@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,17 +24,17 @@ package org.edgo.audio.measure.sound;
  * ConcurrentLinkedQueue} so an audio capture thread and its consume thread
  * exchange chunks without any per-call {@code Node} allocation.  Used in
  * pairs by {@link WdmksRecorder} and {@link WasapiRecorder}: one ring carries
- * filled packets capture→consumer, a second carries recycled buffers
- * consumer→capture (the producer/consumer roles simply reversed).
+ * filled packets capture->consumer, a second carries recycled buffers
+ * consumer->capture (the producer/consumer roles simply reversed).
  *
- * <p>Capacity must be a power of two — {@link #mask} reduces the
+ * <p>Capacity must be a power of two - {@link #mask} reduces the
  * modulo-arithmetic to a bitwise AND on the hot path.  Memory ordering
  * is provided by the {@code volatile} {@link #writePos} / {@link
  * #readPos} cursors: a release-store of {@code writePos} happens-before
  * the matching acquire-load by the consumer, so a slot written by the
  * producer is visible to the consumer when it reads at that index.
  *
- * <p><b>Strictly one producer and one consumer thread per ring</b> — a second
+ * <p><b>Strictly one producer and one consumer thread per ring</b> - a second
  * producer can silently lose a slot (two offers reading the same
  * {@code writePos}).  A producer-side thread that has a buffer rejected by a
  * full ring must keep it in its own thread-local spare rather than offering

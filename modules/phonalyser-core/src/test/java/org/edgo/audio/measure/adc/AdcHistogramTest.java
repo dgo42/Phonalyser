@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -78,7 +78,7 @@ class AdcHistogramTest {
         // minCount is the LATEST per-record bin count seen along the
         // way (records traverse 1, 1, 1, ...); maxCount is the
         // highest-ever per-record value.  Implementation detail:
-        // see record() body — min/max are updated EVERY tick from the
+        // see record() body - min/max are updated EVERY tick from the
         // newly-incremented bin's value.  So minCount == 1 (first hit
         // of any new code) and maxCount == 10.
         assertEquals(1L,  h.getMinCount());
@@ -105,7 +105,7 @@ class AdcHistogramTest {
 
     @Test
     void bitDepth_24_acceptsLargerCodes() {
-        // 24-bit ADC → 16 777 216 codes.  Verify the histogram
+        // 24-bit ADC -> 16 777 216 codes.  Verify the histogram
         // accepts codes near the top of the range.
         AdcHistogram h = new AdcHistogram(24);
         long topCode = (1L << 24) - 1;

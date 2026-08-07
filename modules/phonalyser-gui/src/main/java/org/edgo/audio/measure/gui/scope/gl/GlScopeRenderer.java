@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -23,7 +23,7 @@ import org.edgo.audio.measure.gui.common.MeasurementPainter;
 /**
  * The scope's per-frame draw callback: given a {@link MeasurementPainter} bound to
  * an open frame and the frame's logical size, draw the scope content (the same call
- * the CPU path makes — {@code view.paintCanvas(painter, w, h)}).  A
+ * the CPU path makes - {@code view.paintCanvas(painter, w, h)}).  A
  * {@link GlScopeSurface} invokes this between its {@code nvgBeginFrame} /
  * {@code nvgEndFrame} so the same render code drives the GPU backend.
  *
@@ -41,7 +41,7 @@ public interface GlScopeRenderer {
         ALL,
         /** Background fill + graticule (never persists). */
         BACKDROP,
-        /** The waveforms only — the layer that accumulates in the phosphor buffer. */
+        /** The waveforms only - the layer that accumulates in the phosphor buffer. */
         TRACE,
         /** Sliders, edge labels, measurement table, header (drawn fresh on top). */
         OVERLAY;

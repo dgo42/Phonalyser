@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -39,10 +39,10 @@ import lombok.extern.log4j.Log4j2;
  * {@link FftAnalyzer}.  Two related operations:
  *
  * <ul>
- *   <li>{@link #export}      — writes a {@link FftResult} as
+ *   <li>{@link #export}      - writes a {@link FftResult} as
  *       {@code fft_harmonics_*.csv} (or a caller-named file), one row
  *       per harmonic plus THD/SNR footer rows.</li>
- *   <li>{@link #subtract}    — parses an exported CSV and subtracts the
+ *   <li>{@link #subtract}    - parses an exported CSV and subtracts the
  *       reconstructed sinusoids (H2 and above; fundamental skipped)
  *       from a sample buffer in-place.</li>
  * </ul>
@@ -90,7 +90,7 @@ public class HarmonicsCsv {
         return outFile.getAbsolutePath();
     }
 
-    /** Convenience overload — saves under the timestamped default name. */
+    /** Convenience overload - saves under the timestamped default name. */
     public String export(FftResult r, String directory) throws IOException {
         return export(r, directory, null);
     }
@@ -105,7 +105,7 @@ public class HarmonicsCsv {
      *   <li>{@code useReIm=false}: amplitude from {@code amplitude_dbfs},
      *       phase from {@code phase_deg} column (4 decimal places).</li>
      *   <li>{@code useReIm=true}: amplitude from {@code amplitude_dbfs},
-     *       phase derived via {@code atan2(im, re)} — full double precision.</li>
+     *       phase derived via {@code atan2(im, re)} - full double precision.</li>
      * </ul>
      */
     public void subtract(double[] samples, int sampleRate,
@@ -119,7 +119,7 @@ public class HarmonicsCsv {
             while ((line = br.readLine()) != null) {
                 line = line.trim();
                 if (line.isEmpty() || !Character.isDigit(line.charAt(0))) {
-                    continue;   // blank line or footer (THD, SNR, …)
+                    continue;   // blank line or footer (THD, SNR, ...)
                 }
                 String[] cols = line.split(";");
                 if (cols.length < 5) continue;

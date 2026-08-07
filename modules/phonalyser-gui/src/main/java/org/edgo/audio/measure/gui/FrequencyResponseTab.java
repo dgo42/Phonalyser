@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Frequency-response tab — hosts the {@link FreqRespPane} (Phase 5+
+ * Frequency-response tab - hosts the {@link FreqRespPane} (Phase 5+
  * skeleton).  Earlier this class was a "coming soon" placeholder
  * reserved for the future feature; now it just wraps the real pane in a
  * single-cell layout so {@link MainTab}'s tab host doesn't need to know

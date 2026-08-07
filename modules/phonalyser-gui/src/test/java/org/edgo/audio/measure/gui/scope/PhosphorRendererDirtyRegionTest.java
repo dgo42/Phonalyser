@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -35,7 +35,7 @@ import org.eclipse.swt.graphics.Rectangle;
 import org.junit.jupiter.api.Test;
 
 /**
- * Dirty-region rasterisation of {@link PhosphorRenderer#render} (item 3): only the trace's content
+ * Dirty-region rasterisation of {@link PhosphorRenderer#render}: only the trace's content
  * bounding box is repainted per frame, yet the blitted coverage image must be BYTE-IDENTICAL to the
  * old whole-buffer flow.  Driven through a recording {@link MeasurementPainter} stub that captures a
  * copy of the {@code drawAlphaImage} buffer (no SWT device, no GL; a {@code null} tint is fine as
@@ -46,9 +46,9 @@ class PhosphorRendererDirtyRegionTest {
 
     private static final int    WIDTH      = 120;
     private static final int    HEIGHT     = 80;
-    private static final int    DISP_COUNT = 480;      // 4 samples/px ⇒ dense (phosphor) regime
+    private static final int    DISP_COUNT = 480;      // 4 samples/px => dense (phosphor) regime
     private static final double CENTER_Y   = HEIGHT / 2.0;
-    private static final double V_SCALE    = 8.0;      // small ⇒ a thin band, a genuine sub-box
+    private static final double V_SCALE    = 8.0;      // small => a thin band, a genuine sub-box
     private static final float  LINE_WIDTH = 2f;
 
     /** A low-amplitude dense trace: the band occupies only a thin horizontal strip near mid-height,
@@ -84,7 +84,7 @@ class PhosphorRendererDirtyRegionTest {
     @Test
     void previousRegionIsErasedSoAMovedTraceMatchesAFreshRender() {
         // Two traces in DIFFERENT vertical bands.  Rendering B after A on one renderer must leave the
-        // SAME bytes as rendering B alone on a fresh renderer — proving A's dirty region (which does
+        // SAME bytes as rendering B alone on a fresh renderer - proving A's dirty region (which does
         // not overlap B's) was fully cleared, with no stale coverage bleeding through.
         float[] a = new float[600];
         float[] b = new float[600];
@@ -103,7 +103,7 @@ class PhosphorRendererDirtyRegionTest {
 
     /** Captures a COPY of the coverage buffer the renderer blits (first {@code imgW*imgH} bytes);
      *  {@code getPixelScale} is 1 (logical resolution).  Every other painter method is an inert
-     *  no-op — {@code render} calls only these two. */
+     *  no-op - {@code render} calls only these two. */
     private static final class CapturePainter implements MeasurementPainter {
         byte[] alpha;
 

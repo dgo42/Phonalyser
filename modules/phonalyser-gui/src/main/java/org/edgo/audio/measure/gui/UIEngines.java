@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,7 +28,7 @@ import org.edgo.audio.measure.gui.sound.SharedCapture;
 import lombok.Getter;
 
 /**
- * Application-lifetime bundle of the three audio engines — the generator
+ * Application-lifetime bundle of the three audio engines - the generator
  * playback ({@link GeneratorController}), the oscilloscope's capture
  * handshake ({@link ScopeController}) and the FFT analyser
  * ({@link FftController} with its {@link FftAnalyzerWorker}).
@@ -49,15 +49,25 @@ public final class UIEngines {
     public UIEngines(Display display) {
         // Eager init of the SharedCapture singleton so its MessageBus
         // responder is registered BEFORE any pane fires a CAPTURE_ACQUIRE
-        // request — otherwise the request returns null and the user
+        // request - otherwise the request returns null and the user
         // thinks the device failed to open.
         SharedCapture.instance();
+        // THE ORDER IS A CONTRACT, not tidiness.  The generator's constructor
+        // registers the GENERATOR_RUNNING and GENERATOR_EMITTED_HZ responders,
+        // and both analyzers below ask them - the emitted tones in particular
+        // are the generator's to answer and are never re-derived by an analyzer
+        // (a remote bench snapped against ITS lane's rate and holds the FLL
+        // trims).  A null answer therefore means "there is no generator in this
+        // process", which is an ORDER fault to fix here, not a case to work
+        // around at the asking end.
         generatorController = new GeneratorController();
         scopeController     = new ScopeController();
         fftController       = new FftController(new FftAnalyzerWorker(display));
     }
 
-    /** Stops every engine and releases their capture / playback resources. */
+    /** Stops every engine and releases their capture / playback resources.
+     *  Mirror of the construction order: the analyzers stop asking BEFORE the
+     *  generator unregisters the responders they ask. */
     public void shutdown() {
         fftController.shutdown();
         scopeController.shutdown();

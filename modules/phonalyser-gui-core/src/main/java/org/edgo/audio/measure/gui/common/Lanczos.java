@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -40,7 +40,7 @@ public class Lanczos {
 
     /**
      * Kernel half-width in samples.  Windowed-sinc with this many lobes
-     * each side gives a stop-band ≥ 80 dB down — well below visible
+     * each side gives a stop-band ≥ 80 dB down - well below visible
      * envelope artifacts on a 14-bit canvas.
      */
     public static final int LANCZOS_A = 16;
@@ -71,13 +71,13 @@ public class Lanczos {
 
     /**
      * Lanczos sinc reconstruction of {@code data} at fractional position
-     * {@code t}, using a precomputed phase table for {@code scale} — the
+     * {@code t}, using a precomputed phase table for {@code scale} - the
      * inner loop is a plain table lookup with zero {@code Math.sin} calls.
      *
      * @param data    sample buffer
      * @param n       valid length of {@code data}
      * @param t       sample-domain position (may be fractional)
-     * @param scale   downsample factor; 1 = classic Whittaker–Shannon, &gt;1
+     * @param scale   downsample factor; 1 = classic Whittaker-Shannon, &gt;1
      *                widens the kernel to act as an anti-aliasing low-pass
      */
     public double lanczos(float[] data, int n, double t, double scale) {
@@ -105,12 +105,12 @@ public class Lanczos {
     }
 
     /**
-     * {@code double[]} overload of {@link #lanczos(float[], int, double, double)} —
+     * {@code double[]} overload of {@link #lanczos(float[], int, double, double)} -
      * used by the frequency-domain views, whose magnitude / phase arrays are
      * {@code double[]}.  Same kernel, but deliberately NOT a twin of the
      * {@code float[]} overload: frequency-domain arrays carry {@code NaN} for
      * invalid points (unswept regions, non-positive magnitudes), so NaN taps are
-     * treated as <em>missing</em> and the remaining taps renormalized — a pixel
+     * treated as <em>missing</em> and the remaining taps renormalized - a pixel
      * whose kernel merely touches a NaN region reconstructs from its valid
      * neighbours instead of going NaN.  A NaN <em>center</em> sample still
      * returns NaN, so genuine gaps render as gaps, matching the linear
@@ -136,7 +136,7 @@ public class Lanczos {
         double sumDeltas  = 0.0;
         for (int i = iLo; i <= iHi; i++) {
             double di = data[i];
-            if (Double.isNaN(di)) continue;              // missing sample — renormalized out
+            if (Double.isNaN(di)) continue;              // missing sample - renormalized out
             double wj = w[i - center + halfWidth - 1];
             sumWeights += wj;
             sumDeltas  += (di - baseline) * wj;
@@ -148,7 +148,7 @@ public class Lanczos {
     }
 
     /**
-     * Hot-path kernel-table lookup — no monitor enter / exit so HotSpot's
+     * Hot-path kernel-table lookup - no monitor enter / exit so HotSpot's
      * C2 happily inlines this whole chain into the {@link #lanczos} call
      * site at the per-pixel render loop.  Falls back to
      * {@link #buildAndCacheKernelTable(double)} only on a cache miss.
@@ -170,7 +170,7 @@ public class Lanczos {
         return buildAndCacheKernelTable(scale);
     }
 
-    /** Cache-miss path — the only place the class-level monitor is held. */
+    /** Cache-miss path - the only place the class-level monitor is held. */
     private synchronized double[][] buildAndCacheKernelTable(double scale) {
         if (scale == 1.0) {
             if (cachedKernelScale1 == null) cachedKernelScale1 = buildKernelTable(1.0);
@@ -186,7 +186,7 @@ public class Lanczos {
     /**
      * Pre-bakes the kernel for {@code scale} into a phase table.  Each row is
      * normalised to unit DC gain ({@code Σw = 1}) regardless of the
-     * ULP-level drift the analytic form leaves behind — critical at narrow
+     * ULP-level drift the analytic form leaves behind - critical at narrow
      * V/div where small gain errors get multiplied by the ~3·10⁵ vScale
      * factor and become visible as a constant amplitude shrink.
      */

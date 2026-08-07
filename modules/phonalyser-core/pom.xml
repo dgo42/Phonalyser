@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  phonalyser-core — the base module.  DSP, FFT, generator, preferences, WAV/FLAC
+  phonalyser-core - the base module.  DSP, FFT, generator, preferences, WAV/FLAC
   I/O, ADC calibration, and the audio SPI (AudioDeviceManager / AudioCapture /
   AudioPlayback / DeviceRef / AudioBackend) plus the shared PortAudio + libusb
   JNA bindings.
 
   DEPENDS ON NOTHING ELSE IN THE REACTOR.  In particular it must NOT gain a
-  dependency on SWT, on any gui.** package, or on any backend-* module — those
+  dependency on SWT, on any gui.** package, or on any backend-* module - those
   three rules are what make a headless agent build possible.  The absence of an
   SWT dependency below is deliberate and load-bearing: if you find yourself
   adding one, the leak belongs in the caller, not here.
@@ -19,7 +19,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.1.1</version>
+        <version>1.2.0</version>
         <relativePath>../phonalyser-parent</relativePath>
     </parent>
 
@@ -63,9 +63,11 @@
     </dependencies>
 
     <build>
-        <!-- version.properties carries the pom version (splash + About); every
-             other resource stays unfiltered so the i18n bundles and YAML keep
-             their literal ${} content. -->
+        <!-- version.properties carries the pom version - read off the class path
+             by the desktop (splash + About) and by the headless server (its
+             banner and the version it announces to clients), so it lives in the
+             one module both of them are built on.  Every other resource stays
+             unfiltered so the devices.yaml seed keeps its literal ${} content. -->
         <resources>
             <resource>
                 <directory>src/main/resources</directory>

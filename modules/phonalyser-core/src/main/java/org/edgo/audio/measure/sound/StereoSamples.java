@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -25,7 +25,7 @@ package org.edgo.audio.measure.sound;
  * channels from one playback instead of running playback twice and throwing
  * away the other channel each time.
  *
- * <p>The two arrays always have the same length — they're filled in lockstep
+ * <p>The two arrays always have the same length - they're filled in lockstep
  * from the same {@code stereo[i]} frames inside the capture listener.
  */
 public record StereoSamples(double[] left, double[] right) {}

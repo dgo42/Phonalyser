@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,19 +20,20 @@ package org.edgo.audio.measure.preferences;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.Reader;
-import java.io.Writer;
+import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -61,6 +62,8 @@ import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.enums.TriggerType;
 import org.edgo.audio.measure.enums.UnevenMode;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.sound.DeviceCalibration;
+import org.edgo.audio.measure.sound.DeviceRef;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 
@@ -69,7 +72,7 @@ import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Process-wide GUI preferences.  Singleton — access via {@link #instance()}.
+ * Process-wide GUI preferences.  Singleton - access via {@link #instance()}.
  *
  * <p>State is persisted as YAML to a file in the application's running
  * directory (see {@link #PREFS_FILE}).  The file is loaded the first time
@@ -79,8 +82,9 @@ import lombok.extern.log4j.Log4j2;
  *
  * <p>Per-backend audio settings (input/output device name, sample rate, bit
  * depth) are stored in a {@link BackendPrefs} map keyed by
- * {@link AudioBackendType}, so switching backends preserves each one's
- * selections.  Oscilloscope toolbar state lives at the top level.
+ * {@link BackendKey#key()}, so switching backends preserves each one's
+ * selections - and a backend reached on a Phonalyser server keeps ONE entry PER
+ * SERVER.  Oscilloscope toolbar state lives at the top level.
  *
  * <p>Devices are persisted by name (a string) rather than as
  * {@link org.edgo.audio.measure.sound.DeviceRef} objects because the
@@ -101,6 +105,13 @@ public final class Preferences {
     /** Classpath location of the bundled {@code devices.yaml} seed. */
     private static final String DEVICES_SEED_RESOURCE = "/devices.yaml";
 
+    /** What separates the owning server's id from the device name in a
+     *  device->card binding key (see {@link #deviceBindingKey}).  A device name
+     *  may contain anything, so the SERVER id - which the net protocol forbids
+     *  from containing its own separator - carries the split point, and the key
+     *  is only ever composed, never parsed back. */
+    private static final String BINDING_KEY_SEPARATOR = "/";
+
     /** Debounce window for auto-save: a burst of bound-property changes
      *  (a drag, a resize, fast typing) coalesces into a single file write
      *  this many milliseconds after the last change. */
@@ -119,15 +130,20 @@ public final class Preferences {
 
     private static volatile Preferences instance;
 
-    private final Property<AudioBackendType> backend = bound(AudioBackendType.WASAPI);
+    /** The backend the application is set to, as the persisted key of
+     *  {@link BackendKey}: a plain enum name for a local backend, and
+     *  {@code net:<serverId>:<TYPE>} for one reached on a Phonalyser server.
+     *  Stored as the string so a remote selection survives a restart with the
+     *  server it belongs to; {@link #getSelectedBackend()} hands it out parsed. */
+    private final Property<String> backend = bound(BackendKey.of(AudioBackendType.WASAPI).key());
 
     /** UI language tag (BCP-47 or just the lowercase ISO 639-1 code:
-     *  "en", "de", …).  Java's {@code ResourceBundle.getBundle} resolves
-     *  this via the fallback chain {@code <lang>_<region>} → {@code <lang>} →
-     *  default (English).  Empty / null → platform default. */
+     *  "en", "de", ...).  Java's {@code ResourceBundle.getBundle} resolves
+     *  this via the fallback chain {@code <lang>_<region>} -> {@code <lang>} ->
+     *  default (English).  Empty / null -> platform default. */
     private final Property<String> uiLanguage = bound("en");
 
-    /** Where the main window's top-level tab strip sits — {@code "TOP"} for
+    /** Where the main window's top-level tab strip sits - {@code "TOP"} for
      *  a conventional horizontal tab folder, {@code "LEFT"} for a vertical
      *  sidebar of large icon + label buttons.  Changing this triggers a
      *  shell recreate so the new layout takes effect immediately. */
@@ -139,16 +155,16 @@ public final class Preferences {
      *  selection via SWT. */
     private final Property<Integer> activeTabIndex = bound(0);
 
-    /** When true, the main tab strip draws icons at a smaller size — useful
-     *  on dense displays or when the user wants more vertical/horizontal
-     *  real estate for the actual measurement panes. */
+    /** When true, the main tab strip draws icons at a smaller size - useful
+     *  on dense displays or when more vertical/horizontal real estate is
+     *  needed for the actual measurement panes. */
     private final Property<Boolean> smallIconsInMainTab = bound(false);
 
     /** UI font specs, format {@code name|height|style} (style: normal /
      *  bold).  NORMAL covers axis labels, readouts and measurement-table
      *  body text across the FFT / scope / FreqResp views; BOLD the
      *  emphasised measurement-table text; CHANNEL the big L/R channel
-     *  buttons (central creation point only — no dialog UI).  Changing
+     *  buttons (central creation point only - no dialog UI).  Changing
      *  the first two in the Preferences dialog triggers a shell recreate
      *  so every painter picks the new fonts up. */
     private final Property<String> uiFontNormal  = bound(defaultUiFont("normal", 0));
@@ -167,15 +183,19 @@ public final class Preferences {
      *  the dialog's "Don't show again" checkbox or in Preferences. */
     private final Property<Boolean> showTipsAtStartup = bound(true);
     /** When true, the oscilloscope renders on the GPU (NanoVG/OpenGL) where available
-     *  — gated by {@code GpuSupport}, so it has no effect on a machine without a
+     *  - gated by {@code GpuSupport}, so it has no effect on a machine without a
      *  working GL context (the checkbox is disabled there). */
     private final Property<Boolean> useGpuAcceleration = bound(true);
 
-    private final Map<AudioBackendType, BackendPrefs> perBackend =
-            new EnumMap<>(AudioBackendType.class);
+    /** Per-backend audio settings, keyed by {@link BackendKey#key()} rather than
+     *  by the enum: a backend on a Phonalyser server is one entry PER SERVER, so
+     *  the set of keys is open-ended.  A key this build cannot parse is kept
+     *  exactly as it was read, so a file touched by a newer release loses
+     *  nothing. */
+    private final Map<String, BackendPrefs> perBackend = new LinkedHashMap<>();
 
     // -------------------------------------------------------------------------
-    // Oscilloscope toolbar state — not backend-specific.
+    // Oscilloscope toolbar state - not backend-specific.
     // -------------------------------------------------------------------------
 
     private final Property<Boolean> oscLeftChannelEnabled  = bound(true);
@@ -205,7 +225,7 @@ public final class Preferences {
      *  mode), the scope overlays the reconstructed {@code |F1-F2|}
      *  beat envelope on the live trace in the trigger channel's
      *  trace colour (20 % darker).  Has no effect outside DUAL_TONE
-     *  mode — the overlay is gated on the form independently. */
+     *  mode - the overlay is gated on the form independently. */
     private final Property<Boolean>        oscShowReconstructedBeat = bound(false);
     /** Per-channel Lanczos sinc-interpolation toggle.  Each channel renders
      *  independently so the user can compare a sinc-reconstructed trace
@@ -222,7 +242,7 @@ public final class Preferences {
      *  measurement.  DC-preserving (removes only 50/60 Hz + harmonics). */
     private final Property<MainsSuppression> oscLeftMainsSuppression  = bound(MainsSuppression.NONE);
     private final Property<MainsSuppression> oscRightMainsSuppression = bound(MainsSuppression.NONE);
-    /** Per-channel HF low-pass mode (LpfMode enum name) — strips spikes
+    /** Per-channel HF low-pass mode (LpfMode enum name) - strips spikes
      *  above the audio band before scope display / measurement. */
     private final Property<LpfMode>        oscLeftLpf   = bound(LpfMode.NONE);
     private final Property<LpfMode>        oscRightLpf  = bound(LpfMode.NONE);
@@ -238,7 +258,7 @@ public final class Preferences {
     private final Property<Double> oscTriggerPositionFrac = bound(0.5);
     /** Sliding-window duration (seconds) for measurement avg / min / max / σ. */
     private final Property<Double>         oscMeasurementAverageSeconds = bound(5.0);
-    /** Display persistence ("digital phosphor") mode — GPU path only. */
+    /** Display persistence ("digital phosphor") mode - GPU path only. */
     private final Property<PersistenceMode> oscPersistenceMode = bound(PersistenceMode.OFF);
     /** Manual persistence time (seconds) used when {@link #oscPersistenceMode} is MANUAL. */
     private final Property<Double>         oscPersistenceManualSeconds = bound(1.0);
@@ -246,7 +266,7 @@ public final class Preferences {
     private final Property<Double>         oscLineWidth         = bound(2.0);
     /** Sample-dot diameter (pixels) when the inter-sample spacing exceeds 10 px. */
     private final Property<Integer>        oscDotDiameter       = bound(5);
-    /** Bars drawn across the amplitude histogram.  Only the DISPLAY resolution —
+    /** Bars drawn across the amplitude histogram.  Only the DISPLAY resolution -
      *  the accumulator always bins far finer and is aggregated down to this many
      *  bars over the occupied span, so changing it re-draws the same collected
      *  data at a different granularity instead of discarding it. */
@@ -269,7 +289,7 @@ public final class Preferences {
     private final Property<Channel> oscMeasurementChannel = bound(Channel.L);
     /** Toggles the measurement table's stats columns (avg/min/max/σ); the worker keeps computing them in the background regardless. */
     private final Property<Boolean> oscShowStats = bound(true);
-    /** Master toggle for the measurement table overlay in the scope view —
+    /** Master toggle for the measurement table overlay in the scope view -
      *  when false, only the L / R channel-pick buttons and the table
      *  show / hide toggle are visible; the rows and the stats / reset
      *  buttons are hidden. */
@@ -278,11 +298,17 @@ public final class Preferences {
      *  window comes back with the app; the distribution itself does not, since it
      *  accumulates from the live capture. */
     private final Property<Boolean> oscShowHistogram = bound(false);
-    /** ADC full-scale RMS voltage — calibration constant used to translate normalised samples into volts.
+    /** ADC full-scale RMS voltage - calibration constant used to translate normalised samples into volts.
      *  This scalar is the LEFT channel value, the LINKED-mode value for both channels, and the legacy
-     *  fallback read by every channel-less consumer.  Persisted across launches. */
+     *  fallback read by every channel-less consumer.
+     *
+     *  <p>RUNTIME-ONLY since 1.2: the selected device's card owns the
+     *  calibration, and this scalar is only the fallback for a device whose card carries none.
+     *  It is LOADED from a pre-1.2 {@code preferences.yaml} once and never written back - see
+     *  {@link #toMap} for why saving it would leak one card's calibration onto the next
+     *  uncalibrated device. */
     private final Property<Double> adcFsVoltageRms = bound(DEFAULT_ADC_FS_VRMS);
-    /** RIGHT-channel ADC full-scale RMS voltage — the per-channel sibling of {@link #adcFsVoltageRms}.
+    /** RIGHT-channel ADC full-scale RMS voltage - the per-channel sibling of {@link #adcFsVoltageRms}.
      *  Equals the left value in LINKED mode (and for old preference files that lack the key); an
      *  INDEPENDENT card resolves it from its right active range. */
     private final Property<Double> adcFsVoltageRmsRight = bound(DEFAULT_ADC_FS_VRMS);
@@ -293,18 +319,18 @@ public final class Preferences {
      *  {@code dBV = dBFS + dbvOffsetDb}.  This is the LEFT / LINKED / fallback offset. */
     @Getter
     private volatile double dbvOffsetDb = 20.0 * Math.log10(DEFAULT_ADC_FS_VRMS);
-    /** Cached RIGHT-channel dBV↔dBFS offset (= {@code 20·log10(adcFsVoltageRmsRight)}) — the
+    /** Cached RIGHT-channel dBV↔dBFS offset (= {@code 20·log10(adcFsVoltageRmsRight)}) - the
      *  per-channel sibling of {@link #dbvOffsetDb}, recomputed alongside it. */
     private volatile double dbvOffsetDbRight = 20.0 * Math.log10(DEFAULT_ADC_FS_VRMS);
     /** Cached √(bin bandwidth) of the live FFT config (= {@code √(inputSampleRate /
-     *  fftLength)}) — the V→V/√Hz divisor in {@link #convertFromDbFs}.  Recomputed via
+     *  fftLength)}) - the V -> V/√Hz divisor in {@link #convertFromDbFs}.  Recomputed via
      *  the {@code fftLength} / {@code backend} property listeners (bidi-bound GUI edits
      *  bypass the setters) and after load / dialog-apply (the per-backend sample rate
      *  is a plain POJO write that fires no property event); {@code volatile} so
      *  off-thread consumers see the update. */
     @Getter
     private volatile double binBwSqrt = 1.0;
-    /** Cached live dBr reference level in dBFS — the DISPLAYED fundamental level of the
+    /** Cached live dBr reference level in dBFS - the DISPLAYED fundamental level of the
      *  current FFT spectrum, stamped by the FFT paint path.  A live measurement value,
      *  NOT persisted; consulted by {@link #convertFromDbFs} for {@link MagnitudeUnit#DBR}
      *  ({@code dBr = dBFS − fftDbrRefDbFs}, so the fundamental reads 0 dBr).  Defaults to 0
@@ -315,13 +341,13 @@ public final class Preferences {
     /** When {@code true}, {@link #save()} is a no-op.  Set by the CLI so a
      *  {@code --adc-fs-vrms} (or any other) value injected into Preferences for
      *  one headless run is never written back to the user's YAML.  Default
-     *  {@code false} — the GUI persists normally. */
+     *  {@code false} - the GUI persists normally. */
     @Getter
     @Setter
     private volatile boolean transientMode;
 
     /** Component-owned preference blocks, keyed by {@link SubPreferences#key()}.
-     *  Registered by their owners (backend managers), which are built lazily —
+     *  Registered by their owners (backend managers), which are built lazily -
      *  so this list fills up long after {@link #load()} has run. */
     private final Map<String, SubPreferences> customPrefs = new LinkedHashMap<>();
     /** The {@code custom} section exactly as {@link #load()} read it.  Keeps the
@@ -329,16 +355,19 @@ public final class Preferences {
      *  save, and lets {@link #registerCustomPreferences} replay a late
      *  registrant's saved values. */
     private final Map<String, Object> customRaw = new LinkedHashMap<>();
-    /** DAC full-scale PEAK amplitude voltage (= full-scale-sine RMS × √2) — the
+    /** DAC full-scale PEAK amplitude voltage (= full-scale-sine RMS × √2) - the
      *  value the generator's amplitude scale divides by, so it is kept in this
-     *  amplitude form in memory (suited for the calculation).  It is PERSISTED
-     *  as RMS ({@code dacFsVoltageRms} in the yaml): converted ampl→RMS on save
-     *  and RMS→ampl on load, at the {@link #toMap}/{@link #fromMap} boundary.
+     *  amplitude form in memory (suited for the calculation).
      *  Calibrated by the user via the "Calibrate DAC" button in the generator
      *  pane and read directly by {@code SignalGenerator}.  This scalar is the LEFT
-     *  channel value, the MONO/LINKED-mirror value, and the legacy fallback. */
+     *  channel value, the MONO/LINKED-mirror value, and the legacy fallback.
+     *
+     *  <p>RUNTIME-ONLY since 1.2, exactly like
+     *  {@link #adcFsVoltageRms}: a pre-1.2 {@code dacFsVoltageRms} yaml entry is
+     *  converted RMS->ampl on load at the {@link #fromMap} boundary and never
+     *  written back - see {@link #toMap}. */
     private final Property<Double> dacFsVoltageAmpl = bound(2.79351);
-    /** RIGHT-channel DAC full-scale PEAK amplitude — the per-channel sibling of
+    /** RIGHT-channel DAC full-scale PEAK amplitude - the per-channel sibling of
      *  {@link #dacFsVoltageAmpl}.  Equals the left value in MONO mode (and for old
      *  preference files that lack the key); LINKED reads both {@code fsLeft} /
      *  {@code fsRight} of the shared active row, an INDEPENDENT card resolves it
@@ -346,31 +375,31 @@ public final class Preferences {
      *  in the yaml), converted ampl↔RMS at the {@link #toMap}/{@link #fromMap} boundary. */
     private final Property<Double> dacFsVoltageAmplRight = bound(2.79351);
 
-    /** Path to the most recently chosen scope "Save to…" file (last N seconds of capture). */
+    /** Path to the most recently chosen scope "Save to..." file (last N seconds of capture). */
     private final Property<String> oscSavePath   = bound(null);
-    /** Folder remembered for the scope's "Save to…" file dialog. */
+    /** Folder remembered for the scope's "Save to..." file dialog. */
     private final Property<String> oscSaveFolder = bound(null);
     /** Scope-save duration in seconds (how much of the recent capture to write to disk). */
     private final Property<Double> oscSaveDurationSeconds = bound(5.0);
 
-    /** Path to the most recently chosen scope "Play from…" source file (WAV/FLAC/AIFF). */
+    /** Path to the most recently chosen scope "Play from..." source file (WAV/FLAC/AIFF). */
     private final Property<String>  oscPlayFromPath   = bound(null);
-    /** Folder remembered for the scope's "Play from…" file dialog. */
+    /** Folder remembered for the scope's "Play from..." file dialog. */
     private final Property<String>  oscPlayFromFolder = bound(null);
     /** Whether the scope file-player should loop on EOF. */
     private final Property<Boolean> oscPlayFromLoop   = bound(false);
 
     // -------------------------------------------------------------------------
-    // Generator pane state — stored by enum name where possible so the file
+    // Generator pane state - stored by enum name where possible so the file
     // stays human-readable.  Amplitude is canonical Vrms; the display unit
     // the user last entered is remembered separately so the field reformats
     // back into "their" unit on reload.
     // -------------------------------------------------------------------------
     private final Property<GenSignalForm> genSignalForm = bound(GenSignalForm.SINE);
     private final Property<Double> genFrequencyHz   = bound(1000.0);
-    /** First tone of the {@code DUAL_TONE} waveform — Hz. */
+    /** First tone of the {@code DUAL_TONE} waveform - Hz. */
     private final Property<Double> genDualToneFreq1Hz = bound(1000.0);
-    /** Second tone of the {@code DUAL_TONE} waveform — Hz. */
+    /** Second tone of the {@code DUAL_TONE} waveform - Hz. */
     private final Property<Double> genDualToneFreq2Hz = bound(1300.0);
     /** Percentage of the total signal power going to the first tone of
      *  {@code DUAL_TONE}; the second tone receives {@code 100 − this}.
@@ -386,7 +415,7 @@ public final class Preferences {
     /** True = the generator dither field displays in dBV (the user typed an
      *  explicit dBV suffix); persisted so a restart keeps the choice. */
     private final Property<Boolean> genDitherDbvDisplay = bound(false);
-    /** Which output lane(s) the generator drives — the encoder gate ({@code BOTH}
+    /** Which output lane(s) the generator drives - the encoder gate ({@code BOTH}
      *  by default = today's behaviour). */
     private final Property<OutputChannels> genOutputChannels = bound(OutputChannels.BOTH);
     /** Path to the SINGLE-tone predistortion {@code .dpd} used by
@@ -408,22 +437,22 @@ public final class Preferences {
     /** Triangle duty cycle (rise-portion fraction) in [0.001, 0.999].  Default 50 %
      *  = symmetric triangle; near 1.0 / 0.0 yields sawtooth-like waveforms. */
     private final Property<Double>  genTriangleDuty  = bound(0.5);
-    /** Sweep (LINEAR_SWEEP / LOG_SWEEP) — start frequency in Hz. */
+    /** Sweep (LINEAR_SWEEP / LOG_SWEEP) - start frequency in Hz. */
     private final Property<Double>  genSweepFreqStartHz   = bound(20.0);
-    /** Sweep — stop frequency in Hz. */
+    /** Sweep - stop frequency in Hz. */
     private final Property<Double>  genSweepFreqEndHz     = bound(20000.0);
     /** Sweep duration in seconds (one full cycle from start to end). */
     private final Property<Double>  genSweepDurationSec   = bound(1.0);
     /** Loop the sweep continuously vs play once then go silent. */
     private final Property<Boolean> genSweepLoop          = bound(true);
-    /** Hann fade-in duration in seconds — smooths the start so the output
+    /** Hann fade-in duration in seconds - smooths the start so the output
      *  doesn't click on transient onset. */
     private final Property<Double>  genSweepFadeInSec     = bound(0.01);
     /** Hann fade-out duration in seconds. */
     private final Property<Double>  genSweepFadeOutSec    = bound(0.01);
     /**
      * When true the generator's frequency input will be snapped to the
-     * nearest exact FFT bin on a future analysis pass.  Persisted only —
+     * nearest exact FFT bin on a future analysis pass.  Persisted only -
      * the snap logic itself is wired by a future change.
      */
     private final Property<Boolean> genSnapToFftBin = bound(false);
@@ -434,15 +463,15 @@ public final class Preferences {
     /** Folder remembered for the generator's "Save WAV" dialog, separate from {@link #genDpdFolder}. */
     private final Property<String>  genWavFolder = bound(null);
 
-    /** Path to the most recently chosen "Play from…" source file (WAV/FLAC/AIFF). */
+    /** Path to the most recently chosen "Play from..." source file (WAV/FLAC/AIFF). */
     private final Property<String>  genPlayFromPath   = bound(null);
-    /** Folder remembered for the "Play from…" file picker. */
+    /** Folder remembered for the "Play from..." file picker. */
     private final Property<String>  genPlayFromFolder = bound(null);
     /** Whether the file-player should loop the source on EOF. */
     private final Property<Boolean> genPlayFromLoop = bound(false);
 
     // -------------------------------------------------------------------------
-    // Window geometry — restored on the next launch.  Defaults of 0 / null mean
+    // Window geometry - restored on the next launch.  Defaults of 0 / null mean
     // "no saved value yet"; the GUI falls back to its built-in defaults.
     // -------------------------------------------------------------------------
 
@@ -452,7 +481,7 @@ public final class Preferences {
     private final Property<Integer> genPaneWidth = bound(0);
     /** Vertical split weights for the Multifunctional tab (oscilloscope / FFT). */
     @Getter @Setter private int[] multiVSplitWeights;
-    /** Collapse state for the three Multifunctional-tab panes — restored on startup. */
+    /** Collapse state for the three Multifunctional-tab panes - restored on startup. */
     private final Property<Boolean> genPaneCollapsed = bound(false);
     private final Property<Boolean> oscPaneCollapsed = bound(false);
     private final Property<Boolean> fftPaneCollapsed = bound(true);
@@ -465,7 +494,7 @@ public final class Preferences {
     @Getter private final Map<String, OscPreset> oscPresets = new LinkedHashMap<>();
 
     // -------------------------------------------------------------------------
-    // FFT pane state — analyser knobs (FFT-tab + THD-tab), view state (axis
+    // FFT pane state - analyser knobs (FFT-tab + THD-tab), view state (axis
     // ranges, magnitude unit, phase visibility) and CSV save / load paths.
     // -------------------------------------------------------------------------
 
@@ -483,13 +512,13 @@ public final class Preferences {
     /** {@code FftOverlap} enum name. */
     private final Property<FftOverlap> fftOverlap = bound(FftOverlap.PCT_0);
     private final Property<Boolean> fftCoherentAveraging = bound(true);
-    /** {@code MainsSuppression} enum name — mains-hum filter applied to
+    /** {@code MainsSuppression} enum name - mains-hum filter applied to
      *  the captured signal before FFT averaging. */
     private final Property<MainsSuppression> fftMainsSuppression = bound(MainsSuppression.NONE);
     /** When true, the FFT-side frequency-lock loop drives the generator
      *  to keep the fundamental on the nearest FFT bin centre.  Only
      *  takes effect when {@code genSnapToFftBin} AND
-     *  {@code fftFundFromGenerator} are also true — both prerequisites
+     *  {@code fftFundFromGenerator} are also true - both prerequisites
      *  are required for the loop to know which bin to lock onto. */
     private final Property<AlignGenerator> fftAlignGenerator = bound(AlignGenerator.NONE);
     private final Property<Double>  fftDistMinHz         = bound(20.0);
@@ -498,7 +527,7 @@ public final class Preferences {
     private final Property<Boolean> fftDistMaxEnabled    = bound(false);
     private final Property<Integer> fftThdMaxHarmonic    = bound(9);
     private final Property<Integer> fftCalcMaxHarmonic   = bound(9);
-    /** A spectral peak counts as a separate TONE (→ multi-tone averaging path)
+    /** A spectral peak counts as a separate TONE (-> multi-tone averaging path)
      *  only if it is within this many dB of the strongest peak.  A clean tone's
      *  harmonics sit far below and are excluded, so a THD/cal signal stays on
      *  the single-reference phase-lock path; real dual-tone / IMD partners are
@@ -509,7 +538,7 @@ public final class Preferences {
     private final Property<Boolean> fftManualFundDbvDisplay = bound(false);
     /** Unit the manual-fundamental-amplitude field renders in: {@code mV}, {@code V}, or {@code dBV}. */
     private final Property<Boolean> fftManualFundEnabled = bound(false);
-    /** Active analysis channel (L or R) — only one channel shown at a time. */
+    /** Active analysis channel (L or R) - only one channel shown at a time. */
     private final Property<Channel> fftChannel = bound(Channel.L);
     /** {@code MagnitudeUnit} enum name: {@code V}, {@code V_SQRT_HZ}, {@code DBV}, {@code DBFS}. */
     private final Property<MagnitudeUnit> fftMagUnit = bound(MagnitudeUnit.DBV);
@@ -534,7 +563,7 @@ public final class Preferences {
      *  fundamental / harmonic peak when at least one .frc calibration
      *  is loaded.  Default dark blue (0x00, 0x00, 0x80). */
     private final Property<Integer> fftBeforeCalDotColor      = bound(0x000080);
-    /** Packed RGB of the "inverted calibration" overlay curve — the
+    /** Packed RGB of the "inverted calibration" overlay curve - the
      *  cascaded calibration response negated and anchored at the H2
      *  peak, drawn alongside the spectrum so the user can see what
      *  shape was subtracted.  Default green (0x00, 0x96, 0x00). */
@@ -557,11 +586,11 @@ public final class Preferences {
 
     /** User-saved FFT presets, same shape and conventions as {@link #oscPresets}. */
     @Getter private final Map<String, FftPreset> fftPresets = new LinkedHashMap<>();
-    /** User-saved Frequency-Response presets — same insertion-order map
+    /** User-saved Frequency-Response presets - same insertion-order map
      *  semantics as the FFT / Scope preset maps so the dropdown shows
      *  entries in the order they were created. */
     @Getter private final Map<String, FreqRespPreset> freqRespPresets = new LinkedHashMap<>();
-    /** Per-filter-type filter parameters — the SINGLE source of truth for the
+    /** Per-filter-type filter parameters - the SINGLE source of truth for the
      *  FreqResp filter overlay's Mode/ripple/atten/edge/order/Q scalars.  The
      *  tab control binds its widgets directly to {@code map[currentType]}: a
      *  field edit writes {@link #putFreqRespFilterParams} (write-through +
@@ -570,7 +599,7 @@ public final class Preferences {
      *  {@link FreqRespFilterTypeParams#fromType} defaults. */
     private final Map<FilterType, FreqRespFilterTypeParams> freqRespFilterParamsByType = new EnumMap<>(FilterType.class);
 
-    /** Per-CARD calibration profiles, backend-independent — the ONE store of
+    /** Per-CARD calibration profiles, backend-independent - the ONE store of
      *  card profiles, persisted to a separate {@code devices.yaml} beside
      *  {@code preferences.yaml} (see {@link #DEVICES_FILE}) so it is editable by
      *  the user and from the UI.  A profile IS the physical soundcard;
@@ -586,13 +615,31 @@ public final class Preferences {
      *  race a save iterating this list. */
     private final List<AudioDeviceProfile> audioDevices = new ArrayList<>();
 
+    /** The user's SAVED card choice per device - which card a device uses is a
+     *  decision, not a guess, and it must survive restarts: telling a QA402 from
+     *  a QA403 is the user's device selection, not a heuristic.  Key: the device
+     *  NAME for a device on this machine, {@code <serverId>/<deviceName>} for the
+     *  local mirror of a choice made on a Phonalyser server; value: the card's
+     *  logical name.  Persisted beside the cards in {@code devices.yaml}.
+     *
+     *  <p>Consulted BEFORE the {@code match} rule by {@link #resolveDeviceProfile}
+     *  - the substring/longest-match heuristic is what recognises a device nobody
+     *  has chosen for, and it must never overrule someone who did choose.  Only
+     *  the LOCAL keys take part in that resolution: a server-prefixed entry names
+     *  a card in the SERVER's store, and resolving it here would hand a foreign
+     *  bench's device to whatever local card happens to share the name - the exact
+     *  collision the calibration-follows-the-device rule exists to stop.  The
+     *  mirror is read by the card chooser, to show the remembered pick before (or
+     *  without) an answer from the bench. */
+    private final Map<String, String> deviceCardBindings = new LinkedHashMap<>();
+
     // -------------------------------------------------------------------------
-    // Frequency Response pane — sweep settings, view state, RIAA + calibration
+    // Frequency Response pane - sweep settings, view state, RIAA + calibration
     // -------------------------------------------------------------------------
 
     /** Sweep start frequency in Hz.  Default 1 Hz (bottom of the usable band). */
     private final Property<Double>  freqRespStartHz          = bound(1.0);
-    /** Sweep stop  frequency in Hz.  Sentinel {@code 0} = "unset" — resolved to
+    /** Sweep stop  frequency in Hz.  Sentinel {@code 0} = "unset" - resolved to
      *  the current device Nyquist ({@code rate/2}) at first use (see
      *  {@link #seedRateDependentFreqRespDefaults()}).  A saved value overrides. */
     private final Property<Double>  freqRespStopHz           = bound(FREQRESP_RATE_DEFAULT_SENTINEL);
@@ -601,7 +648,7 @@ public final class Preferences {
     /** True = the sweep amplitude field displays in dBV; persisted. */
     private final Property<Boolean> freqRespAmplitudeDbvDisplay = bound(false);
     /** Number of log-spaced output frequency points the deconvolution emits.
-     *  Sentinel {@code 0} = "unset" — resolved to the FS/2 point count
+     *  Sentinel {@code 0} = "unset" - resolved to the FS/2 point count
      *  ({@code rate/2}) at first use (see
      *  {@link #seedRateDependentFreqRespDefaults()}).  A saved value overrides. */
     private final Property<Integer> freqRespSweepPoints      = bound(FREQRESP_RATE_DEFAULT_SENTINEL_INT);
@@ -611,18 +658,18 @@ public final class Preferences {
      *  analyzer / wizard still read this field so the rest of the
      *  pipeline doesn't have to know about FFT size. */
     private final Property<Double>  freqRespDurationSec      = bound(5.5);
-    /** Deconvolution FFT length (power of 2, 64k … 16M).  Primary control
-     *  in the Settings tab — the sweep duration is derived from this so
+    /** Deconvolution FFT length (power of 2, 64k ... 16M).  Primary control
+     *  in the Settings tab - the sweep duration is derived from this so
      *  the analyzer's {@code nextPow2(leadIn + sweep + tail)} lands
      *  exactly on the chosen length (no wasted bins). */
     private final Property<Integer> freqRespFftSize          = bound(4194304);
     /** TPDF dither bits applied to the generator before quantisation;
      *  0 disables.  Same convention as the generator pane. */
     private final Property<Integer> freqRespDitherBits       = bound(0);
-    /** Silent lead-in prepended to the sweep, in seconds.  Lets the DAC →
+    /** Silent lead-in prepended to the sweep, in seconds.  Lets the DAC ->
      *  ADC chain settle before the first sweep sample lands. */
     private final Property<Double>  freqRespLeadInSec        = bound(0.05);
-    /** Which output lane(s) the FreqResp sweep drives — the encoder gate
+    /** Which output lane(s) the FreqResp sweep drives - the encoder gate
      *  ({@code BOTH} by default).  A one-sided sweep skips the un-driven capture
      *  channel's deconvolution. */
     private final Property<OutputChannels> freqRespOutputChannels = bound(OutputChannels.BOTH);
@@ -634,13 +681,13 @@ public final class Preferences {
     private final Property<Double>  tuneNotchStopHz          = bound(1100.0);
     /** Tune-notch wizard generator drive amplitude at the DAC, V RMS. */
     private final Property<Double>  tuneNotchAmplitudeVrms   = bound(1.0);
-    /** Tune-notch wizard target (desired) notch frequency in Hz — the dashed
+    /** Tune-notch wizard target (desired) notch frequency in Hz - the dashed
      *  marker the live readout is tuned onto. */
     private final Property<Double>  tuneNotchTargetHz        = bound(1000.0);
-    /** Which output lane(s) the tune-notch sweep drives — the encoder gate
+    /** Which output lane(s) the tune-notch sweep drives - the encoder gate
      *  ({@code BOTH} by default).  Kept independent of the main FreqResp pane, like
      *  the other {@code tuneNotch*} dialog fields (the tune-notch capture channel is
-     *  unaffected — only its output lane is gated). */
+     *  unaffected - only its output lane is gated). */
     private final Property<OutputChannels> tuneNotchOutputChannels = bound(OutputChannels.BOTH);
 
     /** Whether the left-channel trace is visible on the view (toggle on the
@@ -651,17 +698,17 @@ public final class Preferences {
     /** Whether the phase curve (right Y-axis ±180°) is painted. */
     private final Property<Boolean> freqRespPhaseVisible     = bound(false);
 
-    /** Visible frequency window — left edge of the trace area in Hz. */
+    /** Visible frequency window - left edge of the trace area in Hz. */
     private final Property<Double>  freqRespFreqMinHz        = bound(20.0);
-    /** Visible frequency window — right edge of the trace area in Hz. */
+    /** Visible frequency window - right edge of the trace area in Hz. */
     private final Property<Double>  freqRespFreqMaxHz        = bound(20000.0);
-    /** Visible magnitude window — top edge in dB. */
+    /** Visible magnitude window - top edge in dB. */
     private final Property<Double>  freqRespMagTopDb         = bound(20.0);
-    /** Visible magnitude window — bottom edge in dB. */
+    /** Visible magnitude window - bottom edge in dB. */
     private final Property<Double>  freqRespMagBotDb         = bound(-140.0);
 
     /** Maximum frequency the crosshair readout reports, expressed as a
-     *  fraction of the sample rate (0.40–0.50).  Default 0.48 clips the
+     *  fraction of the sample rate (0.40-0.50).  Default 0.48 clips the
      *  readout at 0.48·Fs so the user doesn't see meaningless magnitude /
      *  phase numbers right at Nyquist where the deconvolution kernel has
      *  no usable energy. */
@@ -674,7 +721,7 @@ public final class Preferences {
     private final Property<Integer> freqRespCompareSmoothWindow = bound(6);
 
     /** When true, the FreqResp view interpolates across each harmonic of
-     *  {@link #freqRespNotchBaseHz} (50/60 Hz) before drawing — removes
+     *  {@link #freqRespNotchBaseHz} (50/60 Hz) before drawing - removes
      *  mains-hum spikes from the displayed response.  Applied per-channel
      *  on the way from raw to displayed copy, so toggling the flag
      *  redraws without re-measuring. */
@@ -684,7 +731,7 @@ public final class Preferences {
     private final Property<Integer> freqRespNotchBaseHz  = bound(50);
 
     /** Trace colour for the measured signal (whichever channel is the
-     *  active one — L and R are mutually-exclusive radio toggles, so a
+     *  active one - L and R are mutually-exclusive radio toggles, so a
      *  single colour covers both).  Packed RGB int, default {@code #0064C8}
      *  (a saturated blue). */
     private final Property<Integer> freqRespSignalColor     = bound(0x0064C8);
@@ -707,7 +754,7 @@ public final class Preferences {
      *  amendment (T4 = 7950 µs) on top of whichever direction is active. */
     private final Property<Boolean> freqRespIecAmendment     = bound(false);
     /** Comparison mode: show measured − reference subtraction trace in
-     *  place of the live measurement; auto-zoom to 2 Hz–25 kHz, ±2 dB
+     *  place of the live measurement; auto-zoom to 2 Hz-25 kHz, ±2 dB
      *  over min/max.  Only enabled when a measured result exists. */
     private final Property<Boolean> freqRespCompareMode      = bound(false);
 
@@ -726,11 +773,11 @@ public final class Preferences {
     private final Property<FilterResponse> freqRespFilterResponse = bound(FilterResponse.BUTTERWORTH);
 
     /** Unevenness table mode: {@code OFF} = no readout computed or drawn,
-     *  {@code LEVEL} = row 1 (±dB given → report the frequency span within
-     *  that tolerance), {@code RANGE} = row 2 (frequency range given → report
+     *  {@code LEVEL} = row 1 (±dB given -> report the frequency span within
+     *  that tolerance), {@code RANGE} = row 2 (frequency range given -> report
      *  the ±dB spread over that range). */
     private final Property<UnevenMode> freqRespUnevenMode     = bound(UnevenMode.OFF);
-    /** Treat the measured curve as a notch in LEVEL mode (explicit — no automatic shape detection). */
+    /** Treat the measured curve as a notch in LEVEL mode (explicit - no automatic shape detection). */
     private final Property<Boolean> freqRespUnevenNotch       = bound(false);
     /** Row-1 unevenness tolerance in dB.  Clamped to [0.001, 20] on load. */
     private final Property<Double>  freqRespUnevenDb          = bound(3.0);
@@ -777,19 +824,19 @@ public final class Preferences {
 
     /** The bundled-seed {@code contentVersion} this user store was last merged
      *  against, read from the store file's top-level {@code contentVersion} key
-     *  (absent on a legacy store, or one from before this feature → {@code 0}, so
+     *  (absent on a legacy store, or one from before this feature -> {@code 0}, so
      *  every such store merges once and then records the current version).  The
      *  once-per-content-version seed merge runs when the live bundle's
      *  {@link SeedBundle#contentVersion} is strictly greater; it is
      *  refreshed and persisted after a merge.  NEVER present in the bundled seed
-     *  resource — it is a user-store bookkeeping field only. */
+     *  resource - it is a user-store bookkeeping field only. */
     private int recordedContentVersion;
 
     /** The {@code formatVersion} the loaded store file carried, read in
      *  {@link #readDevicesFile} ({@code 0} when absent).  Only a FALLBACK for the
      *  writer: a written store copies the bundled seed's {@code formatVersion}
-     *  (the single source of truth), and reaches for this loaded value — then 1 as
-     *  the last resort — only when the seed is unreadable at write time. */
+     *  (the single source of truth), and reaches for this loaded value - then 1 as
+     *  the last resort - only when the seed is unreadable at write time. */
     private int storeFormatVersion;
 
     /** Overrides the bundled {@code devices.yaml} seed with a file on disk, so a
@@ -816,15 +863,15 @@ public final class Preferences {
         // Resolve the rate-dependent FreqResp defaults (stop = Nyquist,
         // points = FS/2) on a fresh install where load() left the sentinels.
         seedRateDependentFreqRespDefaults();
-        // Flush any debounced save on JVM exit — saveScheduler is a daemon
+        // Flush any debounced save on JVM exit - saveScheduler is a daemon
         // thread the runtime abandons at shutdown, so a change made within the
         // coalesce window before close would otherwise be lost.
         Runtime.getRuntime().addShutdownHook(new Thread(this::flush, "prefs-flush"));
     }
 
     /** Detached constructor for {@link #copyForDialog()}: skips {@link #load()}
-     *  and the JVM-shutdown flush hook, and — via {@link #requestSave()} bailing
-     *  out on {@code detached} — never starts the save thread. */
+     *  and the JVM-shutdown flush hook, and - via {@link #requestSave()} bailing
+     *  out on {@code detached} - never starts the save thread. */
     private Preferences(boolean detached) {
         this.detached = detached;
         recomputeBinBw();
@@ -862,21 +909,42 @@ public final class Preferences {
     }
 
     /**
-     * Returns the saved preferences for {@code type}, lazily creating a
-     * default entry on first access.
+     * Returns the saved preferences for the LOCAL backend {@code type}, lazily
+     * creating a default entry on first access.
      */
     public BackendPrefs prefsFor(AudioBackendType type) {
+        return prefsFor(BackendKey.of(type).key());
+    }
+
+    /**
+     * Returns the saved preferences for one selection - a local backend, or one
+     * backend on one server - lazily creating a default entry on first access.
+     */
+    public BackendPrefs prefsFor(BackendKey key) {
+        return prefsFor(key.key());
+    }
+
+    private BackendPrefs prefsFor(String key) {
         synchronized (perBackend) {
-            BackendPrefs p = perBackend.get(type);
+            BackendPrefs p = perBackend.get(key);
             if (p == null) {
                 p = new BackendPrefs();
-                perBackend.put(type, p);
+                perBackend.put(key, p);
             }
             return p;
         }
     }
 
-    /** Shorthand for {@code prefsFor(getBackend())}. */
+    /** A copy of the per-backend MAP holding the live {@link BackendPrefs}
+     *  objects - so the dialog copy can be filled (or committed) without the
+     *  lock on this instance's map being held across the other instance's. */
+    private Map<String, BackendPrefs> perBackendSnapshot() {
+        synchronized (perBackend) {
+            return new LinkedHashMap<>(perBackend);
+        }
+    }
+
+    /** Shorthand for {@code prefsFor(getSelectedBackend())}. */
     public BackendPrefs current() {
         return prefsFor(backend.get());
     }
@@ -936,11 +1004,13 @@ public final class Preferences {
         c.setTuneNotchOutputChannels(tuneNotchOutputChannels.get());
 
         c.backend.set(backend.get());
-        for (AudioBackendType t : AudioBackendType.values()) {
-            c.prefsFor(t).copyFrom(prefsFor(t));
+        // Every remembered selection, local and remote alike - the dialog may
+        // switch to any of them and must find the settings that were saved for it.
+        for (Map.Entry<String, BackendPrefs> e : perBackendSnapshot().entrySet()) {
+            c.prefsFor(e.getKey()).copyFrom(e.getValue());
         }
-        // Seed the global full-scale scalars so the dialog's "New card…" seeds a
-        // range row from the CURRENT calibration (not the bound() defaults) —
+        // Seed the global full-scale scalars so the dialog's "New card..." seeds a
+        // range row from the CURRENT calibration (not the bound() defaults) -
         // setters keep the detached copy's dbvOffsetDb consistent, and requestSave
         // is inert while detached.
         c.setAdcFsVoltageRms(adcFsVoltageRms.get());
@@ -951,6 +1021,9 @@ public final class Preferences {
         synchronized (audioDevices) {
             for (AudioDeviceProfile p : audioDevices) c.audioDevices.add(copyProfile(p));
         }
+        // ...and the card choices with them: the combo shows what is bound and
+        // the OK commit carries any change back.
+        c.deviceCardBindings.putAll(getDeviceCardBindings());
         return c;
     }
 
@@ -958,28 +1031,34 @@ public final class Preferences {
      * Commits every preference the {@link PreferencesDialog} edited on
      * {@code edit} back into this live instance, firing the bound-property
      * listeners so the views refresh, then persists once.  The dialog's OK
-     * handler (re)activates the chosen backend on {@code AudioBackend} — kept
+     * handler (re)activates the chosen backend on {@code AudioBackend} - kept
      * there so this state class stays free of the sound/hardware layer.
      * Only for PreferencesDialog.
      */
     public void applyFromDialog(Preferences edit) {
         // Backend selection first: the Nyquist clamp below reads current()'s
         // input sample rate, which must reflect the just-chosen backend.
-        setBackend(edit.backend.get());
-        for (AudioBackendType t : AudioBackendType.values()) {
-            prefsFor(t).copyFrom(edit.prefsFor(t));
+        setSelectedBackend(edit.getSelectedBackend());
+        for (Map.Entry<String, BackendPrefs> e : edit.perBackendSnapshot().entrySet()) {
+            prefsFor(e.getKey()).copyFrom(e.getValue());
         }
         // The copyFrom above may have changed the current backend's input
-        // sample rate — a POJO write the property listeners can't observe.
+        // sample rate - a POJO write the property listeners can't observe.
         recomputeBinBw();
 
         // Commit the edited profile list back BEFORE the scalar setters, so a
         // subsequent resolution (or a re-open of the dialog) sees fresh profiles.
-        // Persist the card store to devices.yaml (its own file — the prefs
+        // Persist the card store to devices.yaml (its own file - the prefs
         // save() below no longer carries the profiles).
         synchronized (audioDevices) {
             audioDevices.clear();
             for (AudioDeviceProfile p : edit.audioDevices) audioDevices.add(copyProfile(p));
+        }
+        // The card CHOICES travel with the cards - a pick made in the dialog is
+        // committed by the same OK that commits the card it names.
+        synchronized (this) {
+            deviceCardBindings.clear();
+            deviceCardBindings.putAll(edit.getDeviceCardBindings());
         }
         saveDevices();
 
@@ -1054,7 +1133,7 @@ public final class Preferences {
         }
     }
 
-    /** Seeds every registered block's edit values from its live ones — the
+    /** Seeds every registered block's edit values from its live ones - the
      *  Preferences dialog calls this as it opens, so an edit abandoned by a
      *  previous Cancel cannot leak into this session. */
     public synchronized void beginCustomPreferencesEdit() {
@@ -1063,7 +1142,7 @@ public final class Preferences {
         }
     }
 
-    /** Commits every registered block's edit values into its live ones — called
+    /** Commits every registered block's edit values into its live ones - called
      *  only when the Preferences dialog is closed with OK, alongside
      *  {@link #applyFromDialog}. */
     public synchronized void commitCustomPreferencesEdit() {
@@ -1082,15 +1161,21 @@ public final class Preferences {
         opts.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
         opts.setIndent(2);
         opts.setPrettyFlow(true);
-        // Write to a sibling temp file and move it into place atomically, so
-        // a JVM exit mid-write (the save daemon is killed hard at shutdown)
-        // can never leave a truncated preferences.yaml behind.
+        // Write to a sibling temp file, FORCE it to disk, then move it into
+        // place atomically.  The move alone is not enough: rename atomicity is
+        // about NAMES, not data - a kernel crash after the rename but before
+        // the OS cache reached the platter leaves a correctly-named EMPTY file
+        // (observed: a bugcheck 0x10D mid-run, and every preference was gone).
+        // SYNC makes the write itself durable before the rename is attempted;
+        // the file is ~4 KB and saves are debounced, so the cost is nothing.
         Path target = prefsPath();
         Path tmp    = target.resolveSibling(target.getFileName() + ".tmp");
         try {
-            try (Writer w = Files.newBufferedWriter(tmp)) {
-                new Yaml(opts).dump(root, w);
-            }
+            StringWriter text = new StringWriter();
+            new Yaml(opts).dump(root, text);
+            Files.writeString(tmp, text.toString(),
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE, StandardOpenOption.SYNC);
             try {
                 Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } catch (AtomicMoveNotSupportedException e) {
@@ -1114,13 +1199,13 @@ public final class Preferences {
     /** Single daemon thread that performs the coalesced write off the caller's
      *  thread.  Per-property reads in {@link #toMap} are atomic reference reads
      *  against the {@code synchronized} {@link #save()}, so a concurrent set is
-     *  benign — the next debounced write captures it. */
+     *  benign - the next debounced write captures it. */
     private ScheduledExecutorService saveScheduler;
     private ScheduledFuture<?> pendingSave;
 
     /** Lazily creates the single-thread save scheduler.  A detached copy
-     *  ({@link #copyForDialog()}) never reaches here — its {@link #requestSave()}
-     *  bails on {@code detached} — so it never starts a thread. */
+     *  ({@link #copyForDialog()}) never reaches here - its {@link #requestSave()}
+     *  bails on {@code detached} - so it never starts a thread. */
     private ScheduledExecutorService saveScheduler() {
         if (saveScheduler == null) {
             saveScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -1142,7 +1227,7 @@ public final class Preferences {
 
     /** Subscribes a calibration entry's two observable toggles to the
      *  debounced auto-save, so flipping Active / With-noise persists exactly
-     *  like a scalar bound property.  The {@code path} is NOT observable —
+     *  like a scalar bound property.  The {@code path} is NOT observable -
      *  the pane saves explicitly after a browse / clear. */
     private void trackCalibration(CalibrationEntry entry) {
         entry.active().addListener(v -> requestSave());
@@ -1204,7 +1289,7 @@ public final class Preferences {
         requestSave();
     }
 
-    /** Persists after a bound property changed — a no-op while {@link #load()}
+    /** Persists after a bound property changed - a no-op while {@link #load()}
      *  is applying a file.  Debounced: a continuous gesture (zoom / drag /
      *  resize / fast typing) coalesces into a single write
      *  {@link #SAVE_COALESCE_MS} ms after the last change, so binding a
@@ -1221,8 +1306,8 @@ public final class Preferences {
 
     /** Writes a still-pending debounced save to disk immediately.  Registered
      *  as a JVM shutdown hook so a change made within {@link #SAVE_COALESCE_MS}
-     *  of closing the app — whose write is otherwise a daemon-thread task the
-     *  runtime abandons at exit — is never lost.  No-op when nothing is pending
+     *  of closing the app - whose write is otherwise a daemon-thread task the
+     *  runtime abandons at exit - is never lost.  No-op when nothing is pending
      *  (the last change already reached disk, or already running). */
     public synchronized void flush() {
         if (pendingSave != null && pendingSave.cancel(false)) {
@@ -1230,9 +1315,18 @@ public final class Preferences {
         }
     }
 
-    public AudioBackendType getBackend()       { return backend.get(); }
-    public void setBackend(AudioBackendType v) { backend.set(v); }
-    public Property<AudioBackendType> backendProperty() { return backend; }
+    /** The CARRIER type of the current selection - what the {@code AudioBackend}
+     *  dispatcher must be handed, which is {@link AudioBackendType#NET} for a
+     *  bench on a server.  What the bench IS comes from
+     *  {@link #getSelectedBackend()}. */
+    /** Selects a LOCAL backend; a remote one goes through
+     *  {@link #setSelectedBackend(BackendKey)}, which carries its server too. */
+    public void setBackend(AudioBackendType v) { setSelectedBackend(BackendKey.of(v)); }
+    /** The full selection: the backend AND, when it is remote, the server it
+     *  lives on - what {@link #prefsFor(BackendKey)} and every
+     *  backend-semantic rule key on. */
+    public BackendKey getSelectedBackend()     { return BackendKey.parse(backend.get()); }
+    public void setSelectedBackend(BackendKey v) { backend.set(v.key()); }
 
     public String getUiLanguage()              { return uiLanguage.get(); }
     public void setUiLanguage(String v)        { uiLanguage.set(v); }
@@ -1262,7 +1356,7 @@ public final class Preferences {
     public void setTabOrientation(TabOrientation v) { tabOrientation.set(v); }
     public Property<TabOrientation> tabOrientationProperty() { return tabOrientation; }
     /** Per-OS default UI font as a {@code "family|size|style"} string: Consolas 9 on
-     *  Windows, Menlo 11 on macOS, DejaVu Sans Mono 11 elsewhere (Linux) — each
+     *  Windows, Menlo 11 on macOS, DejaVu Sans Mono 11 elsewhere (Linux) - each
      *  platform's standard monospace face, present out of the box.  {@code sizeBump}
      *  enlarges the channel-button font above the base size. */
     private String defaultUiFont(String style, int sizeBump) {
@@ -1661,7 +1755,7 @@ public final class Preferences {
     public void setAdcFsVoltageRms(double v)   {
         if (!(v > 0.0)) {
             if (log.isWarnEnabled()) {
-                log.warn("Rejecting invalid ADC full-scale {} Vrms — keeping {} Vrms", v, adcFsVoltageRms.get());
+                log.warn("Rejecting invalid ADC full-scale {} Vrms - keeping {} Vrms", v, adcFsVoltageRms.get());
             }
             return;
         }
@@ -1674,7 +1768,7 @@ public final class Preferences {
     public void setAdcFsVoltageRmsRight(double v) {
         if (!(v > 0.0)) {
             if (log.isWarnEnabled()) {
-                log.warn("Rejecting invalid RIGHT ADC full-scale {} Vrms — keeping {} Vrms", v, adcFsVoltageRmsRight.get());
+                log.warn("Rejecting invalid RIGHT ADC full-scale {} Vrms - keeping {} Vrms", v, adcFsVoltageRmsRight.get());
             }
             return;
         }
@@ -1683,20 +1777,20 @@ public final class Preferences {
     }
     public Property<Double> adcFsVoltageRmsRightProperty() { return adcFsVoltageRmsRight; }
 
-    /** The ADC full-scale RMS voltage of {@code ch}: LEFT → the {@link #adcFsVoltageRms} scalar
-     *  (also the LINKED / legacy value), RIGHT → {@link #adcFsVoltageRmsRight}. */
+    /** The ADC full-scale RMS voltage of {@code ch}: LEFT -> the {@link #adcFsVoltageRms} scalar
+     *  (also the LINKED / legacy value), RIGHT -> {@link #adcFsVoltageRmsRight}. */
     public double getAdcFsVoltageRms(Channel ch) {
         return ch == Channel.R ? adcFsVoltageRmsRight.get() : adcFsVoltageRms.get();
     }
 
-    /** The ±full-scale PEAK volts of {@code ch} (= {@code fs(ch) · √2}) — the ±1.0 → volts scale
+    /** The ±full-scale PEAK volts of {@code ch} (= {@code fs(ch) · √2}) - the ±1.0 -> volts scale
      *  every scope / measurement site derives inline today from the single scalar. */
     public double getAdcPeakVolts(Channel ch) {
         return getAdcFsVoltageRms(ch) * Math.sqrt(2.0);
     }
 
-    /** The cached dBV↔dBFS offset of {@code ch}: LEFT → {@link #dbvOffsetDb} (also the LINKED /
-     *  legacy value), RIGHT → {@link #dbvOffsetDbRight}. */
+    /** The cached dBV↔dBFS offset of {@code ch}: LEFT -> {@link #dbvOffsetDb} (also the LINKED /
+     *  legacy value), RIGHT -> {@link #dbvOffsetDbRight}. */
     public double getDbvOffsetDb(Channel ch) {
         return ch == Channel.R ? dbvOffsetDbRight : dbvOffsetDb;
     }
@@ -1707,7 +1801,7 @@ public final class Preferences {
     private double dbvOffsetFor(double fsVrms) {
         if (!(fsVrms > 0.0)) {
             if (log.isWarnEnabled()) {
-                log.warn("Invalid ADC full-scale {} Vrms — falling back to 0 dB dBV offset", fsVrms);
+                log.warn("Invalid ADC full-scale {} Vrms - falling back to 0 dB dBV offset", fsVrms);
             }
             return 0.0;
         }
@@ -1716,7 +1810,7 @@ public final class Preferences {
 
     /** Recomputes the cached {@link #binBwSqrt} from the live capture config.  Hooked to
      *  the {@code fftLength} / {@code backend} property listeners and called after
-     *  {@link #load()} / {@link #applyFromDialog} — see the field doc for why both are
+     *  {@link #load()} / {@link #applyFromDialog} - see the field doc for why both are
      *  needed.  Falls back to 1 (plain V) on a not-yet-valid config. */
     private void recomputeBinBw() {
         int rate = current().getInputSampleRate();
@@ -1736,7 +1830,7 @@ public final class Preferences {
      * offset from dBFS ({@link #dbvOffsetDb}), V is the same value read linearly
      * (0&nbsp;dBV = 1&nbsp;V), and V/√Hz additionally divides by √(bin bandwidth).
      *
-     * @param binBwSqrt √(bin bandwidth in Hz) of the spectrum being converted —
+     * @param binBwSqrt √(bin bandwidth in Hz) of the spectrum being converted -
      *                  carried by file-loaded results ({@code FftResult#binBwSqrt});
      *                  {@code null} uses the cached live config, which is bidi-bound
      *                  and restarts the FFT on change, so it always matches the live
@@ -1753,7 +1847,7 @@ public final class Preferences {
     }
 
     /** Channel-aware {@link #convertFromDbFs(double, MagnitudeUnit, Double)}: the dBV offset
-     *  follows {@code ch} (LEFT / LINKED / legacy → {@link #dbvOffsetDb}, RIGHT →
+     *  follows {@code ch} (LEFT / LINKED / legacy -> {@link #dbvOffsetDb}, RIGHT ->
      *  {@link #dbvOffsetDbRight}), so the FFT absolute-dBV axis tracks the analysed channel. */
     public double convertFromDbFs(double dbFs, MagnitudeUnit unit, Double binBwSqrt, Channel ch) {
         double off = getDbvOffsetDb(ch);
@@ -1772,7 +1866,7 @@ public final class Preferences {
     public void setDacFsVoltageAmpl(double v)   {
         if (!(v > 0.0)) {
             if (log.isWarnEnabled()) {
-                log.warn("Rejecting invalid DAC full-scale {} V (ampl) — keeping {} V", v, dacFsVoltageAmpl.get());
+                log.warn("Rejecting invalid DAC full-scale {} V (ampl) - keeping {} V", v, dacFsVoltageAmpl.get());
             }
             return;
         }
@@ -1784,7 +1878,7 @@ public final class Preferences {
     public void setDacFsVoltageAmplRight(double v) {
         if (!(v > 0.0)) {
             if (log.isWarnEnabled()) {
-                log.warn("Rejecting invalid RIGHT DAC full-scale {} V (ampl) — keeping {} V", v, dacFsVoltageAmplRight.get());
+                log.warn("Rejecting invalid RIGHT DAC full-scale {} V (ampl) - keeping {} V", v, dacFsVoltageAmplRight.get());
             }
             return;
         }
@@ -1792,13 +1886,13 @@ public final class Preferences {
     }
     public Property<Double> dacFsVoltageAmplRightProperty() { return dacFsVoltageAmplRight; }
 
-    /** The DAC full-scale PEAK amplitude of {@code ch}: LEFT → the {@link #dacFsVoltageAmpl}
-     *  scalar (also the MONO/LINKED-mirror / legacy value), RIGHT → {@link #dacFsVoltageAmplRight}. */
+    /** The DAC full-scale PEAK amplitude of {@code ch}: LEFT -> the {@link #dacFsVoltageAmpl}
+     *  scalar (also the MONO/LINKED-mirror / legacy value), RIGHT -> {@link #dacFsVoltageAmplRight}. */
     public double getDacFsVoltageAmpl(Channel ch) {
         return ch == Channel.R ? dacFsVoltageAmplRight.get() : dacFsVoltageAmpl.get();
     }
 
-    /** The per-lane RIGHT output scale — {@code fsLeft/fsRight} so a card with
+    /** The per-lane RIGHT output scale - {@code fsLeft/fsRight} so a card with
      *  distinct DAC full-scales emits the same physical level on both lanes;
      *  {@code 1.0} when the full-scales are equal or the card is mono (both
      *  scalars equal).  A driver's mono amplitude is computed against the LEFT
@@ -2153,12 +2247,25 @@ public final class Preferences {
     public void setFreqRespActiveTabIndex(int v) { freqRespActiveTabIndex.set(v); }
     public Property<Integer> freqRespActiveTabIndexProperty() { return freqRespActiveTabIndex; }
 
-    /** Loads preferences from {@link #PREFS_FILE} if present.  No-op if missing or unreadable. */
+    /** Loads preferences from {@link #PREFS_FILE} if present.  A missing file is
+     *  a fresh start; a file that EXISTS but cannot be read as a YAML map is
+     *  quarantined loudly - see {@link #quarantine}: silently defaulting over it
+     *  is how a kernel crash cost the operator every saved setting without one
+     *  line saying so. */
     public synchronized void load() {
         Path path = prefsPath();
         if (!Files.exists(path)) return;
-        try (Reader r = Files.newBufferedReader(path)) {
-            Object loaded = new Yaml().load(r);
+        // Read fully BEFORE parsing: quarantine renames the file, which Windows
+        // refuses while a reader still holds it open.
+        String text;
+        try {
+            text = Files.readString(path);
+        } catch (IOException e) {
+            log.warn("Failed to read preferences from {}: {}", path, e.getMessage());
+            return;
+        }
+        try {
+            Object loaded = new Yaml().load(text);
             if (loaded instanceof Map<?, ?> root) {
                 loading = true;
                 try {
@@ -2167,10 +2274,37 @@ public final class Preferences {
                     loading = false;
                 }
                 log.info("Preferences loaded from {}", path.toAbsolutePath());
+                return;
             }
-        } catch (IOException | RuntimeException e) {
-            log.warn("Failed to load preferences from {}: {}", path, e.getMessage());
+            quarantine(path, "its content is not a YAML map (empty or truncated file)");
+        } catch (RuntimeException e) {
+            quarantine(path, e.toString());
         }
+    }
+
+    /**
+     * Preserves a preferences/devices file that exists but cannot be read, and
+     * says so at ERROR - never silently.  The broken file is renamed to
+     * {@code <name>.corrupt} beside itself, so (a) whatever survives in it can
+     * still be recovered by hand, and (b) the next save cannot cement a
+     * defaults-only file over the evidence.  A file comes to this state through
+     * no fault of the operator's - the observed case is a kernel crash
+     * (bugcheck 0x10D mid-run) leaving a renamed save with its data
+     * never flushed - and losing their settings AND the file AND the
+     * explanation all at once is the one outcome this forbids.
+     */
+    private void quarantine(Path path, String why) {
+        Path kept = path.resolveSibling(path.getFileName() + ".corrupt");
+        String recovered;
+        try {
+            Files.move(path, kept, StandardCopyOption.REPLACE_EXISTING);
+            recovered = "the broken file is kept as " + kept.getFileName();
+        } catch (IOException e) {
+            recovered = "and it could not be renamed aside (" + e.getMessage()
+                    + ") - it is left in place and the next save will overwrite it";
+        }
+        log.error("{} could not be read - {}. This run starts from DEFAULTS; {}.",
+                path.toAbsolutePath(), why, recovered);
     }
 
     private Path prefsPath() {
@@ -2180,7 +2314,7 @@ public final class Preferences {
     private Map<String, Object> toMap() {
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("formatVersion",          FileVersions.PREFERENCES_YAML);
-        root.put("backend",                backend.get().name());
+        root.put("backend",                backend.get());
         if (uiLanguage.get() != null) root.put("uiLanguage", uiLanguage.get());
         root.put("tabOrientation", tabOrientation.get().name());
         root.put("uiFontNormal",  uiFontNormal.get());
@@ -2232,12 +2366,15 @@ public final class Preferences {
         root.put("oscShowStats",                 oscShowStats.get());
         root.put("oscShowMeasurementTable",      oscShowMeasurementTable.get());
         root.put("oscShowHistogram",             oscShowHistogram.get());
-        // DEPRECATED shared full-scale calibration — the FALLBACK for devices with no
-        // card in devices.yaml (per-card calibration owns everything else).  Kept
-        // read AND written for backwards compatibility, per the help's Preferences
-        // chapter; scheduled for removal in the release AFTER the next one.
-        root.put("adcFsVoltageRms", adcFsVoltageRms.get());
-        root.put("dacFsVoltageRms", dacFsVoltageAmpl.get() / Constants.SQRT2);
+        // NOT WRITTEN - the deprecated shared full-scale scalars (adcFsVoltageRms /
+        // dacFsVoltageRms) are RUNTIME-ONLY since 1.2: they are the fallback for a
+        // device with no calibrated card, and a card that HAS its own calibration
+        // pushes its values into the very same scalars (applyInputDeviceProfile and
+        // siblings).  Persisting them would therefore save the last selected card's
+        // calibration as the machine-wide default and hand it to the next
+        // uncalibrated device as if it were measured there.  fromMap() still READS
+        // the keys so a pre-1.2 file seeds the fallback once; nothing writes them
+        // back, so the entry disappears with the first save.
         root.put("genSignalForm",                genSignalForm.get().name());
         root.put("genFrequencyHz",               genFrequencyHz.get());
         root.put("genDualToneFreq1Hz",           genDualToneFreq1Hz.get());
@@ -2403,12 +2540,12 @@ public final class Preferences {
         root.put("freqRespPhaseColor",          freqRespPhaseColor.get());
         root.put("freqRespReferenceColor",      freqRespReferenceColor.get());
         root.put("freqRespBackgroundColor",     freqRespBackgroundColor.get());
-        // Note: freqRespShowRiaa is intentionally NOT persisted — it always
+        // Note: freqRespShowRiaa is intentionally NOT persisted - it always
         // starts unchecked on a fresh session.
         root.put("freqRespReverseRiaa",       freqRespReverseRiaa.get());
         root.put("freqRespIecAmendment",      freqRespIecAmendment.get());
         root.put("freqRespCompareMode",       freqRespCompareMode.get());
-        // Note: freqRespShowFilter is intentionally NOT persisted — it always
+        // Note: freqRespShowFilter is intentionally NOT persisted - it always
         // starts unchecked on a fresh session (mirrors freqRespShowRiaa).
         root.put("freqRespFilterCompare",     freqRespFilterCompare.get());
         root.put("freqRespFilterType",        freqRespFilterType.get().name());
@@ -2513,7 +2650,7 @@ public final class Preferences {
 
         Map<String, Object> perBackendMap = new LinkedHashMap<>();
         synchronized (perBackend) {
-            for (Map.Entry<AudioBackendType, BackendPrefs> e : perBackend.entrySet()) {
+            for (Map.Entry<String, BackendPrefs> e : perBackend.entrySet()) {
                 Map<String, Object> bp = new LinkedHashMap<>();
                 BackendPrefs v = e.getValue();
                 bp.put("inputDeviceName",  v.getInputDeviceName());
@@ -2522,7 +2659,7 @@ public final class Preferences {
                 bp.put("inputBitDepth",    v.getInputBitDepth());
                 bp.put("outputSampleRate", v.getOutputSampleRate());
                 bp.put("outputBitDepth",   v.getOutputBitDepth());
-                perBackendMap.put(e.getKey().name(), bp);
+                perBackendMap.put(e.getKey(), bp);
             }
         }
         root.put("perBackend", perBackendMap);
@@ -2565,7 +2702,12 @@ public final class Preferences {
         if (root.get("showTipsAtStartup")         instanceof Boolean b) showTipsAtStartup.set(b);
         if (root.get("useGpuAcceleration")        instanceof Boolean b) useGpuAcceleration.set(b);
         if (root.get("backend") instanceof String s) {
-            backend.set(enumOr(AudioBackendType.class, s, backend.get()));
+            // A file written before remote benches existed holds a bare enum
+            // name, which parses to the same LOCAL key it always meant.
+            BackendKey selected = BackendKey.parse(s);
+            if (selected != null) {
+                backend.set(selected.key());
+            }
         }
         if (root.get("windowWidth")            instanceof Integer i) windowWidth.set(i);
         if (root.get("windowHeight")           instanceof Integer i) windowHeight.set(i);
@@ -2609,9 +2751,11 @@ public final class Preferences {
         if (root.get("oscShowStats")                 instanceof Boolean b) oscShowStats.set(b);
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable.set(b);
         if (root.get("oscShowHistogram")             instanceof Boolean b) oscShowHistogram.set(b);
-        // DEPRECATED shared full-scale fallback (unbound devices) — see toMap();
-        // honoured so a pre-card preferences.yaml keeps its calibration.  The
-        // setters validate and refresh the cached dBV offsets.
+        // DEPRECATED shared full-scale fallback (devices with no calibrated card) -
+        // READ-ONLY since 1.2, see toMap(): a pre-1.2 preferences.yaml seeds the
+        // runtime scalars once, and because nothing writes the keys back the entry
+        // is gone after the first save.  The setters validate and refresh the
+        // cached dBV offsets.
         if (root.get("adcFsVoltageRms") instanceof Number n) setAdcFsVoltageRms(n.doubleValue());
         if (root.get("dacFsVoltageRms") instanceof Number n) setDacFsVoltageAmpl(n.doubleValue() * Constants.SQRT2);
         if (root.get("genSignalForm")                instanceof String s) genSignalForm.set(enumOr(GenSignalForm.class, s, genSignalForm.get()));
@@ -2777,7 +2921,7 @@ public final class Preferences {
         if (root.get("freqRespNotchEnabled") instanceof Boolean b) freqRespNotchEnabled.set(b);
         if (root.get("freqRespNotchBaseHz")  instanceof Number  n) {
             int v = n.intValue();
-            // Snap any non-50/60 value back to 50 (EU default) — the UI
+            // Snap any non-50/60 value back to 50 (EU default) - the UI
             // exposes only those two choices.
             freqRespNotchBaseHz.set((v == 60) ? 60 : 50);
         }
@@ -2793,12 +2937,12 @@ public final class Preferences {
         Object bgColorObj     = root.get("freqRespBackgroundColor");
         if (bgColorObj     instanceof String s) freqRespBackgroundColor.set(parseHtmlColor(s, freqRespBackgroundColor.get()));
         else if (bgColorObj     instanceof Number n) freqRespBackgroundColor.set(n.intValue());
-        // freqRespShowRiaa is intentionally not loaded from disk — it
+        // freqRespShowRiaa is intentionally not loaded from disk - it
         // always starts unchecked on a fresh session.
         if (root.get("freqRespReverseRiaa")       instanceof Boolean b) freqRespReverseRiaa.set(b);
         if (root.get("freqRespIecAmendment")      instanceof Boolean b) freqRespIecAmendment.set(b);
         if (root.get("freqRespCompareMode")       instanceof Boolean b) freqRespCompareMode.set(b);
-        // freqRespShowFilter is intentionally not loaded from disk — it
+        // freqRespShowFilter is intentionally not loaded from disk - it
         // always starts unchecked on a fresh session (mirrors freqRespShowRiaa).
         if (root.get("freqRespFilterCompare")     instanceof Boolean b) freqRespFilterCompare.set(b);
         if (root.get("freqRespFilterType")        instanceof String  s) freqRespFilterType.set(enumOr(FilterType.class, s, freqRespFilterType.get()));
@@ -2810,7 +2954,7 @@ public final class Preferences {
         }
         if (root.get("freqRespUnevenStartHz")     instanceof Number  n) freqRespUnevenStartHz.set(n.doubleValue());
         if (root.get("freqRespUnevenStopHz")      instanceof Number  n) freqRespUnevenStopHz.set(n.doubleValue());
-        // Sanity: start must sit below stop — otherwise reset both to defaults.
+        // Sanity: start must sit below stop - otherwise reset both to defaults.
         if (freqRespUnevenStartHz.get() >= freqRespUnevenStopHz.get()) {
             freqRespUnevenStartHz.set(20.0);
             freqRespUnevenStopHz.set(20_000.0);
@@ -2945,10 +3089,12 @@ public final class Preferences {
 
         if (root.get("perBackend") instanceof Map<?, ?> pbm) {
             for (Map.Entry<?, ?> e : pbm.entrySet()) {
+                // The key is kept verbatim, unparsed: a legacy enum name IS the
+                // local key, and a block this build cannot interpret (a newer
+                // release's backend, a server it has not met) must survive the
+                // next save rather than be dropped.
                 if (!(e.getKey() instanceof String key)) continue;
-                AudioBackendType type = enumOr(AudioBackendType.class, key, null);
-                if (type == null) continue;
-                BackendPrefs bp = prefsFor(type);
+                BackendPrefs bp = prefsFor(key);
                 if (e.getValue() instanceof Map<?, ?> bpMap) {
                     if (bpMap.get("inputDeviceName")  instanceof String  s) bp.setInputDeviceName(s);
                     if (bpMap.get("outputDeviceName") instanceof String  s) bp.setOutputDeviceName(s);
@@ -3049,7 +3195,7 @@ public final class Preferences {
 
     /** The filter parameters for {@code type}, or that type's pinned
      *  {@link FreqRespFilterTypeParams#fromType} defaults when nothing is
-     *  stored yet.  Never mutates the map — the caller edits the returned
+     *  stored yet.  Never mutates the map - the caller edits the returned
      *  snapshot and writes it back via {@link #putFreqRespFilterParams}. */
     public synchronized FreqRespFilterTypeParams getFreqRespFilterParams(FilterType type) {
         if (type == null) return FreqRespFilterTypeParams.fromType(FilterType.LOW_PASS);
@@ -3065,7 +3211,7 @@ public final class Preferences {
     }
 
     // -------------------------------------------------------------------------
-    // Per-card calibration profiles — the store lives here in memory; only its
+    // Per-card calibration profiles - the store lives here in memory; only its
     // PERSISTENCE is the separate devices.yaml (seed-if-absent, load, migrate).
     // -------------------------------------------------------------------------
 
@@ -3104,8 +3250,8 @@ public final class Preferences {
         // the rewrite below all consume the same SeedBundle.
         SeedBundle seed = readSeed();
         // Once-per-content-version seed merge: when the bundle catalog advanced
-        // past the version this store last recorded, fold the bundle in — new
-        // cards, new ranges, refreshed nominals — while keeping every user-owned
+        // past the version this store last recorded, fold the bundle in - new
+        // cards, new ranges, refreshed nominals - while keeping every user-owned
         // choice (channel mode, match list, active range, hand-added ranges,
         // calibrated values).  A store with no recorded version counts as 0, so it
         // merges once and then records the bundle's version; the store is
@@ -3120,9 +3266,9 @@ public final class Preferences {
     /** Everything the bundled {@code devices.yaml} seed contributes, from ONE
      *  parse: the profiles (merge source), the {@code contentVersion} (merge
      *  gate), the {@code formatVersion} (single source of truth for the written
-     *  store's format marker — never a hardwired Java constant) and the leading
+     *  store's format marker - never a hardwired Java constant) and the leading
      *  header comment (copied into the user store so the editable file carries
-     *  the seed's documentation).  Missing / garbled seed → empty profiles,
+     *  the seed's documentation).  Missing / garbled seed -> empty profiles,
      *  versions {@code 0}, empty header. */
     private static final class SeedBundle {
         final List<AudioDeviceProfile> profiles;
@@ -3139,9 +3285,9 @@ public final class Preferences {
         }
     }
 
-    /** Reads the bundled seed ONCE — bytes to text, header comment off the text,
+    /** Reads the bundled seed ONCE - bytes to text, header comment off the text,
      *  YAML parse off the same text, profiles via the shared
-     *  {@link #readDeviceProfile} vocabulary — so the merge gate, the merge
+     *  {@link #readDeviceProfile} vocabulary - so the merge gate, the merge
      *  source and the store writer all consume one consistent snapshot. */
     private SeedBundle readSeed() {
         List<AudioDeviceProfile> profiles = new ArrayList<>();
@@ -3175,8 +3321,8 @@ public final class Preferences {
     }
 
     /** Copies the bundled seed to {@code path} on first run (file absent).  Uses
-     *  the {@link #seedPathOverride test override} file when set — copied through
-     *  the same absent-only discipline — else the {@code AppPaths} classpath
+     *  the {@link #seedPathOverride test override} file when set - copied through
+     *  the same absent-only discipline - else the {@code AppPaths} classpath
      *  seeding of {@link #DEVICES_SEED_RESOURCE}. */
     private void seedStoreIfAbsent(Path path) {
         if (seedPathOverride == null) {
@@ -3206,10 +3352,10 @@ public final class Preferences {
 
     /** Once-per-content-version merge of the bundled seed catalog into the user
      *  store.  Each seed card is mapped to a store card by
-     *  {@link #findStoreCardForSeed name or match-list overlap}: none found → the
-     *  whole seed card is deep-copied in; found → its RANGE table is reconciled per
+     *  {@link #findStoreCardForSeed name or match-list overlap}: none found -> the
+     *  whole seed card is deep-copied in; found -> its RANGE table is reconciled per
      *  direction (see {@link #mergeSeedRanges}) and any match entry the release
-     *  added is UNIONED into the store card (see {@link #unionMatch} — add-only,
+     *  added is UNIONED into the store card (see {@link #unionMatch} - add-only,
      *  case-insensitive dedupe).  The matched store card keeps its own name, channel
      *  mode and active-range selection; a user-created card (no seed maps onto it)
      *  is never visited, so it stays untouched. */
@@ -3232,7 +3378,7 @@ public final class Preferences {
     /** Add-only case-insensitive union of a seed card's {@code match} entries into
      *  the store card's list on the seed merge: existing entries keep their place
      *  and order, each seed entry the store lacks (compared case-insensitively) is
-     *  appended.  No removals — a user-added recognition pattern is never dropped,
+     *  appended.  No removals - a user-added recognition pattern is never dropped,
      *  so a released seed's new match entry reaches an existing store card. */
     private void unionMatch(List<String> into, List<String> from) {
         for (String s : from) {
@@ -3242,7 +3388,7 @@ public final class Preferences {
         }
     }
 
-    /** The store card the {@code seed} card maps onto — first by case-insensitive
+    /** The store card the {@code seed} card maps onto - first by case-insensitive
      *  logical NAME, else by MATCH-list overlap (any {@code match} entry equal
      *  case-insensitively between the two lists), so a user who renamed a well-known
      *  card is still recognised by its recognition patterns.  {@code null} when the
@@ -3259,7 +3405,7 @@ public final class Preferences {
     }
 
     /** True when {@code a} and {@code b} share at least one entry compared
-     *  case-insensitively — the match-list overlap {@link #findStoreCardForSeed}
+     *  case-insensitively - the match-list overlap {@link #findStoreCardForSeed}
      *  uses so a renamed card keeps its seed identity. */
     private boolean matchOverlap(List<String> a, List<String> b) {
         for (String s : a) {
@@ -3270,7 +3416,7 @@ public final class Preferences {
 
     /** Reconciles one direction's range table against the {@code seed} endpoint:
      *  each seed range is ADDED when the store lacks its label, else it REPLACES the
-     *  store row in place with the seed's nominal definition — but a store row the
+     *  store row in place with the seed's nominal definition - but a store row the
      *  user CALIBRATED carries its measured {@code fsLeft} / {@code fsRight} and the
      *  {@code calibrated} flag into the replacement (a user scalar-calibrated value
      *  lands on both channels; distinct left/right survive).  A device-provided
@@ -3300,7 +3446,7 @@ public final class Preferences {
     }
 
     /** The index of the first row labelled {@code label} (case-insensitive) in
-     *  {@code rows}, or {@code -1} when none — the seed-merge lookup that
+     *  {@code rows}, or {@code -1} when none - the seed-merge lookup that
      *  distinguishes "add a new range" from "update one in place". */
     private int indexOfLabel(List<DeviceRange> rows, String label) {
         if (label == null) return -1;
@@ -3311,15 +3457,44 @@ public final class Preferences {
     }
 
     /** Reads {@code devices.yaml} into {@link #audioDevices}, tolerantly: a
-     *  missing file is a fresh start, a garbled root / entry is a guarded warn
-     *  and skip, never a throw (a broken store can't stop the app starting). */
+     *  missing file is a fresh start, a garbled ENTRY is a guarded warn and
+     *  skip, never a throw (a broken store can't stop the app starting).  A
+     *  file whose whole ROOT is unreadable is {@link #quarantine}d instead of
+     *  silently ignored - the cards in it carry the operator's calibrations,
+     *  and the next start re-seeds from the bundled store. */
     private void readDevicesFile(Path path) {
         if (!Files.exists(path)) return;
-        try (Reader r = Files.newBufferedReader(path)) {
-            Object loaded = new Yaml().load(r);
-            if (!(loaded instanceof Map<?, ?> root)) return;
+        // Read fully BEFORE parsing - quarantine renames, and Windows refuses
+        // that while a reader holds the file open (same shape as load()).
+        String text;
+        try {
+            text = Files.readString(path);
+        } catch (IOException e) {
+            if (log.isWarnEnabled()) {
+                log.warn("Failed to read device profiles from {}: {}", path, e.getMessage());
+            }
+            return;
+        }
+        try {
+            Object loaded = new Yaml().load(text);
+            if (!(loaded instanceof Map<?, ?> root)) {
+                quarantine(path, "its content is not a YAML map (empty or truncated file)");
+                return;
+            }
             if (root.get("contentVersion") instanceof Number n) recordedContentVersion = n.intValue();
             if (root.get("formatVersion")  instanceof Number n) storeFormatVersion     = n.intValue();
+            // Before the early return below: a store may carry bindings and no
+            // cards at all (every binding could name a card the seed supplies).
+            if (root.get("bindings") instanceof Map<?, ?> bound) {
+                synchronized (this) {
+                    for (Map.Entry<?, ?> e : bound.entrySet()) {
+                        if (e.getKey() instanceof String k && e.getValue() instanceof String v
+                                && !k.isEmpty() && !v.isEmpty()) {
+                            deviceCardBindings.put(k, v);
+                        }
+                    }
+                }
+            }
             if (!(root.get("audioDevices") instanceof List<?> raw)) return;
             synchronized (audioDevices) {
                 for (Object o : raw) {
@@ -3331,14 +3506,12 @@ public final class Preferences {
             if (log.isInfoEnabled()) {
                 log.info("Device profiles loaded from {}", path.toAbsolutePath());
             }
-        } catch (IOException | RuntimeException e) {
-            if (log.isWarnEnabled()) {
-                log.warn("Failed to load device profiles from {}: {}", path, e.getMessage());
-            }
+        } catch (RuntimeException e) {
+            quarantine(path, e.toString());
         }
     }
 
-    /** Persists the per-card profile store to {@code devices.yaml} — the policy
+    /** Persists the per-card profile store to {@code devices.yaml} - the policy
      *  gate the profile mutators call.  No-op in {@link #isTransientMode()
      *  transient mode} or a {@link #detached} copy, so a dialog edit copy / a CLI
      *  run never writes the store; otherwise delegates to
@@ -3349,7 +3522,7 @@ public final class Preferences {
     }
 
     /** Writes the per-card profile store to {@code path} using the same atomic
-     *  temp-file-move discipline as {@link #save()} — the file mechanism, with no
+     *  temp-file-move discipline as {@link #save()} - the file mechanism, with no
      *  policy gate (a test drives it directly against a temp dir).
      *  {@code synchronized} (preset style) so a structural profile change can't
      *  race a concurrent write iterating the list. */
@@ -3358,25 +3531,25 @@ public final class Preferences {
     }
 
     /** {@link #writeDevicesTo(Path)} with an already-parsed {@link SeedBundle}
-     *  (one seed read per operation — the load path shares its bundle with the
+     *  (one seed read per operation - the load path shares its bundle with the
      *  merge gate; standalone saves parse once via the delegate above). */
     private synchronized void writeDevicesTo(Path path, SeedBundle seed) {
         // HAND-EMITTED YAML: SnakeYAML's emitter cannot reproduce the seed's exact
         // style (one-line rows regardless of width, spaces inside the braces,
-        // double-quoted labels), so the store text is emitted directly —
+        // double-quoted labels), so the store text is emitted directly -
         // deterministic and byte-stable; the ordinary YAML reader parses it back.
         StringBuilder out = new StringBuilder();
         // The user-editable store carries the bundled seed's header comment
         // (vocabulary + upgrade behaviour), copied dynamically at write time
         // so seed-comment edits propagate on the next rewrite.
         out.append(seed.headerComment);
-        // formatVersion is COPIED from the seed — the single source of truth for
+        // formatVersion is COPIED from the seed - the single source of truth for
         // the devices.yaml format marker; the loaded store's own version when the
         // seed is unreadable, 1 as the last resort.
         int formatVersion = seed.formatVersion > 0 ? seed.formatVersion
                 : (storeFormatVersion > 0 ? storeFormatVersion : 1);
         out.append("formatVersion: ").append(formatVersion).append('\n');
-        // User-store bookkeeping only — records the bundled seed catalog version we
+        // User-store bookkeeping only - records the bundled seed catalog version we
         // last merged against, so the once-per-content-version merge fires exactly
         // once per bump.  Never present in the bundled seed resource.
         out.append("contentVersion: ").append(recordedContentVersion).append('\n');
@@ -3388,10 +3561,26 @@ public final class Preferences {
                 for (AudioDeviceProfile p : audioDevices) writeDeviceProfile(out, p);
             }
         }
+        // The user's saved device->card choices.  Omitted entirely
+        // while nothing is bound, so an installation that never chose a card
+        // keeps the file it always had.
+        Map<String, String> bindings = getDeviceCardBindings();
+        if (!bindings.isEmpty()) {
+            out.append("bindings:\n");
+            for (Map.Entry<String, String> e : bindings.entrySet()) {
+                out.append("  ").append(quoted(e.getKey()))
+                   .append(": ").append(quoted(e.getValue())).append('\n');
+            }
+        }
         Path tmp = path.resolveSibling(path.getFileName() + ".tmp");
         try {
             Files.createDirectories(path.getParent());
-            Files.writeString(tmp, out.toString());
+            // SYNC before the move, same as save(): device cards carry the
+            // operator's calibrations, and a rename whose data never reached
+            // the disk survives a kernel crash as a correctly-named empty file.
+            Files.writeString(tmp, out.toString(),
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE, StandardOpenOption.SYNC);
             try {
                 Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } catch (AtomicMoveNotSupportedException e) {
@@ -3417,7 +3606,7 @@ public final class Preferences {
     }
 
     /** The live profile with logical {@code name} (case-insensitive), or
-     *  {@code null} when none is stored.  Returns the live object — callers that
+     *  {@code null} when none is stored.  Returns the live object - callers that
      *  mutate then persist go through {@link #putAudioDeviceProfile}. */
     public AudioDeviceProfile findAudioDeviceProfile(String name) {
         if (name == null) return null;
@@ -3458,10 +3647,12 @@ public final class Preferences {
      *  {@link AudioDeviceProfile#getMatch match} entries is a case-insensitive
      *  substring of {@code deviceName}, and on overlap between cards the card with
      *  the LONGEST matching entry wins (most specific).  Returns {@code null} when
-     *  no card matches.  Direction-independent — the caller reads whichever
+     *  no card matches.  Direction-independent - the caller reads whichever
      *  endpoint block it needs (an empty endpoint contributes no ranges). */
     public AudioDeviceProfile resolveDeviceProfile(String deviceName) {
         if (deviceName == null) return null;
+        AudioDeviceProfile chosen = boundProfile(deviceName);
+        if (chosen != null) return chosen;
         AudioDeviceProfile best = null;
         int bestStrength = -1;
         synchronized (audioDevices) {
@@ -3474,6 +3665,69 @@ public final class Preferences {
             }
         }
         return best;
+    }
+
+    /** The card the user CHOSE for a local device, or null when they never chose
+     *  one - or chose a card that has since been deleted or renamed, in which case
+     *  the caller falls through to the match rule rather than treating the device
+     *  as unknown (a stale binding must not uncalibrate a device). */
+    private AudioDeviceProfile boundProfile(String deviceName) {
+        String cardName = boundCardName(deviceName);
+        return cardName == null ? null : findAudioDeviceProfile(cardName);
+    }
+
+    /** True when the active backend's INPUT device resolves to a bound card whose
+     *  input endpoint calibrates its two channels separately - any mode except
+     *  {@link DeviceChannelMode#MONO} (LINKED writes the shared active row's
+     *  per-channel fields, INDEPENDENT each channel's own row).  A MONO card or an
+     *  unbound device (no profile) keeps the single-row legacy flow.  Lives here
+     *  because it is pure card-store resolution - the panes that gate their
+     *  calibrate dialogs on it hold no device knowledge of their own. */
+    public boolean isInputBoundStereo() {
+        AudioDeviceProfile p = resolveDeviceProfile(current().getInputDeviceName());
+        return p != null && p.getInput() != null
+                && p.getInput().getChannels() != DeviceChannelMode.MONO;
+    }
+
+    /** Output twin of {@link #isInputBoundStereo()}. */
+    public boolean isOutputBoundStereo() {
+        AudioDeviceProfile p = resolveDeviceProfile(current().getOutputDeviceName());
+        return p != null && p.getOutput() != null
+                && p.getOutput().getChannels() != DeviceChannelMode.MONO;
+    }
+
+    /** The binding key for a device: its plain NAME on this machine, prefixed with
+     *  the owning server's id for the local mirror of a remote choice - a remote
+     *  device is bound on the SERVER, and locally under the same name with the
+     *  server UUID as prefix.  {@code serverId} null = a device on this machine. */
+    public String deviceBindingKey(String serverId, String deviceName) {
+        return serverId == null ? deviceName : serverId + BINDING_KEY_SEPARATOR + deviceName;
+    }
+
+    /** The logical card name bound to {@code deviceKey} (see
+     *  {@link #deviceBindingKey}), or null when nothing is bound. */
+    public synchronized String boundCardName(String deviceKey) {
+        return deviceKey == null ? null : deviceCardBindings.get(deviceKey);
+    }
+
+    /** Records the user's card choice for {@code deviceKey} and persists it;
+     *  a null / blank {@code cardName} UNBINDS, which puts the device back under
+     *  the {@code match} rule.  No-op when nothing changes, so a passive re-select
+     *  of the card already bound does not rewrite the store. */
+    public synchronized void bindDeviceToCard(String deviceKey, String cardName) {
+        if (deviceKey == null || deviceKey.isEmpty()) return;
+        String previous = cardName == null || cardName.isEmpty()
+                ? deviceCardBindings.remove(deviceKey)
+                : deviceCardBindings.put(deviceKey, cardName);
+        if (!Objects.equals(previous, cardName == null || cardName.isEmpty() ? null : cardName)) {
+            saveDevices();
+        }
+    }
+
+    /** Every saved binding, key -> card name - a defensive copy for the dialog
+     *  working copy and the store round-trip. */
+    public synchronized Map<String, String> getDeviceCardBindings() {
+        return new LinkedHashMap<>(deviceCardBindings);
     }
 
     /**
@@ -3494,13 +3748,13 @@ public final class Preferences {
         // ALSA "[plughw:1,0]" / "[hw:1,0]" suffix.
         int bracket = s.indexOf('[');
         if (bracket > 0) s = s.substring(0, bracket).trim();
-        // WASAPI role wrapper "Role (Card name)" → "Card name".
+        // WASAPI role wrapper "Role (Card name)" -> "Card name".
         s = unwrapRole(s);
         return s.trim();
     }
 
-    /** Removes a leading WASAPI role wrapper — {@code Line (X)} /
-     *  {@code Speakers (X)} / {@code Microphone (X)} / {@code Headphones (X)} —
+    /** Removes a leading WASAPI role wrapper - {@code Line (X)} /
+     *  {@code Speakers (X)} / {@code Microphone (X)} / {@code Headphones (X)} -
      *  returning the inner {@code X}; returns {@code s} unchanged when it is not
      *  a recognised wrapper. */
     private String unwrapRole(String s) {
@@ -3519,7 +3773,7 @@ public final class Preferences {
         }
     }
 
-    /** True when {@code list} already carries {@code value} (case-insensitive) —
+    /** True when {@code list} already carries {@code value} (case-insensitive) -
      *  the dedupe test the {@code match} union / alias absorption share. */
     private boolean containsIgnoreCase(List<String> list, String value) {
         if (value == null) return false;
@@ -3538,18 +3792,58 @@ public final class Preferences {
      *  from the {@code activeRangeRight} row's {@code fsRight} (a dangling right
      *  label falls back to the {@code activeRange} row's {@code fsRight}).  A no-op
      *  for BOTH channels (legacy global scalars stand) when the name is unbound or
-     *  the profile has no usable range row. */
+     *  the profile has no usable range row - which includes a row whose full scales
+     *  are not above zero, i.e. one that was never calibrated (see
+     *  {@link #deviceCalibration}). */
     public void applyInputDeviceProfile(String deviceName) {
+        DeviceCalibration cal = deviceCalibration(deviceName, true);
+        if (cal == null) return;
+        setAdcFsVoltageRms(cal.fsRmsLeft());
+        setAdcFsVoltageRmsRight(cal.fsRmsRight());
+    }
+
+    /** The per-channel active-range full-scales (stored RMS) of the card
+     *  {@code deviceName} resolves to, in the given direction, or {@code null}
+     *  when nothing is bound or the endpoint has no usable range row.  MONO: the
+     *  single physical channel's {@code fsLeft} fills BOTH values.  LINKED: left
+     *  and right from the SAME active row.  INDEPENDENT: left from the
+     *  {@code activeRange} row's {@code fsLeft}, right from the
+     *  {@code activeRangeRight} row's {@code fsRight} (a dangling right label
+     *  falls back to the {@code activeRange} row's {@code fsRight}).
+     *
+     *  <p>"Usable" includes ABOVE ZERO, on both channels.  A full scale is the
+     *  divisor every level is computed against, so a zero is not a quiet device -
+     *  it is a division by zero, or an infinite reading, depending on which way it
+     *  is applied.  A range row that was never calibrated carries exactly that
+     *  zero, and such a row is an UNCALIBRATED device however it got there: the
+     *  honest answer is the same {@code null} an unbound name gets, so every
+     *  caller falls back to its own legacy default instead of inheriting a number
+     *  that cannot be arithmetic.
+     *
+     *  <p>The ONE resolution: the two apply methods above and below push it into
+     *  their own scalars, and a Phonalyser server publishes it as the {@code cal}
+     *  of every device it offers - so what a remote client is told and what this
+     *  machine would apply itself can never be computed two different ways, and
+     *  the zero guard lands on all of them at once.
+     *
+     *  <p>{@code synchronized} on the SAME instance monitor the calibrate writes
+     *  hold ({@link #storeDeviceCalibration} and its siblings write {@code fsLeft}
+     *  and {@code fsRight} as two separate field writes before
+     *  {@link #putAudioDeviceProfile} re-puts the card).  Without it a server
+     *  broadcasting {@code cal} could sample the row between those two writes and
+     *  publish a half-updated pair - the new left against the old right - which is
+     *  a plausible-looking channel imbalance no client could detect. */
+    public synchronized DeviceCalibration deviceCalibration(String deviceName, boolean input) {
         AudioDeviceProfile p = resolveDeviceProfile(deviceName);
         if (p == null) {
-            logProfileUnresolved(true, deviceName);
-            return;
+            logProfileUnresolved(input, deviceName);
+            return null;
         }
-        DeviceEndpointConfig ep = p.getInput();
+        DeviceEndpointConfig ep = input ? p.getInput() : p.getOutput();
         DeviceRange rowLeft = activeRange(ep, Channel.L);
         if (rowLeft == null) {
-            logProfileUnresolved(true, deviceName);
-            return;
+            logProfileUnresolved(input, deviceName);
+            return null;
         }
         double fsLeft = rowLeft.getFsLeft();
         double fsRight;
@@ -3558,9 +3852,12 @@ public final class Preferences {
             case LINKED:      fsRight = rowLeft.getFsRight();                    break;
             default:          fsRight = fsLeft;                                  break;   // MONO: one value both sides
         }
-        logProfileResolved(true, deviceName, p, rowLeft, fsLeft);
-        setAdcFsVoltageRms(fsLeft);
-        setAdcFsVoltageRmsRight(fsRight);
+        if (fsLeft <= 0.0 || fsRight <= 0.0) {
+            logProfileUncalibrated(input, deviceName, p, rowLeft, fsLeft, fsRight);
+            return null;
+        }
+        logProfileResolved(input, deviceName, p, rowLeft, fsLeft);
+        return new DeviceCalibration(fsLeft, fsRight);
     }
 
     /** Resolves the output device name to its owning card's per-channel
@@ -3572,29 +3869,102 @@ public final class Preferences {
      *  {@code activeRange} row's {@code fsLeft}, right from the
      *  {@code activeRangeRight} row's {@code fsRight} (a dangling right label falls
      *  back to the {@code activeRange} row's {@code fsRight}).  A no-op (legacy
-     *  global scalars stand) when unbound or with no usable range row. */
+     *  global scalars stand) when unbound or with no usable range row - which
+     *  includes an uncalibrated row, see {@link #deviceCalibration}. */
     public void applyOutputDeviceProfile(String deviceName) {
+        DeviceCalibration cal = deviceCalibration(deviceName, false);
+        if (cal == null) return;
+        setDacFsVoltageAmpl(cal.fsRmsLeft() * Constants.SQRT2);
+        setDacFsVoltageAmplRight(cal.fsRmsRight() * Constants.SQRT2);
+    }
+
+    /** Applies {@code device}'s per-channel full-scales in one direction,
+     *  preferring the calibration the DEVICE carries over this machine's card
+     *  store: a device plugged into a Phonalyser server is calibrated there
+     *  (spec 4.3 {@code cal}), and its values must win - the local store knows
+     *  nothing about that bench and could only match it by a name collision, and
+     *  nothing about a foreign device is ever written into it.  A local device
+     *  carries no calibration and falls back to the name lookup, which is what
+     *  {@link #applyInputDeviceProfile} / {@link #applyOutputDeviceProfile} have
+     *  always done. */
+    public void applyDeviceProfile(DeviceRef device, boolean input) {
+        DeviceCalibration cal = device.calibration();
+        if (cal == null) {
+            if (device.remote()) {
+                // A device on a bench is calibrated by that bench and by nothing
+                // else: a matching local card is the SOURCE for propagating a
+                // calibration up to the server, never a silent calibrator down
+                // here.  Resolving it by name would put this machine's full
+                // scales under a device across the room on the strength of a
+                // name collision, and nothing on screen would say so
+                // - the scalars stay where they are and the selection is reported
+                // as uncalibrated ({@link #isUncalibrated}).
+                logRemoteUncalibrated(device, input);
+                return;
+            }
+            if (input) {
+                applyInputDeviceProfile(device.name());
+            } else {
+                applyOutputDeviceProfile(device.name());
+            }
+            return;
+        }
+        if (input) {
+            setAdcFsVoltageRms(cal.fsRmsLeft());
+            setAdcFsVoltageRmsRight(cal.fsRmsRight());
+        } else {
+            setDacFsVoltageAmpl(cal.fsRmsLeft() * Constants.SQRT2);
+            setDacFsVoltageAmplRight(cal.fsRmsRight() * Constants.SQRT2);
+        }
+    }
+
+    /**
+     * True when {@code device} would be measured with NO real calibration in this
+     * direction - the test behind the warning the Preferences dialog raises when
+     * the operator commits a changed backend / device: an uncalibrated device or
+     * card has to be announced, because V, dBV and every value derived from them
+     * are then not accurate.
+     *
+     * <p>It reads the SAME precedence {@link #applyDeviceProfile} applies, in the
+     * same order, so the answer can never disagree with what the selection is
+     * actually measured against: the calibration the device carries wins, then
+     * this machine's card store, and anything else is uncalibrated.
+     *
+     * <p>A {@code calibrationFromDevice} endpoint is exempt - a QA40x carries its
+     * own factory calibration and there is nothing for the operator to do about
+     * it, so the warning would be noise.
+     */
+    public synchronized boolean isUncalibrated(DeviceRef device, boolean input) {
+        if (device.calibration() != null) {
+            return false;
+        }
+        // A bench device the bench has no calibration for IS uncalibrated,
+        // whatever this machine's store happens to hold under the same name -
+        // the local card is what the operator may propagate UP, not a reason to
+        // keep quiet about a device that is measuring uncalibrated.
+        return device.remote() || isUncalibrated(device.name(), input);
+    }
+
+    /** Guarded log for the one case that used to fall back silently: a bench
+     *  device with no calibration of its own, whose scalars this process
+     *  deliberately leaves alone (see {@link #applyDeviceProfile}). */
+    private void logRemoteUncalibrated(DeviceRef device, boolean input) {
+        if (log.isInfoEnabled()) {
+            log.info("'{}' ({}) is on a server that has no calibration for it - the "
+                    + "full scales stay as they are and the selection is uncalibrated",
+                    device.name(), input ? "input" : "output");
+        }
+    }
+
+    /** The name-only form of {@link #isUncalibrated(DeviceRef, boolean)} - for a
+     *  device this process holds no enumerated ref for, which is exactly the case
+     *  the name lookup has always covered on its own. */
+    public synchronized boolean isUncalibrated(String deviceName, boolean input) {
         AudioDeviceProfile p = resolveDeviceProfile(deviceName);
-        if (p == null) {
-            logProfileUnresolved(false, deviceName);
-            return;
+        if (p != null && (input ? p.getInput() : p.getOutput()).isCalibrationFromDevice()) {
+            return false;
         }
-        DeviceEndpointConfig ep = p.getOutput();
-        DeviceRange rowLeft = activeRange(ep, Channel.L);
-        if (rowLeft == null) {
-            logProfileUnresolved(false, deviceName);
-            return;
-        }
-        double fsLeft = rowLeft.getFsLeft();
-        double fsRight;
-        switch (ep.getChannels()) {
-            case INDEPENDENT: fsRight = activeRange(ep, Channel.R).getFsRight(); break;
-            case LINKED:      fsRight = rowLeft.getFsRight();                    break;
-            default:          fsRight = fsLeft;                                  break;   // MONO: one value both sides
-        }
-        logProfileResolved(false, deviceName, p, rowLeft, fsLeft);
-        setDacFsVoltageAmpl(fsLeft * Constants.SQRT2);
-        setDacFsVoltageAmplRight(fsRight * Constants.SQRT2);
+        return deviceCalibration(deviceName, input) == null;
     }
 
     /** Writes {@code fsVrms} as the current input device's ADC calibration:
@@ -3642,7 +4012,7 @@ public final class Preferences {
         writeActiveRangeFs(ep, ch, fsVrms);
         putAudioDeviceProfile(p);   // add/replace + save()
         if (mono) {
-            // MONO card: one physical channel — both scalars move together.
+            // MONO card: one physical channel - both scalars move together.
             setAdcFsVoltageRms(fsVrms);
             setAdcFsVoltageRmsRight(fsVrms);
         } else if (ch == Channel.R) {
@@ -3674,7 +4044,7 @@ public final class Preferences {
         setDacFsVoltageAmplRight(fsAmpl);
     }
 
-    /** Per-channel DAC calibrate for backend + current output device — the mirror
+    /** Per-channel DAC calibrate for backend + current output device - the mirror
      *  of {@link #storeAdcCalibration(Channel, double)} on the output endpoint.  On
      *  a bound stereo card (LINKED or INDEPENDENT) it writes ONLY {@code ch}'s
      *  active-range field (the RMS form {@code fsAmpl / √2}: {@code fsLeft} of the
@@ -3698,7 +4068,7 @@ public final class Preferences {
         writeActiveRangeFs(ep, ch, fsAmpl / Constants.SQRT2);
         putAudioDeviceProfile(p);   // add/replace + save()
         if (mono) {
-            // MONO card: one physical channel — both scalars move together.
+            // MONO card: one physical channel - both scalars move together.
             setDacFsVoltageAmpl(fsAmpl);
             setDacFsVoltageAmplRight(fsAmpl);
         } else if (ch == Channel.R) {
@@ -3708,17 +4078,57 @@ public final class Preferences {
         }
     }
 
+    /**
+     * Stores the pair of full-scale RMS volts as the calibration of {@code
+     * deviceName} in one direction - the card write of the calibrate flow, aimed
+     * at a NAMED device instead of the currently selected one, and touching no
+     * global scalar.
+     *
+     * <p>That is what a Phonalyser server needs: the calibration of every device
+     * plugged into it is ITS to keep (spec 4.3 {@code device.setCalibration}),
+     * the device a client is calibrating is not necessarily the one this process
+     * would measure on, and a server has no measurement of its own for a scalar
+     * to serve.  The card resolution, the auto-created card and the
+     * calibrated-row marking are the local flow's own
+     * ({@link #storeAdcCalibration(Channel, double)} and its siblings), so a
+     * value written here reads back through {@link #deviceCalibration} unchanged.
+     *
+     * @return {@code false} - and nothing is written - when the endpoint's
+     *         calibration comes from the device itself (a QA40x): those values
+     *         are the analyzer's, not a caller's to set
+     */
+    public synchronized boolean storeDeviceCalibration(String deviceName, boolean input,
+            double fsRmsLeft, double fsRmsRight) {
+        AudioDeviceProfile p = resolveDeviceProfile(deviceName);
+        if (p == null) {
+            p = seedProfileFor(input, deviceName);
+        }
+        DeviceEndpointConfig ep = input ? p.getInput() : p.getOutput();
+        if (ep.isCalibrationFromDevice()) {
+            warnDeviceProvidedCalibration(p);
+            return false;
+        }
+        // LEFT first: on a MONO endpoint this single call fills both row fields,
+        // which is the one physical channel a mono card has.
+        writeActiveRangeFs(ep, Channel.L, fsRmsLeft);
+        if (ep.getChannels() != DeviceChannelMode.MONO) {
+            writeActiveRangeFs(ep, Channel.R, fsRmsRight);
+        }
+        putAudioDeviceProfile(p);   // add/replace + saveDevices()
+        return true;
+    }
+
     /** Guarded WARN when a calibrate write targets a device-provided endpoint (a
      *  QA40x whose calibration is loaded from the device): the store rejects the
      *  write and leaves both the range values and the global scalars untouched. */
     private void warnDeviceProvidedCalibration(AudioDeviceProfile p) {
         if (log.isWarnEnabled()) {
-            log.warn("Ignoring calibration write — calibration is device-provided for {}", p.getName());
+            log.warn("Ignoring calibration write - calibration is device-provided for {}", p.getName());
         }
     }
 
     /** True when the active input device resolves to a card whose ADC full-scale
-     *  is provided by the device itself (a QA40x) — its calibration is read-only,
+     *  is provided by the device itself (a QA40x) - its calibration is read-only,
      *  so the calibrate dialog opens view-only. */
     public synchronized boolean isAdcCalibrationFromDevice() {
         AudioDeviceProfile p = resolveDeviceProfile(current().getInputDeviceName());
@@ -3726,7 +4136,7 @@ public final class Preferences {
     }
 
     /** True when the active output device resolves to a card whose DAC full-scale
-     *  is provided by the device itself (a QA40x) — its calibration is read-only,
+     *  is provided by the device itself (a QA40x) - its calibration is read-only,
      *  so the calibrate dialog opens view-only. */
     public synchronized boolean isDacCalibrationFromDevice() {
         AudioDeviceProfile p = resolveDeviceProfile(current().getOutputDeviceName());
@@ -3735,7 +4145,7 @@ public final class Preferences {
 
     /** Resolves the card for a first calibrate on an UNBOUND device: a card whose
      *  {@code match} entries already recognise {@code deviceName} (via
-     *  {@link #resolveDeviceProfile}) is BOUND — the device name is
+     *  {@link #resolveDeviceProfile}) is BOUND - the device name is
      *  {@link AudioDeviceProfile#bindDeviceName appended} to {@code match} when
      *  nothing already matches, and the card keeps its ranges; nothing recognised
      *  falls back to a fresh bare {@code "default"}-row card.  Returns the LIVE
@@ -3785,7 +4195,7 @@ public final class Preferences {
             for (DeviceRange r : rows) {
                 if (ep.getActiveRangeRight().equals(r.getLabel())) return r;
             }
-            // Dangling right label → fall back to the activeRange (left) row below.
+            // Dangling right label -> fall back to the activeRange (left) row below.
         }
         if (label != null) {
             for (DeviceRange r : rows) {
@@ -3796,21 +4206,21 @@ public final class Preferences {
     }
 
     /** Writes {@code fs} into the endpoint's active row for BOTH channels (the
-     *  LINKED / legacy write) — the DAC calibrate path and the single-arg ADC
+     *  LINKED / legacy write) - the DAC calibrate path and the single-arg ADC
      *  calibrate use this.  Creates a {@code "default"} row and selects it when the
      *  table is empty, and selects the resolved row as active when no label was set. */
     private void writeActiveRangeFs(DeviceEndpointConfig ep, double fs) {
         DeviceRange row = seedableActiveRow(ep, Channel.L);
         row.setFsLeft(fs);
         row.setFsRight(fs);
-        // A real calibration wrote this row — protect it from seed-merge refresh.
+        // A real calibration wrote this row - protect it from seed-merge refresh.
         row.setCalibrated(true);
     }
 
     /** Writes {@code fs} into ONLY {@code ch}'s active-range field on a bound stereo
-     *  endpoint: LEFT → the {@code activeRange} row's {@code fsLeft}; RIGHT → the
+     *  endpoint: LEFT -> the {@code activeRange} row's {@code fsLeft}; RIGHT -> the
      *  {@code activeRangeRight} row's {@code fsRight} for INDEPENDENT (dangling right
-     *  label → the {@code activeRange} row), or the SAME active row's {@code fsRight}
+     *  label -> the {@code activeRange} row), or the SAME active row's {@code fsRight}
      *  for LINKED (shared range switching, per-channel values).  On a MONO endpoint
      *  (one physical channel) it falls back to the legacy both-equal write so the
      *  single value lands on both row fields. */
@@ -3825,12 +4235,12 @@ public final class Preferences {
         } else {
             row.setFsLeft(fs);
         }
-        // A real calibration wrote this row — protect it from seed-merge refresh.
+        // A real calibration wrote this row - protect it from seed-merge refresh.
         row.setCalibrated(true);
     }
 
     /** Resolves {@code ch}'s active range row, seeding a {@code "default"} row (and
-     *  selecting it as active) when the range table is empty — the shared setup for
+     *  selecting it as active) when the range table is empty - the shared setup for
      *  the two {@code writeActiveRangeFs} forms. */
     private DeviceRange seedableActiveRow(DeviceEndpointConfig ep, Channel ch) {
         DeviceRange row = activeRange(ep, ch);
@@ -3853,6 +4263,18 @@ public final class Preferences {
         }
     }
 
+    /** Guarded debug log of a card whose active row carries no usable full scale -
+     *  a range row that was never calibrated.  Debug, not warn: an uncalibrated
+     *  card is an ordinary state of a fresh install, and this is read on every
+     *  device-list build (a Phonalyser server publishes it per device). */
+    private void logProfileUncalibrated(boolean input, String deviceName, AudioDeviceProfile p,
+                                        DeviceRange row, double fsLeft, double fsRight) {
+        if (log.isDebugEnabled()) {
+            log.debug("{} device '{}' -> card '{}' -> range '{}' is uncalibrated (FS {} / {} Vrms); keeping the global full-scale",
+                    input ? "input" : "output", deviceName, p.getName(), row.getLabel(), fsLeft, fsRight);
+        }
+    }
+
     /** Guarded debug log of an unresolved device (legacy global scalar stands). */
     private void logProfileUnresolved(boolean input, String deviceName) {
         if (log.isDebugEnabled()) {
@@ -3862,7 +4284,7 @@ public final class Preferences {
     }
 
     /** Deep-copies a profile: new match list, new endpoint configs, new range
-     *  rows — shared by {@link #getAudioDeviceProfiles} and the dialog copy/apply
+     *  rows - shared by {@link #getAudioDeviceProfiles} and the dialog copy/apply
      *  so a mutation on one side never leaks to the other. */
     private AudioDeviceProfile copyProfile(AudioDeviceProfile src) {
         AudioDeviceProfile c = new AudioDeviceProfile();
@@ -3874,13 +4296,13 @@ public final class Preferences {
     }
 
     /** Deep-copies one endpoint config (new range-row objects) via
-     *  {@link DeviceEndpointConfig#deepCopy()} — the state owner performs the
+     *  {@link DeviceEndpointConfig#deepCopy()} - the state owner performs the
      *  copy. */
     private DeviceEndpointConfig copyEndpoint(DeviceEndpointConfig src) {
         return src.deepCopy();
     }
 
-    /** Serialises one {@link FreqRespFilterTypeParams} to its YAML map — the
+    /** Serialises one {@link FreqRespFilterTypeParams} to its YAML map - the
      *  ONE place that lists the filter-param field names for writing.  Shared
      *  by the per-type {@code freqRespFilterParamsByType} block and every
      *  {@link FreqRespPreset}'s embedded {@code filterParams}. */
@@ -3901,7 +4323,7 @@ public final class Preferences {
 
     /** Deserialises one {@link FreqRespFilterTypeParams} from its YAML map,
      *  seeded with {@code type}'s pinned defaults and clamped to the valid
-     *  ranges — the ONE place that lists the field names for reading.  Shared
+     *  ranges - the ONE place that lists the field names for reading.  Shared
      *  by the per-type block and every preset's embedded {@code filterParams}. */
     private FreqRespFilterTypeParams readFilterParams(FilterType type, Map<?, ?> pm) {
         FreqRespFilterTypeParams p = FreqRespFilterTypeParams.fromType(type);
@@ -3918,7 +4340,7 @@ public final class Preferences {
         return p;
     }
 
-    /** Emits one {@link AudioDeviceProfile} in the seed's exact style — the ONE
+    /** Emits one {@link AudioDeviceProfile} in the seed's exact style - the ONE
      *  place that lists the profile field names for writing.  The {@code match}
      *  list and endpoint blocks are omitted when empty; the legacy per-backend
      *  alias maps are never emitted (they are folded into {@code match} on read). */
@@ -3937,7 +4359,7 @@ public final class Preferences {
         writeEndpoint(out, "output", p.getOutput());
     }
 
-    /** {@code s} as a YAML double-quoted scalar (backslash and quote escaped) —
+    /** {@code s} as a YAML double-quoted scalar (backslash and quote escaped) -
      *  the style the seed uses for every match entry / range label / active-range
      *  label. */
     private String quoted(String s) {
@@ -3945,14 +4367,117 @@ public final class Preferences {
     }
 
     /** A card name in the seed's plain (unquoted) style when it is safely plain
-     *  YAML — word character first, then letters / digits / spaces and a few
-     *  benign punctuation marks, no trailing space — else double-quoted. */
+     *  YAML - word character first, then letters / digits / spaces and a few
+     *  benign punctuation marks, no trailing space - else double-quoted. */
     private String plainOrQuoted(String s) {
         return !s.endsWith(" ") && s.matches("[A-Za-z0-9][A-Za-z0-9 ()./+_-]*") ? s : quoted(s);
     }
 
+    /**
+     * One card as a plain map, in the SAME vocabulary its {@code devices.yaml}
+     * entry uses - what a Phonalyser client sends when it hands a card to the
+     * bench that owns the device (net spec 4.3 {@code cards.put}) and what a
+     * server answers when it describes one ({@code cards.list}).
+     *
+     * <p>The wire form is the STORE's form on purpose: a card that travelled
+     * comes back through {@link #cardFromMap} as the same card, and there is one
+     * vocabulary to keep in step instead of two that drift. An endpoint with no
+     * range table is left out entirely, exactly as {@code writeEndpoint} leaves
+     * it out of the file - an endpoint with no rows calibrates nothing, and an
+     * empty block on the wire would only invite a binding that measures nothing.
+     */
+    public Map<String, Object> cardToMap(AudioDeviceProfile p) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("name", p.getName());
+        m.put("match", new ArrayList<>(p.getMatch()));
+        putEndpointMap(m, "input",  p.getInput());
+        putEndpointMap(m, "output", p.getOutput());
+        return m;
+    }
+
+    /** {@link #cardToMap}'s reader: the map form of a card back into a card, or
+     *  {@code null} when it carries no usable name.  Deliberately the SAME
+     *  reader the file uses ({@code readDeviceProfile}) - a card arriving over
+     *  the wire and a card read from disk must become the same object, including
+     *  every tolerance the reader already has (absent {@code match}, scalar
+     *  {@code fsVrms}, either {@code activeRange} shape). */
+    public AudioDeviceProfile cardFromMap(Map<?, ?> m) {
+        return readDeviceProfile(m);
+    }
+
+    /** One endpoint of {@link #cardToMap}, omitted when it holds no range row.
+     *  The two flags are emitted only when true, mirroring the file writer, so a
+     *  plain card's wire form carries nothing it does not need. */
+    private void putEndpointMap(Map<String, Object> card, String key, DeviceEndpointConfig ep) {
+        if (ep == null || ep.getRanges().isEmpty()) return;
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("channels", ep.getChannels().name());
+        if (ep.isCalibrationFromDevice()) out.put("calibrationFromDevice", true);
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (DeviceRange r : ep.getRanges()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("label", r.getLabel());
+            row.put("fsVrms", Map.of("left", r.getFsLeft(), "right", r.getFsRight()));
+            if (r.isCalibrated()) row.put("calibrated", true);
+            // The device-authored display text (QA40x verbose range labels) -
+            // without it a bench's card shows its plain keys on every client.
+            if (r.getDisplayLabel() != null) row.put("displayLabel", r.getDisplayLabel());
+            rows.add(row);
+        }
+        out.put("ranges", rows);
+        if (ep.getActiveRange() != null) {
+            // The same two shapes the file has: one label, or the per-channel
+            // pair an INDEPENDENT endpoint needs.
+            out.put("activeRange", ep.getChannels() == DeviceChannelMode.INDEPENDENT
+                    ? Map.of("left", ep.getActiveRange(), "right",
+                            ep.getActiveRangeRight() != null
+                                    ? ep.getActiveRangeRight() : ep.getActiveRange())
+                    : ep.getActiveRange());
+        }
+        card.put(key, out);
+    }
+
+    /**
+     * Moves the ACTIVE range marker of the card {@code deviceName} resolves to -
+     * the write behind net spec 4.3's {@code device.setActiveRange}, and the same
+     * marker the Preferences dialog's range radios move locally.
+     *
+     * <p>Which row is active decides which full scale is in force, so this
+     * changes what every later measurement on the device MEANS - hence the wire
+     * form requires the device lock, exactly like a calibration write.
+     *
+     * @param channel {@code null} or {@link Channel#L} on a LINKED / MONO
+     *        endpoint moves the one marker both channels read; on an INDEPENDENT
+     *        endpoint {@link Channel#R} moves the right channel's own marker
+     * @return false when nothing is bound to that name, or the endpoint has no
+     *         row with that label - a marker pointing at a row that does not
+     *         exist would silently fall back to the first row
+     */
+    public synchronized boolean storeActiveRange(String deviceName, boolean input,
+            String label, Channel channel) {
+        AudioDeviceProfile p = resolveDeviceProfile(deviceName);
+        if (p == null || label == null) return false;
+        DeviceEndpointConfig ep = input ? p.getInput() : p.getOutput();
+        boolean known = false;
+        for (DeviceRange r : ep.getRanges()) {
+            if (label.equals(r.getLabel())) { known = true; break; }
+        }
+        if (!known) return false;
+        if (channel == Channel.R && ep.getChannels() == DeviceChannelMode.INDEPENDENT) {
+            ep.setActiveRangeRight(label);
+        } else {
+            ep.setActiveRange(label);
+            // A LINKED / MONO endpoint reads both channels off the one marker, so
+            // a stale right marker left behind by an earlier INDEPENDENT spell
+            // must not survive the move.
+            if (ep.getChannels() != DeviceChannelMode.INDEPENDENT) ep.setActiveRangeRight(null);
+        }
+        putAudioDeviceProfile(p);   // add/replace + saveDevices()
+        return true;
+    }
+
     /** Deserialises one {@link AudioDeviceProfile} from its YAML map, or
-     *  {@code null} for a garbled entry (no usable name) — the caller skips it
+     *  {@code null} for a garbled entry (no usable name) - the caller skips it
      *  rather than aborting the whole load.  The ONE place that lists the
      *  profile field names for reading. */
     private AudioDeviceProfile readDeviceProfile(Map<?, ?> m) {
@@ -3991,7 +4516,7 @@ public final class Preferences {
         if (ep == null || ep.getRanges().isEmpty()) return;
         out.append("    ").append(key).append(":\n");
         out.append("      channels: ").append(ep.getChannels().name()).append('\n');
-        // Emitted ONLY when set — a device-provided endpoint (QA40x); an ordinary
+        // Emitted ONLY when set - a device-provided endpoint (QA40x); an ordinary
         // endpoint stays clean, mirroring the range-level calibrated flag.
         if (ep.isCalibrationFromDevice()) out.append("      calibrationFromDevice: true\n");
         out.append("      ranges:\n");
@@ -4002,9 +4527,9 @@ public final class Preferences {
     }
 
     /** The {@code activeRange} VALUE for one endpoint: an INDEPENDENT endpoint
-     *  writes the ONE inline {@code { left: …, right: … }} flow map (each channel's
+     *  writes the ONE inline {@code { left: ..., right: ... }} flow map (each channel's
      *  own selected row label, double-quoted; an unset right selection mirrors the
-     *  left label, matching the resolver's fallback) — replacing the legacy split
+     *  left label, matching the resolver's fallback) - replacing the legacy split
      *  {@code activeRange} + {@code activeRangeRight} key pair on disk.  LINKED and
      *  MONO keep the scalar (quoted) row label.  Only called with a non-null
      *  {@code activeRange}. */
@@ -4015,7 +4540,7 @@ public final class Preferences {
     }
 
     /** Deserialises one {@link DeviceEndpointConfig} (channel mode via
-     *  {@link #enumOr}, defaulting {@link DeviceChannelMode#LINKED}) — the ONE
+     *  {@link #enumOr}, defaulting {@link DeviceChannelMode#LINKED}) - the ONE
      *  place that reads the endpoint YAML vocabulary, shared by the on-disk
      *  profiles and the bundled devices.yaml seed alike (they use one format).
      *  {@code activeRange} is accepted in both current forms: the
@@ -4044,8 +4569,8 @@ public final class Preferences {
         return ep;
     }
 
-    /** Emits one {@link DeviceRange} as ONE line in the seed's exact style —
-     *  {@code - { label: "X", fsVrms: { left: A, right: B } }} — with {@code fsVrms}
+    /** Emits one {@link DeviceRange} as ONE line in the seed's exact style -
+     *  {@code - { label: "X", fsVrms: { left: A, right: B } }} - with {@code fsVrms}
      *  ALWAYS the {@code { left, right }} pair form (never a scalar) and the label
      *  double-quoted.  The ONE place that lists the range field names for writing.
      *  The reader still accepts a scalar {@code fsVrms} for backward
@@ -4054,13 +4579,18 @@ public final class Preferences {
         out.append("        - { label: ").append(quoted(r.getLabel()))
            .append(", fsVrms: { left: ").append(r.getFsLeft())
            .append(", right: ").append(r.getFsRight()).append(" }");
-        // Emitted ONLY when set by a real calibration — a nominal (seed) row stays clean.
+        // Emitted ONLY when set by a real calibration - a nominal (seed) row stays clean.
         if (r.isCalibrated()) out.append(", calibrated: true");
+        // Device-authored display text (QA40x verbose labels) - kept so a start
+        // without the analyzer attached still shows the ranges as the device names them.
+        if (r.getDisplayLabel() != null) {
+            out.append(", displayLabel: ").append(quoted(r.getDisplayLabel()));
+        }
         out.append(" }\n");
     }
 
     /** Deserialises one {@link DeviceRange}, or {@code null} for a garbled row
-     *  (no label) — the ONE place that lists the range field names for reading.
+     *  (no label) - the ONE place that lists the range field names for reading.
      *  Accepts both the scalar {@code fsVrms} shorthand and the
      *  {@code {left, right}} map form. */
     private DeviceRange readDeviceRange(Map<?, ?> m) {
@@ -4080,6 +4610,8 @@ public final class Preferences {
         }
         // Tolerant: absent key means an uncalibrated (nominal) row.
         if (m.get("calibrated") instanceof Boolean b) r.setCalibrated(b);
+        // Tolerant: absent key means the plain label is the display text.
+        if (m.get("displayLabel") instanceof String dl) r.setDisplayLabel(dl);
         return r;
     }
 

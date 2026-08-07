@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,7 +28,7 @@ import lombok.Getter;
  * <p>Detection strategy: a fast pass over the buffer computes min / max /
  * mean / RMS and counts rising-edge crossings of the DC mean.  The two
  * outermost crossings span an integer number of cycles, which gives a
- * coarse period estimate — that estimate is then refined by scanning a
+ * coarse period estimate - that estimate is then refined by scanning a
  * narrow band of Goertzel DFTs (single-bin DFTs) around it for the peak
  * magnitude.  Goertzel is O(N) per probe and lets us pin the frequency to
  * a fraction of a Hz without an FFT.
@@ -44,8 +44,8 @@ final class SignalMeasurements {
     private final double vrms;       // volts RMS (including DC offset)
     private final double vmean;      // DC offset in volts
     private final double period;     // seconds (NaN if unknown)
-    private final double riseTime;   // seconds, 10 % → 90 % on rising edges (NaN if unknown)
-    private final double fallTime;   // seconds, 90 % → 10 % on falling edges (NaN if unknown)
+    private final double riseTime;   // seconds, 10 % -> 90 % on rising edges (NaN if unknown)
+    private final double fallTime;   // seconds, 90 % -> 10 % on falling edges (NaN if unknown)
     private final double frequency;  // Hz (NaN if unknown)
     private final double dutyCycle;  // fraction [0, 1] (NaN if unknown)
     private final double dualF1;     // Hz, dual-tone tone 1 as captured (NaN if not measured)
@@ -75,11 +75,11 @@ final class SignalMeasurements {
     /**
      * Computes measurements over the first {@code n} samples of {@code data}.
      * {@code peakVolts} converts a normalised sample of ±1.0 into the full-scale
-     * ADC voltage swing — i.e. {@code adcFsVoltageRms · √2}.
+     * ADC voltage swing - i.e. {@code adcFsVoltageRms · √2}.
      *
      * <p>{@code broadScan} enables the costly broad-band fundamental fallback
      * (a per-bin Goertzel sweep over the whole window), used only when the
-     * crossing-derived frequency is low-quality — i.e. weak / noisy signals.
+     * crossing-derived frequency is low-quality - i.e. weak / noisy signals.
      * The scope worker passes {@code false} on its real-time path and runs the
      * {@code true} variant off-thread so a weak signal can't throttle the table.
      */
@@ -111,7 +111,7 @@ final class SignalMeasurements {
         double vmean = mean * peakVolts;
         double vrms = rms * peakVolts;
 
-        // Half-amplitude midpoint of the signal — used as the crossing
+        // Half-amplitude midpoint of the signal - used as the crossing
         // threshold for both period detection and duty cycle.  Independent
         // of any DC bias on the input, so DC-coupled and AC-coupled inputs
         // yield the same answers.
@@ -132,12 +132,12 @@ final class SignalMeasurements {
         // Vmean / Vrms over an INTEGER number of periods.  The fixed-length
         // window holds a fractional cycle count, and that fraction adds an
         // amplitude-proportional, capture-phase-random residual to the mean
-        // (up to A/(π·cycles) — ~mV at full scale over 0.25 s) that swamps
+        // (up to A/(π·cycles) - ~mV at full scale over 0.25 s) that swamps
         // the noise floor in the Vmean statistics.  The rising mid-threshold
         // crossings bound whole periods, and the signal sits AT its mean
         // there, so the whole-sample boundary error is second-order (sub-µV)
-        // — Vmean then moves only with the noise floor.  No crossings (DC /
-        // noise-only) → the full-window figures above stand.
+        // - Vmean then moves only with the noise floor.  No crossings (DC /
+        // noise-only) -> the full-window figures above stand.
         if (crossCount >= 2) {
             int    pn     = lastCross - firstCross;
             double pSum   = 0;
@@ -155,7 +155,7 @@ final class SignalMeasurements {
         }
 
         // Rise/fall time: average over all complete 10 %↔90 % transitions
-        // in the buffer.  Bracket-based — track when the signal first
+        // in the buffer.  Bracket-based - track when the signal first
         // crosses the 10 % threshold going up and when it then crosses the
         // 90 % threshold (same direction), and vice versa for the falling
         // edge.  Linear interpolation gives sub-sample resolution.
@@ -219,7 +219,7 @@ final class SignalMeasurements {
             // randomises the crossing count and the crossing-derived period
             // is wildly off; the broad-band scan still finds the spectral
             // peak in that regime.
-            if (qA < 0.1 && broadScan) {   // broad-band scan is costly — the worker runs it off-thread
+            if (qA < 0.1 && broadScan) {   // broad-band scan is costly - the worker runs it off-thread
                 double refinedB = scanForFundamental(data, n, sampleRate, mean);
                 if (refinedB > 0) {
                     double magB = goertzelMagnitude(data, n, sampleRate, refinedB, mean);
@@ -240,7 +240,7 @@ final class SignalMeasurements {
                 // Leakage-debiased final estimate.  The rectangular-window
                 // Goertzel peak is pulled off the true frequency by spectral
                 // leakage from the negative-frequency image, and the pull is
-                // large on short buffers — up to ~0.3 Hz at ~20 cycles, which
+                // large on short buffers - up to ~0.3 Hz at ~20 cycles, which
                 // is what made the scope read low next to the FFT.  Re-refining
                 // the same peak on a Hann-windowed copy suppresses that image
                 // (the window's far-lower side-lobes) and pins the frequency to
@@ -386,7 +386,7 @@ final class SignalMeasurements {
     /** Returns a copy of this measurement with every time-domain field
      *  set to {@link Double#NaN} (period, rise time, fall time,
      *  frequency, duty cycle).  Used by the scope worker for dual-tone
-     *  signals — period / frequency / duty have no meaningful
+     *  signals - period / frequency / duty have no meaningful
      *  single-value answer for two simultaneous tones, so the readout
      *  table renders {@code ---} ({@link MeasurementRow}'s NaN
      *  formatting) instead of latching onto an arbitrary value.
@@ -426,8 +426,8 @@ final class SignalMeasurements {
      *  RAW signal after the mains comb has been used only to find WHICH peak
      *  is the fundamental: the comb suppresses an often-dominant mains so the
      *  tone becomes the spectral peak (a good seed), but its notches bias the
-     *  frequency; the raw signal is un-biased and — because mains harmonics
-     *  are tens of Hz apart — carries no competing component inside this
+     *  frequency; the raw signal is un-biased and - because mains harmonics
+     *  are tens of Hz apart - carries no competing component inside this
      *  narrow band.  Returns NaN for a non-finite seed. */
     static double refineFrequencyAround(float[] data, int n, double sampleRate,
                                         double seedHz, double halfHz) {

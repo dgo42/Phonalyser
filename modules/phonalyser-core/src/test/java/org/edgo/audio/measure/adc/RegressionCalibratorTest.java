@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -38,7 +38,7 @@ class RegressionCalibratorTest {
         int    sampleRate = 48_000;
         double freqHz     = 1_000.0;
         double amplitude  = 0.5;          // normalised peak
-        int    samples    = 1 << 14;      // 16 384 samples → ~340 ms
+        int    samples    = 1 << 14;      // 16 384 samples -> ~340 ms
 
         // Coherent integer-bin sine so the fit has zero windowing
         // error.  Slight phase offset so the regression's golden-section
@@ -85,11 +85,11 @@ class RegressionCalibratorTest {
 
     @Test
     void calibrate_resultArraysMatchCodeCount() {
-        // Smoke check on the result-array sizes: 16-bit ADC → 65 536 codes,
-        // 8-bit ADC → 256 codes.  All three arrays (avgErrorLsb,
+        // Smoke check on the result-array sizes: 16-bit ADC -> 65 536 codes,
+        // 8-bit ADC -> 256 codes.  All three arrays (avgErrorLsb,
         // sampleCount, interpolated) must match codeCount exactly.
         int    sampleRate = 48_000;
-        int    samples    = 4 * sampleRate;  // 4 s → covers many cycles
+        int    samples    = 4 * sampleRate;  // 4 s -> covers many cycles
         double[] sig = new double[samples];
         for (int n = 0; n < samples; n++) {
             sig[n] = (double) (0.4 * Math.sin(2.0 * Math.PI * 1000.0 * n / sampleRate));

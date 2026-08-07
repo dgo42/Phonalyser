@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -46,14 +46,14 @@ import lombok.Setter;
 import static org.lwjgl.nanovg.NanoVG.*;
 
 /**
- * {@link MeasurementPainter} backed by a <b>NanoVG</b> context — the GPU rendering
+ * {@link MeasurementPainter} backed by a <b>NanoVG</b> context - the GPU rendering
  * path for the embedded scope.  It translates the GC-mirroring API into NanoVG
  * immediate-mode calls inside an open {@code nvgBeginFrame}/{@code nvgEndFrame}
  * pair (opened and closed by the GL surface, not here).
  *
  * <p>Because NanoVG is immediate-mode and stateless across calls (no getters),
- * this painter <b>tracks the pen state itself</b> — foreground / background,
- * width, cap / join, antialias, dash, font, clip — and applies it on each
+ * this painter <b>tracks the pen state itself</b> - foreground / background,
+ * width, cap / join, antialias, dash, font, clip - and applies it on each
  * primitive, so the views' save/restore paint code (which reads state back) works
  * unchanged.  SWT {@link Color}s are converted to NanoVG colours on the way
  * through; fills use the background colour and strokes the foreground, matching
@@ -64,7 +64,7 @@ import static org.lwjgl.nanovg.NanoVG.*;
  * the user configured in Preferences): {@link #textExtent}/{@link #fontHeight} use
  * a real {@code GC} so layout matches the CPU path exactly, and {@link #drawText}
  * rasterises the string with that {@code GC}, tints it to the foreground colour,
- * and uploads it as a NanoVG image — cached (LRU) and keyed by string + font +
+ * and uploads it as a NanoVG image - cached (LRU) and keyed by string + font +
  * colour, so the throttled readouts are a cache hit almost every frame.
  *
  * <p>Created per surface and reused across frames; the surface calls
@@ -92,10 +92,10 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
             return true;
         }
     };
-    /** GL textures for drawn images (toolbar icons), keyed by Image identity —
+    /** GL textures for drawn images (toolbar icons), keyed by Image identity -
      *  uploaded once and kept for the context's life (icons are shared, stable
      *  objects).  NanoVG batches draws until endFrame, so the texture must outlive
-     *  the frame — deleting it right after the draw call renders nothing. */
+     *  the frame - deleting it right after the draw call renders nothing. */
     private final Map<Image, Integer> imageCache = new HashMap<>();
     private GC   measureGc;       // lazily created GC for textExtent / rasterising
     private Font measureGcFont;   // font currently set on measureGc
@@ -104,7 +104,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
     // A POOL of RGBA textures, one per drawAlphaImage call within a frame (cursor reset
     // in reset()): NanoVG defers all draw commands to endFrame but nvgUpdateImage uploads
     // IMMEDIATELY, so two blits sharing one texture in a frame (left + right channel, or
-    // the trace + the reconstructed-beat overlay) would both render the LAST upload — the
+    // the trace + the reconstructed-beat overlay) would both render the LAST upload - the
     // first trace vanished.  Entries are recreated only when the plot size changes, so
     // steady-state frames allocate no GL texture.
     private record PhosphorImg(int img, int w, int h) { }
@@ -116,7 +116,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
     @Getter @Setter private Color foreground;
     @Getter @Setter private Color background;
     @Getter private int   antialias = SWT.ON;
-    @Getter private int[] lineDash;                         // null ⇒ solid
+    @Getter private int[] lineDash;                         // null => solid
     @Getter @Setter private int lineStyle = SWT.LINE_SOLID;
     private final LineAttributes lineAttributes =
             new LineAttributes(1f, SWT.CAP_FLAT, SWT.JOIN_MITER);
@@ -306,7 +306,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
         byte r = (byte) (tint != null ? tint.getRed()   : 0);
         byte g = (byte) (tint != null ? tint.getGreen() : 0);
         byte b = (byte) (tint != null ? tint.getBlue()  : 0);
-        // Straight-alpha RGBA (no premultiply flag) — matches rasterise() above, which
+        // Straight-alpha RGBA (no premultiply flag) - matches rasterise() above, which
         // NanoVG source-over composites correctly; the coverage rides in the A channel.
         for (int i = 0; i < pixels; i++) {
             buf.put(r).put(g).put(b).put(alpha[i]);
@@ -358,7 +358,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
     @Override public void lineTo(float x, float y) { nvgLineTo(vg, x, y); }
     @Override public void strokePath()             { stroke(); }
 
-    // --- Measurement (real SWT GC ⇒ exact parity with the CPU path) ----------
+    // --- Measurement (real SWT GC => exact parity with the CPU path) ----------
 
     @Override public Point textExtent(String s) { return measureGc().textExtent(s); }
     @Override public int   fontHeight()         { return measureGc().getFontMetrics().getHeight(); }
@@ -399,7 +399,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
     }
 
     /** Renders {@code s} with the SWT font as white-on-black, then builds an RGBA
-     *  texture tinted to the foreground colour with the glyph coverage as alpha —
+     *  texture tinted to the foreground colour with the glyph coverage as alpha -
      *  antialiased, transparent, exactly the SWT font the CPU path uses. */
     private CachedText rasterise(String s) {
         GC gc = measureGc();
@@ -417,7 +417,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
         ig.drawText(s, 0, 0, true);
         // Read the glyph bitmap at the DEVICE zoom (200 on Retina): the no-arg
         // getImageData() returns the downscaled 100% copy, so the texture would be
-        // 1× and NanoVG would upscale it to the HiDPI framebuffer → soft / "smashed".
+        // 1× and NanoVG would upscale it to the HiDPI framebuffer -> soft / "smashed".
         // The texture is built at this native pixel resolution while the DRAW size
         // stays the point extent (w/h), so NanoVG maps it 1:1 onto device pixels.
         ImageData data = img.getImageData(Math.max(100, Math.round(pixelScale * 100f)));
@@ -433,7 +433,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
         for (int yy = 0; yy < th; yy++) {
             for (int xx = 0; xx < tw; xx++) {
                 RGB c = data.palette.getRGB(data.getPixel(xx, yy));
-                int coverage = (c.red + c.green + c.blue) / 3;       // white glyph ⇒ 255
+                int coverage = (c.red + c.green + c.blue) / 3;       // white glyph => 255
                 buf.put((byte) fr).put((byte) fgn).put((byte) fb).put((byte) coverage);
             }
         }
@@ -443,7 +443,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
         return new CachedText(image, w, h);
     }
 
-    /** Strokes a dashed line by walking the {@link #lineDash} on/off pattern —
+    /** Strokes a dashed line by walking the {@link #lineDash} on/off pattern -
      *  NanoVG has no native dashing.  Matches the GC behaviour the scope's slider,
      *  trigger and full-scale lines rely on. */
     private void dashedLine(int x1, int y1, int x2, int y2) {

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -22,7 +22,7 @@ import java.util.Map;
 
 /**
  * A block of preferences owned by one component rather than by
- * {@link Preferences} itself — the settings a single backend has and no other
+ * {@link Preferences} itself - the settings a single backend has and no other
  * does (the QA40x front-panel I2S port, for instance).  The owner registers an
  * implementation with {@link Preferences#registerCustomPreferences}, and
  * {@code Preferences} then persists it and drives its edit lifecycle without
@@ -33,7 +33,7 @@ import java.util.Map;
  * is changing).  {@link #beginEdit()} seeds edit from live when the Preferences
  * dialog opens; {@link #commitEdit()} copies edit into live when that dialog is
  * closed with OK.  Cancel simply never commits, so an abandoned edit dies with
- * the dialog — the same contract as {@code Preferences.copyForDialog} /
+ * the dialog - the same contract as {@code Preferences.copyForDialog} /
  * {@code applyFromDialog} for the ordinary preferences.
  *
  * <p><b>Registration can arrive late.</b> Backend managers are built lazily, so
@@ -45,7 +45,7 @@ import java.util.Map;
 public interface SubPreferences {
 
     /** This block's prefix inside the {@code custom} section of
-     *  preferences.yaml — one per owning backend ({@code qa40x} for the
+     *  preferences.yaml - one per owning backend ({@code qa40x} for the
      *  QA402/QA403).  Unique across implementations and stable across releases:
      *  it is what saved files are keyed by.  Lower-case, no spaces. */
     String key();
@@ -55,7 +55,7 @@ public interface SubPreferences {
     Map<String, Object> toMap();
 
     /** Restores LIVE values from a previously saved block.  Absent or
-     *  unrecognised entries must keep the current value rather than throw — the
+     *  unrecognised entries must keep the current value rather than throw - the
      *  file may come from an older or newer release. */
     void fromMap(Map<?, ?> map);
 

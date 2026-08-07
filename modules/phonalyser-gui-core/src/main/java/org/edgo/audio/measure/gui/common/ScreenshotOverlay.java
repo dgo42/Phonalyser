@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -54,7 +54,7 @@ public final class ScreenshotOverlay {
     /** Overlay ink, chosen per region to contrast its background. */
     private static final int    INK_LIGHT = 0xF0F0F0;
     private static final int    INK_DARK  = 0x101010;
-    /** Background luminance (0–255) above which a region counts as "light". */
+    /** Background luminance (0-255) above which a region counts as "light". */
     private static final int    LUMA_THRESHOLD = 140;
     /** Font height (pt) used to measure the watermark before scaling to width. */
     private static final int    MEASURE_PT = 12;
@@ -69,7 +69,7 @@ public final class ScreenshotOverlay {
      * Stamps {@code img} in place.
      *
      * @param img          the rendered screenshot to draw onto.
-     * @param commentTopY  top y (px) of the comment caption — set per pane so it
+     * @param commentTopY  top y (px) of the comment caption - set per pane so it
      *                     sits under that pane's header.
      * @param comment      caption text; null/blank draws no caption.
      * @param commentFont  caption font; null falls back to the system font at

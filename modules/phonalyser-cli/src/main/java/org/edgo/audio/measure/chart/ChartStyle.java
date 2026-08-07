@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -73,7 +73,7 @@ public final class ChartStyle {
     public static final double ANNOTATION_Y_OFFSET   = 5.0;   // dB above peak
 
     // -------------------------------------------------------------------------
-    // Cal overlay (inverted frequency response, series 2) — shown when --cal used
+    // Cal overlay (inverted frequency response, series 2) - shown when --cal used
     // -------------------------------------------------------------------------
     public static final Color       CAL_OVERLAY_COLOR  = new Color(0, 150, 0);
     public static final BasicStroke CAL_OVERLAY_STROKE =
@@ -81,7 +81,7 @@ public final class ChartStyle {
                             0.0f, new float[]{6.0f, 4.0f}, 0.0f);
 
     // -------------------------------------------------------------------------
-    // Pre-correction peak markers (series 3) — H1/Hn positions BEFORE --cal was
+    // Pre-correction peak markers (series 3) - H1/Hn positions BEFORE --cal was
     // applied, drawn as dots in a distinct blue alongside the red corrected dots
     // -------------------------------------------------------------------------
     public static final Color            PRE_PEAK_COLOR = new Color(0, 0, 200);

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -37,7 +37,7 @@ import org.edgo.audio.measure.gui.sound.SignalBufferReader;
  *
  * <p>The buffer is the scope's existing ring of normalised
  * {@code float} samples in {@code [-1, +1]}.  No live capture
- * coordination needed — the writer just reads whatever the buffer
+ * coordination needed - the writer just reads whatever the buffer
  * currently holds.
  */
 @Log4j2
@@ -55,7 +55,7 @@ public final class ScopeFileSaver {
     /**
      * Locates the largest {@code (start, length)} sub-range of the
      * read snapshot whose endpoints land on rising zero crossings of
-     * the left channel — both inside one signal period of the buffer
+     * the left channel - both inside one signal period of the buffer
      * ends.  That guarantees the saved file:
      *
      * <ul>
@@ -129,7 +129,7 @@ public final class ScopeFileSaver {
         float[] right = new float[frames];
         int actual = reader.readLatest(frames, left, right);
         if (actual <= 0) {
-            throw new IOException("Scope buffer is empty — capture hasn't produced any samples yet.");
+            throw new IOException("Scope buffer is empty - capture hasn't produced any samples yet.");
         }
         // Snap start + length to rising zero crossings one period
         // apart so the saved file begins and ends on (nearly) zero

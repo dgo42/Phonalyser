@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -41,7 +41,7 @@ import org.jfree.data.xy.XYSeriesCollection;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Exports the RAW {@link AdcHistogram} as a PNG chart — counts per code-bucket
+ * Exports the RAW {@link AdcHistogram} as a PNG chart - counts per code-bucket
  * vs voltage, before any DNL weighting.  Useful as a sanity check: you can
  * eyeball the actual ADC code distribution (e.g. arcsine PDF for a sine input,
  * with rail-bin spikes when the signal over-drives FS) and confirm it matches
@@ -102,7 +102,7 @@ public class HistogramExporter {
         long minSum = Long.MAX_VALUE;
         long maxSum = Long.MIN_VALUE;
         for (int b = firstBucket; b <= lastBucket; b++) {
-            // Voltage at the bucket centre — bipolar, 0 V at mid-range.
+            // Voltage at the bucket centre - bipolar, 0 V at mid-range.
             double centerVoltage = ((b + 0.5) * bucketSize) * voltsPerLSB - scaleVolts / 2.0;
             series.add(centerVoltage, (double) sums[b]);
             if (sums[b] < minSum) minSum = sums[b];
@@ -140,7 +140,7 @@ public class HistogramExporter {
         domain.setRange(-scaleVolts / 2.0, scaleVolts / 2.0);
         // Voltage-axis ticks: tick unit chosen so ticks land every ~40..100 px
         // (40 px @ 1920 wide, 100 px @ 5000 wide, linear in between).  Format
-        // string passed explicitly — leaving NumberTickUnit's default DecimalFormat
+        // string passed explicitly - leaving NumberTickUnit's default DecimalFormat
         // produces unlabeled ticks under some locales.
         double step = ChartStyle.chooseVoltageTickStep(scaleVolts, width);
         DecimalFormat fmt = (DecimalFormat) NumberFormat.getNumberInstance(Locale.US);

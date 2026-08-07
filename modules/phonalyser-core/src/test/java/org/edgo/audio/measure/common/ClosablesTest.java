@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -46,7 +46,7 @@ class ClosablesTest {
             throw new RuntimeException("intentional");
         };
 
-        // No assertion needed past "must not throw" — closeQuietly is
+        // No assertion needed past "must not throw" - closeQuietly is
         // expected to swallow.  An exception propagating out would fail
         // the test by way of the JUnit runner.
         Closeables.closeQuietly(throwing);

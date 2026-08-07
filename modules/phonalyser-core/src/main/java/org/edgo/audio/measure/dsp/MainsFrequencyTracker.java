@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,9 +27,9 @@ import lombok.Getter;
  *
  * <p>Scans the 50 Hz and 60 Hz bands (each with its 2nd harmonic) of a
  * reference block, discriminates 50 vs 60 by total band energy, and locks to
- * the stronger source — refining the estimate to a few mHz by parabolic
+ * the stronger source - refining the estimate to a few mHz by parabolic
  * interpolation.  The lock is exponentially smoothed (mains drifts only
- * ±0.1–0.5 Hz, so heavy averaging resists per-window jitter and the occasional
+ * ±0.1-0.5 Hz, so heavy averaging resists per-window jitter and the occasional
  * mis-lock) and outlier detections are rejected; a window with no detected
  * line holds the existing lock rather than dropping it.
  *
@@ -39,7 +39,7 @@ import lombok.Getter;
  *
  * <p>Extracted from {@code MainsCombFilter} so the comb, the synchronous
  * subtractor and the LMS canceller all detect the mains frequency the same
- * way.  Not thread-safe — drive it from one thread.
+ * way.  Not thread-safe - drive it from one thread.
  */
 public final class MainsFrequencyTracker {
 
@@ -83,7 +83,7 @@ public final class MainsFrequencyTracker {
         lockHz = Double.NaN;
     }
 
-    /** Double-precision reference overload — narrows into reusable scratch and
+    /** Double-precision reference overload - narrows into reusable scratch and
      *  reuses the single-precision estimator (the estimate is insensitive to
      *  float vs double). */
     public double track(double[] ref, int len) {
@@ -96,7 +96,7 @@ public final class MainsFrequencyTracker {
 
     /**
      * Estimates the mains fundamental from {@code ref}, returning the smoothed
-     * lock (Hz) — or the held lock (possibly {@code NaN}) when no confident
+     * lock (Hz) - or the held lock (possibly {@code NaN}) when no confident
      * line is found this window.
      */
     public double track(float[] ref, int len) {
@@ -114,7 +114,7 @@ public final class MainsFrequencyTracker {
             w[i] = ref[i] * 0.5 * (1.0 - Math.cos(norm * i));
         }
 
-        // Score 50 vs 60 by fundamental AND 2nd harmonic (50→50/100, 60→60/120);
+        // Score 50 vs 60 by fundamental AND 2nd harmonic (50->50/100, 60->60/120);
         // H2 bands use twice the span (the harmonic drifts 2× as far in Hz).
         BandScan h1a = scanBand(w, len, 50.0,  DETECT_SPAN_HZ);
         BandScan h2a = scanBand(w, len, 100.0, 2 * DETECT_SPAN_HZ);
@@ -171,7 +171,7 @@ public final class MainsFrequencyTracker {
         return new BandScan(refinedHz, mag[bestK], lo, mag);
     }
 
-    /** Median Goertzel power across the four detection bands — a robust floor
+    /** Median Goertzel power across the four detection bands - a robust floor
      *  the strongest line must clear to count as real mains. */
     private double scannedBaseline(BandScan h1a, BandScan h1b,
                                    BandScan h2a, BandScan h2b) {

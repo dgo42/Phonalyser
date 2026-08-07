@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * + drift}, and a correction issued now only reaches the measurement {@code DELAY}
  * frames later (the rig transport delay + window fill).  The loop must cancel the
  * drift, lock the measured frequency to within {@link #LOCK_PPM} of the target, and
- * — crucially — issue exactly ONE correction per disturbance, holding through the
+ * - crucially - issue exactly ONE correction per disturbance, holding through the
  * dead time rather than stacking corrections it can't yet see the effect of.
  */
 class FrequencyFllTest {
@@ -92,7 +92,7 @@ class FrequencyFllTest {
     @Test
     void holdsThroughALongDeadTime() {
         // Even with a long (20-frame) dead time the loop issues a single correction
-        // and waits it out — the whole point of waiting for ±0.1 ppm rather than
+        // and waits it out - the whole point of waiting for ±0.1 ppm rather than
         // re-correcting every frame the error is still non-zero.
         int frames = 80, delay = 20;
         Run r = drive(frames, delay, constantDrift(frames, 0.03));   // 30 ppm
@@ -104,7 +104,7 @@ class FrequencyFllTest {
     @Test
     void reCorrectsWhenDriftLeavesTheBand() {
         // Lock, then step the drift (a sudden clock-ratio change): the error leaves
-        // the band, so the loop issues a SECOND correction and re-locks — two
+        // the band, so the loop issues a SECOND correction and re-locks - two
         // corrections total, not a continuous stream.
         int frames = 120, delay = 5;
         double[] drift = constantDrift(frames, 0.05);
@@ -117,7 +117,7 @@ class FrequencyFllTest {
 
     @Test
     void subBandJitterIsHeldNotChased() {
-        // Measurement jitter INSIDE the lock band must not provoke corrections —
+        // Measurement jitter INSIDE the lock band must not provoke corrections -
         // the loop holds instead of chasing noise.  (The old fine-track regime
         // nudged every cycle; with exact transport gating the band hold is safe,
         // because a real escape from the band is corrected on the very next
@@ -138,7 +138,7 @@ class FrequencyFllTest {
         // Worst-case transport fault: the plant NEVER reflects corrections (e.g.
         // trim events not reaching the generator, or a measurement pinned by a
         // poisoned average).  The loop may keep re-correcting, but only once per
-        // transport-visibility window — never faster than the corrected signal
+        // transport-visibility window - never faster than the corrected signal
         // could physically arrive.  Regression test for the runaway that walked
         // the generator hundreds of ppm off grid: heuristic dead-time tracking
         // mis-measured the loop delay and stacked full-size corrections every
@@ -154,7 +154,7 @@ class FrequencyFllTest {
             prev = fll.getCorrection();
             absStart += N;
         }
-        // Visibility window = ceil(0.7 s · SR) samples ≈ 33 frames of N — the
+        // Visibility window = ceil(0.7 s · SR) samples ≈ 33 frames of N - the
         // total correction count is bounded by the number of windows that fit.
         int maxAllowed = (int) (frames * (long) N / (0.7 * SR)) + 2;
         assertTrue(changes <= maxAllowed,

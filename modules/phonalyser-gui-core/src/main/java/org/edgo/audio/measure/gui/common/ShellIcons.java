@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -32,9 +32,9 @@ import java.io.InputStream;
  * Applies the Phonalyser app icon to a {@link Shell}.  Picks the format
  * the running OS reads best:
  * <ul>
- *   <li>Windows — {@code phonalyser.ico} (multi-resolution; the OS
+ *   <li>Windows - {@code phonalyser.ico} (multi-resolution; the OS
  *       chooses the sharpest embedded size for title bar / taskbar);</li>
- *   <li>everywhere else — {@code phonalyser.png}.</li>
+ *   <li>everywhere else - {@code phonalyser.png}.</li>
  * </ul>
  * The {@code .icns} file is shipped alongside for jpackage to wire into
  * the macOS bundle's {@code Info.plist}; SWT itself doesn't read it at
@@ -69,7 +69,7 @@ public class ShellIcons {
         Image[] fromPrimary = tryLoad(target, primary);
         if (fromPrimary.length > 0) return fromPrimary;
         // Fall back to the PNG when the platform-preferred file is
-        // missing or unreadable — keeps the window iconised even if
+        // missing or unreadable - keeps the window iconised even if
         // the .ico was stripped from a slim build.
         if (!primary.equals(PNG_PATH)) {
             return tryLoad(target, PNG_PATH);

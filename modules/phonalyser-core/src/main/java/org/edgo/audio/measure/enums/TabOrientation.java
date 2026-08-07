@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,7 +18,7 @@
 
 package org.edgo.audio.measure.enums;
 
-/** Placement of the main window's tab strip — a look-and-feel preference.
+/** Placement of the main window's tab strip - a look-and-feel preference.
  *  The constant name is the token stored in preferences ({@link #valueOf}). */
 public enum TabOrientation {
     TOP,

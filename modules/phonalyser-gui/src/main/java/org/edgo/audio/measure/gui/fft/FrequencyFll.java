@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,27 +28,27 @@ import org.edgo.audio.measure.enums.AlignGenerator;
  * correction is issued, the loop records the absolute capture position where the
  * corrected signal can first appear in a measurement
  * ({@code writePos + DAC-drain guard}); until a result's analysis window
- * <em>starts</em> past that position, every update is held unconditionally —
+ * <em>starts</em> past that position, every update is held unconditionally -
  * such a measurement provably predates the correction, and acting on it would
  * stack a second correction onto an error the in-flight one already cancels.
  *
  * <h2>Update law</h2>
  * <pre>
- *   measurement window starts before correctionVisibleFrom → hold (in flight)
- *   |detected − target| ≤ LOCK_PPM·target                  → hold (locked / noise)
- *   else → correction −= error;  correctionVisibleFrom = writePos + drain
+ *   measurement window starts before correctionVisibleFrom -> hold (in flight)
+ *   |detected − target| ≤ LOCK_PPM·target                  -> hold (locked / noise)
+ *   else -> correction −= error;  correctionVisibleFrom = writePos + drain
  * </pre>
  *
- * <p>Earlier revisions modelled the transport heuristically — update-call
+ * <p>Earlier revisions modelled the transport heuristically - update-call
  * counts, a relative arrival test, a measured dead time, a give-up timeout.
  * Those mis-measured the dead time under fine-track noise and then re-corrected
- * faster than the ~3–4 s physical loop delay (DAC buffer drain + the analysis
+ * faster than the ~3-4 s physical loop delay (DAC buffer drain + the analysis
  * window, whose measurement frames sit at the window START), stacking full-size
- * corrections every second — a runaway that walked the generator hundreds of
+ * corrections every second - a runaway that walked the generator hundreds of
  * ppm off grid.  Gating on capture sample positions replaces all of it and is
  * immune to IRREGULAR delays too: a buffer overrun / re-sync jumps
  * {@code samplesAbsStart} forward past the gap, display throttling and GC
- * pauses change only the update cadence — none of which the gate even sees.
+ * pauses change only the update cadence - none of which the gate even sees.
  * Corrections can neither stack nor wedge, by construction; a transient
  * mis-measurement costs exactly one bounded, fully observed round trip.
  *
@@ -58,7 +58,7 @@ import org.edgo.audio.measure.enums.AlignGenerator;
 public final class FrequencyFll implements FrequencyAligner {
 
     /** Steady-state lock band (ppm of target): hold within it, re-correct when
-     *  drift leaves it.  Must be ≈ the measurement's own frequency jitter —
+     *  drift leaves it.  Must be ≈ the measurement's own frequency jitter -
      *  below it the loop chases noise, far above it real drift goes
      *  uncorrected. */
     private static final double LOCK_PPM        = 0.01;
@@ -69,18 +69,18 @@ public final class FrequencyFll implements FrequencyAligner {
      *  measurable. */
     private static final double DRAIN_GUARD_SEC = 0.7;
     /** EWMA weight on the previous drift estimate when a deadbeat folds a
-     *  fresh slope measurement in — smooths the estimator noise riding on
+     *  fresh slope measurement in - smooths the estimator noise riding on
      *  each band exit. */
     private static final double DRIFT_SMOOTH    = 0.7;
     /** Drift sanity cap (ppm of target per second): non-disciplined crystals
      *  wander orders below this; anything larger is a mis-measurement. */
     private static final double MAX_DRIFT_PPM_PER_SEC = 0.01;
     /** Minimum capture-time baseline between two deadbeats for the residual
-     *  to qualify as a slope measurement — closer exits are estimator noise,
+     *  to qualify as a slope measurement - closer exits are estimator noise,
      *  not wander, and would poison the drift estimate. */
     private static final double MIN_DRIFT_BASELINE_SEC = 2.0;
 
-    /** Current correction in Hz — add to the snap target before publishing the trim. */
+    /** Current correction in Hz - add to the snap target before publishing the trim. */
     @Getter
     private double correction = 0.0;
     /** Absolute capture sample position from which a measurement window
@@ -88,14 +88,14 @@ public final class FrequencyFll implements FrequencyAligner {
      *  (every measurement is usable). */
     private long correctionVisibleFrom = -1;
     /** Drift-rate feedforward (Hz/s): the EWMA-tracked rate at which the
-     *  measured error rebuilds between corrections — the relative wander of
+     *  measured error rebuilds between corrections - the relative wander of
      *  the two free-running converter crystals.  Applied predictively every
      *  update so the error stays near zero INSTEAD of sawtoothing to the
      *  band edge once per transport round-trip. */
     private double driftHzPerSec = 0.0;
-    /** Capture position of the previous update — feedforward dt baseline. */
+    /** Capture position of the previous update - feedforward dt baseline. */
     private long lastUpdateAbsPos = -1;
-    /** Capture position of the previous deadbeat — slope-measurement baseline. */
+    /** Capture position of the previous deadbeat - slope-measurement baseline. */
     private long lastDeadbeatAbsPos = -1;
 
     @Override
@@ -105,7 +105,7 @@ public final class FrequencyFll implements FrequencyAligner {
             return;
         }
         // Drift feedforward: predictive sub-band microsteps on EVERY update
-        // (held ones included — prediction needs no transport verification;
+        // (held ones included - prediction needs no transport verification;
         // its residual is folded back in at the next deadbeat).  dt comes
         // from capture positions, so display cadence / GC pauses don't skew it.
         if (lastUpdateAbsPos >= 0 && sampleRate > 0 && absStartSamples > lastUpdateAbsPos) {
@@ -113,7 +113,7 @@ public final class FrequencyFll implements FrequencyAligner {
             correction -= driftHzPerSec * dt;
         }
         lastUpdateAbsPos = absStartSamples;
-        // Transport gate: the measurement's frames begin at absStartSamples —
+        // Transport gate: the measurement's frames begin at absStartSamples -
         // if that predates the point where the last correction reached the
         // ADC, the measurement reflects the UNcorrected signal.  Hold.
         if (correctionVisibleFrom >= 0 && absStartSamples < correctionVisibleFrom) {
@@ -122,7 +122,7 @@ public final class FrequencyFll implements FrequencyAligner {
         correctionVisibleFrom = -1;            // in-flight correction fully observed
         double error = detected - target;
         if (Math.abs(error) <= LOCK_PPM * 1e-6 * target) {
-            return;                            // within the lock band — hold
+            return;                            // within the lock band - hold
         }
         // Fold the residual into the drift estimate: error that accumulated
         // since the last deadbeat DESPITE the feedforward measures the slope

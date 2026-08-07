@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,21 +24,21 @@ import lombok.Getter;
 
 /**
  * Amplitude occupancy counter: how often the signal sat at each level.  Feeding
- * it a capture answers "where does this waveform spend its time" — a sine piles
+ * it a capture answers "where does this waveform spend its time" - a sine piles
  * up at its two extremes (the classic bathtub, because a sinusoid moves slowest
  * at its turning points), noise makes a Gaussian bell, and a clipped signal
  * grows a spike where the rail is.
  *
  * <h2>Resolution follows the signal, not full scale</h2>
  * The range is symmetric about zero and sized by the signal's own observed
- * extremes — so 0&nbsp;V is always the centre of the axis — divided into
+ * extremes - so 0&nbsp;V is always the centre of the axis - divided into
  * {@value #MICRO_PER_BAR} micro-bins per displayed bar.  Rendering sums whole
  * groups of micro-bins into bars, so a bar is never narrower than one micro-bin
  * and the plot cannot break up into a comb of stripes with gaps.
  *
  * <p>Dividing FULL SCALE by a fixed bin count instead would tie the resolution
  * to the converter's range rather than to what is being measured: on a card with
- * 1.79&nbsp;V<sub>RMS</sub> full scale, 2048 divisions is a 2.5&nbsp;mV bin —
+ * 1.79&nbsp;V<sub>RMS</sub> full scale, 2048 divisions is a 2.5&nbsp;mV bin -
  * six orders of magnitude coarser than the 1.18&nbsp;nV the 32-bit converter
  * actually resolves, and useless for anything small enough to be interesting.
  *
@@ -46,12 +46,12 @@ import lombok.Getter;
  * {@link #fit} is called with the signal's peak before each block's samples are
  * added.  While it fits, counting continues and the distribution accumulates
  * without bound.  When it no longer fits, the range is re-established and the
- * counts are CLEARED — deliberately, because counts gathered at a materially
+ * counts are CLEARED - deliberately, because counts gathered at a materially
  * different level describe a different signal, and merging the two would present
  * two populations as one distribution.  A restart is the honest signal that the
  * measurement changed.
  *
- * <p>The peak handed in must itself be a STABLE one — the caller aggregates it
+ * <p>The peak handed in must itself be a STABLE one - the caller aggregates it
  * over the scope's measurement-average window.  A single block's peak is a random
  * draw from the signal's tail, and ranging on that would restart the distribution
  * on almost every pass of anything noisy.
@@ -61,12 +61,12 @@ import lombok.Getter;
  * is exceeded no sample is ever clamped.  A signal that SHRINKS keeps its range
  * (and so gets coarser); a reset re-ranges onto whatever is present now.  Resets
  * come from the histogram window's own button and from the scope's statistics
- * reset — the events that invalidate the running avg / min / max invalidate the
+ * reset - the events that invalidate the running avg / min / max invalidate the
  * distribution too.
  *
  * <h2>Units and the resolution floor</h2>
- * Deliberately unit-agnostic: it is fed NORMALISED samples EXACTLY AS CAPTURED —
- * no DC removal, no filtering — and stores nothing but counts, so the range is in
+ * Deliberately unit-agnostic: it is fed NORMALISED samples EXACTLY AS CAPTURED -
+ * no DC removal, no filtering - and stores nothing but counts, so the range is in
  * the same units as whatever was added.  The paint side multiplies the bin edges
  * by the channel's peak volts to label the axis, which means a recalibration
  * relabels the display without disturbing a single count.
@@ -82,7 +82,7 @@ import lombok.Getter;
  *
  * <h2>Threading</h2>
  * Not synchronised, and it does not need to be.  {@link #fit} / {@link #add} /
- * {@link #reset()} all run on the measurement worker thread — a reset asked for
+ * {@link #reset()} all run on the measurement worker thread - a reset asked for
  * by the UI is a request the worker consumes on its next pass, never an in-place
  * clear underneath an {@code add()}.  The UI thread only ever reads a
  * {@link #snapshot()} the worker publishes through a volatile field, so the
@@ -95,7 +95,7 @@ public final class AmplitudeHistogram {
     public static final int MICRO_PER_BAR = 256;
     /** Reserve held at EACH end of the range, as a fraction of it: the signal
      *  occupies the middle six eighths and an eighth is headroom either side.
-     *  Generous on purpose — this IS the re-range tolerance, so it is what keeps
+     *  Generous on purpose - this IS the re-range tolerance, so it is what keeps
      *  the ordinary wander of a noisy signal's extremes from restarting the
      *  distribution.  It costs nothing on screen: the display aggregates over the
      *  OCCUPIED bins only, so unused padding never becomes a bar. */
@@ -110,7 +110,7 @@ public final class AmplitudeHistogram {
     private final int[] bins;
 
     /** Range currently covered, and the width of one micro-bin.  Meaningless
-     *  until {@link #fit} has been called once — see {@link #isRanged()}. */
+     *  until {@link #fit} has been called once - see {@link #isRanged()}. */
     @Getter
     private double rangeMin;
     @Getter
@@ -155,7 +155,7 @@ public final class AmplitudeHistogram {
 
     /**
      * Prepares the accumulator for a block whose mean-removed extremes are
-     * {@code min}…{@code max}, and reports whether the counts collected so far
+     * {@code min}...{@code max}, and reports whether the counts collected so far
      * survived.  Call once per block, before {@link #add}.
      *
      * @return {@code true} if the existing distribution was kept, {@code false}
@@ -189,7 +189,7 @@ public final class AmplitudeHistogram {
      *
      * <p>The painter windows the plot symmetrically about this, and labels the axis
      * relative to it, so the mean always lands on the middle line.  Computing it
-     * from the counts — rather than subtracting a running estimate before binning —
+     * from the counts - rather than subtracting a running estimate before binning -
      * is what lets the samples be counted exactly as captured: a DC offset moves
      * neither the bins nor the picture, only what the axis is measured from.
      */
@@ -202,7 +202,7 @@ public final class AmplitudeHistogram {
         return acc / total;
     }
 
-    /** The value at a fractional bin position, in the caller's units — for labelling
+    /** The value at a fractional bin position, in the caller's units - for labelling
      *  an axis relative to {@link #meanBin()}. */
     public double binValue(double binPos) {
         return rangeMin + binWidth * binPos;
@@ -235,7 +235,7 @@ public final class AmplitudeHistogram {
         ranged   = false;
     }
 
-    /** Count in {@code bin}, indexed 0 (at {@link #getRangeMin()}) …
+    /** Count in {@code bin}, indexed 0 (at {@link #getRangeMin()}) ...
      *  {@link #getMicroBins()}−1. */
     public int getCount(int bin) {
         return bins[bin];
@@ -263,7 +263,7 @@ public final class AmplitudeHistogram {
 
     /**
      * Sums micro-bins {@code [fromBin, toBinExclusive)} down into {@code outBins}
-     * buckets — the drawn bars.
+     * buckets - the drawn bars.
      *
      * <p>Micro-bins divide unevenly in general; each is added whole to the bucket
      * its centre falls in, so the total is preserved exactly and no count is

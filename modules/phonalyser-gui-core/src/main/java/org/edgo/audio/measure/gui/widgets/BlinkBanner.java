@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,15 +27,15 @@ import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.widgets.Composite;
 
 /**
- * A transparent overlay banner: paints one line of OUTLINED text — a halo around
- * the glyphs in the {@code outline} colour, so it reads over any plot content — and
+ * A transparent overlay banner: paints one line of OUTLINED text - a halo around
+ * the glyphs in the {@code outline} colour, so it reads over any plot content - and
  * blinks that text between a "lit" and a "dim" colour every 500&nbsp;ms on its OWN
  * {@code Display.timerExec} loop.  Only this widget repaints, never the parent
  * canvas (the previous overlay-text banner forced a full plot + signal redraw twice
  * a second just to flip the colour).
  *
  * <p>Created {@code SWT.NO_BACKGROUND | SWT.TRANSPARENT} so the plot shows through
- * around the text.  Show it when the banner is relevant and hide it otherwise — the
+ * around the text.  Show it when the banner is relevant and hide it otherwise - the
  * blink loop starts on {@link SWT#Show} and stops the instant the widget is hidden
  * or disposed.  Size/position with the inherited {@code setBounds}/{@code setLocation}
  * (or a layout via {@link #computeSize}), tooltip with {@code setToolTipText}, font
@@ -70,7 +70,7 @@ public final class BlinkBanner extends TransparentComposite {
     }
 
     /** The blink pair ({@code lit}/{@code dim}) and the {@code outline} halo colour.
-     *  All owned by the caller (the view's palette) — NOT disposed here.  Applies the
+     *  All owned by the caller (the view's palette) - NOT disposed here.  Applies the
      *  current phase immediately and (re)starts the blink if visible. */
     public void setColors(Color lit, Color dim, Color outline) {
         this.lit = lit;
@@ -92,8 +92,8 @@ public final class BlinkBanner extends TransparentComposite {
     }
 
     /**
-     * Right-anchors this banner inside its parent — {@code rightInset} px from
-     * the parent's right border — sized to its text but never extending left
+     * Right-anchors this banner inside its parent - {@code rightInset} px from
+     * the parent's right border - sized to its text but never extending left
      * past {@code leftInset} px from the parent's left border.  A
      * {@code BlinkBanner} paints transparently yet still captures clicks across
      * its whole width, so a banner that overlays a button row (the views float
@@ -116,7 +116,7 @@ public final class BlinkBanner extends TransparentComposite {
     /**
      * The {@code FormLayout} counterpart of {@link #alignRight}: for a banner
      * right-anchored by its {@link FormData}, pins the FormData width to the
-     * banner's text — clamped to {@code maxWidth} — so the transparent widget no
+     * banner's text - clamped to {@code maxWidth} - so the transparent widget no
      * longer spans, and captures clicks/tooltips across, more than the text
      * occupies (a full-width banner sits over the axis / readout table beside
      * it).  Call after {@link #setText}, before {@code requestLayout}; a no-op
@@ -145,7 +145,7 @@ public final class BlinkBanner extends TransparentComposite {
         // when the user recolours, so a banner shown across that edit could be
         // holding a disposed Color until the host re-pushes the new one.  Guard
         // every use so a stale reference simply skips a layer instead of
-        // throwing — the halo / text reappears on the next setColors().
+        // throwing - the halo / text reappears on the next setColors().
         if (outline != null && !outline.isDisposed()) {   // 8-offset halo for contrast over the plot
             gc.setForeground(outline);
             for (int dx = -1; dx <= 1; dx++) {
@@ -163,17 +163,17 @@ public final class BlinkBanner extends TransparentComposite {
         }
     }
 
-    /** Left-ellipsises {@code s} (prefixing "…") until it fits {@code maxWidth} px
+    /** Left-ellipsises {@code s} (prefixing "...") until it fits {@code maxWidth} px
      *  in the GC's current font; returned unchanged when it already fits. */
     private String fitRight(GC gc, String s, int maxWidth) {
         if (gc.textExtent(s).x <= maxWidth) {
             return s;
         }
         String t = s;
-        while (t.length() > 1 && gc.textExtent("…" + t).x > maxWidth) {
+        while (t.length() > 1 && gc.textExtent("..." + t).x > maxWidth) {
             t = t.substring(1);
         }
-        return "…" + t;
+        return "..." + t;
     }
 
     /** Starts the blink loop on {@link SWT#Show}.  Begins lit. */
@@ -185,7 +185,7 @@ public final class BlinkBanner extends TransparentComposite {
     }
 
     /** Schedules the next 500 ms toggle.  Gated on {@link #blinking} (set by Show/Hide),
-     *  NOT {@code isVisible()} — so a transient hidden state during layout can't kill the
+     *  NOT {@code isVisible()} - so a transient hidden state during layout can't kill the
      *  loop; only an actual {@link SWT#Hide} stops it. */
     private void scheduleBlink() {
         if (blinkScheduled || isDisposed() || !blinking) {

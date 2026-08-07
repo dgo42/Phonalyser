@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -32,16 +32,16 @@ import lombok.Getter;
  * (cos&nbsp;<i>kφ</i>, sin&nbsp;<i>kφ</i>) and two adaptive weights; the
  * estimate is their weighted sum and the output is the input minus the
  * estimate.  A least-mean-squares update steers the weights so the estimate
- * converges to whatever sinusoid sits at each harmonic — including a drifting
- * amplitude/phase — while everything off those exact frequencies passes through
+ * converges to whatever sinusoid sits at each harmonic - including a drifting
+ * amplitude/phase - while everything off those exact frequencies passes through
  * untouched.  Because the model is purely sinusoidal (no DC term), the DC /
  * operating point is preserved either way, and the test tone (off the mains
- * grid) is left intact — safe to run ahead of coherent FFT averaging.
+ * grid) is left intact - safe to run ahead of coherent FFT averaging.
  *
  * <p>The mains phase is a continuous accumulator advancing by {@code f₀/fs}
  * per sample (so it follows slow drift), and the per-harmonic references are
  * built by incremental rotation rather than per-sample trig.  Successive calls
- * are assumed contiguous in the stream.  Not thread-safe — drive from one
+ * are assumed contiguous in the stream.  Not thread-safe - drive from one
  * thread.
  */
 public final class MainsLmsFilter implements MainsTimeFilter {
@@ -96,7 +96,7 @@ public final class MainsLmsFilter implements MainsTimeFilter {
     }
 
     /** Sinusoidal model carries no DC term, so cancelling never touches the
-     *  operating point — both entry points share one path. */
+     *  operating point - both entry points share one path. */
     @Override
     public void process(float[] data, int len, long absStart) {
         filter(data, len, absStart);

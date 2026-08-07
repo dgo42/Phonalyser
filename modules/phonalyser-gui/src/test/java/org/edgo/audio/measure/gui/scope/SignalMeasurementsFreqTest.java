@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -89,9 +89,9 @@ class SignalMeasurementsFreqTest {
     // ---- Dual-tone residual: independent DAC/ADC clocks ---------------------
     // The scope worker seeds the dual-tone residual's two frequencies from the
     // generator's commanded values and re-pins each on the captured signal
-    // (refineFrequencyAround, ±2 Hz — the worker's FREQ_REFINE_HALF_HZ).  With
+    // (refineFrequencyAround, ±2 Hz - the worker's FREQ_REFINE_HALF_HZ).  With
     // independent DAC/ADC clocks the tones arrive scaled by the clock ratio
-    // (ppm), which no hardware on the test bench can reproduce on demand — so
+    // (ppm), which no hardware on the test bench can reproduce on demand - so
     // these tests SIMULATE the offset and pin both halves of the fix: the
     // refinement must recover the AS-CAPTURED frequencies from the commanded
     // seeds, and the least-squares subtraction at the refined frequencies must
@@ -100,9 +100,9 @@ class SignalMeasurementsFreqTest {
     /** Commanded CCIF-style pair (Hz) the "generator" emits. */
     private static final double DUAL_F1_HZ = 19_000.0;
     private static final double DUAL_F2_HZ = 20_000.0;
-    /** Worker's raw re-pin half-band (Hz) — mirrors FREQ_REFINE_HALF_HZ. */
+    /** Worker's raw re-pin half-band (Hz) - mirrors FREQ_REFINE_HALF_HZ. */
     private static final double REFINE_HALF_HZ = 2.0;
-    /** Residual fit-window scale: 65 536 samples @ 192 kHz ≈ 0.34 s — the
+    /** Residual fit-window scale: 65 536 samples @ 192 kHz ≈ 0.34 s - the
      *  worst case for clock-offset phase drift (RESIDUAL_FIT_MAX_SAMPLES). */
     private static final double DUAL_FS = 192_000.0;
     private static final int    DUAL_N  = 65_536;
@@ -120,7 +120,7 @@ class SignalMeasurementsFreqTest {
     @Test
     void dualToneClockOffset_refinesToAsCapturedFrequencies() {
         // ±80 ppm spans real crystal offsets with margin while staying inside
-        // the ±2 Hz refine band at 20 kHz (80 ppm → 1.6 Hz).
+        // the ±2 Hz refine band at 20 kHz (80 ppm -> 1.6 Hz).
         for (double ppm : new double[]{-80, -20, 20, 80}) {
             double scale = 1.0 + ppm * 1e-6;
             double true1 = DUAL_F1_HZ * scale;
@@ -142,14 +142,14 @@ class SignalMeasurementsFreqTest {
         double true2 = DUAL_F2_HZ * scale;                // 20 001.00 Hz as captured
         float[] d = dualTone(true1, true2, DUAL_FS, DUAL_N);
 
-        // End-to-end path: commanded seeds → refined as-captured frequencies.
+        // End-to-end path: commanded seeds -> refined as-captured frequencies.
         double r1 = SignalMeasurements.refineFrequencyAround(d, DUAL_N, DUAL_FS, DUAL_F1_HZ, REFINE_HALF_HZ);
         double r2 = SignalMeasurements.refineFrequencyAround(d, DUAL_N, DUAL_FS, DUAL_F2_HZ, REFINE_HALF_HZ);
 
         double rmsRefined   = dualFitResidualRms(d, r1, r2);
         double rmsCommanded = dualFitResidualRms(d, DUAL_F1_HZ, DUAL_F2_HZ);
 
-        // 50 ppm over 0.34 s ≈ 2 rad of phase drift — the commanded-frequency
+        // 50 ppm over 0.34 s ≈ 2 rad of phase drift - the commanded-frequency
         // fit must leave gross fundamental leakage (a sizeable fraction of the
         // 0.4 amplitude), while the refined fit subtracts into the numeric
         // floor.  The ratio is the point: the fix buys orders of magnitude.
@@ -161,7 +161,7 @@ class SignalMeasurementsFreqTest {
                 String.format("leakage ratio %.1f× (expected > 20×)", rmsCommanded / rmsRefined));
     }
 
-    /** RMS of the two-tone least-squares residual — initial fit of each tone
+    /** RMS of the two-tone least-squares residual - initial fit of each tone
      *  plus two alternating refit rounds, mirroring the scope residual's
      *  cross-leakage cancellation (each round refits one tone on the signal
      *  minus the other tone's current model). */

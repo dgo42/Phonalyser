@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -47,12 +47,12 @@ import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * {@code --record-wav} / {@code --record-mapped-wav} — raw ADC capture to WAV.
+ * {@code --record-wav} / {@code --record-mapped-wav} - raw ADC capture to WAV.
  *
  * <p>{@code --record-wav}: captures the configured input device for
  * {@code --duration} seconds and writes the bytes straight to disk (no
- * sample-level processing).  Optionally renders a waveform PNG, and — when
- * {@code --adc-comp} + {@code --fft-size} are supplied — also emits an
+ * sample-level processing).  Optionally renders a waveform PNG, and - when
+ * {@code --adc-comp} + {@code --fft-size} are supplied - also emits an
  * {@code <name>_adc_corrected.wav} where per-frame ADC distortion has been
  * subtracted (the fundamental's phase/level extracted via an inline FFT
  * drives the time-domain correction kernel).
@@ -121,7 +121,7 @@ public class RecordWavMode {
         }
 
         if (mappedWeightedArg != null) {
-            log.info("Mode       : record + weighted map → WAV");
+            log.info("Mode       : record + weighted map -> WAV");
             log.info("Weights    : {}", mappedWeightedArg);
             log.info("Device     : {}", mixer.name());
             log.info("SampleRate : {} Hz", sampleRate);
@@ -136,7 +136,7 @@ public class RecordWavMode {
             recordMappedWav(mixer, sampleRate, durationSeconds, bitDepth, scaleVolts, weights, outputArg,
                     waveformDurationMs, chartWidth, chartHeight);
         } else {
-            log.info("Mode       : record raw → WAV");
+            log.info("Mode       : record raw -> WAV");
             log.info("Device     : {}", mixer.name());
             log.info("SampleRate : {} Hz", sampleRate);
             log.info("Bits       : {}", bitDepth);
@@ -183,14 +183,14 @@ public class RecordWavMode {
                 : 0;
         if (totalFramesAlloc > 0) {
             // --adc-comp keeps the whole capture in memory (plus its trim
-            // copy) — refuse a duration that cannot fit instead of dying
+            // copy) - refuse a duration that cannot fit instead of dying
             // mid-capture with a bare OutOfMemoryError.
             Runtime rt = Runtime.getRuntime();
             long needBytes = 2L * totalFramesAlloc * Double.BYTES;
             long freeBytes = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory());
             if (needBytes > freeBytes - freeBytes / 4) {
                 throw new IllegalArgumentException(String.format(
-                        "--adc-comp keeps the whole capture in memory: ~%d MB needed, %d MB of Java heap free — "
+                        "--adc-comp keeps the whole capture in memory: ~%d MB needed, %d MB of Java heap free - "
                         + "reduce --duration or raise -Xmx", needBytes >> 20, freeBytes >> 20));
             }
         }
@@ -199,7 +199,8 @@ public class RecordWavMode {
         final long halfRange = 1L << (bitDepth - 1);
 
         try (WavWriter wav = new WavWriter(outFile, sampleRate, 2, bitDepth, false);
-             AudioCapture recorder = AudioBackend.instance().openCapture(device, sampleRate, bitDepth)) {
+             AudioCapture recorder = AudioBackend.instance().manager(device.carrier())
+                     .openCapture(device, sampleRate, bitDepth)) {
             recorder.setRawBytesListener(bytes -> {
                 if (skipped.get() < skipFrames) {
                     skipped.addAndGet(bytes.length / frameSize);
@@ -245,7 +246,7 @@ public class RecordWavMode {
         if (adcCompPath != null) {
             int actual = capPos.get();
             if (actual < fftSize) {
-                log.error("Captured {} samples — fewer than --fft-size {}; cannot apply ADC correction.",
+                log.error("Captured {} samples - fewer than --fft-size {}; cannot apply ADC correction.",
                         actual, fftSize);
                 return;
             }
@@ -289,7 +290,8 @@ public class RecordWavMode {
         final AtomicInteger skipped     = new AtomicInteger(0);
 
         try (WavWriter wav = new WavWriter(outFile, sampleRate, 2, bitDepth + 8, false);
-             AudioCapture recorder = AudioBackend.instance().openCapture(device, sampleRate, bitDepth)) {
+             AudioCapture recorder = AudioBackend.instance().manager(device.carrier())
+                     .openCapture(device, sampleRate, bitDepth)) {
             recorder.setSampleListener(samples -> {
                 if (skipped.get() < skipFrames) {
                     skipped.addAndGet(samples.length);

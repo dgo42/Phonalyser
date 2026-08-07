@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -39,19 +39,17 @@ import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Scrollable;
-import org.edgo.audio.measure.gui.common.Lanczos;
 import org.edgo.audio.measure.dsp.LowPassFilter;
 import org.edgo.audio.measure.dsp.MainsFilters;
 import org.edgo.audio.measure.dsp.MainsTimeFilter;
 import org.edgo.audio.measure.dsp.MedianFilter;
 import org.edgo.audio.measure.dsp.SineFit;
+import org.edgo.audio.measure.dsp.TimeDiscontinuityDetector;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.OscSliderId;
 import org.edgo.audio.measure.enums.PersistenceMode;
-import org.edgo.audio.measure.dsp.TimeDiscontinuityDetector;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.enums.TriggerType;
@@ -59,11 +57,11 @@ import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
-import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.gui.common.GcMeasurementPainter;
-import org.edgo.audio.measure.gui.common.MeasurementPainter;
 import org.edgo.audio.measure.gui.common.Icon;
+import org.edgo.audio.measure.gui.common.Lanczos;
+import org.edgo.audio.measure.gui.common.MeasurementPainter;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.GlScopeRenderer;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
@@ -98,11 +96,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     static final         int DIVISIONS_Y    = 10;
 
     /** Sub-ticks per grid division along each cross-hair arm
-     *  ({@code CrossHairSpec.subTicksPerDivision}) — a tick COUNT, not a length:
+     *  ({@code CrossHairSpec.subTicksPerDivision}) - a tick COUNT, not a length:
      *  5 gives the classic 0.2-div minor marks of a scope graticule. */
     private final static int TICKS_PER_DIV = 5;
     /** Half-length in px of each cross-hair sub-tick, drawn perpendicular to the
-     *  arm ({@code CrossHairSpec.subTickHalfLen}) — distinct from the views' axis
+     *  arm ({@code CrossHairSpec.subTickHalfLen}) - distinct from the views' axis
      *  tick lengths, which size the ticks along the chart edges instead. */
     private final static int TICK_HALF_LEN = 4;
 
@@ -111,7 +109,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  CAP_ROUND endpoint then lies beyond the visible area, so the
      *  antialiased trace reaches both edges at full intensity instead of
      *  fading where a cap would sit.  Must exceed the largest line width's
-     *  cap radius (5 px wide → 2.5 px). */
+     *  cap radius (5 px wide -> 2.5 px). */
     private final static int TRACE_EDGE_OVERHANG_PX = 4;
 
     // All scope colours live in the AbstractMeasurementView palette
@@ -122,7 +120,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     // attenuate(...) and applied via setColor in syncChannelColors().
     /** Latest-window read cursor over the shared capture (or a wrapped frozen /
      *  file buffer).  The scope reads relative to {@code writePos}, so it never
-     *  uses the cursor's read position — it just delegates readLatest /
+     *  uses the cursor's read position - it just delegates readLatest /
      *  readEndingAt. */
     @Getter private SignalBufferReader reader;
     private float[] leftBuf  = new float[0];
@@ -131,23 +129,23 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /** The pan/zoom engine: every horizontal/vertical move/zoom transform + the
      *  viewport mapping.  Stateless (grid divisions + the 1-2-5 ladder), so the
      *  pane and tab control share this one instance for their wheel/drag/control
-     *  handlers — keeping all the logic in {@link ScopeNav}, not scattered here. */
+     *  handlers - keeping all the logic in {@link ScopeNav}, not scattered here. */
     @Getter private final ScopeNav nav =
             new ScopeNav(DIVISIONS_X, DIVISIONS_Y, OscParse.voltsPerDivTargets());
 
     /** Carbon-copy of the last trace frame this view rendered (the exact
      *  windowed samples + render parameters passed to {@link #renderTraces}).
      *  The screenshot pane reads this so a saved image matches what's on
-     *  screen — including a frozen / stopped trace — instead of re-reading
+     *  screen - including a frozen / stopped trace - instead of re-reading
      *  fresh samples from the buffer. */
     private RenderedFrame lastFrame;
-    /** Grow-only staging buffers behind {@link #lastFrame} — overwritten
+    /** Grow-only staging buffers behind {@link #lastFrame} - overwritten
      *  every paint; see {@link #captureFrame}. */
     private float[] capStageL, capStageR;
     /** Grow-only scratch for {@link #reconstructBeatSignal} (output + the
-     *  two boxcar cascade stages) — rebuilt every paint while DUAL_TONE. */
+     *  two boxcar cascade stages) - rebuilt every paint while DUAL_TONE. */
     private float[] beatOut, beatTmp, beatAbsLp;
-    /** Per-channel grow-only scratch for {@link #computeResidual} — holds the
+    /** Per-channel grow-only scratch for {@link #computeResidual} - holds the
      *  fit-window slice with the best-fit single tone subtracted, reused across
      *  paints (paint is single-threaded).  Lazily sized to the slice length. */
     private float[] residualScratchL, residualScratchR;
@@ -162,7 +160,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private double lastResidualVppL = Double.NaN;
     private double lastResidualVppR = Double.NaN;
     /** Index in the returned residual scratch that corresponds to the caller's
-     *  {@code dispStart} — the scratch is indexed from the fit-window start, so
+     *  {@code dispStart} - the scratch is indexed from the fit-window start, so
      *  this is {@code dispStart − sliceFrom}.  Set by {@link #computeResidual}
      *  each call, read by the caller immediately after (single-threaded paint). */
     private int    residualDispStart;
@@ -171,14 +169,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  {@link #computeResidual} alongside {@link #residualDispStart}. */
     private int    residualSliceLen;
     /** When non-null this view renders {@code frozenFrame} verbatim and
-     *  ignores the live buffer — used by the offscreen screenshot view. */
+     *  ignores the live buffer - used by the offscreen screenshot view. */
     private RenderedFrame frozenFrame;
     /** When non-null the CPU paint composites this GPU-phosphor afterglow (current
      *  trace + decayed history, read back from the live pane at screenshot time) in
      *  place of {@link #drawWaveforms}'s single frozen trace, so the built-in
      *  screenshot shows the same persistence the GL canvas does.  Set only on the
      *  offscreen screenshot clone; {@code null} everywhere else (live CPU paint, GPU
-     *  render, persistence off) — then the trace draws unchanged. */
+     *  render, persistence off) - then the trace draws unchanged. */
     @Setter
     private ImageData persistenceSnapshot;
 
@@ -204,6 +202,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /** Last-logged tracked mains frequency per channel (debounce for the
      *  lock diagnostic); {@link Double#NaN} = not tracking / not logged. */
     private double mainsLoggedHzL = Double.NaN, mainsLoggedHzR = Double.NaN;
+    /** Butterworth order of the HF spike-removal low-pass.  Lives here because
+     *  the trace is the only thing this filter is allowed to touch: the
+     *  measurement worker used to run the same filter so its numbers would match
+     *  the drawn line, which made a display setting move Vpp, Tr, Tf and Duty. */
+    private static final int    HF_LPF_ORDER = 8;
     /** Notch −3 dB width (Hz) for the scope mains combs. */
     private static final double MAINS_NOTCH_BW_HZ = 2.0;
     /** Minimum spacing between mains re-tracks (ns); tuning persists across
@@ -214,7 +217,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * Absolute writePos (in samples since capture start) of the trigger event
      * currently anchoring the display.  {@code -1} means no trigger captured
      * yet.  Used to hold the same frame across redraws in NORMAL / SINGLE
-     * modes — the buffer keeps scrolling forward but the same absolute time
+     * modes - the buffer keeps scrolling forward but the same absolute time
      * stays centred on the pane until a new trigger is taken.
      */
     private long lastTriggerAbsPos = -1;
@@ -237,12 +240,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /**
      * SINGLE-mode capture: dedicated buffers holding the frozen frame.
      * Independent of the ring buffer so the trace stays visible
-     * indefinitely after the trigger fires — even after the original
+     * indefinitely after the trigger fires - even after the original
      * samples have scrolled out of the live buffer.  {@code singleHeld}
      * gates whether the contents are valid.
      */
     private boolean singleHeld = false;
-    /** Scope is stopped on a frozen buffer.  The render path is unchanged — it just
+    /** Scope is stopped on a frozen buffer.  The render path is unchanged - it just
      *  holds the last trigger (step 2) for every mode instead of re-searching /
      *  free-running, so a stopped trace pans/zooms exactly like live, and auto-setup
      *  can scale the vertical off the held measurements. */
@@ -255,8 +258,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private double  capturedSubSampleOffset;
     /** Trigger position within the captured copy (captured-buffer samples, sub-sample
      *  accurate).  The trigger-less entry-frame snapshot supplies a SYNTHETIC anchor
-     *  (the sample under the trigger-position fraction), so EVERY held frame — real
-     *  trigger or entry — positions via the (virtual-capable) trigger offset, pan +
+     *  (the sample under the trigger-position fraction), so EVERY held frame - real
+     *  trigger or entry - positions via the (virtual-capable) trigger offset, pan +
      *  zoom exactly like the live trigger-offset model, instead of a separate magnify
      *  anchor. */
     private double  capturedTriggerLocal = Double.NaN;
@@ -265,11 +268,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  averaging worker mean (which would drift the frozen trace vertically). */
     private double  capturedDcL;
     private double  capturedDcR;
-    /** time/div in effect when the frame was frozen — lets {@link
+    /** time/div in effect when the frame was frozen - lets {@link
      *  #renderHeldCapturedFrame} re-derive the shown window for the current
      *  time/div so Ctrl+Shift+wheel zoom works on a frozen frame. */
     private double  capturedTimePerDiv;
-    /** Sample rate of the live reader when the frame was captured — the held
+    /** Sample rate of the live reader when the frame was captured - the held
      *  render path may run with {@link #reader} already null (SINGLE hold after
      *  Stop), so the residual fit reads its rate from here instead. */
     private int     capturedSampleRate;
@@ -281,13 +284,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private long    lastLiveDispStartAbs = -1;
     private double  lastLiveSubSampleOffset;
     /** Absolute sample sitting at the trigger-position fraction of the last live
-     *  window — the anchor a STOPPED scope holds (step 2) when it never triggered
+     *  window - the anchor a STOPPED scope holds (step 2) when it never triggered
      *  (free-running AUTO, {@link #lastTriggerAbsPos} = -1), so its zoom/pan still
      *  pin to the trigger offset instead of free-running to the buffer's edge.
      *  -1 until a live frame has been drawn. */
     private long    lastLiveAnchorAbs = -1;
     /** The visible widget that receives pointer events + cursor/tooltip and whose
-     *  client area sizes the pointer math — {@code this} on the CPU path, the GL
+     *  client area sizes the pointer math - {@code this} on the CPU path, the GL
      *  canvas on the GPU path (where this view is hidden). */
     private Control  pointerHost = this;
     /** GPU repaint hook: {@link #redraw()} runs it so every repaint reaches the GL
@@ -301,19 +304,25 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /** The GPU-drawn header button currently pressed (the mouse was forwarded to it),
      *  so the release goes to the same button.  Null on the CPU path / no press. */
     private ToolButton pressedHeaderButton;
-    /** Pane-attached controller — the rect zoom's FILE-mode horizontal part
+    /** Pane-attached controller - the rect zoom's FILE-mode horizontal part
      *  goes through its {@code viewCenterFrames} + {@code applyViewState}. */
     private ScopeController controller;
-    public void attachController(ScopeController controller) { this.controller = controller; }
+    public void attachController(ScopeController controller) {
+        this.controller = controller;
+        // Worker -> controller "informed from below" wiring: the controller
+        // owns the worker/UI border, so it takes the capture-end terminal.
+        measWorker.setCaptureEndListener(
+                controller != null ? controller::captureEndedFromBelow : null);
+    }
     /** Frozen-frame view position: the captured-buffer sample shown at the LEFT edge
      *  of the held view (may be negative or past the data; a window past the captured
      *  samples blanks there through the renderer's own in-bounds check).  Derived each
      *  held render from the captured trigger offset and the live trigger-position
-     *  fraction — see {@link #renderHeldCapturedFrame}. */
+     *  fraction - see {@link #renderHeldCapturedFrame}. */
     private double  heldViewStart;
 
     /**
-     * Last trigger mode seen by {@link #drawWaveforms} — used to detect
+     * Last trigger mode seen by {@link #drawWaveforms} - used to detect
      * mode transitions so a stale SINGLE capture from a previous session
      * doesn't pop back onto the screen the moment the user re-enters
      * SINGLE mode.
@@ -325,7 +334,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * raw paint rate.  Updated only when {@link #drawWaveforms} renders new
      * content (a fresh trigger event, or AUTO free-run latest samples).
      * Frames that re-render the same frozen content (NORMAL with no new
-     * trigger, SINGLE held, blank pane) don't bump the rate — they decay it
+     * trigger, SINGLE held, blank pane) don't bump the rate - they decay it
      * toward zero based on the age of the last new frame.  Zero means no
      * new frame has arrived recently.
      */
@@ -342,11 +351,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /**
      * Refresh period for the cap/s readout string and the measurement-table
      * MeasurementRow[] aggregation.  Limits how often the (relatively expensive)
-     * String.format + stats walk runs — the canvas is still redrawn on every
+     * String.format + stats walk runs - the canvas is still redrawn on every
      * paint, just with the cached values.
      */
     private static final long READOUT_THROTTLE_NS = 200_000_000L;
-    /** Minimum glitch-mode collection time before the cumulative rate is shown —
+    /** Minimum glitch-mode collection time before the cumulative rate is shown -
      *  below this, count ÷ elapsed is dominated by start-up jitter, so read 0. */
     private static final double GLITCH_RATE_MIN_SECONDS = 1.0;
     private MeasurementRow[]  cachedMeasurementRows;
@@ -358,7 +367,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private long   lastCapsBuildNanos;
 
     /**
-     * Reusable {@link LineAttributes} instances — created once and mutated
+     * Reusable {@link LineAttributes} instances - created once and mutated
      * (or read as-is) per paint instead of allocating a fresh wrapper every
      * frame.  At 65+ cap/s the per-paint {@code new LineAttributes(...)}
      * calls were adding ~200 short-lived objects/sec to the young
@@ -374,9 +383,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  tone at a wide lookback can't blow the fit into a multi-second walk per paint. */
     private static final int    RESIDUAL_FIT_MAX_SAMPLES = 65_536;
     /** Residual mode: floor on the fit-window length (samples); below it the
-     *  3-parameter fit is too short to be trustworthy → paint the captured trace. */
+     *  3-parameter fit is too short to be trustworthy -> paint the captured trace. */
     private static final int    RESIDUAL_MIN_FIT_SAMPLES = 256;
-    /** Residual mode: sanity cap (Hz) on the per-step frequency polish — a larger
+    /** Residual mode: sanity cap (Hz) on the per-step frequency polish - a larger
      *  correction than this means the phase-slope estimate is unreliable (noise /
      *  wrong seed), so the polish is abandoned and the seed frequency is kept. */
     private static final double RESIDUAL_POLISH_MAX_HZ   = 1.0;
@@ -386,17 +395,17 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /** Residual mode: stop polishing once a step moves the frequency less than this. */
     private static final double RESIDUAL_POLISH_MIN_STEP_HZ = 1e-6;
     /** Residual mode, dual tone: minimum |F1−F2| beat cycles the fit window must
-     *  span — below that the two per-tone fits leak into each other. */
+     *  span - below that the two per-tone fits leak into each other. */
     private static final int    RESIDUAL_MIN_BEAT_CYCLES = 2;
     /** Residual mode, dual tone: alternating refit rounds after the initial
      *  fits.  Per-tone cross-leakage over T is ≈ 1/(π·|F1−F2|·T) first-order,
-     *  and every refit SQUARES the remaining leakage — two rounds push even the
+     *  and every refit SQUARES the remaining leakage - two rounds push even the
      *  2-beat-cycle floor (≈16 %) below the noise, making the residual remnant
      *  independent of the time/div-driven window length. */
     private static final int    RESIDUAL_DUAL_REFIT_ROUNDS = 2;
 
-    /** Dense-trace (more than one sample/pixel) digital-phosphor renderer — owns all the
-     *  rasterisation pools + count→alpha LUT + CPU-blit reuse arrays, and adapts to the
+    /** Dense-trace (more than one sample/pixel) digital-phosphor renderer - owns all the
+     *  rasterisation pools + count->alpha LUT + CPU-blit reuse arrays, and adapts to the
      *  surface's device pixel scale.  {@link #drawDigitalPhosphor} delegates to it. */
     private final PhosphorRenderer phosphor = new PhosphorRenderer();
     /**
@@ -428,7 +437,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     public void setViewBackOffsetFrames(double v) {
         double clamped = Math.max(0.0, v);
         // Live view: crossing 0 ↔ >0 switches the window model between
-        // trigger-anchored and absolute — zoom mementos can't cross it.
+        // trigger-anchored and absolute - zoom mementos can't cross it.
         // File mode stays absolute at offset 0, so its history survives.
         if (!fileMode && (this.viewBackOffsetFrames == 0.0) != (clamped == 0.0)) clearZoomHistory();
         this.viewBackOffsetFrames = clamped;
@@ -437,7 +446,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private int paintProfileTick;
     /**
      * When true the view is showing a statically-loaded signal (no live
-     * capture).  Trigger search makes no sense in this mode — the trace
+     * capture).  Trigger search makes no sense in this mode - the trace
      * uses the same right-edge anchoring as the navigation bypass so
      * scrolling and t/div changes don't snap to different trigger
      * positions.  Set by {@link ScopeOpenSignal#loadFile} on load and
@@ -446,8 +455,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     @Getter
     private volatile boolean fileMode;
     public void setFileMode(boolean fileMode) {
-        // A mode switch invalidates every stacked zoom state — live mementos are
-        // trigger-relative seconds, file mementos absolute frames.  A true→true
+        // A mode switch invalidates every stacked zoom state - live mementos are
+        // trigger-relative seconds, file mementos absolute frames.  A true->true
         // call is a NEW file loading over the old one: its mementos hold absolute
         // frames of the previous file's timeline, equally meaningless.
         if (fileMode || this.fileMode) clearZoomHistory();
@@ -484,15 +493,15 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      */
     private final ScopeMeasurementWorker measWorker = new ScopeMeasurementWorker();
 
-    /** Minimum averaging window for AC DC removal — never average less than this even when prefs.avg is shorter. */
+    /** Minimum averaging window for AC DC removal - never average less than this even when prefs.avg is shorter. */
     private static final long AC_DC_MIN_AVG_NANOS = 500_000_000L;
 
-    /** Monospace font for the measurement table — created lazily, disposed with the view. */
+    /** Monospace font for the measurement table - created lazily, disposed with the view. */
     private Font monoFont;
     /** Bold, larger font used only for the L / R channel-pick header buttons. */
     private Font chanButtonFont;
 
-    /** Hit-boxes for the header buttons — refreshed every paint, consumed by the mouse listener. */
+    /** Hit-boxes for the header buttons - refreshed every paint, consumed by the mouse listener. */
     private Toolbar    headerBar;       // header buttons (migrated from canvas-draw to widgets)
     private ToolButton leftBtn;
     private ToolButton rightBtn;
@@ -503,7 +512,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private ToolButton statsToggleBtn;
     private ToolButton resetBtn;
     private TransparentComposite dataSpacer;   // gap before the signal-gated buttons
-    /** When true, the measurement-table rows are NOT drawn in this view —
+    /** When true, the measurement-table rows are NOT drawn in this view -
      *  they're hosted in {@link #measurementWindow} instead.  Header
      *  buttons (L, R, Auto-Setup, gauge, external-window, chart, reset)
      *  stay in this view either way. */
@@ -524,13 +533,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  this far inside; the dashed tracks stay at the true position (data). */
     private static final int MARKER_EDGE_INSET = 2;
 
-    /** Hit-boxes for the three sliders — refreshed every paint, consumed by drag handlers. */
+    /** Hit-boxes for the three sliders - refreshed every paint, consumed by drag handlers. */
     private final Rectangle offsetSliderBounds   = new Rectangle(0, 0, 0, 0);
     private final Rectangle triggerLevelBounds   = new Rectangle(0, 0, 0, 0);
     private final Rectangle triggerPosBounds     = new Rectangle(0, 0, 0, 0);
 
     /** Hit-boxes for the centre-line voltage labels (top/bottom of vertical
-     *  centre line for each channel) — refreshed every paint, consumed by the
+     *  centre line for each channel) - refreshed every paint, consumed by the
      *  hover-tooltip handler.  Width/height = 0 means the label isn't currently
      *  visible (channel disabled). */
     private final Rectangle leftMaxLabelBounds   = new Rectangle(0, 0, 0, 0);
@@ -541,7 +550,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private final Rectangle timeLeftLabelBounds  = new Rectangle(0, 0, 0, 0);
     private final Rectangle timeRightLabelBounds = new Rectangle(0, 0, 0, 0);
 
-    /** Slider currently being dragged ({@code null} ⇒ no drag in progress). */
+    /** Slider currently being dragged ({@code null} => no drag in progress). */
     private OscSliderId draggingSlider;
 
     /** Gap (px) between the cap/s readout and the file-path label drawn to its left. */
@@ -590,11 +599,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         fileBanner = new BlinkBanner(this);
         fileBanner.setVisible(false);
         // Derived mid (~65 %) channel colours track the LEFT/RIGHT_TRACE
-        // entries — set once here, refreshed by syncChannelColors() on
+        // entries - set once here, refreshed by syncChannelColors() on
         // every relevant prefs change.
         syncChannelColors();
 
-        // L/R channel-pick buttons — migrated to ToolButton widgets in a top-left Toolbar.
+        // L/R channel-pick buttons - migrated to ToolButton widgets in a top-left Toolbar.
         // Dim "mid" colour unselected, bright trace colour filled when selected.
         chanButtonFont = Fonts.instance().channel(getDisplay());
         headerBar = new Toolbar(this, BTN_W, BTN_H);
@@ -634,16 +643,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // so on the CPU path the overlay toolbar shows an opaque (white/grey) strip
         // over the black scope.  Force the strip and its buttons (INHERIT_FORCE) to
         // the scope background so it blends.  Windows/macOS honour NO_BACKGROUND
-        // (transparent), and their GPU path hides the widget entirely — leave them.
+        // (transparent), and their GPU path hides the widget entirely - leave them.
         if ("gtk".equals(SWT.getPlatform())) {
             headerBar.setBackground(color(ColorRole.BACKGROUND));
             headerBar.setBackgroundMode(SWT.INHERIT_FORCE);
         }
-        // L / R measurement-channel pick (radio pair) — the click writes the
+        // L / R measurement-channel pick (radio pair) - the click writes the
         // now-bound pref (auto-saved); the history-clear + repaint side-effect
         // and the mirror-back onto the ToolButtons live in the pref subscriber
         // below, so a preset load drives both too.  ToolButton isn't an SWT
-        // Button, so Bindings.check can't bind it directly — the writer stays
+        // Button, so Bindings.check can't bind it directly - the writer stays
         // explicit, the reaction goes through Bindings.onChange.
         leftBtn.addListener(SWT.Selection, e -> {
             if (leftBtn.isToggled()) prefs.setOscMeasurementChannel(Channel.L);
@@ -658,7 +667,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             redraw();
         });
         // Grey out + block the measurement-channel button whose channel is switched
-        // off, so a disabled channel can't be picked — the same enable prefs the
+        // off, so a disabled channel can't be picked - the same enable prefs the
         // V-group and vertical slider subscribe to.  The table's auto-switch off a
         // just-disabled channel already lives in prepareMeasurementRows (not repeated).
         Bindings.onChange(this, prefs.oscLeftChannelEnabledProperty(),  en -> syncMeasurementChannelButtons());
@@ -666,7 +675,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         autoSetupBtn.addListener(SWT.Selection, e -> MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP));
         histogramBtn.addListener(SWT.Selection, e ->
                 prefs.setOscShowHistogram(histogramBtn.isToggled()));
-        // Only the button state is this view's business — the window the preference
+        // Only the button state is this view's business - the window the preference
         // opens is orchestrated by ScopeController.
         Bindings.onChange(this, prefs.oscShowHistogramProperty(), histogramBtn::setToggled);
         tableToggleBtn.addListener(SWT.Selection, e ->
@@ -691,11 +700,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         });
         resetBtn.addListener(SWT.Selection, e -> { clearMeasurementHistory(); redraw(); });
         // ADC re-calibration rescales every measured voltage; DAC re-calibration
-        // changes the generated (loopback) level — either makes the accumulated
+        // changes the generated (loopback) level - either makes the accumulated
         // running statistics inconsistent, so clear them on a calibration change.
         Bindings.onChange(this, prefs.adcFsVoltageRmsProperty(), v -> { clearMeasurementHistory(); redraw(); });
         // Right-channel ADC full-scale rescales the RIGHT measured voltages the same way
-        // — same clear+redraw so its running stats never go stale after a per-channel recal.
+        // - same clear+redraw so its running stats never go stale after a per-channel recal.
         Bindings.onChange(this, prefs.adcFsVoltageRmsRightProperty(), v -> { clearMeasurementHistory(); redraw(); });
         Bindings.onChange(this, prefs.dacFsVoltageAmplProperty(), v -> { clearMeasurementHistory(); redraw(); });
         syncScopeButtons();       // apply the initial signal-gated visibility
@@ -716,8 +725,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             measWorker.stop();
             disposePalette();
             // monoFont / chanButtonFont are shared instances owned by
-            // Fonts — never disposed here.
-            // Header icons are cached and owned by IconUtils — disposed
+            // Fonts - never disposed here.
+            // Header icons are cached and owned by IconUtils - disposed
             // when the main shell tears down, not here.
             if (measurementWindow != null) {
                 measurementWindow.dispose();
@@ -746,7 +755,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         boolean wasFrozen = this.frozen;
         this.reader = reader;
         measWorker.setBuffer(reader);
-        syncScopeButtons();   // signal presence changed → re-evaluate the gated buttons
+        syncScopeButtons();   // signal presence changed -> re-evaluate the gated buttons
         // Always reset the per-paint trigger / cap-rate state.  On a FREEZE this is
         // what stops the last live trigger from being held and re-anchored as the
         // user pans/zooms the stopped trace (which made it jump left/right); on a
@@ -755,7 +764,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         this.lastNewFrameNanos = 0;
         this.cachedCapsString  = "";
         if (resetMeasurements) {
-            // New capture / file load: live again — clear the trigger anchor, the
+            // New capture / file load: live again - clear the trigger anchor, the
             // frozen hold, and the previous session's measurements (the DC mean is
             // read from the worker until it publishes ~100 ms in).
             this.frozen            = false;
@@ -775,7 +784,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             // The frozen snapshot is a FRESH buffer whose writePos is just its own
             // sample count (≈ capacity), while the kept anchors are in the LIVE
             // buffer's absolute coordinates.  Once the live ring has wrapped (live
-            // writePos > capacity) the two diverge by (liveWritePos − snapshotLen) —
+            // writePos > capacity) the two diverge by (liveWritePos − snapshotLen) -
             // without this the anchor lands far off the snapshot and the whole trace
             // blanks.  Shift the kept live anchors into the snapshot's coordinates.
             if (!wasFrozen && prevReader != null) {
@@ -798,7 +807,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
 
     /** Pans a STOPPED (frozen) trace horizontally by one wheel tick = ½ division, by
      *  nudging the (virtual-capable) trigger-position fraction.  The offset moves FREELY
-     *  (it may go virtual — the handle pins to the edge, the mark shows the real value);
+     *  (it may go virtual - the handle pins to the edge, the mark shows the real value);
      *  the RENDER clamps the view to the buffer so the signal never blanks (it parks at
      *  the true buffer edge).  {@code dir} matches the wheel sign.  Returns whether it
      *  moved, so the caller only repaints on a real change. */
@@ -818,7 +827,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  trigger travel together, the trigger may leave the view (handle pins, mark shows
      *  the real value), and the far buffer edge just blanks.  An AUTO free-run view has
      *  no trigger and is right-anchored on the newest, so this has no effect there (the
-     *  offset is ignored) — trigger it or stop to scroll.  Returns whether it moved. */
+     *  offset is ignored) - trigger it or stop to scroll.  Returns whether it moved. */
     public boolean panLiveOffset(int dir) {
         if (frozen || reader == null) return false;
         Preferences p = Preferences.instance();
@@ -866,7 +875,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         double prevRef = (ref == Channel.L) ? p.getOscLeftOffsetFrac() : p.getOscRightOffsetFrac();
         if (prevRef == frac) return false;
         double delta = frac - prevRef;
-        // No clamp — offsetFrac may run past [0, 1] so the user can place ±FS at grid
+        // No clamp - offsetFrac may run past [0, 1] so the user can place ±FS at grid
         // centre; the render honours the extended range.
         p.setOscLeftOffsetFrac (p.getOscLeftOffsetFrac()  + delta);
         p.setOscRightOffsetFrac(p.getOscRightOffsetFrac() + delta);
@@ -894,7 +903,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** True when the measurement table's L/R selector points at the left
-     *  channel — the worker measures both; the view shows this one. */
+     *  channel - the worker measures both; the view shows this one. */
     private boolean measChannelIsLeft() {
         return Preferences.instance().getOscMeasurementChannel() == Channel.L;
     }
@@ -915,7 +924,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * Returns the latest peak-to-peak voltage of the measurement
      * channel (in volts), or {@code NaN} if no measurement is yet
      * available.  Used by the pane to gate the calibrate button on
-     * "signal occupies at least 25 % of the ADC full-scale p-p" — too
+     * "signal occupies at least 25 % of the ADC full-scale p-p" - too
      * small a signal would yield a noisy calibration result.
      */
     public double getLastVpp() {
@@ -941,7 +950,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * Copies the latest measurement snapshot and sliding-window history from
      * {@code source} into this view.  Used by the screenshot renderer so a
      * passive (worker-less) OscilloscopePane instance still draws the
-     * measurement table with the live values — without this the screenshot
+     * measurement table with the live values - without this the screenshot
      * view's {@link #lastMeasResult} stays {@code null} and
      * {@link #drawMeasurements} bails out early.
      */
@@ -971,17 +980,17 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     public void setSingleArmed(boolean armed) {
         singleArmed = armed;
         if (armed) {
-            // Wait for a FRESH trigger — don't anchor on the previous one.
+            // Wait for a FRESH trigger - don't anchor on the previous one.
             lastTriggerAbsPos = -1;
         }
     }
 
-    /** Drops the held trigger anchor and captured frame — called when the trigger
+    /** Drops the held trigger anchor and captured frame - called when the trigger
      *  SOURCE changes (type / edge / channel) or the generated signal changes: the
      *  old anchor belongs to the old trigger/signal and would keep re-rendering a
      *  stale trace (and re-stamp it into the persistence afterglow on the next
      *  interactive render).  NORMAL / SINGLE then stay blank until the new trigger
-     *  fires.  Also restarts the glitch-mode cap/s collection — events caught under
+     *  fires.  Also restarts the glitch-mode cap/s collection - events caught under
      *  the old trigger/signal (e.g. the generator transition itself, which IS a
      *  discontinuity) don't belong in the new count. */
     public void resetTriggerHold() {
@@ -1004,7 +1013,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * measurement table, cap/s readout) to {@code gc} at the requested
      * {@code (w, h)} resolution.  Decoupled from {@link #onPaint} so the
      * screenshot dialog can re-render the same view to an off-screen
-     * {@link Image} at an arbitrary size — that's how we keep the trace
+     * {@link Image} at an arbitrary size - that's how we keep the trace
      * pixel-accurate when the user picks a screenshot resolution different
      * from the on-screen pane.
      */
@@ -1020,7 +1029,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         syncChannelColors();
         gc.setBackground(color(ColorRole.BACKGROUND));
         gc.fillRectangle(0, 0, w, h);
-        // Default readout font each frame — the NanoVG painter keeps font state across
+        // Default readout font each frame - the NanoVG painter keeps font state across
         // frames (a GC resets per paint), so without this a readout that doesn't set its
         // own font would inherit the last one used (e.g. the bold channel-button font).
         if (monoFont == null) monoFont = Fonts.instance().normal(getDisplay());
@@ -1039,7 +1048,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         drawCaptureRate(gc, w);
         drawFilePath(gc, w);
         drawRectZoomOverlay(gc, w, h);
-        // TEMP paint profiling — once per ~30 paints, log the per-section ms so we
+        // TEMP paint profiling - once per ~30 paints, log the per-section ms so we
         // can see where the frame time goes.  Remove once the hot section is fixed.
         long _tEnd = System.nanoTime();
         if (++paintProfileTick >= 30 && log.isWarnEnabled()) {
@@ -1053,7 +1062,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** Renders the scope through a {@link MeasurementPainter} for the GPU surface,
-     *  mirroring {@link #onPaint} (paint + capture-rate update) — used as the GL
+     *  mirroring {@link #onPaint} (paint + capture-rate update) - used as the GL
      *  surface's renderer when the GPU scope is enabled.  Split into
      *  {@link GlScopeRenderer.Phase phases} so the persistence surface can route the
      *  TRACE into a decayed phosphor buffer and draw the BACKDROP + OVERLAY fresh;
@@ -1079,16 +1088,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         drawScopeGrid(gc, w, h);
     }
 
-    /** Trace phase: the waveforms only — the layer the phosphor buffer accumulates.
+    /** Trace phase: the waveforms only - the layer the phosphor buffer accumulates.
      *  The cap/s computation lives here (not in the always-run overlay) so expose-only
-     *  re-composites — which skip the trace — don't feed stale frames into the rate. */
+     *  re-composites - which skip the trace - don't feed stale frames into the rate. */
     private void glTrace(MeasurementPainter gc, int w, int h) {
         gc.setAdvanced(true);
         drawWaveforms(gc, w, h);
         updateCaptureRate();
     }
 
-    /** Overlay phase: sliders, labels, measurement table, header — drawn fresh on top.
+    /** Overlay phase: sliders, labels, measurement table, header - drawn fresh on top.
      *  Also runs the per-frame side effects (extracted measurement window + cap/s rate). */
     private void glOverlay(MeasurementPainter gc, int w, int h) {
         gc.setAdvanced(true);
@@ -1102,21 +1111,21 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         drawHeaderOverlay(gc);   // GPU only: the toolbar widgets are hidden, draw them via the painter
         drawRectZoomOverlay(gc, w, h);
         // The GPU loop renders through the surface, not redraw(), so the redraw() override
-        // that drives the extracted measurement + histogram windows never fires — do it
+        // that drives the extracted measurement + histogram windows never fires - do it
         // directly here, or they look frozen while the trace runs.
         if (measurementWindow != null) measurementWindow.redraw();
         if (controller != null) controller.redrawHistogram();
     }
 
     /** Whether the most recent {@link #drawWaveforms} rendered genuinely new captured
-     *  content (vs a held / re-composited frame) — the phosphor surface consults this to
+     *  content (vs a held / re-composited frame) - the phosphor surface consults this to
      *  decide whether to decay+accumulate or merely re-composite. */
     @Override
     public boolean isLastFrameNew() { return lastFrameWasNew; }
 
     /** GPU path only: the header {@link Toolbar} is a hidden child of this view, so
      *  render it into an off-screen image and draw it over the GL trace as a texture
-     *  — an SWT control can't overlay a GLCanvas (its buffer swap paints over it). */
+     *  - an SWT control can't overlay a GLCanvas (its buffer swap paints over it). */
     private void drawHeaderOverlay(MeasurementPainter painter) {
         for (Control c : headerBar.getChildren()) {
             if (c instanceof ToolButton btn && btn.getVisible()) {   // honour signal-gated hiding
@@ -1148,9 +1157,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * scales), optional axis labels, a second Y axis, and edge tick marks, and to
      * serve all that it allocates major/minor tick arrays and maps every line
      * through {@code valueToX} / {@code valueToY} (with per-call scale branching)
-     * on each paint.  The oscilloscope needs none of it — a fixed, evenly spaced
+     * on each paint.  The oscilloscope needs none of it - a fixed, evenly spaced
      * {@code DIVISIONS_X × DIVISIONS_Y} grid with a centred cross-hair and uniform
-     * sub-ticks — so re-using the configurable method spends its setup cost every
+     * sub-ticks - so re-using the configurable method spends its setup cost every
      * realtime frame for nothing.  This dedicated version computes the line
      * positions arithmetically, with no allocation and no scale lookup, keeping
      * the hot paint path lean.  It is pixel-for-pixel identical to the
@@ -1258,7 +1267,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             }
             lastNewFrameNanos = now;
         } else if (lastNewFrameNanos > 0) {
-            // No new frame this paint — clamp the displayed rate to the
+            // No new frame this paint - clamp the displayed rate to the
             // instantaneous "since last new frame" rate so the readout
             // visibly decays toward 0 instead of stalling at the last
             // captured EMA value.
@@ -1268,14 +1277,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 if (instant < captureRate) captureRate = instant;
             }
         } else {
-            // Never had a new frame — make sure the readout reads 0.
+            // Never had a new frame - make sure the readout reads 0.
             captureRate = 0;
         }
     }
 
     /** Pale-grey "123.4 cap/s" readout in the top-right corner. */
     private void drawCaptureRate(MeasurementPainter gc, int w) {
-        // Visible for the whole live record — even reading 0.0.  In glitch mode a
+        // Visible for the whole live record - even reading 0.0.  In glitch mode a
         // new frame only arrives per glitch, so this readout IS the glitches/s
         // counter and must not vanish between events.  A STOPPED scope keeps
         // showing the last live value; hidden only in file mode (no capture) and
@@ -1291,7 +1300,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         long now = System.nanoTime();
         if (cachedCapsString.isEmpty() || now - lastCapsBuildNanos >= READOUT_THROTTLE_NS) {
             // 3 decimals: in glitch mode the rate is glitches/s and a rare event
-            // (one per minutes) reads e.g. 0.008 — one decimal would show 0.0.
+            // (one per minutes) reads e.g. 0.008 - one decimal would show 0.0.
             cachedCapsString   = String.format("%.3f cap/s", captureRate);
             lastCapsBuildNanos = now;
         }
@@ -1302,7 +1311,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /**
      * Top-right blinking file-path label, shown only when in file mode.
      * Positioned 20 px to the left of the cap/s readout, on the same row,
-     * and left-truncated with a "…" prefix so the file name end stays
+     * and left-truncated with a "..." prefix so the file name end stays
      * visible.  The left edge is clamped past the right-channel max-voltage
      * label (near the vertical centre line) to avoid overlap.  Blinks
      * between {@code #FFFFFF} and {@code #AAAAAA} every 500 ms via wall-
@@ -1340,11 +1349,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
 
         int avail = rightEdge - leftEdge;
-        if (avail <= 0) { hideFileBanner(); return; }   // canvas too narrow → drop the label
+        if (avail <= 0) { hideFileBanner(); return; }   // canvas too narrow -> drop the label
 
         // Hand the path to the self-blinking widget: it right-aligns + left-ellipsises
         // to its width (the BACKGROUND halo keeps it readable over the trace) and blinks
-        // itself — so the canvas no longer repaints twice a second just for the toggle.
+        // itself - so the canvas no longer repaints twice a second just for the toggle.
         // Size it to the text (right-anchored at rightEdge, never left of leftEdge) so
         // the transparent widget doesn't capture hovers over the trace beside it.
         fileBanner.setFont(getFont());
@@ -1371,7 +1380,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * last {@code oscMeasurementAverageSeconds} of measurements.
      */
     private void drawMeasurements(MeasurementPainter gc) {
-        // When extracted, the table is rendered into the measurementWindow instead —
+        // When extracted, the table is rendered into the measurementWindow instead -
         // skip the in-canvas table here.
         if (tableExtracted) return;
 
@@ -1381,8 +1390,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         Channel selected = prefs.getOscMeasurementChannel();
 
         // L / R channel-pick buttons stay visible unconditionally so the
-        // measurement channel — and therefore the vertical-offset slider
-        // channel — can still be switched when one or both channels are
+        // measurement channel - and therefore the vertical-offset slider
+        // channel - can still be switched when one or both channels are
         // off and even when no live data is available yet.  The gauge,
         // stats toggle, reset, and external-window buttons only appear
         // once a signal is present (recorded or loaded).
@@ -1424,7 +1433,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         if (cur == null) return null;
         MeasurementRow[] rows = cachedMeasurementRows;
         // Rebuild when the worker posts a NEW result (each of its compute passes),
-        // not on a display timer — the timer's period beat against the capture
+        // not on a display timer - the timer's period beat against the capture
         // block arrivals, making the readout update irregularly.
         if (rows == null || cur != lastBuiltMeasResult) {
             long now = System.nanoTime();
@@ -1478,7 +1487,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** Resets the running measurement statistics (avg / min / max / σ) and repaints
-     *  — called when the generator signal changes (USER_INPUT) so the table doesn't
+     *  - called when the generator signal changes (USER_INPUT) so the table doesn't
      *  average the old signal's readings into the new one. */
     public void resetMeasurementHistory() {
         if (isDisposed()) return;
@@ -1490,7 +1499,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  window.  The shell's actual open/closed state is derived from this
      *  flag AND {@code oscShowMeasurementTable} via {@link #syncToolWindow},
      *  so hiding the measurement table with the gauge button closes the
-     *  shell without forgetting the extracted intent — re-enabling the
+     *  shell without forgetting the extracted intent - re-enabling the
      *  measurement table then brings the shell back automatically. */
     private void setTableExtracted(boolean extracted) {
         if (extracted == tableExtracted) return;
@@ -1502,8 +1511,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** Shows/hides the signal-gated header buttons (gauge / external / stats / reset and
-     *  the gap before them) per the cascade — signal present → table shown → not
-     *  extracted → stats on — then re-flows the toolbar.  Driven by {@link #setBuffer}
+     *  the gap before them) per the cascade - signal present -> table shown -> not
+     *  extracted -> stats on - then re-flows the toolbar.  Driven by {@link #setBuffer}
      *  and the toggle listeners, never by paint. */
     private void syncScopeButtons() {
         Preferences p = Preferences.instance();
@@ -1556,14 +1565,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     // The histogram window's CONTENT is a HistogramView of its own; all it needs
     // from here is the chrome to sit in and the worker to read.
 
-    /** A tool window wearing the scope's chrome — its palette and header-button
+    /** A tool window wearing the scope's chrome - its palette and header-button
      *  geometry.  The caller owns what goes in it and how long it lives. */
     ToolWindow newToolWindow(boolean resizable) {
         return new ToolWindow(this, color(ColorRole.BACKGROUND), color(ColorRole.TEXT),
                 BTN_W, BTN_H, resizable);
     }
 
-    /** As above, but hosting a content view the caller builds — see
+    /** As above, but hosting a content view the caller builds - see
      *  {@link ToolWindow.ContentFactory}. */
     ToolWindow newToolWindow(boolean resizable, ToolWindow.ContentFactory content) {
         return new ToolWindow(this, color(ColorRole.BACKGROUND), color(ColorRole.TEXT),
@@ -1571,12 +1580,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** The measurement worker, for a tool window whose content reads what it
-     *  publishes — the histogram's distribution. */
+     *  publishes - the histogram's distribution. */
     ScopeMeasurementWorker getMeasurementWorker() {
         return measWorker;
     }
 
-    /** Starts / stops the worker's amplitude binning — driven by the histogram
+    /** Starts / stops the worker's amplitude binning - driven by the histogram
      *  window's open state. */
     void setHistogramEnabled(boolean on) {
         measWorker.setHistogramEnabled(on);
@@ -1614,7 +1623,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         w.open();
     }
 
-    /** {@link ToolWindow.ContentPainter} for the measurements window — draws the live table
+    /** {@link ToolWindow.ContentPainter} for the measurements window - draws the live table
      *  straight into the window's GC at {@code top} (just below its button row). */
     private void paintMeasurementTable(GC gc, int top) {
         Preferences prefs = Preferences.instance();
@@ -1655,7 +1664,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     public void redraw() {
         super.redraw();
         if (glRepaint != null) glRepaint.run();   // GPU: render the surface (the view is hidden)
-        // Mirror to the extracted tool window so it tracks the main view in lock-step — its
+        // Mirror to the extracted tool window so it tracks the main view in lock-step - its
         // canvas repaints through the painter registered in createMeasurementWindow().
         if (measurementWindow != null) {
             measurementWindow.redraw();
@@ -1664,7 +1673,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** GPU: overlay-only repaints (rubber band, focus border) re-composite the
-     *  phosphor instead of resetting it — see {@link #glOverlayRepaint}. */
+     *  phosphor instead of resetting it - see {@link #glOverlayRepaint}. */
     @Override
     protected void requestZoomOverlayRepaint() {
         if (glOverlayRepaint != null) {
@@ -1677,7 +1686,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /**
-     * Starts the background measurement worker.  Idempotent — calling while
+     * Starts the background measurement worker.  Idempotent - calling while
      * the worker is already running is a no-op.  Invoked by
      * {@link ScopePane#startCapture()} once a fresh
      * {@link SignalBufferReader} has been attached via {@link #setBuffer}.
@@ -1709,8 +1718,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * Auto-setup vertical offset fraction for the {@code left} (else right)
      * channel at the given {@code vDiv}.  A DC-coupled channel (AC mode off) is
      * centred on its measured DC mean so a DC-biased signal lands mid-screen
-     * instead of clipped off an edge; an AC-coupled channel — DC already removed
-     * from its trace — stays centred at 0&nbsp;V.  The screen-centre voltage is
+     * instead of clipped off an edge; an AC-coupled channel - DC already removed
+     * from its trace - stays centred at 0&nbsp;V.  The screen-centre voltage is
      * {@code (offsetFrac - 0.5) * DIVISIONS_Y * vDiv}, so centring on
      * {@code meanV} gives {@code offsetFrac = 0.5 + meanV / (DIVISIONS_Y * vDiv)}.
      * The result is intentionally <em>not</em> clamped to {@code [0, 1]}: a DC
@@ -1755,7 +1764,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  should cover.  Extended past the usual {@code [0, 1]} so the trace can
      *  move all the way until either ±FS is at the grid centre.  At wide V/div
      *  (the entire ±FS span fits on screen) the range collapses back to exactly
-     *  {@code [0, 1]} — there's nothing to scroll. */
+     *  {@code [0, 1]} - there's nothing to scroll. */
     public double[] offsetFracBounds() {
         double vpdiv = measurementChannelVPDiv();
         // Pair the full-scale with the SAME reference channel measurementChannelVPDiv
@@ -1776,8 +1785,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * between tracks.  Called once per paint right after the read window is
      * filled, so trigger, draw and SINGLE capture all see the filtered data.
      */
-    /** Snapshot of one rendered trace frame — the windowed samples plus the
-     *  parameters {@link #renderTraces} needs — so a screenshot reproduces
+    /** Snapshot of one rendered trace frame - the windowed samples plus the
+     *  parameters {@link #renderTraces} needs - so a screenshot reproduces
      *  exactly what was on screen.  Vertical offset / line width / dot size
      *  are intentionally NOT stored: they come from the (global) Preferences
      *  the offscreen view shares, so they match automatically. */
@@ -1834,11 +1843,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // Clamp BOTH ends into [0, dataLen]: a virtual trigger offset / strong zoom-out
         // can drive dispStart far past the buffer, and arraycopy rejects a srcPos beyond
         // the array even with length 0.  When the window is fully off-buffer this yields
-        // n = 0 → an empty frame → the renderer draws nothing (blank), per spec.
+        // n = 0 -> an empty frame -> the renderer draws nothing (blank), per spec.
         int lo  = Math.max(0, Math.min(dataLen, dispStart - pad));
         int hi  = Math.max(0, Math.min(dataLen, dispStart + dispCount + pad));
         int n   = Math.max(0, hi - lo);
-        // Stage into grow-only buffers — the snapshot getter materialises an
+        // Stage into grow-only buffers - the snapshot getter materialises an
         // owning copy when (rarely) asked, so the per-paint cost is a memcpy
         // rather than two fresh multi-100k float[] every frame.
         float[] l = null;
@@ -1860,7 +1869,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /** Applies the per-channel HF low-pass (80 kHz) to {@link #leftBuf} /
      *  {@link #rightBuf} in place, stripping switching / RF spikes above the
      *  audio band.  Always on for both channels (re-read overlapping windows
-     *  ⇒ reset each paint), but a no-op below its Nyquist gate. */
+     *  => reset each paint), but a no-op below its Nyquist gate. */
     private void applyHfLowPass(int sampleRate, int available,
                                 boolean needL, boolean needR) {
         Preferences prefs = Preferences.instance();
@@ -1884,7 +1893,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         if (mode == LpfMode.HZ_80) {
             LowPassFilter f = left ? hfLpfLeft : hfLpfRight;
             if (f == null) {
-                f = new LowPassFilter(sampleRate, mode.cutoffHz, ScopeMeasurementWorker.SCOPE_HF_LPF_ORDER);
+                f = new LowPassFilter(sampleRate, mode.cutoffHz, HF_LPF_ORDER);
                 if (left) hfLpfLeft = f; else hfLpfRight = f;
                 log.info("Scope LPF [{}]: {} Hz, active={} (Nyquist {} Hz)",
                         left ? "L" : "R", mode.cutoffHz, f.isActive(), sampleRate / 2);
@@ -1918,8 +1927,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         boolean retrack = (now - mainsTrackNanos) >= MAINS_TRACK_PERIOD_NANOS;
         if (retrack) mainsTrackNanos = now;
         // An untuned filter (just enabled, or no mains line found yet) is
-        // re-tracked every paint until it locks — independent of the throttle
-        // and of System.nanoTime()'s arbitrary origin — so enabling a channel
+        // re-tracked every paint until it locks - independent of the throttle
+        // and of System.nanoTime()'s arbitrary origin - so enabling a channel
         // mid-run takes effect immediately rather than after one throttle gap.
         if (mainsL) {
             if (mainsLeft == null || mainsLeftMode != modeL) {
@@ -1927,7 +1936,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 mainsLeftMode = modeL;
             }
             if (retrack || !mainsLeft.isTuned()) logMainsLock("L", mainsLeft.track(leftBuf, available));
-            // The comb keeps no cross-paint state worth holding — reset it so
+            // The comb keeps no cross-paint state worth holding - reset it so
             // each paint filters the contiguous window fresh; the adaptive
             // filters KEEP their converged template / weights across paints.
             if (modeL == MainsSuppression.IIR_COMB) mainsLeft.reset();
@@ -1946,7 +1955,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
 
     /** One-line diagnostic, debounced to lock-state changes, so the log
      *  shows whether the scope's mains comb actually detected a 50/60 Hz
-     *  line (and to what frequency) — a quick way to tell a detection miss
+     *  line (and to what frequency) - a quick way to tell a detection miss
      *  from a merely-invisible-on-a-linear-trace suppression. */
     private void logMainsLock(String ch, double trackedHz) {
         double last = "L".equals(ch) ? mainsLoggedHzL : mainsLoggedHzR;
@@ -1994,7 +2003,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
         // When the stats toggle is off, draw only the "cur" header/column;
         // avg / min / max / σ are hidden.  Background worker keeps
-        // computing them so the row[] cache is still populated — toggling
+        // computing them so the row[] cache is still populated - toggling
         // back on shows up-to-date numbers immediately.
         int headerCols = showStats ? HEADERS.length : 1;
         for (int i = 0; i < headerCols; i++) {
@@ -2035,10 +2044,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         int[] prevDash = gc.getLineDash();
 
         // Line dash patterns:
-        //   long-dash (trigger sliders) — long pen-on + short gap, clearly
+        //   long-dash (trigger sliders) - long pen-on + short gap, clearly
         //   visible across the whole pane even at low contrast against the
         //   waveform;
-        //   short-dash (offset slider) — half-length dashes, visually distinct
+        //   short-dash (offset slider) - half-length dashes, visually distinct
         //   from the trigger lines so the two cross-hairs can be told apart
         //   at a glance even when they overlap.
         final int[] LONG_DASH  = { 10, 4 };
@@ -2060,17 +2069,17 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // even at slider-Y positions where the lines would not actually
         // overlap, but the result reads as a clean broken track.
         // Draw position clamps to the canvas edge, but the VOLTAGE label below
-        // uses the raw (virtual-capable) fraction — a vertical zoom can park
+        // uses the raw (virtual-capable) fraction - a vertical zoom can park
         // the level outside the view, and the label must state the threshold
         // the trigger actually fires at, not the edge voltage under the
         // pinned handle.
         double levelFracRaw = prefs.getOscTriggerLevelFrac();
         double levelFrac = ScopeFormat.clamp01(levelFracRaw);
         int levelY = (int) Math.round(levelFrac * h);
-        // Trigger-level marker is ALWAYS yellow — a fixed scope-trigger colour,
+        // Trigger-level marker is ALWAYS yellow - a fixed scope-trigger colour,
         // independent of which channel is the trigger source or its trace colour.
         Color levelColor = getDisplay().getSystemColor(SWT.COLOR_YELLOW);
-        // Trigger-channel offset is intentionally NOT clamped to [0, 1] —
+        // Trigger-channel offset is intentionally NOT clamped to [0, 1] -
         // the trigger-level voltage label needs to track the channel offset
         // out to the extended ±FS-at-centre range the vertical scrollbar
         // can reach.
@@ -2084,7 +2093,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
 
         int maxOffsetLabelW = 0;
         if (showL) {
-            // No clamp01 — the offset-marker voltage label needs to honour
+            // No clamp01 - the offset-marker voltage label needs to honour
             // the extended offset range too (mirrors the trigger-level
             // label above).
             String s = ScopeFormat.formatVolts((0.5 - prefs.getOscLeftOffsetFrac())
@@ -2100,10 +2109,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         int levelLineStartX    = MARKER_EDGE_INSET + SLIDER_TRI_LONG + 4 + maxOffsetLabelW + 4;
 
         // ----- Trigger level: dotted horizontal cross-hair + handle on right
-        // edge.  The dotted line is broken on both sides — short of the
+        // edge.  The dotted line is broken on both sides - short of the
         // value label on the right, and short of the offset labels on the
-        // left — so neither overlay sits on top of the dotted track.
-        // Hidden entirely in file mode — trigger has no meaning on a
+        // left - so neither overlay sits on top of the dotted track.
+        // Hidden entirely in file mode - trigger has no meaning on a
         // static loaded signal, and an inactive slider just clutters
         // the canvas.
         if (!fileMode) {
@@ -2166,7 +2175,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // ----- Channel offsets: both visible channels get a full set of
         // marker elements (dashed zero-line, triangle, value label).  Only
         // the triangle's brightness distinguishes active (drag-enabled) from
-        // inactive (read-only) — line and label stay at full brightness on
+        // inactive (read-only) - line and label stay at full brightness on
         // both so the position info is clearly readable for both channels.
         // Inactive is drawn first so any overlap at the same Y is won by the
         // active triangle and label.
@@ -2176,7 +2185,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // (typically ≥ 1 V/div); off-screen lines are naturally clipped.
         // Drawn before the offset track so the brighter offset zero-line
         // and triangle stay on top when they overlap.  Anchored to the RAW
-        // (virtual-capable) offset — NOT clamp01 — so at fine V/div, where
+        // (virtual-capable) offset - NOT clamp01 - so at fine V/div, where
         // the offset scroll bound exceeds the canvas (offsetMoveHalfRange),
         // the FS line keeps tracking and reaches the vertical middle at the
         // clamp ("a channel moves until ±FS/2 reaches the vertical middle").
@@ -2224,8 +2233,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /**
-     * Draws two horizontal dashed lines — one at +FS volts and one at −FS
-     * volts — relative to the channel's offset.  Moves with the channel's
+     * Draws two horizontal dashed lines - one at +FS volts and one at −FS
+     * volts - relative to the channel's offset.  Moves with the channel's
      * vertical-offset slider.  Visible only when the V/div is coarse
      * enough to put ±FS inside the canvas; otherwise SWT's natural clip
      * culls the off-screen ends.
@@ -2246,7 +2255,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /**
-     * Draws one offset slider — dashed zero-line, triangle handle on the left
+     * Draws one offset slider - dashed zero-line, triangle handle on the left
      * edge, and a value label between them.  The line starts AFTER the label
      * so the label sits cleanly on the background instead of on top of the
      * dashed track.  When {@code isActive} is {@code true} the
@@ -2261,7 +2270,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                                   boolean isActive, int lineRightEnd) {
         // offsetFrac arrives RAW (virtual-capable).  The track + handle pin to the
         // clamped on-screen position so they stay visible/grabbable, but the value
-        // label uses the REAL offset — a zoom/pan can park it far outside [0, 1],
+        // label uses the REAL offset - a zoom/pan can park it far outside [0, 1],
         // and a label computed from the clamped frac would freeze at ±5·V/div
         // (mirrors the trigger-level label, which tracks the extended range too).
         int offsetY     = (int) Math.round(ScopeFormat.clamp01(offsetFrac) * h);
@@ -2328,9 +2337,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * Renders absolute-unit labels along the centre cross-hair:
      * <ul>
      *   <li>Time at the horizontal centre line × left/right grid edges (just
-     *       above the line — negative on the left, positive on the right).</li>
+     *       above the line - negative on the left, positive on the right).</li>
      *   <li>Channel min / max at the vertical centre line × top/bottom grid
-     *       edges — left channel just left of the centre, right channel just
+     *       edges - left channel just left of the centre, right channel just
      *       right of it, each in its own colour.</li>
      * </ul>
      * Keeps the absolute-value readouts on the centre cross-hair so they
@@ -2360,12 +2369,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         double leftTime;
         double rightTime;
         if (fileMode && reader != null) {
-            // Loaded file: no trigger — the edge marks show the ABSOLUTE time within
+            // Loaded file: no trigger - the edge marks show the ABSOLUTE time within
             // the file (seconds from its first sample), from the right-anchored view
             // position (viewBackOffsetFrames back from the tip).
             int sr = reader.getSampleRate();
             double viewRightAbs = (double) reader.getWritePos() - viewBackOffsetFrames;
-            // Window width in EXACT double samples (timePerDiv × 10 div × rate) —
+            // Window width in EXACT double samples (timePerDiv × 10 div × rate) -
             // the int-rounded displaySamplesFor would bias the left mark at rates
             // where the window isn't a whole sample count (e.g. 88.2 @ 44.1 kHz).
             double viewLeftAbs  = viewRightAbs - windowTime * sr;
@@ -2374,7 +2383,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         } else {
             // Live / frozen: times are relative to the trigger (t = 0).  Use the REAL
             // (virtual-capable) offset so the marks keep counting when a pan/zoom has
-            // carried the trigger off-screen — and the window the render ACTUALLY
+            // carried the trigger off-screen - and the window the render ACTUALLY
             // draws (integer displaySamples, see renderedWindowSeconds), or at
             // few-sample windows the marks skew off the trace by p × the round() gap.
             double posReal = prefs.getOscTriggerPositionFrac();
@@ -2404,7 +2413,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // the grid, in each channel's colour.
         if (showL) {
             // offsetFrac may run past [0, 1] when the user has scrolled
-            // the trace toward the ±FS-at-centre extremes — render the
+            // the trace toward the ±FS-at-centre extremes - render the
             // labels honestly so the user sees the actual top/bottom
             // grid voltages.  Precision tracks V/div so a narrow scale
             // doesn't round meaningful digits away.
@@ -2457,10 +2466,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
 
     /**
      * Maps a mouse position to the active slider's fraction and stores it
-     * back into preferences (without saving — the disk save happens on
+     * back into preferences (without saving - the disk save happens on
      * mouseUp so we don't hammer the YAML file during a drag).
      */
-    /** Pointer pressed at ({@code x}, {@code y}) in the visible scope canvas —
+    /** Pointer pressed at ({@code x}, {@code y}) in the visible scope canvas -
      *  grabs a slider handle / header button under the cursor, else starts a
      *  rect-zoom selection drag (which also focuses the view).  Public so the
      *  GPU path's GL canvas can forward to it (this view is hidden then;
@@ -2490,7 +2499,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
     }
 
-    /** Pointer released — commits a rect-zoom selection, else ends a slider
+    /** Pointer released - commits a rect-zoom selection, else ends a slider
      *  drag and persists the new value. */
     public void pointerUp() {
         if (pressedHeaderButton != null) {
@@ -2506,7 +2515,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
     }
 
-    /** Double-click — resets the slider handle under the cursor to centre (0.5). */
+    /** Double-click - resets the slider handle under the cursor to centre (0.5). */
     public void pointerDoubleClick(int x, int y, int button) {
         if (button != 1) return;
         Preferences prefs = Preferences.instance();
@@ -2536,7 +2545,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     // Rectangular zoom (base machinery in AbstractMeasurementView)
     // -------------------------------------------------------------------------
 
-    /** X = the displayed time window — trigger-relative SECONDS on the
+    /** X = the displayed time window - trigger-relative SECONDS on the
      *  trigger-anchored live/frozen view, absolute FRAMES whenever the render
      *  places the window absolutely (file mode OR scrolled back from the live
      *  tip; same condition as the render's nav branch).  Mode/model switches
@@ -2575,11 +2584,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     @Override
     protected boolean applyZoomState(ZoomState s) {
         Preferences prefs = Preferences.instance();
-        // The trigger level is stored as a SCREEN fraction — after the vertical
+        // The trigger level is stored as a SCREEN fraction - after the vertical
         // ranges change, the same fraction is a different VOLTAGE, so the
         // trigger would re-fire at a different waveform point and shift the
         // trigger-anchored window sideways.  Hold the trigger voltage invariant:
-        // volts under the OLD trigger-channel mapping → fraction under the NEW.
+        // volts under the OLD trigger-channel mapping -> fraction under the NEW.
         boolean trigLeft = prefs.getOscTriggerChannel() == Channel.L;
         double  oldOff   = trigLeft ? prefs.getOscLeftOffsetFrac()  : prefs.getOscRightOffsetFrac();
         double  oldVdiv  = trigLeft ? prefs.getOscLeftVoltsPerDiv() : prefs.getOscRightVoltsPerDiv();
@@ -2590,12 +2599,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         double newVdiv = trigLeft ? prefs.getOscLeftVoltsPerDiv() : prefs.getOscRightVoltsPerDiv();
         if (newVdiv > 0) {
             // Virtual-capable like the trigger offset: a zoom that excludes the
-            // trigger voltage parks the level outside [0,1] — honest, undoable.
+            // trigger voltage parks the level outside [0,1] - honest, undoable.
             prefs.setOscTriggerLevelFrac(newOff - levelVolts / (DIVISIONS_Y * newVdiv));
         }
         double span = s.xMax() - s.xMin();
         if (span > 0) {
-            // The toolbar t/div field clamps at T_PER_DIV_MIN — writing below it
+            // The toolbar t/div field clamps at T_PER_DIV_MIN - writing below it
             // would let the field's reverse binding desync pref and display, so
             // the zoom obeys the same floor.  When the floor engages, the
             // trigger branch keeps the selection's left edge (p pins xMin);
@@ -2618,13 +2627,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                     // stale scroll centre from an earlier excursion would make the
                     // t/div binding's applyViewState re-derive a back-offset
                     // against the advanced writePos and flip the render into the
-                    // absolute nav branch mid-commit — pin the centre to
+                    // absolute nav branch mid-commit - pin the centre to
                     // follow-latest, which is what the screen actually shows.
                     controller.setViewCenterFrames(-1.0);
                 }
                 prefs.setOscTimePerDiv(tDiv);
-                // Solve p against the window the render will ACTUALLY draw —
-                // integer displaySamples, read back from the stored t/div — not
+                // Solve p against the window the render will ACTUALLY draw -
+                // integer displaySamples, read back from the stored t/div - not
                 // the continuous span: the round() gap × virtual |p| slid the
                 // trace against the axis at few-sample windows (see
                 // renderedWindowSeconds).  Left edge stays pinned, incl. at the
@@ -2638,7 +2647,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** Whether the render places the time window ABSOLUTELY (right edge =
-     *  writePos − backOffset) rather than trigger-anchored — the exact
+     *  writePos − backOffset) rather than trigger-anchored - the exact
      *  condition of the paint's nav branch, which the zoom's X model must
      *  match. */
     private boolean isAbsoluteWindow() {
@@ -2646,12 +2655,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** The time window the trigger-anchored render ACTUALLY draws, in seconds:
-     *  {@code round(t/div · divs · fs) / fs} — the integer displaySamples the
+     *  {@code round(t/div · divs · fs) / fs} - the integer displaySamples the
      *  paint derives, not the continuous t/div product.  The two differ by up
      *  to half a sample, harmless alone, but the trigger offset p is measured
      *  in windows, so a virtual p (deep zoom) multiplies that gap into a
      *  screen-scale trace-vs-axis skew (bench: p = −11 on a 4-sample window
-     *  → 15 µs).  Zoom capture/commit and the edge time marks must all express
+     *  -> 15 µs).  Zoom capture/commit and the edge time marks must all express
      *  the window THIS way.  Falls back to the continuous product when no
      *  capture is attached or the window is under the render's 2-sample floor
      *  (nothing is drawn there to stay aligned with). */
@@ -2666,13 +2675,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         return window;
     }
 
-    /** Voltage window → V/div + offsetFrac for one channel: {@code vDiv =
+    /** Voltage window -> V/div + offsetFrac for one channel: {@code vDiv =
      *  span/10}, {@code offsetFrac = top/span} (the zero line's screen
      *  fraction).  The toolbar V/div fields follow via their reverse binding. */
     private void applyChannelVoltageRange(Preferences prefs, boolean left, double bottomV, double topV) {
         double span = topV - bottomV;
         if (span <= 0) return;
-        // Same floor as the toolbar V/div field — see the t/div clamp rationale.
+        // Same floor as the toolbar V/div field - see the t/div clamp rationale.
         double vDiv = Math.max(ScopeTabControl.V_PER_DIV_MIN, span / DIVISIONS_Y);
         double off  = topV / (vDiv * DIVISIONS_Y);
         if (left) {
@@ -2685,7 +2694,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** The scope plots edge-to-edge (no axis margins), so the selection maps
-     *  linearly onto the current window on both axes — per channel vertically,
+     *  linearly onto the current window on both axes - per channel vertically,
      *  since the rect is screen-space and applies to every scale alike. */
     @Override
     protected ZoomState zoomStateForRect(Rectangle sel) {
@@ -2709,7 +2718,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         return new ZoomState(cur.xMin() + fx0 * xSpan, cur.xMin() + fx1 * xSpan, nyMin, nyMax);
     }
 
-    /** Slider handles, header buttons and the hoverable labels stay clickable —
+    /** Slider handles, header buttons and the hoverable labels stay clickable -
      *  a selection drag can't start on them. */
     @Override
     protected boolean isRectZoomBlockedAt(int x, int y) {
@@ -2725,7 +2734,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 || rightMinLabelBounds.contains(x, y);
     }
 
-    /** Pointer moved — drives a slider drag or a rect-zoom selection drag, else
+    /** Pointer moved - drives a slider drag or a rect-zoom selection drag, else
      *  updates the hover cursor / tooltip on the {@link #pointerHost} (the
      *  visible widget). */
     public void pointerMove(int x, int y) {
@@ -2734,7 +2743,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             return;
         }
         rectZoomPointerMove(x, y);   // rubber-band update (no-op unless dragging)
-        // Mid-selection the hover hit-tests stay quiet — no cursor flips or
+        // Mid-selection the hover hit-tests stay quiet - no cursor flips or
         // tooltips while the rubber band crosses sliders / header buttons.
         if (isRectZoomDragActive()) return;
         int cursorId;
@@ -2743,7 +2752,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         if (headerBtn != null) {
             // GPU path: the view is hidden and the header buttons are painted into the
             // GL canvas, so their pointer events (and tooltips) come through here rather
-            // than to the real widgets — surface the hovered button's own tooltip.
+            // than to the real widgets - surface the hovered button's own tooltip.
             cursorId = SWT.CURSOR_HAND;
             tip = headerBtn.getToolTipText();
         } else if (offsetSliderBounds.contains(x, y)) {
@@ -2787,14 +2796,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         this.pointerHost      = host;
         this.glRepaint        = repaint;
         this.glOverlayRepaint = overlayRepaint;
-        // The GL canvas is now the interaction control — re-home the rect-zoom
+        // The GL canvas is now the interaction control - re-home the rect-zoom
         // focus/hover tracking (its mouse input still arrives via the pointer
         // funnel the pane forwards, so hookMouse stays off).
         installRectZoom(host, false);
         // GPU path: the header buttons are drawn into the GL canvas, so the real
         // Toolbar widget must be hidden.  On GTK a SWT.NO_BACKGROUND composite still
         // paints the theme (grey) background and a NO_BACKGROUND child's window isn't
-        // reliably unmapped when the parent view is hidden — leaving a grey strip
+        // reliably unmapped when the parent view is hidden - leaving a grey strip
         // behind the GL-drawn buttons.  Hiding it explicitly clears that; the
         // per-button getVisible() flags (and bounds) the overlay reads stay intact.
         if (headerBar != null && !headerBar.isDisposed()) headerBar.setVisible(false);
@@ -2821,7 +2830,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 break;
             case TRIGGER_POSITION:
                 // Absolute: the line follows the cursor (centred under it), clamped to
-                // [0,1] — so grabbing a virtual (edge-pinned) handle recaptures it to the
+                // [0,1] - so grabbing a virtual (edge-pinned) handle recaptures it to the
                 // cursor, and the handle can never be pushed off the view (spec).
                 prefs.setOscTriggerPositionFrac(ScopeFormat.clamp01((double) mouseX / w));
                 break;
@@ -2830,7 +2839,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** Whether the window anchored at {@code anchorAbs}/{@code offsetFrac} sits fully
-     *  inside the current read buffer (with sinc padding) — a live NORMAL hold tracks
+     *  inside the current read buffer (with sinc padding) - a live NORMAL hold tracks
      *  the ring while it does, then falls back to the captured copy. */
     private boolean holdFitsInBuffer(double anchorAbs, double offsetFrac, int displaySamples,
                                      long bufStartAbs, int available) {
@@ -2841,7 +2850,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
 
     /** The trace layer for one CPU paint: normally {@link #drawWaveforms}, but a
      *  screenshot carrying a {@link #persistenceSnapshot GPU afterglow} composites that
-     *  instead — the phosphor already holds the current trace plus its decayed history, so
+     *  instead - the phosphor already holds the current trace plus its decayed history, so
      *  it reproduces the live GL canvas exactly (scaled to this paint's size).  Without a
      *  snapshot (every non-screenshot paint, and any persistence-off capture) the trace
      *  draws unchanged, keeping a persistence-off screenshot byte-identical. */
@@ -2866,7 +2875,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         if (frozenFrame != null) {
             RenderedFrame f = frozenFrame;
             // The residual (if any) is already baked into the snapshot arrays, so
-            // renderTraces skips the fit on this path — the sample rate is unused here.
+            // renderTraces skips the fit on this path - the sample rate is unused here.
             renderTraces(gc, w, h, f.left, f.right, f.len, f.dispStart, f.subSampleOffset,
                          f.dispCount, f.showL, f.showR, f.leftVDiv, f.rightVDiv,
                          f.sincL, f.sincR, f.dcL, f.dcR, 0.0);
@@ -2888,7 +2897,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // Entering NORMAL/SINGLE with nothing frozen yet (e.g. from AUTO) freezes
         // the frame currently on screen (captureEntryFrame, applied after the
         // read) so the trace persists instead of blanking until the new mode's
-        // first trigger.  Switching N<->S keeps the already-held frame as-is — NO
+        // first trigger.  Switching N<->S keeps the already-held frame as-is - NO
         // re-capture, which would jump the trace to a freshly grabbed window.
         boolean captureEntryFrame = false;
         if (lastTriggerMode != triggerMode) {
@@ -2906,7 +2915,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // frame if there is one (independent of the ring buffer, so it stays
         // visible even after capture stops), otherwise it leaves the pane blank.
         // The trace changes only when the user arms a shot and its trigger fires
-        // — it must NOT free-run like AUTO and must NOT auto-capture a fresh frame.
+        // - it must NOT free-run like AUTO and must NOT auto-capture a fresh frame.
         boolean sincL = prefs.isOscLeftSincInterpEnabled();
         boolean sincR = prefs.isOscRightSincInterpEnabled();
         boolean acL = prefs.isOscLeftAcMode();
@@ -2970,7 +2979,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         long latestAbs   = b.getWritePos();
         long viewEndAbs;
         double frozenViewLeftAbs = Double.NaN;
-        // File / scrolled-back window right edge (absolute, fractional) — the exact
+        // File / scrolled-back window right edge (absolute, fractional) - the exact
         // value the edge time marks show; the nav render below anchors the window here.
         double scrollViewEndAbs = (double) latestAbs - viewBackOffsetFrames;
         if (frozen && lastTriggerAbsPos >= 0) {
@@ -3015,7 +3024,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // the new mode's first trigger.
         if (captureEntryFrame) {
             // Re-grab the EXACT window the last live paint showed (by absolute
-            // position), NOT the latest — which would be newer samples that
+            // position), NOT the latest - which would be newer samples that
             // arrived since (a visible shift on a sweep / fast time-base).
             int entryStart;
             if (lastLiveDispStartAbs >= 0) {
@@ -3029,7 +3038,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             // Anchor the trigger-less entry snapshot at the sample under the
             // (virtual-capable) trigger-position fraction, so the held frame
             // pans/zooms through the SAME trigger-offset branch as a real
-            // trigger — identical nav model across modes; identity at capture
+            // trigger - identical nav model across modes; identity at capture
             // (heldViewStart = entryStart + entrySub), p then moves it.
             captureSingleFrame(entryStart, displaySamples, available, entrySub,
                     entryStart + entrySub + triggerPosFracReal * displaySamples);
@@ -3046,7 +3055,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         //   (b) the view is showing a static loaded signal (fileMode).
         // Triggering on either of these produces visible jumps when
         // scrolling or zooming because trigger anchors to a different
-        // sample for each search window — the user reads this as
+        // sample for each search window - the user reads this as
         // "signal jumps left/right".  Right-edge anchoring is stable
         // across both operations.
         if (viewBackOffsetFrames > 0 || fileMode) {
@@ -3056,7 +3065,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             // Deriving the window from `available` minus an elastic sinc pad instead
             // ate the first LANCZOS_PADDING samples of scrolling near the file start
             // and then drew the trace that far left of the marks.  dispCount stays the
-            // full displaySamples — the renderer blanks columns the buffer can't fill.
+            // full displaySamples - the renderer blanks columns the buffer can't fill.
             ScopeNav.Viewport vp = nav.viewport(scrollViewEndAbs, 1.0, displaySamples, bufStartAbs);
             if (vp.dispCount() < 2) return;
             double dcLn = acL ? acDcMean(true)  : 0.0;
@@ -3071,7 +3080,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // Trigger search range: keep the resulting display window
         // [windowLeftT, windowLeftT + displaySamples) plus Lanczos.LANCZOS_PADDING on
         // each side fully inside the read buffer.  The split is asymmetric
-        // when the trigger-position slider isn't centred — at triggerPosFrac
+        // when the trigger-position slider isn't centred - at triggerPosFrac
         // = 0 the display extends one full window to the right of the
         // trigger, so the trigger has to lie at least that far back from
         // `available`; symmetric reasoning bounds the left side at
@@ -3128,7 +3137,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // AC-coupled |F1-F2| envelope (in the trigger channel's
         // volts-per-div units), then run the standard trigger search
         // on it.  The user's trigger-level slider and hysteresis stay
-        // honoured — the level offsets above or below the envelope's
+        // honoured - the level offsets above or below the envelope's
         // mid-line in the same units the raw trace is drawn in, so
         // moving the slider re-positions where on the beat envelope
         // the trigger fires.  Sub-sample refinement is dropped (the
@@ -3143,11 +3152,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             // bin" is on, exactly as GeneratorController snaps them.  Using
             // the raw commanded values makes |F1-F2| slightly off, so the
             // beat overlay drifts out of phase with the capture when snap is on.
-            double f1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, prefs.getGenDualToneFreq1Hz());
-            double f2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, prefs.getGenDualToneFreq2Hz());
-            if (f1 > 0 && f2 > 0 && sr > 0 && Math.abs(f2 - f1) > 0) {
-                effectiveData = reconstructBeatSignal(triggerData, available, sr, f1, f2);
-                effectiveSinc = false;
+            double[] emitted = dualToneEmittedHz(sr);
+            if (emitted != null) {
+                double f1 = emitted[0];
+                double f2 = emitted[1];
+                if (f1 > 0 && f2 > 0 && sr > 0 && Math.abs(f2 - f1) > 0) {
+                    effectiveData = reconstructBeatSignal(triggerData, available, sr, f1, f2);
+                    effectiveSinc = false;
+                }
             }
         }
         double triggerFrac;
@@ -3155,11 +3167,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             triggerFrac = -1.0;
         } else if (prefs.getOscTriggerType() == TriggerType.GLITCH) {
             // Discontinuity trigger: fires where the signal breaks the sinusoid-
-            // recurrence prediction — level steps AND slope splices, anywhere on
+            // recurrence prediction - level steps AND slope splices, anywhere on
             // the wave, regardless of direction.  ↑ anchors the display on the
             // glitch's start, ↓ on its end.  Level / hysteresis / sinc refine
             // don't apply.  The TRIGGER channel's own measured frequency pins
-            // the recurrence exactly (noise-floor baseline at any f) — the
+            // the recurrence exactly (noise-floor baseline at any f) - the
             // worker measures both channels.
             int glitchSr = b.getSampleRate();
             SignalMeasurements meas = measWorker.getLastMeasResult(triggerCh == Channel.L);
@@ -3178,7 +3190,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // Unified positioning (ScopeNav): pick the absolute anchor + screen
         // offset for THIS mode, then map it to a render window.  drawTrace blanks
         // any column the buffer can't fill, so a virtual offset or a window
-        // hanging off the buffer edge just shows empty space — it never stretches
+        // hanging off the buffer edge just shows empty space - it never stretches
         // the trace or jumps to the right edge.
         // ---------------------------------------------------------------
         int dispStart;
@@ -3199,13 +3211,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             offsetFrac = triggerPosFracReal;            // virtual-capable: shift+wheel can carry it off-screen
             lastFrameWasNew = true;                     // every triggered paint is a fresh frame (cap/s)
         } else if (triggerMode == TriggerMode.SINGLE && singleArmed) {
-            // Armed, still waiting: hold the captured frame or stay blank — never free-run.
+            // Armed, still waiting: hold the captured frame or stay blank - never free-run.
             if (singleHeld) renderHeldCapturedFrame(gc, w, h, showL, showR,
                     leftVDiv, rightVDiv, sincL, sincR, acL, acR);
             return;
         } else if (triggerMode == TriggerMode.AUTO) {
             // Free-run (no trigger seen): the fresh stream, right-anchored so the newest
-            // sample fills to the right edge — never a blank future half.  There is no
+            // sample fills to the right edge - never a blank future half.  There is no
             // trigger to scroll the offset against, so this view isn't pannable; put the
             // trigger level on the signal (AUTO === NORMAL) or stop to scroll history.
             int rightPad = Math.min(Lanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
@@ -3219,12 +3231,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             anchorAbs  = lastTriggerAbsPos + lastTriggerSubSampleOffset;
             offsetFrac = triggerPosFracReal;
         } else if (singleHeld) {
-            // NORMAL frame scrolled out of the ring → the frozen captured copy.
+            // NORMAL frame scrolled out of the ring -> the frozen captured copy.
             renderHeldCapturedFrame(gc, w, h, showL, showR,
                     leftVDiv, rightVDiv, sincL, sincR, acL, acR);
             return;
         } else {
-            return;                                     // NORMAL, never triggered → blank
+            return;                                     // NORMAL, never triggered -> blank
         }
 
         ScopeNav.Viewport vp = nav.viewport(anchorAbs, offsetFrac, displaySamples, bufStartAbs);
@@ -3236,7 +3248,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // the screen just shows the buffered signal on the other side until the true edge.
 
         // SINGLE / NORMAL persistence: capture the displayed frame (clamped in-buffer)
-        // on a fresh trigger so the trace can be held after triggers stop — and disarm
+        // on a fresh trigger so the trace can be held after triggers stop - and disarm
         // SINGLE so its Start toggle pops back out.
         if (foundTrigger && !frozen
                 && ((triggerMode == TriggerMode.SINGLE && singleArmed) || triggerMode == TriggerMode.NORMAL)) {
@@ -3252,7 +3264,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // AC DC removal: worker-published, ≥500 ms-averaged channel means.
         // Returns 0 during the AC_WARMUP_NANOS window after capture start
         // (worker hasn't published yet), so the trace shows the raw signal
-        // — including any ADC settling transient — during that period.
+        // - including any ADC settling transient - during that period.
         // After warmup the worker publishes a transient-free mean and the
         // trace snaps to centred.
         double dcL = acL ? acDcMean(true)  : 0.0;
@@ -3264,8 +3276,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         if (!frozen) {
             lastLiveDispStartAbs    = bufStartAbs + dispStart;
             lastLiveSubSampleOffset = subSampleOffset;
-            // Anchor at the point ACTUALLY shown at the offset fraction — offsetFrac,
-            // not the trigger slider — so an AUTO free-run frame (offsetFrac = 1.0,
+            // Anchor at the point ACTUALLY shown at the offset fraction - offsetFrac,
+            // not the trigger slider - so an AUTO free-run frame (offsetFrac = 1.0,
             // right-aligned) freezes where it was displayed, not 0.7 div off.
             lastLiveAnchorAbs       = bufStartAbs + dispStart
                                     + Math.round(displaySamples * offsetFrac);
@@ -3274,7 +3286,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                      dispStart, subSampleOffset, dispCount,
                      showL, showR, leftVDiv, rightVDiv, sincL, sincR, dcL, dcR, b.getSampleRate());
         // Overlay the reconstructed |F1-F2| beat envelope on top of
-        // the live trace — one per VISIBLE channel, from that channel's
+        // the live trace - one per VISIBLE channel, from that channel's
         // own samples, in that channel's darkened colour.  Gated on
         // DUAL_TONE form AND the user's "Reconstructed beat" checkbox
         // inside drawBeatOverlays.
@@ -3283,7 +3295,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** Paints the reconstructed |F1-F2| beat envelope on top of EACH visible
-     *  channel's trace — reconstructed from that channel's own samples, in
+     *  channel's trace - reconstructed from that channel's own samples, in
      *  that channel's darkened trace colour, at that channel's V/div and
      *  offset, so every dual-tone trace carries its own visually paired
      *  envelope.  Renders only when the generator is in DUAL_TONE mode AND
@@ -3299,37 +3311,56 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         Preferences prefs = Preferences.instance();
         if (!prefs.isOscShowReconstructedBeat()) return;
         if (!prefs.getGenSignalForm().isDualTone() || sampleRate <= 0) return;
-        // No overlay when the generator is silent — the captured signal then
+        // No overlay when the generator is silent - the captured signal then
         // has no |F1−F2| beat and the reconstruction would trace noise.
         if (!Boolean.TRUE.equals(MessageBus.instance().request(Events.GENERATOR_RUNNING))) {
             return;
         }
-        double f1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sampleRate,
-                prefs.getGenDualToneFreq1Hz());
-        double f2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sampleRate,
-                prefs.getGenDualToneFreq2Hz());
-        if (!(f1 > 0) || !(f2 > 0) || Math.abs(f2 - f1) <= 0) return;
-        double pixelsPerDivY = (double) h / DIVISIONS_Y;
-        float  lineWidth     = (float) prefs.getOscLineWidth();
-        // A channel showing its RESIDUAL gets no beat overlay — the envelope
-        // belongs to the tones the residual just removed, and at residual
-        // zoom levels it would dwarf the trace.
-        if (showL && dataLeft != null && !prefs.isOscLeftResidualEnabled()) {
-            float[] beat = reconstructBeatSignal(dataLeft, dataLen, sampleRate, f1, f2);
-            drawTrace(gc, beat, dataLen, dispStart, subSampleOffset, dispCount,
-                    w, h, h * prefs.getOscLeftOffsetFrac(),
-                    prefs.getAdcPeakVolts(Channel.L) / leftVDiv * pixelsPerDivY, lineWidth,
-                    color(ColorRole.LEFT_BEAT),
-                    /* sincEnabled = */ false, /* dcOffset = */ 0.0, /* dotDiameter = */ 0);
+        double[] emitted = dualToneEmittedHz(sampleRate);
+        if (emitted != null) {
+            double f1 = emitted[0];
+            double f2 = emitted[1];
+            if (!(f1 > 0) || !(f2 > 0) || Math.abs(f2 - f1) <= 0) return;
+            double pixelsPerDivY = (double) h / DIVISIONS_Y;
+            float  lineWidth     = (float) prefs.getOscLineWidth();
+            // A channel showing its RESIDUAL gets no beat overlay - the envelope
+            // belongs to the tones the residual just removed, and at residual
+            // zoom levels it would dwarf the trace.
+            if (showL && dataLeft != null && !prefs.isOscLeftResidualEnabled()) {
+                float[] beat = reconstructBeatSignal(dataLeft, dataLen, sampleRate, f1, f2);
+                drawTrace(gc, beat, dataLen, dispStart, subSampleOffset, dispCount,
+                        w, h, h * prefs.getOscLeftOffsetFrac(),
+                        prefs.getAdcPeakVolts(Channel.L) / leftVDiv * pixelsPerDivY, lineWidth,
+                        color(ColorRole.LEFT_BEAT),
+                        /* sincEnabled = */ false, /* dcOffset = */ 0.0, /* dotDiameter = */ 0);
+            }
+            if (showR && dataRight != null && !prefs.isOscRightResidualEnabled()) {
+                float[] beat = reconstructBeatSignal(dataRight, dataLen, sampleRate, f1, f2);
+                drawTrace(gc, beat, dataLen, dispStart, subSampleOffset, dispCount,
+                        w, h, h * prefs.getOscRightOffsetFrac(),
+                        prefs.getAdcPeakVolts(Channel.R) / rightVDiv * pixelsPerDivY, lineWidth,
+                        color(ColorRole.RIGHT_BEAT),
+                        /* sincEnabled = */ false, /* dcOffset = */ 0.0, /* dotDiameter = */ 0);
+            }
         }
-        if (showR && dataRight != null && !prefs.isOscRightResidualEnabled()) {
-            float[] beat = reconstructBeatSignal(dataRight, dataLen, sampleRate, f1, f2);
-            drawTrace(gc, beat, dataLen, dispStart, subSampleOffset, dispCount,
-                    w, h, h * prefs.getOscRightOffsetFrac(),
-                    prefs.getAdcPeakVolts(Channel.R) / rightVDiv * pixelsPerDivY, lineWidth,
-                    color(ColorRole.RIGHT_BEAT),
-                    /* sincEnabled = */ false, /* dcOffset = */ 0.0, /* dotDiameter = */ 0);
-        }
+    }
+
+    /**
+     * The two frequencies the generator is actually emitting, in Hz - what every
+     * dual-tone reconstruction here has to be built on.
+     *
+     * <p>Resolved through the generator controller's
+     * {@link Events#GENERATOR_EMITTED_HZ} responder, so a generator running on
+     * a remote bench answers with the tones IT is emitting: it snapped them
+     * against its own lane's sample rate and it holds the frequency-lock trims,
+     * and a beat rebuilt from the pair this process would have computed instead
+     * drifts out of phase with the capture exactly as it does when the snap is
+     * ignored.  The local snap is recomputed here when no generator engine is
+     * registered at all.
+     */
+    private double[] dualToneEmittedHz(int sampleRate) {
+        double[] emitted = MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, sampleRate);
+        return emitted;
     }
 
     /** Reconstructs the signed beat modulator of a dual-tone signal,
@@ -3346,14 +3377,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *        residue band but well below the {@code (F1+F2)} carrier
      *        sum, keeping the abs envelope clean.</li>
      *    <li>Walk the abs envelope and flip the sign every time it
-     *        dips into a local minimum — those minima are exactly the
+     *        dips into a local minimum - those minima are exactly the
      *        modulator's zero crossings, so the sign of {@code cos}
      *        flips there.  A hysteresis-based "in-minimum" flag stops
      *        the same minimum from triggering multiple flips when
      *        ripple causes the envelope to wobble around the
      *        threshold.</li>
      *    <li>Subtract the residual mean so the output centres on
-     *        zero — the scope's trigger level slider then offsets
+     *        zero - the scope's trigger level slider then offsets
      *        above or below the modulator's mid-line in the same
      *        volts-per-div units as the raw trace, and the user's
      *        slider keeps its physical meaning.</li>
@@ -3379,7 +3410,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         Arrays.fill(out, 0, available, 0f);   // early returns must yield silence
         double beatHz = Math.abs(f2Hz - f1Hz);
         if (!(beatHz > 0) || sampleRate <= 0) return out;
-        // L = quarter-beat-period samples — bracketed so a tiny beat
+        // L = quarter-beat-period samples - bracketed so a tiny beat
         // doesn't blow past the buffer length and a huge beat doesn't
         // collapse to L = 1.
         int lFromBeat   = (int) Math.round(sampleRate / (4.0 * beatHz));
@@ -3391,13 +3422,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         int halfL = L / 2;
 
         // --- Step 1: rectify + boxcar LP applied TWICE in cascade
-        // → smoothed abs envelope (in volts).  A single boxcar has
+        // -> smoothed abs envelope (in volts).  A single boxcar has
         // {@code sinc} frequency response; cascading two of the same
         // length gives {@code sinc²}, with much deeper attenuation
         // in the stopband (carrier-residue band) for only a marginal
         // increase in main-lobe width.  Each pass emits at its
         // window centre, so the cascade still has zero net group
-        // delay — the reconstructed modulator stays time-aligned
+        // delay - the reconstructed modulator stays time-aligned
         // with the raw trace.  Boundaries of each pass are filled
         // with the nearest valid value so the next stage's running
         // sum doesn't ingest zero-initialised edge samples.
@@ -3448,7 +3479,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // {@code atan2(Q, I) = 2·φ_m}, so {@code φ_m = phase / 2}.
         // Reconstructing the modulator as a clean sinusoid at the
         // recovered phase eliminates every residual carrier and
-        // higher-harmonic ripple — output is a pure
+        // higher-harmonic ripple - output is a pure
         // {@code cos((F1-F2)/2·t - φ_m)} with peak {@code rawPeak}.
         double dc = 0.0;
         int validN = 0;
@@ -3462,7 +3493,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         double iSum = 0.0;
         double qSum = 0.0;
         // Phase-recurrence oscillator (2 mul + 2 add per sample) instead of
-        // Math.cos + Math.sin per sample — this and the synthesis loop below
+        // Math.cos + Math.sin per sample - this and the synthesis loop below
         // were 300-900k transcendental calls per paint.  Rotation drift over
         // a window is ~n·ulp, far below the correlation's own noise.
         double rotC = Math.cos(omega), rotS = Math.sin(omega);
@@ -3491,13 +3522,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
 
     /**
      * Computes the single-tone RESIDUAL for the displayed slice of {@code data}
-     * — {@code residual[i] = data[i] − bestFitSingleTone(i)} with only the
+     * - {@code residual[i] = data[i] − bestFitSingleTone(i)} with only the
      * sinusoid removed (DC left in the trace; the AC toggle handles DC).
      *
      * <p>The tone's frequency is seeded from the scope's Goertzel-refined
      * measurement ({@link #getLastFrequencyHz}), cheaply polished on the fit
      * window by phase-slope, and its amplitude / phase / DC come from an exact
-     * 3-parameter least-squares fit ({@link SineFit}) over the fit window — so
+     * 3-parameter least-squares fit ({@link SineFit}) over the fit window - so
      * the synthesized tone is inherently phase-aligned to the triggered display.
      *
      * <p>The result is written into the per-channel grow-only scratch, indexed
@@ -3508,7 +3539,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *
      * @return the residual scratch, or {@code null} when the residual can't be
      *         computed (no valid frequency, fit window too short, degenerate
-     *         fit) — the caller then paints the captured trace.
+     *         fit) - the caller then paints the captured trace.
      */
     private float[] computeResidual(float[] data, int dataLen, int dispStart, int dispCount,
                                     int pad, double sampleRate, boolean leftChannel,
@@ -3516,7 +3547,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // 1. Tone frequencies.  Single tone: seed from THIS channel's measured
         //    fundamental (the worker measures both channels).  Dual tone: the
         //    single-value measured f is deliberately cleared (two fundamentals),
-        //    so prefer the worker's per-channel measured PAIR — read off the raw
+        //    so prefer the worker's per-channel measured PAIR - read off the raw
         //    capture, so immune to the DAC/ADC clock offset (the commanded,
         //    FFT-bin-snapped generator values are exact only in the DAC domain;
         //    with independent clocks and no FLL they are ppm-off in the ADC
@@ -3539,10 +3570,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 f1 = m.getDualF1();
                 f2 = m.getDualF2();
             } else {
-                f1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
-                        prefs.getGenDualToneFreq1Hz());
-                f2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
-                        prefs.getGenDualToneFreq2Hz());
+                double[] emitted = dualToneEmittedHz(sr);
+                if (emitted != null) {
+                    f1 = emitted[0];
+                    f2 = emitted[1];
+                }
             }
             if (!(f1 > 0) || !(f2 > 0) || !(Math.abs(f2 - f1) > 0)) {
                 recordResidualVpp(leftChannel, Double.NaN);
@@ -3559,8 +3591,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
 
         // 2. Fit window: start from the padded display slice, grow to cover at
-        //    least RESIDUAL_MIN_CYCLES cycles / RESIDUAL_MIN_FIT_SAMPLES — LEFT
-        //    first (older lookback samples exist), then right — clamped to the
+        //    least RESIDUAL_MIN_CYCLES cycles / RESIDUAL_MIN_FIT_SAMPLES - LEFT
+        //    first (older lookback samples exist), then right - clamped to the
         //    buffer and capped at RESIDUAL_FIT_MAX_SAMPLES.
         int sliceFrom = Math.max(0, dispStart - pad);
         int sliceTo   = Math.min(dataLen, dispStart + dispCount + pad);
@@ -3568,7 +3600,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         int needCycles = (int) Math.ceil(RESIDUAL_MIN_CYCLES * sampleRate / seed);
         if (dual) {
             // The two tones are only separable when the window spans several
-            // beat cycles — below that the fits leak into each other.
+            // beat cycles - below that the fits leak into each other.
             int needBeat = (int) Math.ceil(
                     RESIDUAL_MIN_BEAT_CYCLES * sampleRate / Math.abs(f2 - f1));
             needCycles = Math.max(needCycles, needBeat);
@@ -3590,7 +3622,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             // fit window at the slice's LEFT edge makes the fitted model
             // extrapolate one-directionally across the whole (up to 10 s) slice,
             // so the residual is clean at the left and its amplitude grows
-            // monotonically RIGHTWARD by 2·A·pi·df·t — where df is the
+            // monotonically RIGHTWARD by 2·A·pi·df·t - where df is the
             // unavoidable sub-Hz frequency error (finite refine precision in the
             // dual path, which has no phase-slope polish; single-tone leftovers
             // in the polish). CENTRE the fit window on the display slice instead
@@ -3605,11 +3637,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
         if (fitLen < RESIDUAL_MIN_FIT_SAMPLES) { recordResidualVpp(leftChannel, Double.NaN); return null; }
 
-        // 3. Cheap phase-slope frequency polish (single tone only — in dual
+        // 3. Cheap phase-slope frequency polish (single tone only - in dual
         //    mode the generator frequencies are exact and a second tone breaks
         //    the single-sinusoid phase model): fit each half of the window and
         //    read off the extra phase advance the seed frequency missed.  A step
-        //    larger than the sanity cap means the estimate is unreliable → keep f.
+        //    larger than the sanity cap means the estimate is unreliable -> keep f.
         double f = seed;
         for (int iter = 0; !dual && iter < RESIDUAL_POLISH_ITERS; iter++) {
             int half = fitLen / 2;
@@ -3637,7 +3669,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             }
         }
 
-        // 5. Subtract the WHOLE fitted model — tone AND the fit's own DC c —
+        // 5. Subtract the WHOLE fitted model - tone AND the fit's own DC c -
         //    over the display slice into the scratch, indexed from sliceFrom
         //    (kOffset = sliceFrom − fitFrom), and add back the stable, long-
         //    averaged DC. Over a non-integer-cycle window {1,sin,cos} are not
@@ -3647,8 +3679,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         //    which drifts the residual baseline frame-to-frame. Removing the full
         //    model makes the residual exactly orthogonal to the constant over the
         //    fit window (its fit-window mean is 0 by construction, independent of
-        //    f̂); adding back dcStable — the SAME acDcMean the AC display offset
-        //    uses — pins the baseline to the Vmean-stable source. AC on: drawTrace
+        //    f̂); adding back dcStable - the SAME acDcMean the AC display offset
+        //    uses - pins the baseline to the Vmean-stable source. AC on: drawTrace
         //    then subtracts the same dcStable, so the trace sits at ~0. AC off:
         //    dcOffset is 0, so the DC-coupled trace sits at its true, stable DC.
         int sliceLen = sliceTo - sliceFrom;
@@ -3659,10 +3691,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
         double dcStable = acDcMean(leftChannel);
         if (dual) {
-            // Two tones: alternating Gauss–Seidel refits over the FULL fit
+            // Two tones: alternating Gauss-Seidel refits over the FULL fit
             // window.  Each round refits one tone on data with the OTHER
             // tone's latest estimate removed, squaring the remaining
-            // cross-leakage — after RESIDUAL_DUAL_REFIT_ROUNDS the remnant is
+            // cross-leakage - after RESIDUAL_DUAL_REFIT_ROUNDS the remnant is
             // below the noise regardless of how few beat cycles the window
             // holds (i.e. independent of time/div).  The last subtraction
             // removes the whole model + pins the baseline to dcStable exactly
@@ -3686,10 +3718,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 fitB = SineFit.of(fs, 0, fitLen, sampleRate, f2);
             }
             // Final subtraction over the DISPLAY SLICE, evaluated analytically
-            // from data exactly like the single-tone path — NOT copied out of
+            // from data exactly like the single-tone path - NOT copied out of
             // the fit scratch: the fit window is capped at
             // RESIDUAL_FIT_MAX_SAMPLES, so at large time/div the slice extends
-            // beyond it (bench: 67 200-sample slice vs a 65 536 fit window →
+            // beyond it (bench: 67 200-sample slice vs a 65 536 fit window ->
             // arraycopy out of bounds).  The fitted sines extrapolate exactly
             // at any k, so the slice tail beyond the fit window subtracts just
             // as cleanly.
@@ -3729,7 +3761,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
 
     /** Copies {@code data[sliceFrom .. sliceFrom+sliceLen)} into the given
      *  channel's residual scratch (grown as needed) so a shown-but-non-residual
-     *  channel renders off the SAME slice geometry as the residual channel — see
+     *  channel renders off the SAME slice geometry as the residual channel - see
      *  {@link #renderTraces}.  Out-of-range samples are left as zeros (drawTrace
      *  blanks columns the buffer can't fill regardless). */
     private float[] copyResidualSlice(float[] data, int sliceFrom, int sliceLen, boolean leftChannel) {
@@ -3758,7 +3790,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * arrays so they persist independently of the ring buffer.  Saves up to
      * two display windows centred on the trigger (i.e. {@code 2·displaySamples
      * + 2·Lanczos.LANCZOS_PADDING}) so the renderer has at least half-a-window of
-     * context on each side — that way the sinc kernel has full data even at
+     * context on each side - that way the sinc kernel has full data even at
      * the pane edges, and a late Start that fires the trigger close to the
      * buffer end still shows the full screen.  When the ring buffer doesn't
      * yet hold the full ideal range (start of capture, very slow time/div)
@@ -3766,7 +3798,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      */
     /** Renders the frozen captured frame (the held SINGLE shot or the last NORMAL
      *  trigger).  AC channels subtract the DC cached at capture ({@link #capturedDcL}
-     *  / {@link #capturedDcR}) — NOT the live worker mean — so the frozen trace stays
+     *  / {@link #capturedDcR}) - NOT the live worker mean - so the frozen trace stays
      *  put instead of drifting as the worker keeps averaging Vmean after the freeze. */
     private void renderHeldCapturedFrame(MeasurementPainter gc, int w, int h,
                                          boolean showL, boolean showR,
@@ -3778,7 +3810,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // Magnify the frozen snapshot around the cursor.  The span follows the
         // live 1-2-5 time/div (the wheel steps the t/div selector as usual); when
         // that scale changes, recompute the left edge so the captured sample under
-        // the cursor stays under it.  NOT clamped to the buffer — where the view
+        // the cursor stays under it.  NOT clamped to the buffer - where the view
         // runs past the captured data, drawTrace draws nothing (no shift).
         double curTDiv = Preferences.instance().getOscTimePerDiv();
         double scale   = (capturedTimePerDiv > 0 && curTDiv > 0) ? curTDiv / capturedTimePerDiv : 1.0;
@@ -3787,8 +3819,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // trigger-offset model: a pan (p) scrolls the held trace; a t/div FIELD zoom
         // (p unchanged) zooms around the trigger; and ctrl+shift+wheel updates p to keep
         // the sample under the mouse put.  The entry-frame snapshot carries a synthetic
-        // anchor (see {@link #capturedTriggerLocal}), so it rides the SAME branch — no
-        // separate magnify anchor.  NOT clamped here — off-buffer edges blank; only a
+        // anchor (see {@link #capturedTriggerLocal}), so it rides the SAME branch - no
+        // separate magnify anchor.  NOT clamped here - off-buffer edges blank; only a
         // MOVE clamps (panLiveOffset).
         double p = Preferences.instance().getOscTriggerPositionFrac();
         heldViewStart = capturedTriggerLocal - p * dispCount;
@@ -3835,7 +3867,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // position (the entry snapshot passes a synthetic anchor, so this is never NaN).
         capturedTriggerLocal    = triggerLocal;
         // Cache each channel's own DC now so AC-mode held renders subtract a
-        // stable bias — the live worker mean keeps averaging after the freeze
+        // stable bias - the live worker mean keeps averaging after the freeze
         // and would otherwise drift the frozen trace up/down.
         capturedDcL             = ScopeFormat.windowMean(capturedLeft,  0, len);
         capturedDcR             = ScopeFormat.windowMean(capturedRight, 0, len);
@@ -3847,7 +3879,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
 
     /**
      * Renders the two channels from a (data, dispStart, subSampleOffset,
-     * dispCount) tuple — shared by the live-data and captured-frame paths.
+     * dispCount) tuple - shared by the live-data and captured-frame paths.
      * The sub-sample offset shifts the rendered signal by a fraction of a
      * sample so the trigger lands precisely on the centre pixel.
      */
@@ -3863,7 +3895,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // Defensive: dispStart/dispCount can run far past the buffer on a held-frame or
         // off-screen-offset zoom, and dataLen must never exceed the channel arrays we
         // were handed.  Clamp it so the snapshot copy (captureFrame) and the sample
-        // reads (drawTrace / TraceEnvelope) stay in bounds — both already blank any
+        // reads (drawTrace / TraceEnvelope) stay in bounds - both already blank any
         // column the data can't fill, so this only caps the count, never the view.
         if (dataLeft  != null) dataLen = Math.min(dataLen, dataLeft.length);
         if (dataRight != null) dataLen = Math.min(dataLen, dataRight.length);
@@ -3890,7 +3922,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // null).  Both channels share the SAME slice geometry [sliceFrom,sliceTo)
         // (it depends only on dispStart/dispCount/pad/dataLen, equal for L and R),
         // so a residual channel and a re-based raw copy of the other channel fit a
-        // single (dataLen, dispStart) tuple — which the snapshot (captureFrame /
+        // single (dataLen, dispStart) tuple - which the snapshot (captureFrame /
         // RenderedFrame) can only carry once.  Substituting the scratch for BOTH
         // captureFrame and drawTrace bakes the residual into the snapshot; the
         // frozen-replay path then paints it verbatim (captureFrame skipped,
@@ -3914,7 +3946,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                             Lanczos.LANCZOS_PADDING, sampleRate, false, peakVoltsR) : null;
             int     dispR = residualDispStart;
             int     lenR  = residualSliceLen;
-            // At least one residual succeeded → both channels render off the shared
+            // At least one residual succeeded -> both channels render off the shared
             // slice: the residual channel from its scratch, the other (shown, raw)
             // channel from a plain copy of the same slice so the single (drawLen,
             // drawDisp) tuple is valid for both traces AND the snapshot.  (The slice
@@ -3934,7 +3966,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
 
         // Snapshot what we're about to draw (live view only) so a screenshot
-        // is a carbon copy of the on-screen trace — residual included.
+        // is a carbon copy of the on-screen trace - residual included.
         if (frozenFrame == null) {
             captureFrame(drawLeft, drawRight, drawLen, drawDisp, subSampleOffset, dispCount,
                     showL, showR, leftVDiv, rightVDiv, sincEnabledL, sincEnabledR, dcOffsetL, dcOffsetR);
@@ -3967,7 +3999,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** Straight-line interpolation of {@code data} at fractional sample position
-     *  {@code pos}, clamped to [0, n-1] — the sin(x)/x-off counterpart to
+     *  {@code pos}, clamped to [0, n-1] - the sin(x)/x-off counterpart to
      *  {@link Lanczos#lanczos}, letting the non-sinc trace stroke one smooth point
      *  per pixel column (see {@link #drawTrace}) instead of per-sample min/max bars. */
     private double lerpAt(float[] data, int n, double pos) {
@@ -3982,18 +4014,18 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * Draws a waveform in one of two regimes keyed off {@code samplesPerPx}
      * ({@code dispCount / width}):
      * <ul>
-     *   <li><b>&le; 1 sample/px</b> — one reconstructed point per pixel column:
+     *   <li><b>&le; 1 sample/px</b> - one reconstructed point per pixel column:
      *       sin(x)/x (Lanczos band-limited, {@code scale == 1}) when the channel's
      *       sinc toggle is on, otherwise linear interpolation.  A 5-px filled dot is
      *       overlaid at each sample when sample spacing exceeds 10 px.
-     *   <li><b>&gt; 1 sample/px</b> — the dense renderer: {@link #drawDigitalPhosphor}
+     *   <li><b>&gt; 1 sample/px</b> - the dense renderer: {@link #drawDigitalPhosphor}
      *       rasterises the displayed window as a DSO-style digital-phosphor coverage
      *       image (each pixel's dwell time is its brightness), blitted once instead of
      *       stroking every period.
      * </ul>
      *
      * <p>{@code subSampleOffset} (range [0, 1)) shifts the rendered signal by
-     * a fraction of a sample in the input-sample direction — used by the
+     * a fraction of a sample in the input-sample direction - used by the
      * trigger logic to anchor the display centre on the band-limited zero
      * crossing instead of the nearest raw sample.
      */
@@ -4007,7 +4039,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         double samplesPerPx = (double) dispCount / width;
         double pxPerSample = (double) width / dispCount;
         // Above one sample per pixel the displayed window rasterises as a DSO-style
-        // digital-phosphor image — a width×height coverage image where each pixel's dwell
+        // digital-phosphor image - a width×height coverage image where each pixel's dwell
         // time is its brightness, blitted once instead of stroking every period.  This IS
         // the dense renderer (not an experiment); the <= 1 spp sparse sin(x)/x path below is
         // the untouched anti-aliased reference.
@@ -4018,7 +4050,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
         // Reached only at <= 1 sample per pixel (the > 1 spp regime rasterised the
         // digital-phosphor image and returned above).  One smooth point per pixel column,
-        // stroked through the shared paintPolyline — the same clipped-Path renderer as the
+        // stroked through the shared paintPolyline - the same clipped-Path renderer as the
         // FFT / FreqResp traces.  Sin x/x reconstructs band-limited values BETWEEN samples at
         // scale 1 (true Whittaker-Shannon) and still reads its own LANCZOS_PADDING samples, so
         // edge values are accurate; otherwise linear interpolates (lerpAt) one point per column.
@@ -4035,18 +4067,18 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                     i -> sincTraceX(i, width),
                     i -> {
                         double pos = dispStart + subSampleOffset + sincTraceX(i, width) * samplesPerPx;
-                        if (pos < 0 || pos > n - 1) return Double.NaN;   // no sample there → blank the edge overhang
+                        if (pos < 0 || pos > n - 1) return Double.NaN;   // no sample there -> blank the edge overhang
                         return centerY - (Lanczos.lanczos(data, n, pos, scale) - dcOffset) * vScale;
                     });
         } else {
-            // Linear (sin x/x off): one linearly-interpolated point per pixel column — the
+            // Linear (sin x/x off): one linearly-interpolated point per pixel column - the
             // same per-column stroke as the sinc branch.  Straight-line interpolation, no
             // band-limiting.
             paintPolyline(gc, plot, color, SWT.LINE_SOLID, lineWidth, width + 2,
                     i -> sincTraceX(i, width),
                     i -> {
                         double pos = dispStart + subSampleOffset + sincTraceX(i, width) * samplesPerPx;
-                        if (pos < 0 || pos > n - 1) return Double.NaN;   // no sample there → blank the edge overhang
+                        if (pos < 0 || pos > n - 1) return Double.NaN;   // no sample there -> blank the edge overhang
                         return centerY - (lerpAt(data, n, pos) - dcOffset) * vScale;
                     });
         }
@@ -4055,7 +4087,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             double dotShift = subSampleOffset * pxPerSample;
             int half = dotDiameter / 2;
             // Iterate over every sample index whose pixel position lands
-            // inside the canvas — including ones outside the original
+            // inside the canvas - including ones outside the original
             // display window (the trace's sinc curve already extends past
             // it).  Stops at buffer bounds; otherwise the sub-sample
             // shift could leave an obvious sample-dot gap at the edges.
@@ -4077,7 +4109,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * {@link PhosphorRenderer}, which rasterises the displayed window as a DSO-style
      * digital-phosphor coverage image at the surface's DEVICE resolution and blits it
      * once through the painter, replacing the vector polyline.  All the rasterisation
-     * pools, the count→alpha LUT and the {@code DPO_*} tuning constants live there now —
+     * pools, the count->alpha LUT and the {@code DPO_*} tuning constants live there now -
      * see {@link PhosphorRenderer#render}.
      */
     private void drawDigitalPhosphor(MeasurementPainter gc, float[] data, int n,
@@ -4090,6 +4122,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
 
     @Override
     protected void checkSubclass() {
-        // Allow subclassing — Canvas is on SWT's restricted list otherwise.
+        // Allow subclassing - Canvas is on SWT's restricted list otherwise.
     }
 }

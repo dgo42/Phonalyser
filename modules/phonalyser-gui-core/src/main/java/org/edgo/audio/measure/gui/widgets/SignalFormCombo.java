@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -47,8 +47,8 @@ import org.edgo.audio.measure.gui.i18n.I18n;
  * {@link Menu} whose {@link MenuItem}s carry each form's pictogram + label.
  *
  * <p>A popup menu (rather than the stock SWT {@code Combo}) is used because
- * menu items show per-item images on <em>every</em> platform — which
- * {@code Combo} cannot — and the menu renders with the native selection
+ * menu items show per-item images on <em>every</em> platform - which
+ * {@code Combo} cannot - and the menu renders with the native selection
  * colours, hover highlight and keyboard navigation for free, with no
  * owner-drawing.
  */
@@ -88,7 +88,7 @@ public final class SignalFormCombo extends Composite {
         setBackgroundMode(SWT.INHERIT_DEFAULT);
 
         iconLabel = new Label(this, SWT.NONE);
-        // No size hint — the Label sizes to its PNG (each pictogram its own size).
+        // No size hint - the Label sizes to its PNG (each pictogram its own size).
         iconLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, true));
         iconLabel.setImage(IconUtils.icon(getDisplay(), Icon.valueOf("SIGNAL_" + current.name())));
 
@@ -96,11 +96,11 @@ public final class SignalFormCombo extends Composite {
         textLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, true));
         textLabel.setText(labelFor(current));
 
-        // Drop-arrow drawn as an SVG label — the native SWT.ARROW|DOWN
+        // Drop-arrow drawn as an SVG label - the native SWT.ARROW|DOWN
         // Button renders inconsistently across GTK / win32 (a tiny pixel
         // glyph on some Linux themes), so we paint the caret ourselves.
         // No press-state animation in the combo (the popup itself is the
-        // visual feedback) — pass equal sizes to disable the swap. #808080
+        // visual feedback) - pass equal sizes to disable the swap. #808080
         dropArrow = new IconStepLabel(this, Icon.DROPDOWN, Icon.DROPDOWN);
         GridData arrowGd = new GridData(SWT.FILL, SWT.FILL, false, true);
         arrowGd.widthHint = 18;
@@ -180,7 +180,7 @@ public final class SignalFormCombo extends Composite {
             item.setImage(IconUtils.icon(d, Icon.valueOf("SIGNAL_" + form.name())));
             item.addListener(SWT.Selection, e -> setSelectedForm(form));
         }
-        // Dispose after it closes (selection / outside-click / Escape) — async
+        // Dispose after it closes (selection / outside-click / Escape) - async
         // so the item's Selection event is delivered first.
         menu.addListener(SWT.Hide, e -> d.asyncExec(() -> {
             if (!menu.isDisposed()) menu.dispose();
@@ -190,7 +190,7 @@ public final class SignalFormCombo extends Composite {
         menu.setVisible(true);
     }
 
-    /** Propagate tooltip to inner children — the Labels and caret Canvas
+    /** Propagate tooltip to inner children - the Labels and caret Canvas
      *  cover the Composite, so hover events never reach this widget's own
      *  background. */
     @Override
@@ -203,6 +203,6 @@ public final class SignalFormCombo extends Composite {
 
     @Override
     protected void checkSubclass() {
-        // SWT forbids subclassing of most widgets by default — opt back in.
+        // SWT forbids subclassing of most widgets by default - opt back in.
     }
 }

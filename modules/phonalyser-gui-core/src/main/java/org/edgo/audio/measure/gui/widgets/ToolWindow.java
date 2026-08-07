@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -35,17 +35,17 @@ import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 
 /**
- * A reusable extracted-table tool window — a {@code DIALOG_TRIM} {@link Shell} hosting a
+ * A reusable extracted-table tool window - a {@code DIALOG_TRIM} {@link Shell} hosting a
  * {@code DOUBLE_BUFFERED} {@link Canvas} (with an optional top button {@link Toolbar}).
  * Shared by the FFT view (THD / IMD) and the scope view (measurements), which each
  * otherwise duplicated the same shell / canvas plumbing.
  *
  * <p>Encapsulated, with a strictly one-way data flow:
  * <ul>
- *   <li><b>owner → window:</b> create it + its colours ({@code ctor}), set its
+ *   <li><b>owner -> window:</b> create it + its colours ({@code ctor}), set its
  *       {@link #setSize size} and {@link #setLocation position}, and register a
  *       {@link #setPainter painter} that draws the table straight into the canvas GC.</li>
- *   <li><b>window → owner:</b> it signals back the two events the owner must act on —
+ *   <li><b>window -> owner:</b> it signals back the two events the owner must act on -
  *       the window was {@link #addCloseListener closed}, and a {@link #addButton button}
  *       (e.g. reset statistics) was clicked.</li>
  * </ul>
@@ -53,7 +53,7 @@ import org.edgo.audio.measure.gui.common.ShellIcons;
  */
 public final class ToolWindow {
 
-    /** Draws the window's content into {@code gc} starting at {@code top} — the y just below
+    /** Draws the window's content into {@code gc} starting at {@code top} - the y just below
      *  the button row (0 when there are no buttons).  Registered via {@link #setPainter};
      *  the window invokes it on every canvas paint, so the owner draws straight into the GC. */
     @FunctionalInterface
@@ -62,7 +62,7 @@ public final class ToolWindow {
     }
 
     /** Creates the window's content control.  Supplied when the content is a VIEW
-     *  in its own right — with its own palette, buttons and paint listener — rather
+     *  in its own right - with its own palette, buttons and paint listener - rather
      *  than something the owner draws through {@link #setPainter}.  The parent is
      *  handed out for exactly this and nothing else; the shell stays private. */
     @FunctionalInterface
@@ -82,7 +82,7 @@ public final class ToolWindow {
     private Toolbar        toolbar;
     private ContentPainter painter;
 
-    /** Fixed-size window — the historical behaviour, and what a table of
+    /** Fixed-size window - the historical behaviour, and what a table of
      *  fixed-pixel columns wants. */
     public ToolWindow(Control owner, Color background, Color text, int buttonWidth, int buttonHeight) {
         this(owner, background, text, buttonWidth, buttonHeight, false);
@@ -93,8 +93,8 @@ public final class ToolWindow {
      *        size, and the canvas repaints on resize.  Opt-in on purpose: a window
      *        whose painter lays out fixed-pixel columns has nothing to do with the
      *        extra space, and the owner's next {@code setSize} would silently undo
-     *        the user's drag.  A window that scales its content — the amplitude
-     *        histogram — passes true.
+     *        the user's drag.  A window that scales its content - the amplitude
+     *        histogram - passes true.
      */
     public ToolWindow(Control owner, Color background, Color text,
                       int buttonWidth, int buttonHeight, boolean resizable) {
@@ -102,7 +102,7 @@ public final class ToolWindow {
              parent -> new Canvas(parent, SWT.DOUBLE_BUFFERED));
     }
 
-    /** As above, but hosting a content control the owner builds — see
+    /** As above, but hosting a content control the owner builds - see
      *  {@link ContentFactory}. */
     public ToolWindow(Control owner, Color background, Color text,
                       int buttonWidth, int buttonHeight, boolean resizable,
@@ -175,7 +175,7 @@ public final class ToolWindow {
     }
 
     /**
-     * Adds a top-row L/R-style channel button and HANDS THE HANDLE BACK — unlike
+     * Adds a top-row L/R-style channel button and HANDS THE HANDLE BACK - unlike
      * {@link #addButton}, because the owner has to keep driving it: a channel
      * switched off in the main view must grey and block its button here too, which
      * only the owner knows about.  Buttons sharing a {@code group} behave as a
@@ -203,7 +203,7 @@ public final class ToolWindow {
 
     /**
      * The area the painter may draw in: the canvas client area with the button row
-     * already removed from the top.  For a content that scales with the window —
+     * already removed from the top.  For a content that scales with the window -
      * where {@code gc.getClipping()} is the damage rectangle, not the drawing
      * surface, and is the wrong thing to lay out against.
      */
@@ -229,14 +229,14 @@ public final class ToolWindow {
         return !shell.isDisposed() && shell.getVisible();
     }
 
-    /** Repaints the table — call from the owner's {@code redraw} to track the main view. */
+    /** Repaints the table - call from the owner's {@code redraw} to track the main view. */
     public void redraw() {
         if (!canvas.isDisposed()) {
             canvas.redraw();
         }
     }
 
-    /** The shell's current outer size — the owner reads it back to place the window. */
+    /** The shell's current outer size - the owner reads it back to place the window. */
     public Point getSize() {
         return shell.getSize();
     }

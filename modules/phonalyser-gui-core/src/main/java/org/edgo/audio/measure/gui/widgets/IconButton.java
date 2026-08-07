@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,13 +27,13 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Event;
 
 /**
- * Owner-drawn icon button — a {@link Canvas} that paints a centred
+ * Owner-drawn icon button - a {@link Canvas} that paints a centred
  * {@link Image} and fires {@code SWT.Selection} on click.
  *
  * <p>Used instead of a native SWT {@code Button} for icon-only buttons because
  * macOS native buttons cap their content height below our icon size and clip
  * the icon on top (the Record LED renders as a half-dome).  A {@code Canvas}
- * has no native bezel, so the full icon shows on every platform — the same
+ * has no native bezel, so the full icon shows on every platform - the same
  * reason the step caret is an {@link IconStepLabel}.
  *
  * <p>Pass {@code SWT.TOGGLE} for a latching button (e.g. Record): it tracks a
@@ -103,6 +103,6 @@ public final class IconButton extends Canvas {
 
     @Override
     protected void checkSubclass() {
-        // SWT forbids subclassing of most widgets by default — opt back in.
+        // SWT forbids subclassing of most widgets by default - opt back in.
     }
 }

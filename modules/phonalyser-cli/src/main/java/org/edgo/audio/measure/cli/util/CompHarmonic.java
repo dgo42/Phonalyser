@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -22,7 +22,7 @@ import lombok.Value;
 
 /**
  * One harmonic row parsed from an applied_compensation CSV.
- * {@code re}/{@code im} are in the rotated frame where fundamental → (0, −1),
+ * {@code re}/{@code im} are in the rotated frame where fundamental -> (0, −1),
  * so they are already the harmonic complex value relative to the fundamental.
  */
 @Value

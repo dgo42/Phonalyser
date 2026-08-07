@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -36,7 +36,7 @@ import org.edgo.audio.measure.gui.i18n.I18n;
  * shared verbatim by the FFT, oscilloscope and frequency-response toolbars.
  *
  * <p>Each pane differs only in (a) a message-key {@code prefix}, (b) the backing
- * preset map, and (c) how it captures / applies the current settings — all
+ * preset map, and (c) how it captures / applies the current settings - all
  * supplied through {@link Store}.  The bar itself owns the widget wiring, the
  * Save-button enablement logic, the overwrite / delete confirmations and a
  * low-frequency poll that keeps Save in sync when settings change elsewhere.
@@ -52,7 +52,7 @@ public final class PresetBar<P> extends Composite {
     /** Pane-specific backing: the named-preset map plus capture / apply of the
      *  current settings. */
     public interface Store<P> {
-        /** The live name → preset map (read for listing, lookup, containment). */
+        /** The live name -> preset map (read for listing, lookup, containment). */
         Map<String, P> presets();
         /** Saves {@code preset} under {@code name}. */
         void put(String name, P preset);
@@ -62,7 +62,7 @@ public final class PresetBar<P> extends Composite {
         P captureCurrent();
         /** Applies {@code preset} to the pane. */
         void apply(P preset);
-        /** Called after a Save or Delete mutated the map — e.g. to refresh a
+        /** Called after a Save or Delete mutated the map - e.g. to refresh a
          *  tab tile showing the saved-preset count.  Default no-op. */
         default void onChanged() { }
     }
@@ -78,7 +78,7 @@ public final class PresetBar<P> extends Composite {
     private final Button   deleteBtn;
 
     /**
-     * @param parent     container — the bar lays itself out in a 4-column grid
+     * @param parent     container - the bar lays itself out in a 4-column grid
      * @param i18nPrefix message-key prefix, e.g. {@code "fft.presets"}; the bar
      *                   reads {@code <prefix>.combo.tooltip}, {@code .save},
      *                   {@code .save.tooltip}, {@code .load}, {@code .load.tooltip},
@@ -188,11 +188,11 @@ public final class PresetBar<P> extends Composite {
         }
         P existing = store.presets().get(name);
         if (existing == null) {
-            saveBtn.setEnabled(true);     // new name — Save creates it
+            saveBtn.setEnabled(true);     // new name - Save creates it
             loadBtn.setEnabled(false);
             deleteBtn.setEnabled(false);
         } else {
-            // Existing — Save only if the current settings differ; Load / Delete always.
+            // Existing - Save only if the current settings differ; Load / Delete always.
             saveBtn.setEnabled(!existing.equals(store.captureCurrent()));
             loadBtn.setEnabled(true);
             deleteBtn.setEnabled(true);

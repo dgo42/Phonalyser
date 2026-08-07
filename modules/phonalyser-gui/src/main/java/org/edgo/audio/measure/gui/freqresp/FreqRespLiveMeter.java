@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -41,8 +41,8 @@ import org.edgo.audio.measure.preferences.Preferences;
  *
  * <p>Axes:
  * <ul>
- *   <li>Horizontal — elapsed time, {@code 0 .. totalDurationSec}.</li>
- *   <li>Vertical — RMS level in dBFS, {@code 0 dB at the top, −100 dB
+ *   <li>Horizontal - elapsed time, {@code 0 .. totalDurationSec}.</li>
+ *   <li>Vertical - RMS level in dBFS, {@code 0 dB at the top, −100 dB
  *       at the bottom}, labelled every 20 dB.</li>
  * </ul>
  *
@@ -88,7 +88,7 @@ public final class FreqRespLiveMeter extends Canvas {
      *  time constant (super smooth), at 10 Hz 0.5 s, at 100 Hz 50 ms. */
     private static final double SMOOTHING_PERIODS = 5.0;
     /** Above this frequency the period count itself shrinks with
-     *  (corner/f)² — smoothing collapses to nothing within a fraction of
+     *  (corner/f)² - smoothing collapses to nothing within a fraction of
      *  an octave.  Blocks up there already span several periods, and any
      *  residual EMA caps how fast the trace can FALL (a linear-domain EMA
      *  drops at most −20·log10(α) dB per block), which clipped the −80 dB
@@ -108,18 +108,18 @@ public final class FreqRespLiveMeter extends Canvas {
     private final Font  labelFont;
 
     private final double totalDurationSec;
-    /** Sweep geometry for the time → instantaneous-frequency mapping that
+    /** Sweep geometry for the time -> instantaneous-frequency mapping that
      *  drives the frequency-proportional smoothing. */
     private final double leadInSec;
     private final double sweepSec;
     private final double startHz;
     private final double stopHz;
 
-    // Two parallel arrays grown together — avoids boxing.
+    // Two parallel arrays grown together - avoids boxing.
     private final float[] timesSec = new float[MAX_POINTS];
     private final float[] levelsDb = new float[MAX_POINTS];
     private int           pointCount;
-    /** Reused x/y pair buffer for {@code drawPolyline} — see drawTrace. */
+    /** Reused x/y pair buffer for {@code drawPolyline} - see drawTrace. */
     private int[]         polyXy;
 
     /** Smoothed RMS state; seeded on the first incoming sample so the
@@ -127,7 +127,7 @@ public final class FreqRespLiveMeter extends Canvas {
      *  several blocks. */
     private double  emaRmsLin;
     private boolean emaSeeded;
-    /** Time of the previous sample — the EMA factor needs the block
+    /** Time of the previous sample - the EMA factor needs the block
      *  interval. */
     private double  lastTimeSec;
 
@@ -151,7 +151,7 @@ public final class FreqRespLiveMeter extends Canvas {
         int rgb = Preferences.instance().getFftLineColor();
         traceColor = new Color(d, (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
 
-        // Shared, centrally configured font — owned by Fonts.
+        // Shared, centrally configured font - owned by Fonts.
         labelFont = Fonts.instance().normal(d);
 
         addPaintListener(this::onPaint);
@@ -161,7 +161,7 @@ public final class FreqRespLiveMeter extends Canvas {
             axisColor.dispose();
             textColor.dispose();
             traceColor.dispose();
-            // labelFont is a shared instance owned by Fonts — not disposed here.
+            // labelFont is a shared instance owned by Fonts - not disposed here.
         });
     }
 
@@ -172,9 +172,9 @@ public final class FreqRespLiveMeter extends Canvas {
      *  <p>The incoming linear RMS is run through an EMA whose time
      *  constant tracks the sweep's instantaneous frequency
      *  ({@link #SMOOTHING_PERIODS} periods): heavy where single blocks
-     *  hold partial cycles (1–10 Hz would otherwise paint as a comb of
+     *  hold partial cycles (1-10 Hz would otherwise paint as a comb of
      *  vertical teeth), fading to none once each block spans several
-     *  periods — so the envelope stays crisp over most of the sweep. */
+     *  periods - so the envelope stays crisp over most of the sweep. */
     public void appendSample(double timeSec, double rmsLin) {
         if (isDisposed()) return;
         if (rmsLin < 0.0 || !Double.isFinite(rmsLin)) rmsLin = 0.0;

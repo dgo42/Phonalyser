@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -43,7 +43,7 @@ import java.util.Random;
 
 /**
  * A small title-less "Tip of the day" popup docked over the bottom-left
- * corner of the main window.  It floats <b>on top but not modal</b> — the
+ * corner of the main window.  It floats <b>on top but not modal</b> - the
  * user can keep working with the application while it is up.
  *
  * <p>When shown at startup it auto-closes after a {@value #AUTO_CLOSE_SECS}
@@ -205,7 +205,7 @@ public final class TipOfTheDayDialog {
      *  {@code owner}'s own font, by inserting line breaks at word boundaries.
      *  The native {@code SWT.WRAP} on a {@link Label} broke words mid-line for
      *  the tip text, so the wrapping is done here and the labels render the
-     *  explicit lines — which also keeps each label's height exact, so the popup
+     *  explicit lines - which also keeps each label's height exact, so the popup
      *  never carries a stale size (or blank space) over from the previous tip. */
     private String wrapText(Control owner, String text, int width) {
         GC gc = new GC(owner);

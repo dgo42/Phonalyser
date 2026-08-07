@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -37,15 +37,15 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * A transparent, self-painting tool button — the widget replacement for the views'
+ * A transparent, self-painting tool button - the widget replacement for the views'
  * canvas-drawn, Hotspot-hit-tested buttons.  Shows a centred icon (rendered INTERNALLY
  * in a light variant for the normal background and a dark variant for the filled one)
  * or a text label, inside an optional rounded frame.
  *
- * <p>Pressing inverts it — fill + dark content — for feedback; a {@link #setToggle(boolean)
+ * <p>Pressing inverts it - fill + dark content - for feedback; a {@link #setToggle(boolean)
  * toggle} button latches that look, its state flipping on mouse-down.  Fires an
  * {@link SWT#Selection} event on click; add a handler with
- * {@code addListener(SWT.Selection, …)} and read {@link #isToggled()} from it.  The
+ * {@code addListener(SWT.Selection, ...)} and read {@link #isToggled()} from it.  The
  * cursor is {@link SWT#CURSOR_HAND}; set the tooltip with the inherited
  * {@code setToolTipText}.  Created {@code SWT.NO_BACKGROUND | SWT.TRANSPARENT} so the
  * plot shows through the corners.
@@ -65,7 +65,7 @@ public final class ToolButton extends TransparentComposite {
     @Setter private boolean toggle;
     @Getter private boolean toggled;
     private boolean pressed;         // mouse held down on the button
-    /** Radio group NAME — same-named sibling {@code ToolButton}s (same parent) are
+    /** Radio group NAME - same-named sibling {@code ToolButton}s (same parent) are
      *  mutually exclusive: clicking one selects it and clears the rest, and each change
      *  fires {@link SWT#Selection} (so a radio handler should act only when
      *  {@link #isToggled()}).  {@code null} = standalone. */
@@ -96,7 +96,7 @@ public final class ToolButton extends TransparentComposite {
             redraw();
         });
         addListener(SWT.MouseExit, e -> {
-            if (pressed) {                 // mouse left while held → drop the press feedback
+            if (pressed) {                 // mouse left while held -> drop the press feedback
                 pressed = false;
                 redraw();
             }
@@ -109,7 +109,7 @@ public final class ToolButton extends TransparentComposite {
     }
 
     /** Draws the button through a {@link MeasurementPainter} at ({@code x}, {@code y})
-     *  at its current size — used by the GPU scope to render the (hidden) toolbar
+     *  at its current size - used by the GPU scope to render the (hidden) toolbar
      *  buttons into the GL canvas, where an SWT control can't overlay it. */
     public void paintWith(MeasurementPainter p, int x, int y) {
         paintContent(p, x, y, getSize().x, getSize().y);
@@ -118,17 +118,17 @@ public final class ToolButton extends TransparentComposite {
     private void paintContent(MeasurementPainter p, int x, int y, int w, int h) {
         int rw = w - 1;
         int rh = h - 1;
-        // A disabled button greys out and never shows the active fill — signalling
+        // A disabled button greys out and never shows the active fill - signalling
         // its action is unavailable (e.g. a measurement channel that's switched off).
         boolean enabled = isEnabled();
         boolean active = (toggled || pressed) && enabled;
         Color disabled = enabled ? null : getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY);
         // Active label + border auto-contrast to absolute black/white by the fill's
-        // brightness — theme-independent (the FFT's light bg and the scope's black bg alike).
+        // brightness - theme-independent (the FFT's light bg and the scope's black bg alike).
         Color contrast = active
                 ? getDisplay().getSystemColor(ColorUtil.isDark(fillColor) ? SWT.COLOR_WHITE : SWT.COLOR_BLACK)
                 : null;
-        p.setLineWidth(1);   // 1-px frame — the shared GPU painter keeps the previous stroke width
+        p.setLineWidth(1);   // 1-px frame - the shared GPU painter keeps the previous stroke width
         if (active) {
             if (fillColor != null) {
                 p.setBackground(fillColor);
@@ -159,7 +159,7 @@ public final class ToolButton extends TransparentComposite {
 
     /** Renders the icon INTERNALLY: {@code svgPath} at {@code iconHeight} px in the
      *  {@code normal} (normal-background) and {@code active} (filled-background) RGBs.
-     *  The images come from {@link IconUtils}' shared cache — borrowed, NEVER disposed here
+     *  The images come from {@link IconUtils}' shared cache - borrowed, NEVER disposed here
      *  (IconUtils owns them and disposes the whole cache at shell teardown).  Disposing them
      *  per-button would blank the same icon on every other button sharing it. */
     public void setIcon(Icon normal, Icon active) {
@@ -177,7 +177,7 @@ public final class ToolButton extends TransparentComposite {
     }
 
     /** Frame colour (normal state) and fill colour (active state).  The active label +
-     *  border auto-contrast to black/white by the fill's brightness — no invert needed. */
+     *  border auto-contrast to black/white by the fill's brightness - no invert needed. */
     public void setColors(Color frame, Color fill) {
         this.frameColor = frame;
         this.fillColor  = fill;

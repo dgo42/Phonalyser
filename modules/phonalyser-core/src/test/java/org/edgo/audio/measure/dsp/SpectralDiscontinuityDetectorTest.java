@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -35,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SpectralDiscontinuityDetectorTest {
 
     private static final int    HALF         = 2048;
-    private static final double BIN_WIDTH_HZ = 0.1875;   // → skirt ≈ 47 bins, exclusion 6 bins
+    private static final double BIN_WIDTH_HZ = 0.1875;   // -> skirt ≈ 47 bins, exclusion 6 bins
     private static final int   TONE  = 200;
     private static final int[] PEAKS = { TONE };
 

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -33,7 +33,7 @@ import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.gui.i18n.I18n;
 
 /**
- * Small helpers for the recurring {@code new MessageBox(parent, …); setText;
+ * Small helpers for the recurring {@code new MessageBox(parent, ...); setText;
  * setMessage; open;} pattern.  Centralises styling and call-site shape so
  * the pane code says <em>what</em> kind of dialog it wants, not <em>how</em>
  * to build one.
@@ -53,9 +53,9 @@ public final class Dialogs {
      *  has no parent (e.g. a top-level utility shell).
      *
      *  <p>Use this for every modal dialog so it opens in a predictable
-     *  spot regardless of where the main window has been moved — tool
+     *  spot regardless of where the main window has been moved - tool
      *  windows that have their own positioning logic (offscreen render
-     *  shells, dropdown popups, …) should not call this. */
+     *  shells, dropdown popups, ...) should not call this. */
     public static void centerOnParent(Shell child) {
         if (child == null || child.isDisposed()) return;
         Shell parent = (Shell) child.getParent();
@@ -69,7 +69,7 @@ public final class Dialogs {
     }
 
     /** Modal error dialog: ICON_ERROR + OK.  Both title and message are
-     *  shown verbatim — caller is responsible for {@code I18n.t(...)}
+     *  shown verbatim - caller is responsible for {@code I18n.t(...)}
      *  lookup. */
     public static int error(Shell parent, String title, String message) {
         return show(parent, SWT.ICON_ERROR | SWT.OK, title, message);
@@ -78,6 +78,13 @@ public final class Dialogs {
     /** Modal info dialog: ICON_INFORMATION + OK. */
     public static int info(Shell parent, String title, String message) {
         return show(parent, SWT.ICON_INFORMATION | SWT.OK, title, message);
+    }
+
+    /** Modal warning dialog: ICON_WARNING + OK - for something the operator must
+     *  know about what they just committed, which is neither an error nor merely
+     *  informational (the uncalibrated-device warning). */
+    public static int warn(Shell parent, String title, String message) { // static-ok: modal-dialog namespace, mirrors error()/info()
+        return show(parent, SWT.ICON_WARNING | SWT.OK, title, message);
     }
 
     /** Modal yes/no dialog: ICON_QUESTION + YES + NO.  Returns
@@ -99,7 +106,7 @@ public final class Dialogs {
      * the text field and is selected so the user can overtype immediately.
      *
      * <p>Built by hand (no SWT InputDialog widget exists) so the look
-     * matches the rest of the app — small Shell with a label, a Text, and
+     * matches the rest of the app - small Shell with a label, a Text, and
      * OK / Cancel buttons.
      */
     public static String promptString(Shell parent, String title,

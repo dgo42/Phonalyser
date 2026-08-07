@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -34,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * LEFT from {@code activeRange}'s {@code fsLeft} and RIGHT from
  * {@code activeRangeRight}'s {@code fsRight}, with a dangling right label falling
  * back to the {@code activeRange} row), and the per-channel {@code storeAdcCalibration(Channel,
- * …)} write (per-channel for bound stereo cards, both-equal for MONO).
+ * ...)} write (per-channel for bound stereo cards, both-equal for MONO).
  *
  * <p>Every instance operates on a DETACHED, transient copy (as in
  * {@link DeviceProfileRoundTripTest}) so nothing here touches the live singleton's
@@ -100,7 +100,7 @@ class PerChannelAdcFsTest {
     void applyInputDeviceProfile_mono_fillsBothScalarsFromOneValue() {
         Preferences p = detached();
         // A MONO card: one physical channel.  Even a stray fsRight on the row is
-        // ignored — the single fsLeft fills both scalars.
+        // ignored - the single fsLeft fills both scalars.
         p.putAudioDeviceProfile(inputProfile("Mono Card", "Line (Mono Card)",
                 DeviceChannelMode.MONO, "gain", null, row("gain", 1.9, 9.9)));
 
@@ -134,7 +134,7 @@ class PerChannelAdcFsTest {
     @Test
     void applyInputDeviceProfile_independent_danglingRight_fallsBackToActiveRow() {
         Preferences p = detached();
-        // activeRangeRight names a row that does not exist → fall back to the
+        // activeRangeRight names a row that does not exist -> fall back to the
         // activeRange ("1.7V") row's fsRight (1.71).
         p.putAudioDeviceProfile(inputProfile("Dangling Card", "Line (Dangling Card)",
                 DeviceChannelMode.INDEPENDENT, "1.7V", "NOPE",
@@ -148,7 +148,7 @@ class PerChannelAdcFsTest {
                 "dangling right label falls back to the activeRange row's fsRight");
     }
 
-    // ── storeAdcCalibration(Channel.R, …) writes only the right side ─────────
+    // ── storeAdcCalibration(Channel.R, ...) writes only the right side ─────────
 
     @Test
     void storeAdcCalibration_right_writesOnlyRightRowFieldAndScalar() {
@@ -200,7 +200,7 @@ class PerChannelAdcFsTest {
         assertEquals(1.71, leftRow.getFsRight(), EPS, "LEFT calibrate must NOT touch fsRight");
     }
 
-    // ── storeAdcCalibration(Channel.R, …) on a LINKED card writes only right ──
+    // ── storeAdcCalibration(Channel.R, ...) on a LINKED card writes only right ──
 
     @Test
     void storeAdcCalibration_right_onLinkedCard_writesOnlyRightOfSharedRow() {
@@ -224,7 +224,7 @@ class PerChannelAdcFsTest {
         assertEquals(3.99, shared.getFsRight(), EPS, "RIGHT calibrate wrote fsRight of the shared active row");
     }
 
-    // ── storeAdcCalibration(Channel, …) on a MONO card keeps both equal ──────
+    // ── storeAdcCalibration(Channel, ...) on a MONO card keeps both equal ──────
 
     @Test
     void storeAdcCalibration_onMonoCard_keepsBothChannelsEqual() {

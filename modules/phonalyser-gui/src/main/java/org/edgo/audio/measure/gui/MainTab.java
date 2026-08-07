@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -63,9 +63,9 @@ import lombok.extern.log4j.Log4j2;
  * {@link Preferences#getTabOrientation()}:
  *
  * <ul>
- *   <li>{@code "TOP"} — conventional SWT {@link TabFolder} with text
+ *   <li>{@code "TOP"} - conventional SWT {@link TabFolder} with text
  *       labels and a small icon per tab.</li>
- *   <li>{@code "LEFT"} — custom vertical sidebar of large 48×48 icon
+ *   <li>{@code "LEFT"} - custom vertical sidebar of large 48×48 icon
  *       buttons with the label rendered underneath.  The selected tab's
  *       content is shown in a {@link StackLayout} to the right.  SWT
  *       offers no built-in left-tab widget, so this is composed by hand.</li>
@@ -73,7 +73,7 @@ import lombok.extern.log4j.Log4j2;
  *
  * <p>Orientation / icon-size changes apply LIVE: the content composites
  * (and the heavy panes inside them) are created once and re-parented
- * into a freshly built host chrome — no shell rebuild, running
+ * into a freshly built host chrome - no shell rebuild, running
  * capture / playback untouched.  The Preferences dialog just writes the
  * prefs; the rebuild is driven by the property bindings registered in
  * the constructor.
@@ -81,7 +81,7 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class MainTab {
 
-    /** Width of the left sidebar — sized for an icon centred on top with
+    /** Width of the left sidebar - sized for an icon centred on top with
      *  a vertically-rotated label underneath (label width = its line
      *  height once rotated, not its run length). */
     private static final int LEFT_BAR_WIDTH_BIG_PX   = 56;
@@ -93,11 +93,11 @@ public final class MainTab {
     private MultifunctionalTab    multifunctional;
     //@SuppressWarnings("unused") // Tab class instances are created for their UI; we don't need to keep a method reference yet.
     private FrequencyResponseTab  frequencyResponse;
-    /** Content composites — created ONCE; the host builders re-parent them
+    /** Content composites - created ONCE; the host builders re-parent them
      *  into whichever chrome (top TabFolder / left sidebar) is active. */
     private Composite multiContent;
     private Composite frContent;
-    /** Root of the current host chrome (TabFolder or sidebar composite) —
+    /** Root of the current host chrome (TabFolder or sidebar composite) -
      *  disposed and rebuilt on an orientation / icon-size change. */
     private Composite hostChrome;
     /** Live selected-tab index, updated by both hosts' selection events;
@@ -118,7 +118,7 @@ public final class MainTab {
         // registry so the panes below re-register their new controls instead
         // of leaving the disposed ones behind.
         UiRegistry.instance().clear();
-        // Content first (parented to the shell), chrome around it after —
+        // Content first (parented to the shell), chrome around it after -
         // buildHost() re-parents the content into the active chrome.
         multiContent = new Composite(shell, SWT.NONE);
         multiContent.setLayout(new FillLayout());
@@ -138,7 +138,7 @@ public final class MainTab {
         frequencyResponse.getPane().registerTabs("frequencyResponse/tabs");
         // Look & Feel layout prefs apply LIVE: the dialog writes the pref,
         // the chrome rebuilds around the untouched content.  Apply can
-        // change both prefs at once — coalesce to a single rebuild.
+        // change both prefs at once - coalesce to a single rebuild.
         Bindings.onChange(shell, prefs.tabOrientationProperty(),      v -> scheduleChromeRebuild());
         Bindings.onChange(shell, prefs.smallIconsInMainTabProperty(), v -> scheduleChromeRebuild());
         // Persist the selected tab once, on shell dispose (per-build
@@ -159,7 +159,7 @@ public final class MainTab {
     }
 
     /** Smallest shell size that fits the contained tabs' natural layout
-     *  — used by {@link MainWindow} to set the shell's minimum size. */
+     *  - used by {@link MainWindow} to set the shell's minimum size. */
     public Point computeNaturalShellSize() {
         return shell.computeSize(SWT.DEFAULT, SWT.DEFAULT, true);
     }
@@ -198,7 +198,7 @@ public final class MainTab {
     }
 
     /** Brings a top-level tab forward regardless of the active chrome (top
-     *  tabs or left sidebar) — used by the component registry so automation
+     *  tabs or left sidebar) - used by the component registry so automation
      *  can reveal the Frequency Response tab before screenshotting it. */
     private void selectTopTab(int index) {
         if (topTabSelector != null) {
@@ -208,7 +208,7 @@ public final class MainTab {
     }
 
     // -------------------------------------------------------------------------
-    // Host construction — top tabs vs. left sidebar
+    // Host construction - top tabs vs. left sidebar
     // -------------------------------------------------------------------------
 
     private void buildHost() {
@@ -221,13 +221,15 @@ public final class MainTab {
     }
 
     /** Coalesces the orientation + icon-size property events (the dialog's
-     *  Apply can fire both) into one chrome rebuild on the next UI tick. */
+     *  Apply can fire both) into one chrome rebuild on the next UI tick.
+     *  Deliberate SAME-thread deferral - the coalescing depends on it, so not
+     *  GuiUtil.marshal (which runs in place on the UI thread). */
     private void scheduleChromeRebuild() {
         if (chromeRebuildPending) return;
         chromeRebuildPending = true;
-        display.asyncExec(() -> {
-            chromeRebuildPending = false;
+        shell.getDisplay().asyncExec(() -> {
             if (shell.isDisposed()) return;
+            chromeRebuildPending = false;
             // Park the content composites on the shell so disposing the
             // old chrome can't take them (and the panes inside) with it.
             multiContent.setParent(shell);
@@ -295,7 +297,7 @@ public final class MainTab {
         multiContent.setParent(contentHost);
         frContent.setParent(contentHost);
 
-        // Owned by this chrome generation — disposed with it, not with the
+        // Owned by this chrome generation - disposed with it, not with the
         // shell, so orientation round-trips don't accumulate colours.
         Color hoverBg    = new Color(display, 0xE6, 0xEE, 0xF8);
         Color selectedBg = new Color(display, 0xCD, 0xDD, 0xF5);
@@ -358,7 +360,7 @@ public final class MainTab {
         });
     }
 
-    /** One row in the left sidebar — a {@link Canvas} that paints the
+    /** One row in the left sidebar - a {@link Canvas} that paints the
      *  icon centered horizontally with the label wrapped underneath.
      *  Using a Canvas (instead of nested Labels with a paint listener)
      *  means our background fill is the only paint that runs for this
@@ -389,7 +391,7 @@ public final class MainTab {
             this.selectedBg = selectedBg;
             this.content    = content;
 
-            // Shared, centrally configured font — owned by Fonts, never
+            // Shared, centrally configured font - owned by Fonts, never
             // disposed here.
             this.labelFont = Fonts.instance().normal(parent.getDisplay());
 
@@ -437,7 +439,7 @@ public final class MainTab {
 
         private int computePreferredHeight() {
             int iconH = (icon != null) ? icon.getBounds().height : 0;
-            // The label is rotated 90°, so its text WIDTH is the vertical run —
+            // The label is rotated 90°, so its text WIDTH is the vertical run -
             // measure it with the actual font (not an estimate) so long names
             // (e.g. "Frequency response") get the exact height they need and are
             // neither clipped at the bottom nor overlapped by the icon.
@@ -478,7 +480,7 @@ public final class MainTab {
                 iconH = ib.height;
             }
 
-            // Label — painted vertically (rotated 90° counter-clockwise)
+            // Label - painted vertically (rotated 90° counter-clockwise)
             // so it reads bottom-to-top below the icon.  Mirrors the
             // collapsed PaneTitle treatment in narrow strips so the
             // sidebar feels consistent with the rest of the app.

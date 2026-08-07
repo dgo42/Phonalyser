@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -176,7 +176,7 @@ public final class SineFit {
      * </pre>
      * DC is left in the trace on purpose (the AC toggle handles DC).  Uses a
      * double-precision sin/cos rotation recurrence seeded at {@code omega·kOffset}
-     * — one {@link Math#sin}/{@link Math#cos} pair, then rotate per sample, no
+     * - one {@link Math#sin}/{@link Math#cos} pair, then rotate per sample, no
      * allocation.
      *
      * @param src     source buffer
@@ -202,8 +202,8 @@ public final class SineFit {
     }
 
     /**
-     * Subtracts the WHOLE fitted model — sinusoid <em>and</em> the DC term
-     * {@code c} — from {@code src[srcFrom .. srcFrom+count)}, then adds back a
+     * Subtracts the WHOLE fitted model - sinusoid <em>and</em> the DC term
+     * {@code c} - from {@code src[srcFrom .. srcFrom+count)}, then adds back a
      * caller-supplied replacement DC {@code dcAdd}, into {@code dst[dstFrom ..]}:
      * <pre>
      * dst[dstFrom+i] = src[srcFrom+i] − (a·sin(omega·(kOffset+i)) + b·cos(omega·(kOffset+i)) + c) + dcAdd

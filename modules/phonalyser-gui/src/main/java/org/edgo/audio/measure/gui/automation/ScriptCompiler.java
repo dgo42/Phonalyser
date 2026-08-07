@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -49,20 +49,20 @@ import lombok.extern.log4j.Log4j2;
 
 /**
  * Compiles an automation-script <b>body snippet</b> at runtime and loads the
- * resulting {@link AbstractAutomationScript} subclass — so a doc-generation
+ * resulting {@link AbstractAutomationScript} subclass - so a doc-generation
  * sequence can be edited on disk and re-run without rebuilding the
  * application.  Used by {@link AutomationRunner} when {@code --automation=}
  * points at a {@code .body} file.
  *
  * <h2>Body-only scripts (sandbox)</h2>
- * <p>A script file is <em>only the statements of {@code run()}</em> — no
+ * <p>A script file is <em>only the statements of {@code run()}</em> - no
  * imports, no class or method declaration.  This compiler supplies the whole
  * scaffold (the {@code extends AbstractAutomationScript} class, the
  * constructor and the {@code run()} signature, all referenced by fully
  * qualified name so the generated file needs no imports) and inserts the body
  * verbatim.  Because the body has no imports and is checked by
  * {@link #rejectIfUnsafe} first, it can reference nothing but the methods it
- * <em>inherits</em> from the base class plus {@code java.lang} primitives — it
+ * <em>inherits</em> from the base class plus {@code java.lang} primitives - it
  * cannot import a type, name one fully, declare a nested type, or reach the
  * dangerous always-available classes ({@code Runtime}, {@code ProcessBuilder},
  * {@code System}, {@code Class}, reflection).  A script's capability surface
@@ -76,14 +76,14 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class ScriptCompiler {
 
-    /** Language level the scripts are compiled against — matches the
+    /** Language level the scripts are compiled against - matches the
      *  application's own build level. */
     private static final String RELEASE_LEVEL = "17";
 
     /** Name of the synthetic class the body is wrapped in. */
     private static final String GENERATED_CLASS = "GeneratedAutomationScript";
 
-    /** Constructs a script body may not contain — each would let it reach
+    /** Constructs a script body may not contain - each would let it reach
      *  beyond the inherited base-class API.  Checked after comments and
      *  string / char literals are stripped, so a path string or comment can't
      *  trip them.  Parallel with {@link #FORBIDDEN_LABEL}. */
@@ -153,7 +153,7 @@ public final class ScriptCompiler {
     }
 
     /** Wraps a verified body in the class scaffold.  Every type is referenced
-     *  by {@link Class#getName()} so the generated file needs no imports — the
+     *  by {@link Class#getName()} so the generated file needs no imports - the
      *  body therefore inherits its entire capability surface and nothing
      *  more. */
     private String wrapBody(String body) {
@@ -214,8 +214,8 @@ public final class ScriptCompiler {
         return cp;
     }
 
-    /** The bundled ECJ — preferred so scripts compile identically on a
-     *  dev JDK and in the jpackaged (JRE-only) app — with the JDK's own
+    /** The bundled ECJ - preferred so scripts compile identically on a
+     *  dev JDK and in the jpackaged (JRE-only) app - with the JDK's own
      *  compiler as fallback.  On a JDK, {@link ServiceLoader} lists the
      *  JDK's module-declared provider BEFORE classpath providers, so the
      *  first provider that is not the system compiler is the bundled one. */
@@ -228,7 +228,7 @@ public final class ScriptCompiler {
         }
         if (system == null) {
             throw new IllegalStateException(
-                    "No Java compiler available — neither ECJ on the classpath nor a JDK runtime.");
+                    "No Java compiler available - neither ECJ on the classpath nor a JDK runtime.");
         }
         return system;
     }
@@ -269,7 +269,7 @@ public final class ScriptCompiler {
     }
 
     /** Binary names of all {@code .class} files under {@code outDir}
-     *  (relative path, separators → dots, extension stripped). */
+     *  (relative path, separators -> dots, extension stripped). */
     private List<String> compiledClassNames(Path outDir) throws IOException {
         List<String> names = new ArrayList<>();
         try (Stream<Path> files = Files.walk(outDir)) {

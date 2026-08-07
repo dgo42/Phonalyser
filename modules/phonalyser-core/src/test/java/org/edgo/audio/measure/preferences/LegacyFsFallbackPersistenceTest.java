@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,16 +28,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
  * Pins the DEPRECATED shared full-scale fallback keys ({@code adcFsVoltageRms},
- * {@code dacFsVoltageRms}) to the preferences yaml round-trip: they are the
- * calibration FALLBACK for devices with no card in {@code devices.yaml}, are
- * documented in the help's Preferences chapter as kept for backwards
- * compatibility, and are scheduled for removal only in the release AFTER the
- * next one.  A cleanup once dropped them from the writer — a released user's
- * calibration silently reset to defaults; this test makes that regression loud.
+ * {@code dacFsVoltageRms}) to their 1.2 contract: LOAD
+ * ONLY.  They are the calibration fallback for a device whose card carries none,
+ * and a calibrated card pushes its own values into the very same runtime
+ * scalars - so writing them back would save the last selected card's
+ * calibration as the machine-wide default and hand it to the next uncalibrated
+ * device as if it had been measured there.  The reader stays: a pre-1.2
+ * {@code preferences.yaml} seeds the runtime fallback once, then the entry
+ * disappears with the first save.
  *
  * <p>Runs against the live singleton in transient mode (no disk writes); every
  * touched preference is restored afterwards.
@@ -67,25 +69,28 @@ class LegacyFsFallbackPersistenceTest {
     }
 
     @Test
-    void legacyFsKeysAreWrittenAndReadBack() throws Exception {
+    void legacyFsKeysAreNeverWritten() throws Exception {
         Preferences prefs = Preferences.instance();
         prefs.setAdcFsVoltageRms(ADC_FS_VRMS);
         prefs.setDacFsVoltageAmpl(DAC_FS_VRMS * Constants.SQRT2);
 
         Map<?, ?> written = invokeToMap(prefs);
-        assertTrue(written.containsKey("adcFsVoltageRms"), "adcFsVoltageRms must stay in the yaml");
-        assertTrue(written.containsKey("dacFsVoltageRms"), "dacFsVoltageRms must stay in the yaml");
-        assertEquals(ADC_FS_VRMS, ((Number) written.get("adcFsVoltageRms")).doubleValue(), EPS);
-        // The DAC value is persisted as RMS (the on-disk convention), amplitude in memory.
-        assertEquals(DAC_FS_VRMS, ((Number) written.get("dacFsVoltageRms")).doubleValue(), EPS);
+        assertFalse(written.containsKey("adcFsVoltageRms"),
+                "adcFsVoltageRms is runtime-only since 1.2 - it must not reach the yaml");
+        assertFalse(written.containsKey("dacFsVoltageRms"),
+                "dacFsVoltageRms is runtime-only since 1.2 - it must not reach the yaml");
+    }
 
-        // A pre-card preferences.yaml carrying only the two legacy keys must land
-        // in the fallback scalars on load.
+    @Test
+    void legacyFsKeysStillSeedTheRuntimeFallbackOnLoad() throws Exception {
+        // A pre-1.2 preferences.yaml carrying the two legacy keys must land in the
+        // fallback scalars on load - the one-way migration the 1.2 contract keeps.
+        Preferences prefs = Preferences.instance();
         prefs.setAdcFsVoltageRms(1.0);
         prefs.setDacFsVoltageAmpl(1.0);
         Map<String, Object> legacy = new LinkedHashMap<>();
         legacy.put("adcFsVoltageRms", ADC_FS_VRMS);
-        legacy.put("dacFsVoltageRms", DAC_FS_VRMS);
+        legacy.put("dacFsVoltageRms", DAC_FS_VRMS);   // on disk RMS, in memory amplitude
         invokeFromMap(prefs, legacy);
         assertEquals(ADC_FS_VRMS, prefs.getAdcFsVoltageRms(), EPS);
         assertEquals(DAC_FS_VRMS * Constants.SQRT2, prefs.getDacFsVoltageAmpl(), EPS);

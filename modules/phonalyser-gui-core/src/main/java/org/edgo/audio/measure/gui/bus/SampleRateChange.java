@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,23 +18,29 @@
 
 package org.edgo.audio.measure.gui.bus;
 
-import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.preferences.BackendKey;
 
 /**
  * Payload of {@link Events#PREFS_SAMPLE_RATE_CHANGED} and
  * {@link Events#PREFS_SAMPLE_RATE_SET}: one direction's sample rate as the
  * Preferences dialog is being edited, tagged with BOTH the backend and the
  * resolved card it belongs to so a subscriber can key off whichever it
- * constrains — a whole backend, or one specific card.  Both ride ON the payload
+ * constrains - a whole backend, or one specific card.  Both ride ON the payload
  * because these events fire against the dialog's UNCOMMITTED working copy: the
  * subscriber cannot read the change off live Preferences yet, so it gates on
  * these fields rather than on current state.
  *
+ * <p>The backend is the whole SELECTION, not just its type: a rule that
+ * constrains a backend's rates constrains it wherever it runs (a QA403 has the
+ * same one clock on a server as on this machine), while the dialog still has to
+ * tell one server's QA40x from another's when it applies the answer.
+ *
  * @param input        {@code true} for the input (capture) direction, {@code false} for output
  * @param sampleRateHz the direction's sample rate in hertz
- * @param backend      the audio backend the edited direction belongs to
+ * @param backend      the selected backend the edited direction belongs to -
+ *                     local, or one server's
  * @param card         the resolved card name for the edited direction's device,
  *                     or {@code null} when the device maps to no card
  */
-public record SampleRateChange(boolean input, int sampleRateHz, AudioBackendType backend, String card) {
+public record SampleRateChange(boolean input, int sampleRateHz, BackendKey backend, String card) {
 }

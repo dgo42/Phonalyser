@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,7 +28,7 @@ import org.junit.jupiter.api.Test;
 /**
  * Range semantics of the IMD product readout: a product whose frequency
  * falls outside the measurable spectrum (below DC or beyond the last bin)
- * must report {@code NaN} — "not measurable" — never a synthetic floor
+ * must report {@code NaN} - "not measurable" - never a synthetic floor
  * voltage.  One-sided DFD3 (SMPTE-style tone pairs, where {@code 2f1 − f2}
  * lands below DC) must still report the measurable sideband, and the
  * combined IMD power must skip unmeasurable products instead of going NaN.
@@ -36,7 +36,7 @@ import org.junit.jupiter.api.Test;
 class ImdAnalyzerRangeTest {
 
     private static final double BIN_BW_HZ = 10.0;
-    /** Spectrum length in bins — top frequency ≈ 40.95 kHz. */
+    /** Spectrum length in bins - top frequency ≈ 40.95 kHz. */
     private static final int    BINS      = 4096;
     /** Any physically meaningful dBV reading sits far above this. */
     private static final double ABSURD_DBV = -400.0;

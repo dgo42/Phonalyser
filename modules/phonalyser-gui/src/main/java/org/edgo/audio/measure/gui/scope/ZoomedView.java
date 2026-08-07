@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -37,7 +37,7 @@ import org.eclipse.swt.widgets.Display;
 
 /**
  * Condensed time-axis strip below the main {@link ScopeView}.  Always
- * displays the most recent <strong>1 second</strong> of captured signal —
+ * displays the most recent <strong>1 second</strong> of captured signal -
  * its full pixel width maps to exactly one second of audio.  Useful as an
  * overview while the main scope is zoomed in on a much shorter window.
  *
@@ -49,7 +49,7 @@ public final class ZoomedView extends AbstractMeasurementView {
 
     private static final int DIVISIONS_X = 10;
 
-    /** See {@link ScopeView#LANCZOS_A} — A=16 for sharper stop-band. */
+    /** See {@link ScopeView#LANCZOS_A} - A=16 for sharper stop-band. */
     private static final int LANCZOS_A = 16;
 
     /** See {@link ScopeView}'s {@code MAX_LANCZOS_DOWNSAMPLE} for rationale. */
@@ -58,7 +58,7 @@ public final class ZoomedView extends AbstractMeasurementView {
     /** Buffer padding (each side) so the widest kernel still has real context. */
     private static final int LANCZOS_PADDING = LANCZOS_A * MAX_LANCZOS_DOWNSAMPLE;
 
-    // All colours live in the AbstractMeasurementView palette —
+    // All colours live in the AbstractMeasurementView palette -
     // dark-theme overrides + prefs-driven L/R trace RGBs are passed
     // via the super(...) override map.  Midline reuses the CROSSHAIR
     // role (semantically the same "thin divider through the strip"
@@ -83,7 +83,7 @@ public final class ZoomedView extends AbstractMeasurementView {
         addDisposeListener(e -> disposePalette());
     }
 
-    // The condensed strip is a fixed 1-second overview — rectangular zoom is
+    // The condensed strip is a fixed 1-second overview - rectangular zoom is
     // never installed here, so the base's zoom hooks stay inert.
     @Override
     protected ZoomState captureZoomState() { return null; }
@@ -193,7 +193,7 @@ public final class ZoomedView extends AbstractMeasurementView {
 
     /**
      * Lanczos-windowed sinc reconstruction with the kernel scaled to the
-     * output rate ({@code scale = max(1, samplesPerPx)}) — see
+     * output rate ({@code scale = max(1, samplesPerPx)}) - see
      * {@link ScopeView#lanczos} for the rationale.
      */
     private float lanczos(float[] data, int n, double t, double scale) {
@@ -264,6 +264,6 @@ public final class ZoomedView extends AbstractMeasurementView {
 
     @Override
     protected void checkSubclass() {
-        // Allow subclassing — Canvas is on SWT's restricted list otherwise.
+        // Allow subclassing - Canvas is on SWT's restricted list otherwise.
     }
 }

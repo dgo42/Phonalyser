@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -33,7 +33,7 @@ import java.util.Random;
  * Cross-tick harmonic-stability harness under a DRIFTING DAC↔ADC clock.
  *
  * <p>Unlike {@code FftHarmonicStabilityTest} (a single long {@code analyze()} call),
- * this drives the <b>real</b> {@link FftAnalyzerWorker} cross-tick path — the one the
+ * this drives the <b>real</b> {@link FftAnalyzerWorker} cross-tick path - the one the
  * live FFT view actually uses: 2 frames per tick (averages = 2), accumulated across
  * ticks by {@link FftAnalyzerWorker#accumulateIntoForeverBuffer} with its type-1
  * phase-lock loop, then read back via {@link FftAnalyzerWorker#overlayAccumulatorOnto}
@@ -44,12 +44,12 @@ import java.util.Random;
  * configurable rate (the DAC↔ADC relative drift).  The worker pins κ from tick 0 and
  * de-rotates each tick's harmonics by {@code h·Φ(pinned κ)}; the PLL tracks the
  * FUNDAMENTAL phase, so a frequency RAMP leaves a type-1 steady-state lag that scales
- * ×h onto the harmonics — the suspected mechanism behind the live "harmonics slowly
+ * ×h onto the harmonics - the suspected mechanism behind the live "harmonics slowly
  * decline over long averages".  This harness reproduces it deterministically: harmonic
  * level vs averaging depth, swept over drift rate.  ({@code 10 ppb/min = 0.01 ppm/min}
  * is the real NZ2520SDA rig; higher rates exaggerate the effect to see the breakdown.)
  */
-@Tag("exploratory")   // slow diagnostic harness — excluded from the normal build (see pom surefire)
+@Tag("exploratory")   // slow diagnostic harness - excluded from the normal build (see pom surefire)
 class FftCrossTickDriftTest {
 
     private static final int        SAMPLE_RATE    = 384_000;
@@ -128,10 +128,10 @@ class FftCrossTickDriftTest {
     }
 
     // ── True dual-tone (IMD) under drift ───────────────────────────────────
-    /** Two EQUAL tones F1,F2 (both strong → the multi-tone path locks both) plus
+    /** Two EQUAL tones F1,F2 (both strong -> the multi-tone path locks both) plus
      *  their 2nd/3rd-order IMD products at non-tone bins.  Under drift the products
      *  are the bins that sink with the fork OFF; with it ON the pooled δ from the two
-     *  equal teeth should hold them — the equal-Fisher regime where the fork is
+     *  equal teeth should hold them - the equal-Fisher regime where the fork is
      *  strongest (the original argument).  Product levels are read straight from the
      *  accumulated spectrum (they aren't harmonics of one fundamental). */
     @Test
@@ -197,7 +197,7 @@ class FftCrossTickDriftTest {
     /** Reproduces the live F2-sink: two EQUAL tones with F2/F1 ≈ 1.05 so the per-tick
      *  single-tone analyze (seeded fundamental = F1, "get fundamental from generator")
      *  snaps F2 to {@code h = round(F2/F1) = 1} and de-rotates it as F1.  F2/F1 = 1.7 in
-     *  the other test rounds to an integer-cycle error and stays clean — this one must
+     *  the other test rounds to an integer-cycle error and stays clean - this one must
      *  bite.  Reads F1 & F2 levels vs averaging depth, fork A/B. */
     @Test
     void crossTickDualToneSinkRepro() {
@@ -205,7 +205,7 @@ class FftCrossTickDriftTest {
         int winLen = FFT_SIZE + hop;
         int total  = (TICKS - 1) * hop + winLen;
         double binHz = (double) SAMPLE_RATE / FFT_SIZE;
-        int    f1Bin = 8533, f2Bin = 9047;                   // ratio→h=1; Δ=514 → 0.25·514=128.5 → 180° cancel
+        int    f1Bin = 8533, f2Bin = 9047;                   // ratio->h=1; Δ=514 -> 0.25·514=128.5 -> 180° cancel
         double[] freqs = { f1Bin * binHz, f2Bin * binHz };
         double[] dbfs  = { -10.0, -10.0 };
 
@@ -231,7 +231,7 @@ class FftCrossTickDriftTest {
                     analyzer.setSecondToneHintHz(freqs[1]);
                     r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
                             WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, freqs[0]);  // seed fund = F1
-                    if (t == 0) {   // SINGLE-capture levels — before any cross-tick accumulation
+                    if (t == 0) {   // SINGLE-capture levels - before any cross-tick accumulation
                         LOG.info(String.format("    single capture (1 avg):  F1=%.2f  F2=%.2f  (F2-F1=%.2f dB)",
                                 r.amplitudeDbFs[f1Bin], r.amplitudeDbFs[f2Bin],
                                 r.amplitudeDbFs[f2Bin] - r.amplitudeDbFs[f1Bin]));
@@ -251,8 +251,8 @@ class FftCrossTickDriftTest {
     }
 
     /** Reproduces the EXACT live case: 19 & 20 kHz at 2 M FFT.  The bug is
-     *  intra-capture, so a single {@code analyze()} (2-frame) shows it directly —
-     *  no cross-tick needed.  Δ=5462 bins → 0.25·5462 = 1365.5 → 180° cancel under
+     *  intra-capture, so a single {@code analyze()} (2-frame) shows it directly -
+     *  no cross-tick needed.  Δ=5462 bins -> 0.25·5462 = 1365.5 -> 180° cancel under
      *  the single-tone snap.  Logs F1/F2 and the second-tone refine so we can see
      *  whether the dual-tone fix even engaged. */
     @Test
@@ -263,7 +263,7 @@ class FftCrossTickDriftTest {
         double binHz = (double) SAMPLE_RATE / FFT;
         int    f1Bin = 103765;                               // ≈19.0 kHz
         int[]  dFbins = { 500, 2000, 5462, 10000, 30000 };   // F2−F1 spacing sweep (5462 = the live 1 kHz)
-        LOG.info("=== IMD 2M (NO HINT — auto-detect, live config): F1 bin {} (~19 kHz), F2 swept; "
+        LOG.info("=== IMD 2M (NO HINT - auto-detect, live config): F1 bin {} (~19 kHz), F2 swept; "
                 + "multiTone, no commanded fundamental ===", f1Bin);
 
         FftAnalyzer analyzer = new FftAnalyzer();
@@ -275,7 +275,7 @@ class FftCrossTickDriftTest {
             analyzer.setSamplesAbsStart(0);
             analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(true);
-            analyzer.setSecondToneHintHz(Double.NaN);        // NO hint — get-fund-from-gen OFF
+            analyzer.setSecondToneHintHz(Double.NaN);        // NO hint - get-fund-from-gen OFF
             FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT, HARMONIC_COUNT,
                     WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);   // no expectedFundHz
             long resid = f2Bin - Math.round((double) f2Bin / f1Bin) * (long) f1Bin;    // off-harmonic distance
@@ -288,7 +288,7 @@ class FftCrossTickDriftTest {
     /** Confirms the IMD PRODUCTS (not just F2) are mis-de-rotated: F1/F2 + the
      *  2nd/3rd-order products at known levels, single 2 M capture, live config.
      *  Products at a·F1+b·F2 get snapped to the nearest F1-harmonic, so they cancel
-     *  asymmetrically by their residual — set vs measured shows which sink. */
+     *  asymmetrically by their residual - set vs measured shows which sink. */
     @Test
     void crossTickImdProducts2M() {
         final int FFT = 2_097_152;
@@ -313,20 +313,20 @@ class FftCrossTickDriftTest {
         LOG.info("=== IMD PRODUCTS 2M (single capture): set vs measured ===");
         for (int i = 0; i < bins.length; i++) {
             long resid = bins[i] - Math.round((double) bins[i] / f1) * (long) f1;
-            LOG.info(String.format("  %-7s bin %7d set %6.1f → measured %8.2f dBFS   (resid %6d → %3.0f°)",
+            LOG.info(String.format("  %-7s bin %7d set %6.1f -> measured %8.2f dBFS   (resid %6d -> %3.0f°)",
                     lbl[i], bins[i], dbfs[i], r.amplitudeDbFs[bins[i]],
                     resid, 360.0 * ((0.25 * resid) % 1.0)));
         }
     }
 
     /** Off-bin twin tones carrying a shared relative-frequency WOBBLE
-     *  (δ(k)=A·sin, ~8-tick period — the residual an alignment loop leaves), products
+     *  (δ(k)=A·sin, ~8-tick period - the residual an alignment loop leaves), products
      *  synthesized as tones at a·F1+b·F2 (each inherits the same relative wobble).
-     *  Accumulated over many ticks; reads the COHERENT level's drift (tick 50 → last),
+     *  Accumulated over many ticks; reads the COHERENT level's drift (tick 50 -> last),
      *  which is the de-coherence the wobble induces as the type-1 PLL lags the moving
      *  frequency.  A/B on {@link FftAnalyzerWorker#MULTI_KAPPA_REFINE}: the one-shot
      *  refine pins the tick-0 κ but cannot FOLLOW a moving frequency, so it does NOT
-     *  fix the wobble — motivating the per-tick Δf feedforward.  wobble=0 is the
+     *  fix the wobble - motivating the per-tick Δf feedforward.  wobble=0 is the
      *  constant-offset baseline (the PLL holds it; both A/B flat). */
     @Test
     void crossTickImdWobbleLock() {
@@ -377,10 +377,10 @@ class FftCrossTickDriftTest {
                     }
                     base += hop;
                 }
-                LOG.info(String.format("--- wobble = %.2f ppm  refine = %s  (tick 50 → %d) ---",
+                LOG.info(String.format("--- wobble = %.2f ppm  refine = %s  (tick 50 -> %d) ---",
                         wobblePpm, refine ? "ON " : "OFF", ticks));
                 for (int i = 0; i < freqs.length; i++) {
-                    LOG.info(String.format("  %-7s %8.2f → %8.2f dBFS   (drift %+.2f)",
+                    LOG.info(String.format("  %-7s %8.2f -> %8.2f dBFS   (drift %+.2f)",
                             lbl[i], early[i], late[i], late[i] - early[i]));
                 }
             }
@@ -434,12 +434,12 @@ class FftCrossTickDriftTest {
     }
 
     /** Sum of tones {@code freqHz[i]} at {@code dbfs[i]}, all sharing ONE relative
-     *  frequency RANDOM-WALK δ(k) — a mean-reverting (Ornstein-Uhlenbeck) wobble with
+     *  frequency RANDOM-WALK δ(k) - a mean-reverting (Ornstein-Uhlenbeck) wobble with
      *  stationary std {@code wobbleAmp} and correlation time {@code tauSamples}, the
      *  bounded residual a NOISY alignment loop leaves around its target.  Unlike a
      *  clean sinusoid (whose lag averages out), a random walk de-correlates the phase,
      *  so it actually de-coheres the cross-tick sum when the loop can't follow it.
-     *  Phase integrated per sample: φ_i(k)=w_i·(k+Σδ) — every tone (and the product
+     *  Phase integrated per sample: φ_i(k)=w_i·(k+Σδ) - every tone (and the product
      *  tones) wobbles by the SAME relative amount, as a shared DAC↔ADC clock would. */
     private static double[] synthesizeWobble(long seed, int n, double wobbleAmp, double tauSamples,
                                             double[] freqHz, double[] dbfs) {

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -96,7 +96,7 @@ class MathUtilTest {
         int half = fftSize / 2;
         double[] re = new double[fftSize];
         double[] im = new double[fftSize];
-        // bin 99, 100, 101 → magnitudes 1, e, 1   (so log = 0, 1, 0)
+        // bin 99, 100, 101 -> magnitudes 1, e, 1   (so log = 0, 1, 0)
         re[99]  = 1.0;
         re[100] = Math.E;
         re[101] = 1.0;
@@ -107,7 +107,7 @@ class MathUtilTest {
 
         double refined = MathUtil.parabolicBinInterp(re, im, 100, fftSize);
         assertEquals(100.0, refined, 1e-6,
-                "symmetric parabola → fractional bin is the peak itself");
+                "symmetric parabola -> fractional bin is the peak itself");
         // Stays in valid range
         assertTrue(refined >= 1 && refined <= half);
     }
@@ -116,13 +116,13 @@ class MathUtilTest {
     void parabolicBinInterp_asymmetric_shiftsToHigherSide() {
         // Concave parabola at bin 100 with γ > α: the formula returns
         // peakBin + 0.5·(α − γ)/(α − 2β + γ).  Use log-powers 1 (lo), 4
-        // (mid), 3 (hi): α=1, β=4, γ=3 → δ = 0.5·(1−3)/(1−8+3) = 0.25.
-        // So the refined bin is 100.25 — between 100 and 101.
+        // (mid), 3 (hi): α=1, β=4, γ=3 -> δ = 0.5·(1−3)/(1−8+3) = 0.25.
+        // So the refined bin is 100.25 - between 100 and 101.
         int fftSize = 256;
         double[] re = new double[fftSize];
         double[] im = new double[fftSize];
         re[99]  = Math.exp(0.5);   // log(re²) = 1
-        re[100] = Math.exp(2.0);   // log(re²) = 4    ← local max
+        re[100] = Math.exp(2.0);   // log(re²) = 4    <- local max
         re[101] = Math.exp(1.5);   // log(re²) = 3
 
         double refined = MathUtil.parabolicBinInterp(re, im, 100, fftSize);
@@ -133,7 +133,7 @@ class MathUtilTest {
 
     @Test
     void parabolicBinInterp_flatNeighbourhood_returnsPeakBin() {
-        // alpha == beta == gamma → denom = 0 in the formula; the
+        // alpha == beta == gamma -> denom = 0 in the formula; the
         // implementation returns peakBin verbatim instead of dividing by
         // zero.
         int fftSize = 256;

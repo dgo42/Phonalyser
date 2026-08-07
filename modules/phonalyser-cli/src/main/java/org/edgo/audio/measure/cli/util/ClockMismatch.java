@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -43,7 +43,7 @@ public class ClockMismatch {
         } else if (sampleRate % 8000 == 0) {
             osc = 24.576e6;  oscName = "24.576 MHz";
         } else {
-            log.info("Iter {} clock: ΔF={} Hz ({} ppm) — sample rate {} matches no standard oscillator family",
+            log.info("Iter {} clock: ΔF={} Hz ({} ppm) - sample rate {} matches no standard oscillator family",
                     iter,
                     String.format(Locale.US, "%+.6f", delta),
                     String.format(Locale.US, "%+.2f", ppm),

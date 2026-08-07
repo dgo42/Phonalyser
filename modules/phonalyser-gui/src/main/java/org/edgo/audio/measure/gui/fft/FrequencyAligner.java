@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ import org.edgo.audio.measure.enums.AlignGenerator;
  *
  * <p>The sole implementation is {@link FrequencyFll}.  The view holds one per
  * tone and adds {@link #getCorrection()} to the snap target before publishing the
- * trim.  Not synchronized — called from the SWT UI thread.
+ * trim.  Not synchronized - called from the SWT UI thread.
  */
 public interface FrequencyAligner {
 
@@ -39,7 +39,7 @@ public interface FrequencyAligner {
     void update(double target, double detected, long absStartSamples, long latestSamplePos,
                 int sampleRate, int fftSize);
 
-    /** Current correction in Hz — add to the snap target before publishing the trim. */
+    /** Current correction in Hz - add to the snap target before publishing the trim. */
     double getCorrection();
 
     /** Zeroes the loop state.  Call on Record stop and on user-initiated

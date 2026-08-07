@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -57,8 +57,8 @@ import static org.lwjgl.nanovg.NanoVG.*;
  *       it.  An empty buffer (first frame / just resized) is seeded from the current trace so
  *       the persisted layer is never blank.</li>
  * </ul>
- * The buffers use raw {@link GL30} framebuffer objects — LWJGL 3.3.3 ships no nvglu
- * framebuffer helper — sized in physical pixels ({@link GlFrameSize#pixelW}); the colour
+ * The buffers use raw {@link GL30} framebuffer objects - LWJGL 3.3.3 ships no nvglu
+ * framebuffer helper - sized in physical pixels ({@link GlFrameSize#pixelW}); the colour
  * textures are wrapped as NanoVG images via the injected {@link NvgImageFactory} (the only
  * GL2-vs-GL3 difference) so they can be composited with {@code nvgImagePattern}.
  */
@@ -77,7 +77,7 @@ final class ScopePhosphor {
         int create(long vg, int textureId, int w, int h);
     }
 
-    /** Which kind of frame is being rendered — selects the persistence behaviour. */
+    /** Which kind of frame is being rendered - selects the persistence behaviour. */
     enum Kind {
         /** Realtime loop: decay + accumulate the trace, but only if it's genuinely new. */
         REALTIME,
@@ -86,7 +86,7 @@ final class ScopePhosphor {
         /** Expose / resize: re-composite the frozen phosphor (no decay, no accumulate). */
         COMPOSITE,
         /** Signal-affecting change (trigger source/type/edge, generator): wipe the
-         *  afterglow WITHOUT re-stamping — the current trace is still anchored on the
+         *  afterglow WITHOUT re-stamping - the current trace is still anchored on the
          *  pre-change event; stay blank until the next genuinely new frame. */
         CLEAR;
 
@@ -99,7 +99,7 @@ final class ScopePhosphor {
 
     private int  scratchFbo;
     private int  scratchTex;
-    private int  scratchRbo;        // packed depth-stencil — NanoVG stencil-stroke path
+    private int  scratchRbo;        // packed depth-stencil - NanoVG stencil-stroke path
     private int  scratchImg;        // scratchTex wrapped as a NanoVG image
     private int  phosphorFbo;
     private int  phosphorTex;
@@ -126,7 +126,7 @@ final class ScopePhosphor {
     private double      lastRightOff;
     private double      lastTriggerPos;
 
-    // This frame's dimensions — set at the top of render(), read by the helpers.
+    // This frame's dimensions - set at the top of render(), read by the helpers.
     private int   logicalW;
     private int   logicalH;
     private int   pixelW;
@@ -141,7 +141,7 @@ final class ScopePhosphor {
 
     /**
      * Renders one persisted frame and composites it to the current (default) framebuffer.
-     * Does <b>not</b> swap buffers — the surface presents.  Returns {@code false} (having
+     * Does <b>not</b> swap buffers - the surface presents.  Returns {@code false} (having
      * released its buffers) when persistence is off or the framebuffers can't be created,
      * so the surface falls back to a direct full render.
      */
@@ -153,10 +153,10 @@ final class ScopePhosphor {
             return false;
         }
         // Trigger source/type/edge/mode changes and external clear requests
-        // invalidate the afterglow AND the current trace's anchor → CLEAR (blank
+        // invalidate the afterglow AND the current trace's anchor -> CLEAR (blank
         // until the next genuinely new frame; re-stamping would freeze the stale-
         // anchored trace, which rare glitch triggers barely decay).  Geometry
-        // changes only move the coordinates → RESET (wipe + re-stamp).
+        // changes only move the coordinates -> RESET (wipe + re-stamp).
         boolean extClear = clearRequested;
         clearRequested = false;
         TriggerMode trigMode = prefs.getOscTriggerMode();
@@ -211,11 +211,11 @@ final class ScopePhosphor {
                 traced = true;
                 resetPhosphor();
             }
-            case COMPOSITE -> { /* phosphor frozen — just re-composite below */ }
+            case COMPOSITE -> { /* phosphor frozen - just re-composite below */ }
             case CLEAR -> clearPhosphor();
         }
         // Seed an empty phosphor (first frame, or a resize just reallocated + cleared it) from
-        // the current trace, so the persisted layer is never blank — vital for a STOPPED scope,
+        // the current trace, so the persisted layer is never blank - vital for a STOPPED scope,
         // whose only repaint is a COMPOSITE expose / resize and which the realtime loop won't refill.
         if (!haveLastAccum) {
             if (!traced) renderTraceToScratch(renderer);
@@ -226,7 +226,7 @@ final class ScopePhosphor {
     }
 
     /**
-     * Reads the accumulated afterglow (the current trace + its decayed history — the
+     * Reads the accumulated afterglow (the current trace + its decayed history - the
      * TRACE layer only, on a transparent background) back into an SWT {@link ImageData}
      * so the built-in screenshot, which renders through the CPU/GC path and never touches
      * this GPU buffer, can composite the very same persistence the live canvas shows.
@@ -303,11 +303,11 @@ final class ScopePhosphor {
      *  first frame and for infinite persistence) then merge the scratch trace into it
      *  <b>brightest-wins</b> (per-component max).  Source-over would re-composite the
      *  trace's anti-aliased fringe pixels over themselves on every new frame, converging
-     *  them to full opacity — the persisted trace turned solid-edged and fat.  Under max,
+     *  them to full opacity - the persisted trace turned solid-edged and fat.  Under max,
      *  a fringe pixel can never exceed its single-frame coverage, so the persisted trace
      *  keeps exactly the anti-aliasing of a persistence-off frame while decayed history
      *  fades underneath.  NanoVG offers no max composite op, but it also never touches
-     *  the GL <i>blend equation</i> (only the factors, which {@code GL_MAX} ignores) —
+     *  the GL <i>blend equation</i> (only the factors, which {@code GL_MAX} ignores) -
      *  so the deposit blit runs in its own NanoVG frame bracketed by
      *  {@code glBlendEquation(GL_MAX)} / restore {@code GL_FUNC_ADD}. */
     private void accumulate(double persistSeconds) {
@@ -322,7 +322,7 @@ final class ScopePhosphor {
             decay(fade);
             nvgEndFrame(vg);
         }
-        // (Infinite persistence, persistSeconds < 0: never decay — just keep accumulating.)
+        // (Infinite persistence, persistSeconds < 0: never decay - just keep accumulating.)
         GL14.glBlendEquation(GL14.GL_MAX);
         nvgBeginFrame(vg, logicalW, logicalH, pixelRatio);
         painter.reset(logicalW, logicalH, pixelRatio);
@@ -335,7 +335,7 @@ final class ScopePhosphor {
     }
 
     /** Signal-affecting change: wipe the afterglow to transparent WITHOUT stamping the
-     *  current trace — it is still anchored on the pre-change event, and with rare
+     *  current trace - it is still anchored on the pre-change event, and with rare
      *  (glitch) triggers the decay would keep it visible for minutes.  The buffer
      *  counts as valid so the seeding path doesn't immediately re-stamp; the next
      *  genuinely new frame starts the accumulation fresh. */
@@ -349,7 +349,7 @@ final class ScopePhosphor {
         haveLastAccum  = true;
     }
 
-    /** Requests a {@link Kind#CLEAR} on the next rendered frame — called (from any
+    /** Requests a {@link Kind#CLEAR} on the next rendered frame - called (from any
      *  thread) when non-render code invalidates the afterglow, e.g. a USER generator
      *  change arriving over the bus. */
     void clearPersistence() {
@@ -388,7 +388,7 @@ final class ScopePhosphor {
     }
 
     /** Multiplies the bound buffer by {@code 1 - fade} (= {@code exp(-dt/tau)}) on every
-     *  channel — a black quad with blend factors {@code (ZERO, ONE_MINUS_SRC_ALPHA)}:
+     *  channel - a black quad with blend factors {@code (ZERO, ONE_MINUS_SRC_ALPHA)}:
      *  {@code dst = 0 + dst*(1 - fade)}.  Restores premultiplied source-over afterwards. */
     private void decay(float fade) {
         nvgGlobalCompositeBlendFunc(vg, NVG_ZERO, NVG_ONE_MINUS_SRC_ALPHA);
@@ -434,7 +434,7 @@ final class ScopePhosphor {
                                        GL30.GL_RENDERBUFFER, scratchRbo);
         boolean scratchOk = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER) == GL30.GL_FRAMEBUFFER_COMPLETE;
 
-        // Phosphor: float colour only (it only ever takes convex fills + blits — no stencil).
+        // Phosphor: float colour only (it only ever takes convex fills + blits - no stencil).
         phosphorTex = newFloatTexture();
         phosphorFbo = GL30.glGenFramebuffers();
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, phosphorFbo);
@@ -458,7 +458,7 @@ final class ScopePhosphor {
         return true;
     }
 
-    /** Allocates a physical-size RGBA16F texture (float colour — an 8-bit buffer has an integer
+    /** Allocates a physical-size RGBA16F texture (float colour - an 8-bit buffer has an integer
      *  decay floor that leaves a faint permanent ghost; RGBA16F decays cleanly to zero). */
     private int newFloatTexture() {
         int tex = GL11.glGenTextures();

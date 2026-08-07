@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -42,7 +42,7 @@ import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * {@code --fft-analyze <wav>} — offline FFT analysis of a captured WAV.
+ * {@code --fft-analyze <wav>} - offline FFT analysis of a captured WAV.
  *
  * <p>Loads the WAV (channel 1), optionally linearises each ADC code through a
  * {@code --load-weighted} INL map and/or subtracts known harmonics via
@@ -60,7 +60,7 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public class FftAnalyzeMode {
 
-    /** The CLI's single Preferences instance (transient mode) — injected by Main. */
+    /** The CLI's single Preferences instance (transient mode) - injected by Main. */
     @Setter
     private Preferences prefs;
 
@@ -87,7 +87,7 @@ public class FftAnalyzeMode {
         String  adcFsArg     = ArgParser.getArgValue(args, "--adc-fs-vrms");
         String  loadWeightedArg = ArgParser.getArgValue(args, "--load-weighted");
         if (adcFsArg != null) {
-            // Inject for this run only — Main marked Preferences transient, so not persisted.
+            // Inject for this run only - Main marked Preferences transient, so not persisted.
             prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
@@ -134,7 +134,7 @@ public class FftAnalyzeMode {
         } else {
             fundRefDbV = Double.NaN;
         }
-        // The analyzer speaks dBFS only — convert the user-supplied dBV anchor at the boundary.
+        // The analyzer speaks dBFS only - convert the user-supplied dBV anchor at the boundary.
         double fundRefDbFs = fundRefDbV - prefs.getDbvOffsetDb();
 
         Double genFreqHz = freqArg != null ? Double.parseDouble(freqArg) : null;
@@ -169,7 +169,7 @@ public class FftAnalyzeMode {
         reader.process(block -> {
             int n = pos.get();
             for (int i = 0; i < block.length && n + i < samples.length; i++) {
-                // 32-bit codes fill the int as a bit pattern (see WavReader.readSample) —
+                // 32-bit codes fill the int as a bit pattern (see WavReader.readSample) -
                 // widen unsigned, or positive half-waves land 2^32 low after the subtract.
                 double code = w != null
                         ? w.correctedCode(block[i]).ch1

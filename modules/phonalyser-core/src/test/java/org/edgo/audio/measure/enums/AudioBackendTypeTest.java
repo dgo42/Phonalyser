@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,26 +20,31 @@ package org.edgo.audio.measure.enums;
 
 import org.junit.jupiter.api.Test;
 
-import org.edgo.audio.measure.sound.LibUsb;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The QA40x backend enum: its availability is gated purely on the
- * {@code libusb-1.0} binding loading (not the host OS), and {@code fromString}
- * accepts the {@code qa40x|qa402|qa403} aliases.  The parse assertions are
- * written to be deterministic whether or not the native library is present on
- * the test machine.
+ * The backend enum as a pure MODEL type: {@code isAvailable()} answers OS
+ * policy only.  Whether the QA40x's {@code libusb-1.0} binding actually loads
+ * is the driver module's answer, given through the provider SPI - this module
+ * cannot even reach the binding, which is the layering under test.
+ * {@code fromString} accepts the {@code qa40x|qa402|qa403} aliases.
  */
 class AudioBackendTypeTest {
 
     @Test
-    void qa40xAvailabilityTracksLibUsb() {
-        // Availability is the binding probe, independent of the OS gate the
-        // sound-card backends use.
-        assertEquals(LibUsb.available(), AudioBackendType.QA40X.isAvailable());
+    void qa40xIsNotOsGated() {
+        // The model answers "fits any OS"; the hardware probe (does libusb
+        // load?) belongs to the driver's provider, not to this enum.
+        assertTrue(AudioBackendType.QA40X.isAvailable());
+    }
+
+    @Test
+    void netIsNeverALocalChoice() {
+        assertFalse(AudioBackendType.NET.isAvailable(),
+                "a remote bench has no local hardware to be available");
     }
 
     @Test
@@ -49,19 +54,23 @@ class AudioBackendTypeTest {
 
     @Test
     void fromStringAcceptsQa40xAliases() {
-        // The token must be RECOGNISED (parsed to QA40X) regardless of the
-        // environment; the availability gate then decides success vs. a clear
-        // "not available" error — never the "Unknown --backend" path.
+        // Deterministic on every machine now that the enum's gate is OS policy
+        // alone: the aliases parse, and whether the analyzer can actually be
+        // driven is discovered where the hardware is, not at argument parsing.
         for (String alias : new String[] {"qa40x", "qa402", "qa403", "QA403"}) {
-            if (LibUsb.available()) {
-                assertEquals(AudioBackendType.QA40X, AudioBackendType.fromString(alias));
-            } else {
-                IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                        () -> AudioBackendType.fromString(alias));
-                assertTrue(ex.getMessage().contains("not available"),
-                        "recognised alias gated by availability, not rejected as unknown: " + ex.getMessage());
-            }
+            assertEquals(AudioBackendType.QA40X, AudioBackendType.fromString(alias));
         }
+    }
+
+    @Test
+    void fromStringDoesNotPretendNetIsALocalBackend() {
+        // NET is the carrier for a bench reached over the network: it owns no
+        // local hardware, so --backend can never select it.  A token that parsed
+        // and then failed the availability gate would answer "not available on
+        // Windows", which is not what is wrong with it.
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> AudioBackendType.fromString("net"));
+        assertTrue(ex.getMessage().contains("Unknown --backend"), ex.getMessage());
     }
 
     @Test

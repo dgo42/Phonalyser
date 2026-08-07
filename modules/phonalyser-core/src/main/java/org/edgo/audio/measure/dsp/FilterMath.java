@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -25,9 +25,9 @@ import org.edgo.audio.measure.enums.FilterResponse;
  * Pure special-function math backing {@link FilterDesign}: Chebyshev
  * polynomials, reverse Bessel polynomials, the complete elliptic integral K,
  * the Jacobi elliptic functions (sn/cn/dn/cd) and the elliptic rational
- * function.  These are stateless numeric primitives with no owning object —
+ * function.  These are stateless numeric primitives with no owning object -
  * {@link FilterDesign} both derives its order/constants (before the value
- * object exists) and evaluates each point through them — so they live in a
+ * object exists) and evaluates each point through them - so they live in a
  * dedicated utility namespace rather than being smeared onto the value object.
  *
  * <p>Algorithm references:
@@ -35,7 +35,7 @@ import org.edgo.audio.measure.enums.FilterResponse;
  *   <li>Chebyshev T<sub>n</sub> via cos/cosh (Abramowitz &amp; Stegun 22.3).</li>
  *   <li>Reverse Bessel polynomial recurrence
  *       θ<sub>k</sub> = (2k−1)θ<sub>k−1</sub> + s²θ<sub>k−2</sub>.</li>
- *   <li>K(k) and Jacobi sn/cn/dn via the arithmetic–geometric mean /
+ *   <li>K(k) and Jacobi sn/cn/dn via the arithmetic-geometric mean /
  *       descending Landen transformation (Abramowitz &amp; Stegun 16.4, 17.6).</li>
  *   <li>Elliptic rational function and the degree/nome relations from
  *       Orfanidis, "Lecture Notes on Elliptic Filter Design" (2006).</li>
@@ -44,7 +44,7 @@ import org.edgo.audio.measure.enums.FilterResponse;
 @UtilityClass
 public class FilterMath {
 
-    /** Hard upper bound on the derived order — keeps the math well conditioned
+    /** Hard upper bound on the derived order - keeps the math well conditioned
      *  in double precision and bounds Bessel's numeric search. */
     public static final int MAX_ORDER = 20;
     /** Smallest order any design may resolve to. */
@@ -55,7 +55,7 @@ public class FilterMath {
     /** Iterations for the AGM and the bisection root finders. */
     private static final int AGM_ITERS = 60;
     private static final int BISECTION_ITERS = 60;
-    /** Theta-null series term count (q < 1 ⇒ converges geometrically). */
+    /** Theta-null series term count (q < 1 => converges geometrically). */
     private static final int THETA_TERMS = 20;
     private static final double CONVERGENCE_EPS = 1e-15;
 
@@ -143,10 +143,10 @@ public class FilterMath {
     }
 
     // ---------------------------------------------------------------------
-    //  Complete elliptic integral of the first kind K(k) — AGM
+    //  Complete elliptic integral of the first kind K(k) - AGM
     // ---------------------------------------------------------------------
 
-    /** K(k) via the arithmetic–geometric mean; k is the modulus (not m = k²). */
+    /** K(k) via the arithmetic-geometric mean; k is the modulus (not m = k²). */
     public double ellipticK(double k) {
         double kk = Math.min(Math.abs(k), 1.0 - CONVERGENCE_EPS);
         double a = 1.0;
@@ -239,7 +239,7 @@ public class FilterMath {
     /**
      * Elliptic (Chebyshev) rational function R<sub>n</sub>(ξ, w) in product
      * form (Orfanidis 2006, "Lecture Notes on Elliptic Filter Design",
-     * eq. 2.13–2.19).  With modulus k = 1/ξ the passband zeros are
+     * eq. 2.13-2.19).  With modulus k = 1/ξ the passband zeros are
      *   z<sub>r</sub> = cd((2r−1)·K/n, k),  r = 1..⌊n/2⌋,
      * and R<sub>n</sub> is the pole/zero product
      *   even n: R<sub>n</sub>(w) = f · Π (w²−z<sub>r</sub>²)/(1−k²z<sub>r</sub>²w²)
@@ -247,12 +247,12 @@ public class FilterMath {
      * with f chosen so R<sub>n</sub>(1) = 1.  This form has the correct
      * stopband poles at w = 1/(k·z<sub>r</sub>) &gt; ξ, giving the equiripple
      * stopband, and equiripples in ±1 across the passband.  Reduces to the
-     * Chebyshev polynomial as ξ → ∞ (k → 0).
+     * Chebyshev polynomial as ξ -> ∞ (k -> 0).
      */
     public double ellipticRational(int n, double xi, double w) {
         double aw = Math.abs(w);
         if (xi <= 1.0) {
-            return chebyshevT(n, aw);   // degenerate selectivity → Chebyshev-like
+            return chebyshevT(n, aw);   // degenerate selectivity -> Chebyshev-like
         }
         double k = 1.0 / xi;
         int half = n / 2;
@@ -347,7 +347,7 @@ public class FilterMath {
     /**
      * Minimum order meeting {@code stopAttenDb} at the stop edge (ratio ws).
      * Closed-form per family; Bessel is searched numerically and may fall
-     * short → {@link #MAX_ORDER} (it has no ripple/closed-form order).
+     * short -> {@link #MAX_ORDER} (it has no ripple/closed-form order).
      */
     public int deriveOrder(FilterResponse response, double rippleDb, double stopAttenDb, double ws) {
         switch (response) {

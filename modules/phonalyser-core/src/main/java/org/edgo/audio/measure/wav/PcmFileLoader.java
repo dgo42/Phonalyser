@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -36,7 +36,7 @@ import lombok.extern.log4j.Log4j2;
  * little-endian signed-PCM {@link AudioInputStream}.  WAV and AIFF
  * route through built-in {@code javax.sound.sampled} SPIs; FLAC goes
  * through Nayuki's {@link FlacDecoder} and is repackaged in-memory
- * (whole-file decode — sized for the 10–60 s clips this app deals
+ * (whole-file decode - sized for the 10-60 s clips this app deals
  * with).
  *
  * <p>Used by both the generator's file-player and the scope's
@@ -44,6 +44,18 @@ import lombok.extern.log4j.Log4j2;
  */
 @Log4j2
 public final class PcmFileLoader {
+
+    /** The one extension that does NOT go through the JDK's AudioSystem - named
+     *  once so {@link #openAsPcm}'s routing and {@link #mimeTypeOf}'s answer are
+     *  literally the same test. */
+    private static final String FLAC_SUFFIX = ".flac";
+
+    /** The audio MIME types this loader can decode.  {@code audio/flac} and
+     *  {@code audio/aiff} are the names the server's staging reads back; they are
+     *  the IANA registrations for these formats. */
+    public static final String MIME_FLAC = "audio/flac";
+    public static final String MIME_WAV  = "audio/wav";
+    public static final String MIME_AIFF = "audio/aiff";
 
     private static volatile PcmFileLoader INSTANCE;
 
@@ -64,6 +76,34 @@ public final class PcmFileLoader {
     }
 
     /**
+     * The audio MIME type of {@code file}, or {@code null} when its extension
+     * names none this loader knows.
+     *
+     * <p>It lives HERE because this class is the decoder authority: the type is
+     * derived from the very extension {@link #openAsPcm} routes on, so the answer
+     * given to a peer and the decoder chosen locally can never disagree.  A second
+     * table somewhere else would be free to drift the day a format is added.
+     *
+     * <p>Answering {@code null} rather than {@code application/octet-stream} is
+     * deliberate: "I do not know" is a fact the caller may want to act on, and an
+     * octet-stream default would be indistinguishable from a positive claim that
+     * the file is opaque bytes.
+     */
+    public String mimeTypeOf(File file) {
+        String name = file.getName().toLowerCase(Locale.ROOT);
+        if (name.endsWith(FLAC_SUFFIX)) {
+            return MIME_FLAC;
+        }
+        if (name.endsWith(".wav") || name.endsWith(".wave")) {
+            return MIME_WAV;
+        }
+        if (name.endsWith(".aiff") || name.endsWith(".aif")) {
+            return MIME_AIFF;
+        }
+        return null;
+    }
+
+    /**
      * Opens {@code file} as a signed-PCM {@link AudioInputStream}.
      * WAV / AIFF rely on the JDK's AudioSystem (with on-the-fly
      * conversion if needed); FLAC is decoded eagerly via Nayuki and
@@ -71,7 +111,7 @@ public final class PcmFileLoader {
      */
     public AudioInputStream openAsPcm(File file) throws Exception {
         String name = file.getName().toLowerCase(Locale.ROOT);
-        if (name.endsWith(".flac")) {
+        if (name.endsWith(FLAC_SUFFIX)) {
             return decodeFlac(file);
         }
         AudioInputStream raw = AudioSystem.getAudioInputStream(file);
@@ -116,7 +156,7 @@ public final class PcmFileLoader {
                 throw new IllegalStateException("FLAC file has no STREAMINFO sample count");
             }
             // FLAC decodes EAGERLY into int[channels][samples] plus the packed
-            // PCM image below — refuse a file that cannot fit the heap instead
+            // PCM image below - refuse a file that cannot fit the heap instead
             // of dying mid-decode with a bare OutOfMemoryError.
             long needBytes = info.numSamples
                     * (4L * info.numChannels + (long) (info.sampleDepth / 8) * info.numChannels);
@@ -124,7 +164,7 @@ public final class PcmFileLoader {
             long freeBytes = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory());
             if (needBytes > freeBytes - freeBytes / 4) {
                 throw new TooLargeException(String.format(
-                        "FLAC file too large to decode into memory: ~%d MB needed, %d MB of Java heap free — "
+                        "FLAC file too large to decode into memory: ~%d MB needed, %d MB of Java heap free - "
                         + "use a shorter file or raise -Xmx", needBytes >> 20, freeBytes >> 20),
                         needBytes >> 20, freeBytes >> 20);
             }

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -23,10 +23,10 @@ import org.eclipse.swt.layout.RowData;
 import org.eclipse.swt.widgets.Composite;
 
 /**
- * A transparent composite that paints nothing — created
+ * A transparent composite that paints nothing - created
  * {@code SWT.NO_BACKGROUND | SWT.TRANSPARENT} so the plot behind it shows through, with
  * SWT's subclass check opted out.  Serves two roles: the shared base for the overlay
- * widgets ({@link ToolButton}, {@link Toolbar}, {@link BlinkBanner}), and — used bare —
+ * widgets ({@link ToolButton}, {@link Toolbar}, {@link BlinkBanner}), and - used bare -
  * a do-nothing spacer in a {@link Toolbar} row.
  *
  * <p>Single inheritance is enough to share this boilerplate; there's nothing here for
@@ -39,7 +39,7 @@ public class TransparentComposite extends Composite {
     }
 
     /** RowLayout helper: excludes (or re-includes) this widget from its row and hides
-     *  (or shows) it — call then re-flow the parent toolbar. */
+     *  (or shows) it - call then re-flow the parent toolbar. */
     public void setExcluded(boolean excluded) {
         ((RowData) getLayoutData()).exclude = excluded;
         setVisible(!excluded);
@@ -47,6 +47,6 @@ public class TransparentComposite extends Composite {
 
     @Override
     protected void checkSubclass() {
-        // SWT forbids subclassing of most widgets by default — opt back in.
+        // SWT forbids subclassing of most widgets by default - opt back in.
     }
 }

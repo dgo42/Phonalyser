@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -35,7 +35,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * {@code --process-wav <file>} — applies a code-weight INL map to an existing
+ * {@code --process-wav <file>} - applies a code-weight INL map to an existing
  * WAV without recapturing.
  *
  * <p>Reads the input WAV, runs every sample through the {@code --load-weighted}
@@ -78,7 +78,7 @@ public class ProcessWavMode {
         int   chartHeight = (heightArg != null) ? Integer.parseInt(heightArg) : 400;
 
         WavReader reader = new WavReader(processWavArg);
-        log.info("Mode      : process WAV → mapped WAV");
+        log.info("Mode      : process WAV -> mapped WAV");
         log.info("Input     : {}", processWavArg);
         log.info("Weights   : {}", loadWeightedArg);
         if (waveformDurationMs > 0) {

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -23,7 +23,7 @@ import org.edgo.audio.measure.sound.StereoSamples;
 /**
  * Optional hook fired by {@link FreqRespAnalyzer} after the stereo sweep
  * capture finishes and before deconvolution starts.  Lets a caller
- * side-effect on the unprocessed samples — the CLI's {@code --sweep-wav}
+ * side-effect on the unprocessed samples - the CLI's {@code --sweep-wav}
  * flag uses this to persist a WAV of the raw recording without dragging
  * file-path concerns into the analyzer's signature.
  *

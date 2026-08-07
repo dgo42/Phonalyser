@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -73,7 +73,7 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public class FftChartExporter {
 
-    /** ADC full-scale RMS voltage anchoring the dBV axis — injected by the caller
+    /** ADC full-scale RMS voltage anchoring the dBV axis - injected by the caller
      *  (the CLI modes pass their Preferences value); the exporter never reaches
      *  into Preferences itself.  > 0 enables the dBV axis, otherwise dBFS. */
     @Setter

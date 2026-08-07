@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -29,7 +29,7 @@ import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 
 /**
- * {@link MeasurementPainter} backed by an SWT {@code GC} — the CPU rendering path
+ * {@link MeasurementPainter} backed by an SWT {@code GC} - the CPU rendering path
  * used for on-screen painting, off-screen screenshots ({@code renderToImage}), and
  * printing.  Every call delegates straight to the wrapped {@code GC}, so this is a
  * pixel-identical pass-through: routing the views' paint through this backend
@@ -97,7 +97,7 @@ public final class GcMeasurementPainter implements MeasurementPainter {
     /** Builds a 24-bit {@code ImageData} with a per-pixel alpha channel (the same
      *  {@code ImageData} + {@code alphaData} shape {@code ScopePhosphor.readback}
      *  produces for the screenshot), all pixels solid {@code tint}, and draws it scaled
-     *  into the logical {@code drawW×drawH} rectangle — {@code drawImage} then
+     *  into the logical {@code drawW×drawH} rectangle - {@code drawImage} then
      *  alpha-composites the coverage.  The {@code imgW×imgH} source buffer is at DEVICE
      *  resolution; at {@code pixelScale == 1} (this backend always) {@code imgW == drawW}
      *  so the blit is 1:1 and pixel-identical to the plain {@code drawImage(img, x, y)}.
@@ -105,13 +105,13 @@ public final class GcMeasurementPainter implements MeasurementPainter {
      *  <p>Zero per-frame array churn: the packed-RGB and alpha bytes ride the
      *  caller-owned {@code scratch} arrays (the {@code ImageData} is built AROUND them),
      *  so only the {@code ImageData}/{@code Image} object headers allocate.  The SWT
-     *  {@code Image} handle itself MUST still be created and disposed per call — an SWT
+     *  {@code Image} handle itself MUST still be created and disposed per call - an SWT
      *  {@code Image} cannot be pixel-updated in place. */
     @Override public void drawAlphaImage(byte[] alpha, int imgW, int imgH, int destX, int destY,
                                          int drawW, int drawH, Color tint, AlphaImageScratch scratch) {
         if (imgW <= 0 || imgH <= 0) return;
         int pixels = imgW * imgH;
-        byte[] rgb       = scratch.rgb(pixels);      // packed R,G,B — grown, reused across frames
+        byte[] rgb       = scratch.rgb(pixels);      // packed R,G,B - grown, reused across frames
         byte[] alphaData = scratch.alpha(pixels);
         byte r = (byte) tint.getRed();
         byte g = (byte) tint.getGreen();
@@ -122,7 +122,7 @@ public final class GcMeasurementPainter implements MeasurementPainter {
             rgb[j + 2] = b;
             alphaData[i] = alpha[i];
         }
-        // ImageData wraps the pooled RGB array directly (scanlinePad 1 ⇒ bytesPerLine =
+        // ImageData wraps the pooled RGB array directly (scanlinePad 1 => bytesPerLine =
         // imgW·3; scratch sizes it exactly imgW·imgH·3 = bytesPerLine·imgH).
         ImageData data = new ImageData(imgW, imgH, 24, scratch.palette(), 1, rgb);
         data.alphaData = alphaData;

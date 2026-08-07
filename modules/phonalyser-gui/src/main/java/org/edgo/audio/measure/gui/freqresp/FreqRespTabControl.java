@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -122,11 +122,11 @@ public final class FreqRespTabControl extends AbstractTabControl {
     };
     private static final double SWEEP_POINTS_MIN = 8192;
     private static final double SWEEP_POINTS_MAX = 10_000_000;
-    /** Sweep frequency floor — sub-hertz sweep limits are degenerate. */
+    /** Sweep frequency floor - sub-hertz sweep limits are degenerate. */
     private static final double FREQ_MIN_HZ      = 1.0;
-    /** Amplitude floor (Vrms) — the pre-rework field's clamp, kept. */
+    /** Amplitude floor (Vrms) - the pre-rework field's clamp, kept. */
     private static final double AMP_MIN_VRMS     = 1e-4;
-    /** Lead-in floor — the pre-rework field's clamp, kept. */
+    /** Lead-in floor - the pre-rework field's clamp, kept. */
     private static final double LEAD_IN_MIN_SEC  = 0.05;
     private static final double TIME_MAX_SEC     = 1_000_000;
     // Display precision caps per the numeric-field spec.
@@ -135,12 +135,12 @@ public final class FreqRespTabControl extends AbstractTabControl {
     private static final int TIME_MAX_DECIMALS = 3;
 
     // ---- Filters / Unevenness field bounds -------------------------------
-    /** dB field range shared by ripple / stopband-attenuation fields — the
+    /** dB field range shared by ripple / stopband-attenuation fields - the
      *  ripple floor (0.001) and a generous attenuation ceiling. */
     private static final double FILTER_DB_MIN      = 0.001;
     private static final double FILTER_DB_MAX      = 200.0;
     private static final int    FILTER_DB_DECIMALS = 3;
-    /** Filter order — Bessel polynomial stays well-conditioned to 20. */
+    /** Filter order - Bessel polynomial stays well-conditioned to 20. */
     private static final double FILTER_ORDER_MIN   = 1;
     private static final double FILTER_ORDER_MAX   = 20;
     /** Band-pass / notch quality factor. */
@@ -163,7 +163,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     };
     /** Heaps below this are 32-bit-class: combo entries above
      *  {@link #SMALL_HEAP_MAX_FFT_SIZE} are not offered.  1.5 GiB sits
-     *  between the 32-bit ceiling (~1.2–1.4 GB usable) and any serious
+     *  between the 32-bit ceiling (~1.2-1.4 GB usable) and any serious
      *  64-bit {@code -Xmx}. */
     private static final long SMALL_HEAP_BYTES = 1_610_612_736L;
     /** Largest deconvolution FFT size offered on a small heap: both channels
@@ -184,12 +184,12 @@ public final class FreqRespTabControl extends AbstractTabControl {
     // tooltips and tile painting; this control only supplies tile content
     // (freqRespTabTiles).
     /** Host pane, injected so the screenshot renderer can clone the whole pane
-     *  (title + plot + collapsed strip) offscreen — matching the FFT pane. */
+     *  (title + plot + collapsed strip) offscreen - matching the FFT pane. */
     @Setter
     private FreqRespPane screenshotPane;
 
     /** Updated whenever the FFT-size combo or the lead-in field changes
-     *  — caption is {@code "FFT size (D.Ds)"} where D.D is the derived
+     *  - caption is {@code "FFT size (D.Ds)"} where D.D is the derived
      *  sweep duration in seconds. */
     private Label fftSizeLabel;
 
@@ -229,10 +229,10 @@ public final class FreqRespTabControl extends AbstractTabControl {
     /** The fixed stacked cells of the 6-column spec grid, in creation order.
      *  Each cell occupies one grid cell for good and overlays its Mode-1 and
      *  Mode-2 control (only one shown); this keeps every field pinned to its
-     *  column in BOTH modes with no exclusion-reflow (finding D). */
+     *  column in BOTH modes with no exclusion-reflow. */
     private final List<SpecCell> specCells = new ArrayList<>();
     /** Per-type parameter picture in the tab's third column (outside the group),
-     *  spanning both header + group rows; hidden in By-order mode (issue 10). */
+     *  spanning both header + group rows; hidden in By-order mode. */
     private Label  filterPictureLabel;
     /** Native-size Mode-1 pictures keyed by filter type; disposed with the tab. */
     private final Map<FilterType, Image> filterPictures = new LinkedHashMap<>();
@@ -274,7 +274,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     private Consumer<String> calFileSavedListener;
 
     /** The combo's offered subset of {@link #FFT_SIZE_VALUES} /
-     *  {@link #FFT_SIZE_LABELS} — truncated at
+     *  {@link #FFT_SIZE_LABELS} - truncated at
      *  {@link #SMALL_HEAP_MAX_FFT_SIZE} on a small heap, the full list
      *  otherwise. */
     private final int[]    offeredFftSizes;
@@ -308,7 +308,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
             }
             @Override
             public int extraPadding(int tabIndex) {
-                // Compact headers — the widget default (28 px) leaves a wide
+                // Compact headers - the widget default (28 px) leaves a wide
                 // empty band at each tab's right edge; match the scope's 7 px.
                 return 7;
             }
@@ -346,7 +346,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
             MessageBus.instance().unsubscribe(Events.CALIBRATION_FILE_SAVED, calFileSavedListener);
         });
 
-        // Push the initially-loaded active rows into the store last — the view
+        // Push the initially-loaded active rows into the store last - the view
         // (built before this control) already holds the same store instance, so
         // the change events this fires find it ready.
         syncStoreFromRows();
@@ -357,8 +357,8 @@ public final class FreqRespTabControl extends AbstractTabControl {
     // -------------------------------------------------------------------------
 
     /** Registers every settings tab under {@code prefix} so an automation
-     *  script can select a tab by path (e.g. {@code prefix + "/riaa"}) — it
-     *  expands the strip and selects that tab — then screenshot this control
+     *  script can select a tab by path (e.g. {@code prefix + "/riaa"}) - it
+     *  expands the strip and selects that tab - then screenshot this control
      *  showing it.  Slugs are language-independent; tabs not built are skipped.
      *  Mirrors {@code ScopeTabControl.registerTabs}. */
     public void registerTabs(String prefix) {
@@ -391,7 +391,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         refreshFilterEnable();
     }
 
-    /** Re-runs the Filters enable cascade — every control is gated on the
+    /** Re-runs the Filters enable cascade - every control is gated on the
      *  Show-filter checkbox; ripple fields depend on the response family;
      *  centre / Q on the type; the two Mode radios gate their own field rows;
      *  Compare needs a present measurement.  Public so the pane's
@@ -413,7 +413,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         filterMode1Radio.setEnabled(show);
         filterMode2Radio.setEnabled(show);
 
-        // Mode-1 rows — ripple only for the equiripple families, centre only
+        // Mode-1 rows - ripple only for the equiripple families, centre only
         // for band-pass / notch.
         filterRippleField.setEnabled(show && mode1 && hasRipple);
         filterStopAttenField.setEnabled(show && mode1);
@@ -427,24 +427,24 @@ public final class FreqRespTabControl extends AbstractTabControl {
                 ? "freqResp.filter.stopband.bp" : "freqResp.filter.stopband"));
         filterPassLabel.requestLayout();
 
-        // Mode-2 rows — ripple only for the equiripple families, Q only for
+        // Mode-2 rows - ripple only for the equiripple families, Q only for
         // band-pass / notch.
         filterOrderPassField.setEnabled(show && mode2);
         filterOrderRippleField.setEnabled(show && mode2 && hasRipple);
         filterOrderField.setEnabled(show && mode2);
         filterQField.setEnabled(show && mode2 && isBpNotch);
 
-        // Visibility swap (issue 5): each fixed spec cell shows its active mode's
+        // Visibility swap: each fixed spec cell shows its active mode's
         // control and hides the other, so no grayed by-spec fields linger and no
-        // by-order fields are missing — without reflowing the columns (finding D).
-        // The per-type picture shows only in Mode 1 (issue 10).
+        // by-order fields are missing - without reflowing the columns.
+        // The per-type picture shows only in Mode 1.
         applyModeVisibility(mode1);
         refreshFilterPicture(type, mode1);
     }
 
     /** Shows the active mode's control in every fixed spec cell (the other
-     *  mode's overlaid control is hidden — {@link SpecCell#show}); the wrappers
-     *  keep their grid cells, so columns stay pinned in both modes (finding D),
+     *  mode's overlaid control is hidden - {@link SpecCell#show}); the wrappers
+     *  keep their grid cells, so columns stay pinned in both modes,
      *  no exclusion-reflow.  Relays the group so its size follows the content. */
     private void applyModeVisibility(boolean mode1) {
         if (specCells.isEmpty()) return;
@@ -468,8 +468,8 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     /** Swaps the tab-column picture to the one matching {@code type} and shows /
-     *  hides it (Mode 1 only — issue 10).  The picture lives in the tab grid's
-     *  third column (finding A), so exclude collapses its column and the tab
+     *  hides it (Mode 1 only).  The picture lives in the tab grid's
+     *  third column, so exclude collapses its column and the tab
      *  body relays. */
     private void refreshFilterPicture(FilterType type, boolean mode1) {
         if (filterPictureLabel == null || filterPictureLabel.isDisposed()) return;
@@ -498,7 +498,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         if (tabIndex == TAB_FREQRESP_SETTINGS) {
             String lo = formatShortHz(prefs.getFreqRespStartHz());
             String hi = formatShortHz(prefs.getFreqRespStopHz());
-            tiles.add(tile(String.format(Locale.US, "%s–%s", lo, hi),
+            tiles.add(tile(String.format(Locale.US, "%s-%s", lo, hi),
                     I18n.t("freqResp.tile.range", lo, hi)));
             tiles.add(tile(String.format(Locale.US, "%.2fV", prefs.getFreqRespAmplitudeVrms()),
                     I18n.t("freqResp.tile.amplitude",
@@ -528,7 +528,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
             String readout;
             switch (prefs.getFreqRespUnevenMode()) {
                 case RANGE:
-                    readout = String.format(Locale.US, "%s–%s",
+                    readout = String.format(Locale.US, "%s-%s",
                             formatShortHz(prefs.getFreqRespUnevenStartHz()),
                             formatShortHz(prefs.getFreqRespUnevenStopHz()));
                     break;
@@ -549,12 +549,12 @@ public final class FreqRespTabControl extends AbstractTabControl {
             else if (n  > 1) tiles.add(tile(I18n.t("calibration.tile.loadedN", n),
                     I18n.t("calibration.tile.loadedN.tooltip", n)));
         } else if (tabIndex == TAB_FREQRESP_PRESETS) {
-            // Show the number of saved presets when there are any — a hint
+            // Show the number of saved presets when there are any - a hint
             // that there's something to load.
             int n = prefs.getFreqRespPresets().size();
             if (n > 0) tiles.add(tile(n + " saved", I18n.t("freqResp.tile.presets", n)));
         } else if (tabIndex == TAB_FREQRESP_UTILITY) {
-            // No header tile — the Utility actions (screenshot, DAC/ADC cal)
+            // No header tile - the Utility actions (screenshot, DAC/ADC cal)
             // leave no per-run state; branch kept so the constant is used.
         }
         return tiles;
@@ -565,8 +565,8 @@ public final class FreqRespTabControl extends AbstractTabControl {
         return TileTabFolder.Tile.text(text, tooltip);
     }
 
-    /** Short Hz format used in the Settings tile row: 1500 → "1.5k",
-     *  20000 → "20k", 8 → "8". */
+    /** Short Hz format used in the Settings tile row: 1500 -> "1.5k",
+     *  20000 -> "20k", 8 -> "8". */
     private String formatShortHz(double hz) {
         if (hz >= 1000.0) {
             double k = hz / 1000.0;
@@ -578,8 +578,8 @@ public final class FreqRespTabControl extends AbstractTabControl {
         return String.format(Locale.US, "%.1f", hz);
     }
 
-    /** Short integer format used in the Settings tile row: 65536 → "65k",
-     *  1048576 → "1M". */
+    /** Short integer format used in the Settings tile row: 65536 -> "65k",
+     *  1048576 -> "1M". */
     private String formatShortCount(int n) {
         if (n >= 1_000_000) return String.format(Locale.US, "%.0fM", n / 1_000_000.0);
         if (n >= 1000)      return String.format(Locale.US, "%.0fk", n / 1000.0);
@@ -587,8 +587,8 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     /** Pretty-prints an FFT size as a power-of-2 abbreviation matching
-     *  the {@link #FFT_SIZE_LABELS} combo entries: 65536 → "64k",
-     *  524288 → "512k", 16777216 → "16M".  Falls back to
+     *  the {@link #FFT_SIZE_LABELS} combo entries: 65536 -> "64k",
+     *  524288 -> "512k", 16777216 -> "16M".  Falls back to
      *  {@link #formatShortCount} for non-power-of-2 values. */
     private String formatFftSize(int n) {
         for (int i = 0; i < FFT_SIZE_VALUES.length; i++) {
@@ -608,14 +608,14 @@ public final class FreqRespTabControl extends AbstractTabControl {
         }
     }
 
-    /** Compact dB value for the Unevenness tile: 3.0 → "3", 1.5 → "1.5". */
+    /** Compact dB value for the Unevenness tile: 3.0 -> "3", 1.5 -> "1.5". */
     private String trimNum(double v) {
         if (v == Math.floor(v)) return String.format(Locale.US, "%.0f", v);
         return String.format(Locale.US, "%s", v).replaceAll("0+$", "").replaceAll("\\.$", "");
     }
 
     // -------------------------------------------------------------------------
-    // Settings tab — sweep parameters
+    // Settings tab - sweep parameters
     // -------------------------------------------------------------------------
 
     private void buildSettingsTab() {
@@ -655,14 +655,14 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // ---- Row 2: amplitude (Vrms) + duration ----------------------------
         addLabel(g, I18n.t("freqResp.settings.amplitude"));
         // No-clip ceiling for the sweep stimulus: the sweep is a sine, so full
-        // scale sits at fsPeak·rawRms(sweep) = fsPeak/√2 — V, dBV and dBFS all
+        // scale sits at fsPeak·rawRms(sweep) = fsPeak/√2 - V, dBV and dBFS all
         // trim to it (0 dBFS is exactly the top).  The field holds V RMS, so
         // capping it at the PEAK full scale would have allowed 3 dB of clipping.
         NumericStepField ampField = new NumericStepField(g, UnitFamily.AMPLITUDE,
                 AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl() / Math.sqrt(2.0), AMP_MAX_DECIMALS,
                 prefs::getDacFsVoltageAmpl, 110);
         ampField.setLayoutData(comboGd());
-        // Follow a DAC recalibration — the ceiling was previously read once, at
+        // Follow a DAC recalibration - the ceiling was previously read once, at
         // construction, and never moved again.
         Bindings.onChange(toolbarTabs, prefs.dacFsVoltageAmplProperty(),
                 v -> ampField.setMax(v / Math.sqrt(2.0)));
@@ -684,7 +684,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // analyzer picks {@code nextPow2(leadIn + sweep + tail)} as its
         // deconvolution length, so by letting the user pick FFT size
         // directly we can solve back for the sweep duration that lands
-        // exactly on that pow2 — no wasted bins, and the label shows
+        // exactly on that pow2 - no wasted bins, and the label shows
         // the user how long the actual sweep will run.
         fftSizeLabel = new Label(g, SWT.NONE);
         fftSizeLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
@@ -696,11 +696,11 @@ public final class FreqRespTabControl extends AbstractTabControl {
         }
         fftSizeCombo.setToolTipText(sizeTip);
         fftSizeCombo.setLayoutData(comboFillGd());
-        // Index-mapped combo (selection index → FFT_SIZE_VALUES[idx] sample
-        // count), so it can't use the ordinal-based Bindings.combo — the
+        // Index-mapped combo (selection index -> FFT_SIZE_VALUES[idx] sample
+        // count), so it can't use the ordinal-based Bindings.combo - the
         // hand-wired helper mirrors that contract over the int value array.
         // The sweep duration is DERIVED by the controller's own fftSize /
-        // leadIn subscriptions; the tab only renders it — the label + tile
+        // leadIn subscriptions; the tab only renders it - the label + tile
         // follow the derived pref and the chosen size.
         bindFftSizeCombo(fftSizeCombo, prefs.freqRespFftSizeProperty());
         Bindings.onChange(toolbarTabs, prefs.freqRespFftSizeProperty(), n -> {
@@ -715,7 +715,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
         // ---- Row 3: sweep points + lead-in ---------------------------------
         addLabel(g, I18n.t("freqResp.settings.points"));
-        // List field replacing the old preset dropdown + "Manual…" prompt:
+        // List field replacing the old preset dropdown + "Manual..." prompt:
         // the wheel jumps along the power-of-2 presets (plus the runtime
         // "Nyquist/2" entry, shown as text), free typing covers everything
         // between.
@@ -768,7 +768,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
         // Audio-format edits (Preferences OK, UI thread) move the Nyquist
         // ceiling of the sweep band edges and the sample-rate/2 entry of the
-        // sweep-points series — re-pull both from the committed prefs.
+        // sweep-points series - re-pull both from the committed prefs.
         Consumer<Void> audioFormatListener = ignored -> {
             if (isDisposed()) return;
             double nyquist = Preferences.instance().current().getInputSampleRate() / 2.0;
@@ -805,7 +805,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         combo.addDisposeListener(e -> property.removeListener(onChange));
     }
 
-    /** Two-way binds the FFT-size {@link Combo} (selection index →
+    /** Two-way binds the FFT-size {@link Combo} (selection index ->
      *  {@link #FFT_SIZE_VALUES}{@code [idx]} sample count) to its
      *  {@code Integer} {@link Property}.  Mirrors {@link Bindings#combo} over
      *  the int value array; falls back to index 0 (64k) when the pref value
@@ -814,8 +814,8 @@ public final class FreqRespTabControl extends AbstractTabControl {
         int max = offeredFftSizes[offeredFftSizes.length - 1];
         if (property.get() > max) {
             // Persisted on a larger-heap run (or hand-edited): the parallel
-            // deconvolution buffers cannot fit this JVM — clamp and persist.
-            log.info("FreqResp FFT size {} exceeds the heap-capped maximum {} — clamped",
+            // deconvolution buffers cannot fit this JVM - clamp and persist.
+            log.info("FreqResp FFT size {} exceeds the heap-capped maximum {} - clamped",
                     property.get(), max);
             property.set(max);
         }
@@ -829,7 +829,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         Consumer<Integer> onChange = v -> {
             if (combo.isDisposed()) return;
             if (v > max) {
-                property.set(max);   // preset from a larger-heap run — re-fires clamped
+                property.set(max);   // preset from a larger-heap run - re-fires clamped
                 return;
             }
             selectFftSizeCombo(combo, v);
@@ -856,7 +856,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         return s;
     }
 
-    /** The rate-derived sweep-points entry — one point per FFT bin up to
+    /** The rate-derived sweep-points entry - one point per FFT bin up to
      *  Nyquist (sample rate / 2 points), rendered as the "Nyquist/2" label. */
     private double nyquistPointCount() {
         return Preferences.instance().current().getInputSampleRate() / 2.0;
@@ -864,7 +864,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
     /** Selects the combo row whose FFT-size value matches the given
      *  number of samples.  Falls back to the smallest entry (64k) when
-     *  the prefs value doesn't line up — should be impossible because
+     *  the prefs value doesn't line up - should be impossible because
      *  the load-time snap rounds non-pow2 values to the next legal
      *  one, but defensive anyway. */
     private void selectFftSizeCombo(Combo combo, int currentFftSize) {
@@ -885,7 +885,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     // -------------------------------------------------------------------------
-    // RIAA & IEC tab — chained checkboxes + Compare
+    // RIAA & IEC tab - chained checkboxes + Compare
     // -------------------------------------------------------------------------
 
     private void buildRiaaTab() {
@@ -915,7 +915,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         Bindings.check(riaaReverseBtn, prefs.freqRespReverseRiaaProperty());
         Bindings.check(riaaIecBtn,     prefs.freqRespIecAmendmentProperty());
         Bindings.onChange(toolbarTabs, prefs.freqRespShowRiaaProperty(), v -> {
-            // Only one reference curve can be active — enabling RIAA turns the
+            // Only one reference curve can be active - enabling RIAA turns the
             // filter overlay off (symmetric with the filter-show handler in
             // buildFiltersTab).
             if (v) prefs.setFreqRespShowFilter(false);
@@ -940,15 +940,15 @@ public final class FreqRespTabControl extends AbstractTabControl {
                         I18n.t("freqResp.error.compare.noMeasurement"));
                 // Veto: roll the pref back, which echoes through the bind to
                 // uncheck the box.  The re-entry sees enable == false and runs
-                // the exit auto-fit — a no-op here, since the veto only fires
+                // the exit auto-fit - a no-op here, since the veto only fires
                 // when there is no measurement to fit.
                 prefs.setFreqRespCompareMode(false);
                 return;
             }
-            // One-shot auto-zoom on entry only — the user's subsequent pan /
+            // One-shot auto-zoom on entry only - the user's subsequent pan /
             // zoom must stick instead of being clobbered on every redraw.  On
-            // exit, refit to the measured curve (the compare window — ±pad
-            // around 0 dB — is meaningless for absolute levels).
+            // exit, refit to the measured curve (the compare window - ±pad
+            // around 0 dB - is meaningless for absolute levels).
             if (enable) view.autoSetupCompare(prefs);
             else       view.autoSetupMagnitudeRange();
             view.redraw();
@@ -968,10 +968,10 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     // -------------------------------------------------------------------------
-    // Filters tab — ideal filter overlay vs measured response (mirrors RIAA)
+    // Filters tab - ideal filter overlay vs measured response (mirrors RIAA)
     // -------------------------------------------------------------------------
 
-    /** Tab-body columns (finding A): [header/group] [header/group] [picture].
+    /** Tab-body columns: [header/group] [header/group] [picture].
      *  Cols 1-2 hold the header pairs and the group below; col3 the picture. */
     private static final int FILTER_TAB_COLS = 3;
 
@@ -979,14 +979,14 @@ public final class FreqRespTabControl extends AbstractTabControl {
      *  row 2 type|combo|response|combo). */
     private static final int FILTER_HEADER_COLS = 4;
 
-    /** Spec parameter grid columns (finding D): three label+field pairs per
+    /** Spec parameter grid columns: three label+field pairs per
      *  row, one grid shared by both rows and both modes so fields align
      *  vertically; Mode-1 Row B fills all three pairs (Center|Passband|
      *  Stopband), the shorter mode/row leave trailing pairs empty. */
     private static final int FILTER_SPEC_COLS = 6;
 
     private void buildFiltersTab() {
-        // Three-column tab grid (finding A): col1+col2 carry the header pairs and
+        // Three-column tab grid: col1+col2 carry the header pairs and
         // (below, spanning both) the Settings group; col3 carries the per-type
         // picture, native 1:1 and TOP-aligned, spanning both rows and living
         // OUTSIDE the bordered group.
@@ -999,11 +999,11 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
         // ---- Header grid (cols 1-2 of the tab): row1 (Show | Compare) column-
         //      aligned over row2 (type label+combo | response label+combo).  One
-        //      4-column grid so Compare sits over "Filter response" and its combo
-        //      (issue 2).  The pairs pack LEFT and compact — no horizontal grab
-        //      between the two columns (finding B):
+        //      4-column grid so Compare sits over "Filter response" and its
+        //      combo.  The pairs pack LEFT and compact - no horizontal grab
+        //      between the two columns:
         //        col0: Show          / "Filter type"     label
-        //        col1: (Show spans→) / type combo
+        //        col1: (Show spans->) / type combo
         //        col2: Compare       / "Filter response" label
         //        col3: (Compare span)/ response combo
         Composite header = new Composite(g, SWT.NONE);
@@ -1015,7 +1015,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         hl.horizontalSpacing = 6; hl.verticalSpacing = 4;
         header.setLayout(hl);
 
-        // Row 1 — Show in col0-1, Compare in col2-3 (over the response combo).
+        // Row 1 - Show in col0-1, Compare in col2-3 (over the response combo).
         filterShowBtn = checkbox(header, "freqResp.filter.show", "freqResp.filter.show.tooltip",
                 prefs.isFreqRespShowFilter());
         span(filterShowBtn, 2);
@@ -1023,7 +1023,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
                 prefs.isFreqRespFilterCompare());
         span(filterCompareBtn, 2);
 
-        // Row 2 — type label+combo (col0-1), response label+combo (col2-3).
+        // Row 2 - type label+combo (col0-1), response label+combo (col2-3).
         addLabel(header, I18n.t("freqResp.filter.type"));
         filterTypeCombo = enumCombo(header, "freqResp.filter.type.tooltip",
                 new String[]{ "freqResp.filter.type.lowpass", "freqResp.filter.type.highpass",
@@ -1037,8 +1037,8 @@ public final class FreqRespTabControl extends AbstractTabControl {
                 prefs.freqRespFilterResponseProperty(), FilterResponse.values());
 
         // ---- Per-type picture (tab col3), native 1:1, TOP-aligned, spanning
-        //      both tab rows so it sits to the right of the header AND the group
-        //      (finding A).  Hidden in By-order mode (issue 10).  Created before
+        //      both tab rows so it sits to the right of the header AND the group.
+        //      Hidden in By-order mode.  Created before
         //      the group so it takes col3 of the header row; the group below
         //      then spans cols 1-2 of the next row and the picture's rowspan
         //      covers it.
@@ -1049,9 +1049,9 @@ public final class FreqRespTabControl extends AbstractTabControl {
         filterPictureLabel.setLayoutData(picGd);
 
         // ---- Bordered "Settings" group (tab cols 1-2, next row): mode radios +
-        //      one 6-column parameter grid of fixed stacked cells (finding D).
-        //      The group does NOT stretch to the tab width — no FILL / grab, so
-        //      it shrinks to its content (finding C).
+        //      one 6-column parameter grid of fixed stacked cells.
+        //      The group does NOT stretch to the tab width - no FILL / grab, so
+        //      it shrinks to its content.
         filterSpecGroup = new Group(g, SWT.NONE);
         filterSpecGroup.setText(I18n.t("freqResp.filter.spec"));
         GridData groupGd = new GridData(SWT.LEFT, SWT.TOP, false, false);
@@ -1084,11 +1084,11 @@ public final class FreqRespTabControl extends AbstractTabControl {
         filterMode1Radio.addListener(SWT.Selection, modeListener);
         filterMode2Radio.addListener(SWT.Selection, modeListener);
 
-        // ---- One 6-column parameter grid shared by BOTH rows and BOTH modes
-        //      (finding D).  Every cell is a fixed StackLayout wrapper overlaying
+        // ---- One 6-column parameter grid shared by BOTH rows and BOTH modes.
+        //      Every cell is a fixed StackLayout wrapper overlaying
         //      that slot's Mode-1 and Mode-2 control; switching modes only flips
         //      the wrapper's top control, so each field stays pinned to its
-        //      column in both modes — no exclusion-reflow.  Three label+field
+        //      column in both modes - no exclusion-reflow.  Three label+field
         //      pairs per row; label wrappers size to their widest child, field
         //      wrappers are fixed-width, so columns line up vertically.
         Composite specGrid = new Composite(filterSpecGroup, SWT.NONE);
@@ -1125,7 +1125,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         onFilterField(filterOrderRippleField, (p, v) -> p.setOrderRippleDb(v));
         registerCell(a2f, filterStopAttenField, filterOrderRippleField);
 
-        // Row-A pair 3 — empty in both modes (spacer slots keep the grid 6 cols).
+        // Row-A pair 3 - empty in both modes (spacer slots keep the grid 6 cols).
         registerCell(specSlot(specGrid, false), null, null);
         registerCell(specSlot(specGrid, true), null, null);
 
@@ -1163,7 +1163,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         onFilterField(filterQField, (p, v) -> p.setQ(v));
         registerCell(b2f, filterPassField, filterQField);
 
-        // Row-B pair 3 — Stopband label+field in Mode 1 only; empty in Mode 2.
+        // Row-B pair 3 - Stopband label+field in Mode 1 only; empty in Mode 2.
         Composite b3l = specSlot(specGrid, false);
         filterStopLabel = addLabel(b3l, I18n.t("freqResp.filter.stopband"));
         registerCell(b3l, filterStopLabel, null);
@@ -1177,7 +1177,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // ---- Bindings: Show / Compare + the enable / redraw side-effects ---
         Bindings.check(filterShowBtn, prefs.freqRespShowFilterProperty());
         Bindings.onChange(toolbarTabs, prefs.freqRespShowFilterProperty(), v -> {
-            // Only one reference curve can be active — enabling the filter
+            // Only one reference curve can be active - enabling the filter
             // overlay turns RIAA off (symmetric with the RIAA-show handler).
             if (v) prefs.setFreqRespShowRiaa(false);
             refreshFilterEnable();
@@ -1195,7 +1195,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
                 return;
             }
             if (enable) view.autoSetupCompare(prefs);
-            else       view.autoSetupMagnitudeRange();   // exit → refit to the measured curve
+            else       view.autoSetupMagnitudeRange();   // exit -> refit to the measured curve
             view.redraw();
             toolbarTabs.refreshTab(TAB_FREQRESP_FILTERS);
         });
@@ -1290,7 +1290,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     /** Seeds every filter widget (fields + mode radio) FROM {@code type}'s map
-     *  entry — a missing entry falls back to
+     *  entry - a missing entry falls back to
      *  {@link FreqRespFilterTypeParams#fromType(FilterType)} defaults, valid for
      *  the type's edge semantics.  This is the ONLY direction at build / type
      *  switch: the map is authoritative, so the widgets follow it and never the
@@ -1354,7 +1354,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
      *  {@link #registerCell}).  {@code field} slots carry the shared field width
      *  hint so every field column lines up; label slots size to their widest
      *  child.  The wrapper never leaves its cell, so the columns don't reflow
-     *  when the mode swaps (finding D). */
+     *  when the mode swaps. */
     private Composite specSlot(Composite grid, boolean field) {
         Composite w = new Composite(grid, SWT.NONE);
         w.setLayout(new StackLayout());
@@ -1372,7 +1372,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     /** Loads and caches the four per-type parameter pictures from
-     *  {@code /imgs/} at their native PNG size (1:1, no scaling — issue 1).
+     *  {@code /imgs/} at their native PNG size (1:1, no scaling).
      *  The tab owns these images and disposes them in
      *  {@link #disposeFilterPictures()}. */
     private void loadFilterPictures(Display display) {
@@ -1402,7 +1402,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     // -------------------------------------------------------------------------
-    // Unevenness tab — response flatness readout mode + parameters
+    // Unevenness tab - response flatness readout mode + parameters
     // -------------------------------------------------------------------------
 
     private void buildUnevennessTab() {
@@ -1413,7 +1413,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         g.setLayout(gl);
         Preferences prefs = Preferences.instance();
 
-        // ---- Row 1: Off mode radio — disables the whole readout — plus the
+        // ---- Row 1: Off mode radio - disables the whole readout - plus the
         // Notch checkbox (explicit notch/peak flatness classification in LEVEL
         // mode); a span-1 filler keeps the 3-column grid rectangular.
         unevenOffRadio = new Button(g, SWT.RADIO);
@@ -1432,7 +1432,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
         // ---- Row 2: ±dB mode radio (carries its label) + Unevenness field --
         // The mode label lives ON the radio so clicking the text selects the
-        // mode (maintainer: "connect radio button with near label").
+        // mode, instead of sitting next to it as a separate, dead label.
         unevenPmRadio = new Button(g, SWT.RADIO);
         unevenPmRadio.setText(I18n.t("freqResp.uneven.db"));
         unevenPmRadio.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
@@ -1504,7 +1504,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         refreshUnevenEnable();
     }
 
-    /** Each Unevenness mode enables only its own row's fields — the dB field
+    /** Each Unevenness mode enables only its own row's fields - the dB field
      *  iff LEVEL, the start / stop fields iff RANGE, the Notch checkbox in both
      *  active modes (it steers the LEVEL walk AND the RANGE extremum line),
      *  none in OFF. */
@@ -1521,7 +1521,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     // -------------------------------------------------------------------------
-    // Presets tab — named snapshots of every FreqResp Settings + RIAA pref
+    // Presets tab - named snapshots of every FreqResp Settings + RIAA pref
     // -------------------------------------------------------------------------
 
     private void buildPresetsTab() {
@@ -1553,9 +1553,9 @@ public final class FreqRespTabControl extends AbstractTabControl {
         p.setReverseRiaa(prefs.isFreqRespReverseRiaa());
         p.setIecAmendment(prefs.isFreqRespIecAmendment());
         p.setCompareMode(prefs.isFreqRespCompareMode());
-        // Filters — the per-type scalars now live in the params map (single
+        // Filters - the per-type scalars now live in the params map (single
         // source of truth); the preset embeds ONE copy of the entry for its
-        // captured filter type (item D).
+        // captured filter type.
         p.setShowFilter(prefs.isFreqRespShowFilter());
         p.setFilterCompare(prefs.isFreqRespFilterCompare());
         p.setFilterType(prefs.getFreqRespFilterType());
@@ -1583,8 +1583,8 @@ public final class FreqRespTabControl extends AbstractTabControl {
         prefs.setFreqRespReverseRiaa(p.isReverseRiaa());
         prefs.setFreqRespIecAmendment(p.isIecAmendment());
         prefs.setFreqRespCompareMode(p.isCompareMode());
-        // Filters — write the embedded params copy back into the map entry for
-        // the preset's filter type (item D); the type combo + filter widgets
+        // Filters - write the embedded params copy back into the map entry for
+        // the preset's filter type; the type combo + filter widgets
         // then reload from the map when the type pref settles below.
         prefs.setFreqRespShowFilter(p.isShowFilter());
         prefs.setFreqRespFilterCompare(p.isFilterCompare());
@@ -1607,7 +1607,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         refreshFftSizeLabel();
         // The filter widgets bind to the params map, not to per-scalar prefs, so
         // reload them from the just-written map entry (the type combo's own
-        // reload only fires when the type actually changed — this also covers a
+        // reload only fires when the type actually changed - this also covers a
         // same-type preset apply).
         loadFilterParams(prefs.getFreqRespFilterType());
         refreshFilterEnable();
@@ -1621,7 +1621,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     // -------------------------------------------------------------------------
-    // Utility tab — Screenshot + DAC + ADC calibration buttons (stubbed)
+    // Utility tab - Screenshot + DAC + ADC calibration buttons (stubbed)
     // -------------------------------------------------------------------------
 
     private void buildUtilityTab() {
@@ -1646,7 +1646,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         shotBtn.setToolTipText(I18n.t("freqResp.utility.screenshot.tooltip"));
         shotBtn.addListener(SWT.Selection, e -> screenshotPane.openScreenshotDialog());
 
-        // ADC / DAC calibration both use the crosshair icon — the
+        // ADC / DAC calibration both use the crosshair icon - the
         // tooltips disambiguate which one.  Matches the scope / FFT
         // "crosshair = calibrate" convention.
         Button dacCalBtn = new Button(g, SWT.PUSH);
@@ -1671,14 +1671,14 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     // -------------------------------------------------------------------------
-    // Calibration tab — multi-row load + clear + add + remove
+    // Calibration tab - multi-row load + clear + add + remove
     // -------------------------------------------------------------------------
 
     /** Per-row widget bundle + the loaded calibration (when any). */
     /** One fixed cell of the spec grid: a {@link StackLayout} wrapper that
      *  overlays the Mode-1 and Mode-2 control for a single label- or field-slot.
      *  The wrapper owns the grid cell permanently, so switching modes only flips
-     *  which child is on top — the column never reflows (finding D).  Either
+     *  which child is on top - the column never reflows.  Either
      *  child may be {@code null} (a slot that a mode leaves empty, e.g. the
      *  Stopband pair that exists only in Mode 1). */
     private static final class SpecCell {
@@ -1714,7 +1714,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     private static final class CalRow {
         Composite                composite;
         Text                     pathField;
-        /** "Active" toggle — two-way bound to {@code entry.active()}; the
+        /** "Active" toggle - two-way bound to {@code entry.active()}; the
          *  calibration is only pushed into the store when this is checked AND
          *  a file is loaded. */
         Button                   activeCheck;
@@ -1730,9 +1730,9 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
     private void buildCalibrationTab() {
         // ScrolledComposite wraps the rows so the tab can grow vertically
-        // beyond the available height — a long list of calibrations
+        // beyond the available height - a long list of calibrations
         // scrolls instead of overflowing.  Created (and set as the item's
-        // control) before the item itself, same ordering rule as groupCell —
+        // control) before the item itself, same ordering rule as groupCell -
         // a stray folder child corrupts the collapsed strip height.
         calRowsScroll = new ScrolledComposite(toolbarTabs, SWT.V_SCROLL);
         calRowsScroll.setExpandHorizontal(true);
@@ -1767,7 +1767,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
     /** Builds and appends a fresh row to the calibration tab.  The row
      *  starts empty (no path, no calibration).  Every row has 6 grid
-     *  cells (path, active, load, clear, add, remove) — for row 0 the
+     *  cells (path, active, load, clear, add, remove) - for row 0 the
      *  remove button is invisible so its grid cell stays reserved,
      *  keeping the load/clear/add columns vertically aligned across
      *  all rows. */
@@ -1855,7 +1855,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     /** Keeps the row's "Active" checkbox enabled state in sync with
-     *  the file-loaded state — disabled until a calibration is loaded
+     *  the file-loaded state - disabled until a calibration is loaded
      *  into the row. */
     private void updateCalRowEnable(CalRow r) {
         if (r.activeCheck == null || r.activeCheck.isDisposed()) return;
@@ -1897,7 +1897,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         r.pathField.setToolTipText(null);
         // Clearing the file disables Active in the UI but we keep the
         // entry's Active flag so re-loading a file re-engages the row
-        // without the user having to re-tick the box — matches the FFT pane.
+        // without the user having to re-tick the box - matches the FFT pane.
         updateCalRowEnable(r);
         syncStoreFromRows();
         Preferences.instance().save();
@@ -1981,7 +1981,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
     /** Rebuilds the row UI from the store.  Used when an external source
      *  (e.g. the wizard's Apply step) replaces the calibration entries
-     *  out-of-band — drops any user-added empty rows, leaving exactly
+     *  out-of-band - drops any user-added empty rows, leaving exactly
      *  one row per loaded entry (with row 0 always present). */
     private void rebuildRowsFromStore() {
         if (calRowsContainer == null || calRowsContainer.isDisposed()) return;
@@ -1989,7 +1989,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // No-op when the store's loaded entries already line up with
         // the loaded rows in the UI (in the same order).  Skipping
         // here preserves user-added empty rows when the bus event is
-        // unrelated to the entries list — e.g. the wizard's setDirect
+        // unrelated to the entries list - e.g. the wizard's setDirect
         // fires the same event but doesn't touch entries.
         if (loadedRowsMatch(entries)) return;
         for (CalRow r : calRows) {
@@ -2033,7 +2033,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     // -------------------------------------------------------------------------
-    // Save-to tab — write the current measurement to a CSV
+    // Save-to tab - write the current measurement to a CSV
     // -------------------------------------------------------------------------
 
     private void buildSaveToTab() {
@@ -2045,7 +2045,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
         // Layout: [pathField (read-only display of last save)] [save].
         // The save button now ALWAYS opens the file-picker before
-        // writing — the previous separate "browse" button was redundant
+        // writing - the previous separate "browse" button was redundant
         // since browse-then-save was the only useful sequence.
         saveToPathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
         String savedPath = prefs.getFreqRespSavePath();
@@ -2060,6 +2060,12 @@ public final class FreqRespTabControl extends AbstractTabControl {
         saveGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         saveBtn.setLayoutData(saveGd);
         saveBtn.setToolTipText(I18n.t("freqResp.saveTo.tooltip"));
+        /* Deliberately ALWAYS enabled.  Saving a measured response to a file is
+         * never gated: the only requirement is that a measurement exists, which
+         * openSaveDialog states itself (freqResp.saveTo.error.noResult).  A
+         * curve's fitness to serve as an ADC calibration is a different question
+         * and is already gated where that use happens: writing a .frc is
+         * unconditional, so ANY measured response can be saved. */
         saveBtn.addListener(SWT.Selection, e -> openSaveDialog());
     }
 
@@ -2074,14 +2080,14 @@ public final class FreqRespTabControl extends AbstractTabControl {
         }
         Preferences prefs = Preferences.instance();
         // Always open the Save-as dialog so the user explicitly picks
-        // (or confirms) the destination on every click — the
+        // (or confirms) the destination on every click - the
         // dedicated "browse" button was removed because pick-and-save
         // is the only useful sequence here.  The picker is pre-filled
         // with the last saved path so the typical "save to the same
         // file again" case is just two clicks.
         FileDialog fd = new FileDialog(getShell(), SWT.SAVE);
         fd.setText(I18n.t("freqResp.saveTo.dialog"));
-        fd.setFilterExtensions(new String[]{ "*.frc", "*.csv" });
+        fd.setFilterExtensions(new String[]{ "*.frc" });
         fd.setOverwrite(true);
         String memFolder = prefs.getFreqRespSaveFolder();
         if (memFolder != null) fd.setFilterPath(memFolder);
@@ -2137,7 +2143,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     // -------------------------------------------------------------------------
-    // Load-from tab — display a saved measurement on the view
+    // Load-from tab - display a saved measurement on the view
     // -------------------------------------------------------------------------
 
     private void buildLoadFromTab() {
@@ -2149,7 +2155,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
         // Layout: [pathField (read-only display of last load)] [load].
         // The load button now ALWAYS opens the file-picker before
-        // reading — the previous separate "browse" button was
+        // reading - the previous separate "browse" button was
         // redundant since browse-then-load was the only useful
         // sequence.
         loadFromPathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
@@ -2169,7 +2175,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     /** Opens an Open file dialog, then loads the chosen file into the
-     *  view.  Always prompts — the dedicated "browse" button was
+     *  view.  Always prompts - the dedicated "browse" button was
      *  removed because browse-then-load was the only useful sequence.
      *  The picker is pre-filled with the last loaded path so re-load
      *  is one extra click. */
@@ -2210,7 +2216,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
                     Channel.R, sr, cR.freqs, cR.magLin, cR.phaseRad,
                     params, picked, true));
             view.setSourceFilePath(picked);
-            // A loaded measurement counts as "has result" — refresh the RIAA
+            // A loaded measurement counts as "has result" - refresh the RIAA
             // enable cascade so Compare becomes available (when Show is on).
             refreshRiaaEnable();
             // Auto-fit the freq / magnitude window to the freshly-loaded curve,
@@ -2233,7 +2239,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
     private void onCalibrationChanged() {
         // Skip the rebuild when this control initiated the store mutation
-        // itself — calRows already matches what we just wrote.  Other
+        // itself - calRows already matches what we just wrote.  Other
         // sources (e.g. wizard Apply, wizard Cancel-restore) take the
         // rebuildRowsFromStore path so the UI catches up.
         if (!calMutationInFlight) {

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests for {@link ScopeTrigger} — the Schmitt-banded edge detector
+ * Tests for {@link ScopeTrigger} - the Schmitt-banded edge detector
  * that anchors every scope frame.  A regression here either drops valid
  * triggers (visible as a frozen / unstable display) or fires on noise.
  */
@@ -32,23 +32,23 @@ class ScopeTriggerTest {
 
     @Test
     void linear_simpleMidpointCrossing() {
-        // prev=-1 at idx 5, curr=+1 at idx 6, level=0 → crossing at 5.5.
+        // prev=-1 at idx 5, curr=+1 at idx 6, level=0 -> crossing at 5.5.
         double t = ScopeTrigger.linear(-1f, +1f, 5, 0f);
         assertEquals(5.5, t, 1e-12);
     }
 
     @Test
     void linear_zeroDenominator_returnsPrevIdx() {
-        // prev == curr → no crossing direction; fall back to prevIdx.
+        // prev == curr -> no crossing direction; fall back to prevIdx.
         assertEquals(7.0, ScopeTrigger.linear(0.5f, 0.5f, 7, 0f), 1e-12);
     }
 
     @Test
     void find_risingEdge_returnsLastCrossing() {
-        // Square wave with rising edges between idx 7→8, 23→24, 39→40,
-        // 55→56.  Hysteresis = 0 → every crossing qualifies; find()
+        // Square wave with rising edges between idx 7->8, 23->24, 39->40,
+        // 55->56.  Hysteresis = 0 -> every crossing qualifies; find()
         // returns the rightmost, sub-sample-refined by linear
-        // interpolation (prev=-1, curr=+1, level=0 → +0.5).
+        // interpolation (prev=-1, curr=+1, level=0 -> +0.5).
         float[] data = new float[64];
         for (int i = 0; i < data.length; i++) {
             data[i] = (i / 8) % 2 == 0 ? -1f : +1f;
@@ -72,7 +72,7 @@ class ScopeTriggerTest {
 
     @Test
     void find_noQualifiedCrossing_returnsMinusOne() {
-        // Constant signal above the level → no crossing.
+        // Constant signal above the level -> no crossing.
         float[] data = new float[64];
         for (int i = 0; i < data.length; i++) data[i] = 0.5f;
 
@@ -101,8 +101,8 @@ class ScopeTriggerTest {
 
     @Test
     void find_hysteresisStillTriggersOnRealEdge() {
-        // Same setup but signal goes from -0.6 to +0.6 — outside the
-        // ±0.5 hysteresis band → trigger fires.
+        // Same setup but signal goes from -0.6 to +0.6 - outside the
+        // ±0.5 hysteresis band -> trigger fires.
         float[] data = new float[64];
         for (int i = 0; i < 32; i++) data[i] = -0.6f;
         for (int i = 32; i < data.length; i++) data[i] = +0.6f;
@@ -129,7 +129,7 @@ class ScopeTriggerTest {
 
     @Test
     void findGlitch_cleanSine_noTrigger() {
-        // A sine's largest |Δ²| is π/2 × its mean |Δ²| — far below the 8×
+        // A sine's largest |Δ²| is π/2 × its mean |Δ²| - far below the 8×
         // threshold, so a clean tone must never fire, at any amplitude.
         for (double a : new double[] { 1.0, 0.001 }) {
             float[] d = glitchTestSine(4096, a);
@@ -158,10 +158,10 @@ class ScopeTriggerTest {
     @Test
     void findGlitch_zeroCrossingSplice_detected() {
         // ADC-side cutoff at a rising zero crossing: the waveform splices into
-        // a FALLING crossing — value stays ≈ 0 (no dV/dt step for a first-
+        // a FALLING crossing - value stays ≈ 0 (no dV/dt step for a first-
         // difference gate) but the slope flips, breaking the local linear
         // prediction by ~2·A·ω/fs ≈ 60× the sine's curvature ceiling.
-        int splice = 2112;                    // multiple of 192 → rising crossing
+        int splice = 2112;                    // multiple of 192 -> rising crossing
         float[] d = glitchTestSine(4096, 1.0);
         double w = 2 * Math.PI / 192.0;
         for (int k = splice; k < d.length; k++) {

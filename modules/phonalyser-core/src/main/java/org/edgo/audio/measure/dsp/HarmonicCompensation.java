@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -30,7 +30,7 @@ import java.util.function.DoubleFunction;
 import org.edgo.audio.measure.fft.FftResult;
 
 /**
- * Complex accumulator for closed-loop DAC harmonic pre-distortion — the
+ * Complex accumulator for closed-loop DAC harmonic pre-distortion - the
  * single home of the correction math shared by the CLI
  * {@code IterativeCompensateMode} and the GUI predistortion wizard.
  *
@@ -38,7 +38,7 @@ import org.edgo.audio.measure.fft.FftResult;
  * per-harmonic correction phasor {@code (re, im)}: the harmonic's amplitude
  * ratio and its phase (corrected for the measured DAC↔ADC transport delay)
  * are added in, scaled by the step μ.  Harmonics within {@code snrMargin} dB
- * of the noise floor are skipped — they would random-walk the accumulator.
+ * of the noise floor are skipped - they would random-walk the accumulator.
  * The accumulated phasors convert to the generator's compensation API
  * ({@link #toGeneratorCorrections}) and serialise to the CLI-compatible
  * {@code applied_compensation_*.csv} ({@link #writeCsv}).
@@ -68,7 +68,7 @@ public final class HarmonicCompensation {
      * LMS-style accumulate of the harmonics measured in {@code r}.  The
      * accumulator holds, per harmonic, a COMPLEX phasor whose magnitude is the
      * harmonic's ABSOLUTE measured level (linear, from its de-embedded-chain dBFS
-     * — the actual ADC reading, NOT a ratio that bakes in the notched-|F0|
+     * - the actual ADC reading, NOT a ratio that bakes in the notched-|F0|
      * division) and whose phase is the RAW measured phase, window-derotated.  The
      * {@code .frc} de-embed and the division by the fundamental are NOT done here;
      * they are applied on the way out, in {@link #toGeneratorCorrections} /
@@ -77,12 +77,12 @@ public final class HarmonicCompensation {
      * <p><b>The fundamental phase is the per-round frame reference.</b>  Each
      * round's FFT window starts at an arbitrary point in the tone, so the
      * fundamental comes out at a RANDOM absolute phase that also carries whatever
-     * the round's non-deterministic DAC→ADC delay was; the whole spectrum is
-     * de-rotated by it (each harmonic by n·φ₁) so F0 → 0° and every round lands in
+     * the round's non-deterministic DAC->ADC delay was; the whole spectrum is
+     * de-rotated by it (each harmonic by n·φ₁) so F0 -> 0° and every round lands in
      * the same frame.  φ₁ is the measured {@code arg(X₁)} MINUS the {@code .frc}
      * phase at f₁ ({@code calFundPhaseRad}): the twin-T notch sitting on f₁
      * phase-inverts the measured fundamental (its phase there ≈ π), and that π
-     * would otherwise enter every harmonic as n·π — flipping the ODD harmonics
+     * would otherwise enter every harmonic as n·π - flipping the ODD harmonics
      * (n·π ≡ π) while leaving the even ones (n·π ≡ 0), i.e. driving the loop to
      * build a triangle.  Subtracting the cal phase removes it.  This is a pure
      * PHASE subtraction (no division by the singular |H(f₁)|), so the notch null
@@ -119,14 +119,14 @@ public final class HarmonicCompensation {
     }
 
     /** Converts the accumulated ABSOLUTE (ADC-dBFS) phasors to the generator's
-     *  compensation triple — applying, HERE on the values that reach the DDS
+     *  compensation triple - applying, HERE on the values that reach the DDS
      *  (not in the accumulator): the {@code .frc} de-embed (magnitude AND phase),
-     *  the ADC-dBFS → absolute-volts conversion, and the division by the DAC
+     *  the ADC-dBFS -> absolute-volts conversion, and the division by the DAC
      *  fundamental.  {@code calResponseAt} returns the loaded {@code .frc}
      *  response {@code [magLin, phaseRad]} at a frequency; {@code adcFsVoltageRms}
-     *  is the ADC full-scale (so {@code dBFS → Vrms}); {@code dacFundamentalVrms}
+     *  is the ADC full-scale (so {@code dBFS -> Vrms}); {@code dacFundamentalVrms}
      *  is the DAC's fundamental output (= {@code genAmplitudeVrms}) the ratio is
-     *  taken against — the DAC's own volts↔dBFS then turns the ratio into its
+     *  taken against - the DAC's own volts↔dBFS then turns the ratio into its
      *  injected harmonic.  Harmonics that never rose above the gate are dropped. */
     public GeneratorCorrections toGeneratorCorrections(double fundamentalHz,
             DoubleFunction<double[]> calResponseAt, double adcFsVoltageRms, double dacFundamentalVrms) {
@@ -143,7 +143,7 @@ public final class HarmonicCompensation {
             if (re == 0.0 && im == 0.0) continue;
             double[] cal = calResponseAt.apply(hFreqs[h]);                 // [magLin, phaseRad] of H(f_h)
             double magDe = Math.hypot(re, im) / (cal[0] > 0.0 ? cal[0] : 1.0);   // ÷ chain magnitude (de-embed)
-            double vH    = magDe * adcFsVoltageRms;                        // ADC dBFS → absolute Vrms at DAC out
+            double vH    = magDe * adcFsVoltageRms;                        // ADC dBFS -> absolute Vrms at DAC out
             amp[i] = dacFundamentalVrms > 0.0 ? vH / dacFundamentalVrms : 0.0;   // ratio to the DAC fundamental
             phi[i] = Math.atan2(im, re) - cal[1];                          // − chain phase (de-embed)
             num[i] = (int) Math.round(hFreqs[h] / fundamentalHz);
@@ -152,7 +152,7 @@ public final class HarmonicCompensation {
         return new GeneratorCorrections(amp, num, phi);
     }
 
-    /** Deep copy — lets the wizard snapshot the best-THD iteration's
+    /** Deep copy - lets the wizard snapshot the best-THD iteration's
      *  accumulator while the loop keeps updating the live one. */
     public HarmonicCompensation copy() {
         HarmonicCompensation c = new HarmonicCompensation(maxHarmonics);
@@ -163,7 +163,7 @@ public final class HarmonicCompensation {
     }
 
     /**
-     * Writes the {@code applied_compensation} CSV — byte-compatible with the
+     * Writes the {@code applied_compensation} CSV - byte-compatible with the
      * CLI iterative-compensate output (German-locale data rows: comma
      * decimals, semicolon fields) so the generator's existing
      * {@code SINE_COMPENSATED} loader reads it unchanged.  Any
@@ -178,7 +178,7 @@ public final class HarmonicCompensation {
         // amplitudeVrms IS the DAC fundamental (genAmplitudeVrms); the ratio columns
         // (amplitude_pct + re/im, consumed by the SINE_COMPENSATED loader) are taken
         // against it.  The amplitude_dbfs column instead carries the de-embedded
-        // ABSOLUTE dBV (V_h via the ADC full-scale) — the honest measured level.
+        // ABSOLUTE dBV (V_h via the ADC full-scale) - the honest measured level.
         double fundDbV = amplitudeVrms > 0.0 ? 20.0 * Math.log10(amplitudeVrms) : 0.0;
         try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8))) {
             if (extraHeaderLines != null) {
@@ -194,7 +194,7 @@ public final class HarmonicCompensation {
             for (int h = 0; h < maxHarmonics; h++) {
                 if (accRe[h] == 0.0 && accIm[h] == 0.0) continue;
                 // Same de-embed as toGeneratorCorrections: ÷ chain H(f_h), ADC dBFS
-                // → Vrms, ratio to the DAC fundamental.
+                // -> Vrms, ratio to the DAC fundamental.
                 double[] cal = calResponseAt.apply(hFreqs[h]);
                 double magDe = Math.hypot(accRe[h], accIm[h]) / (cal[0] > 0.0 ? cal[0] : 1.0);
                 double vH    = magDe * adcFsVoltageRms;                    // de-embedded harmonic, abs Vrms

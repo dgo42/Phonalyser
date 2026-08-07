@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -78,7 +78,7 @@ class AmplitudeHistogramTest {
     @Test
     void resolutionFollowsTheSignalNotFullScale() {
         // The whole point.  A signal a thousandth of full scale must get a bin a
-        // thousandth as wide — not a bin sized to the converter's range.
+        // thousandth as wide - not a bin sized to the converter's range.
         AmplitudeHistogram big   = new AmplitudeHistogram(BARS);
         AmplitudeHistogram small = new AmplitudeHistogram(BARS);
         big.fit(-1.0, 1.0);
@@ -88,8 +88,8 @@ class AmplitudeHistogramTest {
 
     @Test
     void binWidthNeverGoesBelowOneConverterCode() {
-        // Unreachable with a real converter — the analog noise floor sits tens of dB
-        // above the LSB — but a digital loopback can hand us a dead-flat block, and a
+        // Unreachable with a real converter - the analog noise floor sits tens of dB
+        // above the LSB - but a digital loopback can hand us a dead-flat block, and a
         // zero-width range would divide by zero on the next add().
         AmplitudeHistogram h = new AmplitudeHistogram(BARS);
         h.fit(0.0, 0.0);
@@ -104,7 +104,7 @@ class AmplitudeHistogramTest {
         AmplitudeHistogram h = new AmplitudeHistogram(BARS);
         h.fit(-0.5, 0.5);
         for (int i = 0; i < 1000; i++) h.add(0.1);
-        // Grow by a third of the headroom — still inside the range.
+        // Grow by a third of the headroom - still inside the range.
         double grow = 0.5 + AmplitudeHistogram.MICRO_PER_BAR / 6.0 * h.getBinWidth();
         assertTrue(h.fit(-grow, grow), "inside the headroom the distribution must survive");
         assertEquals(1000, h.getTotal());
@@ -151,7 +151,7 @@ class AmplitudeHistogramTest {
     @Test
     void outOfRangeSamplesClampIntoTheEdgeBins() {
         // Only reachable inside the headroom in normal use, where it is a shift of
-        // less than half a bar — but it must never lose a sample or throw.
+        // less than half a bar - but it must never lose a sample or throw.
         AmplitudeHistogram h = new AmplitudeHistogram(BARS);
         h.fit(-0.5, 0.5);
         h.add(5.0);
@@ -202,7 +202,7 @@ class AmplitudeHistogramTest {
     void everyBarIsPopulatedWhateverTheSignalLevel() {
         // The defect this design exists to prevent: with the range pinned to full
         // scale, a small signal occupied a handful of bins and the plot collapsed to
-        // a comb — or, once clamped, to two bars.  Ranging on the signal makes the
+        // a comb - or, once clamped, to two bars.  Ranging on the signal makes the
         // level irrelevant.
         for (double amp : new double[] {0.9, 1e-3, 1e-6}) {
             AmplitudeHistogram h = sine(amp, 200_000);
@@ -284,7 +284,7 @@ class AmplitudeHistogramTest {
         h.fit(-0.25, 0.75);
         assertEquals(h.getRangeMin(), h.binLowerEdge(0), 1e-12);
         // The painter labels the axis with binLowerEdge(lastOccupied + 1), which for a
-        // full range is one past the last bin — pure arithmetic, never an array read.
+        // full range is one past the last bin - pure arithmetic, never an array read.
         assertEquals(h.getRangeMax(), h.binLowerEdge(MICRO), 1e-12);
     }
 

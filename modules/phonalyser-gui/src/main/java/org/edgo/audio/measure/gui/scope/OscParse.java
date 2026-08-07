@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -62,7 +62,7 @@ public final class OscParse {
 
     private OscParse() {}
 
-    /** Legacy helper — returns the V/div value for the given list index.
+    /** Legacy helper - returns the V/div value for the given list index.
      *  Public so {@link org.edgo.audio.measure.gui.Preferences} can migrate
      *  old integer-index prefs into the new double-valued field. */
     public static double voltsPerDivFromIdx(int index) {
@@ -70,14 +70,14 @@ public final class OscParse {
         return parseUnit(VOLT_PER_DIV[index], "V");
     }
 
-    /** Legacy helper — returns the t/div value for the given list index. */
+    /** Legacy helper - returns the t/div value for the given list index. */
     public static double timePerDivFromIdx(int index) {
         if (index < 0 || index >= TIME_PER_DIV.length) index = 6;  // "1 ms/div"
         return parseUnit(TIME_PER_DIV[index], "s");
     }
 
     /** Returns the standard V/div step list as an array of values in volts,
-     *  ascending.  Series for the scope's V/div field — its wheel and arrows
+     *  ascending.  Series for the scope's V/div field - its wheel and arrows
      *  step through these "nice" values from a free-form current value. */
     public static double[] voltsPerDivTargets() {
         double[] out = new double[VOLT_PER_DIV.length];
@@ -97,7 +97,7 @@ public final class OscParse {
     }
 
     /** Pretty-prints {@code volts} as "{@code N μV/div}", "{@code N mV/div}"
-     *  or "{@code N V/div}" with auto-prefix — the scope measurement rows'
+     *  or "{@code N V/div}" with auto-prefix - the scope measurement rows'
      *  display format. */
     public static String formatVoltsPerDiv(double volts) {
         return formatWithUnit(volts, "V") + "/div";
@@ -109,7 +109,7 @@ public final class OscParse {
         return formatWithUnit(seconds, "s") + "/div";
     }
 
-    /** Shared auto-prefix formatter — picks the SI prefix that lands the
+    /** Shared auto-prefix formatter - picks the SI prefix that lands the
      *  mantissa in the [1, 1000) range when possible.  Trailing zeros are
      *  stripped from the decimal part for tidier display. */
     private static String formatWithUnit(double v, String baseUnit) {
@@ -147,7 +147,7 @@ public final class OscParse {
         if (unit.startsWith("n"))                         mult = 1e-9;
         else if (unit.startsWith("μ") || unit.startsWith("u")) mult = 1e-6;
         else if (unit.startsWith("m"))                    mult = 1e-3;
-        // bare "V" / "s" → mult = 1.0
+        // bare "V" / "s" -> mult = 1.0
         return value * mult;
     }
 

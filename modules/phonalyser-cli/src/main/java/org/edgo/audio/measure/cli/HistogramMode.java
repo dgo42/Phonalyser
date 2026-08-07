@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -35,7 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * {@code --histogram} — ADC code-occupancy histogram capture or offline replay.
+ * {@code --histogram} - ADC code-occupancy histogram capture or offline replay.
  *
  * <p>Record mode (no {@code --load}): records {@code --duration} seconds from
  * the selected input device, accumulating a per-code occupancy count.  Replay
@@ -56,7 +56,7 @@ import java.util.concurrent.atomic.AtomicLong;
 @Log4j2
 public class HistogramMode {
 
-    /** The CLI's single Preferences instance (transient mode) — injected by Main. */
+    /** The CLI's single Preferences instance (transient mode) - injected by Main. */
     @Setter
     private Preferences prefs;
 
@@ -183,7 +183,8 @@ public class HistogramMode {
                             int sineEdgeBins, int sineFitPoints, boolean rawHistChart) throws Exception {
         AdcHistogram histogram = new AdcHistogram(bitDepth);
 
-        try (AudioCapture recorder = AudioBackend.instance().openCapture(device, sampleRate, bitDepth)) {
+        try (AudioCapture recorder = AudioBackend.instance().manager(device.carrier())
+                .openCapture(device, sampleRate, bitDepth)) {
             final AdcHistogram histogramRef = histogram;
             final AtomicLong   nextLogAt    = new AtomicLong(System.currentTimeMillis());
             final int          skipFrames   = sampleRate / 100;

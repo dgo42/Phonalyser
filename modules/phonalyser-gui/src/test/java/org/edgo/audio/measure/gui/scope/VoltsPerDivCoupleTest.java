@@ -15,8 +15,8 @@ import org.junit.jupiter.api.Test;
 class VoltsPerDivCoupleTest {
 
     private static final double[] RULE = OscParse.voltsPerDivTargets();
-    private static final int IN  = -1;   // zoom in  → smaller V/div
-    private static final int OUT = +1;   // zoom out → larger V/div
+    private static final int IN  = -1;   // zoom in  -> smaller V/div
+    private static final int OUT = +1;   // zoom out -> larger V/div
     private static final double NO_CEIL = 0;
 
     @Test
@@ -51,9 +51,9 @@ class VoltsPerDivCoupleTest {
         assertEquals(500e-6, r[1], 1e-12);
     }
 
-    /** Both on the rule → still proportional; the base is picked so the SCALED
-     *  channel lands nearest a rung.  500µV/200µV zoom-in: left base → right
-     *  200·(200/500)=80µV (20µV off 100µV) beats right base → left 250µV (50µV off 200µV). */
+    /** Both on the rule -> still proportional; the base is picked so the SCALED
+     *  channel lands nearest a rung.  500µV/200µV zoom-in: left base -> right
+     *  200·(200/500)=80µV (20µV off 100µV) beats right base -> left 250µV (50µV off 200µV). */
     @Test
     void bothOnRule_holdsRatio_scaledNearestRung() {
         double[] r = ScopeFormat.coupleVoltsPerDivZoom(500e-6, 200e-6, IN, RULE, NO_CEIL);
@@ -62,7 +62,7 @@ class VoltsPerDivCoupleTest {
         assertEquals(2.5, r[0] / r[1], 1e-9);          // ratio held
     }
 
-    /** Worked example: 500µV/1mV zoom-in → 250µV/500µV (right base; left 250µV is
+    /** Worked example: 500µV/1mV zoom-in -> 250µV/500µV (right base; left 250µV is
      *  50µV off 200µV, beating left base's 400µV which is 100µV off 500µV). */
     @Test
     void bothOnRule_worked_500u_1m_zoomIn() {
@@ -85,7 +85,7 @@ class VoltsPerDivCoupleTest {
     void zoomOutBlockedAtCeiling() {
         double ceil = 0.5;   // pretend FS fills the grid at 0.5 V/div
         double[] r = ScopeFormat.coupleVoltsPerDivZoom(0.5, 0.2, OUT, RULE, ceil);
-        assertEquals(0.5, r[0], 1e-12);   // unchanged — blocked
+        assertEquals(0.5, r[0], 1e-12);   // unchanged - blocked
         assertEquals(0.2, r[1], 1e-12);
     }
 
@@ -94,7 +94,7 @@ class VoltsPerDivCoupleTest {
     void proportionPreservedWithOffRuleFollower() {
         // left on rule (1 mV) leads; right (400 µV, off rule) keeps its 0.4 proportion.
         double[] in = ScopeFormat.coupleVoltsPerDivZoom(1e-3, 400e-6, IN, RULE, NO_CEIL);
-        assertEquals(500e-6, in[0], 1e-12);          // 1m → 500u (rule)
+        assertEquals(500e-6, in[0], 1e-12);          // 1m -> 500u (rule)
         assertEquals(200e-6, in[1], 1e-12);          // 400u * 0.5
         assertEquals(0.4, in[1] / in[0], 1e-12);     // proportion 400/1000 held
     }

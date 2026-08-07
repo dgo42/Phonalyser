@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -52,14 +52,14 @@ public class FreqRespCalHelper {
     public static final double SWEEP_FADE_FRACTION_PER_SIDE = 0.05;
 
     /** Shared per-tone lobe lift (floor estimate + data-derived lobe extent +
-     *  power-domain proportional scale) — also used by the manual-fundamental
+     *  power-domain proportional scale) - also used by the manual-fundamental
      *  display so both rescale a tone the same way. */
     private static final ToneLobeLift LOBE = new ToneLobeLift();
 
     /** Highest intermod order whose dual-tone products get their lobes
      *  de-embedded (correctAllBins=false).  Mirrors {@code ImdResult.MAX_ORDER}
      *  so the corrected product set matches exactly what {@code ImdAnalyzer}
-     *  measures; kept as a local copy to avoid a {@code dsp → gui} dependency. */
+     *  measures; kept as a local copy to avoid a {@code dsp -> gui} dependency. */
     private static final int MAX_IMD_ORDER = 5;
 
     /** {@code .frc} header key for the capture sample rate, as written into
@@ -78,7 +78,7 @@ public class FreqRespCalHelper {
     private static final boolean USE_IR_GATING = false;
 
     /** One-sided gate length in seconds.  Frequency resolution after
-     *  gating is ≈ 1/this — features narrower than that get smoothed.
+     *  gating is ≈ 1/this - features narrower than that get smoothed.
      *  50 ms preserves any analog feature with Q · f₀ &lt; 1000 (e.g. a
      *  Twin-T at 1 kHz up to Q ≈ 50). */
     private static final double IR_GATE_LENGTH_SEC = 0.25;
@@ -120,10 +120,10 @@ public class FreqRespCalHelper {
 
     /** Output frequency grid sampled EXACTLY at the deconvolution's FFT bin
      *  centres ({@code k·binHz}) across {@code [startHz, stopHz]}, so
-     *  {@link #computeFromLogSweep} reads each bin with fractional offset 0 —
+     *  {@link #computeFromLogSweep} reads each bin with fractional offset 0 -
      *  no phase-sensitive complex interpolation between bins (which facets the
      *  trace into a frame-to-frame comb).  {@code binHz} must be
-     *  {@code sampleRate / nextPow2(captureLength)} — the spacing of the FFT
+     *  {@code sampleRate / nextPow2(captureLength)} - the spacing of the FFT
      *  {@code computeFromLogSweep} builds.
      *
      *  <p>When the band spans more than {@code maxPoints} bins (a wide band on
@@ -178,7 +178,7 @@ public class FreqRespCalHelper {
      *  empty for no prefix.
      *
      *  <p>{@code fadeSamples} is the per-side Hann fade length applied to
-     *  the X reference inside this call — it MUST match the
+     *  the X reference inside this call - it MUST match the
      *  {@code fadeInSamples}/{@code fadeOutSamples} previously set on
      *  the playing {@code SignalGenerator} (use {@link #sweepFadeSamples}
      *  to compute one value for both sites).  Zero disables the fade and
@@ -362,7 +362,7 @@ public class FreqRespCalHelper {
         // Normalisation: |Y/X| at unity loopback equals the captured ADC
         // peak in normalised units = amplitudeVrms × √2 / V_ADC_FS_PEAK
         // = amplitudeVrms / adcFsVoltageRms.  Dividing by this gives the
-        // physical transfer-function magnitude — exactly 1.0 (= 0 dB)
+        // physical transfer-function magnitude - exactly 1.0 (= 0 dB)
         // for a calibrated unity-gain loopback.
         //
         // The old form used dacDrivePeak (DAC-side normalised peak), which
@@ -544,7 +544,7 @@ public class FreqRespCalHelper {
      *
      * <pre>frequency_hz, mag_left_dB, mag_right_dB, phase_left_deg, phase_right_deg</pre>
      *
-     * <p>Magnitudes are stored as <em>relative</em> dB — the calibrated
+     * <p>Magnitudes are stored as <em>relative</em> dB - the calibrated
      * ratio of (ADC voltage) to (DAC drive voltage), so a flat passband
      * sits at 0 dB regardless of absolute DAC or ADC scaling.  The DAC
      * and ADC voltage calibrations are assumed to have been applied
@@ -645,7 +645,7 @@ public class FreqRespCalHelper {
     /**
      * Reads the capture sample rate recorded in a {@code .frc} file's leading
      * {@code # sample_rate_hz=} header comment (written by {@link #saveFrc}).
-     * Only the header block is scanned — the scan stops at the first
+     * Only the header block is scanned - the scan stops at the first
      * non-comment line.  Returns {@code 0} when the header is absent or
      * unparseable (legacy files), so callers can fall back.
      */
@@ -661,7 +661,7 @@ public class FreqRespCalHelper {
                     try {
                         return Integer.parseInt(line.substring(eq + 1).trim());
                     } catch (NumberFormatException e) {
-                        return 0;   // garbled header — treat as absent
+                        return 0;   // garbled header - treat as absent
                     }
                 }
             }
@@ -696,7 +696,7 @@ public class FreqRespCalHelper {
         int corrected = 0;
         if (correctAllBins) {
             // "With noise": every in-range bin divided by H at its OWN
-            // frequency — the whole spectrum, noise included, is corrected.
+            // frequency - the whole spectrum, noise included, is corrected.
             for (int k = 1; k <= half; k++) {
                 double f = k * binWidth;
                 if (f < fLo || f > fHi) continue;
@@ -719,7 +719,7 @@ public class FreqRespCalHelper {
             // Per-TONE: a tone is a SINGLE frequency whose energy fills the
             // window's whole main lobe.  Correct the WHOLE lobe (extent found
             // from the data) by ONE cal value at the tone frequency, applied
-            // PROPORTIONALLY to the signal above the local noise floor — so the
+            // PROPORTIONALLY to the signal above the local noise floor - so the
             // lobe lifts as a unit while its wings stay on the floor.  This
             // replaces lifting only 1-2 bins (a narrow spike on the wider lobe)
             // and the per-bin slope (the split + the lobe-tilt frequency shift).
@@ -737,11 +737,11 @@ public class FreqRespCalHelper {
                 corrected += correctToneLobe(r, cal, r.fundamental2HzRefined, half, binWidth, linPerMag, fLo, fHi, done);
                 // Dual-tone intermod PRODUCTS are discrete tones too (like the
                 // harmonics), so correcting only their lobes leaves the noise
-                // between them un-lifted — the whole-spectrum divide stays the
+                // between them un-lifted - the whole-spectrum divide stays the
                 // "with noise" mode's job.  The product-frequency set is derived
                 // exactly as gui.fft.ImdAnalyzer does (its dnL/dnH loop, orders
                 // k = 2..ImdResult.MAX_ORDER = 5); the CCIF/DIN formulas are
-                // replicated locally to avoid a dsp→gui dependency:
+                // replicated locally to avoid a dsp->gui dependency:
                 //   d2L = f2 − f1,                 d2H = f1 + f2
                 //   dnL = (n−1)·f1 − (n−2)·f2,     dnH = (n−1)·f2 − (n−2)·f1  (n ≥ 3)
                 // Each product goes through correctToneLobe, which skips
@@ -785,9 +785,9 @@ public class FreqRespCalHelper {
      *  <pre>  |X'| = √( (|X|² − floor²)·(1/|H|)² + floor² )  </pre>
      *  The signal power above the floor is scaled by (1/|H|)² and the noise
      *  floor power is kept, so every well-above-floor bin lifts by the same
-     *  1/|H| — the lobe shape is preserved (no per-bin split, no
+     *  1/|H| - the lobe shape is preserved (no per-bin split, no
      *  frequency-shifting tilt, and no narrow spike from lifting the peak more
-     *  than the shoulders) — while near-floor bins stay on the floor (no noise
+     *  than the shoulders) - while near-floor bins stay on the floor (no noise
      *  hump).  Phase is rotated by {@code −argH}.  Lobe extent is data-derived
      *  ({@link #lobeEdge}). */
     private int correctToneLobe(FftResult r, FreqRespCalibration cal, double toneHz,
@@ -869,7 +869,7 @@ public class FreqRespCalHelper {
 
     /**
      * Divides a single complex phasor {@code (re, im)} by the calibration
-     * response {@code H = magLin·e^{j·phaseRad}} — i.e. takes the {@code .frc}
+     * response {@code H = magLin·e^{j·phaseRad}} - i.e. takes the {@code .frc}
      * out of one measured bin, de-embedding BOTH magnitude and phase
      * ({@code X/H = X·e^{−j·phaseRad}/magLin}).  Same divide
      * {@link #applyCompensationInPlace} does per bin, exposed for the

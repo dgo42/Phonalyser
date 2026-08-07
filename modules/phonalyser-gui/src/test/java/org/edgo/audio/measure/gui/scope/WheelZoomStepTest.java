@@ -10,15 +10,15 @@ import org.junit.jupiter.api.Test;
 /**
  * Regression for the scope wheel-zoom stall at 200 µV / 200 µs. The wheel now
  * navigates the V/div, s/div field's OWN value list
- * ({@code NumericStepField.step} → {@link NumericStepModel#wheel}, which
+ * ({@code NumericStepField.step} -> {@link NumericStepModel#wheel}, which
  * identifies the current series entry by tolerance and steps to the next),
  * instead of recomputing the next value with a strict float comparison that
  * returned the parse-rounded 200 µV bucket as a no-op. These drive that list
- * navigation directly (headless — no SWT needed).
+ * navigation directly (headless - no SWT needed).
  */
 class WheelZoomStepTest {
 
-    /** One wheel-down notch from a clean 200 µV must leave the bucket (→ 100 µV). */
+    /** One wheel-down notch from a clean 200 µV must leave the bucket (-> 100 µV). */
     @Test
     void singleDownStepLeaves200uVBucket() {
         NumericStepModel m = new NumericStepModel(

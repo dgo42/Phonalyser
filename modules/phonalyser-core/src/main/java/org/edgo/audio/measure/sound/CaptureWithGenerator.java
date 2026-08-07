@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
 import org.edgo.audio.measure.adc.WeightedBuffer;
+import org.edgo.audio.measure.common.MemUtil;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
 
@@ -38,7 +39,7 @@ public class CaptureWithGenerator {
 
     /**
      * Simultaneously plays a signal on {@code outDevice} and records from {@code inDevice}
-     * for {@code duration} seconds.  Returns the captured mono samples normalised to −1…+1.
+     * for {@code duration} seconds.  Returns the captured mono samples normalised to −1...+1.
      * Channel 0 (left / primary) of the input device is used.
      */
     public double[] run(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
@@ -50,7 +51,7 @@ public class CaptureWithGenerator {
 
     /**
      * Full overload.  When {@code weights} is non-null, each captured raw ADC code
-     * is run through a {@link WeightedBuffer} code-map (offset-binary in →
+     * is run through a {@link WeightedBuffer} code-map (offset-binary in ->
      * linearised float code out) before the [-1, +1] normalisation.
      *
      * <p>{@code syncPauseSec} adds a configurable delay between the generator
@@ -74,21 +75,26 @@ public class CaptureWithGenerator {
         AtomicBoolean   genStop  = new AtomicBoolean(false);
         CountDownLatch  genReady = new CountDownLatch(1);
 
-        AudioPlayback audioGen = AudioBackend.instance().openPlayback(outDevice, sampleRate, bitDepth, ditherBits);
+        AudioBackend audio = AudioBackend.instance();
+        AudioPlayback audioGen = audio.playbackManager(outDevice)
+                .openPlayback(outDevice, sampleRate, bitDepth, ditherBits);
         audioGen.open();
 
         Thread genThread = new Thread(() -> {
             try {
                 audioGen.play(gen, genStop, genReady);
-            } catch (Exception e) {
-                log.error("Generator error", e);
+            } catch (Throwable t) {
+                // See the sibling run() above: an Error out of the native output
+                // path must not leave the sweep with nothing but a JVM stack dump.
+                log.error("Generator error", t);
             } finally {
                 audioGen.close();
             }
         }, "gen-thread");
         genThread.setPriority(Thread.MAX_PRIORITY);
 
-        try (AudioCapture recorder = AudioBackend.instance().openCapture(inDevice, sampleRate, bitDepth)) {
+        try (AudioCapture recorder = audio.manager(inDevice.carrier())
+                .openCapture(inDevice, sampleRate, bitDepth)) {
             final WeightedBuffer w = weights;
             recorder.setSampleListener(stereo -> {
                 if (skipped.get() < skipFrames) {
@@ -108,12 +114,12 @@ public class CaptureWithGenerator {
             recorder.open();
             genThread.start();
             if (!genReady.await(10, TimeUnit.SECONDS)) {
-                // The generator never started streaming — recording anyway
+                // The generator never started streaming - recording anyway
                 // would deliver a full-duration capture of silence presented
                 // as a valid measurement.
                 genStop.set(true);
                 throw new IllegalStateException(
-                        "Generator did not start streaming within 10 s — capture aborted.");
+                        "Generator did not start streaming within 10 s - capture aborted.");
             }
             if (syncPauseSec > 0) {
                 log.info("Sync pause: holding capture for {} s while generator runs (analog sync settle)", syncPauseSec);
@@ -126,7 +132,7 @@ public class CaptureWithGenerator {
         genStop.set(true);
         genThread.join(5000L);
         if (genThread.isAlive()) {
-            log.warn("Generator thread still running after 5 s — the playback device may remain busy.");
+            log.warn("Generator thread still running after 5 s - the playback device may remain busy.");
         }
 
         int actual = Math.min(writePos.get(), maxSamples);
@@ -137,36 +143,19 @@ public class CaptureWithGenerator {
      * Stereo variant: same playback/capture orchestration as
      * {@link #run}, but keeps both ADC channels instead of picking
      * one.  Used by the Frequency Response measurement so a single sweep
-     * produces both L and R samples — half the wall time of two separate
+     * produces both L and R samples - half the wall time of two separate
      * sweeps, and no L/R drift from conditions changing between them.
      */
-    /** Worst-case heap bytes {@link #runStereo} allocates for a capture of
-     *  {@code duration} s at {@code sampleRate}: two double lanes plus their
-     *  end-of-capture trim copies.  Public so the GUI can pre-check with a
-     *  localized message before the sweep starts — the in-method guard here
-     *  is the English backstop (CLI / logs). */
-    public long stereoCaptureHeapBytes(int sampleRate, int duration) {
-        long maxSamples = Math.min((long) duration * sampleRate + sampleRate, Integer.MAX_VALUE);
-        return 4L * maxSamples * Double.BYTES;
-    }
-
-    /** The current free-heap bytes when {@code needBytes} plus a 25 %
-     *  headroom (for the analysis that follows the capture) does NOT fit,
-     *  or {@code -1} when it fits. */
-    public long heapShortfall(long needBytes) {
-        Runtime rt = Runtime.getRuntime();
-        long freeBytes = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory());
-        return needBytes > freeBytes - freeBytes / 4 ? freeBytes : -1;
-    }
-
-    /** Refuses up-front — with the real numbers — when {@code needBytes}
+    /** Refuses up-front - with the real numbers - when {@code needBytes}
      *  cannot fit the current heap: a too-long duration otherwise dies
-     *  mid-capture with a bare OutOfMemoryError. */
+     *  mid-capture with a bare OutOfMemoryError.  This English guard is the
+     *  CLI / log backstop; the GUI pre-checks the SAME {@link MemUtil}
+     *  numbers with a localized message. */
     private void ensureHeapFits(long needBytes, String what) {
-        long freeBytes = heapShortfall(needBytes);
+        long freeBytes = MemUtil.heapShortfall(needBytes);
         if (freeBytes >= 0) {
             throw new IllegalArgumentException(String.format(
-                    "%s needs ~%d MB but only %d MB of Java heap are free — "
+                    "%s needs ~%d MB but only %d MB of Java heap are free - "
                     + "reduce the duration / sample rate, or raise -Xmx",
                     what, needBytes >> 20, freeBytes >> 20));
         }
@@ -180,7 +169,7 @@ public class CaptureWithGenerator {
                                    BooleanSupplier cancelToken,
                                    StereoCaptureProgress progress) throws Exception {
         int   maxSamples = (int) Math.min((long) duration * sampleRate + sampleRate, Integer.MAX_VALUE);
-        ensureHeapFits(stereoCaptureHeapBytes(sampleRate, duration), "The stereo capture buffers");
+        ensureHeapFits(MemUtil.stereoCaptureHeapBytes(sampleRate, duration), "The stereo capture buffers");
         final double[] leftBuf  = new double[maxSamples];
         final double[] rightBuf = new double[maxSamples];
         final long    halfRange = 1L << (bitDepth - 1);
@@ -191,26 +180,33 @@ public class CaptureWithGenerator {
         AtomicBoolean   genStop  = new AtomicBoolean(false);
         CountDownLatch  genReady = new CountDownLatch(1);
 
-        AudioPlayback audioGen = AudioBackend.instance().openPlayback(outDevice, sampleRate, bitDepth, ditherBits);
+        AudioBackend audio = AudioBackend.instance();
+        AudioPlayback audioGen = audio.playbackManager(outDevice)
+                .openPlayback(outDevice, sampleRate, bitDepth, ditherBits);
         audioGen.open();
-        // Gate the played sweep to the selected DAC lane(s) — LEFT / RIGHT write
+        // Gate the played sweep to the selected DAC lane(s) - LEFT / RIGHT write
         // digital silence to the un-driven lane at the quantizer's
         // stereo-interleave seam; BOTH drives both (legacy).  The sweep never
-        // scales lanes — calibration enters only in the deconvolution math.
+        // scales lanes - calibration enters only in the deconvolution math.
         audioGen.setOutputChannels(outputChannels);
 
         Thread genThread = new Thread(() -> {
             try {
                 audioGen.play(gen, genStop, genReady);
-            } catch (Exception e) {
-                log.error("Generator error", e);
+            } catch (Throwable t) {
+                // Throwable, not Exception: a native output path raises an Error
+                // out of JNA when the device is pulled mid-play, and a thread body
+                // that let that through would report nothing at all beyond the
+                // JVM's own uncaught-exception line.
+                log.error("Generator error", t);
             } finally {
                 audioGen.close();
             }
         }, "gen-thread");
         genThread.setPriority(Thread.MAX_PRIORITY);
 
-        try (AudioCapture recorder = AudioBackend.instance().openCapture(inDevice, sampleRate, bitDepth)) {
+        try (AudioCapture recorder = audio.manager(inDevice.carrier())
+                .openCapture(inDevice, sampleRate, bitDepth)) {
             final WeightedBuffer w = weights;
             recorder.setSampleListener(stereo -> {
                 if (skipped.get() < skipFrames) {
@@ -253,7 +249,7 @@ public class CaptureWithGenerator {
             if (!genReady.await(10, TimeUnit.SECONDS)) {
                 genStop.set(true);
                 throw new IllegalStateException(
-                        "Generator did not start streaming within 10 s — capture aborted.");
+                        "Generator did not start streaming within 10 s - capture aborted.");
             }
             if (syncPauseSec > 0) {
                 log.info("Sync pause: holding capture for {} s while generator runs (analog sync settle)", syncPauseSec);
@@ -266,7 +262,7 @@ public class CaptureWithGenerator {
         genStop.set(true);
         genThread.join(5000L);
         if (genThread.isAlive()) {
-            log.warn("Generator thread still running after 5 s — the playback device may remain busy.");
+            log.warn("Generator thread still running after 5 s - the playback device may remain busy.");
         }
 
         int actual = Math.min(writePos.get(), maxSamples);

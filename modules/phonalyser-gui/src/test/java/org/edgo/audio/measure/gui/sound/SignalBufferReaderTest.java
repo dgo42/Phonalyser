@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -114,9 +114,9 @@ class SignalBufferReaderTest {
         SignalBuffer b = bufferOfCapacity(100);
         SignalBufferReader rd = new SignalBufferReader(b);
         append(b, 0, 150);                       // writePos=150, resident [50,150)
-        rd.seek(0);                              // older than oldest → clamped to 50
+        rd.seek(0);                              // older than oldest -> clamped to 50
         assertEquals(50L, rd.getReadPos());
-        rd.seek(999);                            // past the tip → clamped to writePos
+        rd.seek(999);                            // past the tip -> clamped to writePos
         assertEquals(150L, rd.getReadPos());
     }
 

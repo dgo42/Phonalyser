@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -37,7 +37,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * {@code --deembed} — separates DAC and ADC contributions to measured harmonic
+ * {@code --deembed} - separates DAC and ADC contributions to measured harmonic
  * distortion via least-squares fit across multiple drive levels.
  *
  * <p>Takes N ≥ 2 applied_compensation CSVs (captured at distinct ADC fundamental
@@ -110,7 +110,7 @@ public class DeembedMode {
         double minL = L[0], maxL = L[0];
         for (double v : L) { if (v < minL) minL = v; if (v > maxL) maxL = v; }
         if (maxL - minL < 1e-6) {
-            log.error("All fundamental levels are identical — deembedding requires distinct levels");
+            log.error("All fundamental levels are identical - deembedding requires distinct levels");
             System.exit(1);
         }
 
@@ -131,7 +131,7 @@ public class DeembedMode {
             boolean present = true;
             for (int i = 1; i < nCsv; i++) if (!maps[i].containsKey(h)) { present = false; break; }
             if (!present) {
-                log.warn("H{} missing in at least one CSV — skipped", h);
+                log.warn("H{} missing in at least one CSV - skipped", h);
                 continue;
             }
 

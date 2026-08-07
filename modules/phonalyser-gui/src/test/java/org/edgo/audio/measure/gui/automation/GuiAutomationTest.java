@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -19,6 +19,7 @@
 package org.edgo.audio.measure.gui.automation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
@@ -45,17 +46,17 @@ import org.junit.jupiter.api.io.TempDir;
  * helpers of {@link AbstractAutomationScript}.
  *
  * <p>No audio hardware is required: without devices the engine starts
- * degrade to a logged warning and the panes render without data — the
+ * degrade to a logged warning and the panes render without data - the
  * automation machinery under test is exercised either way.  Skipped (via
  * assumption) where no SWT display can be created (headless CI).
  *
  * <p>Side effects are contained: the Preferences singleton is switched to
  * transient mode (no YAML write-back) and re-loaded from the temp dir;
  * the UI locale is restored after the run.  Note the singleton keeps the
- * test's loaded values for the remainder of the JVM — no current test
+ * test's loaded values for the remainder of the JVM - no current test
  * depends on them.
  */
-@Tag("exploratory")   // slow diagnostic harness — excluded from the normal build (see pom surefire)
+@Tag("exploratory")   // slow diagnostic harness - excluded from the normal build (see pom surefire)
 class GuiAutomationTest {
 
     private static final String[] LANGUAGES = { "en", "de" };
@@ -65,7 +66,7 @@ class GuiAutomationTest {
     private static final long   RUN_TIMEOUT_MS = 120_000;
     private static final long   POLL_MS        = 10;
     private static final byte[] PNG_SIGNATURE  = { (byte) 0x89, 'P', 'N', 'G' };
-    /** A blank 640×480 pane still compresses to a few KB — anything below
+    /** A blank 640×480 pane still compresses to a few KB - anything below
      *  this is a truncated / failed write. */
     private static final int    MIN_PNG_BYTES  = 500;
     private static final int    SNAPSHOT_WIDTH_PX  = 640;
@@ -73,7 +74,7 @@ class GuiAutomationTest {
     /** Marker value proving the custom YAML (not the defaults) is live. */
     private static final double CUSTOM_GEN_FREQ_HZ = 1234.5;
 
-    /** Snapshot output root, handed to the script class — the runner
+    /** Snapshot output root, handed to the script class - the runner
      *  instantiates it reflectively, so a static field is the channel. */
     static volatile Path outDir;
 
@@ -101,7 +102,7 @@ class GuiAutomationTest {
             // Mirror GuiMain's launch sequence: locale + active backend
             // from the (custom) prefs, then window + automation runner.
             I18n.setLocale(Locale.forLanguageTag(prefs.getUiLanguage()));
-            AudioBackend.instance().setActive(prefs.getBackend());
+            AudioBackend.instance().setActive(prefs.getSelectedBackend());
 
             try {
                 display = new Display();
@@ -115,7 +116,7 @@ class GuiAutomationTest {
             new AutomationRunner(display, window, CapturePanesScript.class.getName()).start();
 
             // Pump the SWT event loop (the test thread IS the UI thread)
-            // until the runner closes the window — or the timeout trips.
+            // until the runner closes the window - or the timeout trips.
             long deadline = System.currentTimeMillis() + RUN_TIMEOUT_MS;
             while (!window.isDisposed() && System.currentTimeMillis() < deadline) {
                 if (!display.readAndDispatch()) {
@@ -141,6 +142,90 @@ class GuiAutomationTest {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // The verdict path: a scripted run must be able to FAIL.  GuiMain turns
+    // AutomationRunner.hasFailed() into the process exit code, which is what
+    // an integration test asserts on; here the runner's own verdict is checked
+    // in-process, both ways round.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void throwingScriptMarksTheRunFailed() throws Exception {
+        AutomationRunner runner = runToCompletion(ThrowingScript.class);
+        assertTrue(runner.hasFailed(),
+                "a script that throws must mark the run failed");
+    }
+
+    @Test
+    void completingScriptLeavesTheRunGreen() throws Exception {
+        AutomationRunner runner = runToCompletion(NoopScript.class);
+        assertFalse(runner.hasFailed(),
+                "a script that returns normally must leave the run green");
+    }
+
+    /** Opens a real window, runs {@code scriptClass} through the production
+     *  {@link AutomationRunner} path while this thread pumps the event loop,
+     *  and returns the runner once it closed the window. */
+    private AutomationRunner runToCompletion(Class<? extends AbstractAutomationScript> scriptClass)
+            throws Exception {
+        // MUST come first: opening and closing a real MainWindow fires MainTab's
+        // dispose listener, which calls prefs.save().  Under Surefire that would
+        // land in target/, but an IDE run resolves the REAL user data dir and
+        // would rewrite the developer's own preferences.yaml.
+        Preferences.instance().setTransientMode(true);
+        Display display = null;
+        try {
+            try {
+                display = new Display();
+            } catch (SWTError | UnsatisfiedLinkError e) {
+                Assumptions.assumeTrue(false, "SWT display unavailable: " + e.getMessage());
+            }
+            MainWindow window = new MainWindow(display);
+            window.open();
+
+            AutomationRunner runner = new AutomationRunner(display, window, scriptClass.getName());
+            runner.start();
+
+            long deadline = System.currentTimeMillis() + RUN_TIMEOUT_MS;
+            while (!window.isDisposed() && System.currentTimeMillis() < deadline) {
+                if (!display.readAndDispatch()) {
+                    Thread.sleep(POLL_MS);
+                }
+            }
+            assertTrue(window.isDisposed(),
+                    "runner should close the window whether the script threw or not");
+            return runner;
+        } finally {
+            if (display != null && !display.isDisposed()) display.dispose();
+        }
+    }
+
+    /** Aborts immediately - the failing half of the verdict check. */
+    public static final class ThrowingScript extends AbstractAutomationScript {
+
+        public ThrowingScript(Display display, MainWindow window) {
+            super(display, window);
+        }
+
+        @Override
+        protected void run() {
+            throw new IllegalStateException("deliberate automation failure");
+        }
+    }
+
+    /** Returns at once with nothing to complain about - the green half. */
+    public static final class NoopScript extends AbstractAutomationScript {
+
+        public NoopScript(Display display, MainWindow window) {
+            super(display, window);
+        }
+
+        @Override
+        protected void run() throws Exception {
+            waitSeconds(0);
+        }
+    }
+
     /** Asserts {@code file} exists, is plausibly sized and carries the PNG
      *  magic bytes. */
     private void assertPng(Path file) throws Exception {
@@ -154,7 +239,7 @@ class GuiAutomationTest {
     }
 
     /**
-     * The script under test — launched reflectively by
+     * The script under test - launched reflectively by
      * {@link AutomationRunner} exactly like a production
      * {@code --automation=} run: start all three engines (tolerating
      * absent audio hardware), settle briefly, then snapshot every pane in

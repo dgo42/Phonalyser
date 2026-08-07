@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Pins {@link FftAnalyzer#selectKth} against a full sort — the selection
+ * Pins {@link FftAnalyzer#selectKth} against a full sort - the selection
  * feeds the SNR / THD+N noise-floor median and 10th percentile, so a subtle
  * partition bug would silently skew every published noise figure.
  */
@@ -59,7 +59,7 @@ class SelectKthTest {
         FftAnalyzer analyzer = new FftAnalyzer();
         // Single element.
         assertEquals(7.0, analyzer.selectKth(new double[]{ 7.0 }, 1, 0));
-        // All equal — every rank must return the constant.
+        // All equal - every rank must return the constant.
         double[] flat = new double[64];
         Arrays.fill(flat, 3.25);
         assertEquals(3.25, analyzer.selectKth(flat.clone(), flat.length, 0));

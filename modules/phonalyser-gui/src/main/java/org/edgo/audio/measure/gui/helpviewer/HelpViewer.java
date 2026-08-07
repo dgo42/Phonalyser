@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -50,20 +50,20 @@ import java.util.Locale;
 /**
  * Modeless help window: a single SWT {@link Browser} hosted in its own
  * shell, fed with the HTML at {@code help/<lang>/index.html}.  Only one
- * instance is open at a time — a second {@link #show} call brings the
+ * instance is open at a time - a second {@link #show} call brings the
  * existing window to the front (and navigates to a different page when
  * a hint is supplied via {@link #showForActiveItem}).
  *
  * <p>Help-bundle location, in priority order (mirrors {@link I18n}):
  * <ol>
- *   <li>{@code -Dhelp.dir=<path>} system property — set by jpackage to
+ *   <li>{@code -Dhelp.dir=<path>} system property - set by jpackage to
  *       {@code $APPDIR/help}; lets the user edit / translate pages
  *       in-place without rebuilding.</li>
  *   <li>{@code help/} folder next to the running JAR (or class files
  *       in dev mode).</li>
  *   <li>The per-user staged copy ({@code <dataDir>/help}): on the
  *       bare-JAR route the bundle packed inside the fat JAR is
- *       extracted here at startup, once per app version — see
+ *       extracted here at startup, once per app version - see
  *       {@link #stageBundledHelp()}.</li>
  *   <li>Classpath fallback: when none of the above exists, the
  *       bundled resources at {@code /help/<lang>/...} are extracted
@@ -81,7 +81,7 @@ public final class HelpViewer {
      *  per-language bundles. */
     private static final String FALLBACK_LANG = "en";
 
-    /** Browser style requesting the Edge (WebView2) engine — the value of
+    /** Browser style requesting the Edge (WebView2) engine - the value of
      *  {@code SWT.EDGE}, inlined because the legacy 32-bit build (Maven profile
      *  {@code windows-x86}) compiles against SWT 3.108, which predates the
      *  constant.  On engines without Edge support the unknown style bit is
@@ -96,7 +96,7 @@ public final class HelpViewer {
      *  horizontal tilt-wheel to history navigation.
      *  <ul>
      *    <li>Thumb buttons are hooked only on non-Chromium engines (the IE
-     *        fallback) — WebView2 navigates on them natively, and a JS hook
+     *        fallback) - WebView2 navigates on them natively, and a JS hook
      *        there would double-navigate.  Pointer events are preferred over
      *        mouse events because the IE engine delivers X-buttons more
      *        reliably through them.</li>
@@ -137,8 +137,8 @@ public final class HelpViewer {
     /** Injected into every loaded page: when the URL carries a
      *  {@code ?hl=<space-separated terms>} query (added by the search page to
      *  its result links), wraps every occurrence of those terms in
-     *  {@code <mark>} and — when there is no {@code #anchor} steering the
-     *  scroll — brings the first match into view.  Guarded per location so an
+     *  {@code <mark>} and - when there is no {@code #anchor} steering the
+     *  scroll - brings the first match into view.  Guarded per location so an
      *  in-page anchor jump doesn't double-wrap.  ES5 / IE11-safe (4-arg
      *  {@code createTreeWalker}, no arrow functions). */
     private static final String HIGHLIGHT_SCRIPT = """
@@ -194,6 +194,7 @@ public final class HelpViewer {
             "tune-notch.html",
             "dac-predistortion.html",
             "preferences.html",
+            "server.html",
             "bench.html",
             "theory/index.html",
             "theory/audio-backend.html",
@@ -247,9 +248,13 @@ public final class HelpViewer {
             "img/tune-notch.png",
             "img/Preferences Look and Feel.png",
             "img/Preferences Audio.png",
+            "img/Preferences Audio QA40x.png",
+            "img/QA40x settings.png",
+            "img/Phonalyser servers.png",
             "img/Preferences Oscilloscope.png",
             "img/Preferences FFT.png",
             "img/Preferences Frequency response.png",
+            "img/scope-histogram.png",
             "img/multifunctional.png",
             "img/generator-pane.png",
             "img/oscilloscope-pane.png",
@@ -264,12 +269,12 @@ public final class HelpViewer {
 
     private static volatile HelpViewer instance;
 
-    /** Single live instance — second invocations re-focus rather than
+    /** Single live instance - second invocations re-focus rather than
      *  open a duplicate window. */
     private Shell openShell;
     /** Cached language-specific help root (i.e. the directory holding
      *  the index.html / chapter files for the active language).
-     *  Re-resolved when the UI language changes — see {@link #resolveLangRoot}. */
+     *  Re-resolved when the UI language changes - see {@link #resolveLangRoot}. */
     private volatile Path langRoot;
     /** The requested UI language {@link #langRoot} was resolved for.  When the
      *  user switches UI language the cached root is stale, so a reopen must
@@ -361,7 +366,7 @@ public final class HelpViewer {
         s.setSize(900, 700);
         // Open docked to the right of the main window, visible frames flush.
         // getBounds() is the OS window rect, which on Windows 10/11 includes an
-        // invisible resize border (~7 px) beyond the painted edge — so a raw
+        // invisible resize border (~7 px) beyond the painted edge - so a raw
         // main.x+main.width would leave that border (plus the help window's own
         // left border) as a visible gap.  toDisplay(0,0).x - bounds.x is the
         // left inset = invisible resize border + the ~1 px visible frame.  We
@@ -410,13 +415,13 @@ public final class HelpViewer {
     /** Reloads the open help window in the current UI language.  A live language
      *  switch rebuilds the main window but not this separate Shell, so
      *  {@code MainWindow.rebuildContent} calls this to carry the help window
-     *  along — no reopen needed.  No-op when help is closed or the language is
+     *  along - no reopen needed.  No-op when help is closed or the language is
      *  unchanged. */
     public void refreshLanguage() {
         if (openShell == null || openShell.isDisposed()) return;
         String[] langs = resolveLanguageChain();
         String want = langs.length > 0 ? langs[0] : FALLBACK_LANG;
-        if (want.equals(langRootLang)) return;   // language unchanged — nothing to do
+        if (want.equals(langRootLang)) return;   // language unchanged - nothing to do
         Browser b = findBrowser(openShell);
         if (b == null) return;
         String rel = relativeToRoot(b.getUrl());   // page + anchor, against the OLD root
@@ -440,7 +445,7 @@ public final class HelpViewer {
         int hash = url.indexOf('#');
         if (hash >= 0) { frag = url.substring(hash); url = url.substring(0, hash); }
         int q = url.indexOf('?');
-        if (q >= 0) url = url.substring(0, q);   // drop a ?hl=… search-highlight query
+        if (q >= 0) url = url.substring(0, q);   // drop a ?hl=... search-highlight query
         try {
             Path cur = Paths.get(URI.create(url));
             return langRoot.relativize(cur).toString().replace('\\', '/') + frag;
@@ -458,7 +463,7 @@ public final class HelpViewer {
         try {
             return new Browser(s, BROWSER_STYLE_EDGE);
         } catch (SWTError edgeUnavailable) {
-            log.info("Help: WebView2 unavailable ({}) — using the platform default browser",
+            log.info("Help: WebView2 unavailable ({}) - using the platform default browser",
                     edgeUnavailable.getMessage());
             return new Browser(s, SWT.NONE);
         }
@@ -503,7 +508,7 @@ public final class HelpViewer {
                 }
             }
         }
-        // Classpath fallback (dev mode) — extract to temp dir.
+        // Classpath fallback (dev mode) - extract to temp dir.
         Path tmpLang = extractFromClasspath(langs);
         if (tmpLang != null) langRoot = tmpLang;
         return langRoot;
@@ -532,7 +537,7 @@ public final class HelpViewer {
 
     /**
      * Stages the help bundled inside the fat platform JAR into the per-user
-     * help directory ({@code <dataDir>/help}), once per app version — the
+     * help directory ({@code <dataDir>/help}), once per app version - the
      * bare-JAR install path, called at startup from {@code GuiMain}.
      *
      * <p>No-op whenever an external help source exists: the installer's
@@ -544,7 +549,7 @@ public final class HelpViewer {
      * <p>On a version change the bundle files are re-extracted over the old
      * copy (stale help is worse than lost edits of the staged copy); files
      * the user added are left alone.  Translators whose edits must survive
-     * upgrades use a {@code help/} folder next to the JAR instead — it wins
+     * upgrades use a {@code help/} folder next to the JAR instead - it wins
      * the search and is never touched.
      */
     public void stageBundledHelp() {
@@ -569,8 +574,8 @@ public final class HelpViewer {
         return null;
     }
 
-    /** The {@code help/} folder that sits next to the running app / JAR — the
-     *  OS-specific install location help is looked for in — whether or not it
+    /** The {@code help/} folder that sits next to the running app / JAR - the
+     *  OS-specific install location help is looked for in - whether or not it
      *  currently exists.  {@code null} when the code source is unknown. */
     private Path appAdjacentHelpDir() {
         try {
@@ -585,8 +590,8 @@ public final class HelpViewer {
     }
 
     /** "Help not found" dialog text: the translated message followed by the
-     *  ACTUAL locations help was searched in.  Those differ per OS — the
-     *  install dir next to the app, the per-user data folder — so they are
+     *  ACTUAL locations help was searched in.  Those differ per OS - the
+     *  install dir next to the app, the per-user data folder - so they are
      *  listed at runtime rather than baked into the message. */
     private String notFoundMessage() {
         return I18n.t("help.window.notFound") + "\n\n" + searchedHelpLocations();
@@ -649,7 +654,7 @@ public final class HelpViewer {
     }
 
     /** Returns the language-fallback chain for the active UI language:
-     *  full BCP-47 tag → primary subtag → {@value #FALLBACK_LANG}. */
+     *  full BCP-47 tag -> primary subtag -> {@value #FALLBACK_LANG}. */
     private String[] resolveLanguageChain() {
         String lang = Preferences.instance().getUiLanguage();
         if (lang == null || lang.isEmpty()) lang = FALLBACK_LANG;

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -55,7 +55,7 @@ class FilterDesignTest {
         // Maximally flat: essentially 0 dB well inside the passband.
         assertEquals(0.0, f2.evalDb(FC / 100.0), 1e-3, "flat passband");
 
-        // Asymptotic roll-off is −20·n dB/decade: one decade above Fc → −40 dB for n = 2.
+        // Asymptotic roll-off is −20·n dB/decade: one decade above Fc -> −40 dB for n = 2.
         assertEquals(-40.0, f2.evalDb(FC * 10.0), 0.01, "−20·n dB/decade slope (n=2)");
 
         FilterDesign f4 = FilterDesign.ofOrder(FilterType.LOW_PASS, FilterResponse.BUTTERWORTH, 4, 0.0, FC, 1.0);
@@ -67,12 +67,12 @@ class FilterDesignTest {
         FilterDesign hp = FilterDesign.ofOrder(FilterType.HIGH_PASS, FilterResponse.BUTTERWORTH, 3, 0.0, FC, 1.0);
         assertEquals(HALF_POWER_DB, hp.evalDb(FC), 1e-9, "HP is −3.0103 dB at Fc");
         assertEquals(0.0, hp.evalDb(FC * 100.0), 1e-3, "HP flat well above Fc");
-        // One decade below Fc → −20·n dB (n = 3).
+        // One decade below Fc -> −20·n dB (n = 3).
         assertEquals(-60.0, hp.evalDb(FC / 10.0), 0.01, "HP −20·n dB/decade below Fc");
     }
 
     // ---------------------------------------------------------------------
-    //  Chebyshev I — passband ripple amplitude
+    //  Chebyshev I - passband ripple amplitude
     // ---------------------------------------------------------------------
 
     @Test
@@ -103,7 +103,7 @@ class FilterDesignTest {
     }
 
     // ---------------------------------------------------------------------
-    //  Inverse Chebyshev — stopband floor == −stopAtten
+    //  Inverse Chebyshev - stopband floor == −stopAtten
     // ---------------------------------------------------------------------
 
     @Test
@@ -113,7 +113,7 @@ class FilterDesignTest {
                 1.0, stopDb, 0.0, FC, 2.0 * FC);
         // Flat, monotone passband anchored at 0 dB at DC.
         assertEquals(0.0, f.evalDb(FC / 100.0), 1e-3, "flat passband at 0 dB");
-        // The passband must stay flat (≈0 dB) up to well inside the passband —
+        // The passband must stay flat (≈0 dB) up to well inside the passband -
         // the prototype's stopband reference edge (w = 1) must sit at the
         // requested stop edge Fs, not compressed down onto Fc.  The wrong
         // frequency scale would land the −A floor at Fc, so this same 0.8·Fc
@@ -133,7 +133,7 @@ class FilterDesignTest {
     }
 
     // ---------------------------------------------------------------------
-    //  Elliptic — verified against published reference attenuations
+    //  Elliptic - verified against published reference attenuations
     // ---------------------------------------------------------------------
 
     /**
@@ -142,13 +142,13 @@ class FilterDesignTest {
      * with the discrimination factor L<sub>n</sub> = R<sub>n</sub>(ξ, ξ) = 1/k1,
      * where k1 is the image modulus of k = 1/ξ under the degree equation
      * (q1 = q(k)^n).  See Orfanidis, "Lecture Notes on Elliptic Filter Design"
-     * (Rutgers, 2006), eqs. (5)–(20).  For a 1 dB passband ripple and selectivity
+     * (Rutgers, 2006), eqs. (5)-(20).  For a 1 dB passband ripple and selectivity
      * ξ = 1.5 this formula gives the reference values below (also reproducible in
      * MATLAB/Octave via {@code ellipord}/{@code ellipap}):
      * <pre>
-     *   n = 3 → 25.176 dB
-     *   n = 4 → 39.518 dB
-     *   n = 5 → 53.875 dB
+     *   n = 3 -> 25.176 dB
+     *   n = 4 -> 39.518 dB
+     *   n = 5 -> 53.875 dB
      * </pre>
      * We drive the design through {@link FilterDesign#ofSpec} (which meets a
      * requested stop attenuation at the stop edge) at the matching ξ = Fs/Fc and
@@ -168,7 +168,7 @@ class FilterDesignTest {
             double expectedAs = ref[1];
             // Ask for slightly less than the reference so ofSpec resolves to this
             // exact order, then read the attenuation the realised design gives at
-            // the stop edge Fs — it must equal the published value.
+            // the stop edge Fs - it must equal the published value.
             FilterDesign f = FilterDesign.ofSpec(FilterType.LOW_PASS, FilterResponse.ELLIPTIC,
                     rippleDb, expectedAs - 1.0, 0.0, FC, fs);
             assertEquals(n, f.getOrder(), "elliptic ofSpec resolves to order " + n);
@@ -196,7 +196,7 @@ class FilterDesignTest {
     }
 
     // ---------------------------------------------------------------------
-    //  Bessel — monotonic, 0 dB at DC, −3 dB at Fc
+    //  Bessel - monotonic, 0 dB at DC, −3 dB at Fc
     // ---------------------------------------------------------------------
 
     @Test
@@ -214,7 +214,7 @@ class FilterDesignTest {
     }
 
     // ---------------------------------------------------------------------
-    //  Band-pass / notch — geometric symmetry + notch depth
+    //  Band-pass / notch - geometric symmetry + notch depth
     // ---------------------------------------------------------------------
 
     @Test
@@ -244,7 +244,7 @@ class FilterDesignTest {
     @Test
     void notch_mode1_meetsStopAttenAcrossStopband_andPassesAtPassbandEdge() {
         // NOTCH by specification: PB is the OUTER (wide) passband-return band,
-        // SB the INNER (narrow) deep-rejection band ⇒ PB > SB.  The design must
+        // SB the INNER (narrow) deep-rejection band => PB > SB.  The design must
         // reach the requested attenuation across the whole SB (its edges), and
         // return to the passband (~−3 dB) at the PB edges.  Verified against
         // scipy's analog band-stop Butterworth (buttord/butter).
@@ -269,7 +269,7 @@ class FilterDesignTest {
     }
 
     // ---------------------------------------------------------------------
-    //  Anchor corners — the view aligns the overlay to the measured trace here
+    //  Anchor corners - the view aligns the overlay to the measured trace here
     // ---------------------------------------------------------------------
 
     @Test
@@ -298,8 +298,8 @@ class FilterDesignTest {
         // NOTCH corners are the passband SHOULDERS: the geometric edges of the
         // outer passband-return band of arithmetic width B (= passHz Mode 1 /
         // fc/Q Mode 2).  They are log-symmetric about fc (product == fc²) and the
-        // ideal notch evaluates to the ≈−3 dB skirt there — NOT the deep null and
-        // NOT the flat plateau — so anchoring puts the ideal plateau on the
+        // ideal notch evaluates to the ≈−3 dB skirt there - NOT the deep null and
+        // NOT the flat plateau - so anchoring puts the ideal plateau on the
         // measured plateau and the clamped floor sits A below it.
         double q = 2.0;
         FilterDesign nt = FilterDesign.ofOrder(FilterType.NOTCH, FilterResponse.BUTTERWORTH, 4, 0.0, FC, q);
@@ -342,18 +342,18 @@ class FilterDesignTest {
 
     // ---------------------------------------------------------------------
     //  Regression: ofSpec with the PINNED PER-TYPE DEFAULTS draws a real curve
-    //  for every type × every closed-form family (issues 7/8/9).
+    //  for every type × every closed-form family.
     // ---------------------------------------------------------------------
 
     /**
-     * The bench bug was "By-spec HP and Notch draw NO curve at all": the shared
+     * By-spec HP and Notch used to draw no curve at all: the shared
      * LP-style defaults (pass &lt; stop) violate the HP edge rule (stop &lt; pass)
      * and the Notch edge rule (SB &lt; PB), so {@link FilterDesign#ofSpec} threw
      * and the view drew nothing.  The DSP fix is that each type validates and
      * designs against ITS OWN edge ordering; this test pins that by driving
      * {@code ofSpec} with the per-type defaults that are valid for each type and
      * asserting a finite, correctly-shaped curve for every closed-form family
-     * (Bessel excluded — it has no ripple/closed-form order and is covered by
+     * (Bessel excluded - it has no ripple/closed-form order and is covered by
      * {@link #ofSpec_meetsStopAttenAtStopEdge_forAllFamilies()}).
      *
      * <p>Per-type edge semantics (all give a prototype stop ratio ws &gt; 1):
@@ -370,7 +370,7 @@ class FilterDesignTest {
                 FilterResponse.BUTTERWORTH, FilterResponse.CHEBYSHEV,
                 FilterResponse.INV_CHEBYSHEV, FilterResponse.ELLIPTIC,
         };
-        // PINNED PER-TYPE DEFAULTS (center, pass, stop) — the actual by-spec
+        // PINNED PER-TYPE DEFAULTS (center, pass, stop) - the actual by-spec
         // seeds from FreqRespFilterTypeParams.fromType, valid for each type's
         // edge semantics (4:1 transition).  center is ignored for LP/HP.
         Object[][] pinned = {
@@ -394,8 +394,8 @@ class FilterDesignTest {
 
                 // Deep in the passband the curve is finite and within the ripple
                 // band [−ripple, 0] (equiripple families dip to −ripple; monotone
-                // families sit at 0).  This is the "there IS a curve, at ~0 dB"
-                // regression and the issue-7/8 alignment level.
+                // families sit at 0).  This is the curve-exists-at-~0-dB
+                // regression and the passband alignment level.
                 for (double freq : passbandDeep) {
                     double db = f.evalDb(freq);
                     assertTrue(Double.isFinite(db), type + "/" + response
@@ -415,12 +415,12 @@ class FilterDesignTest {
     }
 
     /**
-     * Finding-E matrix: every {@link FilterType} × every {@link FilterResponse}
+     * Design matrix: every {@link FilterType} × every {@link FilterResponse}
      * × BOTH design modes (by-spec {@code ofSpec} and by-order {@code ofOrder})
      * seeded from the shipped per-type {@link FreqRespFilterTypeParams#fromType}
      * defaults must build without throwing, land a finite passband at ≈0 dB
      * (within the family's ripple band), and resolve to a sensible sub-cap order
-     * — {@code MIN_ORDER ≤ order < MAX_ORDER}, i.e. NO combo may fall back to the
+     * - {@code MIN_ORDER ≤ order < MAX_ORDER}, i.e. NO combo may fall back to the
      * {@link FilterMath#MAX_ORDER} cap.  Bessel is the load-bearing case: at a
      * 2:1 transition its gentle roll-off never reaches the 40 dB stop spec at any
      * order and {@code ofSpec} pins it to the cap, so the defaults use a 4:1
@@ -432,8 +432,8 @@ class FilterDesignTest {
         for (FilterType type : FilterType.values()) {
             FreqRespFilterTypeParams d = FreqRespFilterTypeParams.fromType(type);
             // Deep-passband probes per type (LP well below Fc, HP well above,
-            // BP at f0, Notch far on both sides) — the "there IS a curve at
-            // ≈0 dB" check.  By-order uses the order-mode pass/center scalar.
+            // BP at f0, Notch far on both sides) - the curve-exists-at-≈0-dB
+            // check.  By-order uses the order-mode pass/center scalar.
             double specCenter = d.getCenterHz();
             for (FilterResponse response : FilterResponse.values()) {
                 boolean rippled = response.hasRipple();
@@ -473,9 +473,9 @@ class FilterDesignTest {
     }
 
     /**
-     * Issue 7/8 (HP half): the high-pass passband is ABOVE the pass edge and must
+     * The high-pass passband is ABOVE the pass edge and must
      * align to 0 dB / the measured level when no measurement exists.  Ten times
-     * the pass edge is deep passband — every family must be finite there and
+     * the pass edge is deep passband - every family must be finite there and
      * within the ripple band; the far-passband reference the view divides out
      * ({@code evalDb(1000)} at the pass edge itself) must also be finite.
      */
@@ -498,7 +498,7 @@ class FilterDesignTest {
     }
 
     /**
-     * Issue 7/8 (Notch half): the notch's out-of-band passband must sit at 0 dB /
+     * The notch's out-of-band passband must sit at 0 dB /
      * the measured level.  Far below and far above the stop region every family
      * must be finite and within the ripple band.
      */
@@ -537,7 +537,7 @@ class FilterDesignTest {
     /** Stop-edge frequencies where the design must reach the requested
      *  attenuation.  LP/HP: the raw stop frequency.  BP/Notch: the two geometric
      *  edges of the stop band, whose arithmetic width B under the standard
-     *  LP→BP transform is the stop width SB (BP: SB = stopHz; Notch: SB = stopHz). */
+     *  LP->BP transform is the stop width SB (BP: SB = stopHz; Notch: SB = stopHz). */
     private double[] stopEdgeHz(FilterType type, double center, double pass, double stop) {
         switch (type) {
             case LOW_PASS:
@@ -563,7 +563,7 @@ class FilterDesignTest {
     }
 
     // ---------------------------------------------------------------------
-    //  Alignment sanity — the view uses evalDb(f) − evalDb(1000)
+    //  Alignment sanity - the view uses evalDb(f) − evalDb(1000)
     // ---------------------------------------------------------------------
 
     @Test

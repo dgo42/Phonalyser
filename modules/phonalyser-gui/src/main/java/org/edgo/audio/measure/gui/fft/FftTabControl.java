@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -49,7 +49,6 @@ import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.MainsSuppression;
@@ -65,12 +64,12 @@ import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.sound.CalibrationStore;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.NumericStepModel;
 import org.edgo.audio.measure.gui.widgets.PresetBar;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
-import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FftPreset;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -88,10 +87,10 @@ import lombok.extern.log4j.Log4j2;
  * routed through {@link MessageBus} so this control needs no back-reference to
  * the pane:
  * <ul>
- *   <li>{@link Events#FFT_SCREENSHOT_REQUESTED} — the Utility tab's camera
+ *   <li>{@link Events#FFT_SCREENSHOT_REQUESTED} - the Utility tab's camera
  *       button; the pane owns the screenshot dialog (it clones itself
  *       offscreen) and subscribes.</li>
- *   <li>{@link Events#FFT_RECORDING_STOP_REQUESTED} — loading a spectrum file
+ *   <li>{@link Events#FFT_RECORDING_STOP_REQUESTED} - loading a spectrum file
  *       must stop live recording so the static trace isn't overwritten; the
  *       pane owns the Record button and subscribes.</li>
  * </ul>
@@ -110,11 +109,11 @@ public final class FftTabControl extends AbstractTabControl {
     };
     /** Heaps below this are 32-bit-class: combo entries above
      *  {@link #SMALL_HEAP_MAX_FFT_LENGTH} are not offered.  1.5 GiB sits
-     *  between the 32-bit ceiling (~1.2–1.4 GB usable) and any serious
+     *  between the 32-bit ceiling (~1.2-1.4 GB usable) and any serious
      *  64-bit {@code -Xmx}. */
     private static final long SMALL_HEAP_BYTES = 1_610_612_736L;
     /** Largest FFT length offered on a small heap: the 4M analysis working
-     *  set (analyzer scratch, result slots, frame cache, window buffers —
+     *  set (analyzer scratch, result slots, frame cache, window buffers -
      *  ~1.3 GB at high rates) cannot fit a 32-bit JVM, while 2M (~600 MB)
      *  does. */
     private static final int SMALL_HEAP_MAX_FFT_LENGTH = 2_097_152;
@@ -137,24 +136,24 @@ public final class FftTabControl extends AbstractTabControl {
      *  and parses as the shared Off label. */
     private static final double AVERAGES_OFF          = 0;
     /** Averages presets the field's wheel / arrows jump along, from Off up
-     *  (Off ↔ 1 ↔ 2 ↔ …); ∞ = forever. */
+     *  (Off ↔ 1 ↔ 2 ↔ ...); ∞ = forever. */
     private static final double[] AVERAGES_SERIES =
             { AVERAGES_OFF, 1, 2, 4, 8, 16, 32, 64, 128, Double.POSITIVE_INFINITY };
     /** Stop-after-N bounds and wheel step (arrows step by 1). */
     private static final double STOP_AFTER_MIN        = 2;
     private static final double STOP_AFTER_MAX        = 1_000_000;
     private static final double STOP_AFTER_WHEEL_STEP = 100;
-    /** Manual-fundamental ceiling (Vrms): declared external levels — e.g. a
-     *  power amplifier measured through a divider — can far exceed the DAC
+    /** Manual-fundamental ceiling (Vrms): declared external levels - e.g. a
+     *  power amplifier measured through a divider - can far exceed the DAC
      *  full-scale. */
     private static final double MANUAL_FUND_MAX_VRMS  = 200.0;
-    /** Amplitude floor (Vrms) — keeps log-unit (dBV) entry finite. */
+    /** Amplitude floor (Vrms) - keeps log-unit (dBV) entry finite. */
     private static final double AMP_MIN_VRMS          = 1e-9;
     /** Representative measured amplitude (Vrms) prefilled into the analyzed-channel
      *  row when the ADC calibration dialog is opened for a help screenshot, so the
      *  two-row form renders fully without a live measurement. */
     private static final double CAPTURE_ADC_VRMS      = 1.0;
-    /** Harmonic-count bounds: THD measures H2…H9; the calc ceiling feeds the
+    /** Harmonic-count bounds: THD measures H2...H9; the calc ceiling feeds the
      *  compensation workflows. */
     private static final double THD_HARM_MIN  = 2;
     private static final double THD_HARM_MAX  = 9;
@@ -179,7 +178,7 @@ public final class FftTabControl extends AbstractTabControl {
     // collapse, hover tooltips and tile painting; this control only feeds it
     // tile content (see fftTabTiles).
 
-    // Widget references for preset apply/refresh — captured at build time.
+    // Widget references for preset apply/refresh - captured at build time.
     private Combo              fftLengthCombo;
     private Combo              windowCombo;
     private Combo              overlapCombo;
@@ -191,12 +190,12 @@ public final class FftTabControl extends AbstractTabControl {
     private Button             logFreqCheck;
     private Button             detectTimeDiscCheck;
     private Button             coherentCheck;
-    /** "Align generator" — None / PID / FLL — selects the FFT-side
+    /** "Align generator" - None / PID / FLL - selects the FFT-side
      *  frequency-alignment loop.  Enabled in the UI only when both
      *  snap-to-FFT-bin and fund-from-generator are on, since the loop
      *  needs a target bin (snap) and a target frequency (fund-from-gen)
      *  to lock onto.  Even when a mode is selected the loop only fires if
-     *  the other two are also on — see {@code FftView.applyFrequencyLockLoop}. */
+     *  the other two are also on - see {@code FftView.applyFrequencyLockLoop}. */
     private Combo              alignGenCombo;
     private Button             distMinEnable;
     private NumericStepField   distMinField;
@@ -207,11 +206,6 @@ public final class FftTabControl extends AbstractTabControl {
     private Button             manualFundEnable;
     private NumericStepField   manualFundField;
 
-    /** Subscriber for {@link Events#GENERATOR_SIGNAL_CHANGED} — used
-     *  only to refresh {@link #alignGenCombo}'s enabled state when the
-     *  user toggles snap-to-FFT-bin on the generator pane (snap-to-bin
-     *  is the missing prerequisite the user needs to satisfy here). */
-    private Consumer<GenChangeCause> genChangeListener;
     private Consumer<String>         calFileSavedListener;
 
     private Composite             fftCalRowsContainer;
@@ -219,7 +213,7 @@ public final class FftTabControl extends AbstractTabControl {
     private final List<FftCalRow> fftCalRows = new ArrayList<>();
 
     /** The combo's offered subset of {@link #FFT_LENGTH_VALUES} /
-     *  {@link #FFT_LENGTH_LABELS} — truncated at
+     *  {@link #FFT_LENGTH_LABELS} - truncated at
      *  {@link #SMALL_HEAP_MAX_FFT_LENGTH} on a small heap, the full list
      *  otherwise. */
     private final int[]    offeredFftLengths;
@@ -281,9 +275,14 @@ public final class FftTabControl extends AbstractTabControl {
 
         // Snap-to-FFT-bin lives on the generator pane and is the missing
         // prerequisite for "Align generator"; refresh the combo's enabled
-        // state whenever the generator signal changes.
-        genChangeListener = cause -> updateAlignGenEnabled();
-        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
+        // state whenever the generator signal changes.  The bus is UI-only -
+        // every publisher of this event is on the display thread - so a plain
+        // subscription is correct; unsubscribed on dispose below.
+        Consumer<GenChangeCause> genChangedListener = cause -> {
+            if (isDisposed()) return;
+            updateAlignGenEnabled();
+        };
+        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangedListener);
         // Audio-format edits (Preferences OK, UI thread) move the Nyquist
         // ceiling of the distortion band-edge fields.
         Consumer<Void> audioFormatListener = ignored -> {
@@ -298,14 +297,14 @@ public final class FftTabControl extends AbstractTabControl {
         calFileSavedListener = path -> onCalibrationFileSaved(path);
         MessageBus.instance().subscribe(Events.CALIBRATION_FILE_SAVED, calFileSavedListener);
         addDisposeListener(e -> {
-            MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
+            MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangedListener);
             MessageBus.instance().unsubscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
             MessageBus.instance().unsubscribe(Events.CALIBRATION_FILE_SAVED, calFileSavedListener);
         });
 
         wireHelpAnchors();
 
-        // Push the initially-loaded active rows into the store last — the view
+        // Push the initially-loaded active rows into the store last - the view
         // (built before this control) already holds the same store instance, so
         // the change events this fires find it ready.
         syncFftStoreFromRows();
@@ -317,8 +316,8 @@ public final class FftTabControl extends AbstractTabControl {
 
     /** Registers each settings tab in the component registry under
      *  {@code prefix} (e.g. {@code "multifunctional/fft/tabs"}) so automation
-     *  can select a tab by path — {@code activate} expands the tab body and
-     *  selects that tab — then screenshot this tab control showing it.  Slugs
+     *  can select a tab by path - {@code activate} expands the tab body and
+     *  selects that tab - then screenshot this tab control showing it.  Slugs
      *  are language-independent; tabs not built (Save / Load without live
      *  capture) are skipped. */
     public void registerTabs(String prefix) {
@@ -359,7 +358,7 @@ public final class FftTabControl extends AbstractTabControl {
 
     /** Enables / disables the "Stop after N" checkbox + numeric field
      *  based on the current averages setting.  Stop-after only makes
-     *  sense when averages is set to "forever" — a finite N already
+     *  sense when averages is set to "forever" - a finite N already
      *  implements a moving window so the analysis is continuous and
      *  "stop after K" can't add anything meaningful. */
     private void refreshStopAfterEnable() {
@@ -396,12 +395,12 @@ public final class FftTabControl extends AbstractTabControl {
         // from the pref, write the pref on input, re-select on an external change
         // (preset load).  Default index 3 (64k) when the saved length is unknown.
         bindFftLengthCombo(prefs.fftLengthProperty());
-        // Pane-local effect — refresh the FFT-settings tab tile.  The view's own
+        // Pane-local effect - refresh the FFT-settings tab tile.  The view's own
         // resetStatistics is driven by the view subscribing to the same pref.
         Bindings.onChange(toolbarTabs, prefs.fftLengthProperty(),
                 v -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
         // Generator's bin snap is anchored to fftLength via sampleRate /
-        // fftLength — broadcast the change so the generator pane can re-snap its
+        // fftLength - broadcast the change so the generator pane can re-snap its
         // running tone onto a fresh bin.  The new length is already in
         // Preferences; subscribers read it from there.
         Bindings.onChange(toolbarTabs, prefs.fftLengthProperty(),
@@ -421,25 +420,25 @@ public final class FftTabControl extends AbstractTabControl {
         overlapCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         overlapCombo.setToolTipText(I18n.t("fft.settings.overlap.tooltip"));
         Bindings.combo(overlapCombo, prefs.fftOverlapProperty(), FftOverlap.values());
-        // Overlap only changes the hop, not the spectrum/accumulator — refresh
+        // Overlap only changes the hop, not the spectrum/accumulator - refresh
         // the tab tile but DON'T reset the average; the worker adapts next tick.
         Bindings.onChange(toolbarTabs, prefs.fftOverlapProperty(),
                 v -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
 
         addLabel(g, I18n.t("fft.settings.averages"));
         // List stepper: wheel / arrow keys snap to the next / previous
-        // preset (Off, 1, 2 … 128, ∞) while manual typing still accepts any
+        // preset (Off, 1, 2 ... 128, ∞) while manual typing still accepts any
         // count ≥ 0 (and the ∞ / inf token, since max is unbounded).
         averagesField = new NumericStepField(g, UnitFamily.NONE,
                 AVERAGES_OFF, Double.POSITIVE_INFINITY, AVERAGES_SERIES, 0, 70);
-        // 0 renders and parses as "Off" — typed in full or as any prefix
+        // 0 renders and parses as "Off" - typed in full or as any prefix
         // (o / of / off), the same shortcut the generator's dither field takes;
         // 1 shows as a plain "1".
         averagesField.setNamedValue(AVERAGES_OFF, NumericStepModel.OFF_LABEL);
         averagesField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         averagesField.setToolTipText(I18n.t("fft.settings.averages.tooltip"));
         Bindings.stepField(averagesField, prefs.fftAveragesProperty());
-        // Pane-local effects only — the tab tile and the stop-after gate.  No
+        // Pane-local effects only - the tab tile and the stop-after gate.  No
         // reset here: the worker resets the average only on a ring↔∞ switch or a
         // smaller ring (a larger ring keeps the depth).
         Bindings.onChange(toolbarTabs, prefs.fftAveragesProperty(), v -> {
@@ -451,7 +450,7 @@ public final class FftTabControl extends AbstractTabControl {
         // own RowLayout so the checkbox + label + field don't widen
         // the outer column-1 / column-0 cells (which previously left
         // empty strips after the FFT-length combo and the
-        // FFT-length-label cell).  Checkbox carries its own text now —
+        // FFT-length-label cell).  Checkbox carries its own text now -
         // a separate Label was creating an extra gap.
         Composite stopRow = new Composite(g, SWT.NONE);
         GridData stopRowGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
@@ -476,7 +475,7 @@ public final class FftTabControl extends AbstractTabControl {
         // that the row is only meaningful when averages is "forever" (a finite N
         // already implements a moving window).  The companion field's enabled
         // state depends on BOTH the toggle and averages==forever, so the enable
-        // recompute is centralized in refreshStopAfterEnable() — driven here off
+        // recompute is centralized in refreshStopAfterEnable() - driven here off
         // the toggle pref and from the averages listener above.  Don't reset the
         // average: the worker stops as soon as the collected count reaches N.
         refreshStopAfterEnable();
@@ -484,7 +483,7 @@ public final class FftTabControl extends AbstractTabControl {
                 v -> refreshStopAfterEnable());
 
         // Mains-suppression selector sits in the outer grid's right-hand column
-        // pair (col 2 label + col 3 combo) — sharing the stop-after grid row but
+        // pair (col 2 label + col 3 combo) - sharing the stop-after grid row but
         // lining up with Window / Averages above and Align generator below,
         // instead of floating after the stop-after field.  Pre-filters the
         // captured signal (50/60 Hz + harmonics) before averaging; tracks the
@@ -510,10 +509,10 @@ public final class FftTabControl extends AbstractTabControl {
         fundFromGenCheck.setToolTipText(I18n.t("fft.settings.fundFromGen.tooltip"));
         Bindings.check(fundFromGenCheck, prefs.fftFundFromGeneratorProperty());
 
-        // "Align generator" — None / FLL — only meaningful when both
+        // "Align generator" - None / FLL - only meaningful when both
         // snap-to-bin (provides a target bin) and fund-from-generator (provides a
         // target frequency) are on, so the combo is disabled otherwise.  Even when
-        // a mode is selected the loop only fires if the other two are also on — see
+        // a mode is selected the loop only fires if the other two are also on - see
         // FftView.applyFrequencyLockLoop.
         Label algLbl = new Label(g, SWT.NONE);
         algLbl.setText(I18n.t("fft.settings.alignGen"));
@@ -525,7 +524,7 @@ public final class FftTabControl extends AbstractTabControl {
         alignGenCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         alignGenCombo.setToolTipText(I18n.t("fft.settings.alignGen.tooltip"));
         // Selecting an active mode resets its loop so each session converges
-        // fresh; NONE deliberately holds everything — that side-effect lives in
+        // fresh; NONE deliberately holds everything - that side-effect lives in
         // the view, which subscribes to this same pref.  Here it's a plain
         // two-way value bind.
         Bindings.combo(alignGenCombo, prefs.fftAlignGeneratorProperty(), AlignGenerator.values());
@@ -544,7 +543,7 @@ public final class FftTabControl extends AbstractTabControl {
         Bindings.onChange(toolbarTabs, prefs.fftCoherentAveragingProperty(),
                 v -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
 
-        // Log freq axis and the time-discontinuity gate share this last row —
+        // Log freq axis and the time-discontinuity gate share this last row -
         // each spans ONE column (not two) so no extra row is added (the tab must
         // stay inside the FFT-pane height).
         logFreqCheck = new Button(g, SWT.CHECK);
@@ -552,7 +551,7 @@ public final class FftTabControl extends AbstractTabControl {
         logFreqCheck.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         logFreqCheck.setToolTipText(I18n.t("fft.settings.logFreq.tooltip"));
         // Pure repaint side-effect (axis remap) lives in the view, which
-        // subscribes to this same pref — a plain two-way value bind here.
+        // subscribes to this same pref - a plain two-way value bind here.
         Bindings.check(logFreqCheck, prefs.fftLogFreqAxisProperty());
 
         detectTimeDiscCheck = new Button(g, SWT.CHECK);
@@ -561,7 +560,7 @@ public final class FftTabControl extends AbstractTabControl {
         detectTimeDiscCheck.setToolTipText(I18n.t("fft.settings.detectTimeDiscontinuity.tooltip"));
         // Checked (the default) runs the time-domain discontinuity gate;
         // unchecking it lets a small or non-sinusoidal signal keep producing an
-        // FFT — the gate would otherwise reject every such block.  The worker
+        // FFT - the gate would otherwise reject every such block.  The worker
         // reads this pref directly.
         Bindings.check(detectTimeDiscCheck, prefs.fftDetectTimeDiscontinuityProperty());
 
@@ -597,9 +596,9 @@ public final class FftTabControl extends AbstractTabControl {
         int max = offeredFftLengths[offeredFftLengths.length - 1];
         if (property.get() > max) {
             // Persisted on a larger-heap run (or hand-edited): the working set
-            // cannot fit this JVM — clamp and persist, the worker follows the
+            // cannot fit this JVM - clamp and persist, the worker follows the
             // pref.
-            log.info("FFT length {} exceeds the heap-capped maximum {} — clamped", property.get(), max);
+            log.info("FFT length {} exceeds the heap-capped maximum {} - clamped", property.get(), max);
             property.set(max);
         }
         int seed = indexOfInt(offeredFftLengths, property.get());
@@ -613,7 +612,7 @@ public final class FftTabControl extends AbstractTabControl {
         Consumer<Integer> onChange = v -> {
             if (fftLengthCombo.isDisposed()) return;
             if (v > max) {
-                property.set(max);   // preset from a larger-heap run — re-fires clamped
+                property.set(max);   // preset from a larger-heap run - re-fires clamped
                 return;
             }
             int i = indexOfInt(offeredFftLengths, v);
@@ -688,13 +687,13 @@ public final class FftTabControl extends AbstractTabControl {
         Bindings.onChange(toolbarTabs, prefs.fftDistMaxHzProperty(),
                 v -> toolbarTabs.refreshTab(TAB_THD_SETTINGS));
 
-        // Row: Manual fundamental — moved one row UP so it sits above
+        // Row: Manual fundamental - moved one row UP so it sits above
         // the harmonic-count row.  Checkbox text replaces the
         // separate Label here too.
         manualFundEnable = new Button(g, SWT.CHECK);
         manualFundEnable.setText(I18n.t("fft.thd.manualFund"));
         manualFundEnable.setToolTipText(I18n.t("fft.thd.manualFund.tooltip"));
-        // Single field that accepts the value AND a unit suffix —
+        // Single field that accepts the value AND a unit suffix -
         // e.g. "1.5 V", "1500 mV", "-3.5 dBV".  The value is canonical Vrms;
         // unit parsing / display switching is the field's own concern.  The
         // 200 V ceiling covers declared external levels (amplifier output
@@ -725,7 +724,7 @@ public final class FftTabControl extends AbstractTabControl {
                 v -> toolbarTabs.refreshTab(TAB_THD_SETTINGS));
 
         addLabel(g, I18n.t("fft.thd.maxCalc"));
-        // Minimum 9 — the THD overlay table is laid out for the H2..H9
+        // Minimum 9 - the THD overlay table is laid out for the H2..H9
         // range and shrinking below that leaves empty rows on the
         // bottom that look like a rendering bug.  Value N means "calc
         // up to HN" (N − 1 harmonics in the 2..N range).
@@ -734,17 +733,17 @@ public final class FftTabControl extends AbstractTabControl {
         calcMaxHarmField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         calcMaxHarmField.setToolTipText(I18n.t("fft.thd.maxCalc.tooltip"));
         // The external THD window's row count tracks this value (resize so the
-        // harmonic rows aren't clipped) — that side-effect lives in the view,
+        // harmonic rows aren't clipped) - that side-effect lives in the view,
         // subscribed to this same pref.  The min-9 floor at the old write site
         // was redundant: every reader of getFftCalcMaxHarmonic() already wraps
         // it in Math.max(9, ...), so a plain two-way value bind is faithful.
         Bindings.stepFieldInt(calcMaxHarmField, prefs.fftCalcMaxHarmonicProperty());
-        // Manual-fundamental value field — registered here, LATE (after the
+        // Manual-fundamental value field - registered here, LATE (after the
         // calc-max field is built), matching the original ordering.  Unit-aware
         // parser/formatter is unchanged; this only mirrors the committed value.
         Bindings.stepField(manualFundField, prefs.fftManualFundVrmsProperty());
         // dBV display choice: seed from the persisted pref, persist the user's
-        // typed unit, and follow external writes (preset load) — setLogDisplay
+        // typed unit, and follow external writes (preset load) - setLogDisplay
         // is idempotent and fires no listener, so the loop terminates.
         manualFundField.setLogDisplay(prefs.isFftManualFundDbvDisplay());
         manualFundField.addSelectionListener(e ->
@@ -753,7 +752,7 @@ public final class FftTabControl extends AbstractTabControl {
                 v -> manualFundField.setLogDisplay(v));
         new Label(g, SWT.NONE);   // fill row
         // (The previous global "Calibrate with noise" checkbox moved to
-        // the Load-calibration tab — it's now a per-row "With noise"
+        // the Load-calibration tab - it's now a per-row "With noise"
         // flag, set independently per loaded .frc file.)
     }
 
@@ -831,6 +830,16 @@ public final class FftTabControl extends AbstractTabControl {
         prefs.setFftManualFundDbvDisplay(p.isManualFundDbvDisplay());
         prefs.setFftManualFundEnabled(p.isManualFundEnabled());
         prefs.save();
+        // A preset writes the freq / mag window like any other writer of those
+        // four prefs, so it announces it like any other writer: the pane's
+        // FFT_RANGE_CHANGED subscriber clamps to [binSize, Nyquist] × [floor,
+        // ceiling] and re-aligns the scrollbars.  Without this publish a preset
+        // was the ONE path that reached the axis unclamped - a stored file with
+        // magTop == magBottom (or an inverted or out-of-range pair) went
+        // straight to the mapping and blanked the plot.  syncFftPan's own
+        // javadoc has always listed "preset apply" among its callers; this is
+        // the line that finally makes that true.
+        MessageBus.instance().publish(Events.FFT_RANGE_CHANGED);
         // Every settings / THD widget is two-way bound to these prefs, so the
         // setters above already pushed the preset into the live widgets (companion
         // field enable-states ride along on their own pref listeners).  Only the
@@ -872,22 +881,26 @@ public final class FftTabControl extends AbstractTabControl {
     }
 
     /** Opens the ADC-calibration dialog using this pane's fundamental
-     *  Vrms (no fallback — the scope pane has its own calibrate button).
+     *  Vrms (no fallback - the scope pane has its own calibrate button).
      *  Aborts with an info MessageBox when no live Vrms is available.
      *
      *  <p>Always the two-row (Left / Right) form, seeded analyzed-channel-only:
      *  the FFT measures one channel ({@link Preferences#getFftChannel()}), so
      *  only that row carries a measured Vrms; the other row is disabled and
      *  blank.  On OK the entered actual Vrms rescales that channel's ADC
-     *  full-scale — a bound stereo card writes only that channel (per-channel,
+     *  full-scale - a bound stereo card writes only that channel (per-channel,
      *  leaving the other untouched), a MONO card or an unbound device writes the
      *  shared both-channels full-scale. */
     private void openCalibrationDialog() {
         if (isDisposed()) return;
         Shell parent = getShell();
         Preferences prefs = Preferences.instance();
-        if (prefs.isAdcCalibrationFromDevice()) {
-            // Device-provided (QA40x): show the built-in full-scale read-only.
+        // Where the calibration goes - this machine's cards or the bench that owns
+        // the device - and, first, whether it may be written at all.
+        final CalibrationStore calibration = new CalibrationStore(prefs);
+        if (calibration.isCalibrationFromDevice(true)) {
+            // Device-provided (a QA40x, here or on a bench): show the built-in
+            // full-scale read-only.
             new CalibrationDialog(parent, adcTexts(),
                     prefs.getAdcFsVoltageRms(Channel.L), prefs.getAdcFsVoltageRms(Channel.R),
                     true, (ch, v) -> { }).open();
@@ -899,20 +912,29 @@ public final class FftTabControl extends AbstractTabControl {
             return;
         }
         final double measuredVrms = currentVrms;
-        final boolean stereo = isInputBoundStereo(prefs);
+        final boolean stereo = prefs.isInputBoundStereo();
         final Channel measCh = prefs.getFftChannel();
         Double seedL = measCh == Channel.L ? measuredVrms : null;
         Double seedR = measCh == Channel.R ? measuredVrms : null;
         new CalibrationDialog(parent, adcTexts(), seedL, seedR, false, (ch, actualVrms) -> {
             double scale = actualVrms / measuredVrms;
+            boolean stored;
             if (stereo) {
                 double newFs = prefs.getAdcFsVoltageRms(ch) * scale;
-                prefs.storeAdcCalibration(ch, newFs);
+                stored = calibration.storeAdcCalibration(ch, newFs);
             } else {
                 // MONO / unbound: shared both-channels full-scale (auto-creates the
                 // profile on first calibrate); also sets the FS scalar and persists.
                 double newFs = prefs.getAdcFsVoltageRms() * scale;
-                prefs.storeAdcCalibration(newFs);
+                stored = calibration.storeAdcCalibration(newFs);
+            }
+            // A bench that would not take it leaves this client's reference where
+            // it was (CalibrationStore applies on success): say so rather than let
+            // the operator believe the typed value is in force.
+            if (!stored) {
+                Dialogs.error(parent, I18n.t("calibrate.title"),
+                        I18n.t("preferences.audio.card.copyCalibration.failed",
+                                prefs.current().getInputDeviceName()));
             }
         }).open();
     }
@@ -925,8 +947,8 @@ public final class FftTabControl extends AbstractTabControl {
     }
 
     /** Capture support (help screenshots): builds the ADC calibration dialog in the
-     *  two-row form seeded analyzed-channel-only — the {@link Preferences#getFftChannel()}
-     *  row carries a representative Vrms, the other stays blank/disabled — and shows it
+     *  two-row form seeded analyzed-channel-only - the {@link Preferences#getFftChannel()}
+     *  row carries a representative Vrms, the other stays blank/disabled - and shows it
      *  non-modally (no live measurement needed), returning it so the automation can
      *  snapshot and dispose it.  Mirrors {@link #openCalibrationDialog}. */
     public CalibrationDialog openAdcCalibrationForCapture() {
@@ -937,16 +959,6 @@ public final class FftTabControl extends AbstractTabControl {
         CalibrationDialog dlg = new CalibrationDialog(getShell(), adcTexts(), seedL, seedR, false, (ch, v) -> { });
         dlg.showForCapture();
         return dlg;
-    }
-
-    /** True when the current backend's input device resolves to a bound card whose
-     *  input endpoint calibrates its two channels separately — any mode except
-     *  {@link DeviceChannelMode#MONO} — the trigger for the two-row per-channel
-     *  calibration dialog (still seeded analyzed-channel-only for the FFT).  A MONO
-     *  card or an unbound device (no profile) keeps the single-row legacy flow. */
-    private boolean isInputBoundStereo(Preferences prefs) {
-        AudioDeviceProfile p = prefs.resolveDeviceProfile(prefs.current().getInputDeviceName());
-        return p != null && p.getInput() != null && p.getInput().getChannels() != DeviceChannelMode.MONO;
     }
 
     // =========================================================================
@@ -1005,7 +1017,7 @@ public final class FftTabControl extends AbstractTabControl {
             d.setFilterExtensions(new String[]{"*.fft"});
             d.setFilterNames(new String[]{"Phonalyser FFT spectrum (*.fft)"});
             d.setOverwrite(true);
-            // Seed the dialog with the previously-used file, if any —
+            // Seed the dialog with the previously-used file, if any -
             // lets the user write to the same target with one click +
             // OK in the file dialog.
             String prev = pathField.getText().trim();
@@ -1077,8 +1089,8 @@ public final class FftTabControl extends AbstractTabControl {
      *  recording, and shows it as a static trace in the matching THD / IMD
      *  table mode. */
     /** Loads a {@code .fft} spectrum file and displays it (same as the
-     *  Load-from tab's button).  Public so a programmatic caller — the
-     *  help/video automation — can show a real spectrum without a live
+     *  Load-from tab's button).  Public so a programmatic caller - the
+     *  help/video automation - can show a real spectrum without a live
      *  capture. */
     public void loadSpectrum(String path) {
         loadSpectrumFft(path);
@@ -1096,7 +1108,7 @@ public final class FftTabControl extends AbstractTabControl {
             showError(I18n.t("fft.load.notImplemented.title"), I18n.t("fft.load.error.format"));
             return;
         }
-        // Stop live capture so the loaded spectrum isn't overwritten — the pane
+        // Stop live capture so the loaded spectrum isn't overwritten - the pane
         // owns the Record button and shared capture, so request the stop on the
         // bus instead of reaching into it.
         MessageBus.instance().publish(Events.FFT_RECORDING_STOP_REQUESTED);
@@ -1109,7 +1121,7 @@ public final class FftTabControl extends AbstractTabControl {
     }
 
     // =========================================================================
-    // Tab-header tiles — the shared TileTabFolder measures / paints; this
+    // Tab-header tiles - the shared TileTabFolder measures / paints; this
     // control only supplies each custom tab's tile content + fallback tooltip.
     // =========================================================================
 
@@ -1146,7 +1158,7 @@ public final class FftTabControl extends AbstractTabControl {
                 tiles.add(TileTabFolder.Tile.text("manF", I18n.t("fft.tile.manualFund")));
             }
         } else if (tabIndex == TAB_CALIBRATION) {
-            // "loaded" / "N loaded" when at least one loaded .frc is active —
+            // "loaded" / "N loaded" when at least one loaded .frc is active -
             // the store only holds active+loaded entries (see
             // syncFftStoreFromRows), mirroring the FreqResp pane's tile.
             int n = correctionStore.getEntries().size();
@@ -1158,7 +1170,7 @@ public final class FftTabControl extends AbstractTabControl {
                         I18n.t("calibration.tile.loadedN.tooltip", n)));
             }
         } else if (tabIndex == TAB_PRESETS) {
-            // Show the number of saved presets when there are any — a hint
+            // Show the number of saved presets when there are any - a hint
             // that there's something to load.
             int n = prefs.getFftPresets().size();
             if (n > 0) tiles.add(TileTabFolder.Tile.text(n + " saved",
@@ -1167,7 +1179,7 @@ public final class FftTabControl extends AbstractTabControl {
         return tiles;
     }
 
-    /** Tab-level hover tooltip key — fallback when no tile is hovered. */
+    /** Tab-level hover tooltip key - fallback when no tile is hovered. */
     private String tabLabelTooltipKey(int tabIndex) {
         switch (tabIndex) {
             case TAB_FFT_SETTINGS: return "fft.tab.settings.tooltip";
@@ -1178,7 +1190,7 @@ public final class FftTabControl extends AbstractTabControl {
 
     // =========================================================================
     // Pure text / number parsers + formatters for the FFT settings fields.
-    // Folded in from the former FftPaneFormat — used only here.
+    // Folded in from the former FftPaneFormat - used only here.
     // =========================================================================
 
     /** Averages presets used by the cycling stepper (wheel / arrows). */
@@ -1205,8 +1217,8 @@ public final class FftTabControl extends AbstractTabControl {
         return -1;
     }
 
-    /** Formats an averages value — {@code +Infinity} → {@code "∞"},
-     *  a single spectrum → the Off label, finite values → plain integer string. */
+    /** Formats an averages value - {@code +Infinity} -> {@code "∞"},
+     *  a single spectrum -> the Off label, finite values -> plain integer string. */
     private String formatAverages(double v) {
         if (Double.isInfinite(v)) return "∞";
         if (v <= AVERAGES_OFF) return NumericStepModel.OFF_LABEL;
@@ -1214,17 +1226,17 @@ public final class FftTabControl extends AbstractTabControl {
     }
 
     // =========================================================================
-    // Load-calibration tab — multi-row .frc loader (mirrors FreqRespPane).
+    // Load-calibration tab - multi-row .frc loader (mirrors FreqRespPane).
     // =========================================================================
 
     private static final class FftCalRow {
         Composite                composite;
         Text                     pathField;
-        /** "Active" toggle — two-way bound to {@code entry.active()}; the
+        /** "Active" toggle - two-way bound to {@code entry.active()}; the
          *  calibration is only added to {@link CorrectionStore} when this
          *  is checked AND a file is loaded. */
         Button                   activeCheck;
-        /** "With noise" toggle — two-way bound to {@code entry.withNoise()};
+        /** "With noise" toggle - two-way bound to {@code entry.withNoise()};
          *  when checked this row's correction is applied to every FFT bin
          *  (noise floor included).  Only meaningful when active AND a file is
          *  loaded; disabled otherwise. */
@@ -1276,10 +1288,10 @@ public final class FftTabControl extends AbstractTabControl {
      *
      *  <p>The two checkboxes feed {@link #syncFftStoreFromRows}:
      *  <ul>
-     *    <li>"Active" — entry is only added to the calibration store
+     *    <li>"Active" - entry is only added to the calibration store
      *        when checked AND a file is loaded.  Toggling it
      *        rebuilds the store immediately.</li>
-     *    <li>"With noise" — when checked, this row's correction is
+     *    <li>"With noise" - when checked, this row's correction is
      *        applied to every FFT bin (noise floor included);
      *        otherwise only harmonic / dot bins are corrected.  Only
      *        meaningful when Active is on; disabled otherwise.</li>
@@ -1368,7 +1380,7 @@ public final class FftTabControl extends AbstractTabControl {
     }
 
     /** Keeps the row's two checkboxes' enabled state in sync with the
-     *  current row state — Active needs a loaded file, With-noise
+     *  current row state - Active needs a loaded file, With-noise
      *  needs both a file and an active row.  Called from row
      *  creation, file load, file clear, and the Active checkbox
      *  listener. */
@@ -1415,8 +1427,8 @@ public final class FftTabControl extends AbstractTabControl {
         // Clearing the file forces the two checkboxes back to disabled
         // (their "applies when active && file selected" rule).  Active
         // stays SELECTED in the UI so the row re-applies as soon as
-        // the user picks a new file — that's the user's stated intent:
-        // "if checkbox active and file not loaded, apply once it loads".
+        // the user picks a new file: an active checkbox with no file
+        // loaded takes effect the moment a file loads.
         updateFftCalRowEnable(r);
         syncFftStoreFromRows();
         Preferences.instance().save();
@@ -1446,7 +1458,7 @@ public final class FftTabControl extends AbstractTabControl {
             r.entry.setPath(picked);
             r.pathField.setText(picked);
             r.pathField.setToolTipText(picked);
-            // File just loaded — refresh the checkboxes' enabled state
+            // File just loaded - refresh the checkboxes' enabled state
             // (Active becomes enable-able; With-noise follows Active).
             updateFftCalRowEnable(r);
             return true;
@@ -1481,7 +1493,7 @@ public final class FftTabControl extends AbstractTabControl {
         correctionStore.clearAll();
         for (FftCalRow r : fftCalRows) {
             // Only push entries that have a loaded file AND the user
-            // has checked "Active" — the per-row With-noise flag rides
+            // has checked "Active" - the per-row With-noise flag rides
             // with the entry into the store.
             if (r.calibration != null && r.entry.getPath() != null && r.entry.active().get()) {
                 correctionStore.addEntry(r.calibration, r.entry.getPath(), r.entry.withNoise().get());

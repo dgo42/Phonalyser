@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -25,13 +25,13 @@ import static org.lwjgl.glfw.GLFW.glfwPollEvents;
 
 /**
  * Process-wide GLFW lifecycle for the macOS GPU scope surface ({@link
- * SwtGlChildSurface}).  GLFW is the embedding mechanism only on macOS — Windows /
- * Linux use SWT's own {@code GLCanvas} — so GLFW is initialised lazily, only when
+ * SwtGlChildSurface}).  GLFW is the embedding mechanism only on macOS - Windows /
+ * Linux use SWT's own {@code GLCanvas} - so GLFW is initialised lazily, only when
  * that path is taken, and stays uninitialised (every call a no-op) elsewhere.
  *
  * <p>SWT already owns {@code NSApplication} on the main thread; GLFW coexists with
- * it.  {@link #poll()} must run on the main (UI) thread — macOS requires
- * {@code glfwPollEvents} there — and is driven once per turn of the SWT event loop
+ * it.  {@link #poll()} must run on the main (UI) thread - macOS requires
+ * {@code glfwPollEvents} there - and is driven once per turn of the SWT event loop
  * so the child window's input callbacks fire.
  */
 @Log4j2
@@ -68,7 +68,7 @@ public final class Glfw {
         }
     }
 
-    /** Whether GLFW is live — the event loop uses this to keep polling (a short nap
+    /** Whether GLFW is live - the event loop uses this to keep polling (a short nap
      *  instead of blocking in {@code Display.sleep()}) so the child window's input
      *  stays responsive while the scope is stopped. */
     public boolean isActive() {

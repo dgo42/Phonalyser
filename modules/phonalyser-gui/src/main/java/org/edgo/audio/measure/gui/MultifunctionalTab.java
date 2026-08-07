@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -45,7 +45,7 @@ import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Content of the Multifunctional tab — the original three-pane layout
+ * Content of the Multifunctional tab - the original three-pane layout
  * (generator on the left, oscilloscope / FFT split on the right) extracted
  * from {@link MainTab} so MainTab can host multiple tab contents without
  * knowing the details of any one.
@@ -58,7 +58,7 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class MultifunctionalTab {
 
-    /** Approximate pixel size of a pane's title bar — used as the SashForm
+    /** Approximate pixel size of a pane's title bar - used as the SashForm
      *  weight for the collapsed pane. */
     private static final int COLLAPSED_PANE_SIZE  = 28;
 
@@ -98,15 +98,15 @@ public final class MultifunctionalTab {
         registerStatePersistence();
     }
 
-    /** Smallest size that fits the panes' natural layout — used by
+    /** Smallest size that fits the panes' natural layout - used by
      *  {@link MainWindow} to set the shell's minimum size. */
     public Point computeNaturalSize() {
         return hSplit.computeSize(SWT.DEFAULT, SWT.DEFAULT, true);
     }
 
     /** Stops every live stream (scope + FFT capture, generator playback) BEFORE
-     *  the Preferences dialog commits a backend / device / rate change — while
-     *  the OLD backend is still active — so each releases its device cleanly.
+     *  the Preferences dialog commits a backend / device / rate change - while
+     *  the OLD backend is still active - so each releases its device cleanly.
      *  Each pane remembers its own running state; this tab does not track what
      *  was running.  Pair with {@link #afterApplyBackendChanges()} once the new
      *  config is committed. */
@@ -140,7 +140,7 @@ public final class MultifunctionalTab {
 
     private void buildPanes(Composite parent, UIEngines engines) {
         // SWT.SMOOTH on a SashForm makes the contained Sash widgets update
-        // the content live while the user drags — without it you get the
+        // the content live while the user drags - without it you get the
         // rubber-band ghost outline and the panes only reflow on release.
         hSplit = new SashForm(parent, SWT.HORIZONTAL | SWT.SMOOTH);
         hSplit.setSashWidth(4);
@@ -175,7 +175,7 @@ public final class MultifunctionalTab {
         hSplit.setWeights(new int[]{1, 3});
 
         // Register the three panes in the component registry so automation can
-        // address them by path — screenshot them, or maximize one for a clean
+        // address them by path - screenshot them, or maximize one for a clean
         // shot.  Maximize uses the SashForm's built-in single-child maximize
         // (scope / fft live in the inner vSplit, so both splits are set).
         Runnable restoreSplits = () -> {
@@ -204,11 +204,14 @@ public final class MultifunctionalTab {
         fftPane.registerTabs("multifunctional/fft/tabs");
 
         // Tint just the splitter bars #808080 with a #C8C8C8 hover state.
-        // We do NOT call setBackground on the SashForm itself — that would
+        // We do NOT call setBackground on the SashForm itself - that would
         // propagate the dark tint to every child Composite that hasn't set
         // its own background, producing dark panes on GTK.
         Color sashColor      = new Color(display, 0x80, 0x80, 0x80);
         Color sashHoverColor = new Color(display, 0xC8, 0xC8, 0xC8);
+        // Deferred on purpose (same-thread, so not GuiUtil.marshal): the
+        // SashForms create their Sash children lazily, on the first layout
+        // pass after construction - tinting now would find none to tint.
         display.asyncExec(() -> {
             if (hSplit == null || hSplit.isDisposed()) return;
             for (Control c : hSplit.getChildren()) {
@@ -225,7 +228,7 @@ public final class MultifunctionalTab {
         });
 
         // While either osc or fft is collapsed the SashForm only knows its
-        // weights, not its pixel size — so a window resize would scale the
+        // weights, not its pixel size - so a window resize would scale the
         // collapsed pane proportionally.  Re-pin the weights to
         // {COLLAPSED_PANE_SIZE, remaining-pixels} on every resize so the
         // collapsed pane stays at roughly the title-bar height.
@@ -245,7 +248,7 @@ public final class MultifunctionalTab {
         }));
 
         // Generator pane = fixed pixel width.  Display.addFilter(SWT.Selection)
-        // fires BEFORE the Sash widget's own listener chain — the only spot we
+        // fires BEFORE the Sash widget's own listener chain - the only spot we
         // can mutate e.x before SashForm's internal handler reads it.
         Listener sashFilter = e -> {
             if (!(e.widget instanceof Sash sash)) return;

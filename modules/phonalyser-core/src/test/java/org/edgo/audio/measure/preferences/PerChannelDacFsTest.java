@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,16 +27,16 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Per-channel DAC full-scale — the OUTPUT mirror of {@link PerChannelAdcFsTest}:
+ * Per-channel DAC full-scale - the OUTPUT mirror of {@link PerChannelAdcFsTest}:
  * the RIGHT scalar {@code dacFsVoltageAmplRight}, the channel-aware
  * {@code applyOutputDeviceProfile} resolution (MONO pushes one value into both
  * scalars; LINKED reads LEFT / RIGHT from the SAME active row; INDEPENDENT resolves
  * RIGHT from {@code activeRangeRight}), the per-channel
- * {@code storeDacCalibration(Channel, …)} write (per-channel for bound stereo cards,
+ * {@code storeDacCalibration(Channel, ...)} write (per-channel for bound stereo cards,
  * both-equal for MONO).
  *
  * <p>The DAC value is a PEAK amplitude in memory but persists as RMS ({@code ÷ √2}
- * on save, {@code × √2} on load), and the device-profile rows store the RMS form —
+ * on save, {@code × √2} on load), and the device-profile rows store the RMS form -
  * so every profile assertion below carries the {@code / √2} conversion, exactly as
  * {@code applyOutputDeviceProfile} / {@code storeDacCalibration} do.
  *
@@ -152,7 +152,7 @@ class PerChannelDacFsTest {
                 "dangling right label falls back to the activeRange row's fsRight");
     }
 
-    // ── storeDacCalibration(Channel.R, …) on INDEPENDENT writes only right ───
+    // ── storeDacCalibration(Channel.R, ...) on INDEPENDENT writes only right ───
 
     @Test
     void storeDacCalibration_right_onIndependentCard_writesOnlyRight() {
@@ -181,7 +181,7 @@ class PerChannelDacFsTest {
         assertEquals(1.1, lo.getFsRight(), EPS);
     }
 
-    // ── storeDacCalibration(Channel.R, …) on a LINKED card writes only right ─
+    // ── storeDacCalibration(Channel.R, ...) on a LINKED card writes only right ─
 
     @Test
     void storeDacCalibration_right_onLinkedCard_writesOnlyRightOfSharedRow() {
@@ -206,7 +206,7 @@ class PerChannelDacFsTest {
         assertEquals(3.5, shared.getFsRight(), EPS, "RIGHT calibrate wrote fsRight of the shared active row (RMS)");
     }
 
-    // ── storeDacCalibration(Channel, …) on a MONO card keeps both equal ──────
+    // ── storeDacCalibration(Channel, ...) on a MONO card keeps both equal ──────
 
     @Test
     void storeDacCalibration_onMonoCard_keepsBothChannelsEqual() {

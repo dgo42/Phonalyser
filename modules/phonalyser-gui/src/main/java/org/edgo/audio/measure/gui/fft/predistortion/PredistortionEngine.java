@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -41,7 +41,7 @@ import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Closed-loop DAC harmonic-predistortion engine for the GUI wizard — the
+ * Closed-loop DAC harmonic-predistortion engine for the GUI wizard - the
  * live counterpart of the CLI {@code IterativeCompensateMode}.  Runs the
  * iterative loop on a daemon thread against the ALREADY-RUNNING generator
  * and FFT analyser:
@@ -67,7 +67,7 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class PredistortionEngine {
 
-    /** Why {@link #runLoop} ended — drives the wizard's end-of-run message. */
+    /** Why {@link #runLoop} ended - drives the wizard's end-of-run message. */
     public enum StopReason {
         TARGET_REACHED, STALLED, USER_STOP, ERROR;
 
@@ -86,7 +86,7 @@ public final class PredistortionEngine {
     public interface Listener {
         /** Waiting for the FLL to settle the tone onto its bin. */
         void onAligning();
-        /** One averaging round finished — {@code result} is a private copy,
+        /** One averaging round finished - {@code result} is a private copy,
          *  {@code averages} the number of frames it actually averaged. */
         void onRound(int round, double thdPct, int averages, FftResult result);
         /** The loop ended.  {@code hasResult} is true when at least one
@@ -94,7 +94,7 @@ public final class PredistortionEngine {
         void onFinished(StopReason reason, double bestThdPct, boolean hasResult);
     }
 
-    /** LMS step μ — full residual per round (CLI default). */
+    /** LMS step μ - full residual per round (CLI default). */
     private static final double COMP_STEP         = 1.0;
     /** Ceiling on the THD0/THD averaging-count growth, so a deep convergence
      *  can't make a single round run essentially forever (64x base = a 64x THD
@@ -105,7 +105,7 @@ public final class PredistortionEngine {
      *  EXTEND_DROP_FACTOR}, so each round averages this much beyond the bare
      *  THD0/THD ratio to measure the shrinking residual with headroom. */
     private static final double EXTEND_DROP_FACTOR = 0.75;
-    /** Tone counts as aligned when the measured fundamental STOPS moving —
+    /** Tone counts as aligned when the measured fundamental STOPS moving -
      *  consecutive frames agree to within this fraction of an FFT bin.  The
      *  test is frame-to-frame stability, NOT a match against a computed target
      *  frequency (which need not equal the measured bin): an already-locked
@@ -124,7 +124,7 @@ public final class PredistortionEngine {
     private final FftController       fft;
     private final FftView             view;
     private final Listener            listener;
-    /** Loaded {@code .frc} corrections — the engine de-embeds their phase off
+    /** Loaded {@code .frc} corrections - the engine de-embeds their phase off
      *  the raw measured phasors itself when computing the DAC correction (the
      *  store only holds the loaded files). */
     private final CorrectionStore correctionStore;
@@ -138,21 +138,21 @@ public final class PredistortionEngine {
     @Getter private volatile Phase phase = Phase.IDLE;
     /** Current round number (0-based), polled live. */
     @Getter private volatile int   currentRound;
-    /** Target FFT-average count for the active COLLECTING round — drives the
+    /** Target FFT-average count for the active COLLECTING round - drives the
      *  remaining-averages readout. */
     private volatile int collectTargetAvg;
 
     /** The single-tone correction set that produced {@link #bestResult} (the
      *  lowest-distortion round), retained for saving.  {@code null} in dual-tone
-     *  mode — see {@link #bestIntermod}. */
+     *  mode - see {@link #bestIntermod}. */
     @Getter private HarmonicCompensation bestApplied;
-    /** The dual-tone counterpart of {@link #bestApplied} — the lowest-distortion
+    /** The dual-tone counterpart of {@link #bestApplied} - the lowest-distortion
      *  round's intermod correction set.  {@code null} in single-tone mode. */
     @Getter private IntermodCompensation bestIntermod;
     /** True when this run is compensating a two-tone signal (drives the wizard's
      *  save / apply branch). */
     @Getter private boolean              dualTone;
-    /** The lowest-distortion round's finalized result — provenance for the header. */
+    /** The lowest-distortion round's finalized result - provenance for the header. */
     @Getter private FftResult            bestResult;
     @Getter private double               bestThdPct = Double.MAX_VALUE;
 
@@ -182,7 +182,7 @@ public final class PredistortionEngine {
         stopRequested = true;
     }
 
-    /** Ends the CURRENT averaging round early — the loop takes the frames
+    /** Ends the CURRENT averaging round early - the loop takes the frames
      *  collected so far, applies the correction and continues with the next
      *  round (unlike {@link #stop()}, which ends the whole loop). */
     public void stopRound() {
@@ -199,20 +199,20 @@ public final class PredistortionEngine {
             int maxH = Math.max(1, Preferences.instance().getFftCalcMaxHarmonic());
             dualTone = Preferences.instance().getGenSignalForm().isDualTone();
             // One of the two accumulators is live; the other stays null.  Both
-            // share the same loop skeleton — only the distortion metric, the
+            // share the same loop skeleton - only the distortion metric, the
             // accumulate call and the hot-apply differ between single / dual tone.
             HarmonicCompensation harm     = dualTone ? null : new HarmonicCompensation(maxH);
             IntermodCompensation imd       = dualTone ? new IntermodCompensation(maxH) : null;
             HarmonicCompensation harmAppl  = dualTone ? null : harm.copy();   // empty = round 0
             IntermodCompensation imdAppl   = dualTone ? imd.copy() : null;
-            double target = gen.effectiveFrequency();          // F1 emit freq — the align target
+            double target = gen.effectiveFrequency();          // F1 emit freq - the align target
 
             // Predistortion needs a deep, phase-coherent, generator-locked
             // measurement: switch the FFT to INFINITE coherent averaging (the
             // engine itself bounds the per-round depth via reset +
             // completedAnalyses), take the fundamental from the generator and
             // lock the tone with the FLL.  Window + mains suppression are only
-            // RECOMMENDED — the user's choice is left intact, with a hint logged
+            // RECOMMENDED - the user's choice is left intact, with a hint logged
             // when it isn't ideal.
             ui(() -> {
                 Preferences p = Preferences.instance();
@@ -222,11 +222,11 @@ public final class PredistortionEngine {
                 p.setFftAlignGenerator(AlignGenerator.FLL);
                 if (log.isInfoEnabled()) {
                     if (p.getFftWindow() != WindowType.HFT248D) {
-                        log.info("Predistortion: FFT window is {} — HFT248D is recommended for the deepest harmonic separation.",
+                        log.info("Predistortion: FFT window is {} - HFT248D is recommended for the deepest harmonic separation.",
                                 p.getFftWindow());
                     }
                     if (p.getFftMainsSuppression() != MainsSuppression.NONE) {
-                        log.info("Predistortion: mains suppression is {} — recommend turning it OFF (it can notch a measured harmonic).",
+                        log.info("Predistortion: mains suppression is {} - recommend turning it OFF (it can notch a measured harmonic).",
                                 p.getFftMainsSuppression());
                     }
                 }
@@ -237,7 +237,7 @@ public final class PredistortionEngine {
             // Always calibrate from the RAW DAC: drop any compensation already
             // on the generator (a previously-loaded .dpd) so round 0 measures
             // the true distortion and the accumulator builds the full
-            // correction from scratch — otherwise the first apply would replace
+            // correction from scratch - otherwise the first apply would replace
             // the loaded correction with only this run's residual delta.
             ui(gen::clearCompensation);
             sleep(APPLY_SETTLE_MS);
@@ -246,18 +246,18 @@ public final class PredistortionEngine {
             on(listener::onAligning);
             if (!waitForAlign()) {
                 if (stopRequested) { reason = StopReason.USER_STOP; return; }
-                log.warn("Predistortion: tone did not stabilise within {} ms — proceeding", ALIGN_TIMEOUT_MS);
+                log.warn("Predistortion: tone did not stabilise within {} ms - proceeding", ALIGN_TIMEOUT_MS);
             }
             ui(fft::resetStatistics);                          // fresh baseline for round 0
 
             int round = 0;
-            double baselineDist = Double.NaN;   // round 0's distortion — the fixed reference
+            double baselineDist = Double.NaN;   // round 0's distortion - the fixed reference
             double prevDist     = Double.NaN;   // last completed round's distortion
             while (!stopRequested) {
                 currentRound = round;
                 // The round is seeded from how far the LAST residual fell below
                 // round 0, then keeps growing live as THIS round's residual drops
-                // further — one formula, see collectUntilAverages / sizeAverages.
+                // further - one formula, see collectUntilAverages / sizeAverages.
                 phase = Phase.COLLECTING;
                 int maxAverages = (int) Math.round(baseAverages * MAX_AVG_GROW);
                 FftResult r = collectUntilAverages(baseAverages, baselineDist, prevDist, maxAverages);
@@ -281,7 +281,7 @@ public final class PredistortionEngine {
                 final int       roundAvg = roundAvgDone;
                 on(() -> listener.onRound(roundIdx, roundDist, roundAvg, roundRes));
 
-                // No auto-stop yet — the loop runs until the user clicks Stop
+                // No auto-stop yet - the loop runs until the user clicks Stop
                 // (an optional Target THD still ends it early when set).
                 if (targetThdPct > 0 && distPct <= targetThdPct) { reason = StopReason.TARGET_REACHED; break; }
 
@@ -325,7 +325,7 @@ public final class PredistortionEngine {
         }
     }
 
-    /** FFT averages still to collect in the current round — drives the wizard's
+    /** FFT averages still to collect in the current round - drives the wizard's
      *  countdown.  0 outside the COLLECTING phase. */
     public int getCollectRemainingAverages() {
         if (phase != Phase.COLLECTING) return 0;
@@ -334,7 +334,7 @@ public final class PredistortionEngine {
 
     /** Combined calibration response {@code [magLin, phaseRad]} the loaded
      *  {@code .frc} corrections impose at {@code freqHz} for the analysed channel
-     *  — the product of {@code H(f)} over every loaded entry (its left or right
+     *  - the product of {@code H(f)} over every loaded entry (its left or right
      *  calibration per {@code left}): magnitudes multiply, phases add.  Entries
      *  whose calibration does not span {@code freqHz} contribute unit response,
      *  matching the display de-embed which only corrects in-range bins.  The
@@ -357,12 +357,12 @@ public final class PredistortionEngine {
     }
 
     /** The loaded {@code .frc} response as a frequency function for the given
-     *  channel — so the save path applies the same de-embed as the live apply. */
+     *  channel - so the save path applies the same de-embed as the live apply. */
     public DoubleFunction<double[]> calResponseFor(boolean left) {
         return f -> calResponseAt(f, left);
     }
 
-    /** The F1 tone's DAC output level (Vrms) — the dual-tone correction's ratio
+    /** The F1 tone's DAC output level (Vrms) - the dual-tone correction's ratio
      *  reference (the products are injected relative to F1).  Derived from the
      *  total generator amplitude and the dual-tone split: with weights
      *  {@code w₁ = split%, w₂ = 100−split%}, tone-1 carries
@@ -383,9 +383,9 @@ public final class PredistortionEngine {
         return (imd != null && Double.isFinite(imd.imdPwrPct)) ? imd.imdPwrPct : r.thdPct;
     }
 
-    /** Blocks until the measured fundamental is stable — consecutive frames
+    /** Blocks until the measured fundamental is stable - consecutive frames
      *  agree within {@link #ALIGN_BIN_FRACTION} of a bin for {@link #ALIGN_FRAMES}
-     *  polls — the timeout elapses, or a stop is requested. */
+     *  polls - the timeout elapses, or a stop is requested. */
     private boolean waitForAlign() {
         long deadline = System.currentTimeMillis() + ALIGN_TIMEOUT_MS;
         int settled = 0;
@@ -442,8 +442,8 @@ public final class PredistortionEngine {
         return Math.max(baseAverages, Math.min(target, maxAverages));
     }
 
-    /** Current cumulative distortion off the live FFT result — THD for a single
-     *  tone, the combined intermod % for a dual tone — matching the round
+    /** Current cumulative distortion off the live FFT result - THD for a single
+     *  tone, the combined intermod % for a dual tone - matching the round
      *  metric.  {@code NaN} when no result is available yet. */
     private double liveDistPct() {
         FftResult r = readResult();

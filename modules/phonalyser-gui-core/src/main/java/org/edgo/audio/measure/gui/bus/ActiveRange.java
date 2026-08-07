@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@ import lombok.Data;
 /**
  * Payload of {@link Events#DEVICE_ACTIVE_RANGE_CHANGED}: one direction of a
  * device-provided card whose active full-scale range changed when the Preferences
- * dialog was closed with OK.  Deliberately device-agnostic — it names neither a
+ * dialog was closed with OK.  Deliberately device-agnostic - it names neither a
  * card nor a backend; a subscriber that owns a live range identifies the affected
  * device from its own current state (selected device / open session) rather than
  * from this payload.

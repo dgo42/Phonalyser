@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -38,8 +38,9 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
-import org.edgo.audio.measure.gui.common.FftBinSnap;
+import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.CaptureEndReason;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -51,13 +52,13 @@ import lombok.extern.log4j.Log4j2;
  * IMD analysis of the displayed frame, and the {@code .fft} spectrum file
  * round-trip.
  *
- * <p>The worker is constructor-injected — the pane builds it (the worker's
+ * <p>The worker is constructor-injected - the pane builds it (the worker's
  * result hand-off marshals through the SWT {@code Display}) and hands it
  * over; the controller itself never imports SWT.  The view calls
  * {@link #analyzeImd} and {@link #applyFrequencyLock} from its
  * result-display pipeline AFTER finalizing the displayed frame (mains
  * correction, recompute, .frc) so both see the finished spectrum; the
- * controller never references the view — everything it emits goes over
+ * controller never references the view - everything it emits goes over
  * the bus.
  */
 @Log4j2
@@ -68,12 +69,12 @@ public final class FftController {
      *  generous ceiling for a REAL mistune; anything beyond it is a
      *  mis-measurement that must not reach the loop. */
     private static final double FLL_MAX_ERROR_PPM  = 500;
-    /** FLL measurement plausibility bound, absolute floor in FFT bins —
+    /** FLL measurement plausibility bound, absolute floor in FFT bins -
      *  keeps the gate permissive at low target frequencies where the
      *  ppm part collapses below the spectral resolution. */
     private static final double FLL_MAX_ERROR_BINS = 5;
     /** Minimum fundamental frequency a loaded spectrum's peak search
-     *  considers (Hz) — skips the DC/mains foot. */
+     *  considers (Hz) - skips the DC/mains foot. */
     private static final double LOADED_FUND_MIN_HZ = 10.0;
     /** Alignment-done threshold for the magnitude-drift watch (ppm of the
      *  tone target): once every locked tone measures within this of its
@@ -84,7 +85,7 @@ public final class FftController {
     /** Magnitude-drift threshold (dB): a fundamental whose level moved by
      *  more than this between the first post-change result and the aligned
      *  result means the running average still carries pre-alignment frames
-     *  at a depressed level — worth suggesting a statistics reset. */
+     *  at a depressed level - worth suggesting a statistics reset. */
     private static final double ALIGN_DRIFT_DB  = 0.1;
 
     /** Analysis engine (capture + FFT + averaging on a daemon thread). */
@@ -94,7 +95,7 @@ public final class FftController {
      *  (silent on the offscreen screenshot variant). */
     @Getter
     private final CorrectionStore correctionStore;
-    /** One analyzer instance for the controller's lifetime — its internal
+    /** One analyzer instance for the controller's lifetime - its internal
      *  scratch buffer (noise-floor quickselect) is only reused this way. */
     private final ImdAnalyzer imdAnalyzer = new ImdAnalyzer();
     /** Frequency-lock loops: {@link #fll} tracks the SINE / dual-tone
@@ -103,7 +104,7 @@ public final class FftController {
     private FrequencyAligner fll;
     private FrequencyAligner fll2;
 
-    /** Magnitude-drift watch state — armed by {@link #resetFrequencyLock()}
+    /** Magnitude-drift watch state - armed by {@link #resetFrequencyLock()}
      *  (generator change / align-on / record stop), baselined from the first
      *  result that reaches {@link #applyFrequencyLock}, resolved one-shot
      *  when the loop(s) report aligned.  See {@link #ALIGN_DRIFT_DB}. */
@@ -114,7 +115,7 @@ public final class FftController {
 
     /** A loaded {@code .fft} spectrum: the reconstructed result plus the
      *  re-measured IMD products when the file was captured in IMD mode
-     *  ({@code null} for THD captures — the view stays in THD mode). */
+     *  ({@code null} for THD captures - the view stays in THD mode). */
     public record LoadedSpectrum(FftResult result, ImdResult imd) {}
 
     public FftController(FftAnalyzerWorker worker) {
@@ -134,7 +135,7 @@ public final class FftController {
 
     /** Stops the analyser and interrupts the worker (idempotent); the
      *  worker releases its shared-capture reference.  Also clears the
-     *  FLL — the locked clock-drift estimate is only meaningful while
+     *  FLL - the locked clock-drift estimate is only meaningful while
      *  the capture is live; on the next Record start it ramps up from
      *  zero again. */
     public void stopRecording() {
@@ -145,6 +146,13 @@ public final class FftController {
     /** True while the analyser worker is running. */
     public boolean isRecording() {
         return worker.isRunning();
+    }
+
+    /** WHY the last recording ended from below ({@code null} for a user stop
+     *  or a stop-after-N pause) - the pane consults this on the auto-stop
+     *  event and localizes it. */
+    public CaptureEndReason captureEndReason() {
+        return worker.getCaptureEndReason();
     }
 
     /** Number of analyses completed since the last reset. */
@@ -166,7 +174,7 @@ public final class FftController {
 
     /** Clears the worker's completed-analyses counter and accumulator and
      *  resumes a stop-after-N pause.  Deliberately does NOT touch the
-     *  FLL — see {@link #resetFrequencyLock()}. */
+     *  FLL - see {@link #resetFrequencyLock()}. */
     public void resetStatistics() {
         worker.resetStatistics();
     }
@@ -179,7 +187,7 @@ public final class FftController {
         worker.resetStatisticsAfterSignalChange();
     }
 
-    /** The UI consumed the published result — the worker's result-throttle
+    /** The UI consumed the published result - the worker's result-throttle
      *  handshake. */
     public void resultConsumed() {
         worker.uiGotResult();
@@ -187,38 +195,38 @@ public final class FftController {
 
     /** True when {@code slot} was produced under the worker's CURRENT reset
      *  epoch.  A result can sit parked in the coalescing hand-off across a
-     *  signal change and drain afterwards — the worker's production-side
+     *  signal change and drain afterwards - the worker's production-side
      *  epoch gates can't catch that, so consumers must drop it here.
      *  Without this the pre-change spectrum reaches the FLL: the old 1 kHz
-     *  tone's H20 sits 2.6 Hz from a 20 kHz tone-2 target — inside the
-     *  plausibility gate — and one such frame trims the live generator
+     *  tone's H20 sits 2.6 Hz from a 20 kHz tone-2 target - inside the
+     *  plausibility gate - and one such frame trims the live generator
      *  ~2.6 Hz off, taking the loop ~30 s to dig itself back out. */
     public boolean isResultCurrent(FftResult slot) {
         return slot != null && slot.epoch == worker.currentResetEpoch();
     }
 
     /** Resets the frequency-lock loop(s) so alignment converges fresh from
-     *  zero.  Called when the user turns alignment ON and on Record stop —
+     *  zero.  Called when the user turns alignment ON and on Record stop -
      *  kept separate from {@link #resetStatistics()} so a manual
      *  statistics reset keeps the converged alignment intact.
      *
      *  <p>Also tells the generator to drop any residual trim
      *  ({@link Events#GENERATOR_FREQ_TRIM_RESET}): clearing only the loop
      *  state would leave the generator at the last published trim, and the
-     *  fresh loop — which assumes "generator = target + correction" — would
+     *  fresh loop - which assumes "generator = target + correction" - would
      *  overshoot by exactly that stale amount on its first correction. */
     public void resetFrequencyLock() {
         // Re-arm the magnitude-drift watch: the next result baselines the
         // fundamental level(s); the comparison fires once alignment settles.
         alignWatchArmed     = true;
         alignWatchBaselined = false;
-        if (fll == null && fll2 == null) return;   // alignment never engaged — no trims published
+        if (fll == null && fll2 == null) return;   // alignment never engaged - no trims published
         if (fll  != null) fll.reset();
         if (fll2 != null) fll2.reset();
         MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM_RESET);
     }
 
-    /** Stops the worker — called by {@code UIEngines} at application exit. */
+    /** Stops the worker - called by {@code UIEngines} at application exit. */
     public void shutdown() {
         worker.stop();
     }
@@ -227,13 +235,30 @@ public final class FftController {
     // Result-driven engine reactions (called by the view's result pipeline)
     // -------------------------------------------------------------------------
 
-    /** Measures the dual-tone IMD products of the (finalized) displayed
-     *  frame against the configured tone frequencies. */
+    /**
+     * Measures the dual-tone IMD products of the (finalized) displayed frame
+     * against the tones the generator is actually emitting.
+     *
+     * <p>Those tones are asked of the engine that OWNS the generator
+     * ({@link Events#GENERATOR_EMITTED_HZ}) and are never re-derived here: a
+     * bench a network away snapped against ITS lane's rate and holds the
+     * frequency-lock trims, so a product placement computed from local
+     * preferences would report the difference between two grids as a drift of
+     * the hardware's clock.
+     *
+     * <p>Nothing answers ONLY when this process has no generator engine, which
+     * is an initialisation or teardown ORDER fault rather than a state to paper
+     * over - {@code UIEngines} builds the generator before the analyzers and
+     * shuts it down after them for exactly that reason.  There is then no
+     * emitted pair to measure against, so no IMD is produced; every caller
+     * already reads {@code null} as "no dual-tone result".
+     */
     public ImdResult analyzeImd(FftResult slot) {
+        double[] emitted = MessageBus.instance()
+                .request(Events.GENERATOR_EMITTED_HZ, slot.sampleRate);
+        if (emitted == null) return null;
         Preferences prefs = Preferences.instance();
-        return imdAnalyzer.analyze(slot,
-                prefs.getGenDualToneFreq1Hz(),
-                prefs.getGenDualToneFreq2Hz(),
+        return imdAnalyzer.analyze(slot, emitted[0], emitted[1],
                 prefs.getDbvOffsetDb(prefs.getFftChannel()));
     }
 
@@ -264,14 +289,16 @@ public final class FftController {
         if (dualTone) {
             if (imd == null) {
                 if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
-                    log.warn("FLL: dual-tone but imd=null — no loop update this frame");
+                    log.warn("FLL: dual-tone but imd=null - no loop update this frame");
                 }
                 return;
             }
-            double t1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
-                    slot.sampleRate, prefs.getGenDualToneFreq1Hz());
-            double t2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
-                    slot.sampleRate, prefs.getGenDualToneFreq2Hz());
+            double t1 = FftBinSnap.snapIfEnabled(GenSignalForm.DUAL_TONE,
+                    slot.sampleRate, prefs.getFftLength(), prefs.isGenSnapToFftBin(),
+                    prefs.getGenDualToneFreq1Hz());
+            double t2 = FftBinSnap.snapIfEnabled(GenSignalForm.DUAL_TONE,
+                    slot.sampleRate, prefs.getFftLength(), prefs.isGenSnapToFftBin(),
+                    prefs.getGenDualToneFreq2Hz());
             if (t1 > 0 && Double.isFinite(imd.f1Hz)
                     && plausibleFllMeasurement(t1, imd.f1Hz, slot.sampleRate, slot.fftSize)) {
                 fll.update(t1, imd.f1Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
@@ -312,8 +339,9 @@ public final class FftController {
             watchAlignmentMagnitudeDrift(imd.f1DbV, imd.f2DbV, aligned);
         } else {
             if (!Double.isFinite(slot.fundamentalHzRefined)) return;
-            double target = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.SINE,
-                    slot.sampleRate, prefs.getGenFrequencyHz());
+            double target = FftBinSnap.snapIfEnabled(GenSignalForm.SINE,
+                    slot.sampleRate, prefs.getFftLength(), prefs.isGenSnapToFftBin(),
+                    prefs.getGenFrequencyHz());
             if (!(target > 0)) return;
             if (!plausibleFllMeasurement(target, slot.fundamentalHzRefined,
                     slot.sampleRate, slot.fftSize)) {
@@ -329,8 +357,8 @@ public final class FftController {
     }
 
     /** Magnitude-drift watch: baselines the fundamental level(s) on the
-     *  first result after {@link #resetFrequencyLock()} re-armed it, then —
-     *  once the loop(s) report aligned — compares the current level(s)
+     *  first result after {@link #resetFrequencyLock()} re-armed it, then -
+     *  once the loop(s) report aligned - compares the current level(s)
      *  against that baseline ONE time.  A drift beyond
      *  {@link #ALIGN_DRIFT_DB} means the running average still contains
      *  pre-alignment frames at a depressed level; the view shows a blinking
@@ -344,7 +372,7 @@ public final class FftController {
             alignWatchBaselined = true;
             return;
         }
-        if (!aligned) return;                       // loop still pulling — keep waiting
+        if (!aligned) return;                       // loop still pulling - keep waiting
         alignWatchArmed = false;                    // one-shot per re-arm
         double delta = Math.abs(f1Db - alignWatchBaseF1Db);
         if (!Double.isNaN(f2Db) && !Double.isNaN(alignWatchBaseF2Db)) {
@@ -356,7 +384,7 @@ public final class FftController {
     }
 
     /** True when the measured frequency is close enough to the target to
-     *  plausibly be the generator's own tone — clock drift is ppm-scale.
+     *  plausibly be the generator's own tone - clock drift is ppm-scale.
      *  A larger mismatch is a mis-measurement (a window still containing
      *  the OLD signal draining through the output buffer after a form /
      *  frequency switch, a harmonic mis-lock, a capture glitch); feeding
@@ -375,7 +403,7 @@ public final class FftController {
     // -------------------------------------------------------------------------
 
     /** Loads a spectrum {@code .fft} file (as written by
-     *  {@link #saveSpectrum} — {@code frequency_hz;magnitude_dBV;phase_deg}
+     *  {@link #saveSpectrum} - {@code frequency_hz;magnitude_dBV;phase_deg}
      *  rows under {@code # mode=} / {@code # tone*_hz=} header comments),
      *  reconstructs an {@link FftResult} and recomputes its fundamental /
      *  harmonic / THD / SNR metrics (and the IMD products when the file
@@ -454,7 +482,7 @@ public final class FftController {
         r.fundamentalHz        = fb * freqRes;
         r.fundamentalHzRefined = MathUtil.parabolicBinInterp(r.re, r.im, fb, r.fftSize) * freqRes;
         // Derive harmonic positions, apply the current THD settings and recompute
-        // — shared with the dynamic recompute that runs when a THD setting changes
+        // - shared with the dynamic recompute that runs when a THD setting changes
         // while this static spectrum is displayed.
         recomputeStaticResult(r);
 
@@ -476,11 +504,11 @@ public final class FftController {
     /**
      * Re-applies the current THD settings to an already-built static spectrum
      * and recomputes its harmonics / THD / SNR: derives harmonic positions for
-     * the max-harmonics count (resizing the harmonic arrays if it changed — the
+     * the max-harmonics count (resizing the harmonic arrays if it changed - the
      * stored spectrum is preserved), sets the manual-fundamental amplitude anchor
      * (Vrms &rarr; dBFS) and the high-pass / low-pass distortion band, then runs
      * {@link FftAnalyzer#recomputeStats}.  Called at load and whenever a THD
-     * setting changes while a static (non-live) spectrum is displayed — the live
+     * setting changes while a static (non-live) spectrum is displayed - the live
      * worker re-reads these settings every tick, so only the static case needs it.
      */
     public void recomputeStaticResult(FftResult r) {
@@ -515,7 +543,7 @@ public final class FftController {
         }
     }
 
-    /** Writes {@code r} as a {@code .fft} spectrum file —
+    /** Writes {@code r} as a {@code .fft} spectrum file -
      *  {@code frequency_hz;magnitude_dBV;phase_deg} rows under provenance
      *  header comments (capture mode, tones, analysis parameters, applied
      *  calibrations). */
@@ -550,7 +578,7 @@ public final class FftController {
                             e.getPath(), e.isWithNoise() ? " (withNoise)" : "");
                 }
             }
-            // Bin bandwidth (Hz) the spectrum was captured with — informational,
+            // Bin bandwidth (Hz) the spectrum was captured with - informational,
             // and the loader derives the V/√Hz scale from it so a re-opened file
             // keeps its own scale instead of the then-live config's.  Live
             // results carry null and write the live-config cache.

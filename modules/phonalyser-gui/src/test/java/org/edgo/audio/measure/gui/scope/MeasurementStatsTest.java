@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests for {@link MeasurementStats} — Welford online accumulator
+ * Tests for {@link MeasurementStats} - Welford online accumulator
  * driving the oscilloscope measurement-table cur/avg/min/max/σ display.
  * Pins NaN-skip behaviour + numerical stability vs the textbook formula.
  */

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -47,6 +47,7 @@ import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
@@ -60,6 +61,7 @@ import org.edgo.audio.measure.gui.scope.gl.GpuSupport;
 import org.edgo.audio.measure.gui.tips.TipOfTheDayDialog;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
+import org.edgo.audio.measure.gui.sound.CalibrationCopyOffers;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -74,23 +76,23 @@ import lombok.extern.log4j.Log4j2;
  *
  * <p>Menu responsibilities:
  * <ul>
- *   <li><b>File</b> — application exit.</li>
- *   <li><b>Language</b> — runtime locale switch (do-not-translate sentinel,
+ *   <li><b>File</b> - application exit.</li>
+ *   <li><b>Language</b> - runtime locale switch (do-not-translate sentinel,
  *       always rendered as "Language" so users who can't read the current
  *       UI language can still find this menu).</li>
- *   <li><b>Tools</b> — opens the {@code PreferencesDialog}.  On OK, a committed
+ *   <li><b>Tools</b> - opens the {@code PreferencesDialog}.  On OK, a committed
  *       audio-config change stops live capture + generator playback before the
  *       switch and restarts them after (via
  *       {@link MainTab#beforeApplyBackendChanges()}) so device changes don't
  *       tear running streams.</li>
- *   <li><b>Help</b> — multi-chapter HTML help viewer (F1 / Ctrl+F1),
+ *   <li><b>Help</b> - multi-chapter HTML help viewer (F1 / Ctrl+F1),
  *       startup-check toggles, GitHub issue reporting, About dialog.</li>
  * </ul>
  */
 @Log4j2
 public final class MainWindow {
 
-    /** Minimum shell footprint — a standard 1024×720 window.  The
+    /** Minimum shell footprint - a standard 1024×720 window.  The
      *  content's computed natural layout is wider but shorter than this, so the
      *  minimum is clamped to let the window shrink to 1024 wide while keeping at
      *  least 720 tall (and never below the content's own natural height). */
@@ -105,20 +107,32 @@ public final class MainWindow {
 
     private final Display display;
     private final Shell   shell;
-    /** App-lifetime audio engines (generator / scope / FFT) — created once
+    /** App-lifetime audio engines (generator / scope / FFT) - created once
      *  here and injected down into the panes, so they keep running through
      *  every {@link #rebuildContent()}; shut down on shell dispose. */
     private final UIEngines engines;
     /** Rebuilt in place by {@link #rebuildContent()} (language / UI-font
-     *  changes) — the shell itself survives.  Consumers (the
+     *  changes) - the shell itself survives.  Consumers (the
      *  {@code gui.automation} scripts) must re-read this after every
      *  rebuild instead of caching the instance. */
     @Getter
     private MainTab mainTab;
+    /** App-lifetime memory of the copy-calibration offers already put to the
+     *  operator (ruling D4: offered once, a decline remembered for the session).
+     *  It lives here because the Preferences dialog does not: a new one is built
+     *  every time the menu item is chosen, and a decline that died with it would
+     *  come back on the very next open. */
+    @Getter
+    private final CalibrationCopyOffers calibrationCopyOffers = new CalibrationCopyOffers();
 
     public MainWindow(Display display) {
         this.display = display;
         this.shell   = new Shell(display);
+        // Published for GuiUtil.marshal callers with no shell of their own - a
+        // worker deep below the panes has no widget to reach one through (and
+        // Widget.getShell() may only be called on the display thread anyway);
+        // this window is the process-wide owner.
+        GuiUtil.setMainShell(shell);
         shell.setText(I18n.t("app.title"));
         shell.setLayout(new FillLayout());
         ShellIcons.apply(shell);
@@ -161,25 +175,26 @@ public final class MainWindow {
         int savedW = prefs.getWindowWidth();
         int savedH = prefs.getWindowHeight();
         // Restore the saved size, clamped to the minimum (NOT to the natural
-        // width — else a saved 1280 would be forced back up to the natural box).
+        // width - else a saved 1280 would be forced back up to the natural box).
         int w = savedW > 0 ? Math.max(minW, savedW) : Math.max(MIN_SHELL_WIDTH, natural.x);
         int h = savedH > 0 ? Math.max(minH, savedH) : Math.max(800, natural.y);
         shell.setSize(w, h);
     }
 
     /** Shows the window and logs the start event.  Caller drives the SWT event loop.
-     *  Also closes the "Switching language…" loading dialog if one was put
+     *  Also closes the "Switching language..." loading dialog if one was put
      *  up by the previous instance's {@link #requestRecreate()}. */
     public void open() {
         shell.open();
         closeRebuildSplash();
         log.info("GUI started.");
         // The SashForms allocate their first pane heights from weights applied
-        // during construction — before the shell is realised at its on-screen
-        // size — so on macOS a pane can open with its title bar clipped until the
+        // during construction - before the shell is realised at its on-screen
+        // size - so on macOS a pane can open with its title bar clipped until the
         // first manual resize.  Defer one more deep layout (runs after the shell
         // has its real size) to settle them at startup, the same re-layout a
-        // resize triggers.
+        // resize triggers.  Deliberate SAME-thread deferral - not a marshal, so
+        // not GuiUtil.marshal (which runs in place on the UI thread).
         display.asyncExec(() -> {
             if (shell.isDisposed()) return;
             shell.layout(true, true);
@@ -191,7 +206,7 @@ public final class MainWindow {
             if (!GpuSupport.instance().isProbed()
                     && GpuSupport.instance().isAvailable(shell)
                     && Preferences.instance().isUseGpuAcceleration()) {
-                rebuildContent(false);   // silent: idle scope, no "Applying settings…" flash
+                rebuildContent(false);   // silent: idle scope, no "Applying settings..." flash
             }
         });
         // Fire the silent update check once the shell is up.  The
@@ -208,13 +223,13 @@ public final class MainWindow {
     }
 
     /** Stops the live streams before the Preferences dialog commits an audio
-     *  change — invoked by its OK handler while the old backend is still active. */
+     *  change - invoked by its OK handler while the old backend is still active. */
     public void beforeApplyBackendChanges() {
         if (mainTab != null) mainTab.beforeApplyBackendChanges();
     }
 
     /** Restarts, on the newly-committed backend, the streams stopped by
-     *  {@link #beforeApplyBackendChanges()} — invoked by the dialog's OK handler. */
+     *  {@link #beforeApplyBackendChanges()} - invoked by the dialog's OK handler. */
     public void afterApplyBackendChanges() {
         if (mainTab != null) mainTab.afterApplyBackendChanges();
     }
@@ -222,6 +237,7 @@ public final class MainWindow {
     public boolean isDisposed() {
         return shell.isDisposed();
     }
+
 
     /** Loop-driven realtime repaint of the active tab's live views, called once
      *  per frame by the main event loop's render tick (see {@code GuiMain}).
@@ -231,25 +247,25 @@ public final class MainWindow {
         return mainTab != null && mainTab.renderRealtimeFrame();
     }
 
-    /** Closes the shell, ending the SWT event loop — how an automation
+    /** Closes the shell, ending the SWT event loop - how an automation
      *  run exits the application when its script completes. */
     public void close() {
         if (!shell.isDisposed()) shell.close();
     }
 
-    /** Rebuilds the menu bar + tab content INSIDE the live shell — the
+    /** Rebuilds the menu bar + tab content INSIDE the live shell - the
      *  window itself (position, size, maximized state) survives.  Used by
      *  the language switch and by UI-font changes.  The audio engines live
      *  in {@link UIEngines}, outside the widget tree, and keep running
-     *  through the teardown — the rebuilt panes re-attach to them, so a
+     *  through the teardown - the rebuilt panes re-attach to them, so a
      *  font / language change never silences a running measurement; a
-     *  brief "Applying settings…" splash covers the work. */
+     *  brief "Applying settings..." splash covers the work. */
     public void rebuildContent() {
         rebuildContent(true);
     }
 
     /** As {@link #rebuildContent()}, but {@code showSplash=false} skips the
-     *  "Applying settings…" splash — used by the one-shot startup CPU→GPU swap
+     *  "Applying settings..." splash - used by the one-shot startup CPU->GPU swap
      *  (the scope is idle then, so the swap is invisible and the splash would just
      *  flash). */
     public void rebuildContent(boolean showSplash) {
@@ -263,7 +279,7 @@ public final class MainWindow {
             shell.setText(I18n.t("app.title"));
             buildMenuBar();
             mainTab = new MainTab(shell, engines);
-            // Recompute only the MINIMUM size — the current window size and
+            // Recompute only the MINIMUM size - the current window size and
             // position deliberately stay untouched.
             Point natural = mainTab.computeNaturalShellSize();
             shell.setMinimumSize(Math.min(natural.x, MIN_SHELL_WIDTH),
@@ -274,7 +290,7 @@ public final class MainWindow {
             if (showSplash) closeRebuildSplash();
         }
         // A live language switch rebuilt the main window above; carry the
-        // separate help window (if open) to the new language too — it is its own
+        // separate help window (if open) to the new language too - it is its own
         // Shell, so the rebuild does not reach it.  No-op unless the language
         // actually changed and help is open.
         HelpViewer.instance().refreshLanguage();
@@ -324,7 +340,7 @@ public final class MainWindow {
         // those entries move out of Tools / Help there (see wireMacSystemMenu).
         boolean mac = "cocoa".equals(SWT.getPlatform());
 
-        // File → Exit.  On macOS quitting is the application-menu "Quit
+        // File -> Exit.  On macOS quitting is the application-menu "Quit
         // Phonalyser" item; since Exit is the only File entry, the whole File
         // menu is omitted there.
         if (!mac) {
@@ -338,11 +354,11 @@ public final class MainWindow {
         }
 
         // Top-level Language menu, sitting right after File.  Its label is
-        // deliberately NOT translated — it stays "Language" in every
+        // deliberately NOT translated - it stays "Language" in every
         // locale so a user who can't read the current language can still
         // find this menu and switch to their own.
         MenuItem languageCascade = new MenuItem(menuBar, SWT.CASCADE);
-        // do-not-translate — always "Language"
+        // do-not-translate - always "Language"
         languageCascade.setText("Language");
         Menu languageMenu = new Menu(shell, SWT.DROP_DOWN);
         languageCascade.setMenu(languageMenu);
@@ -351,8 +367,8 @@ public final class MainWindow {
         }
 
         // Tools menu.  "Tune notch" is present on every platform; Preferences
-        // is only added on non-macOS — on macOS it is the application-menu
-        // "Settings…" item (wired in wireMacSystemMenu).
+        // is only added on non-macOS - on macOS it is the application-menu
+        // "Settings..." item (wired in wireMacSystemMenu).
         MenuItem toolsCascade = new MenuItem(menuBar, SWT.CASCADE);
         toolsCascade.setText(I18n.t("menu.tools"));
         Menu toolsMenu = new Menu(shell, SWT.DROP_DOWN);
@@ -419,7 +435,7 @@ public final class MainWindow {
         helpRebuildIndex.setText(I18n.t("menu.help.rebuildIndex"));
         helpRebuildIndex.addListener(SWT.Selection, e -> rebuildHelpIndex());
 
-        // Help → About.  On macOS this is the application-menu "About Phonalyser"
+        // Help -> About.  On macOS this is the application-menu "About Phonalyser"
         // item (wired in wireMacSystemMenu), so it is omitted from Help there.
         if (!mac) {
             new MenuItem(helpMenu, SWT.SEPARATOR);
@@ -443,7 +459,7 @@ public final class MainWindow {
         dialog.open();
     }
 
-    /** Opens the Tune-notch wizard — a continuous Farina-sweep frequency
+    /** Opens the Tune-notch wizard - a continuous Farina-sweep frequency
      *  response chart for live notch-filter tuning. */
     private void openTuneNotchDialog() {
         new TuneNotchWizardDialog(shell).open();
@@ -456,8 +472,8 @@ public final class MainWindow {
     }
 
     /** macOS only: routes the application ("apple") menu's standard About and
-     *  Settings items to the same handlers as the (suppressed) Help → About and
-     *  Tools → Preferences entries.  Quit / Services / Hide are left as macOS
+     *  Settings items to the same handlers as the (suppressed) Help -> About and
+     *  Tools -> Preferences entries.  Quit / Services / Hide are left as macOS
      *  provides them. */
     private void wireMacSystemMenu() {
         Menu systemMenu = display.getSystemMenu();
@@ -609,7 +625,7 @@ public final class MainWindow {
         return tags;
     }
 
-    /** {@code messages_zh_TW.properties} → {@code zh-TW}. */
+    /** {@code messages_zh_TW.properties} -> {@code zh-TW}. */
     private String tagFromFileName(String fileName) {
         String core = fileName.substring("messages_".length(),
                 fileName.length() - ".properties".length());
@@ -617,7 +633,7 @@ public final class MainWindow {
     }
 
     /** Native-language label for the BCP-47 tag, with first letter
-     *  capitalised (e.g. {@code nb} → "Norsk bokmål", not "norsk bokmål"). */
+     *  capitalised (e.g. {@code nb} -> "Norsk bokmål", not "norsk bokmål"). */
     private String displayLabel(String tag) {
         Locale loc = Locale.forLanguageTag(tag);
         String name = loc.getDisplayName(loc);
@@ -638,7 +654,7 @@ public final class MainWindow {
             // RADIO fires both for the newly-selected item (selection=true)
             // and the previously-selected one (selection=false); only act
             // on the gain event.  Also skip when the user re-clicks the
-            // already-active language — saves an unnecessary shell rebuild.
+            // already-active language - saves an unnecessary shell rebuild.
             if (!item.getSelection()) return;
             if (tag.equals(prefs.getUiLanguage())) return;
             prefs.setUiLanguage(tag);

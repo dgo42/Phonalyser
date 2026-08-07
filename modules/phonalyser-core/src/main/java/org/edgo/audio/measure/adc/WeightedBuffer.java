@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -103,7 +103,7 @@ public class WeightedBuffer {
     // 32-bit storage
     @Getter private final float[][] chunks;
 
-    // Code map built by buildCodeMap(): raw code → corrected code
+    // Code map built by buildCodeMap(): raw code -> corrected code
     private double[]   codeMapBins;    // ≤ 24-bit
     private double[][] codeMapChunks;  // 32-bit
 
@@ -251,7 +251,7 @@ public class WeightedBuffer {
      * <p>Amplitude estimation: when {@code sineAmpFsRatio} is {@code NaN} or
      * non-positive, A is estimated from the observed rail-bin counts assuming
      * clipping dominates them:
-     * {@code N_rail/N_total ≈ (2/π)·arccos(1/A) ⇒ A = 1/cos(π·N_rail/2N_total)}.
+     * {@code N_rail/N_total ≈ (2/π)·arccos(1/A) => A = 1/cos(π·N_rail/2N_total)}.
      * For moderate clipping (rail counts are mostly the clipped portion) this
      * is accurate to within a fraction of an LSB.  Pass an explicit ratio
      * (e.g. 1.05 = 5 % over FS) when you want to bypass the estimator.
@@ -298,7 +298,7 @@ public class WeightedBuffer {
         if (Double.isNaN(amp) || amp <= 0.0) {
             if (total == 0) {
                 amp = 1.0;
-                log.info("Sine-reference: histogram empty — assuming A = 1.0 FS");
+                log.info("Sine-reference: histogram empty - assuming A = 1.0 FS");
             } else {
                 amp = estimateAmplitudeFromCDF(histogram, fitPoints);
                 double clipPct = amp > 1.0
@@ -353,7 +353,7 @@ public class WeightedBuffer {
             float rightFill = (rightA + rightB) / 2.0f;
             for (long k = 0; k < edgeBins; k++) set(k, leftFill);
             for (long k = binCount - edgeBins; k < binCount; k++) set(k, rightFill);
-            log.info("Sine-reference: masked {} edge bin(s) per side — left fill {} (from bins {}, {}), right fill {} (from bins {}, {})",
+            log.info("Sine-reference: masked {} edge bin(s) per side - left fill {} (from bins {}, {}), right fill {} (from bins {}, {})",
                     edgeBins,
                     String.format(Locale.US, "%.4f", leftFill),  edgeBins, edgeBins + 1,
                     String.format(Locale.US, "%.4f", rightFill), binCount - 1 - edgeBins, binCount - 2 - edgeBins);
@@ -382,22 +382,22 @@ public class WeightedBuffer {
      * empirical histogram CDF gives the voltage V_i where the cumulative
      * count crosses F_i·N_total; the analytic relation then yields
      *   A_i = V_i / sin(π·(F_i − 1/2))
-     * The median of {A_i} is returned — robust against drift / non-stable
+     * The median of {A_i} is returned - robust against drift / non-stable
      * signal poisoning the histogram tails (which would dominate any rail-bin
      * estimator).
      *
      * <p>Quantile points are sampled from {@code F ∈ [0.10, 0.40] ∪
      * [0.60, 0.90]}, deliberately skipping:
      * <ul>
-     *   <li>the rails (F &lt; 0.10, F &gt; 0.90) — poisoned by drift, glitches,
+     *   <li>the rails (F &lt; 0.10, F &gt; 0.90) - poisoned by drift, glitches,
      *       and clipping;
-     *   <li>the median (F ≈ 0.5) — where {@code sin(π·(F−1/2)) → 0} makes
+     *   <li>the median (F ≈ 0.5) - where {@code sin(π·(F−1/2)) -> 0} makes
      *       {@code V/sin(...)} numerically singular.
      * </ul>
      *
      * @param histogram captured ADC histogram
      * @param nPoints   total number of quantile points (split equally
-     *                  between the two F bands).  Typical 20–40.
+     *                  between the two F bands).  Typical 20-40.
      */
     public double estimateAmplitudeFromCDF(AdcHistogram histogram, int nPoints) {
         long binCount = histogram.getBinCount();
@@ -463,7 +463,7 @@ public class WeightedBuffer {
     }
 
     /**
-     * Builds a linearization map: raw code → corrected code.
+     * Builds a linearization map: raw code -> corrected code.
      *
      * Algorithm:
      *   1. Treat the weight of each bin as a measure of how many output codes it deserves.
@@ -484,7 +484,7 @@ public class WeightedBuffer {
                 total += bins[i];
             }
             if (total == 0) {
-                log.warn("All weights are zero – map will be identity.");
+                log.warn("All weights are zero - map will be identity.");
                 return;
             }
             double cdf = 0;
@@ -504,7 +504,7 @@ public class WeightedBuffer {
                 }
             }
             if (total == 0) {
-                log.warn("All weights are zero – map will be identity.");
+                log.warn("All weights are zero - map will be identity.");
                 return;
             }
             double cdf    = 0;

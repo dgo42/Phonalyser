@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -56,7 +56,7 @@ import lombok.Setter;
  *   <li>A custom {@link CTabFolderRenderer} that widens each custom tab to
  *       fit the wider of its label / tile row and draws the label
  *       top-aligned so the tiles sit cleanly underneath.</li>
- *   <li>A transparent spacer {@link Image} per custom tab — the lever
+ *   <li>A transparent spacer {@link Image} per custom tab - the lever
  *       {@code CTabFolder} actually uses to size a tab; resized on demand
  *       so a setting change visibly re-fits the tab.</li>
  *   <li>The paint listener that draws the tiles, plus per-tile hover
@@ -84,11 +84,11 @@ import lombok.Setter;
  *   tabs.init();                                    // capture labels, size, wire listeners
  * </pre>
  * Only the leading {@code customTabs} tabs get tiles; any trailing tabs
- * (Presets, Utility, Save, Load, …) render with the default behaviour.
+ * (Presets, Utility, Save, Load, ...) render with the default behaviour.
  */
 public class TileTabFolder extends CTabFolder {
 
-    /** Inset of the tile row / label from the tab's left edge — narrower on
+    /** Inset of the tile row / label from the tab's left edge - narrower on
      *  the selected tab because its curve bulges further in. */
     private static final int SEL_INSET   = 11;
     private static final int UNSEL_INSET = 15;
@@ -110,7 +110,7 @@ public class TileTabFolder extends CTabFolder {
     /** Floor for a spacer image so a near-empty tab is still clickable. */
     private static final int MIN_TAB_WIDTH   = 50;
     /** Gap below the tile row.  4 px (was 2) raises the tile row by 2 px to
-     *  match the label lift — see {@link #LABEL_TOP_Y}. */
+     *  match the label lift - see {@link #LABEL_TOP_Y}. */
     private static final int TILE_BOTTOM_GAP = 4;
     private static final int TILE_GAP        = 3;
     private static final int TILE_H_PADDING  = 4;
@@ -145,7 +145,7 @@ public class TileTabFolder extends CTabFolder {
      *  its own hover tooltip. */
     public static final class Tile {
 
-        /** Tile shape — a text chip or a filled LED dot. */
+        /** Tile shape - a text chip or a filled LED dot. */
         public enum Kind {
             TEXT, LED;
 
@@ -168,7 +168,7 @@ public class TileTabFolder extends CTabFolder {
             return new Tile(Kind.TEXT, text, tooltip);
         }
 
-        /** A filled LED dot — a square chip with a coloured circle, used to
+        /** A filled LED dot - a square chip with a coloured circle, used to
          *  flag an "on" state (e.g. a live oscilloscope channel). */
         public static Tile led(String tooltip) {
             return new Tile(Kind.LED, null, tooltip);
@@ -257,7 +257,7 @@ public class TileTabFolder extends CTabFolder {
     }
 
     /** Collapses or expands the tab body.  Collapsed leaves only the tab
-     *  strip visible — clicking a tab still switches it, but the controls
+     *  strip visible - clicking a tab still switches it, but the controls
      *  underneath are hidden and the freed vertical space is returned to
      *  whatever sits above.  {@code CTabFolder.computeSize(hHint)} treats
      *  {@code hHint} as the client-area height and adds the strip trim on
@@ -417,7 +417,7 @@ public class TileTabFolder extends CTabFolder {
         }
         PaletteData palette = new PaletteData(0xFF0000, 0x00FF00, 0x0000FF);
         ImageData id = new ImageData(width, 1, 24, palette);
-        id.alphaData = new byte[width];      // all zeros → fully transparent
+        id.alphaData = new byte[width];      // all zeros -> fully transparent
         Image img = new Image(getDisplay(), id);
         spacerImages[tabIndex] = img;
         getItem(tabIndex).setImage(img);
@@ -457,7 +457,7 @@ public class TileTabFolder extends CTabFolder {
                 }
             }
         });
-        // Dynamic per-region hover tooltip — tile tips are resolved at paint
+        // Dynamic per-region hover tooltip - tile tips are resolved at paint
         // time so they reflect current state.  Set the tooltip on the hovered
         // CTabItem (its built-in tab tooltip takes priority over the
         // widget-level one).  Only update when the resolved region actually

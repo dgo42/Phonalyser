@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -83,7 +83,7 @@ class FreqRespCorrectionStoreTest {
         assertNull(store.getCurrentPath());
         assertEquals(1, changes.get());
 
-        // Second clear is a no-op — no extra notification.
+        // Second clear is a no-op - no extra notification.
         store.clearCurrent();
         assertEquals(1, changes.get());
     }

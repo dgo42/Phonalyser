@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,14 +20,14 @@ package org.edgo.audio.measure.dsp;
 
 /**
  * Time-domain waveform-discontinuity detector, shared by the oscilloscope's
- * glitch trigger and the FFT worker's time-domain rejection gate — so both
+ * glitch trigger and the FFT worker's time-domain rejection gate - so both
  * instruments agree on what counts as a damaged block (dropped-sample DAC
  * gaps, ADC-side cutoffs, phase-jump splices).
  *
  * <p>Each sample is predicted from the sinusoid recurrence
  * {@code d[i] ≈ a·d[i−1] − d[i−2]} with {@code a = 2·cos ω} estimated from the
  * window itself by least squares.  The recurrence is EXACT for a clean tone at
- * any frequency, so the prediction-error baseline is the noise floor — unlike
+ * any frequency, so the prediction-error baseline is the noise floor - unlike
  * a plain second difference (the {@code a = 2} special case), whose baseline
  * is the tone's own curvature {@code A·ω²} and which therefore goes deaf as
  * the signal frequency rises (at 20 kHz / 384 kHz the curvature threshold
@@ -40,7 +40,7 @@ public final class TimeDiscontinuityDetector {
     /**
      * Relative (noise-referenced) term of the detection threshold: this factor ×
      * the window's mean |prediction error|.  For a clean tone the error is
-     * noise-limited, where 8× ≈ 6.4 σ — broadband noise never fires; a splice
+     * noise-limited, where 8× ≈ 6.4 σ - broadband noise never fires; a splice
      * breaks the prediction by a large fraction of the amplitude, decades above.
      * Residual harmonics / a second tone raise the baseline (they don't fit a
      * single-tone recurrence), and the threshold self-scales with them.  This
@@ -55,27 +55,27 @@ public final class TimeDiscontinuityDetector {
      * {@code threshold = max(REL_FACTOR·meanAbs, EVENT_FLOOR_FRACTION·A)}.  It
      * stops the relative term from over-firing on a high tone, where sub-sample
      * capture-timing slips leak a residual prediction error {@code e ≈ A·2πf·δt}
-     * that grows with frequency and — referenced only to the noise floor —
+     * that grows with frequency and - referenced only to the noise floor -
      * crosses {@code REL_FACTOR·meanAbs} above a few kHz.
      *
-     * <p>Placement (maintainer's physical spec, 384 kHz rig): a real event is a
-     * deviation of ≥ 0.2·A within 2–4 samples (a 60–108 µs zero-pause, or a glued
+     * <p>Placement (physical spec of the 384 kHz rig): a real event is a
+     * deviation of ≥ 0.2·A within 2-4 samples (a 60-108 µs zero-pause, or a glued
      * capture splice), so 0.05 sits 12 dB BELOW the smallest real event
-     * (0.2 / 0.05 = 4 → 12.0 dB).  The largest legitimate non-event residual is a
+     * (0.2 / 0.05 = 4 -> 12.0 dB).  The largest legitimate non-event residual is a
      * 50 ns slip at 20 kHz.  Its naive step {@code A·2π·20 kHz·50 ns ≈ 0.006·A} is
      * NOT the error the detector sees: an isolated slip enters the sinusoid
      * recurrence weighted by the coefficient {@code a = 2·cos ω ≈ 1.9} (at
      * 20 kHz / 384 kHz), so the MEASURED worst-case residual is
      * {@code e_worst ≈ 2·cos ω · 0.006·A ≈ 0.012·A}.  The floor therefore sits
-     * ~12 dB ABOVE the worst non-event (0.05 / 0.012 ≈ 4.2 → 12.4 dB) — centered
+     * ~12 dB ABOVE the worst non-event (0.05 / 0.012 ≈ 4.2 -> 12.4 dB) - centered
      * between the two, clearing every timing-slip spur yet still firing on every
      * real event.
      */
     private static final double EVENT_FLOOR_FRACTION = 0.05;
 
-    /** Discontinuity bursts closer than this (seconds) belong to ONE glitch — a
+    /** Discontinuity bursts closer than this (seconds) belong to ONE glitch - a
      *  dropout's entry and recovery boundaries (the observed USB gaps run
-     *  120–160 µs) merge, so a caller can anchor on the glitch's start or end
+     *  120-160 µs) merge, so a caller can anchor on the glitch's start or end
      *  as a whole rather than on each boundary separately. */
     public static final double MERGE_SECONDS = 0.001;
 
@@ -86,12 +86,12 @@ public final class TimeDiscontinuityDetector {
      * samples form a burst; bursts closer than {@code mergeSamples} form ONE
      * glitch (a dropout = entry burst + body + recovery burst).
      *
-     * @param anchorStart {@code true} → return the last clean sample before the
-     *        glitch, {@code false} → the first settled sample after it
-     * @param omega the KNOWN fundamental as {@code 2π·f/sampleRate} — pins the
+     * @param anchorStart {@code true} -> return the last clean sample before the
+     *        glitch, {@code false} -> the first settled sample after it
+     * @param omega the KNOWN fundamental as {@code 2π·f/sampleRate} - pins the
      *        recurrence coefficient exactly, so the tone nulls to the noise floor
      *        even when an in-window glitch or harmonics would bias the estimate;
-     *        {@code NaN} → least-squares self-estimate from the window (external /
+     *        {@code NaN} -> least-squares self-estimate from the window (external /
      *        unknown signals)
      * @return that index for the RIGHTMOST glitch, or {@code -1.0} when nothing
      *         qualifies (including flat / silent input)
@@ -143,7 +143,7 @@ public final class TimeDiscontinuityDetector {
             }
             if (burstStart >= 0) {
                 if (glitchEnd >= 0 && burstStart - glitchEnd <= mergeSamples) {
-                    glitchEnd = i;                    // same glitch — extend to this burst
+                    glitchEnd = i;                    // same glitch - extend to this burst
                 } else {
                     glitchStart = burstStart;         // a new (rightmost) glitch
                     glitchEnd   = i;

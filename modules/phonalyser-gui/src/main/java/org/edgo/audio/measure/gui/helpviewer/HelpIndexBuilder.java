@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -40,19 +40,19 @@ import java.util.stream.Stream;
  * Rebuilds the offline help search assets from a language help folder:
  *
  * <ul>
- *   <li>{@code search-index.js} — {@code window.HELP_DOCS = [...]}, one entry
+ *   <li>{@code search-index.js} - {@code window.HELP_DOCS = [...]}, one entry
  *       per heading-anchored section (id, url, anchor, page title, heading,
  *       body text).  The {@code help-index.html} page builds a lunr index from
  *       this in the browser.</li>
- *   <li>{@code help-index.html} — the "Index &amp; search" page: a search box
- *       plus an auto A–Z list of topics (headings) and terms (acronyms +
+ *   <li>{@code help-index.html} - the "Index &amp; search" page: a search box
+ *       plus an auto A-Z list of topics (headings) and terms (acronyms +
  *       emphasised concept words).</li>
  * </ul>
  *
  * <p>This is the in-app / offline twin of the refresh-help skill's
  * {@code build-help-index.py}: a translator who corrects a language bundle can
- * regenerate its search index without the Python toolchain — either from the
- * Help menu (Rebuild help search index…) or from the command line via
+ * regenerate its search index without the Python toolchain - either from the
+ * Help menu (Rebuild help search index...) or from the command line via
  * {@link #main}.
  *
  * <p>Search-result links carry the query terms as a {@code ?hl=} parameter;
@@ -73,7 +73,7 @@ public final class HelpIndexBuilder {
             "TOC", "ASCII", "ID", "OK", "AM", "PM", "CPU", "GPU", "OS", "UI", "FAQ",
             "AND", "BUILD", "ALGORITHMS", "ON", "OR", "IS", "TRUE", "AIR", "MB", "PC");
 
-    /** Lowercase function words — a phrase containing one is a sentence
+    /** Lowercase function words - a phrase containing one is a sentence
      *  fragment, not an index term. */
     private static final Set<String> FUNCTION_WORDS = Set.of(
             "of", "the", "a", "an", "to", "in", "on", "for", "with", "and", "or", "is",
@@ -107,7 +107,7 @@ public final class HelpIndexBuilder {
     private static final Pattern B_RE        = Pattern.compile("<(?:b|strong|em|i)>(.*?)</(?:b|strong|em|i)>",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern ACRONYM_RE  = Pattern.compile("\\b[A-Z][A-Z0-9]{1,}(?:-[A-Z0-9]{2,})?\\b");
-    private static final Pattern HYPHEN_RE   = Pattern.compile("\\b[A-Z][A-Za-z]+[–-][A-Z][A-Za-z]+\\b");
+    private static final Pattern HYPHEN_RE   = Pattern.compile("\\b[A-Z][A-Za-z]+[--][A-Z][A-Za-z]+\\b");
     private static final Pattern PROPER_RE   = Pattern.compile("\\b[A-Z][a-z]{2,}\\b");
     private static final Pattern VALUE_RE    = Pattern.compile("^[\\W\\d]*[\\d][\\d\\s.,%/A-Za-zµ -]*$");
     private static final Pattern HEX_RE      = Pattern.compile("^[0-9A-Fa-f]{6}$");
@@ -160,7 +160,7 @@ public final class HelpIndexBuilder {
         String raw = Files.readString(path, StandardCharsets.UTF_8);
         String url = relUrl(path);
         Matcher tm = TITLE_RE.matcher(raw);
-        String title = tm.find() ? strip(tm.group(1)).replace("Phonalyser — ", "") : url;
+        String title = tm.find() ? strip(tm.group(1)).replace("Phonalyser - ", "") : url;
         title = title.replaceFirst("^Theory:\\s*", "").replaceFirst("^Further reading:\\s*", "");
         if (title.equals("Theory of operation")) title = "Overview";
 
@@ -185,7 +185,7 @@ public final class HelpIndexBuilder {
     }
 
     /** Drops script/style/svg blocks and every tag, unescapes entities, and
-     *  collapses whitespace — the plain text used for indexing. */
+     *  collapses whitespace - the plain text used for indexing. */
     private String strip(String html) {
         String s = DROP_BLOCKS.matcher(html).replaceAll(" ");
         s = TAG_RE.matcher(s).replaceAll(" ");
@@ -219,7 +219,7 @@ public final class HelpIndexBuilder {
                     if (KNOWN_PROPER.contains(t.toLowerCase(Locale.ROOT))) addTerm(terms, t, p.url, s.anchor, secLabel);
                 }
             }
-            // Concept terms emphasised in body text — skip bold sentence
+            // Concept terms emphasised in body text - skip bold sentence
             // lead-ins (those end with a period) and keep only short,
             // term-like phrases.
             String pageAnchor = p.secs.isEmpty() ? "" : p.secs.get(0).anchor;
@@ -271,7 +271,7 @@ public final class HelpIndexBuilder {
                     String head = s.text.length() > 130 ? s.text.substring(0, 130) : s.text;
                     int sp = head.lastIndexOf(' ');
                     blurb = sp >= 0 ? head.substring(0, sp) : head;
-                    if (!blurb.isEmpty() && !head.endsWith(" ")) blurb += "…";
+                    if (!blurb.isEmpty() && !head.endsWith(" ")) blurb += "...";
                 }
                 topics.add(new Topic(s.heading, p.url, s.anchor, label, blurb));
             }
@@ -326,7 +326,7 @@ public final class HelpIndexBuilder {
             for (Topic e : g.items) {
                 String href = e.url + "#" + e.anchor;
                 String blurb = e.blurb.isEmpty() ? ""
-                        : " — <span class=\"small\">" + esc(e.blurb) + "</span>";
+                        : " - <span class=\"small\">" + esc(e.blurb) + "</span>";
                 sb.append("      <li><a href=\"").append(esc(href)).append("\">").append(esc(e.name))
                   .append("</a> <span class=\"small\">(").append(esc(e.label)).append(")</span>")
                   .append(blurb).append("</li>\n");
@@ -346,7 +346,7 @@ public final class HelpIndexBuilder {
                     links.append("<a href=\"").append(esc(r[0])).append('#').append(esc(r[1]))
                          .append("\">").append(esc(r[2])).append("</a>");
                 }
-                sb.append("      <li><b>").append(esc(e.display)).append("</b> — ")
+                sb.append("      <li><b>").append(esc(e.display)).append("</b> - ")
                   .append(links).append("</li>\n");
             }
             sb.append("    </ul>\n");
@@ -473,12 +473,12 @@ public final class HelpIndexBuilder {
             case "ge"     -> "≥";
             case "ne"     -> "≠";
             case "asymp"  -> "≈";
-            case "hellip" -> "…";
-            case "rarr"   -> "→";
-            case "larr"   -> "←";
+            case "hellip" -> "...";
+            case "rarr"   -> "->";
+            case "larr"   -> "<-";
             case "harr"   -> "↔";
-            case "ndash"  -> "–";
-            case "mdash"  -> "—";
+            case "ndash"  -> "-";
+            case "mdash"  -> "-";
             case "minus"  -> "−";
             case "sup2"   -> "²";
             case "sup3"   -> "³";
@@ -545,7 +545,7 @@ public final class HelpIndexBuilder {
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Index &amp; search</title>
+  <title>Phonalyser - Index &amp; search</title>
   <link rel="stylesheet" href="style.css"/>
   <script src="lunr.min.js"></script>
   <script src="search-index.js"></script>
@@ -557,7 +557,7 @@ public final class HelpIndexBuilder {
 
   <div class="search">
     <input id="q" type="text" autocomplete="off" spellcheck="false"
-           placeholder="Search the help…"/>
+           placeholder="Search the help..."/>
     <div id="results" class="results"></div>
   </div>
 """;
@@ -588,7 +588,7 @@ public final class HelpIndexBuilder {
       for(var i=0;i<toks.length;i++){var p=low.indexOf(toks[i]); if(p>=0&&(at<0||p<at))at=p;}
       if(at<0)at=0;
       var start=Math.max(0,at-50), s=text.substring(start,start+170);
-      if(start>0)s='…'+s; if(start+170<text.length)s=s+'…';
+      if(start>0)s='...'+s; if(start+170<text.length)s=s+'...';
       s=esc(s);
       for(var j=0;j<toks.length;j++){
         s=s.replace(new RegExp('('+toks[j].replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+')','ig'),'<mark>$1</mark>');
@@ -612,7 +612,7 @@ public final class HelpIndexBuilder {
       res.forEach(function(r){
         var d=byId[r.ref]; if(!d) return;
         // Carry the query terms so the opened page highlights them (the help
-        // viewer injects a highlighter that reads ?hl=… — see HelpViewer).
+        // viewer injects a highlighter that reads ?hl=... - see HelpViewer).
         var href=d.u+'?'+hl+(d.a?('#'+d.a):'');
         var label=d.t+(d.h?(' ▸ '+d.h):'');
         var div=document.createElement('div'); div.className='hit';

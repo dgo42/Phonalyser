@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,8 +26,8 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Pins the dBFS→display-unit conversion math in
- * {@link Preferences#convertFromDbFs} — the anchor for every absolute level
+ * Pins the dBFS->display-unit conversion math in
+ * {@link Preferences#convertFromDbFs} - the anchor for every absolute level
  * the FFT view shows.  An uninitialised {@code dbvOffsetDb} once shifted all
  * dBV/V readouts by ~5 dB on fresh installs; these tests would have caught it.
  *
@@ -59,7 +59,7 @@ class PreferencesConversionTest {
         savedSampleRate = prefs.current().getInputSampleRate();
 
         prefs.setAdcFsVoltageRms(ADC_FS_VRMS);
-        // POJO write first, then the property set — the fftLength listener
+        // POJO write first, then the property set - the fftLength listener
         // fires recomputeBinBw() and picks the new rate up with it.
         prefs.current().setInputSampleRate(SAMPLE_RATE);
         prefs.setFftLength(FFT_LENGTH == prefs.getFftLength() ? FFT_LENGTH / 2 : FFT_LENGTH);
@@ -101,7 +101,7 @@ class PreferencesConversionTest {
 
     @Test
     void voltsPerSqrtHz_explicitBinBwOverridesCache() {
-        // A loaded .fft file carries its own √(bin bandwidth) — the 3-arg
+        // A loaded .fft file carries its own √(bin bandwidth) - the 3-arg
         // overload must use it instead of the live-config cache.
         assertEquals(0.2 / 2.0,
                 Preferences.instance().convertFromDbFs(-20.0, MagnitudeUnit.V_SQRT_HZ, 2.0), EPS);
@@ -116,7 +116,7 @@ class PreferencesConversionTest {
     @Test
     void fftLengthChange_recomputesCachedBinBandwidth() {
         Preferences prefs = Preferences.instance();
-        // Bidi-bound GUI edits write the property directly — the listener
+        // Bidi-bound GUI edits write the property directly - the listener
         // registered in the constructor must keep the cache in step.
         prefs.fftLengthProperty().set(FFT_LENGTH / 4);
         double binBw = (double) SAMPLE_RATE / (FFT_LENGTH / 4);

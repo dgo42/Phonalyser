@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,12 +18,14 @@
 
 package org.edgo.audio.measure.gui.freqresp;
 
-import org.edgo.audio.measure.sound.CaptureWithGenerator;
+import org.edgo.audio.measure.common.MemUtil;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.sound.StereoCaptureProgress;
 import org.edgo.audio.measure.sound.StereoSamples;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.sound.SweepCapture;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import java.util.function.BooleanSupplier;
@@ -34,8 +36,8 @@ import java.util.function.BooleanSupplier;
  * channels of the capture so the deconvolution can recover L and R from
  * a single playback.
  *
- * <p>Production code uses {@link #real()} which delegates to
- * {@link CaptureWithGenerator#runStereo}; unit tests inject a stub
+ * <p>Production code uses {@link #forSweep}, whose one strategy drives the
+ * shared ring through a {@code GeneratorLane}; unit tests inject a stub
  * returning synthetic {@link StereoSamples} without opening any audio
  * device.  Tests only need to implement the SAM
  * {@link #capture(SignalGenerator, DeviceRef, DeviceRef, int, int, int, OutputChannels, int, BooleanSupplier)};
@@ -50,7 +52,7 @@ public interface StereoCaptureProvider {
      * channels of {@code inDevice} for {@code durationSec} seconds,
      * returning the captured samples normalised to {@code [-1, +1]}.
      *
-     * @param outputChannels which DAC lane(s) carry the sweep — {@code LEFT} /
+     * @param outputChannels which DAC lane(s) carry the sweep - {@code LEFT} /
      *                       {@code RIGHT} write digital silence to the other
      *                       lane; {@code BOTH} drives both (legacy)
      * @param cancelToken polled during the capture wait; non-null tokens
@@ -79,49 +81,66 @@ public interface StereoCaptureProvider {
                        outputChannels, durationSec, cancelToken);
     }
 
-    /** Returns the production capture strategy that drives real audio
-     *  hardware via {@link CaptureWithGenerator#runStereo}.  Both the
-     *  no-progress SAM and the {@link #captureWithProgress} variant are
-     *  overridden — the latter actually forwards live block progress. */
-    /** Localized pre-check for the sweep capture: refuses — with the real
-     *  numbers — when the two capture lanes (plus their trim copies) cannot
-     *  fit the heap, BEFORE the generator starts.  The English guard inside
-     *  {@link CaptureWithGenerator#runStereo} stays as the CLI / log
-     *  backstop; this one carries the i18n text the measurement-failed
-     *  dialog shows. */
+    /** Localized pre-check for the sweep capture: refuses - with the real
+     *  numbers - when the two capture lanes (plus their trim copies) cannot
+     *  fit the heap, BEFORE the generator starts.  The CLI capture leg guards
+     *  the same {@link MemUtil} numbers with its English backstop; this one
+     *  carries the i18n text the measurement-failed dialog shows. */
     default void ensureCaptureFits(int sampleRate, int durationSec) {
-        long needBytes = CaptureWithGenerator.stereoCaptureHeapBytes(sampleRate, durationSec);
-        long freeBytes = CaptureWithGenerator.heapShortfall(needBytes);
+        long needBytes = MemUtil.stereoCaptureHeapBytes(sampleRate, durationSec);
+        long freeBytes = MemUtil.heapShortfall(needBytes);
         if (freeBytes >= 0) {
             throw new IllegalArgumentException(I18n.t("freqResp.capture.tooLarge",
                     needBytes >> 20, freeBytes >> 20));
         }
     }
 
-    static StereoCaptureProvider real() {   // static-ok: interface factory — no instance exists to hang it on
+    /**
+     * The production strategy: ONE {@link SweepCapture} over ONE
+     * {@link org.edgo.audio.measure.gui.sound.GeneratorLane} - the lane, not
+     * this seam, decides whether the chirp is rendered here or commanded to a
+     * bench, so no caller differentiates the two.  The {@link SignalGenerator}
+     * the analyzer passes in stays its own deconvolution reference; the lane
+     * builds the identical chirp from the same numbers.
+     *
+     * <p>The sweep is derived in SAMPLES here, by the same formulas
+     * {@link FreqRespAnalyzer#run} uses on the same inputs; they must stay in
+     * step, because whichever end renders the chirp builds it from these and
+     * the analyzer deconvolves against one built from those.
+     *
+     * @param sampleRate    the rate the sweep will be asked for - every count
+     *                      below is against it, which is why a lane that grants
+     *                      another one fails the measurement instead of running it
+     * @param durationSec   the chirp's own length, excluding the lead-in
+     * @param dacFsVoltage  the DAC full-scale the amplitude is scaled against
+     */
+    static StereoCaptureProvider forSweep(int sampleRate, double startHz, double stopHz,   // static-ok: interface factory - no instance exists to hang it on
+            double durationSec, double leadInSec, double amplitudeVrms, double dacFsVoltage) {
+        int sweepSamples  = (int) Math.round(durationSec * sampleRate);
+        int leadInSamples = (int) Math.round(leadInSec * sampleRate);
+        int fadeSamples   = FreqRespCalHelper.sweepFadeSamples(sweepSamples);
         return new StereoCaptureProvider() {
             @Override
             public StereoSamples capture(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
-                                         int sampleRate, int bitDepth, int ditherBits,
+                                         int rate, int bitDepth, int ditherBits,
                                          OutputChannels outputChannels,
-                                         int durationSec,
+                                         int captureSec,
                                          BooleanSupplier cancelToken) throws Exception {
-                ensureCaptureFits(sampleRate, durationSec);
-                return CaptureWithGenerator.runStereo(gen, outDevice, inDevice,
-                        sampleRate, bitDepth, ditherBits, outputChannels,
-                        durationSec, null, 0, cancelToken, null);
+                return captureWithProgress(gen, outDevice, inDevice, rate, bitDepth,
+                        ditherBits, outputChannels, captureSec, cancelToken, null);
             }
             @Override
             public StereoSamples captureWithProgress(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
-                                                     int sampleRate, int bitDepth, int ditherBits,
+                                                     int rate, int bitDepth, int ditherBits,
                                                      OutputChannels outputChannels,
-                                                     int durationSec,
+                                                     int captureSec,
                                                      BooleanSupplier cancelToken,
                                                      StereoCaptureProgress progress) throws Exception {
-                ensureCaptureFits(sampleRate, durationSec);
-                return CaptureWithGenerator.runStereo(gen, outDevice, inDevice,
-                        sampleRate, bitDepth, ditherBits, outputChannels,
-                        durationSec, null, 0, cancelToken, progress);
+                ensureCaptureFits(rate, captureSec);
+                return new SweepCapture().run(startHz, stopHz, sweepSamples,
+                        leadInSamples, fadeSamples, amplitudeVrms, dacFsVoltage,
+                        rate, bitDepth, ditherBits, outputChannels,
+                        captureSec, cancelToken, progress);
             }
         };
     }

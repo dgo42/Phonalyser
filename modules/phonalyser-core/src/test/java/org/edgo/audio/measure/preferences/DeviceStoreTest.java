@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -66,19 +67,158 @@ class DeviceStoreTest {
 
     private static final double EPS = 1e-12;
 
+    // ── device->card binding: the user's saved choice ─────────────────────────
+
+    /** The name both cards recognise - the two-analyzer bench the binding exists
+     *  to disambiguate.  "QA403" is a substring of the longer card's match entry,
+     *  so the match rule has a clear (and wrong) favourite. */
+    private static final String AMBIGUOUS_DEVICE = "QA403 analyzer";
+    private static final String CHOSEN_CARD = "QA403";
+    private static final String OTHER_CARD = "QA403 analyzer (old)";
+
+    /**
+     * The whole point of the binding: the operator's pick beats the match rule,
+     * which without it answers "the longest matching entry" - a coin toss between
+     * two cards that both recognise the device, and one nobody can influence.
+     */
+    @Test
+    void aBoundCardBeatsTheLongestNameMatch() {
+        Preferences p = detached();
+        p.putAudioDeviceProfile(matchCard(CHOSEN_CARD, CHOSEN_CARD));
+        p.putAudioDeviceProfile(matchCard(OTHER_CARD, AMBIGUOUS_DEVICE));
+
+        assertEquals(OTHER_CARD, p.resolveDeviceProfile(AMBIGUOUS_DEVICE).getName(),
+                "without a binding the longest match wins, as it always has");
+
+        p.bindDeviceToCard(p.deviceBindingKey(null, AMBIGUOUS_DEVICE), CHOSEN_CARD);
+
+        assertEquals(CHOSEN_CARD, p.resolveDeviceProfile(AMBIGUOUS_DEVICE).getName(),
+                "the card the user chose is the card the device uses");
+    }
+
+    @Test
+    void unbindingPutsTheDeviceBackUnderTheMatchRule() {
+        Preferences p = detached();
+        p.putAudioDeviceProfile(matchCard(CHOSEN_CARD, CHOSEN_CARD));
+        p.putAudioDeviceProfile(matchCard(OTHER_CARD, AMBIGUOUS_DEVICE));
+        String key = p.deviceBindingKey(null, AMBIGUOUS_DEVICE);
+        p.bindDeviceToCard(key, CHOSEN_CARD);
+
+        p.bindDeviceToCard(key, null);
+
+        assertNull(p.boundCardName(key));
+        assertEquals(OTHER_CARD, p.resolveDeviceProfile(AMBIGUOUS_DEVICE).getName());
+    }
+
+    /** A card the binding names but the store no longer holds (deleted, or
+     *  renamed in the card editor) must not blank the device out - recognition is
+     *  what the match rule is for, and it is still there. */
+    @Test
+    void aBindingToACardThatIsGoneFallsBackToTheMatchRule() {
+        Preferences p = detached();
+        p.putAudioDeviceProfile(matchCard(OTHER_CARD, AMBIGUOUS_DEVICE));
+        p.bindDeviceToCard(p.deviceBindingKey(null, AMBIGUOUS_DEVICE), "Deleted Card");
+
+        assertEquals(OTHER_CARD, p.resolveDeviceProfile(AMBIGUOUS_DEVICE).getName());
+    }
+
+    /** A remote choice is mirrored under the SERVER's id, and that key must never
+     *  take part in local resolution: the card it names lives in the server's
+     *  store, and a local card of the same name is exactly the collision the
+     *  calibration-follows-the-device rule exists to stop. */
+    @Test
+    void aRemoteMirrorIsKeptApartFromTheLocalBinding() {
+        Preferences p = detached();
+        p.putAudioDeviceProfile(matchCard(OTHER_CARD, AMBIGUOUS_DEVICE));
+        String remoteKey = p.deviceBindingKey("bench-1", AMBIGUOUS_DEVICE);
+        p.bindDeviceToCard(remoteKey, CHOSEN_CARD);
+
+        assertEquals(CHOSEN_CARD, p.boundCardName(remoteKey), "the mirror is readable");
+        assertNull(p.boundCardName(AMBIGUOUS_DEVICE),
+                "but it is not the local device's binding");
+        assertEquals(OTHER_CARD, p.resolveDeviceProfile(AMBIGUOUS_DEVICE).getName(),
+                "and it must not resolve a local device to a card of the bench's");
+    }
+
+    @Test
+    void bindingsRoundTripThroughTheStoreFile(@TempDir Path dir) {
+        Path store = dir.resolve("devices.yaml");
+        Preferences src = detached();
+        src.putAudioDeviceProfile(matchCard(CHOSEN_CARD, CHOSEN_CARD));
+        src.bindDeviceToCard(src.deviceBindingKey(null, AMBIGUOUS_DEVICE), CHOSEN_CARD);
+        src.bindDeviceToCard(src.deviceBindingKey("bench-1", AMBIGUOUS_DEVICE), CHOSEN_CARD);
+        writeDevicesTo(src, store);
+
+        Preferences dst = detached();
+        loadDevicesFrom(dst, store);
+
+        assertEquals(CHOSEN_CARD, dst.boundCardName(AMBIGUOUS_DEVICE),
+                "the choice survives a restart, which is what makes it a decision "
+                        + "rather than this session's guess");
+        assertEquals(CHOSEN_CARD, dst.boundCardName(dst.deviceBindingKey("bench-1",
+                AMBIGUOUS_DEVICE)), "and so does the remote mirror, under its server id");
+        assertEquals(CHOSEN_CARD, dst.resolveDeviceProfile(AMBIGUOUS_DEVICE).getName());
+    }
+
+    /**
+     * A store that carries CHOICES but no cards of its own - every binding names
+     * a card the bundled seed supplies, which is exactly what an installation that
+     * has only ever picked from the known-cards list looks like.
+     *
+     * <p>The reader takes the {@code audioDevices} block as its cue to stop, so
+     * the bindings have to be read before that point or this file loses them
+     * silently: the operator's QA402-vs-QA403 pick would come back as "never
+     * chose", and the match rule would go on guessing.
+     */
+    @Test
+    void aStoreWithBindingsAndNoCardsStillLoadsTheChoices(@TempDir Path dir)
+            throws IOException {
+        Path store = dir.resolve("devices.yaml");
+        Files.writeString(store, "formatVersion: 1\ncontentVersion: 0\n"
+                + "bindings:\n  \"" + AMBIGUOUS_DEVICE + "\": \"" + CHOSEN_CARD + "\"\n");
+
+        Preferences p = detached();
+        loadDevicesFrom(p, store);
+
+        assertEquals(CHOSEN_CARD, p.boundCardName(AMBIGUOUS_DEVICE),
+                "the choice is read even with no audioDevices block to reach it past");
+    }
+
+    /** A card recognising {@code match}, with one calibrated LINKED input row so
+     *  it is a usable card in either resolution path. */
+    private AudioDeviceProfile matchCard(String name, String match) {
+        AudioDeviceProfile p = new AudioDeviceProfile();
+        p.setName(name);
+        p.getMatch().add(match);
+        DeviceRange row = new DeviceRange();
+        row.setLabel("default");
+        row.setFsLeft(1.0);
+        row.setFsRight(1.0);
+        p.getInput().setChannels(DeviceChannelMode.LINKED);
+        p.getInput().getRanges().add(row);
+        p.getInput().setActiveRange("default");
+        return p;
+    }
+
     /** A detached, transient Preferences with the inherited profile list cleared
-     *  — the same construction {@link DeviceProfileRoundTripTest} uses. */
+     *  - the same construction {@link DeviceProfileRoundTripTest} uses.  The card
+     *  CHOICES go with them: {@code copyForDialog} carries the bindings too, and a
+     *  developer's own pick for one of these device names would decide what the
+     *  resolution tests resolve. */
     private Preferences detached() {
         Preferences p = Preferences.instance().copyForDialog();
         p.setTransientMode(true);
         for (AudioDeviceProfile inherited : p.getAudioDeviceProfiles()) {
             p.removeAudioDeviceProfile(inherited.getName());
         }
+        for (String key : p.getDeviceCardBindings().keySet()) {
+            p.bindDeviceToCard(key, null);
+        }
         return p;
     }
 
     /** Invokes the private {@code loadDevicesFrom(Path)} store-establish mechanism
-     *  (seed-if-absent → read → seed-merge → rewrite) against {@code path}. */
+     *  (seed-if-absent -> read -> seed-merge -> rewrite) against {@code path}. */
     private void loadDevicesFrom(Preferences p, Path path) {
         invoke(p, "loadDevicesFrom", Path.class, path);
     }
@@ -110,9 +250,9 @@ class DeviceStoreTest {
     }
 
     /** The live bundle's {@code contentVersion} via the private one-parse
-     *  {@code readSeed()} snapshot — the catalog generation the
+     *  {@code readSeed()} snapshot - the catalog generation the
      *  once-per-content-version merge gates on.  A store recording an
-     *  equal-or-higher value keeps the merge dormant; a lower (or absent → 0)
+     *  equal-or-higher value keeps the merge dormant; a lower (or absent -> 0)
      *  value makes it fire once. */
     private int bundleContentVersion(Preferences p) {
         try {
@@ -140,7 +280,7 @@ class DeviceStoreTest {
     }
 
     /** The first range labelled {@code label} (case-sensitive test lookup), or
-     *  {@code null} — lets a merge assertion address a row by label rather than
+     *  {@code null} - lets a merge assertion address a row by label rather than
      *  by its position in the rebuilt list. */
     private DeviceRange findRow(List<DeviceRange> rows, String label) {
         for (DeviceRange r : rows) {
@@ -155,7 +295,7 @@ class DeviceStoreTest {
     void loadDevices_seedsBundle_whenFileAbsent(@TempDir Path dir) throws Exception {
         Path store  = dir.resolve("devices.yaml");
         Path bundle = dir.resolve("bundle.yaml");
-        // ISOLATED fixture seed — the SHIPPED bundle carries the maintainer's live
+        // ISOLATED fixture seed - the SHIPPED bundle carries real, measured
         // calibration data and changes between releases; tests assert only against
         // their own stable fixture so runs are repeatable on any machine.
         writeBundle(bundle, 1,
@@ -279,12 +419,12 @@ class DeviceStoreTest {
         p.getMatch().add("Cosmos ADC");
 
         // An existing entry ("Cosmos ADC") is already a substring of this device
-        // name → nothing is appended.
+        // name -> nothing is appended.
         assertFalse(p.bindDeviceName("Line (E1DA Cosmos ADC)"),
                 "no append when an existing entry already matches");
         assertEquals(List.of("Cosmos ADC"), p.getMatch());
 
-        // A device name no entry matches → the full name is appended.
+        // A device name no entry matches -> the full name is appended.
         assertTrue(p.bindDeviceName("Focusrite Scarlett 2i2"));
         assertEquals(List.of("Cosmos ADC", "Focusrite Scarlett 2i2"), p.getMatch());
 
@@ -309,7 +449,7 @@ class DeviceStoreTest {
         assertEquals(1.82, p.getAdcFsVoltageRmsRight(), EPS,
                 "legacy single-arg calibrate keeps both channel scalars equal");
         assertEquals(before, p.getAudioDeviceProfiles().size(),
-                "recognition binds the existing seed — no new card is forked");
+                "recognition binds the existing seed - no new card is forked");
 
         // The seeded Cosmos profile got the measured FS in its active row; its
         // match entry already recognised the device, so no name was appended.
@@ -346,7 +486,7 @@ class DeviceStoreTest {
         prof.getOutput().setActiveRange("default");
         src.putAudioDeviceProfile(prof);
         // Stamp the current content version so the store is on-version and the
-        // once-per-content-version merge stays dormant — this is a pure round-trip.
+        // once-per-content-version merge stays dormant - this is a pure round-trip.
         setRecordedContentVersion(src, bundleContentVersion(src));
         writeDevicesTo(src, store);
 
@@ -375,7 +515,7 @@ class DeviceStoreTest {
         writeDevicesTo(src, store);
 
         String yaml = Files.readString(store);
-        // "match:" (the KEY form) — the seed header comment the writer prepends
+        // "match:" (the KEY form) - the seed header comment the writer prepends
         // legitimately mentions the word "match" in prose.
         assertFalse(yaml.contains("match:"),
                 "a user card with no patterns must not persist an empty match key");
@@ -385,7 +525,7 @@ class DeviceStoreTest {
 
     @Test
     void migration_prefsStopWritingAudioDevicesBlock() {
-        // toMap must no longer emit an audioDevices block — the store moved out
+        // toMap must no longer emit an audioDevices block - the store moved out
         // to devices.yaml, so the block disappears from preferences.yaml.
         Preferences p = detached();
         AudioDeviceProfile prof = new AudioDeviceProfile();
@@ -398,10 +538,10 @@ class DeviceStoreTest {
 
     // ── Legacy global full-scale scalars in preferences.yaml ─────────────────
     // The two RELEASED scalars (adcFsVoltageRms / dacFsVoltageRms) are the
-    // DEPRECATED fallback for devices with no card — kept written and read for
+    // DEPRECATED fallback for devices with no card - kept written and read for
     // backwards compatibility until the release AFTER the next one (the help's
     // Preferences chapter documents this).  The RIGHT-channel siblings were
-    // never released and must stay out — per-channel values live in the card
+    // never released and must stay out - per-channel values live in the card
     // store only.
 
     /** The two never-released per-channel keys toMap must never write. */
@@ -426,17 +566,20 @@ class DeviceStoreTest {
     }
 
     @Test
-    void toMap_writesDeprecatedFallbackScalars_neverTheRightSiblings() {
-        // The deprecated shared fallback stays in the yaml until the release
-        // after the next one; the never-released Right siblings stay out.
+    void toMap_writesNoFullScaleScalarAtAll() {
+        // Since 1.2 the deprecated shared fallback is runtime-only:
+        // a calibrated card pushes ITS values into those same scalars, so saving
+        // them would hand one card's calibration to the next uncalibrated device
+        // as the machine-wide default.  The never-released Right siblings were
+        // never written either.
         Preferences p = detached();
         p.putAudioDeviceProfile(calibratedCard("Cosmos", "Line In (Cosmos)", 1.79));
 
         Map<?, ?> root = toMap(p);
-        assertTrue(root.containsKey("adcFsVoltageRms"),
-                "the deprecated ADC fallback scalar stays in preferences.yaml");
-        assertTrue(root.containsKey("dacFsVoltageRms"),
-                "the deprecated DAC fallback scalar stays in preferences.yaml");
+        assertFalse(root.containsKey("adcFsVoltageRms"),
+                "the deprecated ADC fallback scalar is runtime-only since 1.2");
+        assertFalse(root.containsKey("dacFsVoltageRms"),
+                "the deprecated DAC fallback scalar is runtime-only since 1.2");
         for (String key : UNRELEASED_FS_KEYS) {
             assertFalse(root.containsKey(key),
                     "toMap must never write never-released full-scale key " + key);
@@ -468,7 +611,7 @@ class DeviceStoreTest {
         src.putAudioDeviceProfile(prof);
         writeDevicesTo(src, store);
 
-        // Only the calibrated row emits the key — the nominal row stays clean.
+        // Only the calibrated row emits the key - the nominal row stays clean.
         String yaml = Files.readString(store);
         int occurrences = yaml.split("calibrated: true", -1).length - 1;
         assertEquals(1, occurrences, "exactly the calibrated row serialises the flag");
@@ -555,7 +698,7 @@ class DeviceStoreTest {
               + "audioDevices:\n" + cardsYaml);
     }
 
-    /** A user store already recorded at a specific {@code contentVersion} — the
+    /** A user store already recorded at a specific {@code contentVersion} - the
      *  steady state after a prior merge, used to model dormant / higher-version
      *  gate cases.  {@code cardsYaml} is the raw {@code audioDevices} YAML body. */
     private void writeStore(Path store, int contentVersion, String cardsYaml) throws Exception {
@@ -701,7 +844,7 @@ class DeviceStoreTest {
         Preferences p = mergeAgainst(store, bundle);
 
         var ranges = p.findAudioDeviceProfile("Card X").getInput().getRanges();
-        assertEquals(2, ranges.size(), "the hand-added row is kept — the merge never deletes ranges");
+        assertEquals(2, ranges.size(), "the hand-added row is kept - the merge never deletes ranges");
         DeviceRange r1 = findRow(ranges, "R1");
         assertNotNull(r1);
         assertEquals(2.22, r1.getFsLeft(), EPS, "an uncalibrated row takes the release value");
@@ -716,7 +859,7 @@ class DeviceStoreTest {
     void mergeSeed_neverTouchesCalibratedRow(@TempDir Path dir) throws Exception {
         Path store  = dir.resolve("devices.yaml");
         Path bundle = dir.resolve("bundle.yaml");
-        // The user row is CALIBRATED — the merge must leave its measured FS alone.
+        // The user row is CALIBRATED - the merge must leave its measured FS alone.
         writeStore(store,
                 "  - name: Card Y\n"
               + "    input:\n"
@@ -740,10 +883,10 @@ class DeviceStoreTest {
     }
 
     @Test
-    void mergeSeed_reconcilesRangesOnly_keepsUserStructure_maintainerStoreShape(@TempDir Path dir) throws Exception {
+    void mergeSeed_reconcilesRangesOnly_keepsUserStructure_realWorldStoreShape(@TempDir Path dir) throws Exception {
         Path store  = dir.resolve("devices.yaml");
         Path bundle = dir.resolve("bundle.yaml");
-        // THE MAINTAINER STORE SHAPE: a Cosmos card the user calibrated
+        // A REAL-WORLD STORE SHAPE: a Cosmos card the user calibrated
         // (INDEPENDENT, a "1.7V" row with distinct left/right values, two match
         // entries), a hand-added UNcalibrated "3.4V" row, and a calibrated "9.9V"
         // row whose label the new release drops.  Plus a card the USER created
@@ -766,7 +909,7 @@ class DeviceStoreTest {
               + "        - { label: \"default\", fsVrms: 2.0, calibrated: true }\n"
               + "      activeRange: \"default\"\n");
         // The new release declares Cosmos LINKED and ships a different, larger range
-        // set — the merge reconciles RANGES only, so none of the store's structure
+        // set - the merge reconciles RANGES only, so none of the store's structure
         // (channel mode, match list, active range, hand-added rows) is changed.
         writeBundle(bundle, 1,
                 "  - name: E1DA Cosmos ADC\n"
@@ -788,7 +931,7 @@ class DeviceStoreTest {
         // The store's own structure is untouched: the channel mode stays exactly as
         // the user had it (the seed's LINKED mode is NOT adopted), and the match list
         // is unchanged because the seed's only entry ("E1DA Cosmos ADC") is already
-        // present (the union deduped it away — no user entry is ever dropped).
+        // present (the union deduped it away - no user entry is ever dropped).
         assertEquals(DeviceChannelMode.INDEPENDENT, cosmos.getInput().getChannels(),
                 "the user's channel mode is untouched (not reshaped to the seed's)");
         assertEquals(List.of("Line (E1DA Cosmos ADC)", "E1DA Cosmos ADC"), cosmos.getMatch(),
@@ -844,7 +987,7 @@ class DeviceStoreTest {
         // The user RENAMED the well-known card ("My Renamed ADC") but kept a
         // recognition entry ("Cosmos ADC") that overlaps the seed's match list, so
         // the merge still maps the seed onto it (by match overlap, not name) and
-        // adds the seed's new range — without forking a second card.
+        // adds the seed's new range - without forking a second card.
         writeStore(store,
                 "  - name: My Renamed ADC\n"
               + "    match: [ \"Cosmos ADC\" ]\n"
@@ -866,7 +1009,7 @@ class DeviceStoreTest {
         Preferences p = mergeAgainst(store, bundle);
 
         assertEquals(1, p.getAudioDeviceProfiles().size(),
-                "the seed maps onto the renamed card by match overlap — no second card is forked");
+                "the seed maps onto the renamed card by match overlap - no second card is forked");
         AudioDeviceProfile renamed = p.findAudioDeviceProfile("My Renamed ADC");
         assertNotNull(renamed, "the card keeps its user-given name");
         assertEquals(2, renamed.getInput().getRanges().size(), "the seed's new range is added to it");
@@ -883,7 +1026,7 @@ class DeviceStoreTest {
         // The user's row was scalar-calibrated (a single fsVrms, both channels
         // equal).  The release ships the same label in {left,right} pair format.
         // The update takes the seed's format but copies the user's calibrated value
-        // onto both channels — the measured value is never lost.
+        // onto both channels - the measured value is never lost.
         writeStore(store,
                 "  - name: Card Z\n"
               + "    input:\n"
@@ -904,7 +1047,7 @@ class DeviceStoreTest {
         DeviceRange row = p.findAudioDeviceProfile("Card Z").getInput().getRanges().get(0);
         assertTrue(row.isCalibrated(), "the calibrated flag is carried across the format change");
         assertEquals(1.75, row.getFsLeft(),  EPS, "the scalar-calibrated value lands on the left channel");
-        assertEquals(1.75, row.getFsRight(), EPS, "and on the right channel (both equal — never the seed's)");
+        assertEquals(1.75, row.getFsRight(), EPS, "and on the right channel (both equal - never the seed's)");
 
         // The merge rewrote the store (changed=true): even the scalar-input row is
         // re-emitted in the {left, right} pair form, never a scalar shorthand.
@@ -935,7 +1078,7 @@ class DeviceStoreTest {
         String edited = Files.readString(store).replace("3.0", "7.0");
         Files.writeString(store, edited);
 
-        // A restart against the SAME bundle must NOT merge — same content version
+        // A restart against the SAME bundle must NOT merge - same content version
         // (the first run seeded the store from the bundle, recording version 1).
         Preferences second = detached();
         second.setSeedPathOverride(bundle);
@@ -979,7 +1122,7 @@ class DeviceStoreTest {
         assertFalse(yaml.contains("seedFingerprint"),
                 "the legacy seedFingerprint line is dropped from disk");
 
-        // A second load on the recorded version must NOT merge again — a hand-edited
+        // A second load on the recorded version must NOT merge again - a hand-edited
         // nominal on the now-seeded card survives.
         Files.writeString(store, Files.readString(store).replace("2.0", "7.0"));
         Preferences second = detached();
@@ -1030,7 +1173,7 @@ class DeviceStoreTest {
               + "        - { label: \"R1\", fsVrms: 3.0 }\n"
               + "      activeRange: \"R1\"\n");
 
-        // The store already records the bundle's contentVersion — the steady state
+        // The store already records the bundle's contentVersion - the steady state
         // after a prior merge.
         writeStore(store, 1,
                 "  - name: My Card\n"
@@ -1043,7 +1186,7 @@ class DeviceStoreTest {
         Preferences p = mergeAgainst(store, bundle);
 
         assertNull(p.findAudioDeviceProfile("Seed Card"),
-                "same contentVersion → no merge, so the bundle card is not seeded in");
+                "same contentVersion -> no merge, so the bundle card is not seeded in");
         assertEquals(1, p.getAudioDeviceProfiles().size(), "only the user card is present");
         assertEquals(1.0,
                 p.findAudioDeviceProfile("My Card").getInput().getRanges().get(0).getFsLeft(), EPS);
@@ -1053,7 +1196,7 @@ class DeviceStoreTest {
     void writtenStore_copiesFormatVersionFromSeed(@TempDir Path dir) throws Exception {
         Path store  = dir.resolve("devices.yaml");
         Path bundle = dir.resolve("bundle.yaml");
-        // The bundled seed is the single source of truth for formatVersion — the
+        // The bundled seed is the single source of truth for formatVersion - the
         // writer copies it verbatim at write time, never a hardwired constant.
         Files.writeString(bundle,
                 "formatVersion: 7\n"
@@ -1075,7 +1218,7 @@ class DeviceStoreTest {
         assertTrue(Files.readString(store).contains("formatVersion: 7"),
                 "the written store carries the seed's formatVersion verbatim");
 
-        // A seed reverted to version 1 stamps 1 on the next write — nothing pins it.
+        // A seed reverted to version 1 stamps 1 on the next write - nothing pins it.
         Files.writeString(bundle,
                 Files.readString(bundle).replace("formatVersion: 7", "formatVersion: 1"));
         writeDevicesTo(p, store);
@@ -1086,7 +1229,7 @@ class DeviceStoreTest {
     @Test
     void writtenStore_formatVersion_fallsBackToLoadedStore_whenSeedUnreadable(@TempDir Path dir) throws Exception {
         Path store  = dir.resolve("devices.yaml");
-        Path bundle = dir.resolve("missing-bundle.yaml");   // never created → seed unreadable
+        Path bundle = dir.resolve("missing-bundle.yaml");   // never created -> seed unreadable
         Files.writeString(store,
                 "formatVersion: 5\n"
               + "contentVersion: 1\n"
@@ -1109,7 +1252,7 @@ class DeviceStoreTest {
     // ── calibrationFromDevice: store guard + seed-authoritative merge ─────────
 
     /** Captures the WARN (and higher) messages the {@code Preferences} logger emits
-     *  while {@code action} runs — so a store-guard test can assert the guard warns
+     *  while {@code action} runs - so a store-guard test can assert the guard warns
      *  without inspecting the log file. */
     private List<String> capturePreferencesWarnings(Runnable action) {
         Logger logger = (Logger) LogManager.getLogger(Preferences.class);
@@ -1151,7 +1294,7 @@ class DeviceStoreTest {
         return p;
     }
 
-    /** The output mirror of {@link #deviceProvidedInputCard()} — a device-provided
+    /** The output mirror of {@link #deviceProvidedInputCard()} - a device-provided
      *  OUTPUT endpoint, one nominal 0 dB range at 3.0 V. */
     private AudioDeviceProfile deviceProvidedOutputCard() {
         AudioDeviceProfile p = new AudioDeviceProfile();
@@ -1259,7 +1402,7 @@ class DeviceStoreTest {
         DeviceEndpointConfig in = p.findAudioDeviceProfile("QA40x").getInput();
         assertTrue(in.isCalibrationFromDevice(), "the endpoint stays device-provided after the merge");
         assertEquals(2, in.getRanges().size(), "no user row is appended onto a device-provided endpoint");
-        // The device-provided values come wholesale from the seed — the user's
+        // The device-provided values come wholesale from the seed - the user's
         // hand-edited calibrated values are ignored on every row.
         assertEquals(9.9, findRow(in.getRanges(), "0dB").getFsLeft(), EPS,
                 "the seed value stands; the user's device-provided value is ignored");

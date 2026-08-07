@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -53,7 +53,7 @@ import org.edgo.audio.measure.gui.widgets.ToolButton;
 import org.edgo.audio.measure.preferences.Preferences;
 
 /**
- * Shared base for the project's measurement canvases — oscilloscope, FFT,
+ * Shared base for the project's measurement canvases - oscilloscope, FFT,
  * frequency response, and the condensed multi-view.
  *
  * <p>The base intentionally stays out of paint: each subclass owns its own
@@ -63,8 +63,8 @@ import org.edgo.audio.measure.preferences.Preferences;
  * <ul>
  *   <li>The shared colour palette (role &rarr; {@link Color}) with prefs-driven
  *       overrides and {@link #newColor} for 0xRRGGBB &rarr; Color conversion.</li>
- *   <li>Small paint helpers — {@link #drawCenteredIcon} and {@link #setBounds}
- *       — plus the grid + axis facility used by every chart.</li>
+ *   <li>Small paint helpers - {@link #drawCenteredIcon} and {@link #setBounds}
+ *       - plus the grid + axis facility used by every chart.</li>
  * </ul>
  *
  * <p>The base installs no listeners of its own except through the opt-in
@@ -84,9 +84,15 @@ public abstract class AbstractMeasurementView extends Canvas {
     protected static final int MINOR_TICK_LEN = 2;
     private static final int MAJOR_TICK_WIDTH = 2;
     /** Major-tick target count for a LOG axis zoomed inside one decade, where
-     *  decade boundaries alone would leave ≤ 1 tick — nice-number linear
+     *  decade boundaries alone would leave ≤ 1 tick - nice-number linear
      *  stepping takes over with roughly this many labels across the span. */
     private static final int SUB_DECADE_TICK_TARGET = 12;
+    /** Ceiling on the decimals a step-aware tick label may grow to.  Four
+     *  places resolve a 0.001-unit step - the FFT pane's 0.01 dB minimum span
+     *  never needs more; a zoom with no span floor (FreqResp's magnitude
+     *  wheel) can outrun it, and this cap is then what keeps the labels from
+     *  outgrowing the axis gutter, at the price of duplicate label text. */
+    private static final int MAX_TICK_DECIMALS = 4;
 
     // --- Header button geometry (shared by every view's header Toolbar / ToolWindow) ---
     protected static final int BTN_W   = 22;   // header button width
@@ -96,7 +102,7 @@ public abstract class AbstractMeasurementView extends Canvas {
     // =========================================================================
     // Shared colour palette.
     //
-    // Each role (background, grid, …) is keyed by {@link ColorRole};
+    // Each role (background, grid, ...) is keyed by {@link ColorRole};
     // the base owns one Color per role in {@link #palette}, allocated
     // once at construction.  Subclasses access them via
     // {@link #color(ColorRole)}, override defaults by passing a
@@ -124,17 +130,17 @@ public abstract class AbstractMeasurementView extends Canvas {
         /** Red glyph for reset / clear-stats buttons. */                  RESET,
         /** Bright phase of a two-phase blink overlay. */                  BLINK_LIT,
         /** Dim phase of a two-phase blink overlay. */                     BLINK_DIM,
-        /** Lit phase of the warning blink banner — separately configurable
+        /** Lit phase of the warning blink banner - separately configurable
          *  from the neutral {@link #BLINK_LIT} blink. */                   WARNING_LIT,
         /** Dim phase of the warning blink banner. */                      WARNING_DIM,
-        /** 65 % attenuation of {@link #LEFT_TRACE} — inactive / unselected
+        /** 65 % attenuation of {@link #LEFT_TRACE} - inactive / unselected
          *  states of L-channel UI elements (scope only). */               LEFT_CHANNEL_MID,
-        /** 65 % attenuation of {@link #RIGHT_TRACE} — symmetric to
+        /** 65 % attenuation of {@link #RIGHT_TRACE} - symmetric to
          *  {@link #LEFT_CHANNEL_MID} (scope only). */                     RIGHT_CHANNEL_MID,
-        /** 80 % brightness ("20 % darker") of {@link #LEFT_TRACE} —
+        /** 80 % brightness ("20 % darker") of {@link #LEFT_TRACE} -
          *  used by the dual-tone reconstructed-beat overlay when the
          *  trigger channel is L (scope only). */                          LEFT_BEAT,
-        /** 80 % brightness of {@link #RIGHT_TRACE} — symmetric to
+        /** 80 % brightness of {@link #RIGHT_TRACE} - symmetric to
          *  {@link #LEFT_BEAT} (scope only). */                            RIGHT_BEAT,
         /** Neutral grey shown in place of a trace when its channel
          *  isn't currently captured (scope only). */                      DISABLED_CHANNEL,
@@ -147,7 +153,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         /** Inverted-cascade calibration overlay trace (FFT only). */      CAL_OVERLAY,
         /** Phase trace (prefs-driven, FreqResp only). */                  PHASE_TRACE,
         /** RIAA / reference curve trace (FreqResp only). */               RIAA_TRACE,
-        /** Compare-mode trace — dark green (FreqResp only). */            COMPARE_TRACE,
+        /** Compare-mode trace - dark green (FreqResp only). */            COMPARE_TRACE,
         /** Ideal-filter curve trace (FreqResp only). */                   FILTER_TRACE,
         /** Active state fill of FreqResp toggle buttons. */               BUTTON_ACTIVE,
         /** Rect-zoom rubber band + the focused-view 1-px edge border. */  ACCENT,
@@ -155,7 +161,7 @@ public abstract class AbstractMeasurementView extends Canvas {
 
     /** Packed-RGB defaults for every {@link ColorRole}.  Subclass
      *  constructors pass a small {@code Map<ColorRole, Integer>} to
-     *  override individual entries — the merged map is consumed once
+     *  override individual entries - the merged map is consumed once
      *  at construction so no Color object is ever allocated twice. */
     private static final Map<ColorRole, Integer> DEFAULT_RGB;
     static {
@@ -173,13 +179,13 @@ public abstract class AbstractMeasurementView extends Canvas {
         m.put(ColorRole.BUTTON_FRAME,    0x606060);
         m.put(ColorRole.RESET,           0xDC1414);
         m.put(ColorRole.BLINK_LIT,       0x000000);
-        m.put(ColorRole.BLINK_DIM,       0xC0C0C0);   // light grey ⇒ a clearly-visible black↔grey pulse on white
+        m.put(ColorRole.BLINK_DIM,       0xC0C0C0);   // light grey => a clearly-visible black↔grey pulse on white
         m.put(ColorRole.WARNING_LIT,     0xF00000);
         m.put(ColorRole.WARNING_DIM,     0x202020);
         m.put(ColorRole.COMPARE_TRACE,   0x1B5E20);
         m.put(ColorRole.FILTER_TRACE,    0x8E24AA);
         m.put(ColorRole.BUTTON_ACTIVE,   0xC0D8F0);
-        m.put(ColorRole.ACCENT,          0x8CFF00);   // bright green — visible on light AND dark plots #8Cff00
+        m.put(ColorRole.ACCENT,          0x8CFF00);   // bright green - visible on light AND dark plots #8Cff00
         DEFAULT_RGB = m;
     }
 
@@ -187,7 +193,7 @@ public abstract class AbstractMeasurementView extends Canvas {
 
     /** Constructor accepting per-role RGB overrides.  For each role the
      *  override (if present) wins over the {@link #DEFAULT_RGB} entry;
-     *  roles with neither stay {@code null} in the palette — typical
+     *  roles with neither stay {@code null} in the palette - typical
      *  for the scope-only mid / disabled-channel slots that aren't
      *  meaningful to FFT or FreqResp.  The base allocates exactly one
      *  Color per role using the merged value, so a subclass that needs
@@ -209,7 +215,7 @@ public abstract class AbstractMeasurementView extends Canvas {
     //
     // A button-1 drag on the plot selects a rectangle; on release the
     // selection is stretched to the full view and the PREVIOUS pan/zoom is
-    // pushed on a per-view undo stack — Ctrl+Z pops it until empty.  The base
+    // pushed on a per-view undo stack - Ctrl+Z pops it until empty.  The base
     // owns the generic machinery (drag lifecycle, rubber-band + focus-border
     // overlay, undo stack, focus / hover targeting); the subclass owns the
     // semantics through the three abstract methods, exchanging the uniform
@@ -219,15 +225,15 @@ public abstract class AbstractMeasurementView extends Canvas {
     /**
      * Uniform pan/zoom memento: the data intervals mapped onto the plot.
      * X = time (scope) or frequency (FFT / FreqResp); one Y interval per
-     * vertical scale — the scope's two channels, the single dB axis of the
+     * vertical scale - the scope's two channels, the single dB axis of the
      * frequency-domain views.  Units are the owning view's own; the base
      * never interprets the numbers, it only stacks and returns them.
      */
     public record ZoomState(double xMin, double xMax, double[] yMin, double[] yMax) { }
 
-    /** Undo-stack depth bound — beyond it the OLDEST zoom states are dropped. */
+    /** Undo-stack depth bound - beyond it the OLDEST zoom states are dropped. */
     private static final int ZOOM_UNDO_LIMIT = 32;
-    /** Minimum selection edge (px) for a drag to count as a zoom — anything
+    /** Minimum selection edge (px) for a drag to count as a zoom - anything
      *  smaller is a plain focus click. */
     private static final int ZOOM_MIN_SELECTION_PX = 8;
     /** Widget-data key marking a control as a measurement view's interaction
@@ -235,7 +241,7 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  without any global registry. */
     private static final String ZOOM_HOST_DATA_KEY = "measurementViewZoomHost";
 
-    /** The control the user interacts with — this canvas normally, the GL
+    /** The control the user interacts with - this canvas normally, the GL
      *  canvas replacing it on the GPU scope.  Null until installRectZoom. */
     private Control zoomHost;
     /** Undo stack of pre-zoom states; newest first. */
@@ -249,16 +255,16 @@ public abstract class AbstractMeasurementView extends Canvas {
     private boolean zoomHostHovered;
     /** Display-wide Ctrl+Z filter; registered once, removed on view dispose. */
     private Listener zoomKeyFilter;
-    /** Shell Activate/Deactivate → overlay repaint; registered once, removed
+    /** Shell Activate/Deactivate -> overlay repaint; registered once, removed
      *  on view dispose (the shell usually outlives the view). */
     private Listener zoomShellActivationListener;
 
-    /** The current pan/zoom as a uniform memento — pushed before every rect
+    /** The current pan/zoom as a uniform memento - pushed before every rect
      *  zoom, replayed by Ctrl+Z.  {@code null} = nothing to remember. */
     protected abstract ZoomState captureZoomState();
 
     /** Applies a memento produced by {@link #captureZoomState()} or computed
-     *  by {@link #zoomStateForRect} — the single mutation gateway shared by
+     *  by {@link #zoomStateForRect} - the single mutation gateway shared by
      *  zoom and undo.  Returns whether the state was actually applied: a
      *  restore may clamp degenerate after the environment changed (e.g. the
      *  Nyquist ceiling dropped below the stored window), and undo then skips
@@ -266,7 +272,7 @@ public abstract class AbstractMeasurementView extends Canvas {
     protected abstract boolean applyZoomState(ZoomState state);
 
     /** Maps the committed selection rectangle (host pixels) to the new zoom
-     *  state — the subclass owns its pixel↔value mapping (log axes, plot
+     *  state - the subclass owns its pixel<->value mapping (log axes, plot
      *  margins, per-channel scales).  {@code null} cancels the zoom. */
     protected abstract ZoomState zoomStateForRect(Rectangle selection);
 
@@ -277,7 +283,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         return (zoomHost instanceof Scrollable s) ? s.getClientArea() : getClientArea();
     }
 
-    /** Whether a selection drag may START at (x, y) — subclasses veto their
+    /** Whether a selection drag may START at (x, y) - subclasses veto their
      *  interactive hit zones (slider handles, header buttons, labels). */
     protected boolean isRectZoomBlockedAt(int x, int y) {
         return false;
@@ -304,7 +310,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         }
         if (zoomKeyFilter == null) {
             zoomKeyFilter = e -> {
-                // Exact Ctrl+Z only — Ctrl+Shift+Z (redo) and other combos pass through.
+                // Exact Ctrl+Z only - Ctrl+Shift+Z (redo) and other combos pass through.
                 if (e.keyCode == 'z' && (e.stateMask & SWT.MODIFIER_MASK) == SWT.MOD1
                         && isZoomUndoTarget() && undoZoom()) {
                     e.doit = false;
@@ -316,7 +322,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         if (zoomShellActivationListener == null) {
             // Border/undo eligibility follows the ACTIVE shell (isZoomUndoTarget),
             // which can change with none of the focus/hover events firing (Alt+Tab
-            // with the pointer resting on the plot) — repaint on activation flips
+            // with the pointer resting on the plot) - repaint on activation flips
             // so a stopped view never keeps a stale border.
             zoomShellActivationListener = e -> requestZoomOverlayRepaint();
             Shell shell = getShell();
@@ -346,7 +352,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         return true;
     }
 
-    /** Drag update — repaints the rubber band. */
+    /** Drag update - repaints the rubber band. */
     protected final void rectZoomPointerMove(int x, int y) {
         if (!zoomDragActive) return;
         zoomDragCurX = x;
@@ -360,7 +366,7 @@ public abstract class AbstractMeasurementView extends Canvas {
     }
 
     /** Repaint request for a change that only affects the rect-zoom OVERLAY
-     *  (rubber band, focus border) — the plotted content is untouched.  The
+     *  (rubber band, focus border) - the plotted content is untouched.  The
      *  GPU scope overrides this to re-composite the frozen phosphor instead
      *  of resetting it; the default is a plain redraw. */
     protected void requestZoomOverlayRepaint() {
@@ -368,13 +374,13 @@ public abstract class AbstractMeasurementView extends Canvas {
     }
 
     /** Release: commits the selection when it spans at least
-     *  {@link #ZOOM_MIN_SELECTION_PX} on both axes — pushes the pre-zoom state
+     *  {@link #ZOOM_MIN_SELECTION_PX} on both axes - pushes the pre-zoom state
      *  and applies the stretched one.  Returns whether a zoom happened. */
     protected final boolean rectZoomPointerUp() {
         if (!zoomDragActive) return false;
         zoomDragActive = false;
         Rectangle sel = normalizedSelection();
-        // Erasing the band touches only the overlay layer — a plain click or an
+        // Erasing the band touches only the overlay layer - a plain click or an
         // aborted drag must not reset the GPU phosphor (the committed path gets
         // its full redraw from applyZoomState).
         requestZoomOverlayRepaint();
@@ -407,7 +413,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         return false;
     }
 
-    /** Drops the whole undo history — a mode switch (record ↔ file on the
+    /** Drops the whole undo history - a mode switch (record <-> file on the
      *  scope) makes the stacked states meaningless. */
     protected final void clearZoomHistory() {
         zoomUndoStack.clear();
@@ -431,7 +437,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         if (zoomHost == null || zoomHost.isDisposed()) return false;
         // The active shell must be this view's shell or one of its child shells
         // (an extracted tool window keeps the main view targetable): an offscreen
-        // screenshot clone — whose hidden shell may traverse-focus this canvas —
+        // screenshot clone - whose hidden shell may traverse-focus this canvas -
         // never sees its shell active, so no border bakes into the image, and a
         // backgrounded app (active shell null) shows no border either.
         Control active = getDisplay().getActiveShell();
@@ -445,9 +451,9 @@ public abstract class AbstractMeasurementView extends Canvas {
         return !(focus instanceof Text || focus instanceof Combo || focus instanceof Spinner);
     }
 
-    /** Draws the rect-zoom layer — call LAST in the subclass's paint: the
+    /** Draws the rect-zoom layer - call LAST in the subclass's paint: the
      *  rubber band while dragging, and the 1-px accent border when this view
-     *  is the Ctrl+Z target.  Both are drawn inside the canvas edge — no
+     *  is the Ctrl+Z target.  Both are drawn inside the canvas edge - no
      *  size / padding / margin impact. */
     protected final void drawRectZoomOverlay(MeasurementPainter p, int w, int h) {
         Color accent = color(ColorRole.ACCENT);
@@ -473,7 +479,7 @@ public abstract class AbstractMeasurementView extends Canvas {
 
     /** Returns {@code packedRgb} with each 8-bit channel scaled by
      *  {@code factor}.  Used by the scope to derive its "mid" (~65 %)
-     *  channel colours from the user-selected trace colour — pure RGB
+     *  channel colours from the user-selected trace colour - pure RGB
      *  math, but kept on the base so subclasses don't reinvent it. */
     protected int attenuate(int packedRgb, double factor) {
         int r = clamp8((int) Math.round(((packedRgb >> 16) & 0xFF) * factor));
@@ -483,7 +489,7 @@ public abstract class AbstractMeasurementView extends Canvas {
     }
     private int clamp8(int v) { return v < 0 ? 0 : (v > 0xFF ? 0xFF : v); }
 
-    /** Returns the live {@link Color} for {@code role} — never null
+    /** Returns the live {@link Color} for {@code role} - never null
      *  unless the view has already been disposed. */
     protected final Color color(ColorRole role) {
         return palette.get(role);
@@ -493,9 +499,9 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  view's {@link ColorRole#BACKGROUND} colour behind the current foreground,
      *  so readouts painted on top of a live signal trace (scope, FFT, FreqResp)
      *  stay legible regardless of the pixels underneath.  The shadow matches the
-     *  chart background — black on the scope, white on FFT / FreqResp — so it
+     *  chart background - black on the scope, white on FFT / FreqResp - so it
      *  always contrasts the foreground.  One offset stamp plus the foreground on
-     *  top — two GDI text calls per label (the scope's readout table alone is
+     *  top - two GDI text calls per label (the scope's readout table alone is
      *  ~50 labels per paint); the anti-aliased glyph edges spread the offset
      *  enough to read as a halo.  Restores the foreground before returning so the
      *  caller's GC state is unchanged. */
@@ -503,7 +509,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         drawOutlinedText(new GcMeasurementPainter(gc), s, x, y);
     }
 
-    /** Painter-backed {@link #drawOutlinedText(GC, String, int, int)} — the real
+    /** Painter-backed {@link #drawOutlinedText(GC, String, int, int)} - the real
      *  implementation; the GC overload bridges to it so callers migrate to a
      *  {@link MeasurementPainter} (and a NanoVG backend) at their own pace. */
     protected final void drawOutlinedText(MeasurementPainter p, String s, int x, int y) {
@@ -514,7 +520,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         p.drawText(s, x, y, true);
     }
 
-    /** Right-aligned variant of {@link #drawOutlinedText} — places
+    /** Right-aligned variant of {@link #drawOutlinedText} - places
      *  the text so its right edge lands at {@code rightX}. */
     protected final void drawOutlinedRightAligned(GC gc, String s, int rightX, int y) {
         drawOutlinedRightAligned(new GcMeasurementPainter(gc), s, rightX, y);
@@ -551,7 +557,7 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  {@code y2}) in {@code color} with a 1-px halo in the view's
      *  {@link ColorRole#BACKGROUND} colour on either side.  Strokes
      *  the same dashed line at line-width 3 in the background colour
-     *  first, then at line-width 1 in the caller's colour on top —
+     *  first, then at line-width 1 in the caller's colour on top -
      *  the wider background underneath shows as a 1-px edge around
      *  each coloured dash.  Restores line width, dash, and
      *  foreground. */
@@ -577,7 +583,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         p.setForeground(prevFg);
     }
 
-    /** Returns the live {@link RGB} for {@code role} — never null
+    /** Returns the live {@link RGB} for {@code role} - never null
      *  unless the view has already been disposed. */
     protected final RGB rgb(ColorRole role) {
         return palette.get(role).getRGB();
@@ -598,7 +604,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         palette.put(role, newColor(packedRgb));
     }
 
-    /** Packed RGBs the channel palette was last built from — used to detect a
+    /** Packed RGBs the channel palette was last built from - used to detect a
      *  preference change without re-allocating a Color on every paint. */
     private int currentLeftRgb  = -1;
     private int currentRightRgb = -1;
@@ -685,7 +691,7 @@ public abstract class AbstractMeasurementView extends Canvas {
     /** Blits {@code icon} centred in the rectangle
      *  {@code (x, y, w, h)}.  No-op when {@code icon} is {@code null} or
      *  disposed.  Shared by every view that paints SVG glyphs inside a
-     *  header button frame — the centring math was open-coded in three
+     *  header button frame - the centring math was open-coded in three
      *  places before this helper. */
     protected final void drawCenteredIcon(GC gc, Image icon, int x, int y, int w, int h) {
         if (icon == null || icon.isDisposed()) return;
@@ -693,7 +699,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         gc.drawImage(icon, x + (w - ib.width) / 2, y + (h - ib.height) / 2);
     }
 
-    /** Sets a {@link Rectangle}'s bounds in one call — the mutable-rect helper the
+    /** Sets a {@link Rectangle}'s bounds in one call - the mutable-rect helper the
      *  header-layout code in every view uses to position its hit-test boxes. */
     protected final void setBounds(Rectangle r, int x, int y, int w, int h) {
         r.x = x; r.y = y; r.width = w; r.height = h;
@@ -701,7 +707,7 @@ public abstract class AbstractMeasurementView extends Canvas {
 
     /** Allocates a fresh SWT {@link Color} from a packed 24-bit
      *  {@code 0xRRGGBB} int.  Subclasses use this as the single point of
-     *  RGB → Color conversion instead of open-coding the same unpack in
+     *  RGB -> Color conversion instead of open-coding the same unpack in
      *  every {@code syncColors} method.  The caller owns the returned
      *  Color and is responsible for disposing it. */
     protected final Color newColor(int packedRgb) {
@@ -718,18 +724,18 @@ public abstract class AbstractMeasurementView extends Canvas {
     // A single drawGrid call paints a 2-D measurement grid plus optional
     // axis tick labels on the left, bottom, and right edges, plus an
     // optional scope-style cross-hair overlay.  Each axis is configured
-    // independently — LINEAR or LOG scale, own range, optional label
-    // formatter — so the same primitive serves the oscilloscope, FFT,
+    // independently - LINEAR or LOG scale, own range, optional label
+    // formatter - so the same primitive serves the oscilloscope, FFT,
     // and frequency-response views.
     // =========================================================================
 
     /** Tick-position strategy for an axis.
      *  <ul>
-     *    <li>{@link #LINEAR} — evenly-spaced {@code divisions+1} ticks; no minors.</li>
-     *    <li>{@link #LINEAR_NICE} — "nice numbers" 1 / 2 / 2.5 / 5 × 10ⁿ majors
+     *    <li>{@link #LINEAR} - evenly-spaced {@code divisions+1} ticks; no minors.</li>
+     *    <li>{@link #LINEAR_NICE} - "nice numbers" 1 / 2 / 2.5 / 5 × 10ⁿ majors
      *        targeting ~{@code targetCount} ticks; minors at a caller-supplied
      *        {@code minorStep} (e.g. 5 dB for dB axes).</li>
-     *    <li>{@link #LOG} — decade majors (10ⁿ) with 2..9 × 10ⁿ minors.  Major
+     *    <li>{@link #LOG} - decade majors (10ⁿ) with 2..9 × 10ⁿ minors.  Major
      *        labels are adaptively thinned based on the decade count visible.</li>
      *  </ul> */
     public enum Scale { LINEAR, LINEAR_NICE, LOG }
@@ -739,16 +745,21 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  to the matching {@code format*} instance method on this base
      *  class so subclasses don't need to wire lambdas. */
     public enum LabelFormat {
-        /** No tick labels — only grid lines and (optional) edge marks. */
+        /** No tick labels - only grid lines and (optional) edge marks. */
         NONE,
-        /** Compact frequency: {@code "1.0 Hz"} / {@code "1.50 kHz"}.
+        /** Compact frequency with as many decimals as the visible tick step
+         *  needs: {@code "20 Hz"} / {@code "1 kHz"} on a log axis wider than a
+         *  decade, {@code "1.005 kHz"} on a fine (sub-decade or linear) zoom.
          *  Use on log frequency axes. */
         FREQ,
         /** Integer-only frequency: {@code "1000 Hz"} / {@code "12 kHz"}.
          *  Use on linear frequency axes. */
         FREQ_INT,
-        /** dB value: {@code "%.1f"} (no unit suffix; the unit caption
-         *  goes on the axis once via {@link AxisSpec#withUnit(String)}). */
+        /** dB value with as many decimals as the visible tick step needs -
+         *  {@code "%.1f"} at steps of 1 dB and coarser (the classic look),
+         *  finer as the axis is zoomed in, so a 0.05 dB step still reads as
+         *  distinct labels (no unit suffix; the unit caption goes on the axis
+         *  once via {@link AxisSpec#withUnit(String)}). */
         DB,
         /** Phase: {@code "-180°"} / {@code "90°"} integer degrees. */
         PHASE_DEG,
@@ -758,7 +769,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         /** Plain counts, thinned with k / M above a thousand:
          *  {@code "0"} / {@code "850"} / {@code "12 k"} / {@code "3.4 M"}.
          *  For an occupancy axis whose full scale climbs without bound while
-         *  data accumulates — {@link #FREQ_INT} would label it in hertz. */
+         *  data accumulates - {@link #FREQ_INT} would label it in hertz. */
         COUNT,
     }
 
@@ -786,7 +797,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         /** Which built-in formatter to use for tick labels;
          *  {@link LabelFormat#NONE} suppresses labels on this axis. */
         public final LabelFormat labelFormat;
-        /** Optional unit caption ("dB", "Hz", "V", "φ", "V/√Hz", …) painted
+        /** Optional unit caption ("dB", "Hz", "V", "φ", "V/√Hz", ...) painted
          *  adjacent to the axis: top-left of left Y, top-right of right Y,
          *  bottom-right of X.  {@code null} = no caption. */
         public final String unit;
@@ -835,7 +846,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         }
     }
 
-    /** Optional cross-hair overlay drawn on top of the grid — used by
+    /** Optional cross-hair overlay drawn on top of the grid - used by
      *  the oscilloscope to mark the centred trigger / offset axes with
      *  a coloured cross plus short sub-division tick marks.  Pass a
      *  {@code CrossHairSpec} to {@link #drawGrid} to enable; pass
@@ -851,11 +862,11 @@ public abstract class AbstractMeasurementView extends Canvas {
         public final int    subTicksPerDivision;
         /** Half-length (px) of each sub-tick mark perpendicular to the arm. */
         public final int    subTickHalfLen;
-        /** Number of full grid divisions along the X axis — used only to
+        /** Number of full grid divisions along the X axis - used only to
          *  size the sub-tick interval; mirrors the AxisSpec.divisions
          *  the caller passed for the X axis. */
         public final int    xDivisions;
-        /** Number of full grid divisions along the Y axis — same role
+        /** Number of full grid divisions along the Y axis - same role
          *  as {@link #xDivisions} for the Y axis. */
         public final int    yDivisions;
 
@@ -876,7 +887,7 @@ public abstract class AbstractMeasurementView extends Canvas {
      * Paints a 2-D measurement grid + optional axis labels + optional
      * unit captions inside {@code plot}.  X axis along the bottom,
      * primary Y along the left, optional secondary Y along the right
-     * (with its own scale & range — for e.g. phase ±180° opposite
+     * (with its own scale & range - for e.g. phase ±180° opposite
      * magnitude dB).  Each axis's grid lines are drawn at tick positions
      * computed from its {@link AxisSpec}:
      * <ul>
@@ -891,8 +902,8 @@ public abstract class AbstractMeasurementView extends Canvas {
      *
      * <p>Label text is produced by each axis's {@code labelFmt}; a
      * {@code null} formatter suppresses tick labels on that axis.  Labels
-     * render outside the plot rectangle — X labels below, primary Y
-     * labels left, secondary Y labels right — so the caller is
+     * render outside the plot rectangle - X labels below, primary Y
+     * labels left, secondary Y labels right - so the caller is
      * responsible for reserving margin around {@code plot}.
      *
      * <p>An {@link AxisSpec#unit} caption is painted top-anchored near
@@ -910,17 +921,17 @@ public abstract class AbstractMeasurementView extends Canvas {
      * @param plot              rectangle the grid is drawn inside (absolute pixels)
      * @param x                 X-axis spec (bottom)
      * @param yLeft             primary Y-axis spec (left)
-     * @param yRight            secondary Y-axis spec (right) — null for none
+     * @param yRight            secondary Y-axis spec (right) - null for none
      * @param gridColor         colour of the grid lines
      * @param axisColor         colour of the plot frame border (and label text
      *                          when {@code labelColor} is null)
-     * @param labelColor        colour of axis tick labels (null ⇒ uses {@code axisColor})
-     * @param labelFont         font for axis tick labels (null ⇒ GC's current font)
+     * @param labelColor        colour of axis tick labels (null => uses {@code axisColor})
+     * @param labelFont         font for axis tick labels (null => GC's current font)
      * @param majorEdgeMarkPx   length (px) of perpendicular tick mark drawn at
      *                          each major tick on the plot frame; 0 = no marks.
      * @param minorEdgeMarkPx   length (px) of perpendicular tick mark drawn at
      *                          each minor tick on the plot frame; 0 = no marks.
-     * @param cross             optional cross-hair overlay (null ⇒ none)
+     * @param cross             optional cross-hair overlay (null => none)
      */
     protected final void drawGrid(GC gc, Rectangle plot,
                                   AxisSpec x, AxisSpec yLeft, AxisSpec yRight,
@@ -946,7 +957,7 @@ public abstract class AbstractMeasurementView extends Canvas {
             gc.drawLine(px, plot.y, px, plot.y + plot.height);
         }
 
-        // --- Grid lines (Y) — primary (left) drives the horizontal grid. --
+        // --- Grid lines (Y) - primary (left) drives the horizontal grid. --
         for (double v : yMajors) {
             int py = valueToY(v, yLeft, plot);
             gc.drawLine(plot.x, py, plot.x + plot.width, py);
@@ -1057,20 +1068,20 @@ public abstract class AbstractMeasurementView extends Canvas {
             // set is adaptively thinned by adaptiveLogLabels.
             if (x.labelFormat != LabelFormat.NONE) {
                 // A log axis zoomed to less than one decade holds at most one
-                // decade gridpoint (e.g. only "1000" in a 990–1010 Hz window), so
+                // decade gridpoint (e.g. only "1000" in a 990-1010 Hz window), so
                 // there the axis is ~linear: switch to evenly-spaced round
                 // (nice-linear) values formatted finely (Hz with as many decimals
                 // as the step needs) instead of a single lonely "1 kHz".
                 boolean wideLog = x.scale == Scale.LOG && !isSubDecade(x.min, x.max);
                 double[] xLabelPositions = wideLog ? adaptiveLogLabels(x.min, x.max) : xMajors;
-                // FREQ labels on a uniform-step axis (linear, or sub-decade log) get a
-                // step-aware format so fine zooms read 1.005 kHz / 1.010 kHz instead of
-                // several identical "1 kHz"; wide log keeps the decade formatter.
-                double fineStep = (x.labelFormat == LabelFormat.FREQ && !wideLog)
-                        ? minSpacing(xLabelPositions) : 0.0;
+                // Step-aware formats (FREQ, DB) size their decimals from the tick
+                // step, so fine zooms read 1.005 kHz / 1.010 kHz instead of several
+                // identical "1 kHz"; a wide log axis has no single step and keeps
+                // the decade formatter.
+                double xStep = labelStep(x, xLabelPositions);
                 // Pixel-aware placement: reserve the decade majors (1 / 10 / 100 /
-                // 1 kHz…) FIRST so a round decade is never thinned away, then fill the
-                // remaining space with the other labels — skipping any whose box would
+                // 1 kHz...) FIRST so a round decade is never thinned away, then fill the
+                // remaining space with the other labels - skipping any whose box would
                 // touch one already placed.
                 int gap = gc.textExtent("0").x;
                 int m = xLabelPositions.length;
@@ -1079,8 +1090,7 @@ public abstract class AbstractMeasurementView extends Canvas {
                 int[] right = new int[m];
                 for (int i = 0; i < m; i++) {
                     double v = xLabelPositions[i];
-                    str[i]   = fineStep > 0 ? formatFreqTick(v, fineStep)
-                                            : applyLabelFormat(x.labelFormat, v);
+                    str[i]   = applyLabelFormat(x.labelFormat, v, xStep);
                     int sw   = gc.textExtent(str[i]).x;
                     left[i]  = valueToX(v, x, plot) - sw / 2;
                     right[i] = left[i] + sw;
@@ -1107,12 +1117,13 @@ public abstract class AbstractMeasurementView extends Canvas {
             if (yLeft.labelFormat != LabelFormat.NONE) {
                 boolean yWideLog = yLeft.scale == Scale.LOG && !isSubDecade(yLeft.min, yLeft.max);
                 double[] yLabelPositions = yWideLog ? adaptiveLogLabels(yLeft.min, yLeft.max) : yMajors;
+                double yStep = labelStep(yLeft, yLabelPositions);
                 int fh = gc.getFontMetrics().getHeight();
                 int lastPy = Integer.MIN_VALUE;
                 for (double v : yLabelPositions) {
                     int py = valueToY(v, yLeft, plot);
                     if (lastPy != Integer.MIN_VALUE && Math.abs(py - lastPy) < fh) continue;
-                    String s = applyLabelFormat(yLeft.labelFormat, v);
+                    String s = applyLabelFormat(yLeft.labelFormat, v, yStep);
                     int sw = gc.textExtent(s).x;
                     gc.drawText(s, plot.x - majorEdgeMarkPx - sw - 4, py - fh / 2, true);
                     lastPy = py;
@@ -1122,17 +1133,18 @@ public abstract class AbstractMeasurementView extends Canvas {
             if (yRight != null && yRight.labelFormat != LabelFormat.NONE) {
                 boolean yrWideLog = yRight.scale == Scale.LOG && !isSubDecade(yRight.min, yRight.max);
                 double[] yrLabelPositions = yrWideLog ? adaptiveLogLabels(yRight.min, yRight.max) : yrMajors;
+                double yrStep = labelStep(yRight, yrLabelPositions);
                 int fh = gc.getFontMetrics().getHeight();
                 int lastPy = Integer.MIN_VALUE;
                 for (double v : yrLabelPositions) {
                     int py = valueToY(v, yRight, plot);
                     if (lastPy != Integer.MIN_VALUE && Math.abs(py - lastPy) < fh) continue;
-                    String s = applyLabelFormat(yRight.labelFormat, v);
+                    String s = applyLabelFormat(yRight.labelFormat, v, yrStep);
                     gc.drawText(s, plot.x + plot.width + majorEdgeMarkPx + 4, py - fh / 2, true);
                     lastPy = py;
                 }
             }
-            // Unit captions — overpaint a small background rectangle on
+            // Unit captions - overpaint a small background rectangle on
             // top of the topmost tick label so the caption stays legible.
             // The Y captions sit in the top margin when there's room for
             // them above the plot, otherwise just inside the plot's top edge
@@ -1143,7 +1155,7 @@ public abstract class AbstractMeasurementView extends Canvas {
             Color prevBg = gc.getBackground();
             // Overpaint with the shared light-grey overlay-box colour (the same
             // role the readout/tooltip boxes use) rather than each view's SWT
-            // Control background — that is white in FftView (which calls
+            // Control background - that is white in FftView (which calls
             // setBackground) but the system widget grey in FreqRespView (which
             // never does), which made the two views' captions look different.
             gc.setBackground(color(ColorRole.OVERLAY_BG));
@@ -1191,7 +1203,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         }
     }
 
-    /** True when a LOG range spans less than one decade — there the 1..9 × 10ⁿ
+    /** True when a LOG range spans less than one decade - there the 1..9 × 10ⁿ
      *  decade grid holds at most one gridpoint, so ticks fall back to nice-linear. */
     private boolean isSubDecade(double min, double max) {
         double lo = Math.max(1e-15, min);
@@ -1199,7 +1211,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         return Math.log10(hi / lo) < 1.0;
     }
 
-    /** True when {@code v} is a 1 × 10ⁿ decade value (1, 10, 100, 1 k…) — these
+    /** True when {@code v} is a 1 × 10ⁿ decade value (1, 10, 100, 1 k...) - these
      *  labels are placed before any others so a round decade is never thinned away. */
     private boolean isDecadeValue(double v) {
         if (!(v > 0)) return false;
@@ -1209,7 +1221,7 @@ public abstract class AbstractMeasurementView extends Canvas {
 
     /** Fine minor grid positions for a sub-decade LOG zoom: subdivisions of the
      *  nice-linear major step (halves for a step-2 grid, fifths otherwise) minus
-     *  the majors — so the fine labels get matching grid lines between them. */
+     *  the majors - so the fine labels get matching grid lines between them. */
     private double[] subDecadeMinors(double min, double max) {
         double[] majors = niceLinearMajors(min, max, 12);
         if (majors.length < 2) return new double[0];
@@ -1257,7 +1269,7 @@ public abstract class AbstractMeasurementView extends Canvas {
     static double[] logMajorTicks(double min, double max) {
         double safeMin = Math.max(1e-15, min);
         // safeMax must MATCH the formula used by AbstractFreqDomainView.freqToX
-        // (max(safeMin + ε, max)) — otherwise the labels and trace use
+        // (max(safeMin + ε, max)) - otherwise the labels and trace use
         // different log ranges and visually misalign at narrow zoom
         // (e.g. a 1 kHz peak rendered near the "2 kHz" label when zoomed
         // to less than one decade).
@@ -1303,7 +1315,7 @@ public abstract class AbstractMeasurementView extends Canvas {
     }
 
     /** Maps a value on a Y axis to an absolute pixel row inside
-     *  {@code plot}.  Y grows downward — {@code v == max} maps to
+     *  {@code plot}.  Y grows downward - {@code v == max} maps to
      *  {@code plot.y}, {@code v == min} maps to {@code plot.y + plot.height}. */
     private static int valueToY(double v, AxisSpec axis, Rectangle plot) {
         double frac = axisFraction(v, axis);
@@ -1317,7 +1329,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         if (axis.scale == Scale.LOG) {
             double safeMin = Math.max(1e-15, axis.min);
             // Match AbstractFreqDomainView.freqToX so labels and trace
-            // span the same log range — a narrow zoom (less than one
+            // span the same log range - a narrow zoom (less than one
             // decade) otherwise puts labels in compressed positions
             // while the trace stretches the full plot width.
             double safeMax = Math.max(safeMin + 1e-9, axis.max);
@@ -1343,7 +1355,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         else                 step = 10    * pow;
         // Index whole multiples of the step instead of accumulating f += step.
         // Repeated addition drifts, so on an axis that straddles zero the tick that
-        // should BE zero lands on a denormal like −3 × 10⁻¹⁹ — which an SI-prefixed
+        // should BE zero lands on a denormal like −3 × 10⁻¹⁹ - which an SI-prefixed
         // label faithfully renders as "-0 f".  k · step is exact at k = 0.
         long k0 = (long) Math.ceil(min / step);
         List<Double> out = new ArrayList<>();
@@ -1381,24 +1393,36 @@ public abstract class AbstractMeasurementView extends Canvas {
 
     /** Compact frequency label: "1.0 Hz" / "1.50 kHz". */
     protected String formatFrequency(double f) {
-        if (!Double.isFinite(f) || f <= 0) return "—";
+        if (!Double.isFinite(f) || f <= 0) return "-";
         if (f >= 1000) return String.format("%.2f kHz", f / 1000);
         return String.format("%.2f Hz", f);
     }
 
     /** Frequency tick label for a narrow (sub-decade) zoom: plain Hz with just
      *  enough decimals to resolve {@code step}, so adjacent fine ticks stay
-     *  distinct — a {@code %.2f kHz} label would otherwise collapse 1000 and
+     *  distinct - a {@code %.2f kHz} label would otherwise collapse 1000 and
      *  1002 Hz to the same "1.00 kHz". */
     private static String formatFreqTick(double v, double step) {
-        if (!Double.isFinite(v) || v <= 0) return "—";
+        if (!Double.isFinite(v) || v <= 0) return "-";
         if (v >= 1000) {
             double kStep = step / 1000.0;                     // kHz with enough decimals
-            int kd = (kStep > 0 && kStep < 1) ? (int) Math.min(4, Math.ceil(-Math.log10(kStep))) : 2;
-            return String.format("%." + kd + "f kHz", v / 1000.0);
+            return String.format("%." + tickDecimals(kStep, 2) + "f kHz", v / 1000.0);
         }
-        int dec = (step > 0 && step < 1) ? (int) Math.min(4, Math.ceil(-Math.log10(step))) : 0;
-        return String.format("%." + dec + "f Hz", v);
+        return String.format("%." + tickDecimals(step, 0) + "f Hz", v);
+    }
+
+    /** Frequency tick label for a LOG axis spanning at least one decade, where
+     *  the labelled values are decade multiples (1 / 2 / 5 × 10ⁿ ...) rather than
+     *  a uniform step: each renders with just the decimals its own decade needs,
+     *  so the axis reads "20 Hz", "1 kHz", "20 kHz" instead of the fixed
+     *  {@code %.2f} "20.00 Hz" / "1.00 kHz" / "20.00 kHz". */
+    static String formatFreqDecadeTick(double v) {   // static-ok: no test creates an SWT Display, so only a static can be pinned - beside niceLinearMajors / adaptiveLogLabels for the same reason
+        if (!Double.isFinite(v) || v <= 0) return "-";
+        double decade = Math.pow(10, Math.floor(Math.log10(v)));
+        if (v >= 1000) {
+            return String.format("%." + tickDecimals(decade / 1000.0, 0) + "f kHz", v / 1000.0);
+        }
+        return String.format("%." + tickDecimals(decade, 0) + "f Hz", v);
     }
 
     /** Smallest gap between consecutive values (0 for fewer than two). */
@@ -1408,19 +1432,42 @@ public abstract class AbstractMeasurementView extends Canvas {
         return Double.isFinite(m) ? m : 0.0;
     }
 
-    /** Fine-grained frequency formatter for crosshair readouts — four
+    /** The uniform tick step behind {@code labelPositions}, or 0 when the axis
+     *  has none - a LOG axis wider than one decade is labelled at adaptively
+     *  thinned decade multiples, whose spacing is a ratio, not a step.  The
+     *  step-aware formats ({@link LabelFormat#FREQ}, {@link LabelFormat#DB})
+     *  size their decimals from it; every other format ignores it, so the
+     *  voltage / phase / count axes render independently of this value. */
+    private double labelStep(AxisSpec axis, double[] labelPositions) {
+        if (axis.scale == Scale.LOG && !isSubDecade(axis.min, axis.max)) return 0.0;
+        return minSpacing(labelPositions);
+    }
+
+    /** Decimal places a tick label needs to resolve a step of {@code step}:
+     *  one place per decade below 1 (a 0.05 dB step needs two), capped at
+     *  {@link #MAX_TICK_DECIMALS}.  A step of one unit or more needs none of
+     *  those and gets the axis's default {@code coarseDecimals} - which is what
+     *  keeps wide spans looking exactly as they always did.  Single derivation
+     *  behind every step-aware tick label, so the frequency and dB axes can
+     *  never disagree about how fine a label has to be. */
+    static int tickDecimals(double step, int coarseDecimals) {   // static-ok: no test creates an SWT Display, so only a static can be pinned - beside niceLinearMajors / adaptiveLogLabels for the same reason
+        if (!(step > 0) || step >= 1) return coarseDecimals;
+        return (int) Math.min(MAX_TICK_DECIMALS, Math.ceil(-Math.log10(step)));
+    }
+
+    /** Fine-grained frequency formatter for crosshair readouts - four
      *  decimal places so sub-Hz refinements stay visible.  Switches to
      *  kHz at 10 kHz so digits stay aligned. */
     protected String formatFrequencyFine(double f) {
-        if (!Double.isFinite(f) || f <= 0) return "—";
+        if (!Double.isFinite(f) || f <= 0) return "-";
         if (f >= 10_000) return String.format("%.4f kHz", f / 1000);
         return String.format("%.4f Hz", f);
     }
 
-    /** Integer-only frequency formatter used on linear axis labels — no
+    /** Integer-only frequency formatter used on linear axis labels - no
      *  fractional Hz, kHz with 0 / 1 decimals depending on size. */
     protected String formatFrequencyInteger(double f) {
-        if (!Double.isFinite(f)) return "—";
+        if (!Double.isFinite(f)) return "-";
         if (f >= 1000) {
             double k = f / 1000;
             if (Math.abs(k - Math.round(k)) < 0.05) return String.format("%d kHz", (long) Math.round(k));
@@ -1429,22 +1476,25 @@ public abstract class AbstractMeasurementView extends Canvas {
         return String.format("%d Hz", (long) Math.round(f));
     }
 
-    /** dB tick label without unit suffix — the unit caption is painted
-     *  once via {@link AxisSpec#withUnit(String)}.  One decimal. */
-    protected String formatDb(double v) {
-        if (!Double.isFinite(v)) return "—";
-        return String.format(Locale.US, "%.1f", v);
+    /** dB tick label without unit suffix - the unit caption is painted
+     *  once via {@link AxisSpec#withUnit(String)}.  One decimal while the
+     *  ticks are 1 dB apart or coarser (every default span), growing to as
+     *  many as {@code step} needs once the axis is zoomed below that - a
+     *  0.05 dB grid would otherwise print the same "0.0" three times. */
+    protected String formatDb(double v, double step) {
+        if (!Double.isFinite(v)) return "-";
+        return String.format(Locale.US, "%." + tickDecimals(step, 1) + "f", v);
     }
 
     /** Phase tick label: integer degrees with the ° suffix
      *  ({@code "-180°"}, {@code "0°"}, {@code "180°"}). */
     protected String formatPhaseDeg(double deg) {
-        if (!Double.isFinite(deg)) return "—";
+        if (!Double.isFinite(deg)) return "-";
         return String.format(Locale.US, "%d°", (int) Math.round(deg));
     }
 
-    /** Voltage tick label with SI prefix: 1.5 V → "1.5 ", 100 mV →
-     *  "100 m", 1 µV → "1 µ".  The unit letter (V, V/√Hz, …) is
+    /** Voltage tick label with SI prefix: 1.5 V -> "1.5 ", 100 mV ->
+     *  "100 m", 1 µV -> "1 µ".  The unit letter (V, V/√Hz, ...) is
      *  supplied separately via {@link AxisSpec#withUnit(String)}.
      *  Mantissa trailing zeros are stripped so 1.50 renders as "1.5". */
     protected String formatVoltsSi(double v) {
@@ -1472,7 +1522,7 @@ public abstract class AbstractMeasurementView extends Canvas {
     }
 
     /** Occupancy tick label: a plain integer up to 999, then k / M so a count
-     *  that keeps climbing never outgrows the axis gutter — {@code "850"},
+     *  that keeps climbing never outgrows the axis gutter - {@code "850"},
      *  {@code "12 k"}, {@code "3.4 M"}.  Trailing zeros in the mantissa are
      *  stripped, as in {@link #formatVoltsSi}. */
     protected String formatCount(double v) {
@@ -1494,12 +1544,12 @@ public abstract class AbstractMeasurementView extends Canvas {
         return m + " " + prefix;
     }
 
-    /** Magnitude value with the unit suffix glued on — for crosshair
+    /** Magnitude value with the unit suffix glued on - for crosshair
      *  readouts where the user sees the number and unit together.  dB
      *  units use one decimal; linear voltage units route through
      *  {@link #formatVoltsSi}. */
     protected String formatMagnitudeWithUnit(double v, MagnitudeUnit unit) {
-        if (!Double.isFinite(v)) return "—";
+        if (!Double.isFinite(v)) return "-";
         switch (unit) {
             case DBFS:      return String.format(Locale.US, "%.1f dBFS", v);
             case DBV:       return String.format(Locale.US, "%.1f dBV",  v);
@@ -1513,12 +1563,19 @@ public abstract class AbstractMeasurementView extends Canvas {
     /** Dispatch used by {@link #drawGrid} to render one tick label
      *  according to the axis's {@link LabelFormat}.  Subclasses can
      *  override individual {@code format*} methods to retheme per
-     *  view; the dispatch table itself stays fixed. */
-    private String applyLabelFormat(LabelFormat fmt, double v) {
+     *  view; the dispatch table itself stays fixed.
+     *
+     *  <p>{@code step} is the axis's uniform tick step (see
+     *  {@link #labelStep}) - 0 when the axis has none.  Only the two
+     *  step-aware formats read it: FREQ picks the fine or the decade
+     *  formatter, DB sizes its decimals.  The remaining formats are
+     *  independent of the zoom level and ignore it. */
+    private String applyLabelFormat(LabelFormat fmt, double v, double step) {
         switch (fmt) {
-            case FREQ:      return formatFrequency(v);
+            case FREQ:      return step > 0 ? formatFreqTick(v, step)
+                                            : formatFreqDecadeTick(v);
             case FREQ_INT:  return formatFrequencyInteger(v);
-            case DB:        return formatDb(v);
+            case DB:        return formatDb(v, step);
             case PHASE_DEG: return formatPhaseDeg(v);
             case VOLTS_SI:  return formatVoltsSi(v);
             case COUNT:     return formatCount(v);
@@ -1529,7 +1586,7 @@ public abstract class AbstractMeasurementView extends Canvas {
 
     /** Adaptively-thinned label set for LOG axes spanning at least a decade:
      *  as more decades become visible we drop more of the sub-decade positions.
-     *  Grid lines and minor ticks at all 1..9 × 10ⁿ positions are still drawn —
+     *  Grid lines and minor ticks at all 1..9 × 10ⁿ positions are still drawn -
      *  only the set of values that get a printed label thins.  (Sub-decade
      *  zooms are handled in {@link #drawGrid} with nice-linear ticks; the
      *  pixel-aware draw loop is the final overlap guard for both.) */
@@ -1558,11 +1615,11 @@ public abstract class AbstractMeasurementView extends Canvas {
     }
 
     // =========================================================================
-    // Shared line-trace renderer — used by every freq / time-domain view.
+    // Shared line-trace renderer - used by every freq / time-domain view.
     // =========================================================================
 
     /** Renders {@code n} samples as one polyline through a {@link ColumnBucketPainter}
-     *  with the given pen — the single rendering path behind every line trace (FFT
+     *  with the given pen - the single rendering path behind every line trace (FFT
      *  spectrum, FreqResp magnitude / phase / RIAA / compare, scope waveform), which
      *  differ only in colour, line style and the per-sample X / Y.  In-range samples are
      *  column-bucketed; samples whose X falls outside the plot become the painter's edge
@@ -1588,7 +1645,7 @@ public abstract class AbstractMeasurementView extends Canvas {
     }
 
     /** Float-width variant of {@link #paintPolyline(GC, Rectangle, Color, int, int,
-     *  int, IntUnaryOperator, IntToDoubleFunction)} — strokes through the pooled
+     *  int, IntUnaryOperator, IntToDoubleFunction)} - strokes through the pooled
      *  {@link #traceLineAttributes} (round cap / join), so the preferences' 0.5-px
      *  width steps render sub-pixel and antialiased joins keep full intensity.
      *  Used by every user-visible data trace; the {@code int} overload remains for
@@ -1612,7 +1669,7 @@ public abstract class AbstractMeasurementView extends Canvas {
     /** Applies the pooled float-width round-cap stroke to {@code gc}.  Exposed for
      *  views that drive a {@link ColumnBucketPainter} directly (the FFT spectrum)
      *  instead of going through {@code paintPolyline}.  The attributes instance is
-     *  pooled — at 65+ paints/s a fresh {@code LineAttributes} per frame measurably
+     *  pooled - at 65+ paints/s a fresh {@code LineAttributes} per frame measurably
      *  loads the young generation. */
     protected final void setTraceLineAttributes(GC gc, float width, int style) {
         setTraceLineAttributes(new GcMeasurementPainter(gc), width, style);
@@ -1624,7 +1681,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         p.setLineAttributes(traceLineAttributes);
     }
 
-    /** Pooled stroke for {@link #setTraceLineAttributes} — see its pooling note. */
+    /** Pooled stroke for {@link #setTraceLineAttributes} - see its pooling note. */
     private final LineAttributes traceLineAttributes =
             new LineAttributes(1.0f, SWT.CAP_ROUND, SWT.JOIN_ROUND);
 
@@ -1670,13 +1727,13 @@ public abstract class AbstractMeasurementView extends Canvas {
             Arrays.fill(yMaxs, Double.NEGATIVE_INFINITY);
         }
 
-        /** Records one data point — absolute canvas pixels, Y kept as a {@code double} so
+        /** Records one data point - absolute canvas pixels, Y kept as a {@code double} so
          *  the Pass-2 trace can stroke sub-pixel.  Points outside the plot rect are silently
-         *  dropped — the caller needn't pre-filter. */
+         *  dropped - the caller needn't pre-filter. */
         public void add(int xAbs, double yAbs) {
             int x = xAbs - plot.x;
             // A sample landing exactly on the right edge (x == plot.width == cnts.length)
-            // maps to the last column — mirroring x == 0 on the left.  Without this the
+            // maps to the last column - mirroring x == 0 on the left.  Without this the
             // rightmost in-range sample is dropped and the trace stops one sample short
             // of the right edge while the left edge is reached fine.
             if (x == cnts.length) x = cnts.length - 1;
@@ -1686,13 +1743,13 @@ public abstract class AbstractMeasurementView extends Canvas {
             cnts[x]++;
         }
 
-        /** Sets the left edge anchor — a point at {@code xAbs < plot.x} the first column
+        /** Sets the left edge anchor - a point at {@code xAbs < plot.x} the first column
          *  connects back to.  Keeps the rightmost candidate (closest to the visible range). */
         public void setLeftAnchor(int xAbs, double yAbs) {
             if (xAbs > leftAnchorX) { leftAnchorX = xAbs; leftAnchorY = yAbs; }
         }
 
-        /** Sets the right edge anchor — a point at {@code xAbs > plot.x + plot.width} the
+        /** Sets the right edge anchor - a point at {@code xAbs > plot.x + plot.width} the
          *  last column connects out to.  Keeps the leftmost candidate. */
         public void setRightAnchor(int xAbs, double yAbs) {
             if (rightAnchorX == Integer.MIN_VALUE || xAbs < rightAnchorX) {
@@ -1765,7 +1822,7 @@ public abstract class AbstractMeasurementView extends Canvas {
          *  coordinate appended is in-bounds, so the Path never hands GDI a value past its
          *  ±32k limit while the whole curve still strokes in one {@code drawPath} with
          *  smooth joins.  Returns whether the path now ends at this segment's true endpoint
-         *  (pen still down — the next segment may continue without a new {@code moveTo}). */
+         *  (pen still down - the next segment may continue without a new {@code moveTo}). */
         private boolean clipSegmentToPath(MeasurementPainter painter, double x0, double y0, double x1, double y1, boolean penDown) {
             double dx = x1 - x0, dy = y1 - y0;
             double u0 = 0.0, u1 = 1.0;

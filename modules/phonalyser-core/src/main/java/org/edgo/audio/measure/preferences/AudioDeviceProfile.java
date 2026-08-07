@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ import lombok.Data;
 /**
  * A logical, backend-independent calibration profile for one physical soundcard.
  * The profile IS the card; {@link #match} is its single list of device-name
- * recognition-and-binding entries — the unified successor of the old per-backend
+ * recognition-and-binding entries - the unified successor of the old per-backend
  * alias maps and the seed recognition patterns.
  *
  * <p>Calibration lives in the per-direction {@link DeviceEndpointConfig}'s range
@@ -52,7 +52,7 @@ public class AudioDeviceProfile {
     private DeviceEndpointConfig output = new DeviceEndpointConfig();
 
     /** Length of the longest {@link #match} entry that is a case-insensitive
-     *  substring of {@code deviceName}, or {@code -1} when none match — the
+     *  substring of {@code deviceName}, or {@code -1} when none match - the
      *  most-specific-wins strength the resolver ranks cards by. */
     public int matchStrength(String deviceName) {
         if (deviceName == null) return -1;

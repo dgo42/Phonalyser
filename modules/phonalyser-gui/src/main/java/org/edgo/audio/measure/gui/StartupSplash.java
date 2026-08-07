@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -42,8 +42,8 @@ import java.util.List;
 
 /**
  * Branded launch splash, drawn entirely with the GC (no bitmap asset): a
- * dark gradient backdrop with an audio motif — a glowing composite waveform
- * over an FFT-style spectrum — and the title, version, copyright and project
+ * dark gradient backdrop with an audio motif - a glowing composite waveform
+ * over an FFT-style spectrum - and the title, version, copyright and project
  * link overlaid.
  *
  * <p>Shown for the brief moment the {@link MainWindow} (menu, panes, audio
@@ -58,9 +58,9 @@ public final class StartupSplash {
     private static final int HEIGHT = 340;
     private static final int MARGIN = 34;
 
-    /** Footer legal lines — fixed identifiers, not UI prose. */
+    /** Footer legal lines - fixed identifiers, not UI prose. */
     private static final String COPYRIGHT = "© 2026 Dimitrij Goldstein";
-    private static final String LICENSE   = "GNU Affero GPL v3 — free software, no warranty";
+    private static final String LICENSE   = "GNU Affero GPL v3 - free software, no warranty";
 
     private final Display display;
     private final List<Resource> resources = new ArrayList<>();
@@ -116,9 +116,9 @@ public final class StartupSplash {
 
     /** Shows the same artwork as the modal About dialog, centred on the
      *  parent: the repo URL is clickable (opens the browser), and a click in
-     *  any other free space — or {@code Esc} — dismisses it. */
+     *  any other free space - or {@code Esc} - dismisses it. */
     public void showAsAbout(Shell parent) {
-        // APPLICATION_MODAL only — no ON_TOP, which would force the window
+        // APPLICATION_MODAL only - no ON_TOP, which would force the window
         // above every other application (reads as system-wide modal).
         Shell s = new Shell(parent, SWT.NO_TRIM | SWT.APPLICATION_MODAL);
         s.setLayout(new FillLayout());

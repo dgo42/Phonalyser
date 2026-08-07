@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -37,7 +37,7 @@ class NumericStepModelTest {
     private static final double EPS = 1e-9;
 
     // -------------------------------------------------------------------------
-    // PERCENT wheel — the spec sequences, verbatim
+    // PERCENT wheel - the spec sequences, verbatim
     // -------------------------------------------------------------------------
 
     @Test
@@ -87,7 +87,7 @@ class NumericStepModelTest {
     }
 
     // -------------------------------------------------------------------------
-    // PERCENT arrows — ±1 in the DISPLAYED unit
+    // PERCENT arrows - ±1 in the DISPLAYED unit
     // -------------------------------------------------------------------------
 
     @Test
@@ -104,23 +104,23 @@ class NumericStepModelTest {
     @Test
     void percentArrow_amplitudeInMillivoltRange_stepsOneMillivolt() {
         NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-6, 10, 5);
-        m.setValue(0.2);                  // < 0.5 V → displays as 200 mV
+        m.setValue(0.2);                  // < 0.5 V -> displays as 200 mV
         m.arrow(+1);
         assertEquals(0.201, m.getValue(), EPS);
     }
 
     @Test
     void percentWheel_stickyDbv_walksTheTenDecibelGrid() {
-        // In log display the wheel steps dB, not linear volts: 0 → −10 → −20;
+        // In log display the wheel steps dB, not linear volts: 0 -> −10 -> −20;
         // an off-grid −3.5 snaps to −10 down and 0 up.
         NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-6, 10, 5);
         assertTrue(m.commit("0 dBV"));
         m.wheel(-1);
-        assertEquals(Math.pow(10, -10 / 20.0), m.getValue(), EPS, "0 → −10 dBV");
+        assertEquals(Math.pow(10, -10 / 20.0), m.getValue(), EPS, "0 -> −10 dBV");
         m.wheel(-1);
-        assertEquals(Math.pow(10, -20 / 20.0), m.getValue(), EPS, "−10 → −20 dBV");
+        assertEquals(Math.pow(10, -20 / 20.0), m.getValue(), EPS, "−10 -> −20 dBV");
         m.wheel(+1);
-        assertEquals(Math.pow(10, -10 / 20.0), m.getValue(), EPS, "−20 → −10 dBV");
+        assertEquals(Math.pow(10, -10 / 20.0), m.getValue(), EPS, "−20 -> −10 dBV");
         assertTrue(m.commit("-3.5 dBV"));
         m.wheel(-1);
         assertEquals(Math.pow(10, -10 / 20.0), m.getValue(), EPS, "−3.5 snaps to −10 down");
@@ -132,7 +132,7 @@ class NumericStepModelTest {
     @Test
     void list_namedFirstEntry_walksInGivenOrder() {
         // The sweep-points list pins "Nyquist/2" FIRST despite its larger
-        // numeric value — the wheel walks the list order, not sorted order.
+        // numeric value - the wheel walks the list order, not sorted order.
         double[] series = {192_000, 8192, 16384};
         NumericStepModel m = new NumericStepModel(UnitFamily.NONE, 4096, 10_000_000, series, 0);
         m.setValue(192_000);
@@ -246,7 +246,7 @@ class NumericStepModelTest {
 
     @Test
     void fixed_distinctWheelAndArrowSteps() {
-        // Multitone detect threshold: wheel ±10 dB, arrows ±1 dB, 10–140.
+        // Multitone detect threshold: wheel ±10 dB, arrows ±1 dB, 10-140.
         NumericStepModel m = new NumericStepModel(UnitFamily.DECIBEL, 10, 140, 10, 1, 1);
         m.setValue(100);
         m.wheel(+1);
@@ -345,7 +345,7 @@ class NumericStepModelTest {
         assertTrue(m.commit("0 DBFS"), "case-insensitive");
         assertEquals(fsRms, m.getValue(), EPS);
         // dBFS sticks like dBV: the family's range-based display switching can
-        // never select it, so an explicit choice has to hold — the field keeps
+        // never select it, so an explicit choice has to hold - the field keeps
         // reading in dBFS after the entry.
         assertTrue(m.text().endsWith("dBFS"), m.text());
         // isLogDisplay() tracks the dBV unit alone (the persisted one); dBFS is
@@ -359,7 +359,7 @@ class NumericStepModelTest {
     @Test
     void amplitude_dbfsRejectedWithoutSupplier_leavesValueUnchanged() {
         // The FFT manual-fundamental field wires NO full-scale supplier, so it
-        // must refuse a dBFS entry and keep its value — the exclusion pins here.
+        // must refuse a dBFS entry and keep its value - the exclusion pins here.
         NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-6, 200, 5);
         assertTrue(m.commit("1.5 V"));
         assertFalse(m.commit("0 dbfs"), "dBFS refused with no full-scale supplier");
@@ -370,7 +370,7 @@ class NumericStepModelTest {
 
     @Test
     void voltage_parsesLinearUnits_rejectsDbv() {
-        // VOLTAGE is AMPLITUDE without the log unit — calibration entry where a
+        // VOLTAGE is AMPLITUDE without the log unit - calibration entry where a
         // dB reference makes no sense.  Same nV/µV/mV/V parsing and switching.
         NumericStepModel m = new NumericStepModel(UnitFamily.VOLTAGE, 1e-9, 1000, 6);
         assertTrue(m.commit("499 mV"));
@@ -429,7 +429,7 @@ class NumericStepModelTest {
     @Test
     void percentWheel_upFromZero_stepsOneDisplayLsb() {
         // Fade fields legitimately sit at 0; the wheel must escape it (and
-        // never poison the value with NaN — 0 sits on no decade grid).
+        // never poison the value with NaN - 0 sits on no decade grid).
         NumericStepModel m = new NumericStepModel(UnitFamily.TIME, 0, 1_000_000, 3);
         m.setValue(0);
         m.wheel(+1);
@@ -440,7 +440,7 @@ class NumericStepModelTest {
     @Test
     void percentWheel_dutyNearMinimum_stepsStayVisible() {
         // Duty min 0.001 % with 3 decimals: a raw 10% step (0.0001) would be
-        // below display resolution — invisible steps that snap back on commit.
+        // below display resolution - invisible steps that snap back on commit.
         // The display-LSB grid floor keeps every notch visible.
         NumericStepModel m = new NumericStepModel(UnitFamily.PERCENT, 0.001, 99.999, 3);
         m.setValue(0.001);
@@ -454,7 +454,7 @@ class NumericStepModelTest {
 
     @Test
     void list_valueBeyondSeriesTop_upGestureSaturatesInPlace() {
-        // Sweep points: series tops at 4M but manual entry allows 10M — an
+        // Sweep points: series tops at 4M but manual entry allows 10M - an
         // up gesture from 6M must not DECREASE the value to the series top.
         double[] series = {8192, 16384, 4_194_304};
         NumericStepModel m = new NumericStepModel(UnitFamily.NONE, 8192, 10_000_000, series, 0);
@@ -485,7 +485,7 @@ class NumericStepModelTest {
 
     @Test
     void unitMatching_survivesTurkishLocale() {
-        // tr locale lowercases "US/DIV" to a dotless ı — Locale.ROOT folding
+        // tr locale lowercases "US/DIV" to a dotless ı - Locale.ROOT folding
         // in Unit.matches must keep the ASCII aliases reachable.
         Locale saved = Locale.getDefault();
         try {
@@ -519,16 +519,16 @@ class NumericStepModelTest {
     }
 
     // -------------------------------------------------------------------------
-    // DITHER policy — full-scale-aware bits⇄dBV, ±1-bit / ±10-dBV, Off at top
+    // DITHER policy - full-scale-aware bits⇄dBV, ±1-bit / ±10-dBV, Off at top
     // -------------------------------------------------------------------------
 
     private static final double DITHER_DB_PER_BIT = 6.0206;
     private static final double DITHER_OFFSET_DB  = 7.782;
 
-    /** Peak full-scale = 1 Vpeak → 20·log10(1) = 0 dBV reference, so a bit's
+    /** Peak full-scale = 1 Vpeak -> 20·log10(1) = 0 dBV reference, so a bit's
      *  dBV is just −(bits−1)·6.0206 − 7.782 and the conversions have a clean
      *  anchor.  (dBV anchors to the PEAK full-scale, not the RMS full-scale;
-     *  the dBV is the physical TPDF level — nothing else enters the mapping.) */
+     *  the dBV is the physical TPDF level - nothing else enters the mapping.) */
     private NumericStepModel dither(int maxBits) {
         return new NumericStepModel(UnitFamily.DITHER, maxBits, () -> 1.0);
     }
@@ -545,9 +545,9 @@ class NumericStepModelTest {
         m.setValue(16);
         assertFalse(m.isLogDisplay());
         assertEquals("16 bits", m.text());
-        // Field in bits → companion shows the dBV of that whole-bit value.
+        // Field in bits -> companion shows the dBV of that whole-bit value.
         assertEquals(String.format(Locale.ROOT, "%.1f", ditherDbv(16)) + " dBV", m.companionText());
-        // Field in dBV → companion shows the bits.
+        // Field in dBV -> companion shows the bits.
         m.setLogDisplay(true);
         assertTrue(m.isLogDisplay());
         assertEquals(String.format(Locale.ROOT, "%.1f", ditherDbv(16)) + " dBV", m.text());
@@ -567,7 +567,7 @@ class NumericStepModelTest {
     @Test
     void dither_dbvAnchorsToPeakFullScale_notRms() {
         // Regression guard: dBV anchors to the PEAK full-scale
-        // (20·log10(dacFsVoltageAmpl)) — NOT the RMS full-scale (/√2), which
+        // (20·log10(dacFsVoltageAmpl)) - NOT the RMS full-scale (/√2), which
         // would read ~3 dB low and make an entered dBV land ~0.5 bit hot.
         double fsAmpl = 2.79351;                 // realistic DAC peak full-scale (Vpeak)
         NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 24, () -> fsAmpl);
@@ -592,7 +592,7 @@ class NumericStepModelTest {
         fs[0] = 2.0;                                   // +6.02 dB full-scale
         assertTrue(m.reanchor(), "dBV view re-solves the bits");
         assertEquals(bits0 + 20 * Math.log10(2.0) / DITHER_DB_PER_BIT, m.getValue(), 1e-9,
-                "bits move by the full-scale delta → the shown dBV is held");
+                "bits move by the full-scale delta -> the shown dBV is held");
     }
 
     @Test
@@ -611,11 +611,11 @@ class NumericStepModelTest {
         assertTrue(m.commit("12 bits"));
         assertEquals(12, m.getValue(), EPS);
         assertFalse(m.isLogDisplay());
-        assertTrue(m.commit("20"));        // above max → clamp to 16
+        assertTrue(m.commit("20"));        // above max -> clamp to 16
         assertEquals(16, m.getValue(), EPS);
         assertTrue(m.commit("15.5 b"));    // fractional bits, short alias
         assertEquals(15.5, m.getValue(), EPS);
-        assertTrue(m.commit("0"));         // 0 → Off
+        assertTrue(m.commit("0"));         // 0 -> Off
         assertEquals(0, m.getValue(), EPS);
         assertEquals("Off", m.text());
         assertTrue(m.commit("off"));       // the word too
@@ -626,16 +626,16 @@ class NumericStepModelTest {
     void dither_bitsStepping_wholeBitStepsWithOffAtTop() {
         NumericStepModel m = dither(16);
         m.setValue(2);
-        m.arrow(+1);                       // up → fewer bits
+        m.arrow(+1);                       // up -> fewer bits
         assertEquals(1, m.getValue(), EPS);
-        m.arrow(+1);                       // up from 1 bit → Off (top of range)
+        m.arrow(+1);                       // up from 1 bit -> Off (top of range)
         assertEquals(0, m.getValue(), EPS);
-        m.arrow(+1);                       // up from Off → stays Off
+        m.arrow(+1);                       // up from Off -> stays Off
         assertEquals(0, m.getValue(), EPS);
-        m.arrow(-1);                       // down from Off → 1 bit
+        m.arrow(-1);                       // down from Off -> 1 bit
         assertEquals(1, m.getValue(), EPS);
         m.setValue(16);
-        m.arrow(-1);                       // down at max → saturates
+        m.arrow(-1);                       // down at max -> saturates
         assertEquals(16, m.getValue(), EPS);
     }
 
@@ -643,7 +643,7 @@ class NumericStepModelTest {
     void dither_bitsStepping_preservesFraction() {
         NumericStepModel m = dither(24);
         assertTrue(m.commit("15.5 bits"));
-        m.arrow(-1);                       // down → more bits, whole-bit step
+        m.arrow(-1);                       // down -> more bits, whole-bit step
         assertEquals(16.5, m.getValue(), EPS);
         m.arrow(+1);
         assertEquals(15.5, m.getValue(), EPS);
@@ -657,10 +657,10 @@ class NumericStepModelTest {
         m.wheel(+1);                       // +10 dBV exactly (fractional bits, no snap)
         assertEquals(ditherBits(ditherDbv(16) + 10), m.getValue(), EPS);
         m.setValue(16);
-        m.wheel(-1);                       // −10 dBV → more bits, clamped at max
+        m.wheel(-1);                       // −10 dBV -> more bits, clamped at max
         assertEquals(16, m.getValue(), EPS);
         m.setValue(1);
-        m.wheel(+1);                       // up from the loudest bit → Off
+        m.wheel(+1);                       // up from the loudest bit -> Off
         assertEquals(0, m.getValue(), EPS);
     }
 

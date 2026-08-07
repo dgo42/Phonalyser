@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -152,7 +152,7 @@ public final class SwtGlCanvasSurface implements GlScopeSurface {
         }
         if (vg != 0L) {
             // GL deletes need the context current; if the canvas is already gone the context
-            // is too and the driver has freed the GL objects — nvgDelete still frees CPU state.
+            // is too and the driver has freed the GL objects - nvgDelete still frees CPU state.
             if (!canvas.isDisposed()) {
                 canvas.setCurrent();
                 if (phosphor != null) phosphor.release();

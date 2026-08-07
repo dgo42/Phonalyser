@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -42,6 +42,11 @@ import org.edgo.audio.measure.bind.Property;
  * retained.  Loop-safety comes from {@link Property#set} (a no-op on an
  * unchanged value) plus the fact that an SWT programmatic {@code select} /
  * {@code setSelection} does not raise {@link SWT#Selection}.
+ *
+ * <p>UI-only, like the bus: a {@link Property} bound here is written on the
+ * display thread and its listeners run inline on it - bindings synchronise
+ * nothing.  Whatever must cross a thread does so in a controller, never in a
+ * binding.
  */
 public final class Bindings {
 
@@ -84,7 +89,7 @@ public final class Bindings {
     /** Two-way binds a {@link NumericStepField} (free-text numeric input with
      *  arrow / wheel steppers) to a {@code Double} {@link Property}.  The field
      *  is value-only; its own parser / formatter / clamp behaviour is unchanged
-     *  — this only mirrors the committed value to and from the property. */
+     *  - this only mirrors the committed value to and from the property. */
     public static void stepField(NumericStepField field, Property<Double> property) {
         field.setValue(property.get());
         field.addSelectionListener(e -> property.set(field.getValue()));
@@ -118,8 +123,8 @@ public final class Bindings {
      *  Each button is selected exactly when the property equals its mapped
      *  value; clicking a button that reports {@code getSelection()} writes its
      *  value.  Mutual exclusion itself (deselecting the siblings) is the
-     *  caller's concern — wire it once, e.g. via the pane's dependent-group
-     *  helper — so this only carries the value, mirroring the {@code combo}
+     *  caller's concern - wire it once, e.g. via the pane's dependent-group
+     *  helper - so this only carries the value, mirroring the {@code combo}
      *  helper for a button group. */
     public static <T> void radio(Map<Button, T> options, Property<T> property) {
         for (Map.Entry<Button, T> entry : options.entrySet()) {
@@ -147,10 +152,10 @@ public final class Bindings {
     }
 
     /** Subscribes {@code listener} to {@code property} for the life of
-     *  {@code owner} — it fires on every change and is removed when the owner
+     *  {@code owner} - it fires on every change and is removed when the owner
      *  widget is disposed.  For a widget that reacts to a parameter it does not
      *  itself edit (a view repaint, a tab-tile refresh). */
-    public static <T> void onChange(Widget owner, Property<T> property, Consumer<T> listener) {
+    public static <T> void onChange(Widget owner, Property<T> property, Consumer<T> listener) { // static-ok: existing all-static binding namespace
         property.addListener(listener);
         owner.addDisposeListener(e -> property.removeListener(listener));
     }

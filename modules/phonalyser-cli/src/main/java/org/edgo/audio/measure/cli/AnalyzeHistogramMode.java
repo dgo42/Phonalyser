@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,14 +28,14 @@ import org.edgo.audio.measure.chart.DnlInlExporter;
 import org.edgo.audio.measure.chart.HistogramExporter;
 
 /**
- * {@code --analyze-histogram <file>} — offline DNL/INL analysis of a previously
+ * {@code --analyze-histogram <file>} - offline DNL/INL analysis of a previously
  * captured ADC code histogram CSV.
  *
  * <p>Loads the histogram, optionally renders the raw counts-vs-voltage chart,
  * then computes per-code DNL/INL either against a sliding moving average
  * (default) or against a theoretical sine-PDF reference (use {@code
  * --sine-reference} when the capture stimulus was a known sine).  Outputs the
- * DNL/INL chart plus a weighted-code-map CSV — the same CSV that {@code
+ * DNL/INL chart plus a weighted-code-map CSV - the same CSV that {@code
  * --load-weighted}, {@code --process-wav} and {@code --record-mapped-wav}
  * consume to linearise raw ADC codes through the measured INL curve.
  *

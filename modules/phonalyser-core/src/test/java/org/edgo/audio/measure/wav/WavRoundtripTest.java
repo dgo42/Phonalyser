@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -38,7 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * RIFF round-trip tests: write a known PCM byte stream via {@link WavWriter}
  * and read it back via {@link WavReader}, confirming header metadata
  * (sample rate, channels, bit depth, frame count) and per-sample values
- * survive the write→read pass.  Catches endianness, header-finalisation
+ * survive the write->read pass.  Catches endianness, header-finalisation
  * and channel-interleave regressions.
  */
 class WavRoundtripTest {
@@ -53,7 +53,7 @@ class WavRoundtripTest {
         File out = tmp.resolve("test.wav").toFile();
 
         // Build a known PCM16 stereo byte stream: left channel ramps
-        // 0 → 99 as little-endian 16-bit signed; right channel mirrors
+        // 0 -> 99 as little-endian 16-bit signed; right channel mirrors
         // with negative values.  This gives us per-sample identifiable
         // signatures so the reader can be verified frame-by-frame.
         ByteBuffer bb = ByteBuffer.allocate(frames * 2 * 2)
@@ -123,7 +123,7 @@ class WavRoundtripTest {
 
     @Test
     void pcm24_stereo_headerMatches(@TempDir Path tmp) throws IOException {
-        // 24-bit PCM: 3 bytes per sample, 2 channels → 6 bytes per frame.
+        // 24-bit PCM: 3 bytes per sample, 2 channels -> 6 bytes per frame.
         int frames = 5;
         File out = tmp.resolve("24bit.wav").toFile();
         try (WavWriter w = new WavWriter(out, 192_000, 2, 24, false)) {

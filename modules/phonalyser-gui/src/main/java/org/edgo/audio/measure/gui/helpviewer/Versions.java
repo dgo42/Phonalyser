@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ import java.util.regex.Pattern;
 
 /**
  * Lenient version-string comparator tuned for the tag conventions this
- * project uses on GitHub releases — bare versions ({@code 1.0}),
+ * project uses on GitHub releases - bare versions ({@code 1.0}),
  * dotted versions ({@code 1.2.3}), pre-release suffixes ({@code 1.0-RC1},
  * {@code 1.0-MS1}, {@code 1.0-SNAPSHOT}) and optional {@code v} prefixes.
  *
@@ -52,7 +52,7 @@ public class Versions {
 
     private static final Pattern NUM = Pattern.compile("^\\d+$");
 
-    /** Resolved once and cached — see {@link #appVersion()}. */
+    /** Resolved once and cached - see {@link #appVersion()}. */
     private String resolvedVersion;
 
     /**
@@ -81,7 +81,7 @@ public class Versions {
     /** The running app's version.  Single source of truth for the splash,
      *  the About dialog and the update checker.  Resolved in order:
      *  <ol>
-     *    <li>{@code /version.properties} — filled with {@code project.version}
+     *    <li>{@code /version.properties} - filled with {@code project.version}
      *        by Maven resource filtering at build time, so it is correct for
      *        both dev runs and packaged builds;</li>
      *    <li>the JAR manifest's {@code Implementation-Version};</li>

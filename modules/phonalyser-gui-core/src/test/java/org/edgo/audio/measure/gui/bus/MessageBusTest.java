@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 /**
  * Behaviour tests for the in-process {@link MessageBus}.  Verifies all
@@ -72,7 +73,52 @@ class MessageBusTest {
         assertEquals("hello", seen.get(), "unsubscribed payload handler must not fire");
     }
 
-@Test
+    /**
+     * A subscriber that dies must not take the rest of the fan-out with it -
+     * including when it dies with an {@link Error}.
+     *
+     * <p>The dispatch used to catch {@code Exception}, which is not what a
+     * failing native call throws - an {@code Error} escaping one subscriber
+     * would silently starve every subscriber further down the same list.
+     */
+    @Test
+    void notification_oneSubscribersErrorDoesNotStopTheFanOut() {
+        AtomicInteger reached = new AtomicInteger();
+        Consumer<Void> dies = ignored -> {
+            throw new Error("the native layer died inside a subscriber");
+        };
+        Consumer<Void> after = ignored -> reached.incrementAndGet();
+        String ev = "test.notification.error";
+
+        bus.subscribe(ev, dies);
+        bus.subscribe(ev, after);
+        try {
+            bus.publish(ev);
+        } finally {
+            bus.unsubscribe(ev, dies);
+            bus.unsubscribe(ev, after);
+        }
+
+        assertEquals(1, reached.get(),
+                "every subscriber gets the event, whatever the one before it did");
+    }
+
+    /** The same at the request seam: a responder that dies answers "no value"
+     *  rather than throwing into its caller's thread. */
+    @Test
+    void responder_thatDiesWithAnErrorAnswersNull() {
+        String ev = "test.responder.error";
+        bus.registerResponder(ev, () -> {
+            throw new Error("the native layer died inside a responder");
+        });
+        try {
+            assertNull(bus.request(ev), "a dead responder is no answer, not a crash");
+        } finally {
+            bus.unregisterResponder(ev);
+        }
+    }
+
+    @Test
     void responder_replacementIsExclusive() {
         String ev = "test.responder.replace";
 
@@ -125,4 +171,34 @@ class MessageBusTest {
         Object result = bus.request("test.responder.absent.never-registered");
         assertNull(result);
     }
+
+    /**
+     * Dispatch stays on the thread that published - and that is a guarantee, not
+     * an accident of the implementation.
+     *
+     * <p>The bus is UI-only - publishers are on the display thread and handlers
+     * run inline on it - so the dispatch itself must add no marshalling and no
+     * deferral: a preference edit's subscribers run before the edit returns.
+     * This pins that the dispatch runs synchronously on whichever thread
+     * published.
+     */
+    @Test
+    void notification_dispatchStaysOnThePublishingThread() throws Exception {
+        AtomicReference<Thread> ranOn = new AtomicReference<>();
+        Consumer<Void> handler = ignored -> ranOn.set(Thread.currentThread());
+        String ev = "test.notification.publishing-thread";
+
+        bus.subscribe(ev, handler);
+        try {
+            Thread publisher = new Thread(() -> bus.publish(ev), "test-publisher");
+            publisher.start();
+            publisher.join();
+            assertSame(publisher, ranOn.get(),
+                    "a subscriber that must NOT be marshalled has to run where it was "
+                            + "published, whatever thread that is");
+        } finally {
+            bus.unsubscribe(ev, handler);
+        }
+    }
+
 }

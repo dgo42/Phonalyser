@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -52,7 +52,7 @@ public enum FftOverlap {
                 return PCT_93_75;
             default:
                 throw new IllegalArgumentException(
-                        "Unknown overlap: " + s + " — use 0, 50, 75, 87.5, or 93.75");
+                        "Unknown overlap: " + s + " - use 0, 50, 75, 87.5, or 93.75");
         }
     }
 }

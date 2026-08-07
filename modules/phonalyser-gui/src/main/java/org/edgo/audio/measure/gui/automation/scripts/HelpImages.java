@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,7 +26,7 @@ import org.edgo.audio.measure.gui.automation.AbstractAutomationScript;
 /**
  * Documentation-screenshot run: starts the generator, the oscilloscope
  * and the FFT, lets the measurement settle, then captures the three panes
- * once per UI language — all from ONE measurement, so the plotted curves
+ * once per UI language - all from ONE measurement, so the plotted curves
  * are pixel-identical across languages (the engines survive the
  * language-switch rebuild).
  *
@@ -36,17 +36,17 @@ import org.edgo.audio.measure.gui.automation.AbstractAutomationScript;
  */
 public final class HelpImages extends AbstractAutomationScript {
 
-    /** Root folder for the produced images, one subfolder per language —
+    /** Root folder for the produced images, one subfolder per language -
      *  under Maven's build dir, so the output is git-ignored and swept by
      *  {@code mvn clean}.  Resolved against the launch working directory
      *  (the workspace root when started from the launch.json config). */
     private static final String OUT_DIR = "target/help-images";
-    /** Languages to capture — extend as bundles get translated help. */
+    /** Languages to capture - extend as bundles get translated help. */
     private static final String[] LANGUAGES = { "en", "de" };
     /** Settling time before the first snapshot: enough FFT averages for a
      *  smooth noise floor at the configured FFT length. */
     private static final double SETTLE_SECONDS = 30;
-    /** Pane snapshot size (px) — matches the help pages' image width. */
+    /** Pane snapshot size (px) - matches the help pages' image width. */
     private static final int PANE_WIDTH_PX  = 900;
     private static final int PANE_HEIGHT_PX = 620;
 

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,45 +28,47 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+
 /**
  * In-process publish / subscribe hub keyed by event name.  Names are
- * symbolic constants declared in {@link Events} — never write a string
+ * symbolic constants declared in {@link Events} - never write a string
  * literal at the call site; the constant gives compile-time safety and
  * a single place to rename / retire events.
  *
  * <p>Two flavours of event are supported:
  * <ul>
- *   <li><b>Pub / sub</b> — every subscriber is a {@link Consumer}.  For
+ *   <li><b>Pub / sub</b> - every subscriber is a {@link Consumer}.  For
  *       notifications without a payload, use {@code Consumer<Void>} and
- *       publish with {@link #publish(String)} — subscribers receive
+ *       publish with {@link #publish(String)} - subscribers receive
  *       {@code null}.  For payload-carrying events, declare
  *       {@code Consumer<MyPayload>} and publish with
  *       {@link #publish(String, Object)}.  One payload type per event
- *       name — mixing types is a programmer error.</li>
- *   <li><b>Request / response</b> — caller invokes
+ *       name - mixing types is a programmer error.</li>
+ *   <li><b>Request / response</b> - caller invokes
  *       {@link #request(String)} / {@link #request(String, Object)} and
  *       gets a value back from a single registered responder
  *       ({@link #registerResponder(String, Supplier)} /
  *       {@link #registerResponder(String, Function)}).  Exactly one
- *       responder per event name — a second {@code registerResponder}
+ *       responder per event name - a second {@code registerResponder}
  *       replaces the first.  Returns {@code null} when no responder is
  *       registered.</li>
  * </ul>
  *
  * <h2>Threading</h2>
- * <p>{@code publish} dispatches synchronously on the calling thread.
- * The subscriber list is a {@link CopyOnWriteArrayList}, so a handler
- * may subscribe / unsubscribe during dispatch.  SWT discipline still
- * applies — if a publisher fires from a worker thread but the
- * subscriber touches widgets, the subscriber is responsible for
- * marshalling to the UI thread (typically with
- * {@code Display.asyncExec}).
+ * <p>The bus is UI-ONLY: publishers are on the display thread, handlers run
+ * inline on it, and nothing here synchronises anything - a bus that never
+ * crosses a thread needs no marshalling.
+ * Controllers own the border between the UI and the worker threads; whatever
+ * crosses it does so in a controller, never through this bus.  {@code publish}
+ * dispatches synchronously on the calling thread, and the subscriber list is
+ * a {@link CopyOnWriteArrayList}, so a handler may subscribe / unsubscribe
+ * during dispatch.
  *
  * <h2>Lifecycle</h2>
  * <p>The bus retains a strong reference to every registered handler;
  * subscribers MUST call {@code unsubscribe} (typically from a
- * {@code Composite.addDisposeListener}) or the bus will keep them — and
- * the widgets they capture — alive forever.
+ * {@code Composite.addDisposeListener}) or the bus will keep them - and
+ * the widgets they capture - alive forever.
  */
 @Log4j2
 public final class MessageBus {
@@ -74,11 +76,11 @@ public final class MessageBus {
     private static volatile MessageBus instance;
 
     /** Handler list per event name.  Each entry is a {@link Consumer}
-     *  — uniform shape lets {@link #dispatch} run a single typed call
+     *  - uniform shape lets {@link #dispatch} run a single typed call
      *  per subscriber, no instanceof branching. */
     private final Map<String, List<Consumer<?>>> subscribers = new ConcurrentHashMap<>();
 
-    /** Single responder per event name — a {@link Supplier} (no payload
+    /** Single responder per event name - a {@link Supplier} (no payload
      *  request) or a {@link Function} (payload-carrying request). */
     private final Map<String, Object> responders = new ConcurrentHashMap<>();
 
@@ -104,7 +106,7 @@ public final class MessageBus {
         if (list != null) list.remove(handler);
     }
 
-    /** Notification — dispatches with a {@code null} payload to every
+    /** Notification - dispatches with a {@code null} payload to every
      *  subscriber.  {@code Consumer<Void>} handlers must tolerate the
      *  null. */
     public void publish(String eventName) {
@@ -137,7 +139,10 @@ public final class MessageBus {
 
     /** Invokes the registered responder for {@code eventName} (if any)
      *  and returns its result.  Returns {@code null} when no responder
-     *  is registered or the responder threw — exceptions are logged. */
+     *  is registered or the responder FAILED - including with an
+     *  {@link Error}: this is a boundary between two components that know
+     *  nothing of each other, and a responder that dies must answer "no
+     *  value" rather than take its caller's thread down with it. */
     public <R> R request(String eventName) {
         return invokeResponder(eventName, null);
     }
@@ -162,7 +167,7 @@ public final class MessageBus {
         try {
             if (r instanceof Supplier<?> s)      return (R) s.get();
             if (r instanceof Function<?, ?> f)   return (R) ((Function<T, R>) f).apply(payload);
-        } catch (Exception ex) {
+        } catch (Throwable ex) {
             log.warn("Responder for {} threw: {}", eventName, ex.getMessage(), ex);
         }
         return null;
@@ -179,7 +184,10 @@ public final class MessageBus {
         for (Consumer<?> raw : list) {
             try {
                 ((Consumer<T>) raw).accept(payload);
-            } catch (Exception ex) {
+            } catch (Throwable ex) {
+                // Every subscriber gets the event, whatever the one before it did
+                // - an Error escaping here would skip the REST of the fan-out,
+                // silently starving every subscriber further down the same list.
                 log.warn("Subscriber threw on {}: {}", eventName, ex.getMessage(), ex);
             }
         }

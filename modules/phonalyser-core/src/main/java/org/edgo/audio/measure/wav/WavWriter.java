@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -57,7 +57,7 @@ public class WavWriter implements AutoCloseable {
         file.getParentFile().mkdirs();
         this.raf = new RandomAccessFile(file, "rw");
         raf.setLength(0);
-        writeHeader(0); // placeholder — finalized in close()
+        writeHeader(0); // placeholder - finalized in close()
     }
 
     /** Writes raw little-endian PCM bytes (for integer PCM mode). */

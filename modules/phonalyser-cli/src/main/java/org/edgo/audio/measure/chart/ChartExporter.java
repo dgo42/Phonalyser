@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -89,7 +89,7 @@ public class ChartExporter {
         domain.setRange(-scaleVolts / 2.0, scaleVolts / 2.0);
         // Voltage-axis ticks: tick unit chosen so ticks land every ~40..100 px
         // (40 px @ 1920 wide, 100 px @ 5000 wide, linear in between).  Format
-        // string passed explicitly — leaving NumberTickUnit's default DecimalFormat
+        // string passed explicitly - leaving NumberTickUnit's default DecimalFormat
         // produces unlabeled ticks under some locales.
         double step = ChartStyle.chooseVoltageTickStep(scaleVolts, width);
         DecimalFormat fmt = (DecimalFormat) NumberFormat.getNumberInstance(Locale.US);
@@ -101,7 +101,7 @@ public class ChartExporter {
         domain.setLabelFont(ChartStyle.AXIS_LABEL_FONT);
         domain.setTickLabelFont(ChartStyle.AXIS_TICK_FONT);
 
-        // Auto-scale Y to the actual data range — the previous fixed
+        // Auto-scale Y to the actual data range - the previous fixed
         // [0.85·avg, 1.01·avg] window was asymmetric and clipped weights
         // above the average, hiding DNL spikes and the noise-smeared rail
         // dip on the upper side.
@@ -114,7 +114,7 @@ public class ChartExporter {
             if (v > maxVal) maxVal = v;
         }
         if (!Double.isFinite(minVal) || maxVal <= minVal) {
-            // Empty / flat data — fall back to a symmetric ±15 % view
+            // Empty / flat data - fall back to a symmetric ±15 % view
             double avg = globalAverage > 0 ? globalAverage : 1.0;
             minVal = avg * 0.85;
             maxVal = avg * 1.15;

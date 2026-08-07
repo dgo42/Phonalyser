@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -29,13 +29,13 @@ import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * {@code --regress-calibrate <wav>} — sine-wave least-squares INL fit.
+ * {@code --regress-calibrate <wav>} - sine-wave least-squares INL fit.
  *
  * <p>Alternative to the histogram-based INL workflow: takes a clean recorded
  * sine, runs a per-code regression-calibration solver ({@link
  * RegressionCalibrator}), and writes both a regression-calibration CSV and
  * a regression chart PNG.  Useful when the stimulus is known to be a clean
- * sine of arbitrary amplitude — the regression jointly recovers
+ * sine of arbitrary amplitude - the regression jointly recovers
  * amplitude/phase and the per-code INL curve.
  *
  * <p>Required: {@code --scale} (full-scale voltage range).
@@ -63,21 +63,21 @@ public class RegressCalibrateMode {
         int       bitDepth    = reader.getBitsPerSample();
         long      totalFrames = reader.getFrameCount();
         // The header depth sizes the per-code tables (1 << bitDepth codes):
-        // a malformed 25–28-bit header would attempt 0.7–5 GB, 29–31 a
-        // negative array — accept only real PCM depths.
+        // a malformed 25-28-bit header would attempt 0.7-5 GB, 29-31 a
+        // negative array - accept only real PCM depths.
         if (bitDepth != 8 && bitDepth != 16 && bitDepth != 24 && bitDepth != 32) {
             throw new IllegalArgumentException("Unsupported WAV bit depth " + bitDepth
-                    + " — regression calibration accepts 8, 16, 24 or 32");
+                    + " - regression calibration accepts 8, 16, 24 or 32");
         }
         // Whole-WAV buffer + (at 24-bit) ~21 B per ADC code of regression
-        // tables — refuse what cannot fit instead of an OutOfMemoryError
+        // tables - refuse what cannot fit instead of an OutOfMemoryError
         // deep inside the calibration.
         Runtime rt = Runtime.getRuntime();
         long needBytes = totalFrames * Double.BYTES + (bitDepth == 24 ? (1L << 24) * 21L : 0L);
         long freeBytes = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory());
         if (needBytes > freeBytes - freeBytes / 4) {
             throw new IllegalArgumentException(String.format(
-                    "Regression calibration needs ~%d MB (whole WAV + per-code tables) but only %d MB of Java heap are free — "
+                    "Regression calibration needs ~%d MB (whole WAV + per-code tables) but only %d MB of Java heap are free - "
                     + "use a shorter capture or raise -Xmx", needBytes >> 20, freeBytes >> 20));
         }
 

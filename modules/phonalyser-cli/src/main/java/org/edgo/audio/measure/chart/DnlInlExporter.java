@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -57,8 +57,8 @@ public class DnlInlExporter {
     /**
      * Computes DNL and INL from {@code weighted}, then saves:
      * <ul>
-     *   <li>dnl_&lt;ts&gt;.csv      — code_hex;code_unsigned;dnl_lsb</li>
-     *   <li>inl_&lt;ts&gt;.csv      — code_hex;code_unsigned;inl_lsb</li>
+     *   <li>dnl_&lt;ts&gt;.csv      - code_hex;code_unsigned;dnl_lsb</li>
+     *   <li>inl_&lt;ts&gt;.csv      - code_hex;code_unsigned;inl_lsb</li>
      *   <li>dnl_chart_&lt;ts&gt;.png</li>
      *   <li>inl_chart_&lt;ts&gt;.png</li>
      * </ul>

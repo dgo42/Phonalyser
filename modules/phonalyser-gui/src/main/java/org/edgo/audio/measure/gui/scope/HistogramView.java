@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -49,14 +49,14 @@ import org.edgo.audio.measure.preferences.Preferences;
  * this lives in; everything inside the window is owned here.
  *
  * <p>The distribution itself lives in the measurement worker, which bins on the
- * capture thread and publishes snapshots — this only ever reads a snapshot, so
+ * capture thread and publishes snapshots - this only ever reads a snapshot, so
  * it never walks an array being mutated underneath it.
  */
 public final class HistogramView extends AbstractMeasurementView {
 
     /** Plot margins: the left gutter holds the voltage tick labels, the top line
      *  the "V" caption, the bottom line the occupancy ticks. */
-    // Wide enough for the longest label the voltage axis can produce — sign, four
+    // Wide enough for the longest label the voltage axis can produce - sign, four
     // digits, decimal point and an SI prefix ("-12.5 µ").  At 52 px the leading
     // digit and the minus sign were being clipped off.
     private static final int MARGIN_LEFT   = 68;
@@ -119,7 +119,7 @@ public final class HistogramView extends AbstractMeasurementView {
 
         leftBtn.addListener(SWT.Selection,  e -> selectChannel(Channel.L, leftBtn));
         rightBtn.addListener(SWT.Selection, e -> selectChannel(Channel.R, rightBtn));
-        // Resets ONLY the distribution — the measurement table's statistics are a
+        // Resets ONLY the distribution - the measurement table's statistics are a
         // different question and keep their own reset.
         resetBtn.addListener(SWT.Selection, e -> { worker.resetHistograms(); redraw(); });
 
@@ -140,8 +140,8 @@ public final class HistogramView extends AbstractMeasurementView {
         redraw();
     }
 
-    /** Radio pick.  Clicking one of the pair fires Selection on BOTH — the button
-     *  being switched ON and the one being switched OFF — so only the button that
+    /** Radio pick.  Clicking one of the pair fires Selection on BOTH - the button
+     *  being switched ON and the one being switched OFF - so only the button that
      *  ended up toggled may change the displayed channel.  Without this guard the
      *  handlers race and the last one to run always wins. */
     private void selectChannel(Channel ch, ToolButton btn) {
@@ -152,7 +152,7 @@ public final class HistogramView extends AbstractMeasurementView {
     }
 
     /** Follows the preference when something other than this window's own buttons
-     *  changes it — a preset load, or a second histogram window on a rebuilt pane. */
+     *  changes it - a preset load, or a second histogram window on a rebuilt pane. */
     private void followChannelPref(Channel ch) {
         if (ch == null || ch == channel) return;
         channel = ch;
@@ -172,7 +172,7 @@ public final class HistogramView extends AbstractMeasurementView {
         } else if (channel == Channel.R && !right && left) {
             channel = Channel.L;
         }
-        // An auto-flip is a pick too — persist it, so re-opening does not put the
+        // An auto-flip is a pick too - persist it, so re-opening does not put the
         // window back on the channel that is switched off.
         Preferences.instance().setOscHistogramChannel(channel);
         leftBtn.setToggled(channel == Channel.L);
@@ -211,7 +211,7 @@ public final class HistogramView extends AbstractMeasurementView {
         // read the axis relative to it, so the middle line is always 0 V.  The
         // samples were counted exactly as captured, DC offset included; centring on
         // the mean here is what keeps that offset from sliding the picture off the
-        // plot — it moves what the axis is measured FROM, not what was counted.
+        // plot - it moves what the axis is measured FROM, not what was counted.
         // An even bar count puts the centre on a bar boundary, not through a bar.
         int centre = (int) Math.round(h.meanBin());
         // Never reach past an end of the accumulator, or the window would stop being
@@ -274,7 +274,7 @@ public final class HistogramView extends AbstractMeasurementView {
         int reach = 0;
         for (int i = 0; i < bars.length; i++) {
             // Bar width in px is count / maxCount · plotWidth, so "wider than one
-            // pixel" is count · plotWidth > maxCount — no rounding needed.
+            // pixel" is count · plotWidth > maxCount - no rounding needed.
             if ((long) bars[i] * plotWidth <= maxCount) continue;
             int d = (i >= half) ? i - half + 1 : half - i;
             if (d > reach) reach = d;
@@ -295,7 +295,7 @@ public final class HistogramView extends AbstractMeasurementView {
 
     // ─── Rectangular zoom: not offered ──────────────────────────────────────
     // The base only calls these after installRectZoom, which this view never
-    // does — a distribution has no time or frequency axis to pan into, and
+    // does - a distribution has no time or frequency axis to pan into, and
     // both of its axes already auto-range onto the data.
 
     @Override

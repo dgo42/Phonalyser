@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -32,7 +32,7 @@ class MainsCombFilterTest {
 
     private static final int FS = 48000;
 
-    /** Goertzel power |X(f)|² over a plain (unwindowed) block — the
+    /** Goertzel power |X(f)|² over a plain (unwindowed) block - the
      *  measurement yardstick for attenuation checks. */
     private static double power(float[] x, int len, double freqHz) {
         double omega = 2.0 * Math.PI * freqHz / FS;
@@ -183,11 +183,11 @@ class MainsCombFilterTest {
     void magnitudeAt_notchesHarmonics_unityPassband_noBias() {
         MainsCombFilter f = new MainsCombFilter(FS, 2.0);
         f.retune(50.0);
-        // Mains harmonics (k·f0) → deep notch (≈ 0).
+        // Mains harmonics (k·f0) -> deep notch (≈ 0).
         for (double h : new double[] { 50, 100, 150, 200, 1000 }) {
             assertTrue(f.magnitudeAt(h) < 1e-6, "no notch at " + h + " Hz");
         }
-        // Anti-notches (k+0.5)·f0 → EXACTLY unity: peak-normalized, so the comb's
+        // Anti-notches (k+0.5)·f0 -> EXACTLY unity: peak-normalized, so the comb's
         // inherent +0.5 dB passband gain is gone.
         for (double a : new double[] { 75, 125, 175, 1025 }) {
             assertEquals(1.0, f.magnitudeAt(a), 1e-9, "passband peak not unity at " + a + " Hz");

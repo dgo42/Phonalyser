@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -49,7 +49,7 @@ class LibUsbTest {
 
     @Test
     void macResolvesToUnixCoreName() {
-        // JNA maps "usb-1.0" → libusb-1.0.dylib on macOS; arch is irrelevant
+        // JNA maps "usb-1.0" -> libusb-1.0.dylib on macOS; arch is irrelevant
         // (the per-arch lib/macos-* directory picks the file).
         assertArrayEquals(new String[] { "usb-1.0" },
                 LibUsb.candidateLibraryNames("Mac OS X", "aarch64"));
@@ -57,7 +57,7 @@ class LibUsbTest {
 
     @Test
     void linuxTriesCoreNameThenVersionedSoname() {
-        // "usb-1.0" → libusb-1.0.so (dev symlink), then the versioned SONAME.
+        // "usb-1.0" -> libusb-1.0.so (dev symlink), then the versioned SONAME.
         assertArrayEquals(new String[] { "usb-1.0", "libusb-1.0.so.0" },
                 LibUsb.candidateLibraryNames("Linux", "amd64"));
     }

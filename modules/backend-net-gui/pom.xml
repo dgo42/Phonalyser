@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  backend-net-gui - the net bridge's own UI surface: the server list (find a
+  Phonalyser server, add one by address, connect / disconnect) and the glue that
+  turns a connected server's backends into entries of the Preferences dialog's
+  backend combo.
+
+  It sits ABOVE both backend-net (whose NetConnection / NetDeviceManager /
+  NetPreferences it drives) and phonalyser-gui-core (whose Dialogs, I18n and bus
+  it uses) - the same shape as backend-qa40x-gui, and for the same reason: the
+  client backend stays headless and its UI is an optional layer discovered at
+  runtime rather than compiled into the driver.
+
+  Because phonalyser-gui must NOT depend on this module (that would be a cycle),
+  the server list is found by ServiceLoader through RemoteBackendUi, not by a
+  direct reference.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.2.0</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>backend-net-gui</artifactId>
+    <name>Phonalyser :: backend :: net (UI)</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-net</artifactId>
+        </dependency>
+        <!-- The wire format, for the beacon record and the field names the
+             server list reads.  Declared rather than taken transitively: this
+             module names those types itself. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>server-api</artifactId>
+        </dependency>
+        <!-- The SHARED GUI infrastructure only - never phonalyser-gui itself.
+             A backend's UI must not sit on top of the whole application: that
+             would make the app a prerequisite of one of its own plug-ins, and
+             would stop phonalyser-gui ever depending on this module. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-gui-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.platform</groupId>
+            <artifactId>${swt.artifactId}</artifactId>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -30,7 +30,7 @@ import org.edgo.audio.measure.enums.Channel;
  *
  * <p>Files loaded from disk arrive with {@link #isCalibrationApplied()}
  * {@code = true} so the GUI's calibration pipeline doesn't divide them by the
- * loaded calibration a second time — the result on disk was already corrected
+ * loaded calibration a second time - the result on disk was already corrected
  * before being saved.  Fresh measurements set the flag to {@code true} when
  * the analyzer divided by the active calibration, {@code false} otherwise.
  */

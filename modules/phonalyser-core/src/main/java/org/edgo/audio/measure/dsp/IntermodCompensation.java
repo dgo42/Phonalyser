@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -32,11 +32,11 @@ import org.edgo.audio.measure.fft.FftResult;
 
 /**
  * Complex accumulator for closed-loop DAC <em>intermodulation</em>
- * pre-distortion — the two-tone sibling of {@link HarmonicCompensation},
+ * pre-distortion - the two-tone sibling of {@link HarmonicCompensation},
  * shared by the GUI predistortion wizard's dual-tone path.
  *
- * <p>Every distortion product of a two-tone signal — each tone's harmonics
- * <em>and</em> their intermodulation products alike — sits at
+ * <p>Every distortion product of a two-tone signal - each tone's harmonics
+ * <em>and</em> their intermodulation products alike - sits at
  * {@code a·f₁ + b·f₂} for integer {@code (a, b)} and has instantaneous phase
  * {@code a·θ₁ + b·θ₂} from the generator's two DDS accumulators, so a single
  * {@code (a, b)}-indexed correction set cancels them all.  This class holds a
@@ -45,13 +45,13 @@ import org.edgo.audio.measure.fft.FftResult;
  *
  * <ul>
  *   <li>the product's <b>phase-stable</b> averaged value comes straight from
- *       the FFT's {@code re}/{@code im} — the analyzer already de-rotates each
+ *       the FFT's {@code re}/{@code im} - the analyzer already de-rotates each
  *       product bin by {@code a·Φ(F1)+b·Φ(F2)}
  *       ({@link FftResult#imdProductA}), so the products enjoy the same
  *       trustworthy phase the per-tone harmonics get from the single-reference
  *       de-rotation;</li>
  *   <li>the transport delay {@code ωD = −(φ₁+π/2)} is read from F1 and applied
- *       per product by its frequency — identical to the single-tone path.</li>
+ *       per product by its frequency - identical to the single-tone path.</li>
  * </ul>
  *
  * Products within {@code snrMargin} dB of the noise floor are skipped (they
@@ -114,13 +114,13 @@ public final class IntermodCompensation {
 
     /**
      * LMS-style accumulate of the two-tone distortion products measured in
-     * {@code r} — the dual-tone twin of {@link HarmonicCompensation#accumulate},
+     * {@code r} - the dual-tone twin of {@link HarmonicCompensation#accumulate},
      * sharing its design: the accumulator holds each product's ABSOLUTE measured
-     * level (dBFS-linear, off the conv-scaled phasors — the actual ADC reading,
+     * level (dBFS-linear, off the conv-scaled phasors - the actual ADC reading,
      * not a notched-fundamental ratio) as a complex phasor, window-derotated; the
      * {@code .frc} de-embed, the dBV conversion and the division by the DAC
      * fundamental are applied on the way OUT ({@link #toGeneratorCorrections} /
-     * {@link #writeDpd}).  Every detected product is corrected — no noise gate.
+     * {@link #writeDpd}).  Every detected product is corrected - no noise gate.
      *
      * <p><b>Two fundamentals frame the products.</b>  Each product {@code a·f₁+b·f₂}
      * is de-rotated by {@code a·(φ₁+π/2) + b·(φ₂+π/2)} so it lands in the same
@@ -128,14 +128,14 @@ public final class IntermodCompensation {
      * {@code φ₂ = arg(X_F2) − argH(f₂)} are the measured fundamental phases with
      * the twin-T notch phase removed (a pure phase subtraction; without it the
      * notch's ≈π at each tone would flip products and build the dual-tone
-     * triangle — see HarmonicCompensation).  F2 is the {@code (0,1)} grid product.
+     * triangle - see HarmonicCompensation).  F2 is the {@code (0,1)} grid product.
      * The b=0 F1 harmonics read the display-de-embedded {@code re}/{@code im}
      * phase + {@link FftResult#rawHarmonicDbFs} magnitude (and take unit response
      * downstream); every b≠0 product reads the raw conv-scaled phasor and is
      * de-embedded downstream.
      *
-     * @param calF1PhaseRad {@code argH(f₁)} — the {@code .frc} phase at F1
-     * @param calF2PhaseRad {@code argH(f₂)} — the {@code .frc} phase at F2
+     * @param calF1PhaseRad {@code argH(f₁)} - the {@code .frc} phase at F1
+     * @param calF2PhaseRad {@code argH(f₂)} - the {@code .frc} phase at F2
      */
     public void accumulate(FftResult r, double f1Hz, double f2Hz, double step,
                            double calF1PhaseRad, double calF2PhaseRad) {
@@ -179,7 +179,7 @@ public final class IntermodCompensation {
         }
     }
 
-    /** Unit calibration response {@code [magLin=1, phaseRad=0]} — a no-op divide
+    /** Unit calibration response {@code [magLin=1, phaseRad=0]} - a no-op divide
      *  for the b=0 harmonics the display already de-embedded. */
     private static final double[] UNIT_RESPONSE = { 1.0, 0.0 };
 
@@ -204,10 +204,10 @@ public final class IntermodCompensation {
     }
 
     /** Converts the accumulated ABSOLUTE (ADC-dBFS) phasors to the generator's
-     *  dual-tone compensation quad — applying HERE (on the values reaching the
+     *  dual-tone compensation quad - applying HERE (on the values reaching the
      *  DDS): the {@code .frc} de-embed (÷H, −argH) for every b≠0 product (b=0
-     *  harmonics took the display de-embed already → unit response), the
-     *  ADC-dBFS → Vrms conversion, and the division by the DAC F1 fundamental.
+     *  harmonics took the display de-embed already -> unit response), the
+     *  ADC-dBFS -> Vrms conversion, and the division by the DAC F1 fundamental.
      *  Products below the gate are dropped. */
     public GeneratorCorrections toGeneratorCorrections(DoubleFunction<double[]> calResponseAt,
             double adcFsVoltageRms, double dacFundamentalVrms) {
@@ -224,7 +224,7 @@ public final class IntermodCompensation {
             if (accRe[g] == 0.0 && accIm[g] == 0.0) continue;
             double[] cal = coefB[g] == 0 ? UNIT_RESPONSE : calResponseAt.apply(freqHz[g]);
             double magDe = Math.hypot(accRe[g], accIm[g]) / (cal[0] > 0.0 ? cal[0] : 1.0);
-            double vP    = magDe * adcFsVoltageRms;                       // ADC dBFS → absolute Vrms
+            double vP    = magDe * adcFsVoltageRms;                       // ADC dBFS -> absolute Vrms
             amp[i] = dacFundamentalVrms > 0.0 ? vP / dacFundamentalVrms : 0.0;   // ratio to DAC F1
             phi[i] = Math.atan2(accIm[g], accRe[g]) - cal[1];
             a[i]   = coefA[g];
@@ -234,7 +234,7 @@ public final class IntermodCompensation {
         return new GeneratorCorrections(amp, a, b, phi);
     }
 
-    /** Deep copy — lets the wizard snapshot the best-THD round's accumulator
+    /** Deep copy - lets the wizard snapshot the best-THD round's accumulator
      *  while the loop keeps updating the live one. */
     public IntermodCompensation copy() {
         return new IntermodCompensation(coefA, coefB, accRe, accIm, freqHz);
@@ -254,7 +254,7 @@ public final class IntermodCompensation {
      * Writes a dual-tone {@code applied_compensation} CSV.  Mirrors the
      * single-tone format ({@link HarmonicCompensation#writeCsv}) but the
      * per-row key is the {@code (a, b)} coefficient pair instead of a single
-     * harmonic number — German-locale data rows (comma decimals, semicolon
+     * harmonic number - German-locale data rows (comma decimals, semicolon
      * fields).  Any {@code extraHeaderLines} are written first as
      * {@code #}-comments.
      */

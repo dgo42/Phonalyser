@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 /**
- * Tests for {@link ScopeFormat} — formatters and step-pickers shared
+ * Tests for {@link ScopeFormat} - formatters and step-pickers shared
  * across the oscilloscope view + pane.  Pins V/div tile labels, axis
  * formatters, the V/div-change offset-preservation math, and the
  * trigger-auto-timeout parser.
@@ -42,7 +42,7 @@ class ScopeFormatTest {
 
     @Test
     void midRgb_scalesEachChannelToRoughly65pct() {
-        // 0xFFFFFF → each channel ≈ 0.65 × 255 = 166 (0xA6).
+        // 0xFFFFFF -> each channel ≈ 0.65 × 255 = 166 (0xA6).
         int mid = ScopeFormat.midRgb(0xFFFFFF);
         assertEquals(0xA6, (mid >> 16) & 0xFF);
         assertEquals(0xA6, (mid >>  8) & 0xFF);
@@ -62,7 +62,7 @@ class ScopeFormatTest {
     void windowMean_correctAverage() {
         float[] data = {1f, 2f, 3f, 4f, 5f};
         assertEquals(3.0, ScopeFormat.windowMean(data, 0, 5), 1e-12);
-        assertEquals(3.0, ScopeFormat.windowMean(data, 1, 3), 1e-12);  // {2,3,4} → 3
+        assertEquals(3.0, ScopeFormat.windowMean(data, 1, 3), 1e-12);  // {2,3,4} -> 3
     }
 
     @Test
@@ -84,7 +84,7 @@ class ScopeFormatTest {
 
     @Test
     void shortVoltsPerDiv_compactLabels() {
-        // 1 V → "1", 100 mV → "100m", 50 µV → "50u".
+        // 1 V -> "1", 100 mV -> "100m", 50 µV -> "50u".
         assertEquals("1",    ScopeFormat.shortVoltsPerDiv(1.0));
         assertEquals("100m", ScopeFormat.shortVoltsPerDiv(0.1));
         assertEquals("50u",  ScopeFormat.shortVoltsPerDiv(50e-6));
@@ -92,7 +92,7 @@ class ScopeFormatTest {
 
     @Test
     void shortTimePerDiv_handlesNsRange() {
-        // 500 ns → "500n", 50 µs → "50u", 20 ms → "20m".
+        // 500 ns -> "500n", 50 µs -> "50u", 20 ms -> "20m".
         assertEquals("500n", ScopeFormat.shortTimePerDiv(500e-9));
         assertEquals("50u",  ScopeFormat.shortTimePerDiv(50e-6));
         assertEquals("20m",  ScopeFormat.shortTimePerDiv(0.02));
@@ -108,16 +108,16 @@ class ScopeFormatTest {
 
     @Test
     void preserveCanvasMiddle_doublingVpdiv_compressesAroundCentre() {
-        // V/div doubles → distance from 0.5 halves → 0.75 becomes 0.625.
+        // V/div doubles -> distance from 0.5 halves -> 0.75 becomes 0.625.
         double newFrac = ScopeFormat.preserveCanvasMiddle(0.75, 1.0, 2.0);
         assertEquals(0.625, newFrac, 1e-12);
     }
 
     @Test
     void displaySamplesFor_spans10Divisions() {
-        // 1 ms/div at 1 MHz → 10 ms × 1e6 = 10000 samples.
+        // 1 ms/div at 1 MHz -> 10 ms × 1e6 = 10000 samples.
         assertEquals(10_000, ScopeFormat.displaySamplesFor(1e-3, 1_000_000));
-        // 1 s/div at 48 kHz → 10 s × 48000 = 480000 samples.
+        // 1 s/div at 48 kHz -> 10 s × 48000 = 480000 samples.
         assertEquals(480_000, ScopeFormat.displaySamplesFor(1.0, 48_000));
         // Minimum guard: always ≥ 2 samples.
         assertEquals(2, ScopeFormat.displaySamplesFor(1e-12, 1));
@@ -136,21 +136,21 @@ class ScopeFormatTest {
     @Test
     void offsetMoveHalfRange_flooredAtHalf() {
         double peak = 1.4142;   // ≈ 1 V rms ADC full-scale peak
-        // V/div where ±FS fits within the grid → half floored at 0.5 ([0,1]).
+        // V/div where ±FS fits within the grid -> half floored at 0.5 ([0,1]).
         assertEquals(0.5, ScopeFormat.offsetMoveHalfRange(1.0, peak, 10), 1e-9);
-        // Narrow V/div → ±FS spans many divisions → half grows past 0.5.
+        // Narrow V/div -> ±FS spans many divisions -> half grows past 0.5.
         assertEquals(peak / (10 * 0.01), ScopeFormat.offsetMoveHalfRange(0.01, peak, 10), 1e-9);
     }
 
     @Test
     void clampOffsetDelta_keepsZeroLineWithinFsBounds() {
         double peak = 1.4142;   // bounds at V/div=1 are [0,1]
-        // From centre, +0.6 would pass 1.0 → clamps to the +0.5 that reaches it.
+        // From centre, +0.6 would pass 1.0 -> clamps to the +0.5 that reaches it.
         assertEquals( 0.5, ScopeFormat.clampOffsetDelta( 0.6, 0.5, 1.0, peak, 10), 1e-9);
         assertEquals(-0.5, ScopeFormat.clampOffsetDelta(-0.6, 0.5, 1.0, peak, 10), 1e-9);
-        // Within bounds → unchanged.
+        // Within bounds -> unchanged.
         assertEquals( 0.3, ScopeFormat.clampOffsetDelta( 0.3, 0.5, 1.0, peak, 10), 1e-9);
-        // Inactive channel (vDiv<=0) → delta passes through untouched.
+        // Inactive channel (vDiv<=0) -> delta passes through untouched.
         assertEquals( 0.9, ScopeFormat.clampOffsetDelta( 0.9, 0.5, 0.0, peak, 10), 1e-9);
     }
 }

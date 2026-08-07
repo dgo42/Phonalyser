@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -48,7 +48,6 @@ import org.edgo.audio.measure.dsp.ToneLobeLift;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.GenChangeCause;
-import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
@@ -57,8 +56,8 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
-import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -86,7 +85,7 @@ import lombok.extern.log4j.Log4j2;
  * {@link FftResult} for paint to read.  The owning
  * {@link FftPane} drives the lifecycle ({@link #start} / {@link #stop} /
  * {@link #resetStatistics}) and feeds settings via {@code Preferences}.
- * View → pane communication is purely via {@link MessageBus} broadcasts
+ * View -> pane communication is purely via {@link MessageBus} broadcasts
  * ({@link Events#FFT_RANGE_CHANGED}, {@link Events#FFT_RECORDING_AUTO_STOPPED}).
  */
 @Log4j2
@@ -99,11 +98,11 @@ public final class FftView extends AbstractFreqDomainView {
 
     // ─── Plot region constants ───────────────────────────────────────────
     /** Pixel margins around the plotting area inside the canvas.
-     *  Sized for the widest expected axis label — SI-prefix V values
-     *  like "100 mV" / "31.6 µV" — plus a few pixels of breathing room
+     *  Sized for the widest expected axis label - SI-prefix V values
+     *  like "100 mV" / "31.6 µV" - plus a few pixels of breathing room
      *  between the label and the plot frame. */
     private static final int MARGIN_LEFT   = 68;
-    /** Zero top margin — the unit caption is drawn INSIDE the plot
+    /** Zero top margin - the unit caption is drawn INSIDE the plot
      *  area at the top, so the chart frame sits flush against the
      *  pane title (no gap). */
     private static final int MARGIN_TOP    = 0;
@@ -121,7 +120,7 @@ public final class FftView extends AbstractFreqDomainView {
     private static final double SIGNAL_FLOOR_MARGIN_DB = 10.0;
 
     /** A measured THD above this (%) means the "fundamental" is not a clean tone
-     *  but the top of a broadband hump (speech) or noise — the harmonics are as
+     *  but the top of a broadband hump (speech) or noise - the harmonics are as
      *  strong as the fundamental.  The THD/IMD table + F/Hn dots are then hidden
      *  even if the fundamental clears the local floor. */
     private static final double MAX_THD_PCT = 20.0;
@@ -141,7 +140,7 @@ public final class FftView extends AbstractFreqDomainView {
     private Label averagesCountLabel;
 
     /** Controller owning the analyser worker, the frequency-lock loops and
-     *  the IMD analysis — the view issues commands / queries and renders.
+     *  the IMD analysis - the view issues commands / queries and renders.
      *  Assigned exactly once in the constructor; NOT {@code final} because
      *  the field-initializer lambdas below ({@code onGenChangeForFll},
      *  {@code onResultReady}) read it and javac's definite-assignment
@@ -150,7 +149,7 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Snapshot overrides for the averages count and fill %.  An offscreen
      *  screenshot clone has its OWN idle controller, so without these it would
-     *  always read 0 — the screenshot of a live measurement would lose its
+     *  always read 0 - the screenshot of a live measurement would lose its
      *  "N average(s)" / "NN%" readout.  {@link #copySnapshotFrom} copies the
      *  live pane's current values here; {@code <0} means "not a snapshot, use
      *  the live controller". */
@@ -166,19 +165,19 @@ public final class FftView extends AbstractFreqDomainView {
      *  {@code startRender} is stamped when a fresh result arrives in
      *  {@link #onResultReady} and {@code gotFftResult} arms the end-of-paint
      *  log line, which disarms it again so only the FIRST repaint of each
-     *  result is timed — later repaints are pans / zooms, not result
+     *  result is timed - later repaints are pans / zooms, not result
      *  rendering. */
     private long startRender;
     private boolean gotFftResult = false;
 
     /** Set by {@link #onResultReady} when a fresh result is ready to paint;
      *  consumed by {@link #renderRealtimeFrame} on the main event loop's render
-     *  tick.  The FFT data hand-off stays async (worker → UI thread), but the
+     *  tick.  The FFT data hand-off stays async (worker -> UI thread), but the
      *  PAINT is loop-driven so the FFT view refreshes on the same cadence as the
      *  scope and neither view can starve the other behind its events. */
     private boolean fftDirty;
 
-    /** Frequency-domain mains rejection for the DISPLAYED frame — the worker
+    /** Frequency-domain mains rejection for the DISPLAYED frame - the worker
      *  only tracks f0, this divides the comb's cached response out of the shown
      *  spectrum (see {@link MainsCombFilter#applySpectrumCorrection}).  Its OWN
      *  instance (UI-thread-driven, separate from the worker's comb), created
@@ -189,11 +188,11 @@ public final class FftView extends AbstractFreqDomainView {
     private final ToneLobeLift LOBE = new ToneLobeLift();
     /** Re-derives the measurements (THD / SNR / N / fundamental / harmonics, all
      *  units + %) from the de-hummed spectrum after {@link #mainsCorrector} runs
-     *  — the same {@code recomputeStats} the worker uses, so every readout
+     *  - the same {@code recomputeStats} the worker uses, so every readout
      *  matches the plot.  Reused so its scratch buffers aren't re-allocated. */
     private final FftAnalyzer mainsStats = new FftAnalyzer();
 
-    /** Sticky table-mode selector — {@code true} draws the IMD table,
+    /** Sticky table-mode selector - {@code true} draws the IMD table,
      *  {@code false} draws the THD table.  Updated only inside
      *  {@link #onResultReady} (which fires only when the FFT worker is
      *  actually producing results), so the user's last-recorded mode
@@ -204,9 +203,9 @@ public final class FftView extends AbstractFreqDomainView {
     private boolean tableModeIsImd =
             Preferences.instance().getGenSignalForm().isDualTone();
 
-    /** Subscriber for {@link Events#GENERATOR_SIGNAL_CHANGED} — held as
+    /** Subscriber for {@link Events#GENERATOR_SIGNAL_CHANGED} - held as
      *  a field so dispose can unsubscribe by reference.  On USER_INPUT
-     *  (any user change to the generated signal — form, frequency /
+     *  (any user change to the generated signal - form, frequency /
      *  dual-tone frequencies, amplitude / balance, duty) both the locked
      *  alignment and the averaged spectrum are stale (they were measured
      *  for the old signal), so reset the FLL(s) AND wipe the FFT
@@ -230,31 +229,31 @@ public final class FftView extends AbstractFreqDomainView {
     };
 
     /** Subscription handler held as a field so the same instance is
-     *  passed to both {@code subscribe} and {@code unsubscribe} — the
+     *  passed to both {@code subscribe} and {@code unsubscribe} - the
      *  bus removes by reference equality.  The {@code slot} payload is
      *  already a deep-copied snapshot (produced on the worker thread
      *  inside {@code publishResult}); we just store the reference and
-     *  redraw — paint code reads {@link #lastResult} directly. */
+     *  redraw - paint code reads {@link #lastResult} directly. */
     private final Consumer<FftResult> onResultReady = slot -> {
         if (isDisposed()) return;
         // Stale-frame guard: a result parked in the worker's coalescing
-        // hand-off across a signal change drains AFTER the change — its
+        // hand-off across a signal change drains AFTER the change - its
         // spectrum is the old signal's.  Displaying it flashes stale data;
         // feeding it onward poisons the FLL/IMD (see isResultCurrent).
         if (!this.controller.isResultCurrent(slot)) return;
         // this-qualified controller reads throughout this initializer
-        // lambda — see onGenChangeForFll.
+        // lambda - see onGenChangeForFll.
         this.controller.resultConsumed();
         if (isRunning()) {
-            // Post-average pipeline (mains → recompute → .frc → dBV), run ONCE
-            // here on the DISPLAYED frame (post throttle + coalescing) — before
+            // Post-average pipeline (mains -> recompute -> .frc -> dBV), run ONCE
+            // here on the DISPLAYED frame (post throttle + coalescing) - before
             // the deep-copy / IMD so both see the finished spectrum + readouts.
             finalizeResult(slot);
             startRender = System.nanoTime();
             gotFftResult = true;
             // In-place refresh of the displayed snapshot: a deepCopy per
             // displayed frame is ~64 MB of garbage at paint rate at fftSize
-            // 4 M — copyFrom reuses the existing arrays when sizes match
+            // 4 M - copyFrom reuses the existing arrays when sizes match
             // (first frame / size change still allocates).
             if (this.lastResult == null) {
                 this.lastResult = slot.deepCopy();
@@ -262,7 +261,7 @@ public final class FftView extends AbstractFreqDomainView {
                 this.lastResult.copyFrom(slot);
             }
             syncDataButtons();
-            // Frame / phase rejections slow the averaging — raise a sticky
+            // Frame / phase rejections slow the averaging - raise a sticky
             // (20 s, restarted on each fresh rejection) blinking warning with
             // the full detail in its tooltip.  Otherwise live data clears any
             // stale banner: the loaded-CSV path (persistent) or a warning whose
@@ -282,7 +281,7 @@ public final class FftView extends AbstractFreqDomainView {
             // Sticky table mode: re-evaluated on every recorded result
             // and held between recordings.  Tied to the generator form
             // because that's the only signal that lets us pick between
-            // THD (single tone) and IMD (two tones) — an external two-
+            // THD (single tone) and IMD (two tones) - an external two-
             // tone source through a paused generator stays on whichever
             // mode was last selected the previous time recording ran.
             boolean prevTableModeIsImd = tableModeIsImd;
@@ -291,7 +290,7 @@ public final class FftView extends AbstractFreqDomainView {
             lastImd = tableModeIsImd ? this.controller.analyzeImd(slot) : null;
             // Mode just flipped (THD ↔ IMD): refresh the extracted window's
             // title + size.  It's set at create time and on form-change, but
-            // tableModeIsImd only updates here — one tick later — so without
+            // tableModeIsImd only updates here - one tick later - so without
             // this the title keeps the old mode (e.g. "IMD" while showing THD).
             if (tableModeIsImd != prevTableModeIsImd) syncExternalShell();
             // Flag the new result; the main event loop's realtime render tick
@@ -304,24 +303,33 @@ public final class FftView extends AbstractFreqDomainView {
         }
     };
 
-    /** Capture re-sync notification from the worker.  Payload is the i18n
-     *  message-key, so one event presents distinct warnings — a ring overrun
-     *  ({@code fft.warning.overrun}) vs a signal discontinuity
-     *  ({@code fft.warning.discontinuity}).  Raises a PERSISTENT blinking banner
+    /** Capture re-sync notification.  Payload is the i18n message-key, so one
+     *  event presents distinct warnings - a ring overrun
+     *  ({@code fft.warning.overrun}), a signal discontinuity
+     *  ({@code fft.warning.discontinuity}) or a remote bench's own confessed loss
+     *  ({@code fft.warning.netGap}).  Raises a PERSISTENT blinking banner
      *  (no fixed timer): the worker emits no result on a re-sync tick and
-     *  re-anchors, so the next FFT result is the first fully-reloaded window —
+     *  re-anchors, so the next FFT result is the first fully-reloaded window -
      *  whereupon {@link #onResultReady}'s {@link #clearBannerIfStale()} drops it.
-     *  Also cleared on a statistics reset and on Record stop. */
+     *  Also cleared on a statistics reset and on Record stop.
+     *
+     *  <p>Marshalled: the worker publishes on the UI thread, but a bench across
+     *  the network confesses on its connection's reader thread, and the banner is
+     *  a widget.  An {@code asyncExec} from the UI thread simply queues, so the
+     *  worker's path is unchanged in effect. */
     private final Consumer<String> onCaptureResync = messageKey -> {
-        if (isDisposed() || !isRunning() || messageKey == null) return;
-        setBanner(I18n.t(messageKey), I18n.t(messageKey + ".tip"),
-                ColorRole.WARNING_LIT, ColorRole.WARNING_DIM, 0L);
-        redraw();
+        if (messageKey == null) return;
+        GuiUtil.marshal(() -> {
+            if (isDisposed() || !isRunning()) return;
+            setBanner(I18n.t(messageKey), I18n.t(messageKey + ".tip"),
+                    ColorRole.WARNING_LIT, ColorRole.WARNING_DIM, 0L);
+            redraw();
+        });
     };
 
     /** Subscriber for {@link Events#FFT_ALIGN_MAG_DRIFT}: the fundamental
      *  level(s) moved by more than the controller's drift threshold while
-     *  the frequency lock pulled the generator onto the bin grid — the
+     *  the frequency lock pulled the generator onto the bin grid - the
      *  running average still contains pre-alignment frames, so hint at a
      *  statistics reset with a 20 s blinking banner.  Payload: the largest
      *  per-tone delta in dB. */
@@ -355,9 +363,9 @@ public final class FftView extends AbstractFreqDomainView {
     // A self-painting, self-blinking BlinkBanner widget (gui.widgets) overlays the
     // plot top-right: the loaded-spectrum path (persistent until live data arrives),
     // the frame-rejection warning (a sticky timer a fresh rejection restarts), or a
-    // capture re-sync / overrun warning (persistent until the buffer reloads — the
-    // next result — or a reset / stop).  The widget blinks itself — no canvas
-    // redraw — so only the expiry lives here.
+    // capture re-sync / overrun warning (persistent until the buffer reloads - the
+    // next result - or a reset / stop).  The widget blinks itself - no canvas
+    // redraw - so only the expiry lives here.
     private BlinkBanner banner;
     /** Expiry ({@code System.nanoTime}); {@code 0} = persistent (no timer). */
     private long        bannerUntilNanos;
@@ -366,7 +374,7 @@ public final class FftView extends AbstractFreqDomainView {
     private boolean    tableExtracted;
     private ToolWindow distortionWindow;   // extracted THD/IMD table window (when extracted)
 
-    /** Latest published analysis result — a deep copy taken on the
+    /** Latest published analysis result - a deep copy taken on the
      *  worker thread inside {@code publishResult} before it crossed
      *  the bus.  {@code null} before the first successful tick.
      *  Mutating this snapshot is safe: the worker no longer holds a
@@ -381,7 +389,7 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Latest dual-tone IMD result computed from {@link #lastResult}
      *  whenever the generator form is {@code DUAL_TONE}.  {@code null}
-     *  when single-tone — the THD table is drawn in that case
+     *  when single-tone - the THD table is drawn in that case
      *  instead.  Recomputed synchronously on the UI thread inside
      *  {@link #onResultReady}; the math (peak-interp + ~24 bin reads)
      *  is microseconds-scale so it doesn't move the paint budget. */
@@ -393,7 +401,7 @@ public final class FftView extends AbstractFreqDomainView {
     // hit the blit path via paintCachedStatic and never re-walk the
     // 64 k spectrum bins.
 
-    /** Cached calibration cascade-sum curve + its key — see
+    /** Cached calibration cascade-sum curve + its key - see
      *  {@link #calCascadeSumDb}.  Invalidation matches the static-layer
      *  fingerprint's calEntries semantics (entry identity + channel). */
     private double[] calOverlaySumDb;
@@ -405,7 +413,7 @@ public final class FftView extends AbstractFreqDomainView {
         // Pass prefs-driven BACKGROUND + SPECTRUM through the override
         // map so the base allocates the right colour once; everything
         // else uses the light-theme defaults from AbstractMeasurementView.
-        // DIM (#DCDCDC) is FFT-only — supplied here rather than the base
+        // DIM (#DCDCDC) is FFT-only - supplied here rather than the base
         // because no other view dims spectrum regions.
         super(parent, SWT.DOUBLE_BUFFERED, Map.of(
                 ColorRole.BACKGROUND, Preferences.instance().getFftChartBackgroundColor(),
@@ -427,15 +435,19 @@ public final class FftView extends AbstractFreqDomainView {
         // by the worker on the UI thread after each analysis) and force
         // the paint to fire synchronously rather than letting SWT
         // coalesce multiple per-tick redraws into one delayed paint.
-        // At typical analysis cadences (1–5 ticks per second) the
+        // At typical analysis cadences (1-5 ticks per second) the
         // per-tick paint cost is well under the hop interval, so
         // blocking the UI thread for this paint is negligible.
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
         bus.subscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
+        // The bus is UI-only - every publisher of this event is on the display
+        // thread - so a plain subscription is correct; unsubscribed on dispose.
         bus.subscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
+        addDisposeListener(e ->
+                bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll));
         bus.subscribe(Events.FFT_ALIGN_MAG_DRIFT, onAlignMagDrift);
-        // Window-function changes reset the running statistics — the control
+        // Window-function changes reset the running statistics - the control
         // writes the pref, the view reacts to the pref, neither calls the other.
         // Every settings/THD parameter whose side-effect targets the view is
         // wired the same way: the control binds the pref (two-way), the view
@@ -443,7 +455,7 @@ public final class FftView extends AbstractFreqDomainView {
         Preferences viewPrefs = Preferences.instance();
         Bindings.onChange(this, viewPrefs.fftWindowProperty(),           w -> resetStatistics());
         // Switching channel restarts the accumulation so it re-captures the new
-        // channel from 0 — the L/R ToolButtons write the pref, the view reacts here.
+        // channel from 0 - the L/R ToolButtons write the pref, the view reacts here.
         Bindings.onChange(this, viewPrefs.fftChannelProperty(),          v -> resetStatistics());
         // Distortion-table toggle: the external button follows the table's
         // visibility, then refresh the extracted shell + repaint.
@@ -453,16 +465,16 @@ public final class FftView extends AbstractFreqDomainView {
             redraw();
         });
         // FFT length re-snaps the generator's tone (pane publishes the bus
-        // event) AND invalidates the accumulator — the view restarts averaging.
+        // event) AND invalidates the accumulator - the view restarts averaging.
         Bindings.onChange(this, viewPrefs.fftLengthProperty(),           v -> resetStatistics());
-        // Coherent ↔ incoherent changes the accumulator semantics — restart.
+        // Coherent ↔ incoherent changes the accumulator semantics - restart.
         Bindings.onChange(this, viewPrefs.fftCoherentAveragingProperty(), v -> resetStatistics());
         // Multi-tone detect threshold reshapes which peaks count as tones, i.e.
-        // how the coherent average is de-rotated — the accumulated frames used the
+        // how the coherent average is de-rotated - the accumulated frames used the
         // old grid, so restart averaging when it changes.
         Bindings.onChange(this, viewPrefs.fftStrongToneRelDbProperty(),   v -> resetStatistics());
         // ADC re-calibration rescales every measured voltage; DAC re-calibration
-        // changes the generated (loopback) signal level — either invalidates the
+        // changes the generated (loopback) signal level - either invalidates the
         // accumulated spectrum, so restart averaging on a calibration change.
         Bindings.onChange(this, viewPrefs.adcFsVoltageRmsProperty(),      v -> resetStatistics());
         Bindings.onChange(this, viewPrefs.adcFsVoltageRmsRightProperty(),  v -> resetStatistics());
@@ -473,7 +485,7 @@ public final class FftView extends AbstractFreqDomainView {
         // is retained).  Only a real change reaches here (equals-guarded).
         Bindings.onChange(this, viewPrefs.fftAlignGeneratorProperty(),
                 mode -> { if (mode != AlignGenerator.NONE) controller.resetFrequencyLock(); });
-        // Log-axis remap, distortion-range corners (THD tile) — pure repaints,
+        // Log-axis remap, distortion-range corners (THD tile) - pure repaints,
         // no statistics reset.
         Bindings.onChange(this, viewPrefs.fftLogFreqAxisProperty(),      v -> redraw());
         // THD settings (HP/LP distortion band, manual fundamental, max harmonics):
@@ -495,10 +507,10 @@ public final class FftView extends AbstractFreqDomainView {
         Bindings.onChange(this, viewPrefs.fftCalcMaxHarmonicProperty(),  v -> { resizeExternalShellToContent(); onThdSettingChanged(); });
         // Pick up FFT-only prefs (harmonic dot, freq-resp response,
         // before-cal dot, cal overlay) that aren't part of the base
-        // palette — kept as view-local fields below.
+        // palette - kept as view-local fields below.
         syncFftColors();
 
-        // L/R channel buttons — migrated to ToolButton widgets in a top-left Toolbar.
+        // L/R channel buttons - migrated to ToolButton widgets in a top-left Toolbar.
         chanButtonFont = Fonts.instance().channel(d);
         headerBar = new Toolbar(this, BTN_W, BTN_H);
         FormData hbd = new FormData();
@@ -513,7 +525,7 @@ public final class FftView extends AbstractFreqDomainView {
                 color(ColorRole.BUTTON_FRAME), color(ColorRole.RIGHT_BTN_CHAN),
                 chanButtonFont, I18n.t("fft.button.right.tooltip"), ch == Channel.R, "channel");
         // L/R channel buttons are ToolButton radios (no Bindings helper covers
-        // a ToolButton) — each just writes the channel pref (auto-saved); the
+        // a ToolButton) - each just writes the channel pref (auto-saved); the
         // accumulation restart lives in the fftChannel subscription above, so it
         // fires whoever changes the channel (a preset load too).
         leftBtn.addListener(SWT.Selection, e -> {
@@ -531,13 +543,13 @@ public final class FftView extends AbstractFreqDomainView {
         maximizeBtn = headerBar.pushButton(Icon.ARROWS_FROM_CIRCLE_DARK, Icon.ARROWS_FROM_CIRCLE_LIT,
                 color(ColorRole.TEXT), I18n.t("fft.maximize.tooltip"));
         maximizeBtn.addListener(SWT.Selection, e -> maximize());
-        // Distortion / Reset / External — widgets past a wide spacer, shown only while
+        // Distortion / Reset / External - widgets past a wide spacer, shown only while
         // there's a result (hidden by syncDataButtons() when lastResult is null).
         dataSpacer = headerBar.spacer(2);
         distortionBtn = headerBar.toggleButton(Icon.CHART_DARK, Icon.CHART_LIT,
                 color(ColorRole.BUTTON_FRAME),
                 I18n.t("fft.distortion.tooltip"), viewPrefs.isFftDistortionTableVisible());
-        // ToolButton toggle (no Bindings helper covers a ToolButton) — writes
+        // ToolButton toggle (no Bindings helper covers a ToolButton) - writes
         // the pref (auto-saved); the visibility side-effects live in the
         // fftDistortionTableVisible subscription above so they fire on any
         // change (a preset load too).
@@ -571,7 +583,7 @@ public final class FftView extends AbstractFreqDomainView {
         });
         addDisposeListener(e -> disposeResources());
 
-        // Top-right overlay widgets — children of this Canvas, positioned
+        // Top-right overlay widgets - children of this Canvas, positioned
         // by FormLayout.  The Canvas paint listener draws underneath;
         // SWT renders child controls on top automatically.
         setLayout(new FormLayout());
@@ -587,13 +599,13 @@ public final class FftView extends AbstractFreqDomainView {
         // Two-way value bind; the unit-change side-effect (convert the visible
         // mag range so it stays on the SAME signal level, then re-align the
         // scrollbars + repaint) lives in the onChange below.  The conversion
-        // needs the PREVIOUS unit, which the property listener doesn't carry —
+        // needs the PREVIOUS unit, which the property listener doesn't carry -
         // so track it in a one-element holder, seeded from the current value
         // and advanced after each conversion.
         Bindings.combo(magUnitCombo, viewPrefs.fftMagUnitProperty(), MagnitudeUnit.values());
         Bindings.onChange(this, viewPrefs.fftMagUnitProperty(), newUnit -> {
             // The magnitude range is stored in canonical dBFS, so switching the unit is
-            // a label-only change — the range itself doesn't move.
+            // a label-only change - the range itself doesn't move.
             fireRangeChanged();
             redraw();
         });
@@ -641,7 +653,7 @@ public final class FftView extends AbstractFreqDomainView {
         bnd.right = new FormAttachment(100, -6);
         // No left attachment: setBanner pins the width to the text (via
         // BlinkBanner.fitFormDataWidth) so the right-anchored banner spans only
-        // the text, not the full plot — a full-width transparent banner covers
+        // the text, not the full plot - a full-width transparent banner covers
         // (and shows its tooltip over) the THD/N+D table and dB axis on the left.
         banner.setLayoutData(bnd);
 
@@ -663,11 +675,11 @@ public final class FftView extends AbstractFreqDomainView {
             if (!txt.equals(fillPercentLabel.getText())) fillPercentLabel.setText(txt);
             if (averagesCountLabel != null && !averagesCountLabel.isDisposed()) {
                 // Tick-based count (consistent across cycled and forever
-                // modes — both increment by exactly one per analysis).
+                // modes - both increment by exactly one per analysis).
                 // For finite N: capped at N once the moving window is
                 // full.  For "forever": climbs without limit.
                 // The cross-tick accumulator math (forever mode) makes
-                // each displayed tick contribute additional SNR depth —
+                // each displayed tick contribute additional SNR depth -
                 // the actual frames-averaged depth is roughly 2× the
                 // displayed N because each forever tick contributes
                 // ~2 FFT frames to the running sum.
@@ -706,12 +718,11 @@ public final class FftView extends AbstractFreqDomainView {
         MessageBus bus = MessageBus.instance();
         bus.unsubscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
         bus.unsubscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
-        bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
         bus.unsubscribe(Events.FFT_ALIGN_MAG_DRIFT, onAlignMagDrift);
         disposePalette();
         // monoFont / monoBoldFont / chanButtonFont are shared instances
-        // owned by Fonts — never disposed here.
-        // Header icons are cached and owned by IconUtils — disposed
+        // owned by Fonts - never disposed here.
+        // Header icons are cached and owned by IconUtils - disposed
         // when the main shell tears down, not here.
         if (distortionWindow != null) distortionWindow.dispose();
         disposeTraceBuffer();
@@ -730,7 +741,7 @@ public final class FftView extends AbstractFreqDomainView {
         setColor(ColorRole.BEFORE_CAL_DOT,     prefs.getFftBeforeCalDotColor());
         setColor(ColorRole.FREQ_RESP_RESPONSE, prefs.getFftFreqRespColor());
         setColor(ColorRole.CAL_OVERLAY,        prefs.getFftCalOverlayColor());
-        // Keep the SWT Canvas background in sync with the palette entry —
+        // Keep the SWT Canvas background in sync with the palette entry -
         // base setColor() is a no-op when the RGB hasn't changed, so this
         // is cheap to repeat per paint.
         setBackground(color(ColorRole.BACKGROUND));
@@ -740,8 +751,8 @@ public final class FftView extends AbstractFreqDomainView {
     // Public API
     // =========================================================================
 
-    /** Copies the paint-relevant snapshot — last spectrum result, the
-     *  dual-tone IMD slot and the THD/IMD table-mode flag — from
+    /** Copies the paint-relevant snapshot - last spectrum result, the
+     *  dual-tone IMD slot and the THD/IMD table-mode flag - from
      *  {@code source} into this view.  Used by the screenshot renderer
      *  so a passive (worker-less) clone draws exactly the table and
      *  dots the live view shows; without the IMD slot the offscreen
@@ -768,7 +779,7 @@ public final class FftView extends AbstractFreqDomainView {
         return controller.isRecording();
     }
 
-    /** Clears the status banner — a re-sync / overrun warning is moot
+    /** Clears the status banner - a re-sync / overrun warning is moot
      *  once recording stopped; the pane calls this alongside
      *  {@code controller.stopRecording()}. */
     public void clearWarningBanner() {
@@ -776,7 +787,7 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** True when the audio generator is currently producing a signal.
-     *  Resolved via {@link MessageBus} — the generator pane registers a
+     *  Resolved via {@link MessageBus} - the generator pane registers a
      *  responder for {@link Events#GENERATOR_RUNNING}.  Defaults to
      *  {@code true} when no responder is registered.  Used by the THD
      *  table to decide whether to draw the generator-anchored Δf row. */
@@ -812,7 +823,7 @@ public final class FftView extends AbstractFreqDomainView {
     /** View-side companion of a statistics reset: drops the retained
      *  result so the readouts (fundamental, THD, SNR, harmonics) and the
      *  plotted curve clear immediately and repopulate from the fresh
-     *  accumulation — otherwise the stale last values linger on screen.
+     *  accumulation - otherwise the stale last values linger on screen.
      *  Only while recording: a statically loaded CSV (worker stopped)
      *  must survive an unrelated setting change that also resets. */
     private void clearRetainedResultsAfterReset() {
@@ -822,15 +833,12 @@ public final class FftView extends AbstractFreqDomainView {
             clearBanner();          // drop any re-sync / overrun warning on reset
         }
         syncDataButtons();
-        Display d = getDisplay();
-        if (d != null && !d.isDisposed()) {
-            d.asyncExec(() -> { if (!isDisposed()) redraw(); });
-        }
+        GuiUtil.marshal(() -> { if (!isDisposed()) redraw(); });
     }
 
     /** Post-average pipeline, run ONCE per DISPLAYED frame (the worker now hands
-     *  over only the RAW averaged spectrum + the state below): mains rejection →
-     *  recompute every measurement → .frc calibration.  So all
+     *  over only the RAW averaged spectrum + the state below): mains rejection ->
+     *  recompute every measurement -> .frc calibration.  So all
      *  readouts (THD / SNR / N / fundamental / harmonics, every unit + %) and the
      *  plot derive from one de-hummed, calibrated spectrum, computed only on
      *  frames the user actually sees. */
@@ -838,7 +846,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (r.amplitudeDbFs == null) return;
         boolean accumulated = !Double.isNaN(r.coherentKappa);
 
-        // 1. Mains rejection — de-hum amplitudeDbFs (dBV is just dBFS + the global
+        // 1. Mains rejection - de-hum amplitudeDbFs (dBV is just dBFS + the global
         //    ADC offset, applied at display time, so nothing extra to correct here).
         boolean mainsApplied = false;
         if (r.mainsF0Hz > 0.0 && r.sampleRate > 0) {
@@ -849,14 +857,14 @@ public final class FftView extends AbstractFreqDomainView {
             mainsApplied = true;
         }
 
-        // 2. Measurements — averaging always needs a recompute (analyze skipped
+        // 2. Measurements - averaging always needs a recompute (analyze skipped
         //    the stats while accumulating); a single tick only needs it once mains
         //    has changed the spectrum (analyze already produced the rest).
         if (accumulated || mainsApplied) {
             mainsStats.recomputeStats(r);
         }
 
-        // 3. Frequency-response (.frc) calibration — adjusts spectrum + readouts;
+        // 3. Frequency-response (.frc) calibration - adjusts spectrum + readouts;
         //    independent of mains, never on the cal (green) line.
         List<CorrectionStore.Entry> calEntries = correctionStore.getEntries();
         if (!calEntries.isEmpty()) {
@@ -923,17 +931,17 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** True when {@code r}'s measured fundamental rises clearly above the LOCAL
-     *  noise floor (the grass in its near range) — i.e. it is a genuine tonal
+     *  noise floor (the grass in its near range) - i.e. it is a genuine tonal
      *  peak, not the top of a broadband hump (speech) or the max bin of pure
      *  noise.  When false, F and the harmonics are indistinguishable from the
      *  surrounding grass, so the THD/IMD table and the F/Hn dots are hidden. */
     private boolean hasDistinguishableSignal(FftResult r) {
         if (r == null || !Double.isFinite(r.fundamentalDbFs)) return false;
-        // Absurd THD ⇒ the harmonics are as strong as the "fundamental": a
+        // Absurd THD => the harmonics are as strong as the "fundamental": a
         // broadband hump (speech) or noise, not a tone.
         if (Double.isFinite(r.thdPct) && r.thdPct > MAX_THD_PCT) return false;
         double floor = r.localNoiseFloorDbFs();
-        if (!Double.isFinite(floor)) return true;   // no floor estimate — don't suppress
+        if (!Double.isFinite(floor)) return true;   // no floor estimate - don't suppress
         return r.fundamentalDbFs > floor + SIGNAL_FLOOR_MARGIN_DB;
     }
 
@@ -942,7 +950,7 @@ public final class FftView extends AbstractFreqDomainView {
         return tableModeIsImd;
     }
 
-    /** Sets the "Loaded: …" blinking-banner path (a statically loaded
+    /** Sets the "Loaded: ..." blinking-banner path (a statically loaded
      *  spectrum), or clears it with {@code null}.  Repaints. */
     public void setSourceFilePath(String path) {
         if (path == null || path.isEmpty()) {
@@ -954,8 +962,8 @@ public final class FftView extends AbstractFreqDomainView {
         if (!isDisposed()) redraw();
     }
 
-    /** Shows the status banner — the loaded-spectrum path or the frame-rejection
-     *  warning — on the {@link BlinkBanner} widget, which paints and blinks itself
+    /** Shows the status banner - the loaded-spectrum path or the frame-rejection
+     *  warning - on the {@link BlinkBanner} widget, which paints and blinks itself
      *  (no canvas redraw).  The widget right-aligns and left-ellipsises the text to
      *  its own width.
      *  @param untilNanos {@code 0} = persistent, else a {@code nanoTime} expiry. */
@@ -992,7 +1000,7 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** Hides the banner once its expiry passes.  The widget blinks itself, so no
-     *  paint tick polls the timer — a one-shot {@code timerExec} does.  Guarded so a
+     *  paint tick polls the timer - a one-shot {@code timerExec} does.  Guarded so a
      *  newer banner (which moves {@link #bannerUntilNanos}) isn't hidden early. */
     private void scheduleBannerHide(long untilNanos) {
         long delayMs = (untilNanos - System.nanoTime()) / 1_000_000L;
@@ -1021,9 +1029,9 @@ public final class FftView extends AbstractFreqDomainView {
         Preferences prefs = Preferences.instance();
 
         // ── Frequency.  In DUAL_TONE / IMD mode the range needs to
-        // span every measurement point we plot — F1, F2, the
+        // span every measurement point we plot - F1, F2, the
         // difference frequency F2−F1, and the per-order dnL/dnH
-        // sidebands — so the auto-set window includes the full IMD
+        // sidebands - so the auto-set window includes the full IMD
         // dot family with a 10 % log-padding either side.  In
         // single-tone (THD) mode keep the existing "one decade either
         // side of the fundamental" behaviour.
@@ -1068,11 +1076,11 @@ public final class FftView extends AbstractFreqDomainView {
         // ── Magnitude: top = strongest detected tone + 10 dB,
         // bottom = noise floor − 20 dB.  In DUAL_TONE mode the
         // strongest tone is whichever of F1 / F2 has the higher
-        // dBFS — the single-fundamental detector in FftAnalyzer
+        // dBFS - the single-fundamental detector in FftAnalyzer
         // already latches on to that one, so we use both F1/F2
         // dBFS from the IMD slot to pick the maximum explicitly.
         if (Double.isFinite(lastResult.fundamentalDbFs) && Double.isFinite(lastResult.avgNoiseFloorDbFs)) {
-            // The fundamental's DISPLAYED dBFS — manual override (converted) when set,
+            // The fundamental's DISPLAYED dBFS - manual override (converted) when set,
             // else the measured level (already .frc-corrected in place by the worker).
             double peakDbFs = displayedFundDbFs();
             if (!Double.isFinite(peakDbFs)) peakDbFs = lastResult.fundamentalDbFs;
@@ -1098,15 +1106,15 @@ public final class FftView extends AbstractFreqDomainView {
     /** Maximises the visible spectrum: frequency range spans the full
      *  capture band ([bin size, Nyquist]) and the magnitude axis runs
      *  from a fixed +20 dB ceiling down to (noise floor − 30 dB).  The
-     *  top is signal-independent — it doesn't track the fundamental —
+     *  top is signal-independent - it doesn't track the fundamental -
      *  so the chart layout stays stable across signal changes.  Works
      *  even when no analysis result is published yet (uses fallback
      *  values for the bottom). */
     private void maximize() {
         Preferences prefs = Preferences.instance();
 
-        // Frequency span: 0 (clamped to bin size) → Nyquist.  Fall back
-        // to currentNyquist() when no result is available yet — that
+        // Frequency span: 0 (clamped to bin size) -> Nyquist.  Fall back
+        // to currentNyquist() when no result is available yet - that
         // helper itself defaults to 192 kHz / 2 = 96 kHz half-rate.
         double nyquist = (lastResult != null) ? lastResult.sampleRate / 2.0 : currentNyquist();
         double lo = Math.max(currentBinSize(), 0.0);
@@ -1125,7 +1133,7 @@ public final class FftView extends AbstractFreqDomainView {
         double botDbFs = (lastResult != null && Double.isFinite(lastResult.avgNoiseFloorDbFs))
                 ? lastResult.avgNoiseFloorDbFs - 30
                 : -150;
-        // Range stored canonically in dBFS — unit conversion happens at draw / readout.
+        // Range stored canonically in dBFS - unit conversion happens at draw / readout.
         if (Double.isFinite(topDbFs) && Double.isFinite(botDbFs) && topDbFs != botDbFs) {
             if (topDbFs < botDbFs) { double s = topDbFs; topDbFs = botDbFs; botDbFs = s; }
             prefs.setFftMagTop(topDbFs);
@@ -1136,7 +1144,7 @@ public final class FftView extends AbstractFreqDomainView {
         redraw();
     }
 
-    /** The fundamental's DISPLAYED level in dBFS — what the spectrum actually draws at
+    /** The fundamental's DISPLAYED level in dBFS - what the spectrum actually draws at
      *  the fundamental: the manual-override dBV (converted) when set, else the measured
      *  level, which the worker already corrected in place for the loaded {@code .frc}
      *  calibration.  {@code NaN} with no result. */
@@ -1149,14 +1157,14 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** Magnitude-axis ceiling in dBFS: the 0 dBFS full-scale max, raised when a signal is
-     *  present to keep the DISPLAYED fundamental + 20 dB in range — so the axis can exceed
+     *  present to keep the DISPLAYED fundamental + 20 dB in range - so the axis can exceed
      *  0 dBFS when calibration lifts the signal above full scale.  Used by the pane's
      *  clamp / scrollbar sync / scroll handler so the corrected peak is reachable. */
     public double magCeiling() {
         double fundDbFs = displayedFundDbFs();
         if (Double.isFinite(fundDbFs)) return Math.max(0.0, fundDbFs + 20.0);
         // No analysis yet (e.g. app start): the ceiling must not shrink below
-        // the persisted window top — the pane's clamp writes the clamped value
+        // the persisted window top - the pane's clamp writes the clamped value
         // back into prefs, which would destroy a saved > 0 dB zoom/scroll
         // position before the first result can re-raise the ceiling.
         return Math.max(0.0, Preferences.instance().getFftMagTop());
@@ -1249,7 +1257,7 @@ public final class FftView extends AbstractFreqDomainView {
                     drawCalOverlay(bgc, plot, lastResult, unit, fFreqMin, freqMax,
                             magTop, magBot, logFreq);
                 }
-                // Harmonic dots are THD-mode markers — hide them when
+                // Harmonic dots are THD-mode markers - hide them when
                 // an IMD result is present (DUAL_TONE generator) so the
                 // F1/F2/dnL/dnH annotations don't compete with the
                 // single-fundamental-anchored H2..Hn series for the
@@ -1263,7 +1271,7 @@ public final class FftView extends AbstractFreqDomainView {
                 drawImdDots(bgc, plot, lastImd, lastResult, unit, fFreqMin, freqMax,
                         magTop, magBot, logFreq);
             }
-            // THD / IMD readout table — static per result, so it renders
+            // THD / IMD readout table - static per result, so it renders
             // into the cached layer: its ~35 outlined labels (≈315 GDI text
             // calls) used to re-draw on every crosshair mouse-move.
             if (lastResult != null && Preferences.instance().isFftDistortionTableVisible()
@@ -1279,7 +1287,7 @@ public final class FftView extends AbstractFreqDomainView {
         // ---- Dynamic overlay (drawn live on top of the cached image)
         gc.setAntialias(SWT.ON);
         gc.setTextAntialias(SWT.ON);
-        // The THD / IMD table renders inside the cached static layer above —
+        // The THD / IMD table renders inside the cached static layer above -
         // exactly one table; mode is sticky and only flipped inside
         // onResultReady (which fires only when the analyser is actually
         // recording), so the user's last-recorded mode persists while
@@ -1304,7 +1312,7 @@ public final class FftView extends AbstractFreqDomainView {
     // -------------------------------------------------------------------------
 
     /** X = displayed frequency window (Hz), Y = the magnitude window in
-     *  CANONICAL dBFS — the unit the range prefs store for every display unit. */
+     *  CANONICAL dBFS - the unit the range prefs store for every display unit. */
     @Override
     protected ZoomState captureZoomState() {
         Preferences prefs = Preferences.instance();
@@ -1330,7 +1338,7 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** Log-aware on X (the axis flag decides); Y maps the pixel fraction
-     *  linearly onto the dBFS prefs — the wheel-zoom convention, correct for
+     *  linearly onto the dBFS prefs - the wheel-zoom convention, correct for
      *  every display unit since linear-in-dB equals log-in-V. */
     @Override
     protected ZoomState zoomStateForRect(Rectangle sel) {
@@ -1339,7 +1347,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (plot == null || plot.width <= 0 || plot.height <= 0) return null;
         boolean logFreq = prefs.isFftLogFreqAxis();
         // Mirror the paint's axis preparation exactly (same order): floor fMin
-        // at 0, stretch sub-1-Hz spans to 1 Hz, then the log floor — otherwise
+        // at 0, stretch sub-1-Hz spans to 1 Hz, then the log floor - otherwise
         // a selection on a stretched axis maps onto the wrong frequencies.
         double fMin = Math.max(0, prefs.getFftFreqMinHz());
         double fMax = Math.max(fMin + 1, prefs.getFftFreqMaxHz());
@@ -1393,7 +1401,7 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** Draws a small red dot at the fundamental peak and at every
-     *  detected harmonic — same {@code FUND_ANNOTATION_COLOR} the CLI
+     *  detected harmonic - same {@code FUND_ANNOTATION_COLOR} the CLI
      *  FFT chart uses.  Helps the user see at a glance which peaks the
      *  analyser picked up. */
     private void drawHarmonicDots(GC gc, Rectangle plot, FftResult r,
@@ -1404,10 +1412,10 @@ public final class FftView extends AbstractFreqDomainView {
         Preferences prefs = Preferences.instance();
         double binBw = r.freqResolution;
 
-        // "Before-cal" dots — painted FIRST so the corrected (red)
+        // "Before-cal" dots - painted FIRST so the corrected (red)
         // dots sit on top.  Pulled from the SAME r snapshot used for
         // the post-cal dots so both share one tick's harmonicHz
-        // values — the snapshot was deep-copied at publish time, so
+        // values - the snapshot was deep-copied at publish time, so
         // BLUE and RED can never end up from different ticks.
         double[][] before = (r != null) ? r.preCorrectionPeaks : null;
         if (before != null && before.length == 2
@@ -1421,7 +1429,7 @@ public final class FftView extends AbstractFreqDomainView {
         }
 
         // Each plotDotAt gates on the dot's magnitude vs the visible
-        // range and skips drawing when it falls outside — that hides
+        // range and skips drawing when it falls outside - that hides
         // dots cleanly without snapping them to the chart edges.
         // The fundamental dot sits on the DISPLAYED peak: the manual
         // fundamental when set (the trace's lobe is stretched to it at
@@ -1429,7 +1437,7 @@ public final class FftView extends AbstractFreqDomainView {
         //
         // With a manual fundamental and no .frc cal there is no pre-cal
         // snapshot above, yet the lobe is stretched to the manual value and the
-        // red dot lands on it — so also drop a BLUE dot at the true MEASURED
+        // red dot lands on it - so also drop a BLUE dot at the true MEASURED
         // fundamental height, matching the before-cal marker the cal path draws.
         if (before == null && Double.isFinite(r.fundamentalTrueDbFs)
                 && r.fundamentalTrueDbFs != r.fundamentalDbFs) {
@@ -1450,7 +1458,7 @@ public final class FftView extends AbstractFreqDomainView {
             }
         }
 
-        // Hn labels on top of every (corrected) dot — fundamental gets
+        // Hn labels on top of every (corrected) dot - fundamental gets
         // the full "H1 ⟨freq⟩" pair, harmonics get just "Hn".  Only
         // the harmonics within the calc-max-harmonic count are
         // labelled (matches the THD-tab's calcMaxHarmonic pref).
@@ -1479,7 +1487,7 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** DEBUG: draws the mains comb's response as a red curve across the plot,
-     *  with its 0 dB (passband) baseline anchored at {@code anchorDbFs} — so the
+     *  with its 0 dB (passband) baseline anchored at {@code anchorDbFs} - so the
      *  notch positions are visible against the dots.  Reused by the THD path
      *  (anchored at H2) and the IMD path (anchored at d2L, since H2 isn't marked
      *  there).  No-op unless mains is locked. */
@@ -1505,9 +1513,9 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** DEBUG: overlays the spectral discontinuity detector's three reject gates
-     *  — gate-2 floor-reference curve (dark cyan) + reject boundary (cyan),
+     *  - gate-2 floor-reference curve (dark cyan) + reject boundary (cyan),
      *  gate-1 near-carrier pedestal reject line (orange), gate-3 total-power
-     *  line + reject band (magenta) — so it's visible what each gate would
+     *  line + reject band (magenta) - so it's visible what each gate would
      *  reject.  Every value is positioned by its dB excess over the detector's
      *  floor, added to the DISPLAYED (calibrated) floor, so it lands at the
      *  right vertical position whatever calibration the chart applies.  A gate
@@ -1534,7 +1542,7 @@ public final class FftView extends AbstractFreqDomainView {
         }
 
         // Per-band MEAN power levels of the pre-average blocks (the quantity gate 2
-        // compares) and the line bands a tone dominates — gate 2 excludes those, so
+        // compares) and the line bands a tone dominates - gate 2 excludes those, so
         // they are skipped in the reference and the block curves alike.
         double[] curLvl = bandLevels(r.gateBlockDbFs, g);
         boolean[] line  = lineBands(g.mref);
@@ -1556,7 +1564,7 @@ public final class FftView extends AbstractFreqDomainView {
             prevXr = x; prevYr = yr; prevXb = x; prevYb = yb;
         }
 
-        // gate 1: near-carrier pedestal — reject threshold (dark yellow) AND the
+        // gate 1: near-carrier pedestal - reject threshold (dark yellow) AND the
         // rejected block's ACTUAL pedestal (red, thick when it fired), so the
         // excess that tripped it is visible.
         if (g.peakBins != null && !Double.isNaN(g.pedestalThreshDb)) {
@@ -1608,10 +1616,10 @@ public final class FftView extends AbstractFreqDomainView {
             }
         }
 
-        // Current accepted block — per-band level curve (grey, context).
+        // Current accepted block - per-band level curve (grey, context).
         drawLevelCurve(gc, plot, curLvl, line, floorDisp, g, unit,
                 freqMin, freqMax, magTop, magBot, logFreq, binBw, SWT.COLOR_GRAY, false);
-        // Full REJECTED FFT (red) at bin resolution — its fundamental rigidly
+        // Full REJECTED FFT (red) at bin resolution - its fundamental rigidly
         // shifted ONTO the displayed fundamental (no stretch) so the block's
         // near-carrier skirt reads at its TRUE height against the aligned peak:
         // the pedestal that tripped the reject shows directly.
@@ -1623,7 +1631,7 @@ public final class FftView extends AbstractFreqDomainView {
                 freqMin, freqMax, magTop, magBot, logFreq, binBw, SWT.COLOR_RED);
 
         // Gate-status readout: value/threshold per gate for the last reject and the
-        // current block, firing gate marked «<<» — over-rejection visible at a glance.
+        // current block, firing gate marked «<<» - over-rejection visible at a glance.
         gc.setLineWidth(1);
         if (rej != null) {
             gc.setForeground(display.getSystemColor(SWT.COLOR_RED));
@@ -1670,11 +1678,11 @@ public final class FftView extends AbstractFreqDomainView {
     /** Builds the rejected block's full-resolution dBFs curve, positioned to
      *  ATTACH its fundamental onto the displayed (averaged) fundamental:
      *  <ul>
-     *   <li>plain spectrum — a rigid dB shift lands the block's fundamental peak
+     *   <li>plain spectrum - a rigid dB shift lands the block's fundamental peak
      *       on the displayed peak (NO stretch); the block's higher single-shot
      *       floor then rides above the average, exposing the near-carrier skirt
      *       that tripped the reject.</li>
-     *   <li>manual-fundamental or .frc — the displayed fundamental is itself a
+     *   <li>manual-fundamental or .frc - the displayed fundamental is itself a
      *       stretched dome, so the block's lobe is stretched the SAME way (same
      *       {@link ToneLobeLift#stretch}) up to the displayed peak, its skirt
      *       lifted onto the cal-corrected scale by the cascade gain.</li>
@@ -1696,7 +1704,7 @@ public final class FftView extends AbstractFreqDomainView {
         //    red lands on blue's scale and is directly comparable.  With-noise
         //    divides every bin by |H| at its own frequency; otherwise only each
         //    tone's data-derived lobe is stretched by 1/|H| at the tone (noise
-        //    left raw) — mirroring FreqRespCalHelper.applyCompensationInPlace.
+        //    left raw) - mirroring FreqRespCalHelper.applyCompensationInPlace.
         for (CorrectionStore.Entry e : correctionStore.getEntries()) {
             FreqRespCalibration c = r.channelLeft ? e.getCalibration().left()
                                                   : e.getCalibration().right();
@@ -1719,7 +1727,7 @@ public final class FftView extends AbstractFreqDomainView {
             }
         }
 
-        // 2. Manual fundamental — its displayed peak is lifted at draw time (not in
+        // 2. Manual fundamental - its displayed peak is lifted at draw time (not in
         //    amplitudeDbFs), so lift red's fundamental lobe to the user value too.
         boolean manual = Double.isFinite(r.fundamentalTrueDbFs)
                 && Double.isFinite(r.fundamentalDbFs) && Double.isFinite(r.fundamentalHzRefined);
@@ -1738,7 +1746,7 @@ public final class FftView extends AbstractFreqDomainView {
         }
 
         // 3. Final attach: rigid shift landing red's fundamental peak exactly on
-        //    the displayed one (a small residual — the cal already matched it).
+        //    the displayed one (a small residual - the cal already matched it).
         double redPk = Double.NEGATIVE_INFINITY;
         for (int d = -2; d <= 2; d++) {
             int k = fundBin + d;
@@ -1752,7 +1760,7 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** Stretches a tone's data-derived main lobe in {@code out} by the cal's
-     *  {@code 1/|H|} at the tone frequency — the per-tone correction
+     *  {@code 1/|H|} at the tone frequency - the per-tone correction
      *  {@link FreqRespCalHelper#applyCompensationInPlace} applies when the cal
      *  excludes noise. */
     private void stretchToneLobe(double[] out, IntToDoubleFunction mag, FreqRespCalibration c,
@@ -1789,7 +1797,7 @@ public final class FftView extends AbstractFreqDomainView {
                 Math.abs(g.powerDb - g.powerMedDb), g.powerThreshDb, pow ? " <<" : "");
     }
 
-    /** Per-band MEAN power level (dBFs) of a pre-average block — the quantity
+    /** Per-band MEAN power level (dBFs) of a pre-average block - the quantity
      *  gate 2 compares; {@code null} when the block is absent. */
     private double[] bandLevels(double[] block, SpectralDiscontinuityDetector.Gates g) {
         if (block == null) return null;
@@ -1804,7 +1812,7 @@ public final class FftView extends AbstractFreqDomainView {
         return lvl;
     }
 
-    /** Bands whose level towers &gt; 10 dB over the local median — tones, which
+    /** Bands whose level towers &gt; 10 dB over the local median - tones, which
      *  gate 2 excludes from its floor comparison. */
     private boolean[] lineBands(double[] lvl) {
         int nb = lvl.length;
@@ -1818,7 +1826,7 @@ public final class FftView extends AbstractFreqDomainView {
         return line;
     }
 
-    /** Median of the non-line band levels — a block's own floor of band means. */
+    /** Median of the non-line band levels - a block's own floor of band means. */
     private double bandFloor(double[] lvl, boolean[] line) {
         double[] c = new double[lvl.length];
         int m = 0;
@@ -1939,7 +1947,7 @@ public final class FftView extends AbstractFreqDomainView {
     /** Paints F1, F2 and the per-order dnL / dnH IMD-product dots +
      *  labels on the spectrum.  Same visual treatment as
      *  {@link #drawHarmonicDots} so the user sees consistent marker
-     *  styling across THD and IMD modes — red dots on every measured
+     *  styling across THD and IMD modes - red dots on every measured
      *  spike, blue "before-cal" dots underneath when one or more
      *  calibration files are loaded.  Dots that fall outside the
      *  visible mag range are skipped (the {@link #plotDotAt} helper
@@ -1952,7 +1960,7 @@ public final class FftView extends AbstractFreqDomainView {
                              boolean logFreq) {
         if (r == null) return;
         Preferences prefs = Preferences.instance();
-        // dBV → dBFs is the fixed global ADC offset (dBFs = dBV − offset) — the
+        // dBV -> dBFs is the fixed global ADC offset (dBFs = dBV − offset) - the
         // same constant for every bin, not a per-result fundamental delta.
         double refDbV = prefs.getDbvOffsetDb(prefs.getFftChannel());
 
@@ -1976,7 +1984,7 @@ public final class FftView extends AbstractFreqDomainView {
 
         // Blue "before-cal" dots first so the red post-cal dots sit on
         // top.  Only drawn when at least one calibration file is
-        // loaded — same gate the THD path uses (preCorrectionPeaks
+        // loaded - same gate the THD path uses (preCorrectionPeaks
         // null vs. non-null).
         List<CorrectionStore.Entry> calEntries =
                 correctionStore.getEntries();
@@ -1998,13 +2006,13 @@ public final class FftView extends AbstractFreqDomainView {
         }
 
         // DEBUG overlay: mains comb response (red), anchored at d2L's level
-        // (the order-2 lower IMD product — H2 isn't present in IMD mode).
+        // (the order-2 lower IMD product - H2 isn't present in IMD mode).
         drawMainsResponse(gc, plot, r, imd.dnLDbV[2] - refDbV, unit,
                 freqMin, freqMax, magTop, magBot, logFreq);
 
         // F1 / F2 labels: each anchored just above its own dot, but if
         // the two labels would overlap the lower-dot's label slides up
-        // — either into the gap between the higher dot's label and
+        // - either into the gap between the higher dot's label and
         // the lower dot (when there's room), or stacked one line above
         // the higher dot's label (when too cramped).  Both labels stay
         // strictly above their own dots so the dot itself is never
@@ -2038,7 +2046,7 @@ public final class FftView extends AbstractFreqDomainView {
                                 ? candTop
                                 : ly1 - gap - ext2.y;
                     } else {
-                        // F2 dot higher than F1 dot — mirror of the above.
+                        // F2 dot higher than F1 dot - mirror of the above.
                         int candTop = bot2 + gap;
                         int candBot = candTop + ext1.y;
                         ly1 = (candBot + margin <= p1.y)
@@ -2075,11 +2083,11 @@ public final class FftView extends AbstractFreqDomainView {
         }
     }
 
-    /** Returns the cumulative calibration dB lift at {@code freqHz} —
+    /** Returns the cumulative calibration dB lift at {@code freqHz} -
      *  i.e. how many dB the calibration cascade adds at this freq when
      *  going from raw to corrected.  Used to recover the pre-cal level
      *  (BLUE dot) at a known post-cal level by adding this value back
-     *  in.  Empty cal list ⇒ 0 dB.  Instance method (per project
+     *  in.  Empty cal list => 0 dB.  Instance method (per project
      *  preference) rather than static.  Same dB-cascade math
      *  {@code FftAnalyzerWorker.sumCalDb} uses for the THD-path blue
      *  dots; kept local here so the IMD path doesn't reach into the
@@ -2108,7 +2116,7 @@ public final class FftView extends AbstractFreqDomainView {
         Preferences prefs = Preferences.instance();
         double v = prefs.convertFromDbFs(dbFs, unit, prefs.getFftChannel());
         // Drop the dot entirely when its magnitude is outside the
-        // visible range — dots clamped to the edge would otherwise
+        // visible range - dots clamped to the edge would otherwise
         // appear as misleading markers at the chart's top / bottom.
         double t = magToYFraction(v, magTop, magBot, unit);
         if (t < 0 || t > 1) return;
@@ -2125,7 +2133,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  the fields are simple primitives.  Two paints with the same
      *  fingerprint always produce the same cached image. */
     /** Static-trace-layer cache key.  Lombok {@code @EqualsAndHashCode} derives
-     *  the fingerprint hash from every rendering input — adding an input is
+     *  the fingerprint hash from every rendering input - adding an input is
      *  adding a field, with no hand-rolled hash chain to forget it in.  Fields
      *  without a {@code hashCode} override (results) contribute their identity
      *  hash, matching the previous behaviour. */
@@ -2135,13 +2143,13 @@ public final class FftView extends AbstractFreqDomainView {
         private final FftResult result;
         /** Ticks once per published result, so every analysis fingerprints
          *  fresh.  The result's identityHashCode ALONE turned out not to be
-         *  reliable in long runs — under sustained GC churn the hash of
+         *  reliable in long runs - under sustained GC churn the hash of
          *  consecutive Result objects could repeat for stretches lasting
          *  seconds-to-minutes, causing the static trace cache to blit a stale
          *  image even though the worker was producing fresh results (visible
          *  as a frozen chart with the averages counter still ticking). */
         private final long completedAnalyses;
-        /** IMD slot — a form-driven null ↔ ImdResult transition must
+        /** IMD slot - a form-driven null ↔ ImdResult transition must
          *  invalidate the cached image, otherwise the F1 / F2 / dnL / dnH dots
          *  linger from the previous mode until the next result lands. */
         private final ImdResult imd;
@@ -2157,7 +2165,7 @@ public final class FftView extends AbstractFreqDomainView {
         private final boolean distMaxEnabled;
         private final double distMinHz;
         private final double distMaxHz;
-        // Appearance prefs — when these change the cached trace image would
+        // Appearance prefs - when these change the cached trace image would
         // otherwise still show the old colour / width.
         private final double lineWidth;
         private final int harmonicDotDiameter;
@@ -2167,11 +2175,11 @@ public final class FftView extends AbstractFreqDomainView {
         private final int beforeCalDotColor;
         private final int freqRespColor;
         private final int calOverlayColor;
-        /** Cal entry list — adding / removing a row (or flipping withNoise)
+        /** Cal entry list - adding / removing a row (or flipping withNoise)
          *  would otherwise leave the overlay curve stale until the next FFT
          *  result swaps the result reference. */
         private final List<CorrectionStore.Entry> calEntries;
-        // THD / IMD readout table inputs — the table renders into the cached
+        // THD / IMD readout table inputs - the table renders into the cached
         // layer, so its visibility / mode / extraction state must invalidate
         // the image (its data identity is already covered by result + imd +
         // completedAnalyses above).
@@ -2181,7 +2189,7 @@ public final class FftView extends AbstractFreqDomainView {
         // Manual-fundamental + max-harmonic THD inputs.  Changing them recomputes
         // the displayed STATIC result's THD / harmonics IN PLACE (same result
         // reference), so without them in the key the cached image would not
-        // refresh — and they also flip whether the signal clears the noise floor,
+        // refresh - and they also flip whether the signal clears the noise floor,
         // i.e. whether the table + F/Hn dots are drawn at all.
         private final boolean manualFundEnabled;
         private final double manualFundVrms;
@@ -2225,11 +2233,11 @@ public final class FftView extends AbstractFreqDomainView {
      *
      * <p>This avoids the "vertical-line per bin" artifact at high zoom
      * where each FFT bin spans many pixels but only one pixel column had
-     * a sample — previously those columns drew a {@code drawPoint} dot
+     * a sample - previously those columns drew a {@code drawPoint} dot
      * with no connection.  Now the trace is one continuous polyline at
      * any zoom level, and stays O(plotWidth) for huge FFTs.
      */
-    /** Display label for a magnitude unit — physics-unit symbols held in i18n (same in
+    /** Display label for a magnitude unit - physics-unit symbols held in i18n (same in
      *  every language) so the enum itself stays label-free. */
     private String magUnitLabel(MagnitudeUnit unit) {
         return I18n.t("unit.mag." + unit.name());
@@ -2256,8 +2264,8 @@ public final class FftView extends AbstractFreqDomainView {
         double binBw   = r.freqResolution;
         int n = r.amplitudeDbFs.length;
         // Manual-fundamental: lift the fundamental's WHOLE main lobe to the user
-        // value — not just its peak bin (that left a narrow spike on the
-        // unlifted lobe) — PROPORTIONALLY above the local noise floor so the
+        // value - not just its peak bin (that left a narrow spike on the
+        // unlifted lobe) - PROPORTIONALLY above the local noise floor so the
         // wings stay on the floor.  Lobe + floor read from the data via the
         // shared ToneLobeLift; applied as a per-bin dBFS anchor so it works in
         // every magnitude unit.
@@ -2289,7 +2297,7 @@ public final class FftView extends AbstractFreqDomainView {
         // first / last visible bins draw at an inset (their freqToX
         // sits a few pixels inside the plot edge) and the chart looks
         // like it has empty strips on the left and right.
-        // kPrev starts at 1 — never include the DC bin in iteration;
+        // kPrev starts at 1 - never include the DC bin in iteration;
         // its zero-magnitude clamps to plot.bottom and on LOG scale
         // (where freqToX clamps any f < freqMin to plot.x) would
         // pollute column 0's yMax, drawing a fat triangle at the
@@ -2297,7 +2305,7 @@ public final class FftView extends AbstractFreqDomainView {
         int kPrev = Math.max(1,     kFirst - 1);
         int kNext = Math.min(n - 1, kLast  + 1);
 
-        // Column-bucketed polyline rendering — see ColumnBucketPainter
+        // Column-bucketed polyline rendering - see ColumnBucketPainter
         // in the shared base.  FFT also tracks one bin JUST outside the
         // visible range on each side so the polyline reaches the chart
         // edges; the helper exposes setLeftAnchor / setRightAnchor for
@@ -2308,9 +2316,9 @@ public final class FftView extends AbstractFreqDomainView {
         // (every magnitude-unit conversion is monotonic in dBFS) and run
         // freqToX + the unit conversion on the two extremes of each pixel
         // column.  That cuts the transcendental count from one log10+pow
-        // PER BIN (~1 M at fftSize 2 M — a 10-40 ms UI stall per rebuilt
+        // PER BIN (~1 M at fftSize 2 M - a 10-40 ms UI stall per rebuilt
         // frame) to ~4 per pixel column.  Only the manual-fundamental
-        // lobe stretch stays per-bin — it spans a few thousand bins at most.
+        // lobe stretch stays per-bin - it spans a few thousand bins at most.
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
         int    curX     = Integer.MIN_VALUE;          // column being accumulated
         double curMinDb = Double.POSITIVE_INFINITY;   // its raw-dBFS extremes
@@ -2327,7 +2335,7 @@ public final class FftView extends AbstractFreqDomainView {
             }
             // Route by frequency, not pixel: on LOG scale freqToX clamps any
             // sub-freqMin bin to plot.x, so an x-based test would silently
-            // add off-screen bins to column 0 with their own y values —
+            // add off-screen bins to column 0 with their own y values -
             // that's the triangle artefact.  The two off-range anchor bins
             // take the per-bin path (there are at most two of them).
             if (f < freqMin) {
@@ -2364,7 +2372,7 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Emits one accumulated spectrum column to the painter: the column's
      *  min/max raw-dBFS extremes converted to the display unit and Y.  A
-     *  single-bin column adds one point (no envelope bar — matching the
+     *  single-bin column adds one point (no envelope bar - matching the
      *  per-bin path's count semantics); a multi-bin column adds both
      *  extremes. */
     private void flushSpectrumColumn(ColumnBucketPainter painter, Preferences prefs,
@@ -2378,7 +2386,7 @@ public final class FftView extends AbstractFreqDomainView {
         }
     }
 
-    /** dBFS → display-unit → trace Y for one spectrum value. */
+    /** dBFS -> display-unit -> trace Y for one spectrum value. */
     private int binYTrace(Preferences prefs, FftResult r, double binDbFs, Rectangle plot,
                           MagnitudeUnit unit, double magTop, double magBot) {
         double v = prefs.convertFromDbFs(binDbFs, unit, r.binBwSqrt, prefs.getFftChannel());
@@ -2404,7 +2412,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (entries.isEmpty()) return;
         Preferences prefs = Preferences.instance();
         // Anchor at H2 in THD mode, or at d2L (the order-2 lower IMD product) in
-        // IMD mode — H2 isn't marked there.
+        // IMD mode - H2 isn't marked there.
         double anchorFreq, anchorDbFs;
         if (lastImd != null && lastImd.dnLHz != null && lastImd.dnLHz.length > 2
                 && Double.isFinite(lastImd.dnLDbV[2])) {
@@ -2421,7 +2429,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (!(anchorFreq > 0.0) || !Double.isFinite(anchorDbFs)) return;
 
         // Match the cal channel to whichever channel the FFT is
-        // currently analysing — using .left() unconditionally would
+        // currently analysing - using .left() unconditionally would
         // mis-compensate the signal when the user picks the right
         // channel (their L/R cal curves are not identical).
         boolean wantLeft = prefs.getFftChannel() == Channel.L;
@@ -2439,8 +2447,8 @@ public final class FftView extends AbstractFreqDomainView {
                 ? entries.get(0).getCalibration().left()
                 : entries.get(0).getCalibration().right();
         double[] freqs = first.freqs;
-        // The cascade sum depends only on (entries, channel) — not on the
-        // result or viewport — so it is cached across rebuilds: the per-point
+        // The cascade sum depends only on (entries, channel) - not on the
+        // result or viewport - so it is cached across rebuilds: the per-point
         // log10 over every entry (~400 k at two 192 k-point cals) used to
         // rerun on every rebuilt frame.
         double[] sumDbCurve = calCascadeSumDb(entries, wantLeft, first);
@@ -2491,7 +2499,7 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** Cached cascade-sum curve (dB per cal point of the FIRST entry's
-     *  frequency grid) — see {@link #drawCalOverlay}.  Keyed on the entry
+     *  frequency grid) - see {@link #drawCalOverlay}.  Keyed on the entry
      *  list content (entries compare by identity) and the analysed
      *  channel. */
     private double[] calCascadeSumDb(List<CorrectionStore.Entry> entries,
@@ -2523,7 +2531,7 @@ public final class FftView extends AbstractFreqDomainView {
         return sum;
     }
 
-    /** Emits one accumulated cal-overlay column — min/max dB extremes
+    /** Emits one accumulated cal-overlay column - min/max dB extremes
      *  converted to the display unit and Y (single-point columns add one
      *  point, matching the per-point path's count semantics). */
     private void flushCalColumn(ColumnBucketPainter painter, Preferences prefs,
@@ -2542,7 +2550,7 @@ public final class FftView extends AbstractFreqDomainView {
     // =========================================================================
 
     /** Shows the data-only buttons (distortion / reset / external + their spacer) when a
-     *  result is present, hides them otherwise — re-laying out {@link #headerBar}.  Driven
+     *  result is present, hides them otherwise - re-laying out {@link #headerBar}.  Driven
      *  by the result-arrival / reset hooks, never by paint. */
     private void syncDataButtons() {
         boolean hasData = lastResult != null;
@@ -2565,7 +2573,7 @@ public final class FftView extends AbstractFreqDomainView {
     // =========================================================================
 
     /**
-     * Draws the THD info table in the format the CLI FFT chart uses —
+     * Draws the THD info table in the format the CLI FFT chart uses -
      * a centred header line with f0 / dBFS / dBV, a centred span line,
      * three two-column metric rows (N+D / THD H₂..ₙ, N / THD+N, SNR /
      * ENOB), and harmonics laid out two per row.  THD/THD+N precision
@@ -2583,7 +2591,7 @@ public final class FftView extends AbstractFreqDomainView {
      *    <li>Two centred lines for F1, F2 fundamentals
      *        ({@code <freq>  <dBFS>  <dBV>}).</li>
      *    <li>A centred Span line (same format the THD path uses).</li>
-     *    <li>Two Δf lines (one per tone) — only when "Get fundamental
+     *    <li>Two Δf lines (one per tone) - only when "Get fundamental
      *        from generator" is checked AND the generator is running.</li>
      *    <li>IMDpwr / TD+N row, DFD2 / DFD3 row.</li>
      *    <li>d2L..d5L (lower sidebands) and d2H..d5H (upper sidebands),
@@ -2616,19 +2624,23 @@ public final class FftView extends AbstractFreqDomainView {
         }
 
         // ── Δf1 / Δf2 (per-tone clock drift).  Only meaningful when
-        // the generator is running AND fund-from-gen is on — same gate
+        // the generator is running AND fund-from-gen is on - same gate
         // the THD table uses for its ΔF row.
         boolean genActive = isGeneratorActive();
         if (genActive && prefs.isFftFundFromGenerator() && lastResult != null) {
             int sr = lastResult.sampleRate;
-            double f1Cmd = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
-                    prefs.getGenDualToneFreq1Hz());
-            double f2Cmd = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
-                    prefs.getGenDualToneFreq2Hz());
-            drawCentred(gc, formatDeltaF("Δf1", f1Cmd, imd.f1Hz, sr), centreX, y);
-            y += lineH;
-            drawCentred(gc, formatDeltaF("Δf2", f2Cmd, imd.f2Hz, sr), centreX, y);
-            y += lineH;
+            // Against what is EMITTED, not what these preferences would compute:
+            // a bench a network away snapped on its own lane's rate and holds
+            // the frequency-lock trims, and a Δf measured against the local
+            // guess reports that difference as a drift of the hardware's clock.
+            double[] emitted = MessageBus.instance()
+                    .request(Events.GENERATOR_EMITTED_HZ, sr);
+            if (emitted != null) {
+                drawCentred(gc, formatDeltaF("Δf1", emitted[0], imd.f1Hz, sr), centreX, y);
+                y += lineH;
+                drawCentred(gc, formatDeltaF("Δf2", emitted[1], imd.f2Hz, sr), centreX, y);
+                y += lineH;
+            }
         }
         gc.setFont(monoFont);
         y += 2;
@@ -2669,13 +2681,13 @@ public final class FftView extends AbstractFreqDomainView {
         if (mValR < 0) gc.setForeground(color(ColorRole.TEXT));
     }
 
-    /** IMD-table percent cell — "---" when the figure is {@code NaN}
+    /** IMD-table percent cell - "---" when the figure is {@code NaN}
      *  (product outside the measurable range). */
     private String imdPctText(double pct) {
         return Double.isFinite(pct) ? String.format("%.8f %%", pct) : "---";
     }
 
-    /** IMD-table dnL/dnH cell (dBV + percent) — "---" for a product whose
+    /** IMD-table dnL/dnH cell (dBV + percent) - "---" for a product whose
      *  frequency lies outside the measurable range at this sample rate. */
     private String imdRowText(double dbv, double pct) {
         return Double.isFinite(dbv)
@@ -2719,7 +2731,7 @@ public final class FftView extends AbstractFreqDomainView {
         int lineH = gc.textExtent("M").y + 1;
         int charW = gc.textExtent("M").x;
 
-        // Table width = harmonic-row layout span (xLeft → xLeft + 64·charW).
+        // Table width = harmonic-row layout span (xLeft -> xLeft + 64·charW).
         // Centre line drawn at xLeft + 32·charW.
         int tableW = 64 * charW;
         int centreX = xLeft + tableW / 2;
@@ -2728,7 +2740,7 @@ public final class FftView extends AbstractFreqDomainView {
         double thdMaxH = prefs.getFftThdMaxHarmonic();
         gc.setFont(monoBoldFont);
         // dBV column: the manual fundamental (fundamentalTrueDbFs) when set,
-        // else the measured fundamental — both lifted to dBV by the same global
+        // else the measured fundamental - both lifted to dBV by the same global
         // ADC offset every other bin uses.  The dBFS column stays the measured
         // level.
         double dbvOffsetDb = prefs.getDbvOffsetDb(prefs.getFftChannel());
@@ -2745,24 +2757,24 @@ public final class FftView extends AbstractFreqDomainView {
         // (22.5792 MHz for the 44.1k sample-rate family, 24.576 MHz
         // for the 48k family).  Mirrors the CLI FFT chart layout.
         // Only shown when "Get fundamental from generator" is enabled
-        // — without that anchor the row would be meaningless.
+        // - without that anchor the row would be meaningless.
         if (includeClockRow) {
-            // Suppress the row when the generator isn't running — the
+            // Suppress the row when the generator isn't running - the
             // "expected" frequency would otherwise be a stale value
             // and the ΔF / Δosc readout would be meaningless.
             boolean genActive = isGeneratorActive();
             if (genActive && prefs.isFftFundFromGenerator()) {
-                // Compare against the SNAPPED generator frequency
-                // when snap-to-FFT-bin is on — the field holds the
-                // raw user value (e.g. 1000 Hz) but the actual emitted
-                // tone sits on the nearest bin (e.g. 999.987 Hz).
-                // Using the raw value here would make ΔF report the
-                // entire snap residual as a clock drift, which is
-                // misleading.
-                double expected = FftBinSnap.snapIfEnabled(
-                        prefs, GenSignalForm.SINE,
-                        r.sampleRate,
-                        prefs.getGenFrequencyHz());
+                // Compare against what the generator is EMITTING - the
+                // engine that owns it answers post-snap and post-trim.
+                // The field holds the raw user value (e.g. 1000 Hz)
+                // while the tone sits on the nearest bin (e.g.
+                // 999.987 Hz), and a bench a network away snapped it
+                // on its own lane's rate: either residual read here
+                // would be reported as a drift of the hardware's
+                // clock, which is exactly what this row must not do.
+                double[] emitted = MessageBus.instance()
+                        .request(Events.GENERATOR_EMITTED_HZ, r.sampleRate);
+                double expected = emitted == null ? 0 : emitted[0];
                 if (expected > 0 && Double.isFinite(r.fundamentalHzRefined)) {
                     double delta = r.fundamentalHzRefined - expected;
                     double ppm   = 1e6 * delta / expected;
@@ -2797,7 +2809,7 @@ public final class FftView extends AbstractFreqDomainView {
         // "%+8.2f dBV  %.8f %%" string without overlapping the right
         // column's key.
         int colGap = 2 * charW;
-        // Metric layout — short values like "-78.41 dBV A" or "12.8 bits".
+        // Metric layout - short values like "-78.41 dBV A" or "12.8 bits".
         int mKeyL = 7  * charW;       // "N+D:" / "SNR:" / "ENOB:"
         int mValL = 14 * charW;       // covers "-78.41 dBV A"
         int mKeyR = 12 * charW;       // "THD H2..9:"
@@ -2883,14 +2895,14 @@ public final class FftView extends AbstractFreqDomainView {
     /** Draws {@code text} horizontally centred on {@code centreX} with
      *  its top at {@code y} using the current GC font.  Centring is
      *  done via {@link GC#textExtent} so it respects the active font
-     *  (mono / mono-bold) — callers don't have to pre-measure. */
+     *  (mono / mono-bold) - callers don't have to pre-measure. */
     private void drawCentred(GC gc, String text, int centreX, int y) {
         Point ext = gc.textExtent(text);
         drawOutlinedText(gc, text, centreX - ext.x / 2, y);
     }
 
     private String fmtDb(double v) {
-        return Double.isFinite(v) ? String.format("%7.2f dBV", v) : "—";
+        return Double.isFinite(v) ? String.format("%7.2f dBV", v) : "-";
     }
 
     private double noiseDb(FftResult r) {
@@ -2958,7 +2970,7 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Re-fits the extracted THD window to whatever
      *  {@link #computeExternalContentSize()} currently returns.  Invoked
-     *  by the FFT pane when "Max harmonic to calculate" changes — the
+     *  by the FFT pane when "Max harmonic to calculate" changes - the
      *  shell was sized at create time and otherwise wouldn't track new
      *  row counts.  No-op when the window isn't open. */
     public void resizeExternalShellToContent() {
@@ -2976,7 +2988,7 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     private void syncExternalShell() {
-        // External window hosts the extracted distortion table — THD or IMD,
+        // External window hosts the extracted distortion table - THD or IMD,
         // matching the main canvas's sticky table mode.  Open it whenever the
         // table is extracted and visible; the painter picks THD vs IMD.
         boolean wantOpen = tableExtracted
@@ -2987,15 +2999,15 @@ public final class FftView extends AbstractFreqDomainView {
             distortionWindow.dispose();
             distortionWindow = null;
         } else if (wantOpen) {
-            // Table mode may have flipped (THD ↔ IMD) while open — retitle + refit.
+            // Table mode may have flipped (THD ↔ IMD) while open - retitle + refit.
             distortionWindow.setTitle(externalTitle());
             resizeExternalShellToContent();
         }
     }
 
-    /** Title for the extracted table window — "IMD …" in dual-tone mode,
-     *  "THD …" otherwise.  Every locale keeps the acronym literal, so a
-     *  THD→IMD swap localises correctly without a separate message key. */
+    /** Title for the extracted table window - "IMD ..." in dual-tone mode,
+     *  "THD ..." otherwise.  Every locale keeps the acronym literal, so a
+     *  THD->IMD swap localises correctly without a separate message key. */
     private String externalTitle() {
         String t = I18n.t("fft.external.window.title");
         return tableModeIsImd ? t.replace("THD", "IMD") : t;
@@ -3007,7 +3019,7 @@ public final class FftView extends AbstractFreqDomainView {
         w.setPainter(this::paintDistortion);
         w.addCloseListener(e -> setTableExtracted(false));
         distortionWindow = w;
-        // Size to content (harmonic-row width + table height; no button row — the reset /
+        // Size to content (harmonic-row width + table height; no button row - the reset /
         // distortion / external toggles stay in the main FFT view), then place it at the
         // parent shell's top-right.
         Point contentSz = computeExternalContentSize();
@@ -3018,7 +3030,7 @@ public final class FftView extends AbstractFreqDomainView {
         w.open();
     }
 
-    /** Computes the natural client size of the extracted THD table —
+    /** Computes the natural client size of the extracted THD table -
      *  used by {@link #createToolWindow} so the tool window fits its
      *  content exactly (no excess whitespace, no clipping).  Width comes
      *  from the harmonic-row layout (the widest row in the table) and
@@ -3035,7 +3047,7 @@ public final class FftView extends AbstractFreqDomainView {
                 // (MAX_ORDER−1) dnL/dnH rows.  Width is set by a dnL/dnH row:
                 // its right-column value is drawn 38·charW from the left
                 // (dKey 5 + dVal 26 + colGap 2 + dKey 5, per drawImdTable), so
-                // MEASURE the worst-case value — the mono "M" cell under-counts
+                // MEASURE the worst-case value - the mono "M" cell under-counts
                 // digit width and the trailing % would otherwise clip.
                 int charW = gc.textExtent("M").x;
                 String worstVal = String.format("%8.2f dBV %.8f %%", -9999.99, 99.99999999);
@@ -3046,9 +3058,9 @@ public final class FftView extends AbstractFreqDomainView {
                 int contentH = EXT_LEFT_PAD + rows * lineH + 8;
                 return new Point(contentW, contentH);
             }
-            // Measure the worst-case harmonic row directly — same
+            // Measure the worst-case harmonic row directly - same
             // formatting drawDistortionTable uses (key + lVal + 2-space
-            // gap + key + rVal) — and add a generous right padding.
+            // gap + key + rVal) - and add a generous right padding.
             // Earlier attempts using "38·charW + textExtent(value)"
             // under-counted on systems where the mono "M" cell is a
             // pixel narrower than the actual digit / percent glyphs;
@@ -3060,8 +3072,8 @@ public final class FftView extends AbstractFreqDomainView {
             int contentW = EXT_LEFT_PAD + rowW + 32;
             // Rows (no top button row in the external window):
             //   header + span + (clock?) + gap + 3 metric rows + gap + harm pairs
-            // Pref value N means "compute up to HN" → N − 1 harmonics
-            // (H2..HN) → ceil((N − 1) / 2) row pairs.
+            // Pref value N means "compute up to HN" -> N − 1 harmonics
+            // (H2..HN) -> ceil((N − 1) / 2) row pairs.
             int maxH = Math.max(9, prefs.getFftCalcMaxHarmonic());
             int harmRows = ((maxH - 1) + 1) / 2;
             int clockRow = prefs.isFftFundFromGenerator() ? lineH : 0;
@@ -3078,7 +3090,7 @@ public final class FftView extends AbstractFreqDomainView {
         } finally { gc.dispose(); }
     }
 
-    /** {@link ToolWindow.ContentPainter} for the extracted distortion window — draws the THD
+    /** {@link ToolWindow.ContentPainter} for the extracted distortion window - draws the THD
      *  or IMD table straight into the window's GC, inset from its top-left so the keys don't
      *  touch the border ({@code top} is 0 here: no button row, those toggles stay in the
      *  main FFT view). */
@@ -3101,11 +3113,11 @@ public final class FftView extends AbstractFreqDomainView {
     // =========================================================================
 
     /**
-     * Mouse-wheel handling — mirrors the oscilloscope view's UX:
-     *   Ctrl + wheel         → magnitude (vertical) zoom around mouse Y
-     *   Ctrl + Shift + wheel → frequency (horizontal) zoom around mouse X
-     *   Shift + wheel        → horizontal pan (frequency)
-     *   plain wheel          → vertical pan (magnitude)
+     * Mouse-wheel handling - mirrors the oscilloscope view's UX:
+     *   Ctrl + wheel         -> magnitude (vertical) zoom around mouse Y
+     *   Ctrl + Shift + wheel -> frequency (horizontal) zoom around mouse X
+     *   Shift + wheel        -> horizontal pan (frequency)
+     *   plain wheel          -> vertical pan (magnitude)
      * In every case the value under the cursor stays under the cursor so
      * the zoom feels anchored, matching the scope's wheel behaviour.
      */
@@ -3191,7 +3203,7 @@ public final class FftView extends AbstractFreqDomainView {
     /** Plain-wheel pan: shifts the magnitude window by ~10 % of its
      *  span without changing the visible span itself.  Operates in log
      *  space for V / V/√Hz so a pan multiplies both bounds by the same
-     *  factor — otherwise an additive pan on a log axis visibly
+     *  factor - otherwise an additive pan on a log axis visibly
      *  compresses or stretches the range.
      *
      *  <p>Clips the step against the hardware limits (max top, min bot)
@@ -3206,7 +3218,7 @@ public final class FftView extends AbstractFreqDomainView {
         double bot = prefs.getFftMagBottom();
         double maxTp = magCeiling();              // dBFS ceiling (≥ 0, raised by a lifted signal)
         double minBt = Constants.MAG_FLOOR_DBFS;  // dBFS floor
-        // Range is dBFS (linear in dB) for every unit — pan additively, clipping at the
+        // Range is dBFS (linear in dB) for every unit - pan additively, clipping at the
         // limits so neither bound overruns.
         double step = (top - bot) * 0.1 * dir;
         if (step > 0 && top + step > maxTp) step = maxTp - top;
@@ -3222,7 +3234,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  Clips the step against the bin-size / Nyquist limits so a pan
      *  that would push one bound past its limit moves both bounds by
      *  less rather than letting the post-pan clamp shrink the visible
-     *  span — without this, panning past either edge looked like a
+     *  span - without this, panning past either edge looked like a
      *  zoom-in. */
     private void panFrequency(int dir) {
         Preferences prefs = Preferences.instance();
@@ -3288,7 +3300,7 @@ public final class FftView extends AbstractFreqDomainView {
     // =========================================================================
 
     private void ensureFonts() {
-        // Shared, centrally configured fonts — owned by Fonts, never
+        // Shared, centrally configured fonts - owned by Fonts, never
         // disposed here.
         Fonts fonts = Fonts.instance();
         Display d = getDisplay();

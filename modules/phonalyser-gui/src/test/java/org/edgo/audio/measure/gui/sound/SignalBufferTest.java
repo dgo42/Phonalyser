@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -89,7 +89,7 @@ class SignalBufferTest {
 
     @Test
     void appendBatch_wrapsCorrectly() {
-        // Capacity 4.  Write 7 samples → buffer holds last 4.
+        // Capacity 4.  Write 7 samples -> buffer holds last 4.
         SignalBuffer b = new SignalBuffer(48_000, 4.0 / 48_000);   // ⌈4⌉ = 4
         assertEquals(4, b.getCapacity());
 

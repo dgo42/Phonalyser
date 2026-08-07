@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -22,7 +22,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * Per-backend settings.  Devices are stored by name (string) — the
+ * Per-backend settings.  Devices are stored by name (string) - the
  * concrete {@code DeviceRef} is re-resolved at dialog open time by
  * matching the saved name against the live device list.
  */

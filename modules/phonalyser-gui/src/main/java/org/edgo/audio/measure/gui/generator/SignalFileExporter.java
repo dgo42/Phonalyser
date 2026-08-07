@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -35,16 +35,16 @@ import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.gui.interfaces.PcmSink;
 
 /**
- * One-shot exporter for the generator pane's "Save to…" action.
+ * One-shot exporter for the generator pane's "Save to..." action.
  * Picks the file format from the target's extension ({@code .wav},
  * {@code .flac}, {@code .aif} / {@code .aiff}) and writes the same
  * PCM stream {@link org.edgo.audio.measure.sound.CsjsoundGenerator}
- * would produce on the wire — same fillBuffer logic, same TPDF
+ * would produce on the wire - same fillBuffer logic, same TPDF
  * dither.  Stereo; honours the per-lane full-scale scale and the
  * Left/Right/Both output gate exactly like the live PcmQuantizer so a
  * saved file matches what the DAC would play.
  *
- * <p>For periodic forms (sine, triangle, rectangle, …) the length is
+ * <p>For periodic forms (sine, triangle, rectangle, ...) the length is
  * truncated to an integer number of signal periods so the file loops
  * cleanly without a click.  Non-periodic forms (noise, sweeps) use
  * the requested duration as-is.

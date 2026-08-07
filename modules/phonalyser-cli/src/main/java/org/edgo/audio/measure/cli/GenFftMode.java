@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -43,7 +43,7 @@ import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * {@code --gen-fft} — single-shot generate → capture → FFT analyze pipeline
+ * {@code --gen-fft} - single-shot generate -> capture -> FFT analyze pipeline
  * with no intermediate WAV file.
  *
  * <p>Snaps the requested fundamental to the nearest exact FFT bin (so coherent
@@ -65,7 +65,7 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public class GenFftMode {
 
-    /** The CLI's single Preferences instance (transient mode) — injected by Main. */
+    /** The CLI's single Preferences instance (transient mode) - injected by Main. */
     @Setter
     private Preferences prefs;
 
@@ -97,7 +97,7 @@ public class GenFftMode {
         String loadWeightedArg = ArgParser.getArgValue(args, "--load-weighted");
         String syncPauseArg  = ArgParser.getArgValue(args, "--sync-pause");
         if (adcFsArg != null) {
-            // Inject for this run only — Main marked Preferences transient, so not persisted.
+            // Inject for this run only - Main marked Preferences transient, so not persisted.
             prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
@@ -146,7 +146,7 @@ public class GenFftMode {
         } else {
             fundRefDbV = Double.NaN;
         }
-        // The analyzer speaks dBFS only — convert the user-supplied dBV anchor at the boundary.
+        // The analyzer speaks dBFS only - convert the user-supplied dBV anchor at the boundary.
         double fundRefDbFs = fundRefDbV - prefs.getDbvOffsetDb();
 
         double freqRequested = frequency;

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -25,15 +25,15 @@ public class PcmUtils {
 
     /** The byte length of a whole-capture PCM image, with the {@code int}
      *  multiply guarded: past ~268 M frames {@code frames * frameSize}
-     *  overflows and {@code new byte[…]} would die with a bare
-     *  {@link NegativeArraySizeException} — refuse with the real numbers
+     *  overflows and {@code new byte[...]} would die with a bare
+     *  {@link NegativeArraySizeException} - refuse with the real numbers
      *  instead. */
     private int pcmImageLength(int frames, int frameSize) {
         long totalBytes = (long) frames * frameSize;
         if (totalBytes > Integer.MAX_VALUE - 8) {
             throw new IllegalArgumentException(String.format(
                     "Capture too long to render as one PCM image: %,d frames × %d B/frame = %,d MB "
-                    + "exceeds Java's single-array limit — export a shorter capture",
+                    + "exceeds Java's single-array limit - export a shorter capture",
                     frames, frameSize, totalBytes >> 20));
         }
         return (int) totalBytes;

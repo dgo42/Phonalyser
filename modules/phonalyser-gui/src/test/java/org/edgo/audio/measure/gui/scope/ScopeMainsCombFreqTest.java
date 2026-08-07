@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -31,7 +31,7 @@ import org.junit.jupiter.api.Test;
  * <p>Strategy under test: the comb suppresses the dominant mains so the tone
  * becomes the spectral peak (a good SEED), but its 999.7 Hz notch (50·20) sits
  * ~4 Hz from the tone and, at high sample rates, the comb never settles inside
- * the window — both pull the combed frequency low.  The worker therefore
+ * the window - both pull the combed frequency low.  The worker therefore
  * re-pins the seed on the RAW signal in a narrow band: mains energy lives in
  * the low harmonics (tens of Hz away), so the band isolates the tone, un-biased.
  */
@@ -58,7 +58,7 @@ class ScopeMainsCombFreqTest {
 
     /** The load-bearing fix: given the comb's (downward-biased) seed, the raw
      *  narrow-band refine returns the true tone frequency at every rate the
-     *  scope uses — not the comb-biased value, and not the stronger mains. */
+     *  scope uses - not the comb-biased value, and not the stronger mains. */
     @Test
     void rawRefineRecoversToneFromBiasedSeed() {
         for (double fs : new double[]{96_000, 192_000, 384_000}) {
@@ -72,7 +72,7 @@ class ScopeMainsCombFreqTest {
     }
 
     /** Sanity: measuring the RAW signal directly (the naive "drop the comb"
-     *  fix) locks onto the stronger mains, NOT the tone — which is exactly why
+     *  fix) locks onto the stronger mains, NOT the tone - which is exactly why
      *  the comb seed is needed to locate the tone first. */
     @Test
     void rawDirectLocksOntoMains() {

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,18 +28,18 @@ import java.util.Arrays;
  *   H(z) = (1 − z^−N) / (1 − α · z^−N),     N = sampleRate / f₀
  * </pre>
  * places a notch at DC and at every harmonic of {@code f₀}
- * (f₀, 2f₀, 3f₀, … up to Nyquist) in one structure — the natural fit
+ * (f₀, 2f₀, 3f₀, ... up to Nyquist) in one structure - the natural fit
  * for mains interference, whose energy sits at 50/60 Hz and its integer
  * harmonics.  {@code α} (0 &lt; α &lt; 1) sets how sharp each notch is;
  * the −3 dB width is uniform across all harmonics and is derived from a
  * caller-supplied bandwidth in Hz.
  *
  * <h2>Frequency tracking</h2>
- * <p>Mains drifts (±0.1–0.5 Hz), and the k-th harmonic drifts k× as far
+ * <p>Mains drifts (±0.1-0.5 Hz), and the k-th harmonic drifts k× as far
  * in Hz, so a fixed comb loses depth on the high harmonics.  {@link
  * #track(float[], int)} measures the true mains fundamental from a
- * reference block — auto-detecting whether the source is 50 Hz or 60 Hz
- * — and re-tunes the whole comb by adjusting {@code N}.  Because every
+ * reference block - auto-detecting whether the source is 50 Hz or 60 Hz
+ * - and re-tunes the whole comb by adjusting {@code N}.  Because every
  * notch is locked to {@code k·f₀}, one estimate repositions the entire
  * comb: tracking {@code f₀} to a few mHz keeps even the high harmonics
  * in their notches.
@@ -47,8 +47,8 @@ import java.util.Arrays;
  * <p>{@code N} is generally fractional, so the {@code z^−N} delays use
  * linear interpolation between the two straddling integer taps.  Linear
  * interpolation slightly reduces notch depth at the highest harmonics
- * (its mild treble droop mistunes them a touch); for mains — where the
- * significant harmonics are below ~1 kHz — this is negligible.  Swap in
+ * (its mild treble droop mistunes them a touch); for mains - where the
+ * significant harmonics are below ~1 kHz - this is negligible.  Swap in
  * a first-order all-pass fractional delay if deep rejection near Nyquist
  * is ever needed.
  *
@@ -60,16 +60,16 @@ import java.util.Arrays;
  * </pre>
  * Typical streaming use re-tracks occasionally (mains drift is slow) and
  * processes every block; the comb's delay-line state persists across
- * {@code process} calls.  Not thread-safe — drive it from one thread.
+ * {@code process} calls.  Not thread-safe - drive it from one thread.
  */
 public final class MainsCombFilter implements MainsTimeFilter {
 
-    /** Default −3 dB notch bandwidth (Hz) for the mains comb — the value used
+    /** Default −3 dB notch bandwidth (Hz) for the mains comb - the value used
      *  by the FFT / scope combs throughout the app.  Callers pass it to the
      *  constructor (a different width can still be chosen per instance). */
     public static final double DEFAULT_NOTCH_BANDWIDTH_HZ = 2.5;
 
-    /** Lowest fundamental the comb will tune to (Hz) — also sizes the delay
+    /** Lowest fundamental the comb will tune to (Hz) - also sizes the delay
      *  line.  Shared with the other mains filters via the tracker. */
     private static final double MIN_MAINS_HZ = MainsFrequencyTracker.MIN_MAINS_HZ;
     /** Highest fundamental the comb will tune to (Hz). */
@@ -97,7 +97,7 @@ public final class MainsCombFilter implements MainsTimeFilter {
     private double nFrac;                // N − floor(N)
     private double alpha;                // ρ^N
 
-    /** Shared mains-frequency detector — survives {@link #reset} (only the
+    /** Shared mains-frequency detector - survives {@link #reset} (only the
      *  delay lines are cleared there). */
     private final MainsFrequencyTracker tracker;
 
@@ -110,7 +110,7 @@ public final class MainsCombFilter implements MainsTimeFilter {
      * @param sampleRate  capture sample rate (Hz)
      * @param notchBandwidthHz  −3 dB width of each harmonic notch (Hz);
      *        smaller = deeper/narrower (less damage to nearby signal,
-     *        but relies on accurate tracking).  Typical 1–4 Hz.
+     *        but relies on accurate tracking).  Typical 1-4 Hz.
      */
     public MainsCombFilter(int sampleRate, double notchBandwidthHz) {
         if (sampleRate <= 0) throw new IllegalArgumentException("sampleRate must be > 0");
@@ -138,14 +138,14 @@ public final class MainsCombFilter implements MainsTimeFilter {
 
     /**
      * Normalized magnitude response at {@code fHz}, linear (0..1): ≈1 in the
-     * passband, → 0 at every mains harmonic (k·f₀).  Closed form of
+     * passband, -> 0 at every mains harmonic (k·f₀).  Closed form of
      * H(z) = (1 − z⁻ᴺ)/(1 − α·z⁻ᴺ) on the unit circle with N = sampleRate/f₀
      * (so ωN = 2π·f/f₀), scaled by {@code (1+α)/2} so the anti-notch PEAK is
-     * exactly 1 — i.e. the comb's inherent {@code 2/(1+α)} passband gain
+     * exactly 1 - i.e. the comb's inherent {@code 2/(1+α)} passband gain
      * (≈ +0.5 dB) is removed.  Multiplying a spectrum by this notches the mains
      * harmonics WITHOUT biasing the passband.  Returns 1.0 while untuned.
      *
-     * <p>Uses the ideal (un-interpolated) N — exact for notch PLACEMENT; the
+     * <p>Uses the ideal (un-interpolated) N - exact for notch PLACEMENT; the
      * implementation's fractional-delay interpolation adds only a negligible
      * treble droop, irrelevant for a plot-time correction.
      */
@@ -156,7 +156,7 @@ public final class MainsCombFilter implements MainsTimeFilter {
         double num = 2.0 * (1.0 - c);
         double den = 1.0 - 2.0 * alpha * c + alpha * alpha;
         double h   = (den > 0.0) ? Math.sqrt(Math.max(0.0, num / den)) : 0.0;
-        return h * (1.0 + alpha) / 2.0;                      // peak-normalize → 1
+        return h * (1.0 + alpha) / 2.0;                      // peak-normalize -> 1
     }
 
     // ── Frequency-domain correction ──────────────────────────────────────────
@@ -166,9 +166,9 @@ public final class MainsCombFilter implements MainsTimeFilter {
     // its transient/phase into every frame, which a coherent average can't undo
     // (it drifts, worst when a mains harmonic sits on a measured tone), whereas a
     // per-bin divide on the FINAL averaged spectrum leaves the accumulator raw.
-    // Peak-normalized ⇒ no +0.5 dB passband bias.  The per-bin response is CACHED
+    // Peak-normalized => no +0.5 dB passband bias.  The per-bin response is CACHED
     // and rebuilt only when f0 (or the spectrum geometry) changes, so each call
-    // after the first is a cheap band-limited add — cheap enough for the UI
+    // after the first is a cheap band-limited add - cheap enough for the UI
     // thread.  Band-limited to CORR_MAX_HZ: real mains hum lives low, so this
     // removes it without notching higher signal tones, and it keeps the f0-keyed
     // cache stable (high comb teeth would otherwise jump bins on a milli-Hz drift).
@@ -271,7 +271,7 @@ public final class MainsCombFilter implements MainsTimeFilter {
     /**
      * Filters {@code data} in place (length {@code len}).  No-op until
      * the comb has been tuned (call {@link #track} or {@link #retune}
-     * first) — an untuned filter passes the signal through unchanged.
+     * first) - an untuned filter passes the signal through unchanged.
      * {@code absStart} is ignored: the comb carries phase in its delay line.
      */
     public void process(float[] data, int len, long absStart) {
@@ -301,7 +301,7 @@ public final class MainsCombFilter implements MainsTimeFilter {
      * Like {@link #process}, but preserves the block's DC level: the comb
      * inherently notches DC (its zero at k=0), which would re-centre a
      * DC-coupled trace and zero its mean.  This variant subtracts the
-     * block mean, combs the zero-mean signal, then adds the mean back — so
+     * block mean, combs the zero-mean signal, then adds the mean back - so
      * only the mains hum (50/60 Hz + harmonics) is removed and the DC
      * operating point is left intact.  Used by the oscilloscope, where the
      * displayed amplitude and {@code Vmean} should reflect "hum removed",

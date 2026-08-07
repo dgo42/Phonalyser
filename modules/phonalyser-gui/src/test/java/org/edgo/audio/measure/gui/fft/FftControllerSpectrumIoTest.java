@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -39,7 +39,7 @@ import org.edgo.audio.measure.fft.FftResult;
 /**
  * Pins the {@code .fft} spectrum file format via
  * {@link FftController#saveSpectrum} / {@link FftController#loadSpectrum}
- * round-trips — headless (the controller's file I/O never touches the
+ * round-trips - headless (the controller's file I/O never touches the
  * injected worker, so it is constructed with {@code null} collaborators).
  *
  * <p>The writer emits dBV ({@code dBFS + dbvOffsetDb}); the loader
@@ -151,17 +151,17 @@ class FftControllerSpectrumIoTest {
         Files.writeString(garbage, "this is not a spectrum\nat all\n", StandardCharsets.UTF_8);
         assertThrows(IllegalArgumentException.class,
                 () -> io().loadSpectrum(garbage.toString()),
-                "no usable rows → format error");
+                "no usable rows -> format error");
         assertThrows(IOException.class,
                 () -> io().loadSpectrum(tmp.resolve("missing.fft").toString()),
-                "unreadable file → IO error");
+                "unreadable file -> IO error");
 
         Path numeric = tmp.resolve("badnumber.fft");
         Files.writeString(numeric,
                 "frequency_hz;magnitude_dBV;phase_deg\n0.0;abc;0.0\n", StandardCharsets.UTF_8);
         assertThrows(IOException.class,
                 () -> io().loadSpectrum(numeric.toString()),
-                "unparseable number → IO error");
+                "unparseable number -> IO error");
     }
 
     @Test

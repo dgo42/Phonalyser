@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -128,7 +128,7 @@ class FftTest {
         // The contract says "in-place".  We can't directly assert no
         // allocation in pure JVM tests, but we can verify that no
         // exception is thrown when the input/output share the same
-        // backing arrays — which is the practical meaning at our level.
+        // backing arrays - which is the practical meaning at our level.
         int n = 8;
         double[] re = { 1, 1, 0, 0, 0, 0, 0, 0 };  // square half-period
         double[] im = new double[n];
