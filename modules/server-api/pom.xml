@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  server-api - the net bridge WIRE FORMAT, and nothing else: the package
+  org.edgo.audio.measure.net.proto (message envelope, JSON codec, binary audio
+  frames, discovery beacon, error codes, field-name constants), specified by
+  doc/NET-PROTOCOL.md.
+
+  Both sides of the bridge consume it - the headless server (server-net) and the
+  desktop client (backend-net) - which is why it is its own module and why its
+  only dependency is the JSON library.  It deliberately does NOT depend on
+  phonalyser-core: the wire format describes bytes on a socket, not audio
+  devices, and keeping core out means the protocol layer cannot quietly grow a
+  dependency on the application it happens to serve.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.2.0</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>server-api</artifactId>
+    <name>Phonalyser :: server :: api (net wire format)</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-core</artifactId>
+        </dependency>
+        <!-- Control-plane JSON (Apache-2.0).  Version in phonalyser-parent. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,66 @@
+/* QA40x sine -> THD: play 1 kHz into the mock's loopback and read the FFT's
+   own displayed numbers back.
+
+   Ordering matters.  The generator starts first so the loopback already
+   carries signal when the analyzer begins its first frame; starting the FFT
+   first would spend that frame on silence and the first result - which
+   averages=1 makes THE result - would be of nothing.
+
+   The wait is named, so a mock that never delivers a frame says which
+   measurement never arrived instead of only how long it waited.  It throws on
+   timeout, which fails the run: a scenario that quietly carried on with no
+   data would assert NaN against every tolerance and report a pile of red
+   checks whose real cause was one missing frame.
+
+   THE LEVEL CHECK is the one assertion here sensitive to the whole gain
+   chain: the frequency is right whatever the ranges do, and THD is a RATIO
+   that survives them, so without it a 42 dB input-range error would sail
+   through green.  Its expected value of -7.75 dBFS looks surprising for a
+   0.1 Vrms request, and it is worth knowing exactly why it is not.
+
+   THREE real QA40x quirks stack up, and all three are documented:
+
+   1. The input range label LIES, deliberately.  A QA "N dBV" INPUT range is
+      really an N-dBFS Vpp-differential reference, so its true RMS full scale
+      is about N-9 dB (Qa40xLevels; Qa40xProtocol.verboseInputLabel even
+      renders it as 'N "dBV" real N dBFS or N-9 dBV' for the operator).
+      OUTPUT ranges, by contrast, are genuine dBV.  At the default 0 "dBV"
+      input range the real full scale is
+        FS_in_rms = cal_adc_r * 10^(0/20) / (2*sqrt2) = 0.988553/2.828427
+                  = 0.3495063 Vrms
+      which is exactly the fsRight the run writes into the QA403 card.
+
+   2. The analyzer is a BALANCED output driving a DIFFERENTIAL input, and the
+      mock models that faithfully: a 0 dBV (1 Vrms) output presents +-2 V at
+      the differential input.  So the input sees sqrt2 times the RMS the
+      generator was asked for - this is device physics, not a gain error.
+
+   3. The right channel's DAC cal factor is 10^(-0.11/20) = 0.987417 at the
+      +18 dBV output row (code 3), and the loopback divides by it.
+
+   Putting them together for the 0.1 Vrms this scenario requests:
+        V_seen = 0.1 * sqrt2 / 0.987417            = 0.1432234 Vrms
+        peak fraction = 0.1432234 / 0.3495063      = 0.409789
+        dBFS = 20*log10(0.409789)                  = -7.75 dBFS
+   The measured value is -7.7018 dBFS, 0.05 dB away - the residual is the
+   remaining cal term - so the tolerance is 0.5 dB.
+
+   Two independent things pin the pieces of this so a future failure lands
+   where its cause is: FftDbFsConventionTest fixes the dBFS column as
+   PEAK-referenced (an rms reference would move this by 3.01 dB), and
+   Qa40xOutputScalingTest fixes the OUTPUT side as true dBV - a full-scale
+   RMS request reaching exactly full-scale peak, no stray sqrt2. Both are
+   device-free unit tests, so if either convention moves, it fails there in
+   one line of arithmetic rather than here, looking like broken hardware.
+
+   THD is the assertion that needs no pinned range at all, being a ratio of
+   harmonics to fundamental.  The mock's loopback is mathematically clean, so
+   with coherent averaging and a near bin-snapped tone the harmonics should
+   sit far below -100 dB.  If this ever fails, investigate before loosening
+   it. */
+startGenerator();
+startFft();
+waitUntil("the first averaged FFT frame", () -> fftHasResult(), 30);
+check("fund-freq", fftFundamentalHz(), 1000.0, 1.0);
+check("fund-level-dbfs", fftFundamentalDbFs(), -7.75, 0.5);
+checkDbBelow("thd", fftThdDb(), -100.0);

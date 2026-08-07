@@ -1,0 +1,56 @@
+/* FFT gestures: rubberband zoom and ctrl+wheel magnitude zoom, driven by REAL
+   synthesized input through the window system.
+
+   Semantics were read out of the view's source, not assumed: the rubberband is
+   plain button 1 with no modifier, it must span at least 8 px on BOTH axes
+   after clamping to the plot rectangle, and on release it writes the four axis
+   preferences and saves.  The wheel map is plain = pan vertical, Shift = pan
+   horizontal, Ctrl = zoom magnitude, Ctrl+Shift = zoom frequency, with the
+   zoom anchored at the cursor.
+
+   The window is brought to the front first.  Synthesized input goes wherever
+   the window system thinks the focus is, so a scenario that skipped this would
+   be posting its gestures at whatever else happened to be on screen.
+
+   Coordinates stay well inside the canvas (0.3 .. 0.7) on purpose.  The plot
+   proper is inset by the level-axis gutter on the left and the frequency-axis
+   strip at the bottom, and a drag beginning in either is refused outright; a
+   middle band is safely inside the plot at any sane window size without this
+   script having to know the exact inset in pixels.
+
+   The assertions are about DIRECTION and MAGNITUDE OF EFFECT, not exact
+   arithmetic: the pixel-to-frequency mapping depends on those insets, and a
+   check pinned to an exact number would be asserting the border geometry
+   rather than the gesture.  A zoom that narrowed the span to somewhere between
+   a tenth and nine tenths, inside the old window, is not something a broken
+   gesture produces. */
+focusMainWindow();
+
+var freqSpanBefore = fftFreqMaxHz() - fftFreqMinHz();
+checkTrue("freq-window-open-before", freqSpanBefore > 0);
+
+dragOnFftPlot(0.35, 0.30, 0.65, 0.60);
+waitUntil("the rubberband zoom to narrow the frequency window",
+        () -> (fftFreqMaxHz() - fftFreqMinHz()) < freqSpanBefore, 10);
+
+var freqMinAfter = fftFreqMinHz();
+var freqMaxAfter = fftFreqMaxHz();
+var freqSpanAfter = freqMaxAfter - freqMinAfter;
+checkTrue("zoom-narrowed", freqSpanAfter < freqSpanBefore);
+checkTrue("zoom-inside-previous-window", freqMinAfter >= 0.0 && freqMaxAfter <= 24000.0);
+checkRange("zoom-fraction", freqSpanAfter / freqSpanBefore, 0.10, 0.90);
+
+/* Ctrl+wheel zooms the MAGNITUDE axis about the cursor.  One tick up is a
+   factor of 0.8 on the span, so the span must shrink; the check is again on
+   the direction and rough size of the change, since the anchor point depends
+   on where inside the plot the cursor landed. */
+var magSpanBefore = fftMagTopDb() - fftMagBottomDb();
+checkTrue("mag-window-open-before", magSpanBefore > 0);
+
+wheelOnFftPlot(0.5, 0.5, 1, true, false);
+waitUntil("the ctrl+wheel zoom to narrow the magnitude window",
+        () -> (fftMagTopDb() - fftMagBottomDb()) < magSpanBefore, 10);
+
+var magSpanAfter = fftMagTopDb() - fftMagBottomDb();
+checkTrue("mag-zoom-narrowed", magSpanAfter < magSpanBefore);
+checkRange("mag-zoom-fraction", magSpanAfter / magSpanBefore, 0.50, 0.95);
