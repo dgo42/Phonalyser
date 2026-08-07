@@ -1,6 +1,6 @@
 # Phonalyser
 
-**Precision audio measurement workbench** — a desktop analyzer for THD/IMD, SNR/ENOB,
+**Precision audio measurement workbench** - a desktop analyzer for THD/IMD, SNR/ENOB,
 frequency response, and oscilloscope-style inspection, built around coherent FFT
 averaging and bit-exact playback/capture.
 
@@ -10,31 +10,39 @@ averaging and bit-exact playback/capture.
 
 ## Highlights
 
-- **FFT analyzer** — THD, THD+N, IMD, SNR, ENOB, per-harmonic readout, coherent
+- **FFT analyzer** - THD, THD+N, IMD, SNR, ENOB, per-harmonic readout, coherent
   averaging, selectable windows, and live calibration (`.frc`).
-- **Ultra-low-distortion measurements** — sub-ppm THD with a capable ADC/DAC
+- **Ultra-low-distortion measurements** - sub-ppm THD with a capable ADC/DAC
   (e.g. E1DA Cosmos), coherent averaging to pull the noise floor down.
-- **Oscilloscope** — triggered time-domain view with Vpp/Vrms/period/frequency
-  stats, digital-phosphor persistence, glitch trigger, and a **residual view**
-  (captured signal minus a best-fit tone — single or dual — exposing the
-  distortion, noise and glitches hidden under the fundamental).
-- **Frequency response** — Farina log-sweep deconvolution with `.frc`
+- **Oscilloscope** - triggered time-domain view with Vpp/Vrms/period/frequency
+  stats, digital-phosphor persistence, glitch trigger, an **amplitude
+  histogram**, and a **residual view** (captured signal minus a best-fit tone -
+  single or dual - exposing the distortion, noise and glitches hidden under the
+  fundamental).
+- **Frequency response** - Farina log-sweep deconvolution with `.frc`
   calibration, **RIAA/IEC and ideal-filter overlays** (low/high/band-pass,
   notch × Butterworth, Chebyshev, inverse Chebyshev, elliptic, Bessel) with
   measured-vs-ideal compare, and a **band-flatness readout** (−X dB corners
   or ± deviation over a range).
-- **Signal generator** — sine, dual-tone (IMD), rectangle / triangle, noise,
-  sweeps — all DDS-generated.
-- **DAC pre-distortion calibration** — a closed-loop wizard that iteratively
+- **Signal generator** - sine, dual-tone (IMD), rectangle / triangle, noise,
+  sweeps - all DDS-generated.
+- **DAC pre-distortion calibration** - a closed-loop wizard that iteratively
   cancels the converter's own harmonics (and dual-tone IMD), pushing the
   playback chain's distortion far below what the DAC produces alone.
-- **Notch-filter tuning** — a live module for trimming a passive twin-T notch:
+- **Notch-filter tuning** - a live module for trimming a passive twin-T notch:
   a continuously looping sweep tracks the null in real time so you can walk it
   onto the target frequency, then de-embed the notch's response from the FFT.
-- **Multi-backend audio** — WASAPI & WDM-KS (Windows), CoreAudio (macOS),
+- **Multi-backend audio** - WASAPI & WDM-KS (Windows), CoreAudio (macOS),
   JavaSound (Linux), plus a direct **QA40x** (QuantAsylum QA402/QA403) USB
-  backend; high sample rates and 16/24/32-bit.
-- **Per-card calibration** — full-scale calibration follows the physical card
+  backend - on the desktop and, over WebUSB, in the browser; high sample rates
+  and 16/24/32-bit.
+- **Network bench** - a headless `phonalyser-server` turns the machine wired to
+  the measurement hardware into a bench; the desktop app and the browser port
+  measure through it as if the hardware were local. Servers are discovered via
+  multicast, devices are locked per client with the holder named, cards and
+  calibration live on the bench, and the generator is commanded on the server
+  rather than streamed.
+- **Per-card calibration** - full-scale calibration follows the physical card
   across backends via name aliases, with a range table per attenuator / DIP
   position; the crosshair calibrations write straight into the card's active
   range.
@@ -43,14 +51,14 @@ averaging and bit-exact playback/capture.
 
 ## Download & run
 
-**Run it in your browser — no install.** A WebAudio port of Phonalyser runs the
+**Run it in your browser - no install.** A WebAudio port of Phonalyser runs the
 full analyzer (FFT, oscilloscope, signal generator) directly in a modern browser
-(Chrome/Edge) at **<https://dgo42.github.io/Phonalyser/web/>** — nothing to download.
+(Chrome/Edge) at **<https://dgo42.github.io/Phonalyser/web/>** - nothing to download.
 
 To install the desktop app instead, each release offers two ways to run
 Phonalyser:
 
-**Native installers** (recommended) — they bundle their own Java runtime, so
+**Native installers** (recommended) - they bundle their own Java runtime, so
 nothing else is needed:
 
 | OS | Installer |
@@ -60,7 +68,7 @@ nothing else is needed:
 | macOS (Apple Silicon) | `Phonalyser-<version>-arm64.dmg` |
 | macOS (Intel) | `Phonalyser-<version>-x64.dmg` |
 
-**Platform JARs** — run on your own **Java 17+** runtime (no bundled JRE).
+**Platform JARs** - run on your own **Java 17+** runtime (no bundled JRE).
 Download the JAR for your OS plus the matching launcher script, keep them in the
 same folder, and run the script:
 
@@ -68,31 +76,48 @@ same folder, and run the script:
 |----|-----|----------|-----------|
 | Windows | `phonalyser-<version>-windows.jar` | `Phonalyser-windows.bat` | `README-windows.txt` |
 | Linux | `phonalyser-<version>-linux.jar` | `Phonalyser-linux.sh` | `README-linux.txt` |
-| macOS | `phonalyser-<version>-macos.jar` (Intel: `…-macos-x64.jar`) | `Phonalyser-macos.sh` | `README-macos.txt` |
+| macOS | `phonalyser-<version>-macos.jar` (Intel: `...-macos-x64.jar`) | `Phonalyser-macos.sh` | `README-macos.txt` |
 
 The JARs are platform‑specific because each bundles the SWT native for that
 OS/arch. macOS additionally needs `-XstartOnFirstThread` (the launcher adds it).
-To run without the script: `java -jar phonalyser-<version>-<os>.jar` — on macOS,
-`java -XstartOnFirstThread -jar …`.
+To run without the script: `java -jar phonalyser-<version>-<os>.jar` - on macOS,
+`java -XstartOnFirstThread -jar ...`.
 
-**32-bit Windows** — a legacy 32-bit JAR (`phonalyser-<version>-windows-x86.jar`)
+**32-bit Windows** - a legacy 32-bit JAR (`phonalyser-<version>-windows-x86.jar`)
 is built for 32-bit machines (lab PCs, instrument controllers). Run it with an
-explicit heap cap — a 32-bit JVM defaults to a 256 MB heap and cannot reserve
+explicit heap cap - a 32-bit JVM defaults to a 256 MB heap and cannot reserve
 much beyond ~1.4 GB of address space on 32-bit Windows:
 `java -Xmx1200m -jar phonalyser-<version>-windows-x86.jar`
 (the `.bat` launcher adds the flag automatically when it picks the x86 JAR).
 
+**Headless server** - each release also attaches the network bench as one zip
+per platform:
+
+| Platform | Server bundle |
+|----------|---------------|
+| Windows x64 / x86 | `phonalyser-server-<version>-windows-x64.zip` / `...-windows-x86.zip` |
+| Linux x64 / aarch64 | `phonalyser-server-<version>-linux-x64.zip` / `...-linux-aarch64.zip` |
+| macOS Intel / Apple Silicon | `phonalyser-server-<version>-macos-x64.zip` / `...-macos-aarch64.zip` |
+
+A zip carries the server's fat JAR, the platform natives, a console launcher,
+the service-install scripts (Windows service, Linux systemd unit, macOS per-user
+launch agent) and its own README; it runs on **Java 17+**. There is deliberately
+no authentication - the server is a bench instrument for a trusted network. The
+full story is in the
+[server chapter](https://dgo42.github.io/Phonalyser/web/help/en/server.html) of
+the help.
+
 ## Code signing
 
 The installers and JARs are currently distributed **unsigned**, so the OS may
-warn on first run — this is expected:
+warn on first run - this is expected:
 
-- **Windows** — SmartScreen "unknown publisher": click **More info → Run anyway**.
-- **macOS** — Gatekeeper may block it: **right‑click → Open**, or clear the
+- **Windows** - SmartScreen "unknown publisher": click **More info -> Run anyway**.
+- **macOS** - Gatekeeper may block it: **right‑click -> Open**, or clear the
   quarantine flag: `xattr -dr com.apple.quarantine <file>`.
 
 Signed builds are planned via the **Microsoft Store (MSIX)**, which signs the
-package for free at publish time — no per‑developer certificate required. Signing
+package for free at publish time - no per‑developer certificate required. Signing
 direct (non‑Store) downloads would need a paid code‑signing certificate, which
 only becomes worthwhile once there's a steady download volume (a certificate's
 SmartScreen reputation builds with downloads regardless).
@@ -111,7 +136,7 @@ the platform JAR (or any other install), configure it once by hand:
    SUBSYSTEM=="usb", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="4e39", TAG+="uaccess", MODE="0660", GROUP="plugdev"
    ```
 
-   (`16c0:4e37` = QA402, `16c0:4e39` = QA403. The hex must stay lowercase —
+   (`16c0:4e37` = QA402, `16c0:4e39` = QA403. The hex must stay lowercase -
    udev matches are literal. The same file ships in the source tree at
    `src/main/jpackage/linux/70-qa40x.rules`.)
 
@@ -160,10 +185,17 @@ under `help/<lang>/`.
 
 ## Measurement bench
 
-Wiring the bench so the cabling doesn't inject its own noise — a Faraday cage,
+Wiring the bench so the cabling doesn't inject its own noise - a Faraday cage,
 CAT.8 twisted pair with XLR connectors, single-point grounding, and the
-resulting induced-noise budget — is described in
+resulting induced-noise budget - is described in
 [doc/Faradey-Cage-bench.md](doc/Faradey-Cage-bench.md).
+
+## Roadmap
+
+Planned measurements, backends and architectural work for the versions after the
+current one - sorted simple to complex, from stepped sweeps over the existing FFT
+engine to ASIO and NI DAQ backends and a scripting SPI - is listed in
+[doc/ROADMAP.md](doc/ROADMAP.md). Nothing there is implemented yet.
 
 ## Build & run
 
@@ -175,10 +207,10 @@ Nayuki's FLAC library is not on Maven Central, but it is vendored as the
 needs no preparatory step.
 
 See [BUILD.md](BUILD.md) for the full build and
-run instructions — including cross-building other platforms and the 32-bit
-Windows JAR — and [PACKAGING.md](PACKAGING.md) for per-platform packaging
+run instructions - including cross-building other platforms and the 32-bit
+Windows JAR - and [PACKAGING.md](PACKAGING.md) for per-platform packaging
 (jpackage).
 
 ## License
 
-GNU Affero General Public License v3.0 — see [LICENSE](LICENSE).
+GNU Affero General Public License v3.0 - see [LICENSE](LICENSE).

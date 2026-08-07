@@ -1,4 +1,4 @@
-/* Phonalyser project site — two-column landing layout.
+/* Phonalyser project site - two-column landing layout.
    Brand palette taken from the app icon (web/favicon.svg):
      navy #0c2538 (scope-screen background), blue #0057b8 (phi glyph),
      amber #ffd700 (sine-wave accent). */
@@ -252,7 +252,7 @@ figure.shot figcaption b { color: var(--navy2); font-weight: 600; }
 .center-page h1 { color: var(--navy); font-size: 34px; margin: 0 0 8px; }
 .center-page p { color: var(--muted); margin: 0 0 20px; }
 
-/* kebab (three-dots) menu button + drawer backdrop — visible only < 760px (below). */
+/* kebab (three-dots) menu button + drawer backdrop - visible only < 760px (below). */
 .menu-toggle {
   display: none; position: fixed; top: 10px; left: 10px; z-index: 50;
   width: 40px; height: 40px; padding: 0; cursor: pointer;

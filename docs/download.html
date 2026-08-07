@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Phonalyser — Download</title>
+  <title>Phonalyser - Download</title>
   <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
   <link rel="stylesheet" href="css/site.css"/>
   <script src="js/site.js" defer></script>
@@ -28,10 +28,10 @@
         <summary>Download <span class="caret">▸</span></summary>
         <a href="download.html">All downloads</a>
         <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
-           target="_blank" rel="noopener">GitHub — latest release</a>
+           target="_blank" rel="noopener">GitHub - latest release</a>
         <a class="ext" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
            target="_blank" rel="noopener">Microsoft Store</a>
-        <a class="disabled" title="Reserved — coming soon">macOS <span class="soon">soon</span></a>
+        <a class="disabled" title="Reserved - coming soon">macOS <span class="soon">soon</span></a>
       </details>
 
       <details class="submenu">
@@ -40,6 +40,7 @@
         <a href="translation.html">Translation</a>
         <a href="bench.html">Measurement bench</a>
         <a href="theory.html">Theory of operation</a>
+        <a href="roadmap.html">Roadmap</a>
       </details>
 
       <a href="privacy.html">Privacy</a>
@@ -58,7 +59,8 @@
       <div>
         <h1>Download</h1>
         <p class="sub">Native installers with a bundled Java runtime, platform
-           JARs for your own JDK, or run it in the browser — nothing to install.</p>
+           JARs for your own JDK, or run it in a Chromium-based browser - nothing
+           to install.</p>
       </div>
     </header>
 
@@ -68,14 +70,17 @@
         <a class="btn btn-primary" href="https://github.com/dgo42/Phonalyser/releases/latest"
            target="_blank" rel="noopener">
           <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-          GitHub — latest release
+          GitHub - latest release
         </a>
         <a class="btn btn-store" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
            target="_blank" rel="noopener">Microsoft Store</a>
         <span class="btn disabled">macOS <span class="soon">soon</span></span>
       </div>
-      <p class="lede">No install at all? The full analyzer also runs in a modern
-         browser — try the <a href="web/index.html">web version</a>.</p>
+      <p class="lede">No install at all? The full analyzer also runs in Chrome,
+         Edge, Opera or Brave - try the <a href="web/index.html">web version</a>.
+         It needs a Chromium-based browser: Firefox and Safari provide neither the
+         AudioWorklet capture path nor WebUSB, and the page says so instead of
+         loading.</p>
 
       <div class="note"><b>Requirements.</b> Windows 10/11, a recent Linux, or
          macOS; a sound device. For distortion work, a capable ADC/DAC (e.g.
@@ -104,22 +109,49 @@
         <tr><th>OS</th><th>JAR</th><th>Launcher</th><th>Run guide</th></tr>
         <tr><td>Windows</td><td><code>phonalyser-&lt;version&gt;-windows.jar</code></td><td><code>Phonalyser-windows.bat</code></td><td><code>README-windows.txt</code></td></tr>
         <tr><td>Linux</td><td><code>phonalyser-&lt;version&gt;-linux.jar</code></td><td><code>Phonalyser-linux.sh</code></td><td><code>README-linux.txt</code></td></tr>
-        <tr><td>macOS</td><td><code>phonalyser-&lt;version&gt;-macos.jar</code> (Intel: <code>…-macos-x64.jar</code>)</td><td><code>Phonalyser-macos.sh</code></td><td><code>README-macos.txt</code></td></tr>
+        <tr><td>macOS</td><td><code>phonalyser-&lt;version&gt;-macos.jar</code> (Intel: <code>...-macos-x64.jar</code>)</td><td><code>Phonalyser-macos.sh</code></td><td><code>README-macos.txt</code></td></tr>
       </table>
       <p>The JARs are platform-specific because each bundles the SWT native for
          that OS/arch. macOS additionally needs <code>-XstartOnFirstThread</code>
          (the launcher adds it). To run without the script:
-         <code>java -jar phonalyser-&lt;version&gt;-&lt;os&gt;.jar</code> — on
-         macOS, <code>java -XstartOnFirstThread -jar …</code>.</p>
+         <code>java -jar phonalyser-&lt;version&gt;-&lt;os&gt;.jar</code> - on
+         macOS, <code>java -XstartOnFirstThread -jar ...</code>.</p>
+      <p><b>32-bit Windows</b> - a legacy 32-bit JAR
+         (<code>phonalyser-&lt;version&gt;-windows-x86.jar</code>) is built for
+         32-bit machines (lab PCs, instrument controllers). Run it with an
+         explicit heap cap:
+         <code>java -Xmx1200m -jar phonalyser-&lt;version&gt;-windows-x86.jar</code>
+         (the <code>.bat</code> launcher adds the flag automatically when it
+         picks the x86 JAR).</p>
+
+      <h2>Headless server</h2>
+      <p>Turn the machine that is wired to the measurement hardware into a
+         network bench - the desktop app and the
+         <a href="web/index.html">web version</a> measure through it as if the
+         hardware were local. One zip per platform from the
+         <a href="https://github.com/dgo42/Phonalyser/releases/latest"
+            target="_blank" rel="noopener">latest release</a>; it runs on
+         <b>Java 17+</b> and installs as a Windows service, a Linux systemd
+         unit or a macOS launch agent (scripts included). The full story is in
+         the <a href="web/help/en/server.html">server chapter</a> of the
+         help.</p>
+      <table>
+        <tr><th>Platform</th><th>Server bundle</th></tr>
+        <tr><td>Windows x64 / x86</td><td><code>phonalyser-server-&lt;version&gt;-windows-x64.zip</code> / <code>...-windows-x86.zip</code></td></tr>
+        <tr><td>Linux x64 / aarch64</td><td><code>phonalyser-server-&lt;version&gt;-linux-x64.zip</code> / <code>...-linux-aarch64.zip</code></td></tr>
+        <tr><td>macOS Intel / Apple Silicon</td><td><code>phonalyser-server-&lt;version&gt;-macos-x64.zip</code> / <code>...-macos-aarch64.zip</code></td></tr>
+      </table>
+      <div class="note"><b>No authentication.</b> The server is a bench
+         instrument for a trusted network - do not expose it beyond one.</div>
 
       <h2>Code signing</h2>
       <p>The installers and JARs are currently distributed <b>unsigned</b>, so
-         the OS may warn on first run — this is expected:</p>
+         the OS may warn on first run - this is expected:</p>
       <ul>
-        <li><b>Windows</b> — SmartScreen "unknown publisher": click
-            <b>More info → Run anyway</b>. (The Microsoft Store build is signed
+        <li><b>Windows</b> - SmartScreen "unknown publisher": click
+            <b>More info -> Run anyway</b>. (The Microsoft Store build is signed
             at publish time.)</li>
-        <li><b>macOS</b> — Gatekeeper may block it: <b>right-click → Open</b>,
+        <li><b>macOS</b> - Gatekeeper may block it: <b>right-click -> Open</b>,
             or clear the quarantine flag:
             <code>xattr -dr com.apple.quarantine &lt;file&gt;</code>.</li>
       </ul>
