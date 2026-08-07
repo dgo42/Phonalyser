@@ -10,12 +10,12 @@
 # jpackage CANNOT cross-build: it bundles the JDK it is running on, and the pom
 # picks its profile from os.arch.  On macOS that is still enough to build both
 # from ONE machine, because the architecture comes from the JDK rather than the
-# hardware — an x86_64 JDK runs on Apple Silicon under Rosetta 2 and makes
+# hardware - an x86_64 JDK runs on Apple Silicon under Rosetta 2 and makes
 # jpackage emit an Intel app.  Each build therefore selects its own JDK with
 # /usr/libexec/java_home -a <arch>; a missing one is reported, not guessed at.
 #
 # Both profiles set the same platform id, so the two builds would overwrite each
-# other's output — each is moved to target/dist-<arch>/ as soon as it is made.
+# other's output - each is moved to target/dist-<arch>/ as soon as it is made.
 #
 # APP_IMAGE rather than DMG keeps the build quick and unsigned; the release
 # pipeline builds the real .dmg (see PACKAGING.md).
@@ -34,7 +34,7 @@ host_arch() {
 }
 
 # Project Nayuki's flac-library is not on Maven Central, but it is vendored as the
-# modules/flac-library-java module and the reactor builds it — no separate install
+# modules/flac-library-java module and the reactor builds it - no separate install
 # step is needed any more.
 
 build_arch() {
@@ -49,7 +49,7 @@ build_arch() {
     profile="${PROFILE:-$profile}"
 
     if ! home=$(/usr/libexec/java_home -a "$jdk_arch" -v 17 2>/dev/null); then
-        echo "No $jdk_arch JDK 17 found — install one to build $arch." >&2
+        echo "No $jdk_arch JDK 17 found - install one to build $arch." >&2
         echo "  (/usr/libexec/java_home -a $jdk_arch -v 17 found nothing)" >&2
         return 1
     fi
@@ -80,8 +80,8 @@ case "${1:-$(host_arch)}" in
     both)
         # Attempt both and report at the end, rather than letting a missing JDK
         # abort after a perfectly good first build.  On an INTEL Mac the arm64
-        # leg cannot succeed at all — Rosetta runs x86_64 on Apple Silicon, not
-        # the other way round — so that DMG has to come from CI.
+        # leg cannot succeed at all - Rosetta runs x86_64 on Apple Silicon, not
+        # the other way round - so that DMG has to come from CI.
         rc=0
         build_arch x64   || rc=1
         build_arch arm64 || rc=1

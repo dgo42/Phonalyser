@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  backend-loopback — placeholder.  No sources yet; builds an empty jar so the
+  backend-loopback - placeholder.  No sources yet; builds an empty jar so the
   reactor wiring, the SPI registration point and the packaging dependency are
   in place before the code arrives.
 -->
@@ -12,7 +12,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.1.1</version>
+        <version>1.2.0</version>
         <relativePath>../phonalyser-parent</relativePath>
     </parent>
 

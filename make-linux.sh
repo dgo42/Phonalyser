@@ -6,7 +6,7 @@
 #   ./make-linux.sh x64        force the x86_64 profile
 #   ./make-linux.sh aarch64    force the aarch64 profile
 #
-# jpackage CANNOT cross-build — it bundles the JDK it is running on.  The arch
+# jpackage CANNOT cross-build - it bundles the JDK it is running on.  The arch
 # argument therefore selects the profile, but the JDK you run this with has to
 # match it; the check below refuses early rather than letting jpackage produce
 # an image for the wrong architecture.  To get both, run this once on an x86_64
@@ -49,7 +49,7 @@ if [ "$JVM_ARCH" != "$ARCH" ]; then
 fi
 
 # Project Nayuki's flac-library is not on Maven Central, but it is vendored as the
-# modules/flac-library-java module and the reactor builds it — no separate install
+# modules/flac-library-java module and the reactor builds it - no separate install
 # step is needed any more.
 
 # jpackage refuses to overwrite an existing image; clear it before building.

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Phonalyser — multi-module AGGREGATOR.
+  Phonalyser - multi-module AGGREGATOR.
 
   This POM answers one question only: what gets built, and in what order.  All
   version and configuration policy lives in phonalyser-parent, which every module
@@ -11,23 +11,36 @@
   Layering:
 
       phonalyser-parent                  versions, plugins, OS profiles
+      server-api                         net wire format; JSON only, no core
       phonalyser-core                    base; no Phonalyser dependencies, no SWT
-        ├── backend-wdm-ks               PortAudio host-API backends
+        ├── backend-wdm-ks               PortAudio host-API backends; the other
+        │                                three share its PortAudio layer
         ├── backend-wasapi
         ├── backend-coreaudio
         ├── backend-javasound
-        ├── backend-qa40x
-        ├── backend-loopback             (placeholder — in-app digital loopback)
-        ├── backend-net                  (placeholder — TCP/IP bridge client)
+        ├── backend-qa40x                + its own contract (Qa40xControl,
+        │                                Qa40xDeviceInfo) - core stays vendor-free
+        ├── backend-loopback             (placeholder - in-app digital loopback)
+        ├── server-net                   headless net server (+ server-api and
+        │                                EVERY backend above: this is the machine
+        │                                the hardware is wired to).  Never
+        │                                backend-net - that half is the client
+        ├── backend-net                  net client (+ server-api).  The server
+        │                                appears in NO scope, tests included: its
+        │                                tests mock the far end of the socket
         └── phonalyser-cli
              └── phonalyser-gui-core     shared SWT infrastructure
-                  ├── phonalyser-gui     the application
-                  └── backend-qa40x-gui  a backend's own UI
+                  ├── phonalyser-gui     the application (+ server-net, which the
+                  │                      server switch starts in-process)
+                  ├── backend-qa40x-gui  a backend's own UI (+ backend-qa40x)
+                  └── backend-net-gui    the net backend's UI (+ backend-net)
                        └── phonalyser-app  fat jar + jpackage installer
 
   Backends and backend settings panels are discovered at runtime through
-  ServiceLoader, so no module names a concrete backend and none of the arrows
-  above ever points back up.
+  ServiceLoader, so no CODE names a concrete backend and none of the arrows
+  above ever points back up.  The dependencies exist only to put the providers
+  on the class path of whoever must offer them: the CLI, the packaged app, and
+  the server that serves them.
 
   Every module lives under modules/; this POM is the only place that spells that
   out, since each module names its parent as the sibling ../phonalyser-parent.
@@ -36,7 +49,7 @@
   modules, so phonalyser-app is declared last and consumes every other module's
   artifact.  The packaging ASSETS stay at this level (src/main/assembly,
   src/main/jpackage, src/main/packaging, src/pdf-tool) and phonalyser-app reaches
-  them via ${project.basedir}/../.. — nothing had to move.
+  them via ${project.basedir}/../.. - nothing had to move.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -46,7 +59,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.1.1</version>
+        <version>1.2.0</version>
         <relativePath>modules/phonalyser-parent</relativePath>
     </parent>
 
@@ -63,7 +76,7 @@
         <checkstyle.config>${project.basedir}/config/checkstyle/checkstyle.xml</checkstyle.config>
     </properties>
 
-    <!-- One module: the modules/ aggregator, which names the fourteen.  Keeping
+    <!-- One module: the modules/ aggregator, which names the eighteen.  Keeping
          the list there rather than here means the directory is a Maven project in
          its own right, so an IDE opened on it (or indexing folder by folder, as
          VS Code's Java support does) discovers them all. -->
