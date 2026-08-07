@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser.web - Editing the settings as JSON</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1 id="json-config">Editing the settings as JSON</h1>
+  <p>Everything the <a href="preferences.html">Preferences</a> dialog writes ends up
+     in one of two stored documents - the settings and the
+     <a href="preferences.html#prefs-audio-card">card profiles</a> - and both can be
+     opened directly, as text, from the <b>Tools</b> menu.  It is the way to see the
+     whole of your configuration at once, to copy a card between machines, or to
+     change something the dialogs deliberately do not expose.</p>
+  <p><img src="img/JSON config editor.png" alt="The JSON configuration editor open on the preferences document, with the completion list showing"/></p>
+
+  <h2 id="json-config-menu">Where it is</h2>
+  <p>Tools carries two submenus:</p>
+  <table class="controls">
+    <tr><th>Menu item</th><th>What it opens</th></tr>
+    <tr><td><b>Preferences ▸ Current</b></td>
+        <td>The live settings document - everything on the five tabs of the
+            Preferences dialog, plus the per-backend blocks and the remembered
+            servers.</td></tr>
+    <tr><td><b>Devices ▸ Current</b></td>
+        <td>The live <a href="preferences.html#prefs-audio-devices-file">device
+            store</a> - your card profiles, their ranges and their measured
+            full-scale values.</td></tr>
+    <tr><td><b>... ▸ Corrupt</b></td>
+        <td>Present only when a store was
+            <a href="preferences.html#prefs-store-quarantine">kept aside</a> because
+            it could not be read.  Opens that copy <b>read-only</b>.</td></tr>
+  </table>
+
+  <h2 id="json-config-editing">Editing</h2>
+  <p>The document opens <b>pretty-printed</b>, and the editor knows its shape:</p>
+  <ul>
+    <li><b>Completion.</b>  Start typing a key and it offers the ones that document
+        actually allows, so you are not guessing at spelling or inventing keys the
+        application will ignore.</li>
+    <li><b>Hover help.</b>  Point at any key and a sentence explains what it is and
+        what its values mean - the same explanation for every setting, including
+        the many that have no control in the Preferences dialog.</li>
+    <li><b>Nothing changes while you look.</b>  <b>OK</b> applies the document to
+        the <em>running</em> application and writes it to storage in one step, so a
+        colour, a sample rate or a whole card takes effect without reloading the
+        page.  <b>Cancel</b> discards it.</li>
+    <li><b>A mistake keeps the window open.</b>  Text that is not valid JSON is
+        reported with the position of the fault and nothing is applied - your
+        editing is never thrown away by pressing OK.</li>
+  </ul>
+  <p>The window is <b>movable</b> by its title bar and <b>resizable</b> from its
+     bottom-right corner, and it remembers where and how big you left it.</p>
+
+  <h2 id="json-config-refusal">The one refused edit</h2>
+  <div class="note"><b>One edit is refused, and it is the dangerous one.</b>  A
+     device document with <b>no <code>audioDevices</code> list at all</b> is
+     rejected rather than applied.  It is easy to arrive at - deleting the block to
+     "start clean", a mistyped <code>audiodevices</code>, or pasting back only the
+     version header - and applying it would delete every card profile and every
+     calibration in it while looking like a success.  To empty the store
+     <em>deliberately</em>, write an empty list: <code>"audioDevices": []</code> is
+     accepted and really does clear it.</div>
+  <div class="note">The <b>Corrupt</b> copy is read-only and has no OK button.  It
+     is shown formatted when it can be parsed, and <b>exactly as stored</b> when it
+     cannot - that text is the only record of what went wrong, so the editor never
+     tidies it.  Copy what you need out of it; the application will not write to
+     it.</div>
+
+<script src="help-viewer.js"></script>
+</body>
+</html>

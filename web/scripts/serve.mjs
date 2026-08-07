@@ -1,8 +1,8 @@
 /*
- * Phonalyser web — dev server for DEBUGGING the UNBUNDLED source.
+ * Phonalyser web - dev server for DEBUGGING the UNBUNDLED source.
  * Serves web/ directly (no build): the page loads js/shell/app.js, js/ui/scope-view.js,
- * etc. as REAL ES-module files, so DevTools → Sources shows the actual source and
- * native breakpoints work — no bundling, no source maps. Sends `Cache-Control: no-store`
+ * etc. as REAL ES-module files, so DevTools -> Sources shows the actual source and
+ * native breakpoints work - no bundling, no source maps. Sends `Cache-Control: no-store`
  * so every reload runs the latest files (and update.js skips the service worker on
  * localhost). Run:  npm run dev   (or:  PORT=9000 node scripts/serve.mjs)
  */
@@ -32,10 +32,10 @@ http.createServer((req, res) => {
   }
   res.writeHead(200, {
     'Content-Type': MIME[extname(fp).toLowerCase()] || 'application/octet-stream',
-    'Cache-Control': 'no-store',   // never cache → freshest source every reload (breakpoints hit)
+    'Cache-Control': 'no-store',   // never cache -> freshest source every reload (breakpoints hit)
   });
   createReadStream(fp).pipe(res);
 }).listen(PORT, () => {
-  console.log(`Phonalyser dev (UNBUNDLED source, no cache) → http://localhost:${PORT}`);
-  console.log('Open it, then DevTools → Sources → js/ … set breakpoints in the real files. No build needed.');
+  console.log(`Phonalyser dev (UNBUNDLED source, no cache) -> http://localhost:${PORT}`);
+  console.log('Open it, then DevTools -> Sources -> js/ ... set breakpoints in the real files. No build needed.');
 });

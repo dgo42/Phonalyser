@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -7,8 +7,8 @@
 // A fake `navigator.usb` carrying one QA403, for headless runs that must reach the QA40x backend
 // without hardware: the help-screenshot capture and any end-to-end pass over the backend switch.
 //
-// It answers the REGISTER protocol only — a 5-byte big-endian frame on endpoint 1, a read being the
-// same frame with the address MSB set and a 4-byte big-endian reply — which is everything the app
+// It answers the REGISTER protocol only - a 5-byte big-endian frame on endpoint 1, a read being the
+// same frame with the address MSB set and a 4-byte big-endian reply - which is everything the app
 // needs to enumerate, open, read the factory calibration page, read the telemetry panel and drive
 // the range/rate/I2S registers. AUDIO transfers (endpoint 2) are accepted and parked forever, since
 // nothing that needs this fake streams: a screenshot never records, and a lane that never completes
@@ -32,7 +32,7 @@ export function fakeQa40xUsbInit({ productId = 0x4E39, firmware = 60 } = {}) {
   const CAL = ${JSON.stringify(CAL)};
 
   // A plausible factory page: every range's linear factor is 1.0 (0 dB), so the card the manager
-  // builds carries the analyzer's NOMINAL full scales — the honest thing for a documentation shot,
+  // builds carries the analyzer's NOMINAL full scales - the honest thing for a documentation shot,
   // where a per-unit trim would only be noise.
   const page = new Uint8Array(CAL.bytes);
   const view = new DataView(page.buffer);
@@ -75,7 +75,7 @@ export function fakeQa40xUsbInit({ productId = 0x4E39, firmware = 60 } = {}) {
       const bytes = new Uint8Array(data.buffer ?? data);
       if (endpoint !== 1) return { status: 'ok', bytesWritten: bytes.length };   // audio: accepted
       const reg = bytes[0];
-      if ((reg & 0x80) !== 0) {                       // a READ request — stage the reply
+      if ((reg & 0x80) !== 0) {                       // a READ request - stage the reply
         const address = reg & 0x7F;
         if (address === REG_CAL_READ) {
           const offset = (calWordIndex++ * 4) % CAL.bytes;

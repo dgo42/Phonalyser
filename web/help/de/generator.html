@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — Generator</title>
+  <title>Phonalyser.web - Generator</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -11,8 +11,8 @@
 
   <h1>Generator</h1>
   <p>Diese Seite beschreibt die Bedienelemente des Generators.  Wie er intern
-     Signale synthetisiert — direkte digitale Synthese, die Wellenformkerne,
-     Sweeps und aktive Verzerrungskompensation — ist unter
+     Signale synthetisiert - direkte digitale Synthese, die Wellenformkerne,
+     Sweeps und aktive Verzerrungskompensation - ist unter
      <a href="theory/generator.html">Funktionsprinzip ▸ Signalgenerator</a>
      erläutert.</p>
   <p>Erzeugt Testsignale und leitet sie an das konfigurierte Ausgabegerät weiter.
@@ -21,7 +21,7 @@
      der <b>Audiodatei-Player</b>.  Das Starten der einen Engine hält die andere an.</p>
   <p class="note">Jedes numerische Feld hier akzeptiert den Wert auf vier Arten:
      Eingabe per Tastatur, Drehen des <b>Mausrads</b>, Klicken der
-     <b>▲/▼-Pfeile</b> oder — bei fokussiertem Feld — Drücken der
+     <b>▲/▼-Pfeile</b> oder - bei fokussiertem Feld - Drücken der
      <b>↑/↓-Cursortasten</b> (gleiche Schrittweite wie die Pfeile).</p>
 
   <div class="shot">
@@ -61,36 +61,36 @@
   </div>
   <ol class="features">
     <li><b>ON&nbsp;AIR-Anzeige.</b>  Grau im Leerlauf; die LED leuchtet und der
-        Text blinkt, während der Generator sendet —
+        Text blinkt, während der Generator sendet -
         <a href="#generator-onair">ON&nbsp;AIR-Anzeige</a>.</li>
     <li><b>Signalform.</b>  Die Wellenformauswahl (Sinus, Dual-Ton,
         Dreieck, Rechteck, Weiß-/Rauschen, Linear- &amp; Log-Sweep,
-        kompensierter Sinus) — <a href="#generator-form">Signalform</a>.  Die
+        kompensierter Sinus) - <a href="#generator-form">Signalform</a>.  Die
         umliegenden Felder werden je nach Form neu konfiguriert (Tastverhältnis für
         Dreieck/Rechteck, die <a href="#generator-sweep">Sweep-Steuerung</a>
         für Sweeps).</li>
     <li><b>Auf FFT-Bin einrasten.</b>  Rundet die Ausgangsfrequenz auf den nächsten
-        FFT-Bin, sodass der Ton kohärent mit dem Analysator ist — die Grundlage des
+        FFT-Bin, sodass der Ton kohärent mit dem Analysator ist - die Grundlage des
         Frequenzregelkreises (<a href="theory/generator.html#dds">Funktionsprinzip ▸
         Phasenakkumulator</a>).  Siehe
         <a href="#generator-snap-fft-bin">Frequenz auf nächsten einrasten</a>.</li>
     <li><b>Amplitude (RMS).</b>  Ausgangspegel in Volt RMS bezogen auf die DAC-
-        Kalibrierung; der Einheitenselektor akzeptiert µV/mV/V, dBV und dBFS —
+        Kalibrierung; der Einheitenselektor akzeptiert µV/mV/V, dBV und dBFS -
         <a href="#generator-amplitude">Amplitude (RMS)</a>.</li>
     <li><b>Korrekturen.</b>  Lädt eine Harmonischen-Kompensationsdatei, damit die
         Form <em>Kompensierter Sinus</em> die gemessene Verzerrung der Signalkette
-        aktiv ausblendet — <a href="#generator-corrections">Korrekturen</a>.</li>
-    <li><b>WAV-Datei.</b>  <a href="#generator-save-to">Speichern unter…</a>
+        aktiv ausblendet - <a href="#generator-corrections">Korrekturen</a>.</li>
+    <li><b>WAV-Datei.</b>  <a href="#generator-save-to">Speichern unter...</a>
         exportiert das aktuelle Signal als WAV/AIFF/FLAC;
-        <a href="#generator-load-from">Laden von… + In Schleife</a> spielt eine
-        Datei ab (das Kontrollkästchen „In Schleife" wiederholt sie).</li>
+        <a href="#generator-load-from">Laden von... + In Schleife</a> spielt eine
+        Datei ab (das Kontrollkästchen "In Schleife" wiederholt sie).</li>
     <li><b>DAC kalibrieren &amp; Abspielen.</b>  Die Fadenkreuz-Schaltfläche öffnet
         den <a href="#generator-dac-calibrate">DAC-Kalibrierungs</a>-Dialog; das grüne
         Dreieck ist <a href="#generator-play">Abspielen / Stopp</a>.  Das Starten des
         Tongenerators hält den Datei-Player an und umgekehrt.</li>
     <li><b>Ausgabekanal.</b>  Das Kombinationsfeld <b>Beide / Links / Rechts</b>
         in der Kopfzeile wählt, welche DAC-Spur das Signal trägt; die nicht
-        gewählte Spur gibt digitale Stille aus —
+        gewählte Spur gibt digitale Stille aus -
         <a href="#generator-output-channel">Ausgabekanal</a>.</li>
   </ol>
 
@@ -99,7 +99,7 @@
   <h3 id="generator-form">Signalform</h3>
   <p>Dropdown-Kombinationsfeld mit elf Wellenformen.  Jeder Eintrag zeigt ein
      kleines Piktogramm der Wellenformgestalt.  Das Ändern der Form konfiguriert
-     die umliegenden Steuerelemente neu — das Tastverhältnis-Feld wird für
+     die umliegenden Steuerelemente neu - das Tastverhältnis-Feld wird für
      <code>Rectangle</code> und <code>Triangle</code> aktiviert,
      die Sweep-Steuerung erscheint für <code>Linear sweep</code> und
      <code>Log sweep</code>, das Frequenzfeld wird für Rauschvarianten deaktiviert.</p>
@@ -110,19 +110,19 @@
     <tr><td>Triangle</td><td>Einstellbares Tastverhältnis (asymmetrische Rampe).</td></tr>
     <tr><td>Rectangle</td><td>Einstellbares Tastverhältnis (Einschaltzeit-Anteil).</td></tr>
     <tr><td>White noise</td><td>Gleichmäßig verteilte Zufallsamples.</td></tr>
-    <tr><td>Pink noise</td><td>Gaußsche Quelle über Voss–McCartney.</td></tr>
-    <tr><td>Pink noise linear</td><td>Amplitudenglattes weißes Rauschen über Voss–McCartney.</td></tr>
+    <tr><td>Pink noise</td><td>Gaußsche Quelle über Voss-McCartney.</td></tr>
+    <tr><td>Pink noise linear</td><td>Amplitudenglattes weißes Rauschen über Voss-McCartney.</td></tr>
     <tr><td>Linear sweep</td><td>Chirp mit zeitlinearer Frequenzrampe.</td></tr>
-    <tr><td>Log sweep</td><td>Farina-Logarithmus-Chirp — gleiche Energie pro Oktave.</td></tr>
+    <tr><td>Log sweep</td><td>Farina-Logarithmus-Chirp - gleiche Energie pro Oktave.</td></tr>
   </table>
 
   <h3 id="generator-output-channel">Ausgabekanal</h3>
-  <p>Kombinationsfeld in der oberen Kopfzeile — in der
+  <p>Kombinationsfeld in der oberen Kopfzeile - in der
      <a href="#generator-form">Signalform</a>-Zeile, <b>über</b> dem
-     Signalform-Selektor und neben der <a href="#generator-onair">ON&nbsp;AIR</a>-Anzeige —,
+     Signalform-Selektor und neben der <a href="#generator-onair">ON&nbsp;AIR</a>-Anzeige -,
      das wählt, welche DAC-Spur das erzeugte Signal trägt: <b>Beide</b>, <b>Links</b>
      oder <b>Rechts</b>.  Die nicht gewählte Spur gibt <b>digitale Stille</b> aus, sodass
-     Sie eine Seite eines Stereo-Geräts — oder einen Kanal des Prüflings — allein
+     Sie eine Seite eines Stereo-Geräts - oder einen Kanal des Prüflings - allein
      ansteuern können.  Es ist <b>live</b>: das Umschalten der Spur, während ein Ton
      abgespielt wird, wirkt sofort, ohne den Generator anzuhalten.</p>
 
@@ -130,7 +130,7 @@
   <p>Eine LED und der Text <b>ON&nbsp;AIR</b> oben rechts im Fenster.
      Sobald entweder der Tongenerator ODER der Audiodatei-Player den Ausgang
      ansteuert, leuchtet die LED dauerhaft rot und der Text <b>ON&nbsp;AIR</b>
-     <b>blinkt</b>.  Beide werden grau, wenn nichts abgespielt wird — die Anzeige
+     <b>blinkt</b>.  Beide werden grau, wenn nichts abgespielt wird - die Anzeige
      zeigt damit auf einen Blick, ob das Programm gerade Ton ausgibt.</p>
 
   <h2>Frequenz</h2>
@@ -139,8 +139,8 @@
   <p>Die Ausgangsfrequenz für periodische Wellenformen (für Rauschformen deaktiviert).
      Akzeptiert <code>Hz</code> und <code>kHz</code>; eine Zahl ohne Einheit wird als
      Hz interpretiert, und die Anzeige wechselt oberhalb von 1&nbsp;kHz auf kHz.</p>
-  <p>Die Beschriftung kann eine Annotation in eckigen Klammern zeigen — z. B.
-     <code>Frequency (1000.122 Hz)</code> — wenn die Einrastkorrektur auf den
+  <p>Die Beschriftung kann eine Annotation in eckigen Klammern zeigen - z. B.
+     <code>Frequency (1000.122 Hz)</code> - wenn die Einrastkorrektur auf den
      nächsten FFT-Bin oder die ganzzahlige Abtastperiode (für <code>Rectangle</code>)
      eine geringfügig andere Ausgangsfrequenz als die eingegebene ergibt.
      Der Wert in Klammern ist die <em>tatsächlich</em> ausgegebene Frequenz.</p>
@@ -161,16 +161,16 @@
   <p>Nur für <code>Rectangle</code> wird das Tastverhältnis <b>an das, was der DDS
      tatsächlich ausgeben kann, angepasst</b>: sein +1/−1-Schritt kann nur <em>auf</em>
      ein ganzzahliges Sample fallen, daher beträgt der feinste Tastverhältnis-Schritt
-     ein Sample pro Periode —
+     ein Sample pro Periode -
      <code>f / f<sub>s</sub></code> (Ausgangsfrequenz ÷ Abtastrate).  Beispiel:
      10&nbsp;kHz bei 384&nbsp;kHz ergibt 38,4 Samples pro Periode, sodass der kleinste
      Schritt ≈ 1/38,4 ≈ <code>2,63&nbsp;%</code> beträgt, und ein feinerer
      eingegebener Wert wird auf den nächsten erreichbaren Schritt eingerastet.
      Die Beschriftung zeigt dann das <em>angepasste</em> Tastverhältnis in eckigen
-     Klammern — z. B. <code>Duty cycle (2.632 %)</code>.</p>
+     Klammern - z. B. <code>Duty cycle (2.632 %)</code>.</p>
   <p><code>Triangle</code> verwendet echtes kontinuierliches DDS mit Phasenverfolgung
      (die Samples folgen den exakten Rampen, der Eckpunkt liegt sub-sample genau),
-     daher ist sein Tastverhältnis <b>exakt</b> — keine Quantisierung und keine
+     daher ist sein Tastverhältnis <b>exakt</b> - keine Quantisierung und keine
      Klammern.  Siehe
      <a href="theory/generator.html#duty">Funktionsprinzip ▸ Tastverhältnis-Quantisierung</a>.</p>
 
@@ -181,26 +181,26 @@
      <b>Amplitudenbalance</b> zwischen den beiden Tönen ergänzt (jede als
      Prozentsatz; ein 19&nbsp;kHz + 20&nbsp;kHz- oder 60&nbsp;Hz + 7&nbsp;kHz-Paar
      sind die üblichen Intermodulationstests).  Das kombinierte Ausgangssignal wird
-     auf den eingestellten V&nbsp;RMS-Wert normiert, unabhängig vom Verhältnis —
+     auf den eingestellten V&nbsp;RMS-Wert normiert, unabhängig vom Verhältnis -
      ein 50/50-Paar ist also nicht leiser als ein einzelner Ton bei gleicher
      Einstellung.  Beide Töne können unabhängig voneinander auf
      <a href="#generator-snap-fft-bin">FFT-Bins eingerastet</a> werden, und
-     der FFT-Analysator misst ihre Intermodulationsprodukte — siehe
+     der FFT-Analysator misst ihre Intermodulationsprodukte - siehe
      <a href="theory/generator.html#dualtone">Funktionsprinzip ▸ Dual-Ton</a>
      und <a href="theory/fft.html#dualtone">Funktionsprinzip ▸ Zwei-Ton</a>.</p>
 
   <h3 id="generator-dualtone-compensated">Dual tone (compensated)</h3>
   <p>Das intermodulationskorrigierte Gegenstück zu <code>Dual tone</code>,
      das Zwei-Ton-Äquivalent von <code>Sine compensated</code>.  Jedes
-     Verzerrungsprodukt eines Zwei-Ton-Signals — die Harmonischen jedes Tons
-     <em>und</em> deren Intermodulationsprodukte — liegt bei
+     Verzerrungsprodukt eines Zwei-Ton-Signals - die Harmonischen jedes Tons
+     <em>und</em> deren Intermodulationsprodukte - liegt bei
      <code>a·f<sub>1</sub> + b·f<sub>2</sub></code> für ganzzahlige
      <code>a</code>, <code>b</code>; der Generator verzerrt das Ausgangssignal
      daher vorab mit einem gegenphasigen Korrekturtton an jedem solchen Produkt,
      um es auf Analysatorseite auszublenden.  Die Korrekturen werden durch den
-     geschlossenen Regelkreis des <b>Predistortion-Assistenten</b> gemessen —
+     geschlossenen Regelkreis des <b>Predistortion-Assistenten</b> gemessen -
      die ★-Zauberstab-Schaltfläche neben der Aufnahmesteuerung des FFT-Analysators
-     — und anschließend live angewendet.
+     - und anschließend live angewendet.
      Die Auswahl dieser Form aus dem Kombinationsfeld ohne geladene Korrekturen
      gibt einfach die beiden reinen Töne aus, genau wie
      <code>Sine compensated</code> auf einen reinen Sinus zurückfällt.</p>
@@ -243,16 +243,16 @@
      automatisch (µV / mV / V), damit die Zahl lesbar bleibt; ein eingegebener
      <code>dBV</code>- oder <code>dBFS</code>-Wert hält das Feld in dieser
      Einheit (die automatische Skalierung wechselt nie selbstständig auf eine
-     dB-Einheit), und Mausrad und Pfeiltasten verstellen ihn dann in dB —
+     dB-Einheit), und Mausrad und Pfeiltasten verstellen ihn dann in dB -
      10&nbsp;dB pro Rastung des Mausrads, 1&nbsp;dB pro Pfeiltaste.  Eine erneut
      ohne Einheit eingegebene Zahl stellt das Feld wieder auf Volt.</p>
   <p class="note"><b>Hinweis:</b> dBV bezieht sich auf 1 V RMS, unabhängig vom
-     Gerät — <code>x dBV = 10<sup>x/20</sup> V<sub>RMS</sub></code>.  Für diese
+     Gerät - <code>x dBV = 10<sup>x/20</sup> V<sub>RMS</sub></code>.  Für diese
      Einheit gibt es Kurzformen: <code>d</code> und <code>db</code> werden
      ebenso akzeptiert wie <code>dbv</code>.</p>
   <p><b>dBFS</b> bezieht sich stattdessen auf den Vollausschlag des Wandlers.
-     Geben Sie den Pegel mit dem Suffix <code>dbfs</code> ein — Kurzform
-     <code>dbf</code> —, zum Beispiel <code>-6 dbfs</code>.  Nach der
+     Geben Sie den Pegel mit dem Suffix <code>dbfs</code> ein - Kurzform
+     <code>dbf</code> -, zum Beispiel <code>-6 dbfs</code>.  Nach der
      AES17-Konvention ist <b>0 dBFS ein Sinus mit Vollausschlag</b>, also der
      RMS-Pegel bei Vollausschlag; die Zahl behält damit ihre Bedeutung, wenn Sie
      die Signalform wechseln.  Der Wert wird weiterhin als Volt RMS gehalten und
@@ -260,8 +260,8 @@
      ändert deshalb den dBFS-Wert, der für denselben physikalischen
      Ausgangspegel angezeigt wird.</p>
   <p class="note"><b>Obergrenze.</b>  Das Feld endet bei dem Pegel, bei dem das
-     Signal den Vollausschlag des Wandlers gerade erreicht — darüber könnte der
-     Ausgang nur noch clippen —, das Maximum folgt also <em>der Signalform</em>:
+     Signal den Vollausschlag des Wandlers gerade erreicht - darüber könnte der
+     Ausgang nur noch clippen -, das Maximum folgt also <em>der Signalform</em>:
      Ein Rechteck darf im Effektivwert 3&nbsp;dB höher liegen als ein Sinus, ein
      Dreieck etwas niedriger, und ein Zweiton folgt seiner eigenen
      Amplitudenaufteilung.  Volt, dBV und dBFS werden alle auf dasselbe Maximum
@@ -273,7 +273,7 @@
 
   <h3 id="generator-dither">Dither</h3>
   <p>Legt fest, wie viel dreieckiger (TPDF-)Dither unmittelbar vor der
-     Quantisierung des Ausgangs hinzugefügt wird — <code>Off</code> oder eine Tiefe
+     Quantisierung des Ausgangs hinzugefügt wird - <code>Off</code> oder eine Tiefe
      von 1&nbsp;LSB bis zur Ausgangs-Bittiefe.  Geben Sie ihn als <b>Bits</b> ein
      oder tippen Sie ein <code>dBV</code>-Suffix, um ihn als den erzeugten
      Rauschpegel festzulegen; die Beschriftung zeigt die jeweils andere Einheit,
@@ -281,9 +281,9 @@
      ±10&nbsp;dBV (dBV-Ansicht), mit <code>Off</code> ganz oben.</p>
   <p>Der dBV-Wert ist der physikalische Pegel des Dither-Rauschens, verankert
      an der DAC-Vollaussteuerung: Die Eingabe von etwa −100&nbsp;dBV legt das von
-     der <a href="fft.html">FFT</a> gemessene Rauschen auf −100&nbsp;dBV — mit
+     der <a href="fft.html">FFT</a> gemessene Rauschen auf −100&nbsp;dBV - mit
      jedem Analysefenster, denn die Rauschmetriken des Analysators
-     berücksichtigen die Rauschbandbreite des Fensters — sofern die FFT
+     berücksichtigen die Rauschbandbreite des Fensters - sofern die FFT
      <b>inkohärente (Leistungs-)Mittelung</b> verwendet (kohärente Mittelung
      löscht Rauschen aus und liest weit niedriger).  Dither bricht periodische
      Quantisierungsmuster bei sehr niedrigen Ausgangspegeln auf.</p>
@@ -291,28 +291,29 @@
   <h3 id="generator-dac-calibrate">DAC-Kalibrierung (Fadenkreuz-Schaltfläche)</h3>
   <p>Die Fadenkreuz-Schaltfläche unten links im Fenster öffnet den gemeinsamen
      DAC-Kalibrierungsdialog, der die Skala <a href="#generator-amplitude">Amplitude
-     (RMS)</a> — die Volt RMS, die der DAC bei digitalem Vollausschlag ausgibt — gegen
+     (RMS)</a> - die Volt RMS, die der DAC bei digitalem Vollausschlag ausgibt - gegen
      einen am Ausgang gemessenen Pegel verankert.  Stellen Sie den Generator auf eine
      bekannte Amplitude, lesen Sie den tatsächlichen Ausgang mit einem
      vertrauenswürdigen Messgerät ab und geben Sie diesen Messwert ein.</p>
   <p><img src="img/DAC calibration.png" alt="Dialog DAC-Kalibrierung"/></p>
   <p>Geben Sie die <b>gemessene Signalamplitude</b> in <code>nV</code> / <code>µV</code> /
      <code>mV</code> / <code>V</code> ein.  Der Dialog hat eine Zeile <b>Links</b> und
-     eine <b>Rechts</b> für eine Stereo-Karte — <b>die Kalibrierung erfolgt stets pro
-     Kanal</b>, da zwei physische DAC-Kanäle nie exakt übereinstimmen — und eine einzelne
+     eine <b>Rechts</b> für eine Stereo-Karte - <b>die Kalibrierung erfolgt stets pro
+     Kanal</b>, da zwei physische DAC-Kanäle nie exakt übereinstimmen - und eine einzelne
      Zeile für eine Mono-Karte; jede Zeile schreibt nur den aktiven Bereich ihres eigenen
      Kanals.  Eine Karte, die auf <a href="preferences.html#prefs-audio-card-editor">Kopplung:
-     Verknüpft</a> eingestellt ist, wird dennoch pro Kanal kalibriert — Verknüpft teilt
+     Verknüpft</a> eingestellt ist, wird dennoch pro Kanal kalibriert - Verknüpft teilt
      nur, welcher Bereich ausgewählt ist.</p>
   <div class="note"><b>Die Windows-Lautstärke ist Teil der Kalibrierung.</b>  Stellen Sie
      die Lautstärke des Ausgabegeräts in den Windows-Sound-Einstellungen auf <b>100</b>
-     und verschieben Sie sie nach der Kalibrierung nicht mehr: der Exklusivmodus von
-     WASAPI und WDM-KS umgeht den Software-Mixer, aber auf vielen USB-Schnittstellen
-     programmiert dieser Regler weiterhin die <em>interne Hardware</em>-Lautstärke des
-     Geräts, sodass ein späteres Verschieben stillschweigend den gemessenen Vollausschlag
+     und verschieben Sie sie nach der Kalibrierung nicht mehr.  Im Browser zählt
+     sie doppelt: die Wiedergabe läuft <em>durch</em> den Windows-Mixer, sodass der
+     Regler das Signal direkt skaliert, und auf vielen USB-Schnittstellen
+     programmiert er zusätzlich die <em>interne Hardware</em>-Lautstärke des Geräts,
+     sodass ein späteres Verschieben stillschweigend den gemessenen Vollausschlag
      neu skaliert.  <b>Ausnahme:</b> eine Karte, die die Reglerstellung zum Umschalten von
-     Modi nutzt — die <b>E1DA Cosmos</b> koppelt oberhalb von Position 49 ihre Kanäle
-     (rechts ist der Haupteingang, links trägt dasselbe Signal 6&nbsp;dB leiser) — muss
+     Modi nutzt - die <b>E1DA Cosmos</b> koppelt oberhalb von Position 49 ihre Kanäle
+     (rechts ist der Haupteingang, links trägt dasselbe Signal 6&nbsp;dB leiser) - muss
      auf der von ihrem Modus geforderten Position stehen und dort bleiben.</div>
 
   <h2 id="generator-corrections">Korrekturen</h2>
@@ -327,7 +328,7 @@
      den geladenen Pfad, und die <b>Löschen-Schaltfläche</b> entlädt sie.
      Diese Dateien werden vom Predistortion-Assistenten des
      <a href="fft.html">FFT-Fensters</a> erzeugt (die ★-Zauberstab-Schaltfläche
-     neben der Aufnahmesteuerung) — siehe
+     neben der Aufnahmesteuerung) - siehe
      <a href="#generator-dualtone-compensated">Dual tone (compensated)</a> und
      <code>Sine compensated</code>.</p>
 
@@ -335,31 +336,62 @@
 
   <h3 id="generator-duration">Dauer</h3>
   <p>Sekunden.  Länge des Audios, das beim Verwenden von <i>Speichern unter</i>
-     geschrieben wird.  Unabhängig von der Live-Ausgabe — die Datei wird in einem
+     geschrieben wird.  Unabhängig von der Live-Ausgabe - die Datei wird in einem
      einzigen Durchgang mit den aktuellen Generatoreinstellungen gerendert.</p>
 
-  <h3 id="generator-save-to">Speichern unter…</h3>
+  <h3 id="generator-save-to">Speichern unter...</h3>
   <p>Schreibgeschützter Pfad + <b>Speichern-Schaltfläche</b>.  Ein Klick öffnet
      einen Speicherdialog; die Erweiterung der gewählten Datei bestimmt das Format
      (<code>.wav</code> / <code>.flac</code> / <code>.aiff</code> /
      <code>.aif</code>).  Nach Bestätigung wird die Datei sofort mit den aktuellen
      Generatoreinstellungen und der oben angegebenen Dauer geschrieben.</p>
   <p class="note">Die geschriebene Datei ist das <b>ideale, mathematisch exakte</b>
-     Signal — digital synthetisiert und frei von jeglicher DAC-, Verstärker- oder
+     Signal - digital synthetisiert und frei von jeglicher DAC-, Verstärker- oder
      Kabelverzerrung.  Verwenden Sie es als Referenz oder um ein anderes Gerät mit
      einer bekannt sauberen Quelle anzusteuern.  Siehe
      <a href="theory/generator.html#savefile">Funktionsprinzip ▸ Signal speichern</a>.</p>
+  <p class="note"><b>Die Datei trägt einen festen Vollausschlag, nicht den dieser
+     Maschine.</b>
+     Eine exportierte Wellenform wird gegen einen festen Vollausschlag von
+     <b>2·√2&nbsp;V Spitze</b> - also 2&nbsp;V&nbsp;RMS - gerendert und nicht
+     gegen die aktuelle DAC-Kalibrierung.  Ein Sinus mit
+     1&nbsp;V<sub>RMS</sub> landet in der Datei daher immer auf demselben
+     digitalen Pegel, gleich welcher Wandler auf der schreibenden Maschine gerade
+     kalibriert war; eine Referenzdatei bedeutet damit überall dasselbe, und zwei
+     an zwei Messplätzen geschriebene Dateien sind direkt vergleichbar.  Der
+     <em>abgespielte</em> Ton bleibt davon unberührt: der geht weiterhin gegen die
+     reale Kalibrierung des von Ihnen gewählten Geräts hinaus.</p>
 
   <h2 id="generator-playback">WAV-Wiedergabe</h2>
 
-  <h3 id="generator-load-from">Laden von… + In Schleife</h3>
+  <h3 id="generator-load-from">Laden von... + In Schleife</h3>
   <p>Spielt eine vorhandene Audiodatei am Ausgabegerät ab.  Die
-     <b>Audio-Öffnen-Schaltfläche</b> wählt die Datei — beliebige
+     <b>Audio-Öffnen-Schaltfläche</b> wählt die Datei - beliebige
      <code>WAV</code>- / <code>AIFF</code>- / <code>FLAC</code>-Dateien, nicht
      nur von diesem Programm gespeicherte.  Das Kontrollkästchen
      <b>In&nbsp;Schleife</b> wiederholt die Datei nach dem Dateiende; der Schalter
-     ist live — das Umschalten während der Wiedergabe wirkt sich beim nächsten
+     ist live - das Umschalten während der Wiedergabe wirkt sich beim nächsten
      Schleifenpunkt aus.</p>
+  <p>Die Datei geht über dieselbe einzelne Spur hinaus wie der erzeugte Ton, daher
+     wird eine Datei mit <b>mehr als einem Kanal auf Mono gemittelt</b>: jeder
+     Kanal trägt bei, die Summe wird durch ihre Anzahl geteilt, und kein Kanal
+     entfällt.  Eine Stereodatei, deren beide Seiten unterschiedliches Material
+     tragen, ist folglich als deren Mittelwert zu hören, nicht als Stereopaar.</p>
+  <p><b>An einem Netzwerk-Messplatz.</b>  Ist das gewählte Backend ein
+     Phonalyser-Server, liegt der Generator ein Netzwerk entfernt, und das
+     Protokoll überträgt keinen Ton von diesem Rechner dorthin - also reist
+     stattdessen die <em>Datei</em>.  Sie wird einmal hochgeladen, und die
+     Generatorspur des Messplatzes dekodiert und spielt sie, aus dessen eigenem
+     Wandler mit der Abtastrate und Bittiefe der Datei.  <b>In&nbsp;Schleife</b>
+     wird am fernen Ende beachtet, und Stopp reicht hinüber.  Zwei Unterschiede
+     sind wissenswert: eine Datei darf höchstens <b>50&nbsp;MB</b> groß sein - die
+     Grenze, die der Server durchsetzt und die hier geprüft wird, bevor irgendetwas
+     gesendet wird, sodass eine zu große Datei sofort und nicht erst nach der
+     Übertragung abgelehnt wird - und die Abspielanzeige erlischt, wenn der
+     Messplatz das Ende der Datei meldet, folgt also dem fernen Ende und nicht
+     diesem Bildschirm.  Der Upload liegt im Speicher des Servers und wird
+     verworfen, sobald die Verbindung schließt; auf dem Messplatz sammelt sich
+     nichts an.</p>
 
   <h3 id="generator-play-file">Datei abspielen / Stopp</h3>
   <p>Kleine Abspiel-LED neben dem Pfadfeld.  Leuchtet während der Dateiwiedergabe,

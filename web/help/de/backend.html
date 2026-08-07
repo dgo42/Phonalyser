@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Audio-Backends</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zum Inhalt</a></p>
+
+  <h1>Audio-Backends</h1>
+  <p>Ein Backend ist der Weg der Anwendung zum Wandler: die Engine, die das
+     Gerät öffnet, die Samples bewegt und die Fehler meldet.  Gewählt wird es
+     unter <a href="preferences.html">Einstellungen ▸ Audio</a>, und welche
+     Backends die Liste anbietet, hängt davon ab, wo die Anwendung läuft.  Im
+     Browser sind die LOKALEN Backends <b>Web Audio</b> und der <b>QA40x über
+     WebUSB</b> - siehe <a href="web-in-browser.html">Phonalyser.web im
+     Browser</a> - und die Tabelle unten beschreibt die Engines, die eine
+     Desktop-Anwendung oder ein <a href="server.html">Server-Messplatz</a>
+     betreibt: das, wodurch Sie messen, wenn Sie mit einem Server verbunden
+     sind.  Wie ein Backend innen arbeitet - Callbacks, Ringpuffer, exklusive
+     Modi - beschreibt
+     <a href="theory/audio-backend.html">Funktionsprinzip ▸ Audio-Backend</a>;
+     diese Seite ist die praktische Hälfte: was es wo gibt, und was der
+     Messplatz mit der Hardware-Lautstärke für Sie tut.</p>
+
+  <h2 id="backend-list">Welches Backend auf welchem System</h2>
+  <table class="controls">
+    <tr><th>Backend</th><th>OS</th><th>Hinweise</th></tr>
+    <tr><td><b>WASAPI exklusiv</b></td><td>Windows</td>
+        <td>Die <code>EXCL:</code>-Geräte - bit-exakter Exklusivmodus über den
+            csjsound-Provider und der Weg zu den hohen Abtastraten.  Braucht
+            die csjsound-Bibliotheken neben der Anwendung.</td></tr>
+    <tr><td><b>WDM-KS</b></td><td>Windows</td>
+        <td>Kernel-Streaming über PortAudio - niedrige Latenz,
+            Callback-getrieben.</td></tr>
+    <tr><td><b>JavaSound (geteilt)</b></td><td>Windows</td>
+        <td>Der geteilte Modus des Systemmixers - immer verfügbar, von Windows
+            resampelt und deshalb der Notweg, nicht der Messweg.</td></tr>
+    <tr><td><b>ALSA</b></td><td>Linux</td>
+        <td>JavaSound über das <code>plughw</code>-Gerät der Karte - direkter
+            Kartenzugriff, ein Öffner zur Zeit.  Port-Namen und Buchsen-
+            Erkennung kommen aus alsa-utils.</td></tr>
+    <tr><td><b>CoreAudio</b></td><td>macOS</td>
+        <td>PortAudio über die CoreAudio-HAL.  Die Abtastratenlisten werden aus
+            den vom Gerät selbst deklarierten Formaten gelesen, nicht durch den
+            OS-Konverter erfragt.</td></tr>
+    <tr><td><b>QA40x</b></td><td>alle drei</td>
+        <td>Der QuantAsylum-Analysator über USB - eigener Takt, eigene
+            Bereiche, gerätegelieferte Kalibrierung.  Siehe die
+            QA40x-Abschnitte der
+            <a href="preferences.html">Einstellungen</a>.</td></tr>
+    <tr><td><b>net</b></td><td>alle drei</td>
+        <td>Die Backends eines <a href="server.html">Phonalyser-Servers</a>
+            über das LAN - was die Messplatz-Maschine anbietet, erscheint neben
+            der lokalen Liste.</td></tr>
+  </table>
+
+  <h2 id="backend-volume">Hardware-Lautstärke unter Linux und macOS</h2>
+  <p>Die Hardware-Lautstärke einer Karte sitzt IN der kalibrierten Kette: ein
+     Regler abseits seiner Stellung zur Kalibrierzeit skaliert jedes Sample,
+     und nichts in der Messung sagt es.  Unter Linux und macOS verwaltet der
+     Messplatz die Lautstärke des geöffneten Geräts deshalb selbst:</p>
+  <ul>
+    <li><b>Beim Öffnen</b> werden die Lautstärkeregler des Geräts auf dessen
+        eigene <b>0 dB</b> gesetzt - unter Linux aus der dB-Skala des Reglers
+        gelesen, unter macOS über die CoreAudio-dB-Übersetzung.  0 dB ist
+        nicht dasselbe wie "Maximum": auf der Aufnahmeseite ist das obere Ende
+        des Reglers das obere Ende des VERSTÄRKUNGS-Bereichs (ein
+        Messinterface liest dort +12 dB), und nur die dB-Skala sagt, wo Eins
+        wirklich liegt.  Ein Regler ohne dB-Angaben wird auf Vollausschlag
+        gesetzt.</li>
+    <li><b>Nur das geöffnete Gerät und die geöffnete Richtung</b> werden
+        angefasst - nie eine andere Karte, nie die andere Richtung, nie eine
+        Buchse, die nicht in Gebrauch ist.  Auf einer Karte, die je PCM-Paar
+        einen gleichnamigen Stream-Regler führt, wird der Regler genommen,
+        dessen Index zum geöffneten PCM-Gerät passt.</li>
+    <li><b>Beim Stoppen</b> wird alles, was das Öffnen bewegt hat, exakt so
+        zurückgestellt, wie es vorgefunden wurde.  Ein Regler, den Sie selbst
+        während des Streams bewegen, behält Ihren Wert.</li>
+    <li><b>Jeder Fehlschlag ist laut, und keiner blockiert eine Messung</b>:
+        ein Regler, der sich nicht lesen, zuordnen oder schreiben lässt, wird
+        im Protokoll benannt und in Ruhe gelassen, und die Aufnahme oder der
+        Ton startet trotzdem.</li>
+  </ul>
+  <div class="note"><b>Windows ist mit Absicht anders.</b>  Dort ist die
+     Systemlautstärke Teil der Kalibrierung: einmal einstellen, kalibrieren,
+     stehen lassen - der Messplatz fasst sie nicht an.</div>
+
+  <h2 id="backend-mac-glitches">macOS: Aufnahme-Störungen mit manchen Geräten</h2>
+  <p>Manche USB-Geräte zerreißen unter macOS den AUFNAHME-Strom auf
+     Betriebssystem-Ebene: jede Aufnahme zeigt klingelnde Störbursts und
+     Unstetigkeiten, während der Analogausgang völlig sauber misst - und
+     dieselbe Aufnahme mit Apples eigenen Werkzeugen trägt denselben Riss.
+     Ein Beispiel vom Messplatz ist das Cubilux CB5 - aber die
+     Unverträglichkeit ist eine Eigenschaft der Paarung aus Gerät und macOS
+     und kann auch mit anderen Geräten auftreten.  Dasselbe Gerät kann unter
+     Linux und Windows einwandfrei arbeiten.</p>
+  <p><b>Der Ausweg ist ein Aggregat-Gerät.</b>  Legen Sie in
+     <b>Audio-MIDI-Setup</b> ein Aggregat an und nehmen Sie Ein- und Ausgang
+     des Geräts hinein, dann wählen Sie das Aggregat auf dem Messplatz.  Die
+     Aggregationsschicht ergänzt die Strombehandlung, die dem eigenen Weg des
+     Geräts fehlt, und die Aufnahmen kommen sauber heraus.</p>
+  <div class="note"><b>Wichtig: Haken bei "Driftkorrektur" entfernen</b>
+     (Drift Correction) für die Untergeräte des Aggregats.  Mit ihr resampelt
+     macOS die Ströme, um ihre Takte anzugleichen - eine Angleichung, die
+     NICHT auf die Quelle synchronisiert ist, wie es die Messung selbst tut -
+     und dieses Resampling erscheint als Frequenz-Leckage im Spektrum.</div>
+  <div class="shot">
+    <img src="img/Macos Aggregate Audio.png" alt="Audio-MIDI-Setup - ein Aggregat-Geraet um das CB5, Driftkorrektur abgewaehlt"/>
+  </div>
+  <p>Ein Aggregat veröffentlicht keine eigenen Lautstärkeregler; der Messplatz
+     setzt und restauriert stattdessen die Lautstärken seiner MITGLIEDER, sodass
+     die 0-dB-Disziplin von oben auch durch das Aggregat hindurch gilt.</p>
+
+<script src="help-viewer.js"></script>
+</body>
+</html>
