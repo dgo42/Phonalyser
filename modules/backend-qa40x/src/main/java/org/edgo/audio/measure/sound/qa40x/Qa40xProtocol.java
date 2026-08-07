@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,67 +24,67 @@ import java.util.Locale;
 import lombok.experimental.UtilityClass;
 
 /**
- * QA402/QA403 register wire protocol — the pure byte math behind
+ * QA402/QA403 register wire protocol - the pure byte math behind
  * {@link Qa40xTransport}'s register traffic (see {@code doc/QA40X-PROTOCOL.md}
  * §4).  It is stateless: register addresses and values, the three range/rate
  * code maps, and the frame codec.
  *
  * <p><b>Register frames are big-endian</b> even though audio samples are
- * little-endian (§5) — two independent endiannesses; this class only speaks the
+ * little-endian (§5) - two independent endiannesses; this class only speaks the
  * register one.  A write is a 5-byte frame {@code [reg][value MSB..LSB]}; a read
  * is the same frame with the address MSB set ({@code 0x80|reg}, value 0), whose
  * reply is a 4-byte big-endian word.
  *
  * <p><b>Code maps.</b> Input full-scale {@code code = dBV / 6} for 0..42 dBV;
- * output full-scale {@code -12/-2/+8/+18 dBV} → codes 0..3; sample rate
- * {@code 48000/96000/192000/384000 Hz} → codes 0..3.  The 384 kHz code is
- * <b>QA403-only</b> — the QA402 has no code 3 — so the rate list is per model
+ * output full-scale {@code -12/-2/+8/+18 dBV} -> codes 0..3; sample rate
+ * {@code 48000/96000/192000/384000 Hz} -> codes 0..3.  The 384 kHz code is
+ * <b>QA403-only</b> - the QA402 has no code 3 - so the rate list is per model
  * ({@link #sampleRatesHz(Qa40xDeviceFinder.Qa40xModel)}) while the code map
  * itself is universal.
  */
 @UtilityClass
 public class Qa40xProtocol {
 
-    /** Full-scale input range (attenuator) — reg {@code 0x05}, code 0..7 (§4). */
+    /** Full-scale input range (attenuator) - reg {@code 0x05}, code 0..7 (§4). */
     public static final int REG_INPUT_FS        = 0x05;
-    /** Full-scale output range — reg {@code 0x06}, code 0..3 (§4). */
+    /** Full-scale output range - reg {@code 0x06}, code 0..3 (§4). */
     public static final int REG_OUTPUT_FS       = 0x06;
-    /** Stream / run control — reg {@code 0x08}; {@link #RUN_START}/{@link #RUN_STOP} (§4). */
+    /** Stream / run control - reg {@code 0x08}; {@link #RUN_START}/{@link #RUN_STOP} (§4). */
     public static final int REG_RUN             = 0x08;
-    /** Sample-rate select — reg {@code 0x09}, code 0..3 (§4). */
+    /** Sample-rate select - reg {@code 0x09}, code 0..3 (§4). */
     public static final int REG_SAMPLE_RATE     = 0x09;
-    /** Front-panel I2S generator control — reg {@code 0x0A}; write
+    /** Front-panel I2S generator control - reg {@code 0x0A}; write
      *  {@link #I2S_START} / {@link #I2S_STOP}, read = running flag (§4).  It
      *  drives the expansion port's own EP-3 pair and is independent of the
      *  analyzer's DAC/ADC loopback, so it neither disturbs nor depends on a
      *  capture session. */
     public static final int REG_I2S             = 0x0A;
-    /** Front-panel I2S frame width — reg {@code 0x0B}; {@link #i2sWidthCode(int)}
+    /** Front-panel I2S frame width - reg {@code 0x0B}; {@link #i2sWidthCode(int)}
      *  turns a bit depth into its value (§4). */
     public static final int REG_I2S_WIDTH       = 0x0B;
-    /** Calibration-page select — reg {@code 0x0D}; write {@link #CAL_PAGE_SELECT_VALUE} (§6). */
+    /** Calibration-page select - reg {@code 0x0D}; write {@link #CAL_PAGE_SELECT_VALUE} (§6). */
     public static final int REG_CAL_PAGE_SELECT = 0x0D;
-    /** Firmware build number — reg {@code 0x10}; real units report 60 (§4). */
+    /** Firmware build number - reg {@code 0x10}; real units report 60 (§4). */
     public static final int REG_FIRMWARE_VERSION = 0x10;
-    /** USB bus voltage — reg {@code 0x11}, millivolts (§6 telemetry). */
+    /** USB bus voltage - reg {@code 0x11}, millivolts (§6 telemetry). */
     public static final int REG_TELEM_USB_VOLTAGE = 0x11;
-    /** USB bus current — reg {@code 0x12}, milliamps (§6). */
+    /** USB bus current - reg {@code 0x12}, milliamps (§6). */
     public static final int REG_TELEM_USB_CURRENT = 0x12;
-    /** ISO-supply current — reg {@code 0x13}, milliamps; **QA402 only** (§6). */
+    /** ISO-supply current - reg {@code 0x13}, milliamps; **QA402 only** (§6). */
     public static final int REG_TELEM_ISO_CURRENT = 0x13;
-    /** Board temperature — reg {@code 0x16}, tenths of °C (§6). */
+    /** Board temperature - reg {@code 0x16}, tenths of °C (§6). */
     public static final int REG_TELEM_TEMPERATURE = 0x16;
-    /** Feature-bit word the app reads before building its rate menu — reg {@code 0x1B} (§4). */
+    /** Feature-bit word the app reads before building its rate menu - reg {@code 0x1B} (§4). */
     public static final int REG_CAPABILITY       = 0x1B;
-    /** Per-model capability word — reg {@code 0x1C} (§4). */
+    /** Per-model capability word - reg {@code 0x1C} (§4). */
     public static final int REG_CAPABILITY2      = 0x1C;
-    /** Serial number — reg {@code 0x1D}, the 8 hex digits packed as a u32 (§4). */
+    /** Serial number - reg {@code 0x1D}, the 8 hex digits packed as a u32 (§4). */
     public static final int REG_SERIAL_NUMBER    = 0x1D;
-    /** Calibration data read port — reg {@code 0x19}, one 32-bit word per read (§6). */
+    /** Calibration data read port - reg {@code 0x19}, one 32-bit word per read (§6). */
     public static final int REG_CAL_READ        = 0x19;
 
     /** Safe-state input range (doc §7 Teardown step 8, ASIO401 parity): maximum
-     *  attenuation, +42 dBV — the fail-safe relay stays engaged (Atten LED lit,
+     *  attenuation, +42 dBV - the fail-safe relay stays engaged (Atten LED lit,
      *  matching the vendor app), so an idle analyzer never sits at a sensitive
      *  range.  Written whenever the stream parks (last lane detach) and at
      *  session close. */
@@ -99,7 +99,7 @@ public class Qa40xProtocol {
 
     /** {@link #REG_I2S} value that starts the front-panel I2S generator (§4). */
     public static final int I2S_START            = 0x01;
-    /** {@link #REG_I2S} value that stops it — also what the vendor app writes at
+    /** {@link #REG_I2S} value that stops it - also what the vendor app writes at
      *  connect as a safe init (§6). */
     public static final int I2S_STOP             = 0x00;
 
@@ -107,7 +107,7 @@ public class Qa40xProtocol {
      *  own loopback is unaffected and stays at {@link #ANALYZER_BITS}. */
     public static final int I2S_BITS_16          = 16;
     public static final int I2S_BITS_32          = 32;
-    /** Delivered depth of the analyzer's own capture path — what the depth combo
+    /** Delivered depth of the analyzer's own capture path - what the depth combo
      *  offers while the I2S port is off. */
     public static final int ANALYZER_BITS        = 24;
 
@@ -116,7 +116,7 @@ public class Qa40xProtocol {
      *  width the port boots at. */
     private static final int I2S_WIDTH_32_FLAG   = 0x40;
     private static final int I2S_WIDTH_16_FLAG   = 0x00;
-    /** {@link #REG_I2S_WIDTH} value written whenever the port is off — the same
+    /** {@link #REG_I2S_WIDTH} value written whenever the port is off - the same
      *  cleared state a stopped session leaves behind. */
     public static final int I2S_WIDTH_OFF        = 0x00;
     /** {@link #REG_CAL_PAGE_SELECT} value that selects the factory cal page (§6). */
@@ -135,7 +135,7 @@ public class Qa40xProtocol {
     /** Output full-scale ranges in dBV (code = index). */
     private static final int[] OUTPUT_RANGE_DBV = {-12, -2, 8, 18};
     /** Sample rates in Hz (code = index).  The 384 kHz code exists on the QA403
-     *  only — see {@link #sampleRatesHz(Qa40xDeviceFinder.Qa40xModel)}. */
+     *  only - see {@link #sampleRatesHz(Qa40xDeviceFinder.Qa40xModel)}. */
     private static final int[] SAMPLE_RATE_HZ   = {48_000, 96_000, 192_000, 384_000};
 
     private static final int INPUT_RANGE_STEP_DBV = 6;
@@ -143,24 +143,24 @@ public class Qa40xProtocol {
     /** Highest rate the QA402 accepts; the 384 kHz code is QA403-only (§4). */
     private static final int QA402_MAX_RATE_HZ    = 192_000;
 
-    /** Suffix of the plain {@code "N dBV"} range-row label — the persisted KEY,
+    /** Suffix of the plain {@code "N dBV"} range-row label - the persisted KEY,
      *  emitted by {@link #rangeLabel(int)} for BOTH directions, so
      *  {@link Qa40xDeviceManager}'s card refresh and any caller resolving a label
      *  back to a range dBV agree byte-for-byte.  The verbose INPUT display label is
      *  built separately in {@link #verboseInputLabel(int)}. */
     private static final String RANGE_LABEL_SUFFIX = " dBV";
 
-    /** Input full-scale ranges in dBV, ascending — a defensive copy. */
+    /** Input full-scale ranges in dBV, ascending - a defensive copy. */
     public int[] inputRangeDbvValues() {
         return INPUT_RANGE_DBV.clone();
     }
 
-    /** Output full-scale ranges in dBV, ascending — a defensive copy. */
+    /** Output full-scale ranges in dBV, ascending - a defensive copy. */
     public int[] outputRangeDbvValues() {
         return OUTPUT_RANGE_DBV.clone();
     }
 
-    /** Sample rates in Hz for {@code model}, ascending — a defensive copy.
+    /** Sample rates in Hz for {@code model}, ascending - a defensive copy.
      *  The QA403 adds 384 kHz (reg-9 code 3) on top of the common 48/96/192;
      *  the QA402 has no code 3 (§4). */
     public int[] sampleRatesHz(Qa40xDeviceFinder.Qa40xModel model) {
@@ -170,7 +170,7 @@ public class Qa40xProtocol {
         return SAMPLE_RATE_HZ.clone();
     }
 
-    /** The device-card range-row label — the persisted KEY, plain {@code "N dBV"}
+    /** The device-card range-row label - the persisted KEY, plain {@code "N dBV"}
      *  for both directions.  The verbose input DISPLAY (the "really N dBFS / N−9 dBV"
      *  text) is {@link #verboseInputLabel}, carried on the row's
      *  {@code DeviceRange.displayLabel} and shown only in the ranges table; it is
@@ -182,7 +182,7 @@ public class Qa40xProtocol {
     /** Verbose DISPLAY label for an input range: {@code N "dBV" real N dBFS or (N−9) dBV}.
      *  The QA "N dBV" input range is really an N-dBFS (Vpp-differential) reference whose
      *  true RMS full scale is {@code ≈ N − 9} dB ({@link Qa40xLevels} / doc §6
-     *  cheat-sheet).  Display only — never a card key, so nothing parses it back. */
+     *  cheat-sheet).  Display only - never a card key, so nothing parses it back. */
     public String verboseInputLabel(int dbv) {
         return String.format(Locale.US, "%d \"dBV\" real %d dBFS or %d dBV", dbv, dbv, dbv - 9);
     }
@@ -236,12 +236,12 @@ public class Qa40xProtocol {
         return String.format(Locale.US, "%.1f °C", raw / 10.0);
     }
 
-    /** A capability word as the {@code 0x…} hex the protocol notes quote (§4). */
+    /** A capability word as the {@code 0x...} hex the protocol notes quote (§4). */
     public String formatCapability(int raw) {
         return String.format(Locale.US, "0x%08X", raw);
     }
 
-    /** {@link #REG_SERIAL_NUMBER} — the packed u32 back as its 8 hex digits (§4). */
+    /** {@link #REG_SERIAL_NUMBER} - the packed u32 back as its 8 hex digits (§4). */
     public String formatSerialNumber(int raw) {
         return String.format(Locale.US, "%08X", raw);
     }
@@ -251,7 +251,7 @@ public class Qa40xProtocol {
         return bits == I2S_BITS_16 ? I2S_WIDTH_16_FLAG : I2S_WIDTH_32_FLAG;
     }
 
-    /** The frame widths the front-panel I2S port offers, ascending — what the
+    /** The frame widths the front-panel I2S port offers, ascending - what the
      *  depth combo shows in place of {@link #ANALYZER_BITS} while it is on. */
     public int[] i2sBitDepths() {
         return new int[] { I2S_BITS_16, I2S_BITS_32 };
@@ -281,7 +281,7 @@ public class Qa40xProtocol {
         return frame;
     }
 
-    /** Builds the read-request frame — a write of value 0 with the address MSB set ({@code 0x80|reg}, §4). */
+    /** Builds the read-request frame - a write of value 0 with the address MSB set ({@code 0x80|reg}, §4). */
     public byte[] readRequestFrame(int reg) {
         return writeFrame(reg | READ_REQUEST_FLAG, 0);
     }

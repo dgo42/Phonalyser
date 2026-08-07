@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,16 +20,21 @@ package org.edgo.audio.measure.sound.qa40x;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.List;
 
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
+import org.edgo.audio.measure.preferences.DeviceRange;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@link Qa40xCalibration} parsing against a synthetic 512-byte page built from
- * the {@code doc/QA40X-PROTOCOL.md} §6 offset tables: every ADC range (24…108)
- * and DAC range (120…156), both channels (right = left + 6), plus the
+ * the {@code doc/QA40X-PROTOCOL.md} §6 offset tables: every ADC range (24...108)
+ * and DAC range (120...156), both channels (right = left + 6), plus the
  * {@link Qa40xCalibration#fromTransport} read procedure (select 0x10, 128 reads
  * of reg 0x19, little-endian repack).
  */
@@ -128,5 +133,63 @@ class Qa40xCalibrationTest {
     @Test
     void fromBlob_rejectsShortPage() {
         assertThrows(IllegalArgumentException.class, () -> Qa40xCalibration.fromBlob(new byte[256]));
+    }
+
+    @Test
+    void fromFactors_rebuildsTheTableTheWireRowsDescribe() {
+        // The rows the net protocol's qa40x.calibration answers with (spec 4.6) -
+        // the same factors the synthetic page encodes, so both constructions must
+        // agree on every range and channel.
+        List<Qa40xCalibration.RangeFactor> adc = new ArrayList<>();
+        for (int dbv : Qa40xProtocol.inputRangeDbvValues()) {
+            int code = Qa40xProtocol.inputRangeCode(dbv);
+            adc.add(new Qa40xCalibration.RangeFactor(dbv, linear(1.0 + code), linear(-(1.0 + code))));
+        }
+        List<Qa40xCalibration.RangeFactor> dac = new ArrayList<>();
+        for (int dbv : Qa40xProtocol.outputRangeDbvValues()) {
+            int code = Qa40xProtocol.outputRangeCode(dbv);
+            dac.add(new Qa40xCalibration.RangeFactor(dbv, linear(2.0 + code), linear(-(2.0 + code))));
+        }
+
+        Qa40xCalibration cal = Qa40xCalibration.fromFactors(adc, dac);
+
+        Qa40xCalibration reference = Qa40xCalibration.fromBlob(syntheticBlob());
+        for (int dbv : Qa40xProtocol.inputRangeDbvValues()) {
+            assertEquals(reference.adcLinearFactor(dbv, false), cal.adcLinearFactor(dbv, false), TOL);
+            assertEquals(reference.adcLinearFactor(dbv, true), cal.adcLinearFactor(dbv, true), TOL);
+        }
+        for (int dbv : Qa40xProtocol.outputRangeDbvValues()) {
+            assertEquals(reference.dacLinearFactor(dbv, false), cal.dacLinearFactor(dbv, false), TOL);
+            assertEquals(reference.dacLinearFactor(dbv, true), cal.dacLinearFactor(dbv, true), TOL);
+        }
+    }
+
+    @Test
+    void fromFactors_missingRowsMeanNoCorrection() {
+        Qa40xCalibration cal = Qa40xCalibration.fromFactors(List.of(), List.of());
+        assertEquals(1.0, cal.adcLinearFactor(0, false), TOL,
+                "an unnamed range gets factor 1.0 - the uncalibrated-device stance");
+        assertEquals(1.0, cal.dacLinearFactor(18, true), TOL);
+    }
+
+    @Test
+    void toProfile_rendersTheCardWithTheBenchActivesAsDefaults() {
+        Qa40xCalibration cal = Qa40xCalibration.fromBlob(syntheticBlob());
+
+        AudioDeviceProfile card = cal.toProfile("QA403 remote", null, 6, -2);
+
+        assertTrue(card.getInput().isCalibrationFromDevice(),
+                "device-read factors make a calibrationFromDevice card");
+        assertEquals(Qa40xProtocol.rangeLabel(6), card.getInput().getActiveRange(),
+                "no existing card: the given default (the bench's actual range) is active");
+        assertEquals(Qa40xProtocol.rangeLabel(-2), card.getOutput().getActiveRange());
+        assertEquals(Qa40xProtocol.inputRangeDbvValues().length,
+                card.getInput().getRanges().size(), "one row per attenuator position");
+        int dbv = Qa40xProtocol.inputRangeDbvValues()[0];
+        DeviceRange row = card.getInput().getRanges().get(0);
+        assertEquals(Qa40xLevels.inputFullScaleRmsVolts(dbv, cal.adcLinearFactor(dbv, false)),
+                row.getFsLeft(), TOL, "fs volts from the levels math and this page's factor");
+        assertEquals(Qa40xLevels.inputFullScaleRmsVolts(dbv, cal.adcLinearFactor(dbv, true)),
+                row.getFsRight(), TOL);
     }
 }

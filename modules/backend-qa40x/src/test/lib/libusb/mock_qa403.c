@@ -96,8 +96,8 @@ static void recompute_gains(qa403_device *d)
     double cal_dac_l = db_to_linear( (float)(0.05f + 0.02f * out_code));
     double cal_dac_r = db_to_linear(-(float)(0.05f + 0.02f * out_code));
 
-    /* Host semantics (maintainer ruling 2026-07-17): the range label is the RMS
-     * full scale on BOTH directions — DAC digital = peak/10^((out+3)/20), ADC
+    /* Host semantics of this mock: the range label is the RMS
+     * full scale on BOTH directions - DAC digital = peak/10^((out+3)/20), ADC
      * volts = digital*10^((in+3)/20).  The +3 terms cancel in the loopback, so
      * the digital gain is plain 10^((out-in)/20); the former +9.0 inverted the
      * dropped -6 dB vendor input term. */
@@ -349,10 +349,10 @@ void qa403_stream(qa403_device *d, double elapsed_sec)
         }
         /* Loopback: the cable un-swaps the DAC L/R swap; ADC is not swapped.
          * wire slot0 = logical R, slot1 = logical L (doc section 5). */
-        /* 24-bit precision (maintainer, 2026-07-17): only the 24 MSBs of the
+        /* 24-bit precision: only the 24 MSBs of the
          * int32 carry signal on the wire, the low byte is zero padding, both
          * directions.  The DAC ignores the incoming low byte and the ADC emits
-         * a zero low byte — mask on ingestion and on output. */
+         * a zero low byte - mask on ingestion and on output. */
         slot0 = (int32_t)(slot0 & 0xFFFFFF00);
         slot1 = (int32_t)(slot1 & 0xFFFFFF00);
         left  = (int32_t)(saturate_i32(d->gain_left  * (double)slot1) & 0xFFFFFF00);

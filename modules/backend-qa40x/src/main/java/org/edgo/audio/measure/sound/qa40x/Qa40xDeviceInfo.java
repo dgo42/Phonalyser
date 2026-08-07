@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,14 +20,20 @@ package org.edgo.audio.measure.sound.qa40x;
 
 /**
  * A snapshot of the analyzer's identity and live telemetry registers, already
- * decoded to display strings (doc §4 extended register map, §6 telemetry).
- * Read by {@link Qa40xDeviceManager} — which owns the transport — and shown
- * read-only by {@link Qa40xSettingsDialog}.
+ * decoded to display strings (QA40x doc §4 extended register map, §6 telemetry).
+ * Read by the QA40x device manager - which owns the transport - and shown
+ * read-only by that backend's settings panel.
  *
  * <p>Every field is a string rather than a number because each register decodes
  * differently (millivolts, tenths of a degree, a packed hex serial) and because
  * a value that cannot be read has to render as {@link #UNAVAILABLE} rather than
  * as a misleading zero.
+ *
+ * <p>It lives beside {@link Qa40xControl} and the driver that fills it, because
+ * three layers read the same snapshot: the driver produces it, the desktop
+ * settings panel shows it, and the net server puts it on the wire (net protocol
+ * 4.6).  A record per layer would be three chances for them to disagree about
+ * what a field means.
  */
 public record Qa40xDeviceInfo(String firmwareVersion,
                               String usbVoltage,
@@ -42,7 +48,7 @@ public record Qa40xDeviceInfo(String firmwareVersion,
      *  ISO-supply current, which only the QA402 has (§6). */
     public static final String UNAVAILABLE = "---";
 
-    /** The all-unavailable snapshot — nothing was read because the device is
+    /** The all-unavailable snapshot - nothing was read because the device is
      *  not open.  A shared constant so every caller shows the same thing. */
     public static final Qa40xDeviceInfo NONE = new Qa40xDeviceInfo(
             UNAVAILABLE, UNAVAILABLE, UNAVAILABLE, UNAVAILABLE,

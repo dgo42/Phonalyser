@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -19,40 +19,40 @@
 package org.edgo.audio.measure.sound.qa40x;
 
 /**
- * Transport seam for the QA402/QA403 USB protocol — the byte pipe between the
+ * Transport seam for the QA402/QA403 USB protocol - the byte pipe between the
  * measurement engine and the analyzer, with no protocol knowledge above the
  * wire level.  It moves four kinds of traffic over interface 0's four bulk
  * endpoints (see {@code doc/QA40X-PROTOCOL.md} §3/§4/§5):
  *
  * <ul>
- *   <li>register <b>writes</b> — a 5-byte big-endian frame on EP {@code 0x01} OUT;</li>
- *   <li>register <b>reads</b> — a {@code 0x80|reg} request write followed by a
+ *   <li>register <b>writes</b> - a 5-byte big-endian frame on EP {@code 0x01} OUT;</li>
+ *   <li>register <b>reads</b> - a {@code 0x80|reg} request write followed by a
  *       4-byte big-endian reply on EP {@code 0x81} IN;</li>
- *   <li>audio <b>playback</b> — async writes on EP {@code 0x02} OUT;</li>
- *   <li>audio <b>capture</b> — async reads on EP {@code 0x82} IN.</li>
+ *   <li>audio <b>playback</b> - async writes on EP {@code 0x02} OUT;</li>
+ *   <li>audio <b>capture</b> - async reads on EP {@code 0x82} IN.</li>
  * </ul>
  *
  * <p>Register traffic is synchronous (blocking bulk transfers); audio traffic is
- * asynchronous — submitted here and completed later on the transport's event
+ * asynchronous - submitted here and completed later on the transport's event
  * thread, which reports back through the {@link TransferListener}.  The
  * full-duplex discipline (≥2 transfers in flight per direction, read-completion
  * clock) lives in the engine that drives this seam, not here.
  *
  * <p><b>Stop discipline.</b> {@link #cancelAll()} aborts in-flight transfers and
  * {@link #close()} tears the session down; neither ever pipe-resets or
- * clear-halts an endpoint — doing so hangs the next session's first read
+ * clear-halts an endpoint - doing so hangs the next session's first read
  * (doc §3).
  *
  * <p>The default full-scale value convention is big-endian for register values
- * even though the audio samples are little-endian — two independent
+ * even though the audio samples are little-endian - two independent
  * endiannesses that this seam neither imposes nor conflates (doc §4/§5).
  */
 public interface Qa40xTransport extends AutoCloseable {
 
-    /** Writes {@code value} to register {@code reg} — a 5-byte big-endian frame on EP {@code 0x01} OUT. */
+    /** Writes {@code value} to register {@code reg} - a 5-byte big-endian frame on EP {@code 0x01} OUT. */
     void registerWrite(int reg, int value);
 
-    /** Reads register {@code reg} — sends {@code 0x80|reg}, then decodes the 4-byte big-endian reply from EP {@code 0x81} IN. */
+    /** Reads register {@code reg} - sends {@code 0x80|reg}, then decodes the 4-byte big-endian reply from EP {@code 0x81} IN. */
     int  registerRead(int reg);
 
     /** Submits an async playback transfer of {@code length} bytes from {@code data} on EP {@code 0x02} OUT. */

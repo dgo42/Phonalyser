@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,11 +24,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * {@link Qa40xLevels} raw ↔ volts math, pinning the range semantics of the
- * REAL device (bench 2026-07-20, doc §6 cheat-sheet — supersedes the
- * 2026-07-17 mock ruling): the OUTPUT label is genuine per-leg RMS dBV, while
- * the INPUT "N dBV" label is a Vpp-differential (dBFS) clip reference — the
+ * REAL device (doc §6 cheat-sheet - supersedes the earlier mock-derived
+ * assumption): the OUTPUT label is genuine per-leg RMS dBV, while the INPUT
+ * "N dBV" label is a Vpp-differential (dBFS) clip reference - the
  * input's true RMS full scale sits 9 dB below its label ({@code +3} peak/RMS
- * and {@code +6} differential ×2) — plus the DAC peak-volts convention
+ * and {@code +6} differential ×2) - plus the DAC peak-volts convention
  * (including the RMS-trap ~3 dB error).
  */
 class Qa40xLevelsTest {
@@ -38,8 +38,8 @@ class Qa40xLevelsTest {
     @Test
     void adcVolts_fullScaleIsHalfTheVppDifferentialClip() {
         // The "N dBV" input label is the Vpp-DIFFERENTIAL clip: 10^(N/20) is
-        // peak-to-peak, so a full-scale sample (±MAXINT) is its half — the
-        // peak — and a full-scale sine reads ≈ (N − 9) dBV RMS (doc §6).
+        // peak-to-peak, so a full-scale sample (±MAXINT) is its half - the
+        // peak - and a full-scale sine reads ≈ (N − 9) dBV RMS (doc §6).
         assertEquals(0.5, Qa40xLevels.adcVolts(Qa40xLevels.MAXINT, 0, 1.0), TOL);
         assertEquals(Math.pow(10.0, 6.0 / 20.0) / 2.0, Qa40xLevels.adcVolts(Qa40xLevels.MAXINT, 6, 1.0), TOL);
         assertEquals(Math.pow(10.0, 6.0 / 20.0), Qa40xLevels.adcVolts(Qa40xLevels.MAXINT, 6, 2.0), TOL);
@@ -62,8 +62,8 @@ class Qa40xLevelsTest {
     @Test
     void dacInt32_rmsTrapIsAboutThreeDbLow() {
         double vrms = 1.0;
-        int correct = Qa40xLevels.dacInt32(Math.sqrt(2.0) * vrms, 18, 1.0);   // PEAK — correct
-        int trap    = Qa40xLevels.dacInt32(vrms, 18, 1.0);                    // RMS — the ~3 dB trap
+        int correct = Qa40xLevels.dacInt32(Math.sqrt(2.0) * vrms, 18, 1.0);   // PEAK - correct
+        int trap    = Qa40xLevels.dacInt32(vrms, 18, 1.0);                    // RMS - the ~3 dB trap
         double errDb = 20.0 * Math.log10((double) correct / trap);
         assertEquals(3.0103, errDb, 0.01);
     }
@@ -78,7 +78,7 @@ class Qa40xLevelsTest {
     void inputFullScaleRms_isNineDbBelowTheLabel() {
         // The input label is a Vpp-differential (dBFS) reference: RMS full
         // scale = 10^(N/20)/(2√2), i.e. a constant 9.03 dB below the label
-        // (doc §6; supersedes the mock-era "label = RMS" bench case).
+        // (doc §6; supersedes the mock-era label-is-RMS case).
         double fs18 = Qa40xLevels.inputFullScaleRmsVolts(18, 1.0);
         assertEquals(Math.pow(10.0, 18 / 20.0) / (2.0 * Math.sqrt(2.0)), fs18, TOL);
         assertEquals(Math.pow(10.0, (18 - 9.0) / 20.0), fs18, 0.02);
@@ -94,11 +94,11 @@ class Qa40xLevelsTest {
 
     @Test
     void fullScaleRms_inputSitsNineDbBelowOutputAtMatchingLabels() {
-        // The mock-era symmetry ruling is superseded (doc §6, bench
-        // 2026-07-20): a digital mock loopback shows no differential
-        // doubling, so it could not surface the input's 9 dB offset.  At
+        // The mock-era symmetry assumption is superseded (doc §6): a
+        // digital mock loopback shows no differential doubling, so it
+        // could not surface the input's 9 dB offset.  At
         // matching labels the output full scale is 2·10^(3/20) (= +9.03 dB)
-        // above the input full scale — one √2 (peak/RMS) plus one ×2
+        // above the input full scale - one √2 (peak/RMS) plus one ×2
         // (differential), for every range.
         for (int dbv : new int[] { 0, 6, 12, 18 }) {
             double ratio = Qa40xLevels.outputFullScaleRmsVolts(dbv, 1.0)

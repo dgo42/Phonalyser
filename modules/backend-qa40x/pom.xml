@@ -1,13 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  backend-qa40x — the QA402/QA403 driver: libusb transport, protocol registers,
+  backend-qa40x - the QA402/QA403 driver: libusb transport, protocol registers,
   duplex engine, calibration page, device manager.
 
   This module deliberately has NO SWT dependency and NO dependency on
   backend-qa40x-gui.  The QA40x settings dialog, range controller and rate
   constraint live in backend-qa40x-gui, which sits ABOVE phonalyser-gui.
-  Qa40xDeviceManager therefore must not name any of them — see the decoupling
-  notes reported with this PoC.
+  Qa40xDeviceManager therefore must not name any of them.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -17,7 +16,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.1.1</version>
+        <version>1.2.0</version>
         <relativePath>../phonalyser-parent</relativePath>
     </parent>
 

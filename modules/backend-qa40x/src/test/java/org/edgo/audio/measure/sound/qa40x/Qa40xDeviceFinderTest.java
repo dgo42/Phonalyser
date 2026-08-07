@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 /**
  * Headless coverage for the finder logic that lives off the JNA boundary: the
- * VID/PID → model mapping (doc §2), the single-device rule (doc §2/§7), and the
+ * VID/PID -> model mapping (doc §2), the single-device rule (doc §2/§7), and the
  * graceful behaviour when {@code libusb} is absent.  Real enumeration/open needs
  * hardware and is not exercised.
  */
@@ -52,7 +52,7 @@ class Qa40xDeviceFinderTest {
 
     @Test
     void unknownProductIdIsEmpty() {
-        // 0x4E27 is the QA401 — deliberately out of scope, so also unmapped here.
+        // 0x4E27 is the QA401 - deliberately out of scope, so also unmapped here.
         assertTrue(Qa40xModel.fromProductId(0x4E27).isEmpty());
         assertTrue(Qa40xModel.fromProductId(0x1234).isEmpty());
     }
@@ -74,14 +74,14 @@ class Qa40xDeviceFinderTest {
 
     @Test
     void listIsEmptyWhenLibusbAbsent() {
-        assumeFalse(LibUsb.available(), "libusb-1.0 present on host — skipping absence test");
+        assumeFalse(LibUsb.available(), "libusb-1.0 present on host - skipping absence test");
         assertDoesNotThrow(finder::list);
         assertTrue(finder.list().isEmpty(), "with libusb absent, list() must be empty");
     }
 
     @Test
     void openThrowsWhenLibusbAbsent() {
-        assumeFalse(LibUsb.available(), "libusb-1.0 present on host — skipping absence test");
+        assumeFalse(LibUsb.available(), "libusb-1.0 present on host - skipping absence test");
         assertThrows(IllegalStateException.class, finder::open);
     }
 }

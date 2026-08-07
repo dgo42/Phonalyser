@@ -20,7 +20,8 @@
  * mock_libusb - the libusb-1.0 API plumbing: init/exit + refcount, the single
  * device list, handles, the async transfer lifecycle, the register bulk path,
  * and the sample-clock worker thread that bridges libusb transfers into and out
- * of the emulated QA403 (mock_qa403).  See .claude/plans/qa40x-mock-libusb.md.
+ * of the emulated QA403 (mock_qa403).  The wire contract the emulation follows
+ * is in doc/QA40X-PROTOCOL.md.
  *
  * Locking discipline: ONE global CRITICAL_SECTION guards all state.  Completion
  * callbacks are invoked ONLY inside libusb_handle_events_timeout_completed, on
@@ -44,8 +45,8 @@ __declspec(dllimport) UINT WINAPI timeEndPeriod(UINT uPeriod);
  * the worker's Sleep(1) / timeBeginPeriod(1) stays fine-grained even when the app
  * has NO foreground window.  Otherwise EcoQoS ignores timeBeginPeriod(1) for a
  * backgrounded process, Sleep(1) coarsens to ~15.6 ms, and the sample clock
- * produces one ~15.6 ms burst per tick — which the app's ~21 ms DAC buffer can't
- * smooth, giving periodic loopback underruns (maintainer bench 2026-07-17).
+ * produces one ~15.6 ms burst per tick - which the app's ~21 ms DAC buffer can't
+ * smooth, giving periodic loopback underruns.
  * SetProcessInformation + ProcessPowerThrottling postdate the VS2015 SDK, so the
  * call is resolved dynamically and simply no-ops on older Windows. */
 typedef struct {
@@ -77,6 +78,10 @@ static void ignore_timer_throttling(void)
 #define QA_PID_QA403    0x4E39
 #define QA_BUS_NUMBER   1
 #define QA_DEV_ADDRESS  5
+/* bConfigurationValue of the device's only configuration.  Distinct from the
+ * descriptor's bNumConfigurations (a COUNT that happens to be 1 as well): this
+ * is the VALUE the host selects and reads back. */
+#define QA403_CONFIGURATION 1
 
 /* --- endpoints (doc section 3) ------------------------------------------- */
 #define EP_REG_OUT      0x01
@@ -302,9 +307,9 @@ static void worker_tick(double elapsed_sec)     /* lock held */
     if (g_ctx.dev.started) {
         qa403_stream(&g_ctx.dev, elapsed_sec);
         feed_locked();                       /* space freed -> accept more OUT */
-        /* Advance in ring-safe slices, feeding between them (maintainer go,
-         * 2026-07-17).  When the app window is fully hidden, Windows 11 revokes
-         * the process's 1 ms timers and this tick coarsens to ~15.6 ms — at
+        /* Advance in ring-safe slices, feeding between them.  When the app
+         * window is fully hidden, Windows 11 revokes the process's 1 ms timers
+         * and this tick coarsens to ~15.6 ms - at
          * 192 kHz that is ~3000 frames against a 1024-frame DAC ring, so a
          * single qa403_stream() call padded ~2000 frames of SILENCE per tick
          * while the data sat in pending OUT transfers (the hidden-window
@@ -322,16 +327,16 @@ static void worker_tick(double elapsed_sec)     /* lock held */
     deliver_locked();
 }
 
-/* Worker wait strategy — TWO alternatives, both keeping the sample clock fine-
+/* Worker wait strategy - TWO alternatives, both keeping the sample clock fine-
  * grained when the app is backgrounded (both proven to remove the periodic
- * loopback discontinuities, maintainer bench 2026-07-17):
+ * loopback discontinuities on the bench):
  *   OPTION 1: plain Sleep(1), made reliable by ignore_timer_throttling() above.
- *   OPTION 2: a high-resolution waitable timer — immune to background timer
+ *   OPTION 2: a high-resolution waitable timer - immune to background timer
  *             coarsening BY CONSTRUCTION (it does not depend on the process timer
  *             resolution at all), so it holds even if a future Windows build stops
  *             honouring the throttling opt-out.
  * Flip MOCK_WORKER_HIRES_TIMER to 0 to roll back to OPTION 1 alone.  Option 1's
- * opt-out stays active either way — the two are complementary, not exclusive. */
+ * opt-out stays active either way - the two are complementary, not exclusive. */
 #define MOCK_WORKER_HIRES_TIMER 1
 
 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION (Windows 10 1803+) postdates the VS2015
@@ -552,6 +557,41 @@ MOCK_API int LIBUSB_CALL libusb_reset_device(libusb_device_handle *handle)
     fail_all_pending();
     qa403_logf("[QA403] libusb_reset_device\n");
     LeaveCriticalSection(&g_ctx.lock);
+    return LIBUSB_SUCCESS;
+}
+
+/* The device has exactly ONE configuration (bNumConfigurations = 1 in the
+ * descriptor), and an opened device is always in it.  Real libusb answers from
+ * the OS, which configures the device at enumeration on Windows and Linux;
+ * macOS may leave it unconfigured, which is the whole reason the Java side
+ * asks before claiming.  Here it is always configured, so the caller's
+ * set_configuration branch is simply never taken. */
+MOCK_API int LIBUSB_CALL libusb_get_configuration(libusb_device_handle *handle, int *configuration)
+{
+    if (handle == NULL || configuration == NULL) {
+        return LIBUSB_ERROR_INVALID_PARAM;
+    }
+    *configuration = QA403_CONFIGURATION;
+    qa403_logf("[QA403] libusb_get_configuration -> %d\n", QA403_CONFIGURATION);
+    return LIBUSB_SUCCESS;
+}
+
+/* Selecting the only configuration is a no-op that succeeds; selecting any
+ * other one cannot be satisfied, and real libusb answers ERROR_NOT_FOUND for a
+ * configuration the device does not have.  The UNCONFIGURED state - which real
+ * libusb spells as -1, and which 0 is also commonly used for - is refused for
+ * the same reason: nothing in this stack asks for it, and quietly accepting it
+ * would leave the mock claiming a state it does not model. */
+MOCK_API int LIBUSB_CALL libusb_set_configuration(libusb_device_handle *handle, int configuration)
+{
+    if (handle == NULL) {
+        return LIBUSB_ERROR_INVALID_PARAM;
+    }
+    if (configuration != QA403_CONFIGURATION) {
+        qa403_logf("[QA403] libusb_set_configuration(%d) -> NOT_FOUND\n", configuration);
+        return LIBUSB_ERROR_NOT_FOUND;
+    }
+    qa403_logf("[QA403] libusb_set_configuration(%d) -> OK\n", configuration);
     return LIBUSB_SUCCESS;
 }
 
