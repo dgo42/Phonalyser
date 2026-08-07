@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -9,14 +9,14 @@
 // (Canvas2DAlphaPainter below).
 //
 // Dense-trace digital-phosphor renderer (more than one sample per pixel): rasterises
-// a displayed window as a DSO-style DIGITAL PHOSPHOR — a coverage image where each
-// pixel's brightness is its dwell time — and blits it as one channel-colour-tinted
+// a displayed window as a DSO-style DIGITAL PHOSPHOR - a coverage image where each
+// pixel's brightness is its dwell time - and blits it as one channel-colour-tinted
 // image through a painter, replacing the vector polyline entirely.
 //
-// The pure signal math lives in trace-envelope.js (accumulate → pen → fringe →
-// downsample); this class OWNS the pooled scratch that math streams through — the
+// The pure signal math lives in trace-envelope.js (accumulate -> pen -> fringe ->
+// downsample); this class OWNS the pooled scratch that math streams through - the
 // per-column span accumulator, the coverage buffers (device-res + supersampled), the
-// exported band arrays, the count→alpha LUT — so the hot path allocates nothing.
+// exported band arrays, the count->alpha LUT - so the hot path allocates nothing.
 //
 // Adaptive device resolution: render() reads painter.getPixelScale() EVERY frame and
 // rasterises at the surface's DEVICE resolution (round(widthPx·scale) ×
@@ -43,7 +43,7 @@ const DPO_SATURATION_COUNT = 64;
 /** 8-bit alpha for a fully saturated phosphor pixel. */
 const DPO_ALPHA_MAX = 255;
 /** Digital-phosphor supersampling factor: the histogram, band export and coverage pen
- *  are rasterised on a grid of 1/this DEVICE-px cells (2 = the maintainer's 0.5 px
+ *  are rasterised on a grid of 1/this DEVICE-px cells (2 = a 0.5 px
  *  histogram) and box-averaged down, so every final pixel carries a true decimal
  *  coverage. 1 = rasterise at device resolution (no supersampling). Bench knob. */
 const DPO_SUPERSAMPLE = 2;
@@ -71,7 +71,7 @@ export class PhosphorRenderer {
     this._phosphorBandEntryY = null;
     this._phosphorBandExitX = null;
     this._phosphorBandExitY = null;
-    /** Count→alpha LUT, built once by {@link phosphorLut}. */
+    /** Count->alpha LUT, built once by {@link phosphorLut}. */
     this._phosphorLut = null;
 
     // Previous frame's non-zero GRID-coordinate content box (inclusive; prevX1 < prevX0
@@ -111,17 +111,17 @@ export class PhosphorRenderer {
     if (widthPx <= 0 || heightPx <= 0) return;
     // Adaptive: read the surface's device scale EVERY frame and rasterise at DEVICE
     // resolution, then blit into the LOGICAL rect. At scale 1 all of the below
-    // collapses to the logical-resolution path — byte-identical.
+    // collapses to the logical-resolution path - byte-identical.
     const pixelScale = painter.getPixelScale();
     const devW = Math.max(1, Math.round(widthPx  * pixelScale));
     const devH = Math.max(1, Math.round(heightPx * pixelScale));
     const ss  = Math.max(1, DPO_SUPERSAMPLE);
     const wSs = devW * ss;
     const hSs = devH * ss;
-    // Vertical value→row transform scale from LOGICAL px into the (devH·ss) grid rows.
+    // Vertical value->row transform scale from LOGICAL px into the (devH·ss) grid rows.
     const sy = hSs / heightPx;
     // At the full-brightness floor (DPO_SINGLE_HIT_ALPHA ≥ 1.0) the count pass is a
-    // no-op — the sink writes nothing and the pen alone draws — so we skip the ENTIRE
+    // no-op - the sink writes nothing and the pen alone draws - so we skip the ENTIRE
     // count pass and don't size/zero the diff accumulator.
     const counts = DPO_SINGLE_HIT_ALPHA < 1.0;
     if (counts && (this._phosphorDiff === null || this._phosphorDiff.length < hSs + 2)) {
@@ -149,11 +149,11 @@ export class PhosphorRenderer {
       }
       gridBuf = this._phosphorAlphaSs;
     } else {
-      gridBuf = this._phosphorAlpha;   // no supersampling → the pen writes the device buffer directly
+      gridBuf = this._phosphorAlpha;   // no supersampling -> the pen writes the device buffer directly
     }
     const alpha = this._phosphorAlpha;
     // DIRTY-REGION FRAME CLEAR. A raster-dimension change (or the full-repaint seam)
-    // invalidates the stored box → whole-buffer fill; otherwise clear ONLY the previous
+    // invalidates the stored box -> whole-buffer fill; otherwise clear ONLY the previous
     // frame's content box (which held ALL of last frame's non-zero coverage).
     const dimsChanged = wSs !== this._prevWSs || hSs !== this._prevHSs
         || devW !== this._prevDevW || devH !== this._prevDevH;
@@ -173,8 +173,8 @@ export class PhosphorRenderer {
     const w = wSs;
     // sin x/x rails ON: each column exports its band-limited crest/trough. At the
     // full-brightness floor (counts == false) the count pass is skipped entirely and the
-    // sink is a no-op — the pen alone rasterises the trace; under phosphor grading the
-    // sink packs counts→LUT and the pen lays its dimmer outline over it via max.
+    // sink is a no-op - the pen alone rasterises the trace; under phosphor grading the
+    // sink packs counts->LUT and the pen lays its dimmer outline over it via max.
     const sink = counts
         ? (x, y, count) => { grid[y * w + x] = lut[Math.min(count, lutMax)]; }
         : () => { };
@@ -199,10 +199,10 @@ export class PhosphorRenderer {
       if (bot > rowMax) rowMax = bot;
     }
     let penColLo, penColHi, rgX0, rgX1, rgY0, rgY1;
-    if (this.fullRepaint) {                          // test seam → whole-grid passes
+    if (this.fullRepaint) {                          // test seam -> whole-grid passes
       penColLo = 0; penColHi = wSs - 1;
       rgX0 = 0; rgX1 = wSs - 1; rgY0 = 0; rgY1 = hSs - 1;
-    } else if (colHi < colLo) {                       // blank frame → nothing to stroke
+    } else if (colHi < colLo) {                       // blank frame -> nothing to stroke
       penColLo = 0; penColHi = -1;
       rgX0 = 0; rgX1 = -1; rgY0 = 0; rgY1 = -1;
     } else {
@@ -237,7 +237,7 @@ export class PhosphorRenderer {
   }
 
   /** Zeroes the inclusive {@code [x0, x1] × [y0, y1]} box of a packed {@code stride}-wide
-   *  byte buffer, one fill per row — the dirty-region frame clear. Callers guarantee
+   *  byte buffer, one fill per row - the dirty-region frame clear. Callers guarantee
    *  {@code x0 ≤ x1} and {@code y0 ≤ y1}. */
   _clearRegion(buf, stride, x0, x1, y0, y1) {
     for (let y = y0; y <= y1; y++) {
@@ -246,7 +246,7 @@ export class PhosphorRenderer {
     }
   }
 
-  /** Lazily builds the count→alpha LUT once, indexed by {@code min(count,
+  /** Lazily builds the count->alpha LUT once, indexed by {@code min(count,
    *  DPO_SATURATION_COUNT)}: {@code alpha(0) = 0}; else {@code DPO_SINGLE_HIT_ALPHA +
    *  (1 − DPO_SINGLE_HIT_ALPHA)·min(1, ln(1+count)/ln(1+DPO_SATURATION_COUNT))}, scaled
    *  to 8-bit. Precomputed so the hot loop never evaluates ln(). */
@@ -254,7 +254,7 @@ export class PhosphorRenderer {
     if (this._phosphorLut === null) {
       const lut = new Uint8Array(DPO_SATURATION_COUNT + 1);
       if (DPO_SINGLE_HIT_ALPHA >= 1.0) {
-        // Floor at full brightness → every hit is full alpha; no log grading needed.
+        // Floor at full brightness -> every hit is full alpha; no log grading needed.
         lut.fill(Math.round(DPO_ALPHA_MAX), 1);
       } else {
         const denom = Math.log(1.0 + DPO_SATURATION_COUNT);
@@ -264,7 +264,7 @@ export class PhosphorRenderer {
           lut[c] = Math.round(a * DPO_ALPHA_MAX);
         }
       }
-      this._phosphorLut = lut;   // lut[0] left 0 → count 0 fully transparent
+      this._phosphorLut = lut;   // lut[0] left 0 -> count 0 fully transparent
     }
     return this._phosphorLut;
   }
@@ -274,12 +274,12 @@ export class PhosphorRenderer {
  * Web replacement for MeasurementPainter.drawAlphaImage + AlphaImageScratch: adapts a
  * Canvas2D context to the painter interface {@link PhosphorRenderer#render} needs
  * (getPixelScale + drawAlphaImage). It owns a POOLED offscreen canvas + ImageData
- * (reallocated only when the device dimensions change — the AlphaImageScratch
+ * (reallocated only when the device dimensions change - the AlphaImageScratch
  * discipline), so a steady-state frame churns nothing.
  *
  * <p>The coverage buffer carries only per-pixel alpha; drawAlphaImage builds an RGBA
  * image where every pixel gets the channel tint's RGB and the coverage byte as ALPHA,
- * putImageData()s it into the offscreen (putImageData REPLACES pixels — it must not go
+ * putImageData()s it into the offscreen (putImageData REPLACES pixels - it must not go
  * straight to the scope canvas), then drawImage()s the offscreen into the destination
  * rect so it composites source-over like the desktop's alpha-image draw.
  */
@@ -348,7 +348,7 @@ function makeOffscreen(w, h) {
 }
 
 /** Parses a channel tint (hex string '#rgb'/'#rrggbb', 0xRRGGBB number, or {r,g,b}) to
- *  its 8-bit RGB components; a null tint (e.g. a test) reads white — the alpha buffer
+ *  its 8-bit RGB components; a null tint (e.g. a test) reads white - the alpha buffer
  *  carries the shape. */
 function parseTint(color) {
   if (color == null) return { r: 255, g: 255, b: 255 };

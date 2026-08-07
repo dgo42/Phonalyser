@@ -1,17 +1,17 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// The device catalog is NOT hard-coded here — it is the Java single source of truth,
+// The device catalog is NOT hard-coded here - it is the Java single source of truth,
 // src/main/resources/devices.yaml, shipped VERBATIM next to the app (web/devices.yaml,
 // re-copied every build) and parsed at runtime. This module owns that load:
 //
-//   parseDevicesYaml(text)  — a minimal, dependency-free YAML reader for exactly the
+//   parseDevicesYaml(text)  - a minimal, dependency-free YAML reader for exactly the
 //                             devices.yaml subset (see below), returning the store
 //                             document shape { formatVersion, contentVersion, audioDevices }.
-//   loadDeviceCatalog(url)  — fetch + parse; null on any failure (the app then boots with
+//   loadDeviceCatalog(url)  - fetch + parse; null on any failure (the app then boots with
 //                             the user's localStorage cards and no fresh seed).
 //
 // The document the parser returns is the exact vocabulary DeviceProfileStore._readProfile
@@ -20,11 +20,11 @@
 // and input / output endpoint blocks (channels, ranges of { label, fsVrms }, activeRange,
 // activeRangeRight). fsVrms is a { left, right } pair OR a scalar
 // shorthand (both channels); activeRange is a scalar row label (LINKED / MONO) OR a
-// { left, right } map (INDEPENDENT). Unknown keys are preserved — the store reader decides
+// { left, right } map (INDEPENDENT). Unknown keys are preserved - the store reader decides
 // what to keep. See the devices.yaml header comment for the full schema + upgrade behaviour.
 //
 // The seed-merge is gated on contentVersion in DeviceProfileStore (runs once when the catalog's
-// contentVersion exceeds the store's recorded one, strictly greater — mirroring the desktop).
+// contentVersion exceeds the store's recorded one, strictly greater - mirroring the desktop).
 
 /** Wraps a parse failure with the 1-based source line for a pinpointable error. */
 function parseError(line, msg) {
@@ -123,7 +123,7 @@ function splitKey(text, line) {
   throw parseError(line, `expected "key: value" but found "${text}"`);
 }
 
-/** True when a block-list item's text begins a nested block map (`key: …`) rather than a flow
+/** True when a block-list item's text begins a nested block map (`key: ...`) rather than a flow
  *  scalar / map / list. */
 function isMapEntry(text) {
   if (text.startsWith('{') || text.startsWith('[') || text.startsWith('"') || text.startsWith("'")) return false;
@@ -141,7 +141,7 @@ function isMapEntry(text) {
   return false;
 }
 
-/** A flow node: [ … ] list, { … } map (one level of nesting is enough for devices.yaml), or a
+/** A flow node: [ ... ] list, { ... } map (one level of nesting is enough for devices.yaml), or a
  *  scalar. */
 function parseFlow(s, line) {
   s = s.trim();
@@ -192,7 +192,7 @@ function parseBlockMap(tokens, st, indent) {
 }
 
 /** Reads consecutive `- ` items at exactly {@code indent}. A flow / scalar item is parsed inline;
- *  a `key: …` item re-homes the dash line as the first entry of a nested block map (at the column
+ *  a `key: ...` item re-homes the dash line as the first entry of a nested block map (at the column
  *  where the item's keys align) so its continuation lines fold in. */
 function parseBlockSeq(tokens, st, indent) {
   const arr = [];

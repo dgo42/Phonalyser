@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -11,7 +11,7 @@
 // The Java surface is GPU-only: it routes the trace through two off-screen
 // RGBA16F framebuffers, decays the accumulation by exp(-dt/tau) on each
 // genuinely new frame, composites it between a fresh backdrop and a fresh
-// overlay, and — when the framebuffers can't be created — releases and returns
+// overlay, and - when the framebuffers can't be created - releases and returns
 // false so the caller falls back to a direct render (ScopePhosphor.java:142-149,
 // ensureBuffers :356-395). We mirror that exactly.
 //
@@ -20,17 +20,17 @@
 // this at ScopePhosphor.java:397-399). RGBA16F (half-float via
 // EXT_color_buffer_float) decays cleanly to zero. If WebGL2, the float-colour
 // extension, or FBO completeness is unavailable, the engine reports unsupported
-// and every render() returns false — the web mirror of Java's release() -> false.
+// and every render() returns false - the web mirror of Java's release() -> false.
 //
 // This module deliberately owns NO knowledge of preferences or the render loop:
 // the pure, node-testable PhosphorGate below decides WHICH Kind each frame is
 // (trigger-source change -> CLEAR, geometry change -> RESET, else the caller's
 // kind), and phosphorFade() is the decay arithmetic as a pure function. The GL
-// engine only executes a Kind. scope-view integration is a separate agent's job.
+// engine only executes a Kind. scope-view integration lives outside this module.
 
 /**
  * Upper bound on a single decay step's `dt` (seconds), so resuming after a long
- * pause — the realtime loop was idle, so the decay clock didn't advance — fades
+ * pause - the realtime loop was idle, so the decay clock didn't advance - fades
  * the afterglow gently over a few frames instead of wiping it in one.
  * Java MAX_DECAY_SECONDS (ScopePhosphor.java:63-66).
  * @type {number}
@@ -50,7 +50,7 @@ export const MAX_DECAY_SECONDS = 0.5;
  *                 (raw; this function applies the {@link MAX_DECAY_SECONDS} cap).
  * @param {number} tauSeconds persistence time constant (must be > 0 for a finite
  *                 decay). For infinite persistence (tau < 0) the caller must skip
- *                 decay entirely — see PhosphorGate / the engine; passing tau <= 0
+ *                 decay entirely - see PhosphorGate / the engine; passing tau <= 0
  *                 here is a programming error and returns 0 (no fade).
  * @returns {number} fade fraction in [0, 1]
  */
@@ -64,7 +64,7 @@ export function phosphorFade(dtSeconds, tauSeconds) {
 // Two verts triangles covering clip space; the fragment stage just reads RGBA
 // from the source texture. Premultiplied source-over / decay is done entirely
 // with fixed-function blending (blendFunc), exactly like NanoVG's composite
-// blend funcs in the Java path — the shader never premultiplies.
+// blend funcs in the Java path - the shader never premultiplies.
 const QUAD_VERT = `#version 300 es
 in vec2 a_pos;
 out vec2 v_uv;
@@ -81,7 +81,7 @@ out vec4 fragColor;
 void main() { fragColor = texture(u_tex, v_uv); }`;
 
 // A flat-colour fill for the decay pass (the black quad multiplied in with
-// blendFunc(ZERO, ONE_MINUS_SRC_ALPHA) — Java decay(), ScopePhosphor.java:329-340).
+// blendFunc(ZERO, ONE_MINUS_SRC_ALPHA) - Java decay(), ScopePhosphor.java:329-340).
 const FILL_FRAG = `#version 300 es
 precision highp float;
 uniform vec4 u_color;
@@ -89,7 +89,7 @@ out vec4 fragColor;
 void main() { fragColor = u_color; }`;
 
 /**
- * GPU display persistence ("digital phosphor") for the oscilloscope — a faithful
+ * GPU display persistence ("digital phosphor") for the oscilloscope - a faithful
  * structural port of org.edgo.audio.measure.gui.scope.gl.ScopePhosphor.
  *
  * <p>The engine owns a hidden WebGL2 canvas and two RGBA16F texture/FBO pairs:
@@ -101,11 +101,11 @@ void main() { fragColor = u_color; }`;
  *       trace is composited in (REALTIME); a held frame leaves it (COMPOSITE); a
  *       geometry gesture resets it (RESET); a signal-affecting change wipes it
  *       without re-stamping (CLEAR). An empty buffer (first frame / just resized)
- *       is seeded from the current trace so the persisted layer is never blank —
+ *       is seeded from the current trace so the persisted layer is never blank -
  *       vital for a STOPPED scope (Java :213-219).</li>
  * </ul>
  *
- * <p><b>Caller contract (compositing order — Java compositeToScreen :313-324).</b>
+ * <p><b>Caller contract (compositing order - Java compositeToScreen :313-324).</b>
  * The engine renders ONLY the persisted trace onto its own transparent WebGL
  * canvas and returns true. The caller draws, in order:
  * <ol>
@@ -121,12 +121,12 @@ void main() { fragColor = u_color; }`;
  *
  * <p>When persistence is off, unsupported, or the buffers can't be created, every
  * render() returns false (having released) and the caller must direct-render the
- * whole frame itself — the web mirror of Java's release() -> false fallback.
+ * whole frame itself - the web mirror of Java's release() -> false fallback.
  */
 export class ScopePhosphor {
 
   /**
-   * Which kind of frame is being rendered — selects the persistence behaviour.
+   * Which kind of frame is being rendered - selects the persistence behaviour.
    * Semantics EXACTLY Java ScopePhosphor.Kind (:77-90).
    * @readonly @enum {string}
    */
@@ -138,7 +138,7 @@ export class ScopePhosphor {
     /** Expose / resize: re-composite the frozen phosphor (no decay, no accumulate). */
     COMPOSITE: 'COMPOSITE',
     /** Signal-affecting change (trigger source/type/edge, generator): wipe the
-     *  afterglow WITHOUT re-stamping — the current trace is still anchored on the
+     *  afterglow WITHOUT re-stamping - the current trace is still anchored on the
      *  pre-change event; stay blank until the next genuinely new frame. */
     CLEAR: 'CLEAR',
   });
@@ -168,14 +168,14 @@ export class ScopePhosphor {
     this._w = 0;
     this._h = 0;
 
-    // Decay-clock state — Java lastAccumNanos / haveLastAccum (:105-106).
+    // Decay-clock state - Java lastAccumNanos / haveLastAccum (:105-106).
     /** ms timestamp of the last accumulate/reset/clear; base for the next dt. */
     this._lastAccumMs = 0;
     /** false until the first accumulate / after a reset; gates decay + seeding. */
     this._haveLastAccum = false;
 
     /** Set by {@link ScopePhosphor#clearPersistence} (volatile-style); consumed as
-     *  a CLEAR on the next render(), taking priority over the caller's kind — Java
+     *  a CLEAR on the next render(), taking priority over the caller's kind - Java
      *  clearRequested (:107-109) + its OR into CLEAR (:156, :186). */
     this._clearRequested = false;
   }
@@ -185,7 +185,7 @@ export class ScopePhosphor {
    * pairs whenever the size changes. On the first call it creates the WebGL2
    * context and requires EXT_color_buffer_float (half-float RGBA16F is fine). If
    * WebGL2, the extension, or FBO completeness is unavailable the instance marks
-   * itself unsupported and every subsequent render() returns false — the web
+   * itself unsupported and every subsequent render() returns false - the web
    * mirror of Java ensureBuffers() -> release() -> false (ScopePhosphor.java:356-395).
    *
    * @param {number} width  target width in device pixels
@@ -222,10 +222,10 @@ export class ScopePhosphor {
       return false;
     }
 
-    // Start the accumulation transparent — Java ensureBuffers clears the phosphor
+    // Start the accumulation transparent - Java ensureBuffers clears the phosphor
     // FBO on (re)allocation (ScopePhosphor.java:380-381).
     this._clearFbo(this._phosphorFbo);
-    // A resize discards the afterglow — force the seeding path next frame.
+    // A resize discards the afterglow - force the seeding path next frame.
     this._haveLastAccum = false;
     return true;
   }
@@ -233,18 +233,18 @@ export class ScopePhosphor {
   /**
    * Renders one persisted frame onto the engine's canvas and returns true, or
    * releases and returns false when persistence is off / unsupported. Does NOT
-   * touch the screen — the CALLER drawImage()s {@link ScopePhosphor#canvas}
+   * touch the screen - the CALLER drawImage()s {@link ScopePhosphor#canvas}
    * between backdrop and overlay (see the class-level compositing contract).
    * Faithful to Java render() (ScopePhosphor.java:144-222); the trigger/geometry
    * kind-override that Java does inline (:151-187) lives in {@link PhosphorGate}
-   * instead — pass the already-decided `kind` here.
+   * instead - pass the already-decided `kind` here.
    *
    * @param {string} kind one of {@link ScopePhosphor.Kind}
    * @param {CanvasImageSource} traceCanvas the app's fresh TRACE render (the
    *        waveforms only, on a transparent background) to upload as scratch
    * @param {number} persistSeconds resolved persistence: 0 = off, < 0 = infinite,
-   *        > 0 = decay time constant (tau) in seconds — Java persistenceSeconds().
-   * @param {boolean} frameIsNew whether this is a genuinely new captured frame —
+   *        > 0 = decay time constant (tau) in seconds - Java persistenceSeconds().
+   * @param {boolean} frameIsNew whether this is a genuinely new captured frame -
    *        Java renderer.isLastFrameNew(); only REALTIME consults it.
    * @param {number} nowMs current time in ms (e.g. performance.now()); the decay
    *        clock base. Java uses System.nanoTime() internally per call.
@@ -252,7 +252,7 @@ export class ScopePhosphor {
    *          false if the caller must direct-render the whole frame itself
    */
   render(kind, traceCanvas, persistSeconds, frameIsNew, nowMs) {
-    // Persistence off — Java render() :147-150.
+    // Persistence off - Java render() :147-150.
     if (persistSeconds === 0) {
       this.release();
       return false;
@@ -260,14 +260,14 @@ export class ScopePhosphor {
     if (this._unsupported) return false;
     if (!this.attach(this.canvas ? this.canvas.width : this._w,
                      this.canvas ? this.canvas.height : this._h)) {
-      // If never attached, there is nothing to size against — treat as unsupported
+      // If never attached, there is nothing to size against - treat as unsupported
       // fallback. (Callers normally attach() first; this guards a bare render().)
       return false;
     }
     if (!this._gl || !this._phosphorFbo) return false;
 
     // External clear (generator change etc.) forces CLEAR next frame, taking
-    // priority — Java :156-157 + :186. clearRequested is consumed here.
+    // priority - Java :156-157 + :186. clearRequested is consumed here.
     let effKind = kind;
     if (this._clearRequested) {
       this._clearRequested = false;
@@ -287,7 +287,7 @@ export class ScopePhosphor {
         this._resetPhosphor(nowMs);
         break;
       case ScopePhosphor.Kind.COMPOSITE:
-        // Phosphor frozen — just re-composite below.
+        // Phosphor frozen - just re-composite below.
         break;
       case ScopePhosphor.Kind.CLEAR:
         this._clearPhosphor(nowMs);
@@ -297,7 +297,7 @@ export class ScopePhosphor {
     }
 
     // Seed an empty phosphor (first frame, or a resize just reallocated + cleared
-    // it) from the current trace, so the persisted layer is never blank — vital
+    // it) from the current trace, so the persisted layer is never blank - vital
     // for a STOPPED scope whose only repaint is a COMPOSITE expose/resize
     // (Java :213-219).
     if (!this._haveLastAccum) {
@@ -310,7 +310,7 @@ export class ScopePhosphor {
   }
 
   /**
-   * Requests a {@link ScopePhosphor.Kind.CLEAR} on the next rendered frame —
+   * Requests a {@link ScopePhosphor.Kind.CLEAR} on the next rendered frame -
    * called (from any code path, e.g. a USER generator change arriving over the
    * bus) when non-render code invalidates the afterglow. Consumed as CLEAR by the
    * next render(), taking priority over the caller's kind and over RESET. Java
@@ -417,7 +417,7 @@ export class ScopePhosphor {
     return sh;
   }
 
-  /** Allocates a device-size RGBA16F texture (float colour — an 8-bit buffer has
+  /** Allocates a device-size RGBA16F texture (float colour - an 8-bit buffer has
    *  an integer decay floor that leaves a faint permanent ghost; RGBA16F decays
    *  cleanly to zero). Java newFloatTexture() (ScopePhosphor.java:397-408). */
   _newFloatTexture(w, h) {
@@ -478,7 +478,7 @@ export class ScopePhosphor {
       const fade = phosphorFade(dt, persistSeconds);
       this._decay(fade);
     }
-    // (Infinite persistence, persistSeconds < 0: never decay — just accumulate.)
+    // (Infinite persistence, persistSeconds < 0: never decay - just accumulate.)
     this._compositeScratch();
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -501,9 +501,9 @@ export class ScopePhosphor {
   }
 
   /** Merges the scratch texture into the bound buffer BRIGHTEST-WINS (per-component
-   *  max, blendEquation(MAX) — core in WebGL2; the blend factors are ignored under
+   *  max, blendEquation(MAX) - core in WebGL2; the blend factors are ignored under
    *  MAX). Source-over re-composited the trace's anti-aliased fringe pixels over
-   *  themselves on every new frame, converging them to full opacity — the persisted
+   *  themselves on every new frame, converging them to full opacity - the persisted
    *  trace turned solid-edged and fat. Under max a fringe pixel can never exceed its
    *  single-frame coverage, so the persisted trace keeps exactly the anti-aliasing
    *  of a persistence-off frame while decayed history fades underneath. Java
@@ -525,7 +525,7 @@ export class ScopePhosphor {
   }
 
   /** Signal-affecting change: wipe the afterglow to transparent WITHOUT stamping
-   *  the current trace — it is still anchored on the pre-change event, and with
+   *  the current trace - it is still anchored on the pre-change event, and with
    *  rare (glitch) triggers the decay would keep it visible for minutes. The
    *  buffer counts as valid (haveLastAccum = true) so the seeding path doesn't
    *  immediately re-stamp; the next genuinely new frame starts accumulation fresh.
@@ -562,7 +562,7 @@ export class ScopePhosphor {
     const gl = this._gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this._w, this._h);
-    gl.clearColor(0, 0, 0, 0);      // transparent — the backdrop is on the 2D canvas
+    gl.clearColor(0, 0, 0, 0);      // transparent - the backdrop is on the 2D canvas
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.enable(gl.BLEND);
     gl.useProgram(this._quadProg);
@@ -602,12 +602,12 @@ export class ScopePhosphor {
 
 /**
  * The per-frame kind-decision state machine extracted from Java
- * ScopePhosphor.render() (ScopePhosphor.java:151-187) — a pure, node-testable
+ * ScopePhosphor.render() (ScopePhosphor.java:151-187) - a pure, node-testable
  * class with NO GL and NO preferences dependency. Given the caller's requested
  * Kind and the current watched settings, it decides the EFFECTIVE Kind:
  *
  * <ul>
- *   <li>first observation (prefsSeen false): pass the caller's kind through — no
+ *   <li>first observation (prefsSeen false): pass the caller's kind through - no
  *       CLEAR/RESET override yet (Java gates every comparison on prefsSeen);</li>
  *   <li>external clear request OR a trigger-source change (mode/type/edge/channel)
  *       -> CLEAR (wipe without re-stamping; extClear takes priority);</li>
@@ -617,18 +617,18 @@ export class ScopePhosphor {
  * </ul>
  *
  * <p>Java resolves the effective persistence seconds from the OscPersistenceMode
- * enum (persistenceSeconds(), :410-413). The web PersistenceMode module (Agent A)
- * did not exist when this was written, so the gate takes `persistSeconds` as a
- * plain number and passes it straight through. If/when persistence-mode.js lands,
- * a caller can resolve it before {@link PhosphorGate#decide} — the gate itself
+ * enum (persistenceSeconds(), :410-413). The web has no PersistenceMode module, so
+ * the gate takes `persistSeconds` as a plain number and passes it straight
+ * through. If/when persistence-mode.js lands,
+ * a caller can resolve it before {@link PhosphorGate#decide} - the gate itself
  * only needs the resolved number.
  */
 export class PhosphorGate {
 
   constructor() {
-    // prefsSeen gates the first frame — Java prefsSeen (:113).
+    // prefsSeen gates the first frame - Java prefsSeen (:113).
     this._prefsSeen = false;
-    // Settings the current afterglow was accumulated under — Java lastTrigger* /
+    // Settings the current afterglow was accumulated under - Java lastTrigger* /
     // lastTimePerDiv / ... (:114-123).
     this._lastTriggerMode = null;
     this._lastTriggerType = null;

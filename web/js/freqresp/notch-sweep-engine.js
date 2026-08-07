@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -14,10 +14,10 @@
 // sweep loop: start() configures the DDS worklet with a LOOPING Farina
 // log-sweep (Hann-faded at each cycle seam) and acquires the shared capture
 // ring; the wizard then grabs the most recent one-period window whenever it
-// wants a fresh result (≈10 updates/s) — no per-sweep device open/close and no
+// wants a fresh result (≈10 updates/s) - no per-sweep device open/close and no
 // real-time recording wait.
 //
-// No alignment of the grabbed window to the sweep-cycle start is needed — but
+// No alignment of the grabbed window to the sweep-cycle start is needed - but
 // ONLY because the wizard makes the loop period a power of two, so
 // computeFromLogSweep's nextPow2(period) FFT is exactly one period: a CIRCULAR
 // transform. A window grabbed at any loop phase is then just a circular shift,
@@ -35,13 +35,13 @@
 //     then un-mutes at the real amplitude; close() stops the generator and restores the config.
 //     The kernel's looping logSweepNext IS the port of the Java generator's, so the seam-fade
 //     semantics are identical. The wizard UI no longer commandeers the DDS.
-//   - Capture uses an injected DEDICATED measurement capture (acquire/release) — a SEPARATE
+//   - Capture uses an injected DEDICATED measurement capture (acquire/release) - a SEPARATE
 //     input device line from the live scope/FFT capture, so a measurement never rides the live
 //     consumers' ring (Java opens its own device line per measurement: "no device-line reuse
 //     across captures"). Its 22 s SignalBuffer ring stands in for Java's private RING_PERIODS
 //     ring; latestPeriod() maps onto readLatest() with a session-start anchor so pre-session
 //     audio can never be served. The capture worklet delivers normalised [-1, +1] floats, so
-//     Java's raw-ADC-code/halfRange conversion (bitDepth/ditherBits) does not exist here — an
+//     Java's raw-ADC-code/halfRange conversion (bitDepth/ditherBits) does not exist here - an
 //     intended web divergence (no bit-depth selector).
 //   - sweepRef() re-renders the reference locally (renderLogSweep, the port of
 //     SignalGenerator#renderLogSweep the kernel itself uses) instead of taking
@@ -60,7 +60,7 @@ import { renderLogSweep } from './farina-sweep.js';
 /** Sweep duration (s) the power-of-two loop period is derived from.
  *  Mirrors TuneNotchWizardDialog.SWEEP_DURATION_SEC. */
 export const SWEEP_DURATION_SEC = 0.26;
-/** Lead-in (s) — the continuous stream uses ZERO lead-in (the loop never
+/** Lead-in (s) - the continuous stream uses ZERO lead-in (the loop never
  *  re-emits silence); kept only as the reported sweep parameter.
  *  Mirrors TuneNotchWizardDialog.SWEEP_LEAD_IN_SEC. */
 export const SWEEP_LEAD_IN_SEC = 0.05;
@@ -70,7 +70,7 @@ export const SWEEP_LEAD_IN_SEC = 0.05;
  *  Mirrors TuneNotchWizardDialog.FADE_SEC. */
 export const FADE_SEC = 0.025;
 /** Safety multiplier on the sweep-band margin (see {@link sweepBand}). The
- *  Hann fades drive the sweep energy |X|→0 at the swept ends, so the displayed
+ *  Hann fades drive the sweep energy |X|->0 at the swept ends, so the displayed
  *  band must sit well inside the fully-excited middle; >1 keeps the displayed
  *  edges clear of the fade and the log sweep's 1/f roll-off (which otherwise
  *  flatten the trace at the edges).
@@ -81,7 +81,7 @@ export const SWEEP_MARGIN_SAFETY = 2.5;
  * The loop period in samples: the power of two NEAREST to
  * SWEEP_DURATION_SEC · sampleRate. The period MUST be a power of two:
  * computeFromLogSweep sizes its FFT to nextPow2(period), so a power-of-two
- * period makes that FFT exactly ONE period — a CIRCULAR transform, not a
+ * period makes that FFT exactly ONE period - a CIRCULAR transform, not a
  * zero-padded linear one. Only then is a window grabbed at an arbitrary loop
  * phase just a circular shift that leaves |H(f)| unchanged; a linear FFT of an
  * unaligned window wraps the period and corrupts every bin into a spike.
@@ -101,7 +101,7 @@ export function powerOfTwoSweepSamples(sampleRate) {
 }
 
 /**
- * Per-side seam-fade length in samples ({@link FADE_SEC} at the given rate) —
+ * Per-side seam-fade length in samples ({@link FADE_SEC} at the given rate) -
  * the SAME value must drive the played loop seam and the deconvolution
  * reference. Mirrors {@code fadeSamples} in TuneNotchWizardDialog#sweepLoop.
  *
@@ -114,8 +114,8 @@ export function notchFadeSamples(sampleRate) {
 
 /**
  * The DDS sweep band: WIDER than the displayed [start, stop] so the Hann fades
- * — which zero the sweep energy |X| over FADE_SEC / SWEEP_DURATION_SEC of the
- * log range at each swept end — fall OUTSIDE the displayed band, with
+ * - which zero the sweep energy |X| over FADE_SEC / SWEEP_DURATION_SEC of the
+ * log range at each swept end - fall OUTSIDE the displayed band, with
  * {@link SWEEP_MARGIN_SAFETY} headroom for the log sweep's 1/f roll-off (so
  * the displayed edges aren't flattened). The view shows only [start, stop];
  * the widened ends are cut. Faithful port of TuneNotchWizardDialog#sweepBand.
@@ -131,66 +131,10 @@ export function sweepBand(startHz, stopHz) {
   return [startHz * Math.exp(-m), stopHz * Math.exp(m)];
 }
 
-/**
- * Finds the deepest notch (minimum linear magnitude) with sub-bin refinement.
- * The discrete bin minimum is only accurate to the bin spacing; a parabola is
- * fitted to the three points around it (in linear magnitude, where the
- * resolution-limited null is a smooth dip) to recover the SUB-bin null
- * frequency and depth — matching the smooth minimum the view draws.
- * Faithful port of TuneNotchWizardDialog#computeNotch.
- *
- * @param {ArrayLike<number>} freqs  ascending frequency grid (Hz)
- * @param {ArrayLike<number>} magLin linear magnitude at each grid point
- * @returns {{valid: boolean, hz: number, db: number}} the refined null
- *   frequency (Hz) and depth (dB); valid=false when the arrays are unusable
- */
-export function findDeepestNotch(freqs, magLin) {
-  if (!magLin || !freqs || magLin.length === 0 || magLin.length !== freqs.length) {
-    return { valid: false, hz: 0, db: 0 };
-  }
-  let idx = 0;
-  for (let i = 1; i < magLin.length; i++) {
-    if (magLin[i] < magLin[idx]) idx = i;
-  }
-  let f = freqs[idx];
-  let m = magLin[idx];
-  if (idx > 0 && idx < magLin.length - 1) {
-    const ym = magLin[idx - 1], y0 = magLin[idx], yp = magLin[idx + 1];
-    const denom = ym - 2.0 * y0 + yp;
-    if (denom > 0.0) {
-      const delta = Math.max(-0.5, Math.min(0.5, (0.5 * (ym - yp)) / denom));
-      f = freqs[idx] + delta * (freqs[idx + 1] - freqs[idx]);
-      const v = y0 - 0.25 * (ym - yp) * delta;
-      if (v > 0.0) m = v;
-    }
-  }
-  return { valid: true, hz: f, db: 20.0 * Math.log10(m) };
-}
-
-/**
- * Linear-interpolates the magnitude → dB at frequency {@code f} (the displayed
- * grid is monotonic ascending) — the measured attenuation AT the target
- * frequency that colours the wizard's target marker. Faithful port of
- * TuneNotchWizardDialog#dbAt.
- *
- * @param {ArrayLike<number>} freqs  ascending frequency grid (Hz)
- * @param {ArrayLike<number>} magLin linear magnitude at each grid point
- * @param {number} f                 frequency to sample (Hz)
- * @returns {number} magnitude in dB at f, or NaN when unusable/non-positive
- */
-export function dbAtFrequency(freqs, magLin, f) {
-  if (!freqs || !magLin || freqs.length < 2 || freqs.length !== magLin.length) {
-    return NaN;
-  }
-  let hi = 1;
-  while (hi < freqs.length - 1 && freqs[hi] < f) hi++;
-  const lo = hi - 1;
-  const span = freqs[hi] - freqs[lo];
-  let w = span > 0.0 ? (f - freqs[lo]) / span : 0.0;
-  w = Math.max(0.0, Math.min(1.0, w));
-  const m = magLin[lo] * (1.0 - w) + magLin[hi] * w;
-  return m > 0.0 ? 20.0 * Math.log10(m) : NaN;
-}
+// There is deliberately no findDeepestNotch (a sub-bin parabolic depth fit) and no dbAtFrequency
+// (a bin interpolation): both readouts come from the DRAWN curve - the wizard asks
+// FreqRespView.drawnMinimum / drawnDb, which is the only thing that agrees with what the operator
+// sees. A deep null is a V, not a parabola, so the fit reported a depth the curve never reaches.
 
 /**
  * Self-contained continuous play+capture session for the Tune-notch wizard's
@@ -210,14 +154,14 @@ export class NotchSweepEngine {
    */
   constructor({ capture, config, startGenerator, stopGenerator, postGen, sampleRate }) {
     this._capture = capture;                 // the dedicated MEASUREMENT capture (own device line)
-    this._config = config;                   // shared DDS config — snapshot/set/restore within
+    this._config = config;                   // shared DDS config - snapshot/set/restore within
     this._startGenerator = startGenerator;   // () => start the DDS generator (returns error key|null)
     this._stopGenerator = stopGenerator;     // () => stop the DDS generator
     this._postGen = postGen;
     this._sampleRate = sampleRate;
     // Session state, set up in start() and torn down in close().
     this._reader = null;         // SignalBufferReader over the measurement ring
-    this._startWritePos = 0;     // ring write position at start() — the anchor
+    this._startWritePos = 0;     // ring write position at start() - the anchor
     this._sweepSamples = 0;
     this._fadeSamples = 0;
     this._sweepRefBuf = null;    // cached one-period reference X(t)
@@ -228,8 +172,8 @@ export class NotchSweepEngine {
 
   /**
    * Deconvolution FFT bin spacing (Hz) for a single captured period of
-   * {@code sweepSamples} — sampleRate / nextPow2(sweepSamples). The wizard
-   * matches its output-grid density to this so the bin→grid interpolation
+   * {@code sweepSamples} - sampleRate / nextPow2(sweepSamples). The wizard
+   * matches its output-grid density to this so the bin->grid interpolation
    * never oversamples (oversampling facets the trace into a kink + comb).
    * Reflects the actual yRec length the wizard passes to computeFromLogSweep
    * (one period, leadIn 0).
@@ -242,7 +186,7 @@ export class NotchSweepEngine {
   }
 
   /**
-   * The looping sweep's one-period reference X(t) — the buffer
+   * The looping sweep's one-period reference X(t) - the buffer
    * computeFromLogSweep deconvolves against (unwindowed; the deconvolution
    * applies the seam fade itself via its fadeSamples parameter, exactly like
    * the Java generator's raw buffer).
@@ -260,17 +204,17 @@ export class NotchSweepEngine {
   /**
    * Acquires the shared capture ONCE, points the DDS worklet at a looping
    * Farina log-sweep (Hann fades at each cycle boundary: the kernel replays
-   * the buffer back-to-back and the per-side fades smooth the loop seam — the
+   * the buffer back-to-back and the per-side fades smooth the loop seam - the
    * SAME fadeSamples must be applied to the deconvolution reference), and
    * anchors the ring so only session samples are ever served.
    *
-   * @param {number} f0           sweep start (Hz) — the WIDENED band, see {@link sweepBand}
+   * @param {number} f0           sweep start (Hz) - the WIDENED band, see {@link sweepBand}
    * @param {number} f1           sweep stop (Hz)
    * @param {number} ampVrms      drive amplitude (V RMS)
    * @param {number} dacFsVrms    DAC full-scale voltage the amplitude scales against
    * @param {number} sweepSamples loop period in samples (a power of two)
    * @param {number} fadeSamples  per-side Hann seam-fade length in samples
-   * @param {string} outputChannels which DAC lane(s) carry the sweep — 'BOTH' (legacy) /
+   * @param {string} outputChannels which DAC lane(s) carry the sweep - 'BOTH' (legacy) /
    *   'LEFT' / 'RIGHT'; the un-driven lane is written as digital silence
    * @param {number} rightLaneScale right-lane full-scale scale (= fsLeft/fsRight) so a
    *   LINKED card with distinct DAC full-scales emits the same physical level on both
@@ -285,7 +229,7 @@ export class NotchSweepEngine {
     this._sweepRefBuf = renderLogSweep(f0, f1, sweepSamples, this._sampleRate);
 
     // Snapshot the shared DDS config, then point the generator at a SILENT looping Farina
-    // sweep and start it — this engine owns the generator lifecycle (the wizard no longer
+    // sweep and start it - this engine owns the generator lifecycle (the wizard no longer
     // touches engine.config or startGenerator; Java NotchSweepEngine owns its own playback).
     const c = this._config;
     this._savedGenConfig = {
@@ -296,14 +240,14 @@ export class NotchSweepEngine {
       outputChannels: c.outputChannels, rightLaneScale: c.rightLaneScale,
     };
     c.form = GenSignalForm.LOG_SWEEP;
-    c.ampVrms = 0;   // start silent — the postGen below un-mutes with the real amplitude
+    c.ampVrms = 0;   // start silent - the postGen below un-mutes with the real amplitude
     c.sweepStartHz = f0; c.sweepEndHz = f1;
     c.sweepDurationSec = sweepSamples / this._sampleRate;
     c.sweepLoop = true;
     c.sweepFadeInSec = fadeSamples / this._sampleRate;
     c.sweepFadeOutSec = fadeSamples / this._sampleRate;
     // Match the RIGHT lane's physical level to the LEFT-referenced digital amplitude, then
-    // gate the looping sweep to the selected DAC lane(s) — Java NotchSweepEngine.start's
+    // gate the looping sweep to the selected DAC lane(s) - Java NotchSweepEngine.start's
     // setChannelScale(1.0, rightLaneScale) + setOutputChannels. startGenerator reads these
     // off the config into the worklet's processorOptions, so they apply from block 0; the
     // pre-session values are restored by _restoreGenConfig on close (snapshot above).
@@ -369,7 +313,7 @@ export class NotchSweepEngine {
   /**
    * Live output-lane change WITHOUT restart: pushes the gate straight to the
    * running worklet (Java NotchSweepEngine.setOutputChannels). Only the gate is
-   * pushed live — the right-lane scale was fixed at start(). Updates the shared
+   * pushed live - the right-lane scale was fixed at start(). Updates the shared
    * config too so a later worklet retune keeps the same lane. No-op before
    * start() / after close().
    *
@@ -382,7 +326,7 @@ export class NotchSweepEngine {
   }
 
   /**
-   * Total samples captured since start() — drives the settle / fill
+   * Total samples captured since start() - drives the settle / fill
    * percentage.
    *
    * @returns {number} session sample count (0 before start)
@@ -415,7 +359,7 @@ export class NotchSweepEngine {
    * Ends the streaming session ONCE: releases the shared capture reference
    * (closing the input device if this was the last consumer). Restoring the
    * DDS worklet to the pre-session form is the CALLER's job (it commandeered
-   * the shared generator — mirror of FreqRespHost.runSweep's restore), unlike
+   * the shared generator - mirror of FreqRespHost.runSweep's restore), unlike
    * Java where the engine owned a private playback line. Idempotent; a stray
    * setBand() after close is a no-op.
    */

@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -85,7 +85,7 @@ export function applyCompensationInPlace(r, cal, correctAllBins, analyzer) {
     if (!Number.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0) {
       correctToneLobe(r, cal, r.fundamental2HzRefined, half, binWidth, linPerMag, fLo, fHi, done);
       // Dual-tone intermod PRODUCTS are discrete tones too (like the harmonics),
-      // so correcting only their lobes leaves the noise between them un-lifted —
+      // so correcting only their lobes leaves the noise between them un-lifted -
       // the whole-spectrum divide stays the "with noise" mode's job. The product
       // set is derived exactly as gui.fft.ImdAnalyzer does (its dnL/dnH loop,
       // orders k = 2..MAX_IMD_ORDER = 5); the CCIF/DIN formulas are replicated

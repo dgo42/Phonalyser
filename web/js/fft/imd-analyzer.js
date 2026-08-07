@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -18,7 +18,7 @@
 // All math runs on the raw dBFS spectrum (offset-invariant for peak picking,
 // the skirt walk and every figure of merit). The manual-fundamental override
 // splits the TRUE COMBINED level across the two tones by their measured ratio
-// (equal tones at 1 V together → each √(½) = −3.01 dBV).
+// (equal tones at 1 V together -> each √(½) = −3.01 dBV).
 
 /** Max IMD-order index (d2..d5). Array slots 0..1 are unused. */
 export const MAX_ORDER = 5;
@@ -41,7 +41,7 @@ export const TONE_SEARCH_BINS = 8;
  * @property {number} f2Mag  F2 V_rms in volts.
  * @property {number} f1DbV  F1 absolute level (dBV), possibly manual-anchored.
  * @property {number} f2DbV  F2 absolute level (dBV).
- * @property {number} f1DbFs F1 measured peak level (dBFS) — drives markers/autoscale.
+ * @property {number} f1DbFs F1 measured peak level (dBFS) - drives markers/autoscale.
  * @property {number} f2DbFs F2 measured peak level (dBFS).
  * @property {number} diffHz f2 − f1 (Hz).
  * @property {number} dfd2Pct DFD2 (f2 − f1) amplitude, % of |F1|+|F2|; NaN when
@@ -75,7 +75,7 @@ export const TONE_SEARCH_BINS = 8;
  *        when not supplied).
  * @param {number} f1Cmd commanded tone 1 frequency (Hz).
  * @param {number} f2Cmd commanded tone 2 frequency (Hz).
- * @param {number} dbvOffsetDb dBFS→dBV anchor (cached Preferences value).
+ * @param {number} dbvOffsetDb dBFS->dBV anchor (cached Preferences value).
  * @returns {?ImdResult} null when there isn't enough data to compute.
  */
 export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
@@ -113,7 +113,7 @@ export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
     out.f1Hz = Math.min(ref1, ref2);   // pairs with p1@fLow
     out.f2Hz = Math.max(ref1, ref2);   // pairs with p2@fHigh
   } else if (ref1Ok || ref2Ok) {
-    // Exactly one refined value — assign it to the slot whose peak is closer.
+    // Exactly one refined value - assign it to the slot whose peak is closer.
     const ref = ref1Ok ? ref1 : ref2;
     if (Math.abs(ref - p1.freqHz) <= Math.abs(ref - p2.freqHz)) {
       out.f1Hz = ref;
@@ -130,7 +130,7 @@ export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
   // Manual fundamental override: split the TRUE COMBINED level across the two
   // tones by their measured ratio. Only absolute dBV / V_rms outputs are
   // anchored; the spectrum dBFS is left untouched.
-  out.f1DbFs = p1.levelDbFs; // measured — drives the dBFS column + markers
+  out.f1DbFs = p1.levelDbFs; // measured - drives the dBFS column + markers
   out.f2DbFs = p2.levelDbFs;
   let f1Lvl = p1.levelDbFs;
   let f2Lvl = p2.levelDbFs;
@@ -156,9 +156,9 @@ export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
 
   // DFD2 (= f2 − f1) and DFD3 (= 2f1 − f2 / 2f2 − f1). DFD3 is the RMS of its
   // two sidebands; a sideband outside the measurable range (NaN) is skipped so
-  // the other still reports — SMPTE-style tone pairs routinely put 2f1 − f2
-  // below DC. Both absent → NaN (readout shows "---"). DFD2 goes NaN when its
-  // bin is out of range (readBinVrms → NaN, so the % divide propagates it).
+  // the other still reports - SMPTE-style tone pairs routinely put 2f1 − f2
+  // below DC. Both absent -> NaN (readout shows "---"). DFD2 goes NaN when its
+  // bin is out of range (readBinVrms -> NaN, so the % divide propagates it).
   const dfd2Mag = readBinVrms(amplitudeDbFs, binBw, out.f2Hz - out.f1Hz, dbvOffsetDb);
   const dfd3LowMag = readBinVrms(amplitudeDbFs, binBw, 2.0 * out.f1Hz - out.f2Hz, dbvOffsetDb);
   const dfd3HighMag = readBinVrms(amplitudeDbFs, binBw, 2.0 * out.f2Hz - out.f1Hz, dbvOffsetDb);
@@ -202,8 +202,8 @@ export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
   imdPwrSq += dfd3Sq;
   out.imdPwrPct = 100.0 * Math.sqrt(imdPwrSq) / refMag;
 
-  // TD+N as the scalar drop from total RMS to the fundamentals —
-  // (Vrms − √(F1² + F2²)) / Vrms — straight from the spectrum and
+  // TD+N as the scalar drop from total RMS to the fundamentals -
+  // (Vrms − √(F1² + F2²)) / Vrms - straight from the spectrum and
   // window-independent. F1 / F2 are stripped with the same dynamic skirt walk
   // FftAnalyzer uses: estimate a leakage-immune floor (10th-percentile bin
   // level) and walk outward from each tone's peak while the level stays above
@@ -219,7 +219,7 @@ export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
   let sumAll = 0.0;
   let sumResidual = 0.0;
   for (let b = 1; b < nBins; b++) {
-    // FS-relative bin voltage — TD+N is a ratio, the dBV offset cancels.
+    // FS-relative bin voltage - TD+N is a ratio, the dBV offset cancels.
     const vBin = Math.pow(10.0, amplitudeDbFs[b] / 20.0);
     const sq = vBin * vBin;
     sumAll += sq;
@@ -285,7 +285,7 @@ export function refinePeak(amplitudeDbFs, binBw, centreHz, searchBins) {
 
 /** Returns the V_rms voltage at the bin nearest freqHz: the dBFS bin lifted to
  *  dBV via dbvOffsetDb, then to volts. Frequencies at or below DC, or beyond the
- *  spectrum, return NaN — the product is not measurable at this sample rate. */
+ *  spectrum, return NaN - the product is not measurable at this sample rate. */
 function readBinVrms(amplitudeDbFs, binBw, freqHz, dbvOffsetDb) {
   if (!(freqHz > 0)) return NaN;
   const n = amplitudeDbFs.length;
@@ -331,7 +331,7 @@ function selectKth(a, len, k) {
   return a[k];
 }
 
-/** Middle value of the three — pivot choice for {@link selectKth}. */
+/** Middle value of the three - pivot choice for {@link selectKth}. */
 function medianOfThree(a, b, c) {
   if (a > b) { const t = a; a = b; b = t; }
   if (b > c) { b = c; }

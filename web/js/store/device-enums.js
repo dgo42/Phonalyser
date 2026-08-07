@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -7,13 +7,13 @@
 // Faithful port of org.edgo.audio.measure.enums.{DeviceChannelMode, OutputChannels}
 // as frozen constant objects. The string VALUES are the tokens stored in the
 // device-profile document (DeviceChannelMode.valueOf / OutputChannels.name), so
-// these constants interoperate with the persisted store — they just give the
+// these constants interoperate with the persisted store - they just give the
 // device-profile code named handles instead of bare string literals.
 //
 // Home rationale: the web has no general "enums" module (scope-enums.js is
 // scope-scoped), so the shared device-profile enum lives here at the store level
-// next to device-profiles.js, its sole consumer. OutputChannels — the generator
-// output-lane gate — is a sibling enum with no store consumer yet; it rides along
+// next to device-profiles.js, its sole consumer. OutputChannels - the generator
+// output-lane gate - is a sibling enum with no store consumer yet; it rides along
 // here per the porting brief so both device-facing enums share one home.
 
 /** How a device endpoint's channels are calibrated. MONO is a single physical
@@ -27,7 +27,7 @@ export const DeviceChannelMode = Object.freeze({
   INDEPENDENT: 'INDEPENDENT',
 });
 
-/** Output-lane gate for the signal generator — which physical DAC channel(s)
+/** Output-lane gate for the signal generator - which physical DAC channel(s)
  *  carry the tone. BOTH drives both lanes (the default); LEFT / RIGHT drive one
  *  lane and write digital silence to the other. */
 export const OutputChannels = Object.freeze({

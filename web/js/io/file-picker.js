@@ -1,10 +1,10 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Browser file open/save glue. No Java counterpart — the desktop app used a
+// Browser file open/save glue. No Java counterpart - the desktop app used a
 // java.io.File chosen via an SWT FileDialog; in the browser the equivalent is
 // the File System Access API (window.showSaveFilePicker / showOpenFilePicker),
 // with a graceful fallback to <a download> for saving and a hidden <input
@@ -42,11 +42,23 @@ function toBlob(data, mime) {
  * File System Access API when present (a real Save dialog, returns the chosen
  * name), otherwise triggers an `<a download>` and returns the suggested name.
  *
+ * THE TWO PATHS DIFFER IN WHAT THEY CAN PROMISE, which is what {@code viaDownload}
+ * is for. Through the dialog the bytes are written before this resolves, so
+ * {@code saved: true} really means saved and {@code saved: false} means the user
+ * cancelled. Through the anchor download there is NO cancel signal and no
+ * completion signal at all: the browser is simply handed the blob, and what it
+ * does next - ask, save silently, refuse, or write "name (1).wav" beside an
+ * existing file - is invisible here. {@code saved} is therefore always true on
+ * that path and means only "handed over", so a caller must not report it as a
+ * completed save. Check {@code viaDownload} and say the weaker, true thing.
+ *
  * @param {Uint8Array|ArrayBuffer|string|Blob} data
  * @param {string} suggestedName        Default file name (with extension).
  * @param {FileTypeSpec[]} [types=[]]    Filters for the native dialog.
- * @returns {Promise<{name:string, saved:boolean}>}
- *          {@code saved} is false only when the user cancels the native dialog.
+ * @returns {Promise<{name:string, saved:boolean, viaDownload:boolean}>}
+ *          {@code saved} is false only on the dialog path, when the user cancels;
+ *          {@code viaDownload} is true when no dialog existed and the file was
+ *          handed to the browser's downloader instead.
  */
 export async function saveFile(data, suggestedName, types = []) {
   const mime = types[0] ? types[0].accept : 'application/octet-stream';
@@ -64,9 +76,11 @@ export async function saveFile(data, suggestedName, types = []) {
       const w = await handle.createWritable();
       await w.write(blob);
       await w.close();
-      return { name: handle.name, saved: true };
+      return { name: handle.name, saved: true, viaDownload: false };
     } catch (err) {
-      if (err && err.name === 'AbortError') return { name: suggestedName, saved: false };
+      if (err && err.name === 'AbortError') {
+        return { name: suggestedName, saved: false, viaDownload: false };
+      }
       throw err;
     }
   }
@@ -81,7 +95,7 @@ export async function saveFile(data, suggestedName, types = []) {
   a.remove();
   // Revoke after the click has been dispatched.
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  return { name: suggestedName, saved: true };
+  return { name: suggestedName, saved: true, viaDownload: true };
 }
 
 /**
@@ -112,7 +126,7 @@ export async function pickSaveTarget(suggestedName, types = []) {
       throw err;
     }
   }
-  // No FS Access API → no real pre-pick; the caller derives the format from the
+  // No FS Access API -> no real pre-pick; the caller derives the format from the
   // suggested name and writeToTarget triggers an anchor download with that name.
   return { name: suggestedName, handle: null };
 }
@@ -122,10 +136,15 @@ export async function pickSaveTarget(suggestedName, types = []) {
  * the FS Access handle when present, otherwise an anchor download named
  * {@code name}.
  *
+ * The same asymmetry as {@link saveFile}: with a handle the bytes are written
+ * before this resolves; without one the blob is only handed to the browser's
+ * downloader, which reports nothing back. {@code viaDownload} tells the caller
+ * which of the two happened so it can word the status line truthfully.
+ *
  * @param {{name:string, handle:?FileSystemFileHandle}} target
  * @param {Uint8Array|ArrayBuffer|string|Blob} data
  * @param {string} [mime='application/octet-stream']
- * @returns {Promise<{name:string, saved:boolean}>}
+ * @returns {Promise<{name:string, saved:boolean, viaDownload:boolean}>}
  */
 export async function writeToTarget(target, data, mime = 'application/octet-stream') {
   const blob = toBlob(data, mime);
@@ -133,7 +152,7 @@ export async function writeToTarget(target, data, mime = 'application/octet-stre
     const w = await target.handle.createWritable();
     await w.write(blob);
     await w.close();
-    return { name: target.name, saved: true };
+    return { name: target.name, saved: true, viaDownload: false };
   }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -143,7 +162,7 @@ export async function writeToTarget(target, data, mime = 'application/octet-stre
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  return { name: target.name, saved: true };
+  return { name: target.name, saved: true, viaDownload: true };
 }
 
 /**

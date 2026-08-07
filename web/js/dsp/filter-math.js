@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -8,7 +8,7 @@
 
 import { FilterResponse } from './filter-types.js';
 
-/** Hard upper bound on the derived order — keeps the math well conditioned
+/** Hard upper bound on the derived order - keeps the math well conditioned
  *  in double precision and bounds Bessel's numeric search. */
 export const MAX_ORDER = 20;
 /** Smallest order any design may resolve to. */
@@ -19,7 +19,7 @@ const LANDEN_ITERS = 8;
 /** Iterations for the AGM and the bisection root finders. */
 const AGM_ITERS = 60;
 const BISECTION_ITERS = 60;
-/** Theta-null series term count (q < 1 ⇒ converges geometrically). */
+/** Theta-null series term count (q < 1 => converges geometrically). */
 const THETA_TERMS = 20;
 const CONVERGENCE_EPS = 1e-15;
 
@@ -107,10 +107,10 @@ export function besselHalfPowerScale(n) {
 }
 
 // ---------------------------------------------------------------------
-//  Complete elliptic integral of the first kind K(k) — AGM
+//  Complete elliptic integral of the first kind K(k) - AGM
 // ---------------------------------------------------------------------
 
-/** K(k) via the arithmetic–geometric mean; k is the modulus (not m = k²). */
+/** K(k) via the arithmetic-geometric mean; k is the modulus (not m = k²). */
 export function ellipticK(k) {
   const kk = Math.min(Math.abs(k), 1.0 - CONVERGENCE_EPS);
   let a = 1.0;
@@ -203,7 +203,7 @@ export function jacobiSnCnDn(uInK, k) {
 /**
  * Elliptic (Chebyshev) rational function R_n(ξ, w) in product
  * form (Orfanidis 2006, "Lecture Notes on Elliptic Filter Design",
- * eq. 2.13–2.19).  With modulus k = 1/ξ the passband zeros are
+ * eq. 2.13-2.19).  With modulus k = 1/ξ the passband zeros are
  *   z_r = cd((2r−1)·K/n, k),  r = 1..⌊n/2⌋,
  * and R_n is the pole/zero product
  *   even n: R_n(w) = f · Π (w²−z_r²)/(1−k²z_r²w²)
@@ -211,12 +211,12 @@ export function jacobiSnCnDn(uInK, k) {
  * with f chosen so R_n(1) = 1.  This form has the correct
  * stopband poles at w = 1/(k·z_r) > ξ, giving the equiripple
  * stopband, and equiripples in ±1 across the passband.  Reduces to the
- * Chebyshev polynomial as ξ → ∞ (k → 0).
+ * Chebyshev polynomial as ξ -> ∞ (k -> 0).
  */
 export function ellipticRational(n, xi, w) {
   const aw = Math.abs(w);
   if (xi <= 1.0) {
-    return chebyshevT(n, aw);   // degenerate selectivity → Chebyshev-like
+    return chebyshevT(n, aw);   // degenerate selectivity -> Chebyshev-like
   }
   const k = 1.0 / xi;
   const half = Math.trunc(n / 2);
@@ -311,7 +311,7 @@ export function rippleEpsilonSq(response, rippleDb, stopAttenDb) {
 /**
  * Minimum order meeting {@code stopAttenDb} at the stop edge (ratio ws).
  * Closed-form per family; Bessel is searched numerically and may fall
- * short → {@link #MAX_ORDER} (it has no ripple/closed-form order).
+ * short -> {@link #MAX_ORDER} (it has no ripple/closed-form order).
  */
 export function deriveOrder(response, rippleDb, stopAttenDb, ws) {
   switch (response) {

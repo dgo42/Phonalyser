@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -9,6 +9,7 @@
 // the remaining blueprint modules layer on around this engine.
 
 import { AudioEngine } from '../audio/backend.js';
+import { deviceErrorText } from '../audio/device-failure-reason.js';
 import { Qa40xDeviceFinder } from '../qa40x/qa40x-device-finder.js';
 import { Qa40xDeviceManager } from '../qa40x/qa40x-device-manager.js';
 import { QA40X_BACKEND } from '../qa40x/qa40x-rate-constraint.js';
@@ -16,12 +17,26 @@ import { FftViewCorrection } from '../fft/fft-view-correction.js';
 import { CorrectionStore } from '../common/correction-store.js';
 import { CalibrationDialog } from './calibration-dialog.js';
 import { CardEditorDialog } from './card-editor-dialog.js';
+import { NetDeviceManager } from '../net/net-device-manager.js';
+import { netManagerFacade } from '../net/net-manager-facade.js';
+import { BenchCards } from '../net/bench-cards.js';
+import { CalibrationCopyOffers } from '../net/calibration-copy-offers.js';
+import { namesNetDevice, remoteBackendOf } from '../net/net-device-ref.js';
+import { NetConnection } from '../net/net-connection.js';
+import { NetPreferences, makeServerEntry } from '../net/net-preferences.js';
+import { NetServerListDialog } from '../net/net-server-list-dialog.js';
+import { NetServerList } from '../net/net-server-list.js';
+import { IntervalTicker } from '../net/ticker.js';
+import { ServerProber, wsUrlOf } from '../net/server-prober.js';
+import { stackOverOpenModals } from '../ui/modal-stack.js';
 import { FftView } from '../ui/fft-view.js';
 import { ScopeView } from '../ui/scope-view.js';
 import { GenSignalForm, isDualTone, rawRms } from '../generator/dds-kernel.js';
 import { Preferences } from '../store/preferences.js';
 import { DeviceProfileStore } from '../store/device-profiles.js';
 import { loadDeviceCatalog } from '../store/device-catalog.js';
+import { createConfigPorts } from '../store/config-port.js';
+import { JsonConfigDialog } from './json-config-dialog.js';
 import { t, initBase, setLocale } from '../i18n/i18n.js';
 import { LOCALES } from '../i18n/locales.js';
 import { WavWriter, AiffWriter, readWav, readAiff } from '../io/wav.js';
@@ -60,38 +75,61 @@ const prefs = Preferences.instance();  // load() runs in the constructor
 // shipped devices.yaml catalog on first run + runs the once-per-contentVersion upgrade merge
 // in its constructor (Preferences.loadDevices at startup); its apply* setters push per-channel
 // full-scale into prefs at device selection (wired in PreferencesDialog). Constructed in init()
-// once the catalog YAML has been fetched + parsed (an async load — see loadDeviceCatalog).
+// once the catalog YAML has been fetched + parsed (an async load - see loadDeviceCatalog).
 let deviceStore;
-// Selectable sample rates — identical to the Java list (sound/*DeviceManager, cli/util/SampleRates):
+// Selectable sample rates - identical to the Java list (sound/*DeviceManager, cli/util/SampleRates):
 // 8/11.025/16/22.05 kHz + 44.1/48 kHz and their multiples up to 768 kHz. No 32 kHz (Java omits it).
 const RATES = [8000, 11025, 16000, 22050, 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000];
-// GenSignalForm token → localized display label for the #signalForm select.
+// GenSignalForm token -> localized display label for the #signalForm select.
 const formLabel = (form) => t(`generator.signalForm.${form}`);
-// GenSignalForm token → per-form waveform pictogram (web/assets/icons/signal-<kebab>.svg).
+// GenSignalForm token -> per-form waveform pictogram (web/assets/icons/signal-<kebab>.svg).
 const formIcon = (form) => `assets/icons/signal-${form.toLowerCase().replace(/_/g, '-')}.svg`;
 
 // The audio backend (Java sound.AudioBackend) and the QA40x device manager it dispatches to.
 // Both are built in init(), NOT here: the manager needs the DeviceProfileStore, which exists only
 // once the device-catalog fetch has resolved (see `deviceStore` above).
 //
-// LATE CONSTRUCTION of the engine — not late injection into it, and not a manager supplier —
+// LATE CONSTRUCTION of the engine - not late injection into it, and not a manager supplier -
 // because that is the ownership Java has: AudioBackend OWNS its per-backend managers and hands
 // them out (AudioBackend.qa40x() / manager(type) / qa40xManager()), and the web engine takes the
 // FINISHED manager through its constructor, which is its only seam. So the engine is what waits
 // for the store, not the manager for the engine. Everything at module scope that needs the engine
 // at CONSTRUCTION time (the FFT view correction + view, the FreqResp pane, the predistortion host,
 // the three engine callbacks) is built in that same init block; everything else reaches it from a
-// callback, which cannot run earlier — the startup splash covers the UI until the load-time scan
+// callback, which cannot run earlier - the startup splash covers the UI until the load-time scan
 // settles, so no pane handler can fire in between.
 let engine;
 let qa40xManager;
+// The net backend (doc/NET-PROTOCOL.md): the session + remote catalogue, and the remembered
+// servers block the server-list modal edits. Both are constructed in init's modals step, where
+// the Preferences store is already loaded - registration replays the stored block into it.
+let netManager;
+let netPreferences;
+/**
+ * The Phonalyser server that SERVED THIS PAGE, as `GET /info` on the page's own origin answered
+ * it (spec §3) - null when the origin is not one: docs/web on GitHub Pages, a dev server, a
+ * file:// open. Probed ONCE at load, and two things read it:
+ *
+ *  - the auto-connect below: the server the operator loaded the client from is the server they
+ *    meant, whichever packaging the bundle is (the embedded build flag used to be the only test,
+ *    so a FULL bundle served from the same place connected to nothing);
+ *  - the backend combo: a page served from there is plain http from a LAN host and therefore not
+ *    a secure context, so it offers no local backends at all.
+ *
+ * One fact, one probe, two consumers - the alternative is two tests that can disagree.
+ */
+let servingServer = null;
+/** How long the operator waits for a bench to answer a dial - the whole handshake, socket and
+ *  hello together (NetConnection.open's budget). One second is what a user reads as the app
+ *  working; the request timeouts behind it are the generous ones. */
+const CONNECT_TIMEOUT_MS = 3000;
 // The FFT side's loaded-.frc store (Java FftController owns
 // new CorrectionStore("FFT", Events.FFT_CALIBRATION_CHANGED)). FftViewCorrection READS it, the
 // predistortion bridge reads it live, and FftTabControl mutates it from the calibration rows.
 // Silent (null change callback): the sole mutator, rebuildCalEntries, does its own single re-render
 // after a clearAll()+addEntry batch, so a per-mutation callback would only re-render redundantly.
 const fftCorrectionStore = new CorrectionStore('FFT', null);
-// Render-time FFT spectral corrections (.frc de-embed + mains + IMD) — applied in the VIEW path
+// Render-time FFT spectral corrections (.frc de-embed + mains + IMD) - applied in the VIEW path
 // (engine.onResult below), NOT in the engine; the coherent accumulator stays raw. Both take the
 // engine at construction, so both are built in init's audio-backend block (see `engine`).
 let fftViewCorrection;
@@ -103,6 +141,12 @@ let confirmModal;
 let alertModal;   // the shared one-button alert modal (device-error surface; constructed in init's modals step)
 let prefsDialog;   // the Preferences dialog (constructed in init's modals step)
 let calibrationDialog;   // the unified ADC/DAC calibration dialog (constructed after initStepFields)
+let benchCalibration;   // where a calibrate WRITE goes while a server's backend is selected (init's modals step)
+/** The human LABEL of the selected input device - what the card recognition patterns match (the
+ *  <select> value carries a Web Audio deviceId). The Preferences dialog owns the combo; before it
+ *  is built the DOM answers directly. */
+const inputDeviceLabel = () => (prefsDialog ? prefsDialog.inputDeviceLabel()
+  : $('#inSel option:selected').text());
 let scopeTabControl;   // the oscilloscope settings strip (constructed in init's modals step)
 let fftTabControl;   // the FFT settings strip (constructed in init's modals step)
 let genPane;   // the generator pane (constructed in init, after initStepFields)
@@ -115,11 +159,11 @@ let mainTab;   // the main tab (the rAF render-frame driver + the 3-pane collaps
 // scopePane instance.
 
 // ADC/DAC re-calibration rescales every measured voltage (ADC) or the generated
-// loopback level (DAC), making the accumulated running statistics inconsistent —
+// loopback level (DAC), making the accumulated running statistics inconsistent -
 // clear the scope measurement history on a calibration change (Java ScopeView
-// adcFsVoltageRms / dacFsVoltageAmpl onChange → clearMeasurementHistory). Java
+// adcFsVoltageRms / dacFsVoltageAmpl onChange -> clearMeasurementHistory). Java
 // FftView wires the SAME two prefs to resetStatistics(), so the FFT cross-tick
-// average must be restarted too — else it keeps folding pre-calibration frames at
+// average must be restarted too - else it keeps folding pre-calibration frames at
 // the old scale into the displayed spectrum. Reset the accumulator while recording.
 // `engine` is null-checked because the calibration prefs can move before init's audio-backend
 // block has run (the device-profile store applies a card's full-scale as it resolves one).
@@ -128,7 +172,7 @@ const onCalChange = () => {
   if (engine && engine.fft.recording) engine.resetAnalyses();
   // The amplitude distribution goes with the running statistics: counts gathered at a different
   // calibration describe a different measurement, and merging them would present two populations
-  // as one distribution. (A V/div or range change does NOT come through here — those relabel the
+  // as one distribution. (A V/div or range change does NOT come through here - those relabel the
   // axis rather than recounting, and must keep their counts.)
   if (engine) engine.scope.resetHistograms();
 };
@@ -140,14 +184,14 @@ prefs.adcFsVoltageRmsRight.addListener(onCalChange);
 prefs.dacFsVoltageAmpl.addListener(onCalChange);
 prefs.dacFsVoltageAmplRight.addListener(onCalChange);
 
-// A DAC full-scale move — a card RANGE switch, or a DAC re-calibration — must NOT change the
+// A DAC full-scale move - a card RANGE switch, or a DAC re-calibration - must NOT change the
 // generated LEVEL. The amplitude the user typed is absolute volts; the DDS derives its normalised
 // amplitude as Vrms/(fsPeak·rawRms(form)), so the physical output is Vrms only while the kernel
 // knows the CURRENT full scale. engine.config.dacFsVoltageAmpl is otherwise refreshed only by
 // readConfig() (a start / a settings commit), which a range switch does not run: the worklet kept
 // the OLD full scale while the hardware moved to the new one, and the trace jumped by fsNew/fsOld
-// on every range change (maintainer report, 2026-07-25). Push the new scale — and the right-lane
-// ratio fsLeft/fsRight, which the same card edit moves — then retune, which is a no-op unless the
+// on every range change. Push the new scale - and the right-lane
+// ratio fsLeft/fsRight, which the same card edit moves - then retune, which is a no-op unless the
 // generator is running. The amplitude CEILING is a separate concern, handled by syncAmpMax.
 const syncDacFullScale = () => {
   if (!engine) return;   // the card store can resolve a profile before init built the engine
@@ -161,13 +205,13 @@ prefs.dacFsVoltageAmplRight.addListener(syncDacFullScale);
 // ----- generator amplitude minimum (Java AMP_MIN_VRMS) + frequency minimum -----
 const AMP_MIN_VRMS = 1e-9;
 // Amplitude CEILING (no-clip), in the canonical Vrms the amplitude fields store. The DDS drives
-// amplitude = Vrms / (fsPeak · rawRms(form)) (dds-kernel), so digital full scale — the point where
-// the waveform starts to clip — is exactly Vrms = fsPeak · rawRms(form). It is therefore
+// amplitude = Vrms / (fsPeak · rawRms(form)) (dds-kernel), so digital full scale - the point where
+// the waveform starts to clip - is exactly Vrms = fsPeak · rawRms(form). It is therefore
 // WAVEFORM-AWARE: a sine tops out at fsPeak/√2, a rectangle at fsPeak, a triangle at fsPeak/√3, a
 // dual tone at fsPeak·√((w1²+w2²)/2), and so on. It reads the LIVE DAC full-scale calibration and
-// the LIVE form / dual-tone split on every call — never a value snapshotted at construction.
+// the LIVE form / dual-tone split on every call - never a value snapshotted at construction.
 // (Capping at the raw PEAK voltage let a sine entry run √2 (+3 dB) past full scale.) This one
-// ceiling backs all three unit views — V, dBV and dBFS (where it is exactly 0 dBFS).
+// ceiling backs all three unit views - V, dBV and dBFS (where it is exactly 0 dBFS).
 const ampMaxVrms = () => prefs.getDacFsVoltageAmpl()
   * rawRms(prefs.genSignalForm.get(), sfVal('amp1Pct', 50) / 100, sfVal('amp2Pct', 50) / 100);
 // The frequency-response sweep and the tune-notch wizard always emit a SINE-family signal
@@ -190,14 +234,14 @@ let stepFieldsAmpMaxSync = () => {};
 
 // Two-way binding (Java Bindings.stepField): a field edit writes the pref (the field's own
 // onChange) AND an external pref change (preset load, DAC calibration, other generator code)
-// pushes back into the field. setValue is silent (no onChange — numeric-step-field.js:504), so
+// pushes back into the field. setValue is silent (no onChange - numeric-step-field.js:504), so
 // the value-guarded listener can never feed back into a loop.
 function bidiBind(field, pref) {
   if (field) pref.addListener((v) => { if (field.getValue() !== v) field.setValue(v); });
 }
 
 /** 1-2-5 decade ladder over [min .. max] inclusive (the scope V/div and t/div
- *  step series), e.g. 1µ, 2µ, 5µ, 10µ, … 200, 500. */
+ *  step series), e.g. 1µ, 2µ, 5µ, 10µ, ... 200, 500. */
 function ladder125(min, max) {
   const out = [];
   const REL = 1 + 1e-9;
@@ -213,11 +257,11 @@ function ladder125(min, max) {
 }
 
 // Scope V/div + t/div 1-2-5 ladders (Java ScopeTabControl LIST policy): V/div
-// 1 nV … 500 V, t/div 1 µs … 1 s — the exact OscParse.VOLT_PER_DIV / TIME_PER_DIV
+// 1 nV ... 500 V, t/div 1 µs ... 1 s - the exact OscParse.VOLT_PER_DIV / TIME_PER_DIV
 // step lists (voltsPerDivTargets/timePerDivTargets). Shared by the step fields AND
 // the scope view's Ctrl-wheel zoom, so the wheel snaps to the SAME series the field
 // arrows walk. (V/div starts at 1 nV to match Java, which the model min already
-// permits — V_PER_DIV_MIN = 1e-9.)
+// permits - V_PER_DIV_MIN = 1e-9.)
 const SCOPE_VDIV_SERIES = ladder125(1e-9, 500);
 const SCOPE_TDIV_SERIES = ladder125(1e-6, 1);
 // The Ctrl-wheel V/div + Ctrl+Shift-wheel t/div zoom step along the same ladders.
@@ -239,7 +283,7 @@ function initStepFields() {
 
   // Frequency: FREQUENCY family, PERCENT policy, [GEN_FREQ_MIN_HZ .. outRate/2].
   // toneHz doubles as the single-tone Frequency AND the dual-tone Frequency 1; it writes the
-  // matching pref per form (genDualToneFreq1Hz in dual, else genFrequencyHz) — Java keeps them
+  // matching pref per form (genDualToneFreq1Hz in dual, else genFrequencyHz) - Java keeps them
   // as distinct fields, so their defaults (1 kHz vs 19 kHz) differ.
   const fTone = mk('toneHz', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
     (v) => {
@@ -255,7 +299,7 @@ function initStepFields() {
 
   // Amplitude: AMPLITUDE family, PERCENT policy, canonical V RMS. dBV display is sticky +
   // persisted via genAmplitudeDbvDisplay. fsAmplSupplier (the live DAC PEAK full scale) also
-  // enables dBFS entry — 0 dBFS ≡ a full-scale SINE (AES17), so the anchor is fsPeak/√2.
+  // enables dBFS entry - 0 dBFS ≡ a full-scale SINE (AES17), so the anchor is fsPeak/√2.
   const fAmp = mk('ampDbfs', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: ampMaxVrms(), maxDecimals: 5,
     fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
     (v) => {
@@ -268,20 +312,20 @@ function initStepFields() {
   // Keep the no-clip ceiling live (Bindings.onChange(... ampField::setMax)): it moves with the DAC
   // full-scale CALIBRATION and with the waveform (and its dual-tone split), so re-apply it on every
   // input that feeds ampMaxVrms(). setMax re-clamps the current value, so switching to a form with
-  // a lower headroom (e.g. rectangle → sine) trims an now-over-scale amplitude down to the new max.
+  // a lower headroom (e.g. rectangle -> sine) trims an now-over-scale amplitude down to the new max.
   const syncAmpMax = () => fAmp.setMax(ampMaxVrms());
   prefs.dacFsVoltageAmpl.addListener(syncAmpMax);
   prefs.genSignalForm.addListener(syncAmpMax);
   stepFieldsAmpMaxSync = syncAmpMax;   // the dual-tone split fields call it from their onChange
 
   // Dither depth: DITHER-policy NumericStepField (whole/fractional bits OR a full-scale-aware dBV
-  // VIEW of the same value) — Java GeneratorPane ditherField. fsAmplSupplier = the DAC PEAK
+  // VIEW of the same value) - Java GeneratorPane ditherField. fsAmplSupplier = the DAC PEAK
   // full-scale (Vpeak) so the dBV view tracks recalibration. The dBV is the PHYSICAL TPDF level
-  // relative to that full-scale — window-invariant, NO FFT-window term: since the analyser's NENBW
-  // correction the integrated noise metrics (N, SNR, …) read the true level, so the entered dBV
+  // relative to that full-scale - window-invariant, NO FFT-window term: since the analyser's NENBW
+  // correction the integrated noise metrics (N, SNR, ...) read the true level, so the entered dBV
   // checks against them with any analysis window. maxBits = 32. The TPDF dither is applied LIVE to
   // the generated signal in the dds worklet (Java PcmQuantizer live-apply) so it shows
-  // on the FFT floor exactly where the dBV view sets it — hence the engine push below, mirroring the
+  // on the FFT floor exactly where the dBV view sets it - hence the engine push below, mirroring the
   // amplitude field. Seed value + display unit BEFORE the change path re-enters (setValue /
   // setLogDisplay never fire onChange). On a committed change: persist the bits + the bits/dBV display
   // choice, push the depth to the running worklet, then re-annotate the "Dither" caption.
@@ -296,7 +340,7 @@ function initStepFields() {
   if (fDither) {
     fDither.setValue(prefs.genDitherBits.get()); fDither.setLogDisplay(prefs.genDitherDbvDisplay.get());
     // Render the "Dither" caption's companion-unit bracket NOW: initStepFields runs AFTER the first
-    // applyPrefsToUi → seedGeneratorControls (which called updateDitherLabel while the field didn't
+    // applyPrefsToUi -> seedGeneratorControls (which called updateDitherLabel while the field didn't
     // yet exist), so without this the bracket stays empty until the first change. genPane is built
     // before initStepFields, so it's present here.
     if (genPane) genPane.updateDitherLabel();
@@ -309,17 +353,17 @@ function initStepFields() {
   mk('calLeftValue', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 1000, maxDecimals: 5 }), () => {});
   mk('calRightValue', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 1000, maxDecimals: 5 }), () => {});
 
-  // FFT THD "Manual fundamental" reference level — unit-aware AMPLITUDE field (accepts dBV), g28.
-  // onChange placeholder — FftTabControl.bind() rebinds it to the THD-settings commit path
-  // (pref-write + live readConfig / stopped-state recompute, #24 — NO restartFft).
+  // FFT THD "Manual fundamental" reference level - unit-aware AMPLITUDE field (accepts dBV).
+  // onChange placeholder - FftTabControl.bind() rebinds it to the THD-settings commit path
+  // (pref-write + live readConfig / stopped-state recompute - NO restartFft).
   // NO fsAmplSupplier on purpose: this is an ADC-side reference level (external levels routinely
-  // far above DAC full scale), so a dBFS figure would be meaningless — the model refuses dBFS here.
+  // far above DAC full scale), so a dBFS figure would be meaningless - the model refuses dBFS here.
   const fManFund = mk('fftManualFund', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 200, maxDecimals: 5 }), () => {});
   if (fManFund) { fManFund.model.setLogDisplay(prefs.fftManualFundDbvDisplay.get()); fManFund.setValue(prefs.fftManualFundVrms.get()); }
 
-  // FFT THD distortion band + harmonic counts (#4) — the Java THD tab's four NumericStepFields
+  // FFT THD distortion band + harmonic counts - the Java THD tab's four NumericStepFields
   // (FftTabControl.buildThdTab): distMin/distMax FREQUENCY [0 .. inRate/2] 9 dec (:570/:594),
-  // maxThd 2..9 / maxCalc 9..50, step 1, 0 dec (:640/:654). onChange is a placeholder here —
+  // maxThd 2..9 / maxCalc 9..50, step 1, 0 dec (:640/:654). onChange is a placeholder here -
   // FftTabControl.bind() rebinds each to the THD-settings commit path (like averages/manualFund).
   const fDistMin = mk('thdDistMin', new NumericStepModel({ family: F.FREQUENCY, min: 0, max: inRate() / 2, maxDecimals: 9 }), () => {});
   if (fDistMin) fDistMin.setValue(prefs.fftDistMinHz.get());
@@ -330,25 +374,25 @@ function initStepFields() {
   const fCalcMaxH = mk('thdCalcMaxH', new NumericStepModel({ family: F.NONE, min: 9, max: 50, wheelStep: 1, arrowStep: 1, decimals: 0 }), () => {});
   if (fCalcMaxH) fCalcMaxH.setValue(prefs.fftCalcMaxHarmonic.get());
 
-  // FFT "Averages" — Java averagesField: NumericStepField(UnitFamily.NONE, AVERAGES_OFF=1,
+  // FFT "Averages" - Java averagesField: NumericStepField(UnitFamily.NONE, AVERAGES_OFF=1,
   // POSITIVE_INFINITY, AVERAGES_SERIES {2,4,8,16,32,64,128,∞}, 0 decimals, width 70). LIST policy:
   // the wheel/arrows snap along the series; ∞ is the top entry, NOT a separate checkbox. Typing
-  // accepts any count ≥ 1 plus two named tokens: "∞" or any prefix of "Infinity" (i / in / inf …),
-  // which max=Infinity enables, and any prefix of "Off" (o / of / off) → 1 (numeric-step-field.js
+  // accepts any count ≥ 1 plus two named tokens: "∞" or any prefix of "Infinity" (i / in / inf ...),
+  // which max=Infinity enables, and any prefix of "Off" (o / of / off) -> 1 (numeric-step-field.js
   // commit()).
-  // onChange placeholder — FftTabControl.bind() rebinds it to pref-write + live readConfig
-  // (#7/#26: an averages change must NOT restart/reset the accumulator).
+  // onChange placeholder - FftTabControl.bind() rebinds it to pref-write + live readConfig
+  // (an averages change must NOT restart/reset the accumulator).
   const fAverages = mk('averages', new NumericStepModel({ family: F.NONE, min: FFT_AVERAGES_OFF,
     max: Infinity, series: FFT_AVERAGES_SERIES, maxDecimals: 0 }), () => {});
-  // 1 renders and parses as "Off" — typed in full or as any prefix (o / of / off),
+  // 1 renders and parses as "Off" - typed in full or as any prefix (o / of / off),
   // the same shortcut the generator's dither field takes.
   if (fAverages) fAverages.model.setNamedValue(FFT_AVERAGES_OFF, OFF_LABEL);
   if (fAverages) fAverages.setValue(prefs.fftAverages.get());
 
-  // FFT "Stop after N averages" count — Java stopAfterNField: NumericStepField(UnitFamily.NONE,
+  // FFT "Stop after N averages" count - Java stopAfterNField: NumericStepField(UnitFamily.NONE,
   // STOP_AFTER_MIN=2, STOP_AFTER_MAX=1_000_000, STOP_AFTER_WHEEL_STEP=100, arrowStep 1, 0 dec).
   // FIXED policy: the wheel jumps in hundreds (the count ranges to a million), arrows step by 1.
-  // onChange placeholder — FftTabControl.bind() rebinds it to the pref-write + live readConfig.
+  // onChange placeholder - FftTabControl.bind() rebinds it to the pref-write + live readConfig.
   const fStopAfterN = mk('fftStopAfterN', new NumericStepModel({ family: F.NONE, min: 2, max: 1000000,
     wheelStep: 100, arrowStep: 1, decimals: 0 }), () => {});
   if (fStopAfterN) fStopAfterN.setValue(prefs.fftStopAfterN.get());
@@ -358,7 +402,7 @@ function initStepFields() {
     () => {
       const duty = (sfVal('duty', 50) || 50) / 100;
       const form = $('#signalForm').val();
-      // Write ONLY the active form's duty pref — each form remembers its own (Java dutyField).
+      // Write ONLY the active form's duty pref - each form remembers its own (Java dutyField).
       if (form === GenSignalForm.TRIANGLE) prefs.genTriangleDuty.set(duty);
       else if (form === GenSignalForm.RECTANGLE) prefs.genRectangleDuty.set(duty);
       engine.config.rectDuty = duty; engine.config.triDuty = duty;
@@ -375,7 +419,7 @@ function initStepFields() {
     (v) => { genPane.applyDualToneAmpSplit('amp2Pct', v); stepFieldsAmpMaxSync(); });
   fAmp2.setValue(100 - prefs.genDualToneSplitPct.get());
 
-  // Sweep fields (LINEAR_SWEEP / LOG_SWEEP) — NumericStepField like the scope's, faithful to
+  // Sweep fields (LINEAR_SWEEP / LOG_SWEEP) - NumericStepField like the scope's, faithful to
   // Java sweep*Field: Start/Stop FREQUENCY [0.01 .. Nyquist] 9 dec; Duration/Fade-in/Fade-out
   // TIME (min 0.001 / 0, 3 dec). Wheel/arrow/keyboard stepping + unit auto-ranging come free.
   // Java GeneratorController sweep-pref bindings (4887ecb): a running Farina (LOG) sweep
@@ -401,7 +445,7 @@ function initStepFields() {
   const fSwFo = mk('sweepFadeOut', new NumericStepModel({ family: F.TIME, min: 0, max: 1000000, maxDecimals: 3 }),
     sweepOnChange(prefs.genSweepFadeOutSec, 'sweepFadeOutSec'));
   if (fSwFo) fSwFo.setValue(prefs.genSweepFadeOutSec.get());
-  // WAV-export duration — TIME NumericStepField (Java durationField).
+  // WAV-export duration - TIME NumericStepField (Java durationField).
   const fGenDur = mk('genDuration', new NumericStepModel({ family: F.TIME, min: 0.001, max: 1000000, maxDecimals: 3 }),
     (v) => prefs.genWavDurationSeconds.set(v));
   if (fGenDur) fGenDur.setValue(prefs.genWavDurationSeconds.get());
@@ -410,14 +454,14 @@ function initStepFields() {
   bidiBind(fTone, prefs.genFrequencyHz);
   bidiBind(fTone2, prefs.genDualToneFreq2Hz);
   bidiBind(fAmp, prefs.genAmplitudeVrms);
-  bidiBind(fDither, prefs.genDitherBits);   // external genDitherBits change (reanchor persist / reload) → field
+  bidiBind(fDither, prefs.genDitherBits);   // external genDitherBits change (reanchor persist / reload) -> field
   bidiBind(fSwStart, prefs.genSweepFreqStartHz);
   bidiBind(fSwStop, prefs.genSweepFreqEndHz);
   bidiBind(fSwDur, prefs.genSweepDurationSec);
   bidiBind(fSwFi, prefs.genSweepFadeInSec);
   bidiBind(fSwFo, prefs.genSweepFadeOutSec);
   bidiBind(fGenDur, prefs.genWavDurationSeconds);
-  // FFT averages — two-way (Java Bindings.stepField): a preset recall pushes the new count
+  // FFT averages - two-way (Java Bindings.stepField): a preset recall pushes the new count
   // (or ∞) back into the field display.
   bidiBind(fAverages, prefs.fftAverages);
 
@@ -430,7 +474,7 @@ function initStepFields() {
     (v) => prefs.freqRespStopHz.set(v));
   if (fStop) fStop.setValue(prefs.freqRespStopHz.get());
   // fsAmplSupplier enables dBFS entry (as on the generator). NB: unlike the generator this field
-  // has no live setMax listener, so its max is frozen at construction — the supplier still reads live.
+  // has no live setMax listener, so its max is frozen at construction - the supplier still reads live.
   const fAmpFr = fr('frAmp', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: sweepAmpMaxVrms(), maxDecimals: 5,
     fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
     (v) => { prefs.freqRespAmplitudeVrms.set(v); prefs.freqRespAmplitudeDbvDisplay.set(fAmpFr.model.isLogDisplay()); });
@@ -457,7 +501,7 @@ function initStepFields() {
   }
 
   // Audio-format edits move the Nyquist ceiling of the sweep band edges and the
-  // sample-rate/2 entry of the sweep-points series — re-pull both on an input-rate
+  // sample-rate/2 entry of the sweep-points series - re-pull both on an input-rate
   // change (Java FreqRespTabControl AUDIO_FORMAT_CHANGED listener).
   $('#inRate').on('input-sample-rate-change change', () => {
     const nyquist = inRate() / 2;
@@ -471,7 +515,7 @@ function initStepFields() {
   });
 
   // Two-way bind the FreqResp step fields to their prefs (Java Bindings.stepField /
-  // stepFieldInt are two-way): an external write — preset recall, wizard — updates the
+  // stepFieldInt are two-way): an external write - preset recall, wizard - updates the
   // field display through the same NumericStepField, like the generator fields above.
   bidiBind(fStart, prefs.freqRespStartHz);
   bidiBind(fStop, prefs.freqRespStopHz);
@@ -480,7 +524,7 @@ function initStepFields() {
   bidiBind(fPts, prefs.freqRespSweepPoints);
 
   // Scope V/div + t/div (Java ScopeTabControl, LIST policy): a strict 1-2-5 ladder.
-  // V/div 1 µV … 500 V, t/div 1 µs … 1 s. onChange writes the osc* pref the scope
+  // V/div 1 µV ... 500 V, t/div 1 µs ... 1 s. onChange writes the osc* pref the scope
   // view reads next frame. Manual entry between ladder points is still allowed.
   const vDivSeries = SCOPE_VDIV_SERIES;
   const tDivSeries = SCOPE_TDIV_SERIES;
@@ -508,7 +552,7 @@ function initStepFields() {
   if (fTd) fTd.setValue(prefs.oscTimePerDiv.get());
 
   // Trigger level (oscTriggerLevelFrac) and position (oscTriggerPositionFrac) have
-  // NO numeric field — matching Java's buildTriggerGroup, which exposes neither.
+  // NO numeric field - matching Java's buildTriggerGroup, which exposes neither.
   // Both are set by dragging their on-canvas handle (ScopeView) / wheel-pan.
   // Trigger hysteresis: 0..5 divisions in 0.1-div steps (Java HYST_MAX_DIV / STEP).
   const fTH = mk('scopeTrigHyst', new NumericStepModel({ family: F.DIVISIONS, min: 0, max: 5, wheelStep: 0.1, arrowStep: 0.1, decimals: 1 }),
@@ -532,7 +576,7 @@ function initStepFields() {
 // stripped so the web chrome reads cleanly.
 function applyI18n() {
   document.querySelectorAll('[data-i18n]').forEach((el) => {
-    el.textContent = t(el.getAttribute('data-i18n')).replace(/&/g, '').replace(/\.\.\.$/, '…');
+    el.textContent = t(el.getAttribute('data-i18n')).replace(/&/g, '').replace(/\.\.\.$/, '...');
   });
   document.querySelectorAll('[data-i18n-title]').forEach((el) => {
     el.title = t(el.getAttribute('data-i18n-title')).replace(/&/g, '');
@@ -541,7 +585,7 @@ function applyI18n() {
     el.placeholder = t(el.getAttribute('data-i18n-placeholder')).replace(/&/g, '');
   });
   // Custom-file "Browse" button text lives in a ::after pseudo-element; localize it
-  // through a CSS custom property the stylesheet reads (item 3).
+  // through a CSS custom property the stylesheet reads.
   document.querySelectorAll('[data-i18n-browse]').forEach((el) => {
     el.style.setProperty('--browse-label', '"' + t(el.getAttribute('data-i18n-browse')).replace(/&/g, '') + '"');
   });
@@ -568,7 +612,7 @@ function initSelects() {
 function buildLanguageMenu() {
   const active = prefs.uiLanguage.get();
   const $menu = $('#langMenu').empty();
-  // English is NOT pinned first — every locale sorts alphabetically by tag (en falls between el and es).
+  // English is NOT pinned first - every locale sorts alphabetically by tag (en falls between el and es).
   for (const l of [...LOCALES].sort((a, b) => a.tag.localeCompare(b.tag))) {
     const checked = l.tag === active ? ' <i class="bi bi-check2"></i>' : '';
     $menu.append(
@@ -587,15 +631,15 @@ function applyPrefsToUi() {
 
   // The generator settings controls (#signalForm / #dither / #snap / sweep + .dpd rows)
   // are seeded by GeneratorPane.seedGeneratorControls(); a FFT-preset recall re-seeds them
-  // via the host.applyPrefsToUi callback (guarded — genPane is built after this first run).
+  // via the host.applyPrefsToUi callback (guarded - genPane is built after this first run).
   if (genPane) genPane.seedGeneratorControls();
 
   const be = prefs.current();
   if (be.inputSampleRate) $('#inRate').val(String(be.inputSampleRate));
   if (be.outputSampleRate) $('#outRate').val(String(be.outputSampleRate));
-  // Per-channel ADC/DAC full-scale readouts (info only — the crosshair Calibrate flows own them,
+  // Per-channel ADC/DAC full-scale readouts (info only - the crosshair Calibrate flows own them,
   // now stored per-card). Rendered as L / R spans; kept in sync by PreferencesDialog on open + card edit.
-  const fmtFs = (v) => ((v > 0 && Number.isFinite(v)) ? v.toFixed(6) : '—');
+  const fmtFs = (v) => ((v > 0 && Number.isFinite(v)) ? v.toFixed(6) : '-');
   $('#adcFsVrms').text(fmtFs(prefs.getAdcFsVoltageRms('L')));
   $('#adcFsVrmsRight').text(fmtFs(prefs.getAdcFsVoltageRms('R')));
   $('#dacFsAmpl').text(fmtFs(prefs.getDacFsVoltageAmpl('L')));
@@ -613,7 +657,7 @@ function bindPrefs() {
   // The audio device/rate <select>s (#inSel/#outSel/#inRate/#outRate) live inside the
   // Preferences dialog; their staged change handlers are wired by PreferencesDialog.bind().
   // The ADC/DAC full-scale is now per-card (owned by the crosshair Calibrate flows), shown as
-  // read-only per-channel spans in the Audio tab — there is no editable full-scale field to bind.
+  // read-only per-channel spans in the Audio tab - there is no editable full-scale field to bind.
 }
 
 function readConfig() {
@@ -631,7 +675,7 @@ function readConfig() {
   const duty = (sfVal('duty', 50) || 50) / 100;
   c.rectDuty = duty; c.triDuty = duty;
   c.ditherBits = sfVal('dither', 0);   // fractional bits from the DITHER NumericStepField (0 = Off)
-  // Sweep params (LINEAR_SWEEP / LOG_SWEEP) — read from the sweep fields.
+  // Sweep params (LINEAR_SWEEP / LOG_SWEEP) - read from the sweep fields.
   c.sweepStartHz = sfVal('sweepStart', 20);
   c.sweepEndHz = sfVal('sweepStop', 20000);
   c.sweepDurationSec = Math.max(0.001, sfVal('sweepDur', 1));
@@ -640,14 +684,14 @@ function readConfig() {
   c.sweepLoop = $('#sweepLoop').is(':checked');
   c.fftSize = parseInt($('#fftSize').val(), 10); c.window = $('#window').val();
   c.overlap = $('#overlap').val();
-  // ∞ (forever) averaging → a true cumulative mean (Infinity). The cross-tick
+  // ∞ (forever) averaging -> a true cumulative mean (Infinity). The cross-tick
   // accumulator in FftController grows the depth tick by tick (it no longer sizes
   // a buffer to the whole depth), so ∞ needs no finite cap; the stop-after-N
   // auto-stop, available only in ∞ mode, lets the user end the run. Read from the
-  // averages NumericStepField (Java averagesField — ∞ is the top of AVERAGES_SERIES).
+  // averages NumericStepField (Java averagesField - ∞ is the top of AVERAGES_SERIES).
   c.averages = stepFields.averages ? stepFields.averages.getValue() : (parseInt($('#averages').val(), 10) || 4);
   c.coherent = $('#coherent').is(':checked');
-  // JIT warm-up has NO UI field (Java hardwires it — no Settings-tab control); c.warmupMs
+  // JIT warm-up has NO UI field (Java hardwires it - no Settings-tab control); c.warmupMs
   // keeps its backend default (backend.js). Only the web-only thread-pool size is read.
   c.threads = parseInt($('#threads').val(), 10);
   c.fllOn = $('#align').val() === 'fll';
@@ -656,16 +700,16 @@ function readConfig() {
   c.dacFsVoltageAmpl = prefs.dacFsVoltageAmpl.get();
   // Output-lane routing (Java GeneratorController.pushOutputRoutingToPlayback): the lane
   // gate + the right-lane scale (= fsLeft/fsRight). Left stays the mono amplitude reference
-  // (scale 1.0), so the DDS amplitude math is unchanged — only the interleave seam gates/scales.
+  // (scale 1.0), so the DDS amplitude math is unchanged - only the interleave seam gates/scales.
   c.outputChannels = prefs.genOutputChannels.get();
   c.rightLaneScale = prefs.dacRightLaneScale();
-  // Java FftAnalyzerWorker:1661 — calcMaxH = max(9, getFftCalcMaxHarmonic()) - 1, i.e. the COUNT of
+  // Java FftAnalyzerWorker:1661 - calcMaxH = max(9, getFftCalcMaxHarmonic()) - 1, i.e. the COUNT of
   // harmonics H2..HN (the fundamental is NOT one of them). The web omitted the -1, so it filled one
-  // extra harmonic H(N+1) (#19: "max harmonic to calculate included the fundamental"). The display's
+  // extra harmonic H(N+1), i.e. the max harmonic to calculate counted the fundamental. The display's
   // label cap (fft-view calcMax = max(9,N)) is the max harmonic NUMBER and stays as-is.
   c.harmonicCount = Math.max(9, prefs.fftCalcMaxHarmonic.get()) - 1;
-  c.thdMaxHarmonic = Math.max(2, Math.min(9, prefs.fftThdMaxHarmonic.get()));   // g27: THD sum upper bound (H2..HN)
-  c.manualFundEnabled = prefs.fftManualFundEnabled.get();                        // g28: fixed-reference fundamental
+  c.thdMaxHarmonic = Math.max(2, Math.min(9, prefs.fftThdMaxHarmonic.get()));   // THD sum upper bound (H2..HN)
+  c.manualFundEnabled = prefs.fftManualFundEnabled.get();                        // fixed-reference fundamental
   c.manualFundVrms = prefs.fftManualFundVrms.get();
   c.fftFundFromGenerator = prefs.fftFundFromGenerator.get();   // hint analyzer with the gen freq vs auto-detect
   c.snrFreqMin = prefs.fftDistMinEnabled.get() ? prefs.fftDistMinHz.get() : 0;   // THD band (Java distMin/distMax)
@@ -678,7 +722,7 @@ function readConfig() {
   // per worker dispatch in FftController; kept in sync on toggle by the FFT settings checkbox.
   c.fftDetectTimeDiscontinuity = prefs.fftDetectTimeDiscontinuity.get();
   // Which ADC channel the FFT analyzes (Java FftAnalyzerWorker:1535
-  // prefs.getFftChannel(); L → ch0, R → ch1) — flows into FftController._wantLeft
+  // prefs.getFftChannel(); L -> ch0, R -> ch1) - flows into FftController._wantLeft
   // at setup and is switched live via engine.setFftChannel from the L/R buttons.
   c.channel = prefs.fftChannel.get();
   // Scope peak-voltage anchor + IMD dBV offset (offset-invariant ratios, but the
@@ -722,20 +766,20 @@ const tileChips = (...vals) => vals.filter(v => v != null && v !== '').map(v => 
 // in the FFT pane (fftPane.setResult / getResult), set from engine.onResult after the view
 // correction is applied here.
 let latestScope = null;
-/** Wires the three engine data callbacks — called from init's audio-backend block, since the
+/** Wires the three engine data callbacks - called from init's audio-backend block, since the
  *  engine is constructed there (see `engine`). The render-time FFT spectral corrections stay
  *  applied in app.js BEFORE the result is handed to the pane; the pane owns latestResult + the
  *  dirty flag (Java FftPane.controller last result). */
 function bindEngineCallbacks() {
   engine.fft.onResult = (r) => {
     // r.channelLeft is stamped in FftController._emit (Java FftAnalyzerWorker:1872
-    // stamps it in the worker off wantLeft — the channel it ACTUALLY read). The .frc
+    // stamps it in the worker off wantLeft - the channel it ACTUALLY read). The .frc
     // de-embed + the predistortion cal pick left()/right() off it (fft-view-correction.js).
     fftViewCorrection.apply(r);
     fftPane.setResult(r);
   };
   engine.scope.onScope = (buf, info) => { latestScope = { buf, info }; };
-  // Stop-after-N tripped (Java FFT_RECORDING_AUTO_STOPPED → FftPane.disengageRecord):
+  // Stop-after-N tripped (Java FFT_RECORDING_AUTO_STOPPED -> FftPane.disengageRecord):
   // the engine paused feeding; the pane tears down the FFT consumer and un-lights the Record LED.
   engine.fft.onFftAutoStopped = () => fftPane.onFftAutoStopped();
 }
@@ -743,7 +787,7 @@ function bindEngineCallbacks() {
 // pane self-gated on its OWN record state) moved to shell/main-tab.js (Java MultifunctionalTab);
 // app.js kicks it via mainTab.start() in init (after both panes are constructed).
 
-// The scope resize → redraw (ResizeObserver: redrawScopeOnResize) moved to
+// The scope resize -> redraw (ResizeObserver: redrawScopeOnResize) moved to
 // scope/scope-pane.js (Java ScopePane); the pane installs its own observer in bind().
 
 // The generator pane (signal-form combo, freq / amp / duty labels, dither combo, snap,
@@ -754,7 +798,7 @@ function bindEngineCallbacks() {
 // buildFormCombo) via the genPane instance, and the shared lifecycle flags flow the other
 // way through injected closures.
 
-// A structural FFT change re-acquires ONLY the FFT consumer — neither disturbs the other two
+// A structural FFT change re-acquires ONLY the FFT consumer - neither disturbs the other two
 // lifecycles (Java: an FFT-length change is FftController's concern, a form change is
 // GeneratorController's, and the scope keeps running throughout).
 async function restartFft() {
@@ -770,19 +814,19 @@ async function restartFft() {
 // fftTabControl step. The FFT PANE machinery (spectrum canvas / Record LED / readout +
 // THD/IMD table / render loop) lives in fft/fft-pane.js (Java FftPane); the strip's host
 // composite routes getResult / setResult to that pane (the web FFT pane has no freq/mag
-// FlatScrollbars — those Java scrollbars were never ported; the FftView navigates itself).
+// FlatScrollbars - those Java scrollbars were never ported; the FftView navigates itself).
 
 // The scope SETTINGS STRIP (tile-tabs, channel / filter / trigger controls,
 // presets, save / load, ADC calibrate) lives in scope/scope-tab-control.js
 // (Java ScopeTabControl); constructed in init's modals step. The scope PANE
 // machinery below (canvas / scrollbars / record / render loop) is the strip's
-// host — the tab-control reaches it through the narrow host object.
+// host - the tab-control reaches it through the narrow host object.
 
-// The scope PANE machinery — the file-mode horizontal nav (scopeOnFileBack), the
+// The scope PANE machinery - the file-mode horizontal nav (scopeOnFileBack), the
 // SINGLE-mode Start gate (syncTriggerStart), the measurement-table header buttons +
 // pop-out window (setMeasTablePopped / makeMeasWindowDraggable), and the vertical /
 // horizontal navigation scrollbars (onVertScrollMoved / onHorizScrollMoved /
-// offsetFracBounds / syncOffsetScrollbar) — moved to scope/scope-pane.js (Java
+// offsetFracBounds / syncOffsetScrollbar) - moved to scope/scope-pane.js (Java
 // ScopePane). app.js drives them through the scopePane instance (which IS the
 // ScopeTabControl.Host); the strip seeds the controls via scopeTabControl
 // .seedScopeControls() and reaches the pane through its public methods.
@@ -792,12 +836,12 @@ async function restartFft() {
 // enable lives in the Left/Right tab "Enabled" checkbox (#scopeLeftEnable /
 // #scopeRightEnable, wired above); the header L/R pair is the measurement-channel
 // picker (#scopeMeasL / #scopeMeasR), wired below.
-// FFT: mutually-exclusive radio — the analyser sees one channel at a time
+// FFT: mutually-exclusive radio - the analyser sees one channel at a time
 // (Java fftChannel = L|R): the switch selects which channel the FFT ANALYZES
-// (L → ch0, R → ch1). Persist the choice AND push it to the engine so the
+// (L -> ch0, R -> ch1). Persist the choice AND push it to the engine so the
 // running analyzer reads the selected channel and resets its statistics +
-// accumulator (Java FftView:511/514 buttons → setFftChannel → fftChannelProperty
-// subscription → resetStatistics). The .frc de-embed then picks the matching
+// accumulator (Java FftView:511/514 buttons -> setFftChannel -> fftChannelProperty
+// subscription -> resetStatistics). The .frc de-embed then picks the matching
 // channel off r.channelLeft (fft-view-correction.js), already done.
 $('.fft-pane .lr.l, .fft-pane .lr.r').on('click', function () {
   const isLeft = $(this).hasClass('l');
@@ -814,7 +858,7 @@ $('#tab-fr .lr.l, #tab-fr .lr.r').on('click', function () {
 // Independent per-pane Record (Java: the scope and FFT panes each hold their own
 // SharedCapture reference; the device opens on the first acquire and closes on the
 // last release). The scope LED drives setScopeRecording (moved to ScopePane); the FFT
-// LED drives setFftRecording (moved to FftPane) — each lights its OWN LED. The
+// LED drives setFftRecording (moved to FftPane) - each lights its OWN LED. The
 // generator (#genPlay) is separate. app.js reaches the FFT LED sync through
 // fftPane.syncFftLed() (restartFft / restartPreservingConfig).
 
@@ -825,20 +869,20 @@ $('#tab-fr .lr.l, #tab-fr .lr.r').on('click', function () {
 // recState / onFileBack / stopCaptureForFileLoad / onSignalFileLoaded are all its public
 // methods. The construction passes `host: scopePane` (see init's scopeTabControl step).
 
-// FFT view header buttons (Java FftView autoSetupBtn / maximizeBtn) — were dead.
+// FFT view header buttons (Java FftView autoSetupBtn / maximizeBtn) - were dead.
 $('#fftAutoSetup').on('click', () => fftView.autoSetup());
 $('#fftMaximize').on('click', () => fftView.maximize());
 
 // The FFT SETTINGS STRIP (FftTabControl) reaches the FFT PANE + shell helpers through this
-// narrow host (mirrors Java FftTabControl.Host) — a COMPOSITE of MIXED ownership: getResult /
+// narrow host (mirrors Java FftTabControl.Host) - a COMPOSITE of MIXED ownership: getResult /
 // setResult route to the FFT pane (which owns latestResult); applyPrefsToUi / readConfig are
 // shell helpers; refreshFreqLabel is the generator pane. The spectrum canvas / Record LED /
 // readout / render loop live in fft/fft-pane.js (Java FftPane), reached via the fftPane instance.
 const fftHost = {
-  getResult: () => fftPane.getResult(),                 // the live analyzed spectrum (Save / ADC-calibrate read it) — owned by the FFT pane
-  setResult: (r) => fftPane.setResult(r),               // a loaded .fft spectrum → repaint next frame (FFT pane state)
-  showLoadedBanner: (name) => fftPane.showLoadedBanner(name),   // Java FftView.setSourceFilePath — "Loaded: file" blink
-  stopFftRecording: () => fftPane.onRecordingStopRequested(),   // Java FFT_RECORDING_STOP_REQUESTED — stop live record before a .fft load clobbers it
+  getResult: () => fftPane.getResult(),                 // the live analyzed spectrum (Save / ADC-calibrate read it) - owned by the FFT pane
+  setResult: (r) => fftPane.setResult(r),               // a loaded .fft spectrum -> repaint next frame (FFT pane state)
+  showLoadedBanner: (name) => fftPane.showLoadedBanner(name),   // Java FftView.setSourceFilePath - "Loaded: file" blink
+  stopFftRecording: () => fftPane.onRecordingStopRequested(),   // Java FFT_RECORDING_STOP_REQUESTED - stop live record before a .fft load clobbers it
   applyPrefsToUi: () => applyPrefsToUi(),               // preset recall re-seeds the main FFT controls
   refreshFreqLabel: () => genPane.refreshFreqLabel(),   // re-snap label after an FFT-length change
   readConfig: () => readConfig(),                       // window / coherent retune the live analyze call
@@ -874,14 +918,14 @@ function openHelp(page) {
 function refreshOpenHelp() {
   if (!helpWin || helpWin.closed) return;
   let path;
-  try { path = helpWin.location.pathname; } catch (e) { return; }   // external (cross-origin) page — don't yank it
+  try { path = helpWin.location.pathname; } catch (e) { return; }   // external (cross-origin) page - don't yank it
   const m = /\/help\/(?:en|de|uk)\/([^/?#]*)/.exec(path);
   const page = (m && m[1]) ? m[1] : 'index.html';
   helpWin.location.href = `help/${helpLang()}/${page}`;
   helpWin.focus();
 }
 
-// Which help page matches the current context — for Ctrl+F1. Read-only DOM inspection at
+// Which help page matches the current context - for Ctrl+F1. Read-only DOM inspection at
 // keypress time (no listeners on the panes): the active top tab, then the focused pane.
 function helpContextPage() {
   const fr = document.getElementById('tab-fr');
@@ -901,13 +945,13 @@ function helpContextPage() {
 $('#helpShow').on('click', () => openHelp());
 $('#helpShowActive').on('click', () => openHelp(helpContextPage()));
 $('#helpReport').on('click', () => window.open('https://github.com/dgo42/Phonalyser/issues/new', '_blank', 'noopener'));
-// Tip of the day (Java MainWindow Help → Tip of the day → new TipOfTheDayDialog(shell).open()):
+// Tip of the day (Java MainWindow Help -> Tip of the day -> new TipOfTheDayDialog(shell).open()):
 // a small non-modal popup docked bottom-left. The Help entry opens it unconditionally; the
 // startup path (init, after the splash dismisses) opens it only when showTipsAtStartup is set.
 const tipDialog = new TipDialog({ prefs, t });
 $('#helpTip').on('click', () => tipDialog.open());
 // About dialog: paint the SAME branded artwork the startup splash draws (Java
-// MainWindow.showAboutDialog → StartupSplash.showAsAbout) — version/tagline/
+// MainWindow.showAboutDialog -> StartupSplash.showAsAbout) - version/tagline/
 // copyright/license/URL are all on the canvas, and the repo URL is clickable.
 // Painted on show (fonts + version + locale are all resolved by then), and
 // re-painted whenever the modal opens so a locale switch re-localizes the tagline.
@@ -919,7 +963,7 @@ $('#helpAbout').on('click', () => {
   aboutSplash.showAsAbout(document.getElementById('aboutCanvas'));
   aboutModal.show();
 });
-// F1 → help contents; Ctrl+F1 → contextual help for the active pane / tab. preventDefault
+// F1 -> help contents; Ctrl+F1 -> contextual help for the active pane / tab. preventDefault
 // so the browser's own F1 help doesn't also fire.
 document.addEventListener('keydown', (e) => {
   if (e.key === 'F1') {
@@ -930,7 +974,7 @@ document.addEventListener('keydown', (e) => {
 
 // ----- shared re-entrancy guard (web-only; no Java equivalent) -----
 // The three running/recording lifecycles are OWNED BY THE CONTROLLERS and read through their
-// observable getters — engine.generator.running / engine.scope.recording / engine.fft.recording;
+// observable getters - engine.generator.running / engine.scope.recording / engine.fft.recording;
 // the shell keeps no copy (Java: GeneratorController.running, ScopeController.isCapturing(),
 // FftController.worker.isRunning()). `busy` alone stays here: startGenerator/stopGenerator and the
 // consumer acquire/release are async (open/close AudioContexts), so a second click mid-transition
@@ -961,8 +1005,8 @@ const WAV_TYPE = [{ description: 'Audio (WAV / AIFF / FLAC)', accept: 'audio/wav
 const FFT_TYPE = [{ description: 'FFT spectrum', accept: 'text/plain', extensions: ['.fft'] }];
 const FRC_TYPE = [{ description: 'Filter calibration', accept: 'text/plain', extensions: ['.frc'] }];
 
-// The generator "Save to…" (DdsKernel render + dither + STEREO WAV/AIFF/FLAC) and the
-// "Load from…" file player (decode + engine DAC playback lane, loop, play/stop) moved to
+// The generator "Save to..." (DdsKernel render + dither + STEREO WAV/AIFF/FLAC) and the
+// "Load from..." file player (decode + engine DAC playback lane, loop, play/stop) moved to
 // generator/generator-pane.js (Java GeneratorPane); they reach the io decode/save helpers +
 // WAV_TYPE through the injected `io` / WAV_TYPE deps.
 
@@ -970,7 +1014,7 @@ const FRC_TYPE = [{ description: 'Filter calibration', accept: 'text/plain', ext
 // The DAC full-scale calibrate flow is the unified shell/calibration-dialog.js (constructed in
 // the 'calibrationDialog' step); its bind() wires the generator #calibrateDac button.
 
-// The scope "Save to…" / "Load signal…" flows moved to ScopeTabControl; the
+// The scope "Save to..." / "Load signal..." flows moved to ScopeTabControl; the
 // pane-side load orchestration (centre the view on the loaded signal + show the
 // nav slider) is host.onSignalFileLoaded below.
 
@@ -1009,7 +1053,7 @@ function showConfirm(title, message) {
 // The one alert currently on screen, so a device that fires several statechange/onerror events in
 // a row (an exclusive grab typically bursts them) raises exactly one modal, not a stack.
 let alertShowing = false;
-/** Shows the shared one-button alert modal (title + message + Close). No return value —
+/** Shows the shared one-button alert modal (title + message + Close). No return value -
  *  informational only. Coalesces repeats while one is already open. */
 function showAlert(title, message) {
   if (!alertModal) { console.error(title, message); return; }   // fired before the modals step wired up
@@ -1023,17 +1067,23 @@ function showAlert(title, message) {
   alertModal.show();
 }
 
-// Device-failure surface (Task A): the AudioContext lives in shared-capture.js (input) and
+// Device-failure surface: the AudioContext lives in shared-capture.js (input) and
 // generator-controller.js (output); both publish AUDIO_DEVICE_ERROR on a getUserMedia/open
 // rejection or an unexpected 'interrupted'/'closed'/onerror while running. Turn it into a visible,
 // actionable alert naming the failed direction (output = generator/freqresp playback; input =
-// scope/FFT/freqresp capture) — the usual cause is the device being held exclusively by another app.
+// scope/FFT/freqresp capture) - the usual cause is the device being held exclusively by another app.
 MessageBus.instance().subscribe(Events.AUDIO_DEVICE_ERROR, (p) => {
-  const dir = p && p.direction;
-  const key = dir === 'input' ? 'web.audio.deviceError.input'
-            : dir === 'output' ? 'web.audio.deviceError.output'
-            : 'web.audio.deviceError.unknown';
-  showAlert(t('web.audio.deviceError.title'), t(key));
+  // The publisher owns the wording: it knows WHICH operation failed and asked the backend that
+  // owned the native error what it meant, so the alert shows the LOCALIZED reason it composed
+  // (Java SharedCapture.openFailureText / GeneratorController.localize). Raw driver text never
+  // reaches here - it went to the log at the failure site. A publisher that carries no message
+  // (a device the app only knows went away) still gets the generic per-direction sentence.
+  // Title AND body are the desktop's own keys now. The three web-only sentences this used
+  // to fall back on each ended in "it appears to be in use by another application" - a guess
+  // printed over whatever had really happened, so a device that was not found, or one that had
+  // been unplugged, was reported as held by another program. deviceErrorText composes the true
+  // reason instead, from the same table every publisher already classifies against.
+  showAlert(t('audio.deviceError.title'), (p && p.message) ? p.message : deviceErrorText(p));
 });
 
 // ----- Scope Utility: screenshot + ADC calibrate (Java buildScreenshotGroup +
@@ -1047,7 +1097,7 @@ MessageBus.instance().subscribe(Events.AUDIO_DEVICE_ERROR, (p) => {
 // scaled to fill) onto a 2d canvas at the requested W×H and stamping the comment.
 
 // Screenshot comment caption top y (px), matching the scope pane's
-// screenshotCommentTopPx() — the scope does NOT override AbstractPane's
+// screenshotCommentTopPx() - the scope does NOT override AbstractPane's
 // DEFAULT_COMMENT_TOP_PX (40), so the caption sits 40 px down (C20c).
 const SCOPE_SCREENSHOT_COMMENT_TOP_PX = 40;
 
@@ -1063,11 +1113,11 @@ const SHOT_SCOPE_H = 360;
 // edits live in scopePrep), then PAINT that laid-out clone onto a 2d <canvas> by
 // walking the tree in DOM order and drawing each element off its own
 // getBoundingClientRect + getComputedStyle (paintCloneToCanvas). Both clonePaneForShot
-// and paintCloneToCanvas are GENERIC — the same pair will capture the FFT and FreqResp
+// and paintCloneToCanvas are GENERIC - the same pair will capture the FFT and FreqResp
 // panes (each with its own prep + live-canvas mapper); composeScopePaneShot is the thin
 // scope wrapper.
 // Every chrome element (.lr-tools buttons + icons, the tile-tab strip, edge labels,
-// slider lines) is drawn at its OWN css-pixel size — it does NOT scale with the target
+// slider lines) is drawn at its OWN css-pixel size - it does NOT scale with the target
 // and is never multiplied by the display pixel density. ONLY the #scope / #scopeZoomed
 // trace canvases scale: their LIVE on-screen bitmaps are blitted into their reflowed
 // rect, so whatever is on screen (live, held/frozen, or loaded) is captured EXACTLY and
@@ -1085,9 +1135,9 @@ function liveScopePaneSize() {
 
 /** Scope-specific prep for clonePaneForShot: collapses the expanded settings tab,
  *  removes the pane header / popped-out measurement window / record LED, and drops the
- *  scrollbar canvases (the vertical bar entirely, the horizontal bar → a 2px black
+ *  scrollbar canvases (the vertical bar entirely, the horizontal bar -> a 2px black
  *  spacer = the wanted scope↔zoomed gap) so the trace fills the full width with no
- *  reserved gutter. The #scope / #scopeZoomed canvases are KEPT in place — paint maps
+ *  reserved gutter. The #scope / #scopeZoomed canvases are KEPT in place - paint maps
  *  them to the matching LIVE canvas by id and blits the live bitmap into their rect. */
 function scopePrep(clone) {
   // Collapse the settings tabs: a .tab-panel shows only with .show, so dropping it
@@ -1098,11 +1148,11 @@ function scopePrep(clone) {
   // Hide the floating popped-out measurement window (it overlays absolutely and is
   // not part of the static capture; the in-canvas table is already in the bitmap).
   const win = clone.querySelector('#scopeMeasWindow'); if (win) win.style.display = 'none';
-  // The record LED button is live-only chrome — not wanted on the static capture.
+  // The record LED button is live-only chrome - not wanted on the static capture.
   const cLed = clone.querySelector('.led-btn'); if (cLed) cLed.remove();
   // Keep the scrollbars exactly as on screen: the VERTICAL scrollbar stays (its live
   // bitmap/thumb is blitted by id through liveCanvasFor), and the HORIZONTAL scrollbar
-  // gutter stays reserved — the hscroll is visibility:hidden until a file is loaded, so
+  // gutter stays reserved - the hscroll is visibility:hidden until a file is loaded, so
   // its gutter SPACE is always reserved and the bar (+ thumb) is painted only in file
   // mode. The zoomed-wrap keeps its right padding so it lines up under the v-scrollbar.
   // C29b loaded-filename static label, top-right: shown only in file mode. The cloned
@@ -1112,15 +1162,15 @@ function scopePrep(clone) {
 /** Thin scope-specific wrapper over the GENERIC clonePaneForShot + paintCloneToCanvas:
  *  composes the scope-pane screenshot at EXACTLY `outW`×`outH` px (or the live pane's
  *  native CSS size when omitted). Maps each clone <canvas> to its live source by id
- *  (#scope → live #scope, #scopeZoomed → live #scopeZoomed). Returns a Promise<canvas>
+ *  (#scope -> live #scope, #scopeZoomed -> live #scopeZoomed). Returns a Promise<canvas>
  *  of exactly that size; renderScopeShot's watermark + caption draw on top. */
 async function composeScopePaneShot(outW, outH) {
   const live = liveScopePaneSize();
   const w = outW > 0 ? outW : live.w;   // the file IS exactly this size
   const h = outH > 0 ? outH : live.h;
   // "Enlarge elements" dpr fix: the output file is EXACTLY w×h, but on a magnified screen
-  // (125% → dpr 1.25) the chrome must be drawn at DEVICE size to match the live on-screen
-  // look. So lay the clone out SMALLER (w/dpr) — chrome sits at its CSS px there — and
+  // (125% -> dpr 1.25) the chrome must be drawn at DEVICE size to match the live on-screen
+  // look. So lay the clone out SMALLER (w/dpr) - chrome sits at its CSS px there - and
   // paintCloneToCanvas scales the whole paint up by dpr to fill the w×h canvas (chrome
   // ×dpr = device size, the trace fills the rest). At 100% (dpr 1) clone == canvas, no scale.
   const dpr = window.devicePixelRatio || 1;
@@ -1151,11 +1201,11 @@ function persistShotSize(w, h) {
 
 /** Renders the FULL scope pane (collapsed tabs) at {@code w}×{@code h} via the
  *  clone-DOM + manual canvas composite, stamping {@code comment} (when non-blank) at
- *  the pane's screenshotCommentTopPx vertical offset in the top-right — mirroring
+ *  the pane's screenshotCommentTopPx vertical offset in the top-right - mirroring
  *  ScreenshotDialog's caption. Returns a {@code Promise<Blob>} in {@code mime}. */
 async function renderScopeShot(comment, w, h, mime) {
   // The clone is painted directly at the target W×H (same proportions as the
-  // composed pane), so the output canvas IS the screenshot — no extra resample.
+  // composed pane), so the output canvas IS the screenshot - no extra resample.
   const out = await composeScopePaneShot(w, h);
   const ctx = out.getContext('2d');
   // composeScopePaneShot left the paintCloneToCanvas ctx.scale(dpr) on the context; reset
@@ -1205,8 +1255,8 @@ async function renderScopeShot(comment, w, h, mime) {
   return new Promise((resolve) => out.toBlob(resolve, mime || 'image/png'));
 }
 
-// ----- FFT screenshot via the SAME cloned-DOM + canvas composite (#28; Java FFT_SCREENSHOT_REQUESTED
-// → ScreenshotDialog). The generic clonePaneForShot + paintCloneToCanvas pair used by the scope above
+// ----- FFT screenshot via the SAME cloned-DOM + canvas composite (Java FFT_SCREENSHOT_REQUESTED
+// -> ScreenshotDialog). The generic clonePaneForShot + paintCloneToCanvas pair used by the scope above
 // captures the FFT pane too; fftPrep is the FFT-specific prep, the live #spec canvas is mapped by id.
 // Replaces the old raw-#spec-PNG-export shortcut so the FFT camera opens the composited dialog. -----
 function liveFftPaneSize() {
@@ -1227,7 +1277,7 @@ function fftPrep(clone) {
 }
 
 /** Thin FFT wrapper over the GENERIC clonePaneForShot + paintCloneToCanvas (mirror of
- *  composeScopePaneShot): composes the FFT pane at EXACTLY outW×outH, mapping #spec → live #spec. */
+ *  composeScopePaneShot): composes the FFT pane at EXACTLY outW×outH, mapping #spec -> live #spec. */
 async function composeFftPaneShot(outW, outH) {
   const live = liveFftPaneSize();
   const w = outW > 0 ? outW : live.w;
@@ -1285,7 +1335,7 @@ async function renderFftShot(comment, w, h, mime) {
 }
 
 // ----- FreqResp screenshot via the SAME cloned-DOM + canvas composite (Java
-// FreqRespTabControl → screenshotPane.openScreenshotDialog). Reuses the generic
+// FreqRespTabControl -> screenshotPane.openScreenshotDialog). Reuses the generic
 // clonePaneForShot + paintCloneToCanvas pair; frPrep is the FreqResp-specific prep, the
 // live #frPlot canvas is mapped by id. Replaces the old raw-#frPlot-PNG download so the
 // FreqResp camera opens the composited dialog exactly like the scope / FFT panes. -----
@@ -1373,13 +1423,13 @@ async function renderFreqRespShot(comment, w, h, mime) {
 // render-time FFT de-embed (fftViewCorrection) and the predistortion engine's calResponseAt.
 
 // ============================ Frequency response ============================
-// Takes the engine at construction → built in init's audio-backend block (see `engine`).
+// Takes the engine at construction -> built in init's audio-backend block (see `engine`).
 let freqRespPane;
 
 // ============================ Predistortion wizard ============================
 let predistModal;
 
-// Restart preserving the (predistortion-mutated) engine.config — does NOT re-read
+// Restart preserving the (predistortion-mutated) engine.config - does NOT re-read
 // the UI, so configureForRun's coherent/∞-averaging settings survive.
 async function restartPreservingConfig() {
   if (!engine.running) return;
@@ -1392,11 +1442,11 @@ async function restartPreservingConfig() {
   await engine.scope.setRecording(true);
   await engine.fft.setRecording(true);
   $('#genPlay').addClass('playing').attr('title', t('generator.play.stop'));
-  $('#onAir').addClass('live');
+  genPane.setOnAir(true);   // ...and re-arms the pane's ON-AIR tick (the lane-death consult)
   scopePane.syncScopeLed(); fftPane.syncFftLed();
 }
 
-// Takes the engine at construction → built in init's audio-backend block (see `engine`).
+// Takes the engine at construction -> built in init's audio-backend block (see `engine`).
 let predistHost;
 
 
@@ -1432,7 +1482,7 @@ function showUnsupportedBrowserOverlay() {
   h.textContent = '⚠ ' + tr('web.browser.unsupported.title', 'Unsupported browser');
   const p = document.createElement('p');
   p.textContent = tr('web.browser.unsupported.message',
-    'Phonalyser.web requires a Chromium-based browser — Google Chrome, Microsoft Edge, Opera or Brave. '
+    'Phonalyser.web requires a Chromium-based browser - Google Chrome, Microsoft Edge, Opera or Brave. '
     + 'It relies on Chromium-only audio APIs (frame-accurate capture-rate probing, AudioWorklet) that this browser '
     + 'does not provide, so it cannot run here. Please open this page in Chrome or Edge.');
   box.appendChild(h); box.appendChild(p);
@@ -1440,10 +1490,51 @@ function showUnsupportedBrowserOverlay() {
   el.appendChild(box); document.body.appendChild(el);
 }
 
+/**
+ * Fills the Tools ▸ Preferences / Devices submenus and opens the JSON editor from them.
+ *
+ * BUILT WHEN THE MENU OPENS, not at load. "Current" is always there, but "Corrupt" exists
+ * only while a quarantined copy does - and a document can be quarantined at any time, by this
+ * very editor writing something the reader then refuses on the next start. A list built once
+ * at load would be wrong for the rest of the session.
+ *
+ * ONE item, not a numbered list: store-quarantine.js writes a fixed `<key>.corrupt` and
+ * overwrites it, so there is never more than one.
+ *
+ * @param {Array<Object>} ports the config ports (store/config-port.js)
+ * @param {Object} dialog the JsonConfigDialog to open
+ */
+function buildConfigMenus(ports, dialog) {
+  const $ = window.jQuery;
+  const hosts = {
+    preferences: '#menuCfgPreferencesItems',
+    devices: '#menuCfgDevicesItems',
+  };
+  const rebuild = () => {
+    for (const port of ports) {
+      const host = $(hosts[port.id]);
+      if (!host.length) continue;
+      host.empty();
+      const item = (labelText, mode) => $('<li>').append(
+        $('<button type="button" class="dropdown-item">').text(labelText)
+          .on('click', () => dialog.open(port, mode)),
+      );
+      host.append(item(t('menu.tools.config.current'), 'live'));
+      if (port.corruptEntry() != null) host.append(item(t('menu.tools.config.corrupt'), 'corrupt'));
+    }
+  };
+  // The Tools dropdown is the one holding the Preferences item; it carries no id of its own,
+  // so it is reached through that item rather than by adding one.
+  const tools = document.getElementById('menuPrefs');
+  const dropdown = tools ? tools.closest('.dropdown') : null;
+  if (dropdown) dropdown.addEventListener('show.bs.dropdown', rebuild);
+  rebuild();   // so the submenus are never empty, even before the menu is first opened
+}
+
 // ----- bootstrap: i18n must resolve before first paint of the chrome -----
 async function init() {
   // Each setup step is ISOLATED + logged: one failing step can no longer abort the
-  // rest (which previously left the device scan un-run → "nothing works", silently).
+  // rest (which previously left the device scan un-run -> "nothing works", silently).
   // The failing step's name + error surface in the console so it's pinpointable.
   const step = (name, fn) => { try { return fn(); } catch (e) { console.error('init step failed:', name, e); } };
   await initBase();
@@ -1461,10 +1552,15 @@ async function init() {
   if (!isChromium()) { splash.dismiss(); showUnsupportedBrowserOverlay(); return; }
   // Fetch + parse the shipped devices.yaml (the Java single-source catalog, copied verbatim by
   // the build) BEFORE building the store, so its constructor seeds / merges from it. A failed load
-  // (null) → no seed: the store still boots with the user's persisted localStorage cards. The two
+  // (null) -> no seed: the store still boots with the user's persisted localStorage cards. The two
   // consumers below (calibrationDialog, PreferencesDialog) run after this await, so they get the
   // constructed store.
+  // Asked at the SAME time as the catalogue rather than after it: the probe is one bounded HTTP
+  // round trip (600 ms worst case) and the two have nothing to do with each other, so overlapping
+  // them costs the slower one alone. Awaited below, before anything reads `servingServer`.
+  const servingProbe = probeServingOrigin();
   const deviceCatalog = await loadDeviceCatalog();
+  servingServer = await servingProbe;
   deviceStore = new DeviceProfileStore(prefs, deviceCatalog ? { catalog: deviceCatalog } : {});
   // ----- audio backend + per-backend device managers (Java sound.AudioBackend) -----
   // Deliberately NOT in a step(): a failing engine breaks everything downstream, so it must
@@ -1475,29 +1571,55 @@ async function init() {
   // the WebUSB chooser, and it must be raised on the same object the later open() enumerates
   // through (qa40x-device-finder.js: scan() prompts, list()/open() never do).
   const qa40xFinder = new Qa40xDeviceFinder();
+  // The one bench seam: every request this build sends to a Phonalyser server's own backend goes
+  // through it (spec 4.6's QA40x passthrough below, spec 4.3's card binding in the modals step).
+  // A LIVE getter for the same reason the engine gets one: netManager is built later, in the
+  // modals step, and each write asks per event.
+  const benchSeam = {
+    call: (backend, request, fields) => (netManager
+      ? netManager.call(backend, request, fields) : Promise.resolve(null)),
+    callLocked: (backend, request, fields) => (netManager
+      ? netManager.callLocked(backend, request, fields) : Promise.resolve(null)),
+    // The remote analyzer's device NAME - the synced card's key. First input, else first output:
+    // the catalogue names the same analyzer both ways (Java Qa40xSettingsUi.remoteDeviceName).
+    deviceName: () => {
+      if (!netManager) return null;
+      const device = netManager.listInputDevices()[0] || netManager.listOutputDevices()[0];
+      return device ? device.name : null;
+    },
+  };
   qa40xManager = new Qa40xDeviceManager({
     prefs, deviceStore, finder: qa40xFinder,
     // Java constructs the SWT settings dialog in place and passes it the parent Shell; the web
     // dialog is a shell concern, so it arrives as this opener. The `parent` Java hands down is the
-    // Preferences shell — here that is the #prefsModal ELEMENT, and mounting a Bootstrap modal
+    // Preferences shell - here that is the #prefsModal ELEMENT, and mounting a Bootstrap modal
     // inside another modal's element nests the two (qa40x/qa40x-settings-dialog.js), so the settings
     // dialog mounts on <body> and Bootstrap stacks it over Preferences.
     openSettingsDialog: (_parent, info, i2sEnabled) => new Qa40xSettingsDialog(null, info).open(i2sEnabled),
+    // The bench seam for a QA40x that hangs on a SERVER (spec 4.6), forwarded to the range
+    // controller this constructor arms.
+    bench: benchSeam,
   });
   // Constructing the manager is also what ARMS the QA40x bus wiring (its own constructor registers
   // custom.qa40x with the prefs store so it loads AND saves, holds the range controller and calls
-  // Qa40xRateConstraint.instance()) — all live before the Preferences dialog can move a rate combo
+  // Qa40xRateConstraint.instance()) - all live before the Preferences dialog can move a rate combo
   // or commit a range. The engine hooks pagehide/beforeunload to park the analyzer, which is why it
   // must receive the manager at CONSTRUCTION (Java AudioBackend.shutdown() on the exit path).
-  engine = new AudioEngine({ prefs, qa40xManager, qa40xFinder });
+  // netManager is constructed in the modals step (it needs the Preferences store loaded), so the
+  // engine is handed a LIVE getter rather than the instance: the dispatch asks per open, exactly
+  // as it asks activeBackend() per open.
+  // The forward the audio layer holds instead of the manager (net-manager-facade.js owns the
+  // member list, the absent-session answers and the arity that must match the manager's).
+  engine = new AudioEngine({ prefs, qa40xManager, qa40xFinder,
+    netManager: netManagerFacade(() => netManager) });
   fftViewCorrection = new FftViewCorrection(engine.config, fftCorrectionStore);
   fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running, correction: fftViewCorrection });
   bindEngineCallbacks();
-  freqRespPane = new FreqRespPane(engine, prefs, { saveFile, openFile, bytesToText });
+  freqRespPane = new FreqRespPane(engine, prefs, { saveFile, openFile, bytesToText, showAlert });
   predistHost = new PredistortionHost(engine, prefs, {
     getResult: () => fftPane.getResult(),
     restart: restartPreservingConfig,
-    // Read the FFT store LIVE — the predistortion engine reads correctionEntries on demand, so a
+    // Read the FFT store LIVE - the predistortion engine reads correctionEntries on demand, so a
     // captured array snapshot would go stale as the calibration rows change.
     get correctionEntries() { return fftCorrectionStore.getEntries(); },
   });
@@ -1533,8 +1655,17 @@ async function init() {
     calibrationDialog = new CalibrationDialog(engine, prefs, deviceStore, {
       getLeftField: () => stepFields.calLeftValue,
       getRightField: () => stepFields.calRightValue,
-      inputLabel: () => (prefsDialog ? prefsDialog.inputDeviceLabel() : $('#inSel option:selected').text()),
+      inputLabel: inputDeviceLabel,
       outputLabel: () => (prefsDialog ? prefsDialog.outputDeviceLabel() : $('#outSel option:selected').text()),
+      // Null for every LOCAL selection, which is what keeps a local calibrate writing where it
+      // always did. Asked per calibrate, not held: the seam is built with the Preferences dialog
+      // (below), and the selected backend changes under this dialog anyway.
+      bench: () => (benchCalibration && benchCalibration.remote() != null ? benchCalibration : null),
+      // A DAC calibration written to a BENCH reaches the tone only at the lane's next open - the
+      // server converts volts with the card it read there (see the dialog's _applyToLiveTone) - so
+      // the dialog re-opens it. The generator pane owns the restart (busy guard + readConfig) and
+      // it is a no-op while nothing is playing.
+      restartGenerator: () => genPane.restartGenerator(),
     }).bind();
   });
   // Oscilloscope PANE (Java ScopePane): the trace canvas wiring, the two nav scrollbars,
@@ -1566,6 +1697,11 @@ async function init() {
       WAV_TYPE, latestScope: () => latestScope, showConfirm,
       setStatus: (m) => $('#status').text(m),
       calibrationDialog: () => calibrationDialog,
+      // The calibrate gate drops its 25 % accuracy threshold for a selection that has no real
+      // calibration to measure against (Java ScopePane's CalibrationStore.isUncalibrated call).
+      // Late-bound like the dialog: the seam is built with the Preferences dialog, further down.
+      inputUncalibrated: () => (benchCalibration
+        ? benchCalibration.uncalibrated(true, inputDeviceLabel()) : false),
     }).bind();
   });
   step('seedScopeControls', () => scopeTabControl.seedScopeControls());
@@ -1588,7 +1724,7 @@ async function init() {
   // layout. Built after BOTH panes exist; start() kicks the requestAnimationFrame loop (which
   // drives scopePane.render() + fftPane.render() each frame, each pane self-gated on its OWN
   // record state), and initLayout() wires the collapsible panes + draggable sashes + the
-  // pane-weight / collapse-state persistence (it owns NO lifecycle flags — those stay in app.js).
+  // pane-weight / collapse-state persistence (it owns NO lifecycle flags - those stay in app.js).
   step('mainTab', () => {
     mainTab = new MainTab({ scopePane, fftPane, prefs });
     mainTab.start();
@@ -1597,7 +1733,7 @@ async function init() {
   // FFT settings strip (Java FftTabControl): its handlers + presets + save/load +
   // calibration + screenshot/ADC-calibrate. Built after initStepFields (the FFT
   // manual-fundamental NumericStepField it reaches via getField exists now). Reaches the
-  // FFT PANE (canvas / Record LED / readout / render loop) through the narrow `host` —
+  // FFT PANE (canvas / Record LED / readout / render loop) through the narrow `host` -
   // getResult / setResult route to the fftPane built above.
   step('fftTabControl', () => {
     fftTabControl = new FftTabControl(engine, prefs, {
@@ -1620,14 +1756,24 @@ async function init() {
   step('fftSeed', () => { genPane.refreshFreqLabel(); genPane.syncFormUI(); });   // generator label + form-gated UI follow the seeded FFT controls
   step('modals', () => {
     prefsModal = new window.bootstrap.Modal(document.getElementById('prefsModal'));
+    // The dialog is resizable (css .modal-content `resize: both`, 640×480 as its minimum).
+    // The drag writes an inline width/height on the content, which would otherwise outlive the
+    // dialog - so it is dropped on hide and the next open re-packs at the minimum, exactly as the
+    // predistortion wizard does below and as Java does by opening a freshly packed shell.
+    (() => {
+      const modal = document.getElementById('prefsModal');
+      const content = modal && modal.querySelector('.modal-content');
+      if (!content) return;
+      modal.addEventListener('hidden.bs.modal', () => { content.style.width = ''; content.style.height = ''; });
+    })();
     aboutModal = new window.bootstrap.Modal(document.getElementById('aboutModal'));
-    predistModal = new window.bootstrap.Modal(document.getElementById('predistModal'), { backdrop: 'static', keyboard: false });   // #1: a real modal — no click-away / Esc dismiss (a running tuning must not be lost to a stray click)
-    // #6/#10: the Java wizard Shell is user-movable AND user-resizable (SWT.DIALOG_TRIM |
-    // SWT.RESIZE, PredistortionWizardDialog:138) and packs to its content (:162) — a modest
+    predistModal = new window.bootstrap.Modal(document.getElementById('predistModal'), { backdrop: 'static', keyboard: false });   // a real modal - no click-away / Esc dismiss (a running tuning must not be lost to a stray click)
+    // The Java wizard Shell is user-movable AND user-resizable (SWT.DIALOG_TRIM |
+    // SWT.RESIZE, PredistortionWizardDialog:138) and packs to its content (:162) - a modest
     // ~470px-wide box, not a full-screen dialog. Bootstrap modals give us neither, so we add
     // both by hand:
     //   - MOVE:   header-drag translates the .modal-dialog (composes with Bootstrap centering).
-    //   - RESIZE: the CSS `resize: both` affordance lives on .modal-CONTENT, not .modal-dialog —
+    //   - RESIZE: the CSS `resize: both` affordance lives on .modal-CONTENT, not .modal-dialog -
     //             Bootstrap sets pointer-events:none on .modal-dialog and hands them to
     //             .modal-content, so a resize handle on the dialog can never be grabbed. We seed
     //             a sensible default size on the CONTENT on open (Java pack() equivalent), which
@@ -1650,7 +1796,7 @@ async function init() {
       modal.addEventListener('show.bs.modal', () => { content.classList.add('dpd-resizable'); });
       modal.addEventListener('hidden.bs.modal', () => {
         dx = 0; dy = 0; dlg.style.transform = '';
-        content.style.width = ''; content.style.height = '';   // drop any user resize → re-pack on reopen
+        content.style.width = ''; content.style.height = '';   // drop any user resize -> re-pack on reopen
       });
     })();
     shotModal = new window.bootstrap.Modal(document.getElementById('shotModal'));
@@ -1666,7 +1812,7 @@ async function init() {
       persistSize: persistShotSize, saveFile, status: (m) => $('#status').text(m),
     });
     shotDialog.bind();
-    // FFT pane shares the SAME dialog (#28): its own renderShot + native-size seed. The chosen
+    // FFT pane shares the SAME dialog: its own renderShot + native-size seed. The chosen
     // size persists PER VIEW independently: the FFT has its own fftScreenshotWidth/Height prefs
     // (the scope has scopeScreenshotWidth/Height, FreqResp freqRespScreenshotWidth/Height); seeds
     // from the live pane size until a size was chosen once.
@@ -1681,7 +1827,7 @@ async function init() {
         prefs.fftScreenshotWidth.set(w); prefs.fftScreenshotHeight.set(h); prefs.save();
       },
     });
-    // FreqResp pane shares the SAME dialog (Java FreqRespTabControl → openScreenshotDialog):
+    // FreqResp pane shares the SAME dialog (Java FreqRespTabControl -> openScreenshotDialog):
     // its own renderShot + native-size seed, with its OWN freqRespScreenshotWidth/Height keys.
     shotDialog.addPane({
       openBtn: '#frShot', renderShot: renderFreqRespShot, nativeSize: freqRespNativeSize,
@@ -1703,52 +1849,323 @@ async function init() {
         $('#signalForm').val(applyForm); genPane.syncFormUI();
       },
     }).bind();
-    // Tune-notch wizard (Java MainWindow Tools → Tune notch… → TuneNotchWizardDialog).
+    // Tune-notch wizard (Java MainWindow Tools -> Tune notch... -> TuneNotchWizardDialog).
     // Static backdrop like the predistortion wizard: a live streaming session must not be
-    // torn down by a stray click-away. The wizard is autonomous — it publishes
+    // torn down by a stray click-away. The wizard is autonomous - it publishes
     // FREQRESP_MEASUREMENT_STARTED and drives its OWN generator + capture, so it needs no
     // generator-running gate (see tune-notch-wizard.js module header).
     const tuneNotchModal = new window.bootstrap.Modal(document.getElementById('tuneNotchModal'), { backdrop: 'static', keyboard: false });
-    new TuneNotchWizard(engine, prefs, { modal: tuneNotchModal }).bind();
-    // Card create / edit dialog (Java CardEditorDialog) — opened from the Preferences Audio tab's
+    new TuneNotchWizard(engine, prefs, { modal: tuneNotchModal, showAlert }).bind();
+    // Card create / edit dialog (Java CardEditorDialog) - opened from the Preferences Audio tab's
     // card combo / edit button. Delegates every decision to store/card-editor-logic.js.
     const cardEditorDialog = new CardEditorDialog({ showConfirm });
+    // The net backend (doc/NET-PROTOCOL.md): a Phonalyser server's backends offered beside the
+    // local ones. The manager owns the session + the remote catalogue; the server-list modal
+    // (Java NetServerListDialog) drives it through the narrow bench seam. The remembered
+    // servers are a SubPreferences block, registered like the QA40x's - registration replays
+    // whatever the stored document already had into it.
+    netPreferences = new NetPreferences();
+    prefs.registerCustomPreferences(netPreferences);
+    netManager = new NetDeviceManager({
+      preferences: netPreferences,
+      // The dial itself, injected: one session per bench, its own keepalive ticker, and the
+      // client name a DEVICE_LOCKED shows on somebody else's screen (spec 4.1).
+      openConnection: async (server) => {
+        const connection = new NetConnection({
+          url: wsUrlOf(server.host, server.port),
+          // The version the menu shows is the one the build injected - the same single source
+          // of truth the About box reads, so a bench log never names a version nothing built.
+          clientName: t('app.title'),
+          clientApp: `Phonalyser.web/${($('.menu-ver').text() || '').replace(/·.*$/, '').trim()}`,
+          ticker: new IntervalTicker(),
+        });
+        await connection.open(CONNECT_TIMEOUT_MS);
+        return connection;
+      },
+    });
+    // Opened from INSIDE Preferences, so it has to be stacked explicitly: Bootstrap's backdrop
+    // sits below every modal's own layer and cannot cover the dialog underneath, which is what
+    // made this one read as "not modal" with the focus left behind on Preferences.
+    // The JSON config editor (shell/json-config-dialog.js). The ONE place the two live stores
+    // are handed to it is createConfigPorts - the dialog and the menu below never see either
+    // store, so there is exactly ONE connection between the editor and them. The live objects are
+    // passed IN: `prefs` is the singleton this module already holds and `deviceStore` is the
+    // instance built above and injected everywhere else, so the editor edits the documents the
+    // app is actually running on rather than a second copy of them.
+    const jsonConfigEl = document.getElementById('jsonConfigModal');
+    const jsonConfigDialog = new JsonConfigDialog({
+      modal: new window.bootstrap.Modal(jsonConfigEl),
+    }).bind();
+    const configPorts = createConfigPorts({ prefs, deviceStore });
+    buildConfigMenus(configPorts, jsonConfigDialog);
+
+    const netServersEl = document.getElementById('netServersModal');
+    stackOverOpenModals(netServersEl);
+    const netServersModal = new window.bootstrap.Modal(netServersEl);
+    // The server list is the APP's, not the dialog's, and the servers it already knows are
+    // asked ONCE, here, as the app loads - known servers are probed after load and no sooner.
+    // No loop, no timer: the only recurring traffic this app makes is the session's own
+    // keepalive, to the one server it is connected to. The answer sticks (the model paints what
+    // the last completed round found), so the window opens on real state instead of on grey.
+    //
+    // The servers are the COMMITTED ones, and they are there by now: registering the block
+    // above replays the stored document into it (Preferences.registerCustomPreferences ->
+    // NetPreferences.fromMap, which fills the live map and only then seeds the edit copy).
+    // Unawaited - the LAN is not on the boot path - and a failure costs the round, not the app.
+    const netServers = new NetServerList(netPreferences);
+    netServers.useProber({ prober: new ServerProber(), now: () => Date.now() });
+    netServers.pollNow().catch((e) => console.warn('net discovery: the load-time round failed', e));
+    // ...and again whenever Preferences opens. That is where a bench is
+    // chosen, so it is where the liveness has to be current: between the load-time round and the
+    // moment the operator goes looking for a server, a bench can have been switched on or off,
+    // and only the Servers window asked again. Still no timer - one round per opening, the
+    // model's own guard drops it if a round is already in flight, and each probe carries the
+    // prober's 600 ms budget. Unawaited: the dialog must open at once, and the rows it feeds are
+    // painted from the model whenever an answer lands.
+    const prefsModalEl = document.getElementById('prefsModal');
+    if (prefsModalEl) {
+      prefsModalEl.addEventListener('show.bs.modal', () => {
+        netServers.pollNow().catch(
+          (e) => console.warn('net discovery: the preferences-open round failed', e));
+      });
+    }
+    new NetServerListDialog({ bench: netManager, modal: netServersModal, servers: netServers }).bind();
+    // On a bench, the card a remote device uses is the operator's choice, made from the
+    // SERVER's cards and stored there (spec 4.3 cards.list / device.setCard), mirrored locally
+    // under the server's id. Java builds this per dialog session on the working copy; the web store
+    // is live, so one instance lives here and the dialog clears its staged picks on every open.
+    const benchCards = new BenchCards({ bench: benchSeam, store: deviceStore });
+    // The once-per-RUN offer register: an operator who declined the copy must not be asked again
+    // the next time they open Preferences, which is exactly when they would be looking at that
+    // device. Held for the app's lifetime, not the dialog's, and never persisted.
+    const copyOffers = new CalibrationCopyOffers();
+    // The selected backend's value while it names one of a server's backends, else null - the ONE
+    // test that decides whether the card combo shows a bench's cards or this machine's (Java
+    // BackendKey.remote()).
+    const benchValue = () => (remoteBackendOf(prefs.backend.get()) != null ? prefs.backend.get() : null);
+    // The catalogue ref behind what the device combo SHOWS. The card seam is handed the option
+    // TEXT and the commit below passes a staged device NAME, and the input combo appends a rate
+    // to its text - so the one test that knows all three spellings does the matching
+    // (namesNetDevice). It used to compare `description || name`, which matched no input device
+    // at all once the text carried anything else.
+    const benchRef = (input, device) => {
+      if (!netManager || !device) return null;
+      const refs = input ? netManager.listInputDevices() : netManager.listOutputDevices();
+      return refs.find((r) => namesNetDevice(r, device)) || null;
+    };
+    // The bench's id - the mirror's key half. The connection's own is authoritative (the server
+    // names itself in hello); the remembered entry covers the moment before it answered.
+    const benchServerId = () => {
+      if (!netManager) return null;
+      const connection = netManager.connection;
+      if (connection && connection.serverId) return connection.serverId;
+      const server = netManager.getConnectedServer();
+      return server ? server.serverId : null;
+    };
+    const cardSource = {
+      cards: async (input, device) => {
+        const value = benchValue();
+        if (value == null) return null;   // a LOCAL selection - this machine's cards, unchanged
+        const ref = benchRef(input, device);
+        const name = ref ? ref.name : device;
+        const staged = name ? benchCards.stagedCard(value, input, name) : null;
+        return {
+          names: await benchCards.list(value, input),
+          bound: staged != null ? staged : benchCards.boundCard(benchServerId(), ref, name),
+        };
+      },
+      stage: (input, device, cardName) => {
+        const value = benchValue();
+        if (value == null) return;
+        const ref = benchRef(input, device);
+        benchCards.stage(value, input, ref ? ref.name : device, cardName);
+      },
+      // Spec 4.3's `cal`: what the SERVER stores for the device, which is what a measurement on it
+      // is scaled by - null when it has none, and only then does the local card store get a say.
+      // UNDEFINED when this bench does not offer the device at all (or none is remote): there is
+      // then nothing to copy TO, which is a different answer from "it has none" and the copy
+      // offer has to tell them apart (Java tests `ref == null` and `ref.calibration() != null`
+      // separately).
+      calibration: (input, device) => {
+        const ref = benchValue() == null ? null : benchRef(input, device);
+        return ref ? ref.calibration : undefined;
+      },
+      // Asked once per run per bench + direction + device - but only a SETTLED
+      // question is remembered, so a wire glitch does not cost the operator the offer.
+      mayCopyAsk: (input, device) => {
+        const value = benchValue();
+        if (value == null) return false;
+        const ref = benchRef(input, device);
+        return copyOffers.mayAsk(value, input, ref ? ref.name : device);
+      },
+      settleCopyAsk: (input, device) => {
+        const value = benchValue();
+        if (value == null) return;
+        const ref = benchRef(input, device);
+        copyOffers.settle(value, input, ref ? ref.name : device);
+      },
+      // The YES branch: this machine's WHOLE card becomes the bench's - cards.put + the
+      // binding - with its values alone as the fallback when the bench will not take the card.
+      // Answers a BenchCards.Copied outcome, which the section turns into what it tells the
+      // operator; nothing of this is written into this machine's storage.
+      copyCalibration: async (input, device) => {
+        const value = benchValue();
+        if (value == null) return BenchCards.Copied.NOTHING;
+        const ref = benchRef(input, device);
+        return benchCards.propagateLocalCard(value, benchServerId(), ref, device, input);
+      },
+      commit: async (input) => {
+        const value = benchValue();
+        if (value == null) return [];
+        const refused = [];
+        for (const [name, cardName] of benchCards.stagedFor(value, input)) {
+          const bound = await benchCards.bind(value, benchServerId(), benchRef(input, name), cardName);
+          if (!bound) refused.push(cardName);
+        }
+        return refused;
+      },
+      clearStaged: () => benchCards.clearStaged(),
+    };
+    // Where the ADC/DAC calibrate dialog's result is WRITTEN while a server's backend is selected
+    // (Java gui/sound/CalibrationStore): the device is plugged into the BENCH, so its full scale
+    // is the bench's to keep - spec 4.3 device.setCalibration, under that device's lock. The
+    // dialog asks for this seam per calibrate and writes locally whenever it answers null.
+    benchCalibration = {
+      remote: benchValue,
+      // Whether the named selection would be measured with no real calibration in this direction
+      // (Java CalibrationStore.isUncalibrated). The BENCH's own answer first - a device on a
+      // server is calibrated there, and this machine's card of the same name describes a
+      // different exemplar of that model - then this machine's card store. A bench device the
+      // catalogue does not carry at all is uncalibrated too: nothing is left to vouch for it.
+      uncalibrated: (input, device) => {
+        if (benchValue() == null) return deviceStore.isUncalibrated(device, input);
+        const ref = benchRef(input, device);
+        return ref == null || ref.calibration == null;
+      },
+      send: async (input, device, fsRmsLeft, fsRmsRight) => {
+        const value = benchValue();
+        if (value == null) return false;
+        return benchCards.calibrate(value, benchRef(input, device), fsRmsLeft, fsRmsRight);
+      },
+    };
     // Preferences dialog (Java PreferencesDialog): staged audio/L&F/Osc/FFT/FR prefs, commit on OK.
     prefsDialog = new PreferencesDialog(engine, prefs, {
       modal: prefsModal, RATES, stepFields, inRate, outRate,
       isBusy: () => busy, setBusy: (v) => { busy = v; }, fftView, deviceStore,
-      cardEditorDialog, showConfirm,
+      cardEditorDialog, showConfirm, showAlert,
       // Java AudioBackend.instance().manager(type): the per-backend manager the dialog asks for the
-      // Settings button (hasCustomPreferences / openCustomPreferences) and — for a backend that
-      // enumerates its own formats — the sample-rate list. Web Audio has no manager, so it answers
+      // Settings button (hasCustomPreferences / openCustomPreferences) and - for a backend that
+      // enumerates its own formats - the sample-rate list. Web Audio has no manager, so it answers
       // null and that backend keeps the native-rate probe.
-      backendManager: (name) => (name === QA40X_BACKEND ? qa40xManager : null),
+      //
+      // A net: value answers the NET manager, because THAT is the manager of that backend
+      // INSTANCE: the bench's catalogue is where its devices' formats live, and asking it is
+      // what makes the dialog offer the rates and sample widths the server declared instead of
+      // the web's static list and a hidden depth row. Settings are a
+      // different question and are resolved by TYPE - see PreferencesDialog.settingsManager.
+      backendManager: (name) => {
+        if (name === QA40X_BACKEND) return qa40xManager;
+        return (netManager && netManager.isRemoteBackend(name)) ? netManager : null;
+      },
+      // The connected server's backends, read synchronously at each combo build from the
+      // manager's cache (it re-asks on connect and on ev.devices.changed).
+      netBackends: () => (netManager ? netManager.getRemoteBackendEntries() : []),
+      // Where the card combo's entries come from for a REMOTE selection, and where a pick is
+      // staged / sent / read back (the local store answers for every local one).
+      cardSource,
+      // Whether this page came from a Phonalyser server - the combo offers no LOCAL backend on a
+      // page that has neither getUserMedia nor WebUSB to open one with.
+      servedByServer: () => servingServer != null,
       // An audio-settings change invalidates everything accumulated at the old settings, exactly as
-      // a re-calibration does — so the OK path reuses the calibration reset: clear the scope's
+      // a re-calibration does - so the OK path reuses the calibration reset: clear the scope's
       // measurement history and restart the FFT's cross-tick average.
       resetStatistics: onCalChange,
     }).bind();
     prefsDialog.applyLookAndFeel();   // main-tab orientation + small icons + UI font from the saved prefs
   });
   step('freqResp', () => freqRespPane.plot());
-  // Auto-enumerate audio devices on load (no Preferences dialog needed) — and dismiss the
+  // Auto-enumerate audio devices on load (no Preferences dialog needed) - and dismiss the
   // startup splash once that scan settles (SAFETY: startup-splash also self-dismisses on a
   // 20 s timeout, so a hung permission prompt can never brick the app behind the overlay).
   // One of the TWO places that enumerate at all (the other is the Scan click); this one carries no
   // user gesture, so the QA40x lists only already-granted analyzers and raises no WebUSB chooser.
   // fromUserGesture stays FALSE: there is no user activation at load, so handing the QA40x path its
-  // granter would call requestDevice() without one — it throws, scan() aborts in its catch, and the
+  // granter would call requestDevice() without one - it throws, scan() aborts in its catch, and the
   // device combos are never filled (they then fall back to the persisted-id stub, which for Web
   // Audio renders as a raw deviceId hash).
+  // A PAGE SERVED BY A SERVER DIALS THAT SERVER FIRST - whichever bundle it is. The server IS the
+  // address: window.location carries it, and no operator entry can add anything to that (spec
+  // §"GET /"). Ordered BEFORE the scan on purpose: the scan enumerates the SELECTED backend, and
+  // until the session is up there is no backend to enumerate. The server-list modal stays
+  // available for the peer table, it is simply not needed.
+  if (servingServer != null) await autoConnectToServingServer();
   const scanPromise = prefsDialog.scan();
   splash.dismissOnScan(scanPromise);
   // Tip of the day at startup (Java MainWindow.open: shown once the window is up when
   // Preferences.isShowTipsAtStartup()). Web equivalent boot moment: after the branded splash
-  // dismisses — the scan settling is what dismisses it — so the popup never overlaps the splash.
+  // dismisses - the scan settling is what dismisses it - so the popup never overlaps the splash.
   if (prefs.showTipsAtStartup.get()) {
     const openTip = () => setTimeout(() => tipDialog.open(), 300);
     Promise.resolve(scanPromise).then(openTip, openTip);
   }
 }
+/**
+ * Does the page's OWN ORIGIN answer as a Phonalyser server? One `GET /info` (spec §3) through the
+ * prober the server-list dialog already probes typed addresses with - same endpoint, same 600 ms
+ * budget, same "anything that is not a Phonalyser server is null" rule, so there is no second
+ * definition of what a server is.
+ *
+ * It fails FAST and silently everywhere it should: on GitHub Pages `/info` is a 404, on file://
+ * fetch throws, on a dev server the JSON does not carry a serverId - all null, all inside the
+ * prober's own budget, none of them an error the operator is told about (this is a question, not
+ * an attempt). The probe is plain http:// like every other one here, so an https-served page
+ * answers null too - which is the honest answer for the one route this app supports being
+ * served over (spec §3's mixed-content note).
+ *
+ * @returns {Promise<?Object>} the server's identity, or null when this page came from elsewhere
+ */
+async function probeServingOrigin() {
+  if (typeof location === 'undefined' || !location.hostname) return null;
+  if (typeof fetch !== 'function') return null;
+  // The page's OWN address, scheme and base path - `https://host/app/` asks
+  // `https://host/app/info` (server-prober.probeOrigin). Not host+port with a hardcoded
+  // http://, which asked a TLS-fronted bench at http://host:443/info and never found it.
+  const base = typeof document !== 'undefined' && document.baseURI ? document.baseURI : location.href;
+  const info = await new ServerProber().probeOrigin(base);
+  if (info != null) console.info(`net client: this page was served by '${info.name}'`);
+  return info;
+}
+
+/**
+ * Connects to the server that served this page. A CALLER of the net machinery and nothing more:
+ * the same NetDeviceManager.connect the server-list modal drives, so the session, the
+ * remembered-server write, the backend-entry refresh and the localized failure text are all the
+ * paths the operator would otherwise have taken by hand - and the server-list dialog therefore
+ * shows this server as the connected one, with its own name.
+ *
+ * IDENTITY comes from the probe (`GET /info` already told us the serverId and the name, so the
+ * remembered entry is keyed correctly from the first millisecond rather than by a placeholder).
+ * The ADDRESS does not: it is window.location's, because the port this page demonstrably came
+ * from is the port that works - a server behind a proxy reports its internal one, and this is
+ * the one case where the address is not a matter of belief.
+ *
+ * A failure is reported exactly as a manual connect's is (the localized sentence the manager
+ * composed, including spec §3's mixed-content explanation) and leaves the app running: the
+ * server-list modal is the retry path.
+ */
+async function autoConnectToServingServer() {
+  if (netManager == null || servingServer == null) return;
+  const host = location.hostname;
+  const port = Number(location.port) || (location.protocol === 'https:' ? 443 : 80);
+  const failure = await netManager.connect(
+    makeServerEntry(servingServer.serverId, servingServer.name || host, host, port, false));
+  if (failure == null) {
+    console.info(`net client: connected to the serving server at ${host}:${port}`);
+    return;
+  }
+  console.warn(`net client: the serving server at ${host}:${port} did not connect - ${failure}`);
+  $('#status').text(failure);
+}
+
 init().catch(e => console.error('init failed', e));
  

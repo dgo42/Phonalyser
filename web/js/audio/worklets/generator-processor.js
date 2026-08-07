@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — AudioWorklet generator processor.
+ * Phonalyser web - AudioWorklet generator processor.
  * Runs on the realtime audio thread of the OUTPUT AudioContext. A phase
  * accumulator emits a sine; the frequency increment `inc` (rad/sample) is
  * retuned live by the main thread (the FLL steers it onto the captured tone).

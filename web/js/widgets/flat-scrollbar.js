@@ -1,10 +1,10 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Canvas-drawn scrollbar — faithful port of the Java
+// Canvas-drawn scrollbar - faithful port of the Java
 // org.edgo.audio.measure.gui.widgets.FlatScrollbar. A constant-thickness flat
 // dark track + lighter rounded thumb + always-on end arrows, sized to
 // ARROW_SIZE px along the scrolling axis. Mirrors the Slider API the scope
@@ -14,13 +14,13 @@
 // after a 300 ms delay, wheel = ±increment, double-click on the thumb recentres.
 // The host passes a <canvas>; the widget owns its painting + mouse wiring.
 // Like the Java widget (SWT.Selection event.detail), each onChange call carries
-// the gesture as a second ScrollDetail argument — ARROW_UP/ARROW_DOWN (arrows +
-// wheel), PAGE_UP/PAGE_DOWN (track click), DRAG (thumb drag), NONE otherwise —
+// the gesture as a second ScrollDetail argument - ARROW_UP/ARROW_DOWN (arrows +
+// wheel), PAGE_UP/PAGE_DOWN (track click), DRAG (thumb drag), NONE otherwise -
 // so a listener can apply an exact model step for arrow/page gestures instead
 // of the int-quantised selection delta.
 
 /**
- * Gesture carried by each onChange call (Java: SWT.Selection event.detail —
+ * Gesture carried by each onChange call (Java: SWT.Selection event.detail -
  * ARROW_UP/ARROW_DOWN for arrow clicks + wheel, PAGE_UP/PAGE_DOWN for track
  * clicks, DRAG for thumb drags, NONE otherwise) so a listener can apply an
  * exact model step for arrow/page gestures instead of the int-quantised
@@ -93,7 +93,7 @@ export class FlatScrollbar {
   // ----- geometry -----
   _size() {
     // The backing-store px must equal the CONTENT-box px the bitmap actually
-    // renders into — clientWidth/clientHeight INCLUDE padding, so a padded axis
+    // renders into - clientWidth/clientHeight INCLUDE padding, so a padded axis
     // (the horizontal scrollbar carries padding-right so it never underlaps the
     // vertical gutter) would size the bitmap to the border box and the browser
     // would compress it into the narrower content box. That compression shifts the
@@ -168,7 +168,7 @@ export class FlatScrollbar {
     g.closePath();
   }
 
-  /** Triangle in the head (start) / tail arrow cell — ▲▼ vertical, ◀▶ horizontal. */
+  /** Triangle in the head (start) / tail arrow cell - ▲▼ vertical, ◀▶ horizontal. */
   _drawArrow(g, w, h, start) {
     const half = Math.trunc(ARROW_SIZE / 3);
     let pts;

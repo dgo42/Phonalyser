@@ -1,33 +1,33 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
 // Faithful port of org.edgo.audio.measure.sound.qa40x.Qa40xTransport.
 //
-// Transport seam for the QA402/QA403 USB protocol — the byte pipe between the
+// Transport seam for the QA402/QA403 USB protocol - the byte pipe between the
 // measurement engine and the analyzer, with no protocol knowledge above the wire
 // level. It moves four kinds of traffic over interface 0's four bulk endpoints
 // (doc/QA40X-PROTOCOL.md §3/§4/§5):
 //
-//   - register WRITES — a 5-byte big-endian frame on EP 0x01 OUT;
-//   - register READS  — a 0x80|reg request write followed by a 4-byte big-endian
+//   - register WRITES - a 5-byte big-endian frame on EP 0x01 OUT;
+//   - register READS  - a 0x80|reg request write followed by a 4-byte big-endian
 //                       reply on EP 0x81 IN;
-//   - audio PLAYBACK  — async writes on EP 0x02 OUT;
-//   - audio CAPTURE   — async reads on EP 0x82 IN.
+//   - audio PLAYBACK  - async writes on EP 0x02 OUT;
+//   - audio CAPTURE   - async reads on EP 0x82 IN.
 //
 // Register traffic is request/response (Java blocks on a bulk transfer; here the
-// same call returns a promise); audio traffic is asynchronous — submitted here
+// same call returns a promise); audio traffic is asynchronous - submitted here
 // and completed later, reported back through a TransferListener. The full-duplex
 // discipline (>=2 transfers in flight per direction, read-completion clock) lives
 // in the engine that drives this seam, not here.
 //
 // Stop discipline. cancelAll() aborts in-flight transfers and close() tears the
-// session down; neither ever pipe-resets or clear-halts an endpoint — doing so
+// session down; neither ever pipe-resets or clear-halts an endpoint - doing so
 // hangs the next session's first read (doc §3).
 //
-// Register values are big-endian even though audio samples are little-endian —
+// Register values are big-endian even though audio samples are little-endian -
 // two independent endiannesses that this seam neither imposes nor conflates
 // (doc §4/§5).
 //
@@ -41,7 +41,7 @@
  *
  * Java invokes these on the transport's libusb event thread; the web port
  * invokes them from the transport's per-direction completion pump, i.e. on the
- * one and only JS task queue — but with the same contract: completions arrive in
+ * one and only JS task queue - but with the same contract: completions arrive in
  * SUBMISSION order per direction, and a listener callback may re-submit (the
  * engine re-arms its read from inside readCompleted).
  */
@@ -67,7 +67,7 @@ export class TransferListener {
 
   /**
    * A transfer failed (or was cancelled); `read` tells the direction, `detail`
-   * the reason. A transfer cancelled by cancelAll()/close() lands here too — the
+   * the reason. A transfer cancelled by cancelAll()/close() lands here too - the
    * engine treats that as benign, exactly as it does the libusb CANCELLED status.
    * @param {boolean} read true for a capture transfer, false for playback
    * @param {string} detail human-readable reason
@@ -78,7 +78,7 @@ export class TransferListener {
 }
 
 /**
- * The transport contract — see the module comment. Every method mirrors
+ * The transport contract - see the module comment. Every method mirrors
  * org.edgo.audio.measure.sound.qa40x.Qa40xTransport one for one; the only
  * deviation is that the two register calls and the two teardown calls return
  * promises, because a browser cannot block.
@@ -86,10 +86,10 @@ export class TransferListener {
 export class Qa40xTransport {
 
   /**
-   * Writes `value` to register `reg` — a 5-byte big-endian frame on EP 0x01 OUT.
+   * Writes `value` to register `reg` - a 5-byte big-endian frame on EP 0x01 OUT.
    * Java returns void from a blocking bulk transfer; here the promise settles
    * when the transfer completes. Callers must serialize register traffic (the
-   * engine's ioLock does this) — the seam does not queue it.
+   * engine's ioLock does this) - the seam does not queue it.
    * @param {number} reg
    * @param {number} value
    * @returns {Promise<void>}
@@ -99,7 +99,7 @@ export class Qa40xTransport {
   }
 
   /**
-   * Reads register `reg` — sends 0x80|reg, then decodes the 4-byte big-endian
+   * Reads register `reg` - sends 0x80|reg, then decodes the 4-byte big-endian
    * reply from EP 0x81 IN into a signed 32-bit word.
    * @param {number} reg
    * @returns {Promise<number>}

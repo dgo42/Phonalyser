@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -8,7 +8,7 @@
 //
 // A snapshot of the analyzer's identity and live telemetry registers, already
 // decoded to display strings (doc/QA40X-PROTOCOL.md §4 extended register map, §6
-// telemetry). Read by Qa40xDeviceManager — which owns the transport — and shown
+// telemetry). Read by Qa40xDeviceManager - which owns the transport - and shown
 // read-only by the QA40x settings dialog.
 //
 // Every field is a STRING rather than a number because each register decodes
@@ -18,7 +18,7 @@
 //
 // The Java record is immutable; the frozen instance here is the same guarantee,
 // and the same shape the sibling Qa40xDevice record in qa40x-device-finder.js
-// uses — record components as plain fields, frozen at construction.
+// uses - record components as plain fields, frozen at construction.
 
 export class Qa40xDeviceInfo {
 
@@ -26,7 +26,7 @@ export class Qa40xDeviceInfo {
    *  current, which only the QA402 has (§6). */
   static UNAVAILABLE = '---';
 
-  /** The all-unavailable snapshot — nothing was read because the device is not
+  /** The all-unavailable snapshot - nothing was read because the device is not
    *  open (or a read failed part-way). A shared constant so every caller shows
    *  the same thing. */
   static NONE = new Qa40xDeviceInfo(
@@ -38,10 +38,10 @@ export class Qa40xDeviceInfo {
    * @param {string} firmwareVersion firmware build number (reg 0x10) as decimal text
    * @param {string} usbVoltage      USB bus voltage, `x.xxx V`
    * @param {string} usbCurrent      USB bus current, `x.xxx A`
-   * @param {string} isoCurrent      ISO-supply current, `x.xxx A` — QA402 only, else UNAVAILABLE
+   * @param {string} isoCurrent      ISO-supply current, `x.xxx A` - QA402 only, else UNAVAILABLE
    * @param {string} temperature     board temperature, `xx.x °C`
-   * @param {string} capability      capability word, `0x…`
-   * @param {string} capability2     per-model capability word, `0x…`
+   * @param {string} capability      capability word, `0x...`
+   * @param {string} capability2     per-model capability word, `0x...`
    * @param {string} serialNumber    the packed serial as 8 hex digits
    */
   constructor(firmwareVersion, usbVoltage, usbCurrent, isoCurrent,

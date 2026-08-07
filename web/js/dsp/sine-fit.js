@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -148,7 +148,7 @@ export class SineFit {
   }
 
   /**
-   * Subtracts the WHOLE fitted model — sinusoid and the DC term c — from
+   * Subtracts the WHOLE fitted model - sinusoid and the DC term c - from
    * src[srcFrom .. srcFrom+count), then adds back a caller-supplied replacement
    * DC dcAdd, into dst[dstFrom ..]. Same recurrence as subtractSineInto.
    */

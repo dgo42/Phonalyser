@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -8,7 +8,7 @@
 // org.edgo.audio.measure.gui.scope.StereoPcmIo (packStereo / decodeStereo /
 // formatForName / openSink) and ScopeFileSaver (findFullPeriodWindow + save).
 //
-// There is no bespoke binary ".osc" container — a scope capture is just a stereo
+// There is no bespoke binary ".osc" container - a scope capture is just a stereo
 // PCM audio file (.wav / .flac / .aiff / .aif). The scope holds a ring of
 // normalised float samples in [-1, +1]; this module quantises them to signed
 // little-endian PCM at the chosen bit depth, optionally snapping the saved span
@@ -16,7 +16,7 @@
 // click at the seam, then wraps the bytes in the format-appropriate writer.
 //
 // The decode side turns a decoder's PCM bytes back into float [-1, +1] L/R,
-// tolerant of 8/16/24/32-bit, signed/unsigned, big/little-endian — the inverse
+// tolerant of 8/16/24/32-bit, signed/unsigned, big/little-endian - the inverse
 // of packStereo for the common (signed little-endian) case.
 
 import { WavWriter, AiffWriter, createFlacWriter,
@@ -227,7 +227,7 @@ function openWriter(fmt, sampleRate, bitDepth) {
 export function saveScopeCapture(left, right, actual, fileName, sampleRate, bitDepth,
                                  signalFrequencyHz = 0) {
   if (actual <= 0) {
-    throw new Error("Scope buffer is empty — capture hasn't produced any samples yet.");
+    throw new Error("Scope buffer is empty - capture hasn't produced any samples yet.");
   }
   const w = findFullPeriodWindow(left, actual, sampleRate, signalFrequencyHz);
   const saveStart = w.start;
@@ -254,7 +254,7 @@ export function saveScopeCapture(left, right, actual, fileName, sampleRate, bitD
 /** Opens the streaming sink for {@code fmt}. WAV / AIFF size-patch their headers
  *  with positioned writes at close; FLAC has no streaming web encoder, so the
  *  caller keeps the buffer-dump fallback for .flac only (handled in the tab
- *  control — saveStreaming throws here so the failure is explicit). */
+ *  control - saveStreaming throws here so the failure is explicit). */
 function openStreamingSink(fmt, writable, sampleRate, bitDepth) {
   switch (fmt) {
     case 'FLAC':
@@ -267,7 +267,7 @@ function openStreamingSink(fmt, writable, sampleRate, bitDepth) {
 
 /**
  * Streams up to {@code totalFrames} of LIVE capture from {@code reader}'s
- * contiguous cursor straight to {@code writable} in real time — for captures
+ * contiguous cursor straight to {@code writable} in real time - for captures
  * longer than the ring buffer. Faithful async port of StereoPcmIo.saveStreaming:
  * unlike {@link saveScopeCapture} (which dumps the already-captured ring), this
  * records FORWARD, reading the cursor as fresh samples arrive, so it takes about
@@ -309,11 +309,21 @@ export async function saveStreaming(reader, writable, sampleRate, bitDepth, tota
       const want = Math.min(chunkFrames, totalFrames - written);
       const n = reader.read(want, left, right);
       if (n === OVERRUN) {
-        reader.seekToLatest();   // writer stalled a full ring behind — re-anchor
+        reader.seekToLatest();   // writer stalled a full ring behind - re-anchor
         continue;
       }
       if (n <= 0) {
-        await new Promise((r) => setTimeout(r, 20));   // caught up to the tip — await fresh samples
+        // Nothing fresh: either we caught up to the live tip, or the capture DIED. Only the
+        // buffer can tell the two apart, so ask it - otherwise this loop waits out the whole
+        // requested duration writing silence over a device that is gone, and hands back a file
+        // that looks like a recording (Java StereoPcmIo.saveStreaming). The reason is read
+        // NON-claiming: the streaming save is not the operator-report owner, so whichever pane
+        // claims it still shows the one message.
+        if (reader.isFinished()) {
+          const reason = reader.getFinishedReason();
+          throw new Error('the capture ended - ' + (reason ? reason.logText : 'unknown'));
+        }
+        await new Promise((r) => setTimeout(r, 20));   // caught up to the tip - await fresh samples
         continue;
       }
       packStereo(left, right, 0, n, buf, bitDepth);

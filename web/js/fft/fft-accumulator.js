@@ -1,14 +1,14 @@
 /*
- * Phonalyser web — cross-tick FFT averaging accumulator.
+ * Phonalyser web - cross-tick FFT averaging accumulator.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
 // Faithful port of the cross-tick running accumulator in
-// org.edgo.audio.measure.gui.fft.FftAnalyzerWorker — the part the desktop calls
+// org.edgo.audio.measure.gui.fft.FftAnalyzerWorker - the part the desktop calls
 // accumulateIntoForeverBuffer(...) + overlayAccumulatorOnto(...) + resetAccumulator().
 //
-// WHY THIS EXISTS — the web port previously had NO cross-tick accumulator: each
+// WHY THIS EXISTS - the web port previously had NO cross-tick accumulator: each
 // FFT tick re-FFT'd a window sized to the WHOLE averaging depth
 // (bufLen = N + (avgTarget−1)·hop), so the first spectrum only appeared after
 // bufLen/inRate seconds (~24 s at 44.1 kHz avg=16; minutes in ∞ mode). The
@@ -28,13 +28,13 @@
 //     delta = samplesAbsStart − accumRefSampleStart. accumRefSampleStart +
 //     accumKFractional + accumIntFundBinRounded are PINNED on the first tick.
 //   - INCOHERENT power sum: Σ |X[k]|² weighted by frameCount (the analyzer stores
-//     RAW magnitude in r.re for incoherent, so we sum mag·mag — no double convert).
-//   - targetN scaling: finite avgTarget → exponential ring window; ∞ → cumulative.
+//     RAW magnitude in r.re for incoherent, so we sum mag·mag - no double convert).
+//   - targetN scaling: finite avgTarget -> exponential ring window; ∞ -> cumulative.
 //   - overlay: rebuild amplitudeDbFs/phaseDeg/re/im off the running average.
 //
-// PORTED (the long-run refinements — full parity with the desktop now):
+// PORTED (the long-run refinements - full parity with the desktop now):
 //   - One-shot κ PHASE-SLOPE REFINE (single-reference): the single-frame parabolic
-//     peak pins κ to only ~0.01–0.03 bin; over a long coherent run that residual
+//     peak pins κ to only ~0.01-0.03 bin; over a long coherent run that residual
 //     ramps the de-rotated fundamental phase (2π·Δκ·delta/fftSize) and vector-
 //     cancels the magnitude (harmonics h× faster). dφ/dΔ over KAPPA_MEAS_FRAMES
 //     CLEAN frames yields Δκ ~100× tighter, folded into accumKFractional ONCE.
@@ -47,7 +47,7 @@
 //     itself; accumulateMultiTone() de-rotates each tone's lobe by its OWN frequency
 //     (constant phase), runs a per-tone PLL + per-tone κ refine, builds the dual-tone
 //     IMD-product grid (a·κ1+b·κ2) and pools the strong tones' clock drift onto the
-//     non-tone bins (FORK_NONTONE_DRIFT) — true dual-tone IMD, no grid-lock.
+//     non-tone bins (FORK_NONTONE_DRIFT) - true dual-tone IMD, no grid-lock.
 //   - Re-anchor on a re-sync (overrun / discontinuity): onResync() sets the κ /
 //     multi-κ skip flags + gapRecoverPending so the jumped frame re-anchors instead
 //     of poisoning the slope measurement.
@@ -55,14 +55,14 @@
 //     accumulator OWNS the detector (as the desktop worker does) and resets it in
 //     reset(); the controller calls reject() per tick before the fold.
 //
-// PARALLELISM NOTE — the desktop runs the per-bin de-rotation loops across cores
+// PARALLELISM NOTE - the desktop runs the per-bin de-rotation loops across cores
 // (parallelChunks). The math is a disjoint per-bin write, so this port runs the
 // SAME loops SERIALLY in one pass: bit-for-bit the same result, just single-threaded
 // (the cross-tick fold is already off the main thread on the FFT worker / pool).
 
 import { SpectralDiscontinuityDetector } from '../dsp/spectral-discontinuity-detector.js';
 
-/** Frames of de-rotated-fundamental phase observed before the one-shot κ refine —
+/** Frames of de-rotated-fundamental phase observed before the one-shot κ refine -
  *  ~24 give κ to ~1e-4 bin at high SNR, before the drift becomes visible. */
 const KAPPA_MEAS_FRAMES = 24;
 /** Phase-tracking-loop gain: fraction of the running fundamental mis-alignment
@@ -70,7 +70,7 @@ const KAPPA_MEAS_FRAMES = 24;
  *  noise, high enough to track the κ-residual ramp (Java PHASE_TRACK_GAIN). */
 const PHASE_TRACK_GAIN = 0.10;
 /** A per-tone cross-tick phase residual larger than this is a phase DISCONTINUITY
- *  (DDS jump / reconnect) — realigned in one shot (gain 1) rather than tracked
+ *  (DDS jump / reconnect) - realigned in one shot (gain 1) rather than tracked
  *  (Java PHASE_JUMP_RAD = 60°). */
 const PHASE_JUMP_RAD = 60.0 * Math.PI / 180.0;
 /** Half-width (bins) of the lobe a tone's constant phase covers. */
@@ -80,7 +80,7 @@ const MIN_TONE_SEP_BINS = 48;
 /** Cap on independent tone references. */
 const MAX_TONES = 8;
 /** A peak at an integer multiple (h≥2) of the strongest tone at least this far
- *  BELOW it is a harmonic (distortion), not an independent tone — dropped so a
+ *  BELOW it is a harmonic (distortion), not an independent tone - dropped so a
  *  single tone + harmonics stays on the single-reference refined path. */
 const HARMONIC_REJECT_BELOW_DB = 40.0;
 /** Ignore peaks below this frequency when detecting tones (residual DC leakage). */
@@ -93,9 +93,9 @@ const STRONG_TONE_REL_DB_DEFAULT = 100.0;
 const USE_SPECTRAL_DISCONTINUITY = true;
 /** "Rotate the fork": pool the strong tones' shared clock-drift estimate onto the
  *  non-tone bins so weak harmonics / IMD products don't sink under drift (Java
- *  FORK_NONTONE_DRIFT — production state on). */
+ *  FORK_NONTONE_DRIFT - production state on). */
 const FORK_NONTONE_DRIFT = true;
-/** Per-tone κ refine (multi-tone path) — Java MULTI_KAPPA_REFINE (production on). */
+/** Per-tone κ refine (multi-tone path) - Java MULTI_KAPPA_REFINE (production on). */
 const MULTI_KAPPA_REFINE = true;
 
 /** Java Math.IEEEremainder(x, y): the remainder nearest to zero (round-half-even).
@@ -103,7 +103,7 @@ const MULTI_KAPPA_REFINE = true;
 function ieeeRemainder(x, y) {
   const q = x / y;
   if (Math.abs(q - Math.trunc(q)) === 0.5) {
-    const n = 2 * Math.round(q / 2);   // tie → nearest even
+    const n = 2 * Math.round(q / 2);   // tie -> nearest even
     return x - y * n;
   }
   return x - y * Math.round(q);
@@ -123,9 +123,9 @@ export class FftAccumulator {
     this._accumHasData = false;
     /** Absolute sample-stream position of the first contributing tick's frame-0. */
     this._accumRefSampleStart = 0;
-    /** Pinned de-rotation frequency (fractional fundamental bin) — held constant. */
+    /** Pinned de-rotation frequency (fractional fundamental bin) - held constant. */
     this._accumKFractional = 0;
-    /** Pinned round(kFractional) — the stable integer lobe pitch. */
+    /** Pinned round(kFractional) - the stable integer lobe pitch. */
     this._accumIntFundBinRounded = 0;
     /** Config the accumulator was built for; a mismatch restarts it. */
     this._accumFftSize = 0;
@@ -158,10 +158,10 @@ export class FftAccumulator {
 
     // ─── multi-tone path ──────────────────────────────────────────────────────
     /** Fractional bins of the strong tones detected at restart (sorted ascending).
-     *  length ≤ 1 ⇒ single-reference rotation; length ≥ 2 ⇒ per-tone de-rotation. */
+     *  length ≤ 1 => single-reference rotation; length ≥ 2 => per-tone de-rotation. */
     this._accumToneKappa = new Float64Array(0);
     /** Per-tone cumulative de-rotation correction (the multi-tone analogue of
-     *  accumDroppedSamples) — one entry per accumToneKappa tone. */
+     *  accumDroppedSamples) - one entry per accumToneKappa tone. */
     this._toneDroppedSamples = new Float64Array(0);
     /** Per-bin IMD-product assignment (cross-tick dual-tone de-rotation), reused. */
     this._imdGridIdx = null;
@@ -194,7 +194,7 @@ export class FftAccumulator {
     this._strongToneRelDb = db;
   }
 
-  /** Cumulative frame depth since the last reset — drives the "N/avgTarget"
+  /** Cumulative frame depth since the last reset - drives the "N/avgTarget"
    *  readout and the stop-after-N threshold (Java getAccumulatedFrames). */
   get accumFrames() { return this._accumFrames; }
   /** True once at least one tick has been folded in. */
@@ -235,7 +235,7 @@ export class FftAccumulator {
   /** Runs the spectral-discontinuity gate on this tick's complex half-spectrum
    *  (Java FftAnalyzerWorker: spectralDetector.reject before the cross-tick fold).
    *  De-rotation does not change magnitude, so the per-window (pre-fold) re/im are
-   *  the right thing to gate. @returns {boolean} true ⇒ REJECT this block. */
+   *  the right thing to gate. @returns {boolean} true => REJECT this block. */
   reject(re, im, halfSize, binWidthHz, peakBins) {
     if (!USE_SPECTRAL_DISCONTINUITY) return false;
     this._spectralDetector.configure(halfSize);
@@ -250,7 +250,7 @@ export class FftAccumulator {
    * Resets transparently when fftSize or coherent flag changes between ticks.
    *
    * @param {object} r per-window result: { fftSize, freqResolution,
-   *        fundamentalHzRefined, re, im, frameCount } — re/im are length
+   *        fundamentalHzRefined, re, im, frameCount } - re/im are length
    *        fftSize/2+1 (half spectrum); for incoherent, re holds raw magnitude.
    * @param {number} samplesAbsStart absolute sample index of this tick's window start.
    * @param {boolean} coherent true = complex de-rotated sum; false = power sum.
@@ -303,7 +303,7 @@ export class FftAccumulator {
     // Time-shift offset from the pinned reference frame-0. An overrun /
     // discontinuity re-anchor jumps samplesAbsStart, but the COVERAGE gap is counted
     // in the sample positions, so the absolute delta bridges it. What it does NOT
-    // count is a dropped-sample xrun — that's recovered into accumDroppedSamples by
+    // count is a dropped-sample xrun - that's recovered into accumDroppedSamples by
     // the PLL below and added here so the pinned-κ rotation stays exact across it.
     let delta = (samplesAbsStart - this._accumRefSampleStart) + this._accumDroppedSamples;
 
@@ -328,13 +328,13 @@ export class FftAccumulator {
     if (coherent) {
       if (this._accumToneKappa.length >= 2) {
         // Multi-tone: de-rotate each detected tone's lobe by its OWN frequency
-        // (constant phase), so every fundamental keeps its true position — no single
+        // (constant phase), so every fundamental keeps its true position - no single
         // reference, hence no grid-lock.
         this._accumulateMultiTone(r, N, weight, delta);
       } else {
         // One-shot κ refine from the de-rotated fundamental's phase slope, then a
         // continuous phase-lock loop. The single-frame parabolic peak pins κ to only
-        // ~0.01–0.03 bin; dφ/dΔ over the first KAPPA_MEAS_FRAMES frames IS
+        // ~0.01-0.03 bin; dφ/dΔ over the first KAPPA_MEAS_FRAMES frames IS
         // 2π·Δκ/fftSize, pinning the EXACT frequency ~100× tighter and killing the
         // long-run phase ramp (which would vector-cancel the magnitude, harmonics h×
         // faster). Refined before accumulating so the corrected κ is used from here.
@@ -349,7 +349,7 @@ export class FftAccumulator {
             // KAPPA_MEAS_FRAMES CLEAN frames (2π·Δκ/fftSize per unit delta).
             if (this._kappaMeasFrames === 0 || this._kappaSkipNext) {
               // Anchor, or re-anchor after a re-sync (delta jumped): adopt this frame
-              // as the reference but DON'T fold its step in — a burst of re-syncs
+              // as the reference but DON'T fold its step in - a burst of re-syncs
               // can't poison or starve the measurement.
               if (this._kappaMeasFrames === 0) {
                 this._kappaCumPhase = 0.0;
@@ -377,7 +377,7 @@ export class FftAccumulator {
             // (the √N-averaged true reference; the accumulator rotates bin k0 by the
             // same krot as obsPhase, so the two compare directly) and fold a FRACTION
             // (PHASE_TRACK_GAIN) of it back into the de-rotation every tick so it
-            // re-locks — killing the residual-κ drift and absorbing disturbances. On
+            // re-locks - killing the residual-κ drift and absorbing disturbances. On
             // a re-sync, do a one-shot FULL realign of THIS frame too (gain 1).
             const accumPhase = Math.atan2(this._accumIm[k0], this._accumRe[k0]);
             const residual = ieeeRemainder(obsPhase - accumPhase, 2.0 * Math.PI);
@@ -393,7 +393,7 @@ export class FftAccumulator {
         // Single reference: PER-LOBE constant-phase de-rotation over the HALF
         // spectrum [0, Nyquist]. Each bin is snapped to its nearest harmonic
         // h = round(bin / k0) and rotated by that lobe's CONSTANT phase h·Φ,
-        // Φ = −2π·delta·accumKFractional/fftSize — NOT a per-bin ramp (which would
+        // Φ = −2π·delta·accumKFractional/fftSize - NOT a per-bin ramp (which would
         // comb the leakage skirt). All bins are positive frequencies, so the
         // harmonic index is round(k / k0) directly (no signed-bin wrap).
         const k0x = Math.max(1, this._accumIntFundBinRounded);
@@ -415,7 +415,7 @@ export class FftAccumulator {
         const aRe = this._accumRe, aIm = this._accumIm;
         const rRe = r.re, rIm = r.im;
         // Serial port of the desktop's parallelChunks de-rotation (disjoint per-bin
-        // writes → identical result single-threaded).
+        // writes -> identical result single-threaded).
         for (let k = 0; k < N; k++) {
           let h = Math.round(k / k0x);                // nearest harmonic lobe (k ≥ 0)
           if (h > hMaxX) h = hMaxX;
@@ -428,7 +428,7 @@ export class FftAccumulator {
       }
     } else {
       // Incoherent analyze stores the RAW FFT magnitude in r.re (im = 0). Sum its
-      // POWER so the mag→amplitude conversion in overlayOnto applies ONCE.
+      // POWER so the mag->amplitude conversion in overlayOnto applies ONCE.
       const aPow = this._accumPow;
       const rRe = r.re;
       for (let k = 0; k < N; k++) {
@@ -444,15 +444,15 @@ export class FftAccumulator {
    * Multi-tone cross-tick rotation (Java FftAnalyzerWorker.accumulateMultiTone):
    * each detected strong tone's lobe is de-rotated by a CONSTANT phase equal to that
    * tone's own inter-tick advance, so the lobe is preserved intact and the
-   * accumulated peak stays at the tone's true (sub-bin) frequency — no grid-lock.
+   * accumulated peak stays at the tone's true (sub-bin) frequency - no grid-lock.
    * Each tone carries its OWN phase-lock loop (toneDroppedSamples) so a frozen-κ
-   * residual can't ramp its lobe out of phase over a long average — the per-tone
+   * residual can't ramp its lobe out of phase over a long average - the per-tone
    * analogue of the single-reference loop, so IMD tone pairs hold. The dual-tone IMD
    * grid (a·F1+b·F2) rides a·ang1+b·ang2 (the SAME tracked tone phases), and the
    * non-tone bins get a plain time-shift drift-corrected by the strong tones' pooled
    * clock estimate. This is the honest "measure what was sampled" path for unknown /
    * external multi-tone signals: the tones are found from the spectrum, not assumed.
-   * Run SERIALLY here; the desktop parallelizes the bin loop (parallelChunks) — the
+   * Run SERIALLY here; the desktop parallelizes the bin loop (parallelChunks) - the
    * per-bin writes are disjoint, so the math is identical.
    */
   _accumulateMultiTone(r, N, weight, delta) {
@@ -484,7 +484,7 @@ export class FftAccumulator {
       const k0 = Math.min(Math.max(0, Math.round(kappa)), N - 1);
       // De-rotate this tone's lobe by its OWN frequency, advanced by the tone's
       // accumulated loop correction. A frozen per-tone κ would ramp the lobe phase
-      // and vector-cancel it — the multi-tone analogue of the single-reference drift.
+      // and vector-cancel it - the multi-tone analogue of the single-reference drift.
       const effDelta = delta + this._toneDroppedSamples[t];
       let ang = -2.0 * Math.PI * effDelta * kappa / fftSize;
       let cr = Math.cos(ang), sr = Math.sin(ang);
@@ -509,7 +509,7 @@ export class FftAccumulator {
           // Per-tone phase-lock loop: fold a fraction of the running mis-alignment vs
           // the DEEP accumulated phase into the tone's correction. A residual far
           // beyond the per-tick noise is a phase DISCONTINUITY (DDS jump / reconnect)
-          // the window gate missed — snap (gain 1). On a re-sync do a full realign too.
+          // the window gate missed - snap (gain 1). On a re-sync do a full realign too.
           const accumPhase = Math.atan2(aIm[k0], aRe[k0]);
           const residual = ieeeRemainder(obsPhase - accumPhase, 2.0 * Math.PI);
           const jump = Math.abs(residual) > PHASE_JUMP_RAD;
@@ -536,8 +536,8 @@ export class FftAccumulator {
     }
     // One re-sync realign serves every tone; clear after they've all used it.
     this._gapRecoverPending = false;
-    // IMD-product grid (true dual-tone): each product a·F1+b·F2 rides a·ang1+b·ang2 —
-    // the SAME tracked tone phases — so its EXACT sub-bin frequency (clock offset /
+    // IMD-product grid (true dual-tone): each product a·F1+b·F2 rides a·ang1+b·ang2 -
+    // the SAME tracked tone phases - so its EXACT sub-bin frequency (clock offset /
     // wobble included) is de-rotated, not the integer bin-centre.
     let prodIdx = null;
     let prodCos = null, prodSin = null;
@@ -623,7 +623,7 @@ export class FftAccumulator {
   }
 
   /** Finds the fractional bins of the "strong" tones in r's spectrum (Java
-   *  detectStrongTones) — local maxima within STRONG_TONE_REL_DB of the strongest
+   *  detectStrongTones) - local maxima within STRONG_TONE_REL_DB of the strongest
    *  peak, merged within MIN_TONE_SEP_BINS, harmonics rejected, refined to sub-bin by
    *  parabolic interpolation, sorted ascending. Detection from the spectrum (not
    *  commanded frequencies) is deliberate: the generator may be external, so the FFT
@@ -668,7 +668,7 @@ export class FftAccumulator {
       }
     }
     // Harmonic rejection: a single tone's harmonics clear the floor and would force
-    // the per-tone path (frozen parabolic κ, NO phase-slope refine — the long-run
+    // the per-tone path (frozen parabolic κ, NO phase-slope refine - the long-run
     // drift). A harmonic sits at an integer multiple h≥2 of the strongest tone AND
     // well below it; the single-reference time-shift already aligns it via h×, so drop
     // it. Genuine inharmonic IMD partners aren't integer multiples and aren't far
@@ -729,7 +729,7 @@ export class FftAccumulator {
     const halfSize = r.fftSize / 2;
     const N = halfSize + 1;
 
-    // Derive the (mag → amplitude) conversion factor from the pre-overlay r:
+    // Derive the (mag -> amplitude) conversion factor from the pre-overlay r:
     // amplLin = hypot(re,im)·normFactor·2 (non-DC/Nyquist). Picking the
     // fundamental bin guarantees a high-SNR sample; the factor depends only on
     // the window's coherent gain (constant for a given fftSize/window).

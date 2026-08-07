@@ -1,12 +1,12 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
 // Faithful port of the language-discovery / display-label logic in
 // org.edgo.audio.measure.gui.MainWindow (discoverLanguageTags / tagFromFileName
-// / displayLabel) — it enumerates the bundled messages_*.properties files,
+// / displayLabel) - it enumerates the bundled messages_*.properties files,
 // turns each filename into a BCP-47 tag (messages_zh_TW.properties -> "zh-TW",
 // i.e. '_' -> '-'), and labels it with the language's own endonym, first
 // letter upper-cased (Locale.forLanguageTag(tag).getDisplayName(loc)).

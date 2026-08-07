@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -11,7 +11,7 @@
 // (readDpd / isDualToneCorrectionFile / loadHarmonics / loadIntermod).
 //
 // The file is self-describing: a single-tone (harmonic) file's column header
-// begins "harmonic;…"; a dual-tone (intermod) file's begins "a;b;…". Data rows
+// begins "harmonic;..."; a dual-tone (intermod) file's begins "a;b;...". Data rows
 // use German-locale decimals (comma decimals, semicolon fields) so the
 // generator's existing SINE_COMPENSATED loader reads them unchanged; the comment
 // header lines use US-locale (dot) decimals. The "2nd freq for IMD" lives in the
@@ -37,7 +37,7 @@ function fixedDe(value, p) {
 }
 
 /** Java `%.<p>e` in GERMAN locale: scientific with `p` mantissa digits, comma
- *  decimal, two-digit signed exponent (e.g. -1.0000000000e+00 → "-1,0000000000e+00").
+ *  decimal, two-digit signed exponent (e.g. -1.0000000000e+00 -> "-1,0000000000e+00").
  *  Java pads the exponent to a minimum of two digits and always carries a sign. */
 function sciDe(value, p) {
   let s = value.toExponential(p);              // e.g. "-1.0000000000e+0"
@@ -52,14 +52,14 @@ function sciDe(value, p) {
 }
 
 // ---------------------------------------------------------------------------
-// Write — single tone (harmonic predistortion).
+// Write - single tone (harmonic predistortion).
 // ---------------------------------------------------------------------------
 
 /**
- * Serialises a single-tone harmonic-predistortion correction to .dpd text —
+ * Serialises a single-tone harmonic-predistortion correction to .dpd text -
  * byte-compatible with the CLI iterative-compensate output so the generator's
  * SINE_COMPENSATED loader reads it unchanged. The de-embed mirrors
- * HarmonicCompensation.toGeneratorCorrections: ÷ chain H(f_h), ADC dBFS → Vrms,
+ * HarmonicCompensation.toGeneratorCorrections: ÷ chain H(f_h), ADC dBFS -> Vrms,
  * ratio to the DAC fundamental.
  *
  * `amplitudeVrms` IS the DAC fundamental (genAmplitudeVrms); the ratio columns
@@ -110,7 +110,7 @@ export function writeHarmonicDpd(comp, extraHeaderLines, fundamentalHz, fundamen
 }
 
 // ---------------------------------------------------------------------------
-// Write — dual tone (intermodulation predistortion).
+// Write - dual tone (intermodulation predistortion).
 // ---------------------------------------------------------------------------
 
 /**
@@ -123,11 +123,11 @@ export function writeHarmonicDpd(comp, extraHeaderLines, fundamentalHz, fundamen
  * @param {import('../predistortion/intermod-compensation.js').IntermodCompensation} comp
  * @param {?string[]} extraHeaderLines provenance comment lines written first
  * @param {number} f1Hz tone-1 frequency (Hz)
- * @param {number} f2Hz tone-2 frequency (Hz) — the "2nd freq for IMD"
+ * @param {number} f2Hz tone-2 frequency (Hz) - the "2nd freq for IMD"
  * @param {number} fundamentalDbFs unused by the format (kept for signature parity)
  * @param {number} sampleRate sample rate (Hz)
  * @param {number} bitDepth output bit depth
- * @param {number} amplitudeVrms total generator amplitude (Vrms) — header only
+ * @param {number} amplitudeVrms total generator amplitude (Vrms) - header only
  * @param {(f: number) => [number, number]} calResponseAt .frc response [magLin, phaseRad]
  * @param {number} adcFsVoltageRms ADC full-scale (Vrms)
  * @param {number} dacFundamentalVrms DAC F1 fundamental output (Vrms) the ratio is taken against
@@ -171,7 +171,7 @@ export function writeIntermodDpd(comp, extraHeaderLines, f1Hz, f2Hz, fundamental
  * Reads a .dpd correction file's text and returns the generator-ready
  * compensation. The format is self-describing (the first non-comment line's
  * column header is the THD/IMD signature): a single-tone (harmonic) file's header
- * begins "harmonic;…"; a dual-tone (intermod) file's begins "a;b;…".
+ * begins "harmonic;..."; a dual-tone (intermod) file's begins "a;b;...".
  *
  * For a single-tone file, `frequency` (Hz) and `sampleRate` drive the system-delay
  * phase re-derivation from the H1 sentinel row (mirrors loadHarmonics); for a
@@ -192,7 +192,7 @@ export function readDpd(text, frequency, sampleRate) {
 }
 
 /** True when `text`'s first non-comment line (the column header) marks a dual-tone
- *  intermod file ("a;b;…") rather than a single-tone harmonic file ("harmonic;…"). */
+ *  intermod file ("a;b;...") rather than a single-tone harmonic file ("harmonic;..."). */
 export function isDualToneDpd(text) {
   const lines = text.split(/\r?\n/);
   for (let raw of lines) {
@@ -209,7 +209,7 @@ export function isDualToneDpd(text) {
 function loadHarmonicsDpd(text, frequency, sampleRate) {
   // [ampRatio, phi_measured (rad), freqHz, harmonicNumber]
   const list = [];
-  let phi1 = NaN;   // fundamental measured phase (rad) — used for delay compensation
+  let phi1 = NaN;   // fundamental measured phase (rad) - used for delay compensation
 
   const lines = text.split(/\r?\n/);
   for (let raw of lines) {
@@ -240,7 +240,7 @@ function loadHarmonicsDpd(text, frequency, sampleRate) {
   }
 
   if (Number.isNaN(phi1)) {
-    // H1 row absent — assume DDS sine start phase (-π/2), delay unknown → no correction.
+    // H1 row absent - assume DDS sine start phase (-π/2), delay unknown -> no correction.
     phi1 = -Math.PI / 2.0;
   }
 
@@ -279,7 +279,7 @@ function loadIntermodDpd(text) {
     const cols = line.split(';');
     if (cols.length < 8) continue;                       // skip the header / short rows
     const c0 = cols[0].trim().charAt(0);
-    if (!isAsciiDigit(c0) && c0 !== '-') continue;       // header row "a;b;…"
+    if (!isAsciiDigit(c0) && c0 !== '-') continue;       // header row "a;b;..."
     const a = parseInt(cols[0].trim(), 10);
     const b = parseInt(cols[1].trim(), 10);
     const re = parseGerman(cols[6]);
@@ -311,7 +311,7 @@ function isAsciiDigit(ch) {
   return ch >= '0' && ch <= '9';
 }
 
-/** Parses a German-locale decimal (comma → dot), mirroring `replace(',', '.')`. */
+/** Parses a German-locale decimal (comma -> dot), mirroring `replace(',', '.')`. */
 function parseGerman(col) {
   return parseFloat(col.trim().replace(',', '.'));
 }

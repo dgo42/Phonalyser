@@ -1,17 +1,17 @@
 /*
- * Phonalyser web — the MAIN TAB (the rAF render-frame driver + the 3-pane collapsible /
+ * Phonalyser web - the MAIN TAB (the rAF render-frame driver + the 3-pane collapsible /
  * sash-split layout).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  *
  * Faithful port of gui/MultifunctionalTab + gui/MainTab. Owns the MAIN rAF render loop
  * (which drives the scope + FFT pane render() each frame, each pane self-gating on its OWN
- * record state) and the workspace LAYOUT — the collapsible generator / scope / FFT panes,
+ * record state) and the workspace LAYOUT - the collapsible generator / scope / FFT panes,
  * the draggable horizontal + vertical SASH splitters, and the pane-weight / collapse-state
  * persistence. The per-pane render branches (live trace + measurement + scrollbars / idle
  * grid, and the dirty-checked spectrum + readout) live in scope/scope-pane.js + fft/fft-pane.js;
  * this tab just sequences them. It owns NO lifecycle flags (genRunning / scopeRec / fftRec /
- * busy) — those stay the single source of truth in app.js and each pane.render() self-gates
+ * busy) - those stay the single source of truth in app.js and each pane.render() self-gates
  * on its own record state through the closures app.js injected into the panes. The panes are
  * injected (start() drives their render()); prefs is injected for the pane-weight / collapse
  * persistence; the workspace DOM ids are reached directly via the global `$` / getElementById.
@@ -129,7 +129,7 @@ export class MainTab {
       if (!state.oscCollapsed && !state.fftCollapsed) { prefs.multiVSplitWeights = state.vGrow.slice(); prefs.save(); }
     }
 
-    // Title-bar clicks route through the bus (Java PaneTitle publishes paneTitleClick →
+    // Title-bar clicks route through the bus (Java PaneTitle publishes paneTitleClick ->
     // MultifunctionalTab subscribes). The PaneTitle widgets above publish; this layout owner
     // subscribes by pane id and performs the collapse (osc/fft mutual exclusion stays here).
     const bus = MessageBus.instance();
@@ -137,7 +137,7 @@ export class MainTab {
     bus.subscribe(paneTitleClick(PaneId.SCOPE), () => toggleOsc());
     bus.subscribe(paneTitleClick(PaneId.FFT), () => toggleFft());
 
-    // Horizontal sash drag — blocked when the generator is collapsed; clamps the
+    // Horizontal sash drag - blocked when the generator is collapsed; clamps the
     // generator width to ≥ MIN_WIDTH_PX and ≤ avail−MIN_WIDTH_PX (Java sashFilter).
     hSash.addEventListener('mousedown', (e) => {
       if (state.genCollapsed) return;
@@ -155,7 +155,7 @@ export class MainTab {
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
     });
 
-    // Vertical sash drag — blocked when either pane is collapsed; pointer Y → a
+    // Vertical sash drag - blocked when either pane is collapsed; pointer Y -> a
     // scope/fft grow ratio.
     vSash.addEventListener('mousedown', (e) => {
       if (state.oscCollapsed || state.fftCollapsed) return;
@@ -177,7 +177,7 @@ export class MainTab {
     // vanishes (the controlResized re-pin).
     window.addEventListener('resize', () => { if (!state.genCollapsed) applyGen(); });
 
-    // Restore saved layout: weights → gen → (osc XOR fft); osc wins the exclusion.
+    // Restore saved layout: weights -> gen -> (osc XOR fft); osc wins the exclusion.
     const savedGen = prefs.genPaneCollapsed.get();
     const savedOsc = prefs.oscPaneCollapsed.get();
     const savedFft = prefs.fftPaneCollapsed.get();

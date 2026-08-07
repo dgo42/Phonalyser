@@ -1,26 +1,26 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
 // Faithful port of org.edgo.audio.measure.gui.scope.ScopeNav.
 //
-// The oscilloscope's pan/zoom engine — the single home for every horizontal and
+// The oscilloscope's pan/zoom engine - the single home for every horizontal and
 // vertical move/zoom transform and the viewport mapping, as pure SWT-/Preferences-
 // free logic so it is fully unit-testable. Callers (the view, pane, tab control)
 // read the persisted state, hand it to one of these methods, and write the result
 // back.
 //
 // ── One buffer, three modes ─────────────────────────────────────────────────
-// All three modes render the SAME signal buffer; only its growth differs — LIVE
+// All three modes render the SAME signal buffer; only its growth differs - LIVE
 // keeps receiving samples, FROZEN (stopped) and FILE never do. Horizontal
 // position is one model in every mode: a `displaySamples`-wide window whose left
 // edge is
 //     viewLeftAbs = anchorAbs − displaySamples · offsetFrac
 // where the *anchor* is the trigger (live/frozen) or the view centre (file, with
 // offsetFrac = 0.5). `offsetFrac` is the trigger-position fraction and MAY leave
-// [0,1] (a *virtual* offset) — the handle pins to the screen edge but the window,
+// [0,1] (a *virtual* offset) - the handle pins to the screen edge but the window,
 // and the time-offset readout, follow the real value. Out-of-buffer columns are
 // simply not drawn (the renderer blanks them); the zoom/pan anchor never moves to
 // compensate.
@@ -49,11 +49,11 @@ import {
  */
 
 /**
- * The file/scroll view-window mapping — read back-offsets for the main + condensed
+ * The file/scroll view-window mapping - read back-offsets for the main + condensed
  * views plus the centre range the nav-slider widget needs. Mirrors the Java
  * `ViewWindow` record.
  * @typedef {Object} ViewWindow
- * @property {number} mainBackOffset      fractional (double) — carries the sub-sample scroll
+ * @property {number} mainBackOffset      fractional (double) - carries the sub-sample scroll
  * @property {number} condensedBackOffset
  * @property {number} minCentre
  * @property {number} maxCentre
@@ -75,7 +75,7 @@ export class ScopeNav {
   }
 
   // =====================================================================
-  // Horizontal — viewport mapping
+  // Horizontal - viewport mapping
   // =====================================================================
 
   /** Absolute (fractional) sample at the left edge of the display window. */
@@ -122,7 +122,7 @@ export class ScopeNav {
     } else {
       clampedCentre = Math.max(minCentre, Math.min(maxCentre, centreFrames));
       // Keep the back-offset FRACTIONAL: a ½-div step is 15.36 samples at 384 kHz,
-      // and rounding to a whole sample would quantise the scroll (→ 41.7 µs, not
+      // and rounding to a whole sample would quantise the scroll (-> 41.7 µs, not
       // 40 µs). The view carries the fraction into a sub-sample render.
       const viewEndAbs = clampedCentre + displaySamples / 2.0;
       mainOffset = Math.max(0, writePos - viewEndAbs);
@@ -143,7 +143,7 @@ export class ScopeNav {
   }
 
   // =====================================================================
-  // Horizontal — move
+  // Horizontal - move
   // =====================================================================
 
   /** One ½-division horizontal move tick in offsetFrac units (live/frozen). */
@@ -161,7 +161,7 @@ export class ScopeNav {
    *  negative = toward older samples), clamped so the full window stays inside the
    *  file. `samplesPerDiv` is the EXACT double samples-per-division
    *  (timePerDiv × sampleRate, NOT derived from the int-rounded window width) so
-   *  fractional steps — ⅕ div = 1.764 samples at 44.1 kHz — accumulate unrounded. */
+   *  fractional steps - ⅕ div = 1.764 samples at 44.1 kHz - accumulate unrounded. */
   moveFileCentre(centreAbs, divisions, samplesPerDiv, displaySamples, oldest, latest) {
     return this.clampFileCentre(centreAbs + divisions * samplesPerDiv, displaySamples, oldest, latest);
   }
@@ -169,7 +169,7 @@ export class ScopeNav {
   /**
    * New file view centre after a horizontal zoom around the mouse: the sample under
    * the pointer (screen fraction `mouseFrac`) stays put as the window resizes from
-   * `dispOld` to `dispNew` samples. Caller clamps the result with clampFileCentre —
+   * `dispOld` to `dispNew` samples. Caller clamps the result with clampFileCentre -
    * once the whole file fits the width the clamp centres it, so the anchor is free to
    * move (per the spec's file limit).
    */
@@ -189,7 +189,7 @@ export class ScopeNav {
   }
 
   // =====================================================================
-  // Horizontal — zoom
+  // Horizontal - zoom
   // =====================================================================
 
   /**
@@ -199,8 +199,8 @@ export class ScopeNav {
    * @param {number} dispNew
    * @param {number} mouseFrac
    * @param {boolean} aroundMouse true for ctrl+shift+wheel (anchor the sample under
-   *        the mouse — the offset moves, possibly off-screen); false for the
-   *        resolution control (anchor the trigger — the offset is unchanged).
+   *        the mouse - the offset moves, possibly off-screen); false for the
+   *        resolution control (anchor the trigger - the offset is unchanged).
    * @returns {number}
    */
   zoomTriggerOffset(offsetOld, dispOld, dispNew, mouseFrac, aroundMouse) {
@@ -212,7 +212,7 @@ export class ScopeNav {
   }
 
   // =====================================================================
-  // Vertical — move (both channels together, ±FS/2-at-middle limit)
+  // Vertical - move (both channels together, ±FS/2-at-middle limit)
   // =====================================================================
 
   /** One ½-division vertical move tick in offsetFrac units. */
@@ -227,7 +227,7 @@ export class ScopeNav {
    * (on == false) is ignored for both the clamp and the result.
    *
    * Per-channel full-scale (Java ScopeNav.moveVertical two-peak overload): each
-   * channel's ±FS/2-at-middle clamp uses its OWN peak — the ADC full-scale plays the
+   * channel's ±FS/2-at-middle clamp uses its OWN peak - the ADC full-scale plays the
    * same per-channel role the V/div already does. `rightPeak` defaults to `leftPeak`
    * so the LINKED (equal L/R full-scale) case is byte-for-byte the single-peak form.
    * @returns {number[]} {newLeftOffsetFrac, newRightOffsetFrac}
@@ -241,14 +241,14 @@ export class ScopeNav {
   }
 
   // =====================================================================
-  // Vertical — zoom (coupled V/div + re-anchored offsets)
+  // Vertical - zoom (coupled V/div + re-anchored offsets)
   // =====================================================================
 
   /** Largest V/div allowed when zooming out: the smallest 1-2-5 rung at which the ADC
    *  full scale (±peak = 2·peak p-p) still FITS the grid height. The exact-fill value
    *  2·peak/Ydiv usually lands between rungs (e.g. 0.506 V/div for a 2.53 V peak), so
    *  rounding UP makes the rung that shows all of FS without clipping reachable
-   *  (1 V/div there) — 500 mV/div would clip the last sliver of FS. */
+   *  (1 V/div there) - 500 mV/div would clip the last sliver of FS. */
   zoomOutVoltsPerDivCeiling(peakVolts) {
     return ceilToStep(2.0 * peakVolts / this.divisionsY, this.vDivLadder);
   }
@@ -256,7 +256,7 @@ export class ScopeNav {
   /**
    * Zooms both active channels' V/div one tick (coupled per the 1-2-5 proportional
    * rule) and re-anchors each channel's offset so the voltage under `anchorFrac`
-   * stays put — anchorFrac = 0.5 for the V/div control (canvas middle), mouseY/h for
+   * stays put - anchorFrac = 0.5 for the V/div control (canvas middle), mouseY/h for
    * ctrl+wheel. Zoom-out is capped at the FS-fills-height ceiling.
    * Per-channel full-scale (Java ScopeNav.zoomVertical two-peak overload): each
    * channel's zoom-out ceiling ("±FS fills the grid height") is derived from its OWN

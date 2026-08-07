@@ -1,14 +1,14 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Frequency-domain glitch / discontinuity rejector — a port of gates 2 & 3 of the
+// Frequency-domain glitch / discontinuity rejector - a port of gates 2 & 3 of the
 // desktop SpectralDiscontinuityDetector. Each block is reduced to log-spaced band
 // levels (dB) and compared to the running statistics of accepted blocks:
 //   gate 2 (broadband floor): mean lift over a per-band running median, vs a
-//           MAD-self-calibrated threshold — catches a uniform floor rise.
+//           MAD-self-calibrated threshold - catches a uniform floor rise.
 //   gate 3 (total power): a generator stall / long dropout where lines collapse.
 // (Gate 1, the near-carrier pedestal, needs the tone-lobe finder and lands with
 //  the full FFT-engine port.) Rejected frames never enter the coherent average.
@@ -80,7 +80,7 @@ export class SpectralDiscontinuityDetector {
       return false;
     }
 
-    // gate 2 — broadband floor lift vs the running per-band median (lines excluded).
+    // gate 2 - broadband floor lift vs the running per-band median (lines excluded).
     const rho = [];
     for (let b = 0; b < bands; b++) {
       if (isLine(b)) continue;
@@ -90,7 +90,7 @@ export class SpectralDiscontinuityDetector {
     const sMed = median(this.scoreHist);
     const scoreOut = score > sMed + this.K * Math.max(mad(this.scoreHist, sMed), this.MIN_MAD);
 
-    // gate 3 — total power outlier (stall / dropout).
+    // gate 3 - total power outlier (stall / dropout).
     const pMed = median(this.powerHist);
     const powerOut = Math.abs(powerDb - pMed) > this.K * Math.max(mad(this.powerHist, pMed), this.MIN_MAD);
 

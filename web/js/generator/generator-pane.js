@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — the generator pane (signal-form combo · freq/amp/duty · dual-tone ·
+ * Phonalyser web - the generator pane (signal-form combo · freq/amp/duty · dual-tone ·
  * sweep · dither · snap-to-bin · .dpd corrections · Play/ON-AIR · Save-to · file player).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
@@ -21,6 +21,12 @@ import { Events, GenChangeCause } from '../bus/events.js';
 import { GenSignalForm, isDualTone, isPeriodic, DdsKernel, quantizePcm, outputLaneGate,
   loadHarmonics, loadIntermod, isDualToneCorrectionFile } from './dds-kernel.js';
 import * as fileStore from '../io/file-store.js';
+import { backendDisplayName } from '../audio/audio-backend-type.js';
+
+/** The ON-AIR tick period (Java GeneratorPane.scheduleOnAirBlink's 500 ms timerExec). The
+ *  desktop toggles the banner's colour here; the web's banner blinks in CSS, so what is left is
+ *  the lane-death consult that rides the same tick - the pane's existing visual sync point. */
+const ON_AIR_TICK_MS = 500;
 
 export class GeneratorPane {
   /**
@@ -29,13 +35,13 @@ export class GeneratorPane {
    * @param deps   {getField, io, WAV_TYPE, formLabel, formIcon, sfVal, outRate,
    *                isGenRunning, isBusy, setBusy, readConfig, syncFftAlign}
    *   - getField: (id) => the generator NumericStepField (built in app.js initStepFields).
-   *   - io: {pickSaveTarget, writeToTarget, saveScopeCapture, readWav, readAiff, decodeFlac} —
+   *   - io: {pickSaveTarget, writeToTarget, saveScopeCapture, readWav, readAiff, decodeFlac} -
    *       the generator Save-to + file-player decode collaborators.
    *   - WAV_TYPE: the save-picker accept descriptor (shared with the scope save).
    *   - formLabel / formIcon: (form) => the localized label / waveform pictogram src (combo).
    *   - sfVal: (id, dflt) => the canonical value of a step field by id (shared with readConfig).
    *   - outRate: () => the live output sample rate (the frequency/sweep Nyquist + emit grid).
-   *   - isGenRunning: () => engine.generator.running — the controller owns the running flag; the pane only reads it.
+   *   - isGenRunning: () => engine.generator.running - the controller owns the running flag; the pane only reads it.
    *   - isBusy / setBusy: the shared async re-entrancy guard accessors (start/stop serialize).
    *   - readConfig: () => snapshot the live UI into engine.config before a (re)start.
    *   - syncFftAlign: () => re-gate the FFT align combo (snap gates it; FftTabControl).
@@ -64,23 +70,23 @@ export class GeneratorPane {
 
     // FreqResp measurement lifecycle (Java GeneratorPane freqRespStarted/StoppedListener):
     // the GeneratorController stops both engines in its OWN subscription; here only the
-    // visuals — clear the play LEDs + ON-AIR and gray both Play buttons for the sweep.
+    // visuals - clear the play LEDs + ON-AIR and gray both Play buttons for the sweep.
     const bus = MessageBus.instance();
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, () => this.onFreqRespMeasurementStarted());
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => this.onFreqRespMeasurementStopped());
     // Output device lost / failed to open (GeneratorController._reportDeviceError, direction
-    // 'output'): the controller stays UI-free and expects the pane to reset its visuals — clear
+    // 'output'): the controller stays UI-free and expects the pane to reset its visuals - clear
     // the Play / ON-AIR / file-Play indicators so they don't read "playing" while no line is open.
     bus.subscribe(Events.AUDIO_DEVICE_ERROR, (p) => {
       if (p && p.direction === 'output') {
         $('#genPlay').removeClass('playing');
-        $('#onAir').removeClass('live');
+        this.setOnAir(false);
         this.setGenFileBtn(false);
       }
     });
   }
 
-  /** FREQRESP_MEASUREMENT_STARTED handler — the controller stops both engines in its own
+  /** FREQRESP_MEASUREMENT_STARTED handler - the controller stops both engines in its own
    *  subscription; here only the visuals: dim and gray both Play buttons while the sweep
    *  drives the DAC (Java GeneratorPane.onFreqRespMeasurementStarted). */
   onFreqRespMeasurementStarted() {
@@ -95,7 +101,7 @@ export class GeneratorPane {
     $('#genPlay, #genFilePlay').prop('disabled', false);
   }
 
-  /** Push every generator pref into its control widget — the init seed + the FFT-preset
+  /** Push every generator pref into its control widget - the init seed + the FFT-preset
    *  recall mirror-back (app.js applyPrefsToUi delegates here). The toneHz / ampDbfs /
    *  tone2Hz / amp1Pct / amp2Pct / duty fields are owned by their NumericStepField
    *  controllers (seeded in initStepFields); nothing to set for those here. */
@@ -110,7 +116,7 @@ export class GeneratorPane {
     $('#snap').prop('checked', prefs.genSnapToFftBin.get());
     $('#genFileLoop').prop('checked', prefs.genPlayFromLoop.get());   // Java playFromLoopBtn is two-way bound
     this.seedSweepFields();   // sweep params (engine.config + loop) from prefs (numeric fields are stepfields)
-    this.restoreDpdFromStore();     // #8: re-seed a persisted .dpd from the file-store before showing the row
+    this.restoreDpdFromStore();     // re-seed a persisted .dpd from the file-store before showing the row
     this.refreshCorrectionsRow();   // .dpd slot enable + display for the current form
   }
 
@@ -118,8 +124,8 @@ export class GeneratorPane {
   // Mirrors Java updateFreqLabel: SINE-with-snap shows the bin-snapped frequency.
   // Frequency label (Java GeneratorPane.updateFreqLabel): brackets for RECTANGLE and TRIANGLE
   // (sample-period-aligned Hz, fs/round(fs/f)), or SINE / SINE_COMP with snap-to-FFT-bin on
-  // (bin-snapped Hz — SINE_COMP is FLL-aligned to the bin here, see below); every other form
-  // (noise, …) shows the plain "Frequency".
+  // (bin-snapped Hz - SINE_COMP is FLL-aligned to the bin here, see below); every other form
+  // (noise, ...) shows the plain "Frequency".
   refreshFreqLabel() {
     const engine = this.engine;
     const sfVal = (id, dflt) => this._sfVal(id, dflt);
@@ -128,10 +134,10 @@ export class GeneratorPane {
     const fs = this._outRate();
     const snap = $('#snap').is(':checked');
     // Bracket grid is the OUTPUT-rate bin width (outRate/fftSize), matching the emit path
-    // (_genEmitFreq) — engine.binW is the capture-side width (inRate/fftSize) and would show a
+    // (_genEmitFreq) - engine.binW is the capture-side width (inRate/fftSize) and would show a
     // bracket that differs from the emitted tone. Java updateFreqLabel/updateDualToneFreqLabels
     // use the output sample rate (effectiveFrequency / FftBinSnap with currentOutputSampleRate).
-    // fftSize is read LIVE from the #fftSize select — Java FftBinSnap.snapIfEnabled reads
+    // fftSize is read LIVE from the #fftSize select - Java FftBinSnap.snapIfEnabled reads
     // prefs.getFftLength() (the FFT pane's CURRENT length), NOT a cached engine.config.fftSize
     // that only refreshes on (re)start; reading the stale config showed a bracket that diverged
     // from the just-changed FFT length. Java guard: fftSize >= 8 (FftBinSnap.snapIfEnabled).
@@ -161,8 +167,8 @@ export class GeneratorPane {
       : t('generator.frequency.bracket', `${corrected.toFixed(3)} Hz`));
   }
 
-  // Duty label: RECTANGLE and TRIANGLE show the real (sample-grid achievable) duty in brackets — k
-  // whole samples of n per period, clamped to [1, n-1] — so the user sees the duty actually emitted,
+  // Duty label: RECTANGLE and TRIANGLE show the real (sample-grid achievable) duty in brackets - k
+  // whole samples of n per period, clamped to [1, n-1] - so the user sees the duty actually emitted,
   // not just the typed value (Java GeneratorPane). Both are driven at the period-aligned grid (fs/N),
   // so RECTANGLE's +1/-1 step edge and TRIANGLE's duty corner land on whole samples; every other form
   // keeps the plain "Duty cycle" label.
@@ -181,7 +187,7 @@ export class GeneratorPane {
   }
 
   // "Dither" caption (Java GeneratorPane.updateDitherLabel): append the dither value in the OTHER
-  // unit in brackets — dBV when the field shows bits, bits when it shows dBV — mirroring how
+  // unit in brackets - dBV when the field shows bits, bits when it shows dBV - mirroring how
   // refreshFreqLabel annotates the Frequency caption. Off shows the plain caption. The dBV side
   // tracks the live DAC full-scale, so this is re-run on the dither reanchor / refresh listeners.
   updateDitherLabel() {
@@ -199,7 +205,7 @@ export class GeneratorPane {
     const form = $('#signalForm').val();
     const comp = form === GenSignalForm.SINE_COMP || form === GenSignalForm.DUAL_TONE_COMP;
     const text = comp ? this.prefs.getGenDpd(form) : null;
-    // Show the original .dpd basename — the session map first, else the persisted name pref
+    // Show the original .dpd basename - the session map first, else the persisted name pref
     // (survives a reload; the full OS path stays unavailable). Fall back to ✓ only if a .dpd is
     // loaded with no remembered name (e.g. a wizard-applied compensation).
     const label = !comp ? '' : (this.genCorrNames[form] || this.prefs.getGenDpdName(form) || (text ? '✓' : ''));
@@ -207,10 +213,10 @@ export class GeneratorPane {
     $('#genCorrPath, #genCorrBrowse, #genCorrClear').prop('disabled', !comp);
     $('#genCorrPath').closest('.filefield').css('opacity', comp ? '' : '0.5');
   }
-  // The file-store key for the .dpd of `form` — one slot per compensation family (single vs
-  // dual tone), matching how prefs.getGenDpd(form) buckets the two forms (#8). Persisted here
+  // The file-store key for the .dpd of `form` - one slot per compensation family (single vs
+  // dual tone), matching how prefs.getGenDpd(form) buckets the two forms. Persisted here
   // so the loaded .dpd survives a reload through the SAME file-store module the FFT calibration
-  // rows use (#5); the worklet still reads the live text out of prefs.getGenDpd.
+  // rows use; the worklet still reads the live text out of prefs.getGenDpd.
   dpdKey(form) { return 'gendpd.' + (isDualTone(form) ? 'dual' : 'single'); }
 
   bindCorrections() {
@@ -222,7 +228,7 @@ export class GeneratorPane {
       try {
         const text = await file.text();
         prefs.setGenDpd(form, text); prefs.setGenDpdName(form, file.name); prefs.save();
-        fileStore.put(this.dpdKey(form), file.name, text);   // #8: persist the compensated .dpd (name + contents)
+        fileStore.put(this.dpdKey(form), file.name, text);   // persist the compensated .dpd (name + contents)
         this.genCorrNames[form] = file.name;
         this.refreshCorrectionsRow();
         await this.restartGenerator();   // re-applies the .dpd to a live compensated tone (no-op if stopped)
@@ -232,17 +238,17 @@ export class GeneratorPane {
     $('#genCorrClear').on('click', async () => {
       const form = $('#signalForm').val();
       prefs.setGenDpd(form, null); prefs.setGenDpdName(form, null); prefs.save();
-      fileStore.remove(this.dpdKey(form));   // #8: clearing removes it from storage
+      fileStore.remove(this.dpdKey(form));   // clearing removes it from storage
       delete this.genCorrNames[form];
       this.refreshCorrectionsRow();
       await this.restartGenerator();
     });
   }
 
-  // Restore any .dpd persisted through the file-store into the live prefs slot on startup (#8):
+  // Restore any .dpd persisted through the file-store into the live prefs slot on startup:
   // the worklet reads the .dpd from prefs.getGenDpd, so re-seed prefs from the file-store when the
-  // prefs slot is empty (e.g. cleared prefs but retained file-store). Idempotent — a slot already
-  // holding the same text is left untouched. Mirrors how the FFT calibration rows restore (#5).
+  // prefs slot is empty (e.g. cleared prefs but retained file-store). Idempotent - a slot already
+  // holding the same text is left untouched. Mirrors how the FFT calibration rows restore.
   restoreDpdFromStore() {
     const prefs = this.prefs;
     for (const [form, key] of [[GenSignalForm.SINE_COMP, this.dpdKey(GenSignalForm.SINE_COMP)],
@@ -278,19 +284,19 @@ export class GeneratorPane {
     const toneTip = dual ? 'generator.dualTone.freq1.tooltip' : 'generator.frequency.tooltip';
     $('#toneHz').attr('data-i18n-title', toneTip).attr('title', t(toneTip).replace(/&/g, ''));
     $('#sweepWrap').css('display', sweep ? 'grid' : 'none');   // sweep params: 2-col grid (Java sweepPanel) when on
-    // Duty row stays ALWAYS laid out (Java updateDutyFieldEnabled) — never hidden by form.
+    // Duty row stays ALWAYS laid out (Java updateDutyFieldEnabled) - never hidden by form.
     // Only enable/disable the duty field + grey its label per form (RECTANGLE / TRIANGLE).
     const duty = form === GenSignalForm.RECTANGLE || form === GenSignalForm.TRIANGLE;
     if (stepFields.duty) stepFields.duty.setDisabled(!duty);
     $('#dutyLabel').toggleClass('disabled', !duty);
-    // Each duty-aware form remembers its own duty — reload the field from the form's pref
+    // Each duty-aware form remembers its own duty - reload the field from the form's pref
     // (Java reloadDutyForForm).
     if (form === GenSignalForm.TRIANGLE && stepFields.duty) stepFields.duty.setValue(prefs.genTriangleDuty.get() * 100);
     else if (form === GenSignalForm.RECTANGLE && stepFields.duty) stepFields.duty.setValue(prefs.genRectangleDuty.get() * 100);
     // Snap checkbox visible for SINE and DUAL_TONE; hidden for sweeps (setSnapBtnVisible).
     $('#snap').closest('.form-check').toggle(!sweep);
     // The scope's Reconstructed-beat checkbox is re-gated by the SCOPE layer on
-    // GENERATOR_SIGNAL_CHANGED (Java ScopeTabControl.syncReconstructedBeatEnabled) — the
+    // GENERATOR_SIGNAL_CHANGED (Java ScopeTabControl.syncReconstructedBeatEnabled) - the
     // generator does NOT reach across panes to mutate #scopeTrigBeat.
     this.refreshFreqLabel();   // bracket annotation is form-dependent (RECTANGLE / TRIANGLE / SINE+snap / dual)
     this.updateDutyLabel();    // RECTANGLE / TRIANGLE show the sample-quantised duty; others plain
@@ -328,7 +334,7 @@ export class GeneratorPane {
 
   /** Faithful port of GeneratorController.restartFarinaOnParamChange (4887ecb): a Farina
    *  (LOG) sweep can't live-edit its pre-rendered buffer without the playback dropping to
-   *  silence, so a sweep-parameter change while it is running does a full restart instead —
+   *  silence, so a sweep-parameter change while it is running does a full restart instead -
    *  the tone resumes with the new parameters (restartGenerator re-reads the just-committed
    *  UI via readConfig, as Java's start() rebuilds from the committed prefs). Returns
    *  {@code true} when it restarted, so the caller skips the live setter + retune. */
@@ -395,7 +401,7 @@ export class GeneratorPane {
   }
 
   // A structural GENERATOR change (form) restarts ONLY the generator consumer; a
-  // structural FFT change re-acquires ONLY the FFT consumer — neither disturbs the
+  // structural FFT change re-acquires ONLY the FFT consumer - neither disturbs the
   // other two lifecycles (Java: a form change is GeneratorController's concern, an
   // FFT-length change is FftController's, and the scope keeps running throughout).
   async restartGenerator() {
@@ -403,8 +409,8 @@ export class GeneratorPane {
     this._setBusy(true);
     try {
       await this.engine.stopGenerator(); this._readConfig();
-      // Returns the start-error reason key (null on success), mirroring Java
-      // controller.getLastStartError() — the form handler surfaces a failed restart.
+      // Returns the LOCALIZED start-error reason (null on success), mirroring Java
+      // controller.getLastStartError() - the form handler surfaces a failed restart.
       return await this.engine.startGenerator();
     } finally { this._setBusy(false); }
   }
@@ -419,7 +425,7 @@ export class GeneratorPane {
     // publishSignalChanged) -----
     // Every signal-affecting generator pref publishes USER_INPUT exactly once where the emitted
     // signal changes. Scope-side reactions (reset measurement history, re-gate the reconstructed-
-    // beat checkbox) hang off this event in the SCOPE layer — the generator never reaches into a
+    // beat checkbox) hang off this event in the SCOPE layer - the generator never reaches into a
     // scope widget. The web has no closed-loop FLL trim path, so only the USER_INPUT cause is
     // emitted here; the FLL_TRIM cause is kept for fidelity with the bus contract.
     // genDitherBits, genOutputChannels and the two DAC full-scale prefs join the list per Java's
@@ -436,11 +442,11 @@ export class GeneratorPane {
 
     // A DAC recalibration shifts the dBV mapping. reanchor() HOLDS the entered value: in the dBV
     // view it keeps the shown dBV and re-solves the bits under the new full-scale; in the bits view
-    // it keeps the bits and only the dBV readout moves. When the bits re-solve, persist them — that
-    // restarts via the usual genDitherBits path (the publisher loop above) — then re-annotate the
+    // it keeps the bits and only the dBV readout moves. When the bits re-solve, persist them - that
+    // restarts via the usual genDitherBits path (the publisher loop above) - then re-annotate the
     // caption. Mirrors Java GeneratorPane's Bindings.onChange for dacFsVoltageAmplProperty. Dither is
     // NOT live-applied to the worklet (accepted Web-Audio divergence, like Java's live ag.setDitherBits)
-    // — readConfig reads the field fresh at each (re)start and the Save-to export path applies it via quantizePcm.
+    // - readConfig reads the field fresh at each (re)start and the Save-to export path applies it via quantizePcm.
     const reanchorDither = () => {
       const f = this._getField('dither');
       if (f && f.reanchor()) prefs.genDitherBits.set(f.getValue());
@@ -448,7 +454,7 @@ export class GeneratorPane {
     };
     prefs.dacFsVoltageAmpl.addListener(reanchorDither);
     // An FFT-window change NEVER touches the dither: bits and dBV are the physical level, window-
-    // invariant since the analyser's NENBW correction. A pure re-render (field text + caption) —
+    // invariant since the analyser's NENBW correction. A pure re-render (field text + caption) -
     // no reanchor, no persist, no restart; the generated output stays put (the values won't change).
     prefs.fftWindow.addListener(() => {
       const f = this._getField('dither');
@@ -457,18 +463,19 @@ export class GeneratorPane {
     });
 
     // Signal-form change is structural (SINGLE↔DUAL_TONE changes generator structure;
-    // the kernel's form is set from processorOptions) → restart the GENERATOR only.
+    // the kernel's form is set from processorOptions) -> restart the GENERATOR only.
     $('#signalForm').on('change', async () => {
       this.syncFormUI();
       const wasRunning = this._isGenRunning();
-      // A not-live-swappable form change restarts the generator; a non-null reason key means the
-      // restart failed (now stopped) — surface it (Java formCombo wasRunning && !isRunning →
-      // Dialogs.error(generator.error.restart, getLastStartError)).
+      // A not-live-swappable form change restarts the generator; a non-null reason means the
+      // restart failed (now stopped) - surface it (Java formCombo wasRunning && !isRunning ->
+      // Dialogs.error(generator.error.restart, getLastStartError)). Already operator language:
+      // the controller localized it at its one wording boundary.
       const err = await this.restartGenerator();
       if (wasRunning && err) {
         $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
-        $('#onAir').removeClass('live');
-        $('#status').text(t('generator.error.restart') + ': ' + t(err));
+        this.setOnAir(false);
+        $('#status').text(t('generator.error.restart') + ': ' + err);
       }
     });
 
@@ -487,11 +494,11 @@ export class GeneratorPane {
     });
     $('#snap').on('change', () => {
       prefs.genSnapToFftBin.set($('#snap').is(':checked'));
-      // Snapshot the LIVE UI into engine.config BEFORE retuning — Java reapplySnap() resolves
+      // Snapshot the LIVE UI into engine.config BEFORE retuning - Java reapplySnap() resolves
       // effectiveFrequency() from live prefs every time: emitFrequency(prefs, form,
       // prefs.current().getOutputSampleRate(), prefs.getGenFrequencyHz()), and FftBinSnap reads
       // prefs.getFftLength(). Setting only config.snapToBin left config.fftSize / outRate / toneHz
-      // stale (they refresh only on (re)start), so _genEmitFreq snapped against a stale bin grid —
+      // stale (they refresh only on (re)start), so _genEmitFreq snapped against a stale bin grid -
       // or, with fftSize never refreshed, failed to move the emitted tone at all (the reported bug:
       // the FFT showed the entered freq, not the snapped one).
       this._readConfig();   // refreshes config.snapToBin + config.fftSize + outRate + toneHz from the live UI
@@ -499,14 +506,14 @@ export class GeneratorPane {
       this.refreshFreqLabel(); this._syncFftAlign();   // snap gates the FFT align combo (FftTabControl)
     });
     this.bindSweepFields();   // sweep loop toggle (numeric fields are stepfields)
-    this.bindCorrections();   // .dpd browse / clear → per-form genDpd pref + live re-apply
+    this.bindCorrections();   // .dpd browse / clear -> per-form genDpd pref + live re-apply
 
     // Surfacing start / restart / playFile failures inline on the #status line (rather than a
     // modal, as Java does via Dialogs.error) is an accepted web idiom.
     // ----- start / stop (the green play triangle = the GENERATOR only) -----
     // Three independent lifecycles now (Java: generator / scope record / FFT record):
     // #genPlay starts/stops the DDS generator; the per-pane Record LEDs drive
-    // setScopeRecording / setFftRecording. `busy` is the shared re-entrancy guard —
+    // setScopeRecording / setFftRecording. `busy` is the shared re-entrancy guard -
     // startGenerator/stopGenerator and the consumer acquire/release are async
     // (open/close AudioContexts); a second click mid-transition races and can tear
     // down a half-built audio graph (STATUS_BREAKPOINT). Ignore clicks until settled.
@@ -515,32 +522,32 @@ export class GeneratorPane {
       if (!this._isGenRunning()) {
         this._setBusy(true);
         this._readConfig();
-        // DDS tone and file playback share the one output device — only one may drive it.
+        // DDS tone and file playback share the one output device - only one may drive it.
         // Java controller.start() stops the file player first; mirror that + re-sync its LED.
         await engine.stopFile(); this.setGenFileBtn(false);
         try {
           // Light the play LED + ON-AIR only AFTER a successful start (Java syncPlayButtonVisuals
           // reads controller.isRunning() AFTER start()); on failure roll the visuals back and
-          // surface the specific reason (Java: getLastStartError → Dialogs.error).
+          // surface the specific reason (Java: getLastStartError -> Dialogs.error).
           const err = await engine.startGenerator();
           if (err) {
             $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
-            $('#onAir').removeClass('live');
-            $('#status').text(t(err));
+            this.setOnAir(false);
+            $('#status').text(err);
           } else {
             $('#genPlay').addClass('playing').attr('title', t('generator.play.stop'));   // lit green play (Java playLit)
-            $('#onAir').addClass('live');
+            this.setOnAir(true);
           }
         } finally { this._setBusy(false); }
       } else {
         this._setBusy(true);
         $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
-        $('#onAir').removeClass('live');
+        this.setOnAir(false);
         try { await engine.stopGenerator(); } finally { this._setBusy(false); }
       }
     });
 
-    // ----- Generator "Save to…" → render via DdsKernel, dither, write STEREO WAV/AIFF/FLAC -----
+    // ----- Generator "Save to..." -> render via DdsKernel, dither, write STEREO WAV/AIFF/FLAC -----
     $('#genSaveBtn').on('click', async () => {
       const c = engine.config;
       // Suggested name encodes signal form + sample rate (kHz) + output bit depth, WAV by
@@ -549,7 +556,7 @@ export class GeneratorPane {
       const rateKhz = Math.round((parseInt($('#outRate').val(), 10) || cur.outputSampleRate || 48000) / 1000);
       const suggested = `${(c.form || GenSignalForm.SINE).toLowerCase()}_${rateKhz}kHz_${cur.outputBitDepth || 24}bit.wav`;
       // Pick the target FIRST so the chosen file's extension drives the container (Java
-      // doSaveToBrowseAndWrite) — WAV / FLAC / AIFF, never the field's stale extension.
+      // doSaveToBrowseAndWrite) - WAV / FLAC / AIFF, never the field's stale extension.
       const target = await io.pickSaveTarget($('#genSaveName').val() || suggested, this.WAV_TYPE);
       if (!target) return;
       $('#genSaveName').val(target.name);
@@ -557,7 +564,7 @@ export class GeneratorPane {
       const rate = parseInt($('#outRate').val(), 10) || prefs.current().outputSampleRate || 48000;
       const seconds = Math.max(0.001, sfVal('genDuration', 5) || prefs.genWavDurationSeconds.get() || 5);
       // Export at the configured output bit depth (16/24/32), like Java exportSignal
-      // (prefs.current().getOutputBitDepth()) — so a "..._16bit.wav" name truly carries 16-bit PCM.
+      // (prefs.current().getOutputBitDepth()) - so a "..._16bit.wav" name truly carries 16-bit PCM.
       const bitDepth = Math.max(8, prefs.current().outputBitDepth || 24);
       const dither = sfVal('dither', 0);   // fractional bits from the DITHER NumericStepField (0 = Off)
       // RECTANGLE and TRIANGLE export at the same sample-period-aligned frequency they play at, so a
@@ -572,7 +579,7 @@ export class GeneratorPane {
         });
         if (isDualTone(c.form)) {
           // Snap tone 2 to the OUTPUT-rate bin grid (rate/fftSize) when snap-to-bin is on,
-          // matching _genEmitFreq2 — the saved file's second tone lands on a bin centre exactly
+          // matching _genEmitFreq2 - the saved file's second tone lands on a bin centre exactly
           // like the live emit (Java GeneratorController snaps both tones).
           const rawF2 = sfVal('tone2Hz', 1100);
           const binF2 = rate / c.fftSize;
@@ -605,14 +612,14 @@ export class GeneratorPane {
         const total = Math.round(rate * seconds);
         // Render + apply the selected dither, then normalise back to a float that re-quantises to the
         // SAME value (so saveScopeCapture's quantiser preserves the dither). The float is duplicated
-        // to a STEREO pair — Java exports stereo, not mono. Periodic non-sweep forms truncate to whole
+        // to a STEREO pair - Java exports stereo, not mono. Periodic non-sweep forms truncate to whole
         // periods inside saveScopeCapture (signalFrequencyHz = emitHz); noise + sweeps pass 0.
-        // Float64 (not Float32) so a 32-bit quantised value survives the normalise→re-quantise round
-        // trip — Float32's 24-bit mantissa would drop the low 8 bits of a 32-bit sample.
+        // Float64 (not Float32) so a 32-bit quantised value survives the normalise->re-quantise round
+        // trip - Float32's 24-bit mantissa would drop the low 8 bits of a 32-bit sample.
         const maxVal = Math.pow(2, bitDepth - 1) - 1;
-        // Interleave seam (Java SignalFileExporter.fillBuffer): render the mono sample ONCE — a
+        // Interleave seam (Java SignalFileExporter.fillBuffer): render the mono sample ONCE - a
         // single dithered value feeds BOTH lanes, so their dither stays correlated exactly as
-        // Java's shared `sample` does — then apply the output-lane gate + right-lane scale. Left is
+        // Java's shared `sample` does - then apply the output-lane gate + right-lane scale. Left is
         // the amplitude reference (scale 1.0) and drives the whole-period truncation; the right lane
         // scales by fsLeft/fsRight; a gated-off lane is digital zero. With gate BOTH + scale 1.0 both
         // lanes carry the identical quantised sample (byte-identical to the pre-feature stereo export).
@@ -627,11 +634,14 @@ export class GeneratorPane {
         const truncHz = (isPeriodic(c.form) && !isSweep) ? emitHz : 0;
         const bytes = io.saveScopeCapture(chL, chR, total, name, rate, bitDepth, truncHz);
         const res = await io.writeToTarget(target, bytes, 'audio/wav');
-        if (res.saved) $('#status').text('saved ' + res.name);
+        if (res.saved) {
+          $('#status').text(res.viaDownload
+            ? t('web.save.handedToDownload', res.name) : 'saved ' + res.name);
+        }
       } catch (e) { $('#status').text('save failed: ' + e.message); }
     });
 
-    // ----- Generator "Load from…" file player (faithful to FilePlayController) -----
+    // ----- Generator "Load from..." file player (faithful to FilePlayController) -----
     // A monitoring convenience: decode the picked file with the project's readers
     // (FLAC-capable, like PcmFileLoader) and hand the float channels to the backend's
     // own DAC playback lane. Loop is live-toggled; the play button doubles as stop.
@@ -648,7 +658,10 @@ export class GeneratorPane {
         const mid = Math.pow(2, dec.bitsPerSample - 1);
         const ch0 = new Float32Array(frames), ch1 = new Float32Array(frames);
         for (let i = 0; i < frames; i++) { ch0[i] = dec.ch0[i] / mid; ch1[i] = dec.ch1[i] / mid; }
-        this.genFileSig = { channels: [ch0, ch1], sampleRate: dec.sampleRate };
+        // The RAW bytes are kept beside the decoded channels: a generator on a Phonalyser server
+        // has no downlink for audio, so playing there uploads the FILE and lets the bench decode
+        // it (spec §3 + 4.5). The local paths use the channels exactly as before.
+        this.genFileSig = { channels: [ch0, ch1], sampleRate: dec.sampleRate, file: { bytes, name: file.name } };
         $('#status').text('loaded ' + file.name);
       } catch (e) { this.genFileSig = null; $('#status').text('load failed: ' + e.message); }
     });
@@ -656,14 +669,19 @@ export class GeneratorPane {
       if (engine.filePlaying) { await engine.stopFile(); this.setGenFileBtn(false); return; }
       if (!this.genFileSig) { $('#status').text(t('generator.error.playFile.pickFirst')); return; }
       try {
-        // DDS tone and file playback share the one output device — only one may drive it.
+        // DDS tone and file playback share the one output device - only one may drive it.
         // Java startFilePlayback() stops the DDS first; mirror that + re-sync the Play button.
         if (this._isGenRunning()) {
           await engine.stopGenerator();
           $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
         }
         engine.onFileEnded = () => this.setGenFileBtn(false);
-        await engine.playFileBuffer(this.genFileSig.channels, this.genFileSig.sampleRate, $('#genFileLoop').is(':checked'));
+        await engine.playFileBuffer(this.genFileSig.channels, this.genFileSig.sampleRate,
+          $('#genFileLoop').is(':checked'), this.genFileSig.file);
+        // A refusal the controller localized (an over-size upload, a bench that said no) never
+        // throws - it lands in filePlayError, and the status line is where it belongs.
+        const refused = engine.filePlayError;
+        if (refused) { $('#status').text(refused); this.setGenFileBtn(false); return; }
         this.setGenFileBtn(true);
       } catch (e) { $('#status').text('play failed: ' + e.message); this.setGenFileBtn(false); }
     });
@@ -680,13 +698,59 @@ export class GeneratorPane {
   }
 
   setGenFileBtn(on) {
-    // Java tinyPlayDim → tinyPlayLit: the play glyph stays, lit green while playing (no stop swap).
+    // Java tinyPlayDim -> tinyPlayLit: the play glyph stays, lit green while playing (no stop swap).
     $('#genFilePlay').toggleClass('playing', on)
       .attr('title', t(on ? 'generator.loadFrom.stop' : 'generator.loadFrom.play'));
     // ON-AIR banner mirrors EITHER engine (Java syncFilePlayVisuals startOnAirBlink while playing;
     // syncPlayButtonVisuals stops the blink only when the DDS tone is also stopped). Light it while
     // the file plays; on file stop / natural end clear it only if the DDS generator isn't running.
-    if (on) $('#onAir').addClass('live');
-    else if (!this._isGenRunning()) $('#onAir').removeClass('live');
+    if (on) this.setOnAir(true);
+    else if (!this._isGenRunning()) this.setOnAir(false);
+  }
+
+  /**
+   * Lights or clears the ON-AIR banner - and starts/stops the tick that rides with it (Java
+   * startOnAirBlink / stopOnAirBlink). The blink itself is CSS here; what the tick is FOR is the
+   * lane-death consult: an output device that dies mid-tone leaves the play LED lit over a lane
+   * that stopped, exactly the way a dead capture left the trace drawing.
+   *
+   * @param {boolean} on
+   */
+  setOnAir(on) {
+    $('#onAir').toggleClass('live', !!on);
+    if (on) this._startOnAirTick(); else this._stopOnAirTick();
+  }
+
+  _startOnAirTick() {
+    if (this._onAirTimer != null) return;
+    this._onAirTimer = setInterval(() => this._onAirTick(), ON_AIR_TICK_MS);
+    // A pending timer holds a Node test process open; browsers have no unref and ignore this.
+    if (this._onAirTimer && typeof this._onAirTimer.unref === 'function') this._onAirTimer.unref();
+  }
+
+  _stopOnAirTick() {
+    if (this._onAirTimer != null) { clearInterval(this._onAirTimer); this._onAirTimer = null; }
+  }
+
+  /** The tick: the play lane records WHY it ended (the lane is already down and its line
+   *  closed); the pane that owns Play reports it (Java scheduleOnAirBlink's consult). */
+  async _onAirTick() {
+    const died = await this.engine.takePlaybackEndedFromBelow();
+    if (died) this.onPlaybackEndedFromBelow();
+  }
+
+  /** The playback lane ended from below - device unplugged, taken exclusively, or the driver
+   *  failed. The lane already stopped itself, so only the visuals and the operator report are
+   *  left. The unified stop message: same form as the capture side's, the BACKEND is named, and
+   *  the technical detail stays in the log - never in the dialog. */
+  onPlaybackEndedFromBelow() {
+    this.setOnAir(false);
+    $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
+    this.setGenFileBtn(false);
+    MessageBus.instance().publish(Events.AUDIO_DEVICE_ERROR, {
+      direction: 'output',
+      message: t('audio.deviceError.playbackEnded',
+        backendDisplayName(this.engine.activeBackend())),
+    });
   }
 }

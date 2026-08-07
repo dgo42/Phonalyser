@@ -1,24 +1,24 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
 // Faithful port of org.edgo.audio.measure.generator.SignalGenerator
 // (DDS kernels, 64-bit phase accumulator, Taylor sine correction, all
-// waveforms, pink-noise Voss–McCartney, dither helper, and the .dpd
+// waveforms, pink-noise Voss-McCartney, dither helper, and the .dpd
 // harmonic / intermod compensation: loadHarmonics / loadIntermod /
 // applyCompensation). Also mirrors org.edgo.audio.measure.enums.GenSignalForm
 // and the DDS constants from org.edgo.audio.measure.common.Constants.
 //
 // The Java generator runs a signed `long` phase accumulator where the natural
 // 2^64 wrap IS the phase wrap. A faithful BigInt port of that integer
-// arithmetic would allocate a fresh immutable BigInt on EVERY add/multiply —
+// arithmetic would allocate a fresh immutable BigInt on EVERY add/multiply -
 // ~1M heap allocations/sec on the realtime AudioWorklet thread, growing the
 // worklet realm until the renderer crashes (Aw-Snap STATUS_BREAKPOINT) under
 // GC pressure. So the phase is carried instead as a double-precision count of
 // *turns* in [0,1): a plain Number, allocation-free in the per-sample hot path.
-// This is NOT a precision loss — a turn stored in a double's 53-bit mantissa
+// This is NOT a precision loss - a turn stored in a double's 53-bit mantissa
 // gives ~0.2 pHz frequency granularity, finer than the original 64-bit target.
 // Phase wraps with `ph -= Math.floor(ph)` instead of a 2^64 mask. Everything
 // floating-point (sine/cos table, Taylor correction, amplitude, noise) stays in
@@ -36,7 +36,7 @@ const TWO_PI = 2.0 * Math.PI;
 // -------------------------------------------------------------------------
 
 /**
- * Waveform identifiers — string-valued so they survive structured-clone across
+ * Waveform identifiers - string-valued so they survive structured-clone across
  * the worklet message port. Values match the Java enum names.
  * @enum {string}
  */
@@ -64,7 +64,7 @@ export function isDualTone(form) {
 }
 
 /**
- * True for every waveform that has a meaningful frequency — i.e. all forms EXCEPT the
+ * True for every waveform that has a meaningful frequency - i.e. all forms EXCEPT the
  * three noise sources (mirrors GenSignalForm.isPeriodic; the generator's Frequency field
  * is disabled, but still visible, for noise).
  * @param {string} form
@@ -110,20 +110,20 @@ const TABLE_BITS = 12;
 const TABLE_SIZE = 1 << TABLE_BITS; // 4096
 /** Radix (2^32) of the two-word 64-bit fixed-point phase accumulator. */
 const PHASE_2P32 = 4294967296;
-/** 1/2^53 — scales the top 53 bits of the accumulator to a turn in [0,1) (Constants.ONE_OVER_2_53). */
+/** 1/2^53 - scales the top 53 bits of the accumulator to a turn in [0,1) (Constants.ONE_OVER_2_53). */
 const ONE_OVER_2_53 = 2 ** -53;
-/** 2^21 — lifts the high word into the top-53-bit turn (the hi word carries bits 33..53 of it). */
+/** 2^21 - lifts the high word into the top-53-bit turn (the hi word carries bits 33..53 of it). */
 const HI_TO_TOP53 = 1 << 21;
 /**
  * Splits a turns-per-sample increment (double in [0,1)) into the high + low 32-bit words of a
  * 64-bit fixed-point increment, so the phase can advance by EXACT integer addition each sample
- * with no floating-point drift — faithful to SignalGenerator's 64-bit `long` accumulator, where
+ * with no floating-point drift - faithful to SignalGenerator's 64-bit `long` accumulator, where
  * `long` overflow IS the turn wrap.
  * @param {number} turns turns-per-sample in [0,1)
  * @returns {{hi:number, lo:number}}
  */
 function incWords(turns) {
-  const scaled = turns * PHASE_2P32;            // integer part → hi word; fraction → lo word
+  const scaled = turns * PHASE_2P32;            // integer part -> hi word; fraction -> lo word
   let hi = Math.floor(scaled);
   let lo = Math.round((scaled - hi) * PHASE_2P32);   // round to nearest, like Math.round(freq/sr·2^64)
   if (lo >= PHASE_2P32) { lo -= PHASE_2P32; hi += 1; }   // carry the rounded lo word into hi
@@ -137,13 +137,13 @@ for (let i = 0; i < TABLE_SIZE; i++) {
   COS_TABLE[i] = Math.cos(angle);
 }
 
-/** Radians per table cell — sub-cell turn fraction → Taylor-correction angle. */
+/** Radians per table cell - sub-cell turn fraction -> Taylor-correction angle. */
 const RAD_PER_CELL = TWO_PI / TABLE_SIZE;
 
 const PINK_OCTAVES = 16;
 
 // -------------------------------------------------------------------------
-// Taylor correction (5th order — matches the active branch in Java)
+// Taylor correction (5th order - matches the active branch in Java)
 // -------------------------------------------------------------------------
 
 /** cos(Δθ) Taylor series; dx2 = Δθ². */
@@ -162,10 +162,10 @@ function wrapTurn(ph) {
 }
 
 /**
- * Turn fraction [0,1) from the top 53 bits of the hi:lo accumulator — the web
+ * Turn fraction [0,1) from the top 53 bits of the hi:lo accumulator - the web
  * mirror of SignalGenerator's `(phaseAcc >>> 11) * ONE_OVER_2_53`. Reconstructing
  * only the top 53 bits keeps the result STRICTLY below 1.0 (max = 1 − 2^-53), so
- * `ph * TABLE_SIZE` can never round up to TABLE_SIZE and index off the table —
+ * `ph * TABLE_SIZE` can never round up to TABLE_SIZE and index off the table -
  * unlike the full `(hi + lo/2^32)/2^32`, which rounds to exactly 1.0 when the
  * accumulator sits just under 2^64 (the wrap point hit at integer-ratio
  * frequencies such as 100 Hz / 1000 Hz).
@@ -207,12 +207,12 @@ function phaseRadToTurns(phiInit) {
 }
 
 // -------------------------------------------------------------------------
-// Gaussian source — Marsaglia polar (Java's Random.nextGaussian algorithm)
+// Gaussian source - Marsaglia polar (Java's Random.nextGaussian algorithm)
 // -------------------------------------------------------------------------
 
 /**
  * Random source matching the API the kernel needs: a uniform [0,1) `next()`
- * and a `nextGaussian()`. Defaults to Math.random; the polar Box–Muller form
+ * and a `nextGaussian()`. Defaults to Math.random; the polar Box-Muller form
  * reproduces java.util.Random.nextGaussian's caching behaviour.
  */
 class GaussianRng {
@@ -245,14 +245,14 @@ class GaussianRng {
 }
 
 // -------------------------------------------------------------------------
-// Compensation sets (immutable, atomically swapped — see Java Compensation /
+// Compensation sets (immutable, atomically swapped - see Java Compensation /
 // DualToneComp)
 // -------------------------------------------------------------------------
 
 /**
  * Builds a single-tone harmonic compensation set.
  * @param {ArrayLike<number>} ampRatios  per-harmonic amplitude ratio (pct/100)
- * @param {ArrayLike<number>} hNums       harmonic numbers (2,3,4,…)
+ * @param {ArrayLike<number>} hNums       harmonic numbers (2,3,4,...)
  * @param {ArrayLike<number>} phiInits    per-harmonic initial phase (radians)
  * @returns {{amp:Float64Array, hNum:Int32Array, phaseOffTurns:Float64Array}}
  */
@@ -323,7 +323,7 @@ export function loadHarmonics(text, frequency) {
     const freqHz = parseFloat(cols[1].trim().replace(',', '.'));
     rows.push([ampPct / 100.0, phi, freqHz, hIndex]);
   }
-  if (Number.isNaN(phi1)) phi1 = -Math.PI / 2.0; // H1 absent → no delay correction
+  if (Number.isNaN(phi1)) phi1 = -Math.PI / 2.0; // H1 absent -> no delay correction
   const omegaD = -(phi1 + Math.PI / 2.0);
   const delayRadPerHz = omegaD / frequency;
   const n = rows.length;
@@ -355,7 +355,7 @@ export function isDualToneCorrectionFile(text) {
 }
 
 /**
- * Parses a dual-tone intermod-correction file body (a;b;…;re;im, German-locale
+ * Parses a dual-tone intermod-correction file body (a;b;...;re;im, German-locale
  * decimals) into a dual-tone compensation set. Mirrors loadIntermod: amplitude
  * = hypot(re,im), phase = atan2(im,re), no delay re-derivation.
  * @param {string} text
@@ -372,7 +372,7 @@ export function loadIntermod(text) {
     const cols = line.split(';');
     if (cols.length < 8) continue;
     const c0 = cols[0].trim().charAt(0);
-    if (!isDigit(c0) && c0 !== '-') continue; // header "a;b;…"
+    if (!isDigit(c0) && c0 !== '-') continue; // header "a;b;..."
     aL.push(parseInt(cols[0].trim(), 10));
     bL.push(parseInt(cols[1].trim(), 10));
     reL.push(parseFloat(cols[6].trim().replace(',', '.')));
@@ -422,11 +422,11 @@ export function renderLogSweep(f0, f1, sweepSamples, sampleRate) {
 }
 
 // -------------------------------------------------------------------------
-// rawRms — theoretical RMS of the unit-amplitude waveform (rawRms)
+// rawRms - theoretical RMS of the unit-amplitude waveform (rawRms)
 // -------------------------------------------------------------------------
 
 /**
- * Theoretical RMS of the raw (unit-amplitude) waveform — used to convert a
+ * Theoretical RMS of the raw (unit-amplitude) waveform - used to convert a
  * target V RMS into a linear peak amplitude scale. For DUAL_TONE forms the
  * value depends on the per-tone weights (w1, w2).
  * @param {string} form
@@ -460,11 +460,11 @@ export function rawRms(form, w1 = 0.5, w2 = 0.5) {
 }
 
 // -------------------------------------------------------------------------
-// DDS kernel — per-sample, usable in an AudioWorklet AND headless
+// DDS kernel - per-sample, usable in an AudioWorklet AND headless
 // -------------------------------------------------------------------------
 
 /**
- * Stateful per-sample DDS kernel — a faithful, headless-capable port of the
+ * Stateful per-sample DDS kernel - a faithful, headless-capable port of the
  * sample-generating core of SignalGenerator. One instance owns the phase
  * accumulators, noise state and live parameters; {@link DdsKernel#nextSample}
  * returns one amplitude-scaled sample and advances all accumulators, exactly
@@ -488,7 +488,7 @@ export class DdsKernel {
     this.form = o.form || GenSignalForm.SINE;
 
     // Phase accumulators: EXACT 64-bit fixed-point (two 32-bit words, hi:lo) advanced by integer
-    // addition with no float drift — faithful to SignalGenerator's 64-bit `long` accumulator
+    // addition with no float drift - faithful to SignalGenerator's 64-bit `long` accumulator
     // (overflow = the turn wrap). `_phaseAcc` / `_phaseAcc2` hold the derived turn fraction [0,1)
     // recomputed each sample for the waveform readers.
     this._phaseAcc = 0.0; this._phaseHi = 0; this._phaseLo = 0;
@@ -531,11 +531,11 @@ export class DdsKernel {
     // Log-sweep state.
     this._logSweepBuffer = null;
     this._logSweepLeadIn = 0;
-    this._logSweepIdx = 0; // sample index (Number — sweeps are far short of 2^53)
+    this._logSweepIdx = 0; // sample index (Number - sweeps are far short of 2^53)
     this._logSweepRestart = false;
   }
 
-  /** Frequency (Hz) → phase increment in turns-per-sample (a plain Number). */
+  /** Frequency (Hz) -> phase increment in turns-per-sample (a plain Number). */
   _toPhaseInc(frequencyHz) {
     return frequencyHz / this.sampleRate;
   }
@@ -720,7 +720,7 @@ export class DdsKernel {
       default: raw = 0.0; break;
     }
     // Advance by exact 64-bit integer addition (carry-propagated; the high word wrapping mod
-    // 2^32 IS the 2^64 turn wrap — no float accumulation error / drift).
+    // 2^32 IS the 2^64 turn wrap - no float accumulation error / drift).
     let lo = this._phaseLo + this._phaseIncLo, carry = 0;
     if (lo >= PHASE_2P32) { lo -= PHASE_2P32; carry = 1; }
     this._phaseLo = lo;
@@ -852,8 +852,8 @@ export class DdsKernel {
 
 /**
  * Trailing-zero count of the low bits of a positive integer counter
- * (Voss–McCartney octave select). The counter is only inspected modulo
- * 2^PINK_OCTAVES, so its low bits — well within 2^53 — are exact in a Number,
+ * (Voss-McCartney octave select). The counter is only inspected modulo
+ * 2^PINK_OCTAVES, so its low bits - well within 2^53 - are exact in a Number,
  * and `& -low` isolates the lowest set bit via 32-bit bitwise ops.
  */
 function trailingZerosLow(x) {
@@ -868,15 +868,15 @@ function trailingZerosLow(x) {
 // -------------------------------------------------------------------------
 
 /**
- * TPDF (triangular-PDF) dither noise in the normalized −1…+1 sample domain, as
+ * TPDF (triangular-PDF) dither noise in the normalized −1...+1 sample domain, as
  * PcmQuantizer.tpdfNoise: (u1 − u2) / 2^(ditherBits−1) for two independent
  * uniform [0,1) draws, or exactly 0 when ditherBits ≤ 0. The ±1 LSB amplitude
  * is set by the dither bit count, not the target bit depth. ditherBits may be
- * fractional — Math.pow(2, bits−1) equals the old 1<<(bits−1) for whole bits and
+ * fractional - Math.pow(2, bits−1) equals the old 1<<(bits−1) for whole bits and
  * interpolates the ±1 LSB amplitude continuously in between.
  * @param {number} ditherBits TPDF dither depth in bits, may be fractional (0 = off)
  * @param {function():number} [rng=Math.random] uniform [0,1) source
- * @returns {number} dither value in the −1…+1 domain
+ * @returns {number} dither value in the −1...+1 domain
  */
 export function tpdfNoise(ditherBits, rng = Math.random) {
   const bits = ditherBits;
@@ -884,17 +884,17 @@ export function tpdfNoise(ditherBits, rng = Math.random) {
   return (rng() - rng()) / Math.pow(2, bits - 1);
 }
 
-/** Clamp to [-1, 1] — PcmQuantizer.clamp. */
+/** Clamp to [-1, 1] - PcmQuantizer.clamp. */
 function clamp1(v) {
   return v > 1.0 ? 1.0 : v < -1.0 ? -1.0 : v;
 }
 
 /**
- * Quantises one continuous-domain sample (−1…+1) to a signed integer of
- * `bitDepth` resolution, applying TPDF dither immediately before rounding —
+ * Quantises one continuous-domain sample (−1...+1) to a signed integer of
+ * `bitDepth` resolution, applying TPDF dither immediately before rounding -
  * a faithful per-sample port of PcmQuantizer.encode. The 8-bit path scales by
  * 127; every other depth scales by 2^(bitDepth−1) − 1.
- * @param {number} sample     normalized amplitude (−1…+1)
+ * @param {number} sample     normalized amplitude (−1...+1)
  * @param {number} bitDepth   target bit depth (8, 16, 24, 32)
  * @param {number} [ditherBits=0] TPDF dither depth in bits (0 = off)
  * @param {function():number} [rng=Math.random] uniform [0,1) source
@@ -908,7 +908,7 @@ export function quantizePcm(sample, bitDepth, ditherBits = 0, rng = Math.random)
 }
 
 /**
- * The output-lane gate — which physical DAC lane(s) carry the tone. Faithful to
+ * The output-lane gate - which physical DAC lane(s) carry the tone. Faithful to
  * PcmQuantizer.encode / SignalFileExporter.fillBuffer: the left lane is driven
  * unless the gate is 'RIGHT', the right lane unless the gate is 'LEFT'; the
  * un-selected lane is written as digital silence. Returns the two booleans so a
@@ -921,14 +921,14 @@ export function outputLaneGate(outputChannels) {
 }
 
 /**
- * One continuous-domain sample → the two interleaved lanes [left, right] through
+ * One continuous-domain sample -> the two interleaved lanes [left, right] through
  * the gate and the per-lane right-scale, matching PcmQuantizer.encode: the left
  * lane scales by 1.0 (the mono/left full-scale is the amplitude reference), the
  * right lane by {@code rightLaneScale} (= fsLeft/fsRight, so a LINKED card with
  * distinct DAC full-scales emits the same physical level on both lanes); a
  * gated-off lane is digital zero. With gate 'BOTH' and rightLaneScale 1.0 both
  * lanes carry the identical sample (pre-feature behaviour). Non-hot-path
- * convenience (file export, tests) — the worklet inlines the hoisted gate.
+ * convenience (file export, tests) - the worklet inlines the hoisted gate.
  * @param {number} sample
  * @param {string} outputChannels 'BOTH' | 'LEFT' | 'RIGHT'
  * @param {number} rightLaneScale

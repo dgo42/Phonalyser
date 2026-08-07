@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -7,7 +7,7 @@
 // Faithful port of org.edgo.audio.measure.fft.FftResult.
 //
 // Container for all FFT analysis outputs. A standalone class so each instance is
-// fully independent of the FftAnalyzer that produced it — the FFT worker hands
+// fully independent of the FftAnalyzer that produced it - the FFT worker hands
 // off results on one tick while the previous one is still being painted.
 //
 // Field names, defaults and the helper-method math (ensureArrays, deepCopy,
@@ -16,8 +16,8 @@
 // browser `number` is IEEE-754 binary64, bit-identical to the desktop `double`).
 
 /** Width (bins) of each flank `localNoiseFloorDbFs()` samples just beyond the
- *  fundamental's skirt — the "near range". Wide enough to clear a broad skirt
- *  (±32–50 bins) and give a stable median. */
+ *  fundamental's skirt - the "near range". Wide enough to clear a broad skirt
+ *  (±32-50 bins) and give a stable median. */
 const LOCAL_FLOOR_FLANK_BINS = 64;
 
 export class FftResult {
@@ -30,7 +30,7 @@ export class FftResult {
     this.frameCount = 0;
     /** Frequency resolution in Hz per bin (= sampleRate / fftSize). */
     this.freqResolution = 0;
-    /** √(bin bandwidth in Hz) — non-null only for results reconstructed from a
+    /** √(bin bandwidth in Hz) - non-null only for results reconstructed from a
      *  saved file ({@code # bin_bw_hz=} header); null for live results. */
     this.binBwSqrt = null;
     /** Window function token (the WindowType enum name, e.g. "BH4"). */
@@ -38,7 +38,7 @@ export class FftResult {
     /** Overlap token (the FftOverlap enum name, e.g. "PCT_0"). */
     this.overlap = null;
 
-    // Single-sided spectrum, bins 0 … fftSize/2.
+    // Single-sided spectrum, bins 0 ... fftSize/2.
     /** @type {?Float64Array} */ this.amplitudeDbFs = null;
     /** @type {?Float64Array} */ this.phaseDeg = null;
     /** @type {?Float64Array} */ this.re = null;
@@ -47,7 +47,7 @@ export class FftResult {
     // Fundamental
     this.fundamentalBin = 0;
     this.fundamentalHz = 0;
-    /** Phase-difference refined frequency in Hz — sub-bin accurate (~1e-5 bin). */
+    /** Phase-difference refined frequency in Hz - sub-bin accurate (~1e-5 bin). */
     this.fundamentalHzRefined = 0;
     /** Sub-bin refined frequency (Hz) of the second tone in a dual-/multi-tone
      *  signal; NaN for single-tone (no second-tone hint supplied). */
@@ -70,7 +70,7 @@ export class FftResult {
     /** The producing worker's reset epoch at analysis start. */
     this.epoch = 0;
 
-    // Harmonics (index 0 = 2nd harmonic, …)
+    // Harmonics (index 0 = 2nd harmonic, ...)
     this.harmonicCount = 0;
     /** @type {?Int32Array}   */ this.harmonicBins = null;
     /** @type {?Float64Array} */ this.harmonicHz = null;
@@ -78,7 +78,7 @@ export class FftResult {
     /** @type {?Float64Array} */ this.harmonicPct = null;
 
     // Raw (pre-.frc-de-embed) complex phasors of the fundamental and of each
-    // distortion peak — drive the DAC-predistortion de-embed.
+    // distortion peak - drive the DAC-predistortion de-embed.
     this.rawFundRe = NaN;
     this.rawFundIm = NaN;
     /** @type {?Float64Array} */ this.rawPeakRe = null;
@@ -90,7 +90,7 @@ export class FftResult {
     /** @type {?Int32Array} */ this.imdProductB = null;
     /** @type {?Int32Array} */ this.imdProductBin = null;
 
-    // Metrics — mutable so post-processing (e.g. ADC / frequency-response
+    // Metrics - mutable so post-processing (e.g. ADC / frequency-response
     // correction) can rewrite them.
     this.thdPct = 0;
     this.thdDb = 0;
@@ -107,11 +107,11 @@ export class FftResult {
     /** Sum of amplLinear[k]² for noise bins inside the SNR band (unweighted). */
     this.noisePower = 0;
     /** Normalized equivalent noise bandwidth of the analysis window, in bins
-     *  (Hann: 1.5) — stamped at analysis time so a band-change recompute applies
+     *  (Hann: 1.5) - stamped at analysis time so a band-change recompute applies
      *  the same noise-integral correction to THIS spectrum regardless of the
      *  window selected by then. */
     this.windowNenbwBins = 0;
-    /** IEC 61672 A-weighted sibling of noisePower — same SNR band, same zone rescale, divided by windowNenbwBins; feeds the A-suffixed N+D / THD+N / SINAD->ENOB readouts. SNR and N stay on noisePower. */
+    /** IEC 61672 A-weighted sibling of noisePower - same SNR band, same zone rescale, divided by windowNenbwBins; feeds the A-suffixed N+D / THD+N / SINAD->ENOB readouts. SNR and N stay on noisePower. */
     this.awNoisePower = 0;
     /** Average noise floor: RMS amplitude of a single noise bin in dBFS. */
     this.avgNoiseFloorDbFs = 0;
@@ -120,7 +120,7 @@ export class FftResult {
     /** @type {?Array<Float64Array>} */ this.preCorrectionPeaks = null;
     /** Half-width of the dynamic fundamental exclusion zone (Hz, one side). */
     this.fundamentalDynExclusionHz = 0;
-    /** User-supplied true fundamental level (dBFS) — manual override anchored at
+    /** User-supplied true fundamental level (dBFS) - manual override anchored at
      *  the input boundary, never overwritten by post-processing. NaN when absent. */
     this.fundamentalTrueDbFs = NaN;
 
@@ -144,7 +144,7 @@ export class FftResult {
   /** Ensures the bin / harmonic arrays are sized for the next analysis. Reuses
    *  existing arrays when their length already matches; otherwise reallocates.
    *  Called before the analyzer writes the bin arrays so it can use re / im /
-   *  amplitudeDbFs / phaseDeg directly as output buffers — no per-tick alloc. */
+   *  amplitudeDbFs / phaseDeg directly as output buffers - no per-tick alloc. */
   ensureArrays(binCount, harmonicCount) {
     if (this.amplitudeDbFs == null || this.amplitudeDbFs.length !== binCount) {
       this.amplitudeDbFs = new Float64Array(binCount);
@@ -226,8 +226,8 @@ export class FftResult {
     c.rejectionTotalFrames = this.rejectionTotalFrames;
     c.rejectionPhaseCoherence = this.rejectionPhaseCoherence;
     c.rejectionDetail = this.rejectionDetail;
-    c.gates = this.gates;                 // immutable snapshot — share the reference
-    c.gateBlockDbFs = this.gateBlockDbFs; // debug snapshots — share (not mutated)
+    c.gates = this.gates;                 // immutable snapshot - share the reference
+    c.gateBlockDbFs = this.gateBlockDbFs; // debug snapshots - share (not mutated)
     c.gateRejectDbFs = this.gateRejectDbFs;
     c.gateRejectGates = this.gateRejectGates;
     if (this.preCorrectionPeaks != null) {
@@ -246,10 +246,10 @@ export class FftResult {
    *
    * MEMOIZED per instance: the spectrum is immutable once emitted (the .frc
    * de-embed applies before any consumer sees the result), and the predistortion
-   * wizard polls this at 100 ms (Java PredistortionWizardDialog:346) — Java
+   * wizard polls this at 100 ms (Java PredistortionWizardDialog:346) - Java
    * re-sorts a primitive double[] each tick and gets away with it; the web pays
    * once per NEW result instead. The percentile comes from an O(n) k-th order
-   * statistic (same element Java's Arrays.sort → noise[idx] yields, :369-371).
+   * statistic (same element Java's Arrays.sort -> noise[idx] yields, :369-371).
    */
   noisePeakFloorDbFs() {
     if (this._noisePeakFloor !== undefined) return this._noisePeakFloor;
@@ -276,7 +276,7 @@ export class FftResult {
   }
 
   /** Exact k-th order statistic of a[0..cnt) (the value a full ascending sort
-   *  would put at index k — Java FftResult:369-371), via median-of-3 Hoare
+   *  would put at index k - Java FftResult:369-371), via median-of-3 Hoare
    *  quickselect: O(n) and comparator-free, where the previous comparator sort
    *  over ~1M bins cost hundreds of ms per call at large FFT sizes. Partially
    *  reorders a (callers pass a scratch copy). */
@@ -304,7 +304,7 @@ export class FftResult {
   }
 
   /**
-   * Robust noise floor (dBFS) in the NEAR RANGE of the fundamental — the median
+   * Robust noise floor (dBFS) in the NEAR RANGE of the fundamental - the median
    * of two LOCAL_FLOOR_FLANK_BINS-wide flanks just beyond the fundamental's
    * dynamic skirt. A sharpness probe, not a wide-band floor. NaN when the flanks
    * hold no usable bins.
@@ -327,7 +327,7 @@ export class FftResult {
   }
 
   /**
-   * Harmonic i's level (dBFS) as ORIGINALLY measured — before any .frc
+   * Harmonic i's level (dBFS) as ORIGINALLY measured - before any .frc
    * de-embedding. Index 0 = H2. NaN when unavailable.
    */
   rawHarmonicDbFs(i) {
@@ -341,7 +341,7 @@ export class FftResult {
   /**
    * Stamps the RAW (pre-.frc-de-embed) fundamental + distortion-peak phasors off
    * the current re/im into rawFundRe / rawPeakRe for the DAC-predistortion
-   * correction — call while re/im still hold the raw averaged spectrum, i.e.
+   * correction - call while re/im still hold the raw averaged spectrum, i.e.
    * BEFORE any in-place .frc de-embed. The peak array carries the HARMONIC bins
    * for a single tone and the de-rotated INTERMOD-PRODUCT bins (imdProductBin)
    * for a dual tone.

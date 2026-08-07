@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -11,7 +11,7 @@
 // state), unit-testable in isolation.
 //
 // columnCrossings is the accumulation: in one pass over the displayed window it
-// counts, per pixel, how many consecutive-sample spans cross it — the pixel's
+// counts, per pixel, how many consecutive-sample spans cross it - the pixel's
 // dwell time, the DSO "phosphor" brightness. Each sample pair is SPLIT at every
 // pixel-column boundary it crosses and each sub-span registered in its own column
 // (through a per-column difference array prefix-summed on the fly), so a diagonal
@@ -24,7 +24,7 @@
 //
 // penRasterize strokes the configured trace width along that band as a true round
 // coverage pen (radius lineWidth/2): a swept stadium over the column's recorded
-// x-extent, or — for a steep single-traversal column — a tilted capsuleColumn so a
+// x-extent, or - for a steep single-traversal column - a tilted capsuleColumn so a
 // near-vertical flank's side fringe ramps with y. The whole rasterisation runs on a
 // supersampled sub-pixel grid (with fringeDilate appending the vector stroke's AA
 // fringe) and is box-averaged down (downsampleBox), so every blitted pixel carries a
@@ -33,13 +33,13 @@
 // Number types mirror Java: JS number (= double) for all transforms; the diff
 // accumulator is an Int32Array, the band arrays Float32Array (Java float[], so a
 // store rounds to float32 exactly as Java's (float) cast does), and the coverage /
-// alpha grids are Uint8Array (Java byte[] used unsigned 0..255 — Uint8Array is
+// alpha grids are Uint8Array (Java byte[] used unsigned 0..255 - Uint8Array is
 // naturally unsigned, so the values match without reproducing Java's signed-byte &
 // 0xFF pitfalls).
 
 import { lanczos } from '../dsp/lanczos.js';
 
-/** Sub-sample search step (in samples) for {@link refineExtreme} — the old ScopeView
+/** Sub-sample search step (in samples) for {@link refineExtreme} - the old ScopeView
  *  RECON_REFINE_STEP: 0.1 already lands the recovered crest within a fraction of a
  *  canvas pixel, so a finer grid buys nothing. */
 const RECON_REFINE_STEP = 0.1;
@@ -53,7 +53,7 @@ const SUBSAMPLE_OFFSETS = [0.125, 0.375, 0.625, 0.875];
 
 /** How far a steep column's band row-span (bandBot − bandTop) may exceed the path's
  *  endpoint |entryY − exitY| and still be treated as a SINGLE monotone traversal by
- *  the {@link penRasterize} capsule branch — rows, on the supersampled grid. The band
+ *  the {@link penRasterize} capsule branch - rows, on the supersampled grid. The band
  *  spans the sinc-refined value-extent, which widens a monotone flank a little past
  *  its raw endpoints; 2.0 rows absorbs that rail widening without admitting a genuine
  *  up-then-down (multi-crossing) column, whose band is far taller than its
@@ -62,7 +62,7 @@ const CAPSULE_TRAVERSAL_SLACK = 2.0;
 
 /** Reconstructs the band-limited curve within ±1 sample of the extreme sample at
  *  {@code idx} and returns the more-extreme of {@code seed} (the raw sample) and the
- *  curve — recovering a crest/trough that drifted between samples. */
+ *  curve - recovering a crest/trough that drifted between samples. */
 function refineExtreme(data, n, idx, step, seed, findMax) {
   let best = seed;
   const lo = Math.max(0.0, idx - 1.0);
@@ -77,11 +77,11 @@ function refineExtreme(data, n, idx, step, seed, findMax) {
 /**
  * Digital-phosphor accumulation (more than one sample per pixel): in a single pass
  * over the displayed window [dispStart, dispStart+dispCount] it counts, for every
- * pixel, how many consecutive-sample spans cross it — the pixel's dwell time, which
+ * pixel, how many consecutive-sample spans cross it - the pixel's dwell time, which
  * the renderer maps to brightness. Pure math, streamed so the hot loop allocates
  * nothing.
  *
- * <p>For each consecutive sample pair (both in [0, n) — a blank / out-of-data sample
+ * <p>For each consecutive sample pair (both in [0, n) - a blank / out-of-data sample
  * breaks the chain, exactly as the vector renderer blanked pos ∈ [0, n−1]), the
  * segment is SPLIT at every pixel-column boundary it crosses and each sub-span
  * registered in ITS own column, so a diagonal reads as a diagonal rather than one
@@ -96,7 +96,7 @@ function refineExtreme(data, n, idx, step, seed, findMax) {
  * crossing counts are byte-identical to the raw accumulation and the band is left all
  * NaN.
  *
- * <p>When {@code counts} is false the entire count pass is skipped — no {@code diff}
+ * <p>When {@code counts} is false the entire count pass is skipped - no {@code diff}
  * writes, no prefix-sum flush, no {@code sink} calls (so {@code diff} may be null);
  * only the sin x/x band export runs. The renderer sets it false at the full-brightness
  * floor, where the sink was already a no-op and the pen alone draws the trace.
@@ -152,10 +152,10 @@ export function columnCrossings(data, n, dispStart, dispCount, width, height,
   let curValMin = Number.POSITIVE_INFINITY;   // value-extent of ALL the column receives
   let curValMax = Number.NEGATIVE_INFINITY;   // (samples AND boundary crossings), pre-round
   let curXLo = Number.POSITIVE_INFINITY;      // x-extent of the path within the column
-  let curXHi = Number.NEGATIVE_INFINITY;      // (fractional, ⊂ [col, col+1]) — the pen sweeps
+  let curXHi = Number.NEGATIVE_INFINITY;      // (fractional, ⊂ [col, col+1]) - the pen sweeps
   let curEntryX = NaN;                         // path ENTRY point (first sub-span left) and
   let curEntryY = NaN;                         // EXIT point (latest sub-span right), unrounded
-  let curExitX = NaN;                          // row space — the tilted-capsule endpoints the
+  let curExitX = NaN;                          // row space - the tilted-capsule endpoints the
   let curExitY = NaN;                          // pen sweeps for a steep single-traversal column
   let curHasSample = false;                    // did any REAL sample land in this column?
   let prevOk = false;
@@ -163,7 +163,7 @@ export function columnCrossings(data, n, dispStart, dispCount, width, height,
   for (let k = dispStart; k <= last; k++) {
     const ok = k >= 0 && k < n;
     const row = ok ? valueToRow(data[k], centerY, vScale, dcOffset, maxRow) : 0;
-    if (prevOk && ok) {                                  // pair (k-1, k) — both valid
+    if (prevOk && ok) {                                  // pair (k-1, k) - both valid
       const xf0 = (k - 1 - dispStart - subSampleOffset) * pxPerSample;
       const xf1 = (k     - dispStart - subSampleOffset) * pxPerSample;
       const col0 = clampCol(Math.floor(xf0), width);
@@ -181,7 +181,7 @@ export function columnCrossings(data, n, dispStart, dispCount, width, height,
         // The sub-span's fractional X endpoints within this column (⊂ [c, c+1]).
         const sxL = Math.max(c, Math.min(c + 1.0, xf0));
         const sxR = Math.max(c, Math.min(c + 1.0, xf1));
-        if (c !== curCol) {                            // column advanced → flush the last
+        if (c !== curCol) {                            // column advanced -> flush the last
           if (curCol >= 0) {
             if (counts) flushColumn(curCol, curLo, curHi, diff, sink);
             if (sinc) flushRails(curCol, curHasSample, curIdxMin, curIdxMax,
@@ -252,8 +252,8 @@ export function columnCrossings(data, n, dispStart, dispCount, width, height,
   }
 }
 
-/** Applies the shared {@code round(centerY − (value − dcOffset)·vScale)} value→row
- *  transform and clamps to {@code [0, height−1]} — the same mapping the vector trace
+/** Applies the shared {@code round(centerY − (value − dcOffset)·vScale)} value->row
+ *  transform and clamps to {@code [0, height−1]} - the same mapping the vector trace
  *  uses for Y. */
 function valueToRow(value, centerY, vScale, dcOffset, maxRow) {
   const r = Math.round(centerY - (value - dcOffset) * vScale);
@@ -266,7 +266,7 @@ function clampCol(col, width) {
 }
 
 /** Whether the sample at {@code idx} is a LOCAL extremum against its neighbour samples
- *  — the precondition for {@link refineExtreme}. An array-edge sample is never
+ *  - the precondition for {@link refineExtreme}. An array-edge sample is never
  *  refined. */
 function isLocalExtremum(data, n, idx, findMax) {
   if (idx <= 0 || idx >= n - 1) return false;
@@ -275,7 +275,7 @@ function isLocalExtremum(data, n, idx, findMax) {
       : data[idx] <= data[idx - 1] && data[idx] <= data[idx + 1];
 }
 
-/** Linear value of the segment {@code (xf0,v0)→(xf1,v1)} at integer column boundary
+/** Linear value of the segment {@code (xf0,v0)->(xf1,v1)} at integer column boundary
  *  {@code b} (with {@code xf0 < b < xf1}). */
 function crossAt(b, v0, v1, xf0, xf1) {
   return v0 + (v1 - v0) * ((b - xf0) / (xf1 - xf0));
@@ -296,7 +296,7 @@ function flushColumn(col, lo, hi, diff, sink) {
 
 /** Exports a just-flushed column's band ends for {@link penRasterize} to stroke, as
  *  unrounded row-space floats through the SAME {@code centerY − (value − dcOffset)·
- *  vScale} value→row transform as the accumulation but WITHOUT rounding. The band spans
+ *  vScale} value->row transform as the accumulation but WITHOUT rounding. The band spans
  *  the column's VALUE-EXTENT; the extreme samples are refined against the full data by
  *  {@link refineExtreme} and widen the band only where a sample is itself the extent. */
 function flushRails(col, hasSample, idxMin, idxMax,
@@ -330,7 +330,7 @@ function flushRails(col, hasSample, idxMin, idxMax,
 /**
  * Strokes a true round coverage pen of EXACTLY {@code lineWidth} pixels along a
  * per-column band and composites it into the packed {@code width×height} alpha buffer
- * {@code out} ({@code out[y·width + x]}, unsigned 0..255) via max — so it lays OVER an
+ * {@code out} ({@code out[y·width + x]}, unsigned 0..255) via max - so it lays OVER an
  * already-packed interior without erasing it. Pure math, no allocation.
  *
  * <p>Swept-stadium model: with {@code h = lineWidth/2} the pen is a disk of radius
@@ -340,13 +340,13 @@ function flushRails(col, hasSample, idxMin, idxMax,
  * ({@link SUBSAMPLE_OFFSETS}).
  *
  * <p>Steep-column capsule branch: when a source column is steep AND a single
- * traversal, its path entry/exit points drive {@link capsuleColumn} instead — the disk
+ * traversal, its path entry/exit points drive {@link capsuleColumn} instead - the disk
  * swept along the tilted segment so per row the neighbour's coverage ramps with the
  * drifting x.
  *
  * <p>Column bounds: {@code bandColLo}/{@code bandColHi} are the first/last non-NaN band
- * columns (empty band = {@code bandColLo > bandColHi} — nothing stroked). The outer
- * loop is bounded to {@code [bandColLo − reach, bandColHi + reach]} — identical output
+ * columns (empty band = {@code bandColLo > bandColHi} - nothing stroked). The outer
+ * loop is bounded to {@code [bandColLo − reach, bandColHi + reach]} - identical output
  * to sweeping every column (the interior already skips NaN sources), just without the
  * wasted NaN scans.
  */
@@ -355,7 +355,7 @@ export function penRasterize(bandTop, bandBot, bandXLo, bandXHi,
                              width, height, lineWidth, alpha255,
                              bandColLo, bandColHi, out) {
   if (width <= 0 || height <= 0) return;
-  if (bandColLo > bandColHi) return;    // no non-NaN band this frame — nothing to stroke
+  if (bandColLo > bandColHi) return;    // no non-NaN band this frame - nothing to stroke
   const h = lineWidth * 0.5;
   const hSq = h * h;
   const reach = Math.ceil(h) + 1;       // source columns each side that can reach out[x]
@@ -372,8 +372,8 @@ export function penRasterize(bandTop, bandBot, bandXLo, bandXHi,
       // The pen sweeps the path's TRUE x-extent within the column, not the whole column.
       let sxLo = bandXLo[c];
       let sxHi = bandXHi[c];
-      if (Number.isNaN(sxLo)) { sxLo = c; sxHi = c + 1.0; }   // no extent recorded → full column
-      // Steep single-traversal column → tilted round-capped CAPSULE instead of stadium.
+      if (Number.isNaN(sxLo)) { sxLo = c; sxHi = c + 1.0; }   // no extent recorded -> full column
+      // Steep single-traversal column -> tilted round-capped CAPSULE instead of stadium.
       const entryY = bandEntryY[c];
       const exitY  = bandExitY[c];
       if (!Number.isNaN(entryY) && !Number.isNaN(exitY)
@@ -409,9 +409,9 @@ export function penRasterize(bandTop, bandBot, bandXLo, bandXHi,
 
 /** Rasterises ONE steep single-traversal source column as a tilted round-capped
  *  CAPSULE into output column {@code x}: the pen disk swept along the straight path
- *  {@code (entryX,entryY)→(exitX,exitY)} rather than the vertical band, so the
+ *  {@code (entryX,entryY)->(exitX,exitY)} rather than the vertical band, so the
  *  neighbour's side coverage RAMPS as the path's x drifts with y. A vertical path
- *  ({@code entryX == exitX}) gives a CONSTANT xAt, hence a constant per-row fringe —
+ *  ({@code entryX == exitX}) gives a CONSTANT xAt, hence a constant per-row fringe -
  *  the correct behaviour, deliberately untapered. Pure, allocation-free. */
 function capsuleColumn(entryX, entryY, exitX, exitY, x, h, hSq, height, alpha255, width, out) {
   const yTop = Math.min(entryY, exitY);
@@ -443,8 +443,8 @@ function capsuleColumn(entryX, entryY, exitX, exitY, x, h, hSq, height, alpha255
 
 /** Vertical half-height of the swept round pen at horizontal subsample {@code u} over
  *  the path's x-extent {@code [xLo, xHi]}: {@code √(h²−d²)} where {@code d} is the
- *  distance from {@code u} to that interval. Returns {@code −1} — a skip marker counting
- *  0 in the four-subsample mean — when {@code d > h}. */
+ *  distance from {@code u} to that interval. Returns {@code −1} - a skip marker counting
+ *  0 in the four-subsample mean - when {@code d > h}. */
 function subsampleVy(u, xLo, xHi, h, hSq) {
   const d = u < xLo ? xLo - u : u > xHi ? u - xHi : 0.0;
   if (d > h) return -1.0;
@@ -516,7 +516,7 @@ export function fringeDilate(grid, w, h, radius, scratch, x0, x1, y0, y1) {
  *
  *  <p>{@code ox0,ox1,oy0,oy1} bound the WRITTEN output pixels (inclusive, clamped):
  *  only pixels whose {@code ss×ss} source block can overlap the fringe content are
- *  recomputed; every other output pixel reads an all-zero block (→ 0) and is left as
+ *  recomputed; every other output pixel reads an all-zero block (-> 0) and is left as
  *  the caller's cleared 0, so passing the whole image reproduces the full downsample
  *  byte-for-byte. */
 export function downsampleBox(src, srcW, ss, dst, dstW, dstH, ox0, ox1, oy0, oy1) {
