@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -8,30 +8,30 @@
 // rectangular-zoom section (the ZoomState memento + installRectZoom machinery,
 // commit 73f6c1f): a button-1 drag on the plot selects a rectangle (min 8 px on
 // both axes, clamped to the zoomable area) that is stretched to the full view on
-// release, with the PREVIOUS pan/zoom pushed on a 32-deep per-view undo stack —
+// release, with the PREVIOUS pan/zoom pushed on a 32-deep per-view undo stack -
 // exact-modifier Ctrl+Z pops it until empty. The Ctrl+Z target is the FOCUSED
-// view (click-to-focus), else the HOVERED one — unless the focus sits on another
+// view (click-to-focus), else the HOVERED one - unless the focus sits on another
 // view's host or a text-editing widget (whose own Ctrl+Z wins; Java's
-// Text/Combo/Spinner exception → input/select/textarea/contenteditable here).
+// Text/Combo/Spinner exception -> input/select/textarea/contenteditable here).
 // The target view shows a 1-px accent border; a drag shows the accent rubber
 // band. Both are canvas-drawn by drawOverlay(), called LAST in the owning view's
 // paint. The view owns the semantics through the injected captureState /
 // applyState / stateForRect callbacks, exchanging the uniform zoom-state
-// memento ({xMin, xMax, yMin[], yMax[]} — units are the view's own; this module
+// memento ({xMin, xMax, yMin[], yMax[]} - units are the view's own; this module
 // never interprets the numbers, it only stacks and returns them).
 //
 // Intended divergence from Java: there is no GL overlay-composite routing (the
-// web renders on Canvas2D) — an overlay-only repaint is a plain full redraw via
+// web renders on Canvas2D) - an overlay-only repaint is a plain full redraw via
 // the injected repaintOverlay callback.
 
 /** Rect-zoom rubber band + focused-view border colour (Java ColorRole.ACCENT
- *  0x8CFF00 — bright green, visible on light AND dark plots). */
+ *  0x8CFF00 - bright green, visible on light AND dark plots). */
 export const RECT_ZOOM_ACCENT = '#8cff00';
 
-// Undo-stack depth bound — beyond it the OLDEST zoom states are dropped
+// Undo-stack depth bound - beyond it the OLDEST zoom states are dropped
 // (Java ZOOM_UNDO_LIMIT).
 const ZOOM_UNDO_LIMIT = 32;
-// Minimum selection edge (px) for a drag to count as a zoom — anything smaller
+// Minimum selection edge (px) for a drag to count as a zoom - anything smaller
 // is a plain focus click (Java ZOOM_MIN_SELECTION_PX).
 const ZOOM_MIN_SELECTION_PX = 8;
 // Dataset key marking an element as a measurement view's interaction host, so
@@ -50,10 +50,10 @@ export class RectZoom {
    * @param {HTMLElement} host the interaction element (the view's canvas).
    * @param {object} cfg
    * @param {() => (object|null)} cfg.captureState the current pan/zoom as a
-   *   uniform memento {xMin, xMax, yMin:number[], yMax:number[]} — pushed
+   *   uniform memento {xMin, xMax, yMin:number[], yMax:number[]} - pushed
    *   before every rect zoom, replayed by Ctrl+Z; null = nothing to remember
    *   (Java captureZoomState).
-   * @param {(s: object) => boolean} cfg.applyState applies a memento — the
+   * @param {(s: object) => boolean} cfg.applyState applies a memento - the
    *   single mutation gateway shared by zoom and undo. Returns whether the
    *   state was actually applied: a restore may clamp degenerate after the
    *   environment changed, and undo then skips the dead entry (Java
@@ -65,10 +65,10 @@ export class RectZoom {
    *   cfg.zoomableArea the region a selection may start in and is clamped to,
    *   in host px (Java zoomableArea).
    * @param {(x:number,y:number) => boolean} [cfg.isBlockedAt] whether a
-   *   selection drag may NOT start at (x, y) — views veto their interactive
+   *   selection drag may NOT start at (x, y) - views veto their interactive
    *   hit zones (Java isRectZoomBlockedAt; default: never blocked).
    * @param {() => void} cfg.repaintOverlay repaint request for a change that
-   *   only affects the rect-zoom overlay (rubber band, focus border) — on
+   *   only affects the rect-zoom overlay (rubber band, focus border) - on
    *   Canvas2D a plain full redraw (Java requestZoomOverlayRepaint).
    * @param {boolean} [cfg.hookMouse=true] with true the machinery wires the
    *   drag to the host's own mouse events (FFT / freq-resp); the scope passes
@@ -99,7 +99,7 @@ export class RectZoom {
     host.tabIndex = -1;
     host.style.outline = 'none';
     host.dataset[HOST_DATASET_KEY] = '1';
-    // Focus / hover tracking → overlay repaint (Java FocusIn/Out +
+    // Focus / hover tracking -> overlay repaint (Java FocusIn/Out +
     // MouseEnter/Exit listeners).
     host.addEventListener('focus', () => this._repaintOverlay());
     host.addEventListener('blur', () => this._repaintOverlay());
@@ -108,7 +108,7 @@ export class RectZoom {
     if (hookMouse) {
       // Drag + release live on the window so a fast drag that leaves the
       // canvas keeps tracking (the SWT canvas captures the pointer during a
-      // button-down drag — same emulation as the scope's slider drags).
+      // button-down drag - same emulation as the scope's slider drags).
       host.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
         const { x, y } = this._hostXY(e);
@@ -122,7 +122,7 @@ export class RectZoom {
       window.addEventListener('mouseup', () => this.pointerUp());
     }
     // Display-wide EXACT-Ctrl Ctrl+Z filter (Java zoomKeyFilter: keyCode 'z'
-    // with stateMask == MOD1 exactly — Ctrl+Shift+Z and other combos pass
+    // with stateMask == MOD1 exactly - Ctrl+Shift+Z and other combos pass
     // through). Never fires while a text-editing widget is the target
     // (isUndoTarget's text-widget exception).
     document.addEventListener('keydown', (e) => {
@@ -133,11 +133,11 @@ export class RectZoom {
     });
     // Border / undo eligibility follows the window focus, which can change
     // with none of the host focus/hover events firing (Alt+Tab with the
-    // pointer resting on the plot) — repaint on the flips so a stopped view
+    // pointer resting on the plot) - repaint on the flips so a stopped view
     // never keeps a stale border (Java zoomShellActivationListener).
     window.addEventListener('focus', () => this._repaintOverlay());
     window.addEventListener('blur', () => this._repaintOverlay());
-    // A focus move between widgets (e.g. plot → text field) changes the
+    // A focus move between widgets (e.g. plot -> text field) changes the
     // hovered view's border eligibility without any host event.
     document.addEventListener('focusin', () => { if (this._hovered) this._repaintOverlay(); });
   }
@@ -165,7 +165,7 @@ export class RectZoom {
     return true;
   }
 
-  /** Drag update — repaints the rubber band (Java rectZoomPointerMove). */
+  /** Drag update - repaints the rubber band (Java rectZoomPointerMove). */
   pointerMove(x, y) {
     if (!this._dragActive) return;
     this._dragCurX = x;
@@ -179,13 +179,13 @@ export class RectZoom {
   }
 
   /** Release: commits the selection when it spans at least 8 px on both axes
-   *  — pushes the pre-zoom state and applies the stretched one. Returns
+   *  - pushes the pre-zoom state and applies the stretched one. Returns
    *  whether a zoom happened (Java rectZoomPointerUp). */
   pointerUp() {
     if (!this._dragActive) return false;
     this._dragActive = false;
     let sel = this._normalizedSelection();
-    // Erasing the band is an overlay-only repaint — a plain click or an
+    // Erasing the band is an overlay-only repaint - a plain click or an
     // aborted drag (the committed path gets its full redraw from applyState).
     this._repaintOverlay();
     // Clamp BEFORE the minimum-size gate: a drag ending outside the plot must
@@ -205,7 +205,7 @@ export class RectZoom {
   }
 
   /** Re-applies the newest restorable zoom state, dropping entries whose
-   *  restore no-ops; false when the stack runs out (Java undoZoom — the
+   *  restore no-ops; false when the stack runs out (Java undoZoom - the
    *  applyState implementations repaint, so no extra redraw here). */
   undo() {
     let prev;
@@ -215,7 +215,7 @@ export class RectZoom {
     return false;
   }
 
-  /** Drops the whole undo history — a mode switch (record ↔ file on the
+  /** Drops the whole undo history - a mode switch (record ↔ file on the
    *  scope) makes the stacked states meaningless (Java clearZoomHistory). */
   clearHistory() {
     this._undoStack.length = 0;
@@ -256,7 +256,7 @@ export class RectZoom {
     const focus = document.activeElement;
     if (focus === this._host) return true;
     if (!this._hovered) return false;
-    if (!focus || focus === document.body) return true;   // Java: focus == null → true
+    if (!focus || focus === document.body) return true;   // Java: focus == null -> true
     if (focus.dataset && focus.dataset[HOST_DATASET_KEY]) return false;   // another view owns it
     const tag = focus.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA'
@@ -265,9 +265,9 @@ export class RectZoom {
   }
 
   /**
-   * Draws the rect-zoom layer — call LAST in the owning view's paint: the
+   * Draws the rect-zoom layer - call LAST in the owning view's paint: the
    * rubber band while dragging, and the 1-px accent border when this view is
-   * the Ctrl+Z target. Both are drawn inside the canvas edge — no layout
+   * the Ctrl+Z target. Both are drawn inside the canvas edge - no layout
    * impact (Java drawRectZoomOverlay).
    * @param {CanvasRenderingContext2D} g
    * @param {number} w canvas width (CSS px)

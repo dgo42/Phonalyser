@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fat platform JAR: the standard jar-with-dependencies layout PLUS the
+     help/ bundle and the i18n locale variants.
+
+     help/** and i18n/messages_*.properties are excluded from the GUI module's
+     thin jar (see its maven-jar-plugin excludes) because the jpackage installer
+     ships them as the external $APPDIR/help and $APPDIR/i18n and must not carry
+     a second copy inside the jar.  The bare platform JARs have no external
+     bundle, so this assembly re-adds them; at startup the app stages help once
+     per version into the per-user data dir (HelpViewer.stageBundledHelp).
+
+     MULTI-MODULE NOTE: this descriptor is consumed by phonalyser-app, which has
+     no sources of its own, so target/classes there is empty.  The two fileSets
+     therefore read the resources straight out of the GUI module's source tree
+     rather than out of a build directory.
+
+     META-INF/services is merged across every unpacked jar: the backend and
+     settings-UI providers are discovered by ServiceLoader, and without the
+     handler one module's provider file would silently overwrite another's. -->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.1.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.1.0 http://maven.apache.org/xsd/assembly-2.1.0.xsd">
+    <id>fat-jar</id>
+    <formats>
+        <format>jar</format>
+    </formats>
+    <includeBaseDirectory>false</includeBaseDirectory>
+    <containerDescriptorHandlers>
+        <containerDescriptorHandler>
+            <handlerName>metaInf-services</handlerName>
+        </containerDescriptorHandler>
+    </containerDescriptorHandlers>
+    <dependencySets>
+        <!-- Mirrors the built-in jar-with-dependencies descriptor.  In the
+             multi-module build this unpacks every reactor module (core,
+             backends, cli, gui, qa40x-gui) plus the third-party jars. -->
+        <dependencySet>
+            <outputDirectory>/</outputDirectory>
+            <useProjectArtifact>true</useProjectArtifact>
+            <unpack>true</unpack>
+            <scope>runtime</scope>
+            <unpackOptions>
+                <excludes>
+                    <!-- ONE ARCHITECTURE PER FAT JAR: the natives for this
+                         build's arch stay COMPLETE (PortAudio, libusb,
+                         csjsound), every other arch goes.  Anchored at the
+                         archive root, set per platform profile in
+                         phonalyser-parent. -->
+                    <exclude>${platform.nativeExcludes}</exclude>
+                    <!-- jna.jar's own jnidispatch for ~26 platforms.  Dropped BY
+                         FILE NAME, never by a win32* glob: com/sun/jna/win32/ is
+                         a Java PACKAGE (StdCallLibrary, W32APIOptions) beside the
+                         win32-x86-64/ platform folder.  This build's own copy is
+                         restored by the second dependencySet below. -->
+                    <exclude>com/sun/jna/*/jnidispatch.dll</exclude>
+                    <exclude>com/sun/jna/*/libjnidispatch.so</exclude>
+                    <exclude>com/sun/jna/*/libjnidispatch.jnilib</exclude>
+                    <exclude>com/sun/jna/*/libjnidispatch.a</exclude>
+                </excludes>
+            </unpackOptions>
+        </dependencySet>
+        <!-- ...and jnidispatch for THIS platform only. -->
+        <dependencySet>
+            <outputDirectory>/</outputDirectory>
+            <unpack>true</unpack>
+            <scope>runtime</scope>
+            <includes>
+                <include>net.java.dev.jna:jna</include>
+            </includes>
+            <unpackOptions>
+                <includes>
+                    <include>com/sun/jna/${jna.resourcePrefix}/**</include>
+                </includes>
+            </unpackOptions>
+        </dependencySet>
+    </dependencySets>
+    <fileSets>
+        <!-- help/ belongs to the application module; the locale bundles belong to
+             gui-core, where I18n reads them.  Each is taken from the module that
+             owns it rather than from one combined resource tree. -->
+        <fileSet>
+            <directory>${project.basedir}/../phonalyser-gui/src/main/resources</directory>
+            <outputDirectory>/</outputDirectory>
+            <includes>
+                <include>help/**</include>
+            </includes>
+        </fileSet>
+        <fileSet>
+            <directory>${project.basedir}/../phonalyser-gui-core/src/main/resources</directory>
+            <outputDirectory>/</outputDirectory>
+            <includes>
+                <include>i18n/**</include>
+            </includes>
+        </fileSet>
+        <!-- macOS natives, the one platform whose libraries are not module
+             resources - mapped into JNA's Platform.RESOURCE_PREFIX folder so
+             Native.load extracts them like the win32 copies.  Off macOS
+             macos.nativeSrc points at lib/ itself, which has no *.dylib
+             directly, so this contributes nothing. -->
+        <fileSet>
+            <directory>${macos.nativeSrc}</directory>
+            <outputDirectory>/${jna.resourcePrefix}</outputDirectory>
+            <includes>
+                <include>*.dylib</include>
+            </includes>
+        </fileSet>
+    </fileSets>
+</assembly>

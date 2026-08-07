@@ -1,10 +1,10 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Faithful port of org.edgo.audio.measure.common.CorrectionStore — the
+// Faithful port of org.edgo.audio.measure.common.CorrectionStore - the
 // owner of one pane's loaded frequency-response correction state: an ordered list
 // of loaded .frc Entry calibrations plus the calibration wizard's direct-loopback
 // buffer. The consumer chains the divides through all entries (in order) plus the
@@ -104,7 +104,7 @@ export class CorrectionStore {
     this._fire();
   }
 
-  /** Alias for clearAll() — wizard / older callers. */
+  /** Alias for clearAll() - wizard / older callers. */
   clearCurrent() {
     this.clearAll();
   }

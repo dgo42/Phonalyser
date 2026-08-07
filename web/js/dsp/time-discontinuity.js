@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -7,7 +7,7 @@
 // Faithful port of org.edgo.audio.measure.dsp.TimeDiscontinuityDetector.
 //
 // Time-domain waveform-discontinuity detector, shared by the oscilloscope's
-// glitch trigger and the FFT worker's time-domain rejection gate — so both
+// glitch trigger and the FFT worker's time-domain rejection gate - so both
 // instruments agree on what counts as a damaged block (dropped-sample DAC
 // gaps, ADC-side cutoffs, phase-jump splices).
 //
@@ -15,7 +15,7 @@
 //   d[i] ≈ a·d[i−1] − d[i−2]   with   a = 2·cos ω
 // estimated from the window itself by least squares. The recurrence is EXACT
 // for a clean tone at any frequency, so the prediction-error baseline is the
-// noise floor — unlike a plain second difference (the a = 2 special case),
+// noise floor - unlike a plain second difference (the a = 2 special case),
 // whose baseline is the tone's own curvature A·ω² and which therefore goes
 // deaf as the signal frequency rises (at 20 kHz / 384 kHz the curvature
 // threshold reaches ~0.5·A, hiding every glitch smaller than a full-peak
@@ -23,7 +23,7 @@
 // the mean-based threshold. Frequency-domain counterpart:
 // js/dsp/spectral-discontinuity-detector.js.
 //
-// PORT NOTE — overload collapse: the desktop class carries a float[] path
+// PORT NOTE - overload collapse: the desktop class carries a float[] path
 // (scope capture buffers) and a double[] twin of detect() (the FFT worker's
 // double-precision window, kept separate purely to avoid a per-tick
 // float-conversion copy). JS numbers are IEEE doubles, so both overloads
@@ -35,7 +35,7 @@
 /**
  * Relative (noise-referenced) term of the detection threshold: this factor ×
  * the window's mean |prediction error|. For a clean tone the error is
- * noise-limited, where 8× ≈ 6.4 σ — broadband noise never fires; a splice
+ * noise-limited, where 8× ≈ 6.4 σ - broadband noise never fires; a splice
  * breaks the prediction by a large fraction of the amplitude, decades above.
  * Residual harmonics / a second tone raise the baseline (they don't fit a
  * single-tone recurrence), and the threshold self-scales with them. This term
@@ -50,10 +50,10 @@ const REL_FACTOR = 8.0;
  * threshold = max(REL_FACTOR·meanAbs, EVENT_FLOOR_FRACTION·A). It stops the
  * relative term from over-firing on a high tone, where sub-sample capture-
  * timing slips leak a residual prediction error e ≈ A·2πf·δt that grows with
- * frequency and — referenced only to the noise floor — crosses REL_FACTOR·meanAbs
- * above a few kHz. Placement (maintainer's physical spec, 384 kHz rig): a real
- * event is ≥ 0.2·A within 2–4 samples, so 0.05 sits ~12 dB below the smallest
- * real event and ~12 dB above the worst legitimate timing-slip spur — centered
+ * frequency and - referenced only to the noise floor - crosses REL_FACTOR·meanAbs
+ * above a few kHz. Placement (measured on a 384 kHz rig): a real
+ * event is ≥ 0.2·A within 2-4 samples, so 0.05 sits ~12 dB below the smallest
+ * real event and ~12 dB above the worst legitimate timing-slip spur - centered
  * between the two. (Java TimeDiscontinuityDetector.EVENT_FLOOR_FRACTION.)
  */
 const EVENT_FLOOR_FRACTION = 0.05;
@@ -64,9 +64,9 @@ const EVENT_FLOOR_FRACTION = 0.05;
  */
 export class TimeDiscontinuityDetector {
 
-  /** Discontinuity bursts closer than this (seconds) belong to ONE glitch — a
+  /** Discontinuity bursts closer than this (seconds) belong to ONE glitch - a
    *  dropout's entry and recovery boundaries (the observed USB gaps run
-   *  120–160 µs) merge, so a caller can anchor on the glitch's start or end
+   *  120-160 µs) merge, so a caller can anchor on the glitch's start or end
    *  as a whole rather than on each boundary separately. */
   static MERGE_SECONDS = 0.001;
 
@@ -80,13 +80,13 @@ export class TimeDiscontinuityDetector {
    * @param {Float64Array|Float32Array|number[]} data sample buffer
    * @param {number} from  inclusive search start
    * @param {number} to    exclusive search end
-   * @param {boolean} anchorStart true → return the last clean sample before
-   *        the glitch, false → the first settled sample after it
+   * @param {boolean} anchorStart true -> return the last clean sample before
+   *        the glitch, false -> the first settled sample after it
    * @param {number} mergeSamples bursts closer than this merge into one glitch
-   * @param {number} omega the KNOWN fundamental as 2π·f/sampleRate — pins the
+   * @param {number} omega the KNOWN fundamental as 2π·f/sampleRate - pins the
    *        recurrence coefficient exactly, so the tone nulls to the noise floor
    *        even when an in-window glitch or harmonics would bias the estimate;
-   *        NaN → least-squares self-estimate from the window (external /
+   *        NaN -> least-squares self-estimate from the window (external /
    *        unknown signals)
    * @returns {number} that index for the RIGHTMOST glitch, or -1.0 when
    *        nothing qualifies (including flat / silent input)
@@ -137,7 +137,7 @@ export class TimeDiscontinuityDetector {
       }
       if (burstStart >= 0) {
         if (glitchEnd >= 0 && burstStart - glitchEnd <= mergeSamples) {
-          glitchEnd = i;                          // same glitch — extend to this burst
+          glitchEnd = i;                          // same glitch - extend to this burst
         } else {
           glitchStart = burstStart;               // a new (rightmost) glitch
           glitchEnd = i;
@@ -155,7 +155,7 @@ export class TimeDiscontinuityDetector {
    * Rejection-gate convenience: whether `data[0 .. n)` contains any
    * discontinuity. Burst merging is irrelevant for a yes/no verdict; `omega`
    * as in {@link TimeDiscontinuityDetector#findDiscontinuity}. (Single path
-   * here — see the PORT NOTE; the Java float[] and double[] detect() twins
+   * here - see the PORT NOTE; the Java float[] and double[] detect() twins
    * both map onto this.)
    *
    * @param {Float64Array|Float32Array|number[]} data sample buffer

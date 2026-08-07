@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser.web - Phonalyser in a browser</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Phonalyser in a browser</h1>
+  <p>This build runs inside a browser tab.  Everything a measurement needs - the
+     generator, the oscilloscope, the FFT analyser, the sweeps - is the same
+     code as the desktop application, but the <em>bottom</em> of the stack is
+     not: a page cannot open a sound card the way a native program can.  This
+     chapter is the short list of what follows from that, and it is worth
+     reading once before you trust a number.</p>
+
+  <h2 id="browser">It only runs on Chromium</h2>
+  <div class="note"><b>This is not a preference, it is a hard requirement.</b>
+     Phonalyser.web needs <b>Google Chrome, Microsoft Edge, Opera or Brave</b>
+     - any browser built on Chromium.  On Firefox or Safari it does not start
+     at all: instead of the application you get a single message saying the
+     browser is unsupported.</div>
+  <p>The reason is that the app depends on audio interfaces only Chromium
+     implements - frame-accurate probing of the real capture rate, and the
+     AudioWorklet form it uses to receive samples.  Rather than start and then
+     fail in confusing ways halfway through a measurement, the app checks the
+     engine before it builds anything and refuses cleanly.</p>
+  <p>Note the scope: this is about the <em>whole application</em>.  Missing
+     <a href="#webusb">WebUSB</a> costs you only the QA40x backend; the wrong
+     browser costs you everything.</p>
+
+  <h2 id="web-audio">The Web Audio backend</h2>
+  <p><b>Web Audio</b> is the default backend and the one you get with an
+     ordinary sound card.  Capture comes in through the browser's
+     microphone/line-in permission and playback goes out through the browser's
+     audio output.</p>
+  <p>The app asks for the device you selected <em>exactly</em>, in stereo, and
+     explicitly switches <b>echo cancellation, noise suppression and automatic
+     gain control off</b>, so nothing the browser offers for voice calls is
+     applied to your signal.  If the device refuses the rate that was asked
+     for, the app retries without the rate constraint but still pinned to that
+     device - <b>it never quietly substitutes a different one</b>.  Anything
+     else surfaces as a visible error rather than a recording of the default
+     microphone.</p>
+
+  <h3 id="float32">No bit depth, and none to report</h3>
+  <p>Samples reach the page as <b>float32</b>, downstream of the Windows
+     shared-mode mixer.  There is no integer word whose width you could choose,
+     which is why <a href="preferences.html#prefs-audio">Preferences ▸ Audio</a>
+     shows <em>Device</em>, <em>Sample rate</em> and <em>Card</em> for Web Audio
+     and no <em>Bit depth</em> control at all.  It is not hidden - it does not
+     exist on this path.</p>
+  <div class="note"><b>The honest consequence:</b> a Web Audio measurement is
+     <b>not bit-exact</b>.  Whatever the system mixer did - a resample, a volume
+     taper, an "enhancement" - is already in the samples before this application
+     sees them.  For a genuinely bit-exact path see
+     <a href="#bit-exact">below</a>.</div>
+
+  <h3 id="rate">The rate is the device's, not the app's</h3>
+  <p>The app opens the stream first, reads the rate the browser actually granted
+     and then builds its audio graph at <em>that</em> rate, so the two can never
+     disagree.  What it cannot do is <em>change</em> the rate: that is the
+     device's Windows shared-mode format, and it is set in Windows.  The full
+     procedure - including the fact that you must reload the tab afterwards so
+     the device is re-opened - is on its own page:
+     <a href="web-input-device.html">Configuring the Windows input device</a>.
+     Read it before your first measurement; a card left at 48&nbsp;kHz analyses
+     a band that stops at 24&nbsp;kHz however long an FFT you choose.</p>
+
+  <h3 id="permission">Permission, busy devices and dead ones</h3>
+  <ul>
+    <li><b>The first capture asks.</b>  The browser puts up its own permission
+        prompt.  A refusal is reported as a device error naming the reason - it
+        does not leave you looking at a flat line wondering.</li>
+    <li><b>A busy device is retried.</b>  Three attempts, a quarter of a second
+        apart, with <em>input device busy (attempt n/3) - retrying...</em> on the
+        status line, before it gives up and says so.</li>
+    <li><b>A dead input cannot pretend to be a quiet one.</b>  A browser can
+        keep a capture track alive and hand out digital silence after the card
+        is unplugged, which would read as a beautifully low noise floor.  The
+        app watches the track itself - ended means the device was lost, muted
+        means it stopped delivering - and additionally holds a two-second
+        delivery deadline: a stream that owes blocks and sends none is stopped
+        with a reason rather than averaged.</li>
+  </ul>
+
+  <h2 id="webusb">The QA40x, and what WebUSB needs</h2>
+  <p>The <b>QA40x</b> backend drives a QuantAsylum QA402 / QA403 directly over
+     <b>WebUSB</b>, with no operating-system audio path in the way at all.  Its
+     row appears in the backend list only when the browser exposes WebUSB; when
+     it does not, the row is still <em>shown</em>, disabled, carrying its reason
+     - <em>Requires WebUSB over https:// or localhost - works in Chrome; other
+     Chromium browsers may not expose it</em> - so its absence is explained
+     rather than mysterious.</p>
+  <p>What has to be true before an analyzer can be used:</p>
+  <ul>
+    <li><b>Google Chrome.</b>  This is narrower than the application's own
+        requirement.  Phonalyser.web runs on any Chromium browser, but the QA40x
+        has only been <em>verified</em> to work in Chrome: on the same machine,
+        over <code>https://</code> with a valid certificate, Edge, Opera and
+        Brave did not reach the analyzer.  Being built on Chromium is not enough
+        - a browser also has to expose WebUSB and let a page use it, and those
+        three do not, at least as they ship.  If the QA40x is what you came for,
+        use Chrome.</li>
+    <li><b>A secure context.</b>  The page must be served over
+        <code>https://</code> or from <code>localhost</code>.</li>
+    <li><b>Your explicit consent, once.</b>  WebUSB shows a device chooser that
+        only a real click can raise, and <b>the click it accepts is
+        <em>Scan devices</em></b> in Preferences ▸ Audio.  Merely selecting
+        QA40x in the backend list does not prompt - that path is deliberately
+        forbidden to enumerate.</li>
+    <li><b>Until you have granted it, the analyzer is invisible.</b>  The
+        browser only reports devices this site was already given, so a QA403
+        that is plugged in but has never been picked in the chooser lists as
+        nothing, and an attempt to open it fails with <em>No QA402/QA403 found
+        on USB</em>.  If your analyzer is not there, press <b>Scan
+        devices</b>.</li>
+    <li><b>On Windows, a WinUSB-class driver.</b>  A per-machine step that no
+        web page can perform, or even detect, for you.</li>
+  </ul>
+  <p>Only one analyzer may be attached at a time.  The claim is exclusive: the
+     app takes interface&nbsp;0, so the QA402 / QA403 must not be open in the
+     QuantAsylum software or in another tab.  A claim that fails leaves the
+     device closed rather than half-owned.</p>
+  <div class="note"><b>It is handed back when nothing is using it.</b>  As soon
+     as the last consumer detaches, the analyzer is parked at its safe ranges,
+     stopped and released.  That is deliberate: because the WebUSB claim is
+     exclusive, an idle-but-claimed analyzer would lock the vendor software and
+     every other tab out of it for as long as this page stayed open.</div>
+
+  <h3 id="bit-exact">The bit-exact path</h3>
+  <p>Since Web Audio is downstream of the mixer, the QA40x is <b>the only
+     bit-exact backend on this machine</b>: its samples cross USB as 24-bit
+     values in 32-bit words and never enter an operating-system audio path at
+     all.  The other bit-exact option is not on this machine - it is a
+     <a href="#served-page">bench</a>, where the desktop application opens a
+     card in exclusive mode on your behalf.</p>
+
+  <h2 id="served-page">The page a bench serves</h2>
+  <p>A <a href="server.html">Phonalyser server</a> does not only serve its sound
+     cards - it also serves <em>this application</em>.  Ask a bench for its
+     address in a browser and you get a copy of Phonalyser.web that is already
+     pointed at that bench: it dials its own server automatically, before the
+     first device scan, so the machine you loaded it from is connected by the
+     time you open Preferences.</p>
+  <p><b>That page offers the bench's backends and nothing else.</b>  There is no
+     Web Audio row and not even the disabled QA40x row.  This is honesty, not a
+     restriction: such a page arrives over plain <code>http://</code> from a
+     machine on your network, which is not a secure context, so
+     <code>getUserMedia</code> and WebUSB genuinely do not exist on it.
+     Offering a local backend there would be offering a choice whose every open
+     must fail, and a greyed row would only invite the question "why can I see
+     it".</p>
+  <p>If a backend you had selected earlier is no longer offered, the page says
+     so plainly rather than failing somewhere deep in the browser.  A backend
+     remembered from a <em>bench</em>, on the other hand, is never migrated
+     away: its row is restored before its server has answered, so the device,
+     rate and card you had set on that bench survive a reload.</p>
+  <div class="note">The page works out that it came from a bench by asking its
+     own address - the same scheme, host and path it was loaded from - so a
+     server reached over <code>https://</code> through a TLS reverse proxy is
+     recognised exactly like one reached directly, and the session it opens is
+     encrypted to match.  A bench that answers too slowly, more than about half a
+     second, is the one case that goes unrecognised: the page then comes up with
+     the full local backend list, which is not wrong - an <code>https://</code>
+     page is a secure context, so Web Audio and the QA40x really do work
+     there.</div>
+
+  <h2 id="mixed-content">An https page cannot reach a bench on the LAN</h2>
+  <p>A bench session is a plain <code>ws://</code> WebSocket.  A browser refuses
+     to open one from a page it loaded over <code>https://</code> - the
+     mixed-content rule - and it refuses <em>before</em> anything is dialled, so
+     there is no timeout to interpret.  The app tells you by name instead of
+     leaving you to guess.</p>
+  <p>Loopback is exempt, so from an <code>https://</code> page you can still
+     reach a bench at <code>localhost</code>, <code>127.0.0.1</code> or
+     <code>::1</code> - but not one anywhere else on the network.  There is no
+     setting that changes this.  The supported route is the one above: <b>load
+     the application from the bench itself</b>, where the page and the session
+     share the same plain <code>http://</code> origin and the rule never
+     applies.</p>
+
+  <h2 id="files">Saving and opening files</h2>
+  <p>On the ordinary <code>https://</code> page in Chrome or Edge, <b>Save</b>
+     opens a real Save-as dialog and the file goes where you put it.  On a page
+     served by a bench - which arrives over plain <code>http://</code> - that
+     dialog does not exist.  The browser <b>downloads</b> the file to your
+     download folder under the suggested name instead, without asking, and the
+     app reports it saved as soon as the download starts rather than when it
+     finishes.  If a file of that name is already there the browser quietly
+     writes <code>name (1).wav</code>, and the app cannot see that it did.</p>
+  <p>Opening files behaves the same way on both kinds of page: you get a file
+     chooser, cancelling really cancels, and the name you picked is the name
+     that is used.</p>
+  <div class="note"><b>The one thing that does not work on a bench-served
+     page</b> is the oscilloscope's <em>record forward to disk</em> save - any
+     duration longer than the capture buffer, or a save started while the scope
+     is stopped.  Recording in real time needs a genuine open file to stream
+     into, which that page cannot obtain, so the app says so and stops rather
+     than recording nothing.</div>
+  <div class="note">On a bench-served page the 📂 <b>Choose target file</b>
+     button in the generator's and the oscilloscope's <em>Save to...</em> tabs
+     opens no picker: it simply fills the read-only name field in.  That is the
+     download path working as intended, not a dead button - there is no second
+     press needed.</div>
+
+  <h2 id="storage">Where your settings live</h2>
+  <p>Settings and card profiles are kept in the browser's <b>local storage</b>,
+     not in files on disk.  Two things follow.  They are <b>per browser and per
+     site</b>: clearing this site's data discards them, and they do not travel
+     to another browser or another machine.  And a stored value that will not
+     parse is never silently replaced - it is copied aside under the same key
+     with a <code>.corrupt</code> suffix and the run starts from defaults, so a
+     damaged document can still be read back out with the browser's developer
+     tools instead of being overwritten by the next save.</p>
+  <p>Both documents can be opened and edited as text from
+     <b>Tools ▸ Preferences / Devices</b> - see
+     <a href="json-config.html">Editing the settings as JSON</a>.  That is also how you copy a calibration to another browser or
+     another machine, which matters here precisely because browser storage does
+     not travel: open the store, copy the document, paste it into the same window
+     on the other machine.</p>
+
+  <div class="note"><b>Reloading the tab is safe.</b>  On reload or close the
+     app stops capture and playback and flushes your preferences first, so
+     nothing in progress is orphaned and no calibration is lost.  A reload is
+     also exactly what the
+     <a href="web-input-device.html">Windows rate procedure</a> asks for, so it
+     is a normal thing to do rather than something to fear.</div>
+
+<script src="help-viewer.js"></script>
+</body>
+</html>

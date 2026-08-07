@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -81,7 +81,7 @@ function trailingBackslashes(line) {
 /**
  * Parse a .properties document into a Map, matching java.util.Properties.
  * @param {string} text raw file contents (ISO-8859-1 / ASCII with \\u escapes,
- *                       or UTF-8 — both decode the same for the \\u-escaped data
+ *                       or UTF-8 - both decode the same for the \\u-escaped data
  *                       these bundles use).
  * @returns {Map<string,string>}
  */
@@ -111,7 +111,7 @@ export function parseProperties(text) {
       if (ch === '\\') { j++; continue; } // skip escaped char
       if (ch === '=' || ch === ':') { sepIdx = j; sepIsKv = true; break; }
       if (ch === ' ' || ch === '\t' || ch === '\f') {
-        // Whitespace separator — but '=' / ':' after it still wins as the
+        // Whitespace separator - but '=' / ':' after it still wins as the
         // real separator (Properties skips ws then optionally one '='/':').
         sepIdx = j;
         break;
@@ -191,6 +191,10 @@ function suffixChainForTag(tag) {
 export async function setLocale(tag) {
   if (!tag) return;
   currentTag = tag;
+  // Keep <html lang> tracking the active locale. openHelp() reads it to choose the help
+  // language (en/de/uk), and it also drives screen-reader / spell-check language. Nothing
+  // else updated it, so switching the UI language left the help stuck on the initial locale.
+  if (typeof document !== 'undefined') document.documentElement.lang = tag;
   const suffixes = suffixChainForTag(tag);
   const bundles = await Promise.all(suffixes.map(loadBundle));
   chain = bundles.filter((b) => b != null);

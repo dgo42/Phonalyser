@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  backend-net - the CLIENT half of the net bridge (package
+  org.edgo.audio.measure.net.client): an ordinary Phonalyser audio backend that,
+  instead of a local sound card, talks to a headless Phonalyser server over the
+  network and presents its devices, capture streams and generator as if they
+  were local.  Named backend-* like every other backend because that is exactly
+  what the GUI consumes it as.
+
+  The server itself lives in modules/server-net, the shared wire format in
+  modules/server-api.
+
+  It depends on phonalyser-core ONLY (plus the wire format and the WebSocket
+  transport): a backend that needed SWT or a gui.** package would no longer be
+  discoverable through the runtime SPI the way every other backend is.  The
+  server is not here in ANY scope, tests included: this module is the pure
+  client side, so its tests mock the far end of the socket the way a database
+  client's tests mock the database - the wire format in server-api is the whole
+  contract they need.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.2.0</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>backend-net</artifactId>
+    <name>Phonalyser :: backend :: net (TCP/IP bridge)</name>
+
+    <dependencies>
+        <!-- The wire format, shared with the headless server. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>server-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-core</artifactId>
+        </dependency>
+        <!-- WebSocket transport (MIT).  Version in phonalyser-parent. -->
+        <dependency>
+            <groupId>org.java-websocket</groupId>
+            <artifactId>Java-WebSocket</artifactId>
+        </dependency>
+    </dependencies>
+</project>

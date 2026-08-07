@@ -1,0 +1,16 @@
+/* Red-path meta-scenario 2 of 2: a run that DIES.
+
+   The other half of the verdict proof.  A failed check is a result the script
+   chose to record; a throw is the script losing control entirely, and the two
+   travel different paths through the runner - one through the checks list, one
+   through the catch.  Both must end at a non-zero exit code.
+
+   It also proves the post-mortem: the check below is recorded BEFORE the throw,
+   so the result file must come back holding that green check AND the #error
+   trailer.  A run that died with its evidence lost would be far less useful.
+
+   IllegalStateException is java.lang, so naming it unqualified reaches none of
+   the sandbox's forbidden patterns - no import, no dotted name, no restricted
+   runtime class. */
+checkTrue("recorded-before-the-throw", true);
+throw new IllegalStateException("boom");

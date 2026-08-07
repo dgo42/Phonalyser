@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -14,24 +14,24 @@
 import { lanczos } from '../dsp/lanczos.js';
 import { TimeDiscontinuityDetector } from '../dsp/time-discontinuity.js';
 
-/** The shared time-domain discontinuity detector (pure math, stateless) —
+/** The shared time-domain discontinuity detector (pure math, stateless) -
  *  the same class the FFT worker's rejection gate uses, so the scope
  *  trigger and the FFT agree on what counts as a damaged block. */
 const GLITCH_DETECTOR = new TimeDiscontinuityDetector();
 
 /**
- * Finds the rightmost waveform discontinuity in `data[from .. to)` — see
+ * Finds the rightmost waveform discontinuity in `data[from .. to)` - see
  * TimeDiscontinuityDetector.findDiscontinuity (js/dsp/time-discontinuity.js)
  * for the detection model (sinusoid-recurrence prediction error, burst
- * merging, anchoring). `anchorStart`: true → the last clean sample before
- * the glitch, false → the first settled sample after it. `omega` =
+ * merging, anchoring). `anchorStart`: true -> the last clean sample before
+ * the glitch, false -> the first settled sample after it. `omega` =
  * 2π·fundamental/sampleRate when the fundamental is known, NaN to
  * self-estimate. Returns -1.0 when nothing qualifies.
  *
  * @param {Float32Array|Float64Array|number[]} data sample buffer
  * @param {number} from    inclusive search start
  * @param {number} to      exclusive search end
- * @param {boolean} anchorStart true → last clean sample before the glitch
+ * @param {boolean} anchorStart true -> last clean sample before the glitch
  * @param {number} mergeSamples bursts closer than this merge into one glitch
  * @param {number} omega   known fundamental as 2π·f/sampleRate, or NaN
  * @returns {number} glitch anchor index, or -1.0 if none found
@@ -58,14 +58,14 @@ export function linear(prev, curr, prevIdx, level) {
 /**
  * Bisects the sinc-interpolated signal between `a` and `b` to find the precise
  * crossing of `level`. 10 iterations give sub-millisample precision
- * (2⁻¹⁰ ≈ 0.001 sample). Uses the unit-scale Lanczos kernel — i.e. the
+ * (2⁻¹⁰ ≈ 0.001 sample). Uses the unit-scale Lanczos kernel - i.e. the
  * band-limited reconstruction at the input sample rate.
  * @param {Float32Array|Float64Array|number[]} data
  * @param {number} n       valid length of `data`
  * @param {number} a       left bracket (fractional index)
  * @param {number} b       right bracket (fractional index)
  * @param {number} level   crossing level
- * @param {boolean} rising true → rising edge
+ * @param {boolean} rising true -> rising edge
  * @returns {number} refined fractional crossing index
  */
 export function refine(data, n, a, b, level, rising) {
@@ -87,7 +87,7 @@ export function refine(data, n, a, b, level, rising) {
  * single-sample-bracket behaviour.
  *
  * `minSpacingSamples` suppresses qualified crossings spaced closer than that
- * many samples apart — the next accepted trigger must lie at least that far
+ * many samples apart - the next accepted trigger must lie at least that far
  * after the previously accepted one. Used in DUAL_TONE mode to lock onto the
  * slow |F1-F2| beat envelope (one trigger per beat cycle). With
  * `minSpacingSamples <= 0` this collapses onto the no-holdoff behaviour.
@@ -97,7 +97,7 @@ export function refine(data, n, a, b, level, rising) {
  * @param {number} from    inclusive search start (≥ 1; data[from-1] is read)
  * @param {number} to      exclusive search end
  * @param {number} level   trigger level
- * @param {boolean} rising true → trigger on rising edge
+ * @param {boolean} rising true -> trigger on rising edge
  * @param {boolean} sincRefine when true, the committed winner is sinc-bisected
  *                  ONCE for sub-sample accuracy; when false, its linear estimate
  *                  is returned. Either way the per-crossing gate uses the cheap
@@ -122,7 +122,7 @@ export function find(data, n, from, to, level, rising, sincRefine,
   if (state === 0) state = rising ? -1 : +1;
 
   // Cheap linear estimate + left index of the COMMITTED crossing. The costly
-  // sinc refine() runs ONCE at the end, on that single winner — not per level
+  // sinc refine() runs ONCE at the end, on that single winner - not per level
   // crossing, not per cycle. A periodic signal above hysteresis confirms a
   // trigger every cycle (hundreds over the ~1 s search window) and a noisy
   // sub-hysteresis signal crosses the level on every wiggle; refining each was

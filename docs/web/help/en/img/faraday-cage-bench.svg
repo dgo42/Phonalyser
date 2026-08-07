@@ -6,7 +6,7 @@
     </marker>
   </defs>
 
-  <text x="20" y="26" font-weight="bold" fill="#334">Distributed Faraday cage — the device enclosures + the cable shields, no separate room cage</text>
+  <text x="20" y="26" font-weight="bold" fill="#334">Distributed Faraday cage - the device enclosures + the cable shields, no separate room cage</text>
 
   <!-- ===== DAC (top-left) ===== -->
   <rect x="40" y="92" width="150" height="64" rx="6" fill="#eef" stroke="#777" stroke-width="3"/>
@@ -60,19 +60,19 @@
   <line x1="99"  y1="392" x2="131" y2="392" stroke="#445" stroke-width="2"/>
   <line x1="104" y1="398" x2="126" y2="398" stroke="#445" stroke-width="2"/>
   <line x1="109" y1="404" x2="121" y2="404" stroke="#445" stroke-width="2"/>
-  <text x="140" y="397" fill="#556" font-size="11">shield/chassis → earth (one point, at the ADC)</text>
+  <text x="140" y="397" fill="#556" font-size="11">shield/chassis -> earth (one point, at the ADC)</text>
 
   <!-- ===== legend (right side) ===== -->
-  <text x="572" y="104" font-weight="bold" fill="#334">Conductors (CAT.8 → XLR)</text>
+  <text x="572" y="104" font-weight="bold" fill="#334">Conductors (CAT.8 -> XLR)</text>
   <line x1="572" y1="124" x2="606" y2="124" stroke="#6fa8dc" stroke-width="3"/>
-  <text x="614" y="128" fill="#333">blue-white → signal (hot) → pin 2</text>
+  <text x="614" y="128" fill="#333">blue-white -> signal (hot) -> pin 2</text>
   <line x1="572" y1="146" x2="606" y2="146" stroke="#1f4e79" stroke-width="3"/>
-  <text x="614" y="150" fill="#333">blue → signal ground (cold) → pin 3</text>
+  <text x="614" y="150" fill="#333">blue -> signal ground (cold) -> pin 3</text>
   <line x1="572" y1="168" x2="606" y2="168" stroke="#aaa" stroke-width="7"/>
-  <text x="614" y="172" fill="#333">green + drain → shield / chassis → pin 1</text>
+  <text x="614" y="172" fill="#333">green + drain -> shield / chassis -> pin 1</text>
 
   <text x="572" y="204" fill="#c22"><tspan font-weight="bold">★</tspan> signal ground ↔ shield/cage at ONE</text>
-  <text x="572" y="220" fill="#c22">point — the DUT input (or output;</text>
+  <text x="572" y="220" fill="#c22">point - the DUT input (or output;</text>
   <text x="572" y="236" fill="#c22">test both for the best result).</text>
   <text x="572" y="258" fill="#556">Every enclosure ties to the shield</text>
   <text x="572" y="274" fill="#556">(pin 1), never to signal ground (pin 3).</text>
@@ -81,7 +81,7 @@
   <text x="572" y="328" fill="#445">No separate room cage. The enclosures</text>
   <text x="572" y="344" fill="#445">+ the cable shields form one continuous</text>
   <text x="572" y="360" fill="#445">conductive envelope around the signal</text>
-  <text x="572" y="376" fill="#445">pair — that IS the cage. It excludes</text>
+  <text x="572" y="376" fill="#445">pair - that IS the cage. It excludes</text>
   <text x="572" y="392" fill="#445">external electric fields; the twisted</text>
   <text x="572" y="408" fill="#445">pair + single-point ground handle</text>
   <text x="572" y="424" fill="#445">magnetic fields.</text>

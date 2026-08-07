@@ -1,0 +1,28 @@
+CUBILUX CB5 at usb-0000:00:14.0-2, high speed : USB Audio
+
+Playback:
+  Status: Stop
+  Interface 3
+    Altset 1
+    Format: S24_3LE
+    Channels: 2
+    Endpoint: 0x03 (3 OUT) (ASYNC)
+    Rates: 44100, 48000, 88200, 96000, 176400, 192000
+    Bits: 24
+  Interface 3
+    Altset 2
+    Format: S32_LE
+    Channels: 2
+    Endpoint: 0x03 (3 OUT) (ASYNC)
+    Rates: 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000
+    Bits: 32
+
+Capture:
+  Status: Stop
+  Interface 4
+    Altset 1
+    Format: S24_3LE
+    Channels: 2
+    Endpoint: 0x84 (4 IN) (ASYNC)
+    Rates: 44100, 48000, 88200, 96000, 176400, 192000
+    Bits: 24

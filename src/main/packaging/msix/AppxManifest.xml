@@ -3,7 +3,7 @@
   MSIX manifest for packaging Phonalyser as a Microsoft Store app.
 
   This packages the jpackage *app-image* (a full-trust Win32 app) into an MSIX so
-  the Microsoft Store signs it for free at publish time — no per-developer
+  the Microsoft Store signs it for free at publish time - no per-developer
   code-signing certificate needed.
 
   Before this can build a Store-valid package you MUST fill in the identity from
@@ -15,7 +15,7 @@
   The release workflow substitutes @VERSION@ automatically; the others come from
   the MSIX_* repo variables (see .github/workflows/release.yml).
 
-  Logos referenced below must exist under Assets\ in the package — supply them in
+  Logos referenced below must exist under Assets\ in the package - supply them in
   src/main/packaging/msix/assets/ (see that folder's note for the required sizes).
 -->
 <Package
@@ -49,7 +49,7 @@
     <Application Id="Phonalyser" Executable="Phonalyser.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
           DisplayName="Phonalyser"
-          Description="Precision audio measurement workbench — generator, oscilloscope, FFT analyser"
+          Description="Precision audio measurement workbench - generator, oscilloscope, FFT analyser"
           BackgroundColor="transparent"
           Square150x150Logo="Assets\Square150x150Logo.png"
           Square44x44Logo="Assets\Square44x44Logo.png"/>

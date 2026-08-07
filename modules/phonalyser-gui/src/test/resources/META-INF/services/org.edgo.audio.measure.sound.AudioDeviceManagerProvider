@@ -1,0 +1,8 @@
+# Test-only: the net carrier for GeneratorControllerRemoteTest.  backend-net is
+# not a dependency of this module, so this claim on AudioBackendType.NET is
+# uncontested and never reaches a shipped jar (test resources only).
+org.edgo.audio.measure.gui.generator.BenchGeneratorStubProvider
+# Test-only: a LOCAL backend whose lanes can be made to die, for the lane-death
+# tests.  This claim on JAVASOUND IS contested (phonalyser-cli puts the real
+# backend on the test class path), so the tests assert the manager they got.
+org.edgo.audio.measure.gui.sound.DyingLaneStubProvider

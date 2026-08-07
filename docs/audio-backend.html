@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Phonalyser — Theory: Audio backend</title>
+  <title>Phonalyser - Theory: Audio backend</title>
   <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
   <link rel="stylesheet" href="css/site.css"/>
   <script src="js/site.js" defer></script>
@@ -28,10 +28,10 @@
         <summary>Download <span class="caret">▸</span></summary>
         <a href="download.html">All downloads</a>
         <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
-           target="_blank" rel="noopener">GitHub — latest release</a>
+           target="_blank" rel="noopener">GitHub - latest release</a>
         <a class="ext" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
            target="_blank" rel="noopener">Microsoft Store</a>
-        <a class="disabled" title="Reserved — coming soon">macOS <span class="soon">soon</span></a>
+        <a class="disabled" title="Reserved - coming soon">macOS <span class="soon">soon</span></a>
       </details>
 
       <details class="submenu">
@@ -40,6 +40,7 @@
         <a href="translation.html">Translation</a>
         <a href="bench.html">Measurement bench</a>
         <a href="theory.html">Theory of operation</a>
+        <a href="roadmap.html">Roadmap</a>
       </details>
 
       <a href="privacy.html">Privacy</a>
@@ -69,11 +70,11 @@
   <p>The audio backend is the bridge between Phonalyser and the sound
      hardware.  Its one job is to move samples between the application and
      the converters <b>bit-exactly</b>: what the generator computes is what
-     the DAC converts, and what the ADC converts is what the analysers see —
+     the DAC converts, and what the ADC converts is what the analysers see -
      with nothing in between.</p>
   <p>That is not how a PC plays audio by default.  The normal Windows audio
      path runs every stream through a mixer, a volume control, a sample-rate
-     converter and possibly "enhancement" filters — each one harmless for
+     converter and possibly "enhancement" filters - each one harmless for
      music, each one fatal for a measurement.  A resampler alone adds
      distortion products far above what a good ADC can resolve.  The backend
      therefore opens the devices in <b>exclusive
@@ -82,14 +83,17 @@
      and the operating system's processing chain is bypassed completely.</p>
 
   <div class="note"><b>Consequence of exclusivity:</b> while Phonalyser is
-     recording or playing, no other application can use that device — and the
+     recording or playing, no other application can use that device - and the
      other way around.  A "device is in use" message when starting a capture
      usually means a browser or media player still holds the input.</div>
 
-  <h2 id="paths">The three driver paths</h2>
+  <h2 id="paths">The driver paths</h2>
   <p>Sound hardware can be reached through several driver interfaces.
-     Phonalyser implements three and lets you pick one in Preferences; all
-     modules work identically on top of whichever is active.</p>
+     Phonalyser implements three general-purpose paths - each works with
+     practically any interface - plus one device-specific backend for the
+     QuantAsylum QA402 / QA403 analyzer (<a href="#qa40x">below</a>).  You pick
+     one in Preferences; all modules work identically on top of whichever is
+     active.</p>
   <table class="controls">
     <tr><th>Path</th><th>What it is</th><th>When to use it</th></tr>
     <tr><td><b>WASAPI</b></td>
@@ -97,7 +101,7 @@
         <td>The default on Windows.  Bit-exact, reliable, works with
             practically every interface.</td></tr>
     <tr><td><b>WDM-KS</b></td>
-        <td>Windows kernel streaming<sup><a href="#ref-ks">[2]</a></sup> —
+        <td>Windows kernel streaming<sup><a href="#ref-ks">[2]</a></sup> -
             the lowest level the driver offers.</td>
         <td>Highest capture throughput in practice; worth trying when the
             oscilloscope should keep its full update rate at very high sample
@@ -106,6 +110,72 @@
         <td>The portable runtime audio interface.</td>
         <td>The only path on Linux and macOS; a fallback on Windows.</td></tr>
   </table>
+
+  <h2 id="qa40x">The QA40x analyzer backend</h2>
+  <p>Alongside the three general-purpose paths, Phonalyser can drive a
+     <b>QuantAsylum QA402 / QA403</b> audio analyzer directly, over USB, with
+     the vendor software closed.  This is not a driver path in front of a sound
+     card - it is a purpose-built backend for one instrument, reaching it
+     through the USB library libusb<sup><a href="#ref-libusb">[3]</a></sup> the
+     same way the manufacturer's own software does.</p>
+  <p>The QA40x is a self-contained measurement front end: an ADC and a DAC on
+     one board, each with a set of switchable full-scale <b>ranges</b> (input
+     attenuator / output level) and its own factory calibration held in the
+     device.  Two consequences for how you use it:</p>
+  <ul>
+    <li><b>One clock, so the rates are locked together.</b>  A single
+        sample-rate generator on the board feeds both the ADC and the DAC, so
+        the input and output sample rates can never differ - set one in
+        Preferences and the other follows.  The list is 48 / 96 / 192 kHz, plus
+        <b>384 kHz on a QA403</b>: the sample-rate register has a fourth code the
+        QA402 does not have, so the rates offered follow the model that is
+        attached.</li>
+    <li><b>The range <em>is</em> the calibration.</b>  Full-scale in volts
+        comes from the selected range and the device's own calibration, not
+        from a crosshair calibration you enter, so the dBV axis and the scope
+        readouts are correct the moment you pick the range.  Input and output
+        carry their own independent ranges; switching one rescales that
+        direction's full scale at once, the same range-is-calibration rule
+        holding for both.</li>
+  </ul>
+  <p>The QA40x always runs full <b>duplex</b> - it captures and plays back as one
+     session, never one direction on its own - so the generator and the analysers
+     ride the same open instrument rather than opening it twice.  Samples cross the
+     USB link as 32-bit words whose top 24 bits carry the signal (the low byte is
+     zero padding), so the effective resolution is 24-bit.</p>
+  <h3 id="qa40x-ranges">What a "dBV" input range actually is</h3>
+  <p>The analyzer names its input ranges in dBV - <code>0 dBV</code>,
+     <code>+18 dBV</code>, and so on - and taking those names for RMS full-scale
+     voltages is wrong by about 9&nbsp;dB.  The reason is the front end's
+     topology, not a labelling slip.  A QA "<i>N</i>&nbsp;dBV" input range is an
+     <b><i>N</i>&nbsp;dBFS reference measured peak-to-peak across the
+     differential input pair</b>.  Converting that reference to the RMS full
+     scale the rest of a measurement is computed from costs two factors - a
+     factor 2 going from peak-to-peak to peak, and √2 going from peak to RMS:</p>
+  <div class="eq">20 log₁₀(2√2) ≈ 9.03&nbsp;dB<span class="no">(1)</span></div>
+  <p>So the range the instrument calls 0&nbsp;dBV is a full scale of about
+     −9&nbsp;dBV RMS, and it is that RMS figure - never the label - that the dBV
+     axis, the volts readouts and every derived metric use.  The ranges table
+     therefore prints the truth beside the name on every input row, as
+     display text only: the stored card keys and the range radios keep the plain
+     <code><i>N</i>&nbsp;dBV</code> so nothing in the device store changes
+     meaning.</p>
+  <p><b>The output ranges carry no such term</b> - those are genuine dBV, single
+     figures for the level the DAC will produce.  The asymmetry is exactly what
+     makes a loopback measurement of a QA40x look wrong at first sight: connect
+     its output to its input and the fundamental measures about <b>√2 - 3&nbsp;dB
+     - louder</b> than the level the generator was asked for.  Neither converter
+     is at fault and nothing is miscalibrated; the balanced output is driving a
+     differential input, so a 1&nbsp;V<sub>RMS</sub> output presents ±2&nbsp;V at
+     the input, and the whole discrepancy belongs to the input side's
+     peak-to-peak reference.</p>
+
+  <div class="note"><b>libusb must be present.</b>  The QA40x backend needs the
+     native libusb library; Phonalyser ships it on Windows.  Where it is absent
+     the backend simply reports itself unavailable and the other paths are
+     unaffected.  As with exclusive mode, one application owns the instrument at
+     a time - the QA402 / QA403 must not be open in the QuantAsylum software
+     while Phonalyser uses it.</div>
 
   <h2 id="how">How it works, roughly</h2>
 
@@ -171,29 +241,29 @@
      samples on its own clock.  Each sample <i>u</i> (an unsigned integer of
      <i>b</i> bits) is converted once to a dimensionless fraction of
      full-scale:</p>
-  <div class="eq"><i>x</i> = (<i>u</i> − 2<sup><i>b</i>−1</sup>) / 2<sup><i>b</i>−1</sup>&nbsp;&nbsp;∈ [−1, +1)<span class="no">(1)</span></div>
+  <div class="eq"><i>x</i> = (<i>u</i> − 2<sup><i>b</i>−1</sup>) / 2<sup><i>b</i>−1</sup>&nbsp;&nbsp;∈ [−1, +1)<span class="no">(2)</span></div>
   <p>and stored in the <a href="ring-buffer.html">ring buffer</a>.  The whole
      analysis pipeline works in these normalised units; conversion to volts
      happens only at display time, using the ADC full-scale calibration.
-     This way a recalibration never touches recorded data — it just changes
+     This way a recalibration never touches recorded data - it just changes
      the ruler.</p>
 
   <p><b>Playback.</b>  The playback lane is a simple, robust producer: it
      asks the <a href="generator.html">generator</a> for the next batch of
      ideal samples, passes them through the
      <a href="generator.html#quantizer">quantizer with dither</a>, and writes
-     them to the device — which accepts data exactly as fast as it converts
+     them to the device - which accepts data exactly as fast as it converts
      it, so the device's own clock paces the loop.  Three details matter for
      measurements:</p>
   <ul>
     <li><b>Warm-up.</b>  Before the line starts, about half a second of
         signal is generated and thrown away so the runtime reaches full speed
-        before the first audible sample — at 384 kHz a cold start could
+        before the first audible sample - at 384 kHz a cold start could
         otherwise stutter.  Sweep playback is rewound to zero afterwards, so
         a frequency-response capture always sees the sweep from its very
         first sample.</li>
     <li><b>Pre-fill.</b>  The hardware buffer is filled completely before
-        playback is reported "ready" — measurement workers start their
+        playback is reported "ready" - measurement workers start their
         capture only after this point, so they never record the silence
         before the stream truly runs.</li>
     <li><b>Headroom.</b>  In steady state the buffer stays a few
@@ -203,7 +273,7 @@
 
   <div class="note"><b>A practical note on WASAPI playback.</b>  Phonalyser
      originally drove WASAPI exclusive playback directly, and on some
-     interfaces the driver produced a short periodic gap — one signal period
+     interfaces the driver produced a short periodic gap - one signal period
      of silence, at regular intervals, visible as spectral garbage.  The
      file-player's playback route on the very same devices was gap-free, so
      tone playback now uses that route as well (the WASAPI device you select
@@ -213,7 +283,7 @@
   <table class="controls">
     <tr><th>Module</th><th>Direction</th><th>How</th></tr>
     <tr><td>Oscilloscope, FFT analyser</td><td>capture</td>
-        <td>Share <em>one</em> capture session and one ring buffer — see
+        <td>Share <em>one</em> capture session and one ring buffer - see
             <a href="ring-buffer.html#sharedcapture">capture session</a>.
             The device opens when the first of them records and closes when
             the last one stops.</td></tr>
@@ -229,26 +299,330 @@
             and GUI results are comparable by construction.</td></tr>
   </table>
 
-  <h2 id="errors">When a device won't open</h2>
-  <p>Exclusive mode means open attempts can fail for everyday reasons.  The
-     backend translates the driver's error into a plain statement of which it
-     was:</p>
+  <h2 id="volume">The hardware volume is part of the chain</h2>
+  <p>On Linux and macOS the card's own volume controls sit between the socket
+     and the converter, so they scale every sample INSIDE the calibrated chain
+     - invisibly, because the calibration was measured through wherever they
+     stood at the time.  The backends therefore treat the volume as borrowed
+     state around every stream:</p>
   <ul>
-    <li><b>Format not supported</b> — the device doesn't accept the chosen
-        sample-rate / bit-depth combination; pick another in Preferences
-        (16/24 bit at 48/96/192/384 kHz are almost universally accepted).</li>
-    <li><b>Device busy</b> — another application (or another exclusive
-        stream) holds it.</li>
-    <li><b>Device gone</b> — unplugged, or its driver isn't loaded; the
-        saved device name no longer matches anything.</li>
+    <li><b>Open pins to the device's own 0 dB, never to "maximum".</b>  On
+        Linux the target comes from the control's dB scale in the
+        <code>amixer</code> dump (a capture gain whose scale runs 0..+12 dB has
+        its unity at the BOTTOM); on macOS from the HAL's dB-to-scalar
+        translation property.  A control publishing no dB information at all is
+        set to full scale.</li>
+    <li><b>Addressing is strict.</b>  Only the opened device and direction are
+        touched.  On ALSA the controls are matched by the opened socket's own
+        terminal word (Line, Mic, Headphone) plus the stream-side PCM control;
+        a stream control the card publishes once per PCM pair under one name is
+        resolved by its control index, which the kernel assigns in PCM device
+        order - and a PORT-named name published twice is refused outright,
+        because moving a stranger's socket is worse than leaving one control
+        unpinned.  A macOS aggregate device publishes no controls of its own,
+        so its ACTIVE member devices are pinned instead.</li>
+    <li><b>Close restores.</b>  Every write the pin made is remembered with the
+        value it replaced and written back when the stream ends - however it
+        ends.  Only what the pin itself moved is restored, so an operator's
+        mid-stream adjustment survives the stop.</li>
+    <li><b>Nothing here may stop a measurement.</b>  A control that cannot be
+        read, mapped or written is named in the log and left alone; the open
+        proceeds at whatever level the hardware kept.</li>
   </ul>
+  <p>Windows is excluded by decision, not omission: the system volume there is
+     part of the calibration - set once, calibrated through, left alone - and
+     the exclusive-mode path bypasses the mixer entirely.</p>
+
+  <h2 id="network">A bench across the network</h2>
+  <p>Everything above assumes the converters are wired to the machine you are
+     sitting at.  They need not be.  A second Phonalyser installation, run as a
+     headless <b>server</b>, turns the machine that <em>is</em> wired to them
+     into a <b>bench</b>, and your workbench measures through it.  The
+     arrangement changes nothing about the reasoning on this page - the bench
+     still opens its devices exclusively, still at the exact rate and depth
+     chosen, still bit-exact.  What crosses the network is not audio hardware
+     but the same two lanes, stretched.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 280" width="100%" height="280" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+
+    <rect x="10" y="60" width="190" height="100" rx="6" fill="#fdf2f2" stroke="#a88"/>
+    <text x="105" y="84" text-anchor="middle" font-weight="bold">Workbench</text>
+    <text x="105" y="104" text-anchor="middle" fill="#755">generator · scope</text>
+    <text x="105" y="120" text-anchor="middle" fill="#755">FFT · sweep</text>
+    <text x="105" y="140" text-anchor="middle" fill="#755">(this machine)</text>
+
+    <line x1="202" y1="95" x2="436" y2="95" stroke="#446" stroke-width="1.5" marker-end="url(#arr3)"/>
+    <text x="319" y="82" text-anchor="middle" fill="#557">one TCP port · 8377</text>
+    <text x="319" y="112" text-anchor="middle" fill="#557">commands · audio · info</text>
+
+    <line x1="436" y1="160" x2="202" y2="160" stroke="#446" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arr3)"/>
+    <text x="319" y="180" text-anchor="middle" fill="#557">beacon 239.255.83.77</text>
+    <text x="319" y="196" text-anchor="middle" fill="#557">every 0.5 s · link-local</text>
+
+    <rect x="440" y="20" width="240" height="240" rx="8" fill="#eef" stroke="#88a" stroke-width="1.5"/>
+    <text x="560" y="44" text-anchor="middle" font-weight="bold">Phonalyser server</text>
+    <text x="560" y="60" text-anchor="middle" fill="#557">the bench</text>
+
+    <rect x="460" y="76" width="200" height="54" rx="6" fill="#fffbe8" stroke="#cc9"/>
+    <text x="560" y="98" text-anchor="middle">its own backends</text>
+    <text x="560" y="116" text-anchor="middle" fill="#775">WASAPI · WDM-KS · QA40x</text>
+
+    <rect x="460" y="150" width="200" height="60" rx="6" fill="#fffbe8" stroke="#cc9"/>
+    <text x="560" y="172" text-anchor="middle">one client per device</text>
+    <text x="560" y="190" text-anchor="middle" fill="#775">the holder is named</text>
+
+    <rect x="700" y="60" width="100" height="50" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="750" y="82" text-anchor="middle" font-weight="bold">DAC</text>
+    <text x="750" y="99" text-anchor="middle" fill="#575">exclusive</text>
+    <rect x="700" y="170" width="100" height="50" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="750" y="192" text-anchor="middle" font-weight="bold">ADC</text>
+    <text x="750" y="209" text-anchor="middle" fill="#575">exclusive</text>
+
+    <line x1="682" y1="88" x2="698" y2="86" stroke="#446" stroke-width="1.5" marker-end="url(#arr3)"/>
+    <line x1="698" y1="194" x2="682" y2="192" stroke="#446" stroke-width="1.5" marker-end="url(#arr3)"/>
+  </svg>
+  </div>
+
+  <p><b>The server owns the machine's backends.</b>  It is not a driver of its
+     own: it starts every backend present on <em>its</em> host - WASAPI, WDM-KS,
+     CoreAudio, JavaSound, a QA40x - and offers them outward.  A backend that is
+     in its build but cannot run on that host is not offered at all rather than
+     offered and refused.  From your side each one appears in the backend list
+     as a further entry, so the modules above the backend cannot tell the
+     difference and do not have to.</p>
+
+  <p><b>One port carries everything.</b>  The control channel, the audio stream
+     and the informational endpoints share a single TCP port - 8377 by default.
+     That is a deliberate simplification with a practical payoff: one number to
+     type, one hole to open in a firewall, and no second connection that can be
+     up while the first is down.</p>
+
+  <p><b>Discovery is a beacon, and it is link-local.</b>  A server announces
+     itself twice a second by multicast, to the group 239.255.83.77 on
+     8377/udp - that announcement port is fixed and is not the
+     <code>--port</code> the server serves on, so a bench moved to another port
+     still announces there and carries its real port inside the announcement -
+     so a client that joins the group learns of every bench in the
+     room without being configured at all - and learns of one going away just as
+     quickly, since a row that stops being announced ages out.  The announcement
+     deliberately carries a time-to-live of one hop: it is a bench instrument on
+     a local network, not a service advertised across a site.  That is exactly
+     why a bench on another subnet has to be added by its address - the
+     announcement cannot reach you, though the session itself routes perfectly
+     well.</p>
+
+  <p><b>Exclusivity survives the trip.</b>  The rule at the top of this page -
+     one application at a time owns a device - becomes, across the network, one
+     <em>client</em> at a time: the server holds a lock per device and per
+     direction, and it publishes the <b>name of the client holding it</b> with
+     every device it lists.  So two operators sharing one bench see each other's
+     occupancy before they try to open something, instead of finding out through
+     a refusal.  A lock is taken when a measurement opens the device and given
+     back when it stops - and a client that disappears releases everything it
+     held.</p>
+
+  <p><b>The generator runs on the bench, commanded rather than streamed.</b>
+     This matters more than it sounds.  The workbench does not push audio across
+     the network for the bench to play; it tells the bench <em>what</em> to
+     emit, and the bench's own generator renders it into its own DAC, at the
+     device's own clock.  Two consequences follow, and the second is the
+     measurement one:</p>
+  <ul>
+    <li>The network never has to carry a gap-free output stream in real time -
+        a jitter budget nobody would want a measurement to depend on.</li>
+    <li>A <a href="freq-resp.html">frequency-response sweep</a> is deconvolved
+        against <b>what the bench actually rendered</b>.  The sweep's own first
+        sample is marked in the capture stream itself, in band, so the analysis
+        anchors on the bench's timing rather than on a network arrival time.
+        Deconvolution divides the captured response by the reference sweep, and
+        an anchor drifting by a packet's worth of latency would smear the
+        impulse response the whole measurement rests on.</li>
+  </ul>
+
+  <p><b>The granted rate is the truth.</b>  When a device grants a different
+     sample rate than the one asked for - the driver's decision, not the
+     server's - the two directions of the same question get different answers.
+     A live capture <b>re-pins to the granted rate</b> and runs: the samples are
+     perfectly good and the frequency axis simply follows the rate they were
+     taken at.  A sweep in the same position is <b>refused</b>: its reference
+     was computed for the rate that was asked for, and deconvolving against a
+     reference of the wrong rate produces a curve that looks plausible and is
+     wrong, which is worse than no curve at all.</p>
+
+  <p><b>The audio stream confesses its gaps.</b>  Captured samples cross as
+     binary messages of three kinds, each carrying a counter that increments on
+     every message of any kind.  <b>Sample</b> messages carry the bench's native
+     PCM exactly as its device produced it, so the workbench decodes them with
+     the same code a local card goes through.  A <b>marker</b> carries no audio
+     at all: it announces that the next sample byte after it is the sweep's own
+     first sample, which is what anchors a deconvolution to the bench's timing.
+     And a <b>gap</b> message says, in as many words, that the server itself lost
+     <i>n</i> stereo frames - a stalled consumer, a device overrun - before they
+     ever reached the network.</p>
+  <p>That third kind is the one that matters for a measurement.  The alternative
+     is to say nothing and let the two sides of the hole be concatenated, which
+     produces a record whose samples are not adjacent in time and whose average
+     therefore reports a noise floor and a phase that never existed.  So the loss
+     is stated, the analyser resets its average rather than splicing, and the FFT
+     raises its <b>bench lost audio</b> banner.  A jump in the counter, by
+     contrast, would mean loss in the <em>transport</em> - impossible over an
+     intact ordered connection - and is treated as a protocol fault: surfaced and
+     stopped, exactly like a device error.</p>
+
+  <p><b>Both ends watch the session, twice a second.</b>  A measurement session
+     is not request-response: once a capture is running, a healthy connection
+     looks exactly like an idle one, and a dead one looks the same again.  So
+     each side sends a keepalive every <b>500&nbsp;ms</b> and counts the answers;
+     <b>four unanswered in a row - two seconds - declares the connection
+     dead</b>.  Everything then unwinds in the direction it must: on the
+     workbench every module measuring through that bench is stopped and the
+     reason is shown, rather than leaving a scope drawing the last frame it
+     received; on the bench the vanished client's locks are released and its
+     hardware is parked, so the next operator finds a free device rather than one
+     held by a machine that has gone home.  Discovery uses the same threshold
+     philosophy - a server that stops announcing ages out of the list after four
+     missed announcements.</p>
+
+  <p><b>A file played on the bench travels once, and belongs to the session.</b>
+     The protocol carries no audio from the workbench to the bench, so
+     <em>Play&nbsp;from...</em> cannot stream: instead the chosen file is uploaded
+     whole, over the same port, and the bench's own generator lane decodes and
+     plays it out of the bench's DAC.  The upload is capped at <b>50&nbsp;MB</b>
+     and the store as a whole is bounded too, so one client cannot fill a bench's
+     memory; the workbench checks the size before a byte leaves, so an over-size
+     file is refused immediately rather than after the transfer.  The bytes live
+     in the server's memory only, are owned by the session that referenced them,
+     and are <b>dropped when that connection closes</b> - nothing accumulates on
+     a bench, and no file outlives the operator who sent it.</p>
+
+  <div class="note"><b>No authentication, on purpose.</b>  A server accepts any
+     client that reaches it.  It is a bench instrument for a trusted network -
+     the room the measurement equipment stands in - and its own documentation
+     says so plainly; it is not something to publish to the open internet.
+     Running one, and restricting it to a single interface, is described in
+     <a href="web/help/en/server.html">The Phonalyser server</a>.</div>
+
+  <p>How to reach a bench from the workbench - the server list, the
+     <code>&lt;server&gt; -> &lt;backend&gt;</code> entries, the per-bench cards
+     and calibration - is described in
+     <a href="web/help/en/preferences.html#prefs-audio-servers">Preferences ▸ Measuring
+     through a Phonalyser server</a>.</p>
+
+  <h2 id="errors">When a device won't open - and when it stops</h2>
+  <p>Exclusive mode means open attempts can fail for everyday reasons.  A
+     native return code says nothing an operator can act on, so the backend
+     that owns the error classifies it into one of six reasons, and the dialog
+     is written from the reason and translated like every other string:</p>
+  <ul>
+    <li><b>The device was disconnected</b> - unplugged, or removed by the
+        driver while the application still had it in its list.</li>
+    <li><b>The device does not answer</b> - it is there and does not respond:
+        the open timed out, or the driver took the call and never came
+        back.</li>
+    <li><b>The device is in use by another application</b> - it (or another
+        exclusive stream) holds the device.</li>
+    <li><b>The device was not found</b> - it is not on this host at all: a
+        card remembered from another machine, or one that has been
+        renamed.</li>
+    <li><b>The device does not support this format</b> - it is present and
+        free but refuses the chosen sample rate, bit depth or channel count;
+        pick another in Preferences (16/24 bit at 48/96/192/384 kHz are almost
+        universally accepted).</li>
+    <li><b>Reason unknown</b> - the backend could not tell.  This is the
+        mandatory fallback and never an error in itself; the log line beside
+        it carries the raw detail.</li>
+  </ul>
+  <p>There is deliberately no central parser of every driver's error text.
+     Each backend reads <em>its own</em> vocabulary - PortAudio's table serves
+     the WDM-KS and CoreAudio paths as well, JavaSound reads the exclusive
+     provider's messages, the QA40x backend reads libusb's and the WASAPI path
+     reads HRESULTs - so a backend added later brings its own vocabulary and
+     nothing above it has to learn it.  The <b>raw driver text always goes to
+     the log</b>, every time, and only there: it is what a developer needs and
+     the one place it belongs.  A <a href="#network">Phonalyser server</a>
+     refusing a device across the network reports through the same six reasons,
+     so a remote failure reads like a local one.</p>
+
+  <h3 id="errors-running">A stream that dies after it started</h3>
+  <p>An open that fails is the easy case: something threw, and there is a caller
+     to tell.  The hard case is a stream that was <em>running</em> and stops.
+     Above the driver there is nothing to notice: a delivery callback that is
+     never called again looks exactly like a very quiet input, so the
+     oscilloscope goes on drawing a flat line, the analyser goes on averaging
+     silence, and the capture-rate readout goes on ticking - a measurement of
+     nothing, presented as a measurement.</p>
+  <p>The way out is a contract rather than a notification.  <b>A stream that has
+     been started owes a block every audio period.</b>  Silence is not an absence
+     of blocks; silence is blocks full of zeroes.  So <em>nothing at all</em> for
+     two seconds is not a quiet signal, it is a stopped stream, and a backend
+     whose driver never tells it anything watches its own delivery and says so.
+     A driver that <em>does</em> report the loss is believed at once, which is
+     why the dialog distinguishes the two: the device was lost, or it stopped
+     delivering.</p>
+  <p>The playback side needs the mirror image of that, with one extra
+     precaution.  A render loop that blocks inside the driver waiting for room
+     cannot notice anything, and on an unplug it may not even be able to
+     <em>leave</em>.  So the loop is paced on the line's own admission instead -
+     it writes only what the device says will fit and waits outside the driver
+     when nothing does - which keeps the thread free to end, and turns two
+     distinct symptoms into two clear verdicts: nothing admitted for the
+     deadline, or a write the line accepted only part of, which is the driver
+     itself saying the lane is dead.</p>
+  <p>However the end is detected, <b>it travels the path the samples did</b> -
+     up through the <a href="ring-buffer.html">ring buffer</a> and its readers to
+     the panes - rather than being announced sideways.  That is what makes the
+     consequences complete without anybody coordinating them: the scope and the
+     analyser stop, one dialog names the backend and the reason, a streaming save
+     to disk is aborted instead of quietly recording nothing, and a
+     <a href="freq-resp.html">sweep</a> whose capture lost samples or stalled
+     mid-run is refused with the reason rather than deconvolved across the
+     hole.</p>
+
+  <h3 id="errors-macos">The device that leaves without a word (macOS)</h3>
+  <p>CoreAudio adds two twists the contract above cannot see.  A pulled device
+     can leave its stream <em>nominally active</em>: the playback callback goes
+     on being invoked into the void, so neither the frame count nor
+     <code>Pa_IsStreamActive</code> ever reports the loss - and an aggregate
+     device whose members all left even goes on delivering capture blocks full
+     of zeroes, which defeats the delivery deadline too, because silence keeps
+     arriving on schedule.  Both sides therefore ask a question no stream can
+     answer: once a second, the live HAL is asked whether the device is still
+     on the machine at all - and for an aggregate, whether anyone is left on
+     its active sub-device list, since the aggregate's own name survives its
+     members.  "Cannot answer" counts as present: a failed read must never
+     kill a healthy measurement.</p>
+  <p>The second twist is the teardown itself.  CoreAudio's stop waits on a
+     semaphore that a vanished device never signals, so a thread that politely
+     drains would hang for ever - and a close abandoned by its watchdog leaves
+     the stream open and COUNTED, which matters beyond the leak: PortAudio can
+     only re-enumerate devices by tearing the whole library down, which is
+     forbidden while any stream is open.  One hung close would therefore veto
+     every future device-list rebuild until the process dies.  Both CoreAudio
+     directions abort instead of draining - a measurement stream has nothing
+     worth draining - and the capture grants a freshly started stream a longer
+     first-block deadline, because an aggregate assembles its IO for several
+     seconds before it speaks at all.</p>
+  <p>The device list itself follows the same discipline: PortAudio's
+     enumeration is a snapshot taken once, so a poll compares the live HAL's
+     device set against the set the snapshot was built from, and only a real
+     difference spends the rebuild - which then waits until the last stream is
+     closed.  A replugged device is a new audio object under an old name, and
+     that identity change is exactly what the comparison sees.</p>
 
   <h2 id="refs">References</h2>
   <ol class="refs">
-    <li id="ref-excl">What exclusive-mode streams bypass and guarantee —
+    <li id="ref-excl">What exclusive-mode streams bypass and guarantee -
         <a href="https://learn.microsoft.com/en-us/windows/win32/coreaudio/exclusive-mode-streams" target="_blank" rel="noopener">Microsoft Learn: Exclusive-Mode Streams</a>.</li>
-    <li id="ref-ks">The kernel-streaming layer beneath WDM-KS —
+    <li id="ref-ks">The kernel-streaming layer beneath WDM-KS -
         <a href="https://learn.microsoft.com/en-us/windows-hardware/drivers/stream/kernel-streaming" target="_blank" rel="noopener">Microsoft Learn: Kernel Streaming</a>.</li>
+    <li id="ref-libusb">The portable USB library the QA40x backend uses to reach
+        the analyzer - <a href="https://libusb.info/" target="_blank" rel="noopener">libusb</a>.</li>
   </ol>
 
   <p class="back"><a href="theory.html">◀ Theory of operation</a> ·

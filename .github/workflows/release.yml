@@ -1,7 +1,7 @@
 name: Build installers
 
 # Triggers:
-#   * push a tag that looks like a version (v1.0.0, 1.0-RC1, 2025.05.20…)
+#   * push a tag that looks like a version (v1.0.0, 1.0-RC1, 2025.05.20...)
 #     -> build all OSes and attach to a GitHub release.
 #   * workflow_dispatch -> manual run from the Actions tab, useful for testing the matrix.
 on:
@@ -25,11 +25,8 @@ jobs:
           java-version: '17'
           cache: maven
 
-      # Project Nayuki's flac-library isn't on Maven Central — it's
-      # vendored under deps/flac-library-java and must be installed to
-      # the runner's local ~/.m2 before the main project resolves it.
-      - name: Install vendored flac-library
-        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+      # Project Nayuki's flac-library isn't on Maven Central - it is vendored as
+      # the modules/flac-library-java module, so the reactor builds it.
 
       # csjsound-provider.jar and the native DLLs are not on Maven Central -
       # they must already live under lib/windows/.  Fail loudly if a checkout
@@ -47,9 +44,32 @@ jobs:
             "lib/windows/libusb-1.0_x86.dll",
             # JNA-resource copies bundled INTO the fat JARs (the standalone x86
             # legacy jar has no installer to stage lib/windows, so libusb must
-            # ride inside the jar — mirrors portaudio's win32-* resources).
-            "src/main/resources/win32-x86-64/libusb-1.0_x64.dll",
-            "src/main/resources/win32-x86/libusb-1.0_x86.dll"
+            # ride inside the jar - mirrors portaudio's win32-* resources).
+            # Each DLL sits in the module whose backend loads it.
+            "modules/backend-qa40x/src/main/resources/win32-x86-64/libusb-1.0_x64.dll",
+            "modules/backend-qa40x/src/main/resources/win32-x86/libusb-1.0_x86.dll",
+            # The same two module copies are what the SERVER zips stage into
+            # their natives\ folder (the repo-root portaudio_x64.dll is a stale
+            # build with WDM-KS compiled out).  The 32-bit PortAudio resource is
+            # named portaudio.dll, not portaudio_x86.dll - JNA finds it on the
+            # second candidate name.
+            "modules/phonalyser-core/src/main/resources/win32-x86-64/portaudio_x64.dll",
+            "modules/phonalyser-core/src/main/resources/win32-x86/portaudio.dll",
+            # csjsound rides in the fat JARs too (WASAPI-exclusive JavaSound
+            # mixers on bare-JAR installs; CsjsoundNativePath stages the DLL).
+            "modules/backend-javasound/src/main/resources/win32-x86-64/csjsound_amd64.dll",
+            "modules/backend-javasound/src/main/resources/win32-x86/csjsound_x86.dll",
+            # WinSW 2.12.0 (MIT, doc/licences/WinSW-LICENSE.txt) hosts the
+            # headless server as a real SCM service, one build per
+            # architecture.  These are the SELF-CONTAINED assets - ~18 MB each
+            # because they carry their own .NET runtime, which is the point: a
+            # bench machine needs nothing installed to host the service, and it
+            # is why a Windows server zip is ~31 MB against ~13 MB elsewhere.
+            # The server zips rename them to phonalyser-server-service.exe, and
+            # the assembly fails outright without them - checked here, where the
+            # message says what to do about it.
+            "lib/windows/WinSW-x64.exe",
+            "lib/windows/WinSW-x86.exe"
           )
           $missing = $required | Where-Object { -not (Test-Path $_) }
           if ($missing) {
@@ -57,22 +77,42 @@ jobs:
             exit 1
           }
 
-      # `mvn package` builds the fat JAR, stages it into target/jpackage-input/,
-      # and runs jpackage — all in one go (see <executions> in pom.xml).
+      # `mvn package` builds the fat JAR, stages it into
+      # modules/phonalyser-app/target/jpackage-input/,
+      # and runs jpackage - all in one go (see <executions> in that module's pom).
       - name: Build fat JAR + EXE installer
         run: mvn -B -DskipTests package
 
       # Legacy 32-bit Windows: a FAT JAR only (no EXE, no installer).  Built on
-      # the SAME x64 JDK — a fat jar is portable bytecode plus the x86 SWT / LWJGL
+      # the SAME x64 JDK - a fat jar is portable bytecode plus the x86 SWT / LWJGL
       # jars (which Maven resolves on any JDK); a 32-bit JVM is only needed to RUN
       # it, not to build it.  Tests are skipped: x86 SWT natives can't load on the
       # x64 JVM, and the x64 build above already ran the suite.  Produces
-      # target/phonalyser-<version>-windows-x86.jar (pom `windows-x86` profile).
+      # modules/phonalyser-app/target/phonalyser-<version>-windows-x86.jar (pom `windows-x86` profile).
       - name: Build x86 legacy fat JAR
         run: mvn -B -DskipTests package -P "windows-x86,!windows-x64"
 
+      # The server serves the web bundle: server-net's prepare-package runs
+      # web/build.mjs (esbuild) and scripts/build-help.mjs, which need
+      # web/node_modules - install them from the lockfile first.
+      - name: Install web build dependencies
+        working-directory: web
+        run: npm ci
+
+      # The HEADLESS SERVER, once per architecture: its own fat jar plus the
+      # per-platform zip (jar + natives + launcher + service scripts + README).
+      # The server-dist profile is opt-in, so the two builds above never pay for
+      # it, and -pl/-am builds only the server's own subtree instead of the whole
+      # desktop reactor a second time.  Both passes write into the same target/,
+      # which is safe: every artefact name carries its own platform id.
+      - name: Build server dist (x64)
+        run: mvn -B -DskipTests package -P "server-dist" -pl modules/server-net -am
+
+      - name: Build server dist (x86)
+        run: mvn -B -DskipTests package -P "server-dist,windows-x86,!windows-x64" -pl modules/server-net -am
+
       # Optional: also pack an MSIX for the Microsoft Store (the Store signs it
-      # for free at publish time).  GUARDED — skipped unless MSIX_IDENTITY_NAME is
+      # for free at publish time).  GUARDED - skipped unless MSIX_IDENTITY_NAME is
       # set, so normal .exe/.jar builds are unaffected.  Needs a Partner Center app
       # reservation (Identity Name + Publisher) and PNG logos in
       # src/main/packaging/msix/assets/.  See PACKAGING.md -> "Microsoft Store (MSIX)".
@@ -81,12 +121,15 @@ jobs:
         shell: pwsh
         run: |
           mvn -B -DskipTests package "-Djpackage.type=APP_IMAGE"
-          $app = "target/installer/Phonalyser"
+          $app = "modules/phonalyser-app/target/installer/Phonalyser"
           if (-not (Test-Path $app)) { throw "app-image not found at $app" }
           if (-not (Get-ChildItem src/main/packaging/msix/assets/*.png -ErrorAction SilentlyContinue)) {
             throw "No Store logos in src/main/packaging/msix/assets/ (see that folder's README.txt)."
           }
-          $pomVer = (Select-Xml -Path pom.xml -XPath "/*[local-name()='project']/*[local-name()='version']").Node.InnerText
+          # The build root inherits its version from the parent module, so the
+          # version element lives in the parent POM, not here.
+          $pomVer = (Select-Xml -Path modules/phonalyser-parent/pom.xml -XPath "/*[local-name()='project']/*[local-name()='version']").Node.InnerText
+          if (-not $pomVer) { throw "no <version> found in modules/phonalyser-parent/pom.xml" }
           $parts  = ($pomVer -replace '[^0-9.].*$','').Split('.')
           while ($parts.Count -lt 3) { $parts += '0' }
           $ver = ($parts[0..2] -join '.') + '.0'
@@ -101,17 +144,27 @@ jobs:
           $makeappx = (Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin" -Recurse -Filter makeappx.exe |
                        Where-Object FullName -match '\\x64\\' | Sort-Object FullName -Descending | Select-Object -First 1).FullName
           if (-not $makeappx) { throw "makeappx.exe not found (Windows SDK)" }
-          & $makeappx pack /d $app /p "target/installer/Phonalyser-$ver.msix" /o
+          & $makeappx pack /d $app /p "modules/phonalyser-app/target/installer/Phonalyser-$ver.msix" /o
 
       # The installer is shipped UNSIGNED (see README.md -> "Code signing").
       - uses: actions/upload-artifact@v7
         with:
           name: phonalyser-windows
           path: |
-            target/installer/*.exe
-            target/installer/*.msix
-            target/phonalyser-*-windows.jar
-            target/phonalyser-*-windows-x86.jar
+            modules/phonalyser-app/target/installer/*.exe
+            modules/phonalyser-app/target/installer/*.msix
+            modules/phonalyser-app/target/phonalyser-*-windows.jar
+            modules/phonalyser-app/target/phonalyser-*-windows-x86.jar
+
+      # A separate artifact from the desktop one: the server bundles have their
+      # own audience and their own download rows, and keeping them apart leaves
+      # the desktop artifact's internal layout untouched.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: phonalyser-server-windows
+          path: |
+            modules/server-net/target/phonalyser-server-*.jar
+            modules/server-net/target/phonalyser-server-*.zip
 
   # ============================================================== Linux x64
   build-linux:
@@ -126,11 +179,8 @@ jobs:
           java-version: '17'
           cache: maven
 
-      # Project Nayuki's flac-library isn't on Maven Central — it's
-      # vendored under deps/flac-library-java and must be installed to
-      # the runner's local ~/.m2 before the main project resolves it.
-      - name: Install vendored flac-library
-        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+      # Project Nayuki's flac-library isn't on Maven Central - it is vendored as
+      # the modules/flac-library-java module, so the reactor builds it.
 
       - name: Install fakeroot (needed by jpackage for .deb)
         run: |
@@ -140,16 +190,84 @@ jobs:
       - name: Build fat JAR + .deb installer
         run: mvn -B -DskipTests package
 
+      # jpackage auto-generates the .deb's Depends line from a dpkg -S scan of the
+      # libs bundled on the BUILD host.  On ubuntu-latest (now 24.04 "Noble") that
+      # scan emits time_t-transition names like libasound2t64, which don't exist on
+      # 22.04 / Debian 12 - so the .deb refuses to install there.  Rewrite each bare
+      # "<name>t64" dependency into the alternation "<name>t64 | <name>" so the
+      # package stays installable on both pre- and post-Noble systems.
+      - name: Normalize t64 deps for pre-Noble installability
+        run: |
+          set -euo pipefail
+          # The whole -R ... -b round-trip runs inside ONE fakeroot session: dpkg-deb -b
+          # records the on-disk ownership, and only fakeroot keeps the extracted tree's
+          # files root:root (same reason jpackage itself needs fakeroot above).
+          cat > /tmp/fix-deb-deps.sh <<'EOS'
+          set -euo pipefail
+          deb=$(ls modules/phonalyser-app/target/installer/*.deb)
+          echo "Patching $deb"
+          work=$(mktemp -d)
+          dpkg-deb -R "$deb" "$work"
+          echo "Depends BEFORE: $(grep '^Depends:' "$work/DEBIAN/control")"
+          # Expand every bare "<name>t64" token into "<name>t64 | <name>".  Tokens are
+          # comma-separated; a token that already carries a " | " alternative contains a
+          # space, so it fails the ^\S+t64$ anchor and is left untouched (idempotent).
+          perl -i -pe '
+            if (/^Depends:\s*/) {
+              my ($p, $v) = /^(Depends:\s*)(.*)$/;
+              my @t = split /\s*,\s*/, $v;
+              for my $x (@t) { $x =~ s/^(\S+)t64$/$1t64 | $1/; }
+              $_ = $p . join(", ", @t) . "\n";
+            }
+          ' "$work/DEBIAN/control"
+          echo "Depends AFTER:  $(grep '^Depends:' "$work/DEBIAN/control")"
+          # Self-check: fail if any bare "<name>t64" token remains without a " | " alternative.
+          if grep '^Depends:' "$work/DEBIAN/control" | grep -Pq '\S+t64(?! \| )'; then
+            echo "::error::t64 dependency left un-alternated in $deb"
+            exit 1
+          fi
+          # The -R/-b round-trip preserves DEBIAN/postinst,postrm (QA40x udev rule) and
+          # their exec bits; only DEBIAN/control was edited above.
+          dpkg-deb -b "$work" "$deb"
+          rm -rf "$work"
+          EOS
+          fakeroot bash /tmp/fix-deb-deps.sh
+
+      # The embedded web bundle needs web/node_modules (esbuild) - see the
+      # Windows job.
+      - name: Install web build dependencies
+        working-directory: web
+        run: npm ci
+
+      # The HEADLESS SERVER, both Linux architectures from this one x86_64
+      # runner.  aarch64 costs nothing extra here: the server jar is
+      # architecture-neutral bytecode and the Linux bundles ship no natives at
+      # all (ALSA comes from the JDK, libusb from the distribution), so there is
+      # nothing in either zip that would need an arm64 machine to produce.  That
+      # is why there is no linux-aarch64 job.
+      - name: Build server dist (x86_64)
+        run: mvn -B -DskipTests package -P 'server-dist' -pl modules/server-net -am
+
+      - name: Build server dist (aarch64)
+        run: mvn -B -DskipTests package -P 'server-dist,linux-aarch64,!linux-x64' -pl modules/server-net -am
+
       - uses: actions/upload-artifact@v7
         with:
           name: phonalyser-linux
           path: |
-            target/installer/*.deb
-            target/phonalyser-*-linux.jar
+            modules/phonalyser-app/target/installer/*.deb
+            modules/phonalyser-app/target/phonalyser-*-linux.jar
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: phonalyser-server-linux
+          path: |
+            modules/server-net/target/phonalyser-server-*.jar
+            modules/server-net/target/phonalyser-server-*.zip
 
   # ===================================================== macOS x64 + Apple Silicon
   # Ship a DMG per architecture.  Both legs run on the Apple-Silicon macos-14
-  # runner — the Intel macos-13 image is being retired.  The arm64 DMG uses the
+  # runner - the Intel macos-13 image is being retired.  The arm64 DMG uses the
   # native aarch64 JDK; the Intel DMG uses an x86_64 JDK running under Rosetta 2,
   # which makes jpackage emit an x86_64 app + JRE that runs natively on Intel
   # Macs (an arm64-only build is rejected with "not supported on this Mac").
@@ -181,13 +299,10 @@ jobs:
           architecture: ${{ matrix.jdk }}
           cache: maven
 
-      # Project Nayuki's flac-library isn't on Maven Central — it's
-      # vendored under deps/flac-library-java and must be installed to
-      # the runner's local ~/.m2 before the main project resolves it.
-      - name: Install vendored flac-library
-        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+      # Project Nayuki's flac-library isn't on Maven Central - it is vendored as
+      # the modules/flac-library-java module, so the reactor builds it.
 
-      # PortAudio + libusb dylibs are not on Maven Central — they must live
+      # PortAudio + libusb dylibs are not on Maven Central - they must live
       # under lib/macos-<arch>/.  Fail loudly if a checkout is missing them
       # instead of producing a DMG whose CoreAudio / QA40x backend is dead
       # (the pom stages them with failonerror=false).
@@ -197,13 +312,13 @@ jobs:
           missing=
           for f in libportaudio.dylib libusb-1.0.dylib; do
             if [ ! -f "$dir/$f" ]; then
-              echo "::error::Missing $dir/$f — see $dir/README.md"
+              echo "::error::Missing $dir/$f - see $dir/README.md"
               missing=1
             fi
           done
           [ -z "$missing" ]
 
-      # Both macos profiles already append -XstartOnFirstThread to
+      # The macos-jpackage profile already appends -XstartOnFirstThread to
       # jpackage's javaOptions; no extra args needed here.
       - name: Build fat JAR + .dmg installer
         run: mvn -B -DskipTests package
@@ -213,17 +328,37 @@ jobs:
       # release page.
       - name: Tag the DMG with its architecture
         run: |
-          cd target/installer
+          cd modules/phonalyser-app/target/installer
           for f in *.dmg; do
             mv "$f" "${f%.dmg}-${{ matrix.arch }}.dmg"
           done
+
+      # The embedded web bundle needs web/node_modules (esbuild) - see the
+      # Windows job.
+      - name: Install web build dependencies
+        working-directory: web
+        run: npm ci
+
+      # The HEADLESS SERVER for this leg's architecture.  No jpackage, no app
+      # bundle and no DMG - the server on macOS is the fat jar, the two dylibs
+      # and the scripts, zipped.  The active macos-x64 / macos-aarch64 profile
+      # (chosen from the JDK's own os.arch) picks the matching dylibs.
+      - name: Build server dist
+        run: mvn -B -DskipTests package -P 'server-dist' -pl modules/server-net -am
 
       - uses: actions/upload-artifact@v7
         with:
           name: phonalyser-macos-${{ matrix.arch }}
           path: |
-            target/installer/*.dmg
-            target/phonalyser-*-macos*.jar
+            modules/phonalyser-app/target/installer/*.dmg
+            modules/phonalyser-app/target/phonalyser-*-macos*.jar
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: phonalyser-server-macos-${{ matrix.arch }}
+          path: |
+            modules/server-net/target/phonalyser-server-*.jar
+            modules/server-net/target/phonalyser-server-*.zip
 
   # ============================================================== Release
   release:
@@ -244,7 +379,7 @@ jobs:
         with:
           # ** recurses into the installer/ subdirectory that
           # upload-artifact@v4 creates when multiple paths share a parent
-          # (target/) — without ** the .exe/.deb/.dmg get skipped and
+          # (target/) - without ** the .exe/.deb/.dmg get skipped and
           # only the top-level fat JAR makes it onto the release.
           # The src/main/packaging/dist/* launcher scripts + per-OS run guides are attached from
           # the checkout (identical for every release).
@@ -253,6 +388,10 @@ jobs:
             artifacts/phonalyser-linux/**
             artifacts/phonalyser-macos-x64/**
             artifacts/phonalyser-macos-arm64/**
+            artifacts/phonalyser-server-windows/**
+            artifacts/phonalyser-server-linux/**
+            artifacts/phonalyser-server-macos-x64/**
+            artifacts/phonalyser-server-macos-arm64/**
             src/main/packaging/dist/Phonalyser-windows.bat
             src/main/packaging/dist/Phonalyser-linux.sh
             src/main/packaging/dist/Phonalyser-macos.sh

@@ -7,48 +7,48 @@
 # suggestion the first time a device whose name matches a pattern is seen, and
 # binding it just adds the alias.
 #
-# The fsVrms values below are NOMINAL — the user still calibrates to measure
+# The fsVrms values below are NOMINAL - the user still calibrates to measure
 # their own card's exact full-scale; the seed only supplies the card name,
 # recognition patterns, channel mode and range labels so the profile starts
 # life shaped right.
 #
-# UPGRADE BEHAVIOUR — what happens to your devices.yaml when a new release
+# UPGRADE BEHAVIOUR - what happens to your devices.yaml when a new release
 # ships an updated copy of this file.  The merge is gated on `contentVersion`
 # below: it runs once whenever this file's contentVersion is higher than the one
 # your store recorded, then records the new number.  For each card below your
 # store is matched by name OR by a shared recognition entry (so a card you
 # renamed is still found), and only the RANGE table is reconciled: a range the
 # release added appears in your store, and a range you both have is refreshed to
-# the release's nominal value — EXCEPT a range you actually CALIBRATED, which
+# the release's nominal value - EXCEPT a range you actually CALIBRATED, which
 # keeps its measured full-scale (and calibrated flag).  Everything else you own
 # is left exactly as-is: your channel mode, your recognition/alias list, your
 # active-range selection, and any range you added by hand all survive.  A card
 # that is new in the release is added whole.  Cards YOU created (names/patterns
 # not listed below) are never touched.
 #
-# VERSIONING — bump `contentVersion` (an integer) whenever the CATALOG content
+# VERSIONING - bump `contentVersion` (an integer) whenever the CATALOG content
 # here changes: a new card, a new range, or a changed nominal value that existing
-# stores should reconcile against once.  `formatVersion` is separate — bump it
+# stores should reconcile against once.  `formatVersion` is separate - bump it
 # only when the FILE FORMAT / schema changes, not the catalog data.
 #
 # Each entry uses the same profile YAML vocabulary Preferences writes:
-#   name        — the logical profile name shown to the user
-#   match       — device-name substrings (case-insensitive) that identify this card
-#   input       / output — per-direction blocks:
-#     channels    — MONO (one physical channel, one full-scale for both sides),
+#   name        - the logical profile name shown to the user
+#   match       - device-name substrings (case-insensitive) that identify this card
+#   input       / output - per-direction blocks:
+#     channels    - MONO (one physical channel, one full-scale for both sides),
 #                   LINKED (both channels share one range but keep per-channel
 #                   values) or INDEPENDENT
-#     calibrationFromDevice — true ONLY for a card whose full-scale is reported by
+#     calibrationFromDevice - true ONLY for a card whose full-scale is reported by
 #                   the device itself (a QA40x): the app never writes calibration
 #                   into these ranges and the upgrade takes them wholesale from the
 #                   seed (omit the key for an ordinary user-calibrated card)
-#     ranges      — one row per attenuator / gain position; fsVrms in volts RMS,
-#                   either one number for both channels or { left: …, right: … }
+#     ranges      - one row per attenuator / gain position; fsVrms in volts RMS,
+#                   either one number for both channels or { left: ..., right: ... }
 #                   for per-channel values (each channel calibrates its own side);
 #                   the app always saves the { left, right } pair form
-#     activeRange — the selected range row: LINKED / MONO endpoints use the row
+#     activeRange - the selected range row: LINKED / MONO endpoints use the row
 #                   label as a scalar, INDEPENDENT endpoints use one
-#                   { left: …, right: … } map (each channel's own label).
+#                   { left: ..., right: ... } map (each channel's own label).
 
 formatVersion: 1
 contentVersion: 1

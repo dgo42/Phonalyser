@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  backend-wdm-ks - the WDM-KS PortAudio host API (Windows kernel streaming).
+
+  NOTE for the dependency review: this module is currently also the home of the
+  PortAudio recorder/generator plumbing that backend-wasapi, backend-coreaudio
+  and backend-javasound all reuse (WdmksRecorder / WdmksGenerator /
+  WdmksDeviceManager).  That makes three sibling backends depend on a module
+  named after a fourth, which is why the shared part arguably wants its own
+  module (backend-portaudio).  See the dependency notes reported alongside this
+  PoC - nothing is moved here yet.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.2.0</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>backend-wdm-ks</artifactId>
+    <name>Phonalyser :: backend :: WDM-KS</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
+        </dependency>
+    </dependencies>
+</project>

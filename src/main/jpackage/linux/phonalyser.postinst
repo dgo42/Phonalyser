@@ -4,10 +4,10 @@
 # see: dh_installdeb(1)
 #
 # jpackage resource-dir override: the stock JDK 17 template (KEEP the
-# DESKTOP_COMMANDS_INSTALL token — jpackage substitutes it at build time)
+# DESKTOP_COMMANDS_INSTALL token - jpackage substitutes it at build time)
 # plus the QA40x udev rule, so a fresh .deb install can open the analyzer
 # without libusb_open failing with LIBUSB_ERROR_ACCESS.  The heredoc below
-# mirrors 70-qa40x.rules next to this script — keep the two in sync.
+# mirrors 70-qa40x.rules next to this script - keep the two in sync.
 
 set -e
 

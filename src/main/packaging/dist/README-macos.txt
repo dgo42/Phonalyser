@@ -4,7 +4,7 @@ Phonalyser - running from the platform JAR (macOS)
 The .dmg installer bundles a Java runtime; the JAR does not, so you need
 Java 17 or newer installed.
 
-1. Install a Java 17+ runtime (e.g. Temurin):  https://adoptium.net/
+1. Install a Java 17+ runtime:
        Apple Silicon (M1/M2/...):  aarch64 Java  +  phonalyser-<version>-macos.jar
        Intel Mac:                  x64 Java      +  phonalyser-<version>-macos-x64.jar
 2. Keep these two files together in the same folder:

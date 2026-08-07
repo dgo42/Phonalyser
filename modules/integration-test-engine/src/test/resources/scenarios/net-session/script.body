@@ -1,0 +1,25 @@
+/* net session: connect to a real Phonalyser server, then disconnect.
+
+   The address is not known when this script is written - the server binds port
+   0 so the OS picks a free one - so it arrives through param(), which is the
+   one sanctioned bridge from the engine into a sandboxed body (a body may not
+   name System).
+
+   'var' is a reserved word rather than a type name, and String is java.lang,
+   so both pass the sandbox scan; the compile-only tests in ScriptCompilerTest
+   pin that, so this scenario cannot be broken by a tightened rule without
+   something else going red first.
+
+   The failure REASON is recorded rather than collapsed into a boolean: a run
+   that reports only "connected: false" tells nobody whether the port was
+   wrong, the handshake was refused, or no server was there at all. */
+var error = netConnect(param("server", ""));
+if (error != null) {
+    failCheck("connect", error);
+}
+waitUntil("the session to come up", () -> netIsConnected(), 5);
+checkTrue("connected", netIsConnected());
+
+netDisconnect();
+waitUntil("the session to close", () -> !netIsConnected(), 5);
+checkTrue("disconnected", !netIsConnected());

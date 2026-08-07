@@ -1,10 +1,10 @@
 /*
- * Phonalyser web — the live per-sweep input-level meter (level-vs-time chart shown
+ * Phonalyser web - the live per-sweep input-level meter (level-vs-time chart shown
  * in the busy/modal while a frequency-response sweep runs).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  *
- * Faithful port of org.edgo.audio.measure.gui.freqresp.FreqRespLiveMeter — a compact
+ * Faithful port of org.edgo.audio.measure.gui.freqresp.FreqRespLiveMeter - a compact
  * RMS-level-over-time chart (REW's per-sweep level monitor). Axes: X = elapsed time
  * 0..totalDurationSec, Y = RMS dBFS 0 dB (top) .. −100 dB (bottom), labelled every
  * 20 dB. appendSample(timeSec, rmsLin) runs the incoming linear RMS through an EMA
@@ -19,7 +19,7 @@
  * desktop's per-block captureProgress cadence isn't available live. The meter math here
  * is byte-for-byte the desktop's appendSample/instantaneousHz; the WIZARD drives it
  * post-hoc from the recorded buffer (a windowed RMS walk at a fixed block size), so the
- * EMA still sees a faithful (time, rmsLin) stream — only the cadence differs, never the
+ * EMA still sees a faithful (time, rmsLin) stream - only the cadence differs, never the
  * math. The chart is otherwise identical to the desktop's.
  */
 
@@ -34,14 +34,14 @@ const MARGIN_BOTTOM = 18;
 
 /** EMA smoothing time constant in PERIODS of the sweep's instantaneous frequency. */
 const SMOOTHING_PERIODS = 5.0;
-/** Above this frequency the period count shrinks with (corner/f)² — smoothing fades. */
+/** Above this frequency the period count shrinks with (corner/f)² - smoothing fades. */
 const SMOOTHING_HF_CORNER_HZ = 100.0;
 /** Upper cap for the per-block EMA factor so the trace never freezes entirely. */
 const ALPHA_MAX = 0.999;
 
 const MAX_POINTS = 4096;
 
-/** packed-int colour → CSS hex (matches the fft/freqresp view helpers). */
+/** packed-int colour -> CSS hex (matches the fft/freqresp view helpers). */
 const colorHex = (c) => '#' + (c & 0xffffff).toString(16).padStart(6, '0');
 
 export class FreqRespLiveMeter {
@@ -65,7 +65,7 @@ export class FreqRespLiveMeter {
     // Same colour as the FFT spectrum trace (user-configurable pref).
     this.traceColor = colorHex(prefs.fftLineColor ? prefs.fftLineColor.get() : 0x0064c8);
 
-    // Two parallel arrays grown together — avoids boxing (FreqRespLiveMeter).
+    // Two parallel arrays grown together - avoids boxing (FreqRespLiveMeter).
     this.timesSec = new Float32Array(MAX_POINTS);
     this.levelsDb = new Float32Array(MAX_POINTS);
     this.pointCount = 0;
@@ -139,10 +139,10 @@ export class FreqRespLiveMeter {
 
   render() {
     const g = this.g, cv = this.cv;
-    // HiDPI backing store matching the CSS box (same pattern as fft-view #27): the backing
-    // store is CSS-px × devicePixelRatio and a setTransform maps 1 CSS px → dpr device px, so
+    // HiDPI backing store matching the CSS box (same pattern as fft-view): the backing
+    // store is CSS-px × devicePixelRatio and a setTransform maps 1 CSS px -> dpr device px, so
     // all drawing below is in CSS-px (W, H). The canvas previously set width = clientWidth with
-    // NO dpr and while the modal was still display:none clientWidth read 0 → a mismatched
+    // NO dpr and while the modal was still display:none clientWidth read 0 -> a mismatched
     // backing store, which CSS then stretched (the distorted, oversized graph).
     const W = cv.clientWidth || 520, H = cv.clientHeight || 100;
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;

@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — the oscilloscope PANE (trace canvas · vertical-offset + horizontal-nav
+ * Phonalyser web - the oscilloscope PANE (trace canvas · vertical-offset + horizontal-nav
  * FlatScrollbars · Record LED · measurement table + pop-out window · file-mode load/scroll ·
  * the scope branch of the rAF render loop).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
@@ -8,7 +8,7 @@
  * Faithful port of gui/scope/ScopePane. Owns the live scope view wiring (the ScopeView canvas,
  * the two navigation scrollbars, the Record LED, the measurement-table render + pop-out window,
  * the file-mode loaded-signal state) and IS the Host the scope SETTINGS strip (ScopeTabControl)
- * reaches it through — mirroring Java ScopePane implements ScopeTabControl.Host. The former
+ * reaches it through - mirroring Java ScopePane implements ScopeTabControl.Host. The former
  * scopeHost closures (requestRedraw / refreshTiles / refreshFields / syncTriggerStart /
  * setTriggerControlsEnabled / syncOffsetScrollbar / redrawScrollbars / syncMeasChannelButtons /
  * syncMeasButtons / recState / onFileBack / stopCaptureForFileLoad / onSignalFileLoaded) are now
@@ -21,12 +21,15 @@
  * the FlatScrollbar widget class (imported directly), and tileChips are injected too.
  */
 import { t } from '../i18n/i18n.js';
+import { makeDraggable } from '../ui/draggable.js';
 import { isDualTone } from '../generator/dds-kernel.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
 import { FlatScrollbar } from '../widgets/flat-scrollbar.js';
 import { offsetMoveHalfRange } from './scope-format.js';
 import { DIVISIONS_Y } from './scope-nav.js';
+import { HistogramView } from './histogram-view.js';
+import { backendDisplayName } from '../audio/audio-backend-type.js';
 
 // ----- scope navigation scrollbars (Java ScopePane vertSlider / navSlider) -----
 // Fixed integer slider range; the offsetFrac / horizontal-pan value is derived
@@ -38,10 +41,10 @@ const MIN_SCROLLBAR_THUMB = Math.round(NAV_RANGE / 33);
 // main trace's cap/s.
 const SCOPE_ZOOM_DECIMATION = 10;
 // Delay before a USER generator change drops the held trigger anchor (Java
-// ScopeTabControl.GEN_CLEAR_DELAY_MS) — covers the DAC → loopback → ADC →
+// ScopeTabControl.GEN_CLEAR_DELAY_MS) - covers the DAC -> loopback -> ADC ->
 // capture-buffer latency so the reset lands after the OLD signal has flushed out
 // of the display path. (Java also wipes the GPU phosphor afterglow here; the web
-// Canvas2D scope has no persistence — that part is skipped.)
+// Canvas2D scope has no persistence - that part is skipped.)
 const GEN_CLEAR_DELAY_MS = 250;
 
 export class ScopePane {
@@ -50,12 +53,12 @@ export class ScopePane {
    * @param prefs  Preferences.
    * @param deps   {view, getField, tileChips, isScopeRec, isBusy, setBusy,
    *                getLatestScope, readConfig, syncCalibrateGate}
-   *   - view: the ScopeView (Java holds `view` as a field) — the trace canvas painter,
+   *   - view: the ScopeView (Java holds `view` as a field) - the trace canvas painter,
    *       single-armed / file-mode state, latest measurement, auto-setup.
-   *   - getField: (id) => the scope NumericStepField (built in app.js initStepFields) — the
+   *   - getField: (id) => the scope NumericStepField (built in app.js initStepFields) - the
    *       hysteresis field re-gate in setTriggerControlsEnabled.
    *   - tileChips: (...vals) => the `.tile` chip-span HTML (shared with the FFT tiles).
-   *   - isScopeRec: () => engine.scope.recording — the controller owns the flag; the pane only reads it.
+   *   - isScopeRec: () => engine.scope.recording - the controller owns the flag; the pane only reads it.
    *   - isBusy / setBusy: the shared async re-entrancy guard accessors (Record serializes with it).
    *   - getLatestScope: () => the latest live scope frame {buf, info} (set by engine.onScope in app.js).
    *   - readConfig: () => snapshot the live UI into engine.config before a record start.
@@ -78,7 +81,7 @@ export class ScopePane {
 
     // ----- scope navigation scrollbars (Java ScopePane vertSlider / navSlider) -----
     // Vertical: thumb at TOP = signal up (low offsetFrac = trace anchored toward the
-    // grid top), thumb at BOTTOM = signal down — maps selection ∈ [0, NAV_RANGE] to
+    // grid top), thumb at BOTTOM = signal down - maps selection ∈ [0, NAV_RANGE] to
     // offsetFrac ∈ [lo, hi]. Horizontal: selection ∈ [0, NAV_RANGE] = how far back
     // from the latest the view is scrolled; rightmost = follow latest (file mode only).
     this.scopeVScroll = new FlatScrollbar(document.getElementById('scopeVScroll'),
@@ -108,23 +111,80 @@ export class ScopePane {
     // Auto-fit-once-measured latch for the live scope (set false each frame in render()).
     this.scopeAutoPending = false;
 
+    // Debug/e2e hook, mirroring FftPane: the help-screenshot capture has to reach the live
+    // histogram accumulators to pose the window with a known distribution.
+    if (typeof window !== 'undefined') window.__scopePane = this;
+
     // FreqResp measurement lifecycle (Java ScopePane freqRespStarted/StoppedListener):
-    // the sweep needs the capture device exclusively — stop a running capture and gray
+    // the sweep needs the capture device exclusively - stop a running capture and gray
     // the Record LED on STARTED, re-enable it on STOPPED.
     const bus = MessageBus.instance();
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, () => this.onFreqRespMeasurementStarted());
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => this.onFreqRespMeasurementStopped());
+    // The controller stopped the capture on its own - today when a device reopen fails to
+    // re-acquire (ScopeController.reattach). The pane owns the Record LED, so it has to reconcile:
+    // without this the trace froze while the LED stayed lit, i.e. the scope LOOKED like it was
+    // still running.
+    // ...and also when the capture ENDED FROM BELOW (device lost / delivery
+    // stalled). When the controller CLAIMED that report, this pane owns the failed operation, so
+    // this pane tells the operator ONCE, in their language (Java ScopePane's
+    // recordingStoppedListener). Null reason = a programmatic stop, or the FFT pane claimed it.
+    bus.subscribe(Events.SCOPE_RECORDING_STOPPED, () => {
+      this.syncScopeLed();
+      const reason = this.engine.scope.captureEndReason();
+      if (reason) this.showCaptureEndedAlert(reason);
+    });
+    // The INPUT device died mid-capture (unplugged, or grabbed exclusively) - the capture source
+    // publishes the error, the shell shows the alert, and the scope must actually STOP: keeping
+    // the consumer on the dead line left the trace drawing a flat line with cap/s still ticking -
+    // a measurement of nothing presented as a measurement. Stop via the
+    // ENGINE unconditionally, exactly as onFreqRespMeasurementStarted does - the stop releases the
+    // shared-capture ref, so the dead device line closes on the last release.
+    bus.subscribe(Events.AUDIO_DEVICE_ERROR, async (p) => {
+      if (p && p.direction === 'input') {
+        await this.engine.scope.setRecording(false);
+        this.syncScopeLed();
+      }
+    });
 
     // Wire the osc-meas measurement stream (owned by engine.scope): the pane has the prefs,
     // so it supplies the per-batch publish PARAMS provider; the worker's publishes are
     // pushed straight into the view (its publish contract, off the render thread). The
     // controller starts/stops the worker + its own gapless ring reader with the recording.
     this.engine.scope.setMeasParamsProvider(() => this._measParams());
-    this.engine.scope.setMeasResultSink((r) => this.view.publishMeasurement(r));
+    this.engine.scope.setMeasResultSink((r) => { this.view.publishMeasurement(r); this.renderHistogram(); });
+    // The histogram plot: its own view, fed a SNAPSHOT of the selected channel's distribution and
+    // that channel's peak volts read at PAINT time - so a recalibration relabels the axis without
+    // disturbing a single collected count.
+    this._histogramView = new HistogramView(document.getElementById('scopeHist'), {
+      snapshot: () => this.engine.scope.histogramSnapshot(this.prefs.oscHistogramChannel.get()),
+      peakVolts: () => this.prefs.getAdcPeakVolts(this.prefs.oscHistogramChannel.get()),
+      barCount: () => this.prefs.oscHistogramBins.get(),
+      // Java HistogramView's own ColorRole map: black plot, 0x3C3C3C grid + axis, 0xF0F0F0 text.
+      palette: () => ({
+        background: '#000000', grid: '#3c3c3c', axis: '#3c3c3c', text: '#f0f0f0',
+        bar: this.prefs.oscHistogramChannel.get() === 'R'
+          ? `#${this.prefs.oscRightChannelColor.get().toString(16).padStart(6, '0')}`
+          : `#${this.prefs.oscLeftChannelColor.get().toString(16).padStart(6, '0')}`,
+      }),
+    });
     // A view-side clearMeasurementHistory (stats reset / channel switch) also resets the
-    // live worker's stream (spec §5) — the view can't reach the controller, so route through
+    // live worker's stream (spec §5) - the view can't reach the controller, so route through
     // the pane.
-    this.view.onClearMeasurement = () => this.engine.scope.resetMeasurement();
+    // A stats reset / channel switch also restarts the amplitude distribution: the same reasoning
+    // as the statistics themselves - a channel change means the counts describe a different signal.
+    this.view.onClearMeasurement = () => {
+      this.engine.scope.resetMeasurement();
+      this.engine.scope.resetHistograms();
+      this.renderHistogram();
+    };
+    // Generator start/stop IS a signal change, so the distribution restarts with it - averaging
+    // before and after together would be wrong (Java publishes GENERATOR_SIGNAL_CHANGED / USER_INPUT
+    // on a real transition for exactly this).
+    MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, () => {
+      this.engine.scope.resetHistograms();
+      this.renderHistogram();
+    });
   }
 
   /** The current osc-meas publish parameters read from prefs + the live config/generator
@@ -134,19 +194,20 @@ export class ScopePane {
     const p = this.prefs, c = this.engine.config;
     if (!p || !p.oscShowMeasurementTable.get()) return null;
     // Dual flag from the LIVE pref, exactly like Java ScopeMeasurementWorker.measureChannel
-    // (dual = prefs.getGenSignalForm().isDualTone()), re-read every publish pass — NOT the
+    // (dual = prefs.getGenSignalForm().isDualTone()), re-read every publish pass - NOT the
     // engine.config snapshot, which only refreshes on a generator (re)start (readConfig).
     // A form change to DUAL_TONE updates the pref immediately (the dropdown's prefs.set),
     // so with the snapshot the worker measured a stale single tone (the sum-crossing f)
     // until the generator happened to restart; the live pref closes that window.
     // Same rule for peakVolts below: read adcFsVoltageRms from the LIVE pref (Java
     // ScopeMeasurementWorker.java:444 re-reads prefs.getAdcFsVoltageRms() each compute pass),
-    // NOT c.adcFsVoltageRms — an ADC calibration rescales the pref mid-capture, and the
+    // NOT c.adcFsVoltageRms - an ADC calibration rescales the pref mid-capture, and the
     // config snapshot would keep the stale full-scale until the next capture restart (the
-    // "reading doesn't move after calibrate → double-calibration" bug).
+    // "reading doesn't move after calibrate -> double-calibration" bug).
     const dual = isDualTone(p.genSignalForm.get());
     const per = (name) => ({
-      lpfMode: p['osc' + name + 'Lpf'].get(),
+      // NO lpfMode: the display LPF / de-spike never reaches a measured value (Java has no
+      // applyHfLowPass / applyChannelHf in ScopeMeasurementWorker).
       mainsMode: p['osc' + name + 'MainsSuppression'].get(),
       dual, f1Hz: this.engine.scope.snapped, f2Hz: this.engine.scope.snapped2,
     });
@@ -162,12 +223,24 @@ export class ScopePane {
     };
   }
 
-  /** Stops a running capture and grays the Record LED — fired by the Frequency Response
+  /** The unified capture-death message (Java ScopePane's recordingStoppedListener / FftPane's
+   *  twin): the reason picks the text, the BACKEND is named, and the technical detail lives in
+   *  the log alone. Raised through the shell's one alert surface (the web's Dialogs.error). */
+  showCaptureEndedAlert(reason) {
+    MessageBus.instance().publish(Events.AUDIO_DEVICE_ERROR, {
+      direction: 'input',
+      reason: reason.name,
+      message: t('capture.error.ended.' + reason.name,
+        backendDisplayName(this.engine.activeBackend())),
+    });
+  }
+
+  /** Stops a running capture and grays the Record LED - fired by the Frequency Response
    *  pane via FREQRESP_MEASUREMENT_STARTED so the sweep can take exclusive control of the
    *  device (Java ScopePane.onFreqRespMeasurementStarted). */
   async onFreqRespMeasurementStarted() {
     $('.scope-pane .led-btn').prop('disabled', true);
-    // Stop the scope via the ENGINE unconditionally — NOT gated on the shell record flag
+    // Stop the scope via the ENGINE unconditionally - NOT gated on the shell record flag
     // (see FftPane.onFreqRespMeasurementStarted): a shell/controller desync must not leave
     // the scope consuming the sweep. setRecording is a no-op when already off; sync the
     // LED to the engine's real state.
@@ -182,8 +255,8 @@ export class ScopePane {
   }
 
   // ----- scope tiles: each tab's KEY SETTINGS (Java ScopeTabControl.scopeTabTiles),
-  // NOT live measured values. Left/Right → led(if enabled) + V/div + ac|dc + sin|lin;
-  // Horizontal → t/div; Trigger → channel L|R + edge ↑|↓ + mode A|N|S + (H x.x if hyst).
+  // NOT live measured values. Left/Right -> led(if enabled) + V/div + ac|dc + sin|lin;
+  // Horizontal -> t/div; Trigger -> channel L|R + edge ↑|↓ + mode A|N|S + (H x.x if hyst).
   // Driven from the osc* prefs that back the scope controls, refreshed whenever one
   // of them changes (mirrors Java's toolbarTabs.refreshTab on every binding change).
   // shortSi / shortVoltsPerDiv / shortTimePerDiv mirror Java ScopeFormat.
@@ -254,7 +327,7 @@ export class ScopePane {
       [mode, modeKey ? t(modeKey) : null],
       hystOn ? ['H ' + prefs.oscTriggerHysteresisDiv.get().toFixed(1), t('scope.trigger.hysteresis.tooltip')] : null));
     // Presets: "N saved" tile only when there are saved presets (Java ScopeTabControl
-    // scopeTabTiles TAB_PRESETS — a hint that there's something to load).
+    // scopeTabTiles TAB_PRESETS - a hint that there's something to load).
     const nPresets = prefs.oscPresets.size;
     $tiles.eq(4).html(nPresets > 0 ? this.titledChips([nPresets + ' saved', t('scope.tile.presets', nPresets)]) : '');
   }
@@ -296,7 +369,7 @@ export class ScopePane {
     // Build the 8×(name+cur+4 stat) row/cell nodes ONCE, then update textContent
     // in place every frame (the table is rendered ~60 fps but its content changes
     // only every READOUT_THROTTLE_MS). Re-emitting innerHTML each frame churned
-    // ~48 fresh DOM nodes per paint — detached nodes accumulated under GC pressure.
+    // ~48 fresh DOM nodes per paint - detached nodes accumulated under GC pressure.
     this.ensureMeasTableRows(rows.length);
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i], cells = this.measTableCells[i];
@@ -345,23 +418,27 @@ export class ScopePane {
    *  states onto the prefs, and applies Java's signal-gated visibility cascade
    *  (syncScopeButtons): table-toggle shown when a signal is present; L/R picker, stats,
    *  reset, pop-out shown only when the table is on. This IS the host.syncMeasButtons()
-   *  seam (Java ScopeTabControl.Host) — its original app.js name was syncScopeMeasButtons. */
+   *  seam (Java ScopeTabControl.Host) - its original app.js name was syncScopeMeasButtons. */
   syncMeasButtons() {
     const prefs = this.prefs;
     // Gate on the presence of a reader (Java syncScopeButtons: reader != null), i.e.
-    // live recording OR a loaded file — NOT the volatile per-frame scopeView.latest,
+    // live recording OR a loaded file - NOT the volatile per-frame scopeView.latest,
     // which goes null on a frozen / held frame and would mis-hide the buttons.
     const signal = this._isScopeRec() || this.view.fileMode;
     const showTable = prefs.oscShowMeasurementTable.get();
     const showStats = prefs.oscShowStats.get();
     $('#scopeTableToggle').toggle(signal).toggleClass('on', showTable);
+    // The histogram toggle carries the SAME signal gate as the gauge (Java syncScopeButtons puts
+    // histogramBtn and tableToggleBtn both behind tableVis = signal): with no signal there is no
+    // distribution to show, so the button only appears once the scope runs or a file is loaded.
+    $('#scopeHistogram').toggle(signal);
     const tableVis = signal && showTable;
     // L/R measurement-channel picker stays visible UNCONDITIONALLY (Java ScopeView:
     // "L/R channel-pick buttons stay visible unconditionally"); only the gauge / pop-out
     // / stats / reset are signal+table gated.
     $('#scopeStatsToggle, #scopeTablePop').toggle(tableVis);
     // Reset stays visible whenever the table is on so the stats toggle never hides /
-    // covers it — both the stats-toggle and reset buttons remain reachable together.
+    // covers it - both the stats-toggle and reset buttons remain reachable together.
     $('#scopeStatsReset').toggle(tableVis);
     $('#scopeStatsToggle').toggleClass('on', showStats);
     $('#scopeTablePop').toggleClass('on', this.measTablePopped);
@@ -376,7 +453,7 @@ export class ScopePane {
   }
 
   // ----- the scope branch of the rAF render loop (Java MultifunctionalTab.renderRealtimeFrame
-  // scope half) — the MAIN rAF loop stays in app.js and calls this each frame. Gated on the
+  // scope half) - the MAIN rAF loop stays in app.js and calls this each frame. Gated on the
   // scope's OWN record state (the FFT renders independently); when the record stops the view
   // freezes on its last frame, and an idle (never-captured) scope keeps the empty grid painted.
   render() {
@@ -392,12 +469,12 @@ export class ScopePane {
         if (latestScope) {
           // The long-window Vrms/Vmean/Tp/f/Duty measurement now runs in the osc-meas Web
           // Worker off its OWN gapless ring reader (engine.scope, wired in the constructor)
-          // — publishing into the view via publishMeasurement on its ~100 ms cadence, off the
+          // - publishing into the view via publishMeasurement on its ~100 ms cadence, off the
           // render thread. So the render loop no longer reads a measurement window here; it
           // just consumes the worker's latest publish (this.view.latest). The synchronous
           // displayed-span / injected-window fallbacks stay inside the view.
           // Generator running? (Java drawBeatOverlays gates the reconstructed-beat overlay
-          // on MessageBus.request(GENERATOR_RUNNING) — the view can't reach the bus, so the
+          // on MessageBus.request(GENERATOR_RUNNING) - the view can't reach the bus, so the
           // pane threads the flag in through the render info.)
           latestScope.info.generatorRunning =
             MessageBus.instance().request(Events.GENERATOR_RUNNING) === true;
@@ -415,19 +492,19 @@ export class ScopePane {
             else scopeView.renderZoomed(document.getElementById('scopeZoomed'), latestScope.buf, latestScope.info);
           }
           // Keep the vertical scrollbar tracking the offset (a wheel/canvas pan moves
-          // the pref without going through the scrollbar) — Java requestRedraw →
+          // the pref without going through the scrollbar) - Java requestRedraw ->
           // syncVertSliderFromPrefs.
           this.syncOffsetScrollbar(); this.scopeVScroll.redraw();
           this.renderMeasurementTable(); this.syncMeasButtons();
-          if (this.scopeAutoPending && scopeView.latest) { scopeView.autoSetup(); this.refreshScopeFields(); this.refreshScopeTiles(); this.scopeAutoPending = false; }   // auto-fit once measured (V/div + t/div changed → re-tile)
+          if (this.scopeAutoPending && scopeView.latest) { scopeView.autoSetup(); this.refreshScopeFields(); this.refreshScopeTiles(); this.scopeAutoPending = false; }   // auto-fit once measured (V/div + t/div changed -> re-tile)
           this._syncCalibrateGate();
         }
       } catch (e) { console.error('scope render error', e); }     // isolated: must not kill the FFT render
     } else if (!scopeView.fileMode && scopeView.renderFrozen()) {
       // Stopped on a captured frame (Java ScopeView.freezeBuffer): replay the FROZEN
-      // snapshot every frame so the last trace — beat overlay included — stays on
+      // snapshot every frame so the last trace - beat overlay included - stays on
       // screen instead of leaving stale pixels, and so a V/div / offset drag re-scales
-      // it live. The zoomed overview has no live ring while stopped → its idle grid.
+      // it live. The zoomed overview has no live ring while stopped -> its idle grid.
       try {
         scopeView.renderZoomedIdle(document.getElementById('scopeZoomed'));
       } catch (e) { console.error('scope frozen render error', e); }
@@ -443,11 +520,11 @@ export class ScopePane {
     }
   }
 
-  // ----- scope resize → redraw (ResizeObserver) -----
+  // ----- scope resize -> redraw (ResizeObserver) -----
   // render()/renderZoomed() resize their DPR-scaled backing store to the canvas's
   // CSS box each paint, so a resize is only corrected when SOMETHING repaints. While
   // recording (scopeRec) the rAF loop repaints every frame, but a FROZEN view (file
-  // mode, a stopped/held last frame) has no live loop — so resizing the browser/pane
+  // mode, a stopped/held last frame) has no live loop - so resizing the browser/pane
   // would just stretch the stale bitmap until the next paint. This forces a redraw of
   // the currently-held content on any size change so the trace re-draws proportionally
   // at the new resolution instead of being upscaled.
@@ -457,7 +534,7 @@ export class ScopePane {
     // Stopped-with-a-frozen-frame: replay the FROZEN snapshot (Java ScopeView renders
     // the frozen buffer, not the live ring). Feeding the stale live buffer back through
     // the live path would re-run the AUTO free-run against a snapshot whose ring cursor
-    // is gone — draw the held frame instead. The zoomed overview has no live ring while
+    // is gone - draw the held frame instead. The zoomed overview has no live ring while
     // stopped, so it drops to its idle grid.
     if (scopeView.renderFrozen()) {
       scopeView.renderZoomedIdle(document.getElementById('scopeZoomed'));
@@ -498,9 +575,9 @@ export class ScopePane {
   }
 
   // ----- measurement-table header buttons (Java ScopeView header bar) -----
-  // (14) gauge → oscShowMeasurementTable; (15) L/R picker → oscMeasurementChannel
-  // (clearing stats on switch); (16) stats-toggle → oscShowStats, reset → clear stats;
-  // (17) pop-out → detach the table into a floating, draggable panel.
+  // (14) gauge -> oscShowMeasurementTable; (15) L/R picker -> oscMeasurementChannel
+  // (clearing stats on switch); (16) stats-toggle -> oscShowStats, reset -> clear stats;
+  // (17) pop-out -> detach the table into a floating, draggable panel.
   bindMeasButtons() {
     const prefs = this.prefs;
     const scopeView = this.view;
@@ -524,6 +601,30 @@ export class ScopePane {
     });
     $('#scopeStatsReset').on('click', () => { scopeView._clearMeasurementHistory(); this.renderMeasurementTable(); });
 
+    // Amplitude histogram. The L/R pick sets its channel EXPLICITLY rather than toggling: an L/R
+    // pair fires on BOTH buttons - the one going on and the one going off - so a toggle lets the
+    // last handler win and the pick always lands on R. This shipped once in Java.
+    $('#scopeHistogram').on('click', () => this.setHistogramOpen(!this.prefs.oscShowHistogram.get()));
+    $('#scopeHistClose').on('click', () => this.setHistogramOpen(false));
+    $('#scopeHistL').on('click', () => { this.prefs.oscHistogramChannel.set('L'); this.renderHistogram(); });
+    $('#scopeHistR').on('click', () => { this.prefs.oscHistogramChannel.set('R'); this.renderHistogram(); });
+    // Clears ONLY the distribution - not the measurement statistics, which is why the histogram has
+    // its own reset and its own channel preference.
+    $('#scopeHistReset').on('click', () => {
+      this.engine.scope.resetHistograms();
+      this.renderHistogram();
+    });
+    // Re-aggregate on a bar-count change: display resolution only, so the collected micro-bins are
+    // re-drawn and never discarded.
+    this.prefs.oscHistogramBins.addListener(() => this.renderHistogram());
+    this.prefs.oscLeftChannelEnabled.addListener(() => this.syncHistogramButtons());
+    this.prefs.oscRightChannelEnabled.addListener(() => this.syncHistogramButtons());
+    // Restore the window the pref says was open. Without this the pref stayed true across a reload
+    // while the markup came up closed, so the toggle read "open" and its first click only cleared
+    // the flag - the window took TWO clicks to come back.
+    this.setHistogramOpen(this.prefs.oscShowHistogram.get());
+    this.syncMeasButtons();   // apply the signal gate at once: no capture yet => no histogram button
+
     $('#scopeTablePop').on('click', () => this.setMeasTablePopped(!this.measTablePopped));
     $('#scopeWinClose').on('click', () => this.setMeasTablePopped(false));
     $('#scopeWinStatsToggle').on('click', () => {
@@ -532,6 +633,13 @@ export class ScopePane {
     });
     $('#scopeWinStatsReset').on('click', () => { scopeView._clearMeasurementHistory(); this.renderMeasurementTable(); });
     this.makeMeasWindowDraggable();
+    this.makeMeasWindowDraggable('scopeHistWindow');
+    // A resize must repaint even while the scope is stopped (no measurement publishes to
+    // ride on), else the canvas keeps the pixels it had at the old size.
+    const histCanvas = document.getElementById('scopeHist');
+    if (histCanvas && typeof ResizeObserver === 'function') {
+      new ResizeObserver(() => this.renderHistogram()).observe(histCanvas);
+    }
   }
 
   // Pop the measurement table into a titled floating window (Java createMeasurementWindow /
@@ -555,25 +663,62 @@ export class ScopePane {
     this.syncMeasButtons();
   }
 
-  // Drag the popped-out window by its title bar (in-page floating panel; browsers can't open
-  // a native always-on-top window without a popup).
-  makeMeasWindowDraggable() {
-    const win = document.getElementById('scopeMeasWindow');
-    if (!win) return;
-    const bar = win.querySelector('.smw-titlebar');
-    let dragging = false, ox = 0, oy = 0;
-    bar.addEventListener('mousedown', (e) => {
-      if (e.target.closest('button')) return;   // let the title-bar buttons click through
-      dragging = true; ox = e.clientX - win.offsetLeft; oy = e.clientY - win.offsetTop; e.preventDefault();
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!dragging) return;
-      win.style.left = (e.clientX - ox) + 'px'; win.style.top = (e.clientY - oy) + 'px';
-    });
-    document.addEventListener('mouseup', () => { dragging = false; });
+  // ----- amplitude histogram: window lifetime + the window's own controls -----
+  // The plot itself is HistogramView (its own class, palette, axes and paint); everything here is
+  // lifecycle and controls, which is the split Java settled on after drawing it inline was rejected.
+
+  /** Opens / closes the histogram window and persists the state. */
+  setHistogramOpen(open) {
+    this.prefs.oscShowHistogram.set(!!open);
+    $('#scopeHistWindow').toggleClass('open', !!open);
+    $('#scopeHistogram').toggleClass('on', !!open);
+    if (open) this.renderHistogram();
   }
 
-  // Vertical offset FlatScrollbar (right gutter) — slides BOTH channels' vertical
+  /**
+   * Repaints the histogram when its window is open. Called on each measurement publish (~100 ms),
+   * which is the cadence the distribution actually changes at - a frame-rate repaint would redraw
+   * an unchanged snapshot.
+   */
+  renderHistogram() {
+    if (!this.prefs.oscShowHistogram.get() || !this._histogramView) return;
+    const canvas = document.getElementById('scopeHist');
+    if (canvas) {
+      // Track the resizable body, so a dragged window buys resolution instead of stretched pixels.
+      const w = Math.max(1, Math.round(canvas.clientWidth));
+      const h = Math.max(1, Math.round(canvas.clientHeight));
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+    }
+    this._histogramView.render();
+    this.syncHistogramButtons();
+  }
+
+  /**
+   * Greys the button of a channel the scope has switched off, and if that was the channel on show,
+   * moves to the other one and persists the move - the window must never sit on a dead channel.
+   */
+  syncHistogramButtons() {
+    const prefs = this.prefs;
+    const leftOn = prefs.oscLeftChannelEnabled.get(), rightOn = prefs.oscRightChannelEnabled.get();
+    let channel = prefs.oscHistogramChannel.get();
+    if (channel === 'L' && !leftOn && rightOn) { channel = 'R'; prefs.oscHistogramChannel.set('R'); }
+    else if (channel === 'R' && !rightOn && leftOn) { channel = 'L'; prefs.oscHistogramChannel.set('L'); }
+    $('#scopeHistL').prop('disabled', !leftOn).toggleClass('on', channel === 'L');
+    $('#scopeHistR').prop('disabled', !rightOn).toggleClass('on', channel === 'R');
+  }
+
+  // Drag the popped-out window by its title bar (in-page floating panel; browsers can't open
+  // a native always-on-top window without a popup). The three handlers live in ui/draggable.js
+  // since the JSON config editor became the second floating window to need them; this call is
+  // the behaviour this method always had - unclamped, so the window can be put anywhere.
+  makeMeasWindowDraggable(id = 'scopeMeasWindow') {
+    const win = document.getElementById(id);
+    if (!win) return;
+    makeDraggable(win, win.querySelector('.smw-titlebar'));
+  }
+
+  // Vertical offset FlatScrollbar (right gutter) - slides BOTH channels' vertical
   // offset together by the same delta from the active measurement channel (Java
   // ScopePane.onVertSliderMoved). Thumb at TOP = signal up (low offsetFrac); the
   // selection ∈ [0, NAV_RANGE] maps to offsetFrac ∈ [lo, hi].
@@ -591,7 +736,7 @@ export class ScopePane {
     prefs.oscRightOffsetFrac.set(prefs.oscRightOffsetFrac.get() + delta);
   }
 
-  // Horizontal navigation FlatScrollbar (Java ScopePane.onNavSliderMoved) — file
+  // Horizontal navigation FlatScrollbar (Java ScopePane.onNavSliderMoved) - file
   // mode only: selection ∈ [0, NAV_RANGE] sets how far the loaded window is scrolled
   // back from the latest sample. Rightmost = follow latest. Drives a re-render.
   onHorizScrollMoved(sel) {
@@ -609,7 +754,7 @@ export class ScopePane {
 
   /** Offset-scrollbar bounds derived from the active channel's V/div (Java
    *  ScopeView.offsetFracBounds): half = Vfs / (DIVISIONS_Y · V/div), floored at 0.5,
-   *  so [0.5−half, 0.5+half]. Small V/div → wide scroll range, large V/div → clamped
+   *  so [0.5−half, 0.5+half]. Small V/div -> wide scroll range, large V/div -> clamped
    *  to [0,1]. */
   offsetFracBounds() {
     const prefs = this.prefs;
@@ -619,15 +764,15 @@ export class ScopePane {
     // getAdcPeakVolts(measurementReferenceChannel())).
     const fs = prefs.getAdcPeakVolts(leftActive ? 'L' : 'R');
     // Half-range = Vfs/(DIVISIONS_Y·V/div), floored at 0.5 (ScopeFormat.offsetMoveHalfRange):
-    // small V/div → wide scroll range, large V/div → clamped to [0,1].
+    // small V/div -> wide scroll range, large V/div -> clamped to [0,1].
     const half = offsetMoveHalfRange(vDiv, fs, DIVISIONS_Y);
     return { lo: 0.5 - half, hi: 0.5 + half };
   }
 
   /** Re-applies the vertical scrollbar's thumb size + selection from the active
    *  V/div (Java ScopePane.syncVertSliderFromPrefs: thumb = visible offset window /
-   *  total span; arrow = 1/5 div, page = 5 div). Small V/div → small thumb (lots of
-   *  scroll room); large V/div → full-width thumb. */
+   *  total span; arrow = 1/5 div, page = 5 div). Small V/div -> small thumb (lots of
+   *  scroll room); large V/div -> full-width thumb. */
   syncOffsetScrollbar() {
     const prefs = this.prefs;
     const b = this.offsetFracBounds();
@@ -662,7 +807,7 @@ export class ScopePane {
   // Independent per-pane Record (Java: the scope and FFT panes each hold their own
   // SharedCapture reference; the device opens on the first acquire and closes on the
   // last release). The scope LED drives setScopeRecording and lights its OWN LED.
-  // `busy` is the shared re-entrancy guard — a second click mid-transition races and
+  // `busy` is the shared re-entrancy guard - a second click mid-transition races and
   // can tear down a half-built audio graph (STATUS_BREAKPOINT). Ignore clicks until settled.
   bindRecordLed() {
     const engine = this.engine, scopeView = this.view;
@@ -671,15 +816,15 @@ export class ScopePane {
       this._setBusy(true);
       const want = !this._isScopeRec();
       if (want) {
-        this._readConfig();   // pull live config (rate, calibration, tone). NO auto-setup on record — Java fires auto-setup ONLY from its manual button; auto-firing here reset the user's trigger level + channel offset on every Record.
+        this._readConfig();   // pull live config (rate, calibration, tone). NO auto-setup on record - Java fires auto-setup ONLY from its manual button; auto-firing here reset the user's trigger level + channel offset on every Record.
         // Leaving file mode: re-arm the trigger controls, clear the loaded-file banner,
         // drop the loaded signal and hide the horizontal nav scrollbar (live record has
-        // no horizontal scroll-back — the trace follows the latest writePos).
+        // no horizontal scroll-back - the trace follows the latest writePos).
         scopeView.fileMode = false;
         this.loadedScope = null; this.scopeFileBack = 0;
         this.setScopeHScrollVisible(false);
         this.setScopeTriggerControlsEnabled(true);
-        $('#scopeLoadedPath').val('').attr('title', '');   // #15 readonly last-loaded-file field
+        $('#scopeLoadedPath').val('').attr('title', '');   // readonly last-loaded-file field
         this.setScopeFileBanner(null);
         // Record (re)start: restart the glitch-mode cap/s collection so the stopped
         // gap isn't folded into the cumulative rate (Java rateSawFrozen restart).
@@ -688,7 +833,7 @@ export class ScopePane {
       try { await engine.scope.setRecording(want); }   // the controller reconciles _scopeOn: false if the device failed to open
       finally {
         // On STOP, freeze the last live frame so the stopped trace stays on screen
-        // (Java ScopeView.freezeBuffer) instead of leaving stale pixels — render()
+        // (Java ScopeView.freezeBuffer) instead of leaving stale pixels - render()
         // below repaints it every frame while stopped. On START the view already
         // dropped the hold (restartGlitchRate). Only after a real stop (engine no
         // longer recording) and not into file mode.
@@ -700,9 +845,9 @@ export class ScopePane {
   syncScopeLed() { $('.scope-pane .led-btn').toggleClass('rec', this._isScopeRec()); }
 
   // ----- the scope SETTINGS strip (ScopeTabControl) host seam -----
-  // Java ScopeController.redrawViews: repaint a FROZEN (stopped) or file-mode view —
+  // Java ScopeController.redrawViews: repaint a FROZEN (stopped) or file-mode view -
   // the live render loop repaints every frame anyway, so nothing to do there. Required
-  // so a setting change (trigger type/edge/channel, V/div, …) shows on an idle view;
+  // so a setting change (trigger type/edge/channel, V/div, ...) shows on an idle view;
   // in particular a resetTriggerHold followed by this blanks the stale held trace.
   requestRedraw() {
     if (this.view.fileMode) { this.refreshScopeFileMode(); return; }
@@ -728,10 +873,10 @@ export class ScopePane {
   }
 
   /** Enables / disables the whole trigger group (Java setSubtreeEnabled(triggerGroup))
-   *  — used to lock the trigger controls in file mode (a static signal has no trigger). */
+   *  - used to lock the trigger controls in file mode (a static signal has no trigger). */
   setScopeTriggerControlsEnabled(on) {
     const prefs = this.prefs;
-    // Channel/Edge/Type/Mode are toggle button GROUPS — disable their inner buttons,
+    // Channel/Edge/Type/Mode are toggle button GROUPS - disable their inner buttons,
     // not the wrapping <div>.
     $('#scopeTrigCh .sq-toggle, #scopeTrigEdge .sq-toggle, #scopeTrigType .sq-toggle, '
       + '#scopeTrigMode .sq-toggle, '
@@ -750,7 +895,7 @@ export class ScopePane {
   }
 
   /** G stays disabled while the trigger mode is AUTO (Java: glitch in AUTO makes no
-   *  sense — free-run repaints at the render rate, so a caught glitch frame would be
+   *  sense - free-run repaints at the render rate, so a caught glitch frame would be
    *  overwritten immediately). */
   syncGlitchTypeEnabled() {
     $('#scopeTrigType .sq-toggle[data-value="GLITCH"]')
@@ -759,7 +904,7 @@ export class ScopePane {
   // ScopeTabControl.Host.setTriggerControlsEnabled(on).
   setTriggerControlsEnabled(on) { this.setScopeTriggerControlsEnabled(on); }
 
-  /** Re-gates the Reconstructed-beat checkbox from the live generator form — enabled
+  /** Re-gates the Reconstructed-beat checkbox from the live generator form - enabled
    *  only in dual-tone (Java ScopeTabControl.syncReconstructedBeatEnabled, fired on
    *  GENERATOR_SIGNAL_CHANGED). Driven by the GENERATOR_SIGNAL_CHANGED bus subscriber in
    *  bind() so toggling the form live greys / un-greys the checkbox without a record
@@ -772,32 +917,32 @@ export class ScopePane {
     $('#scopeTrigBeat').prop('disabled', !isDualTone($('#signalForm').val()));
   }
 
-  // A signal file finished loading (the tab-control decoded the picked file → float
-  // channels) → centre the view on its start, show the nav slider (file mode) and
+  // A signal file finished loading (the tab-control decoded the picked file -> float
+  // channels) -> centre the view on its start, show the nav slider (file mode) and
   // apply the view state (Java ScopePane.onSignalFileLoaded). The capture stop +
   // the decode itself live in ScopeTabControl; this is the pane-side view state.
   onSignalFileLoaded(decoded) {
     const scopeView = this.view;
     const { left, right, frames, sampleRate, name } = decoded;
-    this.setScopeFileBanner(name);   // Java ScopeView.setFilePath → blinking top-right banner
+    this.setScopeFileBanner(name);   // Java ScopeView.setFilePath -> blinking top-right banner
     // Stash the decoded signal so the horizontal nav scrollbar can re-render a
-    // scrolled-back window (Java ScopePane.onSignalFileLoaded → applyViewState).
+    // scrolled-back window (Java ScopePane.onSignalFileLoaded -> applyViewState).
     this.loadedScope = { left, right, frames, sampleRate };
-    this.setScopeHScrollVisible(true);           // file mode → show the horizontal scrollbar
+    this.setScopeHScrollVisible(true);           // file mode -> show the horizontal scrollbar
     // First render the loaded buffer once so scopeView.latest holds a fresh
     // measurement, THEN auto-fit V/div + t/div + offsets to it and force the
     // redraw the auto-setup needs to take effect (autoSetup mutates prefs but
-    // doesn't repaint — file mode has no live render loop). Reset the rolling
+    // doesn't repaint - file mode has no live render loop). Reset the rolling
     // measurement statistics so the loaded signal starts from a clean history,
     // and position the view at the BEGINNING of the loaded buffer (Java
     // ScopePane.onSignalFileLoaded centres on the start = oldest window =
     // back == fileMaxBack()).
     this.scopeFileBack = this.fileMaxBack();   // position at the BEGINNING (oldest window) FIRST
-    this.renderLoadedScope();             // render + measure the DISPLAYED window → scopeView.latest
+    this.renderLoadedScope();             // render + measure the DISPLAYED window -> scopeView.latest
     scopeView.autoSetup();           // auto-fit V/div + t/div + offsets to what is actually shown
     this.refreshScopeFields();
     scopeView._clearMeasurementHistory();   // clean rolling stats AFTER the fit
-    this.scopeFileBack = this.fileMaxBack();   // autoSetup changed t/div → window size changed → re-pin to start
+    this.scopeFileBack = this.fileMaxBack();   // autoSetup changed t/div -> window size changed -> re-pin to start
     this.renderLoadedScope();             // repaint with the fitted settings
     this.refreshScopeTiles();
     this.renderMeasurementTable(); this.syncMeasButtons();
@@ -829,7 +974,7 @@ export class ScopePane {
   }
 
   /** Re-renders the loaded signal after a setting change (V/div, t/div, offset,
-   *  channel toggle) — file mode has no live render loop, so the change needs an
+   *  channel toggle) - file mode has no live render loop, so the change needs an
    *  explicit repaint (Java ScopePane.requestRedraw). No-op outside file mode. */
   refreshScopeFileMode() {
     if (this.view.fileMode && this.loadedScope) { this.scopeFileBack = Math.min(this.scopeFileBack, this.fileMaxBack()); this.renderLoadedScope(); }
@@ -856,19 +1001,19 @@ export class ScopePane {
     this.scopeHScroll.setThumb(thumb);
     const maxBack = Math.max(0, frames - displaySamples);
     const maxSel = NAV_RANGE - thumb;
-    // back = 0 → rightmost (latest); back = maxBack → leftmost (oldest).
+    // back = 0 -> rightmost (latest); back = maxBack -> leftmost (oldest).
     const sel = (maxBack <= 0 || maxSel <= 0) ? maxSel : Math.round((1 - this.scopeFileBack / maxBack) * maxSel);
     this.scopeHScroll.setSelection(Math.max(0, Math.min(maxSel, sel)));
   }
 
   /** Shows / hides the horizontal nav scrollbar gap (Java ScopePane.setNavSliderVisible
-   *  — visible only in file mode). */
+   *  - visible only in file mode). */
   setScopeHScrollVisible(visible) {
     $('#scopeHScroll').toggleClass('show', !!visible);
     if (visible) this.scopeHScroll.redraw();
   }
 
-  // ----- scope resize → redraw (ResizeObserver) -----
+  // ----- scope resize -> redraw (ResizeObserver) -----
   // While actively recording the rAF loop already repaints at the new size; only force
   // the redraw when no live loop is driving it (idempotent if it does). Installed here so
   // the pane owns its own canvases' resize handling.
@@ -894,7 +1039,7 @@ export class ScopePane {
     // genChangeListener on GENERATOR_SIGNAL_CHANGED): re-gate the Reconstructed-beat
     // checkbox on every change, and on a real USER_INPUT change drop the rolling
     // measurement statistics so avg/min/max start fresh on the new signal (a sub-Hz
-    // FLL trim keeps them). Subscribed in the scope layer — the generator never touches
+    // FLL trim keeps them). Subscribed in the scope layer - the generator never touches
     // the scope's checkbox.
     MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, (cause) => {
       this.syncReconstructedBeatEnabled();
@@ -903,11 +1048,11 @@ export class ScopePane {
         this.renderMeasurementTable();
         // A real generator change also invalidates the held trigger anchor AND the
         // persistence afterglow (it shows the OLD signal): the signal transition itself is
-        // a discontinuity — the glitch trigger fires on it and NORMAL would hold that
+        // a discontinuity - the glitch trigger fires on it and NORMAL would hold that
         // transition frame forever, and with a rare glitch trigger the afterglow barely
         // decays. Both are DELAYED so they land after the change has flushed through the
-        // DAC → loopback → ADC path (Java ScopeTabControl genChangeListener →
-        // timerExec(GEN_CLEAR_DELAY_MS) → resetTriggerHold + controller.clearPersistence).
+        // DAC -> loopback -> ADC path (Java ScopeTabControl genChangeListener ->
+        // timerExec(GEN_CLEAR_DELAY_MS) -> resetTriggerHold + controller.clearPersistence).
         setTimeout(() => {
           this.view.resetTriggerHold();
           this.view.clearPersistence();

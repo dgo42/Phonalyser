@@ -1,10 +1,10 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Log/linear-frequency magnitude spectrum on a Canvas2D — white plot to match
+// Log/linear-frequency magnitude spectrum on a Canvas2D - white plot to match
 // the desktop FftView. Adds the desktop wheel interactions: plain = magnitude
 // pan, Shift = frequency pan, Ctrl = magnitude zoom around cursor Y,
 // Ctrl+Shift = frequency zoom around cursor X. The view's freq/mag window is the
@@ -13,18 +13,20 @@
 import {
   unitIsLog, formatMagnitudeWithUnit, formatMagTick,
   adaptiveLogLabels, logMajorTicks, logMinorTicks,
-  niceLinearMajors, niceLinearMinors, isSubDecade, isDecadeValue, minSpacing,
-  formatFrequency, formatFreqTick, formatFrequencyInteger,
+  niceLinearMajors, niceLinearMinors, isSubDecade, isDecadeValue, labelStep,
+  formatFreqTick, formatFreqDecadeTick, formatFrequencyInteger,
 } from './axis-format.js';
 // Drag-select rectangular zoom + Ctrl+Z undo (Java AbstractMeasurementView's
 // installRectZoom base machinery); this view supplies the log-aware freq / dB
 // pixel↔value mappings through the injected callbacks (Java FftView overrides).
 import { RectZoom } from './rect-zoom.js';
 // Shared per-tone lobe lift (data-derived floor + lobe extent + log-domain
-// stretch) — the SAME mechanism the .frc de-embed uses (fft-compensation.js
+// stretch) - the SAME mechanism the .frc de-embed uses (fft-compensation.js
 // correctToneLobe). Reused here to lift the manual-fundamental lobe to the user
 // value at render time, with the manual/peak ratio as the scale instead of 1/H.
 import { ToneLobeLift } from '../dsp/tone-lobe-lift.js';
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
 
 // Plot rect margins (Java MARGIN_LEFT/TOP/BOTTOM, right inset 2).
 const MARGIN_LEFT = 68, MARGIN_TOP = 0, MARGIN_BOTTOM = 28, MARGIN_RIGHT = 2;
@@ -41,20 +43,20 @@ const FREQ_NICE_TARGET = 10, MAG_DB_NICE_TARGET = 10, MAG_DB_MINOR_STEP = 5.0;
 // THD/IMD table overlay origin + gate constants (Java FftView).
 // TABLE_TOP_Y = 5 + BTN_H + 6; the desktop header buttons are not painted on the
 // web canvas (they live in the HTML toolbar), so the table starts a few px down.
-const TABLE_TOP_Y = 33;                 // 5 + BTN_H(22) + 6 — Java FftView.java:112 with
+const TABLE_TOP_Y = 33;                 // 5 + BTN_H(22) + 6 - Java FftView.java:112 with
                                         // AbstractMeasurementView.java:79 BTN_H=22; the web
                                         // .lr toolbar is the same 22px at top:5, so 24 (a
                                         // wrongly assumed BTN_H=13) overlapped the table header.
-const EXT_LEFT_PAD = 4;                 // Java FftView.EXT_LEFT_PAD — float-window table inset
+const EXT_LEFT_PAD = 4;                 // Java FftView.EXT_LEFT_PAD - float-window table inset
 const SIGNAL_FLOOR_MARGIN_DB = 10.0;    // Java FftView.SIGNAL_FLOOR_MARGIN_DB
 const MAX_THD_PCT = 20.0;               // Java FftView.MAX_THD_PCT
 const IMD_MAX_ORDER = 5;                // Java ImdResult.MAX_ORDER
-// Java FftResult.LOCAL_FLOOR_FLANK_BINS — near-range flank width for the local floor.
+// Java FftResult.LOCAL_FLOOR_FLANK_BINS - near-range flank width for the local floor.
 const LOCAL_FLOOR_FLANK_BINS = 64;
 
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 
-/** Java AWT-int colour (0xRRGGBB) → CSS hex. */
+/** Java AWT-int colour (0xRRGGBB) -> CSS hex. */
 const colorHex = (c) => '#' + (c & 0xffffff).toString(16).padStart(6, '0');
 
 export class FftView {
@@ -62,11 +64,11 @@ export class FftView {
     this.cv = canvas; this.g = canvas.getContext('2d');
     this.prefs = prefs;
     this.topDb = topDb; this.botDb = botDb;
-    // Java FftView.correctionStore — the loaded .frc de-embed cascade (FftViewCorrection), injected
+    // Java FftView.correctionStore - the loaded .frc de-embed cascade (FftViewCorrection), injected
     // so the IMD path can draw the blue "before-cal" dots at dbFs + sumCalDbAt (drawImdDots:1952-1962).
     // Null in tests that construct FftView without it (the blue IMD pass is then skipped).
     this.correction = correction;
-    // Java FftView.isGeneratorActive() — true while the generator is producing a
+    // Java FftView.isGeneratorActive() - true while the generator is producing a
     // signal. Gates the clock-drift (ΔF / Δf1 / Δf2) rows of the distortion tables.
     this._genActive = genActive;
     // Java FftView publishes FFT_RANGE_CHANGED after a wheel pan / zoom so the pane
@@ -74,10 +76,10 @@ export class FftView {
     // this hook in its constructor; null when no pane is wired (e.g. tests).
     this.onRangeChanged = null;
     this._last = null;                 // last rendered result, for repaint on wheel
-    // Java FftView.tableExtracted (:358) — true while the THD/IMD table is popped out into
+    // Java FftView.tableExtracted (:358) - true while the THD/IMD table is popped out into
     // the tool window. The paint gate (FftView.java:1253-1254) draws the inline table only
     // when "!tableExtracted", so the table is never shown twice. The pane mirrors its own
-    // extracted flag here (setTableExtracted → redraw()).
+    // extracted flag here (setTableExtracted -> redraw()).
     this.tableExtracted = false;
     this._nyquist = 192000; this._binSize = 1;
     this._crossX = -1; this._crossY = -1;   // cursor crosshair position (canvas px); -1 = outside
@@ -86,7 +88,7 @@ export class FftView {
       canvas.addEventListener('mousemove', (e) => this._onMove(e));
       canvas.addEventListener('mouseleave', () => { this._crossX = this._crossY = -1; this.applyPrefs(); });
       canvas.style.cursor = 'crosshair';
-      // Drag-select zoom + Ctrl+Z undo (Java FftView: installRectZoom(this, true) —
+      // Drag-select zoom + Ctrl+Z undo (Java FftView: installRectZoom(this, true) -
       // hookMouse, so the machinery wires the drag to the canvas's own mouse events).
       this._rectZoom = new RectZoom(canvas, {
         captureState: () => this._captureZoomState(),
@@ -108,7 +110,7 @@ export class FftView {
     }
   }
 
-  /** Track the cursor for the crosshair/readout overlay (Java onMouseMove — always records
+  /** Track the cursor for the crosshair/readout overlay (Java onMouseMove - always records
    *  the position and repaints, even before the first result, so the crosshair tracks over
    *  the empty graticule too). */
   _onMove(e) {
@@ -118,17 +120,17 @@ export class FftView {
   }
 
   /** Re-render after a pref/axis change. Java FftView.onPaint always repaints the
-   *  frame (grid + axes), drawing the trace only when a result exists — so this
+   *  frame (grid + axes), drawing the trace only when a result exists - so this
    *  repaints with the last result, or the empty graticule when there is none. */
   applyPrefs() { this.render(this._last); }
 
   /** The manual-fundamental dBFS override for {@code r}, mirroring Java's
    *  FftAnalyzer: r.fundamentalTrueDbFs is finite ONLY when manual-fundamental
    *  mode is enabled (the analyzer sets it from fundRefDbFs, which is NaN when
-   *  the toggle is off — FftController._fundRefDbFs). The web's static
+   *  the toggle is off - FftController._fundRefDbFs). The web's static
    *  recomputeStats path does NOT clear a previously-set fundamentalTrueDbFs when
    *  the user switches manual OFF, so the stale value would otherwise pin the red
-   *  fundamental dot / dBV column / ceiling at the old manual frequency (#7).
+   *  fundamental dot / dBV column / ceiling at the old manual frequency.
    *  Re-gate on the CURRENT fftManualFundEnabled pref so it tracks the live
    *  on/off state: returns the override when enabled+finite, else NaN (auto). */
   _manualFundDbFs(r) {
@@ -137,9 +139,19 @@ export class FftView {
     return Number.isFinite(r.fundamentalTrueDbFs) ? r.fundamentalTrueDbFs : NaN;
   }
 
+  /** The DISPLAYED fundamental level in dBFS - the manual override when set, else the
+   *  measured level (Java FftView.displayedFundDbFs). NaN when there is no fundamental yet.
+   *  This is the same reference the THD readouts and the lobe stretch use, which is why the
+   *  on-screen peak lands exactly on 0 dBr with no extra work. */
+  _displayedFundDbFs(r) {
+    if (!r) return NaN;
+    const man = this._manualFundDbFs(r);
+    return Number.isFinite(man) ? man : r.fundamentalDbFs;
+  }
+
   /** Java FftView.magCeiling: the 0 dBFS full-scale max, raised to the DISPLAYED
    *  fundamental + 20 dB when a signal is present (so a .frc lift above full scale
-   *  stays reachable). No result yet → max(0, persisted mag top) so the pane's clamp
+   *  stays reachable). No result yet -> max(0, persisted mag top) so the pane's clamp
    *  can't shrink a saved > 0 dB zoom before the first result re-raises the ceiling. */
   magCeiling() {
     const r = this._last;
@@ -152,7 +164,7 @@ export class FftView {
   }
 
   /** Java FftView.getLastVrms: latest fundamental Vrms (linear × ADC fs voltage), or
-   *  null when no analysis — the ADC-calibrate dialog seeds + scales from it. */
+   *  null when no analysis - the ADC-calibrate dialog seeds + scales from it. */
   getLastVrms() {
     const r = this._last;
     if (!r || !Number.isFinite(r.fundamentalLinear)) return null;
@@ -227,7 +239,7 @@ export class FftView {
   }
 
   _onWheel(e) {
-    // Java FftView.onMouseWheel gates only on e.count==0 — pan/zoom work before the
+    // Java FftView.onMouseWheel gates only on e.count==0 - pan/zoom work before the
     // first result (currentBinSize/currentNyquist fall back). Require only prefs.
     if (!this.prefs) return;
     e.preventDefault();
@@ -242,7 +254,7 @@ export class FftView {
     else if (e.shiftKey) this._panFreq(dir);
     else this._panMag(dir);
     this.applyPrefs();
-    // Java FftView publishes FFT_RANGE_CHANGED → FftPane.syncFftPan re-aligns the
+    // Java FftView publishes FFT_RANGE_CHANGED -> FftPane.syncFftPan re-aligns the
     // scrollbar thumbs to the new pan window.
     if (this.onRangeChanged) this.onRangeChanged();
   }
@@ -321,7 +333,7 @@ export class FftView {
   }
 
   /** X = displayed frequency window (Hz), Y = the magnitude window in CANONICAL
-   *  dBFS — the unit the range prefs store for every display unit (Java
+   *  dBFS - the unit the range prefs store for every display unit (Java
    *  FftView.captureZoomState). */
   _captureZoomState() {
     const p = this.prefs;
@@ -347,8 +359,8 @@ export class FftView {
   }
 
   /** Log-aware on X (the axis flag decides); Y maps the pixel fraction linearly
-   *  onto the dBFS prefs — the wheel-zoom convention, correct for every display
-   *  unit since linear-in-dB equals log-in-V (Java FftView.zoomStateForRect —
+   *  onto the dBFS prefs - the wheel-zoom convention, correct for every display
+   *  unit since linear-in-dB equals log-in-V (Java FftView.zoomStateForRect -
    *  mirrors the paint's axis preparation exactly: floor fMin at 0, stretch
    *  sub-1-Hz spans to 1 Hz, then the log floor). */
   _zoomStateForRect(sel) {
@@ -371,7 +383,7 @@ export class FftView {
     };
   }
 
-  /* Java AbstractFreqDomainView.xToFreq (:218) — exact inverse of _freqToX:
+  /* Java AbstractFreqDomainView.xToFreq (:218) - exact inverse of _freqToX:
    * LOG: safeMin = max(1, fMin), safeMax = max(fMax, safeMin·1.0000001),
    * f = 10^(lo + t·(hi−lo)); LINEAR: f = fMin + t·(fMax−fMin). */
   _xToFreq(xPx, plot, fMin, fMax, logFreq) {
@@ -385,14 +397,15 @@ export class FftView {
     return fMin + t * (fMax - fMin);
   }
 
-  /** Java FftView.magUnitLabel — the axis unit caption (i18n unit.mag.*). */
+  /** Java FftView.magUnitLabel - the axis unit caption (i18n unit.mag.*). */
   _magAxisLabel(unit) {
-    return unit === 'V' ? 'V' : unit === 'V_SQRT_HZ' ? 'V/√Hz' : unit === 'DBV' ? 'dBV' : 'dBFS';
+    return unit === 'V' ? 'V' : unit === 'V_SQRT_HZ' ? 'V/√Hz'
+      : unit === 'DBV' ? 'dBV' : unit === 'DBR' ? 'dBr' : 'dBFS';
   }
 
-  /* Java AbstractFreqDomainView.freqToX (:183) — LOG: safeMin=max(1,freqMin),
+  /* Java AbstractFreqDomainView.freqToX (:183) - LOG: safeMin=max(1,freqMin),
    * safeMax=max(freqMax, safeMin*1.0000001), t=(log10(max(1,f))-lo)/(hi-lo);
-   * LINEAR: t=(f-freqMin)/(freqMax-freqMin); both → plot.x + round(t*plot.width). */
+   * LINEAR: t=(f-freqMin)/(freqMax-freqMin); both -> plot.x + round(t*plot.width). */
   _freqToX(f, plot, fMin, fMax, logFreq) {
     let t;
     if (logFreq) {
@@ -406,8 +419,8 @@ export class FftView {
     return plot.x + Math.round(t * plot.width);
   }
 
-  /* Java AbstractFreqDomainView.magToYFraction (:273) — log units (V/V√Hz) map
-   * on a log magnitude axis; dB units stay linear in dB. top→0, bot→1. */
+  /* Java AbstractFreqDomainView.magToYFraction (:273) - log units (V/V√Hz) map
+   * on a log magnitude axis; dB units stay linear in dB. top->0, bot->1. */
   _magToYFraction(v, top, bot, unit) {
     if (unitIsLog(unit)) {
       const vL = (v <= 0) ? -Infinity : Math.log10(v);
@@ -419,20 +432,20 @@ export class FftView {
     return (top - v) / (top - bot);
   }
 
-  /* Java magToY (:287) — clamped to the plot. */
+  /* Java magToY (:287) - clamped to the plot. */
   _magToY(v, plot, top, bot, unit) {
     let t = this._magToYFraction(v, top, bot, unit);
     if (t < 0) t = 0; if (t > 1) t = 1;
     return plot.y + Math.round(t * plot.height);
   }
 
-  /* Java magToYTrace (:300) — NO clamp (the GC clip cuts an over-range flank flush). */
+  /* Java magToYTrace (:300) - NO clamp (the GC clip cuts an over-range flank flush). */
   _magToYTrace(v, plot, top, bot, unit) {
     const t = this._magToYFraction(v, top, bot, unit);
     return plot.y + Math.round(t * plot.height);
   }
 
-  /* Java yToMag (:308) — inverse of magToY for the crosshair readout. */
+  /* Java yToMag (:308) - inverse of magToY for the crosshair readout. */
   _yToMag(yPx, plot, top, bot, unit) {
     let t = (plot.height <= 0) ? 0 : (yPx - plot.y) / plot.height;
     if (t < 0) t = 0; if (t > 1) t = 1;
@@ -450,13 +463,21 @@ export class FftView {
    *  the frame and draws the spectrum trace / dots / table only when a result exists. */
   render(result) {
     this._last = result || null;
+    // dBr reference = the DISPLAYED fundamental level (manual override when set, else the
+    // measured level); re-stamped every paint so the DBR axis + cursor readouts pin the
+    // fundamental to 0 dBr. Non-finite (no fundamental yet) leaves the previous reference
+    // intact (Java FftView.onPaint -> prefs.setFftDbrRefDbFs).
+    if (this.prefs) {
+      const dbrRef = this._displayedFundDbFs(result);
+      if (Number.isFinite(dbrRef)) this.prefs.fftDbrRefDbFs = dbrRef;
+    }
     const mag = result ? result.amplitudeDbFs : null;
     const binW = result ? result.binW : this._binSize;
     const p = this.prefs;
     // Live Nyquist / bin size for the pan clipping (kept from the last result when empty).
     if (mag) { this._nyquist = mag.length * binW; this._binSize = binW > 0 ? binW : 1; }
     const g = this.g;
-    // ---- HiDPI backing store (#27): backing px = CSS px × devicePixelRatio,
+    // ---- HiDPI backing store: backing px = CSS px × devicePixelRatio,
     // then a setTransform(dpr,...) so 1 CSS px == dpr device px and the trace /
     // grid stroke crisp at native resolution instead of being drawn small then
     // CSS-scaled. All drawing below is in CSS-px (W, H) coordinates.
@@ -466,7 +487,7 @@ export class FftView {
     if (this.cv.width !== bw) this.cv.width = bw;
     if (this.cv.height !== bh) this.cv.height = bh;
     // setTransform is absent on the headless test's mock 2D context; the real
-    // CanvasRenderingContext2D always has it (maps 1 CSS px → dpr device px).
+    // CanvasRenderingContext2D always has it (maps 1 CSS px -> dpr device px).
     if (g.setTransform) g.setTransform(dpr, 0, 0, dpr, 0, 0);
     const margin = MARGIN_LEFT;
     const logAxis = p ? p.fftLogFreqAxis.get() : true;
@@ -477,25 +498,25 @@ export class FftView {
     if (logAxis && fMin < 1) fMin = 1;
     const magUnit = p ? p.fftMagUnit.get() : 'DBFS';
     const magLog = unitIsLog(magUnit);
-    // The ANALYZED channel — every dBFS→display conversion below de-references with THIS
+    // The ANALYZED channel - every dBFS->display conversion below de-references with THIS
     // channel's ADC dBV offset (Java FftView threads prefs.getFftChannel() through every
     // convertFromDbFs / getDbvOffsetDb call site).
     const ch = p ? p.fftChannel.get() : 'L';
     // Java FftView (:1197-1198): magBot/magTop = prefs.convertFromDbFs(getFftMag*, unit)
-    // — the 2-arity form, so V/√Hz uses the cached binBwSqrt. The per-bin TRACE uses the
+    // - the 2-arity form, so V/√Hz uses the cached binBwSqrt. The per-bin TRACE uses the
     // result's binBwSqrt (convertFromDbFs(dbFs, unit, r.binBwSqrt), :2290). The axis is
     // LOG-VOLTAGE for V/V√Hz (magToYFraction maps log(v)). Dots/crosshair use cv() too.
     const cv = (dbFs) => p ? p.convertFromDbFs(dbFs, magUnit, null, ch) : dbFs;
     const magBot = cv(p ? p.fftMagBottom.get() : this.botDb);
     const magTop = cv(p ? p.fftMagTop.get() : this.topDb);
     // Java plot rect: x=MARGIN_LEFT, y=MARGIN_TOP, width=W-MARGIN_LEFT-rightMargin(1),
-    // height=H-MARGIN_TOP-MARGIN_BOTTOM. (#27/#10: full-height plot, no magic insets.)
+    // height=H-MARGIN_TOP-MARGIN_BOTTOM. (Full-height plot, no magic insets.)
     const plot = {
       x: MARGIN_LEFT, y: MARGIN_TOP,
       width: Math.max(1, W - MARGIN_LEFT - 1),
       height: Math.max(1, H - MARGIN_TOP - MARGIN_BOTTOM),
     };
-    // x(f) / y(v) used by the trace / dots / crosshair downstream — Java freqToX /
+    // x(f) / y(v) used by the trace / dots / crosshair downstream - Java freqToX /
     // magToY. y() takes a value already in the DISPLAY unit (cv(dbFs)).
     const x = (f) => this._freqToX(f, plot, fMin, fMax, logAxis);
     const y = (v) => this._magToY(v, plot, magTop, magBot, magUnit);
@@ -514,12 +535,12 @@ export class FftView {
         if (lp < fMax) { const xL = x(Math.max(lp, fMin)), xR = plot.x + plot.width; if (xR > xL) g.fillRect(xL, plot.y, xR - xL, plot.height); }
       }
     }
-    // ---- Grid + tick labels — faithful Java drawGrid port. ----
+    // ---- Grid + tick labels - faithful Java drawGrid port. ----
     this._drawGrid(g, plot, { fMin, fMax, logAxis, magTop, magBot, magUnit, magLog });
 
     // No result yet (0 averages): the empty graticule above is the whole frame. Java
     // still paints the crosshair over it (drawCrosshair runs whenever the pointer is in
-    // the plot, independent of lastResult) — only the trace / dots / table need a result.
+    // the plot, independent of lastResult) - only the trace / dots / table need a result.
     if (!result) {
       this._drawCrosshair({ W, H, plot, margin, logAxis, fMin, fMax, magTop, magBot, magUnit, mag: null, binW, result: null });
       // Rect-zoom overlay draws LAST, over the empty graticule too (Java onPaint
@@ -528,15 +549,15 @@ export class FftView {
       return;
     }
 
-    // trace — per-pixel-column min/max envelope (Java ColumnBucketPainter): a polyline through
+    // trace - per-pixel-column min/max envelope (Java ColumnBucketPainter): a polyline through
     // each column's midpoint + a vertical bar across dense (multi-bin) columns, so troughs /
     // noise-floor structure between peaks survive (a max-only trace reads too high). The final
-    // column is flushed too — the old max-only loop dropped the rightmost column.
+    // column is flushed too - the old max-only loop dropped the rightmost column.
     g.strokeStyle = p ? colorHex(p.fftLineColor.get()) : '#1a5fb4'; g.lineWidth = p ? p.fftLineWidth.get() : 1;
-    // Java drawSpectrum / binYTrace (:2288): per-bin dBFS → convertFromDbFs(unit) →
+    // Java drawSpectrum / binYTrace (:2288): per-bin dBFS -> convertFromDbFs(unit) ->
     // magToYTrace (NO clamp; the GC clip cuts an over-range flank flush). Column min/max
     // are compared in raw dBFS (every unit conversion is monotonic in dBFS), then the
-    // two column extremes converted + Y-mapped — Java ColumnBucketPainter envelope.
+    // two column extremes converted + Y-mapped - Java ColumnBucketPainter envelope.
     const binYTrace = (dbFs) => this._magToYTrace(
       p ? p.convertFromDbFs(dbFs, magUnit, result.binBwSqrt, ch) : dbFs, plot, magTop, magBot, magUnit);
     const yClip = (yPx) => Math.max(plot.y, Math.min(plot.y + plot.height, yPx));
@@ -548,17 +569,17 @@ export class FftView {
       // spans the column min/max, the midpoint trace runs through the column centre.
       // Bars mirror Java ColumnBucketPainter.drawTo:1353-1356: multi-bin columns only,
       // Y clamped to the plot (rounding + the collapsed-bar skip happen at draw time,
-      // in DEVICE pixels — see pass 1 below).
+      // in DEVICE pixels - see pass 1 below).
       if (colCnt >= 2) bars.push([px, yClip(binYTrace(colMax)), yClip(binYTrace(colMin))]);
       mids.push([px, binYTrace((colMin + colMax) / 2)]);
     };
     // Manual-fundamental: lift the fundamental's WHOLE main lobe to the user
-    // value at RENDER TIME (Java FftView.drawSpectrum :2234-2258). Visual only —
+    // value at RENDER TIME (Java FftView.drawSpectrum :2234-2258). Visual only -
     // the stored spectrum (amplitudeDbFs / re / im) is NEVER touched, so THD/SNR
     // stay on the raw measured peak (the table uses the manual value via
     // _manualFundDbFs). It is the SAME ToneLobeLift.stretch the .frc de-embed
     // uses, with the manual/peak ratio as the scale. Gated on the manual value
-    // being finite — NOT on whether a cal is loaded: a cal + manual compose, the
+    // being finite - NOT on whether a cal is loaded: a cal + manual compose, the
     // stretch reads the already-de-embedded spectrum and lifts it to the manual
     // level (Java's gate is on fundamentalTrueDbFs finite, independent of cal).
     let lobeLo = -1, lobeHi = -1, floorLin = 0, liftFactor = 1, peakMagLin = 0;
@@ -568,7 +589,7 @@ export class FftView {
       const peak = Math.round(result.fundamentalHzRefined / binW);
       const half = mag.length - 1;
       if (peak >= 1 && peak <= half) {
-        const magLin = (k) => Math.pow(10, mag[k] / 20);   // dBFS → linear (Java mag lambda)
+        const magLin = (k) => Math.pow(10, mag[k] / 20);   // dBFS -> linear (Java mag lambda)
         floorLin = LOBE.localFloor(magLin, peak, half);
         const edges = LOBE.lobeBins(magLin, peak, half, floorLin);
         lobeLo = edges[0]; lobeHi = edges[1];
@@ -596,14 +617,14 @@ export class FftView {
     }
     if (lastPx >= 0) flushCol(lastPx);
     // Pass 1 (Java ColumnBucketPainter.drawTo:1346-1359): the vertical envelope bars are
-    // drawn AA-OFF at integer NATIVE-pixel coords in Java — fully OPAQUE columns, the
+    // drawn AA-OFF at integer NATIVE-pixel coords in Java - fully OPAQUE columns, the
     // solid fill of the noise band. Two canvas pitfalls both re-created the striping:
-    // a 1-px STROKE centered on integer x straddles two half-intensity columns, and —
-    // even with fillRect — CSS-px integers land on FRACTIONAL device pixels under a
+    // a 1-px STROKE centered on integer x straddles two half-intensity columns, and -
+    // even with fillRect - CSS-px integers land on FRACTIONAL device pixels under a
     // fractional devicePixelRatio (Windows 125/150 % scaling), anti-aliasing again.
     // So the bars are drawn with the transform RESET, snapped to the DEVICE-pixel grid:
     // each CSS column [bx−w/2, bx+w/2) maps to [round((bx−w/2)·dpr), round((bx+w/2)·dpr))
-    // — adjacent columns tile EXACTLY (col n's right edge == col n+1's left edge) at any
+    // - adjacent columns tile EXACTLY (col n's right edge == col n+1's left edge) at any
     // dpr, so the band is gapless and opaque like Java's native-pixel bars.
     g.fillStyle = g.strokeStyle;
     const barW = Math.max(1, g.lineWidth);
@@ -614,7 +635,7 @@ export class FftView {
         const x1 = Math.round((bx + barW / 2) * dpr);
         const y0 = Math.round(lo * dpr);
         const y1 = Math.round(hi * dpr);
-        if (y0 === y1) continue;   // Java :1356 — collapsed bar (native px) skipped
+        if (y0 === y1) continue;   // Java :1356 - collapsed bar (native px) skipped
         g.fillRect(x0, y0, Math.max(1, x1 - x0), y1 - y0);
       }
       g.setTransform(dpr, 0, 0, dpr, 0, 0);   // back to CSS-px space for pass 2
@@ -623,7 +644,7 @@ export class FftView {
       for (const [bx, lo, hi] of bars) g.fillRect(bx, Math.round(lo), 1, Math.max(1, Math.round(hi) - Math.round(lo)));
     }
     // Pass 2 (Java :1360-1384): the midpoint polyline as ONE anti-aliased sub-pixel path,
-    // stroked OVER the opaque bars — the Java pass order, so it blends into the band.
+    // stroked OVER the opaque bars - the Java pass order, so it blends into the band.
     g.beginPath();
     let started = false;
     for (const [mx, my] of mids) { started ? g.lineTo(mx, my) : (g.moveTo(mx, my), started = true); }
@@ -637,7 +658,7 @@ export class FftView {
       const dotColor = p ? colorHex(p.fftHarmonicDotColor.get()) : '#ff0000';
       const dotR = Math.max(2, (p ? p.fftHarmonicDotDiameter.get() : 9) / 2);
       const calcMax = p ? Math.max(9, p.fftCalcMaxHarmonic.get()) : 9;
-      // Java drawHarmonicDots / dotScreenPos (:1809): dBFS → convertFromDbFs(unit),
+      // Java drawHarmonicDots / dotScreenPos (:1809): dBFS -> convertFromDbFs(unit),
       // drop when the y-fraction is off-plot (t<0||t>1), then magToY.
       const dotAt = (fHz, d, label) => {
         if (!(fHz >= fMin && fHz <= fMax) || !Number.isFinite(d)) return;
@@ -662,19 +683,19 @@ export class FftView {
         }
       }
       // Java drawHarmonicDots (:1349): the fundamental dot sits on the DISPLAYED
-      // peak — the manual fundamental (fundamentalTrueDbFs) when set, else the
-      // measured level — ALWAYS at the auto-detected r.fundamentalHzRefined (NOT
+      // peak - the manual fundamental (fundamentalTrueDbFs) when set, else the
+      // measured level - ALWAYS at the auto-detected r.fundamentalHzRefined (NOT
       // the manual frequency). _manualFundDbFs re-gates on the live manual on/off
       // pref so switching manual OFF drops back to the auto level (or the dot
-      // disappears when no fundamental) instead of pinning the stale override (#7);
-      // switching ON restores the dot at the manual level (#6).
+      // disappears when no fundamental) instead of pinning the stale override;
+      // switching ON restores the dot at the manual level.
       const fHz = result.fundamentalHzRefined || 0;
       const man = this._manualFundDbFs(result);
       const fDb = Number.isFinite(man) ? man : result.fundamentalDbFs;
-      // Manual-fundamental original-height blue dot (WEB addition — the Java fix is parallel-ongoing;
+      // Manual-fundamental original-height blue dot (WEB addition - the Java fix is parallel-ongoing;
       // the committed Java draws blue dots only under a .frc de-embed). With manual fundamental set
       // and NO cal (preCorrectionPeaks unset), the red F dot rises to the manual value and the lobe
-      // is stretched up to meet it — mark the ORIGINAL measured height with a blue dot
+      // is stretched up to meet it - mark the ORIGINAL measured height with a blue dot
       // (BEFORE_CAL_DOT colour), painted UNDER the red dot, mirroring the de-embed's before/after
       // pair. When a cal IS loaded the pre-correction blue dots above already cover it.
       if (Number.isFinite(man) && !(pre && pre[0] && pre[1])
@@ -694,9 +715,9 @@ export class FftView {
     }
     if (imd) {
       // Dual-tone: F1/F2 + per-order lower/upper intermod products d2L..dnH (Java drawImdDots).
-      // Product levels are dBV → de-reference to the dBFS axis with the dBV offset. Drop dots
+      // Product levels are dBV -> de-reference to the dBFS axis with the dBV offset. Drop dots
       // outside the freq/mag window (no clamping, matching Java). Same marker styling as the
-      // single-tone path — HARMONIC_DOT colour + harmonicDotDiameter for every dot (Java
+      // single-tone path - HARMONIC_DOT colour + harmonicDotDiameter for every dot (Java
       // drawImdDots:1965 / plotDotAt:2088-2090).
       // IMD dBV products de-reference to dBFS with the ANALYZED channel's ADC offset
       // (Java FftController:237 imdAnalyzer.analyze(..., getDbvOffsetDb(getFftChannel()))).
@@ -705,7 +726,7 @@ export class FftView {
       const dotR = Math.max(2, (p ? p.fftHarmonicDotDiameter.get() : 9) / 2);
       // Java plotDotAt: fill the dot in HARMONIC_DOT; the fill colour is set immediately
       // before each arc (like the single-tone dotAt) so _dotLabel's halo strokeStyle /
-      // fillStyle can't clobber later dots. No vertical stem — Java draws none.
+      // fillStyle can't clobber later dots. No vertical stem - Java draws none.
       const imdDot = (fHz, dbfs) => {
         if (!(fHz >= fMin && fHz <= fMax) || !Number.isFinite(dbfs)) return;
         const v = cv(dbfs), t = this._magToYFraction(v, magTop, magBot, magUnit);
@@ -713,7 +734,7 @@ export class FftView {
         g.fillStyle = dotColor; g.beginPath(); g.arc(x(fHz), y(v), dotR, 0, 2 * Math.PI); g.fill();
       };
       // Blue "before-cal" dots FIRST, under the red post-cal dots, so the .frc correction gap is
-      // visible — one per IMD dot position (F1, F2, dnL[2..5], dnH[2..5]) at dbFs + sumCalDbAt,
+      // visible - one per IMD dot position (F1, F2, dnL[2..5], dnH[2..5]) at dbFs + sumCalDbAt,
       // only when a calibration file is loaded (Java drawImdDots:1948-1962). Same freq/finite/mag
       // gates as imdDot; channel pick off result.channelLeft (matching the de-embed, apply()).
       if (this.correction && this.correction.store.getEntries().length) {
@@ -743,7 +764,7 @@ export class FftView {
           imdDot(imd.dnHHz[k], imd.dnHDbV[k] - refDbV);
         }
       }
-      // F1 / F2 labels — "F1 <freq>" / "F2 <freq>" with overlap avoidance (Java
+      // F1 / F2 labels - "F1 <freq>" / "F2 <freq>" with overlap avoidance (Java
       // drawImdDots:1976-2031). Each label is anchored just above its own dot; when the two
       // label boxes overlap the lower dot's label slides into the gap between the higher
       // label's bottom and the lower dot if it fits, else stacks one line above the higher
@@ -763,7 +784,7 @@ export class FftView {
         // Match _dotLabel's font so measureText widths align with the rendered text.
         g.font = '10px "Segoe UI", sans-serif';
         const w1 = g.measureText(t1).width, w2 = g.measureText(t2).width;
-        const LBL_H = 12;         // Java ext.y — 10px label height (font + descent)
+        const LBL_H = 12;         // Java ext.y - 10px label height (font + descent)
         const margin = 4;         // dot-to-label vertical gap (Java)
         const gap = 2;            // label-to-label vertical gap (Java)
         let ly1 = pos1 ? pos1.y - margin - LBL_H : 0;   // label TOP y
@@ -804,12 +825,12 @@ export class FftView {
       }
     }
 
-    // THD / IMD measurement table — painted ON the canvas (Java FftView paint
+    // THD / IMD measurement table - painted ON the canvas (Java FftView paint
     // switch, drawDistortionTable / drawImdTable). Gated on the distortion-table
     // pref AND "!tableExtracted" AND a distinguishable signal (Java FftView.java:1253-1254:
     // "if (lastResult != null && Preferences.instance().isFftDistortionTableVisible()
-    //      && !tableExtracted && hasDistinguishableSignal(lastResult))" — when the table is
-    // extracted into the tool window it is NOT drawn on the spectrum); dual-tone → IMD
+    //      && !tableExtracted && hasDistinguishableSignal(lastResult))" - when the table is
+    // extracted into the tool window it is NOT drawn on the spectrum); dual-tone -> IMD
     // table, else THD table.
     if (p && p.fftDistortionTableVisible.get() && !this.tableExtracted
         && this._hasDistinguishableSignal(result)) {
@@ -818,15 +839,15 @@ export class FftView {
       else this.drawDistortionTable(g, result, magUnit, xLeft, TABLE_TOP_Y);
     }
 
-    // Crosshair + cursor readout — Java drawCrosshair, drawn whenever the cursor is
+    // Crosshair + cursor readout - Java drawCrosshair, drawn whenever the cursor is
     // inside the plot (with or without a result; the |m| line is omitted when none).
     this._drawCrosshair({ W, H, plot, margin, logAxis, fMin, fMax, magTop, magBot, magUnit, mag, binW, result });
-    // Rect-zoom rubber band + focused-view accent border — LAST (Java onPaint
+    // Rect-zoom rubber band + focused-view accent border - LAST (Java onPaint
     // calls drawRectZoomOverlay after the crosshair).
     if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
   }
 
-  /** Java FftView.drawCrosshair — dashed grey cross + an f / y / |m| readout box at the
+  /** Java FftView.drawCrosshair - dashed grey cross + an f / y / |m| readout box at the
    *  cursor. Drawn over the empty graticule too (Java paints it whenever the pointer is
    *  inside the plot, independent of lastResult); the |m| bin level is shown only when a
    *  result/spectrum exists. */
@@ -860,9 +881,9 @@ export class FftView {
       const bin = Math.round(fAt / binW);
       if (bin >= 0 && bin < mag.length) {
         // Java drawCrosshair (:2828): the fundamental bin reads its manual-override
-        // level so |m| matches the displayed (lobe-lifted) trace — but only while
+        // level so |m| matches the displayed (lobe-lifted) trace - but only while
         // manual mode is enabled (_manualFundDbFs re-gates on the live pref so a
-        // stale override doesn't override the auto level after switch-off, #7).
+        // stale override doesn't override the auto level after switch-off).
         let dbFs = mag[bin];
         const man = this._manualFundDbFs(result);
         if (Number.isFinite(man)
@@ -886,21 +907,21 @@ export class FftView {
     g.restore();
   }
 
-  /** Java AbstractMeasurementView.formatFrequencyFine (:1069) — 4 decimals,
+  /** Java AbstractMeasurementView.formatFrequencyFine (:1069) - 4 decimals,
    *  kHz at 10 kHz. */
   _fmtFreqFine(f) {
-    if (!Number.isFinite(f) || f <= 0) return '—';
+    if (!Number.isFinite(f) || f <= 0) return '-';
     if (f >= 10000) return (f / 1000).toFixed(4) + ' kHz';
     return f.toFixed(4) + ' Hz';
   }
 
   /* ---- Faithful Java AbstractMeasurementView.drawGrid port (:584). ---------
-   * X axis: log freq → AxisSpec.log (decade majors + 2..9×10ⁿ minors, sub-decade
-   *   falls back to nice-linear), LabelFormat.FREQ; linear freq → AxisSpec.linearNice
+   * X axis: log freq -> AxisSpec.log (decade majors + 2..9×10ⁿ minors, sub-decade
+   *   falls back to nice-linear), LabelFormat.FREQ; linear freq -> AxisSpec.linearNice
    *   (niceLinearMajors targetCount 10), LabelFormat.FREQ_INT.
-   * Y axis (magnitude): log units (V/V√Hz) → AxisSpec.log + LabelFormat.VOLTS_SI
+   * Y axis (magnitude): log units (V/V√Hz) -> AxisSpec.log + LabelFormat.VOLTS_SI
    *   (label round 1·2·3·5·7×10ⁿ via adaptiveLogLabels, thinned by decade count);
-   *   dB units → AxisSpec.linearNice(...,10,5.0) + LabelFormat.DB ("%.1f").
+   *   dB units -> AxisSpec.linearNice(...,10,5.0) + LabelFormat.DB ("%.1f").
    * The magnitude axis bounds are in DISPLAY units (magTop/magBot, log-voltage for
    * V/V√Hz). */
   _drawGrid(g, plot, { fMin, fMax, logAxis, magTop, magBot, magUnit, magLog }) {
@@ -910,7 +931,7 @@ export class FftView {
     if (logAxis) {
       if (isSubDecade(fMin, fMax)) {
         xMajors = niceLinearMajors(fMin, fMax, SUB_DECADE_TICK_TARGET);
-        xMinors = [];   // sub-decade minors are subdivisions; FREQ axis rarely sub-decade — keep majors only
+        xMinors = [];   // sub-decade minors are subdivisions; FREQ axis rarely sub-decade - keep majors only
       } else {
         xMajors = logMajorTicks(fMin, fMax);
         xMinors = logMinorTicks(fMin, fMax);
@@ -957,16 +978,19 @@ export class FftView {
     // ---- X tick labels (Java drawGrid :717). ----
     g.font = '11px "Segoe UI", sans-serif';
     g.fillStyle = '#333'; g.textAlign = 'center'; g.textBaseline = 'top';
-    // wideLog: log axis spanning >= one decade → adaptiveLogLabels; else the majors.
+    // wideLog: log axis spanning >= one decade -> adaptiveLogLabels; else the majors.
     const wideLog = logAxis && !isSubDecade(fMin, fMax);
     const xLabelPositions = wideLog ? adaptiveLogLabels(fMin, fMax) : xMajors;
-    const fineStep = (logAxis && !wideLog) ? minSpacing(xLabelPositions) : 0.0;
+    // Step-aware formats (FREQ, DB) size their decimals from the tick step, so fine zooms read
+    // 1.005 kHz / 1.010 kHz instead of several identical "1 kHz"; a wide log axis has no single
+    // step and keeps the decade formatter (Java drawGrid -> labelStep).
+    const fineStep = labelStep(xLabelPositions, logAxis, fMin, fMax);
     // Java pixel-aware placement: place decade majors first, then fill the rest,
     // skipping any whose label box would touch one already placed.
     const gap = g.measureText('0').width;
     const items = xLabelPositions.map((v) => {
       const str = logAxis
-        ? (fineStep > 0 ? formatFreqTick(v, fineStep) : formatFrequency(v))
+        ? (fineStep > 0 ? formatFreqTick(v, fineStep) : formatFreqDecadeTick(v))
         : formatFrequencyInteger(v);
       const sw = g.measureText(str).width;
       const cxp = fx(v);
@@ -989,13 +1013,14 @@ export class FftView {
     g.textAlign = 'right'; g.textBaseline = 'middle';
     const yWideLog = magLog && !isSubDecade(magBot, magTop);
     const yLabelPositions = yWideLog ? adaptiveLogLabels(magBot, magTop) : yMajors;
+    const yStep = labelStep(yLabelPositions, magLog, magBot, magTop);
     const fh = 12;   // font height for the overlap skip
     let lastPy = -1e9;
     for (const v of yLabelPositions) {
       const py = fy(v);
       if (Math.abs(py - lastPy) < fh) continue;
       g.fillStyle = '#333';
-      g.fillText(formatMagTick(v, magUnit), pL - 6, py);
+      g.fillText(formatMagTick(v, magUnit, yStep), pL - 6, py);
       lastPy = py;
     }
     // ---- Magnitude unit caption (top-left of the Y axis). ----
@@ -1006,11 +1031,11 @@ export class FftView {
 
   /** Formats a frequency for a harmonic-dot label (e.g. "1.00 kHz"). */
   _fmtFreq(f) {
-    if (!(f > 0)) return '—';
+    if (!(f > 0)) return '-';
     return f >= 1000 ? (f / 1000).toFixed(2) + ' kHz' : f.toFixed(f < 10 ? 2 : 0) + ' Hz';
   }
 
-  /** Draws a halo-outlined label centred above (cx, cy) — Java drawOutlinedText. */
+  /** Draws a halo-outlined label centred above (cx, cy) - Java drawOutlinedText. */
   _dotLabel(g, text, cx, cy) {
     const yy = Math.max(11, cy);
     g.font = '10px "Segoe UI", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'bottom';
@@ -1026,24 +1051,24 @@ export class FftView {
   // The Java FftView has a WINDOW_RESTORE toggle (externalBtn) that extracts this
   // THD/IMD table into a separate OS ToolWindow whose ContentPainter is paintDistortion
   // (drawDistortionTable / drawImdTable). The web ports that rendering as
-  // paintDistortionInto(g, top) + distortionContentSize(g) so the pane (markup agent)
+  // paintDistortionInto(g, top) + distortionContentSize(g) so the pane
   // can paint the SAME table into a separate float-window canvas; inline rendering keeps
   // calling drawDistortionTable / drawImdTable directly. The distortion-table visibility
   // + reset buttons that DO map are wired in fft-pane.js (they need the engine for the
   // reset).
 
-  /** Java FftView.hasDistinguishableSignal — the fundamental must clear the LOCAL
+  /** Java FftView.hasDistinguishableSignal - the fundamental must clear the LOCAL
    *  noise floor by SIGNAL_FLOOR_MARGIN_DB and THD must be sane, else the table /
    *  dots are grass and are hidden. */
   _hasDistinguishableSignal(r) {
     if (r == null || !Number.isFinite(r.fundamentalDbFs)) return false;
     if (Number.isFinite(r.thdPct) && r.thdPct > MAX_THD_PCT) return false;
     const floor = this._localNoiseFloorDbFs(r);
-    if (!Number.isFinite(floor)) return true;   // no floor estimate — don't suppress
+    if (!Number.isFinite(floor)) return true;   // no floor estimate - don't suppress
     return r.fundamentalDbFs > floor + SIGNAL_FLOOR_MARGIN_DB;
   }
 
-  /** Java FftResult.localNoiseFloorDbFs — median of two LOCAL_FLOOR_FLANK_BINS-wide
+  /** Java FftResult.localNoiseFloorDbFs - median of two LOCAL_FLOOR_FLANK_BINS-wide
    *  flanks just beyond the fundamental's dynamic skirt. NaN when no usable bins. */
   _localNoiseFloorDbFs(r) {
     const mag = r.amplitudeDbFs;
@@ -1062,7 +1087,7 @@ export class FftView {
     return band[Math.trunc(cnt / 2)];
   }
 
-  /** Java FftView.formatSpan — the noise-integration band on the header span row. */
+  /** Java FftView.formatSpan - the noise-integration band on the header span row. */
   _formatSpan(r) {
     const hasLo = r.snrFreqMin > 0, hasHi = r.snrFreqMax > 0;
     if (!hasLo && !hasHi) return 'Span: full';
@@ -1071,50 +1096,46 @@ export class FftView {
     return `Span: ${lo.toFixed(0)} .. ${hi.toFixed(0)} Hz`;
   }
 
-  /** Java FftView.fmtDb — "%7.2f dBV" or "—". */
+  /** Java FftView.fmtDb - "%7.2f dBV" or "-". */
   _fmtDb(v) {
-    return Number.isFinite(v) ? `${v.toFixed(2)} dBV` : '—';
+    return Number.isFinite(v) ? `${v.toFixed(2)} dBV` : '-';
   }
 
-  /** Java FftView.imdPctText — IMD-table percent cell; "---" when the figure is
+  /** Java FftView.imdPctText - IMD-table percent cell; "---" when the figure is
    *  NaN (product outside the measurable range). */
   _imdPctText(pct) {
     return Number.isFinite(pct) ? `${pct.toFixed(8)} %` : '---';
   }
 
-  /** Java FftView.imdRowText — IMD-table dnL/dnH cell (dBV + percent); "---" for
+  /** Java FftView.imdRowText - IMD-table dnL/dnH cell (dBV + percent); "---" for
    *  a product whose frequency lies outside the measurable range at this sample
    *  rate. */
   _imdRowText(dbv, pct) {
     return Number.isFinite(dbv) ? `${dbv.toFixed(2)} dBV  ${pct.toFixed(8)} %` : '     ---';
   }
 
-  /** Java FftView.noiseDb — 10·log10(noisePower) + dbvOffset; NaN when noisePower<=0. */
+  /** Java FftView.noiseDb - 10·log10(noisePower) + dbvOffset; NaN when noisePower<=0. */
   _noiseDb(r) {
     if (!(r.noisePower > 0)) return NaN;
     // Analyzed channel's ADC offset (Java FftView:2877 getDbvOffsetDb(getFftChannel())).
     return 10 * Math.log10(r.noisePower) + this.prefs.getDbvOffsetDb(this.prefs.fftChannel.get());
   }
 
-  /** Java FftView.thdNPct — THD+N % from the N+D ratio in dB. */
+  /** Java FftView.thdNPct - THD+N % from the N+D ratio in dB. */
   _thdNPct(r) {
     if (!Number.isFinite(r.thdNDb)) return NaN;
     return Math.pow(10, r.thdNDb / 20.0) * 100;
   }
 
-  /** Java FftBinSnap.snapIfEnabled (SINE / DUAL_TONE): snap to the nearest FFT bin
-   *  centre when snap-to-bin is enabled; else pass through. */
-  _snapIfEnabled(sampleRate, raw) {
-    const p = this.prefs;
-    if (!p || !p.genSnapToFftBin.get()) return raw;
-    const fftSize = p.fftLength.get();
-    if (fftSize < 8 || sampleRate <= 0) return raw;
-    const binHz = sampleRate / fftSize;
-    if (binHz <= 0) return raw;
-    return Math.round(raw / binHz) * binHz;
+  /** What the generator says it is EMITTING at this analyzer's rate - [tone1Hz, tone2Hz], 0.0
+   *  for "this waveform emits no such tone", null when nobody answers (Java FftView asks
+   *  GENERATOR_EMITTED_HZ instead of recomputing FftBinSnap from the same preferences: a
+   *  drift readout derived from what we BELIEVE was commanded measures nothing). */
+  _emittedHz(sampleRate) {
+    return MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, sampleRate);
   }
 
-  /** Java FftView.formatDeltaF — per-tone clock-drift line for the IMD table. */
+  /** Java FftView.formatDeltaF - per-tone clock-drift line for the IMD table. */
   _formatDeltaF(label, expectedHz, measuredHz, sampleRate) {
     const delta = measuredHz - expectedHz;
     const ppm = expectedHz > 0 ? 1e6 * delta / expectedHz : NaN;
@@ -1133,7 +1154,7 @@ export class FftView {
     return { hz: NaN, name: '?' };
   }
 
-  /** Java "%+.Nf" — always-signed fixed-point. */
+  /** Java "%+.Nf" - always-signed fixed-point. */
   _signed(v, digits) {
     if (!Number.isFinite(v)) return 'NaN';
     return (v >= 0 ? '+' : '') + v.toFixed(digits);
@@ -1145,13 +1166,13 @@ export class FftView {
     return { charW: g.measureText('M').width, lineH: 14 };
   }
 
-  /** Java FftView.drawCentred — text horizontally centred on centreX, top at y. */
+  /** Java FftView.drawCentred - text horizontally centred on centreX, top at y. */
   drawCentred(g, text, centreX, y, plain = false) {
     const w = g.measureText(text).width;
     this._outlined(g, text, centreX - w / 2, y, plain);
   }
 
-  /** Java FftView.drawKv — two key/value pairs at independent key-column widths. */
+  /** Java FftView.drawKv - two key/value pairs at independent key-column widths. */
   drawKv(g, x, y, lKeyW, lKey, lVal, rightColX, rKeyW, rKey, rVal, plain = false) {
     this._outlined(g, lKey, x, y, plain);
     this._outlined(g, lVal, x + lKeyW, y, plain);
@@ -1164,7 +1185,7 @@ export class FftView {
   /** Java drawOutlinedText for a left-aligned table cell (top baseline).
    *  {@code plain} = the extracted tool-window paint: Java drawOutlinedText
    *  (AbstractMeasurementView.java:224-230) shadows in ColorRole.BACKGROUND then draws
-   *  the text in fg — on the ToolWindow's white canvas (ToolWindow.java:77-78, BACKGROUND
+   *  the text in fg - on the ToolWindow's white canvas (ToolWindow.java:77-78, BACKGROUND
    *  = 0xFFFFFF) that shadow is invisible, i.e. plain 0x202020 text on white with NO
    *  halo. The on-graph overlay (over the trace) keeps the web's white halo stroke. */
   _outlined(g, text, x, y, plain = false) {
@@ -1175,8 +1196,8 @@ export class FftView {
     g.fillStyle = plain ? '#202020' : '#222'; g.fillText(text, x, y);
   }
 
-  /** Java FftView.drawDistortionTable — single-tone THD/harmonics table.
-   *  {@code plain} — extracted tool-window mode: no halo stroke (see _outlined). */
+  /** Java FftView.drawDistortionTable - single-tone THD/harmonics table.
+   *  {@code plain} - extracted tool-window mode: no halo stroke (see _outlined). */
   drawDistortionTable(g, r, unit, xLeft, yTop, plain = false) {
     const p = this.prefs;
     let m = this._monoMetrics(g, false);
@@ -1197,10 +1218,12 @@ export class FftView {
     y += lineH;
     this.drawCentred(g, this._formatSpan(r), centreX, y, plain);
     y += lineH;
-    // Clock-drift ΔF / Δosc row — only when the generator is running AND
+    // Clock-drift ΔF / Δosc row - only when the generator is running AND
     // fund-from-generator is on (the row is meaningless otherwise).
     if (this._genActive() && p.fftFundFromGenerator.get()) {
-      const expected = this._snapIfEnabled(r.sampleRate, p.genFrequencyHz.get());
+      // No responder -> no expectation -> no row: 0 and "nobody answered" behave identically.
+      const emitted = this._emittedHz(r.sampleRate);
+      const expected = emitted == null ? 0 : emitted[0];
       if (expected > 0 && Number.isFinite(r.fundamentalHzRefined)) {
         const delta = r.fundamentalHzRefined - expected, ppm = 1e6 * delta / expected;
         const o = this._osc(r.sampleRate);
@@ -1229,7 +1252,7 @@ export class FftView {
     y += lineH + 2;
 
     // ── Harmonics, 2 per row. The % column is r.harmonicPct[i] VERBATIM
-    // (referenced to the analyzer's fundamental — NOT recomputed here). ──────
+    // (referenced to the analyzer's fundamental - NOT recomputed here). ──────
     const hKey = 4 * charW, hVal = 24 * charW;
     const hRightColX = xLeft + hKey + hVal + colGap;
     const harmCount = r.harmonicDbFs == null ? 0 : r.harmonicDbFs.length;
@@ -1247,8 +1270,8 @@ export class FftView {
     return y;
   }
 
-  /** Java FftView.drawImdTable — dual-tone IMD measurement table.
-   *  {@code plain} — extracted tool-window mode: no halo stroke (see _outlined). */
+  /** Java FftView.drawImdTable - dual-tone IMD measurement table.
+   *  {@code plain} - extracted tool-window mode: no halo stroke (see _outlined). */
   drawImdTable(g, imd, r, xLeft, yTop, plain = false) {
     const p = this.prefs;
     let m = this._monoMetrics(g, false);
@@ -1264,15 +1287,16 @@ export class FftView {
     y += lineH;
     this.drawCentred(g, this._formatSpan(r), centreX, y, plain);
     y += lineH;
-    // Δf1 / Δf2 per-tone clock-drift — same gate as the THD ΔF row.
+    // Δf1 / Δf2 per-tone clock-drift - same gate as the THD ΔF row.
     if (this._genActive() && p.fftFundFromGenerator.get()) {
       const sr = r.sampleRate;
-      const f1Cmd = this._snapIfEnabled(sr, p.genDualToneFreq1Hz.get());
-      const f2Cmd = this._snapIfEnabled(sr, p.genDualToneFreq2Hz.get());
-      this.drawCentred(g, this._formatDeltaF('Δf1', f1Cmd, imd.f1Hz, sr), centreX, y, plain);
-      y += lineH;
-      this.drawCentred(g, this._formatDeltaF('Δf2', f2Cmd, imd.f2Hz, sr), centreX, y, plain);
-      y += lineH;
+      const emitted = this._emittedHz(sr);
+      if (emitted != null) {   // no answer -> the two rows are not drawn at all
+        this.drawCentred(g, this._formatDeltaF('Δf1', emitted[0], imd.f1Hz, sr), centreX, y, plain);
+        y += lineH;
+        this.drawCentred(g, this._formatDeltaF('Δf2', emitted[1], imd.f2Hz, sr), centreX, y, plain);
+        y += lineH;
+      }
     }
     this._monoMetrics(g, false);
     y += 2;
@@ -1300,11 +1324,11 @@ export class FftView {
     return y;
   }
 
-  /** Java FftView.paintDistortion (:2975) — the ToolWindow.ContentPainter for the
+  /** Java FftView.paintDistortion (:2975) - the ToolWindow.ContentPainter for the
    *  EXTRACTED distortion window: draws the SAME THD or IMD table straight into the
    *  given 2D context, inset from its top-left by EXT_LEFT_PAD so the keys don't
-   *  touch the border (top is 0 here — no button row; the toggles stay in the main
-   *  FFT view). The pane (markup agent) owns the float-window canvas + its show/hide
+   *  touch the border (top is 0 here - no button row; the toggles stay in the main
+   *  FFT view). The pane owns the float-window canvas + its show/hide
    *  toggle; it calls this to paint the table into that canvas, and inline rendering
    *  keeps using drawDistortionTable / drawImdTable directly. No-op with no result. */
   paintDistortionInto(g, top = 0) {
@@ -1320,7 +1344,7 @@ export class FftView {
     }
   }
 
-  /** Java FftView.computeExternalContentSize (:2916) — the natural client size of
+  /** Java FftView.computeExternalContentSize (:2916) - the natural client size of
    *  the extracted table (width from the widest row, height from the fixed +
    *  dynamic harmonic / sideband rows) so the float window fits its content with no
    *  excess whitespace or clipping. Needs a measuring context with the mono font.
@@ -1329,7 +1353,7 @@ export class FftView {
     const r = this._last;
     if (!r) return null;
     const m = this._monoMetrics(g, false);
-    const charW = m.charW, lineH = m.lineH;   // Java textExtent("M").y + 1 → fixed 14 here
+    const charW = m.charW, lineH = m.lineH;   // Java textExtent("M").y + 1 -> fixed 14 here
     const p = this.prefs;
     if (r.imd) {
       // Java: rows = F1/F2 + span + optional Δf1/Δf2 + 2 metric + (MAX_ORDER−1) dnL/dnH.
@@ -1340,7 +1364,7 @@ export class FftView {
       const contentH = EXT_LEFT_PAD + rows * lineH + 8;
       return { width: Math.ceil(contentW), height: Math.ceil(contentH) };
     }
-    // THD: measure the worst-case harmonic row (Java :2946 — measuring the whole row
+    // THD: measure the worst-case harmonic row (Java :2946 - measuring the whole row
     // removes the mono "M"-cell under-count that clipped the trailing %).
     const widestRow = `H10: ${this._signed(-9999.99, 2)} dBV ${(99.99999999).toFixed(8)} %  `
       + `H11: ${this._signed(-9999.99, 2)} dBV ${(99.99999999).toFixed(8)} %`;

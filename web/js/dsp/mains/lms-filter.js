@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -74,7 +74,7 @@ export class MainsLmsFilter {
 
   /**
    * Filters data in place over len samples. No-op until tuned. absStart is
-   * the absolute index of data[0] in the continuous capture stream — the
+   * the absolute index of data[0] in the continuous capture stream - the
    * mains phase advances by the DELTA from the previous call's absStart.
    * @param {Float32Array|Float64Array} data
    * @param {number} len
@@ -86,7 +86,7 @@ export class MainsLmsFilter {
 
   /**
    * Same as process(): the sinusoidal model carries no DC term, so cancelling
-   * never touches the operating point — both entry points share one path.
+   * never touches the operating point - both entry points share one path.
    * @param {Float32Array|Float64Array} data
    * @param {number} len
    * @param {number} [absStart=0]
@@ -112,7 +112,7 @@ export class MainsLmsFilter {
     this.reset();
   }
 
-  /** Shared filter core (Java filter/filterD collapse to one — typed-array
+  /** Shared filter core (Java filter/filterD collapse to one - typed-array
    *  stores round to the element type automatically). */
   _filter(data, len, absStart) {
     if (!this.isTuned()) return;

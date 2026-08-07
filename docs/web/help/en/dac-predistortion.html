@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — DAC pre-distortion wizard</title>
+  <title>Phonalyser.web - DAC pre-distortion wizard</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -11,14 +11,14 @@
 
   <h1>DAC pre-distortion wizard</h1>
   <p>This page covers the wizard's controls.  For <em>why</em> it works the way
-     it does — the mandatory twin-T notch, why the fundamental is taken from the
+     it does - the mandatory twin-T notch, why the fundamental is taken from the
      generator, how deep coherent averaging digs the harmonics out, and how the
-     correction loop converges — see
+     correction loop converges - see
      <a href="theory/dac-predistortion.html">Theory of operation ▸ DAC
      pre-distortion</a>.</p>
 
   <p>The wizard drives down the DAC's <em>own</em> harmonic distortion so the
-     stimulus is cleaner than the converter can natively produce — what the
+     stimulus is cleaner than the converter can natively produce - what the
      <a href="fft.html">FFT analyser</a> then shows is the device under test's
      distortion, not the source's.  It measures the DAC's harmonics behind a
      notch filter and feeds an equal-and-opposite correction back into the
@@ -29,7 +29,7 @@
 
   <div class="note"><b>A passive twin-T notch is mandatory.</b>  Put a passive
      twin-T notch, tuned to the fundamental, between the device under test and
-     the ADC — otherwise the ADC's own harmonics set the floor and the loop
+     the ADC - otherwise the ADC's own harmonics set the floor and the loop
      ends up compensating the ADC, not the DAC.  Tune it first with the
      <a href="tune-notch.html">tune-notch wizard</a>.  See
      <a href="theory/dac-predistortion.html#notch">Theory ▸ why the notch is
@@ -65,21 +65,21 @@
   </div>
   <ol class="features">
     <li><b>Procedure.</b>  The mandatory twin-T notch and how the closed loop
-        works — measure the harmonics, feed back an equal-and-opposite
+        works - measure the harmonics, feed back an equal-and-opposite
         correction, repeat each round.</li>
     <li><b>Status line.</b>  The live phase: aligning the tone, averaging a
-        round, applying the correction or settling — here, <em>Target THD
+        round, applying the correction or settling - here, <em>Target THD
         reached</em>.</li>
     <li><b>FFT settings.</b>  Size, sample rate and window, inherited read-only
         from the <a href="fft.html">FFT</a> pane.</li>
     <li><b>Convergence chart.</b>  Each completed round's distortion on a log
         axis, falling toward the red target line.</li>
     <li><b>Progress readouts.</b>  Round, averages, the live and best THD, and
-        SNR / SINAD / fundamental / noise floor — <a href="#dpd-readouts">What
+        SNR / SINAD / fundamental / noise floor - <a href="#dpd-readouts">What
         you see</a>.</li>
     <li><b>Averages &amp; target.</b>  Averages per round and the Target THD to
-        stop at — <a href="#dpd-controls">Controls</a>.</li>
-    <li><b>Buttons.</b>  Start / Stop&nbsp;round / Save / Close —
+        stop at - <a href="#dpd-controls">Controls</a>.</li>
+    <li><b>Buttons.</b>  Start / Stop&nbsp;round / Save / Close -
         <a href="#dpd-controls">Controls</a>.</li>
   </ol>
 
@@ -87,7 +87,7 @@
   <p>Open it from the <b>wand</b> button in the FFT pane's toolbar (left of the
      record button, live pane only).  Before you start, the generator must
      already be <b>playing</b> a <b>sine</b>, <b>compensated sine</b> or
-     <b>dual-tone</b> signal — the loop cancels a single tone's harmonics or a
+     <b>dual-tone</b> signal - the loop cancels a single tone's harmonics or a
      two-tone signal's intermodulation products; any other waveform is rejected.
      The wizard runs the FFT in unbounded coherent averaging with the
      <a href="fft.html#fft-tab-thd">fundamental taken from the generator</a> and
@@ -101,7 +101,7 @@
     <tr><td>Averages, n</td>
         <td>FFT averages per round (minimum 10).  Each round averages this many
             frames, then grows the count in proportion to how far the distortion
-            has already dropped — so late rounds average far deeper than early
+            has already dropped - so late rounds average far deeper than early
             ones.  The mouse wheel steps by 10, the arrows by 1.</td></tr>
     <tr><td>Target THD, %</td>
         <td>Stop once the distortion reaches this value; <b>0</b> runs until it
@@ -111,7 +111,7 @@
         <td>Start begins the closed loop and becomes Stop while it runs.  The
             loop also stops itself when it reaches the target or stalls.</td></tr>
     <tr><td>Stop round</td>
-        <td>End the current averaging round <em>now</em> — apply the correction
+        <td>End the current averaging round <em>now</em> - apply the correction
             measured so far and move on to the next round.  Use it when the
             spectrum has stopped improving and you don't want to wait out the
             remaining averages.  Active only while a round is averaging.</td></tr>
@@ -132,14 +132,14 @@
 
   <h2 id="dpd-readouts">What you see</h2>
   <p>An <b>FFT settings</b> block echoes the size, sample rate and window the
-     run inherits from the FFT pane (read-only — set them there beforehand).  A
+     run inherits from the FFT pane (read-only - set them there beforehand).  A
      <b>status line</b> reports the live phase: aligning the tone onto its FFT
      bin, the round number and averages remaining, applying the correction, or
      settling after it.</p>
   <p>The <b>convergence chart</b> plots each completed round's distortion on a
      logarithmic axis, with the markers spaced along the horizontal in
-     proportion to how deeply that round averaged — so a long, deep late round
-     occupies more of the trace than a quick early one — falling toward the red
+     proportion to how deeply that round averaged - so a long, deep late round
+     occupies more of the trace than a quick early one - falling toward the red
      target line.</p>
   <p>A <b>progress</b> block lists the live figures.  For a single tone these
      are the round number, the live and last-round THD, the best THD so far, the

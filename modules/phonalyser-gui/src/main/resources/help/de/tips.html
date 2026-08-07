@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser - Tipps</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zum Inhaltsverzeichnis</a></p>
+
+  <h1>Tipps</h1>
+  <p>Kleine Dinge, die viel ausmachen - beim Start einzeln angezeigt
+     (abschaltbar über die Checkbox im Tipp-Dialog oder unter
+     <a href="preferences.html#prefs-lookfeel">Einstellungen ▸ Look&nbsp;&amp;&nbsp;Feel</a>)
+     und hier vollständig gesammelt.</p>
+
+  <div class="tip"><b>Kohärente Mittelung dringt weit unter das Grundrauschen vor.</b>
+     Lassen Sie die kohärente (komplexe) Mittelung aktiviert und den FFT laufen: Jeder
+     Block wird vor der Summierung auf eine gemeinsame Phase de-rotiert, sodass der Ton
+     kohärent addiert wird, während sich das Rauschen teilweise aufhebt - das Grundrauschen
+     sinkt mit zunehmender Messzeit weiter.  Siehe <a href="theory/fft.html#coherent">Theorie ▸ Kohärente
+     Mittelung</a>.</div>
+
+  <div class="tip"><b>Rasten Sie den Generator auf eine FFT-Bin ein für ein sauberes Spektrum.</b>
+     Mit aktiviertem <em>Frequenz auf nächsten Bin einrasten</em> landet der Ton exakt auf
+     einem Bin, sodass Fensterleckage die Grundfrequenz nicht auf Nachbarbins verschmiert
+     und die Harmonischen-Schätzungen zuverlässig bleiben.
+     Siehe <a href="generator.html#generator-snap-fft-bin">Generator ▸ Einrasten</a>.</div>
+
+  <div class="tip"><b>Wenn ein Twin-T-Sperrfilter verwendet wird, geben Sie die Amplitude der Grundschwingung manuell ein.</b>
+     Eine passive Twin-T-Null ist so steil, dass bereits wenige Zehntel Hertz thermischer
+     Drift die entbettete Grundfrequenz um Zehntel dB verschieben und den THD-Wert
+     schwanken lassen.  Tragen Sie den tatsächlich bekannten Pegel über <em>Manuelle
+     Grundwelle</em> ein; die Harmonischen auf der sanften Flanke werden korrekt
+     entbettet.
+     Siehe <a href="theory/fft.html#manual-fund">Theorie ▸ Grundfrequenz fixieren</a>.</div>
+
+  <div class="tip"><b>Der WASAPI-Exklusivmodus hält die Messung bit-genau.</b>
+     Der Exklusivmodus übergibt das Gerät direkt an Phonalyser und umgeht den
+     Windows-Mixer sowie dessen Abtastratenkonverter - kein verdecktes Resampling
+     verfälscht das Ergebnis.  Siehe
+     <a href="theory/audio-backend.html">Theorie ▸ Audio-Backend</a>.</div>
+
+  <div class="tip"><b>WDM-KS liefert dem Oszilloskop die meisten Bilder pro Sekunde.</b>
+     Für die schnellste Live-Aktualisierung des Oszilloskops wählen Sie das WDM-KS-Backend
+     in den Einstellungen - es liegt tiefer im Treiberstapel als WASAPI und liefert mehr
+     Capture-Blöcke pro Sekunde.  Siehe <a href="preferences.html#prefs-audio">Einstellungen ▸
+     Audio</a>.</div>
+
+  <div class="tip"><b>Das Mausrad zoomt um den Cursor herum.</b>
+     In jeder Kurvenansicht: <b>Rad</b> verschiebt vertikal, <b>Shift+Rad</b>
+     horizontal, <b>Ctrl+Rad</b> skaliert die vertikale Achse und
+     <b>Ctrl+Shift+Rad</b> die horizontale - wobei beide Zoom-Varianten den Wert
+     unter dem Zeiger fixieren, sodass genau die betrachtete Stelle hereingezoomt wird.</div>
+
+  <div class="tip"><b>Jedes Zahlenfeld nimmt Einheiten, das Rad und die Tastatur an.</b>
+     Tippen Sie einen Wert mit Einheit (<code>µV</code>, <code>1.5 V</code>,
+     <code>-3 dBV</code>, <code>2 kHz</code>), oder drehen Sie das Mausrad, klicken Sie
+     auf die ▲/▼-Pfeile oder drücken Sie die <kbd>↑</kbd>/<kbd>↓</kbd>-Tasten der
+     Tastatur, um schrittweise zu ändern.</div>
+
+  <div class="tip"><b>Sinc-Interpolation zählt nur, wenn Sie hineingezoomt sind.</b>
+     Der Sin/Lin-Schalter ändert die Kurve nur dann, wenn Abtastpunkte mindestens einige
+     Pixel voneinander entfernt sind; andernfalls sehen gerade Verbindungslinien identisch
+     aus und sind weniger CPU-aufwändig.  Aktivieren Sie die Interpolation, sobald einzelne
+     Abtastwerte sichtbar sind.  Siehe <a href="oscilloscope.html#scope-sinc-interp">Oszilloskop ▸
+     Sin/Lin</a>.</div>
+
+  <div class="tip"><b>Hysterese stabilisiert den Trigger bei einem schwachen, verrauschten Signal.</b>
+     Ohne Hysterese löst das Rauschen um den Triggerpegel eine Folge von Fehlauslösungen
+     aus und die Kurve zittert.  Mit aktivierter Trigger-Hysterese arretiert die Kurve.
+     Siehe <a href="oscilloscope.html#scope-trigger-hysteresis">Oszilloskop
+     ▸ Hysterese</a>.</div>
+
+  <div class="tip"><b>Ein gespeichertes Generatorsignal ist eine perfekte Referenz.</b>
+     <em>Speichern unter...</em> schreibt die ideale, mathematisch exakte Wellenform -
+     digital synthetisiert, ohne DAC-, Verstärker- oder Kabelverzerrung.  Verwenden Sie
+     sie als Eingangsquelle für ein anderes Messgerät: Jede messbare Abweichung gehört
+     dann zu diesem Gerät, nicht zur Quelle.  Siehe
+     <a href="theory/generator.html#savefile">Theorie ▸ Signal speichern</a>.</div>
+
+  <div class="tip"><b>Rechnen Sie eine Beschaltung mit einer Kalibrierdatei heraus.</b>
+     Messen Sie die Übertragungsfunktion eines Notch-Filters, Dämpfungsglieds oder einer
+     Soundkarte einmalig im Frequenzgang-Modul, und laden Sie die erzeugte <code>.frc</code>
+     in den FFT-Analyser: Die Übertragungsfunktion wird zur Anzeigzeit herausdividiert,
+     sodass die Tabelle den Prüfling zeigt, nicht die Messkette.  Siehe
+     <a href="theory/fft.html#cal">Theorie ▸ rote und blaue Punkte</a>.</div>
+
+  <div class="tip"><b>Die rekonstruierte Schwebungs-Überlagerung bändigt ein eng beieinanderliegendes Tonpaar.</b>
+     Im Zweiton-Modus zeichnet das <em>Rekonstruierter Beat</em>-Overlay des Oszilloskops
+     die langsame |f₁−f₂|-Einhüllende, sodass Sie auf den Beat triggern können, anstatt
+     die schnellen Trägernulldurchgänge zu verfolgen.  Siehe
+     <a href="oscilloscope.html#scope-trigger-beat">Oszilloskop ▸ Rekonstruierter
+     Beat</a>.</div>
+
+  <div class="tip"><b>Der Frequenzgang-Sweep ist seine eigene Referenz.</b>
+     Die Sweep-Messung wird gegen den <em>exakten</em> abgespielten Sweep dekonvolviert -
+     nicht gegen eine neu gemessene Kopie - sodass der zurückgewonnene Betrag und die Phase
+     die wahre Übertragungsfunktion des Prüflings darstellen.  Siehe
+     <a href="theory/freq-resp.html">Theorie ▸ Frequenzgang</a>.</div>
+
+  <div class="tip"><b>Strg+F1 springt direkt zur passenden Hilfe.</b>
+     Drücken Sie <kbd>F1</kbd> an beliebiger Stelle für das Handbuch, oder
+     <kbd>Ctrl</kbd>+<kbd>F1</kbd>, um die Hilfe genau bei dem Abschnitt zu öffnen,
+     der zum aktuell fokussierten Steuerelement gehört.  Und die neue
+     <a href="help-index.html">Index &amp; Suche</a>-Seite durchsucht das gesamte Handbuch.</div>
+
+  <div class="tip"><b>Die Residuum-Ansicht zeigt, was sich unter der Grundwelle verbirgt.</b>
+     Schalten Sie einen Oszilloskop-Kanal auf <em>Residuum</em>, und er zeichnet das
+     erfasste Signal minus seines am besten passenden Tons - die Verzerrung, das Rauschen
+     und die Glitches, die unter dem Grundton verborgen sind, werden sichtbar.  Zweiton
+     funktioniert ebenfalls: Beide Frequenzen werden aus der Erfassung selbst gemessen,
+     sodass frei laufende DAC- und ADC-Takte die Subtraktion nicht verschmieren können.
+     Siehe <a href="oscilloscope.html">Oszilloskop</a>.</div>
+
+  <div class="tip"><b>Überlagern Sie einem gemessenen Frequenzgang ein ideales Filter.</b>
+     Der <em>Filter</em>-Reiter des Frequenzgang-Moduls verankert einen idealen Tiefpass,
+     Hochpass, Bandpass oder eine Bandsperre (Butterworth, Tschebyscheff, Inverser
+     Tschebyscheff, Elliptisch oder Bessel) an der gemessenen Kurve, und
+     <em>Vergleichen</em> zeichnet die Abweichung davon - genau wie der Vergleich gegen
+     RIAA.  Siehe <a href="freqresp.html">Frequenzgang</a>.</div>
+
+  <div class="tip"><b>Lassen Sie die Unebenheits-Anzeige die Ebenheit beurteilen.</b>
+     Auf dem <em>Unebenheit</em>-Reiter lesen Sie die Bandränder ab, an denen der
+     Frequenzgang zuerst einen Korridor von ±X dB um seinen Höchstwert verlässt (oder um
+     sein Minimum, bei einer Bandsperre), oder die ±-Abweichung über einen gewählten
+     Bereich - im Diagramm annotiert, mit einem abtrennbaren Messwertfenster.  Siehe
+     <a href="freqresp.html">Frequenzgang</a>.</div>
+
+  <div class="tip"><b>Die Vollaussteuerungs-Kalibrierung gehört zur Soundkarte.</b>
+     Jede Karte behält ihr eigenes Profil - eine Zeile je Abschwächer- oder DIP-Bereich,
+     getrennte Links-/Rechts-Werte, über den Gerätenamen auf jedem Backend zugeordnet -
+     sodass ein Wechsel von Geräten oder Backends Kalibrierungen nie durcheinanderbringt.
+     Bekannte Karten sind vorkonfiguriert; Ihre Fadenkreuz-Kalibrierung verfeinert sie.
+     Siehe <a href="preferences.html#prefs-audio-card">Einstellungen ▸ Karte</a>.</div>
+
+  <div class="tip"><b>Treiben Sie nur den Kanal, den Sie messen.</b>
+     Der Generator, der Frequenzgang-Sweep und der Kerbfilter-Abgleichassistent haben
+     jeweils einen <em>Ausgangskanal</em>-Wähler - Beide, nur Links oder nur Rechts -, der
+     die angesteuerte Spur live schaltet.  Praktisch für Übersprech-Prüfungen und Geräte
+     mit nur einem Eingang.  Siehe <a href="generator.html">Generator</a>.</div>
+
+  <div class="tip"><b>Weit herausgezoomt zeichnet das Oszilloskop wie ein echtes DSO.</b>
+     Oberhalb von einem Sample pro Pixel wird die Kurve zu einem Digital-Phosphor-Bild:
+     das Verweil-Histogramm jeder Spalte, gezogen mit einem Stift der konfigurierten
+     Linienbreite - schmale Impulse und Schwebungshüllkurven behalten ihren echten
+     Spitze-Spitze-Wert bei jedem Zoom, und die Helligkeit zeigt, wo das Signal verweilt.
+     Siehe <a href="theory/oscilloscope.html">Theorie ▸ Oszilloskop</a>.</div>
+
+  <div class="tip"><b>Gestörte Erfassungen vergiften nie eine lange Mittelung.</b>
+     Der FFT verwirft Blöcke mit Klebestellen, Ausfällen oder bandbegrenzungsverletzenden
+     Glitches, bevor sie in die Mittelung eingehen, synchronisiert dann neu und läuft
+     weiter.  Für ein kleines oder nichtsinusförmiges Signal, das das Gatter bei jedem
+     Block auslöst, deaktivieren Sie <em>Zeitliche Diskontinuität erkennen</em> auf dem
+     Tab FFT-Einstellungen.  Siehe
+     <a href="theory/fft.html#rejection">Theorie ▸ schlechte Blöcke heraushalten</a>.</div>
+
+  <div class="tip"><b>SNR und ENOB bleiben auch bei einem breiten oder verrauschten Ton ehrlich.</b>
+     Die Rauschkennwerte schließen nicht nur den Grundton und seine Harmonischen aus,
+     sondern den gesamten Leck- / Phasenrausch-<em>Saum</em> des Grundtons: Das
+     ausgeschlossene Band weitet sich, um einem breiten oder zitternden Ton nach außen zu
+     folgen, bis seine Bins auf das Grundrauschen zurückfallen, sodass ein breiter Saum
+     SNR oder ENOB nie aufbläht.
+     Siehe <a href="theory/fft.html#metrics">Theorie &#9656; Verzerrungs- &amp;
+     Rausch-Metriken</a>.</div>
+
+  <div class="tip"><b>Lassen Sie die Einheit weg - nackte Ziffern bedeuten die Basiseinheit.</b>
+     Tippen Sie nur eine Zahl, und das Feld interpretiert sie in seiner Basiseinheit:
+     <code>1000</code> in einem Frequenzfeld sind 1000&nbsp;Hz, in einem Amplitudenfeld
+     1000&nbsp;V, in einem Zeitfeld 1000&nbsp;s.  Und für Kilohertz gibt es Kurzformen:
+     <code>1.5k</code>, <code>1.5kh</code> und <code>1.5khz</code> bedeuten alle
+     1.5&nbsp;kHz.</div>
+
+  <div class="tip"><b>Ziehen Sie ein Rechteck auf, um genau in diesen Bereich zu zoomen.</b>
+     In den Ansichten von Oszilloskop, FFT und Frequenzgang ziehen Sie mit der linken
+     Maustaste ein Gummiband-Rechteck um den interessanten Bereich - beim Loslassen wird
+     er auf die volle Ansicht gestreckt (das Oszilloskop behält Triggerpegel und -position
+     auf demselben Wellenformpunkt).  <kbd>Ctrl</kbd>+<kbd>Z</kbd> geht die letzten 32
+     Zoom-Schritte der Ansicht unter dem Zeiger oder mit Fokus zurück - ein dünner grüner
+     Rahmen markiert, welche Ansicht das Rückgängig übernimmt.</div>
+
+  <div class="tip"><b>Stellen Sie Dither in dBV ein und lesen Sie ihn direkt am FFT-Grundrauschen ab.</b>
+     Das Dither-Feld des Generators nimmt Bits oder einen dBV-Pegel an, und der dBV
+     enthält bereits die Rauschbandbreite des FFT-Fensters - so landet bei
+     <b>inkohärenter (Leistungs-)Mittelung</b> das FFT-Grundrauschen genau dort, wo
+     Sie es eingestellt haben: Geben Sie &minus;100&nbsp;dBV ein, und das
+     Grundrauschen liegt bei &minus;100&nbsp;dBV.  Kohärente Mittelung löscht
+     Rauschen aus und liest weit niedriger.</div>
+
+  <div class="tip"><b>Die Hardware muss nicht auf Ihrem Schreibtisch stehen.</b>
+     Lassen Sie Phonalyser als <em>Server</em> auf der Maschine laufen, an der Ihre
+     Wandler hängen, und drücken Sie dann in Einstellungen ▸ Audio auf
+     <em>Server...</em>: Die Backends jenes Messplatzes reihen sich neben den lokalen
+     in die Backend-Liste ein, und von da an arbeiten Geräte, Karten, Kalibrierung,
+     Generator und Sweeps, als steckte die Karte hier.
+     Siehe <a href="server.html">Der Phonalyser-Server</a> und
+     <a href="preferences.html#prefs-audio-servers">Einstellungen ▸ Messen über
+     einen Server</a>.</div>
+
+  <div class="tip"><b>Ein Gerät des Messplatzes, an dem jemand anders misst, sagt es.</b>
+     Jedes Gerät eines Servers ist jeweils an einen Client gesperrt, und ein Gerät,
+     das jemand anders hält, liest sich mitten in der Geräteliste als
+     <em>belegt von</em> samt dem Namen jenes Clients - Sie erfahren es also,
+     bevor Sie auf Aufnehmen drücken, nicht danach.
+     Siehe <a href="preferences.html#prefs-audio-server-backends">Einstellungen ▸
+     Ein Backend des Messplatzes wählen</a>.</div>
+
+  <div class="tip"><b>Lesen Sie Oberwellen mit dBr direkt an der Achse ab.</b>
+     Stellen Sie die Amplitudeneinheit der FFT auf <em>dBr</em>, und die Grundwelle
+     liegt exakt auf 0, sodass jede Oberwelle und jeder Störton unmittelbar als
+     "so und so viele dB unter dem Ton" ablesbar ist.  Die Referenz ist die
+     angezeigte Grundwelle und wird bei jedem Neuzeichnen neu gelesen, sie folgt
+     also einem driftenden Pegel.
+     Siehe <a href="fft.html#fft-mag-unit">FFT ▸ Amplitudeneinheit</a> und
+     <a href="theory/fft.html#plot">Theorie ▸ Korrekturen zur Plot-Zeit</a>.</div>
+
+  <div class="tip"><b>Tippen Sie einen Ausgangspegel in dBFS, wenn Sie die
+     Vollaussteuerung meinen.</b>  Der Generator, der Frequenzgang-Sweep und der
+     Kerbfilter-Abgleichassistent nehmen alle eine Amplitude in dBFS an - Suffix
+     <code>dbfs</code> oder kurz <code>dbf</code> - und zeigen sie weiterhin in
+     dieser Einheit an.  0&nbsp;dBFS ist ein vollausgesteuerter <em>Sinus</em>, die
+     Zahl ändert ihre Bedeutung also nicht, wenn Sie die Wellenform wechseln.
+     Siehe <a href="generator.html#generator-amplitude">Generator ▸ Amplitude</a>.</div>
+
+  <div class="tip"><b>Das Amplitudenhistogramm unterscheidet Übersteuerung von
+     Rauschen auf einen Blick.</b>  Öffnen Sie es über die Werkzeugleiste des
+     Oszilloskops: Ein Sinus zeichnet die Badewanne seiner beiden Umkehrpunkte,
+     Breitbandrauschen eine Gaußsche Glocke und ein übersteuertes Signal einen
+     harten Zacken dort, wo die Begrenzung liegt.  Eine nur einseitig übersteuerte
+     Wellenform zeigt sich als ungleiche Balken um die Mittellinie.
+     Siehe <a href="oscilloscope.html#scope-histogram-window">Oszilloskop ▸
+     Amplitudenhistogramm-Fenster</a> und
+     <a href="theory/oscilloscope.html#histogram">Theorie ▸ wie oft, nicht
+     wann</a>.</div>
+
+  <div class="tip"><b>Ein QA40x-Eingangsbereich "0 dBV" sind nicht 0 dBV RMS.</b>
+     Die Bereichstabelle schreibt es aus - <code>0 "dBV" real 0 dBFS or -9 dBV</code>
+     -, denn ein QA-Eingangsbereich ist eine Spitze-Spitze-dBFS-Referenz über das
+     Differenzpaar, dessen echte RMS-Vollaussteuerung rund 9&nbsp;dB tiefer liegt.
+     Die Ausgangsbereiche sind echte dBV.
+     Siehe <a href="theory/audio-backend.html#qa40x-ranges">Theorie ▸ was ein
+     "dBV"-Eingangsbereich wirklich ist</a>.</div>
+
+  <div class="tip"><b>Ihre Kalibrierung kann Ihnen auf den Messplatz folgen.</b>
+     Wählen Sie ein Gerät des Servers, das keine Kalibrierung hat, während diese
+     Maschine eine dazu passende kalibrierte Karte besitzt, und Phonalyser bietet
+     an, die Werte hinüberzukopieren - einmal pro Sitzung und nie stillschweigend.
+     Sagen Sie nein, wird nichts geschrieben.
+     Siehe <a href="preferences.html#prefs-audio-server-cards">Einstellungen ▸
+     Karten und Kalibrierung auf dem Messplatz</a>.</div>
+
+  <div class="tip"><b>Ein QA403 läuft mit 384&nbsp;kHz, ein QA402 nicht.</b>
+     Die Ratenliste richtet sich nach dem tatsächlich angeschlossenen Analysator -
+     das Abtastraten-Register hat einen vierten Code, den nur der QA403 besitzt.
+     Aufnahme und Generator laufen beide mit der Rate, die Sie wählen, denn die
+     beiden Richtungen teilen sich einen Hardware-Takt.
+     Siehe <a href="theory/audio-backend.html#qa40x">Theorie ▸ Das
+     QA40x-Analysator-Backend</a>.</div>
+
+  <div class="tip"><b>Der QA40x kann einen Wandler direkt über seinen
+     I2S-Anschluss an der Frontplatte treiben.</b>  Schalten Sie den Anschluss
+     unter <em>QA40x-Einstellungen</em> ein, und die Liste der Ausgangs-Bittiefen
+     bietet die 16 und 32 Bit des Anschlusses statt der 24 des Analysators an,
+     während der Eingang durchgehend bei 24 bleibt.  Es ist experimentell:
+     QuantAsylum dokumentiert den Anschluss, nicht aber die Register, die ihn
+     einschalten.
+     Siehe <a href="preferences.html#prefs-audio">Einstellungen ▸ Audio</a>.</div>
+
+  <div class="tip"><b>Ein langer Sweep muss nicht mehr abgewartet werden.</b>
+     Das Fortschrittsfenster des Frequenzgangs trägt eine Schaltfläche
+     <em>Abbrechen</em>.  Sie wirkt kooperativ - der Sweep endet über den
+     gewöhnlichen Stopp-Pfad, sodass sich das Fenster schließt und der Bereich
+     entsperrt wird, genau wie nach einem vollendeten Lauf, und Aufnahme und
+     Generator zurückgegeben werden.
+     Siehe <a href="freqresp.html">Frequenzgang</a>.</div>
+
+  <div class="tip"><b>Ein glatt aussehender Frequenzgang kann trotzdem
+     übersteuert sein.</b>  Hat die Aufnahme die Vollaussteuerung erreicht, werden
+     Sie gewarnt, sobald die Kurve erscheint.  Die Entfaltung macht aus einer an
+     die Begrenzung gefahrenen Aufnahme eine feine, regelmäßige Welligkeit, die
+     sich nach Rauschen statt nach Schaden liest - verringern Sie also die
+     Ansteueramplitude, statt der Kurve zu trauen.
+     Siehe <a href="freqresp.html#freqresp-measure-clipping">Frequenzgang ▸
+     Welliger Verlauf</a>.</div>
+
+  <div class="tip"><b>Jeder Frequenzgang auf dem Bildschirm lässt sich
+     speichern.</b>  Der Reiter <em>Speichern unter...</em> schreibt die
+     dargestellte Kurve ohne jede Qualitätsprüfung in eine Datei - einen soeben
+     gemessenen Sweep, einen sanft ausgesteuerten oder einen von der Platte
+     zurückgeladenen.  Das Einzige, was er verlangt, ist, dass überhaupt eine
+     Messung vorliegt.
+     Siehe <a href="freqresp.html#freqresp-tab-saveto">Frequenzgang ▸ Speichern
+     unter...</a>.</div>
+
+  <div class="tip"><b>Stecken Sie eine Karte ein, ohne die Anwendung neu zu
+     starten.</b>  <em>Geräte scannen</em> in Einstellungen ▸ Audio liest die
+     Geräteliste des gewählten Backends erneut, und ein Gerät, das mit dem
+     "ungültigen Gerät" des Treibers scheitert, löst von sich aus eine einmalige
+     erneute Suche samt Wiederholung aus.
+     Siehe <a href="preferences.html#prefs-audio-buttons">Einstellungen ▸ Die
+     Schaltflächen in der Backend-Zeile</a>.</div>
+
+  <div class="tip"><b>Die Einstellungen sagen Ihnen, wenn Ihre Volt geraten
+     sind.</b>  Das Schließen des Reiters Audio nach einem Wechsel des Backends
+     oder eines Geräts prüft, ob die übernommene Auswahl wirklich zu einer
+     gemessenen Vollaussteuerung führt, und nennt den Eingang, den Ausgang oder
+     beide, wenn nicht.  Eine an das Gerät gebundene Karte, die nur Nullen trägt,
+     gilt als unkalibriert - eine leere Zeile ist keine Messung.
+     Siehe <a href="preferences.html#prefs-audio-card">Einstellungen ▸ Karte</a>.</div>
+
+  <div class="tip"><b>Ein toter Eingang sagt es, statt eine flache Linie zu
+     zeichnen.</b>  Ziehen Sie die Karte ab oder lassen Sie eine andere Anwendung
+     sie exklusiv übernehmen, und Oszilloskop und FFT halten mit einem einzigen
+     Dialog an, der das Backend nennt und sagt, ob das Gerät verloren ging oder
+     nur keine Abtastwerte mehr lieferte.  Die Wiedergabeseite wird genauso
+     überwacht.
+     Siehe <a href="theory/audio-backend.html#errors-running">Theorie ▸ Ein
+     Strom, der nach dem Start stirbt</a>.</div>
+
+  <div class="tip"><b>Eine Einstellungsdatei, die sich nicht auswerten lässt,
+     wird nie überschrieben.</b>  Eine durch einen Absturz beschädigte
+     <code>preferences.yaml</code> oder <code>devices.yaml</code> wird daneben in
+     <code>.corrupt</code> umbenannt und der Fehler protokolliert, sodass sich
+     jede Kalibrierung darin noch von Hand retten lässt, statt vom nächsten
+     Speichern einzementiert zu werden.</div>
+
+  <hr/>
+  <p class="back"><a href="index.html">◀ Zurück zum Inhaltsverzeichnis</a></p>
+
+</body>
+</html>

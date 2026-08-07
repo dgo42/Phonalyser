@@ -1,15 +1,15 @@
 /*
- * Phonalyser web — FFT analyzer worker (off the main thread).
+ * Phonalyser web - FFT analyzer worker (off the main thread).
  * Buffer-and-analyze: the engine hands a window of N·(frames) capture samples;
  * this worker runs the faithful FftAnalyzer.analyze (own coherent/incoherent
  * cross-frame averaging, sub-bin fundamental, harmonics, THD/SNR/SINAD) and
  * returns the populated FftResult. Heavy FFT/analyze stays here so the render
  * loop on the main thread never blocks.
  *
- * threads > 1 → THIS worker coordinates a nested pool of fft-pool-worker.js
- * siblings (prelude → split the frame ranges → gather → merge → finalize, all
+ * threads > 1 -> THIS worker coordinates a nested pool of fft-pool-worker.js
+ * siblings (prelude -> split the frame ranges -> gather -> merge -> finalize, all
  * in-worker). Java parity: FftAnalyzerWorker.parallelChunks (FftAnalyzerWorker
- * .java:640-642) splits chunks ON the background analyzer thread — the UI
+ * .java:640-642) splits chunks ON the background analyzer thread - the UI
  * thread never coordinates. (The first web port ran the coordinator on the
  * main thread, which froze the UI at threads > 1.)
  * GNU AGPL v3 or later.
@@ -20,9 +20,9 @@ import { TimeDiscontinuityDetector } from '../dsp/time-discontinuity.js';
 import { FftAccumulator } from './fft-accumulator.js';
 
 const analyzer = new FftAnalyzer();
-const slot = new FftResult();   // reused pool slot — analyze/prelude/finalize write into it
+const slot = new FftResult();   // reused pool slot - analyze/prelude/finalize write into it
 
-// Time-domain discontinuity gate (Java FftAnalyzerWorker.timeDetector) — the scope's
+// Time-domain discontinuity gate (Java FftAnalyzerWorker.timeDetector) - the scope's
 // glitch detector run on the tick's raw window. A splice/dropout breaks the sinusoid
 // recurrence decades above the noise floor even when its spectral footprint slips under
 // the frequency-domain gates (and vice versa), so the scope trigger and the FFT rejection
@@ -41,7 +41,7 @@ let shadowAccum = null;
  *  on the noise floor at any signal frequency; NaN (no tone) self-estimates.
  *  @param {Float64Array} samples the raw tick window
  *  @param {FftResult} r this tick's analyzed result (fundamentalHzRefined + sampleRate)
- *  @returns {boolean} true ⇒ the window contains a time-domain discontinuity */
+ *  @returns {boolean} true => the window contains a time-domain discontinuity */
 function timeDiscontinuity(samples, r) {
   const f0 = r.fundamentalHzRefined;
   const omega = (f0 > 0 && f0 < r.sampleRate / 2.0)
@@ -50,7 +50,7 @@ function timeDiscontinuity(samples, r) {
 }
 
 /** Fundamental bin(s) the spectral gate measures the near-carrier pedestal around
- *  (mirror of FftController._fundamentalBins) — needed by the shadow fold's reject(). */
+ *  (mirror of FftController._fundamentalBins) - needed by the shadow fold's reject(). */
 function fundamentalBins(r) {
   if (!(r.freqResolution > 0)) return null;
   const f1 = (Number.isFinite(r.fundamentalHzRefined) && r.fundamentalHzRefined > 0)
@@ -66,7 +66,7 @@ function fundamentalBins(r) {
 /** Step 5b: run the shadow cross-tick fold for this tick and return the cumulative spectrum
  *  for the controller's parity check, or null if the tick was gated out / not accumulated.
  *  Mirrors FftController._onWorkerResult's fold (same FftAccumulator, same gate order
- *  time→spectral, same reset/resync one-shots), overlaid onto a SCRATCH copy so the posted
+ *  time->spectral, same reset/resync one-shots), overlaid onto a SCRATCH copy so the posted
  *  per-window arrays stay raw for the main fold. */
 function shadowFold(d, r, timeDisc) {
   if (!shadowAccum) shadowAccum = new FftAccumulator();
@@ -97,8 +97,8 @@ function finishAndPost(r, d, id, t0) {
 // Nested parallel pool (threads > 1). The controller serializes dispatches
 // (one analysis in flight), so a single pending gather is enough.
 // A hung sub-worker (no partial, no error) would otherwise leave `pending` unresolved and the
-// controller's one-in-flight gate stuck forever → the whole FFT stalls. The watchdog tears the
-// pool down and finishes the tick SERIALLY so analysis self-heals (no Java analog — its pool
+// controller's one-in-flight gate stuck forever -> the whole FFT stalls. The watchdog tears the
+// pool down and finishes the tick SERIALLY so analysis self-heals (no Java analog - its pool
 // runs in one JVM; a browser sub-worker can wedge independently).
 const POOL_WATCHDOG_MS = 5000;
 let pool = [];
@@ -123,7 +123,7 @@ function ensurePool(W) {
  *  .frc de-embed + the readout consume. Cloning the spectral arrays (not
  *  transferring `slot`'s) keeps the pool slot reusable next tick.
  *  `timeDisc` = the time-domain discontinuity verdict for this window (the
- *  controller mirrors Java's gate order off it — time gate before spectral). */
+ *  controller mirrors Java's gate order off it - time gate before spectral). */
 function postResult(r, id, t0, timeDisc, shadow) {
   const out = {
     id,
@@ -146,7 +146,7 @@ function postResult(r, id, t0, timeDisc, shadow) {
     snrDb: r.snrDb, sinadDb: r.sinadDb,
     snrFreqMin: r.snrFreqMin, snrFreqMax: r.snrFreqMax,
     coherentAveraging: r.coherentAveraging,
-    noisePower: r.noisePower, avgNoiseFloorDbFs: r.avgNoiseFloorDbFs,
+    noisePower: r.noisePower, windowNenbwBins: r.windowNenbwBins, avgNoiseFloorDbFs: r.avgNoiseFloorDbFs,
     imdProductA: r.imdProductA ? r.imdProductA.slice() : null,
     imdProductB: r.imdProductB ? r.imdProductB.slice() : null,
     imdProductBin: r.imdProductBin ? r.imdProductBin.slice() : null,
@@ -162,7 +162,7 @@ function postResult(r, id, t0, timeDisc, shadow) {
 }
 
 /** threads > 1: single-threaded prelude here, per-frame accumulation fanned out
- *  to the nested pool, merge + finalize back here — the exact stage split the
+ *  to the nested pool, merge + finalize back here - the exact stage split the
  *  old main-thread coordinator ran, now entirely off the UI thread. */
 function analyzePooled(d, W, t0) {
   let sp;
@@ -200,7 +200,7 @@ function analyzePooled(d, W, t0) {
     const frameEnd = frameStart + len;
     // Each sub-worker gets its OWN copy of the sample window (transferred so it
     // owns it; d.samples stays intact for the next copy). The copies happen in
-    // THIS worker — the UI thread never pays for them.
+    // THIS worker - the UI thread never pays for them.
     const win = d.samples.slice();
     pool[i].postMessage({
       type: 'partial', id: d.id, w: i, frameStart, frameEnd,
@@ -233,7 +233,7 @@ function onPartial(p) {
   finishAndPost(r, g.d, g.id, g.t0);
 }
 
-/** Watchdog: a sub-worker wedged (no partial, no error) — tear the pool down (rebuilt on the
+/** Watchdog: a sub-worker wedged (no partial, no error) - tear the pool down (rebuilt on the
  *  next threads>1 dispatch) and finish THIS tick on the coordinator thread so the controller's
  *  one-in-flight gate resolves instead of stalling the FFT forever. */
 function onPoolTimeout(id) {

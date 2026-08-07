@@ -1,0 +1,860 @@
+/*
+ * Phonalyser - precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.edgo.audio.measure.gui.widgets;
+
+import java.util.Locale;
+import java.util.function.DoubleSupplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.edgo.audio.measure.gui.widgets.UnitFamily.Unit;
+
+import lombok.Getter;
+
+/**
+ * The SWT-free brain of a {@link NumericStepField}: canonical value, unit
+ * family, bounds, precision and one of three stepping policies.  Pure logic so
+ * the wheel walks, unit parsing and clamping are unit-testable headless.
+ *
+ * <p>The three policies (selected by constructor - configuration is data, not
+ * callbacks):
+ * <ul>
+ *   <li><b>FIXED</b> - wheel and arrows add fixed (possibly different)
+ *       increments.</li>
+ *   <li><b>LIST</b> - wheel and arrows jump along a value series (1-2-5
+ *       scope resolutions, power-of-two averages, ...); manual entry between
+ *       list points is allowed.</li>
+ *   <li><b>PERCENT</b> - the "careful 10 %" wheel: up adds 10 % and floors
+ *       the result onto its decade's 10 %-grid (1000 -> 1100 -> ... -> 1900 ->
+ *       2000 -> 2200); down steps along the 1-significant-digit grid when
+ *       already on it (1000 -> 900 -> ... -> 200 -> 100 -> 90), else to the next
+ *       lower 10 %-grid value (1300 -> 1200).  Arrows add ±1 in the
+ *       <em>displayed</em> unit (±1 kHz at 192 kHz, not ±1 Hz).</li>
+ * </ul>
+ *
+ * <p>Values are clamped to {@code [min, max]} on every commit and step
+ * (clamp-on-enter).  An explicitly typed unit suffix (e.g. {@code dBV})
+ * becomes sticky for display until the next suffix-less entry; otherwise the
+ * family's automatic display-unit switching applies.
+ */
+public final class NumericStepModel {
+
+    /** Number with an optional trailing unit suffix; decimal comma accepted
+     *  (normalised to a dot before matching).  Includes both micro code points
+     *  - MICRO SIGN U+00B5 and GREEK SMALL LETTER MU U+03BC - since pasted
+     *  scientific text and Greek keyboards produce the latter. */
+    private static final Pattern NUMBER_WITH_UNIT =
+            Pattern.compile("([+-]?[0-9]*\\.?[0-9]+(?:[eE][+-]?[0-9]+)?)\\s*([%µμ\\w./]*)");
+    /** Lenient mid-edit grammar for the SWT Verify filter: any prefix of a
+     *  valid number-with-unit (sign alone, dangling separator, exponent
+     *  fragment, unit characters incl. µ and the per-div slash, ∞) or of a
+     *  named-value label ("Nyquist/2").  {@link #commit} remains the strict
+     *  gate. */
+    private static final Pattern PARTIAL_INPUT =
+            Pattern.compile("[+-]?[0-9]*[.,]?[0-9]*(?:[eE][+-]?[0-9]*)?[\\sa-zA-Z0-9µμ%/∞]*");
+    /** Relative tolerance for grid / series membership checks. */
+    private static final double REL_EPS = 1e-9;
+    /** Significant digits every computed value is rounded to - kills the
+     *  binary-float drift that would otherwise accumulate over wheel walks
+     *  (1100.0000000001 breaking the next grid snap). */
+    private static final int VALUE_SIG_DIGITS = 12;
+    /** The PERCENT policy's wheel ratio: one notch targets ±10 %. */
+    private static final double PERCENT_STEP_FACTOR = 1.1;
+    /** PERCENT-policy wheel step while a log unit (dBV) is displayed: one
+     *  notch walks the 10-dB grid (0 -> −10 -> −20 ...) - stepping the linear
+     *  value by 10 % would produce 0.83-dB crumbs. */
+    private static final double LOG_WHEEL_STEP_DB = 10;
+    /** PERCENT policy's nominal wheel step, shown in {@link #stepHint()}. */
+    private static final String PERCENT_STEP_LABEL = "10 %";
+    /** Language-neutral glyphs for {@link #stepHint()}: mouse wheel, step
+     *  arrows, and the separator between LIST values. */
+    private static final String WHEEL_GLYPH  = "⟳";
+    private static final String ARROWS_GLYPH = "▲▼";
+    private static final String SERIES_SEP   = "·";
+    /** LIST series longer than this are abbreviated to first·...·last. */
+    private static final int SERIES_HINT_MAX = 7;
+
+    /** DITHER: dB per factor-of-10 amplitude - the dBV <-> Vrms scale. */
+    private static final double DITHER_DB_PER_DECADE  = 20.0;
+    /** DITHER: one TPDF bit is 6.0206 dB (RMS = 2^−(bits−1)/√6) ... */
+    private static final double DITHER_DB_PER_BIT     = 6.0206;
+    /** ... and the constant term is 20·log10(1/√6) = −7.782 dBFS. */
+    private static final double DITHER_TPDF_OFFSET_DB = 7.782;
+    /** DITHER dBV-view wheel/arrow notch: 10 dBV, snapped to the nearest bit. */
+    private static final double DITHER_DBV_STEP       = 10.0;
+    /** Decimals shown for the DITHER dBV view. */
+    private static final int    DITHER_DBV_DECIMALS   = 1;
+    /** dBFS ↔ amplitude conversion: dB per factor-of-10 (voltage), as for dBV.
+     *  A dBFS entry needs the live full-scale, so - unlike dBV - it is resolved
+     *  here in {@link #commit}, not in {@link Unit#toCanonical}. */
+    private static final double DBFS_DB_PER_DECADE    = 20.0;
+    /** √2 - the peak<->RMS ratio anchoring 0 dBFS to a full-scale SINE. */
+    private static final double ROOT_TWO              = Math.sqrt(2.0);
+    /** The Off vocabulary, shared by every policy that has an Off state - a 0-bit
+     *  dither, an averages count of 1, ... : the text such a value renders as, and
+     *  the word {@link #isOffWord} accepts in full or as any prefix. */
+    public static final String OFF_LABEL              = "Off";
+    /** The unbounded vocabulary, for a field whose max is infinite: this word is
+     *  accepted in full or as any prefix ({@code i}, {@code in}, {@code inf}, ...). */
+    public static final String INFINITY_LABEL         = "Infinity";
+    /** Rendered form of an unbounded value, and the shortest way to type one. */
+    private static final String INFINITY_SIGN         = "∞";
+
+    private enum Policy {
+        FIXED, LIST, PERCENT, DITHER;
+
+        private Policy() {}
+    }
+
+    @Getter
+    private final UnitFamily family;
+    private final Policy policy;
+    private double min;
+    private double max;
+    private final double wheelStep;   // FIXED only
+    private final double arrowStep;   // FIXED only
+    private double[] series;          // LIST only, kept sorted
+    /** DITHER, and dBFS-capable PERCENT (AMPLITUDE) fields: live DAC peak
+     *  full-scale amplitude (Vpeak) supplier.  DITHER's bits⇄dBV view and an
+     *  AMPLITUDE field's dBFS entry are both full-scale-aware, so the conversion
+     *  tracks the live calibration; injected as config (never a singleton
+     *  reach-in), {@code null} for every other policy and for a PERCENT field
+     *  that must refuse dBFS (the FFT manual-fundamental). */
+    private final DoubleSupplier fsAmplSupplier;
+    /** DITHER only: the config dBV (the full-scale term) that {@link #value}
+     *  was last reconciled against - {@link #reanchor} moves the bits by the
+     *  config delta to hold the displayed dBV across a full-scale change. */
+    private double ditherConfigDbv;
+    /** ≥ 0: fixed decimal count; −1: trim mode capped at {@link #maxDecimals}. */
+    private final int decimals;
+    private final int maxDecimals;
+    /** Unit the user last typed explicitly; {@code null} = automatic. */
+    private Unit stickyUnit;
+    /** Optional value rendered / accepted as a label instead of a number
+     *  (the sweep-points "Nyquist/2" entry); NaN = none. */
+    private double namedValue = Double.NaN;
+    private String namedValueLabel;
+    @Getter
+    private double value;
+    /** When set, the field renders empty and holds no value - the disabled,
+     *  never-measured channel row in the calibration dialog (avoids the
+     *  clamp-to-min "1 nV" artifact).  Cleared by any value mutation. */
+    @Getter
+    private boolean blank;
+
+    /** FIXED policy: wheel adds {@code wheelStep}, arrows add
+     *  {@code arrowStep}, values render with exactly {@code decimals}
+     *  decimal digits. */
+    public NumericStepModel(UnitFamily family, double min, double max,
+                            double wheelStep, double arrowStep, int decimals) {
+        this.family     = family;
+        this.policy     = Policy.FIXED;
+        this.min        = min;
+        this.max        = max;
+        this.wheelStep  = wheelStep;
+        this.arrowStep  = arrowStep;
+        this.decimals   = decimals;
+        this.maxDecimals = decimals;
+        this.fsAmplSupplier = null;
+        this.value      = min;
+    }
+
+    /** LIST policy: wheel and arrows jump along {@code series} in the GIVEN
+     *  order (a copy is taken) - pass the intended wheel order, usually
+     *  ascending; manual entry off the list is allowed.  Values render with
+     *  up to {@code maxDecimals} decimals, trailing zeros trimmed. */
+    public NumericStepModel(UnitFamily family, double min, double max,
+                            double[] series, int maxDecimals) {
+        this.family     = family;
+        this.policy     = Policy.LIST;
+        this.min        = min;
+        this.max        = max;
+        this.wheelStep  = 0;
+        this.arrowStep  = 0;
+        this.series     = series.clone();
+        this.decimals   = -1;
+        this.maxDecimals = maxDecimals;
+        this.fsAmplSupplier = null;
+        this.value      = min;
+    }
+
+    /** PERCENT policy: the "careful 10 %" wheel, ±1 displayed-unit arrows.
+     *  Values render with up to {@code maxDecimals} decimals, trailing zeros
+     *  trimmed.  No full-scale supplier - a dBFS entry is refused. */
+    public NumericStepModel(UnitFamily family, double min, double max,
+                            int maxDecimals) {
+        this(family, min, max, maxDecimals, null);
+    }
+
+    /** PERCENT policy with a live DAC peak full-scale (Vpeak) supplier so an
+     *  AMPLITUDE field accepts a dBFS entry ({@code x dBFS = fullScaleRms ·
+     *  10^(x/20)}); the supplier comes IN as config (never a singleton
+     *  reach-in).  {@code null} on a field that must refuse dBFS (the FFT
+     *  manual-fundamental).  Steps are unchanged from the plain PERCENT field. */
+    public NumericStepModel(UnitFamily family, double min, double max,
+                            int maxDecimals, DoubleSupplier fsAmplSupplier) {
+        this.family     = family;
+        this.policy     = Policy.PERCENT;
+        this.min        = min;
+        this.max        = max;
+        this.wheelStep  = 0;
+        this.arrowStep  = 0;
+        this.decimals   = -1;
+        this.maxDecimals = maxDecimals;
+        this.fsAmplSupplier = fsAmplSupplier;
+        this.value      = min;
+    }
+
+    /** DITHER policy: a dither depth that is 0 (Off) or {@code [1, maxBits]}
+     *  bits - possibly fractional - shown as whole/fractional bits or a
+     *  full-scale-aware dBV VIEW of the same value.  {@code fsAmplSupplier}
+     *  yields the live peak full-scale (Vpeak) and comes IN as config so the
+     *  model never reaches for a singleton; the dBV is the physical TPDF
+     *  level relative to that full-scale.  Off sits at the TOP of the range
+     *  (stepping up from 1 bit reaches Off). */
+    public NumericStepModel(UnitFamily family, int maxBits,
+                            DoubleSupplier fsAmplSupplier) {
+        this.family     = family;
+        this.policy     = Policy.DITHER;
+        this.min        = 0;
+        this.max        = maxBits;
+        this.wheelStep  = 0;
+        this.arrowStep  = 0;
+        this.decimals   = -1;
+        this.maxDecimals = DITHER_DBV_DECIMALS;
+        this.fsAmplSupplier = fsAmplSupplier;
+        this.value      = 0;   // Off
+        this.ditherConfigDbv = ditherFsDbv();
+    }
+
+    // -------------------------------------------------------------------------
+    // Value + bounds
+    // -------------------------------------------------------------------------
+
+    /** Sets the canonical value, clamped to {@code [min, max]}.  NaN is
+     *  ignored - a poisoned value could never be stepped or committed away. */
+    public void setValue(double v) {
+        if (Double.isNaN(v)) return;
+        blank = false;
+        value = clamp(roundSig(v));
+    }
+
+    /** Puts the model into the blank state: no value, an empty rendered text.
+     *  The next {@link #setValue}, {@link #wheel}, {@link #arrow} or a
+     *  successful {@link #commit} leaves it. */
+    public void setBlank() {
+        blank = true;
+    }
+
+    /** Updates the lower bound (e.g. a config-driven floor) and re-clamps. */
+    public void setMin(double min) {
+        this.min = min;
+        value = clamp(value);
+    }
+
+    /** Updates the upper bound (e.g. Nyquist following the sample rate, the
+     *  DAC full-scale following calibration) and re-clamps. */
+    public void setMax(double max) {
+        this.max = max;
+        value = clamp(value);
+    }
+
+    /** Replaces the LIST series (e.g. the sweep-points list whose head follows
+     *  the sample rate), in the given wheel order.  No-op for other
+     *  policies. */
+    public void setSeries(double[] series) {
+        if (policy == Policy.LIST) this.series = series.clone();
+    }
+
+    /** Declares one value that renders and parses as {@code label} instead of
+     *  a number - the sweep-points "Nyquist/2" entry, whose numeric value
+     *  follows the sample rate.  Stepping treats it as its plain number. */
+    public void setNamedValue(double value, String label) {
+        this.namedValue = value;
+        this.namedValueLabel = label;
+    }
+
+    // -------------------------------------------------------------------------
+    // Stepping
+    // -------------------------------------------------------------------------
+
+    /** One wheel notch: {@code dir} = +1 up / −1 down. */
+    public void wheel(int dir) {
+        switch (policy) {
+            case FIXED:   setValue(value + dir * wheelStep); break;
+            case LIST:    setValue(listJump(dir));           break;
+            case PERCENT:
+                Unit u = currentUnit();
+                if (u.log()) {
+                    setValue(u.toCanonical(logGridStep(u.fromCanonical(value), dir)));
+                } else if (u.fsRelative()) {
+                    // dBFS sticks like dBV: walk the same 10-dB grid, in the
+                    // dBFS domain (via the live full-scale), back to canonical.
+                    setValue(canonicalFromDbfs(logGridStep(dbfsFromCanonical(value), dir)));
+                } else {
+                    setValue(dir > 0 ? percentUp(value) : percentDown(value));
+                }
+                break;
+            case DITHER:  ditherStep(dir); break;
+        }
+    }
+
+    /** One arrow-key step: {@code dir} = +1 up / −1 down. */
+    public void arrow(int dir) {
+        switch (policy) {
+            case FIXED:   setValue(value + dir * arrowStep); break;
+            case LIST:    setValue(listJump(dir));           break;
+            case PERCENT: setValue(plusOneDisplayedUnit(dir)); break;
+            case DITHER:  ditherStep(dir); break;
+        }
+    }
+
+    // ---- DITHER policy ------------------------------------------------------
+
+    /** One dither step: {@code dir} = +1 up (fewer bits -> toward Off) / −1 down
+     *  (more bits, quieter dither).  Bits view walks whole ±1-bit steps (a
+     *  fractional value keeps its fraction); dBV view walks exactly ±10 dBV
+     *  (fractional bits - no snap to whole bits).  Off sits at the TOP: stepping
+     *  up from 1 bit reaches Off; stepping down from Off reaches 1 bit. */
+    private void ditherStep(int dir) {
+        if (value <= 0) {                     // currently Off
+            setValue(dir > 0 ? 0 : 1);        // up stays Off; down -> 1 bit
+            return;
+        }
+        if (currentUnit().log()) {            // dBV view: step exactly ±10 dBV
+            double stepped = ditherBitsForDbv(ditherDbvForBits(value) + dir * DITHER_DBV_STEP);
+            setValue(dir > 0 && stepped < 1 ? 0 : clampBits(stepped));
+        } else {                              // bits view: whole ±1-bit step
+            double nv = value - dir;          // up (+1) -> fewer bits, toward Off
+            setValue(dir > 0 && nv < 1 ? 0 : clampBits(nv));
+        }
+    }
+
+    /** dBV of the DAC PEAK full-scale.  The TPDF dither is added to the
+     *  peak-normalised sample (±1 ≡ peak FS = {@code dacFsVoltageAmpl}) and its
+     *  RMS = 2^−(bits−1)/√6 is relative to that PEAK full-scale, so the dBV
+     *  reference is the peak full-scale voltage itself - NOT the RMS full-scale
+     *  ({@code /√2}), which would read ~3 dB low. */
+    private double ditherFsDbv() {
+        return DITHER_DB_PER_DECADE * Math.log10(fsAmplSupplier.getAsDouble());
+    }
+
+    /** dBV of the TPDF dither noise at {@code bits} bits (bits ≥ 1) - the
+     *  physical level relative to the peak full-scale. */
+    private double ditherDbvForBits(double bits) {
+        return -(bits - 1) * DITHER_DB_PER_BIT - DITHER_TPDF_OFFSET_DB
+                + ditherFsDbv();
+    }
+
+    /** The (fractional) bit count whose TPDF dither lands at {@code dbv} - the
+     *  exact inverse of {@link #ditherDbvForBits}, un-clamped. */
+    private double ditherBitsForDbv(double dbv) {
+        return 1 + (ditherFsDbv() - DITHER_TPDF_OFFSET_DB - dbv)
+                / DITHER_DB_PER_BIT;
+    }
+
+    /** Clamps a non-Off dither depth to {@code [1, maxBits]}. */
+    private double clampBits(double bits) {
+        return Math.max(1.0, Math.min(max, bits));
+    }
+
+    /** Reacts to a config change (DAC full-scale) while holding the CURRENTLY
+     *  DISPLAYED value.  In the dBV view the shown dBV is kept and the bits
+     *  move by the config delta (so the entered level is maintained under the
+     *  new calibration); in the bits view (and for Off) the bits are kept and
+     *  only the dBV readout moves.  Returns {@code true} when the stored bit
+     *  count changed (dBV view) so the caller can persist the re-solved dither
+     *  and restart the generator. */
+    public boolean reanchor() {
+        if (policy != Policy.DITHER) return false;
+        double newConfigDbv = ditherFsDbv();
+        double before = value;
+        if (isLogDisplay() && value > 0) {
+            value = clampBits(value + (newConfigDbv - ditherConfigDbv) / DITHER_DB_PER_BIT);
+        }
+        ditherConfigDbv = newConfigDbv;
+        return value != before;
+    }
+
+    /** Renders the current dither value: {@code Off}, a bit count, or the
+     *  full-scale-aware dBV view - per the current (sticky) display unit. */
+    private String ditherText() {
+        if (value <= 0) return OFF_LABEL;
+        Unit u = currentUnit();
+        if (u.log()) {
+            return format(ditherDbvForBits(value), DITHER_DBV_DECIMALS) + " " + u.suffix();
+        }
+        return trimTrailingZeros(format(value, maxDecimals)) + " " + u.suffix();
+    }
+
+    /** {@code x} rendered with {@code decimals} places, dot decimal separator. */
+    private String format(double x, int decimals) {
+        return String.format(Locale.ROOT, "%." + decimals + "f", x);
+    }
+
+    /** Parses a dither entry: {@code Off} - or any prefix of it ({@code o},
+     *  {@code of}) - and {@code 0} -> Off; a bare number or a {@code bits} suffix ->
+     *  that bit count (clamped to {@code [1, maxBits]}, 0 -> Off), possibly
+     *  fractional; a {@code dBV} suffix -> the full-scale-aware fractional bit count
+     *  (which sticks the dBV view). */
+    private boolean commitDither(String text) {
+        String t = text.trim().replace(',', '.');
+        if (t.isEmpty()) return false;
+        if (isPrefixOf(OFF_LABEL, t)) {               // "o" / "of" / "off" - keep the current view
+            blank = false;
+            value = 0;
+            return true;
+        }
+        Matcher m = NUMBER_WITH_UNIT.matcher(t);
+        if (!m.matches()) return false;
+        double num;
+        try {
+            num = Double.parseDouble(m.group(1));
+        } catch (NumberFormatException ex) {
+            return false;
+        }
+        String suffix = m.group(2).trim();
+        Unit unit = suffix.isEmpty() ? family.defaultUnit(value) : family.match(suffix);
+        if (unit == null) return false;
+        blank = false;
+        if (unit.log()) {                             // dBV -> fractional bits, dBV sticks
+            stickyUnit = unit;
+            value = clampBits(roundSig(ditherBitsForDbv(num)));
+        } else {                                      // bits (base): 0 -> Off, else [1, maxBits]
+            stickyUnit = null;
+            value = num <= 0 ? 0 : clampBits(roundSig(num));
+        }
+        return true;
+    }
+
+    /** The current dither value in the OTHER unit - bits<->dBV - for a companion
+     *  label beside a DITHER field; empty for Off or a non-DITHER policy (which
+     *  has no alternate view). */
+    public String companionText() {
+        if (policy != Policy.DITHER || value <= 0) return "";
+        if (currentUnit().log()) {                    // field shows dBV -> label shows bits
+            return trimTrailingZeros(format(value, maxDecimals)) + " " + family.defaultUnit(value).suffix();
+        }
+        return format(ditherDbvForBits(value), DITHER_DBV_DECIMALS) + " " + family.logUnit().suffix();
+    }
+
+    /** Next multiple of {@link #LOG_WHEEL_STEP_DB} from {@code db} in
+     *  {@code dir}: 0 -> −10 -> −20 going down; an off-grid −3.5 snaps to
+     *  −10 down and 0 up. */
+    private double logGridStep(double db, int dir) {
+        double d = roundSig(db) / LOG_WHEEL_STEP_DB;
+        double next = (dir > 0)
+                ? Math.floor(d + REL_EPS) + 1
+                : Math.ceil(d - REL_EPS) - 1;
+        return next * LOG_WHEEL_STEP_DB;
+    }
+
+    /** ±1 in the unit currently displayed: ±1 kHz at 192 kHz, ±1 mV at
+     *  200 mV, ±1 dB when dBV or dBFS is sticky. */
+    private double plusOneDisplayedUnit(int dir) {
+        Unit u = currentUnit();
+        if (u.log()) {
+            return u.toCanonical(u.fromCanonical(value) + dir);
+        }
+        if (u.fsRelative()) {
+            return canonicalFromDbfs(dbfsFromCanonical(value) + dir);
+        }
+        return value + dir * u.factor();
+    }
+
+    /** Up: add 10 % and floor the result onto its decade's 10 %-grid -
+     *  1000 -> 1100 -> ... -> 1900 -> 2000 (2090 floored) -> 2200.  The grid never
+     *  drops below one display LSB, so steps near the minimum stay visible
+     *  (duty 0.001 % steps by 0.001, not by an invisible 0.0001); from 0 -
+     *  which sits on no decade grid - the first step is one display LSB. */
+    private double percentUp(double v) {
+        double lsb = displayLsb();
+        if (v <= 0) return lsb;
+        double target = v * PERCENT_STEP_FACTOR;
+        double g = Math.max(gridStep(target), lsb);
+        double r = Math.floor(target / g * (1 + REL_EPS)) * g;
+        if (r <= v * (1 + REL_EPS)) r = v + g;   // always make progress
+        return r;
+    }
+
+    /** Down: along the 1-significant-digit grid when already on it
+     *  (1000 -> 900 -> ... -> 200 -> 100 -> 90), else to the next lower
+     *  10 %-grid value (1300 -> 1200, 2200 -> 2100).  Same display-LSB grid
+     *  floor as {@link #percentUp}. */
+    private double percentDown(double v) {
+        if (v <= 0) return v;
+        double lsb = displayLsb();
+        double decade = Math.pow(10, Math.floor(Math.log10(v) + REL_EPS));
+        double mantissa = v / decade;
+        long m = Math.round(mantissa);
+        if (decade >= lsb && Math.abs(mantissa - m) < REL_EPS * 10) {
+            // On the 1-significant-digit grid: m·10^k -> (m−1)·10^k, 1 -> 9·10^(k−1).
+            return m > 1 ? (m - 1) * decade : 9 * decade / 10.0;
+        }
+        double g = Math.max(gridStep(v), lsb);
+        double r = (Math.ceil(v / g * (1 - REL_EPS)) - 1) * g;   // next lower multiple
+        if (r >= v * (1 - REL_EPS)) r = v - g;
+        return r;
+    }
+
+    /** One least-significant display digit in canonical units - the smallest
+     *  step that visibly changes the rendered text.  0 (no floor) for the log
+     *  unit, whose canonical step has no fixed display LSB, and for FIXED
+     *  fields, whose steps are explicit. */
+    private double displayLsb() {
+        if (decimals >= 0) return 0;
+        Unit u = currentUnit();
+        if (u.log()) return 0;
+        return Math.pow(10, -maxDecimals) * u.factor();
+    }
+
+    /** The 10 %-grid spacing at {@code v}: a tenth of its decade
+     *  (1000...9999 -> 100, 100...999 -> 10, ...). */
+    private double gridStep(double v) {
+        return Math.pow(10, Math.floor(Math.log10(v) + REL_EPS)) / 10.0;
+    }
+
+    /** Next series entry in {@code dir} from the current value.  A value ON
+     *  the list walks it in GIVEN order (the sweep-points list pins the
+     *  rate-derived "Nyquist/2" entry first, ahead of numerically smaller
+     *  presets); an off-list value jumps to the numerically nearest entry in
+     *  the step direction.  The ends saturate - including a manually-entered
+     *  value beyond the numeric extremes, which stays put (an up-gesture
+     *  must never decrease the value). */
+    private double listJump(int dir) {
+        for (int i = 0; i < series.length; i++) {
+            if (sameValue(series[i], value)) {
+                int next = i + dir;
+                if (next < 0 || next >= series.length) return value;   // end of list
+                return series[next];
+            }
+        }
+        // Off-list: nearest entry in the numeric direction.
+        if (dir > 0) {
+            double best = Double.POSITIVE_INFINITY;
+            for (double s : series) {
+                if (s > value * (1 + REL_EPS) + Double.MIN_NORMAL && s < best) best = s;
+            }
+            return Double.isInfinite(best) && !contains(series, best) ? value : best;
+        }
+        double best = Double.NEGATIVE_INFINITY;
+        for (double s : series) {
+            if (s < value * (1 - REL_EPS) - Double.MIN_NORMAL && s > best) best = s;
+        }
+        return Double.isInfinite(best) ? value : best;
+    }
+
+    private boolean sameValue(double a, double b) {
+        if (a == b) return true;   // covers equal infinities
+        // A mixed finite/infinite pair must compare unequal - the relative
+        // epsilon below degenerates to ∞ <= ∞ and would match everything.
+        if (Double.isInfinite(a) || Double.isInfinite(b)) return false;
+        return Math.abs(a - b) <= Math.max(Math.abs(a), Math.abs(b)) * REL_EPS;
+    }
+
+    private boolean contains(double[] arr, double v) {
+        for (double s : arr) {
+            if (sameValue(s, v)) return true;
+        }
+        return false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Text round-trip
+    // -------------------------------------------------------------------------
+
+    /** Formats the current value in the current display unit: fixed decimals
+     *  for FIXED policy, up-to-{@code maxDecimals} with trailing-zero trim
+     *  otherwise.  Infinity renders as {@code ∞}. */
+    public String text() {
+        if (blank) return "";
+        if (policy == Policy.DITHER) return ditherText();
+        if (Double.isInfinite(value)) return INFINITY_SIGN;
+        if (isNamedValue(value)) return namedValueLabel;
+        return formatIn(value, currentUnit());
+    }
+
+    /** Formats {@code canonical} in {@code u}: fixed decimals for FIXED policy,
+     *  up-to-{@code maxDecimals} with trailing-zero trim otherwise.  The
+     *  full-scale-relative unit (dBFS) is converted here against the live
+     *  supplier - {@link Unit#fromCanonical} has no full-scale - the only
+     *  caller reaching this branch is {@link #text} via a sticky dBFS
+     *  {@link #currentUnit}, so the supplier is guaranteed non-null (a dBFS
+     *  sticky requires a successful commit or {@link #setDbfsDisplay}, both of
+     *  which need it). */
+    private String formatIn(double canonical, Unit u) {
+        double x = u.fsRelative() ? dbfsFromCanonical(canonical) : u.fromCanonical(canonical);
+        // Locale.ROOT so the decimal separator is always '.', matching the
+        // dot-based parser in commit() and the canonical value contract.
+        // Without it a comma-decimal UI locale (uk, de, fr, ...) renders "0,5",
+        // which downstream dot-only parsers reject.
+        String num = (decimals >= 0)
+                ? String.format(Locale.ROOT, "%." + decimals + "f", x)
+                : trimTrailingZeros(String.format(Locale.ROOT, "%." + maxDecimals + "f", x));
+        String suffix = u.suffix();
+        return suffix.isEmpty() ? num : num + " " + suffix;
+    }
+
+    /**
+     * Language-neutral, one-line description of what one wheel notch and one
+     * arrow step actually do - for the field's tooltip, so the hint can never
+     * drift from the real behaviour the way a hand-written tooltip does.
+     * Reflects the live policy and display unit:
+     * <ul>
+     *   <li>FIXED -> {@code ⟳ ±<wheelStep>, ▲▼ ±<arrowStep>}</li>
+     *   <li>PERCENT (linear) -> {@code ⟳ ±10 %, ▲▼ ±1 <unit>}; (dBV/dBFS) ->
+     *       {@code ⟳ ±10 dB, ▲▼ ±1 dB}</li>
+     *   <li>LIST -> {@code ⟳▲▼ <values>} (abbreviated when long)</li>
+     * </ul>
+     * Glyphs: {@code ⟳} = mouse wheel, {@code ▲▼} = arrows / step buttons.
+     */
+    public String stepHint() {
+        switch (policy) {
+            case FIXED:
+                return WHEEL_GLYPH + " ±" + formatStep(wheelStep)
+                        + ", " + ARROWS_GLYPH + " ±" + formatStep(arrowStep);
+            case PERCENT: {
+                Unit u = currentUnit();
+                if (u.log() || u.fsRelative()) {
+                    return WHEEL_GLYPH + " ±" + (int) LOG_WHEEL_STEP_DB + " dB, " + ARROWS_GLYPH + " ±1 dB";
+                }
+                String suffix = u.suffix();
+                return WHEEL_GLYPH + " ±" + PERCENT_STEP_LABEL + ", "
+                        + ARROWS_GLYPH + " ±1" + (suffix.isEmpty() ? "" : " " + suffix);
+            }
+            case LIST:
+                return WHEEL_GLYPH + ARROWS_GLYPH + " " + seriesHint();
+            case DITHER: {
+                Unit u = currentUnit();
+                return u.log()
+                        ? WHEEL_GLYPH + ARROWS_GLYPH + " ±" + (int) DITHER_DBV_STEP + " " + u.suffix()
+                        : WHEEL_GLYPH + ARROWS_GLYPH + " ±1 " + u.suffix();
+            }
+            default:
+                return "";
+        }
+    }
+
+    /** A FIXED step rendered in its own natural display unit (so a 0.001 s step
+     *  reads "1 ms", not "0.001 s"). */
+    private String formatStep(double canonicalStep) {
+        return formatIn(canonicalStep, family.displayUnit(canonicalStep));
+    }
+
+    /** The LIST series for {@link #stepHint()}: every entry when short, else
+     *  first·...·last. */
+    private String seriesHint() {
+        int n = series.length;
+        if (n == 0) return "";
+        if (n > SERIES_HINT_MAX) {
+            return seriesEntry(series[0]) + SERIES_SEP + "..." + SERIES_SEP + seriesEntry(series[n - 1]);
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            if (i > 0) sb.append(SERIES_SEP);
+            sb.append(seriesEntry(series[i]));
+        }
+        return sb.toString();
+    }
+
+    private String seriesEntry(double v) {
+        if (Double.isInfinite(v)) return INFINITY_SIGN;
+        if (isNamedValue(v)) return namedValueLabel;
+        return formatIn(v, family.displayUnit(v));
+    }
+
+    /** Parses {@code text} (number + optional unit suffix of this family, decimal
+     *  comma accepted, {@value #INFINITY_SIGN} or any prefix of
+     *  {@value #INFINITY_LABEL} when the field is unbounded above, and any prefix
+     *  of {@value #OFF_LABEL} when it declares Off as its named value), clamps,
+     *  and commits.  An explicit suffix becomes the sticky display unit;
+     *  suffix-less entry reverts to automatic.
+     *
+     *  @return {@code false} (value unchanged) when the text is not a valid
+     *          number-with-unit of this family */
+    public boolean commit(String text) {
+        if (text == null) return false;
+        if (policy == Policy.DITHER) return commitDither(text);
+        // Normalise: decimal comma -> dot, Greek mu -> micro sign (pasted
+        // scientific text and Greek keyboards produce U+03BC), and drop one
+        // dangling separator ("200." / "200,") the way Double.parseDouble
+        // would have tolerated it.
+        String t = text.trim().replace(',', '.').replace('μ', 'µ');
+        if (t.isEmpty()) return false;
+        if (t.length() > 1 && t.endsWith(".") && Character.isDigit(t.charAt(t.length() - 2))) {
+            t = t.substring(0, t.length() - 1);
+        }
+        if (Double.isInfinite(max)
+                && (t.equals(INFINITY_SIGN) || isPrefixOf(INFINITY_LABEL, t))) {
+            stickyUnit = null;
+            blank = false;
+            value = Double.POSITIVE_INFINITY;
+            return true;
+        }
+        if (matchesNamedLabel(t)) {
+            stickyUnit = null;
+            blank = false;
+            value = clamp(roundSig(namedValue));
+            return true;
+        }
+        Matcher m = NUMBER_WITH_UNIT.matcher(t);
+        if (!m.matches()) return false;
+        double num;
+        try {
+            num = Double.parseDouble(m.group(1));
+        } catch (NumberFormatException ex) {
+            return false;
+        }
+        String suffix = m.group(2).trim();
+        Unit unit;
+        if (suffix.isEmpty()) {
+            unit = family.defaultUnit(value);
+            stickyUnit = null;
+        } else {
+            unit = family.match(suffix);
+            if (unit == null) return false;
+            // A full-scale-relative unit (dBFS) is resolved from the live DAC
+            // full-scale below; a field with no supplier wired (the FFT
+            // manual-fundamental) refuses it, leaving the value unchanged.
+            if (unit.fsRelative() && fsAmplSupplier == null) return false;
+            // Both the log unit (dBV) and the full-scale-relative unit (dBFS)
+            // stick: the family's range-based display switching can never select
+            // either, so an explicit choice must hold (entering one switches the
+            // sticky unit).  Linear units always re-enter the automatic range
+            // switching - typing "499 mV" and stepping past 0.5 V must show
+            // volts - so they never stick.
+            stickyUnit = (unit.log() || unit.fsRelative()) ? unit : null;
+        }
+        blank = false;
+        double canonical;
+        if (unit.fsRelative()) {
+            // 0 dBFS ≡ full-scale SINE (AES17): the stored quantity is the
+            // sine's Vrms, so the anchor is the RMS full scale (peak/√2),
+            // form-independent - a full-scale square legitimately enters as
+            // +3.01 dBFS.  (This deliberately differs from the dither field's
+            // PEAK anchor, a noise-floor level with different semantics - see
+            // the test dither_dbvAnchorsToPeakFullScale_notRms.)
+            canonical = canonicalFromDbfs(num);
+        } else {
+            canonical = unit.toCanonical(num);
+        }
+        value = clamp(roundSig(canonical));
+        return true;
+    }
+
+    /** Unit the field currently renders in: the explicitly-typed sticky unit
+     *  if any, else the family's automatic choice for the value. */
+    public Unit currentUnit() {
+        return stickyUnit != null ? stickyUnit : family.displayUnit(value);
+    }
+
+    /** True while the log unit (dBV) is the sticky display unit - the one
+     *  display choice worth persisting, since the automatic range switching
+     *  can never select it. */
+    public boolean isLogDisplay() {
+        return stickyUnit != null && stickyUnit.log();
+    }
+
+    /** Restores ({@code true}) or clears ({@code false}) the log display
+     *  unit - the persisted counterpart of typing an explicit dBV suffix.
+     *  No-op for families without a log unit. */
+    public void setLogDisplay(boolean on) {
+        Unit log = family.logUnit();
+        if (log == null) return;
+        if (on) {
+            stickyUnit = log;
+        } else if (isLogDisplay()) {
+            stickyUnit = null;
+        }
+    }
+
+    /** Lenient mid-edit acceptance for the SWT Verify filter - any prefix of a
+     *  valid entry passes (bare sign, dangling separator, exponent fragment,
+     *  unit characters, ∞) so typing is never blocked halfway; {@link #commit}
+     *  stays the strict gate.  Shares this class's grammar so the two can't
+     *  drift apart. */
+    public boolean acceptsPartial(String text) {
+        return PARTIAL_INPUT.matcher(text).matches();
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    private double clamp(double v) {
+        return Math.max(min, Math.min(max, v));
+    }
+
+    private boolean isNamedValue(double v) {
+        return namedValueLabel != null
+                && Math.abs(v - namedValue) <= Math.abs(namedValue) * REL_EPS;
+    }
+
+    /** {@code true} when {@code t} is a non-empty, case-insensitive prefix of
+     *  {@code word}.  One shared rule so a named state can be committed from a
+     *  single keystroke - {@code o}/{@code of}/{@code off},
+     *  {@code i}/{@code in}/{@code inf}/... - the way the unit suffixes already take
+     *  a prefix. */
+    private boolean isPrefixOf(String word, String t) {
+        return !t.isEmpty() && t.length() <= word.length()
+                && word.regionMatches(true, 0, t, 0, t.length());
+    }
+
+    /** Named-value label match: exact, or - when that named value IS the Off state
+     *  - any prefix of {@value #OFF_LABEL}.  Prefixes are deliberately confined to
+     *  Off: for a label like "Nyquist/2" a lone letter must never commit. */
+    private boolean matchesNamedLabel(String t) {
+        if (namedValueLabel == null) return false;
+        String label = namedValueLabel.trim();
+        return t.equalsIgnoreCase(label)
+                || (OFF_LABEL.equalsIgnoreCase(label) && isPrefixOf(OFF_LABEL, t));
+    }
+
+    /** Canonical Vrms -> dBFS against the live full-scale, the inverse of
+     *  {@link #canonicalFromDbfs}: 0 dBFS ≡ a full-scale SINE, so the reference
+     *  is the RMS full scale (peak/√2).  Only reached on the sticky-dBFS
+     *  display / step path, where a successful dBFS commit (or
+     *  {@link #setDbfsDisplay}) guaranteed a non-null supplier. */
+    private double dbfsFromCanonical(double canonical) {
+        return DBFS_DB_PER_DECADE * Math.log10(canonical * ROOT_TWO / fsAmplSupplier.getAsDouble());
+    }
+
+    /** dBFS -> canonical Vrms against the live full-scale - the inverse of
+     *  {@link #dbfsFromCanonical} and the shared form of the {@link #commit}
+     *  conversion. */
+    private double canonicalFromDbfs(double dbfs) {
+        return fsAmplSupplier.getAsDouble() / ROOT_TWO * Math.pow(10.0, dbfs / DBFS_DB_PER_DECADE);
+    }
+
+    /** Rounds to {@link #VALUE_SIG_DIGITS} significant digits so wheel walks
+     *  stay exactly on their grids. */
+    private double roundSig(double v) {
+        if (v == 0 || !Double.isFinite(v)) return v;
+        double scale = Math.pow(10, VALUE_SIG_DIGITS - 1 - Math.floor(Math.log10(Math.abs(v))));
+        return Math.round(v * scale) / scale;
+    }
+
+    private String trimTrailingZeros(String num) {
+        if (num.indexOf('.') < 0 && num.indexOf(',') < 0) return num;
+        String s = num;
+        while (s.endsWith("0")) s = s.substring(0, s.length() - 1);
+        if (s.endsWith(".") || s.endsWith(",")) s = s.substring(0, s.length() - 1);
+        return s;
+    }
+}

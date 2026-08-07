@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -11,9 +11,9 @@
 //
 // The desktop engine is welded to SWT (Display.syncExec) and the live
 // GeneratorController / FftController / FftView. This port keeps the loop ALGORITHM
-// — the constants, the round-sizing formula (sizeAverages), the align poll, the
-// accumulate → hot-apply → settle → reset cycle, the best-round snapshot, and the
-// stop reasons — bit-faithful, and takes the desktop's SWT collaborators as an
+// - the constants, the round-sizing formula (sizeAverages), the align poll, the
+// accumulate -> hot-apply -> settle -> reset cycle, the best-round snapshot, and the
+// stop reasons - bit-faithful, and takes the desktop's SWT collaborators as an
 // injected, async-friendly `host` object so the browser side can drive the same
 // loop against worklets / workers. Every host method that the desktop ran on the UI
 // thread is awaited here.
@@ -25,7 +25,7 @@
 import { HarmonicCompensation } from './harmonic-compensation.js';
 import { IntermodCompensation } from './intermod-compensation.js';
 
-/** Why the loop ended — drives the wizard's end-of-run message. */
+/** Why the loop ended - drives the wizard's end-of-run message. */
 export const StopReason = Object.freeze({
   TARGET_REACHED: 'TARGET_REACHED',
   STALLED: 'STALLED',
@@ -43,7 +43,7 @@ export const Phase = Object.freeze({
   FINISHED: 'FINISHED',
 });
 
-/** LMS step μ — full residual per round (CLI default). */
+/** LMS step μ - full residual per round (CLI default). */
 const COMP_STEP = 1.0;
 /** Ceiling on the THD0/THD averaging-count growth (64× base). */
 const MAX_AVG_GROW = 64.0;
@@ -59,7 +59,7 @@ const POLL_MS = 150;
 const APPLY_SETTLE_MS = 200;
 
 /**
- * Host the engine drives — the browser-side counterpart of the desktop's
+ * Host the engine drives - the browser-side counterpart of the desktop's
  * GeneratorController / FftController / FftView / Preferences / clock, supplied by
  * the caller. Every method may be async (the engine awaits each); the desktop ran
  * these on the SWT UI thread.
@@ -67,7 +67,7 @@ const APPLY_SETTLE_MS = 200;
  * @typedef {Object} PredistortionHost
  * @property {() => number} maxHarmonics            Preferences.getFftCalcMaxHarmonic (≥1)
  * @property {() => boolean} isDualTone             gen signal form is dual-tone
- * @property {() => number} effectiveFrequency      F1 emit freq — the align target
+ * @property {() => number} effectiveFrequency      F1 emit freq - the align target
  * @property {() => number} adcFsVoltageRms         Preferences.getAdcFsVoltageRms
  * @property {() => number} genAmplitudeVrms        Preferences.getGenAmplitudeVrms
  * @property {() => number} dualToneSplitPct        Preferences.getGenDualToneSplitPct
@@ -121,7 +121,7 @@ export class PredistortionEngine {
     this.bestIntermod = null;
     /** True when this run is compensating a two-tone signal. */
     this.dualTone = false;
-    /** The lowest-distortion round's finalized result — header provenance. */
+    /** The lowest-distortion round's finalized result - header provenance. */
     this.bestResult = null;
     this.bestThdPct = Number.MAX_VALUE;
   }
@@ -131,7 +131,7 @@ export class PredistortionEngine {
     this.stopRequested = true;
   }
 
-  /** Ends the CURRENT averaging round early — the loop applies and continues. */
+  /** Ends the CURRENT averaging round early - the loop applies and continues. */
   stopRound() {
     this.roundStopRequested = true;
   }
@@ -163,7 +163,7 @@ export class PredistortionEngine {
       // harmAppl / imdAppl: the snapshot of what's currently applied (empty = round 0).
       let harmAppl = this.dualTone ? null : harm.copy();
       let imdAppl = this.dualTone ? imd.copy() : null;
-      const target = this.host.effectiveFrequency();          // F1 emit freq — the align target
+      const target = this.host.effectiveFrequency();          // F1 emit freq - the align target
 
       // Switch the FFT to INFINITE coherent generator-locked averaging.
       await this.host.configureForRun();
@@ -178,12 +178,12 @@ export class PredistortionEngine {
       this._emit('onAligning');
       if (!(await this._waitForAlign())) {
         if (this.stopRequested) { reason = StopReason.USER_STOP; return; }
-        // tone did not stabilise within ALIGN_TIMEOUT_MS — proceed anyway.
+        // tone did not stabilise within ALIGN_TIMEOUT_MS - proceed anyway.
       }
       await this.host.resetStatistics();                      // fresh baseline for round 0
 
       let round = 0;
-      let baselineDist = NaN;   // round 0's distortion — the fixed reference
+      let baselineDist = NaN;   // round 0's distortion - the fixed reference
       let prevDist = NaN;       // last completed round's distortion
       while (!this.stopRequested) {
         this.currentRound = round;
@@ -192,8 +192,8 @@ export class PredistortionEngine {
         const r = await this._collectUntilAverages(baseAverages, baselineDist, prevDist, maxAverages);
         if (r == null) {
           reason = this.stopRequested ? StopReason.USER_STOP : StopReason.ERROR;
-          // A null measurement that wasn't user-requested is a real failure — LOG it so the
-          // wizard's "Measurement error — see the log" headline actually points at something.
+          // A null measurement that wasn't user-requested is a real failure - LOG it so the
+          // wizard's "Measurement error - see the log" headline actually points at something.
           if (!this.stopRequested) console.error('Predistortion: measurement returned no result (analysis failed) at round ' + round + '.');
           break;
         }
@@ -255,13 +255,13 @@ export class PredistortionEngine {
 
   /**
    * Combined calibration response [magLin, phaseRad] the loaded .frc corrections
-   * impose at `freqHz` for the analysed channel — the product of H(f) over every
+   * impose at `freqHz` for the analysed channel - the product of H(f) over every
    * loaded entry (magnitudes multiply, phases add). Entries whose calibration does
    * not span `freqHz` contribute unit response. Faithful port of
    * PredistortionEngine.calResponseAt.
    *
    * @param {number} freqHz
-   * @param {boolean} left true → left channel cal, false → right
+   * @param {boolean} left true -> left channel cal, false -> right
    * @returns {[number, number]} [magLin, phaseRad]
    */
   _calResponseAt(freqHz, left) {
@@ -280,14 +280,14 @@ export class PredistortionEngine {
     return [mag, phase];
   }
 
-  /** The loaded .frc response as a frequency function for the given channel — so
+  /** The loaded .frc response as a frequency function for the given channel - so
    *  the save path applies the same de-embed as the live apply. */
   calResponseFor(left) {
     return f => this._calResponseAt(f, left);
   }
 
   /**
-   * The F1 tone's DAC output level (Vrms) — the dual-tone correction's ratio
+   * The F1 tone's DAC output level (Vrms) - the dual-tone correction's ratio
    * reference. With weights w₁ = split%, w₂ = 100−split%, tone-1 carries
    * total·w₁/√(w₁²+w₂²) of the combined RMS. Faithful port of
    * PredistortionEngine.dualToneFundamentalVrms.
@@ -306,7 +306,7 @@ export class PredistortionEngine {
     return Number.isFinite(v) ? v : r.thdPct;
   }
 
-  /** Current cumulative distortion off the live FFT result — THD (single) or
+  /** Current cumulative distortion off the live FFT result - THD (single) or
    *  combined intermod % (dual). NaN when no result yet. */
   _liveDistPct() {
     const r = this.host.readResult();

@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -22,7 +22,7 @@
  * Decoded WAV header + bulk samples.
  *
  * Samples are delivered as SIGNED integers (two's-complement, native PCM range)
- * — matching StereoPcmIo.decodeStereo's readSample (the scope load path divides
+ * - matching StereoPcmIo.decodeStereo's readSample (the scope load path divides
  * by 2^(bits-1) to get float [-1,+1]). For mono files ch1 mirrors ch0.
  *
  * @typedef {Object} WavReadResult
@@ -55,7 +55,7 @@ function readSample(dv, off, bytes) {
       return dv.getInt16(off, true);
     case 3: {
       const b0 = dv.getUint8(off), b1 = dv.getUint8(off + 1), b2 = dv.getInt8(off + 2);
-      return (b2 << 16) | (b1 << 8) | b0;   // b2 signed → sign-extended 24-bit
+      return (b2 << 16) | (b1 << 8) | b0;   // b2 signed -> sign-extended 24-bit
     }
     case 4:
       return dv.getInt32(off, true);
@@ -153,7 +153,7 @@ function fromExtended80(dv, off) {
 
 /**
  * Decoded AIFF/AIFF-C header + bulk samples. Samples are delivered as SIGNED
- * integers (two's-complement, native PCM range) — matching what the scope/load
+ * integers (two's-complement, native PCM range) - matching what the scope/load
  * callers expect (they normalise by 2^(bits-1)).
  *
  * @typedef {Object} AiffReadResult
@@ -169,7 +169,7 @@ function fromExtended80(dv, off) {
  * Reads a PCM AIFF or AIFF-C file. Parses FORM/AIFF|AIFC, the COMM chunk (channel
  * count, frame count, bit depth, 80-bit extended sample rate) and SSND (offset +
  * block-size header, then big-endian PCM). AIFF-C compression NONE is big-endian;
- * sowt is little-endian — both decoded to signed samples.
+ * sowt is little-endian - both decoded to signed samples.
  *
  * @param {ArrayBuffer|Uint8Array} input  Raw file bytes.
  * @returns {AiffReadResult}
@@ -235,7 +235,7 @@ export function readAiff(input) {
   return { sampleRate, channels, bitsPerSample: bits, frameCount: n, ch0, ch1 };
 }
 
-/** Reads one signed AIFF PCM sample (big-endian by default; sowt → little-endian). */
+/** Reads one signed AIFF PCM sample (big-endian by default; sowt -> little-endian). */
 function readAiffSample(dv, off, bytes, le) {
   switch (bytes) {
     case 1:
@@ -255,7 +255,7 @@ function readAiffSample(dv, off, bytes, le) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Byte sink — mirrors RandomAccessFile growth without a fixed length.
+// Byte sink - mirrors RandomAccessFile growth without a fixed length.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class ByteSink {
@@ -283,7 +283,7 @@ function asciiBytes(s) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WAV writer — port of WavWriter. Header placeholder then finalised on finish().
+// WAV writer - port of WavWriter. Header placeholder then finalised on finish().
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -295,8 +295,8 @@ export class WavWriter {
    * @param {number}  sampleRate
    * @param {number}  channels
    * @param {number}  bitsPerSample
-   * @param {boolean} [floatFormat=false]  true → 32-bit IEEE float (fmt code 3);
-   *                                        false → integer PCM (fmt code 1).
+   * @param {boolean} [floatFormat=false]  true -> 32-bit IEEE float (fmt code 3);
+   *                                        false -> integer PCM (fmt code 1).
    */
   constructor(sampleRate, channels, bitsPerSample, floatFormat = false) {
     this.sampleRate = sampleRate;
@@ -363,10 +363,10 @@ export class WavWriter {
 
 /**
  * Streaming WAV writer for the scope stream-forward record (StereoPcmIo
- * .saveStreaming + openSink → WavWriter): writes a 44-byte header with PLACEHOLDER
+ * .saveStreaming + openSink -> WavWriter): writes a 44-byte header with PLACEHOLDER
  * RIFF/data sizes to a FileSystemWritableFileStream up front, appends PCM chunks
  * as they arrive (sequential writes advance the stream cursor), then patches the
- * two size fields with positioned writes on {@link #close} — the streaming analogue
+ * two size fields with positioned writes on {@link #close} - the streaming analogue
  * of {@link WavWriter}, whose in-memory header is finalised only on finish().
  */
 export class StreamingWavWriter {
@@ -430,7 +430,7 @@ export class StreamingWavWriter {
 }
 
 /**
- * Streaming AIFF writer — same incremental scheme as {@link StreamingWavWriter}:
+ * Streaming AIFF writer - same incremental scheme as {@link StreamingWavWriter}:
  * a 54-byte header with placeholder FORM/COMM/SSND sizes is written up front, each
  * sample byte-swapped to big-endian as it streams, then the FORM size, COMM frame
  * count and SSND size are patched with positioned writes on {@link #close} (port of
@@ -502,7 +502,7 @@ export class StreamingAiffWriter {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AIFF writer — port of AiffWriter. Big-endian PCM; LE input byte-swapped.
+// AIFF writer - port of AiffWriter. Big-endian PCM; LE input byte-swapped.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -535,7 +535,7 @@ function toExtended80(v) {
 
 /**
  * Builds a PCM AIFF file in memory. Faithful port of AiffWriter: samples are
- * stored big-endian — callers still hand little-endian PCM and this writer
+ * stored big-endian - callers still hand little-endian PCM and this writer
  * byte-swaps each sample on the fly.
  */
 export class AiffWriter {
@@ -604,7 +604,7 @@ export class AiffWriter {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FLAC writer — STUB. Java uses javaFlacEncoder; the browser port needs a WASM
+// FLAC writer - STUB. Java uses javaFlacEncoder; the browser port needs a WASM
 // encoder (e.g. libFLAC compiled to WASM). Until that is wired in, this throws.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -619,7 +619,7 @@ export const FLAC_MAX_SAMPLE_RATE = 655350;
  * Note: the Java FlacWriter NEGATES samples before encoding (a javaFlacEncoder
  * polarity workaround) and forces INDEPENDENT channel coding. Any WASM
  * implementation must reproduce whatever polarity the chosen codec needs to
- * round-trip bit-equivalent to the WAV writer — verify empirically.
+ * round-trip bit-equivalent to the WAV writer - verify empirically.
  *
  * @param {number} sampleRate
  * @param {number} channels

@@ -28,11 +28,11 @@
 <body>
 <h1>Browser loopback scope + FFT null test</h1>
 <p>Plays a bin‑snapped sine out the chosen <b>DAC</b> and captures it on the chosen <b>ADC</b>
-(loopback cable DAC→ADC). Input and output run in <b>separate AudioContexts</b> so each stays at its
+(loopback cable DAC->ADC). Input and output run in <b>separate AudioContexts</b> so each stays at its
 own native rate. A <b>pool of Web Workers</b> computes the FFTs in parallel; <b>overlap</b> processing
 runs more frames per second. With <b>FLL + coherent + reject</b> on, a frequency‑lock loop steers the
 generator onto the captured tone, glitch frames are rejected, and averaging goes <b>coherent</b>
-(each frame de‑rotated to a common time origin) — the skirt collapses and the floor digs below the
+(each frame de‑rotated to a common time origin) - the skirt collapses and the floor digs below the
 incoherent level. Needs a secure context (https or localhost).</p>
 
 <div class="note"><b>This makes sound.</b> Patch the loopback cable and keep amplitude modest
@@ -65,11 +65,11 @@ incoherent level. Needs a secure context (https or localhost).</p>
 </div>
 
 <div id="status">idle</div>
-<div id="readout">—</div>
+<div id="readout">-</div>
 <canvas id="scope" width="1200" height="200"></canvas>
 <canvas id="spec"  width="1200" height="400"></canvas>
-<p><small>Floor near the ADC's real noise floor ⇒ browser path is clean (capture + generate viable in‑tab).
-Forest of spurs / raised floor / resampler images ⇒ poisoned; the DAC side would need native (Electron/Tauri).</small></p>
+<p><small>Floor near the ADC's real noise floor => browser path is clean (capture + generate viable in‑tab).
+Forest of spurs / raised floor / resampler images => poisoned; the DAC side would need native (Electron/Tauri).</small></p>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -87,10 +87,10 @@ function med(a){ if(!a.length)return 0; const c=[...a].sort((x,y)=>x-y), n=c.len
 function madev(a,m){ if(!a.length)return 0; const d=a.map(v=>Math.abs(v-m)).sort((x,y)=>x-y), n=d.length; const x=n&1?d[n>>1]:0.5*(d[(n>>1)-1]+d[n>>1]); return 1.4826*x; }
 function wrapToPi(a){ let x=(a+Math.PI)%(2*Math.PI); if(x<0)x+=2*Math.PI; return x-Math.PI; }
 
-// FLL — DerotationPhaseLock's measure-then-correct loop, STEERING THE GENERATOR.
+// FLL - DerotationPhaseLock's measure-then-correct loop, STEERING THE GENERATOR.
 // observe(phase, offset): tracks the raw fundamental phase vs absolute sample offset.
 // Per pair it removes the expected on-bin advance and accumulates the residual slope
-// (Σresidual / Σdelta = 2π·ε/N), so the fractional-bin error ε is read directly — independent
+// (Σresidual / Σdelta = 2π·ε/N), so the fractional-bin error ε is read directly - independent
 // of overlap/hop and of dropped frames. One full correction nudges the generator to null it.
 function makeFLL(fundBin, n, windowSamples){
   return { locked:false, hasPrev:false, prevPhase:0, prevOff:0, sumRes:0, sumDelta:0, count:0, stable:0, windows:0, errBins:0,
@@ -108,7 +108,7 @@ function makeFLL(fundBin, n, windowSamples){
         const eps = (this.sumRes/this.sumDelta) * n/(2*Math.PI);   // fractional-bin error (bins)
         this.errBins = eps;
         if(Math.abs(eps) < 5e-4){ if(++this.stable>=2) this.locked=true; }
-        else { this.stable=0; if(!this.locked) corr=eps; }          // full correction → steer generator
+        else { this.stable=0; if(!this.locked) corr=eps; }          // full correction -> steer generator
         if(!this.locked && this.windows>=12) this.locked=true;       // fallback: accept best ε
         this.sumRes=0; this.sumDelta=0; this.count=0; this.hasPrev=false;
       }
@@ -116,7 +116,7 @@ function makeFLL(fundBin, n, windowSamples){
     } };
 }
 
-// Frame rejector — gates 2 (broadband floor lift) and 3 (total-power outlier) of
+// Frame rejector - gates 2 (broadband floor lift) and 3 (total-power outlier) of
 // SpectralDiscontinuityDetector: log-spaced band levels vs a running per-band median with
 // MAD-self-calibrated thresholds. (Gate 1, the near-carrier pedestal, needs the tone-lobe
 // finder and is omitted.) Magnitude-based, so the de-rotated spectrum is fine.
@@ -163,7 +163,7 @@ class Cap extends AudioWorkletProcessor { constructor(){ super(); this.b=new Flo
 registerProcessor('cap',Cap);
 `;
 
-// FFT worker — windows, transforms, extracts the RAW fundamental (for the FLL), then de-rotates
+// FFT worker - windows, transforms, extracts the RAW fundamental (for the FLL), then de-rotates
 // every returned bin by e^{-j2πkδ/N} (δ = offset mod N) to align frames to a common time origin
 // so coherent averaging works across OVERLAPPED frames. One whole FFT per worker = pool parallelism.
 const FFT_WORKER = `
@@ -196,7 +196,7 @@ let N, cg, pavg, accRe, accIm, framesDone, avgTarget, binW, fundBin, inRate, sna
 let ring, ringW, ringFilled, hop, sinceHop, totalSamples, overlapPct;
 const SCOPE_LEN = 1<<15;                  // scope ring length (≈4 cycles down to ~47 Hz @ 384k)
 let fftFps=0, fftCount=0, fftWinT0=0, workerMs=0;   // FFT-frame rate (counted over a fixed window)
-let scopeFps=0, scopeCount=0, scopeWinT0=0, scopeBuf; // scope rate (counted, not instantaneous — immune to burst delivery)
+let scopeFps=0, scopeCount=0, scopeWinT0=0, scopeBuf; // scope rate (counted, not instantaneous - immune to burst delivery)
 let genNode, genFreq, outSampleRate;      // generator handle + steered frequency + its sample rate
 let fllOn=true, fll, rejector, rejectedCount=0, coherent=false;
 const FLL_GAIN=0.7;
@@ -209,14 +209,14 @@ function fillThreads(){ const hc=navigator.hardwareConcurrency||4, max=Math.min(
 
 async function listDevices(){
   try { (await navigator.mediaDevices.getUserMedia({audio:true})).getTracks().forEach(t=>t.stop()); }
-  catch(e){ status("mic permission denied — "+e.name); }
+  catch(e){ status("mic permission denied - "+e.name); }
   const devs = await navigator.mediaDevices.enumerateDevices();
   const ins = devs.filter(d=>d.kind==="audioinput"), outs = devs.filter(d=>d.kind==="audiooutput");
   $("#inSel").innerHTML  = ins.map(d=>`<option value="${d.deviceId}">${d.label||d.deviceId}</option>`).join("");
   $("#outSel").innerHTML = outs.map(d=>`<option value="${d.deviceId}">${d.label||d.deviceId}</option>`).join("");
   fillRates($("#inRate"),384000); fillRates($("#outRate"),384000);
   $("#start").disabled=false;
-  status(`${ins.length} input(s), ${outs.length} output(s) — pick devices/rates and Start.`);
+  status(`${ins.length} input(s), ${outs.length} output(s) - pick devices/rates and Start.`);
 }
 
 async function start(){
@@ -242,7 +242,7 @@ async function start(){
   warmup = Math.round(inRate * Math.max(0, parseFloat($("#warm").value)||0) / 1000);
   fftFps=0; fftCount=0; fftWinT0=0; workerMs=0; scopeFps=0; scopeCount=0; scopeWinT0=0; scopeBuf=new Float32Array(SCOPE_LEN);
 
-  status("opening contexts + devices…");
+  status("opening contexts + devices...");
   try {
     // FFT worker pool
     const wurl = URL.createObjectURL(new Blob([FFT_WORKER],{type:"application/javascript"}));
@@ -250,7 +250,7 @@ async function start(){
     for(let i=0;i<P;i++){ const w=new Worker(wurl); w.onmessage=onWorkerResult; w.onerror=ev=>console.error("worker",ev.message); workers.push(w); freeW.push(w); }
 
     const url = URL.createObjectURL(new Blob([WORKLET],{type:"application/javascript"}));
-    // OUTPUT context (DAC) — generator at the DAC's native rate
+    // OUTPUT context (DAC) - generator at the DAC's native rate
     outCtx = new AudioContext({ sampleRate: outRate, latencyHint:"playback" });
     if (outCtx.setSinkId && outId){ try{ await outCtx.setSinkId(outId); }catch(e){ console.warn("setSinkId",e); } }
     await outCtx.audioWorklet.addModule(url);
@@ -259,7 +259,7 @@ async function start(){
     genNode.connect(outCtx.destination);
     genFreq = snapped; outSampleRate = outCtx.sampleRate;   // FLL steers genFreq from here
 
-    // INPUT context (ADC) — capture at the ADC's native rate
+    // INPUT context (ADC) - capture at the ADC's native rate
     inCtx = new AudioContext({ sampleRate: inRate });
     await inCtx.audioWorklet.addModule(url);
     stream = await navigator.mediaDevices.getUserMedia({ audio: {
@@ -274,11 +274,11 @@ async function start(){
     if (inCtx.state==="suspended")  await inCtx.resume();
     running=true; $("#start").disabled=true; $("#stop").disabled=false;
     const tr = stream.getAudioTracks()[0].getSettings();
-    runMsg = `running — out ${outCtx.sampleRate} Hz, in ${inCtx.sampleRate} Hz (track ${tr.sampleRate||"?"}), `
+    runMsg = `running - out ${outCtx.sampleRate} Hz, in ${inCtx.sampleRate} Hz (track ${tr.sampleRate||"?"}), `
          + `tone ${snapped.toFixed(3)} Hz (bin ${fundBin}), Δf ${binW.toFixed(3)} Hz, ${P} FFT thread(s)`
-         + (outCtx.sampleRate!==inCtx.sampleRate ? "  [different rates — clocks not locked]" : "");
-    status(warmup>0 ? `warm‑up — filling buffer (${(warmup/inRate*1000).toFixed(0)} ms discarded)…` : runMsg);
-  } catch(e){ status("start failed: "+e.name+" — "+e.message); await stop(); }
+         + (outCtx.sampleRate!==inCtx.sampleRate ? "  [different rates - clocks not locked]" : "");
+    status(warmup>0 ? `warm‑up - filling buffer (${(warmup/inRate*1000).toFixed(0)} ms discarded)...` : runMsg);
+  } catch(e){ status("start failed: "+e.name+" - "+e.message); await stop(); }
 }
 
 function onChunk(chunk){
@@ -325,16 +325,16 @@ function processSpectrum(r){
   const re=r.re, im=r.im;                    // de-rotated half spectrum (length N/2+1)
   fllOn = $("#fll").checked;                 // read live so it can be A/B-toggled
 
-  // 1) glitch-frame rejection (SpectralDiscontinuityDetector gates 2+3) — magnitude-based
+  // 1) glitch-frame rejection (SpectralDiscontinuityDetector gates 2+3) - magnitude-based
   if (fllOn && rejector.reject(re, im, N/2)){ rejectedCount++; fll.hasPrev=false; finalize(); return; }
 
-  // 2) FLL — measure the RAW fundamental phase vs absolute offset, steer the generator
+  // 2) FLL - measure the RAW fundamental phase vs absolute offset, steer the generator
   if (fllOn && genNode){
     const corr = fll.observe(Math.atan2(r.fundIm, r.fundRe), r.offset);
     if (corr !== 0){ genFreq -= corr*binW*FLL_GAIN; genNode.port.postMessage({ inc: 2*Math.PI*genFreq/outSampleRate }); }
   }
 
-  // 3) average — coherent (complex, frames de-rotated by the worker) once locked; else incoherent power
+  // 3) average - coherent (complex, frames de-rotated by the worker) once locked; else incoherent power
   const wantCoherent = fllOn && fll.locked;
   if (wantCoherent !== coherent){ coherent = wantCoherent; framesDone=0; accRe.fill(0); accIm.fill(0); pavg.fill(0); }
   const w = framesDone < avgTarget ? 1/(framesDone+1) : 1/avgTarget;
@@ -375,7 +375,7 @@ function readout(mag){
     `THD (H2..10) ${(thd*100).toExponential(3)} %  (${(20*Math.log10(thd||1e-12)).toFixed(1)} dB)\n`+
     `noise floor  ${floor.toFixed(1)} dBFS (median, ${binW.toFixed(2)} Hz bins, ${framesDone}/${avgTarget} avg${framesDone>=avgTarget?" ✓":""})   SNR ~ ${(20*Math.log10(fundA)-floor).toFixed(1)} dB\n`+
     `rate         ${fftFps.toFixed(1)} fps (target ${(inRate/hop).toFixed(1)})   ${P}×worker, FFT ${workerMs.toFixed(0)} ms each   overlap ${overlapPct}% (hop ${(hop/inRate*1000).toFixed(0)} ms)   dropped ${dropped}\n`+
-    `FLL          ${!fllOn?'off':(fll.locked?'LOCKED ✓':'acquiring…')}   err ${(fll.errBins*binW/snapped*1e6).toFixed(3)} ppm   gen ${genFreq.toFixed(4)} Hz   rejected ${rejectedCount}   [${coherent?'coherent':'power'} avg]\n`+
+    `FLL          ${!fllOn?'off':(fll.locked?'LOCKED ✓':'acquiring...')}   err ${(fll.errBins*binW/snapped*1e6).toFixed(3)} ppm   gen ${genFreq.toFixed(4)} Hz   rejected ${rejectedCount}   [${coherent?'coherent':'power'} avg]\n`+
     lines.join("   ");
 }
 

@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — the scope MEASUREMENT web worker.
+ * Phonalyser web - the scope MEASUREMENT web worker.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  *
@@ -7,7 +7,7 @@
  * side (osc-meas-client) owns a FORWARD SignalBufferReader over the shared ring and, per
  * CAPTURE_BATCH_AVAILABLE, reads the contiguous gap of BOTH channels exactly once (gapless,
  * FFT-consumer pattern) and posts it here as a 'feed'. This worker carries the per-channel
- * HF-LPF/despike + mains-comb STREAMING state batch to batch (never reset — a running
+ * HF-LPF/despike + mains-comb STREAMING state batch to batch (never reset - a running
  * absPos gives the phase-locked cancellers their absStart deltas) and appends the filtered
  * samples (+ a parallel raw copy) into a rolling collection window = oscMeasurementAverage
  * Seconds·sampleRate. On its OWN fixed ~100 ms cadence (with catch-up re-anchor, Java
@@ -24,16 +24,16 @@ const PUBLISH_INTERVAL_MS = 100;   // Java measurementLoop ~100 ms cadence
 
 const engine = new OscMeasCompute();
 // Latest publish parameters, refreshed with every feed / params message (Java worker
-// re-reads Preferences each pass): the sample rate, per-channel ±1.0→volts scale
-// (peakVoltsL/peakVoltsR — each channel's own ADC full-scale), and per-channel mains
+// re-reads Preferences each pass): the sample rate, per-channel ±1.0->volts scale
+// (peakVoltsL/peakVoltsR - each channel's own ADC full-scale), and per-channel mains
 // mode + dual-tone form + the generator's (snap-aware) tone seeds.
 let params = null;
 let publishTimer = null;
 
 // Nested broad-band weak-signal frequency scan (Java ScopeMeasurementWorker "osc-freq-scan"
 // thread): when the cheap crossing search returns NaN for a single tone, the costly per-bin
-// Goertzel sweep runs in a NESTED worker (module workers may spawn workers — the same
-// fft-worker→fft-pool-worker pattern) so it never stalls this publish loop. Coalesced per
+// Goertzel sweep runs in a NESTED worker (module workers may spawn workers - the same
+// fft-worker->fft-pool-worker pattern) so it never stalls this publish loop. Coalesced per
 // channel (one scan in flight at a time); the result folds into the next publish via
 // engine.setAsyncFreq. Lazily created so it costs nothing until a weak tone appears.
 const freqScan = { L: { worker: null, busy: false }, R: { worker: null, busy: false } };
@@ -92,8 +92,8 @@ self.onmessage = (e) => {
       sampleRate: d.sampleRate, peakVoltsL: d.peakVoltsL, peakVoltsR: d.peakVoltsR,
       L: d.L, R: d.R,
     };
-    const feedL = { lpfMode: d.L.lpfMode, mainsMode: d.L.mainsMode, avgSeconds: d.avgSeconds };
-    const feedR = { lpfMode: d.R.lpfMode, mainsMode: d.R.mainsMode, avgSeconds: d.avgSeconds };
+    const feedL = { mainsMode: d.L.mainsMode, avgSeconds: d.avgSeconds };
+    const feedR = { mainsMode: d.R.mainsMode, avgSeconds: d.avgSeconds };
     if (d.bufL) engine.feed('L', d.bufL, d.n, d.sampleRate, feedL);
     if (d.bufR) engine.feed('R', d.bufR, d.n, d.sampleRate, feedR);
     startTimer();

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser - DAC pre-distortion wizard</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>DAC pre-distortion wizard</h1>
+  <p>This page covers the wizard's controls.  For <em>why</em> it works the way
+     it does - the mandatory twin-T notch, why the fundamental is taken from the
+     generator, how deep coherent averaging digs the harmonics out, and how the
+     correction loop converges - see
+     <a href="theory/dac-predistortion.html">Theory of operation ▸ DAC
+     pre-distortion</a>.</p>
+
+  <p>The wizard drives down the DAC's <em>own</em> harmonic distortion so the
+     stimulus is cleaner than the converter can natively produce - what the
+     <a href="fft.html">FFT analyser</a> then shows is the device under test's
+     distortion, not the source's.  It measures the DAC's harmonics behind a
+     notch filter and feeds an equal-and-opposite correction back into the
+     running generator, repeating in rounds until the distortion reaches your
+     target or stops improving.  The result is saved as a <code>.dpd</code>
+     file and applied to the generator's
+     <a href="generator.html#generator-corrections">compensated</a> waveforms.</p>
+
+  <div class="note"><b>A passive twin-T notch is mandatory.</b>  Put a passive
+     twin-T notch, tuned to the fundamental, between the device under test and
+     the ADC - otherwise the ADC's own harmonics set the floor and the loop
+     ends up compensating the ADC, not the DAC.  Tune it first with the
+     <a href="tune-notch.html">tune-notch wizard</a>.  See
+     <a href="theory/dac-predistortion.html#notch">Theory ▸ why the notch is
+     mandatory</a>.</div>
+
+  <div class="shot">
+    <img src="img/dac-predistortion-wizard.png" alt="DAC pre-distortion wizard"/>
+    <svg class="callouts" viewBox="0 0 693 920" preserveAspectRatio="none"
+         xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
+      <defs><marker id="dpdca" viewBox="0 0 10 10" refX="9" refY="5"
+          markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/></marker></defs>
+      <line x1="300" y1="311" x2="188" y2="311" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <line x1="250" y1="340" x2="112" y2="340" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <line x1="300" y1="690" x2="100" y2="690" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <line x1="505" y1="857" x2="420" y2="857" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <line x1="300" y1="893" x2="322" y2="893" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <circle cx="673" cy="20" r="13" fill="#c33"/>
+      <text x="673" y="25" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <circle cx="300" cy="311" r="13" fill="#c33"/>
+      <text x="300" y="316" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <circle cx="250" cy="340" r="13" fill="#c33"/>
+      <text x="250" y="345" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+      <circle cx="620" cy="455" r="13" fill="#c33"/>
+      <text x="620" y="460" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
+      <circle cx="300" cy="690" r="13" fill="#c33"/>
+      <text x="300" y="695" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
+      <circle cx="505" cy="857" r="13" fill="#c33"/>
+      <text x="505" y="862" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
+      <circle cx="300" cy="893" r="13" fill="#c33"/>
+      <text x="300" y="898" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
+    </svg>
+  </div>
+  <ol class="features">
+    <li><b>Procedure.</b>  The mandatory twin-T notch and how the closed loop
+        works - measure the harmonics, feed back an equal-and-opposite
+        correction, repeat each round.</li>
+    <li><b>Status line.</b>  The live phase: aligning the tone, averaging a
+        round, applying the correction or settling - here, <em>Target THD
+        reached</em>.</li>
+    <li><b>FFT settings.</b>  Size, sample rate and window, inherited read-only
+        from the <a href="fft.html">FFT</a> pane.</li>
+    <li><b>Convergence chart.</b>  Each completed round's distortion on a log
+        axis, falling toward the red target line.</li>
+    <li><b>Progress readouts.</b>  Round, averages, the live and best THD, and
+        SNR / SINAD / fundamental / noise floor - <a href="#dpd-readouts">What
+        you see</a>.</li>
+    <li><b>Averages &amp; target.</b>  Averages per round and the Target THD to
+        stop at - <a href="#dpd-controls">Controls</a>.</li>
+    <li><b>Buttons.</b>  Start / Stop&nbsp;round / Save / Close -
+        <a href="#dpd-controls">Controls</a>.</li>
+  </ol>
+
+  <h2 id="dpd-open">Opening the wizard</h2>
+  <p>Open it from the <b>wand</b> button in the FFT pane's toolbar (left of the
+     record button, live pane only).  Before you start, the generator must
+     already be <b>playing</b> a <b>sine</b>, <b>compensated sine</b> or
+     <b>dual-tone</b> signal - the loop cancels a single tone's harmonics or a
+     two-tone signal's intermodulation products; any other waveform is rejected.
+     The wizard runs the FFT in unbounded coherent averaging with the
+     <a href="fft.html#fft-tab-thd">fundamental taken from the generator</a> and
+     the FLL on; for the deepest floor use the HFT248D window and leave mains
+     suppression off, and drive a clean tone a few dB below full scale with the
+     fundamental snapped to a bin.</p>
+
+  <h2 id="dpd-controls">Controls</h2>
+  <table class="controls">
+    <tr><th>Control</th><th>What it does</th></tr>
+    <tr><td>Averages, n</td>
+        <td>FFT averages per round (minimum 10).  Each round averages this many
+            frames, then grows the count in proportion to how far the distortion
+            has already dropped - so late rounds average far deeper than early
+            ones.  The mouse wheel steps by 10, the arrows by 1.</td></tr>
+    <tr><td>Target THD, %</td>
+        <td>Stop once the distortion reaches this value; <b>0</b> runs until it
+            stalls.  Accepts a sub-ppm figure (eight decimals), and is drawn as a
+            red dashed line on the convergence chart so you can see the goal.</td></tr>
+    <tr><td>Start / Stop</td>
+        <td>Start begins the closed loop and becomes Stop while it runs.  The
+            loop also stops itself when it reaches the target or stalls.</td></tr>
+    <tr><td>Stop round</td>
+        <td>End the current averaging round <em>now</em> - apply the correction
+            measured so far and move on to the next round.  Use it when the
+            spectrum has stopped improving and you don't want to wait out the
+            remaining averages.  Active only while a round is averaging.</td></tr>
+    <tr><td>Save</td>
+        <td>Write the best result to a <code>.dpd</code> file (enabled once a
+            round has completed).  The suggested name encodes the tone
+            frequency, FFT size, overlap, window and the achieved distortion in
+            ppm.</td></tr>
+    <tr><td>Apply</td>
+        <td>Save becomes Apply once a file is written.  Apply loads that
+            <code>.dpd</code> onto the running generator and switches it to the
+            <b>compensated</b> form (compensated sine / dual tone) with no
+            restart, then closes the wizard.</td></tr>
+    <tr><td>Close</td>
+        <td>Stop the loop, revert the generator to the plain tone (unless you
+            applied a file) and reset the FFT statistics.</td></tr>
+  </table>
+
+  <h2 id="dpd-readouts">What you see</h2>
+  <p>An <b>FFT settings</b> block echoes the size, sample rate and window the
+     run inherits from the FFT pane (read-only - set them there beforehand).  A
+     <b>status line</b> reports the live phase: aligning the tone onto its FFT
+     bin, the round number and averages remaining, applying the correction, or
+     settling after it.</p>
+  <p>The <b>convergence chart</b> plots each completed round's distortion on a
+     logarithmic axis, with the markers spaced along the horizontal in
+     proportion to how deeply that round averaged - so a long, deep late round
+     occupies more of the trace than a quick early one - falling toward the red
+     target line.</p>
+  <p>A <b>progress</b> block lists the live figures.  For a single tone these
+     are the round number, the live and last-round THD, the best THD so far, the
+     running average count, and THD+N, SNR, SINAD, the fundamental and noise
+     floor (dBV).  For a dual-tone signal the loop minimises intermodulation, so
+     the THD figures are replaced by IMD, best IMD and D+N.</p>
+
+  <div class="note">If the last rounds stop improving before the target is
+     reached, the wizard keeps the best result and lets you Save it anyway.</div>
+
+</body>
+</html>

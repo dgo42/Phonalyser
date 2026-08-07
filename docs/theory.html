@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Phonalyser — Theory of operation</title>
+  <title>Phonalyser - Theory of operation</title>
   <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
   <link rel="stylesheet" href="css/site.css"/>
   <script src="js/site.js" defer></script>
@@ -28,10 +28,10 @@
         <summary>Download <span class="caret">▸</span></summary>
         <a href="download.html">All downloads</a>
         <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
-           target="_blank" rel="noopener">GitHub — latest release</a>
+           target="_blank" rel="noopener">GitHub - latest release</a>
         <a class="ext" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
            target="_blank" rel="noopener">Microsoft Store</a>
-        <a class="disabled" title="Reserved — coming soon">macOS <span class="soon">soon</span></a>
+        <a class="disabled" title="Reserved - coming soon">macOS <span class="soon">soon</span></a>
       </details>
 
       <details class="submenu">
@@ -40,6 +40,7 @@
         <a href="translation.html">Translation</a>
         <a href="bench.html">Measurement bench</a>
         <a href="theory.html">Theory of operation</a>
+        <a href="roadmap.html">Roadmap</a>
       </details>
 
       <a href="privacy.html">Privacy</a>
@@ -64,7 +65,7 @@
 
     <div class="content">
 
-      <p>This page explains how Phonalyser works <em>inside</em> — what actually
+      <p>This page explains how Phonalyser works <em>inside</em> - what actually
          happens to your signal between the moment it is synthesized and the
          moment a THD number appears on screen. It is written for the measurement
          user: you don't need to know anything about software development to
@@ -73,7 +74,7 @@
 
       <div class="note"><b>A tip of the hat.</b> Phonalyser owes its existence to
          <a href="https://www.roomeqwizard.com/" target="_blank" rel="noopener">REW
-         (Room EQ Wizard)</a> — working with that excellent tool inspired the
+         (Room EQ Wizard)</a> - working with that excellent tool inspired the
          author to build a measurement application of his own, aiming at even more
          comprehensive and more precise distortion and frequency-response
          measurement.</div>
@@ -142,23 +143,23 @@
       </div>
 
       <h2>The modules and what they are for</h2>
-      <p><b>Signal generator</b> — the stimulus source. Produces calibrated test
+      <p><b>Signal generator</b> - the stimulus source. Produces calibrated test
          signals: a spectrally pure sine for distortion measurements, two tones for
          intermodulation, white/pink noise, linear and logarithmic sweeps, and a
          <em>compensated</em> sine that actively cancels the playback chain's own
          distortion so the DUT receives a cleaner signal than the DAC alone can
          produce. Output level is set in volts, against the DAC calibration.</p>
-      <p><b>Oscilloscope</b> — the time-domain view. This is where you look
+      <p><b>Oscilloscope</b> - the time-domain view. This is where you look
          <em>first</em>: is the signal there at all, is it clipping, does it carry
          DC or mains hum, what are V<sub>pp</sub> / V<sub>rms</sub> / frequency?
          A spectral number is only worth trusting after the time-domain picture
          looks sane.</p>
-      <p><b>FFT analyser</b> — the frequency-domain workhorse. Shows the spectrum
+      <p><b>FFT analyser</b> - the frequency-domain workhorse. Shows the spectrum
          and measures THD, THD+N, SNR, SINAD/ENOB and the individual harmonics; in
          two-tone mode the intermodulation products. Coherent averaging digs
          signals out far below the single-shot noise floor.</p>
-      <p><b>Frequency response</b> — the swept measurement. Plays a logarithmic
-         sweep through the DUT and computes its transfer function — magnitude and
+      <p><b>Frequency response</b> - the swept measurement. Plays a logarithmic
+         sweep through the DUT and computes its transfer function - magnitude and
          phase across the whole band in seconds. Results can be compared against
          RIAA / IEC curves or saved as calibration files the FFT analyser later
          de-embeds.</p>
@@ -167,32 +168,32 @@
       <p>Each chapter is a page in this guide (the same engineering theory is also
          served inside the app and the <a href="web/index.html">web version</a>):</p>
       <ul>
-        <li><a href="audio-backend.html"><b>Audio backend</b></a> — the bit-exact bridge to the sound hardware: what it guarantees, how capture and playback sessions work, who shares the devices.</li>
-        <li><a href="ring-buffer.html"><b>Ring buffer &amp; consumers</b></a> — the shared 22-second capture memory, independent read cursors, and what happens when a reader falls behind.</li>
-        <li><a href="generator.html"><b>Signal generator</b></a> — direct digital synthesis: the phase accumulator, every waveform, sweeps, distortion compensation, amplitude calibration and dither.</li>
-        <li><a href="oscilloscope.html"><b>Oscilloscope</b></a> — conditioning, triggering, and how the level / frequency numbers are measured; the frequency-tracked mains comb.</li>
-        <li><a href="fft.html"><b>FFT analyser</b></a> — coherent averaging and sub-bin de-rotation, glitch rejection, THD / SNR / SINAD / ENOB, two-tone intermodulation.</li>
-        <li><a href="derotation-accuracy.html"><b>De-rotation accuracy</b></a> — how precisely the per-block rotation angle is known, why its error does not accumulate over hours-long averages, and how overlap and window choice set the floor.</li>
-        <li><a href="dac-predistortion.html"><b>DAC pre-distortion</b></a> — cancelling the converter's own harmonics: why the twin-T notch is mandatory, why its drift forces a manual fundamental, and the dual notch for two-tone IMD.</li>
-        <li><a href="freq-resp.html"><b>Frequency response</b></a> — Farina log-sweep deconvolution, transport-delay removal, smoothing, and calibration de-embedding.</li>
-        <li><a href="tune-notch.html"><b>Tune-notch measurement</b></a> — tuning a passive twin-T notch live: a looping sweep whose power-of-two period makes the transform shift-invariant, so the null tracks with no trigger.</li>
-        <li><a href="algorithms.html"><b>Algorithm reference</b></a> — catalogue of every named algorithm in the instrument, linking each to the chapter that explains it.</li>
+        <li><a href="audio-backend.html"><b>Audio backend</b></a> - the bit-exact bridge to the sound hardware: what it guarantees, how capture and playback sessions work, who shares the devices.</li>
+        <li><a href="ring-buffer.html"><b>Ring buffer &amp; consumers</b></a> - the shared 22-second capture memory, independent read cursors, and what happens when a reader falls behind.</li>
+        <li><a href="generator.html"><b>Signal generator</b></a> - direct digital synthesis: the phase accumulator, every waveform, sweeps, distortion compensation, amplitude calibration and dither.</li>
+        <li><a href="oscilloscope.html"><b>Oscilloscope</b></a> - conditioning, triggering, and how the level / frequency numbers are measured; the frequency-tracked mains comb.</li>
+        <li><a href="fft.html"><b>FFT analyser</b></a> - coherent averaging and sub-bin de-rotation, glitch rejection, THD / SNR / SINAD / ENOB, two-tone intermodulation.</li>
+        <li><a href="derotation-accuracy.html"><b>De-rotation accuracy</b></a> - how precisely the per-block rotation angle is known, why its error does not accumulate over hours-long averages, and how overlap and window choice set the floor.</li>
+        <li><a href="dac-predistortion.html"><b>DAC pre-distortion</b></a> - cancelling the converter's own harmonics: why the twin-T notch is mandatory, why its drift forces a manual fundamental, and the dual notch for two-tone IMD.</li>
+        <li><a href="freq-resp.html"><b>Frequency response</b></a> - Farina log-sweep deconvolution, transport-delay removal, smoothing, and calibration de-embedding.</li>
+        <li><a href="tune-notch.html"><b>Tune-notch measurement</b></a> - tuning a passive twin-T notch live: a looping sweep whose power-of-two period makes the transform shift-invariant, so the null tracks with no trigger.</li>
+        <li><a href="algorithms.html"><b>Algorithm reference</b></a> - catalogue of every named algorithm in the instrument, linking each to the chapter that explains it.</li>
       </ul>
 
       <h2>Design themes you will meet everywhere</h2>
       <ul>
-        <li><b>Coherent averaging digs below the single-shot floor — and noise sets
+        <li><b>Coherent averaging digs below the single-shot floor - and noise sets
             the limit.</b> Every deep measurement sums phase-aligned blocks so the
             tone holds while the noise falls as 1/&#8730;<i>n</i>. The floor you
             reach is set by the bin signal-to-noise ratio and the effective number
-            of averages — not by any trick.</li>
+            of averages - not by any trick.</li>
         <li><b>Measure the reference afresh, never integrate it.</b> Phase
             references and frequency locks are read on each block, never carried by
             a free-running counter. A measured reference averages out; an
             integrated one random-walks and slowly de-coheres the tone.</li>
         <li><b>Drift is a walking phase, not a lost level.</b> Converter clock
             mismatch and notch-component temperature drift show up as a slow phase
-            walk, which the analysis strips block by block — costing coherence, not
+            walk, which the analysis strips block by block - costing coherence, not
             magnitude.</li>
         <li><b>Exact frequencies by integer phase.</b> The DDS accumulator, every
             harmonic correction tone and the sweep reference are formed by integer

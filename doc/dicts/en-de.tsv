@@ -1,6 +1,9 @@
-# Phonalyser domain glossary — English ↔ German (en-de)
+# Phonalyser domain glossary - English ↔ German (en-de)
 # Format: english<TAB>german<TAB>note   (see README.md). Sorted by English.
-Coherent average    Kohärente Mittelung
-Coherent averaging    Kohärente Mittelung
+Coherent    average Kohärente Mittelung
+Coherent    averaging   Kohärente Mittelung
 Noise floor Grundrauschen
+Scan devices	Geräte scannen	Schaltfläche in Einstellungen ▸ Audio
+clipping	Übersteuerung	Verb: übersteuert; NICHT "Abschneiden"
 de-embedded entbettete
+full scale	Vollaussteuerung	FS; "Vollaussteuerungsspannung" für die ADC-Referenz

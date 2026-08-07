@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser - Frequency response</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Frequency response</h1>
+  <p>This page covers the frequency-response analyser's controls.  For how it
+     measures - a pre-rendered logarithmic sweep, deconvolved against the
+     played reference to recover magnitude and phase across the whole band in
+     one pass - see
+     <a href="theory/freq-resp.html">Theory of operation ▸ Frequency
+     response</a> and the
+     <a href="external/sine-sweep.html">log-sweep (Farina) summary</a>.</p>
+  <p>Frequency response is a <b>separate top-level tab</b> (next to the
+     combined Generator / Oscilloscope / FFT tab).  It plays one swept sine
+     from the output device, captures the return at the input, and plots the
+     measured <b>magnitude</b> (and optional <b>phase</b>) of the device under
+     test versus frequency - with an optional RIAA / IEC reference overlay and
+     a measured-minus-reference compare curve for phono and filter work.</p>
+
+  <div class="shot">
+    <img src="img/freqresp-pane.png" alt="Frequency response pane"/>
+    <svg class="callouts" viewBox="0 0 1294 709" preserveAspectRatio="none"
+         xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
+      <defs><marker id="frca" viewBox="0 0 10 10" refX="9" refY="5"
+          markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/></marker></defs>
+      <line x1="250" y1="42" x2="164" y2="42" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="267" y1="600" x2="267" y2="662" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="347" y1="600" x2="347" y2="662" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="673" y1="600" x2="673" y2="662" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="1245" y1="130" x2="1288" y2="130" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <circle cx="115" cy="95" r="13" fill="#c33"/>
+      <text x="115" y="100" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <circle cx="250" cy="42" r="13" fill="#c33"/>
+      <text x="250" y="47" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <circle cx="267" cy="587" r="13" fill="#c33"/>
+      <text x="267" y="592" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+      <circle cx="347" cy="587" r="13" fill="#c33"/>
+      <text x="347" y="592" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
+      <circle cx="650" cy="320" r="13" fill="#c33"/>
+      <text x="650" y="325" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
+      <circle cx="1245" cy="130" r="13" fill="#c33"/>
+      <text x="1245" y="135" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
+      <circle cx="673" cy="587" r="13" fill="#c33"/>
+      <text x="673" y="592" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
+    </svg>
+  </div>
+
+  <h2 id="freqresp-overview">At a glance</h2>
+  <ol class="features">
+    <li><b>Magnitude plot.</b>  Log-frequency horizontal axis, linear-dB
+        vertical axis.  Shows the Left <em>or</em> Right channel (the L / R
+        header buttons are mutually exclusive).  See
+        <a href="#freqresp-buttons">Header buttons</a>.</li>
+    <li><b>Phase trace.</b>  Optional ±180° curve on a second right-hand axis,
+        toggled by the phase header button.</li>
+    <li><b>RIAA / IEC reference.</b>  Overlay the RIAA replay/record curve,
+        optionally with the IEC subsonic amendment, to check a phono stage -
+        <a href="#freqresp-tab-riaa">RIAA &amp; IEC tab</a>.</li>
+    <li><b>Compare (measured − reference).</b>  Subtract the reference from the
+        measurement and auto-zoom to a tight ±2&nbsp;dB window - the deviation
+        from ideal RIAA, read directly.  <a href="#freqresp-tab-riaa">RIAA &amp;
+        IEC tab</a>.</li>
+    <li><b>Crosshair readout.</b>  A dashed cross follows the pointer with a
+        floating box showing frequency, magnitude and (when shown) phase and
+        the compare Δ.  <a href="#freqresp-crosshair">Crosshair</a>.</li>
+    <li><b>Pan &amp; zoom.</b>  The same wheel convention as every Phonalyser
+        view, plus a drag-a-rectangle zoom with Ctrl+Z undo -
+        <a href="#freqresp-panzoom">Pan &amp; zoom</a>.</li>
+    <li><b>Calibration de-embedding.</b>  Load one or more <code>.frc</code> /
+        CSV correction files to subtract a known interface response from the
+        measurement.  <a href="#freqresp-tab-calibration">Load calibration
+        tab</a>.</li>
+  </ol>
+
+  <h2 id="freqresp-buttons">Header buttons</h2>
+  <p>The button row sits above the plot.</p>
+  <table class="controls">
+    <tr><th>Button</th><th>Action</th></tr>
+    <tr><td><b>L</b> (cyan)</td>
+        <td>Show the left channel's magnitude.  Mutually exclusive with
+            <b>R</b> - picking one hides the other.</td></tr>
+    <tr><td><b>R</b> (yellow)</td>
+        <td>Show the right channel's magnitude.</td></tr>
+    <tr><td><b>Phase</b></td>
+        <td>Show / hide the phase trace and its right-hand ±180° axis.</td></tr>
+    <tr><td><b>Auto-setup</b></td>
+        <td>Fit the vertical (magnitude) window to the visible trace, leaving a
+            little headroom above the highest point.  Frequency span is left
+            as-is.</td></tr>
+    <tr><td><b>Maximize</b></td>
+        <td>Reset to the default view - full frequency span (1&nbsp;Hz to the
+            Nyquist fraction) and +20 ... −150&nbsp;dB vertically.</td></tr>
+    <tr><td><b>Detach readout</b> (toggle)</td>
+        <td>Move the measurement readout (the compare max/min figures and the
+            <a href="#freqresp-tab-unevenness">Unevenness</a> flatness line) out
+            of the plot corner and into a small separate window.  Click again,
+            or close the window, to dock it back.  It has no effect until there
+            is a measurement to report.  See
+            <a href="#freqresp-measure">Measurement readout</a>.</td></tr>
+    <tr><td><b>Wizard</b></td>
+        <td>Open the guided calibration wizard, which first measures the
+            DAC -> ADC loopback and then the filter under test, in sequence.
+            (This button and <b>Play</b> sit on the toolbar row beside the
+            settings tabs, not on the plot header bar.)</td></tr>
+    <tr><td><b>Play</b> (green)</td>
+        <td>Start a measurement sweep; while one runs the tooltip changes to
+            "stop" and a progress dialog appears, with a <b>Cancel</b> button
+            that ends the sweep early (see
+            <a href="#freqresp-measure">Running a measurement</a>).</td></tr>
+  </table>
+
+  <h2 id="freqresp-panzoom">Pan &amp; zoom</h2>
+  <p>Over the plot -
+     <b>wheel</b>: pan the magnitude (vertical) axis;
+     <b>Shift+wheel</b>: pan the frequency (horizontal) axis;
+     <b>Ctrl+wheel</b>: zoom the magnitude axis (wheel up = zoom in);
+     <b>Ctrl+Shift+wheel</b>: zoom the frequency axis (wheel up = zoom in).
+     Both zooms are <em>anchored at the cursor</em> - the value (dB, or
+     frequency) under the pointer stays fixed while the scale changes around
+     it.  This is the same convention used in the scope and FFT views.  Each
+     scrollbar pans one axis only - never zooms - and its thumb is sized by the
+     view, so it tracks the zoom (it grows / shrinks as you scale).  Click the
+     empty track to page toward the pointer, or hold the button down to keep
+     paging until the thumb reaches the cursor.</p>
+  <p><b>Rectangle zoom.</b>  Drag with the left mouse button inside the plot to
+     draw a rubber-band rectangle; on release the selected region stretches to
+     fill the view - frequency and magnitude zoom together in one gesture.
+     Selections smaller than 8 pixels in either direction are ignored, so a
+     stray click doesn't zoom.  The drag must start inside the plot area
+     (not on the axis labels), and the result stays clamped to the plot's
+     limits (1&nbsp;Hz up to the Nyquist fraction horizontally).  The same
+     gesture works in the scope and FFT views.</p>
+  <p><b>Ctrl+Z - step back.</b>  Every rectangle zoom remembers the window it
+     replaced; press <b>Ctrl+Z</b> (exactly Ctrl - Ctrl+Shift+Z and other
+     combinations are ignored) to step back through up to 32 previous windows
+     per view.  Wheel pan / zoom is not recorded - only rectangle zooms add
+     steps.  Ctrl+Z acts on the view that has keyboard focus (click a plot to
+     focus it) or, when no view is focused, the one under the pointer; the
+     targeted view is marked by a thin bright-green border around its edge.
+     While a text-entry field has focus, Ctrl+Z belongs to that field's own
+     undo instead.</p>
+
+  <h2 id="freqresp-crosshair">Crosshair readout</h2>
+  <p>Moving the pointer inside the plot draws a dashed cross and a floating
+     box reading the <b>frequency</b> at the cursor (clipped at the Nyquist
+     fraction), the <b>magnitude (dB) at the cursor's height</b> on the left
+     axis (<code>y = ...</code>), the <b>L</b> / <b>R</b> trace magnitude in dB,
+     the <b>phase</b> in
+     degrees when the phase trace is shown, and the <b>compare Δ</b> when
+     compare mode is on.  It clears when the pointer leaves the plot.</p>
+
+  <h2 id="freqresp-tabs">Settings tabs</h2>
+  <p>The settings strip holds nine tabs, in order:
+     <a href="#freqresp-tab-settings">Settings</a>,
+     <a href="#freqresp-tab-riaa">RIAA &amp; IEC</a>,
+     <a href="#freqresp-tab-filters">Filters</a>,
+     <a href="#freqresp-tab-unevenness">Unevenness</a>,
+     <a href="#freqresp-tab-presets">Presets</a>,
+     <a href="#freqresp-tab-utility">Utility</a>,
+     <a href="#freqresp-tab-calibration">Load calibration...</a>,
+     <a href="#freqresp-tab-saveto">Save to...</a> and
+     <a href="#freqresp-tab-loadfrom">Load from...</a>.  As elsewhere, the strip
+     shows an overflow <code>»</code> when more tabs exist than fit.  The
+     Settings, RIAA, Filters, Unevenness, Calibration and Presets tabs carry
+     tiles summarising their key values while collapsed (Utility, Save and Load
+     have none); hover a tile for a tooltip describing the value.</p>
+
+  <h3 id="freqresp-tab-settings">Settings</h3>
+  <p><img src="img/FreqResp - Settings.png" alt="Settings tab"/></p>
+  <table class="controls">
+    <tr><th>Control</th><th>Notes</th></tr>
+    <tr><td>Start frequency, Hz</td>
+        <td>Low end of the sweep.  ≥ 1 Hz.</td></tr>
+    <tr><td>Stop frequency, Hz</td>
+        <td>High end of the sweep, up to the Nyquist fraction.</td></tr>
+    <tr><td>Amplitude (RMS)</td>
+        <td>Drive level sent to the DAC, in volts RMS against the DAC
+            calibration; the tooltip toggles a dBV display.  Accepts
+            µV / mV / V / dBV / dBFS, the last against converter full scale
+            (0 dBFS = full-scale sine).</td></tr>
+    <tr><td>FFT size (Ds)</td>
+        <td>Analysis length of the deconvolution, a power of two from 64k to
+            16M.  Longer gives finer frequency resolution and more noise
+            rejection at the cost of a longer sweep; the label shows the
+            resulting sweep duration.  On a small Java heap (32-bit runtime)
+            the list ends at 4M.</td></tr>
+    <tr><td>Sweep points</td>
+        <td>Number of log-spaced output points the deconvolution emits
+            (8192 ... 10M).  The wheel steps through power-of-two presets
+            (8192, 16384, 32768, ... up to 4194304) plus an <b>FS/2</b> entry
+            equal to half the current sample rate (24000 at 48&nbsp;kHz,
+            96000 at 192&nbsp;kHz - it tracks the audio format); any value in
+            range can also be typed directly.</td></tr>
+    <tr><td>Lead-in, s</td>
+        <td>Silent / settle time before the sweep proper, so the chain is in
+            steady state when measurement starts.</td></tr>
+    <tr><td>Dither</td>
+        <td>Dither depth applied to the generated sweep, Off or 1-31 bits -
+            decorrelates quantisation error in the played signal.</td></tr>
+    <tr><td>Output channel</td>
+        <td><b>Both</b>, <b>Left</b> or <b>Right</b> - which DAC lane the sweep
+            drives.  Driving one side plays the other lane as digital silence and
+            measures only that channel's response.</td></tr>
+  </table>
+  <div class="note">The <b>maximal analysed frequency</b> (as a % of Nyquist)
+     is set on the <a href="preferences.html#prefs-freqresp">Preferences ▸
+     Frequency response</a> tab, not here; it caps the band where the sweep
+     deconvolution is trustworthy.</div>
+
+  <h3 id="freqresp-tab-riaa">RIAA &amp; IEC</h3>
+  <p><img src="img/FreqResp - RIAA IEC.png" alt="RIAA &amp; IEC tab"/></p>
+  <table class="controls">
+    <tr><th>Control</th><th>Notes</th></tr>
+    <tr><td>Show RIAA curve</td>
+        <td>Overlay the RIAA reference, aligned at 1 kHz.  This gate enables
+            the three controls below.</td></tr>
+    <tr><td>Reverse RIAA</td>
+        <td>Switch the reference between the record (encode) and playback
+            (decode) curve - pick the one matching what your device does.</td></tr>
+    <tr><td>IEC amendment</td>
+        <td>Add the IEC subsonic high-pass (~20 Hz) to the reference.</td></tr>
+    <tr><td>Compare (measured − reference)</td>
+        <td>Plot the smoothed difference between the measurement and the RIAA
+            reference around a 0 dB centreline, and auto-zoom once to
+            20 Hz - 25 kHz horizontally with the vertical window hugging the
+            difference to within ±2 dB of its extremes.  Needs an existing
+            measurement.  A blinking banner names the active reference.</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-filters">Filters</h3>
+  <p><img src="img/FreqResp - Filters.png" alt="Filters tab"/></p>
+  <p>Draw the ideal magnitude response of a textbook analogue filter on top of
+     the measured trace, so you can see at a glance how close a real filter (or
+     a filter you are building) comes to its target.  The overlay is a
+     <b>purple dashed curve</b>; a compare mode can also plot the measured curve
+     minus this ideal.  Only one reference can be shown at a time - turning this
+     overlay on switches the <a href="#freqresp-tab-riaa">RIAA / IEC</a> overlay
+     off, and vice-versa.</p>
+
+  <h4>Turning the overlay on</h4>
+  <table class="controls">
+    <tr><th>Control</th><th>Notes</th></tr>
+    <tr><td><b>Show filter curve</b></td>
+        <td>Draw the ideal filter response over the measured trace.  This is the
+            master switch - every other control on the tab is inactive until it
+            is ticked.  It always starts <b>off</b> when the pane opens (unlike
+            the filter type, response, design values and Compare, which are all
+            remembered).</td></tr>
+    <tr><td><b>Compare (measured − filter)</b></td>
+        <td>Plot the measured response minus the ideal filter, smoothed and
+            centred so its middle sits at 0 dB, and auto-zoom to the difference
+            (see <a href="#freqresp-filter-compare">Compare</a>).  Available only
+            once a measurement exists - attempting it beforehand pops a reminder
+            to run a sweep first.</td></tr>
+    <tr><td><b>Filter type</b></td>
+        <td>The filter family whose ideal response is drawn:
+            <b>Low pass</b>, <b>High pass</b>, <b>Band pass</b> or
+            <b>Notch</b>.  Each type keeps its own complete set of design values
+            (see <a href="#freqresp-filter-memory">Per-type memory</a>).</td></tr>
+    <tr><td><b>Filter response</b></td>
+        <td>The approximation that shapes passband flatness and roll-off, in
+            list order: <b>Bessel</b>, <b>Butterworth</b>, <b>Chebyshev</b>,
+            <b>Elliptic</b> and <b>Inverse Chebyshev</b>.  The passband-ripple
+            value is only meaningful - and only enabled - for the three ripple
+            families (Chebyshev, Elliptic, Inverse Chebyshev); Bessel and
+            Butterworth have no adjustable ripple.</td></tr>
+  </table>
+
+  <h4>The Settings group</h4>
+  <p>The design values live in a bordered <b>Settings</b> group.  A pair of
+     radios chooses <em>how</em> the filter is specified; the field set below
+     them changes to match, with no change in layout size:</p>
+  <ul>
+    <li><b>By specification</b> (the default) - you give the passband and
+        stopband edges and the required attenuation, and the filter order is
+        derived for you.  A schematic of the chosen type's target shape (with
+        its edges and levels labelled) is shown to the right of the group in
+        this mode.</li>
+    <li><b>By order</b> - you set the order and cutoff (or centre) frequency
+        directly.  The schematic is hidden in this mode.</li>
+  </ul>
+  <p>Each filter type remembers which of the two modes you last used for it.</p>
+
+  <p><b>By specification</b> exposes these fields (those marked band/notch only
+     appear for Band pass and Notch):</p>
+  <table class="controls">
+    <tr><th>Field</th><th>Notes</th></tr>
+    <tr><td>Passband ripple (R)</td>
+        <td>Peak-to-peak passband ripple, in dB (0.001 ... 200).  Active only for
+            the ripple families.  For Inverse Chebyshev this figure sets the
+            stopband ripple instead, by convention, even though the label still
+            reads passband.</td></tr>
+    <tr><td>Stopband atten. (A)</td>
+        <td>Minimum stopband attenuation, in dB, used to derive the order.  For
+            a Notch it also sets how deep the drawn null is taken (see
+            <a href="#freqresp-filter-overlay">the overlay curve</a>).</td></tr>
+    <tr><td>Center Freq. (Fc)</td>
+        <td>Band/notch only - the centre frequency, in Hz.</td></tr>
+    <tr><td>Passband edge</td>
+        <td>Labelled <b>Passband (Fc)</b> for low/high pass and
+            <b>Passband (PB)</b> for band pass / notch.  For low pass the
+            stopband must sit above it; for high pass, below it.  For a band
+            pass this is the inner passband width and for a notch the outer
+            return width.</td></tr>
+    <tr><td>Stopband edge</td>
+        <td>Labelled <b>Stopband (Fs)</b> for low/high pass and
+            <b>Stopband (SB)</b> for band pass / notch.  For a band pass the
+            reject width must be wider than the passband width; for a notch the
+            reject width must be narrower than the return width.</td></tr>
+  </table>
+
+  <p><b>By order</b> exposes these fields:</p>
+  <table class="controls">
+    <tr><th>Field</th><th>Notes</th></tr>
+    <tr><td>Passband freq</td>
+        <td>The cutoff frequency for low/high pass, or the centre frequency for
+            band pass / notch, in Hz.</td></tr>
+    <tr><td>Ripple</td>
+        <td>Passband ripple in dB - again only for the ripple families.</td></tr>
+    <tr><td>Order</td>
+        <td>The filter order, a whole number 1 ... 20.  Higher orders give a
+            steeper roll-off.</td></tr>
+    <tr><td>Q</td>
+        <td>Band/notch only - the quality factor; the bandwidth is the centre
+            frequency divided by Q.</td></tr>
+  </table>
+  <p>All frequency fields read out in Hz below 1 kHz and in kHz above, accept
+     free typing as well as the arrow / wheel steppers, and are capped at the
+     Nyquist fraction - the cap follows the audio format if it changes.</p>
+
+  <h4 id="freqresp-filter-memory">Per-type parameter memory</h4>
+  <p>Each of the four filter types keeps its <em>own</em> complete set of design
+     values and its own mode choice.  Selecting a type loads that type's values;
+     editing a value writes only the current type's set.  All of this is
+     remembered across sessions - filter type, response, mode, the per-type
+     values and the Compare switch - with the single exception of <b>Show filter
+     curve</b>, which always begins off.</p>
+
+  <h4 id="freqresp-filter-overlay">The overlay curve</h4>
+  <p>When Show is on and the design is valid, the ideal magnitude response is
+     drawn as a <b>purple dashed</b> curve at the same line width as the trace -
+     pure magnitude in dB, passband at roughly 0 dB, no phase.  It is sampled
+     one point per screen column, with the exact corner (or notch) frequency
+     forced in so that critical point always renders true no matter how wide the
+     plot is.</p>
+  <p>The ideal curve is <b>not</b> anchored at 1 kHz (1 kHz can lie deep in the
+     stopband).  Instead it is lined up with the measured trace at the point
+     that matters for each type, so the two meet where you would judge the fit:</p>
+  <ul>
+    <li><b>Low / high pass</b> - at the passband-edge corner, so ideal and
+        measured coincide at the corner frequency.</li>
+    <li><b>Band pass</b> - at the two passband edges (centre ± half-bandwidth),
+        falling back to the centre.</li>
+    <li><b>Notch</b> - at the notch point itself, so the ideal tip pins to the
+        measured tip.</li>
+  </ul>
+  <p>A true notch null is infinitely deep, so the drawn tip is given a finite
+     floor: in <b>By specification</b> it descends to the <b>Stopband atten.
+     (A)</b> you entered; in <b>By order</b> it descends to a fixed 120 dB below
+     the plateau.  Either way the tip rounds asymptotically into that depth
+     rather than showing a flat bottom.</p>
+
+  <h4 id="freqresp-filter-compare">Compare (measured − filter)</h4>
+  <p>With <b>Show filter curve</b> and <b>Compare</b> both on and a measurement
+     present, the plot shows the measured response minus the ideal filter,
+     point by point.  The difference is smoothed and then centred on its median
+     over 20 Hz - 25 kHz so its central tendency reads 0 dB, and drawn as a
+     solid line.  Because the filter is the active reference here, this compare
+     curve is drawn in <b>purple</b> (the RIAA compare curve, by contrast, is
+     dark green).  Its smoothing is the same shared setting the
+     <a href="#freqresp-tab-riaa">RIAA compare</a> uses.</p>
+  <p>A small two-line table in the top-left corner reads the <b>max</b> and
+     <b>min</b> of the smoothed difference over 20 Hz - 25 kHz.  Entering compare
+     mode auto-zooms once - horizontally to 20 Hz - 25 kHz, vertically hugging
+     the difference to within ±2 dB of its extremes - after which any panning or
+     zooming you do is preserved.  The <b>Auto-setup</b> header button also fits
+     the compare curve.</p>
+
+  <h3 id="freqresp-tab-unevenness">Unevenness</h3>
+  <p><img src="img/FreqResp - Unevenness.png" alt="Unevenness tab"/></p>
+  <p>Reduce the response to a single flatness figure and mark it on the plot.
+     Depending on the mode, this is either the widest band that stays within a
+     tolerance of a reference peak (or notch), or the peak-to-peak spread of the
+     response across a chosen frequency range.</p>
+  <table class="controls">
+    <tr><th>Control</th><th>Notes</th></tr>
+    <tr><td><b>Off</b></td>
+        <td>No flatness readout - nothing is computed, tabled or drawn.  This is
+            the default.</td></tr>
+    <tr><td><b>Unevenness</b> (dB field)</td>
+        <td>The radio and its dB field on the same row.  You set an allowed
+            deviation; the analysis finds the widest band around a reference
+            extremum where the response stays within that many dB of it, and
+            reports the band edges.  The dB field takes 0.001 ... 20 dB.</td></tr>
+    <tr><td><b>Range</b> (Start / Stop freq fields)</td>
+        <td>The radio labelled <b>Start freq</b>, with Start and Stop frequency
+            fields.  The analysis reports half the peak-to-peak spread of the
+            response inside that range.  Editing one edge clamps it to stay at
+            least 1 Hz clear of the other; both edges are capped at the Nyquist
+            fraction.</td></tr>
+    <tr><td><b>Notch</b></td>
+        <td>Steer the analysis toward a dip rather than a peak (available in
+            both active modes, see below).</td></tr>
+  </table>
+
+  <h4>What each mode measures</h4>
+  <p><b>Unevenness mode.</b>  With <b>Notch</b> off, the analysis finds the peak
+     within the audio band (20 Hz - 20 kHz) and walks outward in both directions
+     as long as the response stays within your tolerance below that peak - the
+     band edges are where the response first drops that far below the peak.  With
+     <b>Notch</b> on, it instead finds the lowest point and walks outward while
+     the response stays within tolerance <em>above</em> the minimum - the edges
+     are where the response first rises that far above the notch.  (In notch
+     mode the curve is only lightly de-spiked, not averaged, so a sharp, deep
+     null keeps its true depth and the marker lines land on the drawn trace.)</p>
+  <p><b>Range mode.</b>  The analysis scans the response between Start and Stop,
+     finds the highest and lowest points, and reports <b>half</b> the spread
+     between them (the ± sign is part of the readout).  The <b>Notch</b> tick
+     here only chooses which extreme the marker line sits on - the lowest point
+     when ticked, the highest when not - it does not change the reported figure.</p>
+
+  <h4>On-plot markers</h4>
+  <p>While a mode is active and a measurement exists, the analysis is drawn over
+     the plot as <b>dotted</b> lines at the overlay line width:</p>
+  <ul>
+    <li><b>Unevenness mode</b> - two <b>green</b> horizontals (one at the
+        reference extremum, one at the tolerance threshold) spanning the found
+        band, plus a <b>purple</b> vertical at each band edge running the full
+        height of the plot.</li>
+    <li><b>Range mode</b> - a <b>purple</b> vertical at Start and at Stop, plus a
+        <b>green</b> horizontal at the extreme of interest between them.  Where
+        the two verticals cross the trace, either one full-width green level (if
+        the two crossing heights match to within a hair) or a short green tick at
+        each vertical is drawn.</li>
+  </ul>
+
+  <h4 id="freqresp-uneven-readout">The flatness readout</h4>
+  <p>The result is written as a short line, shown in a small outlined table below
+     the header buttons (stacking below the compare max/min table when both are
+     present).  Its wording depends on the mode:</p>
+  <ul>
+    <li><b>Unevenness mode</b> - "Frequency response is <i>lo</i> to <i>hi</i>,
+        <i>x</i> dB", e.g. "Frequency response is 20 Hz to 18.5 kHz, 3 dB".</li>
+    <li><b>Range mode</b> - "±<i>x</i> dB frequency response in range <i>lo</i>
+        to <i>hi</i>", e.g. "±0.42 dB frequency response in range 20 Hz to
+        20 kHz" - here <i>x</i> is the half-spread.</li>
+  </ul>
+  <p>The same figure is condensed onto the tab's tile while the strip is
+     collapsed: "±<i>x</i> dB" in Unevenness mode, the Start-Stop pair in Range
+     mode, or "Off".  The whole readout can also be
+     <a href="#freqresp-measure">detached</a> into its own window with the
+     <b>Detach readout</b> header button.</p>
+
+  <div class="note">The flatness analysis ignores everything at or above 95 % of
+     the Nyquist frequency, where the deconvolved signal is too weak to trust.
+     For a <a href="#freqresp-tab-loadfrom">loaded file</a> the Nyquist used is
+     the one recorded in the file itself, so a high-sample-rate capture opened on
+     a slower device is still analysed across its full span.</div>
+
+  <h3 id="freqresp-tab-presets">Presets</h3>
+  <p><img src="img/FreqResp - Presets.png" alt="Presets tab"/></p>
+  <p>Save and recall complete Settings + RIAA configurations.</p>
+  <table class="controls">
+    <tr><th>Control</th><th>Notes</th></tr>
+    <tr><td>Name combo</td>
+        <td>Type a new preset name or pick an existing one.</td></tr>
+    <tr><td>Save</td>
+        <td>Store the current sweep + RIAA settings under that name; greyed out
+            when the live settings already match the selected preset.</td></tr>
+    <tr><td>Load</td>
+        <td>Apply the selected preset to the live pane.</td></tr>
+    <tr><td>Delete</td>
+        <td>Remove the selected preset (with confirmation).</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-utility">Utility</h3>
+  <p><img src="img/FreqResp - Utility.png" alt="Utility tab"/></p>
+  <table class="controls">
+    <tr><th>Button</th><th>Action</th></tr>
+    <tr><td>Screenshot</td>
+        <td>Save or copy a picture of the frequency-response plot.</td></tr>
+    <tr><td>Calibrate DAC full-scale</td>
+        <td>Reference-level DAC calibration helper (1 kHz / 1 V RMS).</td></tr>
+    <tr><td>Calibrate ADC full-scale</td>
+        <td>Reference-level ADC calibration helper (measures a 1 kHz
+            reference at the input).</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-calibration">Load calibration...</h3>
+  <p><img src="img/FreqResp - Load calibration.png" alt="Load calibration tab"/></p>
+  <p>A list of calibration rows.  Each loaded, <b>Active</b>-checked
+     <code>.frc</code> / CSV file is de-embedded (subtracted) from the
+     measurement, so the plot shows the device under test with a known
+     interface response removed.</p>
+  <table class="controls">
+    <tr><th>Per-row control</th><th>Notes</th></tr>
+    <tr><td>Path</td>
+        <td>The loaded file, or "No calibration loaded".</td></tr>
+    <tr><td>Active</td>
+        <td>Engage / park this file's correction without unloading it -
+            unchecked rows stay in the list for one-click re-use.</td></tr>
+    <tr><td>Load</td>
+        <td>Open-file button - pick a <code>.frc</code> or CSV correction file
+            for this row.</td></tr>
+    <tr><td>Clear (×)</td>
+        <td>Unload this row's file (keeps the Active flag).</td></tr>
+    <tr><td>Add (+)</td>
+        <td>Append another row to cascade a second correction.</td></tr>
+    <tr><td>Remove (−)</td>
+        <td>Delete this row.</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-saveto">Save to...</h3>
+  <p><img src="img/FreqResp - Save to.png" alt="Save to tab"/></p>
+  <p>Save the current measurement as a stereo CSV (frequency, L/R magnitude in
+     dB, L/R phase in degrees).  The file also records the sample rate it was
+     measured at, so a later <a href="#freqresp-tab-loadfrom">Load from...</a>
+     knows the correct analysis bandwidth.  The Save button prompts for a
+     path, pre-filled with a timestamped <code>freqresp_...&period;frc</code> name.</p>
+  <p>There is <b>no quality gate</b> on saving.  Any response on screen can be
+     written out - a sweep you have just run, one driven gently, or one you
+     loaded back from disk - because a saved file is a record of a measurement,
+     not a verdict on it.  The only thing the button asks is that <b>a
+     measurement exists</b>: with nothing measured and nothing loaded it says so
+     and writes nothing.</p>
+  <p class="note"><b>Auto-reload:</b> if the file you save is already loaded as a
+     calibration row in the <a href="fft.html">FFT</a> pane or in this
+     Frequency&nbsp;Response pane (see <a href="#freqresp-tab-calibration">Load
+     calibration...</a>), that row is re-read from disk automatically the moment
+     you save - so re-measuring and overwriting a calibration takes effect
+     immediately, with no need to browse for it again.</p>
+
+  <h3 id="freqresp-tab-loadfrom">Load from...</h3>
+  <p><img src="img/FreqResp - Load from.png" alt="Load from tab"/></p>
+  <p>Load a previously saved stereo CSV back into the plot.  A loaded file is
+     treated as already corrected (it isn't re-calibrated), and a non-blinking
+     banner shows its path at the top-right of the plot.</p>
+  <p class="note">A saved file records the sample rate it was measured at, and
+     that recorded rate - not the live device rate - defines the analysis
+     bandwidth (the Nyquist used by the crosshair clip and the
+     <a href="#freqresp-tab-unevenness">Unevenness</a> analysis).  So a file
+     captured at a high sample rate is analysed across its full span even when
+     opened on a slower device.  Only an older file that carries no recorded rate
+     falls back to the current device rate.</p>
+
+  <h2 id="freqresp-measure">Running a measurement</h2>
+  <p>Press <b>Play</b> to sweep.  Capture and generator playback are taken over
+     for the run, a modal progress dialog shows a live RMS-versus-time meter,
+     and the magnitude (and phase) plot refreshes when the deconvolution
+     completes.  The total time is the lead-in plus the sweep duration implied
+     by the FFT size and sample rate.  Because the reference is the exact
+     pre-rendered sweep that was played, the result is the device's true
+     transfer function, not an estimate - see
+     <a href="theory/freq-resp.html">Theory ▸ Frequency response</a>.</p>
+  <p><img src="img/FreqResp - Busy.png" alt="Measurement progress dialog"/></p>
+  <p>The progress dialog carries a <b>Cancel</b> button.  It is cooperative:
+     pressing it asks the sweep to stop, and the run then finishes through the
+     ordinary stopped path - the dialog closes, the pane unlocks and the capture
+     and generator are handed back, exactly as after a completed sweep.  Useful
+     when a long run is under way; a low start frequency at a large FFT size can
+     take minutes.</p>
+  <p class="note">If the sweep cannot start at all - the audio device is busy,
+     gone, or refuses the sample rate - the wizard and the pane now say so
+     directly, with the failure on the status line and in a dialog.  The
+     driver's own words stay in the log.</p>
+
+  <h3 id="freqresp-measure-readout">Measurement readout</h3>
+  <p>Two small readouts can appear over the plot once a measurement exists:</p>
+  <ul>
+    <li>a compare <b>max / min</b> table, shown while a compare mode is active
+        (<a href="#freqresp-tab-riaa">RIAA</a> or
+        <a href="#freqresp-filter-compare">filter</a>), giving the extremes of
+        the difference curve; and</li>
+    <li>the <a href="#freqresp-uneven-readout">Unevenness flatness line</a>, shown
+        while an Unevenness mode is active.</li>
+  </ul>
+  <p>Both sit in the plot corner beneath the header buttons.  The <b>Detach
+     readout</b> header button lifts them out into a small separate window (titled
+     "Measurements") near the top-right of the pane; click the button again, or
+     close the window, to dock them back.  The button does nothing until there is
+     a measurement to report, and the detached state resets to docked on
+     restart.</p>
+
+  <h3 id="freqresp-measure-clipping">Wobbly trace - check for clipping</h3>
+  <div class="note"><b>The sweep now checks this for you.</b>  The largest
+     absolute sample of the raw capture is recorded before any deconvolution,
+     and if it reached <b>0.9995 of full scale</b> a warning appears as soon as
+     the sweep stops and its trace is on screen.  (The threshold sits a hair
+     below the rail rather than on it because the anti-alias filter typically
+     shaves a hard-limited sweep just under full scale; −0.0043&nbsp;dBFS is
+     clipping territory in any case.)  The
+     <a href="#freqresp-tab-calibration">calibration wizard</a> checks both of
+     its legs, so a clipped curve cannot be walked into a calibration file
+     unnoticed.  The rest of this section is how to recognise the same fault by
+     eye - worth knowing, because a sweep that stayed just under the rail can
+     still be distorted.</div>
+  <p>A trace that should be smooth but instead carries a dense, regular ripple -
+     typically a solid band one to a few decibels thick, and about equally thick
+     from the bottom of the swept band to the top - means the <b>input is being
+     overdriven</b>.  The ripple is not a property of the device under test.</p>
+  <p>A swept sine separates distortion from the wanted response in time: every
+     harmonic the device generates lands in its own impulse response, a fixed
+     interval <em>ahead</em> of the linear one -
+     <i>T</i> · ln <i>N</i> / ln(<i>f</i><sub>2</sub>/<i>f</i><sub>1</sub>) for
+     the <i>N</i>-th harmonic, with <i>T</i> the sweep duration and
+     <i>f</i><sub>1</sub>...<i>f</i><sub>2</sub> the swept band.  Those extra
+     impulses beat against the wanted one and comb the magnitude trace at a
+     period of one over that interval.  The ripple is evenly spaced in hertz, so
+     on the logarithmic frequency axis it looks sparse at the left and packs into
+     a solid band toward the right - which is what makes it easy to mistake for
+     noise.</p>
+  <p>Zoom in until individual ripples resolve and measure their spacing
+     Δ<i>f</i>; the harmonic responsible is the one whose interval equals
+     1/Δ<i>f</i>.  Odd orders only (3rd, 5th, 7th) means symmetric clipping - the
+     signal is hitting both rails equally.  A 4.9 s sweep over 1 Hz...96 kHz, for
+     example, puts the 3rd harmonic 0.47 s ahead of the linear response, giving a
+     2.1 Hz ripple.</p>
+  <div class="note"><b>The cure is level, not settings.</b>  Lower the sweep
+     <a href="#freqresp-tab-settings">Amplitude</a> until the ripple collapses;
+     the level at which it disappears is the input's real headroom.  Watch for
+     inputs that are not line level - the headset or microphone input on a USB
+     adapter can overload an order of magnitude below the 1 V a line input
+     accepts.</div>
+
+</body>
+</html>

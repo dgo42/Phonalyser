@@ -27,11 +27,11 @@
 <h1>Browser audio device probe</h1>
 <p>Enumerates input / output audio devices and probes which <b>sample rates</b> the browser
 will actually grant. <b>Bit depth is not exposed</b> by the Web platform (Web Audio is 32-bit
-float after the OS mixer), and there is <b>no exclusive mode</b> — so this shows the ceiling a
+float after the OS mixer), and there is <b>no exclusive mode</b> - so this shows the ceiling a
 pure browser tab can reach, not what the hardware can do.</p>
 
 <div class="note">
-Click <b>Scan</b> and allow microphone access — without permission the OS hides device labels.
+Click <b>Scan</b> and allow microphone access - without permission the OS hides device labels.
 The scan opens each input device once per candidate rate, so it takes a few seconds.
 </div>
 
@@ -50,24 +50,43 @@ different rate, ✗ = refused.</small></p>
 <p id="inputMeta"><small></small></p>
 
 <h2>3. Output / AudioContext sample-rate support (<code>new AudioContext({sampleRate})</code>)</h2>
-<p><small>Probes the default output path — a browser tab cannot enumerate per-output-device
+<p><small>Probes the default output path - a browser tab cannot enumerate per-output-device
 capabilities, only attempt a context at a given rate.</small></p>
 <table id="ctx"><thead><tr>
   <th>requested rate</th><th>created?</th><th>actual ctx.sampleRate</th>
 </tr></thead><tbody></tbody></table>
 
-<h2>4. What the platform does NOT expose</h2>
+<h2>4. Bit-depth probe, per device (<code>sampleSize</code>)</h2>
+<p><small>The Media Capture spec lists <code>sampleSize</code> as a constrainable property, so
+"bit depth is not exposed" deserves measuring rather than asserting. Each INPUT is opened in turn and
+asked what depth it reports and which exact depths it will accept. OUTPUTS cannot be probed at all -
+a tab may route to one with <code>setSinkId</code> but never open or inspect it - so they are listed
+for completeness with the reason.</small></p>
+<p id="depthEngine"><small></small></p>
+<table id="depth"><thead><tr>
+  <th>device</th><th>kind</th><th>getSettings()</th><th>getCapabilities()</th>
+  <th>exact 16</th><th>exact 24</th><th>exact 32</th>
+</tr></thead><tbody></tbody></table>
+<p id="depthVerdict"><small></small></p>
+
+<h2>5. What the platform does NOT expose</h2>
 <ul>
-  <li><b>Bit depth</b> — none. Capture is float32 post-mixer; no 16/24-bit raw PCM.</li>
-  <li><b>Exclusive mode</b> — none. Every stream goes through the shared OS mixer + its resampler.</li>
-  <li><b>Per-output-device formats</b> — not queryable; <code>setSinkId</code> only routes.</li>
+  <li><b>Bit depth</b> - <i>partly</i>, and less than it looks. Chromium DOES implement the
+      <code>sampleSize</code> constraint: it advertises it, <code>getCapabilities()</code> returns a
+      min/max, and an <i>exact</i> value outside that range is refused with
+      <code>OverconstrainedError</code> rather than ignored (measured - run section 4). What it
+      describes is the capture format the browser opened, NOT a choice you can make: the samples
+      handed to the page are float32 taken <b>post-mixer</b>, so the device's own converter depth is
+      already gone by the time anything is read. Treat a reported depth as information, not control.</li>
+  <li><b>Exclusive mode</b> - none. Every stream goes through the shared OS mixer + its resampler.</li>
+  <li><b>Per-output-device formats</b> - not queryable; <code>setSinkId</code> only routes.</li>
 </ul>
 
 <script>
 const RATES = [8000,16000,32000,44100,48000,88200,96000,176400,192000,352800,384000,705600,768000];
 const $  = (s)=>document.querySelector(s);
 const status = (t)=>{ $("#status").textContent = t; };
-const trunc = (s)=> s ? (s.length>16 ? s.slice(0,16)+"…" : s) : "(none)";
+const trunc = (s)=> s ? (s.length>16 ? s.slice(0,16)+"..." : s) : "(none)";
 
 async function stopStream(stream){
   if (stream) for (const t of stream.getTracks()) t.stop();
@@ -91,14 +110,108 @@ async function probeRate(deviceId, rate){
   } finally { await stopStream(stream); }
 }
 
+/**
+ * Asks whether an EXACT bit depth can be demanded of a capture. A browser that does not implement
+ * the constraint ignores it silently (the stream opens, the depth is whatever it was), which is
+ * indistinguishable from success unless the reported value is checked - so both are returned.
+ */
+async function probeDepth(deviceId, bits){
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: {
+      deviceId: deviceId ? { exact: deviceId } : undefined,
+      sampleSize: { exact: bits }, echoCancellation: false, noiseSuppression: false,
+      autoGainControl: false } });
+    const st = stream.getAudioTracks()[0].getSettings?.() ?? {};
+    return { ok: true, reported: st.sampleSize ?? null };
+  } catch (e) {
+    return { ok: false, err: e.name };
+  } finally { await stopStream(stream); }
+}
+
+/** What ONE input reports about its own depth, unconstrained. */
+async function depthOf(deviceId){
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: {
+      deviceId: deviceId ? { exact: deviceId } : undefined,
+      echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    const track = stream.getAudioTracks()[0];
+    const st = track.getSettings?.() ?? {};
+    const caps = track.getCapabilities?.() ?? {};
+    return {
+      settings: ("sampleSize" in st) ? String(st.sampleSize) : null,
+      caps: ("sampleSize" in caps) ? JSON.stringify(caps.sampleSize) : null,
+    };
+  } catch (e) {
+    return { err: e.name };
+  } finally { await stopStream(stream); }
+}
+
+/** Section 4 - what each device reports about its own bit depth, and which depths it will accept. */
+async function runDepthProbe(devices){
+  const supported = navigator.mediaDevices.getSupportedConstraints();
+  const ctx = new AudioContext();
+  const carried = ctx.createBuffer(1, 128, ctx.sampleRate).getChannelData(0).constructor.name;
+  await ctx.close();
+  $("#depthEngine").innerHTML = "<small>"
+    + `<code>getSupportedConstraints().sampleSize</code>: `
+    + (supported.sampleSize ? "<span class='ok'>advertised</span>" : "<span class='no'>not implemented</span>")
+    + ` &nbsp;·&nbsp; what the processing path carries: <b>${carried}</b> `
+    + "(Web Audio renders in float, whatever the device's own depth).</small>";
+
+  const dtb = $("#depth tbody"); dtb.innerHTML = "";
+  const cell = (v, cls) => `<td${cls ? ` class="${cls}"` : ""}>${v}</td>`;
+
+  for (const d of devices){
+    const name = d.label || trunc(d.deviceId);
+    if (d.kind === "audiooutput"){
+      // A tab can ROUTE to an output (setSinkId) but never open or inspect one, so there is no
+      // handle to ask - unlike an input, which getUserMedia hands over as a track.
+      const tr = document.createElement("tr");
+      tr.innerHTML = cell(name) + cell("output")
+        + `<td colspan="5"><i>not queryable - a tab cannot open an output device;
+             <code>setSinkId</code> only routes</i></td>`;
+      dtb.appendChild(tr);
+      continue;
+    }
+    status(`bit depth of "${name}" ...`);
+    const own = await depthOf(d.deviceId);
+    let cells = cell(name) + cell("input");
+    if (own.err){
+      cells += `<td colspan="5" class="no">${own.err}</td>`;
+    } else {
+      cells += cell(own.settings ?? "<i>absent</i>", own.settings ? "ok" : "no");
+      cells += cell(own.caps ?? "<i>absent</i>", own.caps ? "ok" : "no");
+      for (const bits of [16, 24, 32]){
+        const res = await probeDepth(d.deviceId, bits);
+        if (!res.ok)                       cells += cell(`✗ ${res.err}`, "no");
+        else if (res.reported === bits)    cells += cell(`✓ ${bits}`, "ok");
+        else                               cells += cell(`opened, reports ${res.reported ?? "?"} - <i>ignored</i>`);
+      }
+    }
+    const tr = document.createElement("tr");
+    tr.innerHTML = cells;
+    dtb.appendChild(tr);
+  }
+
+  $("#depthVerdict").innerHTML = "<small><b>How to read this:</b> a depth in "
+    + "<code>getCapabilities()</code> plus an <code>OverconstrainedError</code> on the others means "
+    + "the browser is reporting the capture format it actually opened - real information. It is NOT "
+    + "a choice you can make: the samples handed to the page are float32 taken <i>post-mixer</i>, so "
+    + "the device's converter depth is already gone. If every input reports the same value "
+    + "regardless of hardware, you are seeing the browser's internal capture format, not the "
+    + "device's.</small>";
+}
+
 async function run(){
   $("#scan").disabled = true;
-  status("requesting microphone permission…");
+  status("requesting microphone permission...");
   // Permission unlocks device labels.
   try { await stopStream(await navigator.mediaDevices.getUserMedia({audio:true})); }
-  catch(e){ status("microphone permission denied — labels will be blank ("+e.name+")"); }
+  catch(e){ status("microphone permission denied - labels will be blank ("+e.name+")"); }
 
-  status("enumerating devices…");
+  status("enumerating devices...");
   const devs = await navigator.mediaDevices.enumerateDevices();
   const audio = devs.filter(d => d.kind === "audioinput" || d.kind === "audiooutput");
   const inputs = audio.filter(d => d.kind === "audioinput");
@@ -107,7 +220,7 @@ async function run(){
   const dtb = $("#devices tbody"); dtb.innerHTML = "";
   audio.forEach((d,i)=>{
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${i+1}</td><td>${d.kind}</td><td>${d.label||"<i>(blocked — no permission)</i>"}</td>`
+    tr.innerHTML = `<td>${i+1}</td><td>${d.kind}</td><td>${d.label||"<i>(blocked - no permission)</i>"}</td>`
                  + `<td class="mono">${trunc(d.deviceId)}</td><td class="mono">${trunc(d.groupId)}</td>`;
     dtb.appendChild(tr);
   });
@@ -118,7 +231,7 @@ async function run(){
   const rtb = $("#rates tbody"); rtb.innerHTML = "";
   let metaSeen = null;
   for (const d of inputs){
-    status(`probing "${d.label||d.deviceId}" …`);
+    status(`probing "${d.label||d.deviceId}" ...`);
     const tr = document.createElement("tr");
     let cells = `<td>${d.label||trunc(d.deviceId)}</td>`;
     for (const r of RATES){
@@ -139,7 +252,7 @@ async function run(){
   // --- table 3: AudioContext rate probe
   const ctb = $("#ctx tbody"); ctb.innerHTML = "";
   for (const r of RATES){
-    let ctx, created=false, actual="—";
+    let ctx, created=false, actual="-";
     try { ctx = new AudioContext({ sampleRate: r }); created = true; actual = ctx.sampleRate; }
     catch(e){ actual = e.name; }
     finally { if (ctx) try { await ctx.close(); } catch(_){} }
@@ -150,7 +263,9 @@ async function run(){
     ctb.appendChild(tr);
   }
 
-  status(`done — ${inputs.length} input(s), ${audio.length-inputs.length} output(s).`);
+  await runDepthProbe(audio);
+
+  status(`done - ${inputs.length} input(s), ${audio.length-inputs.length} output(s).`);
   $("#scan").disabled = false;
 }
 

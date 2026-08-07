@@ -1,0 +1,757 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  phonalyser-parent - the single place where VERSIONS live.
+
+  Modelled on spring-boot-parent: this POM carries no code and aggregates
+  nothing.  It declares every third-party version, every reactor artifact's
+  coordinates, the shared plugin configuration and the per-OS profiles.  Every
+  module names it as <parent> and then depends on things WITHOUT a version.
+
+  Separated from the aggregator (../pom.xml) on purpose.  An aggregator answers
+  "what gets built, in what order"; a parent answers "what version of everything,
+  and how is it configured".  Keeping them apart means the module list can change
+  without touching version policy, and a module can be built on its own
+  (mvn -f phonalyser-core/pom.xml ...) without the aggregator being involved.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>org.edgo.phonalyser</groupId>
+    <artifactId>phonalyser-parent</artifactId>
+    <version>1.2.0</version>
+    <packaging>pom</packaging>
+
+    <name>Phonalyser :: parent</name>
+    <description>Dependency, plugin and profile management for every Phonalyser module</description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <swt.version>3.126.0</swt.version>
+        <!-- Per-OS SWT fragment, set by the OS profiles below.  Modules that do
+             NOT compile against SWT never reference it - which is the point of
+             the split: if phonalyser-core ever needs this property, core has
+             grown an SWT dependency and the headless goal is broken. -->
+        <swt.artifactId>org.eclipse.swt.win32.win32.x86_64</swt.artifactId>
+
+        <lwjgl.version>3.3.3</lwjgl.version>
+        <lwjgl.natives>natives-windows</lwjgl.natives>
+
+        <!-- Third-party versions, pinned once, here. -->
+        <log4j.version>2.23.1</log4j.version>
+        <log4j.slf4j.version>2.26.0</log4j.slf4j.version>
+        <!-- The slf4j API every module compiles against.  It arrives as a
+             transitive of log4j-slf4j2-impl AND of Java-WebSocket, which ship
+             different versions; managed here so the whole reactor sees one. -->
+        <slf4j.version>2.0.17</slf4j.version>
+        <lombok.version>1.18.32</lombok.version>
+        <jna.version>5.14.0</jna.version>
+        <jfreechart.version>1.5.4</jfreechart.version>
+        <jtransforms.version>3.1</jtransforms.version>
+        <flac.encoder.version>0.3.8</flac.encoder.version>
+        <flac.library.version>1.1.0</flac.library.version>
+        <snakeyaml.version>2.2</snakeyaml.version>
+        <commons.lang3.version>3.14.0</commons.lang3.version>
+        <ecj.version>3.38.0</ecj.version>
+        <junit.version>5.10.1</junit.version>
+        <flexmark.version>0.64.8</flexmark.version>
+        <!-- net bridge only (modules/server-api, server-net, backend-net). -->
+        <jackson.version>2.19.2</jackson.version>
+        <javawebsocket.version>1.6.0</javawebsocket.version>
+        <!-- The SERVER's combined HTTP+WebSocket front (one port).  The
+             desktop CLIENT stays on Java-WebSocket. -->
+        <jetty.version>12.0.15</jetty.version>
+
+        <!-- Plugin versions. -->
+        <compiler.plugin.version>3.13.0</compiler.plugin.version>
+        <surefire.plugin.version>3.2.5</surefire.plugin.version>
+        <jar.plugin.version>3.3.0</jar.plugin.version>
+        <resources.plugin.version>3.3.1</resources.plugin.version>
+        <assembly.plugin.version>3.6.0</assembly.plugin.version>
+        <antrun.plugin.version>3.1.0</antrun.plugin.version>
+        <install.plugin.version>3.1.1</install.plugin.version>
+        <clean.plugin.version>3.3.2</clean.plugin.version>
+        <jpackage.plugin.version>1.6.5</jpackage.plugin.version>
+        <launch4j.plugin.version>2.5.2</launch4j.plugin.version>
+        <buildhelper.plugin.version>3.6.0</buildhelper.plugin.version>
+        <exec.plugin.version>3.2.0</exec.plugin.version>
+        <checkstyle.plugin.version>3.3.1</checkstyle.plugin.version>
+        <checkstyle.tool.version>10.14.2</checkstyle.tool.version>
+        <!-- Shared ruleset at the build root.  ${project.basedir} is re-evaluated
+             in each child, and every module sits at modules/<name>, so this one
+             expression resolves correctly everywhere - including this POM.
+             The aggregator overrides it (its basedir IS the root). -->
+        <checkstyle.config>${project.basedir}/../../config/checkstyle/checkstyle.xml</checkstyle.config>
+
+        <!-- Application metadata consumed by jpackage (used by phonalyser-app). -->
+        <app.name>Phonalyser</app.name>
+        <app.vendor>edgo.org</app.vendor>
+        <app.version>${project.version}</app.version>
+        <app.mainClass>org.edgo.audio.measure.gui.GuiMain</app.mainClass>
+        <!-- Deliberately NOT ${project.artifactId}: the packaging module is called
+             phonalyser-app, but the PUBLISHED artefact keeps the historical
+             phonalyser-<version>-<platform>.jar name so download links, the README
+             tables and the release workflow's globs stay valid across the split. -->
+        <app.mainJar>phonalyser-${project.version}-${platform.id}.jar</app.mainJar>
+        <jpackage.libDir>$APPDIR</jpackage.libDir>
+        <platform.id>local</platform.id>
+
+        <!-- The headless server's fat jar (server-net, profile server-dist).
+             It carries its OWN platform id, set explicitly by each of the six
+             profiles below, because platform.id is not usable for this: the two
+             macOS profiles deliberately SHARE platform.id=macos, and the three
+             primary arches answer the bare `windows` / `linux` / `macos`, which
+             names no architecture at all.  Renaming platform.id to fix that
+             would break every desktop download link and release glob, so the
+             server gets the honest per-architecture name and the desktop keeps
+             its historical one.  The dist descriptors are named after this
+             property (src/main/assembly/server-dist-<id>.xml), so a profile that
+             forgot to set it would not resolve its descriptor.
+
+             The ${platform.id} default below is only for a profile-less build
+             (platform.id=local), where there is no architecture to name. -->
+        <server.mainClass>org.edgo.audio.measure.net.server.ServerMain</server.mainClass>
+        <server.platform.id>${platform.id}</server.platform.id>
+        <!-- ONE ARCHITECTURE PER FAT JAR.  Both fat jars (the desktop one from
+             phonalyser-app and the server one from server-net) carry the natives
+             for their OWN architecture, complete, and none for any other.
+
+             win32-x86-64/, win32-x86/ and darwin-* follow JNA's
+             Platform.RESOURCE_PREFIX convention: Native.load falls back to
+             extracting the library from the folder matching the RUNNING JVM, so
+             the folder for the target arch is LOAD-BEARING (it is what lets a
+             bare `java -jar` open devices with nothing on java.library.path) and
+             every other arch is pure ballast.  Set per profile below.
+
+             The default excludes NOTHING on purpose: a profile-less build
+             (platform.id=local) has no target arch to judge by, and dropping the
+             wrong folder does not shrink the jar, it stops JNA loading at all.
+             The sentinel matches no entry that exists. -->
+        <platform.nativeExcludes>**/.no-native-excludes</platform.nativeExcludes>
+        <!-- JNA's own Platform.RESOURCE_PREFIX - the ONE folder under
+             com/sun/jna/ whose jnidispatch this build can load.  jna.jar ships
+             ~26 of them (4.9 MB of foreign-arch natives); the descriptors drop
+             every one by file name and re-add just this folder.  Beware: the
+             sibling com/sun/jna/win32/ is a Java PACKAGE (StdCallLibrary,
+             W32APIOptions - LibUsb compiles against it), so no win32* glob may
+             ever be used here. -->
+        <jna.resourcePrefix>${platform.id}</jna.resourcePrefix>
+        <!-- macOS natives are the one platform whose libraries are NOT already
+             module resources: they sit in the repo's lib/macos-*.  The default
+             points at lib/ itself, which holds no *.dylib directly, so the
+             copying fileSet contributes nothing off macOS.  The binaries are
+             checked in and frozen - the build only copies them. -->
+        <macos.nativeSrc>${project.basedir}/../../lib</macos.nativeSrc>
+
+        <!-- The Windows thin launcher (Launch4j).  It does NOT wrap the jar - it
+             sits beside it and starts a JRE with the natives\ folder on the
+             library paths, which is the whole reason it exists.
+
+             Skipped everywhere by default: only the two Windows dist descriptors
+             pick phonalyser-server.exe up, so building one on Linux or macOS
+             would burn Launch4j's cross-platform binaries to produce a file
+             nothing packs.  The two Windows profiles turn it on. -->
+        <server.launch4j.skip>true</server.launch4j.skip>
+        <!-- The launcher is named per BUNDLE TARGET, not per stub bitness:
+             Launch4j always emits a 32-bit PE32 head, in both cases, so the
+             suffix says which JRE it hunts for (runtimeBits) and therefore which
+             natives\ arch it must sit beside - pairing the x86 exe with the x64
+             folder would start a JVM that finds no DLL at all.  Never written
+             off Windows: server.launch4j.skip is true there. -->
+        <server.exeName>phonalyser-server.exe</server.exeName>
+        <!-- 64 or 32 - a 32-bit build must REFUSE a 64-bit JVM: the jar is
+             arch-neutral but the staged natives\ folder is not, so the wrong JVM
+             would start and then fail at the first device open.  The 64/32
+             default is Launch4j's "either", correct only where no arch is known. -->
+        <server.launch4j.runtimeBits>64/32</server.launch4j.runtimeBits>
+        <!-- 0 means "unset" to Launch4j; the x86 profile caps it, mirroring the
+             .cmd, because a 32-bit JVM cannot address more. -->
+        <server.launch4j.maxHeapMb>0</server.launch4j.maxHeapMb>
+        <!-- LAYERING EXCEPTION: this reaches out of the headless server into a
+             GUI module's resources.  It is a build-time file path, not a
+             dependency, and phonalyser-app does the same for its own staging -
+             but phonalyser-app IS the desktop distribution, where that is
+             natural, and server-net is the module whose entire purpose is to owe
+             the GUI nothing.  Kept as a PROPERTY so moving the .ico into
+             src/main/packaging/windows/ is a one-line change here and touches no
+             plugin configuration. -->
+        <server.launch4j.icon>${project.basedir}/../phonalyser-gui/src/main/resources/icons/phonalyser.ico</server.launch4j.icon>
+        <server.mainJar>phonalyser-server-${project.version}-${server.platform.id}.jar</server.mainJar>
+
+        <surefire.excludedGroups>exploratory,qa40x-mock</surefire.excludedGroups>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- LWJGL BOM pins every lwjgl-* module + native classifier to one version. -->
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl-bom</artifactId>
+                <version>${lwjgl.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- Reactor modules - children reference these WITHOUT a version. -->
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>phonalyser-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>phonalyser-cli</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>phonalyser-gui-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>phonalyser-gui</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>backend-wdm-ks</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>backend-wasapi</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>backend-coreaudio</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>backend-javasound</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>backend-qa40x</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>backend-qa40x-gui</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>backend-loopback</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>backend-net</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>backend-net-gui</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>server-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>server-net</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <!-- Third-party -->
+            <dependency>
+                <groupId>net.java.dev.jna</groupId>
+                <artifactId>jna</artifactId>
+                <version>${jna.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jfree</groupId>
+                <artifactId>jfreechart</artifactId>
+                <version>${jfreechart.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.wendykierp</groupId>
+                <artifactId>JTransforms</artifactId>
+                <version>${jtransforms.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.axet</groupId>
+                <artifactId>java-flac-encoder</artifactId>
+                <version>${flac.encoder.version}</version>
+            </dependency>
+            <!-- Project Nayuki's FLAC decoder - NOT on Maven Central.  Vendored as
+                 the modules/flac-library-java module, so the reactor builds it and
+                 no hand install is needed (see BUILD.md). -->
+            <dependency>
+                <groupId>io.nayuki</groupId>
+                <artifactId>flac-library</artifactId>
+                <version>${flac.library.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.yaml</groupId>
+                <artifactId>snakeyaml</artifactId>
+                <version>${snakeyaml.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+                <version>${commons.lang3.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.jdt</groupId>
+                <artifactId>ecj</artifactId>
+                <version>${ecj.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.vladsch.flexmark</groupId>
+                <artifactId>flexmark-all</artifactId>
+                <version>${flexmark.version}</version>
+            </dependency>
+            <!-- net bridge control plane.  Jackson - Apache License 2.0,
+                 chosen over gson for parse/serialize throughput.  The BOM is
+                 imported rather than jackson-databind pinned alone: databind's own
+                 jackson-core and jackson-annotations are transitive, and only
+                 the BOM pins them BY POLICY instead of by luck of the release
+                 train - the same device as the lwjgl-bom above. -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- net bridge transport.  Java-WebSocket - MIT license, no
+                 dependencies beyond slf4j-api; the desktop CLIENT's transport
+                 (its Proxy support carries the servers dialog's proxy
+                 setting). -->
+            <dependency>
+                <groupId>org.java-websocket</groupId>
+                <artifactId>Java-WebSocket</artifactId>
+                <version>${javawebsocket.version}</version>
+            </dependency>
+            <!-- The SERVER's combined front (EPL-2.0/Apache-2.0): Jetty 12
+                 core serves HTTP and upgrades WebSocket on ONE port - no
+                 servlet stack. -->
+            <dependency>
+                <groupId>org.eclipse.jetty</groupId>
+                <artifactId>jetty-server</artifactId>
+                <version>${jetty.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.jetty.websocket</groupId>
+                <artifactId>jetty-websocket-jetty-server</artifactId>
+                <version>${jetty.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.jetty.websocket</groupId>
+                <artifactId>jetty-websocket-jetty-api</artifactId>
+                <version>${jetty.version}</version>
+            </dependency>
+            <!-- Java-WebSocket carries an OLDER slf4j-api than log4j-slf4j2-impl
+                 does, and inside the net modules it wins the nearest-declared
+                 tie - which would compile them against a different API than the
+                 fat jar ships.  Managed, so every module sees the same one. -->
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>${slf4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.platform</groupId>
+                <artifactId>${swt.artifactId}</artifactId>
+                <version>${swt.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>*</groupId>
+                        <artifactId>*</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <!-- Inherited by EVERY module: logging and Lombok are universal here, and
+         JUnit is wanted wherever tests appear. -->
+    <dependencies>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j2-impl</artifactId>
+            <version>${log4j.slf4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>${lombok.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>${compiler.plugin.version}</version>
+                    <configuration>
+                        <source>${maven.compiler.source}</source>
+                        <target>${maven.compiler.target}</target>
+                        <encoding>${project.build.sourceEncoding}</encoding>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${surefire.plugin.version}</version>
+                    <!-- THE RULE: a test is isolated from the runtime
+                         environment.  It never reads and never writes anything
+                         outside its own module's target/ - not the developer's
+                         data directory, not their log directory, not their
+                         devices.yaml / preferences.yaml / server-id, and not a
+                         path relative to whatever working directory the runner
+                         happened to pick.  The two properties below are what
+                         enforce it, which is why they are set HERE, once, for
+                         every module rather than per test.
+
+                         Both are ABSOLUTE (${project.build.directory}), and that
+                         is the whole point: a relative path resolves against the
+                         JVM's working directory, which is the module basedir
+                         under Surefire but the REPO ROOT under an IDE run - and
+                         at the repo root `logs/` is a junction into the live
+                         Roaming\Phonalyser\logs, so a relative default writes
+                         JUnit output straight into the running app's log. -->
+                    <configuration>
+                        <excludedGroups>${surefire.excludedGroups}</excludedGroups>
+                        <systemPropertyVariables>
+                            <app.data.dir>${project.build.directory}/test-app-data</app.data.dir>
+                            <app.log.dir>${project.build.directory}/test-logs</app.log.dir>
+                        </systemPropertyVariables>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>${jar.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-resources-plugin</artifactId>
+                    <version>${resources.plugin.version}</version>
+                </plugin>
+                <!-- IDE-ONLY metadata.  m2e - the Maven integration behind both
+                     Eclipse and the VS Code Java extension - refuses to run plugin
+                     executions it has no mapping for and reports them as POM errors
+                     ("Plugin execution not covered by lifecycle configuration").
+                     Maven itself has never heard of this plugin and ignores the
+                     whole block.  Checkstyle runs at validate, which m2e does not
+                     map, so it is told to skip the goal in the IDE; the command-line
+                     build still enforces it. -->
+                <plugin>
+                    <groupId>org.eclipse.m2e</groupId>
+                    <artifactId>lifecycle-mapping</artifactId>
+                    <version>1.0.0</version>
+                    <configuration>
+                        <lifecycleMappingMetadata>
+                            <pluginExecutions>
+                                <pluginExecution>
+                                    <pluginExecutionFilter>
+                                        <groupId>org.apache.maven.plugins</groupId>
+                                        <artifactId>maven-checkstyle-plugin</artifactId>
+                                        <versionRange>[1.0,)</versionRange>
+                                        <goals>
+                                            <goal>check</goal>
+                                        </goals>
+                                    </pluginExecutionFilter>
+                                    <action>
+                                        <ignore/>
+                                    </action>
+                                </pluginExecution>
+                            </pluginExecutions>
+                        </lifecycleMappingMetadata>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-assembly-plugin</artifactId>
+                    <version>${assembly.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-antrun-plugin</artifactId>
+                    <version>${antrun.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-install-plugin</artifactId>
+                    <version>${install.plugin.version}</version>
+                </plugin>
+                <!-- Newer than Maven's built-in 2.5: that release fails the whole
+                     build when a native library in target/classes is still locked
+                     by a running debug session. -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-clean-plugin</artifactId>
+                    <version>${clean.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.panteleyev</groupId>
+                    <artifactId>jpackage-maven-plugin</artifactId>
+                    <version>${jpackage.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>build-helper-maven-plugin</artifactId>
+                    <version>${buildhelper.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>exec-maven-plugin</artifactId>
+                    <version>${exec.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-checkstyle-plugin</artifactId>
+                    <version>${checkstyle.plugin.version}</version>
+                    <!-- The plugin bundles an old Checkstyle; pin a current one so
+                         the Maven run and the IDE plugin evaluate the same rules. -->
+                    <dependencies>
+                        <dependency>
+                            <groupId>com.puppycrawl.tools</groupId>
+                            <artifactId>checkstyle</artifactId>
+                            <version>${checkstyle.tool.version}</version>
+                        </dependency>
+                    </dependencies>
+                    <configuration>
+                        <configLocation>${checkstyle.config}</configLocation>
+                        <inputEncoding>${project.build.sourceEncoding}</inputEncoding>
+                        <consoleOutput>true</consoleOutput>
+                        <failOnViolation>true</failOnViolation>
+                        <violationSeverity>error</violationSeverity>
+                        <includeTestSourceDirectory>true</includeTestSourceDirectory>
+                        <!-- Structural checks only; no third-party sources to skip. -->
+                        <logViolationsToConsole>true</logViolationsToConsole>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>checkstyle-validate</id>
+                            <!-- BEFORE compile: a package/directory mismatch must fail
+                                 with a file and line, not as a downstream type error. -->
+                            <phase>validate</phase>
+                            <goals>
+                                <goal>check</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- ============================ Windows x86_64 ============================ -->
+        <profile>
+            <id>windows-x64</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                    <arch>amd64</arch>
+                </os>
+            </activation>
+            <properties>
+                <jpackage.type>EXE</jpackage.type>
+                <jpackage.libDir>$APPDIR/lib/windows</jpackage.libDir>
+                <platform.id>windows</platform.id>
+                <server.platform.id>windows-x64</server.platform.id>
+                <platform.nativeExcludes>win32-x86/**</platform.nativeExcludes>
+                <jna.resourcePrefix>win32-x86-64</jna.resourcePrefix>
+                <server.launch4j.skip>false</server.launch4j.skip>
+                <server.launch4j.runtimeBits>64</server.launch4j.runtimeBits>
+                <server.exeName>phonalyser-server-x64.exe</server.exeName>
+                <swt.artifactId>org.eclipse.swt.win32.win32.x86_64</swt.artifactId>
+                <lwjgl.natives>natives-windows</lwjgl.natives>
+            </properties>
+        </profile>
+
+        <!-- ==================== Windows x86 (32-bit) - legacy fat jar ==================== -->
+        <!-- Never auto-activates:  mvn package -P "windows-x86,!windows-x64" -->
+        <profile>
+            <id>windows-x86</id>
+            <properties>
+                <platform.id>windows-x86</platform.id>
+                <server.platform.id>windows-x86</server.platform.id>
+                <platform.nativeExcludes>win32-x86-64/**</platform.nativeExcludes>
+                <jna.resourcePrefix>win32-x86</jna.resourcePrefix>
+                <server.launch4j.skip>false</server.launch4j.skip>
+                <!-- Refuse a 64-bit JVM outright: natives\ here is 32-bit only. -->
+                <server.launch4j.runtimeBits>32</server.launch4j.runtimeBits>
+                <server.launch4j.maxHeapMb>1200</server.launch4j.maxHeapMb>
+                <server.exeName>phonalyser-server-x86.exe</server.exeName>
+                <!-- 3.108.0 (Sept 2018) is the LAST SWT published for win32 x86;
+                     Eclipse dropped 32-bit afterwards, so this profile is frozen
+                     legacy by construction. -->
+                <swt.version>3.108.0</swt.version>
+                <swt.artifactId>org.eclipse.swt.win32.win32.x86</swt.artifactId>
+                <lwjgl.natives>natives-windows-x86</lwjgl.natives>
+            </properties>
+            <build>
+                <plugins>
+                    <!-- Legacy target = fat jar ONLY: no app-image, no installer.
+                         Without this the build would reach jpackage and fail. -->
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- ============================== Linux x86_64 ============================== -->
+        <profile>
+            <id>linux-x64</id>
+            <activation>
+                <os>
+                    <family>unix</family>
+                    <name>linux</name>
+                    <arch>amd64</arch>
+                </os>
+            </activation>
+            <properties>
+                <jpackage.type>DEB</jpackage.type>
+                <platform.id>linux</platform.id>
+                <server.platform.id>linux-x64</server.platform.id>
+                <!-- No win32 resource can ever load here, so both arches go.
+                     Nothing is added: Linux uses the JDK's ALSA and the distro's
+                     libusb, so the repo ships no Linux natives by design. -->
+                <platform.nativeExcludes>win32-*/**</platform.nativeExcludes>
+                <jna.resourcePrefix>linux-x86-64</jna.resourcePrefix>
+                <swt.artifactId>org.eclipse.swt.gtk.linux.x86_64</swt.artifactId>
+                <lwjgl.natives>natives-linux</lwjgl.natives>
+            </properties>
+        </profile>
+
+        <!-- ============================== Linux aarch64 ============================== -->
+        <profile>
+            <id>linux-aarch64</id>
+            <activation>
+                <os>
+                    <family>unix</family>
+                    <name>linux</name>
+                    <arch>aarch64</arch>
+                </os>
+            </activation>
+            <properties>
+                <jpackage.type>DEB</jpackage.type>
+                <platform.id>linux-aarch64</platform.id>
+                <server.platform.id>linux-aarch64</server.platform.id>
+                <platform.nativeExcludes>win32-*/**</platform.nativeExcludes>
+                <jna.resourcePrefix>linux-aarch64</jna.resourcePrefix>
+                <swt.artifactId>org.eclipse.swt.gtk.linux.aarch64</swt.artifactId>
+                <lwjgl.natives>natives-linux-arm64</lwjgl.natives>
+            </properties>
+        </profile>
+
+        <!-- ================================ macOS x64 ================================ -->
+        <profile>
+            <id>macos-x64</id>
+            <activation>
+                <os>
+                    <family>mac</family>
+                    <arch>x86_64</arch>
+                </os>
+            </activation>
+            <properties>
+                <jpackage.type>DMG</jpackage.type>
+                <!-- The Intel jar carries the -x64 suffix; the bare "macos"
+                     name belongs to the Apple-Silicon jar (both published that
+                     way since 1.1.0, and the two jars differ - SWT, LWJGL and
+                     JNA natives are single-arch - so they cannot share a
+                     name on the release page). -->
+                <platform.id>macos-x64</platform.id>
+                <server.platform.id>macos-x64</server.platform.id>
+                <platform.nativeExcludes>win32-*/**</platform.nativeExcludes>
+                <jna.resourcePrefix>darwin-x86-64</jna.resourcePrefix>
+                <!-- Copied into the jar as /darwin-x86-64/, which is where
+                     Native.load("portaudio") and Native.load("usb-1.0") look:
+                     the shipped names (libportaudio.dylib, libusb-1.0.dylib)
+                     already match JNA's mapping, so a bare `java -jar` on macOS
+                     finds CoreAudio devices with nothing staged beside it. -->
+                <macos.nativeSrc>${project.basedir}/../../lib/macos-x64</macos.nativeSrc>
+                <swt.artifactId>org.eclipse.swt.cocoa.macosx.x86_64</swt.artifactId>
+                <lwjgl.natives>natives-macos</lwjgl.natives>
+            </properties>
+        </profile>
+
+        <!-- ========================= macOS aarch64 (Apple Silicon) ========================= -->
+        <profile>
+            <id>macos-aarch64</id>
+            <activation>
+                <os>
+                    <family>mac</family>
+                    <arch>aarch64</arch>
+                </os>
+            </activation>
+            <properties>
+                <jpackage.type>DMG</jpackage.type>
+                <!-- The bare "macos" jar name is the Apple-Silicon build -
+                     the historical published name (the Intel jar is the one
+                     with the -x64 suffix). -->
+                <platform.id>macos</platform.id>
+                <server.platform.id>macos-aarch64</server.platform.id>
+                <platform.nativeExcludes>win32-*/**</platform.nativeExcludes>
+                <jna.resourcePrefix>darwin-aarch64</jna.resourcePrefix>
+                <macos.nativeSrc>${project.basedir}/../../lib/macos-arm64</macos.nativeSrc>
+                <swt.artifactId>org.eclipse.swt.cocoa.macosx.aarch64</swt.artifactId>
+                <lwjgl.natives>natives-macos-arm64</lwjgl.natives>
+            </properties>
+        </profile>
+    </profiles>
+</project>

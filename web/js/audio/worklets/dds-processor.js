@@ -1,11 +1,11 @@
 /*
- * Phonalyser web — AudioWorklet DDS generator processor.
+ * Phonalyser web - AudioWorklet DDS generator processor.
  * Drives the headless DDS kernel (a faithful port of
  * org.edgo.audio.measure.generator.SignalGenerator) on the realtime audio
  * thread of the OUTPUT AudioContext. The main thread hot-swaps waveform,
  * frequency, amplitude, duty, dual-tone split, sweep params and harmonic /
  * intermod compensation live via the message port; the kernel preserves its
- * phase accumulator across every change so transitions stay phase-continuous —
+ * phase accumulator across every change so transitions stay phase-continuous -
  * exactly like the desktop generator. (Does NOT replace generator-processor.js,
  * the minimal sine used by the loopback null test.)
  * GNU AGPL v3 or later.
@@ -31,13 +31,13 @@ class DdsProcessor extends AudioWorkletProcessor {
       amplitudeVRms: po.amplitudeVRms != null ? po.amplitudeVRms : 1.0,
       dacFsVoltageAmpl: po.dacFsVoltageAmpl != null ? po.dacFsVoltageAmpl : Math.sqrt(2.0),
     });
-    // Output-lane routing (the interleave seam — Java PcmQuantizer). Live-updatable
+    // Output-lane routing (the interleave seam - Java PcmQuantizer). Live-updatable
     // via the port, like every other kernel tunable; the default 'BOTH' + 1.0 scale
     // reproduces the pre-feature both-lanes-identical output.
     this._outputChannels = po.outputChannels != null ? po.outputChannels : 'BOTH';
     this._rightLaneScale = po.rightLaneScale != null ? po.rightLaneScale : 1.0;
     // TPDF dither depth (bits, may be fractional; 0 = Off) applied LIVE to the mono sample before
-    // the per-lane scale — Java PcmQuantizer (the generator's live-tunable dither). Live-updatable.
+    // the per-lane scale - Java PcmQuantizer (the generator's live-tunable dither). Live-updatable.
     this._ditherBits = po.ditherBits != null ? po.ditherBits : 0;
     this.port.onmessage = (e) => this._onMessage(e.data || {});
   }
@@ -45,7 +45,7 @@ class DdsProcessor extends AudioWorkletProcessor {
   /**
    * Live-control protocol. Each message field maps to one DdsKernel setter;
    * absent fields are left unchanged. Compensation may be supplied either as a
-   * prebuilt set ({amp,…}) or as a raw .dpd/CSV text body to be parsed here.
+   * prebuilt set ({amp,...}) or as a raw .dpd/CSV text body to be parsed here.
    */
   _onMessage(d) {
     const k = this._kernel;
@@ -100,7 +100,7 @@ class DdsProcessor extends AudioWorkletProcessor {
     const n = out[0].length;
     const k = this._kernel;
     // Interleave seam: write both lanes explicitly (this is why the node is opened
-    // outputChannelCount [2] — a single mono lane up-mixed by the destination cannot
+    // outputChannelCount [2] - a single mono lane up-mixed by the destination cannot
     // express per-lane values). Mirrors PcmQuantizer.encode: left lane = sample unless
     // gated to RIGHT, right lane = sample*rightLaneScale unless gated to LEFT, the
     // un-selected lane digital zero. Gate hoisted once per block (no per-sample alloc).
@@ -112,7 +112,7 @@ class DdsProcessor extends AudioWorkletProcessor {
     for (let i = 0; i < n; i++) {
       // TPDF dither added to the mono sample BEFORE the per-lane scale (Java PcmQuantizer:
       // dither then scale), so both lanes carry the same physical dither and it lands on the FFT
-      // floor where the dBV view sets it. tpdfNoise is 0 for Off — guard to skip the call.
+      // floor where the dBV view sets it. tpdfNoise is 0 for Off - guard to skip the call.
       let s = k.nextSample();
       if (dither > 0) s += tpdfNoise(dither);
       ch0[i] = wantL ? s : 0;

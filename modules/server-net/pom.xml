@@ -1,0 +1,403 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  server-net - the HEADLESS server side of the net bridge (package
+  org.edgo.audio.measure.net.server): the machine wired to the measurement
+  hardware owns the local audio backends and the signal generator and serves
+  them over WebSocket/HTTP to Phonalyser GUI clients.
+
+  Complete: the sessions, device catalog, capture streamer, generator and the
+  HTTP/beacon front all live here, and the server-dist profile below packages
+  the whole of it as a runnable fat jar.
+
+  It depends on phonalyser-core, on every LOCAL audio backend it serves, and NOT
+  on any gui module.  That is the whole point of the split: if this module ever
+  needs SWT or a gui.** package, the headless server has stopped being headless.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.2.0</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>server-net</artifactId>
+    <name>Phonalyser :: server :: net (headless server)</name>
+
+    <dependencies>
+        <!-- The wire format, shared with the desktop client. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>server-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-core</artifactId>
+        </dependency>
+        <!-- EVERY local backend, because this module IS the machine the hardware
+             is wired to: it serves whatever is plugged in, and a backend's own
+             contract (QA40x ranges, calibration page and I2S port - spec 4.6)
+             has to be on its compile path to be served at all.  backend-net is
+             deliberately absent and must stay absent: that one is the pure
+             CLIENT side, and a server that carried it could serve a bench it is
+             itself a client of. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-javasound</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-wasapi</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-wdm-ks</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-coreaudio</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-qa40x</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-loopback</artifactId>
+        </dependency>
+        <!-- The combined HTTP+WebSocket front: Jetty 12 core, ONE port
+             (versions in phonalyser-parent).  Java-WebSocket is gone from
+             the server - it stays the CLIENT's transport. -->
+        <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty.websocket</groupId>
+            <artifactId>jetty-websocket-jetty-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty.websocket</groupId>
+            <artifactId>jetty-websocket-jetty-api</artifactId>
+        </dependency>
+        <!-- TEST scope only, and deliberately: the loopback test's client is a
+             REAL desktop client, and the desktop client's transport is
+             Java-WebSocket.  Driving the Jetty server from the same library the
+             shipped client uses is what makes the loopback test prove the two
+             actually interoperate; a Jetty client on both ends would only prove
+             Jetty agrees with itself.  The server's own transport carries no
+             trace of it (see the front deps above). -->
+        <dependency>
+            <groupId>org.java-websocket</groupId>
+            <artifactId>Java-WebSocket</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <profiles>
+        <!-- The server's own FAT jar, and the place the per-platform dist bundle
+             will hang from.
+
+             OFF by default, and that is the point: this module is a LIBRARY the
+             desktop reactor compiles on its way to phonalyser-app, so an
+             unconditional assembly execution would write a ~16 MB jar on every
+             `mvn package` of the whole build for nobody.  Build it with
+
+                 mvn -o -Pserver-dist -DskipTests package -pl modules/server-net -am
+
+             (or -Dserver.dist, which activates the same profile from a reactor
+             build).  The jar lands in target/ as
+             phonalyser-server-<version>-<server.platform.id>.jar - see
+             server.mainJar in phonalyser-parent. -->
+        <profile>
+            <id>server-dist</id>
+            <activation>
+                <property>
+                    <name>server.dist</name>
+                </property>
+            </activation>
+            <properties>
+                <!-- This module sits at modules/server-net, so the packaging
+                     assets kept at the build root are two levels up. -->
+                <repo.root>${project.basedir}/../..</repo.root>
+            </properties>
+            <build>
+                <plugins>
+                    <!-- The WEB BUNDLE this server serves at / (ServerMain.staticDir).
+                         Running build.mjs with the embedded flag (spelled in
+                         the arguments below - a double hyphen cannot appear
+                         inside an XML comment, and writing it here once killed
+                         all six assembly descriptors) writes the
+                         net-backend-only packaging to
+                         ${repo.root}/target/web-embedded, which is
+                         exactly the directory the six server-dist descriptors
+                         already read as their /web fileSet - so nothing is
+                         re-pointed here; the build simply produces what they
+                         were already looking for.
+
+                         prepare-package, like the two executions below it and
+                         for the same reason: the dist zip is an assembly
+                         execution in the PACKAGE phase, and a different
+                         plugin's execution in that same phase runs after the
+                         assembly - a bundle built there would miss the zip it
+                         belongs in. Bound inside the server-dist profile so it
+                         is gated exactly as the assemblies are: an ordinary
+                         reactor build of this module as a library still runs
+                         no web build at all.
+
+                         The clean ordering is the phase binding's: within one
+                         invocation prepare-package runs after clean, so a
+                         `mvn clean` that empties the root target/ can never
+                         race the bundle that lands in it.
+
+                         NO SKIP FLAG, deliberately: a package run
+                         on a machine without node or without web/node_modules
+                         now FAILS here, visibly, instead of quietly producing a
+                         server with no bundle. -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>build-embedded-web-bundle</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>node</executable>
+                                    <workingDirectory>${repo.root}/web</workingDirectory>
+                                    <arguments>
+                                        <argument>build.mjs</argument>
+                                        <argument>--embedded</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <!-- The HELP, which the app build deliberately leaves alone (it is
+                                 a separate, slower target: the lunr search index is rebuilt
+                                 here). Nothing ever copied it into the server's bundle, so the
+                                 served app's Help window opened on nothing.
+
+                                 SECOND, and that is not incidental: the app build WIPES its
+                                 output directory, so a help copy made before it would be
+                                 thrown away. Two executions of the same plugin in the same
+                                 phase run in the order they are declared here, which is what
+                                 orders these two.
+
+                                 Same flag as the build above, with the same meaning - the
+                                 script writes into target/web-embedded/help instead of
+                                 docs/web/help - so the served app's help sits at exactly the
+                                 relative path the published site's does and the viewer needs
+                                 no idea which packaging it is running in. -->
+                            <execution>
+                                <id>copy-embedded-web-help</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>node</executable>
+                                    <workingDirectory>${repo.root}/web</workingDirectory>
+                                    <arguments>
+                                        <argument>scripts/build-help.mjs</argument>
+                                        <argument>--embedded</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- The csjsound MixerProvider (WASAPI-exclusive JavaSound -
+                         the "EXCL:" device names).  A vendored jar discovered
+                         through the JavaSound SPI, so nothing compiles against it
+                         and the assembly's dependencySet cannot reach it: unpack
+                         its classes and its own META-INF/services registration
+                         into this module's output BEFORE the jar is built, so the
+                         fat jar carries them.  Exactly what phonalyser-app does
+                         for the desktop jar.
+
+                         Without this the server jar carries the DLL but can never
+                         load it, and a Windows server serves JavaSound in SHARED
+                         mode only - the silent-48 kHz shared-mixer fallback,
+                         while the same interface driven locally runs EXCL: at
+                         384 kHz.  The other half is the staging call in
+                         ServerMain.main: the provider resolves its native through
+                         System.loadLibrary, which reads java.library.path only.
+
+                         Absent on a non-Windows checkout: never fail for it. -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>unpack-csjsound-provider</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <unzip src="${repo.root}/lib/windows/csjsound-provider.jar"
+                                               dest="${project.build.outputDirectory}"
+                                               failOnEmptyArchive="false">
+                                            <patternset>
+                                                <exclude name="META-INF/MANIFEST.MF"/>
+                                                <exclude name="META-INF/maven/**"/>
+                                            </patternset>
+                                        </unzip>
+                                    </target>
+                                    <failOnError>false</failOnError>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- The Windows thin launcher.  dontWrapJar: the exe does NOT
+                         contain the jar, it starts a JVM beside it - so all it
+                         needs at build time is the jar's NAME, which is why this
+                         can run at prepare-package, BEFORE the jar exists.
+
+                         prepare-package and not package, deliberately: the dist
+                         zip is an assembly execution in the package phase, and a
+                         DIFFERENT plugin's execution in that same phase runs
+                         after the assembly, so an exe built there would miss the
+                         bundle it is supposed to be in.
+
+                         Skipped on Linux and macOS (server.launch4j.skip) - only
+                         the two Windows descriptors pack this file.
+
+                         No <versionInfo>: Launch4j requires the whole block once
+                         it is present, including a four-part numeric
+                         fileVersion, which a qualified pom version cannot
+                         satisfy. -->
+                    <plugin>
+                        <groupId>com.akathist.maven.plugins.launch4j</groupId>
+                        <artifactId>launch4j-maven-plugin</artifactId>
+                        <version>${launch4j.plugin.version}</version>
+                        <executions>
+                            <execution>
+                                <id>server-launcher-exe</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>launch4j</goal>
+                                </goals>
+                                <configuration>
+                                    <skip>${server.launch4j.skip}</skip>
+                                    <!-- console, not gui: the server's whole
+                                         operator interface is its stdout banner,
+                                         and -d is what silences it. -->
+                                    <headerType>console</headerType>
+                                    <!-- Named per bundle target (server.exeName).
+                                         The stub itself is a 32-bit PE32 in BOTH
+                                         cases - that is simply how Launch4j
+                                         builds launchers - so the suffix names
+                                         the JRE it hunts for and the natives\
+                                         arch it belongs beside, not its own
+                                         bitness. -->
+                                    <outfile>${project.build.directory}/${server.exeName}</outfile>
+                                    <dontWrapJar>true</dontWrapJar>
+                                    <jar>${server.mainJar}</jar>
+                                    <!-- Resolve everything against the exe's own
+                                         folder, so the bundle works unzipped
+                                         anywhere and started from any CWD. -->
+                                    <chdir>.</chdir>
+                                    <icon>${server.launch4j.icon}</icon>
+                                    <errTitle>Phonalyser server</errTitle>
+                                    <jre>
+                                        <minVersion>17</minVersion>
+                                        <runtimeBits>${server.launch4j.runtimeBits}</runtimeBits>
+                                        <maxHeapSize>${server.launch4j.maxHeapMb}</maxHeapSize>
+                                        <!-- The reason this launcher exists: the
+                                             staged natives\ beside the exe, on
+                                             all three paths the loaders consult
+                                             (JNA's own, the JVM's, and the QA40x
+                                             libusb override).  The plugin's Jre
+                                             element takes these as <opts>, not as
+                                             bare repeated <opt>. -->
+                                        <opts>
+                                            <opt>-Djava.library.path="%EXEDIR%\natives"</opt>
+                                            <opt>-Djna.library.path="%EXEDIR%\natives"</opt>
+                                            <opt>-Dlibusb.path="%EXEDIR%\natives"</opt>
+                                        </opts>
+                                    </jre>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-assembly-plugin</artifactId>
+                        <configuration>
+                            <archive>
+                                <manifest>
+                                    <mainClass>${server.mainClass}</mainClass>
+                                </manifest>
+                                <manifestEntries>
+                                    <!-- log4j ships Java-9+ classes under
+                                         META-INF/versions/; without this flag the
+                                         merged jar hides them and log4j warns
+                                         "does not support multi-release JARs". -->
+                                    <Multi-Release>true</Multi-Release>
+                                    <!-- ServerConfig falls back to this when the
+                                         filtered /version.properties is missing,
+                                         before it gives up and says "dev". -->
+                                    <Implementation-Version>${project.version}</Implementation-Version>
+                                </manifestEntries>
+                            </archive>
+                            <descriptors>
+                                <descriptor>${repo.root}/src/main/assembly/server-jar.xml</descriptor>
+                            </descriptors>
+                            <finalName>phonalyser-server-${project.version}-${server.platform.id}</finalName>
+                            <appendAssemblyId>false</appendAssemblyId>
+                            <includeSystemScope>true</includeSystemScope>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>make-server-jar</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>single</goal>
+                                </goals>
+                            </execution>
+                            <!-- The per-platform dist bundle: the jar plus the
+                                 natives and launch/service scripts that make it
+                                 a Windows / Linux / macOS server.  Declared
+                                 AFTER the jar execution and NOT by accident -
+                                 two executions bound to the same phase run in
+                                 declaration order, and this one packs the very
+                                 file the one above writes.
+
+                                 Only the descriptor and <attach> are overridden
+                                 here; finalName and appendAssemblyId are
+                                 inherited from the plugin-level configuration,
+                                 so the zip lands beside the jar under the same
+                                 phonalyser-server-<version>-<id> stem.
+
+                                 attach=false is load-bearing: with
+                                 appendAssemblyId off, an ATTACHED second
+                                 assembly would take over this module's main
+                                 artifact and replace the jar the execution above
+                                 just set.  The zip is a deliverable, not the
+                                 module's artifact. -->
+                            <execution>
+                                <id>make-server-dist-zip</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>single</goal>
+                                </goals>
+                                <configuration>
+                                    <descriptors>
+                                        <descriptor>${repo.root}/src/main/assembly/server-dist-${server.platform.id}.xml</descriptor>
+                                    </descriptors>
+                                    <attach>false</attach>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

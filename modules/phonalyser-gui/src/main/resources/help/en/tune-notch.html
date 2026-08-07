@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser - Tune-notch wizard</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Tune-notch wizard</h1>
+  <p>For how the measurement behind this display works - a played logarithmic
+     sweep deconvolved against the reference to recover the notch's response in
+     one pass - see <a href="theory/freq-resp.html">Theory of operation ▸
+     Frequency response</a>.</p>
+
+  <div class="shot">
+    <img src="img/tune-notch.png" alt="Tune-notch wizard"/>
+    <svg class="callouts" viewBox="0 0 624 550" preserveAspectRatio="none"
+         xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
+      <defs><marker id="tnca" viewBox="0 0 10 10" refX="9" refY="5"
+          markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/></marker></defs>
+      <line x1="415" y1="116" x2="461" y2="116" stroke="#c33" stroke-width="2.5" marker-end="url(#tnca)"/>
+      <line x1="288" y1="165" x2="361" y2="160" stroke="#c33" stroke-width="2.5" marker-end="url(#tnca)"/>
+      <line x1="172" y1="524" x2="110" y2="524" stroke="#c33" stroke-width="2.5" marker-end="url(#tnca)"/>
+      <circle cx="415" cy="116" r="13" fill="#c33"/>
+      <text x="415" y="121" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <circle cx="288" cy="165" r="13" fill="#c33"/>
+      <text x="288" y="170" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <circle cx="172" cy="524" r="13" fill="#c33"/>
+      <text x="172" y="529" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+    </svg>
+  </div>
+  <p>A passive notch filter (typically a twin-T) ahead of the input is the
+     classic way to measure distortion below the analyser's own floor: it
+     removes the fundamental before the ADC, so the FFT sees the harmonics
+     without the converter's own distortion products.  But the notch only
+     works if its null sits exactly on the test frequency - and on a twin-T
+     the centre and the depth move together as you turn the trimmers.  The
+     wizard gives you a <b>live, continuously refreshing</b> picture of the
+     notch so you can watch the null move while you adjust the filter with a
+     screwdriver in hand.</p>
+  <p>Open it from the main menu: <b>Tools ▸ Tune notch...</b>.  While the dialog
+     is open it takes over playback and capture - the generator, oscilloscope,
+     FFT and any frequency-response sweep stop for the duration.  Wire the
+     signal path as for the later distortion measurement: output ▸ notch
+     filter ▸ input.</p>
+  <table class="controls">
+    <tr><th>Control</th><th>Notes</th></tr>
+    <tr><td>Start frequency, Hz</td>
+        <td>Low edge of the displayed band.  Accepts kHz shorthand - typing
+            <code>1.5k</code> means 1500&nbsp;Hz; plain digits are read as
+            Hz.</td></tr>
+    <tr><td>Stop frequency, Hz</td>
+        <td>High edge of the displayed band, up to Nyquist.</td></tr>
+    <tr><td>Amplitude (RMS)</td>
+        <td>Drive level of the tuning sweep, in volts RMS; accepts
+            µV / mV / V / dBV / dBFS, the last against converter full scale
+            (0 dBFS = full-scale sine).</td></tr>
+    <tr><td>Output channel</td>
+        <td><b>Both</b>, <b>Left</b> or <b>Right</b> - which DAC lane drives the
+            tuning sweep.  The unselected lane plays digital silence.</td></tr>
+    <tr><td>Target frequency, Hz</td>
+        <td>The frequency you are tuning the notch onto - drawn as a dashed
+            vertical marker on the plot (see below).</td></tr>
+    <tr><td>Close</td>
+        <td>Stops the tuning loop, releases the audio device and restores the
+            main frequency-response view.</td></tr>
+  </table>
+  <p>All four values are remembered between sessions.  Editing the start /
+     stop fields re-scales the frequency axis immediately.</p>
+  <p><b>What you see.</b>  The plot is rebuilt roughly <b>ten times a second</b>
+     from a short looping sweep (about a quarter of a second per pass) - each turn
+     of a trimmer shows up within a fraction of a second.  <b>Both input channels
+     are measured on every sweep</b>; the <b>L / R buttons</b> at the top-left of
+     the plot choose which channel is drawn, while the other keeps being measured in
+     the background.  The vertical axis fits itself to the trace automatically.
+     Three live elements sit on the plot:</p>
+  <ol class="features">
+    <li><b>Notch readout</b> (top-right corner): the frequency of the deepest null
+        found in the current sweep and its depth in dB, for the displayed channel.
+        It is the deepest point of the <em>drawn</em> curve, found by scanning the
+        trace's own pixel columns, so the number always agrees with the dip you
+        can see.</li>
+    <li><b>Target marker</b>: a dashed vertical line at the target frequency.
+        Its colour is graded <em>relative to the null this sweep actually
+        reached</em>: within <b>1&nbsp;dB</b> of the notch floor it is
+        <b>green</b> - the target is in the notch - and it fades to <b>red</b>
+        at <b>20&nbsp;dB</b> above the floor, linearly in between.  The colour
+        reflects the attenuation <em>at the target frequency</em>, not at
+        wherever the null currently sits - a deep notch parked at the wrong
+        frequency still shows red.  Because the scale follows each sweep's own
+        floor, a network that can only reach −70&nbsp;dB still turns green when
+        it is trimmed onto the target; there is no absolute depth to reach.</li>
+    <li><b>Status line</b>: the running sweep count and the progress toward
+        the next result.</li>
+  </ol>
+  <div class="note">The response smoothing used elsewhere in this pane is
+     switched <b>off</b> in the wizard: smoothing a sharp null would round it
+     several dB shallower than it really is, so here the notch depth reads
+     true.</div>
+  <p><b>Tuning workflow.</b>  Set the target to your distortion-test
+     frequency and bracket it with the start / stop band.  Turn the notch's
+     frequency trimmer until the readout's null frequency lands on the target
+     and the marker turns green, then adjust the balance / depth trimmer for
+     maximum depth; on a twin-T the two interact, so iterate a couple of
+     times.  When the null sits on the target at full depth, close the wizard and
+     first measure the notch's own frequency response with a normal sweep,
+     saving it to a <code>.frc</code> file.  Load that as a calibration in the
+     <a href="fft.html">FFT</a> pane so the notch's shape is de-embedded from the
+     reading, then run the distortion measurement there.  The measurement behind
+     this display is the same played-sweep deconvolution as a normal
+     frequency-response run - see
+     <a href="theory/freq-resp.html">Theory ▸ Frequency response</a>.</p>
+
+</body>
+</html>

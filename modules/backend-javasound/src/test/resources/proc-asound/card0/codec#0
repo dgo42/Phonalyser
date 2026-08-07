@@ -1,0 +1,31 @@
+Codec: Realtek ALC262
+Address: 0
+Vendor Id: 0x10ec0262
+Subsystem Id: 0x10250000
+Revision Id: 0x100002
+
+Node 0x02 [Audio Output] wcaps 0x40d: Stereo Digital
+  Converter: stream=0, channel=0
+  PCM:
+    rates [0x5e0]: 44100 48000 88200 96000 192000
+    bits [0xe]: 16 20 24
+    formats [0x1]: PCM
+
+Node 0x03 [Audio Output] wcaps 0x40d: Stereo
+  Converter: stream=0, channel=0
+  PCM:
+    rates [0x160]: 44100 48000 96000
+    bits [0x6]: 16 24
+    formats [0x1]: PCM
+
+Node 0x09 [Audio Input] wcaps 0x10051b: Stereo Amp-In
+  Converter: stream=0, channel=0
+  PCM:
+    rates [0x160]: 44100 48000 96000
+    bits [0x6]: 16 24
+    formats [0x1]: PCM
+
+Node 0x14 [Pin Complex] wcaps 0x40018d: Stereo Amp-Out
+  PCM:
+    rates [0x7f0]: 8000 44100 48000 88200 96000 192000 384000
+    bits [0xe]: 16 20 24

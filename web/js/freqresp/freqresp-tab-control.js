@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -35,6 +35,9 @@ const UNEVEN_DB_MIN = 0.001;
 const UNEVEN_DB_MAX = 20.0;
 
 const FRC_TYPE = [{ description: 'Filter calibration', accept: 'text/plain', extensions: ['.frc'] }];
+/** The Save-to gate's drive-level floor (V RMS) - a calibration measured below this is too noisy
+ *  to trust (Java FreqRespTabControl.CAL_MIN_SIGNAL_VRMS). */
+const CAL_MIN_SIGNAL_VRMS = 0.5;
 
 export class FreqRespTabControl {
   /**
@@ -65,7 +68,7 @@ export class FreqRespTabControl {
     this._calRows = [];
     // Re-entrancy guard so the store's change callback doesn't rebuild rows for our own writes.
     this._calMutationInFlight = false;
-    // Set by bindCalibration(); awaited by app.js (with the FFT pane's) before pruneCals (issue 2.3).
+    // Set by bindCalibration(); awaited by app.js (with the FFT pane's) before pruneCals.
     this._calRestore = null;
   }
 
@@ -73,7 +76,7 @@ export class FreqRespTabControl {
 
   bind() {
     const $ = this.$;
-    // FreqResp tile-tabs — Settings / RIAA-IEC / Presets / Utility / Calibration / Save / Load
+    // FreqResp tile-tabs - Settings / RIAA-IEC / Presets / Utility / Calibration / Save / Load
     // drop-down panels (Java TileTabFolder). Was a raw handler in app.js; owned here now.
     new TileTabs('#frTabs').bind();
     // frStart/frStop/frAmp/frPoints/frLeadIn are NumericStepFields owned by app.js
@@ -89,7 +92,7 @@ export class FreqRespTabControl {
     $('#frFft').val(String(this.prefs.freqRespFftSize.get()));
     $('#frFft').on('change', () => { this.prefs.freqRespFftSize.set(parseInt($('#frFft').val(), 10)); this.refreshFftLabel(); });
     // NOTE: the initial label is set by app.js init's step('refreshFftLabel') AFTER the i18n
-    // bundle has loaded — calling t() at construction would resolve to the bare key.
+    // bundle has loaded - calling t() at construction would resolve to the bare key.
 
     // Dither dropdown ↔ freqRespDitherBits (0..31; index == bit count).
     this.rebuildDitherCombo();
@@ -107,7 +110,7 @@ export class FreqRespTabControl {
     $('#frRiaa').on('change', () => {
       const show = $('#frRiaa').is(':checked');
       this.prefs.freqRespShowRiaa.set(show);
-      if (show) {   // only one reference curve can be active — enabling RIAA turns the
+      if (show) {   // only one reference curve can be active - enabling RIAA turns the
         // filter overlay off (symmetric with the filter-show handler, Java parity)
         this.prefs.freqRespShowFilter.set(false);
         $('#frFilterShow').prop('checked', false);
@@ -115,7 +118,7 @@ export class FreqRespTabControl {
         this.refreshFilterTile();
       }
       this.refreshRiaaEnable();   // Show gates Reverse / IEC / Compare
-      // Show RIAA toggled on while Compare is already armed → fit the compare curve once.
+      // Show RIAA toggled on while Compare is already armed -> fit the compare curve once.
       if (this.prefs.freqRespShowRiaa.get() && this.prefs.freqRespCompareMode.get() && this.view.hasAnyResult()) {
         this.view.autoSetupCompare();
       }
@@ -155,7 +158,7 @@ export class FreqRespTabControl {
     // run from seedTabs() in app.js's init AFTER the i18n bundle is loaded. The Filters /
     // Unevenness tabs build NumericStepFields whose unit suffixes come from t('unit.*'),
     // so they are deferred there too (same ordering reason app.js runs initStepFields
-    // after applyI18n — building them here rendered raw "unit.*" keys + console misses).
+    // after applyI18n - building them here rendered raw "unit.*" keys + console misses).
   }
 
   /** Builds the i18n-dependent tab UI (filter/unevenness fields, calibration rows, preset
@@ -180,8 +183,30 @@ export class FreqRespTabControl {
     $('#frRiaaCompare').prop('disabled', !(show && this.view.hasAnyResult()));
     this.refreshRiaaTile();
     // The Filters tab's Compare is likewise gated on a present measurement, so re-run its
-    // cascade from the same pane entry point (Java refreshRiaaEnable → refreshFilterEnable).
+    // cascade from the same pane entry point (Java refreshRiaaEnable -> refreshFilterEnable).
     this.refreshFilterEnable();
+    this.refreshSaveEnable();
+  }
+
+  /**
+   * A result worth saving AS A CALIBRATION (Java FreqRespTabControl.calibrationWorthy): it must
+   * be THIS session's own measurement - a loaded file carries someone else's chain and would be
+   * saved back as if it were measured here - and it must have been driven above
+   * CAL_MIN_SIGNAL_VRMS, because a calibration measured near the noise floor is noise.
+   *
+   * @param {?object} r a FreqRespResult
+   * @returns {boolean}
+   */
+  calibrationWorthy(r) {
+    return r != null && r.sourceFilePath == null && r.sweepParams != null
+      && r.sweepParams.amplitudeVrms > CAL_MIN_SIGNAL_VRMS;
+  }
+
+  /** Gates the Save-to button on either channel being worth saving (Java refreshSaveEnable). */
+  refreshSaveEnable() {
+    this.$('#frSaveBtn').prop('disabled',
+      !(this.calibrationWorthy(this.view.getLeftResultOrNull())
+        || this.calibrationWorthy(this.view.getRightResultOrNull())));
   }
 
   /** RIAA tab tile chips (Java freqRespTabTiles RIAA branch). */
@@ -196,8 +221,8 @@ export class FreqRespTabControl {
     this.$('#frRiaaTabSub').html(chips.map((c) => `<span class="tile">${c}</span>`).join(''));
   }
 
-  /** Populates the dither combo with 0..31, where the option index IS the bit count (0 → "Off",
-   *  else the bare number) — faithful to Java FreqRespTabControl. */
+  /** Populates the dither combo with 0..31, where the option index IS the bit count (0 -> "Off",
+   *  else the bare number) - faithful to Java FreqRespTabControl. */
   rebuildDitherCombo() {
     let html = '';
     for (let i = 0; i <= 31; i++) html += `<option value="${i}">${i === 0 ? 'Off' : i}</option>`;
@@ -214,7 +239,7 @@ export class FreqRespTabControl {
 
   // ===========================================================================
   // Filters tab (Java FreqRespTabControl.buildFiltersTab): ideal filter overlay
-  // vs measured response — Show / Compare + type & response + By-spec / By-order.
+  // vs measured response - Show / Compare + type & response + By-spec / By-order.
   // ===========================================================================
 
   bindFilters() {
@@ -357,7 +382,7 @@ export class FreqRespTabControl {
     };
   }
 
-  /** Seeds every filter widget (fields + mode radio) FROM {@code type}'s map entry — a missing
+  /** Seeds every filter widget (fields + mode radio) FROM {@code type}'s map entry - a missing
    *  entry falls back to fromType defaults. The map is authoritative, so the widgets follow it
    *  and never the reverse. The re-entrancy guard stops the programmatic setValue from writing
    *  the values straight back through the field / radio listeners (Java loadFilterParams). */
@@ -421,7 +446,7 @@ export class FreqRespTabControl {
     $('#frFilterMode2').prop('disabled', !show);
 
     const setF = (id, on) => { if (this._filterFields[id]) this._filterFields[id].setDisabled(!on); };
-    // Mode-1 rows — ripple only for equiripple families, centre only for band-pass / notch.
+    // Mode-1 rows - ripple only for equiripple families, centre only for band-pass / notch.
     setF('frFilterRipple', show && mode1 && ripple);
     setF('frFilterStopAtten', show && mode1);
     setF('frFilterCenter', show && mode1 && isBpNotch);
@@ -430,21 +455,21 @@ export class FreqRespTabControl {
     // Passband / Stopband labels read Fc/Fs for LP/HP, PB/SB for BP/notch.
     $('#frFilterPassLbl').text(t(isBpNotch ? 'freqResp.filter.passband.bp' : 'freqResp.filter.passband'));
     $('#frFilterStopLbl').text(t(isBpNotch ? 'freqResp.filter.stopband.bp' : 'freqResp.filter.stopband'));
-    // Mode-2 rows — ripple only for equiripple families, Q only for band-pass / notch.
+    // Mode-2 rows - ripple only for equiripple families, Q only for band-pass / notch.
     setF('frFilterOrderPass', show && mode2);
     setF('frFilterOrderRipple', show && mode2 && ripple);
     setF('frFilterOrder', show && mode2);
     setF('frFilterQ', show && mode2 && isBpNotch);
 
     // Visibility swap: show the active mode's field row, hide the other (Java applyModeVisibility).
-    // The per-type picture shows only in Mode 1 (Java issue 10).
+    // The per-type picture shows only in Mode 1.
     const $body = $('#frFilterPanel .fr-filter-body');
     $body.toggleClass('mode-spec', mode1).toggleClass('mode-order', mode2);
     this.refreshFilterPicture(type, mode1);
   }
 
   /** Swaps the panel picture to the one matching {@code type} and shows / hides it (Mode 1
-   *  only — Java refreshFilterPicture). */
+   *  only - Java refreshFilterPicture). */
   refreshFilterPicture(type, mode1) {
     const src = { LOW_PASS: 'LPF', HIGH_PASS: 'HPF', BAND_PASS: 'BPF', NOTCH: 'Notch' }[type] || 'LPF';
     this.$('#frFilterPic').attr('src', 'assets/img/' + src + '.svg').css('visibility', mode1 ? '' : 'hidden');
@@ -474,7 +499,7 @@ export class FreqRespTabControl {
 
   // ===========================================================================
   // Unevenness tab (Java FreqRespTabControl.buildUnevennessTab): response flatness
-  // readout mode + parameters — Off / ±dB / Range radios, Notch, dB + start/stop.
+  // readout mode + parameters - Off / ±dB / Range radios, Notch, dB + start/stop.
   // ===========================================================================
 
   bindUnevenness() {
@@ -545,7 +570,7 @@ export class FreqRespTabControl {
     this.refreshUnevenEnable();
   }
 
-  /** Each Unevenness mode enables only its own row's fields — the dB field iff LEVEL, the
+  /** Each Unevenness mode enables only its own row's fields - the dB field iff LEVEL, the
    *  start / stop fields iff RANGE, the Notch checkbox in both active modes, none in OFF
    *  (Java refreshUnevenEnable). */
   refreshUnevenEnable() {
@@ -563,7 +588,7 @@ export class FreqRespTabControl {
     let readout;
     switch (prefs.freqRespUnevenMode.get()) {
       case 'RANGE':
-        readout = this.formatShortHz(prefs.freqRespUnevenStartHz.get()) + '–'
+        readout = this.formatShortHz(prefs.freqRespUnevenStartHz.get()) + '-'
           + this.formatShortHz(prefs.freqRespUnevenStopHz.get());
         break;
       case 'LEVEL':
@@ -577,7 +602,7 @@ export class FreqRespTabControl {
     this.$('#frUnevenTabSub').html(`<span class="tile">${readout}</span>`);
   }
 
-  /** Compact Hz for the Unevenness tile: 20 → "20", 20000 → "20k" (Java formatShortHz). */
+  /** Compact Hz for the Unevenness tile: 20 -> "20", 20000 -> "20k" (Java formatShortHz). */
   formatShortHz(hz) {
     if (hz >= 1000) {
       const k = hz / 1000;
@@ -586,18 +611,18 @@ export class FreqRespTabControl {
     return this.trimNum(hz);
   }
 
-  /** Compact dB value for the Unevenness tile: 3.0 → "3", 1.5 → "1.5" (Java trimNum). */
+  /** Compact dB value for the Unevenness tile: 3.0 -> "3", 1.5 -> "1.5" (Java trimNum). */
   trimNum(v) {
     if (v === Math.floor(v)) return v.toFixed(0);
     return String(v).replace(/0+$/, '').replace(/\.$/, '');
   }
 
   // ===========================================================================
-  // Presets tab (Java FreqRespTabControl.buildPresetsTab → PresetBar)
+  // Presets tab (Java FreqRespTabControl.buildPresetsTab -> PresetBar)
   // ===========================================================================
 
   bindPresets() {
-    // Java FreqRespTabControl.buildPresetsTab → PresetBar<FreqRespPreset>.
+    // Java FreqRespTabControl.buildPresetsTab -> PresetBar<FreqRespPreset>.
     this._presetBar = new PresetBar({
       ids: { name: '#frPresetName', save: '#frPresetSave', load: '#frPresetLoad',
         delete: '#frPresetDelete', menu: '#frPresetMenu', menuBtn: '#frPresetMenuBtn' },
@@ -631,7 +656,7 @@ export class FreqRespTabControl {
     p.reverseRiaa = prefs.freqRespReverseRiaa.get();
     p.iecAmendment = prefs.freqRespIecAmendment.get();
     p.compareMode = prefs.freqRespCompareMode.get();
-    // Filters — the per-type scalars live in the params map; the preset embeds ONE deep copy
+    // Filters - the per-type scalars live in the params map; the preset embeds ONE deep copy
     // of the entry for its captured filter type (Java captureCurrentFreqRespPreset).
     p.showFilter = prefs.freqRespShowFilter.get();
     p.filterCompare = prefs.freqRespFilterCompare.get();
@@ -661,7 +686,7 @@ export class FreqRespTabControl {
     prefs.freqRespReverseRiaa.set(p.reverseRiaa);
     prefs.freqRespIecAmendment.set(p.iecAmendment);
     prefs.freqRespCompareMode.set(p.compareMode);
-    // Filters — write the embedded params copy back into the map entry for the preset's filter
+    // Filters - write the embedded params copy back into the map entry for the preset's filter
     // type; the filter widgets then reload from the map below (Java applyFreqRespPreset).
     prefs.freqRespShowFilter.set(p.showFilter);
     prefs.freqRespFilterCompare.set(p.filterCompare);
@@ -710,17 +735,17 @@ export class FreqRespTabControl {
     this.view.render();
   }
 
-  /** Repopulates the preset dropdown + chip + button enablement — delegates to the shared
+  /** Repopulates the preset dropdown + chip + button enablement - delegates to the shared
    *  PresetBar. Kept as a named method (called at setup + after settings recall). */
   refreshPresetList() { this._presetBar.refreshList(); }
 
   // ===========================================================================
-  // Utility tab (Java FreqRespTabControl.buildUtilityTab): screenshot-only here —
+  // Utility tab (Java FreqRespTabControl.buildUtilityTab): screenshot-only here -
   // the desktop DAC/ADC calibrate buttons are stubs (acceptable parity).
   // ===========================================================================
 
   bindUtility() {
-    // Screenshot (#frShot) is wired in app.js via shotDialog.addPane. DAC / ADC calibrate —
+    // Screenshot (#frShot) is wired in app.js via shotDialog.addPane. DAC / ADC calibrate -
     // desktop stubs (dialog wired in a Phase 6 follow-up).
     this.$('#frCalDac').on('click', () => console.info('FreqResp DAC-cal clicked (stub)'));
     this.$('#frCalAdc').on('click', () => console.info('FreqResp ADC-cal clicked (stub)'));
@@ -736,6 +761,7 @@ export class FreqRespTabControl {
     $('#frLoadPath').val(prefs.freqRespLoadPath.get() || '');
     $('#frSaveBtn').on('click', () => this.saveMeasurement());
     $('#frLoadBtn').on('click', () => this.loadMeasurement());
+    this.refreshSaveEnable();   // gated from build time, not only after the first sweep
   }
 
   /** Writes the current measurement (BOTH channels) to a .frc (Java openSaveDialog). When one
@@ -764,7 +790,9 @@ export class FreqRespTabControl {
       if (res.saved) {
         this.$('#frSavePath').val(res.name);
         this.prefs.freqRespSavePath.set(res.name); this.prefs.save();
-        this.status('saved ' + res.name);
+        // The download path promises nothing back, so it must not be reported as saved.
+        this.status(res.viaDownload
+          ? t('web.save.handedToDownload', res.name) : 'saved ' + res.name);
         // If this .frc is loaded as a calibration row, reload it so the new curve applies.
         this.onCalibrationFileSaved(res.name);
       }
@@ -828,7 +856,7 @@ export class FreqRespTabControl {
       }
       this.syncStoreFromRows();
     };
-    // Exposed so app.js can await BOTH panes' cal restore before pruneCals (issue 2.3).
+    // Exposed so app.js can await BOTH panes' cal restore before pruneCals.
     this._calRestore = restore().catch((e) => console.error('FreqResp: cal restore failed', e));
   }
 
@@ -844,7 +872,7 @@ export class FreqRespTabControl {
     const $activeLbl = $('<label class="form-check-label small">').append($active).append(' ' + t('fft.calibration.active'));
     const $load = $('<button class="fcal-load btn btn-sm btn-outline-secondary" type="button">').attr('title', t('freqResp.calibration.load.tooltip')).html('<img src="assets/icons/folder-open.svg" class="util-svg" alt="">');
     // Icon-tinted like the FFT cal rows (CSS): green ADD(+), red CLEAR(×)/REMOVE(−), neutral load
-    // — a plain secondary border, NOT a red outline button.
+    // - a plain secondary border, NOT a red outline button.
     const $clear = $('<button class="fcal-clear btn btn-sm btn-outline-secondary" type="button">').attr('title', t('freqResp.calibration.clear.tooltip')).html('<img src="assets/icons/rectangle-xmark.svg" class="util-svg" alt="">');
     const $add = $('<button class="fcal-add btn btn-sm btn-outline-secondary" type="button">').attr('title', t('freqResp.calibration.add.tooltip')).html('<img src="assets/icons/plus.svg" class="util-svg" alt="">');
     const $remove = $('<button class="fcal-remove btn btn-sm btn-outline-secondary" type="button">').attr('title', t('freqResp.calibration.remove.tooltip')).html('<img src="assets/icons/minus.svg" class="util-svg" alt="">');
@@ -878,7 +906,7 @@ export class FreqRespTabControl {
       if (!f) return;
       if (!this.loadFileIntoRow(row, this.io.bytesToText(f.bytes), f.name)) return;
       // Store the raw bytes in the shared cal-store and record the hash on the entry so the row
-      // can be restored after a reload without a re-pick (issue 2.3).
+      // can be restored after a reload without a re-pick.
       try {
         const bytes = f.bytes instanceof ArrayBuffer ? f.bytes : f.bytes.buffer;
         row.entry.hash = await putCal(bytes, f.name);
@@ -972,7 +1000,7 @@ export class FreqRespTabControl {
   }
 
   /** Store-changed handler: retraces the view, and rebuilds the calibration-tab rows when the
-   *  change came from OUTSIDE the tab (Java FreqRespTabControl.onCalibrationChanged — skips the
+   *  change came from OUTSIDE the tab (Java FreqRespTabControl.onCalibrationChanged - skips the
    *  rebuild for the control's own writes). */
   onStoreChanged() {
     if (this.view) this.view.onCalibrationChanged();
@@ -982,7 +1010,7 @@ export class FreqRespTabControl {
     this.refreshCalTile();
   }
 
-  /** Rebuilds the row UI from the store's entries, dropping user-added empty rows — exactly one
+  /** Rebuilds the row UI from the store's entries, dropping user-added empty rows - exactly one
    *  row per loaded entry, row 0 always present (Java rebuildRowsFromStore). No-op when the loaded
    *  rows already line up with the store. */
   rebuildRowsFromStore() {

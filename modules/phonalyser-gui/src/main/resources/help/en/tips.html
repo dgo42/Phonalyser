@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser - Tips</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Tips</h1>
+  <p>Small things that make a big difference - shown one at a time at startup
+     (turn that off with the checkbox on the tip dialog, or in
+     <a href="preferences.html#prefs-lookfeel">Preferences ▸ Look&nbsp;&amp;&nbsp;Feel</a>),
+     and all collected here.</p>
+
+  <div class="tip"><b>Coherent averaging digs far below the noise floor.</b>
+     Leave coherent (complex) averaging on and let the FFT run: each block is
+     de-rotated to a common phase before summing, so the tone adds coherently
+     while the noise partly cancels - the floor keeps dropping the longer you
+     wait.  See <a href="theory/fft.html#coherent">Theory ▸ Coherent
+     averaging</a>.</div>
+
+  <div class="tip"><b>Snap the generator to an FFT bin for a clean spectrum.</b>
+     With <em>Snap frequency to nearest</em> on, the tone lands exactly on a
+     bin, so window leakage doesn't smear the fundamental across its neighbours
+     and the harmonic estimates stay honest.
+     See <a href="generator.html#generator-snap-fft-bin">Generator ▸ Snap</a>.</div>
+
+  <div class="tip"><b>Pin the fundamental by hand on a twin-T notch.</b>
+     A passive twin-T null is so steep that a few tenths of a hertz of thermal
+     drift swing the de-embedded fundamental by tenths of a dB and wobble your
+     THD.  Enter the level you actually know with <em>Manual fundamental</em>;
+     the harmonics, on the gentle flank, de-embed fine.
+     See <a href="theory/fft.html#manual-fund">Theory ▸ pinning the
+     fundamental</a>.</div>
+
+  <div class="tip"><b>WASAPI exclusive mode keeps the measurement bit-exact.</b>
+     Exclusive mode hands the device straight to Phonalyser, bypassing the
+     Windows mixer and its sample-rate converter - no hidden resampling to
+     colour the result.  See
+     <a href="theory/audio-backend.html">Theory ▸ Audio backend</a>.</div>
+
+  <div class="tip"><b>WDM-KS gives the oscilloscope the most frames per second.</b>
+     For the fastest live scope refresh, pick the WDM-KS backend in
+     Preferences - it sits lower than WASAPI and pushes more capture blocks
+     per second.  See <a href="preferences.html#prefs-audio">Preferences ▸
+     Audio</a>.</div>
+
+  <div class="tip"><b>The mouse wheel zooms around the cursor.</b>
+     In any trace view: <b>wheel</b> moves vertically, <b>Shift+wheel</b>
+     horizontally, <b>Ctrl+wheel</b> zooms the vertical axis and
+     <b>Ctrl+Shift+wheel</b> the horizontal - and both zooms keep the value
+     under the pointer fixed, so you zoom into exactly what you're looking at.</div>
+
+  <div class="tip"><b>Every numeric field takes units, the wheel, and the keyboard.</b>
+     Type a value with its unit (<code>µV</code>, <code>1.5 V</code>,
+     <code>-3 dBV</code>, <code>2 kHz</code>), or scroll the wheel, click the
+     ▲/▼ arrows, or press the keyboard <kbd>↑</kbd>/<kbd>↓</kbd> keys to step.</div>
+
+  <div class="tip"><b>Sinc interpolation only matters when you're zoomed in.</b>
+     The Sin/Lin switch changes the trace only when sample points are at least
+     a couple of pixels apart on screen; otherwise straight lines look
+     identical and cost less CPU.  Turn it on once individual samples are
+     visible.  See <a href="oscilloscope.html#scope-sinc-interp">Oscilloscope ▸
+     Sin/Lin</a>.</div>
+
+  <div class="tip"><b>Hysteresis stabilises the trigger on a weak, noisy signal.</b>
+     Without it, noise around the trigger level fires a flurry of false
+     triggers and the trace jitters.  Enable trigger hysteresis and the trace
+     locks.  See <a href="oscilloscope.html#scope-trigger-hysteresis">Oscilloscope
+     ▸ Hysteresis</a>.</div>
+
+  <div class="tip"><b>A saved generator signal is a perfect reference.</b>
+     <em>Save to...</em> writes the ideal, mathematically exact waveform -
+     synthesised digitally, with no DAC, amplifier or cabling distortion.  Feed
+     it to another instrument and any imperfection you measure belongs to that
+     device, not the source.  See
+     <a href="theory/generator.html#savefile">Theory ▸ saving a signal</a>.</div>
+
+  <div class="tip"><b>De-embed a fixture with a calibration file.</b>
+     Measure a notch, attenuator or soundcard's response once in the
+     Frequency-response module, then load that <code>.frc</code> into the FFT
+     analyser: its response is divided out at display time, so the table shows
+     the device under test, not the chain.  See
+     <a href="theory/fft.html#cal">Theory ▸ the red and blue dots</a>.</div>
+
+  <div class="tip"><b>The reconstructed-beat overlay tames a close two-tone pair.</b>
+     In dual-tone mode the scope's <em>Reconstructed beat</em> overlay draws
+     the slow |f₁−f₂| envelope, so you can trigger on the beat instead of
+     chasing the fast carrier crossings.  See
+     <a href="oscilloscope.html#scope-trigger-beat">Oscilloscope ▸ Reconstructed
+     beat</a>.</div>
+
+  <div class="tip"><b>The frequency-response sweep is its own reference.</b>
+     The swept measurement is deconvolved against the <em>exact</em> sweep that
+     was played - not a re-measured copy - so the recovered magnitude and phase
+     are the device's true transfer function.  See
+     <a href="theory/freq-resp.html">Theory ▸ Frequency response</a>.</div>
+
+  <div class="tip"><b>Ctrl+F1 jumps straight to the right help.</b>
+     Press <kbd>F1</kbd> anywhere for the manual, or <kbd>Ctrl</kbd>+<kbd>F1</kbd>
+     to open the help at the exact section for the control that currently has
+     focus.  And the new <a href="help-index.html">Index &amp; search</a> page
+     searches the whole manual.</div>
+
+  <div class="tip"><b>The residual view shows what hides under the fundamental.</b>
+     Flip a scope channel to <em>Residual</em> and it draws the captured signal
+     minus its best-fit tone - the distortion, noise and glitches buried under
+     the fundamental become visible.  Dual tone works too: both frequencies are
+     measured from the capture itself, so free-running DAC and ADC clocks cannot
+     smear the subtraction.  See <a href="oscilloscope.html">Oscilloscope</a>.</div>
+
+  <div class="tip"><b>Overlay an ideal filter on a measured response.</b>
+     The Frequency-response module's <em>Filters</em> tab anchors an ideal
+     low-pass, high-pass, band-pass or notch (Butterworth, Chebyshev, inverse
+     Chebyshev, elliptic or Bessel) to the measured curve, and <em>Compare</em>
+     plots the deviation from it - just like comparing against RIAA.  See
+     <a href="freqresp.html">Frequency response</a>.</div>
+
+  <div class="tip"><b>Let the Unevenness readout judge flatness for you.</b>
+     On the <em>Unevenness</em> tab, read the band edges where the response first
+     leaves a ±X dB corridor from its peak (or from its minimum, for a notch), or
+     the ± deviation over a chosen range - annotated on the plot, with a
+     detachable measurements window.  See
+     <a href="freqresp.html">Frequency response</a>.</div>
+
+  <div class="tip"><b>Full-scale calibration belongs to the sound card.</b>
+     Each card keeps its own profile - one row per attenuator or DIP range,
+     separate left / right values, matched by device name on every backend - so
+     switching devices or backends never mixes calibrations up.  Known cards come
+     pre-configured; your crosshair calibration refines them.  See
+     <a href="preferences.html#prefs-audio-card">Preferences ▸ Card</a>.</div>
+
+  <div class="tip"><b>Drive only the channel you are measuring.</b>
+     The generator, the frequency-response sweep and the notch tuner each have an
+     <em>Output channel</em> selector - Both, Left only or Right only - that gates
+     the driven lane live.  Handy for crosstalk checks and single-input devices.
+     See <a href="generator.html">Generator</a>.</div>
+
+  <div class="tip"><b>Zoomed far out, the scope renders like a real DSO.</b>
+     Above one sample per pixel the trace becomes a digital-phosphor image: each
+     column's dwell histogram, swept with a pen of the configured trace width -
+     narrow pulses and beat envelopes keep their true peak-to-peak at any zoom,
+     and brightness shows where the signal dwells.  See
+     <a href="theory/oscilloscope.html">Theory ▸ Oscilloscope</a>.</div>
+
+  <div class="tip"><b>Glitched captures never poison a long average.</b>
+     The FFT rejects blocks containing splices, dropouts or band-limit-violating
+     glitches before they enter the average, then re-syncs and keeps going.  For a
+     small or non-sinusoidal signal that trips the gate on every block, uncheck
+     <em>Detect time discontinuity</em> on the FFT settings tab.  See
+     <a href="theory/fft.html#rejection">Theory ▸ keeping bad blocks out</a>.</div>
+
+  <div class="tip"><b>SNR and ENOB stay honest under a wide or noisy tone.</b>
+     The noise figures exclude not only the fundamental and its harmonics but the
+     fundamental's whole leakage / phase-noise <em>skirt</em>: the excluded band
+     widens to follow a broad or jittery tone outward until its bins fall back to
+     the noise floor, so a wide skirt never inflates SNR or ENOB.
+     See <a href="theory/fft.html#metrics">Theory &#9656; Distortion &amp; noise
+     metrics</a>.</div>
+
+  <div class="tip"><b>Skip the unit - plain digits mean the base unit.</b>
+     Type just a number and the field takes it in its base unit: <code>1000</code>
+     in a frequency field is 1000&nbsp;Hz, in an amplitude field 1000&nbsp;V, in a
+     time field 1000&nbsp;s.  And kilohertz has short forms: <code>1.5k</code>,
+     <code>1.5kh</code> and <code>1.5khz</code> all mean 1.5&nbsp;kHz.</div>
+
+  <div class="tip"><b>Drag a rectangle to zoom into exactly that region.</b>
+     In the oscilloscope, FFT and frequency-response views, drag with the left
+     button to rubber-band the area you care about - on release it stretches to
+     fill the view (the scope keeps the trigger level and position on the same
+     waveform point).  <kbd>Ctrl</kbd>+<kbd>Z</kbd> steps back through the last
+     32 zooms of the view under the pointer or with focus - a thin green border
+     marks which view will take the undo.</div>
+
+  <div class="tip"><b>Set dither in dBV and read it straight off the FFT floor.</b>
+     The generator's dither field takes bits or a dBV level, and the dBV already
+     includes the FFT window's noise bandwidth - so with <b>incoherent (power)
+     averaging</b> the FFT noise floor lands exactly where you set it: enter
+     &minus;100&nbsp;dBV and the floor sits at &minus;100&nbsp;dBV.  Coherent
+     averaging cancels noise and reads far lower.</div>
+
+  <div class="tip"><b>The hardware does not have to be on your desk.</b>
+     Run Phonalyser as a <em>server</em> on the machine your converters are wired
+     to, then press <em>Servers...</em> in Preferences ▸ Audio: that bench's
+     backends join the backend list beside the local ones, and from there
+     devices, cards, calibration, the generator and the sweeps all work as though
+     the card were plugged in here.
+     See <a href="server.html">The Phonalyser server</a> and
+     <a href="preferences.html#prefs-audio-servers">Preferences ▸ measuring
+     through a server</a>.</div>
+
+  <div class="tip"><b>A bench device someone else is measuring on says so.</b>
+     Each of a server's devices is locked to one client at a time, and a device
+     another operator holds reads <em>in use by</em> plus that client's name
+     right in the device list - so you find out before you press Record, not
+     after.
+     See <a href="preferences.html#prefs-audio-server-backends">Preferences ▸
+     choosing a bench backend</a>.</div>
+
+  <div class="tip"><b>Read harmonics straight off the axis with dBr.</b>
+     Switch the FFT's magnitude unit to <em>dBr</em> and the fundamental sits at
+     exactly 0, so every harmonic and spur reads directly as "so many dB below
+     the tone".  The reference is the displayed fundamental and is re-read on
+     every repaint, so it keeps following a drifting level.
+     See <a href="fft.html#fft-mag-unit">FFT ▸ magnitude unit</a> and
+     <a href="theory/fft.html#plot">Theory ▸ plot-time corrections</a>.</div>
+
+  <div class="tip"><b>Type an output level in dBFS when full scale is what you
+     mean.</b>  The generator, the frequency-response sweep and the tune-notch
+     wizard all accept an amplitude in dBFS - suffix <code>dbfs</code>, or the
+     short <code>dbf</code> - and keep displaying it in that unit.  0&nbsp;dBFS
+     is a full-scale <em>sine</em>, so the figure does not change meaning when
+     you switch waveform.
+     See <a href="generator.html#generator-amplitude">Generator ▸ amplitude</a>.</div>
+
+  <div class="tip"><b>The amplitude histogram tells clipping from noise at a
+     glance.</b>  Open it from the oscilloscope toolbar: a sine draws the bathtub
+     of its two turning points, broadband noise a Gaussian bell, and a clipped
+     signal a hard spike where the rail is.  A waveform clipped on one side only
+     shows as unequal bars about the centre line.
+     See <a href="oscilloscope.html#scope-histogram-window">Oscilloscope ▸
+     amplitude-histogram window</a> and
+     <a href="theory/oscilloscope.html#histogram">Theory ▸ how often, not
+     when</a>.</div>
+
+  <div class="tip"><b>A QA40x "0 dBV" input range is not 0 dBV RMS.</b>
+     The ranges table spells it out - <code>0 "dBV" real 0 dBFS or -9 dBV</code>
+     - because a QA input range is a peak-to-peak dBFS reference across the
+     differential pair, whose true RMS full scale sits about 9&nbsp;dB lower.
+     The output ranges are genuine dBV.
+     See <a href="theory/audio-backend.html#qa40x-ranges">Theory ▸ what a "dBV"
+     input range actually is</a>.</div>
+
+  <div class="tip"><b>Your calibration can follow you onto the bench.</b>
+     Select a server device that has no calibration while this machine holds a
+     calibrated card matching it, and Phonalyser offers to copy the values across
+     - once per session, and never silently.  Say no and nothing is written.
+     See <a href="preferences.html#prefs-audio-server-cards">Preferences ▸ cards
+     and calibration on the bench</a>.</div>
+
+  <div class="tip"><b>A QA403 runs at 384&nbsp;kHz; a QA402 does not.</b>
+     The rate list follows the analyzer actually attached - the sample-rate
+     register has a fourth code only the QA403 has.  Capture and generator both
+     run at whichever rate you pick, because the two directions share one
+     hardware clock.
+     See <a href="theory/audio-backend.html#qa40x">Theory ▸ the QA40x analyzer
+     backend</a>.</div>
+
+  <div class="tip"><b>The QA40x can drive a converter straight from its
+     front-panel I2S port.</b>  Switch the port on under <em>QA40x
+     preferences</em> and the output bit-depth list offers the port's 16 and 32
+     bits in place of the analyzer's 24, the input staying at 24 throughout.  It
+     is experimental: QuantAsylum documents the connector, but not the registers
+     that enable it.
+     See <a href="preferences.html#prefs-audio">Preferences ▸ Audio</a>.</div>
+
+  <div class="tip"><b>A long sweep no longer has to be waited out.</b>
+     The frequency-response progress window carries a <em>Cancel</em> button.  It
+     is cooperative - the sweep ends through the ordinary stopped path, so the
+     window closes and the pane unlocks exactly as after a completed run, with
+     the capture and the generator handed back.
+     See <a href="freqresp.html">Frequency response</a>.</div>
+
+  <div class="tip"><b>A smooth-looking frequency response can still be
+     clipped.</b>  If the capture reached full scale you are warned as soon as
+     the trace appears.  Deconvolution turns a railed recording into a fine
+     regular ripple that reads like noise rather than like damage, so lower the
+     drive level instead of trusting the curve.
+     See <a href="freqresp.html#freqresp-measure-clipping">Frequency response ▸
+     wobbly trace</a>.</div>
+
+  <div class="tip"><b>Any frequency response on screen can be saved.</b>
+     The <em>Save to...</em> tab writes the displayed curve to a file with no
+     quality gate of any kind - a sweep you have just run, one driven gently, or
+     one loaded back from disk.  The only thing it asks is that a measurement
+     exists.
+     See <a href="freqresp.html#freqresp-tab-saveto">Frequency response ▸ Save
+     to...</a>.</div>
+
+  <div class="tip"><b>Plug a card in without restarting the application.</b>
+     <em>Scan devices</em> in Preferences ▸ Audio reads the selected backend's
+     device list again, and a device that fails with the driver's "invalid
+     device" triggers one automatic rescan and retry on its own.
+     See <a href="preferences.html#prefs-audio-buttons">Preferences ▸ the buttons
+     on the backend row</a>.</div>
+
+  <div class="tip"><b>Preferences tells you when your volts are guesses.</b>
+     Closing the Audio tab after a backend or device change checks that the
+     committed selection really resolves to a measured full scale, and names the
+     input, the output or both when it does not.  A card bound to the device but
+     holding zeros counts as uncalibrated - an empty row is not a measurement.
+     See <a href="preferences.html#prefs-audio-card">Preferences ▸ card</a>.</div>
+
+  <div class="tip"><b>A dead input says so instead of drawing a flat line.</b>
+     Unplug the card, or let another application take it exclusively, and the
+     oscilloscope and the FFT stop with one dialog naming the backend and saying
+     whether the device was lost or merely stopped delivering samples.  The
+     playback side is watched the same way.
+     See <a href="theory/audio-backend.html#errors-running">Theory ▸ a stream
+     that dies after it started</a>.</div>
+
+  <div class="tip"><b>A settings file that will not parse is never
+     overwritten.</b>  A <code>preferences.yaml</code> or
+     <code>devices.yaml</code> damaged by a crash is renamed to
+     <code>.corrupt</code> beside itself and the failure logged, so every
+     calibration in it can still be recovered by hand instead of being cemented
+     over by the next save.</div>
+
+  <hr/>
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+</body>
+</html>

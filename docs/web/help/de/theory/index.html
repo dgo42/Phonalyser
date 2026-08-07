@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — Funktionsprinzip</title>
+  <title>Phonalyser.web - Funktionsprinzip</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -10,7 +10,7 @@
   <p class="back"><a href="../index.html">◀ Zurück zum Inhaltsverzeichnis</a></p>
 
   <h1>Funktionsprinzip</h1>
-  <p>Dieses Kapitel erklärt, wie Phonalyser.web <em>intern</em> arbeitet — was
+  <p>Dieses Kapitel erklärt, wie Phonalyser.web <em>intern</em> arbeitet - was
      mit dem Signal tatsächlich passiert, vom Zeitpunkt der Synthese bis zu dem
      Moment, in dem eine THD-Zahl auf dem Bildschirm erscheint.  Es richtet
      sich an den Messanwender: Kenntnisse in der Softwareentwicklung sind nicht
@@ -20,11 +20,11 @@
      <a href="../fft.html">FFT-Analysator</a>).</p>
 
   <div class="note"><b>Ein Dankeschön.</b>  Phonalyser.web verdankt seine Existenz
-     <a href="https://www.roomeqwizard.com/">REW (Room EQ Wizard)</a> —
+     <a href="https://www.roomeqwizard.com/">REW (Room EQ Wizard)</a> -
      die Arbeit mit diesem hervorragenden Werkzeug hat den Autor inspiriert, eine
      eigene Messapplikation zu entwickeln, die auf eine noch umfassendere und
      präzisere Verzerrungsgrad- und Frequenzgangmessung abzielt (siehe
-     <a href="fft.html#purpose">das FFT-Kapitel</a>, was „präzise" hier
+     <a href="fft.html#purpose">das FFT-Kapitel</a>, was "präzise" hier
      bedeutet).</div>
 
   <h2>Der Signalpfad</h2>
@@ -78,7 +78,7 @@
 
     <rect x="210" y="120" width="130" height="56" rx="6" fill="#eef" stroke="#88a"/>
     <text x="275" y="142" text-anchor="middle" font-weight="bold">Capture session</text>
-    <text x="275" y="160" text-anchor="middle" fill="#557">PCM → [-1,+1]</text>
+    <text x="275" y="160" text-anchor="middle" fill="#557">PCM -> [-1,+1]</text>
 
     <rect x="10"  y="120" width="150" height="56" rx="6" fill="#eef" stroke="#88a"/>
     <text x="85"  y="142" text-anchor="middle" font-weight="bold">Ring buffer</text>
@@ -110,28 +110,28 @@
 
   <h2>Die Module und ihr Zweck</h2>
   <div class="pane">
-    <p><b>Signalgenerator</b> — die Stimulusquelle.  Erzeugt kalibrierte
+    <p><b>Signalgenerator</b> - die Stimulusquelle.  Erzeugt kalibrierte
        Testsignale: einen spektral reinen Sinus für Verzerrungsmessungen, zwei
        Töne für Intermodulationsmessungen, Weiß-/Rauschsignale, lineare und
        logarithmische Sweeps sowie einen <em>kompensierten</em> Sinus, der die
        Eigenverzerrung der Wiedergabekette aktiv auslöscht, sodass das Messobjekt
        ein saubereres Signal empfängt, als der DAC allein liefern kann.
        Der Ausgangspegel wird in Volt gegen die DAC-Kalibrierung eingestellt.</p>
-    <p><b>Oszilloskop</b> — die Zeitbereichsansicht.  Hier wird <em>zuerst</em>
+    <p><b>Oszilloskop</b> - die Zeitbereichsansicht.  Hier wird <em>zuerst</em>
        nachgeschaut: Liegt überhaupt ein Signal an, clippt es, enthält es
        Gleichspannung oder Netzbrumm, wie groß sind V<sub>pp</sub> / V<sub>rms</sub> /
        Frequenz?  Triggerung, kanalweise Skalierung und eine laufende Messtabelle
        funktionieren wie an einem Tischoszilloskop.  Ein spektraler Messwert ist
        erst dann vertrauenswürdig, wenn das Zeitbereichsbild einwandfrei aussieht.</p>
-    <p><b>FFT-Analysator</b> — das Arbeitspferd im Frequenzbereich.  Zeigt das
+    <p><b>FFT-Analysator</b> - das Arbeitspferd im Frequenzbereich.  Zeigt das
        Spektrum und misst THD, THD+N, SNR, SINAD/ENOB sowie die einzelnen
        Harmonischen; im Zweiton-Betrieb die Intermodulationsprodukte.  Kohärente
        Mittelung hebt Signale weit unterhalb des Einzelschuss-Grundrauschens heraus;
        Netzbrumm-Unterdrückung, Kalibrierungs-Entbetten und eine manuelle
        Grundton-Referenz behandeln praxisnahe Messaufbauten (Kerbfilter,
        Abschwächer, bekannte Quellpegel).</p>
-    <p><b>Frequenzgang</b> — die Sweep-Messung.  Spielt einen logarithmischen
-       Sweep durch das Messobjekt und berechnet dessen Übertragungsfunktion —
+    <p><b>Frequenzgang</b> - die Sweep-Messung.  Spielt einen logarithmischen
+       Sweep durch das Messobjekt und berechnet dessen Übertragungsfunktion -
        Betrag und Phase über das gesamte Band in Sekunden.  Ergebnisse können
        mit RIAA-/IEC-Kurven verglichen oder als Kalibrierungsdateien gespeichert
        werden, die der FFT-Analysator später aus seinen eigenen Messungen
@@ -145,65 +145,66 @@
 
   <h2>Kapitel</h2>
   <div class="toc">
-    <a href="audio-backend.html"><b>Audio-Backend</b> — die bitgenaue Brücke
-       zwischen Phonalyser.web und der Sound-Hardware: Garantien, Funktionsweise einer
+    <a href="audio-backend.html"><b>Audio-Backend</b> - die bitgenaue Brücke
+       zwischen Phonalyser.web und der Sound-Hardware (einschließlich des direkten
+       QA40x-Analysator-Backends): Garantien, Funktionsweise einer
        Aufnahme- und Wiedergabesitzung, gemeinsam genutzte Geräte</a>
-    <a href="ring-buffer.html"><b>Ringpuffer &amp; Konsumenten</b> — der gemeinsame
+    <a href="ring-buffer.html"><b>Ringpuffer &amp; Konsumenten</b> - der gemeinsame
        22-Sekunden-Aufnahmespeicher, unabhängige Lesecursor und was passiert,
        wenn ein Leser in Rückstand gerät</a>
-    <a href="generator.html"><b>Signalgenerator</b> — direkte digitale
+    <a href="generator.html"><b>Signalgenerator</b> - direkte digitale
        Synthese: der Phasenakkumulator, alle Wellenformen, Sweeps,
        Verzerrungskompensation, Amplitudenkalibrierung und Dither</a>
-    <a href="oscilloscope.html"><b>Oszilloskop</b> — Aufbereitung,
+    <a href="oscilloscope.html"><b>Oszilloskop</b> - Aufbereitung,
        Triggerung und Messung der Pegel-/Frequenzwerte;
        der frequenzverfolgte Netz-Kammfilter</a>
-    <a href="fft.html"><b>FFT-Analysator</b> — kohärente Mittelung und
+    <a href="fft.html"><b>FFT-Analysator</b> - kohärente Mittelung und
        Sub-Bin-De-Rotation, Ausreißer-Unterdrückung, THD / SNR / SINAD / ENOB,
        Zweiton-Intermodulation</a>
-    <a href="derotation-accuracy.html"><b>De-Rotationsgenauigkeit</b> — wie
+    <a href="derotation-accuracy.html"><b>De-Rotationsgenauigkeit</b> - wie
        präzise der Rotationswinkel je Block bekannt ist, warum sein Fehler sich
        über stundenlange Mittelungen nicht aufaddiert und wie Überlappung und
        Fensterwahl das pro Zeiteinheit erreichbare Grundrauschen bestimmen</a>
-    <a href="dac-predistortion.html"><b>DAC-Vorverzerrung</b> — Auslöschen der
+    <a href="dac-predistortion.html"><b>DAC-Vorverzerrung</b> - Auslöschen der
        Wandlereigenen Harmonischen: warum das Twin-T-Kerbfilter zwingend erforderlich
        ist, warum dessen Temperaturdrift eine manuelle Grundtonreferenz erzwingt,
        wie tiefe kohärente Mittelung die Korrektur verlässlich macht und das
        doppelte Twin-T-Kerbfilter für Zweiton-IMD-Messungen</a>
-    <a href="freq-resp.html"><b>Frequenzgang</b> — Farina-Log-Sweep-
+    <a href="freq-resp.html"><b>Frequenzgang</b> - Farina-Log-Sweep-
        Dekonvolution, Entfernung der Transportverzögerung, Glättung und
        Kalibrierungs-Entbetten</a>
-    <a href="tune-notch.html"><b>Kerbfilter-Abgleich</b> — ein passives
+    <a href="tune-notch.html"><b>Kerbfilter-Abgleich</b> - ein passives
        Twin-T-Kerbfilter live abgleichen: ein Schleifen-Sweep, dessen
        Zweierpotenz-Periode die Transformation verschiebungsinvariant macht,
        sodass die Nullstelle ohne Trigger nachgeführt wird</a>
-    <a href="algorithms.html"><b>Algorithmus-Referenz</b> — Katalog aller
+    <a href="algorithms.html"><b>Algorithmus-Referenz</b> - Katalog aller
        benannten Algorithmen im Instrument mit Verweis auf das erklärende Kapitel
        und das vollständige technische Dokument</a>
   </div>
 
   <h2>Weiterführende Literatur</h2>
   <div class="toc">
-    <a href="../external/fft-analysis.html"><b>FFT-Analyse kompakt</b> —
+    <a href="../external/fft-analysis.html"><b>FFT-Analyse kompakt</b> -
        Zusammenfassung eines hervorragenden externen Leitfadens (Fensterfunktionen,
        Leckeffekt, Auflösung, Mittelung) mit Link zum Original</a>
     <a href="../external/sine-sweep.html"><b>Der exponentielle Sinussweep in
-       der Praxis</b> — Zusammenfassung eines praxisorientierten Artikels über die
+       der Praxis</b> - Zusammenfassung eines praxisorientierten Artikels über die
        Farina-Messmethode mit Links zum Original und zur Veröffentlichung</a>
   </div>
 
   <h2>Durchgängige Designprinzipien</h2>
   <div class="pane">
     <ul>
-      <li><b>Kohärente Mittelung dringt unter das Einzelschuss-Grundrauschen —
+      <li><b>Kohärente Mittelung dringt unter das Einzelschuss-Grundrauschen -
           und das Rauschen setzt die Grenze.</b>  Jede tiefe Messung (Harmonische,
           Zweitonprodukte, Vorverzerrungskorrektur) summiert phasensynchron
           ausgerichtete Blöcke, sodass der Ton erhalten bleibt, während das
           Rauschen mit 1/√<i>n</i> sinkt.  Das erreichbare Grundrauschen wird durch das
           Bin-Signal-Rausch-Verhältnis und die effektive Anzahl der Mittelungen
-          bestimmt — und durch keinen Trick.</li>
+          bestimmt - und durch keinen Trick.</li>
       <li><b>Referenz neu messen, nie integrieren.</b>  Phasenreferenzen und
-          Frequenzsperren — der De-Rotationswinkel je Block, der Frequenz-Lock-Loop,
-          die manuelle Grundtonreferenz — werden in jedem Block neu gelesen, niemals
+          Frequenzsperren - der De-Rotationswinkel je Block, der Frequenz-Lock-Loop,
+          die manuelle Grundtonreferenz - werden in jedem Block neu gelesen, niemals
           über einen freilaufenden Zähler fortgeführt.  Eine gemessene Referenz
           mittelt sich heraus; eine integrierte führt einen Zufallsgang aus und
           lässt den Ton langsam dekohärieren.</li>
@@ -211,20 +212,20 @@
           Taktversatz im Wandler und Temperaturdrift der Kerbfilterkomponenten
           äußern sich als langsamer Phasendrift, den die Analyse Block für Block
           herausrechnet.  Als Phasengröße behandelt kosten sie Kohärenz, nicht
-          Betrag — weshalb die Breitbandpegel stabil bleiben, während der
+          Betrag - weshalb die Breitbandpegel stabil bleiben, während der
           Grundton in einer driftenden Nullstelle liegt.</li>
       <li><b>Exakte Frequenzen durch ganzzahligen Phasengang.</b>  Der
           DDS-Akkumulator, jeder harmonische Korrektonton und die Sweep-Referenz
           werden durch ganzzahlige Multiplikation einer einzigen Masterphase
           gebildet, sodass ein Ton <em>exakt</em> bei <i>h·f</i> liegt und nie
-          mit der Verzerrung schlägt, die er misst oder auslöscht — unabhängig
+          mit der Verzerrung schlägt, die er misst oder auslöscht - unabhängig
           von der Laufzeit.</li>
       <li><b>Fensterfunktionen werden nach Nebenkeulendämpfung gewählt, nicht
           nach Rauschen.</b>  Oberhalb der empfohlenen Überlappung jeder
           Fensterfunktion erreicht jedes Fenster dasselbe Grundrauschen in
           derselben Messzeit, sodass die Wahl (HFT248D bei 87,5&nbsp;%) darum
           geht, die Leckage eines starken Tons von den schwachen Bins fernzuhalten
-          — nicht um das Rauschen.</li>
+          - nicht um das Rauschen.</li>
       <li><b>Kalibrierung an den Rändern, normierte Werte in der Mitte.</b>
           ADC- und DAC-Vollausspannungen werden nur bei der Anzeige und am Ausgang
           angewendet; die Signaldaten bleiben während der gesamten Verarbeitung in

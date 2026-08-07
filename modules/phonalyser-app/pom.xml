@@ -1,0 +1,519 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  phonalyser-app - the distribution module.  Carries NO source of its own: it
+  exists because a Maven reactor builds the aggregator BEFORE its modules, so
+  the build root cannot package artifacts produced by its own children.  This
+  module is declared last, depends on every other module, and does the two
+  packaging steps the single-module build used to do:
+
+    1. the FAT platform jar (maven-assembly-plugin + src/main/assembly/fat-jar.xml)
+    2. the native installer / app-image (jpackage)
+
+  The packaging ASSETS stay at the build root - this pom reaches them with
+  ${project.basedir}/../.. so nothing had to be relocated.
+
+  Backends are RUNTIME dependencies: the app names none of them, it just needs
+  them all present in the distribution.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.2.0</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>phonalyser-app</artifactId>
+    <name>Phonalyser :: app (fat jar + installer)</name>
+
+    <properties>
+        <!-- This module sits at modules/phonalyser-app, so the build root - which
+             carries the packaging assets and the native libs - is two levels up,
+             and its sibling modules are one.  The staging steps below tolerate a
+             missing native-lib folder. -->
+        <repo.root>${project.basedir}/../..</repo.root>
+        <modules.root>${project.basedir}/..</modules.root>
+        <!-- PortAudio's JNA binding lives in core, so its DLL does too, and the
+             MODULE resource is the authoritative copy - it is the one that must
+             reach the installer.  The repo-root lib/windows copy was once a
+             STALE build with WDM-KS compiled out (rc=-9979); it has since been
+             refreshed and the two are byte-identical today.  Sourcing the module
+             resource is still the rule: provenance should not depend on the two
+             happening to match. -->
+        <core.resources>${modules.root}/phonalyser-core/src/main/resources</core.resources>
+        <!-- Staged from each module's BUILD OUTPUT, not from its src/: the reactor
+             has already produced these by the time this module packages, and a
+             module reaching into a sibling's source tree is both a layering
+             inversion and something an IDE rejects outright. -->
+        <gui.classes>${modules.root}/phonalyser-gui/target/classes</gui.classes>
+        <guicore.classes>${modules.root}/phonalyser-gui-core/target/classes</guicore.classes>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-gui</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-qa40x-gui</artifactId>
+        </dependency>
+        <!-- The net bridge's UI layer: the server list and the combo glue.  Like
+             backend-qa40x-gui it is discovered through the service loader, so it
+             is the APP that has to put it on the class path - phonalyser-gui
+             must not, or the plug-in would depend on the application. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-net-gui</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-cli</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-wdm-ks</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-wasapi</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-coreaudio</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-javasound</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-qa40x</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-loopback</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- The client half of the net bridge only.  server-net is deliberately
+             absent: the headless server is its own application with its own fat
+             jar (server-net's server-dist profile), not a mode of the desktop
+             one, and the wire format it shares rides in through backend-net. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-net</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Stage the external i18n/ and help/ folders so jpackage's input dir
+                 carries $APPDIR/i18n and $APPDIR/help, exactly as the single-module
+                 build did.
+
+                 Taken from the module ARTIFACTS, not from sibling source folders.
+                 A distribution module consumes what the reactor produced; reaching
+                 across into another module's src/ makes this module's build depend
+                 on a path rather than on a dependency, and an IDE rejects it
+                 outright ("access ... outside of project base directory").  The
+                 jar layout already is i18n/... and help/..., so unpacking into
+                 target/ lands both exactly where the staging step below expects. -->
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>${app.mainClass}</mainClass>
+                        </manifest>
+                        <!-- log4j ships Java-9+ classes under META-INF/versions/;
+                             without this flag the merged jar hides them and log4j
+                             warns "does not support multi-release JARs" at startup. -->
+                        <manifestEntries>
+                            <Multi-Release>true</Multi-Release>
+                        </manifestEntries>
+                    </archive>
+                    <descriptors>
+                        <descriptor>${repo.root}/src/main/assembly/fat-jar.xml</descriptor>
+                    </descriptors>
+                    <!-- Historical published name, not the module's artifactId - see
+                         app.mainJar in phonalyser-parent. -->
+                    <finalName>phonalyser-${project.version}-${platform.id}</finalName>
+                    <appendAssemblyId>false</appendAssemblyId>
+                    <includeSystemScope>true</includeSystemScope>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-assembly</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Stage only what jpackage needs into a clean directory (pointing
+                 jpackage at the whole target/ folder makes it copy its own
+                 previous output on a second run). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <executions>
+                    <!-- Stage the external i18n/ and help/ folders so jpackage's
+                         input dir carries $APPDIR/i18n and $APPDIR/help, exactly as
+                         the single-module build did.  Copied from each module's
+                         BUILD OUTPUT: the reactor has already produced it by now,
+                         and a module reaching into a sibling's src/ is both a
+                         layering inversion and something an IDE rejects outright.
+                         Kept in THIS plugin block rather than a second one - Maven
+                         merges duplicate plugin declarations and the merge reorders
+                         executions, which once ran the jpackage staging below
+                         before the assembly had written the fat jar. -->
+                    <execution>
+                        <id>stage-i18n-and-help-external</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <!-- The locale bundles sit with I18n, in gui-core.
+                                     Only the TRANSLATIONS go outside: the English
+                                     base stays in the jar as the fallback. -->
+                                <copy todir="${project.build.directory}/i18n">
+                                    <fileset dir="${gui.classes}/i18n">
+                                        <include name="messages_*.properties"/>
+                                    </fileset>
+                                </copy>
+                                <!-- help/ ships with HelpViewer, in gui. -->
+                                <copy todir="${project.build.directory}/help">
+                                    <fileset dir="${gui.classes}/help"/>
+                                </copy>
+                            </target>
+                        </configuration>
+                    </execution>
+                    <!-- The csjsound MixerProvider (WASAPI-exclusive JavaSound mixers,
+                         the "EXCL:" device names) is a vendored jar discovered through
+                         the JavaSound SPI, so nothing compiles against it and the
+                         assembly's dependencySet cannot pull it in.  Unpack its classes
+                         (and its own META-INF/services registration) into this module's
+                         output BEFORE the jar is built, so the FAT jar carries them -
+                         the bare platform jars have no installer to stage lib/windows.
+                         The matching DLL rides along as a win32-* resource in
+                         backend-javasound.  Absent on non-Windows: never fail for it. -->
+                    <execution>
+                        <id>unpack-csjsound-provider</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <unzip src="${repo.root}/lib/windows/csjsound-provider.jar"
+                                       dest="${project.build.outputDirectory}"
+                                       failOnEmptyArchive="false">
+                                    <patternset>
+                                        <exclude name="META-INF/MANIFEST.MF"/>
+                                        <exclude name="META-INF/maven/**"/>
+                                    </patternset>
+                                </unzip>
+                            </target>
+                            <failOnError>false</failOnError>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>stage-jpackage-input</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <!-- jpackage REFUSES to overwrite an existing
+                                     app-image, so a second build in the same target/
+                                     fails unless the previous one is removed.  Done
+                                     here rather than only in the make-* scripts, so
+                                     a plain `mvn package` is repeatable too.  Quiet
+                                     and non-fatal: a running app-image can hold
+                                     runtime\lib\modules open on Windows, and that is
+                                     the user's problem to close, not a build error
+                                     to raise before jpackage has even spoken. -->
+                                <delete dir="${project.build.directory}/installer"
+                                        quiet="true" failonerror="false"/>
+                                <mkdir dir="${project.build.directory}/jpackage-input"/>
+                                <copy file="${project.build.directory}/${app.mainJar}"
+                                      todir="${project.build.directory}/jpackage-input"/>
+                                <copy todir="${project.build.directory}/jpackage-input/i18n">
+                                    <fileset dir="${project.build.directory}/i18n"/>
+                                </copy>
+                                <copy todir="${project.build.directory}/jpackage-input/help">
+                                    <fileset dir="${project.build.directory}/help"/>
+                                </copy>
+                                <!-- Windows natives live at the REPO root (lib/windows),
+                                     outside the PoC; tolerate their absence. -->
+                                <copy todir="${project.build.directory}/jpackage-input/lib/windows"
+                                      failonerror="false" quiet="true">
+                                    <fileset dir="${repo.root}/lib/windows" erroronmissingdir="false">
+                                        <include name="*.dll"/>
+                                        <exclude name="portaudio_x64.dll"/>
+                                    </fileset>
+                                    <fileset dir="${core.resources}/win32-x86-64" erroronmissingdir="false">
+                                        <include name="portaudio_x64.dll"/>
+                                    </fileset>
+                                </copy>
+                                <copy todir="${project.build.directory}/jpackage-input"
+                                      failonerror="false" quiet="true">
+                                    <fileset dir="${repo.root}/lib/windows" erroronmissingdir="false">
+                                        <include name="csjsound-provider.jar"/>
+                                    </fileset>
+                                </copy>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.panteleyev</groupId>
+                <artifactId>jpackage-maven-plugin</artifactId>
+                <configuration>
+                    <name>${app.name}</name>
+                    <appVersion>${app.version}</appVersion>
+                    <vendor>${app.vendor}</vendor>
+                    <destination>${project.build.directory}/installer</destination>
+                    <input>${project.build.directory}/jpackage-input</input>
+                    <mainJar>${app.mainJar}</mainJar>
+                    <mainClass>${app.mainClass}</mainClass>
+                    <type>${jpackage.type}</type>
+                    <javaOptions>
+                        <option>-Djava.library.path=${jpackage.libDir}</option>
+                        <option>-Djna.library.path=${jpackage.libDir}</option>
+                        <option>-Di18n.dir=$APPDIR/i18n</option>
+                        <option>-Dhelp.dir=$APPDIR/help</option>
+                    </javaOptions>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>jpackage</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jpackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- Per-platform jpackage configuration.  The OS-activated profiles in
+             phonalyser-parent carry only properties (jpackage.type, natives,
+             SWT artifact); everything the INSTALLER itself needs per platform -
+             icons, resource-dir templates, platform launcher options - lives
+             here, beside the one jpackage plugin that consumes it. -->
+        <profile>
+            <id>windows-jpackage</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                    <arch>amd64</arch>
+                </os>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <icon>${repo.root}/modules/phonalyser-gui/src/main/resources/icons/phonalyser.ico</icon>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Windows installer-only jpackage options.  The win-menu, win-shortcut,
+             win-menu-group and win-upgrade-uuid flags are rejected by jpackage
+             when the type is app-image.  The Windows release builds an app-image
+             (then makeappx to MSIX, see PACKAGING.md) via
+             -Djpackage.type=APP_IMAGE, so these flags MUST NOT be applied on
+             that path.  This profile activates ONLY on a plain Windows build
+             with NO -Djpackage.type override - the EXE installer - so
+             "mvn clean package" yields an EXE with a Start-menu entry while
+             -Djpackage.type=APP_IMAGE still builds a clean app-image.  (Maven
+             ANDs the two activation conditions.) -->
+        <profile>
+            <id>windows-installer-extras</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                    <arch>amd64</arch>
+                </os>
+                <property>
+                    <name>!jpackage.type</name>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <!-- Stable installer UpgradeCode: keeps every build part of the
+                                 same product line so a newer app.version performs a MAJOR
+                                 UPGRADE (removes the old, installs the new) instead of failing
+                                 with "Another version of this product is already installed".
+                                 NEVER change this GUID across releases; pair it with a strictly
+                                 increasing app.version (the installer ProductVersion). -->
+                            <winUpgradeUuid>dd3443af-6db7-442d-9fd3-dd39832a5ae5</winUpgradeUuid>
+                            <!-- Start-menu + Desktop shortcuts, with an installer dialog
+                                 letting the user choose whether to create them. -->
+                            <winMenu>true</winMenu>
+                            <winMenuGroup>Phonalyser</winMenuGroup>
+                            <winShortcut>true</winShortcut>
+                            <winShortcutPrompt>true</winShortcutPrompt>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>linux-jpackage</id>
+            <activation>
+                <os>
+                    <family>unix</family>
+                    <name>linux</name>
+                </os>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <icon>${repo.root}/modules/phonalyser-gui/src/main/resources/icons/phonalyser.png</icon>
+                            <!-- DEB maintainer-script overrides (phonalyser.postinst/.postrm):
+                                 install the QA40x udev rule (70-qa40x.rules) so the analyzer
+                                 opens without LIBUSB_ERROR_ACCESS.  jpackage token-substitutes
+                                 the scripts like its stock templates. -->
+                            <resourceDir>${repo.root}/src/main/jpackage/linux</resourceDir>
+                            <linuxPackageDeps>libusb-1.0-0</linuxPackageDeps>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>macos-jpackage</id>
+            <activation>
+                <os>
+                    <family>mac</family>
+                </os>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <icon>${repo.root}/modules/phonalyser-gui/src/main/resources/icons/phonalyser.icns</icon>
+                            <!-- Custom Info.plist template adding NSMicrophoneUsageDescription
+                                 so macOS prompts for mic access on first CoreAudio capture. -->
+                            <resourceDir>${repo.root}/src/main/jpackage/macos</resourceDir>
+                            <!-- SWT on macOS must run on the main thread. -->
+                            <javaOptions combine.children="append">
+                                <option>-XstartOnFirstThread</option>
+                            </javaOptions>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>csjsound-ide-debug</id>
+            <activation>
+                <property><name>m2e.version</name></property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>com.cleansine</groupId>
+                    <artifactId>csjsound-provider</artifactId>
+                    <version>1.0-SNAPSHOT</version>
+                    <scope>system</scope>
+                    <systemPath>${repo.root}/lib/windows/csjsound-provider.jar</systemPath>
+                </dependency>
+            </dependencies>
+        </profile>
+        <!-- jpackage is opt-out: `mvn -Dskip.jpackage=true package` builds only the
+             fat jar, which is what you want while iterating on the module split. -->
+        <profile>
+            <id>no-jpackage</id>
+            <activation>
+                <property>
+                    <name>skip.jpackage</name>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Docs -> PDF, unchanged from the single-module build; the converter
+             source still lives at the PoC root. -->
+        <profile>
+            <id>pdf</id>
+            <dependencies>
+                <dependency>
+                    <groupId>com.vladsch.flexmark</groupId>
+                    <artifactId>flexmark-all</artifactId>
+                    <version>0.64.8</version>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>add-pdf-tool-source</id>
+                                <phase>generate-sources</phase>
+                                <goals>
+                                    <goal>add-source</goal>
+                                </goals>
+                                <configuration>
+                                    <sources>
+                                        <source>${repo.root}/src/pdf-tool/java</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

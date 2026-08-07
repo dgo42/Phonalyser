@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — the oscilloscope settings strip (channel / filter / trigger /
+ * Phonalyser web - the oscilloscope settings strip (channel / filter / trigger /
  * V&T scale / presets / save / load / ADC-calibrate controls).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
@@ -7,7 +7,7 @@
  * Faithful port of gui/scope/ScopeTabControl. Owns the scope toolbar tabs and
  * their bound controls; reaches the scope PANE (canvas / scrollbars / record /
  * render loop, which stay in app.js) only through the narrow injected `host`
- * object — mirroring Java ScopeTabControl→ScopePane.Host (requestRedraw /
+ * object - mirroring Java ScopeTabControl->ScopePane.Host (requestRedraw /
  * applyViewState / stopCaptureForFileLoad / onSignalFileLoaded). The scope V/div
  * + t/div + hysteresis + save-duration NumericStepFields are built in app.js's
  * initStepFields and reached here via the injected getField; the io / format
@@ -17,14 +17,14 @@ import { t } from '../i18n/i18n.js';
 import { OscPreset } from '../store/preferences.js';
 // Direct import (not via the injected `io` seam, which app.js assembles): the
 // streaming-FLAC branch of the forward record lives with the codec in io/flac.js
-// (Java streams FLAC through StereoPcmIo.openSink → FlacWriter exactly like
+// (Java streams FLAC through StereoPcmIo.openSink -> FlacWriter exactly like
 // WAV/AIFF; the web streaming WAV/AIFF sinks stay in io/scope-capture.js, whose
 // openStreamingSink cannot host libFLAC's self-framing encoder).
 import { saveStreamingFlac } from '../io/flac.js';
 import { TileTabs } from '../widgets/tile-tabs.js';
 import { PresetBar } from '../widgets/preset-bar.js';
 
-/** FLAC exports are capped at 24 bits/sample EVERYWHERE in the web port — the
+/** FLAC exports are capped at 24 bits/sample EVERYWHERE in the web port - the
  *  WASM libFLAC reference encoder rejects 32-bit (encodeFlac's guard; Java's
  *  javaFlacEncoder-based FlacWriter accepts 16/24/32). WAV/AIFF keep 32-bit. */
 const FLAC_BIT_DEPTH = 24;
@@ -32,12 +32,23 @@ const FLAC_BIT_DEPTH = 24;
 /** WAV / AIFF scope exports are full 32-bit PCM (matches the ring's precision). */
 const PCM_BIT_DEPTH = 32;
 
+/** Minimum peak-to-peak signal, as a fraction of the ADC's full-scale p-p, for the calibrate
+ *  button to be active - below it the signal occupies too little of the converter's range and
+ *  the calibration would be dominated by quantisation and noise (Java
+ *  ScopePane.CALIBRATE_MIN_VPP_FRACTION). */
+const CALIBRATE_MIN_VPP_FRACTION = 0.25;
+
+/** The same floor for an UNCALIBRATED selection: enough to tell a signal from silence and no
+ *  more - see syncCalibrateEnabled for why the accuracy rule cannot apply there. 0.001 is
+ *  -60 dBFS p-p (Java ScopePane.CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED). */
+const CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED = 0.001;
+
 export class ScopeTabControl {
   /**
    * @param engine the AudioEngine (record state via host; ADC-cal reads the live scope view).
    * @param prefs  Preferences.
    * @param deps   {host, view, getField, io, WAV_TYPE, latestScope, showConfirm, setStatus}
-   *   - host: the narrow scope-PANE seam (Java ScopeTabControl.Host) —
+   *   - host: the narrow scope-PANE seam (Java ScopeTabControl.Host) -
    *       requestRedraw() (repaint a frozen / file-mode view: app.js refreshScopeFileMode),
    *       refreshTiles() (toolbarTabs.refreshTab: app.js refreshScopeTiles),
    *       refreshFields() (re-sync V/T fields after an auto-setup: app.js refreshScopeFields),
@@ -47,18 +58,18 @@ export class ScopeTabControl {
    *       renderMeasurementTable() / syncMeasButtons() (measurement-table header),
    *       recState() (=> scopeRec), stopCaptureForFileLoad() (stop live capture before a load),
    *       onSignalFileLoaded(decoded) (centre the view on the loaded signal + show the nav slider).
-   *   - view: the ScopeView (Java holds `view` as a field) — single-armed state, auto-setup,
+   *   - view: the ScopeView (Java holds `view` as a field) - single-armed state, auto-setup,
    *       latest measurement, the single-disarmed / settings-changed / file-back callbacks.
    *   - getField: (id) => the scope NumericStepField (built in app.js initStepFields).
    *   - io: {pickSaveTarget, writeToTarget, encodeFlac, saveScopeCapture, findFullPeriodWindow,
-   *          formatForName, readWav, readAiff, decodeFlac} — the file save / load collaborators.
+   *          formatForName, readWav, readAiff, decodeFlac} - the file save / load collaborators.
    *   - WAV_TYPE: the save-picker accept descriptor (shared with the generator save).
    *   - latestScope: () => the latest live scope frame {buf, info} (Save reads the ring snapshot).
-   *   - showConfirm: (title, message) => Promise<boolean> — the shared Bootstrap confirm modal.
+   *   - showConfirm: (title, message) => Promise<boolean> - the shared Bootstrap confirm modal.
    *   - setStatus: (msg) => set the status line.
    */
   constructor(engine, prefs, { host, view, getField, io, WAV_TYPE, latestScope,
-    showConfirm, setStatus, calibrationDialog }) {
+    showConfirm, setStatus, calibrationDialog, inputUncalibrated }) {
     this.engine = engine;
     this.prefs = prefs;
     this.host = host;
@@ -70,8 +81,13 @@ export class ScopeTabControl {
     this._showConfirm = showConfirm;
     this._setStatus = setStatus;
     // The unified ADC/DAC calibration dialog (Java CalibrationDialog), late-bound
-    // (built after this control) — () => the shared dialog instance.
+    // (built after this control) - () => the shared dialog instance.
     this._calibrationDialog = calibrationDialog;
+    // Whether the current INPUT selection would be measured with no real calibration (Java
+    // CalibrationStore.isUncalibrated) - the one thing that drops the calibrate gate's accuracy
+    // threshold, see syncCalibrateEnabled. Absent => treat everything as calibrated, which is
+    // the gate this control has always applied.
+    this._inputUncalibrated = inputUncalibrated || (() => false);
     // A pre-picked target (Browse) is held here so Save writes straight to it; if the
     // user clicks Save without browsing first, Save opens the picker inline. A request
     // longer than the capture ring records FORWARD to disk in real time
@@ -99,7 +115,7 @@ export class ScopeTabControl {
     });
   }
 
-  /** Pushes every scope pref into its control widget — the init seed and the
+  /** Pushes every scope pref into its control widget - the init seed and the
    *  preset-load mirror-back (Java applyOscPreset re-syncs the widgets via the
    *  two-way bindings). Step-field setValue() is guarded since the fields are
    *  built in initStepFields. */
@@ -120,7 +136,7 @@ export class ScopeTabControl {
     $('#scopeRightLpf').val(prefs.oscRightLpf.get());
     this.trigGroupSet('scopeTrigCh', prefs.oscTriggerChannel.get());
     this.trigGroupSet('scopeTrigEdge', prefs.oscTriggerEdge.get());
-    // Glitch in AUTO makes no sense — normalize a persisted GLITCH+AUTO combo back to
+    // Glitch in AUTO makes no sense - normalize a persisted GLITCH+AUTO combo back to
     // EDGE at seed time (Java buildTriggerGroup build-time normalization), then seed
     // the E/G type group and gate G on the trigger mode.
     if (prefs.oscTriggerMode.get() === 'AUTO' && prefs.oscTriggerType.get() === 'GLITCH') {
@@ -151,9 +167,9 @@ export class ScopeTabControl {
     this.host.syncMeasButtons();
     // Initial enable-gate for the Reconstructed-beat checkbox: Java buildTriggerGroup
     // sets reconstructedBeatBtn.setEnabled(isGeneratorDualTone()) at build time, so the
-    // initial state must match the current generator form (single-tone → greyed).
+    // initial state must match the current generator form (single-tone -> greyed).
     this.host.syncReconstructedBeatEnabled();
-    this.syncScopeSaveEnabled();   // #2: Save disabled until a target is chosen this session
+    this.syncScopeSaveEnabled();   // Save disabled until a target is chosen this session
     this.host.refreshTiles();   // tiles mirror the seeded settings (Java toolbarTabs tiles)
   }
 
@@ -184,7 +200,7 @@ export class ScopeTabControl {
     const right = bufR.subarray(start, start + n);
     if (this.io.formatForName(name) === 'FLAC') {
       // The WASM libFLAC reference encoder supports only up to 24 bits/sample
-      // (init returns INVALID_BITS_PER_SAMPLE and writes NOTHING at 32-bit — the
+      // (init returns INVALID_BITS_PER_SAMPLE and writes NOTHING at 32-bit - the
       // 0-byte-file bug). WAV/AIFF keep the full 32-bit export above; FLAC caps at
       // 24-bit. (Java's javaFlacEncoder accepts 32-bit; the browser codec can't.)
       const flacBits = FLAC_BIT_DEPTH;
@@ -198,11 +214,11 @@ export class ScopeTabControl {
   /**
    * Records {@code totalFrames} of LIVE capture straight to {@code target} in real
    * time (for captures longer than the ring buffer), showing a FLOATING non-modal
-   * progress window with a Cancel — the user keeps watching the scope / FFT while
+   * progress window with a Cancel - the user keeps watching the scope / FFT while
    * it records. Acquires its own capture reference for the duration (opening the
    * device if the scope isn't already recording), streams via
    * StereoPcmIo.saveStreaming (WAV / AIFF) or the flac.js streaming encoder
-   * (.flac — Java routes all three through StereoPcmIo.openSink, ~line 71), and
+   * (.flac - Java routes all three through StereoPcmIo.openSink, ~line 71), and
    * releases when done / cancelled / errored.
    * Faithful port of ScopeTabControl.startStreamingSave (~line 1217).
    *
@@ -217,8 +233,7 @@ export class ScopeTabControl {
     // the FS Access handle (anchor-download fallback) there is no incremental disk
     // sink, so this path needs a real picked file handle.
     if (!target.handle) {
-      setStatus(t('scope.save.error') + ': '
-        + 'streaming record needs the File System Access API (a real save file).');
+      setStatus(t('scope.save.error') + ': ' + t('web.scope.save.needsFileHandle'));
       return;
     }
     // Acquire a forward-read capture cursor, opening the device if the scope isn't
@@ -255,7 +270,7 @@ export class ScopeTabControl {
           (written / ringRate).toFixed(1), totalSeconds.toFixed(1)));
       };
       // .flac routes to the libFLAC streaming encoder (scope-capture's
-      // openStreamingSink has no FLAC sink and would throw — the old
+      // openStreamingSink has no FLAC sink and would throw - the old
       // "progress window closes instantly, no file" bug); WAV / AIFF keep
       // the header-patching streaming writers.
       if (this.io.formatForName(target.name) === 'FLAC') {
@@ -335,7 +350,7 @@ export class ScopeTabControl {
     prefs.oscTriggerType.set(p.triggerType || 'EDGE');
     prefs.oscTriggerMode.set(p.triggerMode);
     this.host.syncTriggerStart();
-    // Fractions — overwrite the values the scale listeners would have clobbered.
+    // Fractions - overwrite the values the scale listeners would have clobbered.
     // Goes last so the preset wins (Java applyOscPreset).
     prefs.oscLeftOffsetFrac.set(p.leftOffsetFrac);
     prefs.oscRightOffsetFrac.set(p.rightOffsetFrac);
@@ -345,23 +360,35 @@ export class ScopeTabControl {
     // Mirror everything back into the controls.
     this.seedScopeControls();
   }
-  /** Repopulates the preset dropdown + chip + button enablement — delegates to the shared
+  /** Repopulates the preset dropdown + chip + button enablement - delegates to the shared
    *  PresetBar. Kept as a named method for app.js init. */
   refreshOscPresetList() { this._presetBar.refreshList(); }
 
-  /** Save is enabled only once a target has been chosen this session (#2): the
+  /** Save is enabled only once a target has been chosen this session: the
    *  two-button flow means Save writes to the pre-picked target silently and never
    *  re-opens the picker, so with no live file handle there is nowhere to write. */
   syncScopeSaveEnabled() {
     $('#scopeSaveGo').prop('disabled', !this.pendingScopeSaveTarget);
   }
 
-  /** Calibrate is enabled only with a live capture and a signal ≥ 25 % of full
-   *  scale p-p (Java setCalibrateEnabled gate). */
+  /** Calibrate is enabled only with a live capture and a signal >= 25 % of full
+   *  scale p-p (Java setCalibrateEnabled gate).
+   *
+   *  <p>Except on an UNCALIBRATED selection, where the threshold drops to a floor that only
+   *  separates a signal from silence (Java ScopePane.CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED).
+   *  The 25 % rule presumes a full scale worth measuring against; an uncalibrated selection is
+   *  exactly the case where there is none - the volts on screen are a provisional full scale
+   *  times a normalized reading, so the operator cannot see how far off the threshold they are,
+   *  and the calibration being refused is what would make the number real. The correction
+   *  (newFs = currentFs x known / measured) reaches the same answer from any seed, so a small
+   *  reading costs accuracy, not correctness. */
   syncCalibrateEnabled() {
     const m = this.view.latest;
     const fsPp = this.prefs.adcFsVoltageRms.get() * Math.SQRT2 * 2;
-    const ok = this.host.recState() && m && m.vpp > 0 && fsPp > 0 && m.vpp >= 0.25 * fsPp;
+    const minFraction = this._inputUncalibrated()
+      ? CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED : CALIBRATE_MIN_VPP_FRACTION;
+    const ok = this.host.recState() && m && m.vpp > 0 && fsPp > 0
+      && m.vpp >= minFraction * fsPp;
     $('#scopeCalibrate').prop('disabled', !ok);
   }
 
@@ -373,10 +400,10 @@ export class ScopeTabControl {
     const getField = (id) => this._getField(id);
     const setStatus = (m) => this._setStatus(m);
 
-    // Scope tile-tabs — Left/Right/Horizontal/Trigger own their control panels (Java TileTabFolder).
+    // Scope tile-tabs - Left/Right/Horizontal/Trigger own their control panels (Java TileTabFolder).
     new TileTabs('#scopeTabs').bind();
 
-    // Scope control panels (Java ScopeTabControl) → the osc* prefs the scope view reads.
+    // Scope control panels (Java ScopeTabControl) -> the osc* prefs the scope view reads.
     // Channel-enable + AC coupling are square toggle BUTTONS (Java squareToggle):
     // click flips the .active class and writes the bound pref.
     $('#scopeLeftEnable').on('click', function () { const on = !$(this).hasClass('active'); $(this).toggleClass('active', on); prefs.oscLeftChannelEnabled.set(on); host.refreshTiles(); host.requestRedraw(); });
@@ -385,12 +412,12 @@ export class ScopeTabControl {
     $('#scopeRightAc').on('click', function () { const on = !$(this).hasClass('active'); $(this).toggleClass('active', on); prefs.oscRightAcMode.set(on); host.refreshTiles(); host.requestRedraw(); });
     $('#scopeLeftSinc').on('change', () => { prefs.oscLeftSincInterpEnabled.set($('#scopeLeftSinc').is(':checked')); host.refreshTiles(); host.requestRedraw(); });
     $('#scopeRightSinc').on('change', () => { prefs.oscRightSincInterpEnabled.set($('#scopeRightSinc').is(':checked')); host.refreshTiles(); host.requestRedraw(); });
-    // Residual view (Java oscLeft/RightResidualEnabled onChange → controller.redrawViews +
+    // Residual view (Java oscLeft/RightResidualEnabled onChange -> controller.redrawViews +
     // toolbarTabs.refreshTab): subtract the best-fit tone and draw only the residual.
     $('#scopeLeftResidual').on('change', () => { prefs.oscLeftResidualEnabled.set($('#scopeLeftResidual').is(':checked')); host.refreshTiles(); host.requestRedraw(); });
     $('#scopeRightResidual').on('change', () => { prefs.oscRightResidualEnabled.set($('#scopeRightResidual').is(':checked')); host.refreshTiles(); host.requestRedraw(); });
     // Per-channel mains-suppression + LPF combos (Java oscLeft/RightMainsSuppression /
-    // oscLeft/RightLpf) — the scope view applies them to the active channel's buffer
+    // oscLeft/RightLpf) - the scope view applies them to the active channel's buffer
     // before the trigger search + trace.
     $('#scopeLeftMains').on('change', () => { prefs.oscLeftMainsSuppression.set($('#scopeLeftMains').val()); host.requestRedraw(); });
     $('#scopeRightMains').on('change', () => { prefs.oscRightMainsSuppression.set($('#scopeRightMains').val()); host.requestRedraw(); });
@@ -398,7 +425,7 @@ export class ScopeTabControl {
     $('#scopeRightLpf').on('change', () => { prefs.oscRightLpf.set($('#scopeRightLpf').val()); host.requestRedraw(); });
 
     // Channel / edge / type changes drop the held trigger anchor (Java onChange
-    // listeners → view.resetTriggerHold + controller.redrawViews): the old anchor
+    // listeners -> view.resetTriggerHold + controller.redrawViews): the old anchor
     // belongs to the OLD trigger source and would keep re-rendering a stale trace.
     // NORMAL / SINGLE then stay blank until the new trigger fires.
     this.wireTrigGroup('scopeTrigCh', (v) => {
@@ -412,7 +439,7 @@ export class ScopeTabControl {
       host.requestRedraw();
     });
     // Trigger event type: E = level-crossing edge trigger, G = dV/dt glitch trigger
-    // (dropped-sample DAC gaps). The ↑/↓ edge selection applies to both — crossing
+    // (dropped-sample DAC gaps). The ↑/↓ edge selection applies to both - crossing
     // direction vs. glitch start/end anchor.
     this.wireTrigGroup('scopeTrigType', (v) => {
       prefs.oscTriggerType.set(v); host.refreshTiles();
@@ -421,7 +448,7 @@ export class ScopeTabControl {
     });
     this.wireTrigGroup('scopeTrigMode', (v) => {
       prefs.oscTriggerMode.set(v);
-      // Glitch in AUTO makes no sense — free-run repaints at the render rate, so a
+      // Glitch in AUTO makes no sense - free-run repaints at the render rate, so a
       // caught glitch frame would be overwritten immediately. Selecting AUTO flips
       // the type back to EDGE, and G stays disabled until NORMAL / SINGLE (Java
       // oscTriggerModeProperty listener).
@@ -443,8 +470,8 @@ export class ScopeTabControl {
       if (fTH) fTH.setDisabled(!on);
       host.refreshTiles();
     });
-    // Reconstructed-beat overlay (oscShowReconstructedBeat) — gated to dual-tone form.
-    // Java binds oscShowReconstructedBeat with onChange→requestRedraw so the overlay toggles
+    // Reconstructed-beat overlay (oscShowReconstructedBeat) - gated to dual-tone form.
+    // Java binds oscShowReconstructedBeat with onChange->requestRedraw so the overlay toggles
     // immediately in file / frozen mode (the live render loop is idle then).
     $('#scopeTrigBeat').on('change', () => { prefs.oscShowReconstructedBeat.set($('#scopeTrigBeat').is(':checked')); host.requestRedraw(); });
     // SINGLE-mode Start button: arms one shot (the scope view freezes on the next
@@ -455,7 +482,7 @@ export class ScopeTabControl {
       view.setSingleArmed(arm);
     });
     view.onSingleDisarmed = () => $('#scopeTrigStart').removeClass('active armed');
-    // Canvas wheel-zoom (V/div, t/div) and pan changed osc* prefs directly — re-sync the
+    // Canvas wheel-zoom (V/div, t/div) and pan changed osc* prefs directly - re-sync the
     // numeric fields and the tab tiles that mirror them.
     view.onSettingsChanged = () => { host.refreshFields(); host.refreshTiles(); host.requestRedraw(); };
     // File-mode horizontal navigation from the canvas wheel (Shift+wheel pan, Ctrl+Shift
@@ -464,31 +491,31 @@ export class ScopeTabControl {
     // (Java ScopePane.stepHorizontalOffset / applyViewState).
     view.onFileBack = (back) => host.onFileBack(back);
 
-    // Scope view header button (Java SCOPE_AUTO_SETUP) — range V/div + t/div + centre to the signal.
+    // Scope view header button (Java SCOPE_AUTO_SETUP) - range V/div + t/div + centre to the signal.
     // refreshScopeFileMode() repaints in file mode (no live loop), so the fit shows on a loaded signal.
     $('#scopeAutoSetup').on('click', () => { view.autoSetup(); host.refreshFields(); host.refreshTiles(); host.requestRedraw(); });
 
-    // Save name: persist the typed file name (extension included → format) into
-    // oscSavePath (Java openScopeSaveBrowse → setOscSavePath persists the full save
+    // Save name: persist the typed file name (extension included -> format) into
+    // oscSavePath (Java openScopeSaveBrowse -> setOscSavePath persists the full save
     // path, extension included).
     $('#scopeSaveName').on('change', () => {
       prefs.oscSavePath.set($('#scopeSaveName').val() || 'scope.wav');
       prefs.save();
     });
 
-    // ----- Scope "Save to…" / "Load signal…" -----
+    // ----- Scope "Save to..." / "Load signal..." -----
     // Faithful to Java ScopeTabControl.buildScopeSaveToGroup: a read-only path field
     // + Browse (Save-As picker: "Choose target") + duration + Save. TWO separate
-    // buttons (#2): Browse ONLY picks + stores the destination (openScopeSaveBrowse);
+    // buttons: Browse ONLY picks + stores the destination (openScopeSaveBrowse);
     // Save writes to the already-chosen target WITHOUT re-prompting (doScopeSave reads
     // pathField.getText() and never re-opens the picker). Save stays disabled until a
-    // target has been chosen this session — the browser needs a live file HANDLE to
+    // target has been chosen this session - the browser needs a live file HANDLE to
     // write silently (a persisted path string alone can't be written without a picker).
     // The chosen file's EXTENSION derives the format (WAV / FLAC / AIFF) via
-    // formatForName — no format dropdown.
+    // formatForName - no format dropdown.
 
     // Browse = "Choose target": pick the destination file up-front so its real
-    // extension drives the format (Java openScopeSaveBrowse → FileDialog SWT.SAVE).
+    // extension drives the format (Java openScopeSaveBrowse -> FileDialog SWT.SAVE).
     // Mirror the chosen name back into the path field + oscSavePath, HOLD the target
     // for the Save click, and enable Save. Does NOT write anything.
     $('#scopeSaveBrowse').on('click', async () => {
@@ -510,7 +537,7 @@ export class ScopeTabControl {
     $('#scopeSaveGo').on('click', async () => {
       if (!this._latestScope()) return;
       try {
-        // Save writes to the ALREADY-CHOSEN target silently — it does NOT re-prompt
+        // Save writes to the ALREADY-CHOSEN target silently - it does NOT re-prompt
         // (mirror of Java doScopeSave: reads pathField.getText(); if empty shows the
         // "pick first" info and returns, never opening the picker). If no target was
         // chosen this session, surface the message and stop.
@@ -518,8 +545,8 @@ export class ScopeTabControl {
         if (!target) { setStatus(t('scope.save.pickFirst')); return; }
         $('#scopeSaveName').val(target.name);
         prefs.oscSavePath.set(target.name); prefs.save();
-        // Not a loaded file AND (the scope isn't recording — so there's no ring to
-        // dump — OR the request is longer than the ring can hold) ⇒ record FORWARD
+        // Not a loaded file AND (the scope isn't recording - so there's no ring to
+        // dump - OR the request is longer than the ring can hold) => record FORWARD
         // to disk in real time (streaming). Otherwise dump the most-recent N seconds
         // instantly (ScopeFileSaver). Faithful to doScopeSave (~line 1188):
         //   long requestedFrames = Math.max(1L, Math.round(durationSeconds * sampleRate));
@@ -532,7 +559,7 @@ export class ScopeTabControl {
         const info = this._latestScope().info;
         const sampleRate = info.inRate;
         // Bit depth by target format: FLAC saves route at 24-bit EVERYWHERE (the
-        // WASM encoder rejects 32-bit — handing 32 to the streaming path used to
+        // WASM encoder rejects 32-bit - handing 32 to the streaming path used to
         // kill the save); WAV/AIFF keep the full 32-bit export (encodeScopeSave).
         const bitDepth = io.formatForName(target.name) === 'FLAC'
           ? FLAC_BIT_DEPTH : PCM_BIT_DEPTH;
@@ -544,14 +571,17 @@ export class ScopeTabControl {
           return;
         }
         // Instant dump of the most-recent N seconds from the capture ring (clamped to
-        // the ring length) — ScopeFileSaver.save.
+        // the ring length) - ScopeFileSaver.save.
         const bytes = await this.encodeScopeSave(target.name);
         const res = await io.writeToTarget(target, bytes, 'audio/wav');
-        if (res.saved) setStatus('saved ' + res.name);
+        if (res.saved) {
+          setStatus(res.viaDownload
+            ? t('web.save.handedToDownload', res.name) : 'saved ' + res.name);
+        }
       } catch (e) { setStatus(t('scope.save.error') + ': ' + ((e && e.message) || String(e))); }
     });
 
-    // #scopeLoadGo is now a Bootstrap custom-file <input type=file> (item 3); load on
+    // #scopeLoadGo is a Bootstrap custom-file <input type=file>; load on
     // its change event and read the chosen File into the {name, bytes} shape the
     // decode path below expects. The visible file label echoes the chosen name.
     $('#scopeLoadGo').on('change', async (ev) => {
@@ -580,8 +610,8 @@ export class ScopeTabControl {
         // File mode: a static loaded signal free-runs with no trigger search / overlay.
         view.fileMode = true;
         // A loaded file has no trigger; SINGLE (unarmed) would render nothing, so
-        // switch to AUTO on load — file mode ignores the trigger anyway (Java
-        // ScopeOpenSignal.loadFile → setOscTriggerMode(AUTO)). AUTO forces the
+        // switch to AUTO on load - file mode ignores the trigger anyway (Java
+        // ScopeOpenSignal.loadFile -> setOscTriggerMode(AUTO)). AUTO forces the
         // trigger type back to EDGE (the mode-listener rule).
         prefs.oscTriggerMode.set('AUTO');
         if (prefs.oscTriggerType.get() === 'GLITCH') prefs.oscTriggerType.set('EDGE');
@@ -591,15 +621,15 @@ export class ScopeTabControl {
         host.refreshTiles();
         host.setTriggerControlsEnabled(false);
         prefs.oscPlayFromPath.set(f.name); prefs.save();   // Java doOpenSignalBrowse persists the load path
-        $('#scopeLoadedPath').val(f.name).attr('title', f.name);   // #15 readonly last-loaded-file field
-        // A signal file finished loading → centre the view on its start, show the nav
-        // slider (file mode) and apply the view state — pane state (Java host.onSignalFileLoaded).
+        $('#scopeLoadedPath').val(f.name).attr('title', f.name);   // readonly last-loaded-file field
+        // A signal file finished loading -> centre the view on its start, show the nav
+        // slider (file mode) and apply the view state - pane state (Java host.onSignalFileLoaded).
         host.onSignalFileLoaded({ left, right, frames, sampleRate: dec.sampleRate, name: f.name });
-        setStatus(`loaded ${f.name} — ${frames} frames @ ${dec.sampleRate} Hz`);
+        setStatus(`loaded ${f.name} - ${frames} frames @ ${dec.sampleRate} Hz`);
       } catch (e) { setStatus(t('scope.openSignal.error') + ': ' + e.message); }
     });
 
-    // ----- Scope Presets (Java ScopeTabControl → PresetBar<OscPreset>) -----
+    // ----- Scope Presets (Java ScopeTabControl -> PresetBar<OscPreset>) -----
     this._presetBar = new PresetBar({
       ids: { name: '#scopePresetName', save: '#scopePresetSave', load: '#scopePresetLoad',
         delete: '#scopePresetDelete', menu: '#scopePresetMenu', menuBtn: '#scopePresetMenuBtn' },

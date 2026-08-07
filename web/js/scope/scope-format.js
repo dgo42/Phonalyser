@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -8,10 +8,10 @@
 // org.edgo.audio.measure.gui.scope.ScopeFormat (the @UtilityClass).
 //
 // Only the SWT-/Preferences-free transform helpers the pan/zoom engine
-// (scope-nav.js) needs are ported here — the V/div ladder math, the
+// (scope-nav.js) needs are ported here - the V/div ladder math, the
 // offset re-anchoring on zoom, and the sample/division mappings. The Java
 // class's string-format and SWT-colour helpers (formatVolts, formatSeconds,
-// midRgb, shortVoltsPerDiv, …) belong to the renderer and are intentionally
+// midRgb, shortVoltsPerDiv, ...) belong to the renderer and are intentionally
 // NOT ported into this nav-math module.
 
 /** Relative tolerance for matching / comparing a V/div value against a 1-2-5 rung
@@ -26,7 +26,7 @@ export function clamp01(v) {
 }
 
 /**
- * Mean of `data` over [start, start+count) — used for AC-mode DC removal
+ * Mean of `data` over [start, start+count) - used for AC-mode DC removal
  * (ScopeFormat.windowMean). Returns 0 for an empty/absent window.
  * @param {Float32Array|Float64Array|number[]} data
  * @param {number} start
@@ -55,7 +55,7 @@ export function ceilToStep(value, targets) {
 /**
  * Number of samples the main view shows for a `timePerDiv` (seconds) and the
  * buffer's `sampleRate` (Hz). The display spans 10 horizontal divisions, so
- * windowSeconds = 10 · timePerDiv → samples = round(windowSeconds · sampleRate),
+ * windowSeconds = 10 · timePerDiv -> samples = round(windowSeconds · sampleRate),
  * floored at 2 (ScopeFormat.displaySamplesFor).
  * @param {number} timePerDiv seconds per division
  * @param {number} sampleRate Hz
@@ -85,7 +85,7 @@ export function anchorOffsetAfterZoom(offsetFrac, oldVpdiv, newVpdiv, anchorFrac
 
 /**
  * The `offsetFrac` that, after the V/div changes from `oldVpdiv` to `newVpdiv`,
- * keeps the same voltage at the canvas vertical centre — the anchorFrac = 0.5 case
+ * keeps the same voltage at the canvas vertical centre - the anchorFrac = 0.5 case
  * (ScopeFormat.preserveCanvasMiddle).
  * @param {number} offsetFrac
  * @param {number} oldVpdiv
@@ -149,16 +149,16 @@ function exceedsCeil(dir, v, vDivMax) {
  * Couples both channels' V/div for one zoom step so they ALWAYS keep their ratio:
  * one channel (the base) snaps to its next 1-2-5 rung and the other scales by that
  * same factor (so a follower may land off the rule).
- *   - Both on the 1-2-5 rule → the base is whichever choice leaves the SCALED
+ *   - Both on the 1-2-5 rule -> the base is whichever choice leaves the SCALED
  *     channel nearest a rung (smallest absolute distance).
- *   - One off the rule → the on-rule channel is the base; both off → the one
+ *   - One off the rule -> the on-rule channel is the base; both off -> the one
  *     nearest its next rung in the zoom direction (smallest |ln(ratio)|).
  * An inactive channel is signalled by a non-positive V/div and returned unchanged;
  * a blocked zoom-out (would exceed the channel's ceiling) returns the inputs.
  * (ScopeFormat.coupleVoltsPerDivZoom.)
  *
  * Per-channel ceilings (Java ScopeFormat.coupleVoltsPerDivZoom two-ceiling overload):
- * each channel's zoom-out is capped at its OWN FS-fills-height rung — the ceiling is a
+ * each channel's zoom-out is capped at its OWN FS-fills-height rung - the ceiling is a
  * pure function of that channel's full-scale, so it simply stops being shared; the
  * block stays coupled. `rightMax` defaults to `leftMax` so equal L/R full-scales
  * (LINKED) are byte-for-byte the single-ceiling behaviour.
@@ -237,7 +237,7 @@ export function offsetMoveHalfRange(vDiv, peakVolts, divisionsY) {
 
 /**
  * Clamps a vertical-move `delta` (in offsetFrac units) so the channel's zero line
- * stays within its offsetMoveHalfRange band — i.e. you can pan the signal only until
+ * stays within its offsetMoveHalfRange band - i.e. you can pan the signal only until
  * its ±FS extreme reaches the canvas middle (ScopeFormat.clampOffsetDelta).
  * @param {number} delta
  * @param {number} offsetFrac

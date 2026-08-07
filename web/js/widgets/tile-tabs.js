@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -15,9 +15,9 @@
 // A tile declares the id of the panel it owns in `data-panel` (empty/absent for a
 // non-panel tile, which then only sets active). The folder's owned panel set is
 // DERIVED from its tiles' data-panel targets, so Save / Load / Calibration panels
-// close along with the rest — the earlier per-pane hand-maintained ID lists drifted
+// close along with the rest - the earlier per-pane hand-maintained ID lists drifted
 // (one omitted Save/Load and they stacked open). Replaces the three duplicated
-// `$('#…Tabs .tab').on('click', …)` handlers (fft / scope / freqresp).
+// `$('#...Tabs .tab').on('click', ...)` handlers (fft / scope / freqresp).
 
 export class TileTabs {
   /**

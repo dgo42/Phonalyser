@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — the card create / edit dialog (Java CardEditorDialog).
+ * Phonalyser web - the card create / edit dialog (Java CardEditorDialog).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  *
@@ -18,7 +18,7 @@ import {
 
 export class CardEditorDialog {
   /**
-   * @param deps {showConfirm} — the shared confirm modal (title, message) => Promise<boolean>,
+   * @param deps {showConfirm} - the shared confirm modal (title, message) => Promise<boolean>,
    *   used for the drop-calibrated-ranges warning on a direction reduction.
    */
   constructor({ showConfirm }) {

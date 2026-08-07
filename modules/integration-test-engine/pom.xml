@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  integration-test-engine - whole-system integration tests.
+
+  TEST-ONLY.  No production artefact leaves this module: src/main/java does not
+  exist, and the jar it builds is empty by construction.  Everything lives under
+  src/test.
+
+  THE SANCTIONED CLASSPATH EXCEPTION.  This is the ONE module allowed to see
+  server-net and the desktop client modules at the same time.  Everywhere else
+  that pairing is forbidden, and for a good reason: a client artefact must never
+  be able to reach server classes.  Here it cannot cause that harm, because
+  nothing production ships from this module and - more to the point - the system
+  under test does not run on this class path at all.  The two test-scope
+  dependencies below exist so that dependency:build-classpath can WRITE OUT a
+  class path file; the engine then feeds that file to a freshly spawned
+  ${java.home}/bin/java.  The GUI and the server each run in their own child JVM,
+  exactly as an operator runs them, which is the truer integration anyway.
+
+  That one shared class path file carries both GuiMain and ServerMain.  Harmless
+  for the same reason: it is a TEST class path, handed to child processes that
+  each start only their own main class.
+
+  Listed LAST in ../pom.xml - it must build after everything it spawns.
+
+  The integration tests do NOT run in an ordinary build.  Failsafe is declared
+  only inside the `integration` profile below, so `mvn test` and `mvn package`
+  have nothing to run here at all:
+
+      mvn -P integration verify -pl modules/integration-test-engine -am
+
+  Tiers are JUnit tags, selected with -Dit.groups (default: user-mode, the tier
+  that needs no drivers and runs on every OS).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.2.0</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>integration-test-engine</artifactId>
+    <packaging>jar</packaging>
+
+    <name>Phonalyser :: integration test engine</name>
+    <description>Whole-system integration tests: spawns the real GUI and the real server as child JVMs</description>
+
+    <properties>
+        <!-- Failsafe and Surefire are released in lockstep and share a version
+             line; pinning the same number keeps the two JUnit runners on one
+             platform version. -->
+        <failsafe.plugin.version>${surefire.plugin.version}</failsafe.plugin.version>
+        <dependency.plugin.version>3.6.1</dependency.plugin.version>
+        <!-- The tier to run.  user-mode needs no drivers and no hardware, so it
+             is the default everywhere; usbip / windows-usbip are later phases. -->
+        <it.groups>user-mode</it.groups>
+    </properties>
+
+    <dependencies>
+        <!-- The whole desktop closure, for the class path file only (see the
+             header): this is what a spawned GuiMain needs to start. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-app</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- The headless server, likewise for the class path file only: this is
+             what a spawned ServerMain needs. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>server-net</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <profiles>
+        <profile>
+            <id>integration</id>
+            <build>
+                <plugins>
+                    <!-- Writes the resolved TEST class path to a file the engine
+                         reads at run time and hands to the child JVMs.  Maven
+                         resolution plus -am is what makes this correct; guessing
+                         at sibling target/ directories would not be. -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <version>${dependency.plugin.version}</version>
+                        <executions>
+                            <execution>
+                                <id>write-it-classpath</id>
+                                <phase>pre-integration-test</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <includeScope>test</includeScope>
+                                    <outputFile>${project.build.directory}/it-cp.txt</outputFile>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>${failsafe.plugin.version}</version>
+                        <configuration>
+                            <includes>
+                                <include>**/*IT.java</include>
+                            </includes>
+                            <groups>${it.groups}</groups>
+                            <!-- Audio devices are exclusive and the mock card is
+                                 shared on purpose in some scenarios; sharing it
+                                 must always be the scenario's decision, never a
+                                 scheduling accident. -->
+                            <forkCount>1</forkCount>
+                            <reuseForks>false</reuseForks>
+                            <systemPropertyVariables>
+                                <!-- The SAME rule phonalyser-parent states for
+                                     Surefire, and for the same reason: a test
+                                     never reads or writes anything outside its
+                                     own module's target/.  Failsafe does not
+                                     inherit that configuration, and without
+                                     these two the failsafe JVM's log4j writes a
+                                     logs/ folder into the module directory.
+                                     Both absolute - a relative path would
+                                     resolve against whatever working directory
+                                     the runner happened to pick. -->
+                                <app.data.dir>${project.build.directory}/it-engine-data</app.data.dir>
+                                <app.log.dir>${project.build.directory}/it-engine-logs</app.log.dir>
+                                <it.classpath.file>${project.build.directory}/it-cp.txt</it.classpath.file>
+                                <it.work.root>${project.build.directory}/it</it.work.root>
+                                <it.repo.root>${project.basedir}/../..</it.repo.root>
+                            </systemPropertyVariables>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>run-integration-tests</id>
+                                <goals>
+                                    <!-- verify is what turns a red IT into a red
+                                         BUILD after the teardown has run. -->
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

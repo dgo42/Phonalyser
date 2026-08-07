@@ -1,0 +1,4 @@
+# Test-only: the net carrier's catalogue, so the QA40x card sync can ask what the
+# remote analyzer is called.  backend-net is not a dependency of this module, so
+# this claim on AudioBackendType.NET is uncontested and never reaches a jar.
+org.edgo.audio.measure.gui.backend.qa40x.StubNetBackendProvider

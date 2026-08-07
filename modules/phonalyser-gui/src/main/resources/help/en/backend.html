@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser - Audio backends</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Audio backends</h1>
+  <p>A backend is the application's route to a converter: the engine that opens
+     the device, moves the samples and reports the errors.  It is chosen under
+     <a href="preferences.html">Preferences ▸ Audio</a>, and which backends the
+     list offers depends on the operating system.  How a backend works inside -
+     callbacks, ring buffers, exclusive modes - is described in
+     <a href="theory/audio-backend.html">Theory ▸ Audio backend</a>; this page
+     is the practical half: what exists where, and what the application does to
+     the hardware volume on your behalf.</p>
+
+  <h2 id="backend-list">Which backend on which system</h2>
+  <table class="controls">
+    <tr><th>Backend</th><th>OS</th><th>Notes</th></tr>
+    <tr><td><b>WASAPI exclusive</b></td><td>Windows</td>
+        <td>The <code>EXCL:</code> devices - bit-exact exclusive mode through
+            the csjsound provider, and the route to the high sample rates.
+            Needs the csjsound natives beside the application.</td></tr>
+    <tr><td><b>WDM-KS</b></td><td>Windows</td>
+        <td>Kernel streaming through PortAudio - low latency, callback
+            driven.</td></tr>
+    <tr><td><b>JavaSound (shared)</b></td><td>Windows</td>
+        <td>The system mixer's shared mode - always available, resampled by
+            Windows, and therefore the fallback rather than the measurement
+            route.</td></tr>
+    <tr><td><b>ALSA</b></td><td>Linux</td>
+        <td>JavaSound over the card's <code>plughw</code> device - direct card
+            access, one opener at a time.  Port names and jack detection come
+            from alsa-utils.</td></tr>
+    <tr><td><b>CoreAudio</b></td><td>macOS</td>
+        <td>PortAudio over the CoreAudio HAL.  Sample-rate lists are read from
+            the device's own declared formats, not probed through the OS
+            converter.</td></tr>
+    <tr><td><b>QA40x</b></td><td>all three</td>
+        <td>The QuantAsylum analyzer over USB - its own clock, ranges and
+            device-provided calibration.  See the QA40x sections of
+            <a href="preferences.html">Preferences</a>.</td></tr>
+    <tr><td><b>net</b></td><td>all three</td>
+        <td>A <a href="server.html">Phonalyser server's</a> backends over the
+            LAN - whatever the bench machine offers appears beside the local
+            list.</td></tr>
+  </table>
+
+  <h2 id="backend-volume">Hardware volume on Linux and macOS</h2>
+  <p>A card's hardware volume sits INSIDE the calibrated chain: a control away
+     from where it stood during calibration scales every sample, and nothing in
+     the reading says so.  On Linux and macOS the application therefore manages
+     the opened device's own volume itself:</p>
+  <ul>
+    <li><b>At open</b>, the device's volume controls are set to the device's
+        own <b>0 dB</b> - read from the control's dB scale on Linux, and
+        through the CoreAudio dB translation on macOS.  0 dB is not the same
+        as "maximum": on a capture side the top of the slider is the top of
+        the GAIN range (one bench interface reads +12 dB there), and only the
+        dB scale says where unity really is.  A control that publishes no dB
+        information is set to full scale.</li>
+    <li><b>Only the opened device and direction</b> are touched - never another
+        card, never the other direction, never a port that is not the one in
+        use.  On a card that names one stream control per PCM pair identically,
+        the control whose index matches the opened PCM device is taken.</li>
+    <li><b>At stop</b>, everything the open moved is put back exactly as it was
+        found.  A control you move yourself while the stream runs keeps your
+        value.</li>
+    <li><b>Every failure is loud and none blocks a measurement</b>: a control
+        that cannot be read, mapped or written is named in the log and left
+        alone, and the capture or tone starts anyway.</li>
+  </ul>
+  <div class="note"><b>Windows is different on purpose.</b>  There the system
+     volume is part of the calibration: set it once, calibrate, and leave it -
+     the application does not touch it.</div>
+
+  <h2 id="backend-mac-glitches">macOS: capture glitches on some devices</h2>
+  <p>Some USB devices tear the CAPTURE stream on macOS at operating-system
+     level: every capture shows ringing bursts and discontinuities while the
+     analog output measures perfectly clean, and the very same recording made
+     with Apple's own tools carries the same tear.  One example bench device is
+     the Cubilux CB5 - but the incompatibility is a property of the
+     device-and-macOS pairing and can happen with other devices too.  The same
+     device may work flawlessly on Linux and Windows.</p>
+  <p><b>The workaround is an Aggregate Device.</b>  In
+     <b>Audio MIDI Setup</b> create an aggregate and put the device's input and
+     output into it, then select the aggregate in Phonalyser.  The aggregation
+     layer adds the stream handling the device's own path lacks, and the
+     captures come out clean.</p>
+  <div class="note"><b>Important: uncheck "Drift Correction"</b> for the
+     sub-devices of the aggregate.  With it, macOS resamples the streams to
+     align their clocks - an alignment that is NOT synchronized to the source
+     the way the measurement itself is - and that resampling shows up as
+     frequency leakage in the spectrum.</div>
+  <div class="shot">
+    <img src="img/Macos Aggregate Audio.png" alt="Audio MIDI Setup - an aggregate device wrapping the CB5, Drift Correction unchecked"/>
+  </div>
+  <p>An aggregate publishes no volume controls of its own; the application pins
+     and restores the volumes of its MEMBER devices instead, so the 0 dB
+     discipline above holds through the aggregate too.</p>
+
+</body>
+</html>

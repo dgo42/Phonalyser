@@ -1,12 +1,12 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
 // Faithful port of org.edgo.audio.measure.dsp.MainsFilters (@UtilityClass).
 //
-// Builds the time-domain mains filter for a MainsSuppression mode — the single
+// Builds the time-domain mains filter for a MainsSuppression mode - the single
 // place the scope (display + measurement) and the FFT pre-filter map the
 // selected mode to a filter instance. All three filters share the same
 // contract (Java MainsTimeFilter): track / process / processPreservingDc /

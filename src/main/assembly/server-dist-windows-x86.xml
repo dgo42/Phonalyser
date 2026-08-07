@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Headless-server distribution zip, Windows x86 (32-bit).
+
+     Identical to the x64 bundle except for the three natives.  The PortAudio
+     resource for this architecture is named portaudio.dll, not portaudio_x86.dll
+     - JNA is handed the candidate list {portaudio_x86, portaudio} on a 32-bit
+     JVM (PortAudio.candidateLibraryNames), so the plain name is found on the
+     second try.  It is shipped under its own name rather than renamed, so the
+     file in the zip is byte-for-byte the file in the repository.
+
+     csjsound_x86.dll is in natives/ for the same load-bearing reason the x64
+     bundle spells out: System.loadLibrary reads java.library.path and nothing
+     else, and the launcher REPLACES the default that used to make "." work, so
+     without this copy the server quietly loses its exclusive-mode mixers.
+
+     The jar in this zip is the same jar as the x64 one - the fat jar carries no
+     architecture - but it is built and named separately because the launcher
+     caps the heap for a 32-bit JVM and because the natives beside it differ.
+
+     jpackage never runs for this platform (the windows-x86 profile pins
+     <skip>true</skip> on it), so there is no executable to add here even if the
+     x64 bundle ever grows one. -->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.1.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.1.0 http://maven.apache.org/xsd/assembly-2.1.0.xsd">
+    <id>windows-x86</id>
+    <formats>
+        <format>zip</format>
+    </formats>
+    <includeBaseDirectory>true</includeBaseDirectory>
+
+    <files>
+        <file>
+            <source>${project.build.directory}/${server.mainJar}</source>
+            <outputDirectory>/</outputDirectory>
+            <fileMode>0644</fileMode>
+        </file>
+        <!-- The 32-bit WinSW build, renamed to match its generated config.  See
+             server-dist-windows-x64.xml for why this is a <file>. -->
+        <file>
+            <source>${repo.root}/lib/windows/WinSW-x86.exe</source>
+            <outputDirectory>/</outputDirectory>
+            <destName>phonalyser-server-service.exe</destName>
+            <fileMode>0755</fileMode>
+        </file>
+    </files>
+
+    <fileSets>
+        <fileSet>
+            <directory>${repo.root}/src/main/packaging/windows</directory>
+            <outputDirectory>/</outputDirectory>
+            <includes>
+                <include>phonalyser-server.cmd</include>
+                <include>install-service.cmd</include>
+                <include>uninstall-service.cmd</include>
+                <include>README-server-windows.txt</include>
+            </includes>
+            <fileMode>0644</fileMode>
+            <!-- CRLF whatever the build host: install-service.cmd uses labels
+                 and goto, and cmd.exe mis-parses those in an LF-only file. -->
+            <lineEnding>dos</lineEnding>
+        </fileSet>
+        <!-- The Launch4j thin launcher, built here with runtimeBits=32 so it
+             refuses a 64-bit JRE: the jar is architecture-neutral, but the
+             natives\ beside it are 32-bit, and a 64-bit JVM would silently find
+             neither PortAudio nor libusb.  Optional, as in the x64 bundle.
+
+             The -x86 suffix names the JRE and the natives\ this stub is paired
+             with, not the stub's own bitness - Launch4j emits a 32-bit head in
+             both bundles.  Spelled out rather than ${server.exeName} so the x64
+             stub left in a shared target/ by the previous pass cannot be packed
+             here. -->
+        <fileSet>
+            <directory>${project.build.directory}</directory>
+            <outputDirectory>/</outputDirectory>
+            <includes>
+                <include>phonalyser-server-x86.exe</include>
+            </includes>
+            <fileMode>0755</fileMode>
+        </fileSet>
+        <fileSet>
+            <directory>${repo.root}/modules/phonalyser-core/src/main/resources/win32-x86</directory>
+            <outputDirectory>/natives</outputDirectory>
+            <includes>
+                <include>portaudio.dll</include>
+            </includes>
+            <fileMode>0644</fileMode>
+        </fileSet>
+        <fileSet>
+            <directory>${repo.root}/modules/backend-qa40x/src/main/resources/win32-x86</directory>
+            <outputDirectory>/natives</outputDirectory>
+            <includes>
+                <include>libusb-1.0_x86.dll</include>
+            </includes>
+            <fileMode>0644</fileMode>
+        </fileSet>
+        <!-- The WASAPI-exclusive JavaSound mixers.  Load-bearing for the
+             launcher, not a duplicate of the jar's copy - see the header. -->
+        <fileSet>
+            <directory>${repo.root}/modules/backend-javasound/src/main/resources/win32-x86</directory>
+            <outputDirectory>/natives</outputDirectory>
+            <includes>
+                <include>csjsound_x86.dll</include>
+            </includes>
+            <fileMode>0644</fileMode>
+        </fileSet>
+        <!-- The web bundle this server serves at `/` (spec 3): a `web` directory
+             BESIDE THE JAR, which is exactly where ServerMain.staticDir() looks -
+             the jar's own CodeSource parent resolved against "web", else the same
+             name in the working directory.  It is a FILESYSTEM path and never a
+             classpath resource, so it belongs in the dist and not inside the jar.
+
+             A fileSet rather than a file because this one IS optional, like the
+             launcher above: the bundle is produced by the embedded web build
+             (`node web/build.mjs` with the embedded flag, which make-servers.cmd
+             runs after the clean and before the package, and which no Maven goal
+             drives), and a build made without that step simply ships no web/ -
+             the server then answers today's "no web bundle is served by this
+             server" 404, which spec 3 marks "when built with it". -->
+        <fileSet>
+            <directory>${repo.root}/target/web-embedded</directory>
+            <outputDirectory>/web</outputDirectory>
+            <fileMode>0644</fileMode>
+        </fileSet>
+    </fileSets>
+</assembly>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logging for the SERVER child JVM the engine spawns.
+
+  Why this file has to exist.  The engine hands both child processes ONE class
+  path (see the module POM header), which is harmless for classes - each child
+  starts only its own main class - but NOT for resources: phonalyser-gui and
+  server-net each ship a `log4j2.xml`, only one of them can win the lookup, and
+  which one wins is an accident of ordering.  The server child was landing on a
+  file-only configuration, so its startup banner never reached stdout and the
+  engine could not read the port it had bound.
+
+  Pointing the child at this file with -Dlog4j2.configurationFile removes the
+  accident entirely: the server's logging is now a property of the TEST, which
+  is what the test then makes assertions about.  Nothing in production changes.
+
+  Console only, and stdout specifically: the engine redirects that stream to a
+  file in the scenario directory, reads the bound port out of it, and later
+  asserts that the session was accepted and closed.
+-->
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="Stdout" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} [%-5level] %msg%n"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <!-- INFO carries both lines this scenario depends on: the "listening
+             on ws://host:port" banner and ClientSession's session accepted /
+             closed pair. -->
+        <Root level="info">
+            <AppenderRef ref="Stdout"/>
+        </Root>
+    </Loggers>
+</Configuration>

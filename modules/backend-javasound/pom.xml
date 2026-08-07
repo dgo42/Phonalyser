@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  backend-javasound - javax.sound.sampled backend, plus CsjsoundNativePath which
+  stages the csjsound WASAPI-exclusive MixerProvider's native DLL onto
+  java.library.path at startup.
+
+  The csjsound provider itself is a RUNTIME-only concern: nothing here imports
+  cz.pavhofman (it is discovered through the JavaSound SPI), so the vendored jar
+  is bundled by phonalyser-app, not depended on at compile time.
+
+  JavaSoundRecorder reuses WasapiRecorder and WdmksRecorder, hence the two
+  sibling backend dependencies.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.2.0</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>backend-javasound</artifactId>
+    <name>Phonalyser :: backend :: JavaSound</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-core</artifactId>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,12 @@
+/* Red-path meta-scenario 1 of 2: a run that records a FAILED CHECK.
+
+   This scenario is supposed to fail.  It is the proof that the whole verdict
+   chain works - script check -> AutomationChecks verdict -> AutomationRunner
+   -> GuiMain exit code -> the engine's assertion - because without it every
+   green result in this suite would be unfalsifiable: a chain that could never
+   report failure would report success just as reliably if it were broken.
+
+   The green check comes first, so the run also proves that ONE red check
+   sinks the run without suppressing what was recorded around it. */
+checkTrue("this-one-is-green", true);
+failCheck("deliberate", "this run must fail");

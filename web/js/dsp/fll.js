@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -11,7 +11,7 @@
 // kappa is slightly wrong the de-rotated fundamental phase drifts linearly with
 // the tick's sample offset, smearing the fundamental and shrinking its peak.
 //
-// This tracks kappa with a MEASURE-THEN-CORRECT loop (unconditionally stable —
+// This tracks kappa with a MEASURE-THEN-CORRECT loop (unconditionally stable -
 // a naive per-tick PLL diverges because the growing offset lever-arm feeds back
 // the kappa it is adjusting). Over a window of ticks kappa is held fixed while
 // the de-rotated fundamental phase is observed; the phase advances linearly with
@@ -98,13 +98,13 @@ export class DerotationPhaseLock {
 // FFT's refined `detected` estimate. The published generator frequency is always
 // `target + correction`.
 //
-// The crucial property — and the regression a prior pass broke by steering every
-// frame undamped — is the TRANSPORT GATE: a correction published now still has the
+// The crucial property - and the regression a prior pass broke by steering every
+// frame undamped - is the TRANSPORT GATE: a correction published now still has the
 // OLD tone queued ahead of it in the DAC's hardware buffer, so it only becomes
 // MEASURABLE once the capture head advances past `latestSamplePos + drain`. Until a
 // measurement window provably STARTS past that point, every update is held: such a
 // measurement predates the correction and acting on it would stack a second
-// correction onto an error the in-flight one already cancels — the sawtooth/runaway.
+// correction onto an error the in-flight one already cancels - the sawtooth/runaway.
 // Gating on capture SAMPLE POSITIONS (not call counts or wall-clock) makes the loop
 // immune to overruns, display throttling and GC pauses: a transient mis-measurement
 // costs exactly one bounded, fully observed round trip.
@@ -121,19 +121,19 @@ export class FrequencyFll {
    *  OLD tone queued ahead of it in the DAC's hardware buffer (≈480 ms render path). */
   static DRAIN_GUARD_SEC = 0.7;
   /** EWMA weight on the previous drift estimate when a deadbeat folds a fresh slope
-   *  measurement in — smooths the estimator noise riding on each band exit. */
+   *  measurement in - smooths the estimator noise riding on each band exit. */
   static DRIFT_SMOOTH = 0.7;
   /** Drift sanity cap (ppm of target per second): anything larger is a mis-measurement. */
   static MAX_DRIFT_PPM_PER_SEC = 0.01;
   /** Minimum capture-time baseline between two deadbeats for the residual to qualify
-   *  as a slope measurement — closer exits are estimator noise, not wander. */
+   *  as a slope measurement - closer exits are estimator noise, not wander. */
   static MIN_DRIFT_BASELINE_SEC = 2.0;
 
   constructor() {
     this.reset();
   }
 
-  /** Current correction in Hz — add to the snap target before publishing the trim. */
+  /** Current correction in Hz - add to the snap target before publishing the trim. */
   get correction() { return this._correction; }
 
   /** Read-only view of the transport gate (Java FrequencyFll.correctionVisibleFrom):
@@ -154,7 +154,7 @@ export class FrequencyFll {
   update(target, detected, absStartSamples, latestSamplePos, sampleRate, fftSize) {
     if (!Number.isFinite(target) || !Number.isFinite(detected) || !(target > 0)) return;
     // Drift feedforward: predictive sub-band microsteps on EVERY update (held ones
-    // included — prediction needs no transport verification; its residual is folded
+    // included - prediction needs no transport verification; its residual is folded
     // back in at the next deadbeat). dt comes from capture positions.
     if (this._lastUpdateAbsPos >= 0 && sampleRate > 0 && absStartSamples > this._lastUpdateAbsPos) {
       const dt = (absStartSamples - this._lastUpdateAbsPos) / sampleRate;
@@ -162,11 +162,11 @@ export class FrequencyFll {
     }
     this._lastUpdateAbsPos = absStartSamples;
     // Transport gate: if the window's frames begin before the corrected signal
-    // reached the ADC, the measurement reflects the UNcorrected signal — hold.
+    // reached the ADC, the measurement reflects the UNcorrected signal - hold.
     if (this._correctionVisibleFrom >= 0 && absStartSamples < this._correctionVisibleFrom) return;
     this._correctionVisibleFrom = -1;            // in-flight correction fully observed
     const error = detected - target;
-    if (Math.abs(error) <= FrequencyFll.LOCK_PPM * 1e-6 * target) return;   // within lock band — hold
+    if (Math.abs(error) <= FrequencyFll.LOCK_PPM * 1e-6 * target) return;   // within lock band - hold
     // Fold the residual into the drift estimate: error that accumulated since the
     // last deadbeat DESPITE the feedforward measures the slope-estimation error.
     if (this._lastDeadbeatAbsPos >= 0 && sampleRate > 0) {

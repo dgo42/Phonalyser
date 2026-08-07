@@ -1,12 +1,12 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
 // Faithful port of org.edgo.audio.measure.dsp.IntermodCompensation.
 //
-// Complex accumulator for closed-loop DAC intermodulation pre-distortion — the
+// Complex accumulator for closed-loop DAC intermodulation pre-distortion - the
 // two-tone sibling of HarmonicCompensation. Every distortion product of a two-
 // tone signal sits at a·f₁ + b·f₂ for integer (a, b) with phase a·θ₁ + b·θ₂, so a
 // single (a, b)-indexed correction set cancels them all. Holds a fixed grid of
@@ -17,7 +17,7 @@
 /** Highest |a|+|b| the FFT analyzer is guaranteed to de-rotate. */
 const INTERMOD_ORDER_CAP = 5;
 
-/** Unit calibration response [magLin=1, phaseRad=0] — a no-op divide for the b=0
+/** Unit calibration response [magLin=1, phaseRad=0] - a no-op divide for the b=0
  *  harmonics the display already de-embedded. */
 const UNIT_RESPONSE = [1.0, 0.0];
 
@@ -61,7 +61,7 @@ export class IntermodCompensation {
    * accumulator holds each product's ABSOLUTE measured level (dBFS-linear, off the
    * conv-scaled phasors) as a complex phasor, window-derotated; the .frc de-embed,
    * the dBV conversion and the division by the DAC fundamental are applied on the
-   * way OUT. Every detected product is corrected — no noise gate.
+   * way OUT. Every detected product is corrected - no noise gate.
    *
    * Each product a·f₁+b·f₂ is de-rotated by a·(φ₁+π/2) + b·(φ₂+π/2), where
    * φ₁ = arg(X_F1) − argH(f₁) and φ₂ = arg(X_F2) − argH(f₂) are the measured
@@ -74,8 +74,8 @@ export class IntermodCompensation {
    * @param {number} f1Hz tone-1 frequency (Hz)
    * @param {number} f2Hz tone-2 frequency (Hz)
    * @param {number} step LMS step μ
-   * @param {number} calF1PhaseRad argH(f₁) — the .frc phase at F1
-   * @param {number} calF2PhaseRad argH(f₂) — the .frc phase at F2
+   * @param {number} calF1PhaseRad argH(f₁) - the .frc phase at F1
+   * @param {number} calF2PhaseRad argH(f₂) - the .frc phase at F2
    */
   accumulate(r, f1Hz, f2Hz, step, calF1PhaseRad, calF2PhaseRad) {
     if (r.re == null || r.im == null) return;
@@ -128,9 +128,9 @@ export class IntermodCompensation {
 
   /**
    * Converts the accumulated ABSOLUTE (ADC-dBFS) phasors to the generator's dual-
-   * tone compensation quad — applying HERE (on the values reaching the DDS): the
+   * tone compensation quad - applying HERE (on the values reaching the DDS): the
    * .frc de-embed (÷H, −argH) for every b≠0 product (b=0 harmonics took the
-   * display de-embed already → unit response), the ADC-dBFS → Vrms conversion, and
+   * display de-embed already -> unit response), the ADC-dBFS -> Vrms conversion, and
    * the division by the DAC F1 fundamental. Products below the gate are dropped.
    *
    * @param {(f: number) => [number, number]} calResponseAt .frc response [magLin, phaseRad]
@@ -152,7 +152,7 @@ export class IntermodCompensation {
       if (this.accRe[g] === 0.0 && this.accIm[g] === 0.0) continue;
       const cal = this.coefB[g] === 0 ? UNIT_RESPONSE : calResponseAt(this.freqHz[g]);
       const magDe = Math.hypot(this.accRe[g], this.accIm[g]) / (cal[0] > 0.0 ? cal[0] : 1.0);
-      const vP = magDe * adcFsVoltageRms;                          // ADC dBFS → absolute Vrms
+      const vP = magDe * adcFsVoltageRms;                          // ADC dBFS -> absolute Vrms
       amp[i] = dacFundamentalVrms > 0.0 ? vP / dacFundamentalVrms : 0.0;   // ratio to DAC F1
       phi[i] = Math.atan2(this.accIm[g], this.accRe[g]) - cal[1];
       a[i] = this.coefA[g];
@@ -162,7 +162,7 @@ export class IntermodCompensation {
     return { ampRatios: amp, coefA: a, coefB: b, phiInits: phi };
   }
 
-  /** Deep copy — lets the wizard snapshot the best-THD round's accumulator while
+  /** Deep copy - lets the wizard snapshot the best-THD round's accumulator while
    *  the loop keeps updating the live one. */
   copy() {
     return new IntermodCompensation(this.coefA, this.coefB, this.accRe, this.accIm, this.freqHz, null);

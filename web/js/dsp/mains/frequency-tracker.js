@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -56,7 +56,7 @@ export class MainsFrequencyTracker {
 
   /**
    * Estimates the mains fundamental from ref, returning the smoothed lock (Hz)
-   * — or the held lock (possibly NaN) when no confident line is found this
+   * - or the held lock (possibly NaN) when no confident line is found this
    * window. Accepts Float32Array, Float64Array or number[].
    * @param {Float32Array|Float64Array|number[]} ref
    * @param {number} len
@@ -77,7 +77,7 @@ export class MainsFrequencyTracker {
       w[i] = ref[i] * 0.5 * (1.0 - Math.cos(norm * i));
     }
 
-    // Score 50 vs 60 by fundamental AND 2nd harmonic (50→50/100, 60→60/120);
+    // Score 50 vs 60 by fundamental AND 2nd harmonic (50->50/100, 60->60/120);
     // H2 bands use twice the span (the harmonic drifts 2× as far in Hz).
     const h1a = this._scanBand(w, len, 50.0, DETECT_SPAN_HZ);
     const h2a = this._scanBand(w, len, 100.0, 2 * DETECT_SPAN_HZ);
@@ -132,7 +132,7 @@ export class MainsFrequencyTracker {
     return { refinedHz, peakPower: mag[bestK], loHz: lo, mags: mag };
   }
 
-  /** Median Goertzel power across the four detection bands — a robust floor the
+  /** Median Goertzel power across the four detection bands - a robust floor the
    *  strongest line must clear to count as real mains. */
   _scannedBaseline(h1a, h1b, h2a, h2b) {
     const m = Math.round(2 * DETECT_SPAN_HZ / DETECT_STEP_HZ) + 1;

@@ -1,12 +1,12 @@
 /*
- * Phonalyser web help — search-term highlighter.
+ * Phonalyser web help - search-term highlighter.
  *
  * Faithful port of org.edgo.audio.measure.gui.helpviewer.HelpViewer.HIGHLIGHT_SCRIPT.
  * The desktop HelpViewer (a WebView2 browser) INJECTED this into every loaded page; the
  * static web help has no such injector, so import-help.mjs copies this file into each
  * language and adds a <script src> to every page. When the URL carries
  * ?hl=<space-separated terms> (added by the search page to its result links), it wraps
- * every occurrence of those terms in <mark> and — when no #anchor steers the scroll —
+ * every occurrence of those terms in <mark> and - when no #anchor steers the scroll -
  * brings the first match into view. ES5/IE11-safe (no arrow functions, 4-arg
  * createTreeWalker), guarded per location so an in-page anchor jump doesn't double-wrap.
  * GNU AGPL v3 or later.

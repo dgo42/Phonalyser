@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  phonalyser-core - the base module.  DSP, FFT, generator, preferences, WAV/FLAC
+  I/O, ADC calibration, and the audio SPI (AudioDeviceManager / AudioCapture /
+  AudioPlayback / DeviceRef / AudioBackend) plus the shared PortAudio + libusb
+  JNA bindings.
+
+  DEPENDS ON NOTHING ELSE IN THE REACTOR.  In particular it must NOT gain a
+  dependency on SWT, on any gui.** package, or on any backend-* module - those
+  three rules are what make a headless agent build possible.  The absence of an
+  SWT dependency below is deliberate and load-bearing: if you find yourself
+  adding one, the leak belongs in the caller, not here.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.2.0</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>phonalyser-core</artifactId>
+    <name>Phonalyser :: core</name>
+
+    <dependencies>
+        <!-- PortAudio + libusb bindings (sound.PortAudio, sound.LibUsb). -->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
+        </dependency>
+        <!-- Farina log-sweep deconvolution (dsp.FreqRespCalHelper). -->
+        <dependency>
+            <groupId>com.github.wendykierp</groupId>
+            <artifactId>JTransforms</artifactId>
+        </dependency>
+        <!-- PNG plots from the ADC regression calibrator (adc.RegressionCalibrator). -->
+        <dependency>
+            <groupId>org.jfree</groupId>
+            <artifactId>jfreechart</artifactId>
+        </dependency>
+        <!-- FLAC encode (wav.FlacWriter) and decode (wav.PcmFileLoader). -->
+        <dependency>
+            <groupId>com.github.axet</groupId>
+            <artifactId>java-flac-encoder</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.nayuki</groupId>
+            <artifactId>flac-library</artifactId>
+        </dependency>
+        <!-- preferences.yaml / devices.yaml persistence. -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!-- version.properties carries the pom version - read off the class path
+             by the desktop (splash + About) and by the headless server (its
+             banner and the version it announces to clients), so it lives in the
+             one module both of them are built on.  Every other resource stays
+             unfiltered so the devices.yaml seed keeps its literal ${} content. -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>version.properties</exclude>
+                </excludes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>version.properties</include>
+                </includes>
+            </resource>
+        </resources>
+    </build>
+</project>

@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>The Phonalyser server</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>The Phonalyser server</h1>
+  <p>The machine your measurement hardware is plugged into does not have to be
+     the machine you sit at.  Run <b>Phonalyser server</b> on the one that
+     <em>is</em> wired to the converters and it becomes a <b>bench</b>: it owns
+     the sound cards and the QA40x analyzer and serves them over the network to
+     Phonalyser.web clients elsewhere.  It has no window and needs no desktop - a
+     Raspberry Pi or any headless box will do.</p>
+  <p>This chapter is the <b>server</b> half: getting one running and keeping it
+     running.  The <b>client</b> half - finding a bench, connecting to it and
+     measuring through it - lives in
+     <a href="preferences.html#prefs-audio-servers">Preferences ▸ Measuring
+     through a Phonalyser server</a>, and what happens on the wire is in
+     <a href="theory/audio-backend.html#network">Theory ▸ A bench across the
+     network</a>.</p>
+
+  <h2 id="server-what">What it is, and what you need</h2>
+  <p>The server ships as its own download, one ZIP per platform - Windows x64
+     and x86, Linux x86_64 and aarch64, macOS Intel and Apple Silicon - beside
+     the desktop application's installers.  Unpack it anywhere and run it; there
+     is no installer and nothing is written outside the folder until the server
+     starts.</p>
+  <p>Inside each ZIP is <b>one fat JAR</b> plus the launchers for that platform.
+     What you must provide is a <b>Java 17 or newer runtime on the PATH</b> -
+     and nothing else: no JRE is bundled.</p>
+  <table class="controls">
+    <tr><th>Platform</th><th>What comes with it</th></tr>
+    <tr><td><b>Windows</b></td>
+        <td><code>phonalyser-server-x64.exe</code> (double-click launcher),
+            <code>phonalyser-server.cmd</code> (the same in a console you can
+            read), <code>install-service.cmd</code> /
+            <code>uninstall-service.cmd</code>, and a <code>natives\</code>
+            folder carrying PortAudio (the WDM-KS path), libusb (the QA40x) and
+            csjsound (the WASAPI-exclusive JavaSound mixers).  <b>Keep
+            <code>natives\</code> next to the launcher</b> - it is the only place
+            searched.  Without csjsound the server still runs but offers
+            shared-mode mixers only, so the <code>EXCL:</code> devices and the
+            high sample rates that depend on them disappear from the list.</td></tr>
+    <tr><td><b>Linux</b></td>
+        <td><code>phonalyser-server.sh</code>,
+            <code>phonalyser-server-service.sh</code> and the QA40x udev rule
+            <code>70-qa40x.rules</code>.  There is deliberately no
+            <code>natives/</code>: ALSA is reached through the Java runtime, and
+            libusb - needed only for a QA40x - comes from your distribution.
+            The JAR is architecture-neutral - the x86_64 and aarch64 ZIPs differ
+            in name only.</td></tr>
+    <tr><td><b>macOS</b></td>
+        <td><code>phonalyser-server.sh</code>,
+            <code>phonalyser-server-service.sh</code> and
+            <code>natives/</code> with <code>libportaudio.dylib</code> (CoreAudio)
+            and <code>libusb-1.0.dylib</code>.  The Intel and Apple Silicon ZIPs
+            carry different dylibs - take the one that matches your Mac.  A QA40x
+            needs no kernel driver here.</td></tr>
+  </table>
+  <div class="note"><b>Windows: the <code>-x64</code> / <code>-x86</code> suffix
+     names what the bundle <em>targets</em></b> - which JRE the launcher looks for
+     and which architecture the DLLs in <code>natives\</code> are - not the
+     launcher's own bitness.  The 32-bit bundle insists on a 32-bit JVM, because
+     a 64-bit one would quietly find none of its DLLs, and it caps the heap at
+     1200 MB, as much as a 32-bit process can reliably reserve.  A QA40x must
+     already be bound to the WinUSB driver, which happens once QuantAsylum's own
+     software has been run on that machine.</div>
+  <div class="note"><b>Run the bench on a physical machine, not in a virtual
+     one.</b>  A server measured inside a virtual machine produced heavy periodic
+     dropouts in both directions; the same hardware, on a physical machine,
+     measured cleanly.  The audio device is reached over USB, and it is the
+     guest's virtualised USB timing that breaks: samples arrive late and in
+     bursts, which a measurement reads as gaps in the signal.  Nothing in the
+     server can compensate for that - put the bench on real hardware.</div>
+
+  <h2 id="server-console">Running it in a console</h2>
+  <pre>    phonalyser-server-x64.exe
+    phonalyser-server.cmd --name bench1 --port 8377</pre>
+  <pre>    ./phonalyser-server.sh
+    ./phonalyser-server.sh --name bench1 --port 8377</pre>
+  <p>Every launcher takes the same four arguments:</p>
+  <table class="controls">
+    <tr><th>Flag</th><th>Meaning</th></tr>
+    <tr><td><code>--name &lt;text&gt;</code></td>
+        <td>The name clients see in their server list and in the
+            <em>in use by</em> note beside a device someone else holds.  Defaults
+            to the machine's host name.</td></tr>
+    <tr><td><code>--port &lt;port&gt;</code></td>
+        <td><b>One port carries everything</b> - the control channel, the audio
+            stream, the informational endpoints, the file upload and the web
+            bundle.  Default <b>8377</b>.</td></tr>
+    <tr><td><code>--bind &lt;address&gt;</code></td>
+        <td>Listen on one interface only.  Default: all of them.  This is the
+            one knob that limits who can reach the bench - see
+            <a href="#server-noauth">no authentication</a> below.</td></tr>
+    <tr><td><code>-d</code>, <code>--daemon</code></td>
+        <td>Accepted, and every service definition passes it - but it changes
+            nothing today: the server writes no console output in any mode, and
+            the log file is written the same way with or without it.</td></tr>
+  </table>
+  <p><b>Ctrl-C stops it cleanly.</b>  The shutdown hook closes the audio lines
+     and <b>parks a QA40x analyzer at a safe attenuator setting</b> - the same
+     protection the desktop application performs on the way out.  That is why a
+     server is stopped rather than killed: an End Task leaves the analyzer at
+     whatever sensitive input range the last measurement selected.</p>
+  <div class="note"><b>macOS asks once.</b>  The first time the server opens an
+     input, macOS asks for microphone access.  Grant it, or every capture stays
+     silent (System&nbsp;Settings ▸ Privacy&nbsp;&amp;&nbsp;Security ▸
+     Microphone).</div>
+
+  <h2 id="server-discovery">Discovery and the firewall</h2>
+  <p>Clients find a server by <b>UDP multicast on 239.255.83.77, port
+     8377/udp</b> - the same number the server listens on, because UDP and TCP
+     are separate port spaces.  The announcement is <b>link-local</b>: routers do
+     not pass it, so a bench on another subnet is never discovered and is added
+     by its address in the client instead.</p>
+  <p>Allow that one port through the firewall, <b>udp and tcp</b>, or skip
+     discovery altogether and type the address into the client by hand.</p>
+
+  <h2 id="server-service">Running it as a service</h2>
+
+  <h3 id="server-service-windows">Windows - a real service</h3>
+  <p>From an <b>elevated</b> command prompt:</p>
+  <pre>    install-service.cmd                     run as LocalSystem
+    install-service.cmd /user BENCH\alex    run as a real account
+    install-service.cmd /user BENCH\alex --name bench1</pre>
+  <p>Extra arguments are baked into the service.  It is named
+     <b>PhonalyserServer</b> and points at <em>that</em> folder, so the folder
+     must not be moved or deleted afterwards.  It is a genuine Service Control
+     Manager service, hosted by WinSW: <b>stopping it is a request, not a
+     kill</b> - WinSW sends a Ctrl+C and waits up to 20 seconds, so the shutdown
+     hook runs and the analyzer is parked, which a scheduled task or an End Task
+     would not do.</p>
+  <pre>    start   : sc start PhonalyserServer
+    stop    : sc stop PhonalyserServer
+    remove  : uninstall-service.cmd
+    settings: services.msc, entry "Phonalyser server"</pre>
+  <div class="note"><b>Which account, and why it matters.</b>  A Windows service
+     always runs in <b>session 0</b>, never in your desktop session - a property
+     of the operating system, not of this server.  A <b>QA40x</b> is reached over
+     USB and does not care, so LocalSystem is fine.  <b>Sound cards do care</b>:
+     the endpoints an application sees, and which one is the default, come from
+     the per-user part of the registry, and LocalSystem has its own, effectively
+     empty view.  Install with <code>/user &lt;account&gt;</code> so the service
+     loads that user's profile and sees the same devices that user does.  Windows
+     needs the account's password before such a service can start and the script
+     deliberately does not handle passwords: after installing, open
+     <code>services.msc</code> ▸ <em>Phonalyser server</em> ▸ Properties ▸ Log On
+     ▸ This account, type it, then Start.  If even that does not show the card you
+     expect, do not fight the service - put a shortcut to the launcher in
+     <code>shell:startup</code> and it starts at logon inside your own desktop
+     session, where the audio stack is unambiguous.</div>
+
+  <h3 id="server-service-linux">Linux - a systemd unit</h3>
+  <pre>    sudo ./phonalyser-server-service.sh install
+    sudo ./phonalyser-server-service.sh activate
+    sudo ./phonalyser-server-service.sh install --name bench1 --bind 192.168.1.20</pre>
+  <p><b>install</b> writes
+     <code>/etc/systemd/system/phonalyser-server.service</code> pointing at that
+     folder, creates the system user <code>phonalyser</code>, creates
+     <code>/var/lib/phonalyser</code> and <code>/var/log/phonalyser</code>, and
+     installs the QA40x udev rule; <b>activate</b> enables the unit and starts
+     it.  Extra arguments given to install are baked into the unit, and the
+     folder must not be moved afterwards - the unit points straight at it.</p>
+  <pre>    status  : systemctl status phonalyser-server
+    stop    : sudo systemctl stop phonalyser-server
+    remove  : sudo ./phonalyser-server-service.sh uninstall</pre>
+  <p>The service user is given the <code>audio</code> and <code>plugdev</code>
+     groups by the unit itself, so nothing in <code>/etc/group</code> is edited.
+     <code>systemctl stop</code> sends <code>SIGTERM</code>, so the shutdown hook
+     runs and the analyzer is parked.  <b>uninstall</b> leaves
+     <code>/var/lib/phonalyser</code>, <code>/var/log/phonalyser</code> and the
+     account alone: your calibration is data, not packaging.</p>
+
+  <h3 id="server-service-macos">macOS - a per-user launch agent</h3>
+  <pre>    ./phonalyser-server-service.sh install
+    ./phonalyser-server-service.sh activate</pre>
+  <p><b>Do not use <code>sudo</code>.</b>  install writes a LaunchAgent at
+     <code>~/Library/LaunchAgents/org.edgo.phonalyser.server.plist</code>
+     pointing at that folder; activate loads it, and from then on it starts at
+     every login.</p>
+  <pre>    status  : launchctl print gui/$(id -u)/org.edgo.phonalyser.server
+    stop    : launchctl bootout gui/$(id -u)/org.edgo.phonalyser.server
+    remove  : ./phonalyser-server-service.sh uninstall</pre>
+  <div class="note"><b>A LaunchAgent, not a LaunchDaemon - and that is not
+     laziness.</b>  CoreAudio is <b>per session</b>, and the microphone-consent
+     prompt comes from the window server: a system daemon would enumerate no
+     inputs at all and could never answer the prompt.  The price of doing it
+     correctly is that the server runs only while you are logged in.
+     <code>bootout</code> terminates normally, so the shutdown hook runs and the
+     analyzer is parked.</div>
+
+  <h2 id="server-files">Where things are</h2>
+  <table class="controls">
+    <tr><th>Platform</th><th>Log, cards and identity</th></tr>
+    <tr><td><b>Windows</b></td>
+        <td>One place, however it was started - console, LocalSystem service or
+            <code>/user</code> service alike:
+            <code>%ProgramData%\Phonalyser\logs\phonalyser-server.log</code>,
+            <code>%ProgramData%\Phonalyser\devices.yaml</code>,
+            <code>%ProgramData%\Phonalyser\server-id</code>.  WinSW keeps its own
+            record of service starts and stops in the same
+            <code>logs</code> folder, beside the application's log rather than
+            instead of it.</td></tr>
+    <tr><td><b>Linux</b></td>
+        <td>From a terminal:
+            <code>~/.config/Phonalyser/logs/phonalyser-server.log</code> (or
+            <code>/var/log/phonalyser</code> when that is writable).  As the
+            service: <code>/var/log/phonalyser/phonalyser-server.log</code> and
+            <code>/var/lib/phonalyser</code> for
+            <code>devices.yaml</code> and <code>server-id</code> - the
+            <code>phonalyser</code> account has no home directory of its own, so
+            the unit names those paths.</td></tr>
+    <tr><td><b>macOS</b></td>
+        <td>Both ways of starting it use one directory:
+            <code>~/Library/Application Support/Phonalyser/</code> -
+            <code>logs/phonalyser-server.log</code>, <code>devices.yaml</code>,
+            <code>server-id</code>.</td></tr>
+  </table>
+  <p>On Windows that single machine-wide home is deliberate: <b>a server is a
+     machine installation</b>.  The per-user <code>%APPDATA%\Phonalyser</code>
+     belongs to the desktop GUI, and a server sharing it would edit the desktop's
+     own card store - while the two service forms would each get a
+     <em>different</em> <code>%APPDATA%</code> and disagree with the console
+     run.</p>
+  <div class="note"><b>The consequence to remember:</b> the desktop
+     application's own calibration is <b>not</b> what the server serves.  Give
+     the server its own - calibrate through a connected client, which writes
+     straight into the bench's store (see
+     <a href="preferences.html#prefs-audio-server-cards">Cards and calibration on
+     the bench</a>), or copy <code>devices.yaml</code> across.  On Linux the same
+     applies between a terminal run and the systemd service, which have separate
+     data directories.</div>
+
+  <h2 id="server-noauth">There is no authentication, on purpose</h2>
+  <p>A Phonalyser server does not ask for a password, and nothing on the wire is
+     encrypted.  That is a decision, not an omission: <b>a bench instrument
+     belongs on a network you trust</b> - the room your measurement equipment is
+     in - and adding credentials to a LAN instrument protocol would buy nothing
+     the network does not already provide.  Anyone who can reach the port can
+     list the devices and take one.</p>
+  <p>So do not expose the port to the open internet.  If the machine has more
+     than one interface, <code>--bind</code> the server to the one your bench
+     lives on and leave the rest unreachable.</p>
+
+  <h2 id="server-measuring">Measuring through it</h2>
+  <p>With a server running, the whole client side is three steps and it is all in
+     Preferences ▸ Audio:</p>
+  <ol>
+    <li><b>Find the bench.</b>  <a href="preferences.html#prefs-audio-server-list">Servers...</a>
+        opens the list.  In a browser it opens <b>empty</b> - a page cannot hear
+        the server's multicast announcement - so type this bench's host and port
+        under <em>Add a server by address</em>; from that one address its peer
+        table brings in the rest.  <b>Connect</b> - or a double-click on the
+        row - opens the session.</li>
+    <li><b>Pick a backend.</b>  The bench's backends
+        <a href="preferences.html#prefs-audio-server-backends">join the Backend
+        list</a> beside the local ones, written
+        <code>&lt;server&gt; -> &lt;backend&gt;</code>.  Browsing only previews;
+        <b>OK</b> commits.</li>
+    <li><b>Measure.</b>  From there the device combos, the card section, the
+        range radios, <b>QA40x preferences</b>, the generator, the sweeps and
+        <em>Play from...</em> all behave exactly as they do for local hardware.
+        Calibration belongs to the bench, so a crosshair calibration writes into
+        <em>its</em> store.</li>
+  </ol>
+  <p>The details - what is staged and what takes effect at once, the <em>in use
+     by</em> note on a device another client holds, the granted-rate rule, the
+     file upload, the five-second reconnect and the reasons a session can
+     end - are all in
+     <a href="preferences.html#prefs-audio-servers">Preferences ▸ Measuring
+     through a Phonalyser server</a>.</p>
+
+  <h2 id="server-serves-app">The server also serves the application</h2>
+  <p>You do not have to install anything on the machine you measure <em>from</em>.
+     A running server hands out its own copy of Phonalyser.web: open the bench's
+     address in a Chromium browser - <code>http://&lt;bench&gt;:8377/</code> - and
+     you get a workbench that is already connected to it, with that bench's
+     backends offered and no setup at all.  This is the address to give a
+     colleague.</p>
+  <p>Such a page has no local backends - it arrives over plain
+     <code>http://</code>, which is not a secure context, so the browser's own
+     audio capture and WebUSB do not exist on it.  That is also the answer to a
+     trap on the other route: an application loaded over <code>https://</code>
+     cannot open a session to a bench on the LAN at all.  Both are explained in
+     <a href="web-in-browser.html#served-page">Phonalyser in a browser ▸ the page
+     a bench serves</a>.</p>
+
+  <h2 id="server-hotplug">While it runs</h2>
+  <ul>
+    <li><b>Hardware is re-enumerated every two seconds</b>, so a device plugged
+        in or pulled out on the bench is noticed without restarting anything, and
+        every connected client is told.  Two seconds rather than continuously on
+        purpose: enumeration talks to drivers and to USB, and nothing on a bench
+        appears so urgently that the delay costs a measurement.</li>
+    <li><b>One client at a time per device.</b>  The server holds a lock per
+        device, so two operators cannot talk over each other's measurement; the
+        lock names its holder, which is what the client's <em>in use by</em> note
+        reads.</li>
+    <li><b>It serves every backend it has, concurrently.</b>  There is no global
+        "active backend" on a server - each session picks its own, so one client
+        can be on the QA40x while another is on a sound card.</li>
+    <li><b>Shutting down parks the hardware</b>, the QA40x's input attenuator
+        included, exactly as the desktop application does on exit.</li>
+    <li>If a folder named <code>web</code> sits next to the JAR, the server also
+        serves it on the same HTTP port.</li>
+  </ul>
+
+  <h2 id="server-refs">See also</h2>
+  <ul>
+    <li><a href="preferences.html#prefs-audio-servers">Preferences ▸ Measuring
+        through a Phonalyser server</a> - the whole client side.</li>
+    <li><a href="theory/audio-backend.html#network">Theory ▸ A bench across the
+        network</a> - the ports, the beacon, the locks, the keepalive and what
+        the audio stream actually carries.</li>
+    <li><a href="bench.html">Measurement bench &amp; wiring</a> - the physical
+        bench the server sits on.</li>
+  </ul>
+
+<script src="help-viewer.js"></script>
+</body>
+</html>

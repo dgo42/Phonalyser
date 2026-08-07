@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — Preferences</title>
+  <title>Phonalyser.web - Preferences</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -11,181 +11,325 @@
 
   <h1>Preferences</h1>
   <p>This page covers the preference settings.  For why the audio settings
-     decide whether a measurement is trustworthy — bit-exact, exclusive
-     capture and playback — see
+     decide whether a measurement is trustworthy - bit-exact, exclusive
+     capture and playback - see
      <a href="theory/audio-backend.html">Theory of operation ▸ Audio
      backend</a>.</p>
   <p>Opened from <b>Tools ▸ Preferences</b>.  Live capture and generator
      playback are paused while the dialog is open, so device or format
      changes don't tear a running stream; <b>OK</b> applies and saves,
-     <b>Cancel</b> reverts.  The dialog is organised into five tabs:
-     <a href="#prefs-lookfeel">Look&nbsp;&amp;&nbsp;Feel</a>,
+     <b>Cancel</b> reverts.  The window <b>resizes</b>: it opens at its minimum
+     size, and widening it widens the entry fields in place rather than leaving
+     white space.  The dialog is organised into five tabs, in this
+     order:
      <a href="#prefs-audio">Audio</a>,
+     <a href="#prefs-lookfeel">Look&nbsp;&amp;&nbsp;Feel</a>,
      <a href="#prefs-oscilloscope">Oscilloscope</a>,
      <a href="#prefs-fft">FFT</a> and
-     <a href="#prefs-freqresp">Frequency&nbsp;response</a>.</p>
-
-  <h2 id="prefs-lookfeel">Look &amp; Feel</h2>
-  <p><img src="img/Preferences Look and Feel.png" alt="Preferences — Look &amp; Feel tab"/></p>
-  <table class="controls">
-    <tr><th>Setting</th><th>Notes</th></tr>
-    <tr><td>Tab orientation</td>
-        <td><code>Top</code> (a conventional tab strip) or <code>Left</code>
-            (a vertical sidebar of large icon buttons).  Applies live — no
-            restart.</td></tr>
-    <tr><td>Small icons in main tab</td>
-        <td>Shrinks the main-tab icons.  Applies live.</td></tr>
-    <tr><td>Use GPU acceleration</td>
-        <td>Renders the oscilloscope on the GPU (OpenGL / NanoVG) for a far
-            higher frame rate and enables display persistence (see the
-            <a href="#prefs-oscilloscope">Oscilloscope</a> tab).  Greyed out
-            automatically when no compatible GPU is available — the scope then
-            uses CPU rendering.</td></tr>
-    <tr><td>UI font / UI font (bold)</td>
-        <td>Fonts for axis labels, readouts and measurement tables (bold for
-            emphasised table text).  Applied on OK.</td></tr>
-  </table>
+     <a href="#prefs-freqresp">Frequency&nbsp;response</a>.
+     <b>Audio</b> is the first tab and the one the dialog opens on - it is where
+     a measurement session starts.</p>
 
   <h2 id="prefs-audio">Audio</h2>
-  <p><img src="img/Preferences Audio.png" alt="Preferences — Audio tab"/></p>
-  <p>Selects the sound back end and the input / output devices and formats —
+  <p><img src="img/Preferences Audio.png" alt="Preferences - Audio tab"/></p>
+  <p>Selects the sound back end and the input / output devices and formats -
      the settings that decide whether a measurement is bit-exact (see
      <a href="theory/audio-backend.html">Theory ▸ Audio backend</a>).</p>
   <table class="controls">
     <tr><th>Setting</th><th>Notes</th></tr>
     <tr><td>Backend</td>
-        <td>WASAPI (default, exclusive bit-exact), WDM-KS (lowest-level,
-            highest capture throughput) or JavaSound (portable / only option
-            off Windows).  Changing it re-enumerates the device lists.</td></tr>
-    <tr><td>Input — Device / Sample rate / Bit depth</td>
-        <td>The capture (ADC) device and the exact rate &amp; depth it opens
-            at.  16/24 bit at 48/96/192/384 kHz are almost universally
-            accepted; an unsupported combination is reported when capture
-            starts.</td></tr>
-    <tr><td>Output — Device / Sample rate / Bit depth</td>
-        <td>The playback (DAC) device and format, used by the generator and
-            the frequency-response sweep.</td></tr>
+        <td><b>Web Audio</b> (the default - the browser's own capture and
+            playback path, see
+            <a href="web-in-browser.html">Phonalyser in a browser</a>) or
+            <b>QA40x</b> - a QuantAsylum QA402 / QA403 analyzer driven directly
+            over WebUSB (see
+            <a href="theory/audio-backend.html#qa40x">Theory ▸ QA40x</a>).  The
+            QA40x row is listed even in a browser that cannot use it, disabled
+            and carrying its reason - <em>Requires WebUSB over https:// or
+            localhost - works in Chrome; other Chromium browsers may not expose
+            it</em> - because that is something you can act
+            on.  Changing the selection re-enumerates the device lists.  Once
+            you are connected to a <a href="#prefs-audio-servers">Phonalyser
+            server</a> the same list also carries that bench's backends, written
+            <code>&lt;server&gt; -> &lt;backend&gt;</code>; a backend the bench
+            reports as unavailable or not operational - CoreAudio on a machine
+            that is not a Mac, a QA40X with no analyzer plugged into it - is not
+            listed at all, because it is not a choice you have.</td></tr>
+    <tr><td>Input - Device / Sample rate</td>
+        <td>The capture (ADC) device and the rate it runs at.  <b>There is no
+            bit-depth setting for Web Audio</b>: the browser hands the page
+            <b>float32</b> samples downstream of the system mixer, so there is
+            no depth to choose and none to report.  The rate is likewise the one
+            Windows has configured for that device rather than one this dialog
+            picks - see
+            <a href="web-input-device.html">Windows input device</a>.  A QA40x
+            <em>does</em> have a depth, and shows the combo.</td></tr>
+    <tr><td>Output - Device / Sample rate</td>
+        <td>The playback (DAC) device and rate, used by the generator and the
+            frequency-response sweep.  Same rule: float32 out through the
+            browser, with a bit depth offered only for the QA40x.</td></tr>
   </table>
-  <div class="note">In exclusive mode a device admits one application at a
-     time.  If a list is empty or a device won't open, close other audio apps
-     and re-open the dialog to re-enumerate.</div>
+  <div class="note">Web Audio does <b>not</b> take a device exclusively - the
+     browser goes through the system mixer, so other applications keep playing
+     and recording alongside it.  That is convenient and it is also the reason a
+     browser capture is never bit-exact: whatever the mixer does to the stream is
+     already done by the time the page sees it.  The <b>QA40x is</b> exclusive:
+     WebUSB claims the analyzer's interface, so it must not be open in the
+     QuantAsylum software or in another tab.  If a device list is empty or a
+     device will not open, grant the page microphone permission, close whatever
+     holds the analyzer, and press <b>Scan devices</b>.</div>
+  <div class="note"><b>QA40x.</b> The QA40x backend appears in the list only when
+     a QA402 / QA403 is connected and the browser supports WebUSB.  With it selected the input and
+     output devices are the one analyzer, and its input and output <b>sample rates
+     are locked equal</b> (one hardware clock) - set one and the other follows.
+     Full-scale is the device's own range calibration, so manual calibration is
+     not possible: the Calibrate dialog opens read-only and simply shows the
+     card's built-in full-scale for each channel.  The rate list <b>follows the
+     model that is actually attached</b>: 48 / 96 / 192 kHz on both, plus
+     <b>384 kHz on a QA403</b>, whose sample-rate register has a fourth code the
+     QA402 does not have.  Capture and generator both run at whichever rate you
+     pick - the two directions share that one clock at every rate.</div>
+  <div class="note"><b>Before the analyzer appears at all</b> the browser has to
+     have granted this page access to it, and the grant is raised by
+     <b>Scan devices</b> - nothing else prompts, including selecting QA40x in
+     the list.  Until then a plugged-in QA403 lists as nothing.  The full set of
+     prerequisites - Google Chrome, <code>https://</code> or
+     <code>localhost</code>, and a WinUSB-class driver on Windows - is in
+     <a href="web-in-browser.html#webusb">Phonalyser in a browser ▸ the QA40x
+     and what WebUSB needs</a>.</div>
+  <div class="note"><b>The analyzer is handed back when nothing is using it.</b>
+     As soon as the last consumer detaches, it is parked at its safe ranges,
+     stopped and released.  The WebUSB claim is exclusive, so an idle but still
+     claimed analyzer would lock the QuantAsylum software - and every other tab
+     - out of it for as long as this page stayed open.</div>
+  <div class="note"><b>QA40x settings.</b> With the QA40x selected, the
+     <b>QA40x preferences</b> button appears next to the backend list - it opens
+     the analyzer's own settings, which no other backend has.  The dialog reads the instrument's
+     identity and live telemetry straight off it (firmware version, serial
+     number, USB voltage and current, ISO-supply current on the QA402, board
+     temperature and the two capability words) and switches the <b>front-panel
+     I2S expansion port</b> on or off.  The port is started before a measurement
+     session and stopped after it; its frame width comes from the
+     <b>output</b> bit depth, so while I2S is on that list offers the port's
+     <b>16 and 32 bits</b> in place of the analyzer's 24 - the input stays at 24
+     throughout.  Like every other page of the dialog these take effect only on
+     OK.  Switching the port is <b>experimental</b>: QuantAsylum documents the
+     connector itself, but not the USB registers that enable it and set its frame
+     width, so that control path is not vendor-confirmed - as the dialog itself
+     states.</div>
+  <p><img src="img/Preferences Audio QA40x.png" alt="Preferences - Audio tab with the QA40x backend selected"/></p>
+  <p><img src="img/QA40x settings.png" alt="QA40x settings dialog"/></p>
 
-  <h3 id="prefs-audio-card">Card — per-card calibration profiles</h3>
-  <p>Full-scale calibration — the volts RMS that map to the converter's ±1.0
+  <h3 id="prefs-audio-buttons">The buttons on the backend row</h3>
+  <p>Three buttons share the row with the backend list.  Two are always
+     present; the third appears only for a backend that has settings of its
+     own.</p>
+  <table class="controls">
+    <tr><th>Button</th><th>What it does</th></tr>
+    <tr><td><b>Scan devices</b></td>
+        <td>Reads the selected backend's device list again - the explicit
+            "I don't trust this list" gesture.  For Web Audio it re-runs the
+            browser's own <code>enumerateDevices</code>, so a card plugged in
+            or pulled out since the page loaded appears (or disappears)
+            <b>without reloading the page</b>.  It also re-composes the backend
+            list itself, which is how an analyzer connected since start-up shows
+            up as a backend at all, and it asks a
+            <a href="#prefs-audio-servers">connected server</a> for its backends
+            again.  <b>For the QA40x this click is the point</b>: WebUSB opens
+            its device chooser only from a real user gesture, so the automatic
+            enumeration at page load can list only analyzers you have already
+            granted - pressing Scan is what raises the chooser for a new one.  A
+            scan never disturbs a measurement: for a remote bench the device
+            list is only read, never re-selected.</td></tr>
+    <tr><td><b>Servers...</b></td>
+        <td>Opens the <a href="#prefs-audio-servers">server list</a> - the
+            Phonalyser servers on the network, and the ones you added by
+            address.  It is there whenever the installation carries the network
+            module, and it does not depend on the selected backend: a bench has
+            to be chosen before any of its backends can be.</td></tr>
+    <tr><td><b>&lt;backend&gt; preferences</b></td>
+        <td>The selected backend's own settings, and the button is
+            <b>named after that backend</b> - <b>QA40x preferences</b> for a
+            QA402 / QA403, whether the analyzer is on this machine or on a bench
+            across the network.  It is hidden for a backend that has no settings
+            of its own, which is every other one at present.</td></tr>
+  </table>
+
+  <h3 id="prefs-audio-card">Card - per-card calibration profiles</h3>
+  <p>Full-scale calibration - the volts RMS that map to the converter's ±1.0
      digital full-scale, and therefore the absolute dBV axis, the scope's
-     voltage readouts and the generator's output level — belongs to the
+     voltage readouts and the generator's output level - belongs to the
      <em>physical card</em>, not to the back end or to the device name a driver
      happens to report.  A <b>card profile</b> ties that calibration to the card
      itself and follows it across back ends, because the same card shows up under
-     different names — WASAPI wraps it as <code>Line (…)</code> or
-     <code>Speakers (…)</code>, WDM-KS reports the bare name, ALSA appends a
-     <code>[plughw:…]</code> suffix.  A profile keeps a single list of
-     <b>recognized device names</b> — the names and name-fragments that identify
-     this card — so one calibration serves it however the driver spells the
-     device.</p>
+     different names - the browser wraps it as <code>Line (...)</code> or
+     <code>Speakers (...)</code>, a bench may report the bare name or an ALSA
+     <code>[plughw:...]</code> suffix.  A profile keeps a single list of
+     <b>recognized device names</b> - the names and name-fragments that identify
+     this card - so one calibration serves it however the device is spelled.</p>
+  <div class="note">Matching is against the <b>name you see in the device
+     list</b>.  The browser's own device identifiers are opaque strings that mean
+     nothing to a human and change between sessions, so a profile is resolved
+     against the device's displayed label instead - which means you can write a
+     <code>match</code> pattern by reading the Device combo, exactly as on the
+     desktop.</div>
   <p>A profile records, in one place: the card's <b>name</b>; which directions it
      is calibrated for (<b>Provides:</b> input, output or both); whether it has one
      channel or two (<b>Channels:</b> Mono or Stereo); how its two channels track
      each other per direction (<b>Coupling:</b> Linked or Independent); its list of
      switchable <b>ranges</b> (attenuator / gain / DIP positions); and the measured
-     full-scale of each range — <b>always stored per channel</b>, since no two
+     full-scale of each range - <b>always stored per channel</b>, since no two
      physical channels are calibrated exactly alike.</p>
-  <p>All card profiles live in a <code>devices.yaml</code> file kept next to your
-     <code>preferences.yaml</code> in the user data directory — the same
-     editable-copies pattern as the interface-text and help files, which are
-     seeded there on first run and then belong to you.  It ships pre-seeded with
+  <p>All card profiles live in <b>one document in the browser's local storage</b>,
+     under the key <code>phonalyser.devices</code>.  It is seeded on first run with
      ready profiles for a few well-known interfaces (the <b>E1DA Cosmos ADC</b>,
      the <b>JLsounds I2SoverUSB</b> and the <b>CUBILUX CB5</b>) and everything you
-     edit in this tab is written back to it.  The file is plain text and
-     hand-editable, so you can add or adjust cards outside the dialog as well.</p>
+     edit in this tab is written back to it.</p>
+  <div class="note">Because it is browser storage and not a file, the store is
+     <b>per browser and per site</b>: your calibrations do not follow you to
+     another browser or another machine, and clearing this site's data deletes
+     them.  There is no <code>devices.yaml</code> and no user data directory in
+     this build - that is the desktop application's arrangement.</div>
 
-  <h4 id="prefs-audio-devices-file">The <code>devices.yaml</code> file — manual editing</h4>
-  <p>The file sits in the user data directory, beside <code>preferences.yaml</code>:</p>
-  <table>
-    <tr><th>OS</th><th>Location</th></tr>
-    <tr><td><b>Windows</b></td><td><code>%APPDATA%\Phonalyser.web\devices.yaml</code></td></tr>
-    <tr><td><b>macOS</b></td><td><code>~/Library/Application Support/Phonalyser/devices.yaml</code></td></tr>
-    <tr><td><b>Linux</b></td><td><code>~/.config/Phonalyser/devices.yaml</code></td></tr>
-  </table>
-  <p>It is plain YAML.  The file opens with a header comment and two version
-     markers, then one block per card.  An annotated card, with every key the
-     application reads:</p>
-  <pre><code>formatVersion: 1        # file-format marker — changes only if the schema itself changes
-contentVersion: 2       # catalogue generation — drives the once-per-release upgrade merge (below)
-audioDevices:           # the list of card profiles
-  - name: E1DA Cosmos ADC          # logical profile name shown in the Card combo (required)
-    match: [ "E1DA Cosmos ADC" ]   # recognized device names: substrings (case-insensitive) that identify this card
-    input:                         # a per-direction block — "output:" is the same shape
-      channels: INDEPENDENT        # MONO = one channel; LINKED = two channels, shared range switch; INDEPENDENT = two channels, each its own
-      ranges:                      # one row per front-end position (attenuator / gain / DIP)
-        - { label: "1.7V", fsVrms: { left: 1.7, right: 1.7 }, calibrated: true }   # measured full-scale per channel; calibrated: true = you measured this row (upgrades never overwrite it)
-        - { label: "3.5V", fsVrms: { left: 3.5, right: 3.5 } }                     # a range you have not yet calibrated — still the seeded nominal
-      activeRange: { left: "1.7V", right: "3.5V" }   # INDEPENDENT: a { left, right } map, each channel's own active row
-  - name: I2SoverUSB
-    match: [ "I2SoverUSB", "JLsounds" ]
-    output:
-      channels: LINKED
-      ranges:
-        - { label: "default", fsVrms: { left: 2, right: 2 } }
-      activeRange: "default"       # LINKED / MONO: a single label (both channels switch together)</code></pre>
+  <h4 id="prefs-audio-devices-file">The device store - reading and editing it by hand</h4>
+  <p>The ordinary way to read or edit it is
+     <a href="json-config.html"><b>Tools ▸ Devices ▸ Current</b></a>, which opens
+     the live document in a JSON editor that knows the shape below and will not let
+     an edit through without checking it.  Everything this section describes is
+     what you see in that window.</p>
+  <p>The store can also be reached with the browser's developer tools, which is the
+     raw fallback - no completion, no checking, and a save takes effect only on the
+     next load: open them with <kbd>F12</kbd>, go to
+     <b>Application ▸ Storage ▸ Local Storage</b>, select this page's origin and
+     look at the <code>phonalyser.devices</code> row.  Use it when you want to copy
+     the whole document somewhere, or to read a store the application will not
+     start on.</p>
+  <p>The value is <b>JSON</b>: two version markers and one object per card.
+     An annotated store, with every key the application reads:</p>
+  <pre><code>{
+  "formatVersion": 1,        // schema marker - changes only if the schema itself changes
+  "contentVersion": 2,       // catalogue generation - drives the once-per-release upgrade merge (below)
+  "audioDevices": [          // the list of card profiles
+    {
+      "name": "E1DA Cosmos ADC",         // logical profile name shown in the Card combo (required)
+      "match": [ "E1DA Cosmos ADC" ],    // recognized device names: substrings (case-insensitive) that identify this card
+      "input": {                         // a per-direction block - "output" is the same shape
+        "channels": "INDEPENDENT",       // MONO = one channel; LINKED = two channels, shared range switch; INDEPENDENT = two channels, each its own
+        "ranges": [                      // one row per front-end position (attenuator / gain / DIP)
+          { "label": "1.7V", "fsVrms": { "left": 1.7, "right": 1.7 }, "calibrated": true },   // measured full-scale per channel; calibrated = you measured this row (upgrades never overwrite it)
+          { "label": "3.5V", "fsVrms": { "left": 3.5, "right": 3.5 } }                        // a range you have not yet calibrated - still the seeded nominal
+        ],
+        "activeRange": { "left": "1.7V", "right": "3.5V" }   // INDEPENDENT: a { left, right } map, each channel's own active row
+      }
+    },
+    {
+      "name": "I2SoverUSB",
+      "match": [ "I2SoverUSB", "JLsounds" ],
+      "output": {
+        "channels": "LINKED",
+        "ranges": [ { "label": "default", "fsVrms": { "left": 2, "right": 2 } } ],
+        "activeRange": "default"         // LINKED / MONO: a single label (both channels switch together)
+      }
+    }
+  ],
+  "bindings": {                          // device -> card choices you made in the dialog; omitted entirely while nothing is bound
+    "Line (E1DA Cosmos ADC)": "E1DA Cosmos ADC"   // this exact device name always resolves to this card, whatever "match" would say
+  }
+}</code></pre>
+  <p class="note">The <code>//</code> comments above are explanation, not part of
+     the document - JSON has no comments, so a value you paste back must not
+     contain them.</p>
   <p>What the keys mean:</p>
   <ul>
     <li><code>match</code> is the <b>Recognized device names</b> list from the card
         editor: each entry is matched as a substring (case-insensitive) against the
         device name the driver reports, and when several cards could match, the
-        <b>most specific</b> (longest matching) entry wins.  Binding a device to a
-        card simply appends that device's name here.</li>
+        <b>most specific</b> (longest matching) entry wins.  This is the
+        <em>guess</em>, used when you have not said which card a device is.</li>
+    <li><code>bindings</code> is the map of choices you <em>did</em> make: picking a
+        card in the <b>Card</b> combo records the selected device's name against that
+        card here.  A binding is consulted <b>before</b> the <code>match</code> rule,
+        so a card that merely recognises part of a device's name can no longer
+        overrule the one you picked - which is what used to happen with two
+        interfaces whose names share a word.  A binding naming a card that has since
+        been deleted or renamed is <em>not</em> an error: it falls through to ordinary
+        matching, so a stale entry can never leave a device uncalibrated.  The block
+        is left out of the file entirely while nothing is bound.  The same OK also
+        appends the device's exact name to that card's <code>match</code> list as a
+        visible alias, so you will see the name in both places - the
+        <code>bindings</code> entry is the one that decides.</li>
     <li><code>fsVrms</code> is the range's full-scale in volts RMS.  The application
-        always writes the <code>{ left, right }</code> pair — each channel carries
-        its own measured value — though a single number applies to both sides if you
+        always writes the <code>{ left, right }</code> pair - each channel carries
+        its own measured value - though a single number applies to both sides if you
         type one by hand.</li>
-    <li><code>calibrated: true</code> marks a row you actually measured through a
+    <li><code>"calibrated": true</code> marks a row you actually measured through a
         Calibrate flow; the upgrade merge never overwrites it.  A row without the flag
         is still the seeded nominal.</li>
+    <li><code>"calibrationFromDevice": true</code> (add it inside the <code>input</code>
+        or <code>output</code> block) marks a card whose full-scale is reported by
+        the instrument itself (a QA40x-class device): its ranges stay switchable, but
+        the app never writes calibration into them and <b>their full-scale values are
+        read from the device itself, not delivered by a catalog upgrade</b>.  Omit the
+        key for an ordinary card you calibrate yourself.</li>
     <li><code>activeRange</code> is the selected row.  <b>INDEPENDENT</b> uses a
         <code>{ left, right }</code> map (each channel its own row); <b>LINKED</b> and
         <b>MONO</b> use a single label.</li>
   </ul>
-  <p>Edit the file only while the application is <b>closed</b> — it is read once at
-     startup and rewritten whenever the app saves, so edits made while it runs are
-     overwritten.  Entries with no <code>name</code> (or ranges with no
-     <code>label</code>) and unrecognised keys are skipped with a warning in the log
-     rather than aborting the load, so a small mistake costs one entry, not the whole
-     file.  Deleting the file makes the next launch re-seed the built-in defaults,
-     which <b>loses any cards you added or calibrated</b>.</p>
+  <p>Editing it <em>in the developer tools</em> has one rule the built-in editor
+     does not: do it with <b>the application's tab closed</b>, then reopen the page.
+     The store is read once at start-up and rewritten whenever the app saves, so an
+     edit typed into storage while the app is running is simply overwritten.  The
+     <a href="json-config.html">JSON editor</a> has no such problem - it hands the
+     document to the running application itself, which is why its changes take
+     effect at once.  Entries with no
+     <code>name</code> (or ranges with no <code>label</code>) and unrecognised keys
+     are skipped with a warning in the console rather than aborting the load, so a
+     small mistake costs one entry, not the whole store.  Deleting the
+     <code>phonalyser.devices</code> key makes the next load re-seed the built-in
+     defaults, which <b>loses any cards you added or calibrated</b>.</p>
+  <p class="note" id="prefs-store-quarantine">A stored document that <em>exists</em> but cannot be parsed at all
+     is never silently replaced by defaults.  In the browser these are entries in
+     the page's <b>local storage</b>, not files on disk, so the quarantine is a
+     copy under a new key rather than a file beside another: the unreadable value is
+     copied to <code>&lt;key&gt;.corrupt</code> and the failure is logged, so what
+     survives in it can still be recovered - read it out with the browser's
+     developer tools - and the next save cannot overwrite the evidence.  This
+     covers the settings document and the device store alike.  Local storage is
+     per browser and per origin: clearing site data for this page discards both,
+     and they do not follow you to another browser or another machine.</p>
 
   <p><b>Upgrades never lose your work.</b>  The seeded catalogue carries a
      <code>contentVersion</code>; when a new release ships a higher number the merge
      runs <b>once</b>, then records the new number so it never repeats.  For each
-     catalogue card it finds your matching card — by name <em>or</em> by a shared
-     recognized-name entry, so a card you renamed is still found — and reconciles only
+     catalogue card it finds your matching card - by name <em>or</em> by a shared
+     recognized-name entry, so a card you renamed is still found - and reconciles only
      its <b>range table</b>: a range the release added appears in your store, and a
-     range you both have is refreshed to the release's nominal full-scale —
+     range you both have is refreshed to the release's nominal full-scale -
      <em>except</em> a range you calibrated, which keeps its measured value and its
      <code>calibrated</code> flag.  A card that is entirely new in the release is
      added whole.  Everything else is yours and is never touched: your calibrated
      values, the cards and ranges you added by hand, your recognized-name list, your
      channel modes and your active-range selections all survive.</p>
 
-  <p>Each direction — <b>Input</b> and <b>Output</b> — carries its own
+  <p>Each direction - <b>Input</b> and <b>Output</b> - carries its own
      <b>Card</b> combo above its device controls.  Bind a card profile when you
      want any of:</p>
   <ul>
     <li>several interfaces you switch between, each with its own full-scale;</li>
-    <li>one interface with a switchable analog front-end — an attenuator, an
-        input-gain step or a DIP setting — where each position has a different
+    <li>one interface with a switchable analog front-end - an attenuator, an
+        input-gain step or a DIP setting - where each position has a different
         full-scale;</li>
     <li>the same card reached under more than one back end, so a single
         calibration is reused instead of re-measured per back end.</li>
   </ul>
-  <p>A plain sound card with a fixed front-end needs no profile — leave its
+  <p>A plain sound card with a fixed front-end needs no profile - leave its
      <b>Card</b> selection empty and it behaves exactly as before this feature
      existed, drawing on the single shared full-scale that predates card
      profiles.</p>
 
   <h4 id="prefs-audio-card-combo">The Card combo and the edit button</h4>
   <p>The combo lists every card profile that has at least one range in this
-     direction — the pre-seeded known cards included — plus <code>New card…</code>;
+     direction - the pre-seeded known cards included - plus <code>New card...</code>;
      a device with no card shows an <em>empty</em> selection.  A small <b>pencil
      (edit) button</b> beside the combo opens the
      <a href="#prefs-audio-card-editor">card editor</a> for the selected card.</p>
@@ -193,25 +337,35 @@ audioDevices:           # the list of card profiles
      matches the new device name against every card's recognized-name list and, when
      one correlates, selects it and shows its ranges.  When more than one could
      match, the most specific (longest matching) recognized name wins.  Selecting the
-     combo entry and pressing <b>OK</b> is what <em>binds</em> the device — it appends
-     the device's exact name to that card's recognized-name list and removes the same
-     name from any other card, so one device is never bound to two cards at once.</p>
+     combo entry and pressing <b>OK</b> is what <em>binds</em> the device, and it does
+     two things at once: it records the device->card choice in the store's
+     <a href="#prefs-audio-devices-file"><code>bindings</code></a> map - which is what
+     resolves the device from then on, ahead of any name matching - and it appends the
+     device's exact name to that card's recognized-name list as a visible alias.  A
+     device is never bound to two cards at once, and it is the <code>bindings</code>
+     map that guarantees it: there is exactly one entry per device, so re-binding to
+     another card <em>replaces</em> that entry.  The alias left behind in the previous
+     card's list is not removed - but it no longer decides anything, and the device
+     follows the new card.</p>
   <p>When <b>no card matches</b> the device, the app does not bind one silently: it
-     offers to make one — <em>Create a new card for '&lt;device&gt;'?</em> — and on
+     offers to make one - <em>Create a new card for '&lt;device&gt;'?</em> - and on
      yes opens the card editor pre-filled from the device name.  You can also pick
-     <code>New card…</code> yourself, or leave the selection empty to keep the device
+     <code>New card...</code> yourself, or leave the selection empty to keep the device
      unbound.</p>
   <div class="note">The application never binds a card silently.  Two identical
-     interfaces report identical names and are indistinguishable to software —
+     interfaces report identical names and are indistinguishable to software -
      only you know which physical box is plugged into which signal chain, so an
      uncertain match is always offered for confirmation rather than applied on its
      own.</div>
   <p>Leaving the selection empty keeps the device unbound: it falls back to the
      single shared full-scale that predates card profiles, and the range table stays
-     hidden.  This global calibration is kept <b>only for backwards compatibility and
-     will be removed in the release after the current one</b> — <b>bind every
-     measurement device to a card</b> so its calibration lives in the card profile.
-     Selecting <code>New card…</code> creates a profile whose first range is
+     hidden.  That global calibration <b>survives only for the current session and is
+     never written back to the settings document</b> - a document from before 1.2
+     is still read once, and the entries disappear with the first save.  The cards in
+     the <a href="#prefs-audio-devices-file">device store</a> are the persistent home
+     of every full-scale value, so
+     <b>bind every measurement device to a card</b>.
+     Selecting <code>New card...</code> creates a profile whose first range is
      seeded from the calibration currently in effect, so the new card starts already
      calibrated to wherever you were.</p>
 
@@ -226,34 +380,37 @@ audioDevices:           # the list of card profiles
         <td>The logical name shown in the Card combo.  Must be non-empty and
             unique.</td></tr>
     <tr><td>Provides</td>
-        <td><b>Input only</b>, <b>Output only</b> or <b>Both</b> — which directions
+        <td><b>Input only</b>, <b>Output only</b> or <b>Both</b> - which directions
             this card is calibrated for.  A card appears only in the combos for the
             directions it provides.  Narrowing a card that already carries calibrated
             ranges in a dropped direction asks first, since those ranges would be
             deleted.</td></tr>
     <tr><td>Channels</td>
-        <td><b>Mono</b> (one physical channel — a single full-scale serves both
+        <td><b>Mono</b> (one physical channel - a single full-scale serves both
             sides) or <b>Stereo</b> (two channels).</td></tr>
     <tr><td>Recognized device names</td>
-        <td>One device name — or a fragment of one — per line.  This card is chosen
+        <td>One device name - or a fragment of one - per line.  This card is chosen
             whenever any line appears (as a substring, case-insensitive) in the
             device name the driver reports; when several cards could match, the most
-            specific line wins.  This one list is both the recognition patterns and
-            the bound device names — binding a device just appends its name here.</td></tr>
-    <tr><td>Input / Output — Coupling</td>
+            specific line wins.  The list holds the card's recognition patterns plus
+            the visible aliases appended when you bind a device to it.  The binding
+            itself does not live here: it is an entry in the store's
+            <a href="#prefs-audio-devices-file"><code>bindings</code></a> map, and it
+            wins over any matching this list produces.</td></tr>
+    <tr><td>Input / Output - Coupling</td>
         <td>Per direction, how a <b>Stereo</b> card's two channels track each other.
             <b>Linked</b> switches both channels' ranges together, but each channel
-            still keeps its <em>own</em> calibrated full-scale value — coupling shares
+            still keeps its <em>own</em> calibrated full-scale value - coupling shares
             only which range is <em>selected</em>, never the measured volts.
             <b>Independent</b> lets each channel select its own active range.  A Mono
             card ignores this.</td></tr>
   </table>
-  <p>The Input and Output groups grey out to match <b>Provides</b> — an input-only
+  <p>The Input and Output groups grey out to match <b>Provides</b> - an input-only
      card shows its Output group disabled, and vice-versa.</p>
 
   <h4 id="prefs-audio-ranges">Ranges table</h4>
-  <p>A <b>range</b> is one setting of the card's analog front-end — an attenuator
-     step, an input-gain position, a DIP or relay setting — each with its own
+  <p>A <b>range</b> is one setting of the card's analog front-end - an attenuator
+     step, an input-gain position, a DIP or relay setting - each with its own
      full-scale voltage.  The table lists one row per range:</p>
   <table class="controls">
     <tr><th>Column</th><th>Notes</th></tr>
@@ -262,23 +419,29 @@ audioDevices:           # the list of card profiles
             Exactly one range is active at a time; switch it to match the
             front-end position you have set on the hardware.</td></tr>
     <tr><td>Label</td>
-        <td>An editable name for the range — e.g. the attenuator or gain position
+        <td>An editable name for the range - e.g. the attenuator or gain position
             it stands for (<code>0 dB</code>, <code>−20 dB</code>, a DIP code).</td></tr>
     <tr><td>Add / Remove</td>
         <td>Add a range for another front-end position, or remove one.</td></tr>
   </table>
   <p>The row carries <em>no</em> full-scale voltage field.  A range's full-scale
-     value is not typed here — it is set exclusively by running the crosshair
+     value is not typed here - it is set exclusively by running the crosshair
      <a href="#prefs-audio-calibrate">Calibrate</a> flow with that range marked
      active, which writes the measured full-scale into it.</p>
   <p>A plain card that never changes its front-end keeps a single row.  A
      switchable interface gets one row per position, and you flip the active
      marker whenever you change the hardware.</p>
+  <div class="note"><b>A range switch takes effect at once, on that channel
+     alone.</b>  Marking a range active applies its full-scale to the channel you
+     marked it on immediately, rather than waiting for <b>OK</b> to write both
+     channels together.  So on an <b>Independent</b> card you can sit the two
+     channels on different ranges and watch each one's readout follow its own
+     switch as you go.</div>
   <p>How many active columns the table shows follows the card's <b>Channels</b> and
      per-direction <b>Coupling</b>, both set in the
      <a href="#prefs-audio-card-editor">card editor</a>:</p>
   <ul>
-    <li><b>Independent</b> stereo card — the active marker splits into two columns,
+    <li><b>Independent</b> stereo card - the active marker splits into two columns,
         headed <b>Left</b> and <b>Right</b>, each carrying exactly one active range
         and its own editable label, so the two channels track their own front-end
         position separately.  This is the <b>E1DA Cosmos ADC</b>, whose left and
@@ -286,29 +449,54 @@ audioDevices:           # the list of card profiles
         matches the left DIP and the right column to the range that matches the
         right.  The bundled Cosmos card ships in this form with every DIP position
         listed, so its range table opens with both columns present.</li>
-    <li><b>Linked</b> stereo card, or a <b>Mono</b> card — a single active column, so
+    <li><b>Linked</b> stereo card, or a <b>Mono</b> card - a single active column, so
         both channels switch ranges together.  (A Linked card still calibrates each
-        channel separately — only the range <em>selection</em> is shared.)</li>
+        channel separately - only the range <em>selection</em> is shared.)</li>
   </ul>
 
-  <h4 id="prefs-audio-example">Worked example — two cards on one bench</h4>
+  <h4 id="prefs-audio-ranges-qa40x">A QA40x input range is not the dBV it is called</h4>
+  <p>For a QA402 / QA403 - on this machine or on a
+     <a href="#prefs-audio-servers">bench across the network</a> - every
+     <b>input</b> row carries a second label after the plain one:</p>
+  <p><code>0 "dBV" real 0 dBFS or -9 dBV</code></p>
+  <p>It is there because the analyzer's range names are not RMS voltages, and
+     reading them as such is off by about 9 dB.  A QA "<i>N</i>&nbsp;dBV" input
+     range is an <b><i>N</i>&nbsp;dBFS reference measured peak-to-peak across the
+     differential pair</b>; the RMS full-scale voltage that corresponds to it sits
+     roughly 9&nbsp;dB lower - a factor of 2 for peak-to-peak versus peak, and
+     √2 for peak versus RMS, is 2·√2 ≈ 9.03&nbsp;dB.  So the range the analyzer
+     calls 0&nbsp;dBV is a full scale of about −9&nbsp;dBV RMS, and that is the
+     number every volt, dBV and derived figure in this application is computed
+     from.</p>
+  <p>Three things follow.  The second label is <b>display only</b>: the stored
+     card keys, the range radios and the values written into the
+     device store keep the plain <code><i>N</i>&nbsp;dBV</code>, so
+     nothing in your store changes because of it.  The <b>output</b> ranges are
+     left alone - those are genuine dBV, with no hidden peak-versus-RMS term.
+     And a loopback measurement of a QA40x reads its own generator about
+     √2&nbsp;(3&nbsp;dB) louder than the level asked for, which is not a fault
+     in either direction but the balanced output driving a differential input;
+     see <a href="theory/audio-backend.html#qa40x">Theory ▸ The QA40x analyzer
+     backend</a>.</p>
+
+  <h4 id="prefs-audio-example">Worked example - two cards on one bench</h4>
   <p>A typical bench has an <b>E1DA Cosmos ADC</b> on the input, whose DIP
      attenuator switches its full-scale, and a separate <b>JLsounds</b> card in
      use as well.  Bind each once and their calibrations never cross:</p>
   <ol>
     <li>Select the Cosmos in the input <b>Device</b> combo.  Its <b>Card</b> combo
-        pre-selects the known card <b>E1DA Cosmos ADC</b> — a ready profile seeded
-        into <code>devices.yaml</code> — with a nominal range for every DIP
+        pre-selects the known card <b>E1DA Cosmos ADC</b> - a ready profile seeded
+        into the device store - with a nominal range for every DIP
         position, <code>1.7V</code> up to <code>43V</code>, already in place.
         Confirm it by selecting it and pressing <b>OK</b>.  (For an unrecognised
-        card you would instead choose <code>New card…</code> and add the rows by
+        card you would instead choose <code>New card...</code> and add the rows by
         hand.)</li>
     <li>Because the Cosmos DIPs move per channel, its table shows a <b>Left</b>
         and a <b>Right</b> active column.  In each column mark the range that
-        matches that channel's DIP position — the two columns track the two
+        matches that channel's DIP position - the two columns track the two
         switches independently.</li>
     <li>Calibrate those ranges through the crosshair
-        <a href="fft.html#fft-utility-calibrate">Calibrate</a> flow — on the scope
+        <a href="fft.html#fft-utility-calibrate">Calibrate</a> flow - on the scope
         only the row for the <b>currently measured channel</b> is live (the other
         row is disabled and stays empty), writing that channel's measured full-scale
         into its active range; measure the other channel to calibrate its row in turn
@@ -321,45 +509,61 @@ audioDevices:           # the list of card profiles
   </ol>
   <p>Because flipping the DIP means nothing more than switching which range is
      active, and the values follow the card rather than the back end, switching
-     between the two cards — or reopening the Cosmos under a different back end
-     once its name is bound there — never mixes their full-scales up.</p>
+     between the two cards - or reopening the Cosmos under a different back end
+     once its name is bound there - never mixes their full-scales up.</p>
 
   <h4 id="prefs-audio-calibrate">How calibration writes into a card</h4>
   <p>The crosshair <b>Calibrate</b> flows anchor the scale against a known
-     reference — the
+     reference - the
      <a href="oscilloscope.html#scope-utility-calibrate">scope</a> and
      <a href="fft.html#fft-utility-calibrate">FFT</a> ADC calibration for the
      input, and the
      <a href="generator.html#generator-dac-calibrate">generator DAC calibration</a>
      for the output.  Each writes the measured full-scale into the <em>active range
-     of the currently bound card</em>.  If the selected device has no profile yet,
-     the first calibration creates one automatically — logical name from the device,
-     a recognized-name entry for it, and one seeded range — so you get a card profile
+     of the card the device resolves to</em>.  If the selected device has no profile yet,
+     the first calibration creates one automatically - logical name from the device,
+     a recognized-name entry for it, and one seeded range - so you get a card profile
      simply by calibrating, without visiting this tab first.</p>
   <p>Calibration is <b>always per channel</b>.  A <b>Stereo</b> card opens the shared
      two-row dialog with a <b>Left</b> and a <b>Right</b> field, because no two
-     physical channels are calibrated exactly alike — coupling shares only which
+     physical channels are calibrated exactly alike - coupling shares only which
      range is selected, never the measured values; a <b>Mono</b> card shows a single
      row.  On the <b>scope</b> ADC path only the row for the <b>currently measured
-     channel</b> is live — the other row is disabled and stays empty, so you
+     channel</b> is live - the other row is disabled and stays empty, so you
      calibrate one channel at a time; on the <b>FFT</b> ADC path only the row for the channel
      being analyzed is enabled, since the FFT works one channel at a time; the
      <b>DAC</b> path drives both rows.  Each row writes only its own channel's active
      range.</p>
 
   <h4 id="prefs-audio-when">When the values take effect</h4>
-  <p>The bound card's active-range full-scale is resolved and applied at these
-     moments: when <b>capture starts</b> (input), when the <b>generator starts</b>
-     (output), and when you close this dialog with <b>OK</b>.  From that point the
-     resolved value drives the FFT's absolute dBV axis, the oscilloscope's voltage
-     readouts and the generator's output scaling.  A device with no profile falls
-     back to the single shared full-scale (a deprecated fallback that will be removed
-     — bind a card), so nothing changes until a card is bound or calibrated.</p>
+  <p>The card's active-range full-scale is resolved - by the
+     <a href="#prefs-audio-devices-file"><code>bindings</code></a> entry for the
+     device if you made one, otherwise by the <code>match</code> rule - and applied
+     at these moments: when <b>capture starts</b> (input), when the <b>generator
+     starts</b> (output), and when you close this dialog with <b>OK</b>.  From that
+     point the resolved value drives the FFT's absolute dBV axis, the oscilloscope's
+     voltage readouts and the generator's output scaling.</p>
+  <p>Two cases fall back to the single shared full-scale that predates card profiles:
+     a device that resolves to no card at all, and a card whose active range is still
+     <b>uncalibrated</b> - a row holding zero is an empty row, not a measurement, so
+     it contributes no calibration of its own.  That shared value is <b>runtime state
+     only</b>: it is no longer written to the settings document (a document from
+     before 1.2 is still read once, and the entries disappear with the first save),
+     because saving it would store the last calibrated card you selected as the
+     machine-wide default and hand it to the next uncalibrated device as though it had
+     been measured there.  The persistent home of every full-scale value is the
+     <a href="#prefs-audio-devices-file">device store</a> - the cards.</p>
+  <p>Because an uncalibrated selection measures on a nominal placeholder rather than
+     on your hardware, closing this dialog with <b>OK</b> after changing the backend or
+     either device warns you once when the committed selection has no calibration
+     behind it, naming the input, the output or both.  A device that reports its own
+     full-scale (<code>calibrationFromDevice</code>, a QA40x-class instrument) is
+     exempt - there is nothing for you to calibrate.</p>
   <p>A value also takes effect <b>immediately when you close the calibration dialog
      with the <a href="#prefs-audio-calibrate">Calibrate</a> button</b>: the new
-     full-scale is written into <code>devices.yaml</code> and applied through the
-     live card binding to every consumer — the oscilloscope's scaling, the FFT's dBV
-     axis and the generator's amplitude ceiling — <b>without a restart</b>.</p>
+     full-scale is written into the device store and applied through the
+     live card binding to every consumer - the oscilloscope's scaling, the FFT's dBV
+     axis and the generator's amplitude ceiling - <b>without a restart</b>.</p>
   <div class="note">Every card resolves each channel to its <em>own</em> calibrated
      full-scale, so every scope trace and measurement uses its own channel's value
      and the FFT's absolute dBV axis follows the analyzed channel.  An
@@ -367,8 +571,240 @@ audioDevices:           # the list of card profiles
      <em>different</em> ranges; a <b>Linked</b> card keeps both on the same range but
      still uses each channel's own measured value.</div>
 
+  <h3 id="prefs-audio-servers">Measuring through a Phonalyser server</h3>
+  <p>The hardware does not have to be wired to the machine you are sitting at.
+     The <b>desktop</b> Phonalyser running as a <b>server</b> on the machine
+     that <em>is</em> wired to the converters turns it into a <b>bench</b>, and
+     this application then measures through it: you pick one of the bench's
+     backends in the list above and everything - devices, formats, cards,
+     calibration, the generator, the sweeps - works as though the hardware were
+     plugged in here.  For what happens on the wire, see
+     <a href="theory/audio-backend.html#network">Theory ▸ A bench across the
+     network</a>.</p>
+  <div class="note">There is deliberately <b>no authentication</b>.  A server is a
+     bench instrument for a network you trust - the room your measurement
+     equipment is in - not something to expose to the open internet.</div>
+
+  <h4 id="prefs-audio-server-list">The server list</h4>
+  <p>The <b>Servers...</b> button on the backend row opens <b>Phonalyser
+     servers</b>.  <b>The list starts empty, and one address fills it.</b>  A
+     browser cannot listen for the announcements servers broadcast on the local
+     network - a page has no way to receive them - so nothing arrives by itself
+     the way it does on the desktop.  Instead you type the address of <em>one</em>
+     server in the row at the bottom of the window, and it reports every other
+     server it has heard: its peer table is the whole of discovery here.  One
+     reachable bench, and the room appears.</p>
+  <p><img src="img/Phonalyser servers.png" alt="The Phonalyser servers list"/></p>
+  <p>The table has three columns:</p>
+  <table class="controls">
+    <tr><th>Column</th><th>Notes</th></tr>
+    <tr><td><b>Server</b></td>
+        <td>The name the server calls itself - its <code>--name</code>, or the
+            machine's own name.  A server you typed in by address carries the
+            name it reported when it was added, not the address you typed.</td></tr>
+    <tr><td><b>Address</b></td>
+        <td>Host and port, e.g. <code>bench-pc:8377</code>.</td></tr>
+    <tr><td><b>State</b></td>
+        <td><b>live</b> - answering right now; <b>offline</b> - a server this
+            installation remembers that is not answering; <b>connected</b> - the
+            one this application is measuring through.  Liveness is asked, not
+            announced: opening the window puts the question to every remembered
+            server at once, and it is repeated while the window stays open - so a
+            bench that is switched off turns from live to offline on its own
+            rather than at your next click.  That polling lives and dies with
+            this window; nothing probes your network in the background.</td></tr>
+  </table>
+  <p>Three buttons sit under the table.  <b>Connect</b> and <b>Remove</b> act on
+     the selected row; <b>Disconnect</b> does not - there is only ever one
+     session, and that is the one it ends.</p>
+  <table class="controls">
+    <tr><th>Button</th><th>What it does</th></tr>
+    <tr><td><b>Connect</b></td>
+        <td>Opens the session and reads the server's backends, which then join
+            the backend list.  <b>Double-clicking a row</b> - or selecting it
+            and pressing <b>Enter</b> - does exactly the same: it is the same
+            path, refusals included.  Greyed for the
+            server that is already connected, so no route re-opens a
+            session over a live one.  A server that will not answer says so:
+            <em>No Phonalyser server answered at &lt;address&gt;</em>, with the
+            connection's own words after it.</td></tr>
+    <tr><td><b>Disconnect</b></td>
+        <td>Ends the session - <b>the live one</b>, whichever row happens to be
+            selected and even with no row selected at all; it is available
+            whenever a server is connected and greyed when none is.  Not the
+            no-op it looks like: the bench's
+            generator lane and every device this installation holds there are
+            given back <em>on the wire</em> first, so the hardware is released
+            rather than abandoned to the server's own clean-up.  Every module
+            measuring through that bench stops, exactly as it would if the
+            connection had died.</td></tr>
+    <tr><td><b>Remove</b></td>
+        <td>Forgets the selected server - and only one that was <b>added by
+            hand</b>.  A server learned from another server's peer table is not
+            removable: the next round would put it straight back, so the button
+            would look broken rather than restrictive.  Removing the server you
+            are connected to disconnects it first.</td></tr>
+  </table>
+  <div class="note"><b>No proxy row here.</b>  The desktop dialog has one; this
+     one does not, and nothing is missing.  A browser's WebSocket follows the
+     system's own proxy configuration and gives the page no say in it, so there
+     would be nothing for you to set.</div>
+  <p>Below the buttons sits <b>Add a server by address</b> - a <b>Host:</b>
+     field, a <b>Port:</b> field and an <b>Add</b> button - and a <b>Close</b>
+     button:</p>
+  <table class="controls">
+    <tr><th>Row</th><th>Notes</th></tr>
+    <tr><td><b>Add a server by address</b> (<b>Host:</b>, <b>Port:</b> and the
+            <b>Add</b> button)</td>
+        <td>How every server gets into this list.  <b>Port</b> is
+            pre-filled with <b>8377</b>, the server's default - one port carries
+            everything, so there is only ever one number to type.  <b>Add</b>
+            does not simply believe you: it asks the address for its name and
+            identity, and only then remembers the server, under the name
+            <em>it</em> reported.  An address that answers but is not a
+            Phonalyser server is refused as such, and so is an empty address or a
+            port outside 1-65535.  It then reads that server's <b>peer table</b>
+            and remembers every server it names, so one address usually brings
+            the whole room in at once.  A successful add clears the address
+            field, ready for the next one.</td></tr>
+  </table>
+  <div class="note"><b>What is staged, and what is not.</b>  Servers you add or
+     remove are <b>edits</b> - they follow the Preferences dialog behind this
+     window: <b>OK</b> writes them, <b>Cancel</b> drops them.  <b>Connecting and
+     disconnecting are actions</b> and take effect at once; a Cancel afterwards
+     does not hand a bench back or take one away.  The bench you are connected to
+     is remembered whatever you press, so a Cancel can never lose the only entry
+     for a server you would have to look up again.</div>
+  <div class="note"><b>An <code>https://</code> page can only reach a bench on
+     this machine.</b>  A bench session is a plain <code>ws://</code> WebSocket,
+     and a browser refuses to open one from a page it loaded over
+     <code>https://</code> - that is the mixed-content rule, and it is enforced
+     before anything is dialled, so no timeout tells you what happened.  The app
+     says so instead of leaving you to guess.  Loopback is exempt, so
+     <code>localhost</code>, <code>127.0.0.1</code> and <code>::1</code> still
+     connect from an https page; any bench on the LAN does not.  The way around
+     it is not a setting - it is to <b>load the app from the bench itself</b>,
+     which serves its own copy over <code>http://</code>; see
+     <a href="web-in-browser.html#served-page">Phonalyser in a browser ▸ The page
+     a bench serves</a>.</div>
+
+  <h4 id="prefs-audio-server-backends">Choosing a bench backend</h4>
+  <p>A connected server's backends join the <b>Backend</b> list beside the local
+     ones, written <code>&lt;server&gt; -> &lt;backend&gt;</code> - e.g.
+     <code>bench-pc -> QA40x</code>.  Only backends the bench can really operate
+     are offered: one that is in the server's build but cannot run on that
+     machine is left out rather than shown greyed.</p>
+  <ul>
+    <li><b>Device, sample rate and bit depth are remembered per server and per
+        backend</b>, exactly as they are for a local backend, so switching
+        between two benches - or between a bench and the card on your desk -
+        does not cost you the format you had set.  An older settings document
+        reads unchanged, and entries written by a
+        newer release, or for a server this installation has never met, survive a
+        save untouched.</li>
+    <li><b>A device another operator is using says so.</b>  Each of the bench's
+        devices may be held exclusively by one client at a time, and one that is
+        taken reads
+        <code>&lt;device&gt; - in use by &lt;client&gt;</code>, naming the
+        machine holding it.  A device <em>this</em> installation holds reads
+        normally - your own running scope is not news.</li>
+    <li><b>Browsing the list only previews.</b>  Selecting a server's backend
+        fills the device combos from that bench without committing anything, so
+        looking is free; <b>Cancel</b> puts the previous routing back untouched
+        and <b>OK</b> is what commits.</li>
+  </ul>
+
+  <h4 id="prefs-audio-server-cards">Cards and calibration on the bench</h4>
+  <p>Calibration belongs to the hardware, so with a bench backend selected the
+     <a href="#prefs-audio-card">Card</a> section works against the
+     <em>bench's</em> store rather than this machine's:</p>
+  <ul>
+    <li>the <b>Card</b> combo lists the bench's cards;</li>
+    <li>a crosshair <a href="#prefs-audio-calibrate">Calibrate</a> writes the
+        measured full-scale <b>into the bench's store</b>, where it belongs and
+        where every other operator of that bench benefits from it;</li>
+    <li>and when you select a bench device that has <em>no</em> calibration
+        while this machine holds a calibrated card for it, you are asked whether
+        to copy it over - <em>Copy calibration to the server?</em> - <b>once per
+        session and never silently</b>.  Say no and nothing is written.</li>
+  </ul>
+
+  <h4 id="prefs-audio-server-measuring">What else crosses the wire</h4>
+  <ul>
+    <li><b>A backend's own settings.</b>  <b>QA40x preferences</b> and the input
+        and output <b>range</b> radios drive an analyzer on the bench exactly as
+        they drive a local one, live telemetry included - the panel reads
+        whichever analyzer the selection points at.</li>
+    <li><b>The generator runs on the bench.</b>  It is <em>commanded</em>, not
+        streamed: this application tells the bench what to emit and the bench's
+        own DAC renders it.  That is what keeps a frequency-response sweep
+        honest - it is deconvolved against exactly what the bench played, with
+        the sweep's first sample marked in the capture stream itself.</li>
+    <li><b>A rate the bench cannot give you.</b>  If the device grants a
+        different sample rate than the one you asked for, a live capture
+        <b>runs and is displayed at the granted rate</b> - the frequency axis
+        follows the reality - while a <b>sweep is refused</b> rather than
+        deconvolved against a rate that was never played.</li>
+    <li><b>File playback crosses too.</b>  The chosen WAV / AIFF / FLAC is
+        uploaded once - up to <b>50 MB</b>, the limit the server enforces,
+        checked here before a byte leaves - and the bench decodes and plays it
+        out of its own DAC, at the file's own rate and depth.  <b>In loop</b> is
+        honoured at the far end, <b>Stop</b> reaches across, and the play
+        indicator goes out when the <em>bench</em> says the file ended rather
+        than when you press stop.  The upload lives in the server's memory and
+        is dropped when the connection closes, so nothing accumulates on the
+        bench.</li>
+    <li><b>A refusal reads like a local one.</b>  A device the bench will not
+        open comes back as the same
+        <a href="theory/audio-backend.html#errors">six reasons</a> a local
+        failure has, in your own language.</li>
+  </ul>
+  <div class="note"><b>A connection that drops comes back by itself.</b>  A
+     session that ended without you asking it to is retried <b>every five
+     seconds</b> until you say otherwise, and the backend you had committed is
+     committed again on the new session - so when you next press Record or Play,
+     it simply works.  It deliberately does <em>not</em> restart a measurement:
+     a bench that resumed measuring while nobody was looking would be worse than
+     one that waited.  A <b>Disconnect</b> you pressed stays disconnected - that
+     is a decision, not a fault.  When a session ends while you are measuring
+     through it, one translated dialog says so and names the reason: the server
+     stopped answering, the connection was closed or failed, the server refused
+     the session, or it sent audio this client cannot read.</div>
+  <div class="note">If the <em>server</em> loses captured samples before they
+     reach the network, the FFT raises its
+     <b>⚠ Bench lost audio - averaging suspect</b> banner: the samples on either
+     side of the gap are not adjacent in time, so an average taken across the
+     splice reports a noise floor and a phase that never existed.  Reset the
+     statistics to collect a clean one.</div>
+
+  <h2 id="prefs-json-editor">Editing the settings as JSON</h2>
+  <p>Both of the documents this dialog writes - the settings and the
+     <a href="#prefs-audio-card">card profiles</a> - can be opened directly, as
+     text, from the <b>Tools</b> menu, in an editor that knows their shape and
+     explains every key.  That has a chapter of its own:
+     <a href="json-config.html"><b>Editing the settings as JSON</b></a>.</p>
+
+  <h2 id="prefs-lookfeel">Look &amp; Feel</h2>
+  <p><img src="img/Preferences Look and Feel.png" alt="Preferences - Look &amp; Feel tab"/></p>
+  <table class="controls">
+    <tr><th>Setting</th><th>Notes</th></tr>
+    <tr><td>Main tab orientation:</td>
+        <td><code>Top</code> (a conventional tab strip) or <code>Left</code>
+            (a vertical sidebar of large icon buttons).  Applies live - no
+            restart.</td></tr>
+    <tr><td>Small icons in main tab</td>
+        <td>Shrinks the main-tab icons.  Applies live.</td></tr>
+    <tr><td>Show tips at startup</td>
+        <td>Whether the <a href="tips.html">tip of the day</a> appears when the
+            application opens.  Clearing the tip window's own <b>Don't show
+            again</b> box does the same thing from the other side.</td></tr>
+    <tr><td>UI font / UI font (bold)</td>
+        <td>Fonts for axis labels, readouts and measurement tables (bold for
+            emphasised table text).  Applied on OK.</td></tr>
+  </table>
+
   <h2 id="prefs-oscilloscope">Oscilloscope</h2>
-  <p><img src="img/Preferences Oscilloscope.png" alt="Preferences — Oscilloscope tab"/></p>
+  <p><img src="img/Preferences Oscilloscope.png" alt="Preferences - Oscilloscope tab"/></p>
   <table class="controls">
     <tr><th>Setting</th><th>Notes</th></tr>
     <tr><td>Measurement average, s</td>
@@ -377,21 +813,29 @@ audioDevices:           # the list of card profiles
     <tr><td>Trace line width, px</td><td>Stroke width of the waveform.</td></tr>
     <tr><td>Sample dot diameter, px</td>
         <td>Size of the per-sample dots drawn when zoomed in.</td></tr>
+    <tr><td>Histogram bins</td>
+        <td>How many bars the
+            <a href="oscilloscope.html#scope-histogram-window">amplitude-histogram
+            panel</a> draws (default 50).  Display resolution only: the
+            collection underneath is far finer, so changing this re-draws what has
+            already been collected instead of discarding it.</td></tr>
     <tr><td>Display persistence</td>
-        <td>Digital-phosphor afterglow — how long each swept trace lingers
+        <td>Digital-phosphor afterglow - how long each swept trace lingers
             before fading, like an analog scope.  Choose <code>Off</code>; a
-            preset decay time — <code>0.5 s</code>, <code>1 s</code>,
+            preset decay time - <code>0.5 s</code>, <code>1 s</code>,
             <code>2 s</code>, <code>5 s</code>, <code>10 s</code>,
             <code>15 s</code> or <code>20 s</code>
             (an old trace dims to ~37 % after that time and
             ~5 % after three times it); <code>∞</code> (traces never fade,
             accumulating until the view changes); or <code>Manual</code> (use
             the field below).  Shows trigger jitter and noise as a fading
-            envelope.  Requires GPU acceleration (see
-            <a href="#prefs-lookfeel">Look &amp; Feel</a>); has no effect on the
-            CPU path.</td></tr>
+            envelope.  Persistence is drawn on the GPU and needs <b>WebGL2 with
+            the <code>EXT_color_buffer_float</code> extension</b>.  There is no
+            setting for it: where the browser or the graphics driver does not
+            offer that combination the trace simply does not persist - no error,
+            no greyed control, just a scope that redraws each sweep clean.</td></tr>
     <tr><td>Manual persistence, s</td>
-        <td>Custom decay time, 0.1–60 s in 0.5-s steps, used when persistence is
+        <td>Custom decay time, 0.1-60 s in 0.5-s steps, used when persistence is
             set to <code>Manual</code>; greyed out otherwise.</td></tr>
     <tr><td>Left / Right channel colour</td>
         <td>Trace colour per channel (defaults cyan <code>#28DCF0</code> /
@@ -399,29 +843,29 @@ audioDevices:           # the list of card profiles
   </table>
 
   <h2 id="prefs-fft">FFT</h2>
-  <p><img src="img/Preferences FFT.png" alt="Preferences — FFT tab"/></p>
+  <p><img src="img/Preferences FFT.png" alt="Preferences - FFT tab"/></p>
   <table class="controls">
     <tr><th>Setting</th><th>Notes</th></tr>
     <tr><td>Trace line width, px</td><td>Stroke width of the spectrum.</td></tr>
     <tr><td>Harmonic dot diameter, px</td>
         <td>Size of the fundamental / harmonic marker dots.</td></tr>
-    <tr><td>Strong-tone relative level, dB</td>
+    <tr><td>Multi-tone detect threshold:</td>
         <td>How far below the strongest peak a second peak may sit and still
-            be tracked as its own tone (vs treated as a harmonic) — the
+            be tracked as its own tone (vs treated as a harmonic) - the
             single- vs multi-tone routing in
             <a href="theory/fft.html#phaseref">Theory ▸ choosing the phase
             reference</a>.</td></tr>
     <tr><td>Line colour</td><td>Spectrum trace (default blue <code>#0064C8</code>).</td></tr>
     <tr><td>Chart background colour</td><td>Plot background (default white).</td></tr>
     <tr><td>Harmonic dot colour</td>
-        <td>The harmonic / fundamental dots — with a calibration loaded this
+        <td>The harmonic / fundamental dots - with a calibration loaded this
             is the <em>corrected</em> (red) marker.  Default red
             <code>#FF0000</code>.</td></tr>
     <tr><td>Before-calibration dot colour</td>
         <td>The second marker showing where each peak sat <em>before</em> the
-            loaded calibration was de-embedded — see the
+            loaded calibration was de-embedded - see the
             <a href="theory/fft.html#cal">red / blue calibration dots</a>.</td></tr>
-    <tr><td>Calibration-overlay colour</td>
+    <tr><td>Calibration overlay colour:</td>
         <td>Colour of the drawn calibration / correction curve.</td></tr>
     <tr><td>Filter response line colour</td>
         <td>The overlaid mains-comb / filter response (default green
@@ -429,14 +873,14 @@ audioDevices:           # the list of card profiles
   </table>
 
   <h2 id="prefs-freqresp">Frequency response</h2>
-  <p><img src="img/Preferences Frequency response.png" alt="Preferences — Frequency response tab"/></p>
+  <p><img src="img/Preferences Frequency response.png" alt="Preferences - Frequency response tab"/></p>
   <table class="controls">
     <tr><th>Setting</th><th>Notes</th></tr>
     <tr><td>Trace line width, px</td>
         <td>Thickness of the magnitude, phase, RIAA-reference and compare
             curves.</td></tr>
-    <tr><td>Maximal analyzed frequency, % Nyquist</td>
-        <td>Caps the view's upper bound at this fraction of Nyquist (96–100 %);
+    <tr><td>Maximal analysed frequency, % Nyquist</td>
+        <td>Caps the view's upper bound at this fraction of Nyquist (96-100 %);
             below 100 % trims the band where the sweep deconvolution rolls
             off.</td></tr>
     <tr><td>Compare smoothing window, 1/N octave</td>

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — Theory: Ring buffer &amp; consumers</title>
+  <title>Phonalyser.web - Theory: Ring buffer &amp; consumers</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -10,7 +10,7 @@
   <p class="back"><a href="index.html">◀ Back to Theory of operation</a></p>
 
   <h1>Ring buffer &amp; consumers</h1>
-  <p>One capture device feeds several independent consumers — the
+  <p>One capture device feeds several independent consumers - the
      oscilloscope paints "now", the FFT accumulates a gap-free stream, a save
      dialog grabs the last seconds.  The structure that makes this work is a
      single shared <b>ring buffer</b><sup><a href="#ref-ring">[1]</a></sup>
@@ -19,16 +19,16 @@
 
   <h2 id="ring">The ring</h2>
   <p>The ring holds the most recent <b>22 seconds</b> of stereo capture as
-     normalised values in [−1, +1] — enough for two full oscilloscope windows
+     normalised values in [−1, +1] - enough for two full oscilloscope windows
      at the slowest 1 s/div × 10 divisions, plus margin so the
      trigger-position control can sweep the whole window without falling off
      the buffer.  Its capacity in samples is</p>
   <div class="eq"><i>C</i> = <i>f</i><sub>s</sub> · 22 s<span class="no">(1)</span></div>
-  <p>— at 384 kHz about 8.4 million samples per channel (≈ 67 MB).</p>
+  <p>- at 384 kHz about 8.4 million samples per channel (≈ 67 MB).</p>
 
   <p>The only position the ring itself maintains is the <b>write position</b>
      <i>w</i>: the total number of samples ever captured.  All addressing is
-     done with such absolute sample indices — sample <i>n</i> means "the
+     done with such absolute sample indices - sample <i>n</i> means "the
      <i>n</i>-th sample since capture started", and the ring stores it at
      array index <i>n</i> mod <i>C</i>.  At any moment exactly the span</p>
   <div class="eq">[<i>w</i> − <i>C</i>, &nbsp;<i>w</i>)<span class="no">(2)</span></div>
@@ -53,8 +53,8 @@
     <!-- labels -->
     <text x="65"  y="124" fill="#557">index 0</text>
     <text x="755" y="124" text-anchor="end" fill="#557">C − 1</text>
-    <text x="640" y="86" text-anchor="middle" fill="#335">older … newer</text>
-    <text x="150" y="86" text-anchor="middle" fill="#335">… newest</text>
+    <text x="640" y="86" text-anchor="middle" fill="#335">older ... newer</text>
+    <text x="150" y="86" text-anchor="middle" fill="#335">... newest</text>
     <text x="380" y="86" text-anchor="middle" fill="#779">oldest (about to be overwritten)</text>
     <!-- wrap arrow -->
     <path d="M 760 50 Q 790 20 410 16 Q 70 14 62 50" fill="none" stroke="#779" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr3)"/>
@@ -77,17 +77,17 @@
      keep the coordination cost negligible:</p>
   <ul>
     <li><b>Block transfers.</b>  Samples move in chunks of thousands, not one
-        by one — each transfer is one or two of the processor's fastest
+        by one - each transfer is one or two of the processor's fastest
         block-copy operations (two when the chunk straddles the wrap point).
         The writer claims the ring roughly 30 times per second for tens of
         microseconds, instead of hundreds of thousands of times.</li>
     <li><b>Readers don't hold the ring while copying.</b>  A read first takes
-        an instantaneous note of <i>w</i> — that is the only moment of
-        coordination — and then copies its window while the writer keeps
+        an instantaneous note of <i>w</i> - that is the only moment of
+        coordination - and then copies its window while the writer keeps
         running.  The writer could only disturb the copy after producing
         <i>C</i> − <i>N</i> further samples (many seconds), while the copy
         itself completes in milliseconds.  The one consumer for which this
-        margin <em>can</em> vanish — a cursor lagging almost a full ring —
+        margin <em>can</em> vanish - a cursor lagging almost a full ring -
         re-validates after the copy; see <a href="#overrun">overrun</a>.</li>
   </ul>
 
@@ -95,15 +95,15 @@
   <table class="controls">
     <tr><th>Read mode</th><th>Semantics</th></tr>
     <tr><td><b>Latest window</b></td>
-        <td>The most recent <i>N</i> samples, ending at the live <i>w</i> —
+        <td>The most recent <i>N</i> samples, ending at the live <i>w</i> -
             "show me now".  Inherently safe: it always reads the newest
             data.</td></tr>
     <tr><td><b>Window ending at a chosen instant</b></td>
-        <td>A window ending at any absolute index — the oscilloscope's
+        <td>A window ending at any absolute index - the oscilloscope's
             scroll-back-in-time.  Parts of the request older than
             <i>w</i> − <i>C</i> are clipped.</td></tr>
     <tr><td><b>Forward from the cursor</b></td>
-        <td>The next contiguous samples after the consumer's own cursor —
+        <td>The next contiguous samples after the consumer's own cursor -
             the gap-free stream (next section).</td></tr>
   </table>
 
@@ -128,7 +128,7 @@
     <rect x="560" y="80" width="140" height="30" fill="#cdf" stroke="#88a"/>
     <text x="630" y="100" text-anchor="middle">latest window</text>
     <text x="40" y="100" fill="#335" font-weight="bold">Scope:</text>
-    <text x="110" y="100" fill="#557">reads the latest window every paint — it always ends at w,</text>
+    <text x="110" y="100" fill="#557">reads the latest window every paint - it always ends at w,</text>
     <text x="110" y="116" fill="#557">jumps forward between paints, can never fall behind.</text>
 
     <!-- FFT cursor -->
@@ -141,7 +141,7 @@
     <rect x="540" y="216" width="110" height="28" fill="#efe" stroke="#7a7" stroke-dasharray="4 3"/>
     <text x="375" y="234" text-anchor="middle">frame k</text>
     <text x="485" y="234" text-anchor="middle">frame k+1</text>
-    <text x="595" y="234" text-anchor="middle" fill="#575">frame k+2 …</text>
+    <text x="595" y="234" text-anchor="middle" fill="#575">frame k+2 ...</text>
     <line x1="320" y1="190" x2="320" y2="210" stroke="#33a" stroke-width="2"/>
     <text x="320" y="184" text-anchor="middle" fill="#33a" font-weight="bold">cursor r</text>
     <text x="110" y="170" fill="#557">consuming, contiguous reads: every frame starts exactly</text>
@@ -151,10 +151,10 @@
   </div>
 
   <ul>
-    <li><b>"Show me now" consumers</b> — the oscilloscope, the measurement
-        table, save-to-file — use the latest-window reads.  No state, nothing
+    <li><b>"Show me now" consumers</b> - the oscilloscope, the measurement
+        table, save-to-file - use the latest-window reads.  No state, nothing
         to fall behind.</li>
-    <li><b>Stream consumers</b> — above all the FFT's coherent averaging —
+    <li><b>Stream consumers</b> - above all the FFT's coherent averaging -
         need every frame to start <em>exactly</em> where the previous one
         ended.  Coherent averaging aligns frames by their absolute position
         in the stream; if the position were taken from "whenever the worker
@@ -167,13 +167,13 @@
   <div class="eq"><i>a</i> = <i>w</i> − <i>r</i><span class="no">(3)</span></div>
 
   <h3 id="overrun">Overrun: when a consumer falls behind</h3>
-  <p>A cursor consumer can lag — a very large FFT, a heavily loaded machine.
+  <p>A cursor consumer can lag - a very large FFT, a heavily loaded machine.
      The writer does not wait for anyone (the freshest data must always win),
      so if the lag ever exceeds the ring's whole capacity,</p>
   <div class="eq"><i>r</i> &lt; <i>w</i> − <i>C</i><span class="no">(4)</span></div>
   <p>then samples the cursor never read are gone, and the stream has a hole.
      Silently continuing would hand the consumer a window torn across a
-     discontinuity — poison for coherent averaging.  Instead the read reports
+     discontinuity - poison for coherent averaging.  Instead the read reports
      an explicit <b>overrun</b> and delivers nothing:</p>
 
   <div class="diagram">
@@ -190,13 +190,13 @@
     <text x="700" y="92" text-anchor="middle" fill="#c33" font-weight="bold">w</text>
     <line x1="180" y1="44" x2="180" y2="76" stroke="#33a" stroke-width="2"/>
     <text x="180" y="92" text-anchor="middle" fill="#33a" font-weight="bold">r</text>
-    <text x="180" y="110" text-anchor="middle" fill="#a33">lapped → overrun</text>
-    <text x="240" y="26" fill="#a33">data here is gone — overwritten before it was read</text>
+    <text x="180" y="110" text-anchor="middle" fill="#a33">lapped -> overrun</text>
+    <text x="240" y="26" fill="#a33">data here is gone - overwritten before it was read</text>
   </svg>
   </div>
 
   <p>On overrun the consumer discards its accumulated state, re-anchors the
-     cursor at the newest sample and starts fresh — the FFT view surfaces
+     cursor at the newest sample and starts fresh - the FFT view surfaces
      this as the blinking <em>capture re-sync</em> warning.  One subtlety:
      because readers copy without holding the ring, a cursor lagging
      <em>almost</em> a full ring could be lapped <em>during</em> its copy.
@@ -205,18 +205,18 @@
 
   <h3 id="snapshot">Frozen copies and file-fed buffers</h3>
   <ul>
-    <li>A consumer can request a <b>frozen copy</b> — a standalone duplicate
+    <li>A consumer can request a <b>frozen copy</b> - a standalone duplicate
         of the ring's current contents with no live writer.  This is how the
         oscilloscope keeps showing the last captured frame after Record
         stops, while the shared device keeps running for other views.</li>
     <li>The same ring + cursor structure also serves <b>loaded signal
         files</b>: the loader fills a private buffer once, and the consumers
-        read it through exactly the same cursors — the views cannot tell a
+        read it through exactly the same cursors - the views cannot tell a
         file from a live capture.</li>
   </ul>
 
   <h2 id="sharedcapture">The capture session: who owns the device</h2>
-  <p>The input device and the live ring have exactly one owner — the
+  <p>The input device and the live ring have exactly one owner - the
      <b>capture session</b>.  Views never open the device themselves; they
      ask the session for access and get their own read cursor back:</p>
 
@@ -236,10 +236,10 @@
 
     <rect x="280" y="40" width="240" height="110" rx="6" fill="#eef" stroke="#88a"/>
     <text x="400" y="64" text-anchor="middle" font-weight="bold">Capture session</text>
-    <text x="400" y="84" text-anchor="middle" fill="#557">first join → device opens</text>
-    <text x="400" y="100" text-anchor="middle" fill="#557">further joins → share the stream</text>
-    <text x="400" y="116" text-anchor="middle" fill="#557">last leave → device closes</text>
-    <text x="400" y="136" text-anchor="middle" fill="#557">converts PCM → [−1, +1)</text>
+    <text x="400" y="84" text-anchor="middle" fill="#557">first join -> device opens</text>
+    <text x="400" y="100" text-anchor="middle" fill="#557">further joins -> share the stream</text>
+    <text x="400" y="116" text-anchor="middle" fill="#557">last leave -> device closes</text>
+    <text x="400" y="136" text-anchor="middle" fill="#557">converts PCM -> [−1, +1)</text>
 
     <path d="M 180 44 L 230 44 L 230 80 L 278 80"  fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#arr6)"/>
     <path d="M 180 114 L 230 114 L 230 110 L 278 110" fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#arr6)"/>
@@ -257,7 +257,7 @@
     <path d="M 280 214 L 95 214 L 95 140" fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#arr6)"/>
     <text x="110" y="180" fill="#557">each consumer receives</text>
     <text x="110" y="196" fill="#557">its own read cursor</text>
-    <text x="540" y="262" fill="#557">"new data" notification per block —</text>
+    <text x="540" y="262" fill="#557">"new data" notification per block -</text>
     <text x="540" y="278" fill="#557">views update event-driven, no polling</text>
   </svg>
   </div>
@@ -267,29 +267,29 @@
         device (with the configured rate and depth), creates the 22 s ring
         and starts the capture thread.  Further views just join the running
         session; when the last one leaves, the device closes.  Scope and FFT
-        can therefore start and stop recording in any order — the device
+        can therefore start and stop recording in any order - the device
         stays open exactly as long as someone needs it.</li>
     <li><b>One stream, private positions.</b>  Every join hands back a fresh
-        cursor over the same ring — consistent data for all, independent
+        cursor over the same ring - consistent data for all, independent
         progress for each.</li>
     <li><b>Event-driven consumers.</b>  After each block lands in the ring,
         the session broadcasts a "new data" notification.  Scope repaints and
         FFT analysis ticks ride on these notifications instead of timers, so
-        the views are exactly as fast as the data — never faster, never
+        the views are exactly as fast as the data - never faster, never
         lagging a polling interval behind.</li>
     <li><b>Conversion at the entrance.</b>  The session converts the raw
         integer samples to normalised values, formula (1) of the
         <a href="audio-backend.html#how">audio-backend chapter</a>, in one
-        block operation per chunk — everything downstream already speaks the
+        block operation per chunk - everything downstream already speaks the
         same unit.</li>
   </ul>
 
   <h2 id="refs">References</h2>
   <ol class="refs">
-    <li id="ref-ring">Circular (ring) buffers in general —
+    <li id="ref-ring">Circular (ring) buffers in general -
         <a href="https://en.wikipedia.org/wiki/Circular_buffer">Wikipedia: Circular buffer</a>.</li>
-    <li id="ref-prodcons">The underlying coordination pattern —
-        <a href="https://en.wikipedia.org/wiki/Producer%E2%80%93consumer_problem">Wikipedia: Producer–consumer problem</a>.</li>
+    <li id="ref-prodcons">The underlying coordination pattern -
+        <a href="https://en.wikipedia.org/wiki/Producer%E2%80%93consumer_problem">Wikipedia: Producer-consumer problem</a>.</li>
   </ol>
 
   <p class="back"><a href="audio-backend.html">◀ Audio backend</a> ·

@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -52,8 +52,8 @@ function recordDb(fHz, iec) {
  * so |H(1 kHz)| = 0 dB regardless of which flag combination is active.
  *
  * @param {number} fHz     frequency (Hz); values ≤ 0 are clamped to 1e-9
- * @param {boolean} reverse false → playback (decode) curve; true → record (encode) curve
- * @param {boolean} iec     true → also apply the IEC subsonic high-pass
+ * @param {boolean} reverse false -> playback (decode) curve; true -> record (encode) curve
+ * @param {boolean} iec     true -> also apply the IEC subsonic high-pass
  * @returns {number} curve magnitude in dB
  */
 export function evalDb(fHz, reverse, iec) {

@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Headless-server distribution zip, Windows x86_64.
+
+     One zip per platform: the server jar's BYTES are platform-independent, but
+     the natives beside it and the service scripts are not, so what makes a
+     Windows bundle a Windows bundle is everything AROUND the jar.
+
+     The natives are taken from the modules that own them (phonalyser-core for
+     PortAudio, backend-qa40x for libusb, backend-javasound for csjsound) and NOT
+     from the repo-root lib/windows, whose portaudio_x64.dll is a stale build
+     with WDM-KS compiled out - phonalyser-app's pom says so at its
+     core.resources property and stages the same module copy into the installer.
+
+     PortAudio and libusb are STAGED into natives/ rather than left to ride
+     inside the jar as JNA resources because the launcher points jna.library.path
+     at that folder: a directory JNA can name is diagnosable (PortAudio logs the
+     path it searched) and needs no temp-directory extraction on a locked-down
+     machine.  For those two the natives/ copy is belt-and-braces - JNA still
+     falls back to the win32-* resources inside the jar.
+
+     csjsound is NOT belt-and-braces, it is load-bearing, and it is here for a
+     reason that is easy to mistake for redundancy.  It is loaded by
+     System.loadLibrary (through CsjsoundNativePath), which has no class-path
+     fallback: it reads java.library.path only.  On a bare `java -jar` the
+     Windows JVM appends "." to that path, so CsjsoundNativePath stages the DLL
+     out of the jar into the working directory and finds it there.  The Launch4j
+     launcher SETS java.library.path explicitly, which REPLACES that default -
+     "." disappears, the staged copy lands in the bundle root where
+     System.loadLibrary never looks, and the server silently falls back to
+     shared-mode JavaSound mixers (no "EXCL:" devices, and with them the
+     high-rate exclusive capture path).  Shipping the DLL inside natives/ puts it
+     where the launcher already points, which also makes CsjsoundNativePath
+     return early, so no stray 900 KB copy is written into the unpacked folder on
+     every run.  The copy inside the jar serves the bare `java -jar` path; this
+     one serves the launcher. -->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.1.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.1.0 http://maven.apache.org/xsd/assembly-2.1.0.xsd">
+    <id>windows-x64</id>
+    <formats>
+        <format>zip</format>
+    </formats>
+    <!-- Unpacks into one folder named after the zip, never into the CWD. -->
+    <includeBaseDirectory>true</includeBaseDirectory>
+
+    <files>
+        <!-- Named exactly, not globbed: server.mainJar is the same property the
+             assembly's finalName is built from, so this cannot pick up a jar
+             left over from a previous platform's build in the same target/. -->
+        <file>
+            <source>${project.build.directory}/${server.mainJar}</source>
+            <outputDirectory>/</outputDirectory>
+            <fileMode>0644</fileMode>
+        </file>
+        <!-- WinSW, vendored under lib/windows and renamed here: its config file
+             must share its base name, so the pair in the zip is
+             phonalyser-server-service.exe + phonalyser-server-service.xml
+             (the .xml is generated from the template by install-service.cmd).
+             A <file> rather than a <fileSet> on purpose - a Windows bundle
+             without a service host is broken, and should fail the build rather
+             than ship. -->
+        <file>
+            <source>${repo.root}/lib/windows/WinSW-x64.exe</source>
+            <outputDirectory>/</outputDirectory>
+            <destName>phonalyser-server-service.exe</destName>
+            <fileMode>0755</fileMode>
+        </file>
+    </files>
+
+    <fileSets>
+        <fileSet>
+            <directory>${repo.root}/src/main/packaging/windows</directory>
+            <outputDirectory>/</outputDirectory>
+            <includes>
+                <include>phonalyser-server.cmd</include>
+                <include>install-service.cmd</include>
+                <include>uninstall-service.cmd</include>
+                <include>README-server-windows.txt</include>
+            </includes>
+            <fileMode>0644</fileMode>
+            <!-- CRLF whatever the build host: install-service.cmd uses labels
+                 and goto, and cmd.exe mis-parses those in an LF-only file. -->
+            <lineEnding>dos</lineEnding>
+        </fileSet>
+        <!-- The Launch4j thin launcher.  A <fileSet> rather than a <file>
+             because this one IS optional: phonalyser-server.cmd is the
+             guaranteed path, and a build without the Launch4j plugin wired in
+             should still produce a working bundle rather than fail.
+
+             The name is spelled out rather than taken from ${server.exeName}:
+             both Windows passes write into the SAME modules/server-net/target
+             (the release workflow runs x64 then x86), so naming the exact file
+             is what stops the x64 stub from riding along in the x86 zip.  It
+             must match what the launch4j execution emits. -->
+        <fileSet>
+            <directory>${project.build.directory}</directory>
+            <outputDirectory>/</outputDirectory>
+            <includes>
+                <include>phonalyser-server-x64.exe</include>
+            </includes>
+            <fileMode>0755</fileMode>
+        </fileSet>
+        <fileSet>
+            <directory>${repo.root}/modules/phonalyser-core/src/main/resources/win32-x86-64</directory>
+            <outputDirectory>/natives</outputDirectory>
+            <includes>
+                <include>portaudio_x64.dll</include>
+            </includes>
+            <fileMode>0644</fileMode>
+        </fileSet>
+        <fileSet>
+            <directory>${repo.root}/modules/backend-qa40x/src/main/resources/win32-x86-64</directory>
+            <outputDirectory>/natives</outputDirectory>
+            <includes>
+                <include>libusb-1.0_x64.dll</include>
+            </includes>
+            <fileMode>0644</fileMode>
+        </fileSet>
+        <!-- The WASAPI-exclusive JavaSound mixers.  Load-bearing for the
+             launcher, not a duplicate of the jar's copy - see the header. -->
+        <fileSet>
+            <directory>${repo.root}/modules/backend-javasound/src/main/resources/win32-x86-64</directory>
+            <outputDirectory>/natives</outputDirectory>
+            <includes>
+                <include>csjsound_amd64.dll</include>
+            </includes>
+            <fileMode>0644</fileMode>
+        </fileSet>
+        <!-- The web bundle this server serves at `/` (spec 3): a `web` directory
+             BESIDE THE JAR, which is exactly where ServerMain.staticDir() looks -
+             the jar's own CodeSource parent resolved against "web", else the same
+             name in the working directory.  It is a FILESYSTEM path and never a
+             classpath resource, so it belongs in the dist and not inside the jar.
+
+             A fileSet rather than a file because this one IS optional, like the
+             launcher above: the bundle is produced by the embedded web build
+             (`node web/build.mjs` with the embedded flag, which make-servers.cmd
+             runs after the clean and before the package, and which no Maven goal
+             drives), and a build made without that step simply ships no web/ -
+             the server then answers today's "no web bundle is served by this
+             server" 404, which spec 3 marks "when built with it". -->
+        <fileSet>
+            <directory>${repo.root}/target/web-embedded</directory>
+            <outputDirectory>/web</outputDirectory>
+            <fileMode>0644</fileMode>
+        </fileSet>
+    </fileSets>
+</assembly>

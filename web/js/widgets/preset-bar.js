@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -10,12 +10,12 @@
 // settings tabs (Java has one generic PresetBar<P>; the web previously triplicated it). The
 // per-pane specifics come in through the `store` adapter (Java Store<P>: presets / put /
 // remove / captureCurrent / apply / onChanged) plus the element ids, the confirm dialog and
-// the i18n key prefix — everything else (the editable-name combo behaviour, the dropdown of
+// the i18n key prefix - everything else (the editable-name combo behaviour, the dropdown of
 // saved names, and the Save/Load/Delete enablement rule) is shared here.
 //
-// Enablement (Java PresetBar.refreshButtons): empty name → all disabled; a NEW name → Save
-// only; an EXISTING name → Load/Delete always, and Save ONLY when the current settings differ
-// from the saved snapshot (JSON equality stands in for Java P.equals — the presets are plain
+// Enablement (Java PresetBar.refreshButtons): empty name -> all disabled; a NEW name -> Save
+// only; an EXISTING name -> Load/Delete always, and Save ONLY when the current settings differ
+// from the saved snapshot (JSON equality stands in for Java P.equals - the presets are plain
 // POJOs of primitives + strings).
 
 import { t } from '../i18n/i18n.js';
@@ -26,8 +26,8 @@ export class PresetBar {
    *   - ids: { name, save, load, delete, menu, menuBtn } jQuery selectors.
    *   - store: { presets():Map<string,P>, put(name,P), remove(name), captureCurrent():P, apply(P) }.
    *   - confirm: (title, message) => Promise<boolean>  (the shared Bootstrap confirm).
-   *   - i18nPrefix: string, e.g. 'fft.presets' → '<prefix>.overwrite.title/.message', '.delete.*'.
-   *   - onChanged?: (names:string[]) => void  — repaint the pane's "N saved" tile chip.
+   *   - i18nPrefix: string, e.g. 'fft.presets' -> '<prefix>.overwrite.title/.message', '.delete.*'.
+   *   - onChanged?: (names:string[]) => void  - repaint the pane's "N saved" tile chip.
    */
   constructor(cfg) {
     this.$ = window.jQuery;
@@ -48,7 +48,7 @@ export class PresetBar {
     $(id.save).on('click', async () => {
       const name = ($(id.name).val() || '').trim();
       if (!name) return;
-      // Confirm before overwriting (Java PresetBar.onSave → Dialogs.confirm); Cancel aborts.
+      // Confirm before overwriting (Java PresetBar.onSave -> Dialogs.confirm); Cancel aborts.
       if (c.store.presets().has(name)
           && !await c.confirm(t(c.i18nPrefix + '.overwrite.title'), t(c.i18nPrefix + '.overwrite.message', name))) return;
       c.store.put(name, c.store.captureCurrent());
@@ -62,12 +62,12 @@ export class PresetBar {
     $(id.delete).on('click', async () => {
       const name = ($(id.name).val() || '').trim();
       if (!c.store.presets().has(name)) return;
-      // Confirm before deleting (Java PresetBar.onDelete → Dialogs.confirm); Cancel aborts.
+      // Confirm before deleting (Java PresetBar.onDelete -> Dialogs.confirm); Cancel aborts.
       if (!await c.confirm(t(c.i18nPrefix + '.delete.title'), t(c.i18nPrefix + '.delete.message', name))) return;
       c.store.remove(name);
       this.refreshList();
     });
-    // NOTE: bind() only wires handlers — it does NOT seed the list. Each pane calls
+    // NOTE: bind() only wires handlers - it does NOT seed the list. Each pane calls
     // refreshList() when its controls are ready (FFT/scope from app.js init, FreqResp at the
     // end of its setup), matching the pre-extraction timing.
   }
@@ -85,7 +85,7 @@ export class PresetBar {
     this.refreshButtons();
   }
 
-  /** Save/Load/Delete enablement — see the class comment (Java PresetBar.refreshButtons). */
+  /** Save/Load/Delete enablement - see the class comment (Java PresetBar.refreshButtons). */
   refreshButtons() {
     const $ = this.$, c = this.cfg, id = c.ids;
     const name = ($(id.name).val() || '').trim();

@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -17,7 +17,7 @@
 //      X and Y to M = nextPow2(max(yRec.length, leadIn + sweepRef.length)).
 //   2. FFT both; per single-sided bin k = 0..M/2 form H = Y·conj(X)/|X|².
 //   3. IFFT H to the impulse response, locate the main peak with sub-sample
-//      quadratic refinement → transport delay; remove it as a linear-phase term
+//      quadratic refinement -> transport delay; remove it as a linear-phase term
 //      exp(+j·2π·k·delay/M) (advancing H so the IR sits at sample 0).
 //   4. Sample H at each requested frequency by linear interpolation between the
 //      two straddling complex bins; magnitude = hypot, phase = atan2.
@@ -63,9 +63,9 @@ function nextPow2(x) {
 /**
  * Output frequency grid sampled EXACTLY at the deconvolution's FFT bin centres
  * (k·binHz) across [startHz, stopHz], so {@link computeFromLogSweep} reads each
- * bin with fractional offset 0 — no phase-sensitive complex interpolation
+ * bin with fractional offset 0 - no phase-sensitive complex interpolation
  * between bins (which facets the trace into a frame-to-frame comb). binHz must
- * be sampleRate / nextPow2(captureLength) — the spacing of the FFT
+ * be sampleRate / nextPow2(captureLength) - the spacing of the FFT
  * computeFromLogSweep builds.
  *
  * When the band spans more than maxPoints bins (a wide band on a fine grid) the
@@ -255,7 +255,7 @@ export function computeFromLogSweep(
 
 /**
  * Inverse-FFTs the single-sided H spectrum (Hermitian-mirrored to full length)
- * and returns the transport delay in samples — the |IR| peak index with
+ * and returns the transport delay in samples - the |IR| peak index with
  * sub-sample quadratic refinement. Mirrors the IR-peak block of
  * FreqRespCalHelper#computeFromLogSweep.
  *

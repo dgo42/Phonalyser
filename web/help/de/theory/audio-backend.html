@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — Theorie: Audio-Backend</title>
+  <title>Phonalyser.web - Theorie: Audio-Backend</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -15,47 +15,131 @@
   <p>Das Audio-Backend ist die Brücke zwischen Phonalyser.web und der
      Soundhardware.  Seine einzige Aufgabe ist es, Samples <b>bitgenau</b>
      zwischen der Anwendung und den Wandlern zu bewegen: Was der Generator
-     berechnet, wandelt der DAC, und was der ADC wandelt, sehen die Analysatoren —
+     berechnet, wandelt der DAC, und was der ADC wandelt, sehen die Analysatoren -
      ohne jegliche Zwischenverarbeitung.</p>
   <p>Das ist nicht die Art, wie ein PC Audio standardmäßig wiedergibt.  Der
      normale Windows-Audiopfad leitet jeden Stream durch einen Mixer, eine
      Lautstärkeregelung, einen Abtastratenkonverter und möglicherweise
-     „Verbesserungs"-Filter — jeder davon harmlos für Musik, jeder davon fatal
+     "Verbesserungs"-Filter - jeder davon harmlos für Musik, jeder davon fatal
      für eine Messung.  Ein Resampler allein erzeugt Verzerrungsprodukte weit
-     oberhalb dessen, was ein guter ADC auflösen kann.  Das Backend öffnet die
-     Geräte daher im <b>Exklusivmodus</b><sup><a href="#ref-excl">[1]</a></sup>:
-     Phonalyser.web spricht direkt mit dem Wandler, bei der exakten Abtastrate und
-     Bittiefe, die Sie gewählt haben, und die Verarbeitungskette des
-     Betriebssystems wird vollständig umgangen.</p>
-
-  <div class="note"><b>Konsequenz der Exklusivität:</b> Während Phonalyser.web
-     aufnimmt oder wiedergibt, kann keine andere Anwendung dieses Gerät
-     verwenden — und umgekehrt.  Eine Meldung „Gerät wird verwendet" beim
-     Starten einer Aufnahme bedeutet meist, dass ein Browser oder
-     Media-Player noch den Eingang belegt.</div>
-
-  <h2 id="paths">Die drei Treiberpfade</h2>
-  <p>Soundhardware ist über verschiedene Treiberinterfaces erreichbar.
-     Phonalyser.web implementiert drei davon und lässt Sie in den Einstellungen
-     einen auswählen; alle Module arbeiten identisch, unabhängig davon,
-     welcher aktiv ist.</p>
+     oberhalb dessen, was ein guter ADC auflösen kann.  Die Desktop-Anwendung
+     beantwortet das, indem sie ihre Geräte im
+     <b>Exklusivmodus</b><sup><a href="#ref-excl">[1]</a></sup> öffnet: Sie
+     spricht direkt mit dem Wandler und umgeht die Verarbeitungskette des
+     Betriebssystems vollständig.</p>
+  <p><b>Ein Browser darf das nicht</b>, und das ist die eine Stelle, an der der
+     Web-Build dem Desktop nicht gleichkommen kann.  Eine Seite hat keine
+     Schnittstelle für den Exklusivmodus: Sie bekommt die Aufnahme über
+     <code>getUserMedia</code> und gibt über einen <code>AudioContext</code>
+     wieder - beides unterhalb des System-Mixers.  Was der Mixer getan hat -
+     ein Resampling, eine Lautstärkekurve, eine "Verbesserung" -, steckt
+     bereits in den Samples, wenn diese Anwendung sie zu sehen bekommt.  Die
+     beiden Backends, die dieser Build hat, teilen sich daher sauber danach
+     auf, was sie versprechen können:</p>
   <table class="controls">
-    <tr><th>Pfad</th><th>Was es ist</th><th>Wann verwenden</th></tr>
-    <tr><td><b>WASAPI</b></td>
-        <td>Das moderne Windows-Audio-Interface, im Exklusivmodus.</td>
-        <td>Der Standard unter Windows.  Bitgenau, zuverlässig, funktioniert
-            mit praktisch jedem Interface.</td></tr>
-    <tr><td><b>WDM-KS</b></td>
-        <td>Windows-Kernel-Streaming<sup><a href="#ref-ks">[2]</a></sup> —
-            die unterste Ebene, die der Treiber bietet.</td>
-        <td>Höchster Aufnahmedurchsatz in der Praxis; es lohnt sich, diesen
-            auszuprobieren, wenn das Oszilloskop seine volle Aktualisierungsrate
-            bei sehr hohen Abtastraten (384 kHz und höher) halten soll.</td></tr>
-    <tr><td><b>JavaSound</b></td>
-        <td>Das portable Laufzeit-Audio-Interface.</td>
-        <td>Der einzige Pfad unter Linux und macOS; ein Fallback unter
-            Windows.</td></tr>
+    <tr><th>Backend</th><th>Was es ist</th><th>Was es versprechen kann</th></tr>
+    <tr><td><b>Web Audio</b></td>
+        <td>Der browsereigene Aufnahme- und Wiedergabepfad -
+            <code>getUserMedia</code> hinein, <code>AudioContext</code> hinaus,
+            Samples als <b>float32</b> nach dem System-Mixer.</td>
+        <td>Der Standard, und er funktioniert mit jedem Gerät, das das
+            Betriebssystem zeigt.  <b>Nicht bitgenau</b> und nicht exklusiv:
+            Andere Anwendungen nutzen das Gerät weiterhin daneben.  Stellen Sie
+            die Rate im Betriebssystem ein, denn die Seite kann es nicht -
+            siehe <a href="../web-input-device.html">Windows-Eingabegerät</a>.</td></tr>
+    <tr><td><b>QA40x</b></td>
+        <td>Ein QuantAsylum QA402 / QA403, direkt über <b>WebUSB</b> angesteuert
+            (<a href="#qa40x">unten</a>) - überhaupt kein Audiopfad des
+            Betriebssystems dazwischen.</td>
+        <td><b>Bitgenau und exklusiv</b>, weil die Samples den Mixer nie
+            betreten: Der Analysator wird als USB-Gerät beansprucht und als
+            solches gelesen.  Das ist die Antwort des Browsers auf den
+            Exklusivmodus, und deshalb entsteht eine ernsthafte Messung in
+            diesem Build meist an einem QA40x oder an einem Messplatz.</td></tr>
+    <tr><td><b>Ein Messplatz</b><br/><code>&lt;Server&gt; -> &lt;Backend&gt;</code></td>
+        <td>Das Backend eines <a href="#network">Phonalyser-Servers</a>, über das
+            Netz erreicht.  Das exklusive Öffnen geschieht auf <em>jener</em>
+            Maschine, in der Desktop-Anwendung.</td>
+        <td>Bitgenau, mit der vollen Auswahl an Treiberpfaden des Desktops -
+            WASAPI, WDM-KS, JavaSound, ein eigener QA40x.  Der Browser rührt hier
+            keinen Wandler an; er fragt eine Maschine, die es kann.</td></tr>
   </table>
+
+  <div class="note"><b>Konsequenz der Exklusivität, wo es sie überhaupt gibt:</b>
+     Ein QA40x wird jeweils von einer Anwendung beansprucht, er darf also weder
+     in der QuantAsylum-Software noch in einem anderen Tab geöffnet sein; und
+     ein Gerät eines Messplatzes ist jeweils an einen Client gebunden, was die
+     Geräteliste auch so ausspricht.  Web Audio kennt keine solche Regel und
+     braucht auch keine - es teilt sich das Gerät.</div>
+
+  <h2 id="qa40x">Das QA40x-Analysator-Backend</h2>
+  <p>Neben dem browsereigenen Audiopfad kann Phonalyser.web einen
+     <b>QuantAsylum QA402 / QA403</b>-Audioanalysator direkt über USB ansteuern,
+     bei geschlossener Herstellersoftware.  Dies ist kein Treiberpfad vor einer
+     Soundkarte - es ist ein eigens gebautes Backend für ein einzelnes
+     Instrument, das dieses über die <b>WebUSB</b>-Schnittstelle des Browsers<sup><a href="#ref-webusb">[3]</a></sup> erreicht und dabei dasselbe Herstellerprotokoll spricht wie die herstellereigene Software.</p>
+  <p>Der QA40x ist ein eigenständiges Mess-Frontend: ein ADC und ein DAC auf
+     einer Platine, jeweils mit einem Satz umschaltbarer
+     Vollausschlag-<b>Bereiche</b> (Eingangsabschwächer / Ausgangspegel) und
+     einer eigenen, im Gerät hinterlegten Werkskalibrierung.  Zwei Konsequenzen
+     für die Nutzung:</p>
+  <ul>
+    <li><b>Ein Takt, daher sind die Raten aneinander gekoppelt.</b>  Ein
+        einziger Abtastratengenerator auf der Platine speist sowohl den ADC als
+        auch den DAC, sodass sich Eingangs- und Ausgangsabtastrate niemals
+        unterscheiden können - stellen Sie eine in den Einstellungen ein, und
+        die andere folgt.  Die Liste umfasst 48 / 96 / 192 kHz sowie
+        <b>384 kHz beim QA403</b>: Das Abtastratenregister besitzt einen vierten
+        Code, den der QA402 nicht hat, sodass sich die angebotenen Raten nach dem
+        angeschlossenen Modell richten.</li>
+    <li><b>Der Bereich <em>ist</em> die Kalibrierung.</b>  Der Vollausschlag in
+        Volt ergibt sich aus dem gewählten Bereich und der geräteeigenen
+        Kalibrierung, nicht aus einer von Ihnen eingegebenen
+        Fadenkreuz-Kalibrierung, sodass die dBV-Achse und die Anzeigen des
+        Oszilloskops in dem Moment korrekt sind, in dem Sie den Bereich wählen.
+        Eingang und Ausgang tragen ihre eigenen, unabhängigen Bereiche; das
+        Umschalten des einen skaliert sofort den Vollausschlag dieser Richtung
+        neu, wobei für beide dieselbe Regel "Bereich ist Kalibrierung" gilt.</li>
+  </ul>
+  <p>Der QA40x läuft stets im vollen <b>Duplex</b>-Betrieb - er nimmt auf und
+     gibt in einer Sitzung wieder, niemals nur eine Richtung für sich allein -
+     sodass der Generator und die Analysatoren dasselbe geöffnete Instrument
+     nutzen, statt es zweimal zu öffnen.  Die Samples überqueren die
+     USB-Verbindung als 32-Bit-Wörter, deren obere 24 Bit das Signal tragen
+     (das niederwertige Byte ist Null-Auffüllung), sodass die effektive
+     Auflösung 24 Bit beträgt.</p>
+  <h3 id="qa40x-ranges">Was ein "dBV"-Eingangsbereich wirklich ist</h3>
+  <p>Der Analysator benennt seine Eingangsbereiche in dBV - <code>0 dBV</code>,
+     <code>+18 dBV</code> und so fort - und wer diese Namen für
+     Effektiv-Vollausschlagspannungen hält, liegt um rund 9&nbsp;dB daneben.  Der
+     Grund liegt in der Topologie des Frontends, nicht in einer
+     Beschriftungspanne.  Ein QA-Eingangsbereich "<i>N</i>&nbsp;dBV" ist ein
+     <b><i>N</i>&nbsp;dBFS-Bezug, gemessen als Spitze-Spitze-Wert über das
+     Differenzpaar am Eingang</b>.  Diesen Bezug in den Effektiv-Vollausschlag
+     umzurechnen, aus dem der Rest einer Messung berechnet wird, kostet zwei
+     Faktoren - einen Faktor 2 von Spitze-Spitze auf Spitze und √2 von Spitze auf
+     Effektivwert:</p>
+  <div class="eq">20 log₁₀(2√2) ≈ 9.03&nbsp;dB<span class="no">(1)</span></div>
+  <p>Der Bereich, den das Instrument 0&nbsp;dBV nennt, ist also ein Vollausschlag
+     von etwa −9&nbsp;dBV effektiv, und es ist diese Effektivzahl - nie die
+     Beschriftung -, die die dBV-Achse, die Volt-Anzeigen und jede abgeleitete
+     Größe verwenden.  Die Bereichstabelle druckt deshalb in jeder Eingangszeile
+     die Wahrheit neben den Namen, und zwar als <b>reine Anzeige</b>: Die
+     gespeicherten Kartenschlüssel und die Bereichs-Optionsfelder behalten das
+     einfache <code><i>N</i>&nbsp;dBV</code>, sodass sich im Gerätebestand nichts
+     in seiner Bedeutung ändert.</p>
+  <p><b>Die Ausgangsbereiche tragen keinen solchen Term</b> - das sind echte dBV,
+     einzelne Zahlen für den Pegel, den der DAC erzeugen wird.  Genau diese
+     Asymmetrie lässt eine Schleifenmessung an einem QA40x auf den ersten Blick
+     falsch aussehen: Verbindet man seinen Ausgang mit seinem Eingang, misst die
+     Grundwelle etwa <b>√2 - 3&nbsp;dB - lauter</b> als den Pegel, der beim
+     Generator angefordert wurde.  Keiner der beiden Wandler ist schuld, und nichts
+     ist fehlkalibriert; der symmetrische Ausgang arbeitet auf einen
+     Differenzeingang, sodass ein Ausgang von 1&nbsp;V<sub>RMS</sub> am Eingang
+     ±2&nbsp;V darstellt, und die gesamte Abweichung gehört zum
+     Spitze-Spitze-Bezug der Eingangsseite.</p>
+
+  <div class="note"><b>Was der Browser braucht.</b>  WebUSB setzt <b>Google Chrome</b> voraus - eine engere Anforderung als die der Anwendung selbst. Phonalyser.web läuft auf jedem Chromium-Browser, doch der Analysator ist bislang nur in Chrome als funktionierend bestätigt: auf derselben Maschine, über <code>https://</code> mit gültigem Zertifikat, erreichten Edge, Opera und Brave ihn nicht. Auf Chromium aufzubauen genügt also nicht; der Browser muss WebUSB auch bereitstellen und einer Seite dessen Nutzung gestatten. Firefox und Safari setzen es überhaupt nicht um, doch so weit kommen Sie dort gar nicht: Die Anwendung selbst <a href="../web-in-browser.html#browser">startet auf einer Nicht-Chromium-Engine nicht</a>.  Die Seite muss über <code>https://</code> oder <code>localhost</code> ausgeliefert werden, und die erste Verbindung erfordert einen Klick: Der Browser öffnet seinen eigenen Geräteauswahldialog, den nur Sie bestätigen können.  Unter Windows muss der Analysator an einen WinUSB-Klassentreiber gebunden sein - ein Schritt pro Rechner, den eine Webseite nicht für Sie ausführen kann.  Wie beim Exklusivmodus besitzt jeweils eine Anwendung das Instrument: Der QA402 / QA403 darf währenddessen weder in der QuantAsylum-Software noch in einem anderen Tab geöffnet sein.</div>
 
   <h2 id="how">Wie es funktioniert, grob umrissen</h2>
 
@@ -121,29 +205,29 @@
      Ganzzahl-Samples in ihrem eigenen Takt.  Jedes Sample <i>u</i> (eine
      vorzeichenlose Ganzzahl mit <i>b</i> Bit) wird einmalig in einen
      dimensionslosen Bruchteil des Vollausschlags umgewandelt:</p>
-  <div class="eq"><i>x</i> = (<i>u</i> − 2<sup><i>b</i>−1</sup>) / 2<sup><i>b</i>−1</sup>&nbsp;&nbsp;∈ [−1, +1)<span class="no">(1)</span></div>
+  <div class="eq"><i>x</i> = (<i>u</i> − 2<sup><i>b</i>−1</sup>) / 2<sup><i>b</i>−1</sup>&nbsp;&nbsp;∈ [−1, +1)<span class="no">(2)</span></div>
   <p>und im <a href="ring-buffer.html">Ringpuffer</a> gespeichert.  Die gesamte
      Analysepipeline arbeitet in diesen normierten Einheiten; die Umrechnung in
      Volt erfolgt erst zur Anzeigezeit, unter Verwendung der ADC-Vollausschlag-
      Kalibrierung.  Dadurch berührt eine Neukalibrierung niemals aufgezeichnete
-     Daten — sie ändert nur den Maßstab.</p>
+     Daten - sie ändert nur den Maßstab.</p>
 
   <p><b>Wiedergabe.</b>  Der Wiedergabepfad ist ein einfacher, robuster
      Erzeuger: Er fordert vom <a href="generator.html">Generator</a> den
      nächsten Satz idealer Samples an, leitet sie durch den
      <a href="generator.html#quantizer">Quantisierer mit Dither</a> und schreibt
-     sie auf das Gerät — das Daten genau so schnell entgegennimmt, wie es sie
+     sie auf das Gerät - das Daten genau so schnell entgegennimmt, wie es sie
      wandelt, sodass der eigene Takt des Geräts die Schleife taktet.  Drei
      Details sind für Messungen wichtig:</p>
   <ul>
     <li><b>Aufwärmphase.</b>  Bevor der Pfad startet, wird etwa eine halbe
         Sekunde Signal erzeugt und verworfen, damit die Laufzeitumgebung volle
-        Geschwindigkeit erreicht, bevor das erste hörbare Sample ausgegeben wird —
+        Geschwindigkeit erreicht, bevor das erste hörbare Sample ausgegeben wird -
         bei 384 kHz könnte ein Kaltstart andernfalls stocken.  Die Sweep-Wiedergabe
         wird danach auf null zurückgespult, sodass eine Frequenzgangmessung den
         Sweep immer ab seinem allerersten Sample sieht.</li>
     <li><b>Vorausfüllen.</b>  Der Hardware-Puffer wird vollständig gefüllt,
-        bevor die Wiedergabe als „bereit" gemeldet wird — Mess-Worker starten
+        bevor die Wiedergabe als "bereit" gemeldet wird - Mess-Worker starten
         ihre Aufnahme erst danach, sodass sie niemals die Stille vor dem echten
         Start des Streams aufzeichnen.</li>
     <li><b>Pufferreserve.</b>  Im eingeschwungenen Zustand liegt der Puffer
@@ -151,21 +235,11 @@
         aussetzerlos hält, wenn das restliche System ausgelastet ist.</li>
   </ul>
 
-  <div class="note"><b>Ein praktischer Hinweis zur WASAPI-Wiedergabe.</b>
-     Phonalyser.web steuerte die exklusive WASAPI-Wiedergabe ursprünglich direkt;
-     bei manchen Interfaces erzeugte der Treiber dabei einen kurzen periodischen
-     Aussetzer — eine Signalperiode Stille in regelmäßigen Abständen, sichtbar
-     als spektrales Rauschen.  Der Wiedergabepfad des Datei-Players auf
-     denselben Geräten war aussetzerlos, daher verwendet die Ton-Wiedergabe
-     nun ebenfalls diesen Pfad (das gewählte WASAPI-Gerät wird weiterhin
-     berücksichtigt).  Die WDM-KS-Wiedergabe behält ihren eigenen nativen
-     Pfad.</div>
-
   <h2 id="who">Wer das Backend nutzt</h2>
   <table class="controls">
     <tr><th>Modul</th><th>Richtung</th><th>Art der Nutzung</th></tr>
     <tr><td>Oszilloskop, FFT-Analysator</td><td>Aufnahme</td>
-        <td>Teilen sich <em>eine</em> Aufnahmesitzung und einen Ringpuffer —
+        <td>Teilen sich <em>eine</em> Aufnahmesitzung und einen Ringpuffer -
             siehe <a href="ring-buffer.html#sharedcapture">Aufnahmesitzung</a>.
             Das Gerät wird geöffnet, wenn das erste von beiden aufzeichnet,
             und geschlossen, wenn das letzte stoppt.</td></tr>
@@ -183,28 +257,378 @@
             sind.</td></tr>
   </table>
 
-  <h2 id="errors">Wenn ein Gerät sich nicht öffnen lässt</h2>
-  <p>Exklusivmodus bedeutet, dass Öffnungsversuche aus alltäglichen Gründen
-     scheitern können.  Das Backend übersetzt den Fehler des Treibers in eine
-     klare Aussage darüber, um welchen Fall es sich handelt:</p>
+  <h2 id="volume">Die Hardware-Lautstärke ist Teil der Kette</h2>
+  <p>Unter Linux und macOS sitzen die Lautstärkeregler der Karte zwischen
+     Buchse und Wandler und skalieren damit jedes Sample IN der kalibrierten
+     Kette - unsichtbar, denn die Kalibrierung wurde durch die damalige
+     Reglerstellung hindurch gemessen.  Die Backends behandeln die Lautstärke
+     deshalb als geliehenen Zustand rund um jeden Strom:</p>
   <ul>
-    <li><b>Format nicht unterstützt</b> — das Gerät akzeptiert die gewählte
-        Kombination aus Abtastrate und Bittiefe nicht; wählen Sie eine andere
-        in den Einstellungen (16/24 bit bei 48/96/192/384 kHz werden fast
-        universell akzeptiert).</li>
-    <li><b>Gerät belegt</b> — eine andere Anwendung (oder ein anderer
-        exklusiver Stream) hält es belegt.</li>
-    <li><b>Gerät nicht vorhanden</b> — abgesteckt oder der Treiber ist nicht
-        geladen; der gespeicherte Gerätename stimmt mit nichts mehr
-        überein.</li>
+    <li><b>Das Öffnen setzt auf die 0 dB des Geräts, nie auf "Maximum".</b>
+        Unter Linux kommt das Ziel aus der dB-Skala des Reglers im
+        <code>amixer</code>-Dump (eine Aufnahmeverstärkung mit Skala
+        0..+12 dB hat ihre Eins am UNTEREN Ende); unter macOS aus der
+        dB-zu-Skalar-Übersetzung der HAL.  Ein Regler ganz ohne dB-Angaben
+        wird auf Vollausschlag gesetzt.</li>
+    <li><b>Die Adressierung ist streng.</b>  Angefasst werden nur das
+        geöffnete Gerät und die geöffnete Richtung.  Unter ALSA werden die
+        Regler über das Terminal-Wort der geöffneten Buchse (Line, Mic,
+        Headphone) plus den Stream-seitigen PCM-Regler zugeordnet; einen
+        Stream-Regler, den die Karte je PCM-Paar unter einem Namen führt,
+        löst der Regler-Index auf, den der Kernel in PCM-Geräte-Reihenfolge
+        vergibt - ein BUCHSEN-benannter Name in doppelter Ausführung wird
+        dagegen rundweg verweigert, denn die Buchse eines Fremden zu bewegen
+        ist schlimmer als einen Regler ungepinnt zu lassen.  Ein
+        macOS-Aggregat veröffentlicht keine eigenen Regler; stattdessen
+        werden seine AKTIVEN Mitgliedsgeräte gesetzt.</li>
+    <li><b>Das Schließen stellt zurück.</b>  Jeder Schreibzugriff des Pins
+        wird mit dem ersetzten Wert gemerkt und beim Ende des Stroms
+        zurückgeschrieben - wie auch immer er endet.  Zurückgestellt wird nur,
+        was der Pin selbst bewegt hat; eine Verstellung des Bedieners während
+        des Stroms überlebt den Stopp.</li>
+    <li><b>Nichts davon darf eine Messung stoppen.</b>  Ein Regler, der sich
+        nicht lesen, zuordnen oder schreiben lässt, wird im Protokoll benannt
+        und in Ruhe gelassen; das Öffnen läuft mit dem Pegel weiter, den die
+        Hardware behalten hat.</li>
   </ul>
+  <p>Windows ist per Entscheidung ausgenommen, nicht aus Versäumnis: Dort ist
+     die Systemlautstärke Teil der Kalibrierung - einmal gesetzt, durch sie
+     hindurch kalibriert, stehen gelassen - und der Exklusivmodus umgeht den
+     Mixer ohnehin.</p>
+
+  <h2 id="network">Ein Messplatz im Netz</h2>
+  <p>Alles bisher Gesagte setzt voraus, dass die Wandler an der Maschine hängen,
+     an der Sie sitzen.  Das müssen sie nicht.  Das <b>Desktop</b>-Phonalyser,
+     kopflos als <b>Server</b> auf der Maschine betrieben, an der sie
+     <em>tatsächlich</em> hängen, macht diese zum <b>Messplatz</b>, und dieser
+     Browser misst über ihn.  Ein Browser kann selbst kein Server sein - er hat
+     keine eigene Soundkarte zu teilen und nichts, worauf er lauschen könnte -,
+     die Messplatz-Hälfte ist also stets die Desktop-Anwendung; siehe
+     <a href="../server.html">Der Phonalyser-Server</a>.  An den Überlegungen dieser Seite ändert
+     das nichts - der Messplatz öffnet seine Geräte weiterhin exklusiv, weiterhin
+     mit genau der gewählten Rate und Bittiefe, weiterhin bit-exakt.  Über das
+     Netz geht keine Audio-Hardware, sondern dieselben zwei Spuren, nur
+     gestreckt.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 280" width="100%" height="280" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+
+    <rect x="10" y="60" width="190" height="100" rx="6" fill="#fdf2f2" stroke="#a88"/>
+    <text x="105" y="84" text-anchor="middle" font-weight="bold">Arbeitsplatz</text>
+    <text x="105" y="104" text-anchor="middle" fill="#755">Generator · FFT</text>
+    <text x="105" y="120" text-anchor="middle" fill="#755">Oszilloskop · Sweep</text>
+    <text x="105" y="140" text-anchor="middle" fill="#755">(diese Maschine)</text>
+
+    <line x1="202" y1="95" x2="436" y2="95" stroke="#446" stroke-width="1.5" marker-end="url(#arr3)"/>
+    <text x="319" y="82" text-anchor="middle" fill="#557">ein TCP-Port · 8377</text>
+    <text x="319" y="112" text-anchor="middle" fill="#557">Befehle · Audio · Info</text>
+
+    <line x1="202" y1="160" x2="436" y2="160" stroke="#446" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arr3)"/>
+    <text x="319" y="180" text-anchor="middle" fill="#557">GET /info · Peer-Tabelle</text>
+    <text x="319" y="196" text-anchor="middle" fill="#557">erfragt, nicht angekündigt</text>
+
+    <rect x="440" y="20" width="240" height="240" rx="8" fill="#eef" stroke="#88a" stroke-width="1.5"/>
+    <text x="560" y="44" text-anchor="middle" font-weight="bold">Phonalyser-Server</text>
+    <text x="560" y="60" text-anchor="middle" fill="#557">der Messplatz</text>
+
+    <rect x="460" y="76" width="200" height="54" rx="6" fill="#fffbe8" stroke="#cc9"/>
+    <text x="560" y="98" text-anchor="middle">seine eigenen Backends</text>
+    <text x="560" y="116" text-anchor="middle" fill="#775">WASAPI · WDM-KS · QA40x</text>
+
+    <rect x="460" y="150" width="200" height="60" rx="6" fill="#fffbe8" stroke="#cc9"/>
+    <text x="560" y="172" text-anchor="middle">ein Client je Gerät</text>
+    <text x="560" y="190" text-anchor="middle" fill="#775">der Halter wird genannt</text>
+
+    <rect x="700" y="60" width="100" height="50" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="750" y="82" text-anchor="middle" font-weight="bold">DAC</text>
+    <text x="750" y="99" text-anchor="middle" fill="#575">exklusiv</text>
+    <rect x="700" y="170" width="100" height="50" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="750" y="192" text-anchor="middle" font-weight="bold">ADC</text>
+    <text x="750" y="209" text-anchor="middle" fill="#575">exklusiv</text>
+
+    <line x1="682" y1="88" x2="698" y2="86" stroke="#446" stroke-width="1.5" marker-end="url(#arr3)"/>
+    <line x1="698" y1="194" x2="682" y2="192" stroke="#446" stroke-width="1.5" marker-end="url(#arr3)"/>
+  </svg>
+  </div>
+
+  <p><b>Dem Server gehören die Backends seiner Maschine.</b>  Er ist kein eigener
+     Treiberweg: Er startet jedes Backend, das auf <em>seinem</em> Rechner
+     vorhanden ist - WASAPI, WDM-KS, CoreAudio, JavaSound, ein QA40x - und bietet
+     sie nach außen an.  Ein Backend, das zwar in seinem Build steckt, auf jenem
+     Rechner aber nicht laufen kann, wird gar nicht erst angeboten, statt
+     angeboten und dann verweigert zu werden.  Auf Ihrer Seite erscheint jedes als
+     ein weiterer Eintrag in der Backend-Liste, sodass die Module oberhalb des
+     Backends den Unterschied nicht bemerken - und ihn auch nicht bemerken
+     müssen.</p>
+
+  <p><b>Ein Port trägt alles.</b>  Der Steuerkanal, der Audiostrom und die
+     informativen Endpunkte teilen sich einen einzigen TCP-Port - standardmäßig
+     8377.  Das ist eine bewusste Vereinfachung mit praktischem Gewinn: eine Zahl
+     zum Tippen, ein Loch in der Firewall und keine zweite Verbindung, die stehen
+     kann, während die erste liegt.</p>
+
+  <p><b>Die Suche ist eine Bake - und ein Browser kann sie nicht hören.</b>  Ein
+     Server kündigt sich zweimal je Sekunde per Multicast an, an die Gruppe
+     239.255.83.77 auf 8377/udp, und der Desktop-Client tritt dieser Gruppe bei
+     und erfährt so ohne jede Konfiguration von jedem Messplatz im Raum.  <b>Eine
+     Seite hat keinen Socket, der einer Multicast-Gruppe beitreten könnte</b>,
+     also erreicht nichts davon diese Anwendung: Die Bake wird weiterhin
+     gesendet, es gibt hier nur schlicht nichts, was auf sie lauschen
+     könnte.</p>
+  <p>An ihre Stelle tritt eine einzige Frage über HTTP.  Sie tippen die Adresse
+     <em>eines</em> Messplatzes ein; die Anwendung holt sich das
+     <code>/info</code> dieses Servers, um seine Identität zu erfahren, und
+     danach seine <b>Peer-Tabelle</b> - die Liste der Server, deren Bake er
+     selbst gehört hat - und merkt sich jeden einzelnen davon.  Der Raum
+     erscheint also durchaus, aber aus zweiter Hand, über einen Messplatz, der
+     die Bake hören <em>kann</em>, statt unmittelbar aus dem Netz.  Dieselbe
+     Abfrage ist auch, was Lebendigkeit hier bedeutet: Ein Server ist
+     "lebendig", weil er gerade eben geantwortet hat, nicht weil eine
+     Ankündigung eingetroffen ist, und gefragt wird nur, solange das
+     Server-Fenster offen ist.  Eine Folge sei klar ausgesprochen - <b>wurde nie
+     eine Adresse eingetippt, ist die Liste leer und bleibt leer</b>.</p>
+
+  <p><b>Die Exklusivität übersteht die Reise.</b>  Die Regel vom Anfang dieser
+     Seite - eine Anwendung besitzt ein Gerät zur Zeit - wird über das Netz zu:
+     ein <em>Client</em> zur Zeit.  Der Server hält eine Sperre je Gerät und
+     Richtung und veröffentlicht mit jedem Gerät, das er auflistet, den
+     <b>Namen des Clients, der sie hält</b>.  So sehen zwei Bedienende, die sich
+     einen Messplatz teilen, die Belegung des anderen, bevor sie etwas zu öffnen
+     versuchen, statt es über eine Ablehnung zu erfahren.  Eine Sperre wird
+     genommen, wenn eine Messung das Gerät öffnet, und zurückgegeben, wenn sie
+     stoppt - und ein Client, der verschwindet, gibt alles frei, was er
+     hielt.</p>
+
+  <p><b>Der Generator läuft auf dem Messplatz, beauftragt statt gestreamt.</b>
+     Das wiegt schwerer, als es klingt.  Der Arbeitsplatz schiebt kein Audio über
+     das Netz, das der Messplatz abspielen soll; er sagt ihm, <em>was</em>
+     auszugeben ist, und der Generator des Messplatzes rendert es in dessen
+     eigenen DAC, auf dessen eigenem Takt.  Zwei Folgen ergeben sich, und die
+     zweite ist die messtechnische:</p>
+  <ul>
+    <li>Das Netz muss nie einen lückenlosen Ausgabestrom in Echtzeit tragen - ein
+        Jitter-Budget, von dem niemand eine Messung abhängig machen möchte.</li>
+    <li>Ein <a href="freq-resp.html">Frequenzgang-Sweep</a> wird gegen
+        <b>das entfaltet, was der Messplatz tatsächlich gerendert hat</b>.  Das
+        erste Sample des Sweeps ist im Aufnahmestrom selbst markiert, im Band,
+        sodass die Auswertung auf dem Zeitverhalten des Messplatzes ankert und
+        nicht auf einer Ankunftszeit im Netz.  Die Entfaltung teilt die
+        aufgenommene Antwort durch den Referenz-Sweep, und ein Anker, der um eine
+        Paketlaufzeit driftet, verschmiert genau die Impulsantwort, auf der die
+        ganze Messung ruht.</li>
+  </ul>
+
+  <p><b>Die gewährte Rate ist die Wahrheit.</b>  Gewährt ein Gerät eine andere
+     Abtastrate als die angeforderte - die Entscheidung des Treibers, nicht die
+     des Servers -, so bekommen die beiden Richtungen derselben Frage
+     unterschiedliche Antworten.  Eine Live-Aufnahme <b>stellt sich auf die
+     gewährte Rate um</b> und läuft: Die Samples sind einwandfrei, und die
+     Frequenzachse folgt schlicht der Rate, mit der sie aufgenommen wurden.  Ein
+     Sweep in derselben Lage wird <b>abgelehnt</b>: Seine Referenz wurde für die
+     angeforderte Rate berechnet, und eine Entfaltung gegen eine Referenz der
+     falschen Rate erzeugt eine Kurve, die plausibel aussieht und falsch ist -
+     was schlimmer ist als gar keine Kurve.</p>
+
+  <p><b>Der Audiostrom bekennt seine Lücken.</b>  Aufgenommene Samples gehen als
+     Binärnachrichten dreier Arten über die Leitung, jede mit einem Zähler, der bei
+     jeder Nachricht - welcher Art auch immer - weiterzählt.
+     <b>Sample</b>-Nachrichten tragen das native PCM des Messplatzes genau so, wie
+     sein Gerät es erzeugt hat, sodass der Arbeitsplatz sie mit demselben Code
+     dekodiert, den auch eine lokale Karte durchläuft.  Eine <b>Marke</b> trägt
+     überhaupt kein Audio: Sie kündigt an, dass das nächste Sample-Byte nach ihr
+     das erste Sample des Sweeps selbst ist - genau das verankert eine Entfaltung
+     im Zeitverhalten des Messplatzes.  Und eine <b>Lücken</b>-Nachricht sagt mit
+     dürren Worten, dass der Server selbst <i>n</i> Stereo-Frames verloren hat -
+     ein stehengebliebener Verbraucher, ein Geräte-Überlauf -, bevor sie überhaupt
+     ins Netz gelangten.</p>
+  <p>Die dritte Art ist die, auf die es bei einer Messung ankommt.  Die Alternative
+     wäre, nichts zu sagen und die beiden Seiten des Lochs aneinanderzusetzen, was
+     eine Aufzeichnung ergibt, deren Samples zeitlich nicht benachbart sind und
+     deren Mittelung daher ein Grundrauschen und eine Phase meldet, die es nie
+     gab.  Also wird der Verlust ausgesprochen, der Analysator setzt seine Mittelung
+     zurück, statt zu spleißen, und die FFT hebt ihr Banner
+     <b>Messplatz verlor Audio</b>.  Ein Sprung im Zähler bedeutete dagegen einen
+     Verlust im <em>Transport</em> - über eine intakte, geordnete Verbindung
+     unmöglich - und wird als Protokollfehler behandelt: gemeldet und gestoppt,
+     genau wie ein Gerätefehler.</p>
+
+  <p><b>Beide Enden bewachen die Sitzung, zweimal je Sekunde.</b>  Eine Messsitzung
+     ist kein Frage-Antwort-Spiel: Läuft eine Aufnahme erst einmal, sieht eine
+     gesunde Verbindung genauso aus wie eine untätige - und eine tote wieder
+     genauso.  Deshalb sendet jede Seite alle <b>500&nbsp;ms</b> ein Lebenszeichen
+     und zählt die Antworten; <b>vier unbeantwortete in Folge - zwei Sekunden -
+     erklären die Verbindung für tot</b>.  Danach wickelt sich alles in der
+     Richtung ab, in der es muss: Auf dem Arbeitsplatz wird jedes Modul gestoppt,
+     das über diesen Messplatz misst, und der Grund wird genannt, statt ein
+     Oszilloskop das zuletzt empfangene Bild weiterzeichnen zu lassen; auf dem
+     Messplatz werden die Sperren des verschwundenen Clients freigegeben und seine
+     Hardware wird geparkt, sodass die nächste Bedienerin ein freies Gerät
+     vorfindet und nicht eines, das eine längst heimgegangene Maschine hält.  Die
+     Server-Liste folgt derselben Philosophie von der anderen Seite her: Ein
+     Messplatz, der das periodische <code>/info</code> des Fensters nicht
+     beantwortet, wird grau, statt zu verschwinden - so bleibt ein Messplatz, den
+     Sie kennen, in der Liste, während er ausgeschaltet ist.</p>
+
+  <p><b>Eine auf dem Messplatz gespielte Datei reist einmal und gehört der
+     Sitzung.</b>  Das Protokoll trägt kein Audio vom Arbeitsplatz zum Messplatz,
+     also kann <em>Abspielen&nbsp;aus...</em> nicht streamen: Stattdessen wird die
+     gewählte Datei als Ganzes über denselben Port hochgeladen, und die
+     Generator-Spur des Messplatzes dekodiert sie und gibt sie aus dessen eigenem
+     DAC aus.  Der Upload ist auf <b>50&nbsp;MB</b> begrenzt, und auch der Bestand
+     als Ganzes ist beschränkt, sodass ein einzelner Client den Speicher eines
+     Messplatzes nicht füllen kann; der Arbeitsplatz prüft die Größe, bevor ein
+     einziges Byte losgeht, sodass eine zu große Datei sofort abgelehnt wird und
+     nicht erst nach der Übertragung.  Die Bytes liegen ausschließlich im
+     Arbeitsspeicher des Servers, gehören der Sitzung, die sie referenziert hat,
+     und werden <b>verworfen, sobald diese Verbindung schließt</b> - auf einem
+     Messplatz sammelt sich nichts an, und keine Datei überlebt die Bedienerin, die
+     sie geschickt hat.</p>
+
+  <div class="note"><b>Keine Authentifizierung, mit Absicht.</b>  Ein Server
+     nimmt jeden Client an, der ihn erreicht.  Er ist ein Messgerät für ein
+     vertrauenswürdiges Netz - den Raum, in dem die Messtechnik steht - und seine
+     eigene Dokumentation sagt das unmissverständlich; er gehört nicht ins offene
+     Internet.  Wie man einen betreibt und ihn auf eine einzige Schnittstelle
+     beschränkt, steht unter
+     <a href="../server.html">Der Phonalyser-Server</a>.</div>
+
+  <p>Wie ein Messplatz vom Arbeitsplatz aus erreicht wird - die Server-Liste, die
+     Einträge <code>&lt;Server&gt; -> &lt;Backend&gt;</code>, die Karten und die
+     Kalibrierung des Messplatzes - steht unter
+     <a href="../preferences.html#prefs-audio-servers">Einstellungen ▸ Messen
+     über einen Phonalyser-Server</a>.</p>
+
+  <h2 id="errors">Wenn ein Gerät sich nicht öffnen lässt - und wenn es aufhört</h2>
+  <p>Exklusivmodus bedeutet, dass Öffnungsversuche aus alltäglichen Gründen
+     scheitern können.  Ein nativer Rückgabecode sagt einer Bedienerin nichts,
+     womit sie etwas anfangen könnte; deshalb ordnet das Backend, dem der Fehler
+     gehört, ihn einem von sechs Gründen zu, und der Dialog wird aus diesem Grund
+     formuliert und wie jeder andere Text übersetzt:</p>
+  <ul>
+    <li><b>Das Gerät wurde getrennt</b> - abgesteckt oder vom Treiber entfernt,
+        während die Anwendung es noch in ihrer Liste führte.</li>
+    <li><b>Das Gerät antwortet nicht</b> - es ist vorhanden und reagiert nicht:
+        das Öffnen lief in eine Zeitüberschreitung, oder der Treiber hat den
+        Aufruf angenommen und kam nie zurück.</li>
+    <li><b>Das Gerät wird von einer anderen Anwendung verwendet</b> - sie (oder
+        ein anderer exklusiver Stream) hält das Gerät belegt.</li>
+    <li><b>Das Gerät wurde nicht gefunden</b> - es ist auf diesem Rechner
+        überhaupt nicht vorhanden: eine von einer anderen Maschine gemerkte oder
+        eine umbenannte Karte.</li>
+    <li><b>Das Gerät unterstützt dieses Format nicht</b> - es ist vorhanden und
+        frei, verweigert aber die gewählte Abtastrate, Bittiefe oder Kanalzahl;
+        wählen Sie eine andere in den Einstellungen (16/24 bit bei
+        48/96/192/384 kHz werden fast universell akzeptiert).</li>
+    <li><b>Grund unbekannt</b> - das Backend konnte es nicht feststellen.  Das
+        ist der verpflichtende Rückfall und nie selbst ein Fehler; die Protokollzeile
+        daneben trägt das rohe Detail.</li>
+  </ul>
+  <p>Es gibt bewusst keinen zentralen Parser für die Fehlertexte sämtlicher
+     Treiber.  Jedes Backend liest <em>sein eigenes</em> Vokabular - im Browser
+     sind das die <b>DOMException-Namen</b>, mit denen
+     <code>getUserMedia</code> und der <code>AudioContext</code>-Konstruktor
+     abweisen; ein anderes natives Fehlervokabular bekommt eine Seite nicht:
+     <code>NotFoundError</code> ist ein Gerät, das es nicht gibt,
+     <code>NotReadableError</code> eines, das eine andere Anwendung hält,
+     <code>OverconstrainedError</code> eine Abtastrate oder Kanalzahl, die das
+     Gerät verweigert.  <code>NotAllowedError</code> und
+     <code>SecurityError</code> stehen bewusst nicht in dieser Tabelle: eine
+     verweigerte Berechtigung ist kein Gerätefehler und wird in der Statuszeile
+     gemeldet statt als solcher.  Das QA40x-Backend liest stattdessen die
+     Fehler von WebUSB, sodass ein später hinzugefügtes Backend sein
+     eigenes Vokabular mitbringt und nichts darüber es lernen muss.  Der
+     <b>rohe Treibertext geht immer ins Protokoll</b>, jedes Mal, und nur dorthin:
+     er ist das, was eine Entwicklerin braucht, und der einzige Ort, an den er
+     gehört.  Ein <a href="#network">Phonalyser-Server</a>, der ein Gerät über
+     das Netz verweigert, meldet über dieselben sechs Gründe, sodass sich ein
+     entfernter Fehler wie ein lokaler liest.</p>
+
+  <h3 id="errors-running">Ein Stream, der nach dem Start stirbt</h3>
+  <p>Ein fehlgeschlagenes Öffnen ist der leichte Fall: Etwas hat geworfen, und es
+     gibt einen Aufrufer, dem man es sagen kann.  Der schwere Fall ist ein Stream,
+     der <em>lief</em> und aufhört.  Oberhalb des Treibers gibt es dabei nichts zu
+     bemerken: Ein Zustell-Callback, der nie wieder aufgerufen wird, sieht genauso
+     aus wie ein sehr leiser Eingang, also zeichnet das Oszilloskop weiter eine
+     flache Linie, mittelt der Analysator weiter Stille, und die Anzeige der
+     Aufnahmerate tickt weiter - eine Messung von nichts, dargeboten als
+     Messung.</p>
+  <p>Der Ausweg ist ein Vertrag statt einer Benachrichtigung.  <b>Ein Stream, der
+     gestartet wurde, schuldet in jeder Audioperiode einen Block.</b>  Stille ist
+     kein Ausbleiben von Blöcken; Stille sind Blöcke voller Nullen.  Also ist
+     <em>gar nichts</em> über zwei Sekunden kein leises Signal, sondern ein
+     stehengebliebener Stream, und ein Backend, dessen Treiber ihm nie etwas sagt,
+     überwacht seine eigene Zustellung und sagt es selbst.  Einem Treiber, der den
+     Verlust <em>doch</em> meldet, wird sofort geglaubt - deshalb unterscheidet der
+     Dialog die beiden Fälle: Das Gerät wurde verloren, oder es liefert keine
+     Abtastwerte mehr.</p>
+  <p>Die Wiedergabeseite braucht das Spiegelbild davon, mit einer zusätzlichen
+     Vorsichtsmaßnahme.  Eine Render-Schleife, die im Treiber blockiert und auf
+     Platz wartet, kann nichts bemerken - und beim Abstecken kann sie ihn womöglich
+     nicht einmal mehr <em>verlassen</em>.  Deshalb taktet sich die Schleife
+     stattdessen an dem, was der Pfad selbst annimmt: Sie schreibt nur, was das
+     Gerät nach eigener Auskunft aufnehmen kann, und wartet außerhalb des Treibers,
+     wenn nichts hineinpasst.  Das hält den Thread jederzeit beendbar und macht aus
+     zwei verschiedenen Symptomen zwei klare Befunde: Über die Frist hinweg wurde
+     nichts angenommen - oder ein Schreibvorgang wurde nur teilweise angenommen,
+     was der Treiber selbst sagt, wenn die Spur tot ist.</p>
+  <p>Wie das Ende auch erkannt wird, <b>es nimmt den Weg, den die Samples
+     nahmen</b> - hinauf durch den <a href="ring-buffer.html">Ringpuffer</a> und
+     seine Leser bis zu den Ansichten -, statt seitwärts verkündet zu werden.
+     Genau das macht die Folgen vollständig, ohne dass jemand sie koordinieren
+     müsste: Das Oszilloskop und der Analysator stoppen, ein einziger Dialog nennt
+     das Backend und den Grund, eine laufende Aufzeichnung in eine Datei wird
+     abgebrochen, statt still nichts mitzuschneiden, und ein
+     <a href="freq-resp.html">Sweep</a>, dessen Aufnahme Samples verloren hat oder
+     mitten im Lauf stehen blieb, wird mit Angabe des Grundes abgelehnt, statt über
+     das Loch hinweg entfaltet zu werden.</p>
+
+  <h3 id="errors-macos">Das Gerät, das wortlos geht (macOS)</h3>
+  <p>CoreAudio fügt zwei Drehungen hinzu, die der Vertrag oben nicht sehen
+     kann.  Ein gezogenes Gerät kann seinen Strom <em>nominell aktiv</em>
+     zurücklassen: der Wiedergabe-Callback wird weiter ins Leere aufgerufen,
+     sodass weder der Frame-Zähler noch <code>Pa_IsStreamActive</code> den
+     Verlust je melden - und ein Aggregat, dessen Mitglieder alle weg sind,
+     liefert sogar weiter Aufnahmeblöcke voller Nullen, was auch die
+     Liefer-Frist aushebelt, denn die Stille trifft pünktlich ein.  Beide
+     Seiten stellen deshalb eine Frage, die kein Strom beantworten kann:
+     einmal pro Sekunde wird die lebendige HAL gefragt, ob das Gerät überhaupt
+     noch an der Maschine ist - und bei einem Aggregat, ob auf seiner Liste
+     aktiver Untergeräte noch jemand steht, denn der Name des Aggregats
+     überlebt seine Mitglieder.  "Kann nicht antworten" zählt als vorhanden:
+     ein fehlgeschlagenes Lesen darf nie eine gesunde Messung beenden.</p>
+  <p>Die zweite Drehung ist der Abbau selbst.  CoreAudios Stopp wartet auf
+     eine Semaphore, die ein verschwundenes Gerät nie signalisiert; ein
+     Thread, der höflich ausklingen lässt, hinge für immer - und ein
+     Schließen, das sein Wachhund aufgibt, lässt den Strom offen und GEZÄHLT
+     zurück, was über das Leck hinaus zählt: PortAudio kann Geräte nur neu
+     aufzählen, indem die ganze Bibliothek abgebaut wird, was bei jedem
+     offenen Strom verboten ist.  Ein einziges hängendes Schließen würde also
+     jeden künftigen Neuaufbau der Geräteliste blockieren, bis der Prozess
+     stirbt.  Beide CoreAudio-Richtungen brechen deshalb ab statt
+     auszuklingen - ein Messstrom hat nichts Ausklingenswertes - und die
+     Aufnahme gewährt einem frisch gestarteten Strom eine längere Frist bis
+     zum ersten Block, denn ein Aggregat baut sein IO sekundenlang zusammen,
+     bevor es überhaupt spricht.</p>
+  <p>Die Geräteliste selbst folgt derselben Disziplin: PortAudios Aufzählung
+     ist eine einmalige Momentaufnahme, also vergleicht eine Abfrage die
+     Gerätemenge der lebendigen HAL mit der Menge, aus der die Aufnahme
+     gebaut wurde, und nur ein echter Unterschied gibt den Neuaufbau aus -
+     der dann wartet, bis der letzte Strom geschlossen ist.  Ein neu
+     eingestecktes Gerät ist ein neues Audio-Objekt unter altem Namen, und
+     genau diese Identitätsänderung ist es, die der Vergleich sieht.</p>
 
   <h2 id="refs">Referenzen</h2>
   <ol class="refs">
-    <li id="ref-excl">Was Exklusivmodus-Streams umgehen und garantieren —
+    <li id="ref-excl">Was Exklusivmodus-Streams umgehen und garantieren -
         <a href="https://learn.microsoft.com/en-us/windows/win32/coreaudio/exclusive-mode-streams">Microsoft Learn: Exclusive-Mode Streams</a>.</li>
-    <li id="ref-ks">Die Kernel-Streaming-Ebene unterhalb von WDM-KS —
+    <li id="ref-ks">Die Kernel-Streaming-Ebene unterhalb von WDM-KS -
         <a href="https://learn.microsoft.com/en-us/windows-hardware/drivers/stream/kernel-streaming">Microsoft Learn: Kernel Streaming</a>.</li>
+    <li id="ref-webusb">Die Browser-Schnittstelle, über die das QA40x-Backend den Analysator erreicht - <a href="https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API">WebUSB</a>.</li>
   </ol>
 
   <p class="back"><a href="index.html">◀ Theorie des Betriebs</a> ·

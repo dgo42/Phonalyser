@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Test-scope log config: Maven/Surefire picks this up automatically during
+     `mvn test`.  Mirrors the main config (Console + rolling file) for all tests,
+     and adds an INDEPENDENT file for the FFT harmonic-stability harness. -->
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} [%-5level] %msg%n"/>
+        </Console>
+        <!-- Test runs log here, NOT into the app's logs/phonalyser.log, so a
+             `mvn test` never pollutes the running app's runtime log.
+
+             app.log.dir is set by Surefire (phonalyser-parent) to this module's
+             own target/test-logs, as an ABSOLUTE path: the literal default below
+             would resolve against the runner's working directory, which is the
+             module basedir under Surefire but the REPO ROOT under an IDE run -
+             and there `logs/` is a junction into the live app log.  Under
+             target/ either way, so it is gitignored and wiped by `mvn clean`.
+             Every appender in this file obeys the same property; a diagnostic
+             log is still a test's output and is isolated like the rest. -->
+        <File name="File"
+              fileName="${sys:app.log.dir:-target/test-logs}/phonalyser-test.log" append="false">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} [%-5level] %logger{36} - %msg%n"/>
+        </File>
+        <!-- Independent log for the harmonic-stability test, overwritten each run. -->
+        <File name="FftHarmonicStabilityFile"
+              fileName="${sys:app.log.dir:-target/test-logs}/fft-harmonic-stability.log" append="false">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} %msg%n"/>
+        </File>
+        <!-- Independent log for the cross-tick drift test, overwritten each run. -->
+        <File name="FftCrossTickDriftFile"
+              fileName="${sys:app.log.dir:-target/test-logs}/fft-cross-tick-drift.log" append="false">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} %msg%n"/>
+        </File>
+        <!-- Independent log for the FLL transport-delay sweep, overwritten each run. -->
+        <File name="FllTransportFile"
+              fileName="${sys:app.log.dir:-target/test-logs}/fll-transport.log" append="false">
+            <PatternLayout pattern="%msg%n"/>
+        </File>
+    </Appenders>
+    <Loggers>
+        <!-- Its own file + console, kept OUT of the shared root file. -->
+        <Logger name="FftHarmonicStability" level="INFO" additivity="false">
+            <AppenderRef ref="FftHarmonicStabilityFile"/>
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Logger name="FftCrossTickDrift" level="INFO" additivity="false">
+            <AppenderRef ref="FftCrossTickDriftFile"/>
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Logger name="FllTransport" level="INFO" additivity="false">
+            <AppenderRef ref="FllTransportFile"/>
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Root level="INFO">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="File"/>
+        </Root>
+    </Loggers>
+</Configuration>

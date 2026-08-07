@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Headless-server distribution zip, macOS Apple Silicon (aarch64).
+
+     The Intel bundle with the arm64 dylibs from lib/macos-arm64 instead of the
+     x86_64 ones - see server-dist-macos-x64.xml for why the natives must be
+     staged on macOS at all.  Jar and scripts, no application bundle. -->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.1.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.1.0 http://maven.apache.org/xsd/assembly-2.1.0.xsd">
+    <id>macos-aarch64</id>
+    <formats>
+        <format>zip</format>
+    </formats>
+    <includeBaseDirectory>true</includeBaseDirectory>
+
+    <files>
+        <file>
+            <source>${project.build.directory}/${server.mainJar}</source>
+            <outputDirectory>/</outputDirectory>
+            <fileMode>0644</fileMode>
+        </file>
+    </files>
+
+    <fileSets>
+        <fileSet>
+            <directory>${repo.root}/src/main/packaging/unix</directory>
+            <outputDirectory>/</outputDirectory>
+            <includes>
+                <include>phonalyser-server.sh</include>
+                <include>phonalyser-server-service.sh</include>
+            </includes>
+            <fileMode>0755</fileMode>
+            <lineEnding>unix</lineEnding>
+        </fileSet>
+        <fileSet>
+            <directory>${repo.root}/src/main/packaging/unix</directory>
+            <outputDirectory>/</outputDirectory>
+            <includes>
+                <include>README-server-macos.txt</include>
+            </includes>
+            <fileMode>0644</fileMode>
+        </fileSet>
+        <fileSet>
+            <directory>${repo.root}/lib/macos-arm64</directory>
+            <outputDirectory>/natives</outputDirectory>
+            <includes>
+                <include>libportaudio.dylib</include>
+                <include>libusb-1.0.dylib</include>
+            </includes>
+            <fileMode>0755</fileMode>
+        </fileSet>
+        <!-- The web bundle this server serves at `/` (spec 3): a `web` directory
+             BESIDE THE JAR, which is exactly where ServerMain.staticDir() looks -
+             the jar's own CodeSource parent resolved against "web", else the same
+             name in the working directory.  It is a FILESYSTEM path and never a
+             classpath resource, so it belongs in the dist and not inside the jar.
+
+             A fileSet because this one IS optional: the bundle is produced by the
+             embedded web build (`node web/build.mjs` with the embedded flag, which
+             make-servers.cmd runs after the clean and before the package, and which
+             no Maven goal drives), and a build made without that step
+             simply ships no web/ - the server then answers today's "no web bundle
+             is served by this server" 404, which spec 3 marks "when built with it". -->
+        <fileSet>
+            <directory>${repo.root}/target/web-embedded</directory>
+            <outputDirectory>/web</outputDirectory>
+            <fileMode>0644</fileMode>
+        </fileSet>
+    </fileSets>
+</assembly>

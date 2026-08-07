@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -17,7 +17,7 @@
 
 import { MainsFrequencyTracker, MIN_MAINS_HZ, MAX_MAINS_HZ } from './frequency-tracker.js';
 
-/** Default −3 dB notch bandwidth (Hz) for the mains comb — the value used by
+/** Default −3 dB notch bandwidth (Hz) for the mains comb - the value used by
  *  the FFT / scope combs throughout the app. */
 export const DEFAULT_NOTCH_BANDWIDTH_HZ = 2.5;
 
@@ -71,7 +71,7 @@ export class MainsCombFilter {
 
   /**
    * Normalized magnitude response at fHz, linear (0..1): ≈1 in the passband,
-   * → 0 at every mains harmonic (k·f₀). Closed form of
+   * -> 0 at every mains harmonic (k·f₀). Closed form of
    * H(z) = (1 − z⁻ᴺ)/(1 − α·z⁻ᴺ) on the unit circle with N = sampleRate/f₀,
    * scaled by (1+α)/2 so the anti-notch PEAK is exactly 1. Returns 1.0 while
    * untuned.
@@ -85,7 +85,7 @@ export class MainsCombFilter {
     const num = 2.0 * (1.0 - c);
     const den = 1.0 - 2.0 * this._alpha * c + this._alpha * this._alpha;
     const h = (den > 0.0) ? Math.sqrt(Math.max(0.0, num / den)) : 0.0;
-    return h * (1.0 + this._alpha) / 2.0;             // peak-normalize → 1
+    return h * (1.0 + this._alpha) / 2.0;             // peak-normalize -> 1
   }
 
   // ── Frequency-domain correction ────────────────────────────────────────
@@ -226,7 +226,7 @@ export class MainsCombFilter {
 
   /**
    * Like process(), but preserves the block's DC (mean) level: subtracts the
-   * block mean, combs the zero-mean signal, then adds the mean back — so only
+   * block mean, combs the zero-mean signal, then adds the mean back - so only
    * the mains hum (50/60 Hz + harmonics) is removed and the DC operating point
    * is left intact. No-op until tuned.
    * @param {Float32Array|Float64Array} data

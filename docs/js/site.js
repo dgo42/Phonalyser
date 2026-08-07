@@ -1,9 +1,9 @@
-/* Phonalyser landing site — shared menu behaviour (no framework, no build step).
+/* Phonalyser landing site - shared menu behaviour (no framework, no build step).
  *
  *  1. The <nav class="menu"> block is byte-identical on every page; this marks the
  *     current page's link `active` and opens its Download / Documentation submenu.
  *  2. Below 760px the sidebar becomes an off-canvas drawer opened by the fixed
- *     three-dots (kebab) button — toggle, backdrop, Esc and close-on-navigate. */
+ *     three-dots (kebab) button - toggle, backdrop, Esc and close-on-navigate. */
 (function () {
   var body = document.body;
   var toggle = document.querySelector('.menu-toggle');
@@ -22,7 +22,7 @@
   // Active link + auto-open its submenu, keyed off the current file name.
   var here = location.pathname.split('/').pop() || 'index.html';
 
-  // Theory-of-operation chapters aren't menu entries themselves — light up their
+  // Theory-of-operation chapters aren't menu entries themselves - light up their
   // parent "Theory of operation" link (and open Documentation) while on one.
   var THEORY = ['audio-backend.html', 'ring-buffer.html', 'generator.html',
     'oscilloscope.html', 'fft.html', 'derotation-accuracy.html',
@@ -43,7 +43,7 @@
 /* Image / diagram lightbox (self-contained, no external library).
  *  Click any content screenshot or theory SVG diagram to enlarge it over a
  *  dimmed page; step through the page's figures with the ‹ › buttons or the
- *  ← → arrow keys; close with ×, Esc or a backdrop click. */
+ *  <- -> arrow keys; close with ×, Esc or a backdrop click. */
 (function () {
   var items = Array.prototype.slice.call(
     document.querySelectorAll('.content img, .content .diagram svg'));
