@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — Help</title>
+  <title>Phonalyser.web - Help</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -14,54 +14,64 @@
      Press <kbd>Ctrl</kbd>+<kbd>F1</kbd> to jump directly to the section
      covering the control that currently has focus.</p>
 
-  <p>🚀 <a href="howto.html"><b>World's shortest HOW-TO</b></a> — the entire
+  <p class="note">🌐 <b>This build runs on Chromium browsers only</b> - Google
+     Chrome, Microsoft Edge, Opera or Brave.  On any other browser it does not
+     start.  What else differs in a browser - no bit depth, the rate set in
+     Windows, WebUSB for the QA40x, the page a bench serves - is collected in
+     <a href="web-in-browser.html"><b>Phonalyser in a browser</b></a>.</p>
+
+  <p>🚀 <a href="howto.html"><b>World's shortest HOW-TO</b></a> - the entire
      parts-per-billion THD measurement, calibration to result, on one screen.
      <b>Start here.</b></p>
 
-  <p>🔍 <a href="help-index.html"><b>Index &amp; search</b></a> — search the
-     whole manual, or browse the A–Z list of topics and terms.</p>
+  <p>🔍 <a href="help-index.html"><b>Index &amp; search</b></a> - search the
+     whole manual, or browse the A-Z list of topics and terms.</p>
 
-  <p>💡 <a href="tips.html"><b>Tips</b></a> — small things that make a big
+  <p>💡 <a href="tips.html"><b>Tips</b></a> - small things that make a big
      difference, also shown one at a time at startup.</p>
 
-  <p>🙏 <a href="credits.html"><b>Credits &amp; acknowledgements</b></a> —
+  <p>🙏 <a href="credits.html"><b>Credits &amp; acknowledgements</b></a> -
      inspiration and thanks.</p>
 
-  <p>📜 <a href="changelog.html"><b>What's new</b></a> — the full release
+  <p>📜 <a href="changelog.html"><b>What's new</b></a> - the full release
      history.</p>
 
   <h2>Modules</h2>
   <div class="toc">
-    <a href="generator.html"><b>Generator</b> — tone generation, sweep, noise, WAV-file playback</a>
-    <a href="oscilloscope.html"><b>Oscilloscope</b> — live time-domain view, trigger, measurement table</a>
-    <a href="fft.html"><b>FFT analyser</b> — spectrum, harmonics, THD / SNR / ENOB</a>
-    <a href="freqresp.html"><b>Frequency response</b> — swept magnitude &amp; phase, RIAA / IEC reference, compare mode</a>
-    <a href="tune-notch.html"><b>Tune-notch wizard</b> — trim a twin-T notch filter live onto a target frequency</a>
-    <a href="dac-predistortion.html"><b>DAC pre-distortion wizard</b> — cancel the DAC's own harmonics for a sub-ppb stimulus</a>
-    <a href="preferences.html"><b>Preferences</b> — audio backend &amp; devices, scope and FFT appearance</a>
-    <a href="web-input-device.html"><b>Windows input device</b> — set the capture (and playback) sample rate the browser can't choose</a>
+    <a href="generator.html"><b>Generator</b> - tone generation, sweep, noise, WAV-file playback</a>
+    <a href="oscilloscope.html"><b>Oscilloscope</b> - live time-domain view, trigger, measurement table</a>
+    <a href="fft.html"><b>FFT analyser</b> - spectrum, harmonics, THD / SNR / ENOB</a>
+    <a href="freqresp.html"><b>Frequency response</b> - swept magnitude &amp; phase, RIAA / IEC reference, compare mode</a>
+    <a href="tune-notch.html"><b>Tune-notch wizard</b> - trim a twin-T notch filter live onto a target frequency</a>
+    <a href="dac-predistortion.html"><b>DAC pre-distortion wizard</b> - cancel the DAC's own harmonics for a sub-ppb stimulus</a>
+    <a href="preferences.html"><b>Preferences</b> - audio backend &amp; devices, scope and FFT appearance</a>
+    <a href="web-in-browser.html"><b>Phonalyser in a browser</b> - Chromium only, the Web Audio and QA40x backends, and the page a bench serves</a>
+    <a href="web-input-device.html"><b>Windows input device</b> - set the capture (and playback) sample rate the browser can't choose</a>
+    <a href="backend.html"><b>Audio backends</b> - which engine drives the converters on each OS, the hardware-volume discipline on Linux/macOS, the macOS aggregate-device workaround</a>
+    <a href="server.html"><b>The Phonalyser server</b> - run the machine your hardware is wired to as a network bench, and measure through it from anywhere on the LAN</a>
+    <a href="json-config.html"><b>Editing the settings as JSON</b> - open the settings and the card profiles as text, with completion and per-key help</a>
   </div>
 
   <h2>Theory of operation</h2>
   <div class="toc">
-    <a href="theory/index.html"><b>Theory of operation</b> — how the instrument works inside: audio backend, ring buffer &amp; consumers, DDS signal generator</a>
+    <a href="theory/index.html"><b>Theory of operation</b> - how the instrument works inside: audio backend, ring buffer &amp; consumers, DDS signal generator</a>
   </div>
 
   <h2>Tools &amp; bench</h2>
   <div class="toc">
-    <a href="bench.html"><b>Measurement bench &amp; wiring</b> — Faraday cage, CAT.8 twisted pair with XLR, single-point grounding, and the induced-noise budget</a>
+    <a href="bench.html"><b>Measurement bench &amp; wiring</b> - Faraday cage, CAT.8 twisted pair with XLR, single-point grounding, and the induced-noise budget</a>
   </div>
 
   <h2>Layout</h2>
-  <p><img src="img/multifunctional.png" alt="Main window — multifunctional tab" style="max-width:100%;height:auto;border:1px solid #dde;"/></p>
+  <p><img src="img/multifunctional.png" alt="Main window - multifunctional tab" style="max-width:100%;height:auto;border:1px solid #dde;"/></p>
   <div class="pane">
     <p>The main window is split into a <b>Generator</b> pane on the left
-       (its width is adjustable — drag the sash, or set it in Preferences)
+       (its width is adjustable - drag the sash, or set it in Preferences)
        and a vertical sash between <b>Oscilloscope</b> (top) and
        <b>FFT analyser</b> (bottom) on the right.  Each pane can be collapsed
        to its title strip by double-clicking the title bar; double-clicking
        again restores it.</p>
-    <p>Each module has its own toolbar — a settings-tab strip below the
+    <p>Each module has its own toolbar - a settings-tab strip below the
        main view with tabs for the per-module settings.  The tab strip can
        be collapsed in turn (double-click the strip) to reclaim vertical
        space for the visible chart.</p>
@@ -70,25 +80,25 @@
   <h2>Conventions</h2>
   <div class="pane">
     <ul>
-      <li><b>Step selectors</b> — fields like <code>V/div</code>,
+      <li><b>Step selectors</b> - fields like <code>V/div</code>,
           <code>t/div</code>, <code>FFT length</code> have small up/down
           arrows.  The mouse wheel scrolls through standard values
           (1-2-5-10) and a manual typed value is accepted when it makes
           sense for the field.</li>
-      <li><b>Numeric fields</b> — accept typed values plus mouse-wheel
+      <li><b>Numeric fields</b> - accept typed values plus mouse-wheel
           stepping.  The wheel step is per-field (5 % for frequency,
           ±1 unit for harmonic numbers, etc.).</li>
-      <li><b>Tab tiles</b> — the small badges painted under each tab
+      <li><b>Tab tiles</b> - the small badges painted under each tab
           label show the active value for that tab's most important
           controls at a glance, even when the tab body is collapsed.</li>
-      <li><b>Crosshair</b> — hovering inside a chart shows a dashed
+      <li><b>Crosshair</b> - hovering inside a chart shows a dashed
           cross with a floating readout box near the cursor.</li>
     </ul>
   </div>
 
   <hr/>
-  <p class="small">Help → About Phonalyser.web shows the version and links to
-     the project repository.  Use Help → Report a problem to file an issue
+  <p class="small">Help -> About Phonalyser.web shows the version and links to
+     the project repository.  Use Help -> Report a problem to file an issue
      on GitHub.</p>
 
 <script src="help-viewer.js"></script>

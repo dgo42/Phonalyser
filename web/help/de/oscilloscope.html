@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — Oszilloskop</title>
+  <title>Phonalyser.web - Oszilloskop</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -11,15 +11,15 @@
 
   <h1>Oszilloskop</h1>
   <p>Diese Seite beschreibt die Bedienelemente des Oszilloskops.  Für die
-     interne Funktionsweise — Trigger, Sin&nbsp;x/x-Rekonstruktion zwischen
-     Abtastwerten, Netzbrummen-Unterdrückung — siehe
+     interne Funktionsweise - Trigger, Sin&nbsp;x/x-Rekonstruktion zwischen
+     Abtastwerten, Netzbrummen-Unterdrückung - siehe
      <a href="theory/oscilloscope.html">Funktionsprinzip ▸
      Oszilloskop</a>.</p>
   <p>Zeitbereichsansicht des erfassten Signals in Echtzeit.  Zwei unabhängige
      Kanäle (L / R) teilen sich den Trigger; jeder Kanal besitzt eigene V/div-,
      Kopplung-, Interpolations- und Vertikal-Offset-Einstellungen.  Die
      Erfassungsrate oben rechts (<code>cap/s</code>) zeigt, wie viele Frames
-     pro Sekunde die Ansicht rendert — bzw. mit dem
+     pro Sekunde die Ansicht rendert - bzw. mit dem
      <a href="#scope-trigger-type">Glitch-Trigger</a>, wie viele Glitches pro
      Sekunde gefangen wurden (siehe
      <a href="#scope-caps">Erfassungsraten-Anzeige</a>).</p>
@@ -37,15 +37,15 @@
       <line x1="118" y1="47" x2="60" y2="47" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
       <circle cx="132" cy="47" r="13" fill="#c33"/>
       <text x="132" y="52" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
-      <!-- 2: trigger level — yellow horizontal marker at the edges -->
+      <!-- 2: trigger level - yellow horizontal marker at the edges -->
       <line x1="919" y1="281" x2="1020" y2="281" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
       <circle cx="905" cy="281" r="13" fill="#c33"/>
       <text x="905" y="286" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
-      <!-- 3: trigger offset — position handle at the foot of the centre line (0 s) -->
+      <!-- 3: trigger offset - position handle at the foot of the centre line (0 s) -->
       <line x1="603" y1="503" x2="516" y2="514" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
       <circle cx="617" cy="495" r="13" fill="#c33"/>
       <text x="617" y="500" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
-      <!-- 4: channel vertical-offset marker — triangle handle on the LEFT edge -->
+      <!-- 4: channel vertical-offset marker - triangle handle on the LEFT edge -->
       <line x1="128" y1="244" x2="48" y2="278" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
       <circle cx="142" cy="237" r="13" fill="#c33"/>
       <text x="142" y="242" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
@@ -64,7 +64,7 @@
   <ol class="features">
     <li><b>Kanal-Schaltflächen.</b>  <code>L</code> / <code>R</code>
         <a href="#scope-channel-pick">wählen, welcher Kanal</a> die
-        Messtabelle und den verschiebbaren Kanal-Offset-Marker ansteuert —
+        Messtabelle und den verschiebbaren Kanal-Offset-Marker ansteuert -
         sie wechseln <em>nicht</em> die Einstellungs-Tabs.  Eine Schaltfläche
         ist <em>deaktiviert</em>, wenn der zugehörige Kanal im
         <a href="#scope-tab-left">Linken</a> / <a href="#scope-tab-right">Rechten</a>
@@ -89,7 +89,7 @@
         Kanals ist ausgegraut.  Siehe
         <a href="#scope-offset-sliders">Kanal-Offset-Marker</a>.</li>
     <li><b>Einstellungs-Tabs.</b>  Die Leiste am unteren Rand enthält je einen
-        Tab pro Bereich — <a href="#scope-tab-left">Links</a> /
+        Tab pro Bereich - <a href="#scope-tab-left">Links</a> /
         <a href="#scope-tab-right">Rechts</a> Kanal,
         <a href="#scope-tab-horizontal">Horizontal</a>,
         <a href="#scope-tab-trigger">Trigger</a>,
@@ -104,22 +104,22 @@
         Aufnahme teilen sich Oszilloskop und FFT-Analysator eine gemeinsame
         Erfassungssitzung (siehe
         <a href="theory/ring-buffer.html#sharedcapture">Erfassungssitzung</a>).</li>
-    <li><b>Schwenken &amp; Zoomen (Mausrad).</b>  Über dem Signal —
+    <li><b>Schwenken &amp; Zoomen (Mausrad).</b>  Über dem Signal -
         <b>Rad</b>: Signal vertikal verschieben (oben = nach oben, unten = nach
         unten);
         <b><kbd>Shift</kbd>+Rad</b>: horizontal verschieben (oben = nach rechts,
         unten = nach links);
-        <b><kbd>Ctrl</kbd>+Rad</b>: Vertikalzoom — V/div (oben = hineinzoomen,
+        <b><kbd>Ctrl</kbd>+Rad</b>: Vertikalzoom - V/div (oben = hineinzoomen,
         d.&nbsp;h. kleinere V/div);
-        <b><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+Rad</b>: Horizontalzoom — s/div
+        <b><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+Rad</b>: Horizontalzoom - s/div
         (oben = hineinzoomen, d.&nbsp;h. kleinere s/div).  Beide Zooms sind
         <em>am Cursor verankert</em>: die Spannung (bzw. die Zeit) unter dem
         Zeiger bleibt fest, während sich die Skala darum ändert.  Dieselbe
         Rad-Konvention gilt in jeder Phonalyser.web-Ansicht (Oszilloskop, FFT,
-        Frequenzgang).  Die vollständigen Regeln — was sich bewegt, was fest
+        Frequenzgang).  Die vollständigen Regeln - was sich bewegt, was fest
         bleibt, der Trigger-Offset, der aus dem Bild wandern kann, und warum
         alles gleich funktioniert, ob das Oszilloskop live läuft, gestoppt ist
-        oder eine geladene Datei zeigt — siehe
+        oder eine geladene Datei zeigt - siehe
         <a href="#scope-move-zoom">Signal verschieben &amp; zoomen</a> weiter
         unten.</li>
   </ol>
@@ -134,7 +134,7 @@
   <h3 id="scope-channel-pick">L / R Kanalauswahl</h3>
   <p>Wählt, welcher Kanal die
      <a href="#scope-meas-table">Messtabelle</a> und den
-     <a href="#scope-offset-sliders">Kanal-Offset</a>-Griff ansteuert —
+     <a href="#scope-offset-sliders">Kanal-Offset</a>-Griff ansteuert -
      sie wechseln <em>nicht</em> die Einstellungs-Tabs.  Der Schaltflächenhintergrund
      nimmt die Signalfarbe des Kanals an, wenn dieser ausgewählt ist; L und R
      sind unabhängig.</p>
@@ -151,11 +151,15 @@
      aktuell ausgewählten Kanals.</p>
 
   <h3 id="scope-histogram">Amplitudenhistogramm</h3>
-  <p>Öffnet und schließt das
-     <a href="#scope-histogram-window">Amplitudenhistogramm-Fenster</a>, das zeigt,
-     wie häufig das Signal bei welcher Spannung lag.  Die Schaltfläche bleibt
-     gedrückt, solange das Fenster geöffnet ist; das Schließen des Fensters gibt sie
-     wieder frei.  Die Erfassung läuft nur, solange das Fenster geöffnet ist.</p>
+  <p>Öffnet und schließt die
+     <a href="#scope-histogram-window">Amplitudenhistogramm-Tafel</a>, die zeigt,
+     wie häufig das Signal bei welcher Spannung lag.  Die Tafel ist Teil dieser
+     Seite - an ihrer Titelzeile verschiebbar, an der Ecke in der Größe
+     veränderbar - und kein eigenes Fenster des Betriebssystems: Sie kann also
+     nicht hinter dem Browser verschwinden und schließt sich mit der Seite.  Die
+     Schaltfläche bleibt gedrückt, solange die Tafel geöffnet ist; das Schließen
+     der Tafel gibt sie wieder frei.  Die Erfassung läuft nur, solange die Tafel
+     geöffnet ist.</p>
 
   <h3 id="scope-gauge">Messanzeige (Messtabellen-Umschalter)</h3>
   <p>Blendet die gesamte Messtabellen-Überlagerung ein und aus.  Wenn
@@ -174,12 +178,12 @@
      Umschalter betrifft nur die Darstellung.</p>
 
   <h3 id="scope-reset">Statistik zurücksetzen</h3>
-  <p>Roter <b>Gegenuhrzeigersinn-Pfeil</b>-Knopf (das „Zum Anfang
+  <p>Roter <b>Gegenuhrzeigersinn-Pfeil</b>-Knopf (das "Zum Anfang
      zurückspulen"-Symbol).  Löscht den gleitenden Statistikverlauf, der die
      <code>avg / min / max / σ</code>-Spalten speist, sodass der nächste Frame
      ein neues Mittelungsfenster beginnt.  Nützlich nach einer Änderung der
      Messbedingungen.  Das <a href="#scope-histogram-window">Amplitudenhistogramm</a>
-     startet gemeinsam damit neu — dieselben Ereignisse machen beides ungültig —,
+     startet gemeinsam damit neu - dieselben Ereignisse machen beides ungültig -,
      und ebenso beim Starten oder Stoppen des Generators.</p>
 
   <h2 id="scope-meas-table">Messtabelle</h2>
@@ -196,24 +200,55 @@
     <tr><th>Zeile</th><th>Bedeutung</th></tr>
     <tr><td id="scope-meas-vpp">Vpp</td><td>Spitze-Spitze-Spannung (max − min über den sichtbaren Frame).</td></tr>
     <tr><td id="scope-meas-vrms">Vrms</td><td>Effektivspannung (Quadratischer Mittelwert) des Frames.</td></tr>
-    <tr><td id="scope-meas-vmean">Vmean</td><td>DC-Mittelwert — nützlich zum Erkennen von Offsets.</td></tr>
+    <tr><td id="scope-meas-vmean">Vmean</td><td>DC-Mittelwert - nützlich zum Erkennen von Offsets.</td></tr>
     <tr><td id="scope-meas-tp">Tp</td><td>Periodendauer (Sekunden), präzise berechnet als <code>1 / f</code> aus der unten gemessenen Frequenz.</td></tr>
-    <tr><td id="scope-meas-tr">Tr</td><td>Anstiegszeit (10&nbsp;% → 90&nbsp;% von Vpp).</td></tr>
-    <tr><td id="scope-meas-tf">Tf</td><td>Abfallzeit (90&nbsp;% → 10&nbsp;%).</td></tr>
+    <tr><td id="scope-meas-tr">Tr</td><td>Anstiegszeit (10&nbsp;% -> 90&nbsp;% von Vpp).</td></tr>
+    <tr><td id="scope-meas-tf">Tf</td><td>Abfallzeit (90&nbsp;% -> 10&nbsp;%).</td></tr>
     <tr><td id="scope-meas-f">f</td><td>Frequenz des Trigger-Kanalsignals, mit Sub-Sample-Präzision gemessen; die Periodendauer <code>Tp = 1 / f</code> wird daraus abgeleitet.</td></tr>
-    <tr><td id="scope-meas-duty">Duty</td><td>Tastverhältnis in % der Periode — Einschaltdauer / Periode.</td></tr>
+    <tr><td id="scope-meas-duty">Duty</td><td>Tastverhältnis in % der Periode - Einschaltdauer / Periode.</td></tr>
   </table>
 
   <h3 id="scope-meas-stats">Statistikspalten (avg / min / max / σ)</h3>
   <p>Gleitende Statistik über ein konfigurierbares Mittelungsfenster
-     (siehe <a href="#scope-tab-presets">Einstellungen → Oszilloskop →
+     (siehe <a href="#scope-tab-presets">Einstellungen -> Oszilloskop ->
      Messungsmittelung</a>).  σ ist die Grundgesamtheits-Standardabweichung.
      Das Fenster beträgt standardmäßig ~33&nbsp;s bei 30&nbsp;fps; der
      <a href="#scope-reset">Zurücksetzen</a>-Knopf löscht die Statistik.</p>
 
-  <h2 id="scope-histogram-window">Amplitudenhistogramm-Fenster</h2>
+  <h3 id="scope-meas-raw">Die Messungen werden so genommen, wie erfasst</h3>
+  <p>Jede Zahl in dieser Tabelle wird auf dem <b>ungefilterten</b> Fenster
+     berechnet - die kanalspezifische <a href="#scope-lpf">LPF</a>-Bereinigung,
+     sowohl der 80&nbsp;kHz-Tiefpass als auch das Despike-Medianfilter, formt
+     allein das <em>dargestellte</em> Signalbild.  Das ist Absicht: das sind
+     Anzeigeeinstellungen, gewählt, um ein Signalbild lesbar zu machen, und in dem
+     Moment, in dem eine davon Vpp, Vmean, Anstiegszeit, Abfallzeit oder
+     Tastverhältnis verschiebt, ist die Zahl keine Messung des Signals mehr,
+     sondern eine Messung unserer Darstellung davon.  Sie können das Filter also
+     umschalten, während Sie die Tabelle beobachten, und nichts darin wird sich
+     bewegen.  Die eine Ausnahme ist die
+     <a href="#scope-mains">Netzbrumm-Unterdrückung</a>, die im Messpfad bleibt -
+     Brumm zu unterdrücken ist eine Mess-Entscheidung, keine kosmetische.</p>
+
+  <h3 id="scope-capture-ended">Wenn die Erfassung von selbst stehen bleibt</h3>
+  <p>Eine Aufnahme kann enden, ohne dass Sie erneut auf <b>Aufnahme</b>
+     drücken - das Gerät wurde abgesteckt, von einer anderen Anwendung exklusiv
+     übernommen oder von seinem Treiber gestoppt.  Das Oszilloskop hält dann an,
+     statt eine flache Linie zu zeichnen, während die Aufnahmerate weiterläuft, und
+     ein einziger Dialog <b>Fehler am Audiogerät</b> nennt das Backend und sagt, ob
+     das Gerät <em>abgesteckt wurde oder sein Stream ausgefallen ist</em> oder ob
+     es <em>keine Abtastwerte mehr liefert</em> - ein Treiber, der gar nichts
+     gesagt hat, gefasst von der Lieferfrist.  Die Wiedergabeseite wird genauso
+     überwacht, sodass ein mitten im Ton herausgezogener Wandler den Generator mit
+     einer Begründung anhält, statt eine leuchtende Abspieltaste über Stille stehen
+     zu lassen.  Siehe
+     <a href="theory/audio-backend.html#errors">Funktionsprinzip ▸ Wenn ein Gerät
+     sich nicht öffnen lässt - und wenn es stehen bleibt</a>.</p>
+
+  <h2 id="scope-histogram-window">Amplitudenhistogramm-Tafel</h2>
   <p>Wird mit der Schaltfläche
-     <a href="#scope-histogram">Amplitudenhistogramm</a> geöffnet.  Es beantwortet
+     <a href="#scope-histogram">Amplitudenhistogramm</a> geöffnet.  Sie ist eine
+     verschiebbare, in der Größe veränderbare Tafel <em>innerhalb der Seite</em>,
+     kein eigenes Fenster.  Sie beantwortet
      eine andere Frage als das Signalbild: nicht, wie die Wellenform über die Zeit
      aussieht, sondern <b>wie viel ihrer Zeit sie bei welcher Spannung verbringt</b>.
      Die Spannung läuft an der linken Achse nach oben, die Anzahl der bei diesem
@@ -223,7 +258,7 @@
   <p><img src="img/scope-histogram.png"
           alt="Amplitudenhistogramm eines ruhigen Eingangs: eine gaußsche Glocke um
                0 V, einige zehn Mikrovolt breit"/></p>
-  <p>Oben: das Eigenrauschen eines Wandlers, einige zehn Mikrovolt breit — eine
+  <p>Oben: das Eigenrauschen eines Wandlers, einige zehn Mikrovolt breit - eine
      saubere Gaußverteilung.  Eine sichtbar nicht-gaußsche Glocke deutet auf etwas
      anderes als thermisches Rauschen hin.</p>
 
@@ -232,7 +267,7 @@
     <tr><th>Form</th><th>Bedeutung</th></tr>
     <tr><td>Zwei Spitzen an den Extremen, hohl in der Mitte</td>
         <td>Ein Sinus.  Eine Sinusschwingung bewegt sich an ihren Umkehrpunkten am
-            langsamsten und verbringt daher die meiste Zeit nahe ±Spitze — die
+            langsamsten und verbringt daher die meiste Zeit nahe ±Spitze - die
             klassische Badewannenform.</td></tr>
     <tr><td>Eine Glocke um null</td>
         <td>Rauschen.  Ein sauberes Grundrauschen ist gaußverteilt, und eine sichtbar
@@ -242,13 +277,13 @@
         <td>Übersteuerung.  An die Aussteuerungsgrenze gepresste Abtastwerte häufen
             sich im äußersten Balken.</td></tr>
     <tr><td>Ungleiche Balken ober- und unterhalb der Mitte</td>
-        <td>Asymmetrie — eine einseitige Begrenzung oder eine asymmetrische
+        <td>Asymmetrie - eine einseitige Begrenzung oder eine asymmetrische
             Verzerrung.</td></tr>
   </table>
 
   <p><b>Die Spannungsachse ist relativ, und ihre Mitte ist immer 0&nbsp;V.</b>  Die
-     Abtastwerte werden genau so gezählt, wie sie erfasst wurden — nichts wird von
-     ihnen abgezogen und nichts gefiltert —, und die Achse wird anschließend aus dem
+     Abtastwerte werden genau so gezählt, wie sie erfasst wurden - nichts wird von
+     ihnen abgezogen und nichts gefiltert -, und die Achse wird anschließend aus dem
      Mittelwert der Verteilung selbst abgeleitet.  Ein DC-Offset der Karte ändert
      daher den Bezugspunkt, <i>von dem</i> aus die Achse gemessen wird, nicht aber,
      bei welchem Pegel ein Abtastwert gezählt wird; das Bild rutscht also weder aus
@@ -261,29 +296,29 @@
      Notch-Residuum im Millivoltbereich ebenso fein aufgelöst wird wie ein Ton bei
      Vollaussteuerung.  Beide Achsen skalieren sich automatisch, während die
      Zählwerte auflaufen, und Pegel, die so schwach besetzt sind, dass sie nur ein
-     einziges Pixel ergäben, werden an den Enden abgeschnitten — so füllt die
-     Verteilung das Fenster, statt von leeren Ausläufern zusammengedrückt zu
+     einziges Pixel ergäben, werden an den Enden abgeschnitten - so füllt die
+     Verteilung die Tafel, statt von leeren Ausläufern zusammengedrückt zu
      werden.</p>
 
-  <p>Das Fenster ist in der Größe veränderbar, und die Darstellung skaliert mit.
-     Oben links trägt es:</p>
+  <p>Die Tafel ist in der Größe veränderbar, und die Darstellung skaliert mit.
+     Oben links trägt sie:</p>
   <table class="controls">
     <tr><th>Bedienelement</th><th>Funktion</th></tr>
     <tr><td><b>L</b> / <b>R</b></td>
-        <td>Welcher Kanal angezeigt wird — immer nur einer.  Ein im Oszilloskop
+        <td>Welcher Kanal angezeigt wird - immer nur einer.  Ein im Oszilloskop
             abgeschalteter Kanal ist ausgegraut und nicht wählbar; war er der gerade
-            angezeigte, wechselt das Fenster auf den anderen.  Die Wahl bleibt über
+            angezeigte, wechselt die Tafel auf den anderen.  Die Wahl bleibt über
             Sitzungen hinweg erhalten.</td></tr>
     <tr><td><b>Zurücksetzen</b></td>
-        <td>Löscht die gesammelte Verteilung und sonst nichts — die Statistik der
+        <td>Löscht die gesammelte Verteilung und sonst nichts - die Statistik der
             Messtabelle bleibt unangetastet.  Damit lässt sich der Bereich neu auf
             ein Signal einstellen, das deutlich kleiner geworden ist, denn ein
             schrumpfendes Signal behält den einmal vergebenen Bereich.</td></tr>
   </table>
 
-  <p>Die Erfassung läuft unbegrenzt, solange das Fenster geöffnet ist, sodass eine
+  <p>Die Erfassung läuft unbegrenzt, solange die Tafel geöffnet ist, sodass eine
      Verteilung über Minuten aufgebaut werden kann.  Sie übersteht eine
-     V/div-Änderung, einen Bereichswechsel und eine Neukalibrierung — eine
+     V/div-Änderung, einen Bereichswechsel und eine Neukalibrierung - eine
      Neukalibrierung beschriftet die Achse neu, statt neu zu zählen.  Von selbst
      startet sie nur dann neu, wenn sich der Pegel so weit verschiebt, dass die alten
      Zählwerte ein anderes Signal beschreiben, und gemeinsam mit der Messstatistik,
@@ -299,7 +334,7 @@
        nicht als Zählung aller Abtastwerte.</p>
   </div>
 
-  <p>Die Anzahl der Balken wird unter <b>Einstellungen → Oszilloskop →
+  <p>Die Anzahl der Balken wird unter <b>Einstellungen -> Oszilloskop ->
      Histogramm-Klassen</b> festgelegt (Vorgabe 50).  Sie ist reine
      Darstellungsauflösung: die zugrunde liegende Erfassung ist weit feiner, sodass
      eine Änderung das bereits Gesammelte neu zeichnet, statt es zu verwerfen.</p>
@@ -328,7 +363,7 @@
      sich am LINKEN Rand</b>.  Die Offset-Spannung wird neben jedem Griff
      angezeigt.  Nur der Marker des
      <a href="#scope-channel-pick">aktuell ausgewählten Kanals</a> ist
-     verschiebbar — der Griff des anderen Kanals ist <b>ausgegraut</b> und
+     verschiebbar - der Griff des anderen Kanals ist <b>ausgegraut</b> und
      dient nur als Referenz.  Den aktiven Marker durch Ziehen des Griffs
      verschieben; <b>Doppelklick zentriert ihn</b>.</p>
 
@@ -336,7 +371,7 @@
   <p>Eine <b>vertikale Scrollleiste</b> rechts verschiebt das Signal nach oben
      oder unten (Spannungs-Offset, beide Kanäle gemeinsam).  Eine <b>horizontale
      Scrollleiste</b> unten verschiebt die Ansicht links / rechts in der Zeit.
-     Jede Scrollleiste verschiebt <em>nur</em> eine Achse — sie zoomt nicht —
+     Jede Scrollleiste verschiebt <em>nur</em> eine Achse - sie zoomt nicht -
      aber ihr Schieber wird von der Ansicht entsprechend der sichtbaren
      Fraktion skaliert, sodass er den Zoom <em>nachverfolgt</em>: Änderung von
      V/div oder t/div vergrößert oder verkleinert den Schieber entsprechend.
@@ -344,14 +379,14 @@
      Knopf gedrückt halten, um weiter zu blättern, bis der Schieber den Cursor
      erreicht.  Zoom mit dem Mausrad über dem Signalbereich.</p>
   <p>Die horizontale Scrollleiste erscheint <b>nur, wenn eine Audiodatei
-     geladen ist</b> — sie dient dazu, eine längere Aufnahme nach links / rechts
+     geladen ist</b> - sie dient dazu, eine längere Aufnahme nach links / rechts
      zu verschieben.  Während der Live-Erfassung gibt es nichts Früheres zum
      Zurückscrollen, daher bleibt sie ausgeblendet.</p>
 
   <h3 id="scope-caps">Erfassungsraten-Anzeige (cap/s)</h3>
   <p>Blassgraue Zahl oben rechts im Signalbereich.  Mit dem
      <b>Flanken</b>-Trigger zeigt sie, wie viele neue Frames pro Sekunde die
-     Ansicht rendert — eine geglättete Rate, die gegen null sinkt, solange
+     Ansicht rendert - eine geglättete Rate, die gegen null sinkt, solange
      nichts triggert.  Mit dem <a href="#scope-trigger-type"><b>Glitch</b>-
      Trigger</a> wird sie zu einem <b>kumulativen Glitches-pro-Sekunde-Zähler</b>:
      die Gesamtzahl gefangener Glitches geteilt durch die Aufnahmezeit,
@@ -359,7 +394,7 @@
      noch z.&nbsp;B. <code>0.008</code> anzeigt, statt auf null gerundet zu
      werden.  Der Zähler beginnt neu, wenn der Glitch-Typ gewählt oder eine
      neue Aufnahme gestartet wird, und die Anzeige bleibt während der gesamten
-     Aufnahme sichtbar — auch wenn sie <code>0.000</code> anzeigt.  Beim
+     Aufnahme sichtbar - auch wenn sie <code>0.000</code> anzeigt.  Beim
      Stoppen der Aufnahme bleibt der letzte Wert <b>eingefroren</b> auf dem
      Bildschirm stehen, bis zur nächsten Aufnahme.  Ausgeblendet, wenn eine
      Datei geladen ist (es wird nichts erfasst).</p>
@@ -373,7 +408,7 @@
      Voreinstellungen / Dienstprogramme / Speichern / Laden haben keine
      Kacheln.</p>
 
-  <h3 id="scope-tab-left">Tab „Links"</h3>
+  <h3 id="scope-tab-left">Tab "Links"</h3>
   <p><img src="img/Oscilloscope - Left.png" alt="Tab für den linken Kanal"/></p>
   <p>Bedienelemente für den linken Kanal.  Enthält den Kanal-Umschalter,
      V/div-Selektor, AC/DC-Schaltfläche, Sin/Lin-Kontrollkästchen,
@@ -397,7 +432,7 @@
   <p>Im AC-Modus wird der laufende DC-Mittelwert vom dargestellten Signal
      subtrahiert, sodass eine kleine AC-Komponente auf einem großen DC-Offset
      sichtbar wird.  Die zugrunde liegenden Messungen werden weiterhin an den
-     Rohabtastwerten berechnet — nur das dargestellte Signal wird verschoben.</p>
+     Rohabtastwerten berechnet - nur das dargestellte Signal wird verschoben.</p>
 
   <h4 id="scope-sinc-interp">Sin / Lin (Sinc-Interpolation)</h4>
   <p>Kanalspezifisches Kontrollkästchen mit einem kleinen Sinc-Formbild.
@@ -414,20 +449,29 @@
      Kanals durch das <b>Residuum</b> ersetzt: das erfasste Signal minus einem
      bestangepassten Einzelton.  Die Frequenz des Tons stammt aus der
      Frequenzmessung des Oszilloskops, und seine Amplitude und Phase werden über
-     das dargestellte Fenster angepasst — der synthetisierte Ton ist somit
+     das dargestellte Fenster angepasst - der synthetisierte Ton ist somit
      phasengleich mit der getriggerten Darstellung, und auf dem Bildschirm
      bleiben die <b>Verzerrung, das Rauschen, der Brumm und die Glitches</b>
      übrig, die sich unter der Grundschwingung verbergen.  Der <b>DC-Pegel
-     bleibt erhalten</b> — nur der Ton wird entfernt — daher <a href="#scope-acdc">AC</a>
+     bleibt erhalten</b> - nur der Ton wird entfernt - daher <a href="#scope-acdc">AC</a>
      verwenden, wenn das Residuum auf null zentriert werden soll.</p>
   <p>Das Residuum funktioniert auch mit einem <b>Zweiton</b>-Signal.  Die beiden
      Frequenzen werden <b>aus dem erfassten Signal selbst
      gemessen</b> (ausgehend von den Werten des Generators und anschließend am
-     erfassten Signal verfeinert) — dadurch ist die Subtraktion unempfindlich
+     erfassten Signal verfeinert) - dadurch ist die Subtraktion unempfindlich
      dagegen, dass DAC und ADC mit unterschiedlichen Takten laufen; die Werte des
-     Generators werden nur verwendet, bis eine Messung vorliegt.  <b>Beide Töne
-     werden angepasst</b> — die beiden Fits werden abwechselnd nachgeführt, damit
-     keiner in den anderen leckt — und beide
+     Generators werden nur verwendet, bis eine Messung vorliegt.  Der Startwert
+     ist das, was der Generator nach eigener Aussage <b>ausgibt</b>, nicht das,
+     was Sie in seine Felder getippt haben - ein
+     <a href="generator.html#generator-snap-fft-bin">auf ein Bin eingerasteter</a>
+     Ton, ein Rechteck oder Dreieck, das auf die nächstgelegene ganzzahlige
+     Sample-Periode gerendert wurde, und ein Ton, der auf einem
+     <a href="preferences.html#prefs-audio-servers">Messplatz im Netz</a> läuft,
+     starten den Fit also alle bei der Frequenz, die tatsächlich hinausgeht;
+     dieselbe Antwort speist die Überlagerung
+     <a href="#scope-trigger-beat">Rekonstruierte Schwebung</a>.  <b>Beide Töne
+     werden angepasst</b> - die beiden Fits werden abwechselnd nachgeführt, damit
+     keiner in den anderen leckt - und beide
      abgezogen; auf dem Bildschirm bleiben die
      <b>Intermodulationsprodukte</b>, das Rauschen und die Glitches unter dem
      Tonpaar.  Das Fit-Fenster wird automatisch so bemessen, dass es mindestens
@@ -436,7 +480,7 @@
      dargestellt.</p>
   <p>Triggerung und die Frequenz- / Perioden-Anzeigen arbeiten weiterhin am
      erfassten Signal, und auch die Vpp- / Vrms-Anzeigen beschreiben weiterhin
-     das erfasste Signal — nur das dargestellte Signal ändert sich.  Bei
+     das erfasste Signal - nur das dargestellte Signal ändert sich.  Bei
      <a href="#scope-autosetup">Auto-Setup</a> übernimmt ein Kanal, der sein
      Residuum zeigt, seine vertikale Skalierung aus dem Spitze-Spitze-Wert des
      <b>Residuums</b>, während Zeitbasis und Trigger weiterhin aus dem erfassten
@@ -444,7 +488,7 @@
      ist, zeigt die Kachel des Kanals einen <b>residual</b>-Marker an, solange
      der Modus aktiv ist.</p>
   <p>Ein Kanal im Residuum-Modus erhält keine
-     <a href="#scope-trigger-beat">rekonstruierte Schwebungs</a>-Überlagerung —
+     <a href="#scope-trigger-beat">rekonstruierte Schwebungs</a>-Überlagerung -
      die Schwebungshüllkurve gehört zu genau den Tönen, die das Residuum gerade
      entfernt hat.</p>
 
@@ -455,12 +499,12 @@
      dargestellte Signal sowie das, worauf Trigger und Messungen wirken, während
      der <b>DC-Pegel erhalten bleibt</b>.  Vier Optionen:</p>
   <ul>
-    <li><b>None</b> — Durchlass, keine Unterdrückung.</li>
-    <li><b>IIR comb</b> — ein frequenznachgeführtes Rückkopplungs-Kammfilter,
+    <li><b>None</b> - Durchlass, keine Unterdrückung.</li>
+    <li><b>IIR comb</b> - ein frequenznachgeführtes Rückkopplungs-Kammfilter,
         das die Netzgrundschwingung und jede Oberwelle auskerbt.</li>
-    <li><b>Sync subtract</b> — periodensynchrone Subtraktion der sich
+    <li><b>Sync subtract</b> - periodensynchrone Subtraktion der sich
         wiederholenden Brummwellenform.</li>
-    <li><b>LMS canceller</b> — ein adaptiver Least-Mean-Squares-Netzstörungs-Kompensator.</li>
+    <li><b>LMS canceller</b> - ein adaptiver Least-Mean-Squares-Netzstörungs-Kompensator.</li>
   </ul>
   <p>Wie das nachgeführte Kammfilter arbeitet, ist in der
      <a href="theory/oscilloscope.html#mains">Funktionsweise</a> beschrieben.</p>
@@ -469,22 +513,22 @@
   <p>Auswahlliste, die eine kanalspezifische <b>Hochfrequenz-Bereinigung</b> auf
      das dargestellte Signal anwendet.  Drei Optionen:</p>
   <ul>
-    <li><b>None</b> — aus.</li>
-    <li><b>80kHz</b> — ein 80&nbsp;kHz-Tschebyscheff-Tiefpass, der kontinuierliche
+    <li><b>None</b> - aus.</li>
+    <li><b>80kHz</b> - ein 80&nbsp;kHz-Tschebyscheff-Tiefpass, der kontinuierliche
         Hochfrequenzanteile oberhalb der Grenzfrequenz entfernt.  Er hat <b>keine
         Wirkung, wenn 80&nbsp;kHz über der Nyquist-Frequenz der Erfassung liegt</b>
         (bei niedrigen Abtastraten gibt es oberhalb von 80&nbsp;kHz nichts zu
         entfernen).</li>
-    <li><b>Despike</b> — ein Medianfilter, das impulsartige Störspitzen ohne das
+    <li><b>Despike</b> - ein Medianfilter, das impulsartige Störspitzen ohne das
         Überschwingen entfernt, das ein lineares Filter hinzufügen würde.</li>
   </ul>
 
-  <h3 id="scope-tab-right">Tab „Rechts"</h3>
+  <h3 id="scope-tab-right">Tab "Rechts"</h3>
   <p><img src="img/Oscilloscope - Right.png" alt="Tab für den rechten Kanal"/></p>
-  <p>Identischer Aufbau wie der Tab „Links" — Kanal-Umschalter, V/div,
+  <p>Identischer Aufbau wie der Tab "Links" - Kanal-Umschalter, V/div,
      AC/DC, Sin/Lin und Residuum, jedoch für den rechten Kanal.</p>
 
-  <h3 id="scope-tab-horizontal">Tab „Horizontal"</h3>
+  <h3 id="scope-tab-horizontal">Tab "Horizontal"</h3>
   <p><img src="img/Oscilloscope - Horizontal.png" alt="Tab Horizontal"/></p>
 
   <h4 id="scope-tdiv">Zeit / div</h4>
@@ -493,9 +537,9 @@
      durch die Liste; alternativ <b>beliebigen Wert eingeben</b>
      (<code>µs</code> / <code>ms</code> / <code>s</code>) für eine Einstellung
      außerhalb der Liste.  Der Signalmittelpunkt bleibt bei einer t/div-Änderung
-     fest — nur die Breite des sichtbaren Fensters ändert sich.</p>
+     fest - nur die Breite des sichtbaren Fensters ändert sich.</p>
 
-  <h3 id="scope-tab-trigger">Tab „Trigger"</h3>
+  <h3 id="scope-tab-trigger">Tab "Trigger"</h3>
   <p><img src="img/Oscilloscope - Trigger.png" alt="Tab Trigger"/></p>
 
   <h4 id="scope-trigger-channel">Kanal</h4>
@@ -514,11 +558,11 @@
   <h4 id="scope-trigger-type">Typ (E / G)</h4>
   <p>E / G-Paar, das wählt, worauf der Trigger reagiert.</p>
   <ul>
-    <li><b>E — Flanke</b>: der klassische, oben beschriebene Komparator —
+    <li><b>E - Flanke</b>: der klassische, oben beschriebene Komparator -
         löst aus, wenn das Trigger-Kanalsignal den Trigger-Pegel in der
         gewählten Richtung kreuzt.</li>
-    <li><b>G — Glitch</b>: löst bei <b>jeder Unstetigkeit der Wellenform</b>
-        aus, überall auf der Welle, in beiden Richtungen — ein
+    <li><b>G - Glitch</b>: löst bei <b>jeder Unstetigkeit der Wellenform</b>
+        aus, überall auf der Welle, in beiden Richtungen - ein
         Amplitudensprung (eine Lücke durch verlorene Abtastwerte bei einem
         USB-Aussetzer oder einem Wandler-Underrun) ebenso wie ein
         Steigungsknick (eine Nahtstelle, an der die Welle mit der falschen
@@ -527,7 +571,7 @@
         Unstetigkeit wird gefangen und angezeigt, oder den Single-Modus
         verwenden, um die erste einzufrieren.</li>
   </ul>
-  <p>Der Glitch-Detektor verwendet den Trigger-Pegel nicht — er sagt jeden
+  <p>Der Glitch-Detektor verwendet den Trigger-Pegel nicht - er sagt jeden
      Abtastwert aus der Rekurrenz der Sinusschwingung selbst voraus und löst
      aus, wenn der Vorhersagefehler deutlich über dem Grundrauschen liegt;
      so fängt er Fehler, die viel zu klein sind, um irgendeinen Flankenpegel
@@ -544,18 +588,18 @@
      Oszilloskop ▸ Trigger</a>.</p>
 
   <h4 id="scope-trigger-mode">Modus</h4>
-  <p>A / N / S — Auto, Normal, Single.</p>
+  <p>A / N / S - Auto, Normal, Single.</p>
   <ul>
-    <li><b>Auto</b> — läuft frei, zeigt das Signal unabhängig davon an, ob
+    <li><b>Auto</b> - läuft frei, zeigt das Signal unabhängig davon an, ob
         die Trigger-Bedingung erfüllt ist.</li>
-    <li><b>Normal</b> — aktualisiert nur bei einem Trigger-Ereignis; friert
+    <li><b>Normal</b> - aktualisiert nur bei einem Trigger-Ereignis; friert
         den zuletzt getriggerten Frame ein, wenn kein neues Ereignis eintrifft.</li>
-    <li><b>Single</b> — Einzelschuss.  Mit der Play-Schaltfläche rechts
+    <li><b>Single</b> - Einzelschuss.  Mit der Play-Schaltfläche rechts
         daneben scharf schalten; erfasst das nächste Trigger-Ereignis und
         hält an.</li>
   </ul>
   <p>Der <a href="#scope-trigger-type">Glitch-Typ</a> funktioniert nur in
-     Normal und Single — in Auto läuft die Anzeige frei und würde einen
+     Normal und Single - in Auto läuft die Anzeige frei und würde einen
      gefangenen Glitch sofort überschreiben; ein Wechsel auf Auto stellt den
      Typ daher auf Flanke zurück und graut die G-Schaltfläche aus.</p>
 
@@ -569,10 +613,10 @@
      nur aus, wenn das Signal zuerst unter <code>(Pegel − Hyst)</code> gefallen
      ist und dann <code>(Pegel + Hyst)</code> nach oben überschritten hat.
      Dies <b>stabilisiert den Trigger bei schwachen oder verrauschten Signalen</b>
-     — ohne Hysterese verursacht Rauschen um den Pegel eine Vielzahl von
+     - ohne Hysterese verursacht Rauschen um den Pegel eine Vielzahl von
      Fehlauslösungen und ein zitterndes Signal.  Der Selektor ist ausgegraut,
      wenn das Kontrollkästchen deaktiviert ist; der Wert bleibt beim
-     Umschalten erhalten.  Gilt nur für den Flanken-Typ — der
+     Umschalten erhalten.  Gilt nur für den Flanken-Typ - der
      <a href="#scope-trigger-type">Glitch-Trigger</a> ignoriert Pegel und
      Hysterese gleichermaßen.</p>
 
@@ -581,7 +625,7 @@
      <a href="generator.html#generator-dualtone">Zwei&nbsp;Töne</a> eingestellt
      ist</b> (für jede andere Wellenform ausgegraut).  Wenn aktiviert, überlagert
      das Oszilloskop die <b>abgedimmte |f₁−f₂|-Schwebungshüllkurve</b> der
-     beiden Töne über das Live-Signal — so kann die langsame Schwebung, die die
+     beiden Töne über das Live-Signal - so kann die langsame Schwebung, die die
      beiden nah beieinander liegenden Töne erzeugen, sichtbar gemacht und der
      Trigger darauf stabilisiert werden.  Die Überlagerung wird <b>pro
      angezeigtem Kanal</b> gezeichnet, jeweils in einem <b>abgedimmten Ton der
@@ -594,18 +638,18 @@
      <a href="#scope-residual">Residuum</a> zeigt (die Hüllkurve gehört zu den
      Tönen, die dieser Kanal gerade entfernt hat).</p>
 
-  <h3 id="scope-tab-presets">Tab „Voreinstellungen"</h3>
+  <h3 id="scope-tab-presets">Tab "Voreinstellungen"</h3>
   <p><img src="img/Oscilloscope - Presets.png" alt="Tab Voreinstellungen"/></p>
   <p>Vollständige Oszilloskop-Konfigurationen speichern und abrufen.  Im
      <b>Namensfeld</b> einen Namen für die aktuelle Konfiguration eingeben und
-     <b>Speichern</b> drücken — alle kanal- und trigger-spezifischen
+     <b>Speichern</b> drücken - alle kanal- und trigger-spezifischen
      Einstellungen werden gespeichert (V/div, AC/DC, Sin/Lin, t/div,
      Trigger-Kanal / Flanke / Modus, Hysterese-Aktivierung + Wert).  Zum
      Wiederherstellen einen zuvor gespeicherten Namen mit dem <b>Pfeil rechts
      neben dem Feld</b> auswählen und <b>Laden</b> drücken.  <b>Löschen</b>
      entfernt die ausgewählte Voreinstellung (nach einer Bestätigung).</p>
 
-  <h3 id="scope-tab-utility">Tab „Dienstprogramme"</h3>
+  <h3 id="scope-tab-utility">Tab "Dienstprogramme"</h3>
   <p><img src="img/Oscilloscope - Utility.png" alt="Tab Dienstprogramme"/></p>
 
   <h4 id="scope-utility-screenshot">Screenshot</h4>
@@ -613,7 +657,7 @@
      ermöglicht das <b>Speichern auf Disk</b> (oder Kopieren).  Das Rendering
      verwendet eine Offscreen-Kopie des Bereichs mit <b>eingeklappten
      Einstellungs-Tabs</b> (sodass das Signal dominiert) und in der gewählten
-     Größe — unabhängig vom sichtbaren Fenster.</p>
+     Größe - unabhängig vom sichtbaren Fenster.</p>
 
   <h4 id="scope-utility-calibrate">ADC-Kalibrierung</h4>
   <p>Öffnet den gemeinsamen ADC-Kalibrierungsdialog, der die Vollaussteuerungsspannung
@@ -625,47 +669,48 @@
      anliegt, in <code>nV</code> / <code>µV</code> / <code>mV</code> / <code>V</code>,
      und die Anwendung skaliert den digitalen Messwert so, dass dieser Pegel korrekt
      angezeigt wird.  Der Dialog hat eine Zeile <b>Links</b> und eine <b>Rechts</b> für
-     eine Stereo-Karte — <b>die Kalibrierung erfolgt stets pro Kanal</b>, da echte
-     Wandlerkanäle nie bis auf das letzte ppm übereinstimmen — und eine einzelne Zeile
+     eine Stereo-Karte - <b>die Kalibrierung erfolgt stets pro Kanal</b>, da echte
+     Wandlerkanäle nie bis auf das letzte ppm übereinstimmen - und eine einzelne Zeile
      für eine Mono-Karte.  Nur die Zeile des <b>gerade gemessenen Kanals</b> ist aktiv;
      die Zeile des anderen Kanals wird <b>deaktiviert und leer</b> angezeigt
      (die Abbildung oben zeigt eine Erfassung nur des rechten Kanals).  Kalibrieren Sie
-     den anderen Kanal, indem Sie ihn nacheinander messen — jede Zeile schreibt nur den
+     den anderen Kanal, indem Sie ihn nacheinander messen - jede Zeile schreibt nur den
      aktiven Bereich ihres eigenen Kanals.  Eine
      Karte, die auf <a href="preferences.html#prefs-audio-card-editor">Kopplung:
-     Verknüpft</a> eingestellt ist, wird ebenso pro Kanal kalibriert — Verknüpft
+     Verknüpft</a> eingestellt ist, wird ebenso pro Kanal kalibriert - Verknüpft
      koppelt nur, welcher Bereich ausgewählt ist, nie die gemessenen Werte.</p>
   <div class="note"><b>Die Windows-Lautstärke ist Teil der Kalibrierung.</b>  Behandeln
      Sie den Lautstärkeregler dieses Geräts in den Windows-Sound-Einstellungen als eine
      Kalibrierungseinstellung: stellen Sie ihn auf <b>100</b> und rühren Sie ihn nach
-     der Kalibrierung nie wieder an.  Der Exklusivmodus von WASAPI und WDM-KS umgeht den
-     Windows-Software-Mixer, aber auf vielen USB-Schnittstellen programmiert dieser
-     Regler weiterhin die <em>interne Hardware</em>-Lautstärke des Geräts — ein
-     Verschieben nach der Kalibrierung ändert also stillschweigend den soeben gemessenen
+     der Kalibrierung nie wieder an.  Im Browser zählt der Regler doppelt: Web Audio
+     läuft <em>durch</em> den Windows-Mixer, sodass der Regler die Abtastwerte direkt
+     skaliert, und auf vielen USB-Schnittstellen programmiert er zusätzlich die
+     <em>interne Hardware</em>-Lautstärke des Geräts - ein Verschieben nach der
+     Kalibrierung ändert also stillschweigend den soeben gemessenen
      Vollausschlag.  <b>Ausnahme:</b> einige wenige Karten nutzen die Reglerstellung zum
      Umschalten von Modi.  Die <b>E1DA Cosmos</b> koppelt oberhalb von Position 49 ihre
-     beiden Kanäle — rechts wird zum Haupteingang und links trägt dasselbe Signal
+     beiden Kanäle - rechts wird zum Haupteingang und links trägt dasselbe Signal
      6&nbsp;dB leiser.  Bei einer solchen Karte stellen Sie den Regler auf die von ihrem
      Modus benötigte Position und halten ihn dann fest.</div>
 
-  <h3 id="scope-tab-save">Tab „Speichern unter…"</h3>
+  <h3 id="scope-tab-save">Tab "Speichern unter..."</h3>
   <p><img src="img/Oscilloscope - Save to.png" alt="Tab Speichern unter"/></p>
   <p>Schreibt die zuletzt erfassten Daten in eine Audiodatei.  Das
      <b>Dauerfeld</b> (eine einzelne Eingabe in Sekunden) legt fest, wie viel
      gespeichert wird; die <b>Dateiöffnen-Schaltfläche</b> wählt das Ziel; die
      <b>Speichern-Schaltfläche</b> schreibt die Datei.</p>
 
-  <h3 id="scope-tab-play">Tab „Audio laden"</h3>
+  <h3 id="scope-tab-play">Tab "Audio laden"</h3>
   <p><img src="img/Oscilloscope - Load signal.png" alt="Tab Audio laden"/></p>
   <p>Spielt eine Audiodatei als Datenquelle des Oszilloskops ab, anstelle des
-     Live-ADC.  Die <b>Audio-öffnen-Schaltfläche</b> wählt die Datei — <b>jede</b>
+     Live-ADC.  Die <b>Audio-öffnen-Schaltfläche</b> wählt die Datei - <b>jede</b>
      <code>WAV</code> / <code>AIFF</code> / <code>FLAC</code>-Datei, nicht nur
      von diesem Oszilloskop gespeicherte.  Dies ist ein einfacher Wellenformbe-
      trachter für die Datei: <b>kein Triggern oder Messen</b> ist für ein
      geladenes Signal verfügbar, und der FFT-Analysator läuft <b>nicht</b> über
      das oszilloskopseitig geladene Audio.  Die ganze Datei wird in den
      Speicher dekodiert (16 Byte pro Sample-Frame); eine Datei, die nicht in
-     den Java-Heap passt, wird vorab abgelehnt — mit Angabe von benötigtem und
+     den Java-Heap passt, wird vorab abgelehnt - mit Angabe von benötigtem und
      freiem Speicher.</p>
 
   <h2 id="scope-tiles">Tab-Kacheln</h2>
@@ -685,18 +730,18 @@
      <code>500m</code>, <code>1</code>).</p>
 
   <h3 id="scope-tile-acdc">AC/DC-Kachel</h3>
-  <p><code>ac</code> oder <code>dc</code> — die Kopplung des Kanals.</p>
+  <p><code>ac</code> oder <code>dc</code> - die Kopplung des Kanals.</p>
 
   <h3 id="scope-tile-interp">Interpolations-Kachel</h3>
   <p><code>sin</code> wenn Sinc-Interpolation aktiv ist, <code>lin</code>
      wenn nicht.</p>
 
   <h3 id="scope-tile-tdiv">Zeit/div-Kachel</h3>
-  <p>Die horizontale Auflösung in Kurzform — z.&nbsp;B. <code>200u</code>,
+  <p>Die horizontale Auflösung in Kurzform - z.&nbsp;B. <code>200u</code>,
      <code>1m</code>, <code>20m</code>.</p>
 
   <h3 id="scope-tile-trigger-channel">Trigger-Kanal-Kachel</h3>
-  <p><code>L</code> oder <code>R</code> — welcher Kanal aktuell zum Scharf
+  <p><code>L</code> oder <code>R</code> - welcher Kanal aktuell zum Scharf
      schalten des Triggers verwendet wird.</p>
 
   <h3 id="scope-tile-trigger-edge">Trigger-Flanken-Kachel</h3>
@@ -704,12 +749,12 @@
      Anfang (↑) oder Ende (↓) des Glitches.</p>
 
   <h3 id="scope-tile-trigger-type">Trigger-Typ-Kachel</h3>
-  <p><code>G</code> — wird nur angezeigt, solange der
+  <p><code>G</code> - wird nur angezeigt, solange der
      <a href="#scope-trigger-type">Glitch-Trigger</a> ausgewählt ist.  Das
      Fehlen dieser Kachel bedeutet den Flanken-Typ.</p>
 
   <h3 id="scope-tile-trigger-mode">Trigger-Modus-Kachel</h3>
-  <p><code>A</code>, <code>N</code> oder <code>S</code> — Auto, Normal, Single.</p>
+  <p><code>A</code>, <code>N</code> oder <code>S</code> - Auto, Normal, Single.</p>
 
   <h3 id="scope-tile-trigger-hysteresis">Hysterese-Kachel</h3>
   <p>Wird nur angezeigt, wenn Hysterese aktiviert ist; die Zahl gibt das
@@ -720,7 +765,7 @@
   <p>Das Signal kann auf beiden Achsen verschoben und skaliert werden.  Alles
      Folgende funktioniert gleich, ob das Oszilloskop <b>live</b> läuft
      (Aufnahme), <b>gestoppt</b> ist (zeigt den letzten erfassten Puffer) oder
-     eine <b>geladene Datei</b> zeigt — der einzige Unterschied ist, dass eine
+     eine <b>geladene Datei</b> zeigt - der einzige Unterschied ist, dass eine
      Live-Erfassung laufend neue Abtastwerte hinzufügt, während die anderen
      beiden eingefroren sind.  Die beiden Achsen sind völlig unabhängig: eine
      horizontale Aktion verschiebt oder skaliert das Signal nie vertikal, und
@@ -728,12 +773,12 @@
 
   <h3 id="scope-move-h">Horizontal verschieben</h3>
   <ul>
-    <li><b>Trigger-Offset</b> (live und gestoppt) — das Dreieck am unteren
+    <li><b>Trigger-Offset</b> (live und gestoppt) - das Dreieck am unteren
         Rand ziehen oder die Nachbarn der s/div-Kachel verwenden.  Dies
         verschiebt den Trigger-Punkt <em>innerhalb</em> des Bildschirms nach
         links oder rechts.</li>
     <li><b><kbd>Shift</kbd>+Rad</b> (live, gestoppt und Datei) oder die
-        horizontale Scrollleiste (Datei) — verschiebt das Signal um
+        horizontale Scrollleiste (Datei) - verschiebt das Signal um
         <b>½ Division pro Raste</b>, geradlinig, egal wo der Trigger sitzt.
         Bei einer gestoppten Erfassung oder einer geladenen Datei wird so
         durch den <em>gesamten</em> Puffer gescrollt, nicht nur durch einen
@@ -741,7 +786,7 @@
     <li><b>Trigger außerhalb des Bildschirms.</b>  Verschieben oder Zoomen
         kann den Trigger-Offset über den Bildschirmrand hinaustragen.  In dem
         Fall bleiben die Offset-Linie und ihr Griff am linken oder rechten
-        Rand angeheftet — sodass sie immer wieder gegriffen werden können —,
+        Rand angeheftet - sodass sie immer wieder gegriffen werden können -,
         aber der echte Offset läuft weiter, womöglich viele Bildschirme weit,
         und die <b>Zeitangabe</b> neben dem Griff zeigt diesen wahren Offset.
         Den angehefteten Griff zurück zur Mitte ziehen, um das Signal wieder
@@ -750,14 +795,14 @@
 
   <h3 id="scope-zoom-h">Horizontal zoomen</h3>
   <ul>
-    <li><b>Horizontale Auflösung</b> (das s/div-Feld) — zoomt um den
+    <li><b>Horizontale Auflösung</b> (das s/div-Feld) - zoomt um den
         <b>Trigger-Offset</b>: der Trigger bleibt an Ort und Stelle, und das
         Signal streckt oder staucht sich darum.  Eine geladene Datei hat
         keinen Trigger, daher wird stattdessen um die <b>Mitte</b> des
         Bildschirms gezoomt.</li>
-    <li><b><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+Rad</b> — zoomt um den
+    <li><b><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+Rad</b> - zoomt um den
         <b>Mauszeiger</b>: der Zeitpunkt unter dem Zeiger bleibt fest.  Steht
-        der Zeiger nicht auf dem Trigger, bewegt sich der Trigger-Offset —
+        der Zeiger nicht auf dem Trigger, bewegt sich der Trigger-Offset -
         und kann, wie oben beschrieben, aus dem Bild wandern.</li>
     <li>Wird bei einer Live- oder gestoppten Erfassung weit genug
         herausgezoomt, kann der Puffer den Bildschirm nicht mehr ganz füllen;
@@ -771,23 +816,23 @@
   <h3 id="scope-move-v">Vertikal verschieben</h3>
   <p>Das einfache <b>Rad</b> oder das Ziehen eines Offset-Griffs an einem der
      Seitenränder verschiebt <b>beide aktiven Kanäle gemeinsam</b> und behält
-     ihren Abstand bei.  Das Signal lässt sich verschieben, bis <b>±FS/2</b> —
-     die Vollaussteuerungsgrenze des Wandlers — die Bildschirmmitte erreicht;
+     ihren Abstand bei.  Das Signal lässt sich verschieben, bis <b>±FS/2</b> -
+     die Vollaussteuerungsgrenze des Wandlers - die Bildschirmmitte erreicht;
      das reicht, um jeden Teil des Signals in der Mitte zu parken, und nicht
      weiter.</p>
 
   <h3 id="scope-zoom-v">Vertikal zoomen</h3>
   <ul>
-    <li>Der <b>V/div-Regler</b> eines Kanals (sein Feld — Eingabe, Pfeile,
+    <li>Der <b>V/div-Regler</b> eines Kanals (sein Feld - Eingabe, Pfeile,
         ↑↓ oder das Rad über dem Feld) skaliert <b>nur diesen Kanal</b>, um
         die <b>Mitte</b> des Bildschirms.  Der andere Kanal bleibt unberührt.</li>
     <li><b><kbd>Ctrl</kbd>+Rad</b> über dem Signal ist die einzige Geste, die
-        <b>beide Kanäle gemeinsam</b> zoomt — um den <b>Mauszeiger</b>, stets
-        unter Beibehaltung ihres Verhältnisses.  Ein Kanal — die
-        <em>Basis</em> — springt auf seine nächste 1‑2‑5-Stufe, und der andere
+        <b>beide Kanäle gemeinsam</b> zoomt - um den <b>Mauszeiger</b>, stets
+        unter Beibehaltung ihres Verhältnisses.  Ein Kanal - die
+        <em>Basis</em> - springt auf seine nächste 1‑2‑5-Stufe, und der andere
         skaliert um denselben Faktor (sodass ein Wert auch außerhalb der Reihe
         landen kann).  Basis ist diejenige Wahl, bei der der <em>skalierte</em>
-        Kanal einem 1‑2‑5-Wert am nächsten kommt — z.&nbsp;B. links
+        Kanal einem 1‑2‑5-Wert am nächsten kommt - z.&nbsp;B. links
         <code>500&nbsp;µV/div</code>, rechts <code>1&nbsp;mV/div</code>: ein
         Hineinzoomen stuft den rechten auf <code>500&nbsp;µV/div</code> und
         skaliert den linken auf <code>250&nbsp;µV/div</code> (50&nbsp;µV
@@ -803,10 +848,10 @@
   <h3 id="scope-zoom-rect">Rechteck-Zoom &amp; Ctrl+Z</h3>
   <p>Mit der <b>linken Taste</b> über das Signal ziehen, um ein Rechteck
      aufzuziehen; beim Loslassen dehnt sich die Auswahl auf die ganze Ansicht
-     aus — die einzige Geste, die beide Achsen zugleich skaliert.  Eine
+     aus - die einzige Geste, die beide Achsen zugleich skaliert.  Eine
      Auswahl kleiner als 8&nbsp;Pixel in einer Richtung wird ignoriert, sodass
      ein versehentlicher Klick nichts bewirkt.  Das Ziehen muss auf der freien
-     Plotfläche beginnen — nicht auf einem Marker-Griff, einer
+     Plotfläche beginnen - nicht auf einem Marker-Griff, einer
      Kopfzeilen-Schaltfläche oder einer Achsenbeschriftung.  Es funktioniert
      gleich, ob das Oszilloskop live läuft, gestoppt ist oder eine geladene
      Datei zeigt, und dieselbe Geste zoomt auch die FFT- und
@@ -819,8 +864,8 @@
         der Wellenform auslöst.</li>
     <li><b><kbd>Ctrl</kbd>+<kbd>Z</kbd> macht rückgängig.</b>  Jeder
         Rechteck-Zoom wird gemerkt, bis zu 32 Schritte pro Ansicht, und
-        <kbd>Ctrl</kbd>+<kbd>Z</kbd> — mit genau diesem Modifikator, nichts
-        weiter gedrückt — nimmt sie Schritt für Schritt zurück.  Der Verlauf
+        <kbd>Ctrl</kbd>+<kbd>Z</kbd> - mit genau diesem Modifikator, nichts
+        weiter gedrückt - nimmt sie Schritt für Schritt zurück.  Der Verlauf
         wird gelöscht, wenn das Oszilloskop zwischen Live-Erfassung und
         Datei-Modus wechselt oder eine neue Datei geladen wird.</li>
     <li><b>Welche Ansicht rückgängig macht.</b>  <kbd>Ctrl</kbd>+<kbd>Z</kbd>
@@ -838,14 +883,17 @@
      der Phosphor eines Analog-Oszilloskops, sodass sich Trigger-Jitter und
      Rauschen zu einer sichtbaren Hüllkurve aufschichten.  Angeboten werden
      Abklingzeiten von 0,5, 1, 2, 5, 10, 15 und 20&nbsp;s, dazu <code>∞</code>
-     (Spuren verblassen nie) und ein manueller Wert.  Das Nachleuchten
-     erfordert GPU-Beschleunigung (Einstellungen ▸ Erscheinungsbild) und hat
-     beim CPU-Renderer keine Wirkung.</p>
+     (Spuren verblassen nie) und ein manueller Wert.  Das Nachleuchten wird auf
+     der GPU gezeichnet und benötigt <b>WebGL2 mit der Erweiterung
+     <code>EXT_color_buffer_float</code></b>; bietet der Browser oder der
+     Grafiktreiber diese Kombination nicht, fällt es stillschweigend auf eine
+     nicht nachleuchtende Spur zurück - die Einstellung bleibt verfügbar und hat
+     schlicht keine sichtbare Wirkung.</p>
   <p>Das Nachleuchten folgt einigen Regeln, damit es nie veraltete Geometrie
      zeigt:</p>
   <ul>
-    <li><b>Verschieben oder Zoomen</b> des Signals — jede der obigen Gesten
-        oder eine Änderung von V/div, t/div, Offset oder Trigger-Position —
+    <li><b>Verschieben oder Zoomen</b> des Signals - jede der obigen Gesten
+        oder eine Änderung von V/div, t/div, Offset oder Trigger-Position -
         löscht das Nachleuchten und zeichnet die aktuelle Spur sofort an ihrer
         neuen Position neu, sodass das Bild nie über den Bildschirm
         verschmiert.</li>
@@ -856,7 +904,7 @@
     <li><b>Ändern des Generator-Signals</b> löscht es ebenfalls, nach einer
         Viertelsekunde Pause, in der das alte Signal durch den Loopback-Pfad
         abfließen kann.  Die automatischen Frequenz-Lock-Trimms des Generators
-        sind ausgenommen — sie löschen das Nachleuchten nie.</li>
+        sind ausgenommen - sie löschen das Nachleuchten nie.</li>
     <li>Während das Oszilloskop <b>gestoppt</b> ist, friert das Nachleuchten
         genau so ein, wie es war, und verblasst weiter, sobald die Aufnahme
         wieder startet.</li>
