@@ -158,13 +158,13 @@ jobs:
 
       # A separate artifact from the desktop one: the server bundles have their
       # own audience and their own download rows, and keeping them apart leaves
-      # the desktop artifact's internal layout untouched.
+      # the desktop artifact's internal layout untouched.  ZIPs only: the zip
+      # already carries the fat jar (plus natives, launcher and service
+      # scripts), so a bare jar on the release page is a duplicate download.
       - uses: actions/upload-artifact@v7
         with:
           name: phonalyser-server-windows
-          path: |
-            modules/server-net/target/phonalyser-server-*.jar
-            modules/server-net/target/phonalyser-server-*.zip
+          path: modules/server-net/target/phonalyser-server-*.zip
 
   # ============================================================== Linux x64
   build-linux:
@@ -261,9 +261,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: phonalyser-server-linux
-          path: |
-            modules/server-net/target/phonalyser-server-*.jar
-            modules/server-net/target/phonalyser-server-*.zip
+          path: modules/server-net/target/phonalyser-server-*.zip
 
   # ===================================================== macOS x64 + Apple Silicon
   # Ship a DMG per architecture.  Both legs run on the Apple-Silicon macos-14
@@ -356,9 +354,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: phonalyser-server-macos-${{ matrix.arch }}
-          path: |
-            modules/server-net/target/phonalyser-server-*.jar
-            modules/server-net/target/phonalyser-server-*.zip
+          path: modules/server-net/target/phonalyser-server-*.zip
 
   # ============================================================== Release
   release:
