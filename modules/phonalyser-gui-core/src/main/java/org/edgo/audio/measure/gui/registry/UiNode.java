@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -29,7 +29,7 @@ import lombok.Getter;
 /**
  * One node of the {@link UiRegistry} tree: a named component with an optional
  * SWT control (for screenshots / bounds) and optional <em>capability</em>
- * callbacks the registrant supplies — {@link #activate} (select / reveal this
+ * callbacks the registrant supplies - {@link #activate} (select / reveal this
  * component, e.g. a settings tab), {@link #maximize} and {@link #restore} (give
  * a pane the whole view, or undo it).
  *

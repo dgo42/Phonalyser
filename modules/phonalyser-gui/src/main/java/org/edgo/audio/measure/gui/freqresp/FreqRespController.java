@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -31,16 +31,16 @@ import org.edgo.audio.measure.preferences.Preferences;
 
 /**
  * Controller of the Frequency Response pane: owns the sweep measurement
- * worker's lifecycle and the sweep-timing rules — the lead-in floor and the
+ * worker's lifecycle and the sweep-timing rules - the lead-in floor and the
  * derived sweep duration that pairs with the chosen FFT size.
  *
  * <p>The constructor subscribes to the preferences the timing rules depend
  * on (FFT size, lead-in) and to audio-format changes, re-deriving and
- * persisting {@code freqRespDurationSec} — the tab control only renders it.
+ * persisting {@code freqRespDurationSec} - the tab control only renders it.
  * It also owns the result {@link FreqRespView}: on {@link
  * Events#FREQRESP_RESULT_AVAILABLE} (the worker's finished deconvolution) it
  * clears and repopulates the view directly on the UI thread.  The view is a
- * passive component — it does NOT subscribe to the measurement lifecycle
+ * passive component - it does NOT subscribe to the measurement lifecycle
  * itself, so a shared {@link Events#FREQRESP_MEASUREMENT_STARTED} (e.g. the
  * Tune-notch wizard grabbing the audio device) cannot wipe its graph.  The
  * pane still handles {@link Events#FREQRESP_MEASUREMENT_STOPPED} /
@@ -48,11 +48,11 @@ import org.edgo.audio.measure.preferences.Preferences;
  */
 public final class FreqRespController {
 
-    /** Lead-in floor (s) — shorter lead-ins starve the deconvolution. */
+    /** Lead-in floor (s) - shorter lead-ins starve the deconvolution. */
     private static final double MIN_LEAD_IN_SEC = 0.05;
     /** Capture tail (s) the analyzer records past lead-in + sweep. */
     private static final double ANALYZER_TAIL_SEC = 0.5;
-    /** Sweep-duration floor (s) — a small FFT size with a long lead-in
+    /** Sweep-duration floor (s) - a small FFT size with a long lead-in
      *  must not produce a negative or unworkable sweep. */
     private static final double MIN_SWEEP_SEC = 0.5;
 
@@ -69,8 +69,8 @@ public final class FreqRespController {
     public FreqRespController(Executor uiExecutor, FreqRespView view) {
         this.uiExecutor = uiExecutor;
         // The view is a passive component owned by this controller: when the
-        // worker's deconvolution finishes, drive it directly — clear the old
-        // trace, then show both channels — marshalled to the UI thread.  The
+        // worker's deconvolution finishes, drive it directly - clear the old
+        // trace, then show both channels - marshalled to the UI thread.  The
         // view is NOT a bus subscriber for its result lifecycle, so a shared
         // FREQRESP_MEASUREMENT_STARTED (e.g. the Tune-notch wizard grabbing the
         // audio device) can never wipe this graph.
@@ -124,7 +124,7 @@ public final class FreqRespController {
         return worker != null && worker.isRunning();
     }
 
-    /** Total expected capture time of one sweep — lead-in + sweep + the
+    /** Total expected capture time of one sweep - lead-in + sweep + the
      *  analyzer's tail.  Sizes the pane's busy meter time axis. */
     public double expectedMeasurementSeconds() {
         Preferences prefs = Preferences.instance();
@@ -133,7 +133,7 @@ public final class FreqRespController {
              + ANALYZER_TAIL_SEC;
     }
 
-    /** Detaches every subscription and cancels an in-flight measurement —
+    /** Detaches every subscription and cancels an in-flight measurement -
      *  called from the pane's dispose listener. */
     public void shutdown() {
         for (Runnable r : unsubscribes) r.run();
@@ -147,7 +147,7 @@ public final class FreqRespController {
 
     /** Derives and persists the sweep duration that pairs with the chosen
      *  FFT size, so the analyzer's {@code nextPow2(leadIn + sweep + tail)}
-     *  lands exactly on {@code fftSize} — no wasted bins.  Clamped to
+     *  lands exactly on {@code fftSize} - no wasted bins.  Clamped to
      *  {@link #MIN_SWEEP_SEC}. */
     private void deriveDuration() {
         Preferences prefs = Preferences.instance();

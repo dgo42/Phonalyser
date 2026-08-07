@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -39,6 +39,7 @@ import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
+import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionWizardDialog;
@@ -47,33 +48,41 @@ import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.CaptureEndReason;
 
 import lombok.Getter;
 
 /**
  * Live FFT analysis pane.  Hosts the {@link FftView} canvas, two flat
  * scrollbars (frequency pan / magnitude pan), and the {@link FftTabControl}
- * — a self-contained tile-tab folder with the Settings, THD, Presets,
- * Utility, Calibration and Save / Load tabs — plus the record-LED toggle.
+ * - a self-contained tile-tab folder with the Settings, THD, Presets,
+ * Utility, Calibration and Save / Load tabs - plus the record-LED toggle.
  */
 public final class FftPane extends AbstractPane {
 
-    /** Resolution of the FlatScrollbars (any large integer — slider values
+    /** Resolution of the FlatScrollbars (any large integer - slider values
      *  are mapped to fractional positions). */
     private static final int SCROLL_RANGE = 1_000_000;
-    /** Screenshot comment caption top (px) — under the FFT averages/percent/unit overlay. */
+    /** Screenshot comment caption top (px) - under the FFT averages/percent/unit overlay. */
     private static final int SCREENSHOT_COMMENT_TOP_PX = 70;
+    /** Smallest magnitude span (dB) the vertical zoom may leave visible.  It
+     *  exists only to keep the span positive - the axis mapping divides by it -
+     *  so it is deliberately far below any useful measurement: 0.01 dB still
+     *  shows ±0.005 dB of ripple across the full plot height, which is the
+     *  resolution a flatness or notch-depth check needs.  The dB tick labels
+     *  follow the step down to four decimals, so the grid stays readable. */
+    private static final double MIN_MAG_SPAN_DB = 0.01;
 
     @Getter
     private FftView         view;
     /** Controller owning the analyser worker, the frequency-lock loops and
      *  the .fft file round-trip; injected into the view + tab control.
      *  The live pane receives the app-lifetime instance (built in
-     *  {@code UIEngines}, survives content rebuilds — the averaging
+     *  {@code UIEngines}, survives content rebuilds - the averaging
      *  accumulator keeps counting through a language / font change); the
      *  offscreen screenshot clone builds its own idle instance. */
     private final FftController controller;
-    /** The generator controller the predistortion wizard drives — stored so
+    /** The generator controller the predistortion wizard drives - stored so
      *  {@link #openPredistortionForCapture()} can construct the wizard. */
     private final GeneratorController genController;
     private FlatScrollbar   freqScrollbar;
@@ -94,30 +103,32 @@ public final class FftPane extends AbstractPane {
      *  field so the dispose listener can unsubscribe the SAME instance
      *  (method references compare by identity). */
     private Consumer<Void> rangeChangedListener;
-    /** Subscriber for {@link Events#FFT_RECORDING_AUTO_STOPPED} — fires
-     *  when the analyser's stop-after-N counter trips so the pane can
-     *  flip Record back off and release the shared capture. */
+    /** Subscriber for {@link Events#FFT_RECORDING_AUTO_STOPPED} - fires
+     *  when the analyser's stop-after-N counter trips, or when its reader
+     *  answered terminally (the capture device died), so the pane can flip
+     *  Record back off and release the shared capture.  The two cases are
+     *  told apart by the worker's recorded capture-end reason. */
     private Consumer<Void> autoStoppedListener;
-    /** Subscriber for {@link Events#FFT_RECORDING_STOP_REQUESTED} — the
+    /** Subscriber for {@link Events#FFT_RECORDING_STOP_REQUESTED} - the
      *  {@link FftTabControl} asks the pane to stop live recording when a
      *  static spectrum is loaded (the pane owns the Record button + shared
      *  capture reference). */
     private Consumer<Void> recordStopRequestedListener;
-    /** Subscriber for {@link Events#FFT_SCREENSHOT_REQUESTED} — the
+    /** Subscriber for {@link Events#FFT_SCREENSHOT_REQUESTED} - the
      *  {@link FftTabControl}'s Utility-tab camera button; the pane owns the
      *  screenshot dialog because it clones the whole pane offscreen. */
     private Consumer<Void> screenshotRequestedListener;
-    /** Subscriber for {@link Events#FREQRESP_MEASUREMENT_STARTED} — the
+    /** Subscriber for {@link Events#FREQRESP_MEASUREMENT_STARTED} - the
      *  Frequency Response pane is about to drive the capture device
      *  exclusively, so this pane must stop any running recording and
      *  gray its Record button so it can't be re-engaged mid-sweep. */
     private Consumer<Void> freqRespStartedListener;
-    /** Counterpart to {@link #freqRespStartedListener} — re-enables the
+    /** Counterpart to {@link #freqRespStartedListener} - re-enables the
      *  Record button once the sweep finishes (or aborts). */
     private Consumer<Void> freqRespStoppedListener;
 
     /**
-     * Constructs the live pane around the injected app-lifetime engine —
+     * Constructs the live pane around the injected app-lifetime engine -
      * the Record toggle drives {@code controller}; when it is already
      * recording (this is a rebuilt pane after a language / font change)
      * the Record LED lights up and the view simply picks up the worker's
@@ -162,7 +173,7 @@ public final class FftPane extends AbstractPane {
                     FftController controller) {
         super(parent);
         // FFT-length changes, capture acquire / release, and the
-        // generator-running query all flow through the MessageBus — no
+        // generator-running query all flow through the MessageBus - no
         // callback parameters needed for those concerns.  The analyser
         // worker acquires and releases its own shared capture on start /
         // stop; the pane just drives the Record button.
@@ -220,7 +231,7 @@ public final class FftPane extends AbstractPane {
         magScrollbar.setLayoutData(sbd);
 
         // ---- Horizontal frequency scrollbar.  Wrapped in a FormLayout
-        // row so its right edge stops 18 px short of the group right —
+        // row so its right edge stops 18 px short of the group right -
         // aligning exactly with the FFT view's right edge (the view
         // ends at the magScrollbar's left edge, magScrollbar is 18 px
         // wide on the right).  Without this wrap the horizontal bar
@@ -263,11 +274,11 @@ public final class FftPane extends AbstractPane {
                 controller);
         toolbarTabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         // Collapsing the tab body (strip double-click / Enter, or the
-        // screenshot path) frees vertical space — re-flow the pane so the
+        // screenshot path) frees vertical space - re-flow the pane so the
         // chart above reclaims it.
         toolbarTabs.setOwner(this);
 
-        // Predistortion-wizard button (live pane only) — left of Record,
+        // Predistortion-wizard button (live pane only) - left of Record,
         // mirroring the Frequency-Response pane's wizard button.  Drives the
         // running generator + FFT through the closed-loop predistortion run.
         if (liveCapture && genController != null) {
@@ -291,9 +302,9 @@ public final class FftPane extends AbstractPane {
         //
         // MessageBus subscriptions back to the pane:
         //   - FFT_RANGE_CHANGED: view publishes after pan / zoom or
-        //     auto-setup / maximize → realign the scrollbars.
+        //     auto-setup / maximize -> realign the scrollbars.
         //   - FFT_RECORDING_AUTO_STOPPED: view publishes when its
-        //     stop-after-N counter trips → release record state.
+        //     stop-after-N counter trips -> release record state.
         //   - FFT_RECORDING_STOP_REQUESTED / FFT_SCREENSHOT_REQUESTED:
         //     the FftTabControl publishes these for the pane to service.
         rangeChangedListener        = ignored -> syncFftPan();
@@ -319,7 +330,7 @@ public final class FftPane extends AbstractPane {
             else                              recordOff();
         });
 
-        // The injected controller survives content rebuilds — when this is
+        // The injected controller survives content rebuilds - when this is
         // a rebuilt pane the analyser may already be recording: light the
         // Record LED; the averaging accumulator keeps counting and the view
         // picks up the worker's next published result.
@@ -347,13 +358,15 @@ public final class FftPane extends AbstractPane {
         // size than it ends up with after the first event-pump (font
         // metrics, native chrome, etc. finalise lazily).  Without a
         // fresh layout the initial render clipped the last row of the
-        // Settings tab — a subsequent collapse/expand cycle "fixed"
-        // it because the second pass had the right metrics.
+        // Settings tab - a subsequent collapse/expand cycle "fixed"
+        // it because the second pass had the right metrics.  Deliberate
+        // SAME-thread deferral - not a marshal, so not GuiUtil.marshal
+        // (which runs in place on the UI thread).
         group.getDisplay().asyncExec(() -> {
             if (group.isDisposed()) return;
             group.layout(true, true);
             // Startup: nothing has fired a range-change yet, so align the scrollbar
-            // thumbs to the pan window restored from Preferences — otherwise they keep
+            // thumbs to the pan window restored from Preferences - otherwise they keep
             // their constructor defaults and a saved zoom shows no scrollbar feedback.
             syncFftPan();
         });
@@ -377,7 +390,7 @@ public final class FftPane extends AbstractPane {
     /** Forces the scrollbar thumb / position and the view to refresh
      *  from the current Preferences.  Needed by the screenshot path
      *  because the offscreen pane's controller never runs an analysis
-     *  tick — the usual {@code onAnalysisPublished} pipeline that
+     *  tick - the usual {@code onAnalysisPublished} pipeline that
      *  drives {@link #syncFftPan()} doesn't fire there.
      *  Call after {@code controller.setLastResult} and
      *  {@code setTabsCollapsed} so the snapshot is fully laid out. */
@@ -407,13 +420,24 @@ public final class FftPane extends AbstractPane {
         }
     }
 
-    /** Invoked by the FFT controller on the UI thread when the
-     *  stop-after-N counter fires.  Disengages record mode so the
+    /** Invoked on the UI thread when the analyser stopped on its own -
+     *  the stop-after-N counter fired, or the capture ended from below
+     *  (device lost / delivery stalled).  Disengages record mode so the
      *  user sees the Record button switch off and the shared capture
      *  refcount drops (which lets the audio device close if no other
-     *  pane is holding it). */
+     *  pane is holding it).  When the worker recorded a capture-end
+     *  reason, this pane owns the failed operation, so this pane tells
+     *  the operator ONCE, in their language. */
     private void disengageRecord() {
+        CaptureEndReason reason = controller.captureEndReason();
         recordOff();
+        if (reason != null) {
+            // The unified stop message: the reason enum picks the text, the
+            // BACKEND is named, the technical detail lives in the log alone.
+            Dialogs.error(group.getShell(), I18n.t("audio.deviceError.title"),
+                    I18n.t("capture.error.ended." + reason.name(),
+                            Preferences.instance().getSelectedBackend().type().getDisplayName()));
+        }
     }
 
     /** {@link Events#FREQRESP_MEASUREMENT_STARTED} handler: stops any
@@ -433,11 +457,11 @@ public final class FftPane extends AbstractPane {
         recordButton.setEnabled(true);
     }
 
-    /** Turns the Record button ON — starts the analyser worker, which acquires
+    /** Turns the Record button ON - starts the analyser worker, which acquires
      *  its own reference on the shared audio capture device (scope + FFT share
      *  the same device; whichever pane records first opens it).  Bails out
      *  silently and un-toggles the button when the acquire fails (no input
-     *  device, already-busy device, etc.) — detected via {@link FftView#isRunning}. */
+     *  device, already-busy device, etc.) - detected via {@link FftView#isRunning}. */
     private void recordOn() {
         if (recordButton == null || recordButton.isDisposed()) return;
         controller.startRecording();
@@ -449,7 +473,7 @@ public final class FftPane extends AbstractPane {
         recordButton.setImage(recordLit);
     }
 
-    /** Programmatically engages Record and lights the LED — the
+    /** Programmatically engages Record and lights the LED - the
      *  {@code gui.automation} scripts' Record.  On an acquire failure the
      *  button silently un-toggles (no modal dialog in an unattended run);
      *  callers can check {@link #isRecording()}. */
@@ -476,13 +500,13 @@ public final class FftPane extends AbstractPane {
 
     /** Whether the analyser was recording when {@link #stopCaptureForPrefs()}
      *  stopped it, so {@link #startCaptureForPrefs()} restarts exactly that.
-     *  Owned here — the caller does not track the pane's recording state. */
+     *  Owned here - the caller does not track the pane's recording state. */
     private boolean recordWasRunningForPrefs;
 
     /** Stops FFT recording ahead of a Preferences audio-config change,
      *  remembering whether it was running.  Releasing the FFT's shared-capture
      *  reference here is what lets a device / sample-rate change actually take
-     *  effect — otherwise the shared device stays open at the OLD parameters and
+     *  effect - otherwise the shared device stays open at the OLD parameters and
      *  the new settings silently never apply.  Pair with
      *  {@link #startCaptureForPrefs()} after the new config is committed. */
     public void stopCaptureForPrefs() {
@@ -498,7 +522,7 @@ public final class FftPane extends AbstractPane {
         if (recordWasRunningForPrefs) recordOn();
     }
 
-    /** Turns the Record button OFF — stops the worker (which releases its own
+    /** Turns the Record button OFF - stops the worker (which releases its own
      *  shared-capture reference) and restores the dim icon.  Called from the
      *  user's Record-button click (off path) and from {@link #disengageRecord}
      *  when the analyser's stop-after-N counter trips. */
@@ -521,7 +545,7 @@ public final class FftPane extends AbstractPane {
     }
 
     /** Loads and displays a {@code .fft} spectrum file (same as the Load-from
-     *  tab) — lets a programmatic caller (help/video automation) show a real
+     *  tab) - lets a programmatic caller (help/video automation) show a real
      *  spectrum without a live capture.  Delegates to the tab control, which
      *  owns the {@code .fft} round-trip. */
     public void loadSpectrum(String path) {
@@ -540,7 +564,7 @@ public final class FftPane extends AbstractPane {
 
 
     /** Copies the live pane's render snapshot (spectrum result, IMD
-     *  slot and table mode) into this pane's view — used by the
+     *  slot and table mode) into this pane's view - used by the
      *  offscreen screenshot clone so it draws exactly what the live
      *  pane shows. */
     public void copySnapshotFrom(FftPane source) {
@@ -558,7 +582,7 @@ public final class FftPane extends AbstractPane {
     private double currentBinSize() {
         FftResult r = view.getLastResult();
         if (r != null && r.fftSize > 0) return (double) r.sampleRate / r.fftSize;
-        // No result yet — assume a typical 384 kHz capture and the
+        // No result yet - assume a typical 384 kHz capture and the
         // configured FFT length.  Worst case the user sees the bin-size
         // lower bound jump once after the first analysis publishes.
         int sr = 384_000;
@@ -587,14 +611,14 @@ public final class FftPane extends AbstractPane {
         if (fMax - fMin < binSize)  fMax = Math.min(nyq, fMin + binSize);
         prefs.setFftFreqMinHz(fMin);
         prefs.setFftFreqMaxHz(fMax);
-        // Magnitude range is canonical dBFS for every unit — clamp linearly.
+        // Magnitude range is canonical dBFS for every unit - clamp linearly.
         double maxTp = view.magCeiling();            // dBFS ceiling (≥ 0, raised by a lifted signal)
         double minBt = Constants.MAG_FLOOR_DBFS;     // dBFS floor
         double mTop = prefs.getFftMagTop();
         double mBot = prefs.getFftMagBottom();
         if (mTop > maxTp) mTop = maxTp;
         if (mBot < minBt) mBot = minBt;
-        if (mTop - mBot < 1) mBot = mTop - 1;    // keep ≥ 1 dB visible
+        if (mTop - mBot < MIN_MAG_SPAN_DB) mBot = mTop - MIN_MAG_SPAN_DB;
         prefs.setFftMagTop(mTop);
         prefs.setFftMagBottom(mBot);
     }
@@ -605,7 +629,7 @@ public final class FftPane extends AbstractPane {
      *  flag).  Thumb size is proportional to (visible / total) so the
      *  user gets immediate visual feedback on how much of the spectrum
      *  is hidden; selection positions the visible slice inside the full
-     *  range.  Called whenever the pan window can have shifted —
+     *  range.  Called whenever the pan window can have shifted -
      *  preset apply, autosetup, maximize, range-change from the FFT
      *  view, FFT length change, and after a fresh analysis. */
     private void syncFftPan() {
@@ -652,7 +676,7 @@ public final class FftPane extends AbstractPane {
             freqScrollbar.setIncrement(Math.max(1, thumb / 10));
         }
 
-        // ---- Magnitude scrollbar (canonical dBFS range — linear for every unit)
+        // ---- Magnitude scrollbar (canonical dBFS range - linear for every unit)
         double maxTp = view.magCeiling();
         double minBt = Constants.MAG_FLOOR_DBFS;
         double mTop  = prefs.getFftMagTop();
@@ -665,7 +689,7 @@ public final class FftPane extends AbstractPane {
         } else {
             int thumb = (int) Math.max(SCROLL_RANGE / 100,
                     Math.min(SCROLL_RANGE - 1, magVis / magTot * SCROLL_RANGE));
-            // Slider 0 → top of mag range; slider max → bottom.
+            // Slider 0 -> top of mag range; slider max -> bottom.
             double pos = (maxTp - mTop) / Math.max(1e-9, magTot - magVis);
             int sel   = (int) Math.max(0,
                     Math.min(SCROLL_RANGE - thumb, pos * (SCROLL_RANGE - thumb)));
@@ -709,7 +733,7 @@ public final class FftPane extends AbstractPane {
 
     private void applyMagScrollbar() {
         Preferences prefs = Preferences.instance();
-        // Canonical dBFS range — pan linearly, identically for every unit.
+        // Canonical dBFS range - pan linearly, identically for every unit.
         double maxTp = view.magCeiling();
         double minBt = Constants.MAG_FLOOR_DBFS;
         double visible = prefs.getFftMagTop() - prefs.getFftMagBottom();

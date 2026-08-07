@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -36,20 +36,20 @@ import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.gui.common.Icon;
 
 /**
- * Editable numeric field with unit handling, stepping and clamping — the one
+ * Editable numeric field with unit handling, stepping and clamping - the one
  * numeric input control of the application (the read-only {@code StepSelector}
  * it also replaces cycled fixed strings).  Free-text entry with a unit suffix,
  * mouse-wheel and arrow-button stepping, commit on Enter / focus-out with
  * revert on invalid input.
  *
  * <p>All behaviour lives in an embedded {@link NumericStepModel}; this class
- * is only the SWT shell.  Configuration is pure data via three constructors —
+ * is only the SWT shell.  Configuration is pure data via three constructors -
  * one per stepping policy (fixed increments, value-series jumps, the "careful
- * 10 %" percent walk) — never callbacks: see the model for the policies and
+ * 10 %" percent walk) - never callbacks: see the model for the policies and
  * {@link UnitFamily} for unit parsing / display switching.
  *
  * <p>The selection listeners fire ONLY when the canonical value actually
- * changed — a bare focus-out, an invalid entry, or a saturated step stays
+ * changed - a bare focus-out, an invalid entry, or a saturated step stays
  * silent, so downstream work wired to value changes (e.g. the FFT averaging
  * restart on {@code GENERATOR_SIGNAL_CHANGED}) is never retriggered
  * spuriously.
@@ -107,7 +107,7 @@ public final class NumericStepField extends Composite {
                 textWidthHint);
     }
 
-    /** DITHER-policy field: a dither depth (0 = Off … {@code maxBits} bits,
+    /** DITHER-policy field: a dither depth (0 = Off ... {@code maxBits} bits,
      *  possibly fractional) shown as bits or a full-scale-aware dBV view;
      *  {@code fsAmplSupplier} yields the live peak full-scale (Vpeak) so the
      *  dBV view tracks recalibration.  Wheel/arrows step ±1 bit (bits view)
@@ -142,13 +142,13 @@ public final class NumericStepField extends Composite {
 
         // Click-able SVG arrows replacing the GTK-inconsistent
         // SWT.ARROW|UP/DOWN buttons.  Borderless, parent background,
-        // press grows 6 → 10 px via IconStepLabel (Canvas under the hood
-        // so the icon centres horizontally — plain Label ignores SWT.CENTER
+        // press grows 6 -> 10 px via IconStepLabel (Canvas under the hood
+        // so the icon centres horizontally - plain Label ignores SWT.CENTER
         // for images on GTK).
         upBtn = new IconStepLabel(this, Icon.UP_BIG, Icon.UP_SMALL);
         GridData ud = new GridData(SWT.FILL, SWT.FILL, false, true);
         ud.widthHint  = 16;
-        // GTK won't grow the cell to fit the larger pressed icon —
+        // GTK won't grow the cell to fit the larger pressed icon -
         // heightHint must clear the 10 px pressed image or it gets
         // clipped to nothing on click.
         ud.heightHint = 12;
@@ -166,11 +166,11 @@ public final class NumericStepField extends Composite {
         attachAutoRepeat(upBtn,   +1);
         attachAutoRepeat(downBtn, -1);
 
-        // Mouse wheel → model wheel step.  Hook every child too so the
+        // Mouse wheel -> model wheel step.  Hook every child too so the
         // wheel works regardless of which sub-widget the pointer is over.
         // Single physical wheel notches can produce multiple SWT MouseWheel
-        // events (one per widget along the bubble path: Text → Canvas →
-        // Composite), so we dedup on {@code e.time} — every event from the
+        // events (one per widget along the bubble path: Text -> Canvas ->
+        // Composite), so we dedup on {@code e.time} - every event from the
         // same notch shares a timestamp.  Without this the list stepper
         // (averages 2/4/8/16/32/∞) was advancing two slots per notch and
         // the user saw values being skipped.
@@ -198,7 +198,7 @@ public final class NumericStepField extends Composite {
             if (!after.isEmpty() && !model.acceptsPartial(after)) e.doit = false;
         });
 
-        // Cursor Up / Down act as clicks on the step buttons — one arrow
+        // Cursor Up / Down act as clicks on the step buttons - one arrow
         // step per press; the OS key auto-repeat provides the same
         // hold-to-sweep behaviour as the buttons' timer repeat.  Consumed
         // so the caret doesn't jump to the text ends.
@@ -230,7 +230,7 @@ public final class NumericStepField extends Composite {
         downBtn.setEnabled(enabled);
     }
 
-    /** Propagate tooltip to inner children — the Composite itself is fully
+    /** Propagate tooltip to inner children - the Composite itself is fully
      *  covered by its Text / arrow Canvases so hover events never reach
      *  this widget's own background. */
     @Override
@@ -242,7 +242,7 @@ public final class NumericStepField extends Composite {
     /** Composes the displayed tooltip = the caller's base text + the model's
      *  live step hint (wheel / arrows) and pushes it to the inner children.
      *  Re-applied on every {@link #refresh()} so the hint tracks the display
-     *  unit (e.g. arrows "±1 Hz" → "±1 kHz" once the field shows kHz). */
+     *  unit (e.g. arrows "±1 Hz" -> "±1 kHz" once the field shows kHz). */
     private void applyToolTip() {
         String hint = model.stepHint();
         String full;
@@ -267,7 +267,7 @@ public final class NumericStepField extends Composite {
         return model.getValue();
     }
 
-    /** Sets the canonical value (clamped by the model) — the two-way binding
+    /** Sets the canonical value (clamped by the model) - the two-way binding
      *  entry point.  Fires only when the resulting value differs. */
     public void setValue(double v) {
         double before = model.getValue();
@@ -275,7 +275,7 @@ public final class NumericStepField extends Composite {
         afterMutation(before, model.isLogDisplay());
     }
 
-    /** Renders the field empty and holding no value — the disabled,
+    /** Renders the field empty and holding no value - the disabled,
      *  never-measured channel row in the calibration dialog.  {@link #isBlank}
      *  stays true until the user (or {@link #setValue}) enters a value. */
     public void setBlank() {
@@ -283,7 +283,7 @@ public final class NumericStepField extends Composite {
         refresh();
     }
 
-    /** True while the field is blank (empty, no value) — callers skip a blank
+    /** True while the field is blank (empty, no value) - callers skip a blank
      *  row instead of reading its clamped-to-min value. */
     public boolean isBlank() {
         return model.isBlank();
@@ -297,7 +297,7 @@ public final class NumericStepField extends Composite {
     }
 
     /** Advances one step in {@code direction} (+1 up, −1 down) from the current
-     *  value — the programmatic equivalent of one mouse-wheel notch over the
+     *  value - the programmatic equivalent of one mouse-wheel notch over the
      *  field, so callers that want to step the field (e.g. the scope's
      *  wheel-zoom) reuse the field's OWN list / increment navigation and
      *  clamping instead of recomputing the next value themselves.  Fires the
@@ -341,14 +341,14 @@ public final class NumericStepField extends Composite {
         refresh();
     }
 
-    /** True while the field displays in its log unit (dBV) — persisted per
+    /** True while the field displays in its log unit (dBV) - persisted per
      *  field so a restart restores the user's display choice. */
     public boolean isLogDisplay() {
         return model.isLogDisplay();
     }
 
     /** Programmatically restores ({@code true}) or clears ({@code false}) the
-     *  dBV display — the seed path for a persisted choice; no listener
+     *  dBV display - the seed path for a persisted choice; no listener
      *  fires. */
     public void setLogDisplay(boolean on) {
         model.setLogDisplay(on);
@@ -439,7 +439,7 @@ public final class NumericStepField extends Composite {
     }
 
     /** Refreshes the display and fires the listeners only when the canonical
-     *  value — or the persisted-worthy dBV display choice — moved away from
+     *  value - or the persisted-worthy dBV display choice - moved away from
      *  the snapshot; the single funnel every model mutation goes through, so
      *  the no-event-on-unchanged contract can't be missed at one of the call
      *  sites.  (Typing "0.5 V" over a dBV display changes the unit without
@@ -461,6 +461,6 @@ public final class NumericStepField extends Composite {
 
     @Override
     protected void checkSubclass() {
-        // SWT forbids subclassing of most widgets by default — opt back in.
+        // SWT forbids subclassing of most widgets by default - opt back in.
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -29,20 +29,20 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Owner of one pane's loaded frequency-response correction state — the
+ * Owner of one pane's loaded frequency-response correction state - the
  * previously-saved {@code .frc} calibrations used to correct what was just
  * measured (a frequency-response sweep or an FFT spectrum).  Holds an ordered
  * list of loaded {@link Entry entries} plus the calibration wizard's
  * direct-loopback buffer:
  *
  * <ul>
- *   <li>{@link #getEntries() entries} — every calibration the user has loaded
+ *   <li>{@link #getEntries() entries} - every calibration the user has loaded
  *       via the pane's calibration tab (or the wizard's Apply step).  Each
  *       entry pairs a {@link StereoFreqRespCalibration} with the file path it
  *       came from.  The consumer chains the divides through all entries in
  *       order at draw / measurement time, so multiple files compose into a
  *       single correction.</li>
- *   <li>{@link #getDirect() direct} — the loopback DAC→ADC response measured
+ *   <li>{@link #getDirect() direct} - the loopback DAC->ADC response measured
  *       on page 1 of the frequency-response calibration wizard.  Used to
  *       bootstrap a calibration so the page-2 measurement of the
  *       device-under-test isn't polluted by the bench's own transfer
@@ -50,7 +50,7 @@ import java.util.List;
  * </ul>
  *
  * <p>The FFT pane and the FreqResp pane each construct their <em>own</em>
- * instance so they can be configured independently — you might keep a loopback
+ * instance so they can be configured independently - you might keep a loopback
  * calibration for the FreqResp pane while loading a DUT-only calibration into
  * the FFT pane.  The pane is the composition root: it builds the store and
  * injects the same instance into the view and tab control it owns (and the
@@ -76,7 +76,7 @@ public final class CorrectionStore {
 
     /** Pairs a loaded calibration with the file path it came from.
      *  Both fields are non-null.  {@code @Value} supplies the all-field
-     *  {@code equals} the snapshot/restore comparison relies on — including
+     *  {@code equals} the snapshot/restore comparison relies on - including
      *  {@link #isWithNoise()}, so a restore that only flips the flag still
      *  fires a change notification. */
     @Value
@@ -91,7 +91,7 @@ public final class CorrectionStore {
         boolean                   withNoise;
     }
 
-    /** Opaque snapshot of every slot — only created by
+    /** Opaque snapshot of every slot - only created by
      *  {@link CorrectionStore#snapshot()}. */
     public static final class Snapshot {
         private final List<Entry>               entries;
@@ -186,7 +186,7 @@ public final class CorrectionStore {
     }
 
     /** Path of row 0, or {@code null} when no entries are loaded
-     *  (or row 0 has no associated path — currently impossible since
+     *  (or row 0 has no associated path - currently impossible since
      *  {@link #addEntry} requires a non-null path). */
     public String getCurrentPath() {
         return entries.isEmpty() ? null : entries.get(0).getPath();
@@ -195,7 +195,7 @@ public final class CorrectionStore {
     /** Clears every loaded entry and seeds row 0 with this calibration.
      *  Also clears any stale wizard transient ({@link #direct}) so the
      *  consumer doesn't double-correct after the wizard's Apply step.
-     *  Both {@code calibration} and {@code path} must be non-null —
+     *  Both {@code calibration} and {@code path} must be non-null -
      *  use {@link #setDirect(StereoFreqRespCalibration)} for the
      *  wizard's transient page-1 buffer. */
     public void setCurrent(StereoFreqRespCalibration calibration, String path) {
@@ -212,7 +212,7 @@ public final class CorrectionStore {
         fire();
     }
 
-    /** Alias for {@link #clearAll()} — wizard / older callers. */
+    /** Alias for {@link #clearAll()} - wizard / older callers. */
     public void clearCurrent() {
         clearAll();
     }
@@ -220,7 +220,7 @@ public final class CorrectionStore {
     /**
      * Replaces the direct (wizard page-1) calibration buffer.  Pass
      * {@code null} to clear.  Fires a change notification so the consumer
-     * applies the new transient calibration on top of the entries list —
+     * applies the new transient calibration on top of the entries list -
      * that's how the wizard's page-2 trace gets the page-1 loopback
      * subtracted without polluting the persistent entries list.
      */

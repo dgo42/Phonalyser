@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -29,7 +29,7 @@ import org.edgo.audio.measure.enums.AudioBackendType;
  *
  * <p>This is what keeps the module graph one-way.  Before it existed,
  * {@code AudioBackend} imported and constructed every device manager directly,
- * which made the core module depend on every backend — the exact inverse of the
+ * which made the core module depend on every backend - the exact inverse of the
  * intended layering, and the reason a headless build had to drag the whole tree
  * along.  Adding a backend is now purely additive: a new module, a provider, a
  * service file.  Nothing in core changes.
@@ -39,7 +39,7 @@ import org.edgo.audio.measure.enums.AudioBackendType;
  * the loader is iterated.  Registering the managers directly would therefore
  * construct all of them on the first backend lookup, losing the lazy
  * construction {@code AudioBackend} has always had.  A provider is trivially
- * cheap to construct — it holds no state and touches no hardware — so discovery
+ * cheap to construct - it holds no state and touches no hardware - so discovery
  * stays free and the real manager is built only when {@link #create()} is
  * called, on first use of that backend.
  *
@@ -54,7 +54,17 @@ public interface AudioDeviceManagerProvider {
      *  given type; {@link AudioBackend} logs and ignores later duplicates. */
     AudioBackendType backendType();
 
-    /** Builds the manager.  Called at most once per type — {@link AudioBackend}
-     *  caches the result — and never during service discovery. */
+    /** Builds the manager.  Called at most once per type - {@link AudioBackend}
+     *  caches the result - and never during service discovery. */
     AudioDeviceManager create();
+
+    /** Whether this backend can actually run in THIS process - the hardware
+     *  half of availability, answered by the module that owns the hardware
+     *  (the QA40x provider probes that its {@code libusb-1.0} binding loads).
+     *  {@code AudioBackendType#isAvailable()} stays pure OS policy; being on
+     *  the class path is checked by {@link AudioBackend} itself.  Must stay
+     *  cheap and must not open a device. */
+    default boolean available() {
+        return true;
+    }
 }

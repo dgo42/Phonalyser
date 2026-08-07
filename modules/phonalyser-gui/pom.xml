@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  phonalyser-gui — the SWT desktop application: panes, views, controllers,
+  phonalyser-gui - the SWT desktop application: panes, views, controllers,
   preferences dialog, help viewer, automation engine, and GuiMain.
 
   Sits on top of everything per the intended layering (core -> backends/cli ->
   gui-core -> gui).
 
   It compiles against backend-javasound (GuiMain -> CsjsoundNativePath,
-  FilePlayController -> JavaSoundDeviceManager) and backend-qa40x (the automation
+  GeneratorController file playback -> JavaSoundDeviceManager) and backend-qa40x (the automation
   engine); the remaining backends are runtime-only, resolved through the service
-  registry.  It must NEVER depend on backend-qa40x-gui — that module sits above
+  registry.  It must NEVER depend on backend-qa40x-gui - that module sits above
   this one and is found at runtime, which is what keeps a backend's own UI
   optional instead of compiled in.
 -->
@@ -21,7 +21,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.1.1</version>
+        <version>1.2.0</version>
         <relativePath>../phonalyser-parent</relativePath>
     </parent>
 
@@ -37,7 +37,7 @@
             <groupId>${project.groupId}</groupId>
             <artifactId>phonalyser-core</artifactId>
         </dependency>
-        <!-- Bus, i18n, widgets, registry, bindings and the common base classes —
+        <!-- Bus, i18n, widgets, registry, bindings and the common base classes -
              shared with backend-qa40x-gui, which must NOT depend on this module. -->
         <dependency>
             <groupId>${project.groupId}</groupId>
@@ -46,11 +46,23 @@
         <!--dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-javasound</artifactId>
-        </dependency>
-        <dependency>
+            <scope>runtime</scope>
+        </dependency-->
+        <!--dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-qa40x</artifactId>
         </dependency-->
+
+        <!-- The wire format.  BenchCards and CalibrationStore read a connected
+             server's device and calibration payloads by their field names, so
+             the desktop needs the shared vocabulary - the same edge
+             backend-net-gui and backend-qa40x-gui declare.  It used to arrive
+             transitively through server-net; the headless server itself has no
+             business on this class path. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>server-api</artifactId>
+        </dependency>
 
         <!-- SWT, per-OS fragment chosen by the parent's OS profiles. -->
         <dependency>
@@ -109,22 +121,6 @@
     </dependencies>
 
     <build>
-        <resources>
-            <resource>
-                <directory>src/main/resources</directory>
-                <filtering>false</filtering>
-                <excludes>
-                    <exclude>version.properties</exclude>
-                </excludes>
-            </resource>
-            <resource>
-                <directory>src/main/resources</directory>
-                <filtering>true</filtering>
-                <includes>
-                    <include>version.properties</include>
-                </includes>
-            </resource>
-        </resources>
         <plugins>
             <!-- The help tree ships as an external folder next to the installed app
                  ($APPDIR/help), so it is kept out of this jar; phonalyser-app re-adds

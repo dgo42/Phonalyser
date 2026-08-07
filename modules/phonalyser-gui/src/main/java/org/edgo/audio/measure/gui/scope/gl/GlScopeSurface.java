@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,26 +26,26 @@ import org.eclipse.swt.widgets.Control;
 import org.edgo.audio.measure.preferences.Preferences;
 
 /**
- * An embedded GPU drawing surface for the oscilloscope — it hides the per-OS
+ * An embedded GPU drawing surface for the oscilloscope - it hides the per-OS
  * mechanism that puts OpenGL inside the SWT scope pane behind one interface so the
  * pane stays OS-agnostic.
  *
- * <p>Two backends: {@code SwtGlCanvasSurface} (Windows / Linux — an SWT
- * {@code GLCanvas} + NanoVGGL2) and {@code SwtGlChildSurface} (macOS — a GLFW
+ * <p>Two backends: {@code SwtGlCanvasSurface} (Windows / Linux - an SWT
+ * {@code GLCanvas} + NanoVGGL2) and {@code SwtGlChildSurface} (macOS - a GLFW
  * child window reparented onto the shell + NanoVGGL3, where SWT's own
  * {@code GLCanvas} crashes).  Both own a NanoVG context, expose the SWT
  * {@link #control() control} the pane lays out where the scope canvas sits, and
  * render a frame on demand via {@link #render()}.
  *
  * <p>{@link #render()} runs on the SWT UI thread, driven by the scope's existing
- * realtime-frame loop — the scope's capture/trigger/filter state is UI-thread, so
+ * realtime-frame loop - the scope's capture/trigger/filter state is UI-thread, so
  * rendering there keeps it thread-safe (no render thread).  The frame draws through
  * the {@link GlScopeRenderer} set via {@link #setRenderer}.
  */
 public interface GlScopeSurface {
 
     /** The GPU surface for this platform as a child of {@code parent}, or
-     *  {@code null} when GPU acceleration is unavailable ({@link GpuSupport} — macOS,
+     *  {@code null} when GPU acceleration is unavailable ({@link GpuSupport} - macOS,
      *  or no working GL context) or switched off (the "use GPU acceleration"
      *  preference), in which case the scope falls back to the CPU/GC path. */
     static GlScopeSurface of(Composite parent) {
@@ -72,20 +72,20 @@ public interface GlScopeSurface {
 
     /** Renders one frame in response to a UI gesture / settings change (pan, zoom, V/div,
      *  slider drag) rather than the realtime loop.  With persistence on, the view geometry
-     *  changed, so the old afterglow is at stale coordinates — the surface re-renders the
+     *  changed, so the old afterglow is at stale coordinates - the surface re-renders the
      *  trace and RESETS the phosphor instead of accumulating, so the trace tracks the
      *  gesture rather than smearing.  Default: a plain {@link #render()} (no persistence). */
     default void renderInteractive() { render(); }
 
     /** Renders one frame for a change that only affects the OVERLAY layer (rect-zoom
-     *  rubber band, focus border) — the trace geometry is untouched, so the frozen
+     *  rubber band, focus border) - the trace geometry is untouched, so the frozen
      *  phosphor is only RE-COMPOSITED (like an expose), never decayed or reset:
      *  hovering / dragging a selection must not wipe a stopped scope's afterglow.
      *  Default: a plain {@link #render()} (no persistence). */
     default void renderOverlay() { render(); }
 
     /** Wipes the persistence afterglow on the next rendered frame WITHOUT re-stamping
-     *  the current trace — for signal-affecting changes (e.g. a USER generator change)
+     *  the current trace - for signal-affecting changes (e.g. a USER generator change)
      *  where the on-screen trace is still anchored on the pre-change event.  Safe from
      *  any thread; no-op without persistence. */
     default void clearPersistence() { }

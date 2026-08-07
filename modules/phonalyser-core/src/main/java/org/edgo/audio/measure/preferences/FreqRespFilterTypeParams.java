@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -25,15 +25,15 @@ import lombok.Data;
 /**
  * Per-{@link FilterType} snapshot of every Frequency-Response filter parameter
  * scalar plus the by-order/by-spec mode radio.  {@link Preferences} keeps one of
- * these per filter type in {@code freqRespFilterParamsByType} — the single
+ * these per filter type in {@code freqRespFilterParamsByType} - the single
  * source of truth for the filter scalars.  The tab control binds its widgets
  * directly to the current type's entry (edit writes through, a type switch
  * reloads the new type's entry), and each {@link FreqRespPreset} embeds one copy
  * for its captured type.
  *
  * <p>The per-type defaults from {@link #fromType(FilterType)} are the pinned
- * edge-semantics-valid seeds — LP needs stop &gt; pass, HP needs stop &lt; pass,
- * BP needs SB &gt; PB, NOTCH needs PB &gt; SB — so a freshly selected type always
+ * edge-semantics-valid seeds - LP needs stop &gt; pass, HP needs stop &lt; pass,
+ * BP needs SB &gt; PB, NOTCH needs PB &gt; SB - so a freshly selected type always
  * yields a drawable curve.
  */
 @Data
@@ -59,8 +59,8 @@ public class FreqRespFilterTypeParams {
      * tighter 2:1 default is feasible for every closed-form family but not for
      * Bessel: its soft roll-off cannot reach the default 40 dB stop attenuation
      * at ws = 2 for ANY order (it saturates around 14 dB), so {@code ofSpec}
-     * pins Bessel to the design's MAX_ORDER cap.  At ws = 4 every family —
-     * Bessel included — resolves to a sensible sub-cap order (Bessel &rarr; 5,
+     * pins Bessel to the design's MAX_ORDER cap.  At ws = 4 every family -
+     * Bessel included - resolves to a sensible sub-cap order (Bessel &rarr; 5,
      * the others &le; 4) while the pinned edge ordering holds.
      */
     public static FreqRespFilterTypeParams fromType(FilterType type) {

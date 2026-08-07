@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,6 +18,16 @@
 
 package org.edgo.audio.measure.sound;
 
+import java.io.File;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.edgo.audio.measure.enums.DeviceFailureReason;
+
 import com.sun.jna.Callback;
 import com.sun.jna.Library;
 import com.sun.jna.Native;
@@ -27,18 +37,14 @@ import com.sun.jna.Pointer;
 import com.sun.jna.PointerType;
 import com.sun.jna.Structure;
 import com.sun.jna.ptr.PointerByReference;
-import lombok.extern.log4j.Log4j2;
 
-import java.io.File;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Locale;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Minimal JNA binding to the PortAudio shared library.  Only exposes the
  * functions needed by {@link WdmksRecorder} and {@link WdmksGenerator}.
  *
- * <p>The library file name is platform-dependent — Windows looks for
+ * <p>The library file name is platform-dependent - Windows looks for
  * {@code portaudio_x64.dll}, Linux for {@code libportaudio.so} (with
  * fall-back to {@code libportaudio.so.2}), macOS for
  * {@code libportaudio.dylib} (with fall-back to {@code libportaudio.2.dylib}).
@@ -55,6 +61,17 @@ public final class PortAudio {
 
     public static final int paNoError                  = 0;
     public static final int paFormatIsSupported        = 0;
+    /** {@code paInvalidDevice} - a device index that is not in PortAudio's
+     *  device list.  On a hot-plugged machine this does NOT mean the operator
+     *  picked something silly; see {@link #refreshDevices()}. */
+    public static final int paInvalidDevice            = -9996;
+    /** The refusals {@link #classifyFailure(Throwable)} can read as a reason -
+     *  the rest of {@code PaErrorCode} stays unmapped on purpose. */
+    public static final int paInvalidChannelCount      = -9998;
+    public static final int paInvalidSampleRate        = -9997;
+    public static final int paSampleFormatNotSupported = -9994;
+    public static final int paTimedOut                 = -9987;
+    public static final int paDeviceUnavailable        = -9985;
 
     /** Stream-callback return values (from {@code PaStreamCallbackResult}). */
     public static final int paContinue = 0;
@@ -73,7 +90,7 @@ public final class PortAudio {
     public static final long paOutputOverflow  = 0x00000008L;
     public static final long paPrimingOutput   = 0x00000010L;
 
-    /** Sample formats — bitfield values from PortAudio's {@code pa_common.h}. */
+    /** Sample formats - bitfield values from PortAudio's {@code pa_common.h}. */
     public static final NativeLong paFloat32 = new NativeLong(0x00000001L);
     public static final NativeLong paInt32   = new NativeLong(0x00000002L);
     public static final NativeLong paInt24   = new NativeLong(0x00000004L);
@@ -81,7 +98,7 @@ public final class PortAudio {
     public static final NativeLong paInt8    = new NativeLong(0x00000010L);
     public static final NativeLong paUInt8   = new NativeLong(0x00000020L);
 
-    /** Host API type IDs — from {@code PaHostApiTypeId} in {@code portaudio.h}. */
+    /** Host API type IDs - from {@code PaHostApiTypeId} in {@code portaudio.h}. */
     public static final int paInDevelopment   = 0;
     public static final int paDirectSound     = 1;
     public static final int paMME             = 2;
@@ -103,7 +120,7 @@ public final class PortAudio {
     }
 
     /**
-     * PortAudio stream callback. Invoked on PortAudio's realtime audio thread —
+     * PortAudio stream callback. Invoked on PortAudio's realtime audio thread -
      * must not allocate, log, block or throw. Return {@link #paContinue} to
      * keep the stream running, {@link #paComplete} to stop after the current
      * buffer drains, or {@link #paAbort} for immediate termination.
@@ -224,17 +241,99 @@ public final class PortAudio {
 
     private static volatile Lib LIB;
     private static volatile boolean initialized;
+    /** PortAudio streams this process currently has OPEN - every one of them
+     *  holds a {@code PaStream*} that {@code Pa_Terminate} would invalidate
+     *  underneath its owner (a vtable call into a freed stream is a native
+     *  crash, not an exception).  Counted so {@link #refreshDevices()} can
+     *  refuse rather than take the chance.  Raised BEFORE {@code Pa_OpenStream},
+     *  so an open in flight is already protected. */
+    private static final AtomicInteger LIVE_STREAMS = new AtomicInteger();
+    /** The numeric PortAudio code {@link #check} writes into the message -
+     *  "Invalid device (-9996)".  A parenthesised NUMBER only: the host code of
+     *  {@code paUnanticipatedHostError} reads "(code=...)" and deliberately does
+     *  not match, because it is the host API's vocabulary and not PortAudio's. */
+    private static final Pattern ERROR_CODE = Pattern.compile("\\((-?\\d{1,5})\\)");
+    /** The opening words of the failure {@link #lib()} throws when no PortAudio
+     *  library could be loaded at all. */
+    private static final String LOAD_FAILED_TEXT = "Could not load PortAudio native library";
 
     private PortAudio() {}
 
+    /** Declares that a stream is about to be opened.  Call immediately BEFORE
+     *  {@code Pa_OpenStream}, and pair with {@link #streamClosed()} on the close
+     *  path AND on a failed open. */
+    public static void streamOpening() { // static-ok: process-wide state of the one shared PortAudio library
+        LIVE_STREAMS.incrementAndGet();
+    }
+
+    /** Declares that a stream is no longer open - after {@code Pa_CloseStream},
+     *  or when the open that raised the count failed. */
+    public static void streamClosed() { // static-ok: process-wide state of the one shared PortAudio library
+        LIVE_STREAMS.decrementAndGet();
+    }
+
+    /**
+     * Rebuilds PortAudio's device list.
+     *
+     * <p><b>Why this has to exist at all.</b>  PortAudio enumerates devices ONCE,
+     * inside {@code Pa_Initialize}, and never rescans: a device index is a
+     * position in that snapshot.  Unplug a USB card and the snapshot still lists
+     * it, so the name the operator picked still resolves - to an index that now
+     * points at nothing.  Every open on it then fails with
+     * {@code paInvalidDevice}, for the rest of the process's life, however many
+     * times the card is plugged back in - the observed failure on the bench is
+     * {@code Pa_OpenStream(input) failed: Invalid device (-9996)} on a card that
+     * was unplugged and replugged.  {@code Pa_Terminate} + {@code Pa_Initialize}
+     * is the only refresh PortAudio offers.
+     *
+     * <p><b>Why it refuses while a stream is open.</b>  There is ONE PortAudio
+     * library in this process and WDM-KS and CoreAudio share it.  Terminating it
+     * frees every open {@code PaStream*}, including one another backend's audio
+     * thread is inside - a native crash, not a catchable failure.  So the count
+     * of live streams is the gate, and it is raised before the open rather than
+     * after it, which closes the window an open in flight would otherwise have.
+     * A refusal is not a failure: the caller's list is simply as stale as it was.
+     *
+     * <p>The {@code Pa_Terminate} shutdown hook installed by {@link #lib()} is
+     * NOT re-registered here - {@link #initialized} deliberately stays true, so
+     * the single hook installed on first use still matches the single live
+     * initialisation at exit.
+     *
+     * @return true when the snapshot was rebuilt
+     */
+    public static synchronized boolean refreshDevices() { // static-ok: process-wide state of the one shared PortAudio library
+        if (!initialized || LIB == null) {
+            return false;
+        }
+        int live = LIVE_STREAMS.get();
+        if (live > 0) {
+            if (log.isWarnEnabled()) {
+                log.warn("PortAudio device list NOT refreshed: {} stream(s) still open - "
+                        + "Pa_Terminate would free them under their owners", live);
+            }
+            return false;
+        }
+        LIB.Pa_Terminate();
+        int rc = LIB.Pa_Initialize();
+        if (rc != paNoError) {
+            initialized = false;
+            throw new IllegalStateException(
+                    "Pa_Initialize failed while refreshing the device list: " + LIB.Pa_GetErrorText(rc));
+        }
+        if (log.isInfoEnabled()) {
+            log.info("PortAudio device list refreshed ({} devices)", LIB.Pa_GetDeviceCount());
+        }
+        return true;
+    }
+
     /** Library names to try in order.  JNA prepends {@code lib} and appends
      *  the platform extension automatically, so we only need the bare core
-     *  here.  On Windows the arch-suffixed name matches the historical builds —
+     *  here.  On Windows the arch-suffixed name matches the historical builds -
      *  {@code portaudio_x86} on a 32-bit JVM (the legacy x86 fat jar),
-     *  {@code portaudio_x64} otherwise — with a plain {@code portaudio}
+     *  {@code portaudio_x64} otherwise - with a plain {@code portaudio}
      *  fall-back; standard distributions on Linux/macOS use plain
      *  {@code portaudio}. */
-    private static String[] candidateLibraryNames() { // static-ok: pure OS/arch→libname map, native-interop
+    private static String[] candidateLibraryNames() { // static-ok: pure OS/arch->libname map, native-interop
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         if (os.contains("win")) {
             String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
@@ -260,7 +359,7 @@ public final class PortAudio {
                     if (log.isInfoEnabled()) {
                         File loaded = NativeLibrary.getInstance(name).getFile();
                         log.info("PortAudio loaded '{}' from {}", name,
-                                loaded != null ? loaded.getAbsolutePath() : "(OS resolver — no file path)");
+                                loaded != null ? loaded.getAbsolutePath() : "(OS resolver - no file path)");
                     }
                     break;
                 } catch (UnsatisfiedLinkError ule) {
@@ -304,7 +403,7 @@ public final class PortAudio {
                     .append(errorText(code)).append(" (").append(code).append(')');
             // -9999 = paUnanticipatedHostError: PortAudio forwards host-specific errors
             // here, so pull the underlying WDM-KS / WASAPI code to make the failure
-            // diagnosable (exclusive-mode conflict vs. unsupported format vs. …).
+            // diagnosable (exclusive-mode conflict vs. unsupported format vs. ...).
             if (code == -9999) {
                 PaHostErrorInfo info = lib().Pa_GetLastHostErrorInfo();
                 if (info != null) {
@@ -313,7 +412,75 @@ public final class PortAudio {
                        .append(" (code=").append(info.errorCode).append(")");
                 }
             }
+            // paInvalidDevice on a device the operator just picked from OUR OWN
+            // list means one thing: the list is PortAudio's start-up snapshot and
+            // the hardware has changed under it (see refreshDevices).  This is
+            // the one funnel every Pa_OpenStream / Pa_IsFormatSupported result
+            // passes through, and the one moment we KNOW our own stream is not
+            // open - so it is where the snapshot is rebuilt.  Deliberately no
+            // retry here: the caller's DeviceRef still carries the stale index,
+            // and the next attempt re-resolves the device by name off the fresh
+            // list.  That is what turns a succeeding second attempt from luck
+            // into the documented behaviour.
+            if (code == paInvalidDevice) {
+                msg.append("  - PortAudio enumerates devices once, at start-up, and this device is "
+                        + "no longer at the position it had then (unplugged / replugged since). "
+                        + "The device list has now been rescanned");
+                if (!refreshDevices()) {
+                    msg.append(" - no, NOT rescanned: another PortAudio stream is still open. "
+                            + "Stop the other measurement and try again");
+                }
+                msg.append("; try again.");
+            }
             throw new IllegalStateException(msg.toString());
+        }
+    }
+
+    /**
+     * What a PortAudio failure MEANT, for the one operator-facing sentence the
+     * GUI renders.  The raw code stays in the log; this is the reason beside it.
+     *
+     * <p>It lives here, next to {@link #check}, because check is what WRITES the
+     * text - "Pa_OpenStream(output) failed: Invalid device (-9996)" - and the
+     * reader of a format belongs with its writer.  WDM-KS and CoreAudio both
+     * fail through the same funnel and would otherwise carry two copies of this
+     * table; their managers delegate here instead.
+     *
+     * <p>The message is read rather than an int, because the code is not
+     * preserved: {@code check} throws a plain {@link IllegalStateException} and
+     * the number survives only as the text it printed.  Everything unmapped -
+     * {@code paUnanticipatedHostError} above all, whose real cause is a
+     * host-specific code this class does not speak - is
+     * {@link DeviceFailureReason#UNKNOWN}, which is always a legal answer.
+     */
+    public static DeviceFailureReason classifyFailure(Throwable failure) { // static-ok: reads the text this all-static binding itself writes
+        String text = (failure == null) ? null : failure.getMessage();
+        if (text == null) {
+            return DeviceFailureReason.UNKNOWN;
+        }
+        if (text.contains(LOAD_FAILED_TEXT)) {
+            // No library, no devices: nothing this backend could have opened.
+            return DeviceFailureReason.DEVICE_NOT_FOUND;
+        }
+        Matcher matcher = ERROR_CODE.matcher(text);
+        if (!matcher.find()) {
+            return DeviceFailureReason.UNKNOWN;
+        }
+        switch (Integer.parseInt(matcher.group(1))) {
+            case paInvalidDevice:
+                // The device list is PortAudio's start-up snapshot and the card
+                // is no longer where it was - unplugged since (see check()).
+                return DeviceFailureReason.DEVICE_DISCONNECTED;
+            case paDeviceUnavailable:
+                return DeviceFailureReason.DEVICE_IN_USE;
+            case paInvalidSampleRate:
+            case paSampleFormatNotSupported:
+            case paInvalidChannelCount:
+                return DeviceFailureReason.FORMAT_UNSUPPORTED;
+            case paTimedOut:
+                return DeviceFailureReason.DEVICE_NOT_ANSWERING;
+            default:
+                return DeviceFailureReason.UNKNOWN;
         }
     }
 

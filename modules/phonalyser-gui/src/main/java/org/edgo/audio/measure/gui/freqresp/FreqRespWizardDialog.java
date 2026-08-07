@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -44,6 +44,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
@@ -56,7 +57,7 @@ import lombok.extern.log4j.Log4j2;
 
 /**
  * Three-page modal wizard that walks the user through measuring the
- * DAC → ADC loopback transfer (page 1) and then the device under test
+ * DAC -> ADC loopback transfer (page 1) and then the device under test
  * (page 2), finally saving the result as a calibration file (page 3) and
  * applying it as the active calibration.  Mirrors the standard Wizard /
  * Next / Back / Cancel flow common to installer dialogs.
@@ -105,7 +106,8 @@ public final class FreqRespWizardDialog {
 
     /** Opens the wizard and blocks until the user finishes / cancels. */
     public void open() {
-        dialog = new Shell(parentShell, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.RESIZE);
+        // FIXED size = initial - no RESIZE bit.
+        dialog = new Shell(parentShell, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL);
         ShellIcons.apply(dialog);
         dialog.setText(I18n.t("freqResp.wizard.title"));
         dialog.setSize(540, 360);
@@ -254,13 +256,19 @@ public final class FreqRespWizardDialog {
 
     private void runMeasurement(boolean directLeg) {
         Preferences prefs = Preferences.instance();
-        DeviceRef out = findDevice(true,  prefs.current().getOutputDeviceName());
-        DeviceRef in  = findDevice(false, prefs.current().getInputDeviceName());
+        DeviceRef out = AudioBackend.instance().getActiveOutputDevice();
+        DeviceRef in  = AudioBackend.instance().getActiveInputDevice();
         if (out == null || in == null) {
             Dialogs.error(dialog, I18n.t("freqResp.wizard.title"),
                     I18n.t("freqResp.error.noDevice"));
             return;
         }
+        // The caller's step after resolution (runs in place - this is the UI
+        // thread): the DAC/ADC full scales land before the sweep reads them.
+        GuiUtil.marshal(dialog, () -> {
+            prefs.applyDeviceProfile(out, false);
+            prefs.applyDeviceProfile(in, true);
+        });
         page1Play.setEnabled(false);
         page2Play.setEnabled(false);
         backBtn.setEnabled(false);
@@ -274,10 +282,9 @@ public final class FreqRespWizardDialog {
         MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
         // Marshal capture-progress to the UI thread so the busy shell's
         // live meter paints level-vs-time as the sweep runs.
-        Display d = dialog.getDisplay();
         StereoCaptureProgress progress = (totalSamples, rmsLin) -> {
             double tSec = totalSamples / (double) sr;
-            d.asyncExec(() -> {
+            GuiUtil.marshal(dialog, () -> {
                 if (busyMeter != null && !busyMeter.isDisposed()) {
                     busyMeter.appendSample(tSec, rmsLin);
                 }
@@ -300,15 +307,24 @@ public final class FreqRespWizardDialog {
                         .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
                         .applyCalibration(!directLeg)  // page 2 divides out the page-1 transfer
                         .captureProgress(progress)
+                        // As in FreqRespAnalyzerWorker: the sweep leg belongs to
+                        // whichever backend is active, and a remote bench renders
+                        // the chirp itself instead of being played into.
+                        .stereoCaptureProvider(StereoCaptureProvider.forSweep(sr,
+                                prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
+                                prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
+                                prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmpl()))
                         .build();
                 StereoFreqRespResult r = new FreqRespAnalyzer(cfg).run(null, null);
-                dialog.getDisplay().asyncExec(() -> onMeasurementDone(directLeg, r, null));
+                GuiUtil.marshal(dialog, () -> onMeasurementDone(directLeg, r, null));
             } catch (Exception ex) {
                 log.error("Wizard measurement failed", ex);
-                dialog.getDisplay().asyncExec(() -> onMeasurementDone(directLeg, null,
+                GuiUtil.marshal(dialog, () -> onMeasurementDone(directLeg, null,
                         ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
             } finally {
-                dialog.getDisplay().asyncExec(() ->
+                // NOT gated on the dialog: the panes' Record buttons stay
+                // grayed until this arrives, dialog or no dialog.
+                GuiUtil.marshal(() ->
                         MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED));
             }
         }, "freqresp-wizard");
@@ -332,7 +348,7 @@ public final class FreqRespWizardDialog {
         if (directLeg) {
             directResult = r;
             StereoFreqRespCalibration cal = stereoCalFromResult(r);
-            // Only the direct (transient) slot — the view applies it
+            // Only the direct (transient) slot - the view applies it
             // automatically alongside the entries list so page 2 gets
             // the page-1 loopback subtracted without polluting the
             // persistent calibration tab.
@@ -346,6 +362,14 @@ public final class FreqRespWizardDialog {
             hostView.setLeftResult(r.left());
             hostView.setRightResult(r.right());
             showPage(2);
+        }
+        // Both legs: the busy shell is closed and the trace is on screen, so a
+        // railed capture can be reported where the operator can act on it -
+        // before they walk this leg's curve into a calibration.
+        if (r.clipped()) {
+            Dialogs.warn(dialog,
+                    I18n.t("freqResp.warning.clipped.title"),
+                    I18n.t("freqResp.warning.clipped.message"));
         }
     }
 
@@ -385,7 +409,7 @@ public final class FreqRespWizardDialog {
             // (loopback × DUT, in page-2 terms).  Save needs the
             // DUT-alone curve, so divide the raw result by the loaded
             // "direct" calibration before writing.  When no direct cal
-            // is available (shouldn't happen at page-3 — page 1 always
+            // is available (shouldn't happen at page-3 - page 1 always
             // populates it) the raw measurement is saved as-is.
             StereoFreqRespCalibration stereoCal = stereoCalFromResult(dutResult);
             StereoFreqRespCalibration direct =
@@ -442,7 +466,7 @@ public final class FreqRespWizardDialog {
     /** Returns {@code true} when the wizard is allowed to actually close. */
     private boolean handleCancel() {
         // After Apply, the calibration has been committed and the dialog
-        // closes via dialog.close() — that path is NOT a cancel, so skip
+        // closes via dialog.close() - that path is NOT a cancel, so skip
         // the "unsaved?" prompt and skip restoring the pre-wizard snapshot.
         if (appliedSuccessfully) return true;
         if (directResult != null || dutResult != null || unsavedDirty) {
@@ -468,7 +492,7 @@ public final class FreqRespWizardDialog {
         l.setText(I18n.t("freqResp.busy.message"));
         l.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        // Sweep geometry feeds the meter's time → instantaneous-frequency
+        // Sweep geometry feeds the meter's time -> instantaneous-frequency
         // mapping, which scales the trace smoothing with the period.
         Preferences prefs = Preferences.instance();
         busyMeter = new FreqRespLiveMeter(s, totalDurationSec,
@@ -496,13 +520,4 @@ public final class FreqRespWizardDialog {
         busyMeter = null;
     }
 
-    private DeviceRef findDevice(boolean output, String name) {
-        if (name == null || name.isEmpty()) return null;
-        for (DeviceRef d : output
-                ? AudioBackend.instance().listOutputDevices()
-                : AudioBackend.instance().listInputDevices()) {
-            if (name.equals(d.name())) return d;
-        }
-        return null;
-    }
 }

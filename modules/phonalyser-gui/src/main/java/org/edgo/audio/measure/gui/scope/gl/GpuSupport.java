@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -50,17 +50,17 @@ import static org.lwjgl.nanovg.NanoVGGL2.nvgDelete;
 import static org.lwjgl.system.MemoryUtil.NULL;
 
 /**
- * Detects, once, whether the embedded GPU scope can actually run on this machine —
+ * Detects, once, whether the embedded GPU scope can actually run on this machine -
  * i.e. whether an SWT {@link GLCanvas} can obtain an OpenGL context and create a
  * NanoVG instance on it.  The result gates the "use GPU acceleration" preference:
  * the checkbox is disabled and the GL surface is never built when this returns
  * false, so a machine without working GL drivers silently stays on the CPU path.
  *
- * <p>The probe is a real round-trip — create a throwaway GL context, bind LWJGL,
- * create a NanoVG context, then tear it all down — guarded so any GL/native failure
+ * <p>The probe is a real round-trip - create a throwaway GL context, bind LWJGL,
+ * create a NanoVG context, then tear it all down - guarded so any GL/native failure
  * just reports "unavailable".  Two mechanisms by OS: Windows / Linux use an SWT
  * {@link GLCanvas} (NanoVGGL2); macOS, where SWT's {@code GLCanvas} crashes on
- * Cocoa, uses a hidden GLFW window (NanoVGGL3) — the same path {@code
+ * Cocoa, uses a hidden GLFW window (NanoVGGL3) - the same path {@code
  * SwtGlChildSurface} drives for real.
  */
 @Log4j2
@@ -79,16 +79,16 @@ public final class GpuSupport {
     }
 
     /** Probes GPU availability the first time using {@code parent} as a transient
-     *  host for the test canvas (any realized {@link Composite} — the main shell at
+     *  host for the test canvas (any realized {@link Composite} - the main shell at
      *  startup), then returns the cached result on every later call. */
     public boolean isAvailable(Composite parent) {
         if (available == null) {
             // On X11 a GLCanvas needs a REALIZED native window; probing before the
             // shell is shown makes glXMakeCurrent abort the process (BadDrawable).
             // So on Linux, until the shell is visible, report unavailable WITHOUT
-            // caching — the post-open re-probe (MainWindow.open) finds the GPU once
+            // caching - the post-open re-probe (MainWindow.open) finds the GPU once
             // the window is up.  Windows (GLCanvas) and macOS (GLFW) probe fine
-            // pre-realize, so they aren't deferred (no startup CPU→GPU rebuild).
+            // pre-realize, so they aren't deferred (no startup CPU->GPU rebuild).
             String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
             boolean linux = !os.contains("win") && !os.contains("mac");
             if (linux && (parent == null || parent.isDisposed()
@@ -118,10 +118,10 @@ public final class GpuSupport {
     private boolean probe(Composite parent) {
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         if (os.contains("mac")) {
-            return probeGlfw();     // SWT GLCanvas crashes on Cocoa — use the GLFW-child path
+            return probeGlfw();     // SWT GLCanvas crashes on Cocoa - use the GLFW-child path
         }
         // isAvailable() only calls this once the shell is shown, so the GLCanvas
-        // gets a REALIZED native window — on X11 an unrealized one makes
+        // gets a REALIZED native window - on X11 an unrealized one makes
         // glXMakeCurrent abort the whole process with an async BadDrawable.
         GLCanvas canvas = null;
         long vg = 0L;
@@ -134,12 +134,12 @@ public final class GpuSupport {
             GL.createCapabilities();
             vg = nvgCreate(NVG_ANTIALIAS | NVG_STENCIL_STROKES);
             if (vg == 0L && log.isWarnEnabled()) {
-                // GL context came up but NanoVG didn't — log it too, otherwise this
+                // GL context came up but NanoVG didn't - log it too, otherwise this
                 // failure mode is silent (no exception to land in the catch below).
                 log.warn("GPU probe: NanoVG context creation returned 0 (scope stays on CPU).");
             }
             return vg != 0L;
-        } catch (Throwable t) {           // any GL / native-link failure ⇒ unavailable
+        } catch (Throwable t) {           // any GL / native-link failure => unavailable
             if (log.isWarnEnabled()) {
                 log.warn("GPU probe failed (scope stays on CPU): {}", t.toString(), t);
             }
@@ -171,7 +171,7 @@ public final class GpuSupport {
             GL.createCapabilities();
             vg = NanoVGGL3.nvgCreate(NVG_ANTIALIAS | NVG_STENCIL_STROKES);
             return vg != 0L;
-        } catch (Throwable t) {           // any GL / native-link failure ⇒ unavailable
+        } catch (Throwable t) {           // any GL / native-link failure => unavailable
             if (log.isDebugEnabled()) {
                 log.debug("GPU GLFW probe failed: {}", t.toString());
             }

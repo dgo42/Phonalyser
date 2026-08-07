@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,28 +24,28 @@ import org.edgo.audio.measure.fft.FftResult;
  * Compiles a {@link ImdResult} from a {@link FftResult} when
  * the generator is in {@code DUAL_TONE} mode.  Lives next to
  * {@code FftAnalyzerWorker} (which invokes it) but stays a pure
- * function — no state, no threads, no widgets.
+ * function - no state, no threads, no widgets.
  *
  * <h2>Algorithm</h2>
  * <ol>
- *   <li><b>Tone detection</b> — search a small bin window (±
+ *   <li><b>Tone detection</b> - search a small bin window (±
  *       {@value #TONE_SEARCH_BINS}) around each commanded frequency
  *       (already snapped to the FFT grid when the user enabled snap),
  *       pick the bin with the highest dBFS, refine with quadratic
  *       peak interpolation.</li>
- *   <li><b>IMD product levels</b> — for each {@code n ∈ [2, 5]} read
+ *   <li><b>IMD product levels</b> - for each {@code n ∈ [2, 5]} read
  *       the nearest bin to {@code n·f₁ − (n−1)·f₂} (lower) and
  *       {@code n·f₂ − (n−1)·f₁} (upper).  Also read the {@code f₂ − f₁}
  *       bin for DFD2 and the {@code 2f₁ − f₂} / {@code 2f₂ − f₁} bins
  *       for DFD3.</li>
- *   <li><b>Ratios</b> — the IMD-product reference is {@code |F1| +
+ *   <li><b>Ratios</b> - the IMD-product reference is {@code |F1| +
  *       |F2|} (linear-magnitude sum of the two fundamentals).  Each
  *       dnL / dnH product is expressed as a percent of that
  *       reference; IMDpwr is the RMS sum of all listed products,
  *       same denominator.  TD+N is computed differently: it's the
  *       residual RMS (everything that isn't F1 or F2) as a fraction
  *       of the total signal Vrms, derived via Parseval from the
- *       spectrum itself — so it matches what
+ *       spectrum itself - so it matches what
  *       {@code √(Vrms² − F1² − F2²) / Vrms} would yield if the
  *       analyser had access to the raw time-domain signal.</li>
  * </ol>
@@ -60,7 +60,7 @@ public final class ImdAnalyzer {
 
     /** Builds an {@link ImdResult} from {@code r} using {@code f1Cmd}
      *  and {@code f2Cmd} as the commanded tone frequencies (Hz) and
-     *  {@code dbvOffsetDb} as the dBFS→dBV anchor (the caller's cached
+     *  {@code dbvOffsetDb} as the dBFS->dBV anchor (the caller's cached
      *  Preferences value).  Returns {@code null} when there isn't enough
      *  data to compute (e.g. spectrum array is missing or the requested
      *  frequencies fall outside the analysed band). */
@@ -69,11 +69,11 @@ public final class ImdAnalyzer {
         if (r == null || r.amplitudeDbFs == null) return null;
         double binBw = r.freqResolution;
         if (!(binBw > 0)) return null;
-        // All internal math runs on the raw dBFS spectrum — peak picking, the
+        // All internal math runs on the raw dBFS spectrum - peak picking, the
         // skirt walk and every figure of merit (dnL/dnH %, DFD2/3 %, IMD-power %,
         // TD+N %) are offset-invariant: a constant dB shift moves every bin
-        // equally and cancels in each ratio.  Only the ABSOLUTE outputs — the
-        // V_rms tone / product magnitudes and the dBV columns — apply
+        // equally and cancels in each ratio.  Only the ABSOLUTE outputs - the
+        // V_rms tone / product magnitudes and the dBV columns - apply
         // dbvOffsetDb, at the dozen scalars instead of per spectrum bin (the
         // old per-tick full-spectrum dBV copy was multi-MB at large FFTs).
         double[] amplitudeDbFs = r.amplitudeDbFs;
@@ -93,7 +93,7 @@ public final class ImdAnalyzer {
         ImdResult out = new ImdResult();
         // Frequencies come from the analyzer's clean-frame sub-bin estimate
         // (the same honest method as the single-tone fundamental), NOT from
-        // the peak of the coherently-collapsed average — which reads the bin
+        // the peak of the coherently-collapsed average - which reads the bin
         // centre and hides the real sub-bin offset.  Fall back to the local
         // peak when the estimate is unavailable (e.g. no generator hint).
         out.f1Hz   = (r.fundamentalHzRefined > 0.0)
@@ -102,11 +102,11 @@ public final class ImdAnalyzer {
                 ? r.fundamental2HzRefined : p2.freqHz;
         // Manual fundamental override: the mandatory twin-T notch suppresses the
         // measured tones, so when the user supplies the true level it is the
-        // TRUE COMBINED level — split across the two tones by their measured
-        // ratio (equal tones at 1 V together → each √(½) = −3.01 dBV).  Only the
+        // TRUE COMBINED level - split across the two tones by their measured
+        // ratio (equal tones at 1 V together -> each √(½) = −3.01 dBV).  Only the
         // absolute dBV / V_rms outputs are anchored; the spectrum dBFS is left
         // untouched, and the ratio = product/(|F1|+|F2|) stays honest.
-        out.f1DbFs = p1.levelDbFs;   // measured — drives the dBFS column + markers
+        out.f1DbFs = p1.levelDbFs;   // measured - drives the dBFS column + markers
         out.f2DbFs = p2.levelDbFs;
         double f1Lvl = p1.levelDbFs;
         double f2Lvl = p2.levelDbFs;
@@ -137,9 +137,9 @@ public final class ImdAnalyzer {
         double dfd3LowMag  = readBinVrms(amplitudeDbFs, binBw, 2.0 * out.f1Hz - out.f2Hz, dbvOffsetDb);
         double dfd3HighMag = readBinVrms(amplitudeDbFs, binBw, 2.0 * out.f2Hz - out.f1Hz, dbvOffsetDb);
         // DFD3 is the RMS of its two sidebands; a sideband outside the
-        // measurable range (NaN) is skipped so the other still reports —
+        // measurable range (NaN) is skipped so the other still reports -
         // SMPTE-style tone pairs routinely put 2f1 − f2 below DC.  Both
-        // absent → NaN (readout shows "---").
+        // absent -> NaN (readout shows "---").
         double dfd3Sq = 0.0;
         int    dfd3N  = 0;
         if (Double.isFinite(dfd3LowMag))  { dfd3Sq += dfd3LowMag  * dfd3LowMag;  dfd3N++; }
@@ -185,12 +185,12 @@ public final class ImdAnalyzer {
         out.imdPwrPct = 100.0 * Math.sqrt(imdPwrSq) / refMag;
 
         // --- TD+N as the scalar drop from total RMS to the
-        // fundamentals — (Vrms − √(F1² + F2²)) / Vrms — computed
+        // fundamentals - (Vrms − √(F1² + F2²)) / Vrms - computed
         // straight from the spectrum and WINDOW-INDEPENDENT.  Σ squared
         // bin voltages over the whole spectrum gives Vrms²; Σ over the
         // fundamental-skirt bins gives F1² + F2².  Both carry the
         // window's equivalent noise bandwidth, which cancels in the
-        // ratio — correct for Hann, Blackman-Harris, … without knowing
+        // ratio - correct for Hann, Blackman-Harris, ... without knowing
         // which window the analyser used.
         //
         // F1 / F2 are stripped with the SAME dynamic skirt search
@@ -216,7 +216,7 @@ public final class ImdAnalyzer {
         double sumAll      = 0.0;
         double sumResidual = 0.0;
         for (int b = 1; b < nBins; b++) {
-            // FS-relative bin voltage — TD+N is a ratio, the dBV offset cancels.
+            // FS-relative bin voltage - TD+N is a ratio, the dBV offset cancels.
             double vBin = Math.pow(10.0, amplitudeDbFs[b] / 20.0);
             double sq = vBin * vBin;
             sumAll += sq;
@@ -237,7 +237,7 @@ public final class ImdAnalyzer {
     /** Picks the highest bin within ±{@code searchBins} of
      *  {@code centreHz} and refines its position via the standard
      *  3-point quadratic peak-interpolation formula.  Works on the raw
-     *  dBFS spectrum — argmax and the parabola use comparisons and
+     *  dBFS spectrum - argmax and the parabola use comparisons and
      *  differences only, so the dBV offset is irrelevant here.  Returns
      *  {@code null} when {@code centreHz} falls outside the
      *  representable bin range. */
@@ -272,7 +272,7 @@ public final class ImdAnalyzer {
     /** Returns the V_rms voltage at the bin nearest {@code freqHz}:
      *  the dBFS bin lifted to dBV via {@code dbvOffsetDb}, then to volts.
      *  Frequencies outside the representable bin range (at or below DC,
-     *  or beyond the spectrum) return {@code NaN} — the product is not
+     *  or beyond the spectrum) return {@code NaN} - the product is not
      *  measurable at this sample rate. */
     private double readBinVrms(double[] amplitudeDbFs, double binBw, double freqHz,
                                double dbvOffsetDb) {
@@ -284,7 +284,7 @@ public final class ImdAnalyzer {
     }
 
     /** Scratch buffer for {@link #noiseFloorDbFs}'s quickselect, grown on
-     *  demand and reused across calls — meaningful when the owner keeps one
+     *  demand and reused across calls - meaningful when the owner keeps one
      *  analyzer instance per view (FftView does), so the per-tick multi-MB
      *  copy allocation disappears after the first call. */
     private double[] floorScratch;
@@ -292,7 +292,7 @@ public final class ImdAnalyzer {
     /** Leakage-immune noise-floor estimate: the 10th-percentile bin
      *  level (dBFS) across the spectrum (DC excluded).  Mirrors the
      *  {@code globalMedianNoisePow} model FftAnalyzer uses to size its
-     *  dynamic fundamental-exclusion walk — the 10th percentile sits
+     *  dynamic fundamental-exclusion walk - the 10th percentile sits
      *  below the bulk of spurs and leakage, close to the true
      *  quantization / noise floor.  dB is monotonic in power, so the
      *  percentile bin is identical whether taken on levels or powers. */
@@ -310,7 +310,7 @@ public final class ImdAnalyzer {
     /** In-place quickselect: partitions {@code a[0..len)} until the
      *  {@code k}-th smallest element sits at index {@code k}, and returns it.
      *  Same result as {@code sort(a)[k]} at O(n) expected instead of
-     *  O(n·log n) — the full sort dominated the IMD tick at large FFT
+     *  O(n·log n) - the full sort dominated the IMD tick at large FFT
      *  lengths.  Hoare partition with a median-of-three pivot, so the
      *  near-sorted spectra a stable noise floor produces don't degrade it. */
     private double selectKth(double[] a, int len, int k) {
@@ -335,7 +335,7 @@ public final class ImdAnalyzer {
         return a[k];
     }
 
-    /** Middle value of the three — pivot choice for {@link #selectKth}. */
+    /** Middle value of the three - pivot choice for {@link #selectKth}. */
     private double medianOfThree(double a, double b, double c) {
         if (a > b) { double t = a; a = b; b = t; }
         if (b > c) { b = c; }
@@ -348,7 +348,7 @@ public final class ImdAnalyzer {
      *  exclusion FftAnalyzer performs around its fundamental: follow the
      *  measured skirt (window main lobe + close-in phase noise) down to
      *  the noise floor, whatever its width and whichever window is in
-     *  use — no fixed window that BH7's wide lobe could leak past. */
+     *  use - no fixed window that BH7's wide lobe could leak past. */
     private int skirtEdge(double[] amplitudeDbFs, int peakBin,
                           int dir, double floorDbFs) {
         int n = amplitudeDbFs.length;

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -48,15 +48,15 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public class FftAnalyzer {
 
-    /** Below this bin count the per-bin passes run serially — the fork/dispatch
+    /** Below this bin count the per-bin passes run serially - the fork/dispatch
      *  overhead would dominate. */
     private static final int PASS_PARALLEL_THRESHOLD = 1 << 16;   // 64k bins
 
     /** Shared empty grid published on {@link FftResult} for non-dual-tone (or
-     *  non-de-rotated) ticks — avoids a per-tick allocation on the hot path. */
+     *  non-de-rotated) ticks - avoids a per-tick allocation on the hot path. */
     private static final int[] NO_IMD_PRODUCTS = new int[0];
 
-    /** Lower edge (Hz) of the no-hint fundamental search: DC … this is ignored so
+    /** Lower edge (Hz) of the no-hint fundamental search: DC ... this is ignored so
      *  window leakage from a residual DC offset can't win the global max. */
     private static final double FUND_SEARCH_MIN_HZ = 5.0;
     /** Upper edge of the no-hint fundamental search as a fraction of Nyquist:
@@ -74,7 +74,7 @@ public class FftAnalyzer {
     /** {@link #AW_NORM_1KHZ_DB} as a power ratio, folded into aWeightPower. */
     private static final double AW_NORM_POWER   = Math.pow(10.0, AW_NORM_1KHZ_DB / 10.0);
 
-    /** Cached window-function table — sized to {@link #cachedWindowSize}
+    /** Cached window-function table - sized to {@link #cachedWindowSize}
      *  for {@link #cachedWindowType}.  analyze() is called repeatedly on
      *  the FFT worker thread with the same (fftSize, windowType) pair, so
      *  reusing this table avoids both the per-call allocation (8 MB at
@@ -83,17 +83,17 @@ public class FftAnalyzer {
     private double[]   cachedWindow;
     private int        cachedWindowSize;
     private WindowType cachedWindowType;
-    /** Coherent gain (mean) of {@link #cachedWindow} — cached alongside it
+    /** Coherent gain (mean) of {@link #cachedWindow} - cached alongside it
      *  so {@code analyze} doesn't re-sum the multi-million-entry table
      *  every tick. */
     private double     cachedCohGain;
     /** Normalized equivalent noise bandwidth of {@link #cachedWindow} in bins,
-     *  {@code N·Σw² / (Σw)²} (Hann: 1.5) — the factor by which one windowed
+     *  {@code N·Σw² / (Σw)²} (Hann: 1.5) - the factor by which one windowed
      *  periodogram bin overstates a bin-width of broadband power.  Cached with
      *  the window; divides the integrated noise sums (never coherent lines). */
     private double     cachedNenbw;
 
-    /** Cached per-bin A-weighting table — entry k = {@link #aWeightPower}(k·freqRes)
+    /** Cached per-bin A-weighting table - entry k = {@link #aWeightPower}(k·freqRes)
      *  for {@link #cachedAweightFreqRes}.  The noise integrals in analyze() and
      *  {@link #recomputeStats} consult it for every non-signal bin each tick;
      *  without it that is ~halfSize sqrt evaluations per call for a curve that
@@ -113,14 +113,14 @@ public class FftAnalyzer {
 
     /** Optional second-tone frequency hint (Hz) for dual-/multi-tone
      *  signals; {@link Double#NaN} disables it.  When set, {@code analyze}
-     *  also produces a sub-bin frequency estimate for this tone — via the
+     *  also produces a sub-bin frequency estimate for this tone - via the
      *  same clean-frame parabolic / phase method used for the fundamental
-     *  — so a dual-tone readout reports its TRUE frequency rather than a
+     *  - so a dual-tone readout reports its TRUE frequency rather than a
      *  peak read off the coherently-collapsed average. */
     private double secondToneHintHz = Double.NaN;
 
     /** Multi-tone flag for the next {@code analyze}.  When set, the
-     *  single-sine R-invariant glitch scan is skipped — that invariant
+     *  single-sine R-invariant glitch scan is skipped - that invariant
      *  cannot hold for a sum of tones and would otherwise flag nearly
      *  every sample, then invalidate itself and accept all frames anyway. */
     private boolean multiTone = false;
@@ -142,7 +142,7 @@ public class FftAnalyzer {
     // =========================================================================
 
     /** Per-fftSize scratch arrays that are purely internal to one
-     *  {@code analyze} call — they are filled in, consumed, and then
+     *  {@code analyze} call - they are filled in, consumed, and then
      *  discarded before the {@link FftResult} is returned (i.e., nothing
      *  in the Result holds a reference to them).  Caching them as
      *  instance fields and re-using them across calls eliminates the
@@ -155,17 +155,17 @@ public class FftAnalyzer {
     private double[] scratchS0Re, scratchS0Im;
     private double[] scratchS1Re, scratchS1Im;
     /** Per-harmonic de-rotation phasor cache (cos/sin of {@code h·Φ}), sized
-     *  {@code 2·hMax+1} and rebuilt per frame — see Pass 2. */
+     *  {@code 2·hMax+1} and rebuilt per frame - see Pass 2. */
     private double[] scratchHcos, scratchHsin;
-    /** Half-size scratch for amplitudes — used only inside one
+    /** Half-size scratch for amplitudes - used only inside one
      *  {@code analyze} call by the harmonic-detection and noise-floor
      *  paths; never returned. */
     private double[] scratchAmplLinear;
-    /** Signal-bin mask scratch for the stats passes — see
+    /** Signal-bin mask scratch for the stats passes - see
      *  {@link #buildSignalBinMask}; never returned. */
     private boolean[] scratchSignalMask;
     /** Grow-only scratch pools for the noise-floor selection (candidate /
-     *  global bin powers) — see {@link #computeNoiseFloorAndExtendSignalMask};
+     *  global bin powers) - see {@link #computeNoiseFloorAndExtendSignalMask};
      *  never returned. */
     private double[] scratchNoiseCand;
     private double[] scratchNoiseGlob;
@@ -209,7 +209,7 @@ public class FftAnalyzer {
         boolean tryFill(long absStart, int fftSize, double[] outRe, double[] outIm);
 
         /** Stores a copy of {@code (re, im)} (length = fftSize) for the
-         *  key {@code (absStart, fftSize)}.  The cache MUST copy — the
+         *  key {@code (absStart, fftSize)}.  The cache MUST copy - the
          *  caller reuses the input arrays. */
         void put(long absStart, int fftSize, double[] re, double[] im);
     }
@@ -248,10 +248,10 @@ public class FftAnalyzer {
         return new double[size];
     }
 
-    /** IEC 61672 A-weighting at {@code freqHz} as a POWER ratio (1 kHz → 1.0):
+    /** IEC 61672 A-weighting at {@code freqHz} as a POWER ratio (1 kHz -> 1.0):
      *  the analog magnitude R_A(f) squared, with the +{@value #AW_NORM_1KHZ_DB} dB
      *  1 kHz normalization folded in.  Weighs the integrals behind the
-     *  A-suffixed readouts — N+D, THD+N and SINAD → ENOB — so they reflect
+     *  A-suffixed readouts - N+D, THD+N and SINAD -> ENOB - so they reflect
      *  audibility; SNR and N stay unweighted. */
     private double aWeightPower(double freqHz) {
         double f2 = freqHz * freqHz;
@@ -262,7 +262,7 @@ public class FftAnalyzer {
         return ra * ra * AW_NORM_POWER;
     }
 
-    /** The cached per-bin {@link #aWeightPower} table for (halfSize, freqRes) —
+    /** The cached per-bin {@link #aWeightPower} table for (halfSize, freqRes) -
      *  rebuilt only when the spectrum geometry changes (bin 0 evaluates to 0). */
     private double[] aWeightTable(int halfSize, double freqRes) {
         if (cachedAweight == null || cachedAweight.length != halfSize + 1
@@ -278,7 +278,7 @@ public class FftAnalyzer {
     }
 
     /** Drops every retained fftSize-scaled scratch buffer and the cached
-     *  window table — at fftSize 4 M the set idles on ~300 MB after the last
+     *  window table - at fftSize 4 M the set idles on ~300 MB after the last
      *  {@code analyze}.  Everything reallocates on demand at the next call,
      *  so this belongs in a stop path, never mid-run.  Callers must not have
      *  an analysis in flight. */
@@ -326,7 +326,7 @@ public class FftAnalyzer {
      * coarse estimate is a single one-hop phase difference; its residual error δk
      * is applied as a linear de-rotation ramp across the whole segment, so on a
      * long coherent average the harmonics de-cohere (∝ sinc(π·h·δk·M·step/N)) and
-     * read low — the slow harmonic decline seen on long captures.  Here κ is
+     * read low - the slow harmonic decline seen on long captures.  Here κ is
      * measured from the SLOPE of the fundamental's phase at {@code refIntBin} over
      * every clean-segment frame: a {@code (bestLen-1)·step} baseline instead of one
      * hop, shrinking δk by ~that factor.  The phase RESIDUAL relative to the coarse
@@ -334,7 +334,7 @@ public class FftAnalyzer {
      * centred so the regression stays well-conditioned.  Returns the refined κ.
      *
      * <p>Only the fundamental BIN is needed per frame, so a single-bin Goertzel
-     * (O(N) per frame, ~6% of a full FFT) replaces the FFT — no extra spectra.  The
+     * (O(N) per frame, ~6% of a full FFT) replaces the FFT - no extra spectra.  The
      * Goertzel result carries a constant phase factor e^{−jω}; being frame-independent
      * it cancels in the phase SLOPE and does not bias κ.  The residuals are re-centred
      * on their circular mean before the fit so an arbitrary fundamental phase landing
@@ -364,7 +364,7 @@ public class FftAnalyzer {
             sumCos += Math.cos(r);
             sumSin += Math.sin(r);
         }
-        double meanAngle = Math.atan2(sumSin, sumCos);          // circular mean → wrap-safe centre
+        double meanAngle = Math.atan2(sumSin, sumCos);          // circular mean -> wrap-safe centre
         double meanBase  = ((double) bestStart + (bestStart + bestLen - 1)) * 0.5 * step;
         double sDbR = 0.0, sDb2 = 0.0;
         for (int f = bestStart; f < bestStart + bestLen; f++) {
@@ -381,14 +381,14 @@ public class FftAnalyzer {
 
 
     // =========================================================================
-    // Result — extracted to the standalone top-level class FftResult so a
+    // Result - extracted to the standalone top-level class FftResult so a
     // result is fully independent of the producer instance.
     // =========================================================================
 
     // (FftResult lives in its own file now.)
 
     // =========================================================================
-    // Analysis — backward-compatible overload (Hann, 0 % overlap)
+    // Analysis - backward-compatible overload (Hann, 0 % overlap)
     // =========================================================================
 
     public FftResult analyze(double[] samples, int sampleRate,
@@ -414,16 +414,16 @@ public class FftAnalyzer {
     }
 
     // =========================================================================
-    // Analysis — full version
+    // Analysis - full version
     // =========================================================================
 
     /**
      * Runs coherent-averaged FFT analysis on a normalized mono signal.
      *
-     * @param samples       signal samples, range −1.0 … +1.0
+     * @param samples       signal samples, range −1.0 ... +1.0
      * @param sampleRate    sample rate in Hz
-     * @param fftSize       FFT frame length — must be a power of 2
-     * @param harmonicCount number of harmonics to evaluate (2nd … N-th)
+     * @param fftSize       FFT frame length - must be a power of 2
+     * @param harmonicCount number of harmonics to evaluate (2nd ... N-th)
      * @param windowType    window function to apply per frame
      * @param overlap       overlap between successive frames
      * @param snrFreqMin         lower bound for SNR noise integration in Hz (0 = no limit)
@@ -465,12 +465,12 @@ public class FftAnalyzer {
      * the fundamental peak search is restricted to a narrow ±10-bin window around
      * the expected frequency instead of the loudest bin in the spectrum.  Use this
      * when the fundamental can be deeply attenuated (e.g. measuring distortion
-     * through a notch filter at the notch frequency) — global max would otherwise
+     * through a notch filter at the notch frequency) - global max would otherwise
      * latch onto a harmonic, mains hum, or a spur and the entire downstream
      * harmonic table would be wrong.  Pass {@link Double#NaN} for the legacy
      * loudest-bin behaviour.
      *
-     * <p>Allocates a fresh {@link FftResult} per call — preferred for one-shot
+     * <p>Allocates a fresh {@link FftResult} per call - preferred for one-shot
      * CLI / test callers.  The live FFT view goes through
      * {@link #analyze(double[], int, int, int, WindowType, FftOverlap,
      * double, double, boolean, double, boolean, double, FftResult)} to write
@@ -511,7 +511,7 @@ public class FftAnalyzer {
      * {@code outResult} slot instead of allocating a fresh Result.
      * The slot's bin / harmonic arrays are resized as needed
      * ({@link FftResult#ensureArrays}) and then used directly as the
-     * analysis output buffers — no per-tick allocation for the four
+     * analysis output buffers - no per-tick allocation for the four
      * fftSize/2+1-long spectrum arrays.  Returns {@code outResult} for
      * convenience.
      */
@@ -549,12 +549,12 @@ public class FftAnalyzer {
         // evaluations.
         double[] window  = getCachedWindow(fftSize, windowType);
         double   cohGain = cachedCohGain;   // cached with the window table
-        double   nenbw   = cachedNenbw;     // ditto — corrects the noise integrals
+        double   nenbw   = cachedNenbw;     // ditto - corrects the noise integrals
 
         // --- Estimate fundamental fractional bin (always, for both averaging modes) --
         // The true signal frequency is k_f × Fs/N where k_f is non-integer.
         // Using the integer bin for harmonic synthesis causes phase drift of
-        // 2π×ε×n/N per sample → complete cancellation failure over long recordings.
+        // 2π×ε×n/N per sample -> complete cancellation failure over long recordings.
         // Phase-difference method: window-independent, accurate to ~1e-5 bins.
         //
         // Strategy: do peak-bin detection on a frame from inside the longest
@@ -568,23 +568,23 @@ public class FftAnalyzer {
         outResult.ensureArrays(halfSize + 1, harmonicCount);
 
         // --- Pre-pass peak-bin estimate (from frame 0; only used to size the
-        //     slew threshold — final kFractional is re-estimated post-rejection)
+        //     slew threshold - final kFractional is re-estimated post-rejection)
         scratchF0Re = scratchOrAlloc(scratchF0Re, fftSize);
         scratchF0Im = scratchOrAlloc(scratchF0Im, fftSize);
         double[] f0Re = scratchF0Re;
         double[] f0Im = scratchF0Im;
         cachedFrameFft(samples, 0, fftSize, window, f0Re, f0Im);
-        // Restrict the fundamental search to FUND_SEARCH_MIN_HZ … 0.7·Nyquist:
+        // Restrict the fundamental search to FUND_SEARCH_MIN_HZ ... 0.7·Nyquist:
         // window leakage from a residual DC offset can populate the lowest bins at
         // roughly -32 dB (Hann) below DC level, easily beating a deeply notched
         // fundamental, while a bin above 0.7·Nyquist is never a fundamental of
-        // interest — either end would otherwise steal the global max.
+        // interest - either end would otherwise steal the global max.
         int fundSearchMinBin = Math.max(2, (int) Math.ceil(FUND_SEARCH_MIN_HZ / freqRes));
         int fundSearchMaxBin = Math.min(halfSize,
                 (int) Math.floor(FUND_SEARCH_MAX_NYQUIST_FRACTION * halfSize));
         int intFundBin;
         if (!Double.isNaN(expectedFundHz) && expectedFundHz > 0.0) {
-            // Hint provided — search ±10 bins around the expected bin instead of
+            // Hint provided - search ±10 bins around the expected bin instead of
             // global max, so a deeply notched fundamental is not lost to a louder
             // harmonic / mains spur / noise spike elsewhere in the spectrum.
             int expectedBin = (int) Math.round(expectedFundHz * fftSize / (double) sampleRate);
@@ -605,9 +605,9 @@ public class FftAnalyzer {
 
         // --- Frame-rejection threshold (signal-interruption detector) --------
         // Pythagorean sine invariant: for s = A·sin(θ) and k = 2π·f/Fs,
-        //   ds/dn = A·k·cos(θ)  ⇒  s² + (ds/dn / k)² ≡ A²
+        //   ds/dn = A·k·cos(θ)  =>  s² + (ds/dn / k)² ≡ A²
         // For each sample we compute R = √(s² + (Δs/k)²) using a central
-        // difference. Clean samples → R ≈ A; glitches violate the invariant.
+        // difference. Clean samples -> R ≈ A; glitches violate the invariant.
         // The test is amplitude-relative and phase-aware: a small |Δ| at a
         // peak (where slope ≈ 0) still produces a large R deviation, which the
         // old constant-|Δ| threshold would have missed.
@@ -615,14 +615,14 @@ public class FftAnalyzer {
         // peakAmp is RMS-derived (peak = √2·RMS for a sine) so that overshoots
         // from dropouts do not inflate A and mask further glitches.
         // BOTH the RMS and the per-sample R scan operate on the
-        // DC-removed signal — a live ADC capture typically carries a
+        // DC-removed signal - a live ADC capture typically carries a
         // small DC bias that, when not subtracted, makes peakAmp =
         // √(2·DC² + A²) instead of A.  For a small AC signal
         // dominated by DC (e.g. 5 mV sine on top of 10 mV bias) this
         // inflates peakAmp by √2·DC, and R for every sample drifts
-        // ~29% away from peakAmp regardless of glitches — flagging
+        // ~29% away from peakAmp regardless of glitches - flagging
         // half the samples and rejecting every frame.
-        // FRAME REJECTION DISABLED — capture glitches of every origin are now
+        // FRAME REJECTION DISABLED - capture glitches of every origin are now
         // handled by the cross-tick gap recovery, and per-frame rejection also
         // (harmlessly) flags AGC amplitude wobble.  This one switch gates BOTH
         // the R-invariant scan and the phase-coherence check, and short-circuits
@@ -630,7 +630,7 @@ public class FftAnalyzer {
         // true to restore.
         final boolean frameRejection = false;
         // DC mean + RMS feed only the rejection-feasibility test and the DEBUG
-        // diagnostic — two full passes over the multi-million-sample window
+        // diagnostic - two full passes over the multi-million-sample window
         // that are pure waste while both are off.
         final double dcMean;
         final double peakAmp;
@@ -643,11 +643,11 @@ public class FftAnalyzer {
         }
         double estFundHz = intFundBin * freqRes;
         double omegaPerSample = 2.0 * Math.PI * estFundHz / sampleRate;
-        final double R_TOLERANCE = 0.10;      // |R−A|/A > 10 %  → flag sample
+        final double R_TOLERANCE = 0.10;      // |R−A|/A > 10 %  -> flag sample
 
         // The R-invariant test assumes s(n) ≈ A·sin(ωn); when the fundamental
         // sine is not the dominant component of the time-domain signal (typical
-        // when measuring distortion through a deep filter notch — fundamental
+        // when measuring distortion through a deep filter notch - fundamental
         // at -100 dBFS while DC offset + noise + harmonics dominate the time
         // domain), the invariant cannot hold and the whole recording would be
         // rejected.  Compare the spectrum-bin amplitude at the candidate
@@ -657,7 +657,7 @@ public class FftAnalyzer {
                                  + f0Im[intFundBin] * f0Im[intFundBin]);
         double specPeakAmp = specMag * 2.0 / ((double) fftSize * cohGain);
         boolean rejectionFeasible = frameRejection && peakAmp > 0.0 && specPeakAmp >= 0.5 * peakAmp;
-        // Per-analysis diagnostic — demoted to DEBUG and guarded so its five
+        // Per-analysis diagnostic - demoted to DEBUG and guarded so its five
         // String.format calls don't run (or spam the log) on every tick.
         if (log.isDebugEnabled()) {
             log.debug("Frame R-invariant check: peakAmp(RMS-derived)={}, fund-bin peak={} (ratio {} dB), k={}, tolerance={}% (using intBin={}, ~{} Hz)",
@@ -682,7 +682,7 @@ public class FftAnalyzer {
         // When the observed RMS(Δ²) is much larger than the expected
         // sine contribution, derivative noise dominates dq = Δs/k
         // and the R-invariant test fires on most samples regardless
-        // of glitches — turning every analysis into a "rejection
+        // of glitches - turning every analysis into a "rejection
         // invalidated" log entry.  Bail out upfront instead.
         if (rejectionFeasible && peakAmp > 0 && omegaPerSample > 0) {
             double noiseAmplification = derivativeNoiseRatio(samples, peakAmp, omegaPerSample);
@@ -698,7 +698,7 @@ public class FftAnalyzer {
         }
 
         // Multi-tone signals (dual tone, etc.): the R-invariant assumes a
-        // single sine, so a sum of tones violates it at almost every sample —
+        // single sine, so a sum of tones violates it at almost every sample -
         // the scan would flag tens of thousands of "events", then invalidate
         // itself and accept all frames anyway.  Skip it outright.
         if (rejectionFeasible && multiTone) {
@@ -712,7 +712,7 @@ public class FftAnalyzer {
         scratchSumIm   = scratchOrAlloc(scratchSumIm,   fftSize);
         scratchFrameRe = scratchOrAlloc(scratchFrameRe, fftSize);
         scratchFrameIm = scratchOrAlloc(scratchFrameIm, fftSize);
-        // sumRe / sumIm are the averaging accumulators — must start at 0.
+        // sumRe / sumIm are the averaging accumulators - must start at 0.
         // frameRe / frameIm are fully overwritten per frame (either by the
         // cache copy or by the windowing loop in cachedFrameFft), so no
         // explicit fill is needed.
@@ -783,7 +783,7 @@ public class FftAnalyzer {
                 int    width  = evE - evS + 1;
                 // Frames whose [base .. base+fftSize-1] window touches [evS .. evE]:
                 //   base + fftSize - 1 >= evS  AND  base <= evE
-                //   → base in [evE - fftSize + 1 .. evS] / step
+                //   -> base in [evE - fftSize + 1 .. evS] / step
                 int fLo = Math.max(0, (int) Math.ceil((evE - (long) fftSize + 1) / (double) step));
                 int fHi = Math.min(frameCount - 1, evS / step);
                 int dirty = 0;
@@ -793,7 +793,7 @@ public class FftAnalyzer {
                         dirty++;
                     }
                 }
-                log.warn("  event {}/{}: sample {} (t={} s), width={} samples ({} µs), peak |R−A|/A={}% → frames [{}..{}] dirty (+{})",
+                log.warn("  event {}/{}: sample {} (t={} s), width={} samples ({} µs), peak |R−A|/A={}% -> frames [{}..{}] dirty (+{})",
                         e + 1, events.size(),
                         evS,
                         String.format(Locale.US, "%.6f", tStart),
@@ -815,7 +815,7 @@ public class FftAnalyzer {
         // left to analyse), the test is no longer a glitch detector;
         // bypass it and use every frame as-is.
         if (!events.isEmpty() && rejectedFrames >= frameCount) {
-            log.warn("R-invariant rejection invalidated: would reject all {} frame(s) (likely low-SNR signal — derivative-noise amplification); accepting all frames",
+            log.warn("R-invariant rejection invalidated: would reject all {} frame(s) (likely low-SNR signal - derivative-noise amplification); accepting all frames",
                     frameCount);
             Arrays.fill(frameClean, true);
             rejectedFrames = 0;
@@ -873,7 +873,7 @@ public class FftAnalyzer {
             outResult.rejectionDetail         = maxRDevRejected * 100.0;   // %
         }
         if (bestLen == 0) {
-            throw new IllegalStateException("All " + frameCount + " frames rejected as corrupt — aborting FFT.");
+            throw new IllegalStateException("All " + frameCount + " frames rejected as corrupt - aborting FFT.");
         }
 
         // --- Re-estimate kFractional from the clean segment ------------------
@@ -887,7 +887,7 @@ public class FftAnalyzer {
         double[] s0Im;
         if (segBaseSample == 0) {
             // The segment's first frame IS the pre-pass frame (bestStart is 0
-            // whenever rejection is off — the only shipping configuration):
+            // whenever rejection is off - the only shipping configuration):
             // alias it instead of re-fetching the same cached FFT into a
             // second scratch pair (2 × 8.4 MB memcpy per tick at 1 M).
             // Both pairs are write-once-then-read-only in this method.
@@ -930,15 +930,15 @@ public class FftAnalyzer {
         // --- Second tone (dual-/multi-tone): same clean-frame sub-bin
         // estimate around its hinted bin.  Computed on the SAME single clean
         // frame as the fundamental, so the dual-tone frequency readout is as
-        // honest and un-pinned as the single-tone fundamental — never read
+        // honest and un-pinned as the single-tone fundamental - never read
         // off the coherently-collapsed average.  Only the 3 lobe bins feed
         // the phase difference / parabola, so noise bins can't bias it.
         outResult.fundamental2HzRefined = Double.NaN;
-        // The hint is the COMMANDED second-tone frequency — set only when
+        // The hint is the COMMANDED second-tone frequency - set only when
         // fund-from-generator is on AND the generator is internal.  When it's
         // absent (external generator, or that option off) but the signal IS
         // dual-tone, DETECT the second tone from the CLEAN single frame instead
-        // (where it is still at full level — the cancellation only happens in the
+        // (where it is still at full level - the cancellation only happens in the
         // 2-frame average): the strongest local-max peak clear of F1's lobe and
         // within 40 dB of it.  Without this the F2 de-rotation fix below can't
         // engage and F2 cancels.
@@ -946,7 +946,7 @@ public class FftAnalyzer {
         double effHint = secondToneHintHz;
         if (Double.isNaN(effHint) && multiTone && intFundBin > 0) {
             double fundAmp2 = s0Re[intFundBin] * s0Re[intFundBin] + s0Im[intFundBin] * s0Im[intFundBin];
-            double thresh2  = fundAmp2 * 1e-4;                 // ≥ −40 dB of F1 → a real tone, not noise
+            double thresh2  = fundAmp2 * 1e-4;                 // ≥ −40 dB of F1 -> a real tone, not noise
             int    loB      = Math.max(3, (int) Math.ceil(10.0 / freqRes));
             double bestAmp2 = 0.0;
             int    bestK    = -1;
@@ -986,7 +986,7 @@ public class FftAnalyzer {
         // The coarse κ above is a one-hop phase difference; its residual error is
         // applied as a de-rotation ramp across the whole segment, so on long
         // averages the harmonics de-cohere and read low.  Refine κ by regressing
-        // the fundamental phase over EVERY clean frame — a (bestLen-1)·step
+        // the fundamental phase over EVERY clean frame - a (bestLen-1)·step
         // baseline vs one hop.  See refineKappaOverSegment.
         if (coherentAveraging && bestLen >= 4 && step > 0) {
             double kRefined = refineKappaOverSegment(samples, window, fftSize, step,
@@ -1009,7 +1009,7 @@ public class FftAnalyzer {
         // harmonic of F1, so a SECOND tone F2 (not a harmonic) gets de-rotated by
         // h·Φ(F1), h=round(κ_F2/κ_F1).  For certain spacings that rotates F2's frames
         // ~180° apart and CANCELS it (the dual-tone IMD bug).  Try BOTH de-rotations
-        // over the segment and keep whichever leaves F2's spike STRONGER — the wrong
+        // over the segment and keep whichever leaves F2's spike STRONGER - the wrong
         // one cancels it, so the strongest spike self-selects (a genuine harmonic
         // comes out equal either way, so this never hurts the single-tone path).
         final int F2_LOBE_HALF = 24;            // bins around F2's peak that ride its own phase
@@ -1039,7 +1039,7 @@ public class FftAnalyzer {
         }
         // Build the IMD-product grid: when F2 is a real second tone, every
         // a·κ_F1 + b·κ_F2 (b≠0, |a|+|b| ≤ order) landing in band is de-rotated by
-        // a·Φ(F1) + b·Φ(F2) over its lobe — F2 itself is the (0,1) product.  This
+        // a·Φ(F1) + b·Φ(F2) over its lobe - F2 itself is the (0,1) product.  This
         // de-rotates the whole 2-tone IMD comb at its TRUE frequencies instead of
         // snapping each product to the nearest F1-harmonic (which cancels the ones
         // at a half-integer residual).  b=0 (F1 + its harmonics) stays single-ref.
@@ -1098,12 +1098,12 @@ public class FftAnalyzer {
         double[] fundCorrIm = coherentAveraging ? new double[bestLen] : null;
         // Per-lobe constant-phase de-rotation.  Each bin is snapped to its
         // nearest harmonic h = round(signed-freq-bin / k₀) and de-rotated by
-        // that lobe's CONSTANT phase h·Φ — NOT a per-bin frequency ramp
+        // that lobe's CONSTANT phase h·Φ - NOT a per-bin frequency ramp
         // k·baseAngle.  For a stationary windowed tone every bin of a lobe
         // (its leakage skirt included) advances frame-to-frame by the SAME
         // phase; the ramp matches that only AT the exact harmonic bins and
         // over-rotates the skirt by ∝ (bin-offset × frame), which the
-        // sub-frame sum turns into a Dirichlet array factor → a comb at
+        // sub-frame sum turns into a Dirichlet array factor -> a comb at
         // sampleRate/(frames·step) riding on the leakage skirt.  Constant
         // phase per lobe aligns the whole lobe, so the comb vanishes (this is
         // what the multi-tone path already does, hence its clean result).
@@ -1118,7 +1118,7 @@ public class FftAnalyzer {
             int base = f * step;
             cachedFrameFft(samples, base, fftSize, window, frameRe, frameIm);
             if (coherentAveraging) {
-                // Φ = −2π·k_f·f·step/N — the fundamental's inter-frame phase
+                // Φ = −2π·k_f·f·step/N - the fundamental's inter-frame phase
                 // advance; harmonic lobe h gets h·Φ.  Cache exp(j·h·Φ) for
                 // h = −hMax..hMax via an incremental phasor (negative h is the
                 // conjugate: the real-spectrum image of harmonic h).
@@ -1235,7 +1235,7 @@ public class FftAnalyzer {
             }
             if (acceptedFrames < 2) {
                 throw new IllegalStateException("Only " + acceptedFrames
-                        + " frame(s) survived phase coherence check — aborting FFT.");
+                        + " frame(s) survived phase coherence check - aborting FFT.");
             }
         }
 
@@ -1244,11 +1244,11 @@ public class FftAnalyzer {
         // --- Single-sided amplitude & phase spectrum -------------------------
         double   normFactor = 1.0 / ((double) fftSize * cohGain);
         // avgRe / avgIm / amplDbFs / phaseDeg are stored in outResult and
-        // outlive this call — but the pool guarantees outResult is owned
+        // outlive this call - but the pool guarantees outResult is owned
         // exclusively by this analysis until the worker publishes it.
         // Aliasing the slot's pre-sized arrays as locals avoids per-tick
         // allocation of four halfSize+1-long arrays.  amplLinear is
-        // purely local and overwritten cell-by-cell below — safe to
+        // purely local and overwritten cell-by-cell below - safe to
         // reuse from scratch.
         double[] avgRe      = outResult.re;
         double[] avgIm      = outResult.im;
@@ -1257,7 +1257,7 @@ public class FftAnalyzer {
         double[] amplDbFs   = outResult.amplitudeDbFs;
         double[] phaseDeg   = outResult.phaseDeg;
 
-        // Per-bin and independent → parallelize across cores (the 1M× log10/atan2
+        // Per-bin and independent -> parallelize across cores (the 1M× log10/atan2
         // is the single biggest compute chunk).  Disjoint k-writes, no recursion.
         final int fc = frameCount;
         parallelChunks(halfSize + 1, (lo, hi) -> {
@@ -1285,9 +1285,9 @@ public class FftAnalyzer {
 
         // --- Fundamental (max bin, skip DC + ULF) ----------------------------
         // When the caller provided expectedFundHz, restrict the search to a
-        // ±10-bin window around the expected bin — same reason as the pre-pass:
+        // ±10-bin window around the expected bin - same reason as the pre-pass:
         // a deeply notched fundamental must not be lost to a louder spur.
-        // Without a hint, scan FUND_SEARCH_MIN_HZ … 0.7·Nyquist so neither DC
+        // Without a hint, scan FUND_SEARCH_MIN_HZ ... 0.7·Nyquist so neither DC
         // leakage nor a high-frequency spur wins.
         int fundBin;
         if (!Double.isNaN(expectedFundHz) && expectedFundHz > 0.0) {
@@ -1315,9 +1315,9 @@ public class FftAnalyzer {
         // amount, so amplLinear[fundBin] is unreliable while H2..Hn stay
         // valid as measured), use the user's true fundamental as the anchor.
         // The measured fundDbFs / fundLinear are still stored verbatim into
-        // Result — downstream code (frequency response calibration scale, chart, cal-CSV anchor)
+        // Result - downstream code (frequency response calibration scale, chart, cal-CSV anchor)
         // depends on those reflecting the actual FFT measurement.
-        // The reference arrives already in dBFS — the analyzer speaks one scale
+        // The reference arrives already in dBFS - the analyzer speaks one scale
         // only; the GUI / CLI callers convert their dBV inputs at the boundary
         // (unit translation is a presentation concern, not a measurement one).
         // refLin then lives in the same FS-relative units as amplLinear[k], so
@@ -1347,7 +1347,7 @@ public class FftAnalyzer {
         }
 
         // --- Harmonics -------------------------------------------------------
-        // Aliased onto the pool slot's harmonic arrays — sized by
+        // Aliased onto the pool slot's harmonic arrays - sized by
         // ensureArrays at the top of analyze.  hLinear is purely local
         // (intermediate THD-sum term), kept as a fresh allocation; it
         // doesn't outlive the call.
@@ -1355,7 +1355,7 @@ public class FftAnalyzer {
         double[] hHz     = outResult.harmonicHz;
         double[] hDbFs   = outResult.harmonicDbFs;
         // hLinear holds the proportional-bin-combined harmonic amplitude
-        // (see detectHarmonics) — used by the THD sum below so it matches
+        // (see detectHarmonics) - used by the THD sum below so it matches
         // the per-harmonic readout, instead of resampling from amplLinear.
         double[] hLinear = new double[harmonicCount];
         double[] hPct    = outResult.harmonicPct;
@@ -1367,10 +1367,10 @@ public class FftAnalyzer {
         // noise-floor sweeps (including the two O(N log N) noise sorts).  While
         // the live view is cross-tick averaging it throws these single-tick
         // stats away and re-derives them with recomputeStats() on the
-        // ACCUMULATED spectrum (display ticks only) — so computing them here ~3×
+        // ACCUMULATED spectrum (display ticks only) - so computing them here ~3×
         // per second is pure waste.  Everything recomputeStats() and the worker
         // actually read was already produced above: the averaged complex
-        // spectrum (re/im), the dB magnitude (amplitudeDbFs — read by the
+        // spectrum (re/im), the dB magnitude (amplitudeDbFs - read by the
         // worker's tone-detect / overlay / dBV lift), and the fundamental +
         // harmonic BIN positions (recomputeStats reuses them, never re-finds).
         // The skipped scalars are neutralised so a recycled result slot cannot
@@ -1384,7 +1384,7 @@ public class FftAnalyzer {
             outResult.windowType                 = windowType;
             outResult.overlap                    = overlap;
             // The display path re-derives all stats via recomputeStats() on THIS
-            // result — it needs the window's NENBW stamped or its noise-integral
+            // result - it needs the window's NENBW stamped or its noise-integral
             // correction silently no-ops (that exact miss shipped the first
             // version of the ENBW fix as a visible no-change).
             outResult.windowNenbwBins            = nenbw;
@@ -1415,9 +1415,9 @@ public class FftAnalyzer {
         double snrLo = snrFreqMin > 0.0 ? snrFreqMin : 0.0;
         double snrHi = snrFreqMax > 0.0 ? snrFreqMax : Double.MAX_VALUE;
 
-        // --- THD — H2..H9 (max 8 harmonics) that fall within dist range ------
+        // --- THD - H2..H9 (max 8 harmonics) that fall within dist range ------
         // awHarmPowerSum carries the same powers through the IEC A-weighting
-        // curve for the A-suffixed readouts (N+D / THD+N / SINAD → ENOB).
+        // curve for the A-suffixed readouts (N+D / THD+N / SINAD -> ENOB).
         double harmPowerSum   = 0.0;
         double awHarmPowerSum = 0.0;
         for (int h = 0; h < Math.min(harmonicCount, 8); h++) {
@@ -1444,9 +1444,9 @@ public class FftAnalyzer {
         final int EXCL_BINS = 4;
         boolean[] isSignalBin = buildSignalBinMask(halfSize, fundBin, hBins, harmonicCount, EXCL_BINS);
 
-        // --- SNR — integrated noise over the measurement band ----------------
+        // --- SNR - integrated noise over the measurement band ----------------
         // Fundamental and all harmonics are excluded via isSignalBin.
-        // SNR = signal_power / sum(noise_bins_in_range) → bandwidth-dependent.
+        // SNR = signal_power / sum(noise_bins_in_range) -> bandwidth-dependent.
 
         NoiseFloor nf = computeNoiseFloorAndExtendSignalMask(
                 amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS,
@@ -1480,7 +1480,7 @@ public class FftAnalyzer {
                 }
             }
         }
-        // The excluded zones (fundamental skirt, harmonics) held noise too —
+        // The excluded zones (fundamental skirt, harmonics) held noise too -
         // estimate it as the surrounding floor by rescaling the counted sum to
         // the full band width, instead of silently dropping those slots (which
         // flattered SNR by the excluded fraction; the same effect, with far
@@ -1493,11 +1493,11 @@ public class FftAnalyzer {
         }
         // A windowed periodogram bin holds NENBW bin-widths of broadband power
         // (Hann: 1.5), so summing noise bins as-is overstates the band's noise
-        // power by exactly that factor — divide it back out.  Coherent lines
+        // power by exactly that factor - divide it back out.  Coherent lines
         // (fundamental, harmonics) need NO such correction: a sine's amplitude
         // is already window-normalized via cohGain, so refLin² and harmPowerSum
         // stay untouched.  Without this, SNR / SINAD / ENOB / THD+N read
-        // 10·log10(NENBW) pessimistic (1.76 dB for Hann) — found against a
+        // 10·log10(NENBW) pessimistic (1.76 dB for Hann) - found against a
         // 23-bit-TPDF-dither hardware simulator where QA40x's software matched
         // the constructed theory value and we sat exactly one ENBW low.
         noisePower   /= nenbw;
@@ -1510,13 +1510,13 @@ public class FftAnalyzer {
             snrDb = 10.0 * Math.log10((refLin * refLin) / noisePower);
         }
 
-        // SINAD: signal RMS² / (noise + distortion) — denominator includes both
+        // SINAD: signal RMS² / (noise + distortion) - denominator includes both
         // the integrated noise sum AND the in-band harmonic power, so ENOB
         // = (SINAD − 1.76)/6.02 reflects every non-fundamental contribution.
         // The denominator is A-WEIGHTED (IEC 61672): SINAD, ENOB, THD+N and
         // the N+D readout all carry the "A" suffix, so the figure reflects
-        // audibility; SNR and N stay unweighted (bench arbiter 2026-07-24:
-        // A-weighting is worth ~5.3 dB on an HF-rising Cosmos floor).
+        // audibility; SNR and N stay unweighted (A-weighting is worth ~5.3 dB
+        // on an HF-rising Cosmos floor).
         double sinadDenom = awNoisePower + awHarmPowerSum;
         double sinadDb    = sinadDenom > 0
                 ? 10.0 * Math.log10((refLin * refLin) / sinadDenom)
@@ -1527,7 +1527,7 @@ public class FftAnalyzer {
                 : fundDbFs - 300.0;
 
         // THD+N is the reciprocal of SINAD: (noise + distortion) / signal,
-        // expressed in dB → −sinadDb.  Same band, same numerator definition.
+        // expressed in dB -> −sinadDb.  Same band, same numerator definition.
         double thdNDb = -sinadDb;
 
         if (logSummary) {
@@ -1592,11 +1592,11 @@ public class FftAnalyzer {
      * <p>The caller is responsible for keeping {@code amplitudeDbFs[]} in sync
      * with {@code re}/{@code im} as it mutates bins; this method trusts
      * {@code amplitudeDbFs[]} as the source of truth for linear amplitude
-     * (because {@code re}/{@code im} are unscaled FFT outputs — the
+     * (because {@code re}/{@code im} are unscaled FFT outputs - the
      * analyzer-side normFactor and single-sided ×2 are folded into
      * {@code amplitudeDbFs}, not into {@code re}/{@code im}).
      *
-     * <p>{@code fundamentalBin} and {@code harmonicBins[]} are kept unchanged —
+     * <p>{@code fundamentalBin} and {@code harmonicBins[]} are kept unchanged -
      * smooth per-bin scaling does not move peaks, so the originally identified
      * bin positions remain valid.
      *
@@ -1610,7 +1610,7 @@ public class FftAnalyzer {
 
         // Derive properly-scaled linear amplitudes from amplitudeDbFs.
         // Reuses the instance scratch (the view retains its analyzer for
-        // exactly this) — otherwise 8.4 MB allocated per displayed frame at
+        // exactly this) - otherwise 8.4 MB allocated per displayed frame at
         // fftSize 2 M.  Every cell is overwritten below, so no zero-fill.
         final double[] amplLinear = scratchOrAlloc(scratchAmplLinear, halfSize + 1);
         scratchAmplLinear = amplLinear;
@@ -1672,7 +1672,7 @@ public class FftAnalyzer {
 
         // --- THD (H2..H9 within SNR range) ---------------------------------
         // awHarmPowerSum: the same powers through the IEC A-weighting curve
-        // for the A-suffixed readouts — see analyze().
+        // for the A-suffixed readouts - see analyze().
         double harmPowerSum   = 0.0;
         double awHarmPowerSum = 0.0;
         for (int h = 0; h < Math.min(harmonicCount, 8); h++) {
@@ -1695,7 +1695,7 @@ public class FftAnalyzer {
                 r.harmonicBins, harmonicCount, EXCL_BINS);
 
         // --- Noise floor + signal-mask extension (shared with analyze()) ---
-        // recomputeStats discards dynWidthBins — the
+        // recomputeStats discards dynWidthBins - the
         // Result.fundamentalDynExclusionHz is final and was set on the
         // original analyze() pass; we only need the median noise power.
         double medianNoisePow = computeNoiseFloorAndExtendSignalMask(
@@ -1721,14 +1721,14 @@ public class FftAnalyzer {
                 }
             }
         }
-        // Excluded-zone rescale + NENBW — same corrections as analyze(), see
+        // Excluded-zone rescale + NENBW - same corrections as analyze(), see
         // the comments there.
         if (countedBins > 0) {
             double rescale = (double) bandBins / countedBins;
             noisePower   *= rescale;
             awNoisePower *= rescale;
         }
-        // Same NENBW correction as analyze() — see the comment there.  The
+        // Same NENBW correction as analyze() - see the comment there.  The
         // factor is read from the RESULT (stamped at analysis time), not the
         // current window cache: a recompute must match the spectrum it is
         // recomputing from, whatever window is selected by now.
@@ -1741,7 +1741,7 @@ public class FftAnalyzer {
                 ? 300.0
                 : 10.0 * Math.log10((refLin * refLin) / noisePower);
         // SINAD denominator = A-WEIGHTED noise + in-band harmonic power (the
-        // basis for ENOB / THD+N / the N+D readout, all "A"-suffixed) — see
+        // basis for ENOB / THD+N / the N+D readout, all "A"-suffixed) - see
         // the comment in analyze().  SNR above stays unweighted.
         double sinadDenom = awNoisePower + awHarmPowerSum;
         r.sinadDb = sinadDenom > 0
@@ -1848,14 +1848,14 @@ public class FftAnalyzer {
     }
 
     /** HFT144D cosine-sum coefficients (Heinzel/Rüdiger/Schilling 2002,
-     *  "Spectrum and spectral density estimation by the DFT…") — flat-top,
+     *  "Spectrum and spectral density estimation by the DFT...") - flat-top,
      *  −144.1 dB highest sidelobe, ±0.0001 dB amplitude flatness,
      *  differentiable. */
     private static final double[] HFT144D_COEFFS = {
             1.0, -1.96760033, 1.57983607, -0.81123644,
             0.22583558, -0.02773848, 0.00090360 };
 
-    /** HFT248D coefficients (same paper) — flat-top, −248.4 dB highest
+    /** HFT248D coefficients (same paper) - flat-top, −248.4 dB highest
      *  sidelobe, ±0.0001 dB amplitude flatness; sidelobes below anything a
      *  physical ADC produces. */
     private static final double[] HFT248D_COEFFS = {
@@ -1867,7 +1867,7 @@ public class FftAnalyzer {
     /** Builds an HFT-family flat-top window: a PERIODIC cosine sum
      *  {@code w(z) = Σ cₖ·cos(k·z)}, {@code z = 2πn/N} (signs live in the
      *  coefficients), normalized to peak 1.  The amplitude scaling
-     *  self-normalizes via the coherent gain — peak-1 just keeps the
+     *  self-normalizes via the coherent gain - peak-1 just keeps the
      *  window family consistent. */
     private double[] buildHftWindow(int N, double[] coeffs) {
         double[] w = new double[N];
@@ -1890,7 +1890,7 @@ public class FftAnalyzer {
     /** Builds a symmetric Kaiser-Bessel window,
      *  {@code w[n] = I₀(β·√(1−x²)) / I₀(β)} with {@code x = 2n/(N−1) − 1}.
      *  Sidelobe suppression follows Kaiser's {@code A ≈ 8.7 + β/0.1102} dB
-     *  relation — β=24 ≈ −226 dB with a narrower main lobe than equally
+     *  relation - β=24 ≈ −226 dB with a narrower main lobe than equally
      *  suppressing cosine windows; β=38 sits below the double-precision
      *  FFT floor (like DC300). */
     private double[] buildKaiserWindow(int N, double beta) {
@@ -1903,7 +1903,7 @@ public class FftAnalyzer {
         return w;
     }
 
-    /** Modified Bessel function of the first kind, order 0 — power series
+    /** Modified Bessel function of the first kind, order 0 - power series
      *  {@code Σ ((x/2)ᵏ/k!)²}; converges to double precision well within
      *  the iteration cap for the β range used here. */
     private double besselI0(double x) {
@@ -2012,7 +2012,7 @@ public class FftAnalyzer {
 
     /** Arithmetic mean of {@code samples}.  Used by {@link #analyze} to
      *  estimate the DC bias before computing the R-invariant peak amplitude
-     *  — without subtracting the bias the RMS-derived peakAmp inflates by
+     *  - without subtracting the bias the RMS-derived peakAmp inflates by
      *  √2·DC for any signal where DC is comparable to the AC swing. */
     private double sampleMean(double[] samples) {
         double sum = 0.0;
@@ -2035,7 +2035,7 @@ public class FftAnalyzer {
     /** Locates each harmonic (H2..H{@code harmonicCount+1}) in the
      *  averaged spectrum.  Physics fixes the Nth harmonic at exactly
      *  {@code N × fundamentalFreq}, so its fractional FFT bin is
-     *  {@code N × kFractional} — and {@link #kFractional} already
+     *  {@code N × kFractional} - and {@link #kFractional} already
      *  captures any DAC↔ADC clock skew with ~1e-5 bin precision.
      *
      *  <p>When the theoretical fractional bin lands between two FFT bins
@@ -2097,7 +2097,7 @@ public class FftAnalyzer {
      *  with the dynamic fundamental-exclusion walk and phase-noise zone. */
     private boolean[] buildSignalBinMask(int halfSize, int fundBin,
                                          int[] hBins, int harmonicCount, int exclBins) {
-        // Reused scratch (1 MB at fftSize 2 M, rebuilt per stats pass) —
+        // Reused scratch (1 MB at fftSize 2 M, rebuilt per stats pass) -
         // must be re-zeroed since previous masks marked other bins.
         boolean[] isSignalBin =
                 (scratchSignalMask != null && scratchSignalMask.length == halfSize + 1)
@@ -2119,7 +2119,7 @@ public class FftAnalyzer {
         return isSignalBin;
     }
 
-    /** Result of {@link #computeNoiseFloorAndExtendSignalMask} — the
+    /** Result of {@link #computeNoiseFloorAndExtendSignalMask} - the
      *  refined range-restricted noise floor (squared linear amplitude)
      *  plus the dynamic fundamental exclusion half-width in bins. */
     private static final class NoiseFloor {
@@ -2141,9 +2141,9 @@ public class FftAnalyzer {
      *  Single point of truth for the SNR/THD-N noise-floor model. */
     /** Skirt-walk look-ahead in bins.  With frame overlap, {@code 1/(1−ovl)}
      *  frames share any given sample, so the averaged floor wobbles with that
-     *  correlation length — a single sub-floor dip inside the skirt is then
+     *  correlation length - a single sub-floor dip inside the skirt is then
      *  noise texture, not the skirt's end.  +2 bins guards the 0%-overlap
-     *  case as well.  0% → 3, 50% → 4, 75% → 6, 87.5% → 10, 93.75% → 18. */
+     *  case as well.  0% -> 3, 50% -> 4, 75% -> 6, 87.5% -> 10, 93.75% -> 18. */
     private int skirtLookAheadBins(FftOverlap ovl) {
         double denom = 1.0 - (ovl != null ? ovl.fraction : 0.0);
         int framesSharing = denom > 0 ? (int) Math.round(1.0 / denom) : 16;
@@ -2156,12 +2156,12 @@ public class FftAnalyzer {
             double snrLo, double snrHi,
             int fundBin, int exclBins, int lookAheadBins) {
 
-        // One scan collects both pools (grow-only scratch — no per-call
+        // One scan collects both pools (grow-only scratch - no per-call
         // allocation):
-        //   globalPow    : full spectrum (no range limit) — used only for the
+        //   globalPow    : full spectrum (no range limit) - used only for the
         //                  dynamic fundamental exclusion walk, so it is never
         //                  contaminated by leakage bins inside a narrow range.
-        //   candidatePow : range-restricted — used for spike threshold / SNR.
+        //   candidatePow : range-restricted - used for spike threshold / SNR.
         if (scratchNoiseCand == null || scratchNoiseCand.length < halfSize) {
             scratchNoiseCand = new double[halfSize];
             scratchNoiseGlob = new double[halfSize];
@@ -2178,7 +2178,7 @@ public class FftAnalyzer {
                 if (freq >= snrLo && freq <= snrHi) candidatePow[candidateCount++] = pow;
             }
         }
-        // Order statistics via in-place quickselect — only ONE rank of each
+        // Order statistics via in-place quickselect - only ONE rank of each
         // pool is ever read, so the full O(n log n) sorts this replaced were
         // 20-50 ms of waste per stats pass at fftSize 2 M.
         double medianNoisePow       = candidateCount > 0
@@ -2187,16 +2187,17 @@ public class FftAnalyzer {
         // walk width still does not depend on the chosen SNR range).  The old
         // tenth-percentile bar broke the look-ahead walk: only ~10 % of noise
         // bins fall below it, so L consecutive sub-threshold bins occur with
-        // ~0.1^L probability — at 87.5 %+ overlap (L = 10/18) the walk never
-        // stopped and marked the whole band as signal (N read "—", SNR pinned
+        // ~0.1^L probability - at 87.5 %+ overlap (L = 10/18) the walk never
+        // stopped and marked the whole band as signal (N showed the
+        // empty-readout placeholder instead of a level, SNR pinned
         // at the 300 dB sentinel).  Half of all noise bins sit below the
         // median, so the look-ahead ends within a few correlation lengths of
-        // entering true noise, while genuine skirt bins — well above the
-        // floor — keep the walk going exactly as before.
+        // entering true noise, while genuine skirt bins - well above the
+        // floor - keep the walk going exactly as before.
         double walkStopPow = globalCount > 0
                 ? selectKth(globalPow, globalCount, globalCount / 2)          : 0.0;
 
-        // Inter-pass — dynamic fundamental exclusion at noise floor level.
+        // Inter-pass - dynamic fundamental exclusion at noise floor level.
         // Uses the GLOBAL-pool walkStopPow so the exclusion width is independent
         // of the chosen SNR frequency range (narrow range bins near the
         // fundamental are contaminated by window leakage and would give a
@@ -2204,11 +2205,11 @@ public class FftAnalyzer {
         int dynWidthBins = exclBins;
         if (walkStopPow > 0) {
             // The walk ends only when LOOKAHEAD consecutive bins sit at/below the
-            // floor — a shorter sub-floor dip is the wobble of an overlap-averaged
+            // floor - a shorter sub-floor dip is the wobble of an overlap-averaged
             // floor (correlated frames), not the skirt's end, and is stepped over
             // (the dip bins get marked as signal with the rest of the skirt).
-            // Hard cap at ±fundBin/2 — the same "can never reach H2" bound the
-            // phase-noise pass uses — so no floor statistics can ever extend the
+            // Hard cap at ±fundBin/2 - the same "can never reach H2" bound the
+            // phase-noise pass uses - so no floor statistics can ever extend the
             // exclusion across the whole band (the rescaled noise sum estimates
             // whatever the zone covers, but it needs surviving bins to do it).
             int walkLo = Math.max(1, fundBin - fundBin / 2);
@@ -2242,7 +2243,7 @@ public class FftAnalyzer {
             if (dynWidthBins > exclBins) {
                 for (int k = dynLo; k <= dynHi; k++) isSignalBin[k] = true;
 
-                // Pass 2 — refined range-restricted median with updated exclusion
+                // Pass 2 - refined range-restricted median with updated exclusion
                 candidateCount = 0;
                 for (int k = 1; k <= halfSize; k++) {
                     double freq = k * freqRes;
@@ -2277,7 +2278,7 @@ public class FftAnalyzer {
     /** In-place Hoare quickselect: returns the {@code k}-th smallest element
      *  of {@code a[0..len)}, partially reordering the array (callers treat
      *  the pools as scratch).  O(len) average vs the O(len·log len) full
-     *  sorts it replaced — only one order statistic per pool is ever read.
+     *  sorts it replaced - only one order statistic per pool is ever read.
      *  Package-private for the unit test. */
     double selectKth(double[] a, int len, int k) {
         int lo = 0, hi = len - 1;
@@ -2319,7 +2320,7 @@ public class FftAnalyzer {
     /** Circular median of {@code n} complex phasors {@code (re[i], im[i])}.
      *  Computes median(sin) and median(cos) on the unit-circle-normalised
      *  components, then takes {@code atan2(medSin, medCos)}.  Robust for
-     *  tightly clustered phases — the expected case for the fundamental
+     *  tightly clustered phases - the expected case for the fundamental
      *  bin across all accepted FFT frames.  Used by {@link #analyze}'s
      *  phase-coherence outlier rejection. */
     private static double circularMedianPhase(double[] re, double[] im, int n) {
@@ -2340,7 +2341,7 @@ public class FftAnalyzer {
      *  decide whether per-sample R-invariant rejection is feasible: when
      *  this ratio exceeds the threshold, the 1/k amplification on
      *  dq = Δs/k turns broadband noise into a per-sample "glitch"
-     *  detector and every frame gets rejected — so the analyser bails
+     *  detector and every frame gets rejected - so the analyser bails
      *  out of rejection entirely instead.  See the inline rationale in
      *  {@code analyze}. */
     private double derivativeNoiseRatio(double[] samples, double peakAmp, double omegaPerSample) {

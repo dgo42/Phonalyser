@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ package org.edgo.audio.measure.fft;
 import lombok.experimental.UtilityClass;
 
 /**
- * Pure-math helpers used by {@link FftAnalyzer}.  Side-effect-free —
+ * Pure-math helpers used by {@link FftAnalyzer}.  Side-effect-free -
  * trivially unit-testable in isolation.
  *
  * <p>Lives in the same package as {@link FftAnalyzer} so its callers

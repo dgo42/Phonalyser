@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -45,7 +45,7 @@ public class DeviceSelector {
         } else {
             log.info("Available audio input devices ({}):", AudioBackend.instance().active());
             inputs.forEach(d -> {
-                log.info("  [{}] {} ({}) — {}", d.index(), d.name(), d.description(), d.vendor());
+                log.info("  [{}] {} ({}) - {}", d.index(), d.name(), d.description(), d.vendor());
                 AudioBackend.instance().listSupportedInputFormats(d).forEach(f -> log.info("      {}", f));
             });
         }
@@ -56,7 +56,7 @@ public class DeviceSelector {
         } else {
             log.info("Available audio output devices ({}):", AudioBackend.instance().active());
             outputs.forEach(d -> {
-                log.info("  [{}] {} ({}) — {}", d.index(), d.name(), d.description(), d.vendor());
+                log.info("  [{}] {} ({}) - {}", d.index(), d.name(), d.description(), d.vendor());
                 AudioBackend.instance().listSupportedOutputFormats(d).forEach(f -> log.info("      {}", f));
             });
         }
@@ -118,7 +118,7 @@ public class DeviceSelector {
                 : AudioBackend.instance().listInputDevices();
         if (devices.isEmpty())  return null;
         if (devices.size() == 1) return AudioBackend.instance().getDeviceByIndex(devices.get(0).index(), isOutput);
-        log.error("Multiple {} devices — use {} <index>:", isOutput ? "output" : "input", flag);
+        log.error("Multiple {} devices - use {} <index>:", isOutput ? "output" : "input", flag);
         devices.forEach(d -> log.error("  {}", d));
         return null;
     }

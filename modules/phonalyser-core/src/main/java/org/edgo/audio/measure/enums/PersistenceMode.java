@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -19,7 +19,7 @@
 package org.edgo.audio.measure.enums;
 
 /**
- * Oscilloscope display persistence ("digital phosphor") — how long a swept trace
+ * Oscilloscope display persistence ("digital phosphor") - how long a swept trace
  * lingers before fading.  {@link #OFF} clears each frame; {@link #INFINITE} never
  * decays (accumulate forever); the timed presets decay with that time constant;
  * {@link #MANUAL} uses the separate manual-seconds preference.  GPU path only.

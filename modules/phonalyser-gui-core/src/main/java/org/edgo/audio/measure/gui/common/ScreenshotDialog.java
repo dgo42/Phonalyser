@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -57,13 +57,13 @@ import lombok.extern.log4j.Log4j2;
  *   Width:  [____]
  *   Height: [____]
  *   [x] Keep aspect ratio
- *   Preset: [1280×720      ▾]   ← selecting fills the W/H fields above
+ *   Preset: [1280×720      ▾]   <- selecting fills the W/H fields above
  *
- *   [Copy to clipboard] [Save as…] [Close]
+ *   [Copy to clipboard] [Save as...] [Close]
  * </pre>
  *
  * <p>The width/height fields are plain numeric Text widgets that accept
- * digits only.  The preset combo is just a quick-fill helper — it does not
+ * digits only.  The preset combo is just a quick-fill helper - it does not
  * carry the dialog's state.
  */
 @Log4j2
@@ -246,9 +246,9 @@ public final class ScreenshotDialog {
 
         // renderer.render() internally pumps the SWT event loop so the
         // panes' offscreen Canvases can paint themselves into the
-        // returned Image.  That pump processes queued events — including
+        // returned Image.  That pump processes queued events - including
         // a second click on Copy/Save if the user happened to double-tap
-        // — and reentry would race the original invocation's
+        // - and reentry would race the original invocation's
         // dialog.close() against the outer frame's dialog.getDisplay(),
         // throwing "Widget is disposed".  Single-flight guard prevents
         // reentry; cached display lets us still finish cleanly if the
@@ -370,7 +370,7 @@ public final class ScreenshotDialog {
         return new FontData(family, DEFAULT_COMMENT_PT, SWT.NORMAL);
     }
 
-    /** Parses a persisted {@code FontData} string; null/blank/invalid → null (use default). */
+    /** Parses a persisted {@code FontData} string; null/blank/invalid -> null (use default). */
     private FontData parseFontData(String s) {
         if (s == null || s.isBlank()) return null;
         try { return new FontData(s); }

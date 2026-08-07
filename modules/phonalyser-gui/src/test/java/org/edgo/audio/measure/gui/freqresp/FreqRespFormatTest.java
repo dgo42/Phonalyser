@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -78,12 +78,12 @@ class FreqRespFormatTest {
         assertEquals("0.00 dB",   FreqRespFormat.formatDb(0.0));
         assertEquals("-3.50 dB",  FreqRespFormat.formatDb(-3.5));
         assertEquals("10.00 dB",  FreqRespFormat.formatDb(10.0));
-        assertEquals("—",         FreqRespFormat.formatDb(Double.NaN));
+        assertEquals("-",         FreqRespFormat.formatDb(Double.NaN));
     }
 
     @Test
     void formatPhaseProducesExpectedLabel() {
         assertTrue(FreqRespFormat.formatPhase(180.0).endsWith("°"));
-        assertEquals("—", FreqRespFormat.formatPhase(Double.NaN));
+        assertEquals("-", FreqRespFormat.formatPhase(Double.NaN));
     }
 }

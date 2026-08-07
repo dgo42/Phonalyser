@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -25,7 +25,7 @@ package org.edgo.audio.measure.dsp;
  *
  * <p>All three arrays are the same length N (the number of sweep points) and
  * {@code freqs} is strictly ascending.  {@code magLin[i]} is the **relative**
- * filter magnitude |H(freqs[i])| — i.e. the captured peak amplitude divided
+ * filter magnitude |H(freqs[i])| - i.e. the captured peak amplitude divided
  * by the DAC drive peak fraction, so the pass-band sits at unity (≈ 1.0)
  * and a notch reads e.g. 1e-4 (−80 dB).  {@code phaseRad[i]} is the filter
  * phase in radians.

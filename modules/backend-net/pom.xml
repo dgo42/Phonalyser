@@ -1,12 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  backend-net — placeholder for the TCP/IP bridge: a headless agent (Raspberry
-  Pi, incl. Zero 2 W) that owns a local audio device and serves it over the
-  network, plus the client-side backend the desktop talks to.
+  backend-net - the CLIENT half of the net bridge (package
+  org.edgo.audio.measure.net.client): an ordinary Phonalyser audio backend that,
+  instead of a local sound card, talks to a headless Phonalyser server over the
+  network and presents its devices, capture streams and generator as if they
+  were local.  Named backend-* like every other backend because that is exactly
+  what the GUI consumes it as.
 
-  It depends on phonalyser-core ONLY.  That is the whole point of the split: if
-  this module ever needs SWT or a gui.** package, the headless agent has stopped
-  being headless.  No sources yet; builds an empty jar.
+  The server itself lives in modules/server-net, the shared wire format in
+  modules/server-api.
+
+  It depends on phonalyser-core ONLY (plus the wire format and the WebSocket
+  transport): a backend that needed SWT or a gui.** package would no longer be
+  discoverable through the runtime SPI the way every other backend is.  The
+  server is not here in ANY scope, tests included: this module is the pure
+  client side, so its tests mock the far end of the socket the way a database
+  client's tests mock the database - the wire format in server-api is the whole
+  contract they need.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -16,7 +26,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.1.1</version>
+        <version>1.2.0</version>
         <relativePath>../phonalyser-parent</relativePath>
     </parent>
 
@@ -24,9 +34,19 @@
     <name>Phonalyser :: backend :: net (TCP/IP bridge)</name>
 
     <dependencies>
+        <!-- The wire format, shared with the headless server. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>server-api</artifactId>
+        </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>phonalyser-core</artifactId>
+        </dependency>
+        <!-- WebSocket transport (MIT).  Version in phonalyser-parent. -->
+        <dependency>
+            <groupId>org.java-websocket</groupId>
+            <artifactId>Java-WebSocket</artifactId>
         </dependency>
     </dependencies>
 </project>

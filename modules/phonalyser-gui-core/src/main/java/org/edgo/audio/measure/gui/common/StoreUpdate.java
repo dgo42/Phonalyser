@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,7 +28,7 @@ import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Asks the Microsoft Store how many package updates are available for THIS app —
+ * Asks the Microsoft Store how many package updates are available for THIS app -
  * the "direct" update check used when Phonalyser runs as a Store (MSIX) install
  * instead of polling GitHub.
  *

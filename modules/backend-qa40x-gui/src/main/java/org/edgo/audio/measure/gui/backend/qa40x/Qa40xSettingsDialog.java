@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -35,27 +35,27 @@ import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceInfo;
 
 /**
- * The QA402/QA403 backend's own settings — the dialog behind the per-backend
+ * The QA402/QA403 backend's own settings - the dialog behind the per-backend
  * button on the Preferences dialog's Audio tab
  * ({@code AudioDeviceManager#openCustomPreferences}).  These settings exist on
  * no other backend, which is why they live with the backend rather than on the
  * shared Preferences pages.
  *
  * <p>Edits reach the caller only on OK; Cancel returns the seed unchanged.  Not
- * an SWT {@code Dialog} subclass — this app builds its own shells.
+ * an SWT {@code Dialog} subclass - this app builds its own shells.
  */
 public class Qa40xSettingsDialog {
 
     private static final int DIALOG_MARGIN   = 12;
     private static final int BUTTON_SPACING  = 8;
-    /** Wrap width of the provenance note — sets the dialog's width, since the
+    /** Wrap width of the provenance note - sets the dialog's width, since the
      *  toggle and the button bar are both narrower. */
     private static final int NOTE_WIDTH_HINT = 380;
 
     private final Shell parent;
     private final Qa40xDeviceInfo info;
 
-    /** The built shell — non-null between {@link #build} and its disposal. */
+    /** The built shell - non-null between {@link #build} and its disposal. */
     private Shell dialog;
     /** The shell's single child, holding every widget.  Snapshotted for a help
      *  capture rather than the shell: a top-level Shell prints blank on Windows,
@@ -77,7 +77,7 @@ public class Qa40xSettingsDialog {
 
     /**
      * Shows the dialog modally, seeded with {@code i2sEnabled}, and returns the
-     * value the user accepted — or the seed unchanged when they cancelled.
+     * value the user accepted - or the seed unchanged when they cancelled.
      */
     public boolean open(boolean i2sEnabled) {
         build(i2sEnabled);
@@ -160,7 +160,7 @@ public class Qa40xSettingsDialog {
         cancelButton.setText(I18n.t("common.cancel"));
         dialog.setDefaultButton(okButton);
 
-        // Seeded so a Cancel — which never fires the OK listener — returns the
+        // Seeded so a Cancel - which never fires the OK listener - returns the
         // value the dialog opened with.
         accepted = i2sEnabled;
         okButton.addListener(SWT.Selection, e -> {
@@ -170,9 +170,9 @@ public class Qa40xSettingsDialog {
         cancelButton.addListener(SWT.Selection, e -> dialog.close());
     }
 
-    /** One {@code label → read-only value} row of the device panel.  A read-only
+    /** One {@code label -> read-only value} row of the device panel.  A read-only
      *  {@link Text} rather than a {@link Label} so the value can be selected and
-     *  copied — handy when quoting a serial or a capability word. */
+     *  copied - handy when quoting a serial or a capability word. */
     private void addReadOnlyRow(Composite parentComposite, String labelKey, String value) {
         Label caption = new Label(parentComposite, SWT.NONE);
         caption.setText(I18n.t(labelKey));

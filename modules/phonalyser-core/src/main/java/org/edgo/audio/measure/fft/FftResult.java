@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ import org.edgo.audio.measure.enums.WindowType;
 /**
  * Container for all FFT analysis outputs.  A standalone top-level class so
  * each {@code FftResult} instance is fully independent of the
- * {@link FftAnalyzer} instance that produced it — important for the FFT
+ * {@link FftAnalyzer} instance that produced it - important for the FFT
  * worker's double-buffered hand-off, where one analyser keeps emitting
  * fresh results while previous ones are still on the paint thread.
  */
@@ -36,8 +36,8 @@ public class FftResult {
     static final long serialVersionUID = 42L;
 
     /** Width (bins) of each flank {@link #localNoiseFloorDbFs()} samples just
-     *  beyond the fundamental's skirt — the "near range".  Wide enough to clear a
-     *  broad skirt (which can run ±32–50 bins) and give a stable median: a true
+     *  beyond the fundamental's skirt - the "near range".  Wide enough to clear a
+     *  broad skirt (which can run ±32-50 bins) and give a stable median: a true
      *  tone has dropped to the floor here, a broadband hump has not. */
     private static final int LOCAL_FLOOR_FLANK_BINS = 64;
 
@@ -49,7 +49,7 @@ public class FftResult {
     public int frameCount;
     /** Frequency resolution in Hz per bin (= sampleRate / fftSize). */
     public double freqResolution;
-    /** √(bin bandwidth in Hz) the spectrum was captured with — non-null only
+    /** √(bin bandwidth in Hz) the spectrum was captured with - non-null only
      *  for results reconstructed from a saved file ({@code # bin_bw_hz=}
      *  header); {@code null} for live results, where the V/√Hz conversion
      *  uses the live-config cache in {@code Preferences} instead. */
@@ -59,7 +59,7 @@ public class FftResult {
     /** FftOverlap used. */
     public FftOverlap overlap;
 
-    // Single-sided spectrum, bins 0 … fftSize/2.  Arrays are reused
+    // Single-sided spectrum, bins 0 ... fftSize/2.  Arrays are reused
     // across analysis ticks via the pool; {@link #ensureArrays} grows
     // them when the FFT length changes.
     public double[] amplitudeDbFs;
@@ -70,7 +70,7 @@ public class FftResult {
     // Fundamental
     public int    fundamentalBin;
     public double fundamentalHz;
-    /** Phase-difference refined frequency in Hz — sub-bin accurate (~1e-5 bin). */
+    /** Phase-difference refined frequency in Hz - sub-bin accurate (~1e-5 bin). */
     public double fundamentalHzRefined;
     /** Sub-bin refined frequency (Hz) of the second tone in a dual-/
      *  multi-tone signal, estimated by the same clean-frame method as
@@ -89,17 +89,17 @@ public class FftResult {
     /** Pinned coherent fundamental bin (κ) for the plot-time .frc "before-cal"
      *  re-derive, or {@link Double#NaN} for a single (non-averaged) tick.  The
      *  worker owns the accumulator and sets this; the UI's post-average pipeline
-     *  consumes it (non-NaN ⇒ averaging). */
+     *  consumes it (non-NaN => averaging). */
     public double coherentKappa = Double.NaN;
-    /** Channel this result was analyzed for ({@code true} = left) — picks the
+    /** Channel this result was analyzed for ({@code true} = left) - picks the
      *  left/right .frc calibration in the UI's post-average pipeline. */
     public boolean channelLeft = true;
     /** Absolute sample index of this result's analysis-window start (the
      *  worker's {@code samplesAbsStart}).  Lets the frequency-lock loop compute
-     *  the REAL elapsed time between corrections — {@code (Δstart)/sampleRate} —
+     *  the REAL elapsed time between corrections - {@code (Δstart)/sampleRate} -
      *  so its gain is time-correct under wildly varying tick durations. */
     public long samplesAbsStart;
-    /** Live capture {@code writePos} when this result was produced — where a
+    /** Live capture {@code writePos} when this result was produced - where a
      *  correction issued in response first lands in the capture stream.  Lets the
      *  frequency-lock loop place the correction's change-point past the
      *  analysis/publish backlog ({@code writePos − samplesAbsStart − fftSize}). */
@@ -107,13 +107,13 @@ public class FftResult {
     /** The producing worker's reset epoch at analysis start.  A result can sit
      *  parked in the coalescing UI hand-off across a signal change (the worker's
      *  epoch gates only cover production, not consumption); consumers compare
-     *  this against the worker's CURRENT epoch and drop stale frames — without
+     *  this against the worker's CURRENT epoch and drop stale frames - without
      *  it, a pre-change spectrum reaches the FLL after the change, and e.g. the
-     *  old 1 kHz tone's H20 (2.6 Hz from a 20 kHz target — inside the
+     *  old 1 kHz tone's H20 (2.6 Hz from a 20 kHz target - inside the
      *  plausibility gate) trims the live generator to a garbage frequency. */
     public long epoch;
 
-    // Harmonics (index 0 = 2nd harmonic, …)
+    // Harmonics (index 0 = 2nd harmonic, ...)
     public int      harmonicCount;
     public int[]    harmonicBins;
     public double[] harmonicHz;
@@ -123,7 +123,7 @@ public class FftResult {
     // Raw (pre-.frc-de-embed) complex phasors of the fundamental and of each
     // distortion peak, stamped by the analyser ({@link #captureRawPeaks}) off
     // the raw spectrum BEFORE any in-place .frc de-embed.  The DAC-predistortion
-    // correction divides these by the calibration response H(f) itself — de-
+    // correction divides these by the calibration response H(f) itself - de-
     // embedding both MAGNITUDE and PHASE explicitly, independent of the display
     // pipeline.  NaN / null when no peaks were captured (then the correction
     // falls back to the live re/im).
@@ -136,7 +136,7 @@ public class FftResult {
     public double[] rawPeakRe;
     public double[] rawPeakIm;
 
-    // Dual-tone intermod-product grid — for every intermodulation product
+    // Dual-tone intermod-product grid - for every intermodulation product
     // a·f1 + b·f2 (b ≠ 0) the analyzer de-rotated by a·Φ(F1) + b·Φ(F2) over
     // its lobe, the integer coefficients and the product's bin index, aligned
     // across the three arrays.  This lets the predistortion engine read a
@@ -149,12 +149,12 @@ public class FftResult {
     public int[] imdProductB;
     public int[] imdProductBin;
 
-    // Metrics — non-final so post-processing (e.g. ADC/frequency response correction) can mutate.
+    // Metrics - non-final so post-processing (e.g. ADC/frequency response correction) can mutate.
     public double thdPct;
     public double thdDb;
     public double thdNDb;
     public double snrDb;
-    /** Unweighted SINAD: 10·log10(refLin² / (noisePower + Σ harmonic power)) — basis for ENOB. */
+    /** Unweighted SINAD: 10·log10(refLin² / (noisePower + Σ harmonic power)) - basis for ENOB. */
     public double sinadDb;
     /** Lower bound of the frequency range used for SNR (Hz); 0 = no limit. */
     public double snrFreqMin;
@@ -168,11 +168,11 @@ public class FftResult {
     /** {@link #noisePower}'s IEC 61672 A-weighted sibling: the same noise bins
      *  weighted by the A curve before summing (same SNR band, same
      *  excluded-zone rescale, already divided by {@link #windowNenbwBins}).
-     *  Feeds the A-suffixed readouts — N+D, THD+N, SINAD → ENOB — while SNR
+     *  Feeds the A-suffixed readouts - N+D, THD+N, SINAD -> ENOB - while SNR
      *  and N stay on the unweighted {@link #noisePower}. */
     public double awNoisePower;
     /** Normalized equivalent noise bandwidth of the analysis window, in bins
-     *  (Hann: 1.5) — stamped at analysis time so a band-change recompute can
+     *  (Hann: 1.5) - stamped at analysis time so a band-change recompute can
      *  apply the same noise-integral correction to THIS spectrum regardless of
      *  the window selected by then. */
     public double windowNenbwBins;
@@ -184,7 +184,7 @@ public class FftResult {
      *  Result rather than as a separate volatile field on the worker
      *  to avoid a tearing race where the view reads "new pre / old
      *  r" and renders BLUE based on a future tick's cumulative data
-     *  while RED still reflects the current tick — visible as the
+     *  while RED still reflects the current tick - visible as the
      *  BLUE dot jumping every few ticks even when the cal lookup
      *  itself is bit-stable.
      *  Layout: {@code [0] = freqs[], [1] = dBFs[]} with index 0
@@ -198,7 +198,7 @@ public class FftResult {
      */
     public double fundamentalDynExclusionHz;
     /**
-     * User-supplied true fundamental level in dBFS — the manual fundamental
+     * User-supplied true fundamental level in dBFS - the manual fundamental
      * (from {@code --fund-v} / {@code --fund-dbv} or the FFT-tab manual-fund
      * field), converted from the stated dBV to dBFS once at the input boundary
      * via the global ADC offset and never overwritten by post-processing.
@@ -210,13 +210,13 @@ public class FftResult {
      *       level (lifted by the global dBV offset for the dBV column)
      *       instead of the notched, measured {@code fundamentalDbFs}.</li>
      * </ul>
-     * It affects ONLY the fundamental — every other bin (harmonics, noise
-     * floor, the spectrum trace) keeps the global dBFS→dBV offset.
+     * It affects ONLY the fundamental - every other bin (harmonics, noise
+     * floor, the spectrum trace) keeps the global dBFS->dBV offset.
      * {@link Double#NaN} when no manual override is supplied.
      */
     public double fundamentalTrueDbFs;
 
-    // Frame-rejection diagnostics — rejections discard frames and slow the
+    // Frame-rejection diagnostics - rejections discard frames and slow the
     // averaging convergence.  Structured (not a pre-formatted string) so the
     // GUI layer can localise the warning banner / tooltip.  rejectedFrames
     // == 0 means the capture was clean this tick.
@@ -256,7 +256,7 @@ public class FftResult {
      *  Called from {@link FftAnalyzer#analyze} before the bin
      *  arrays are written so the analyzer can use {@code re} /
      *  {@code im} / {@code amplitudeDbFs} / {@code phaseDeg}
-     *  directly as its output buffers — no per-tick allocation. */
+     *  directly as its output buffers - no per-tick allocation. */
     public void ensureArrays(int binCount, int harmonicCount) {
         if (amplitudeDbFs == null || amplitudeDbFs.length != binCount) {
             amplitudeDbFs = new double[binCount];
@@ -277,7 +277,7 @@ public class FftResult {
      *  later in-place mutation of the source (e.g. cal cascade
      *  re-write on the worker thread) doesn't perturb the copy.
      *  Use when a consumer needs a stable snapshot decoupled from
-     *  the live worker tick — e.g. a screenshot, a frozen
+     *  the live worker tick - e.g. a screenshot, a frozen
      *  comparison reference, or a paint that may outlive the next
      *  worker write. */
     public FftResult deepCopy() {
@@ -304,9 +304,9 @@ public class FftResult {
 
     /** Copies every field of {@code src} into THIS result, reusing this
      *  result's arrays when their lengths already match and allocating
-     *  otherwise — the in-place sibling of {@link #deepCopy()} (which
+     *  otherwise - the in-place sibling of {@link #deepCopy()} (which
      *  delegates here, so the field list lives once).  Lets a steady-state
-     *  consumer — the FFT view's displayed snapshot — refresh per displayed
+     *  consumer - the FFT view's displayed snapshot - refresh per displayed
      *  frame without cloning ~64 MB of spectrum arrays into garbage each
      *  time at large FFT sizes. */
     public void copyFrom(FftResult src) {
@@ -364,13 +364,13 @@ public class FftResult {
         c.rejectionTotalFrames       = src.rejectionTotalFrames;
         c.rejectionPhaseCoherence    = src.rejectionPhaseCoherence;
         c.rejectionDetail            = src.rejectionDetail;
-        c.gates                      = src.gates;   // immutable snapshot — share the reference
-        c.gateBlockDbFs              = src.gateBlockDbFs;    // debug snapshots — share (not mutated)
+        c.gates                      = src.gates;   // immutable snapshot - share the reference
+        c.gateBlockDbFs              = src.gateBlockDbFs;    // debug snapshots - share (not mutated)
         c.gateRejectDbFs             = src.gateRejectDbFs;
         c.gateRejectGates            = src.gateRejectGates;
         // 2-D array: clone the outer array AND each non-null row so the copy
         // can be mutated independently of the source (rows are tiny peak
-        // lists — no reuse needed).
+        // lists - no reuse needed).
         if (src.preCorrectionPeaks != null) {
             double[][] rows = src.preCorrectionPeaks;
             double[][] dst  = new double[rows.length][];
@@ -386,7 +386,7 @@ public class FftResult {
     /**
      * Noise floor as the spectrum actually SHOWS it (dBFS): the high-percentile
      * "top of the grass" with the fundamental, the harmonics and their skirts
-     * removed — the practical level a harmonic must clear to be measurable,
+     * removed - the practical level a harmonic must clear to be measurable,
      * well above the RMS {@link #avgNoiseFloorDbFs}.  Decays as the coherent
      * average deepens.  {@link Double#NaN} when no spectrum is present.
      */
@@ -414,7 +414,7 @@ public class FftResult {
     }
 
     /**
-     * Robust noise floor (dBFS) in the NEAR RANGE of the fundamental — the median
+     * Robust noise floor (dBFS) in the NEAR RANGE of the fundamental - the median
      * of two {@link #LOCAL_FLOOR_FLANK_BINS}-wide flanks placed immediately beyond
      * the fundamental's dynamic skirt.  This is a SHARPNESS probe, not a wide-band
      * floor: a genuine tone has dropped to the noise floor a few lobes out (so it
@@ -440,7 +440,7 @@ public class FftResult {
     }
 
     /**
-     * Harmonic {@code i}'s level (dBFS) as ORIGINALLY measured — before any
+     * Harmonic {@code i}'s level (dBFS) as ORIGINALLY measured - before any
      * {@code .frc} de-embedding.  When a cal is loaded the displayed
      * {@link #harmonicDbFs} is lifted by the cal, but {@link #preCorrectionPeaks}
      * retains the raw pre-correction levels; with no cal, {@link #harmonicDbFs}
@@ -461,12 +461,12 @@ public class FftResult {
     /**
      * Stamps the RAW (pre-.frc-de-embed) fundamental + distortion-peak phasors
      * off the current {@code re}/{@code im} into {@link #rawFundRe} /
-     * {@link #rawPeakRe} for the DAC-predistortion correction — call while
+     * {@link #rawPeakRe} for the DAC-predistortion correction - call while
      * {@code re}/{@code im} still hold the raw averaged spectrum, i.e. BEFORE
      * any in-place {@code .frc} de-embed.  The peak array carries the HARMONIC
      * bins for a single tone (derived from the refined fundamental, index
      * 0 = 2nd harmonic) and the de-rotated INTERMOD-PRODUCT bins
-     * ({@link #imdProductBin}) for a dual tone — the two correction paths never
+     * ({@link #imdProductBin}) for a dual tone - the two correction paths never
      * run together.  Shared by the GUI analyser worker and the CLI iterative
      * compensator so both feed the correction identical raw phase.
      */
@@ -478,7 +478,7 @@ public class FftResult {
         if (fundBin <= 0 || fundBin >= re.length) return;
 
         // Scale the captured phasors by the FFT amplitude factor so |phasor|
-        // equals the ABSOLUTE level (dBFS-linear) at that bin, not raw re/im —
+        // equals the ABSOLUTE level (dBFS-linear) at that bin, not raw re/im -
         // the dual-tone correction reads the magnitude straight off them.  The
         // factor (= |amplitude_linear| / |re,im|) is constant across the spectrum
         // and cancels the notch, so deriving it from the fundamental bin is

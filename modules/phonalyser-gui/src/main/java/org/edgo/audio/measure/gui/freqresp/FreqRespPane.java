@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -40,6 +40,7 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
@@ -58,8 +59,8 @@ import lombok.Getter;
  *
  * <p>The pane keeps the chart ({@link FreqRespView}), the frequency /
  * magnitude scrollbars, and the Wizard + Play action buttons that drive the
- * measurement worker.  Every tab — Settings / RIAA &amp; IEC / Presets /
- * Utility / Calibration / Save-to / Load-from — lives in the self-contained
+ * measurement worker.  Every tab - Settings / RIAA &amp; IEC / Presets /
+ * Utility / Calibration / Save-to / Load-from - lives in the self-contained
  * {@link FreqRespTabControl}; the pane only calls
  * {@link FreqRespTabControl#refreshRiaaEnable()} when a fresh measurement
  * lands.  Scrollbars round-trip through {@link Preferences} +
@@ -72,13 +73,16 @@ public final class FreqRespPane extends AbstractPane {
     /** Lower bound for the log-frequency scrollbar.  The view clamps
      *  freqRespFreqMinHz to ≥ 1 Hz so the log mapping is well-defined. */
     private static final double FREQ_FLOOR_HZ = 1.0;
-    /** Lower bound for the magnitude axis — matches the view's wheel
+    /** Lower bound for the magnitude axis - matches the view's wheel
      *  zoom-out limit (MAG_BOT_MIN_DB) so the scrollbar can reach the
      *  same outer edge the wheel allows. */
     private static final double MAG_BOT_MIN = -300.0;
     /** Fixed height of the toolbar row while the tab body is expanded;
-     *  released to strip-only height when the tabs are collapsed. */
-    private static final int TOOLBAR_ROW_HEIGHT = 200;
+     *  released to strip-only height when the tabs are collapsed.  232
+     *  (was 200): the Filters tab is the tallest and its bottom field row
+     *  clipped out of view at 200; 232 is the measured fit - every tab
+     *  shares this one height. */
+    private static final int TOOLBAR_ROW_HEIGHT = 232;
 
     @Getter private FreqRespView view;
 
@@ -100,10 +104,19 @@ public final class FreqRespPane extends AbstractPane {
     private Consumer<Void> rangeChangedListener;
     private Consumer<Void> measurementStoppedListener;
     private Consumer<String> measurementFailedListener;
+    private Consumer<StereoFreqRespResult> resultAvailableListener;
+
+    /** Set when the finished sweep's raw capture touched the converter rail,
+     *  cleared when the warning has been shown.  The flag exists because the
+     *  result arrives while the modal busy shell is still up - a dialog opened
+     *  there would sit behind it - so the warning waits for the STOPPED event
+     *  that closes the shell.  Written on the worker thread that publishes the
+     *  result and read on the UI thread, hence volatile. */
+    private volatile boolean clippedWarningPending;
 
     /** Calibration-correction store the pane owns (IoC) and constructor-injects
      *  into the view and tab control it builds, so both see the same entries.
-     *  Created before the builds run — it has no dependency on either. */
+     *  Created before the builds run - it has no dependency on either. */
     private final CorrectionStore correctionStore;
 
     public FreqRespPane(Composite parent) {
@@ -126,13 +139,14 @@ public final class FreqRespPane extends AbstractPane {
 
         // Build order matters: the view (created in buildPlotRow) receives the
         // store first; the tab control's constructor then pushes the prefs rows
-        // into it, firing FREQRESP_CALIBRATION_CHANGED — which the view handles
+        // into it, firing FREQRESP_CALIBRATION_CHANGED - which the view handles
         // by re-deriving from the store it already holds.
         correctionStore = new CorrectionStore("FreqResp", Events.FREQRESP_CALIBRATION_CHANGED);
         // Build the view first so it can be injected into the controller, which
         // owns it and drives clear/populate on each finished deconvolution.
         buildPlotRow();
-        controller = new FreqRespController(d::asyncExec, view);
+        Shell paneShell = group.getShell();
+        controller = new FreqRespController(r -> GuiUtil.marshal(paneShell, r), view);
         buildFreqScrollbarRow();
         buildToolbarRow(wandIcon, playIcon);
 
@@ -152,16 +166,22 @@ public final class FreqRespPane extends AbstractPane {
             setLocked(false);
             closeBusyShell();
             tabControl.refreshRiaaEnable();
+            warnIfClipped();
         };
         measurementFailedListener = this::showError;
+        // The sweep that just finished is the one whose raw capture may have hit
+        // the rail; the controller applies the same result to the view.
+        resultAvailableListener = stereo -> clippedWarningPending = stereo != null && stereo.clipped();
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.FREQRESP_RANGE_CHANGED, rangeChangedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, measurementStoppedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_FAILED, measurementFailedListener);
+        bus.subscribe(Events.FREQRESP_RESULT_AVAILABLE, resultAvailableListener);
         group.addDisposeListener(e -> {
             bus.unsubscribe(Events.FREQRESP_RANGE_CHANGED, rangeChangedListener);
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED, measurementStoppedListener);
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_FAILED, measurementFailedListener);
+            bus.unsubscribe(Events.FREQRESP_RESULT_AVAILABLE, resultAvailableListener);
             controller.shutdown();
         });
 
@@ -170,7 +190,7 @@ public final class FreqRespPane extends AbstractPane {
     }
 
     /** Registers this pane's settings tabs in the component registry under
-     *  {@code prefix} so automation can select + screenshot each by path —
+     *  {@code prefix} so automation can select + screenshot each by path -
      *  delegates to {@link FreqRespTabControl#registerTabs}. */
     public void registerTabs(String prefix) {
         if (tabControl != null) tabControl.registerTabs(prefix);
@@ -210,7 +230,7 @@ public final class FreqRespPane extends AbstractPane {
 
     private void buildFreqScrollbarRow() {
         // Horizontal frequency scrollbar wrapped in a FormLayout row so its
-        // right edge stops 18 px short of the group right — aligning with
+        // right edge stops 18 px short of the group right - aligning with
         // the view's right edge (the view ends at the magScrollbar's left
         // edge, magScrollbar is 18 px wide on the right).
         Composite freqRow = new Composite(group, SWT.NONE);
@@ -237,7 +257,7 @@ public final class FreqRespPane extends AbstractPane {
         // Toolbar row: the FreqRespTabControl (left, grabs space) + Wizard +
         // Play anchored on the right.  Mirrors the scope / FFT toolbar layout
         // so the action buttons always stay accessible.  heightHint set
-        // explicitly so the Settings tab's 4-row body has room — without it
+        // explicitly so the Settings tab's 4-row body has room - without it
         // the tab folder gets vertically squeezed and the bottom row (dither /
         // Nyquist combos) clips out of view.
         Composite toolbarRow = new Composite(group, SWT.NONE);
@@ -257,14 +277,14 @@ public final class FreqRespPane extends AbstractPane {
         // the plot above reclaims the freed space.
         tabControl.setOwner(this);
 
-        // Wizard button (left of Play) — opens the 3-page calibration wizard.
+        // Wizard button (left of Play) - opens the 3-page calibration wizard.
         wizardButton = createActionButton(toolbarRow, SWT.PUSH);
         if (wandIcon != null) wizardButton.setImage(wandIcon);
         wizardButton.setToolTipText(I18n.t("freqResp.button.wizard.tooltip"));
         wizardButton.addListener(SWT.Selection, e ->
                 new FreqRespWizardDialog(group.getShell(), view).open());
 
-        // Play button — kicks off a sweep measurement.  Click is ignored
+        // Play button - kicks off a sweep measurement.  Click is ignored
         // while a measurement is already in flight (the lock helper has
         // disabled it anyway but the listener guards defensively).
         playButton = createActionButton(toolbarRow, SWT.PUSH);
@@ -277,25 +297,25 @@ public final class FreqRespPane extends AbstractPane {
     // Play / measurement orchestration
     // -------------------------------------------------------------------------
 
-    /** Handler for the big Play button — locks the pane, opens the busy
+    /** Handler for the big Play button - locks the pane, opens the busy
      *  shell, and hands the sweep to the controller.  Unlock + close ride
      *  the {@link Events#FREQRESP_MEASUREMENT_STOPPED} subscription, the
      *  error dialog rides {@link Events#FREQRESP_MEASUREMENT_FAILED}. */
     private void onPlayClicked() {
         if (controller.isMeasurementRunning()) return;
-        // A fresh sweep replaces any loaded file — drop the "Loaded: …" banner.
+        // A fresh sweep replaces any loaded file - drop the "Loaded: ..." banner.
         view.setSourceFilePath(null);
         setLocked(true);
         openBusyShell(controller.expectedMeasurementSeconds());
         // Marshal each capture block's RMS to the SWT UI thread and
         // forward it to the live meter.  The callback fires on the audio
-        // capture thread so we MUST asyncExec — touching the meter
+        // capture thread so we MUST asyncExec - touching the meter
         // directly here would deadlock or crash.
         int sr = Math.max(1, Preferences.instance().current().getInputSampleRate());
-        Display d = group.getDisplay();
+        Shell paneShell = group.getShell();
         StereoCaptureProgress progress = (totalSamples, rmsLin) -> {
             double tSec = totalSamples / (double) sr;
-            d.asyncExec(() -> {
+            GuiUtil.marshal(paneShell, () -> {
                 if (busyMeter != null && !busyMeter.isDisposed()) {
                     busyMeter.appendSample(tSec, rmsLin);
                 }
@@ -326,7 +346,7 @@ public final class FreqRespPane extends AbstractPane {
         l.setText(I18n.t("freqResp.busy.message"));
         l.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        // Sweep geometry feeds the meter's time → instantaneous-frequency
+        // Sweep geometry feeds the meter's time -> instantaneous-frequency
         // mapping, which scales the trace smoothing with the period.
         Preferences prefs = Preferences.instance();
         busyMeter = new FreqRespLiveMeter(s, totalDurationSec,
@@ -336,6 +356,17 @@ public final class FreqRespPane extends AbstractPane {
         mg.widthHint  = 520;
         mg.heightHint = 100;
         busyMeter.setLayoutData(mg);
+
+        // Cancel is cooperative - the worker's
+        // cancel flag ends the sweep, and the normal STOPPED path closes this
+        // shell and unlocks the pane, exactly like a completed run.
+        Button cancel = new Button(s, SWT.PUSH);
+        cancel.setText(I18n.t("common.cancel"));
+        cancel.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, true, false));
+        cancel.addListener(SWT.Selection, e -> {
+            cancel.setEnabled(false);   // one shot; the teardown takes a moment
+            controller.cancelMeasurement();
+        });
 
         s.pack();
         Rectangle pb = parent.getBounds();
@@ -363,9 +394,22 @@ public final class FreqRespPane extends AbstractPane {
                 message != null ? message : "");
     }
 
+    /** Warns once about a sweep whose raw capture reached the converter rail.
+     *  Called from the STOPPED handler, i.e. after the modal busy shell is
+     *  gone - the trace is already on screen behind the dialog, which is the
+     *  point: the operator sees the curve the warning is about. */
+    private void warnIfClipped() {
+        if (!clippedWarningPending) return;
+        clippedWarningPending = false;
+        if (group.isDisposed()) return;
+        Dialogs.warn(group.getShell(),
+                I18n.t("freqResp.warning.clipped.title"),
+                I18n.t("freqResp.warning.clipped.message"));
+    }
+
     /** Disables every interactive control under this pane (recursively).
-     *  When unlocked, restores enabled state.  Spec literally calls for
-     *  "all tab control readonly and the button play too" — disabling the
+     *  When unlocked, restores enabled state.  A running sweep must leave
+     *  every tab control read-only, the Play button included - disabling the
      *  root {@link Composite} cascades correctly to children on every
      *  platform SWT supports. */
     private void setLocked(boolean locked) {
@@ -374,7 +418,7 @@ public final class FreqRespPane extends AbstractPane {
     }
 
     // -------------------------------------------------------------------------
-    // Scrollbar wiring — log-frequency horizontal, linear-dB vertical
+    // Scrollbar wiring - log-frequency horizontal, linear-dB vertical
     // -------------------------------------------------------------------------
 
     /** Re-aligns the freq and mag scrollbar thumbs + selections from the
@@ -386,7 +430,7 @@ public final class FreqRespPane extends AbstractPane {
         if (magScrollbar  == null || magScrollbar.isDisposed())  return;
         Preferences prefs = Preferences.instance();
 
-        // Frequency scrollbar — log scale spans FREQ_FLOOR..Nyquist.
+        // Frequency scrollbar - log scale spans FREQ_FLOOR..Nyquist.
         double nyq = nyquistHz();
         double a   = Math.log10(Math.max(FREQ_FLOOR_HZ, FREQ_FLOOR_HZ));
         double b   = Math.log10(Math.max(a + 1, nyq));
@@ -407,7 +451,7 @@ public final class FreqRespPane extends AbstractPane {
             freqScrollbar.setIncrement(Math.max(1, thumb / 10));
         }
 
-        // Magnitude scrollbar — linear dB range capped at view.magCeilingDb() /
+        // Magnitude scrollbar - linear dB range capped at view.magCeilingDb() /
         // MAG_BOT_MIN.  Thumb size shows the visible slice's share.
         double magTopMax = view.magCeilingDb();
         double visibleM = prefs.getFreqRespMagTopDb() - prefs.getFreqRespMagBotDb();
@@ -458,7 +502,7 @@ public final class FreqRespPane extends AbstractPane {
         view.redraw();
     }
 
-    /** Maximal analyzed frequency for the FreqResp view — Nyquist
+    /** Maximal analyzed frequency for the FreqResp view - Nyquist
      *  (sampleRate/2) scaled by {@code freqRespNyquistFraction}.  Caps
      *  the scrollbar's outer travel at the same value the view uses for
      *  zoom-out. */
@@ -499,7 +543,7 @@ public final class FreqRespPane extends AbstractPane {
     // FreqResp shares the common screenshot-size preference (persisted like the
     // other panes) but keeps its own save folder.
 
-    /** FreqResp's "Loaded: …" banner occupies the top-right, so the comment
+    /** FreqResp's "Loaded: ..." banner occupies the top-right, so the comment
      *  caption sits a line lower than the default to clear it. */
     @Override
     protected int screenshotCommentTopPx() {

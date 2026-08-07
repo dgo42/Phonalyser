@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,7 +28,7 @@ import lombok.extern.log4j.Log4j2;
 
 /**
  * Writes a PCM AIFF file (Apple Audio Interchange).  Samples are
- * stored big-endian — caller still hands little-endian PCM, this
+ * stored big-endian - caller still hands little-endian PCM, this
  * class byte-swaps on the fly so the generator's existing fillBuffer
  * code path (LE for the {@link WavWriter}) can be reused unchanged.
  *
@@ -118,7 +118,7 @@ public class AiffWriter implements AutoCloseable {
      *
      * <p>Computing {@code (long)(mantissa * 2^63)} directly would
      * overflow signed {@code long} for any mantissa &gt; 1 (which it
-     * always is, in [1,2)) and saturate to {@code Long.MAX_VALUE} —
+     * always is, in [1,2)) and saturate to {@code Long.MAX_VALUE} -
      * decoders then read the rate as ~0.9999 × 2^exp instead of the
      * intended value.  We instead split the mantissa into integer-bit
      * (always 1) and 63-bit fractional part, the latter fitting safely

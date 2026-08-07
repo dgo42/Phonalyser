@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -33,7 +33,7 @@ import lombok.Setter;
 /**
  * Recording {@link Qa40xTransport} test double.  It logs every register write in
  * order, hands back queued register-read replies, and holds audio transfers until
- * a test completes them synchronously — so the engine's async discipline can be
+ * a test completes them synchronously - so the engine's async discipline can be
  * driven step by step on the test thread.
  */
 final class FakeTransport implements Qa40xTransport {

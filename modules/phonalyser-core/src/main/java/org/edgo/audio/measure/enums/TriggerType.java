@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,7 +20,7 @@ package org.edgo.audio.measure.enums;
 
 /**
  * Trigger event type: EDGE fires on a level crossing (the classic Schmitt
- * trigger); GLITCH fires on a dV/dt discontinuity — a per-sample jump far
+ * trigger); GLITCH fires on a dV/dt discontinuity - a per-sample jump far
  * beyond the signal's own bounded slew, e.g. a dropped-samples DAC gap.
  * The {@link TriggerEdge} slope applies to both: crossing direction for
  * EDGE, jump sign for GLITCH.

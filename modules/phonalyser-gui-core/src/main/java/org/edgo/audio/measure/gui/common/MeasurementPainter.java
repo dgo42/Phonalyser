@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -30,15 +30,15 @@ import org.eclipse.swt.graphics.Rectangle;
  * response, condensed strip) paint through, so one set of render code can target
  * either an SWT {@code GC} or a GPU canvas (NanoVG) without being duplicated.
  *
- * <p>The two backends are {@link GcMeasurementPainter} (wraps a {@code GC} — used
+ * <p>The two backends are {@link GcMeasurementPainter} (wraps a {@code GC} - used
  * for on-screen CPU rendering, off-screen screenshots, and printing) and
- * {@code NvgMeasurementPainter} (wraps a NanoVG context — used for the embedded
+ * {@code NvgMeasurementPainter} (wraps a NanoVG context - used for the embedded
  * GPU scope).  Because every view's {@code paintCanvas} drives the <i>same</i>
  * painter, the live GPU view and the GC-rendered screenshot can never drift.
  *
  * <p>The method set deliberately <b>mirrors the {@code GC} subset the views use</b>
- * — same names, same getter/setter pairs — so the existing save/restore paint
- * code (e.g. {@code int prev = gc.getAntialias(); … ; gc.setAntialias(prev);})
+ * - same names, same getter/setter pairs - so the existing save/restore paint
+ * code (e.g. {@code int prev = gc.getAntialias(); ... ; gc.setAntialias(prev);})
  * converts mechanically by swapping the receiver, and {@code GcMeasurementPainter}
  * stays a pixel-identical pass-through.  Colours and fonts are SWT types because
  * the views already hold them (the palette is SWT {@code Color}s); a NanoVG
@@ -47,7 +47,7 @@ import org.eclipse.swt.graphics.Rectangle;
  * <p>The one departure from {@code GC} is the path API ({@link #beginPath()} /
  * {@link #moveTo} / {@link #lineTo} / {@link #strokePath()}): {@code GC} builds a
  * stroked curve through a heap-allocated {@code Path}, while NanoVG builds it
- * statefully — the stateful form fits both, so the GC backend manages the
+ * statefully - the stateful form fits both, so the GC backend manages the
  * {@code Path} internally.
  */
 public interface MeasurementPainter {
@@ -73,7 +73,7 @@ public interface MeasurementPainter {
     void  setTextAntialias(int mode);
     void  setAdvanced(boolean advanced);
 
-    /** Device pixels per LOGICAL pixel this surface renders at — the factor the
+    /** Device pixels per LOGICAL pixel this surface renders at - the factor the
      *  digital-phosphor rasteriser scales its coverage buffer up by so a HiDPI GPU
      *  surface gets crisp 1:1 device texels instead of a soft logical-res upscale.
      *  {@code 1} on a normal display and on the {@link GcMeasurementPainter} CPU path
@@ -129,6 +129,6 @@ public interface MeasurementPainter {
     // --- Measurement ---------------------------------------------------------
 
     Point textExtent(String s);
-    /** Current font's line height — the GC {@code getFontMetrics().getHeight()}. */
+    /** Current font's line height - the GC {@code getFontMetrics().getHeight()}. */
     int  fontHeight();
 }

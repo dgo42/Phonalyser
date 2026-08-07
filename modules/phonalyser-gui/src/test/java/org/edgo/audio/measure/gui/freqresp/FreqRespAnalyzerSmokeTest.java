@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Smoke tests for {@link FreqRespAnalyzer}.  All tests inject a mock
  * {@link StereoCaptureProvider} that synthesises a delay-line response from
- * the generator's reference sweep on BOTH channels — the deconvolution
+ * the generator's reference sweep on BOTH channels - the deconvolution
  * should recover a flat unity magnitude across the swept band on each.
  * Validates the orchestration (validate / progress / cancel / raw-capture
  * listener) without touching any real audio hardware.
@@ -52,11 +52,16 @@ class FreqRespAnalyzerSmokeTest {
     private static final double DURATION_SEC   = 1.0;
     private static final double LEAD_IN_SEC    = 0.1;
     private static final double AMP_VRMS       = 0.5;
-    /** Literal calibration values (the factory defaults) — both the stub's
+    /** Literal calibration values (the factory defaults) - both the stub's
      *  capture-side scaling and the analyzer's normalisation use these, so the
      *  test is self-consistent and needs no Preferences singleton. */
     private static final double DAC_FS_VRMS    = 2.79351;
     private static final double ADC_FS_VRMS    = 1.7931;
+    /** A 16-bit positive rail on the normalised scale - 32767/32768, the
+     *  highest level a 16-bit capture can deliver. */
+    private static final double RAIL_16_BIT    = 32767.0 / 32768.0;
+    /** Hot but unrailed: −0.0087 dBFS, just under the clip threshold. */
+    private static final double NEAR_RAIL_LIN  = 0.999;
 
     @Test
     void deconvolutionRecoversFlatResponseFromDelayLineOnBothChannels() throws Exception {
@@ -73,7 +78,7 @@ class FreqRespAnalyzerSmokeTest {
         assertEquals(SAMPLE_RATE, stereo.left().getSampleRate());
         assertFalse(stereo.left().isCalibrationApplied());
         assertNull(stereo.left().getSourceFilePath());
-        // Delay line on both channels → unity magnitude in the middle band.
+        // Delay line on both channels -> unity magnitude in the middle band.
         int lo = (int) (SWEEP_POINTS * 0.10);
         int hi = (int) (SWEEP_POINTS * 0.90);
         for (int i = lo; i < hi; i++) {
@@ -94,7 +99,7 @@ class FreqRespAnalyzerSmokeTest {
             assertNotNull(msg, "progress message must be non-null");
             assertTrue(frac >= 0.0 && frac <= 1.0, "fraction in [0,1]: " + frac);
             assertTrue(frac >= lastFraction.get(),
-                    "progress must be non-decreasing: " + lastFraction.get() + " → " + frac);
+                    "progress must be non-decreasing: " + lastFraction.get() + " -> " + frac);
             lastFraction.set(frac);
             fires.incrementAndGet();
         };
@@ -145,6 +150,64 @@ class FreqRespAnalyzerSmokeTest {
         assertNotNull(rightCount.get());
         assertTrue(leftCount.get() > 0);
         assertEquals(leftCount.get(), rightCount.get(), "L and R same length");
+    }
+
+    @Test
+    void rawPeakReportsTheCaptureLevelAndClearsTheClipFlag() throws Exception {
+        FreqRespAnalyzerConfig cfg = baseConfig()
+                .stereoCaptureProvider(delayLineProvider(DELAY_SAMPLES)).build();
+        StereoFreqRespResult stereo = new FreqRespAnalyzer(cfg).run(null, null);
+
+        // The stub drives the sweep at amplitudeVrms·√2 / dacFs of full scale;
+        // the raw peak must report that level, not 0 and not the rail.
+        double drivePeak = AMP_VRMS * Math.sqrt(2.0) / DAC_FS_VRMS;
+        assertEquals(drivePeak, stereo.rawPeakLin(), 1e-3,
+                "raw peak must track the captured level");
+        assertFalse(stereo.clipped(), "a sweep a long way below the rail is not clipped");
+    }
+
+    @Test
+    void railedSampleOnEitherChannelMarksTheResultClipped() throws Exception {
+        // Rail on the RIGHT channel only, and negative - so the peak scan has to
+        // cover both channels and take absolute values.
+        FreqRespAnalyzerConfig cfg = baseConfig()
+                .stereoCaptureProvider((g, o, i, sr, bd, d, oc, dur, c) -> {
+                    double[] left  = new double[sr * dur];
+                    double[] right = new double[sr * dur];
+                    right[right.length / 2] = -RAIL_16_BIT;
+                    return new StereoSamples(left, right);
+                })
+                .build();
+        StereoFreqRespResult stereo = new FreqRespAnalyzer(cfg).run(null, null);
+
+        assertEquals(RAIL_16_BIT, stereo.rawPeakLin(), 1e-12);
+        assertTrue(stereo.clipped(), "a capture that touches the 16-bit rail is clipped");
+    }
+
+    @Test
+    void captureJustBelowTheThresholdIsNotClipped() throws Exception {
+        FreqRespAnalyzerConfig cfg = baseConfig()
+                .stereoCaptureProvider((g, o, i, sr, bd, d, oc, dur, c) -> {
+                    double[] left  = new double[sr * dur];
+                    double[] right = new double[sr * dur];
+                    left[left.length / 2] = NEAR_RAIL_LIN;
+                    return new StereoSamples(left, right);
+                })
+                .build();
+        StereoFreqRespResult stereo = new FreqRespAnalyzer(cfg).run(null, null);
+
+        assertEquals(NEAR_RAIL_LIN, stereo.rawPeakLin(), 1e-12);
+        assertFalse(stereo.clipped(),
+                "a hot but unrailed capture must not raise the clipping warning");
+    }
+
+    @Test
+    void thePeakExactlyAtTheThresholdCountsAsClipped() {
+        // Pins the >= against a silent drift to >: 0.9995 is the documented
+        // threshold on StereoFreqRespResult, and the boundary itself must trip
+        // (the 16-bit rail sits only a hair above it).
+        assertTrue(new StereoFreqRespResult(null, null, 0.9995).clipped(),
+                "at the threshold IS clipped - >= not >");
     }
 
     @Test
@@ -203,7 +266,7 @@ class FreqRespAnalyzerSmokeTest {
                     y[offset + i] = sweep[i] * dacDrivePeak;
                 }
             }
-            // Same data on both channels for the test — the analyzer should
+            // Same data on both channels for the test - the analyzer should
             // still deconvolve them independently in parallel.
             return new StereoSamples(y, y.clone());
         };

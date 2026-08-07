@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -64,7 +64,7 @@ import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * {@code --freq-response} — measures a filter's transfer function H(f) via
+ * {@code --freq-response} - measures a filter's transfer function H(f) via
  * Farina log-sweep frequency-domain deconvolution.
  *
  * <p>Plays a single Farina exponential sweep {@code x(t)=sin(K(eᵗ/ᴸ−1))} from
@@ -84,7 +84,7 @@ import java.util.concurrent.CompletableFuture;
 @Log4j2
 public class FreqRespMode {
 
-    /** The CLI's single Preferences instance (transient mode) — injected by Main. */
+    /** The CLI's single Preferences instance (transient mode) - injected by Main. */
     @Setter
     private Preferences prefs;
 
@@ -107,7 +107,7 @@ public class FreqRespMode {
         if (samplerateArg == null) { log.error("--samplerate required"); System.exit(1); }
         if (amplitudeArg  == null) { log.error("--amplitude required");  System.exit(1); }
         if (adcFsArg != null) {
-            // Inject for this run only — Main marked Preferences transient, so not persisted.
+            // Inject for this run only - Main marked Preferences transient, so not persisted.
             prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
@@ -169,7 +169,7 @@ public class FreqRespMode {
         log.info("In device   : {}", inDevice.name());
         log.info("Sample rate : {} Hz",   sampleRate);
         log.info("Bits        : {}",      bitDepth);
-        log.info("Sweep range : {} → {} Hz",
+        log.info("Sweep range : {} -> {} Hz",
                 String.format(Locale.US, "%.3f", fStart),
                 String.format(Locale.US, "%.3f", fEnd));
         log.info("Sweep length: {} s ({} samples)",
@@ -189,7 +189,7 @@ public class FreqRespMode {
         // applied to the X reference inside computeFromLogSweep).
         int fadeSamples = FreqRespCalHelper.sweepFadeSamples(sweepSamples);
         gen.setSweepParams(false, fadeSamples, fadeSamples);
-        // Stereo capture: one playback, both ADC channels retained — the
+        // Stereo capture: one playback, both ADC channels retained - the
         // CLI mirrors the GUI's behaviour so a saved measurement carries
         // L and R deconvolved from the same sweep.
         StereoSamples rec = CaptureWithGenerator.runStereo(

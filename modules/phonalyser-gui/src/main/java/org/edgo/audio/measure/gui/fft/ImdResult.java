@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -29,17 +29,17 @@ package org.edgo.audio.measure.gui.fft;
  * IMD products follow the CCIF / DIN difference-frequency convention:
  *
  * <ul>
- *   <li>{@code dfd2Db} — the {@code f2 − f1} component (2nd-order
+ *   <li>{@code dfd2Db} - the {@code f2 − f1} component (2nd-order
  *       difference-frequency distortion).</li>
- *   <li>{@code dfd3Db} — combined 3rd-order: √(|F(2f₁−f₂)|² +
+ *   <li>{@code dfd3Db} - combined 3rd-order: √(|F(2f₁−f₂)|² +
  *       |F(2f₂−f₁)|²).</li>
- *   <li>{@code dnL[n] / dnH[n]} — n-th sideband below F1 (lower) /
+ *   <li>{@code dnL[n] / dnH[n]} - n-th sideband below F1 (lower) /
  *       above F2 (upper); n indexes 2..5.  {@code dnL[n] = level at
  *       n·f₁ − (n−1)·f₂},  {@code dnH[n] = level at n·f₂ − (n−1)·f₁}.</li>
- *   <li>{@code imdPwrPct} — combined intermod RMS as a percentage of
+ *   <li>{@code imdPwrPct} - combined intermod RMS as a percentage of
  *       the fundamental reference |F1| + |F2| (linear-magnitude sum
  *       of the two fundamentals).</li>
- *   <li>{@code tdnPct} — total distortion + noise as the scalar drop
+ *   <li>{@code tdnPct} - total distortion + noise as the scalar drop
  *       from total RMS to the fundamentals,
  *       {@code 100·(Vrms − √(F1² + F2²)) / Vrms}, where {@code Vrms²}
  *       and {@code F1² + F2²} are summed squared bin voltages over the
@@ -66,26 +66,26 @@ public final class ImdResult {
      *  (0..1).  Convert to dBV via the same anchor the THD path uses. */
     public double f1Mag;
     public double f2Mag;
-    /** F1 / F2 dBV values — the canonical absolute (voltage) readout for both
+    /** F1 / F2 dBV values - the canonical absolute (voltage) readout for both
      *  tones.  When a manual fundamental is supplied these carry the TRUE
      *  combined level split across the two tones (the notch-suppressed
      *  measurement can't); otherwise they are the measured level + ADC offset. */
     public double f1DbV;
     public double f2DbV;
-    /** F1 / F2 MEASURED level in dBFS (straight off the spectrum peak) — used for
+    /** F1 / F2 MEASURED level in dBFS (straight off the spectrum peak) - used for
      *  the dBFS column, the spectrum markers and autoscale, so they stay on the
      *  real peak even when {@link #f1DbV} is anchored to a manual fundamental. */
     public double f1DbFs;
     public double f2DbFs;
 
-    /** {@code f2 − f1} (Hz) — the difference frequency tracked by the
+    /** {@code f2 − f1} (Hz) - the difference frequency tracked by the
      *  DFD2 measurement. */
     public double diffHz;
 
     /** DFD2 amplitude as a percentage of the fundamental reference.
      *  {@code NaN} when {@code f2 − f1} is outside the measurable range. */
     public double dfd2Pct;
-    /** DFD3 amplitude as a percentage of the fundamental reference —
+    /** DFD3 amplitude as a percentage of the fundamental reference -
      *  RMS of the measurable sidebands; {@code NaN} when both {@code 2f1 − f2}
      *  and {@code 2f2 − f1} fall outside the spectrum. */
     public double dfd3Pct;
@@ -94,7 +94,7 @@ public final class ImdResult {
      *  Reference is the linear-magnitude sum |F1| + |F2|. */
     public double imdPwrPct;
     /** Total distortion + noise as the scalar drop from total RMS to
-     *  the fundamentals — {@code 100·(Vrms − √(F1² + F2²)) / Vrms} over
+     *  the fundamentals - {@code 100·(Vrms − √(F1² + F2²)) / Vrms} over
      *  squared bin voltages, the F1 / F2 skirts forming the
      *  fundamental term.  Window-independent. */
     public double tdnPct;

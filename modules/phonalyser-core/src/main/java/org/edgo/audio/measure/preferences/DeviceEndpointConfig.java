@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -45,7 +45,7 @@ public class DeviceEndpointConfig {
     private String activeRangeRight;
 
     /** {@code true} when this direction's full-scale values are OWNED by the
-     *  device — a QA40x reports its own input / output calibration (per-direction,
+     *  device - a QA40x reports its own input / output calibration (per-direction,
      *  hence the flag lives on the endpoint, not the profile).  The store never
      *  writes calibration into such ranges, and the once-per-upgrade seed merge
      *  takes them wholesale from the seed with no calibrated-value overlay (the
@@ -54,7 +54,7 @@ public class DeviceEndpointConfig {
      *  (default {@code false}). */
     private boolean calibrationFromDevice;
 
-    /** A deep copy of this endpoint — new range-row objects, so a copied profile
+    /** A deep copy of this endpoint - new range-row objects, so a copied profile
      *  (a dialog edit copy, a seeded profile) shares no mutable state with its
      *  source. */
     public DeviceEndpointConfig deepCopy() {

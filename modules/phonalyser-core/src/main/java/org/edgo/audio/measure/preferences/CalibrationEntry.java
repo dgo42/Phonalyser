@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,13 +26,13 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * One row of a pane's Load-calibration list — a single {@code .frc} file plus
+ * One row of a pane's Load-calibration list - a single {@code .frc} file plus
  * its two per-row toggles.  Reused by both the FFT pane and the Frequency
  * Response pane (the FreqResp pane simply ignores {@link #withNoise()}).
  *
  * <p>{@link #path} is plain mutable state: a row's file is chosen by the
  * file-browse and the row is rebuilt around the new path, so it never needs
- * change notification — the pane re-pushes the calibration store and triggers a
+ * change notification - the pane re-pushes the calibration store and triggers a
  * save by hand after a browse / clear.  {@link #active()} and
  * {@link #withNoise()} are observable {@link Property} values so each row's
  * checkbox two-way binds via {@code Bindings.check}; {@link Preferences} wires
@@ -49,11 +49,11 @@ public final class CalibrationEntry {
      *  empty (added-but-unpopulated) row. */
     @Getter @Setter private String path;
 
-    /** "Active" toggle — when {@code true} (and a file is loaded) this row's
+    /** "Active" toggle - when {@code true} (and a file is loaded) this row's
      *  correction is pushed into the calibration store and applied. */
     private final Property<Boolean> active;
 
-    /** "With noise" toggle — when {@code true} this row's correction applies to
+    /** "With noise" toggle - when {@code true} this row's correction applies to
      *  every FFT bin (noise floor included), not just the harmonic / dot
      *  positions.  Unused by the FreqResp pane. */
     private final Property<Boolean> withNoise;

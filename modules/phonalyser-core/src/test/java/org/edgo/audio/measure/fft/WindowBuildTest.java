@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -29,7 +29,7 @@ import org.edgo.audio.measure.enums.WindowType;
  * Sanity-pins {@link FftAnalyzer#buildWindow} for EVERY {@link WindowType}
  * (incl. the HFT / Kaiser-Bessel / deep-Chebyshev additions): correct
  * length, all-finite values, peak ≈ 1, non-trivial coherent gain, and
- * even symmetry — the properties every analysis window must satisfy
+ * even symmetry - the properties every analysis window must satisfy
  * regardless of its lobe shape.
  */
 class WindowBuildTest {
@@ -57,13 +57,13 @@ class WindowBuildTest {
         // Cosine-sum windows peak within a fraction of a percent of 1;
         // RECT / Chebyshev / HFT / Kaiser are exactly 1 by construction.
         assertTrue(max > 0.99 && max < 1.01, type + ": peak " + max);
-        // Coherent gain must be a healthy fraction — a broken build (sign
+        // Coherent gain must be a healthy fraction - a broken build (sign
         // error, wrong normalization) collapses it toward 0.
         double cohGain = sum / N;
         assertTrue(cohGain > 0.01 && cohGain <= 1.0, type + ": cohGain " + cohGain);
 
         // Even symmetry: symmetric windows mirror about (N−1)/2, periodic
-        // ones (FT / HFT) about N/2 — accept either convention.
+        // ones (FT / HFT) about N/2 - accept either convention.
         double symErr = 0.0, perErr = 0.0;
         for (int n = 1; n < N / 2; n++) {
             symErr = Math.max(symErr, Math.abs(w[n] - w[N - 1 - n]));
@@ -78,7 +78,7 @@ class WindowBuildTest {
         // The defining flat-top property: a tone BETWEEN bins keeps its
         // amplitude.  Synthesize a sine at bin 100.5, window it, and check
         // the windowed DFT magnitude at the two neighbouring bins against
-        // an on-bin tone — the worst-case scalloping must stay within
+        // an on-bin tone - the worst-case scalloping must stay within
         // ±0.001 dB (the published flatness is ±0.0001 dB).
         FftAnalyzer analyzer = new FftAnalyzer();
         double[] w = analyzer.buildWindow(N, WindowType.HFT248D);

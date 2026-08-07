@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -21,8 +21,8 @@ package org.edgo.audio.measure.enums;
 /**
  * How the FFT view steers the DDS generator onto the FFT bin grid:
  * <ul>
- *   <li>{@link #NONE} — no alignment (the generator runs free),</li>
- *   <li>{@link #FLL}  — a frequency-lock loop that corrects then waits for the
+ *   <li>{@link #NONE} - no alignment (the generator runs free),</li>
+ *   <li>{@link #FLL}  - a frequency-lock loop that corrects then waits for the
  *       measurement to settle within tolerance of the target before correcting
  *       again.</li>
  * </ul>

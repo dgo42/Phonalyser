@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Tests for {@link Lanczos} — the band-limited reconstruction kernel shared
+ * Tests for {@link Lanczos} - the band-limited reconstruction kernel shared
  * by the scope trace renderer ({@code float[]} overload) and the
  * frequency-domain views ({@code double[]} overload).  A regression here
  * shows up as wrong amplitudes, beat-envelope aliasing, or visible
@@ -83,8 +83,8 @@ class LanczosTest {
     @Test
     void lanczos_dcSignal_passesThroughUnchanged() {
         // A constant signal must come out as the same constant at any
-        // fractional position — Σw = 1 guarantee.  Tolerance allows
-        // for the float→double widening artefact at ~1e-7.
+        // fractional position - Σw = 1 guarantee.  Tolerance allows
+        // for the float->double widening artefact at ~1e-7.
         int n = 128;
         float[] data = new float[n];
         for (int i = 0; i < n; i++) data[i] = 0.42f;
@@ -105,7 +105,7 @@ class LanczosTest {
         // need to suppress aliasing.
         int n = 256;
         float[] data = new float[n];
-        double f = 1.0 / 32.0;   // 1 cycle per 32 samples → Nyquist/16
+        double f = 1.0 / 32.0;   // 1 cycle per 32 samples -> Nyquist/16
         for (int i = 0; i < n; i++) {
             data[i] = (float) Math.sin(2 * Math.PI * f * i);
         }
@@ -151,7 +151,7 @@ class LanczosTest {
     void lanczosDouble_nanEdges_doNotPoisonValidCore() {
         // Freq-domain compare traces carry NaN outside the swept band.  A DC
         // core flanked by NaN must reconstruct to the constant right up to the
-        // first / last valid sample — NaN taps are skipped and renormalized
+        // first / last valid sample - NaN taps are skipped and renormalized
         // out, not propagated.
         int n = 64;
         double[] data = new double[n];
@@ -170,7 +170,7 @@ class LanczosTest {
     @Test
     void lanczosDouble_nanCenter_returnsNaN() {
         // A genuine gap (NaN center sample) must stay a gap so the painter
-        // drops the pixel — same semantics as the linear per-point feed.
+        // drops the pixel - same semantics as the linear per-point feed.
         int n = 64;
         double[] data = new double[n];
         for (int i = 0; i < n; i++) data[i] = (i == 32) ? Double.NaN : 1.0;
@@ -181,7 +181,7 @@ class LanczosTest {
     @Test
     void lanczosDouble_arrayEdge_keepsFullGain() {
         // Where the kernel truncates at the array ends the renormalization
-        // keeps DC gain at 1 — a flat trace stays flat to the very last
+        // keeps DC gain at 1 - a flat trace stays flat to the very last
         // sample instead of drooping toward zero.
         int n = 64;
         double[] data = new double[n];

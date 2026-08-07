@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -34,16 +34,16 @@ import org.edgo.audio.measure.preferences.Preferences;
  * Central creation point for the application's three UI fonts, configured
  * through {@link Preferences} as {@code name|height|style} specs:
  * <ul>
- *   <li><b>normal</b> — axis labels, readouts, measurement-table body text
+ *   <li><b>normal</b> - axis labels, readouts, measurement-table body text
  *       (FFT / scope / FreqResp views, MainTab sidebar labels, the
  *       FreqResp live meter);</li>
- *   <li><b>bold</b> — emphasised measurement-table text;</li>
- *   <li><b>channel</b> — the big L/R channel buttons (not user-editable in
+ *   <li><b>bold</b> - emphasised measurement-table text;</li>
+ *   <li><b>channel</b> - the big L/R channel buttons (not user-editable in
  *       the Preferences dialog, but centralised here).</li>
  * </ul>
  *
  * <p>One {@link Font} per role is cached per {@link Display} and disposed
- * by a display-dispose hook — consumers must NOT dispose what they get
+ * by a display-dispose hook - consumers must NOT dispose what they get
  * here.  A font-preference change invalidates the cache, but running
  * widgets keep their old Font objects; the Preferences dialog therefore
  * triggers an in-place content rebuild ({@code MainWindow.rebuildContent}),
@@ -62,7 +62,7 @@ public final class Fonts {
 
     /** Live Font per role for the (single) display that requested it. */
     private final Map<Role, Font> cache = new HashMap<>();
-    /** Fonts retired by {@link #invalidate()} — widgets built before the
+    /** Fonts retired by {@link #invalidate()} - widgets built before the
      *  spec change may still paint with them, so they are only disposed
      *  with the display ({@link #disposeAll()}). */
     private final List<Font> retired = new ArrayList<>();
@@ -71,7 +71,7 @@ public final class Fonts {
     private Display cachedDisplay;
 
     private Fonts() {
-        // Invalidate on any spec change — the recreated shell re-fetches.
+        // Invalidate on any spec change - the recreated shell re-fetches.
         Preferences prefs = Preferences.instance();
         prefs.uiFontNormalProperty().addListener(v -> invalidate());
         prefs.uiFontBoldProperty().addListener(v -> invalidate());
@@ -104,13 +104,13 @@ public final class Fonts {
         return p[0] + " " + p[1] + ("normal".equals(p[2]) ? "" : " " + p[2]);
     }
 
-    /** Spec → {@link FontData}, for seeding the SWT FontDialog. */
+    /** Spec -> {@link FontData}, for seeding the SWT FontDialog. */
     public FontData toFontData(String spec) {
         String[] p = split(spec);
         return new FontData(p[0], parseHeight(p[1]), parseStyle(p[2]));
     }
 
-    /** {@link FontData} → spec.  Bold and italic survive — they are the
+    /** {@link FontData} -> spec.  Bold and italic survive - they are the
      *  only styles an SWT {@link Font} can carry (underline / strikeout
      *  are text-layout attributes, not font attributes). */
     public String toSpec(FontData fd) {
@@ -122,7 +122,7 @@ public final class Fonts {
         return fd.getName() + "|" + fd.getHeight() + "|" + style;
     }
 
-    /** Style token(s) → SWT style bits; tokens may combine as
+    /** Style token(s) -> SWT style bits; tokens may combine as
      *  {@code "bold+italic"}. */
     private int parseStyle(String token) {
         int style = SWT.NORMAL;
@@ -134,7 +134,7 @@ public final class Fonts {
     private synchronized Font font(Display d, Role role, String spec) {
         if (cachedDisplay != d) {
             // A new display (app restart inside one JVM, tests): the old
-            // display disposed our fonts with itself — just drop the refs.
+            // display disposed our fonts with itself - just drop the refs.
             cache.clear();
             cachedDisplay = d;
             d.disposeExec(this::disposeAll);

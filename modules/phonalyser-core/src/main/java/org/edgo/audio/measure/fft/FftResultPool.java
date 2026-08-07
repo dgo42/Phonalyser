@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * analysis path.
  *
  * <p><b>Ownership rule:</b> a slot leaves the pool via {@link #acquire}
- * and must be {@link #release}d exactly once — by whichever party
+ * and must be {@link #release}d exactly once - by whichever party
  * consumed it last (the producer on a discard path, or the consumer
  * after it deep-copied what it keeps).  A released slot's contents are
  * garbage from that moment on.
@@ -56,7 +56,7 @@ public final class FftResultPool {
     }
 
     /** Drops every pooled slot so their spectrum arrays become
-     *  collectable — e.g. when the analysis stops and ~100 MB of slots
+     *  collectable - e.g. when the analysis stops and ~100 MB of slots
      *  (at fftSize 4 M) would otherwise idle in the pool. */
     public void clear() {
         free.clear();

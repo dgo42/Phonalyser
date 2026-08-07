@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -38,25 +38,25 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * floor (Gaussian) that is then TPDF-dithered to {@link #DITHER_BITS}, runs it
  * through the coherent-averaging FFT over {@link #FRAMES} frames, and repeats
  * {@link #COLLECTIONS} times (independent noise seeds) to measure the run-to-run
- * SPREAD of each harmonic — the "drift" we have been chasing by overlaying
+ * SPREAD of each harmonic - the "drift" we have been chasing by overlaying
  * screenshots.  All results go to an INDEPENDENT log
  * ({@code target/fft-harmonic-stability.log}, see {@code log4j2-test.xml}).
  *
  * <p><b>Scope note:</b> a single {@code analyze()} buffer carries NO inter-frame
  * clock drift (the frames sit at exact sample offsets), so this isolates the
  * MEASUREMENT + intra-capture coherent averaging.  If the harmonics come out
- * stable here, the live drift is the cross-tick CLOCK, not the analysis math — a
+ * stable here, the live drift is the cross-tick CLOCK, not the analysis math - a
  * useful thing to pin down deterministically.  A cross-tick (worker) harness
  * with a simulated drifting offset is a separate, larger step.
  *
  * <p>Every generator/FFT knob is a {@code static final} constant below.
  */
-@Tag("exploratory")   // slow diagnostic harness — excluded from the normal build (see pom surefire)
+@Tag("exploratory")   // slow diagnostic harness - excluded from the normal build (see pom surefire)
 class FftHarmonicStabilityTest {
 
     // ── Generator & FFT settings (tune here) ───────────────────────────────
     private static final int        SAMPLE_RATE    = 384_000;          // Hz
-    private static final int        FFT_SIZE       = 65_536;           // 2^16 (real rig: 2_097_152 — slow)
+    private static final int        FFT_SIZE       = 65_536;           // 2^16 (real rig: 2_097_152 - slow)
     private static final WindowType WINDOW         = WindowType.BH7;
     private static final FftOverlap OVERLAP        = FftOverlap.PCT_75;
     private static final int        HARMONIC_COUNT = 8;                // H2..H9
@@ -68,7 +68,7 @@ class FftHarmonicStabilityTest {
     private static final double     FUND_HZ        = 1001.953125;
 
     private static final double     FUND_DBFS      = -79.74;           // fundamental level (dBFS)
-    /** H2..H9 levels as ABSOLUTE dBFS (NOT relative to the fundamental) — the
+    /** H2..H9 levels as ABSOLUTE dBFS (NOT relative to the fundamental) - the
      *  ADC's distortion sits at a fixed level regardless of signal strength. */
     private static final double[]   HARMONIC_DBFS  = {
             -130.0, -135.0, -150.0, -145.0, -158.0, -160.0, -157.0, -162.0
@@ -88,7 +88,7 @@ class FftHarmonicStabilityTest {
 
     // ── Plateau check: spread vs frames at FIXED overlap ───────────────────
     private static final int[]      PLATEAU_FRAMES  = {25, 100, 400, 1600};
-    private static final FftOverlap PLATEAU_OVERLAP = FftOverlap.PCT_75;   // fixed → window factor constant
+    private static final FftOverlap PLATEAU_OVERLAP = FftOverlap.PCT_75;   // fixed -> window factor constant
     private static final int        PLATEAU_SEEDS   = 40;
 
     // ── κ-refit A/B: "rotate the fork" ─────────────────────────────────────
@@ -139,7 +139,7 @@ class FftHarmonicStabilityTest {
                 if (kH < 1 || kH >= r.re.length) { singleDb[i][c] = lockDb[i][c] = Double.NaN; continue; }
                 double re = r.re[kH], im = r.im[kH], mag = Math.hypot(re, im);
                 // h·fundPh aligns the time-shift part; the (h-1)·π/2 term is the
-                // sin→complex offset (each tone is −π/2), which the harmonics carry
+                // sin->complex offset (each tone is −π/2), which the harmonics carry
                 // h× relative to the fundamental.  In a real rig this fixed offset
                 // would come from a phase calibration, not be assumed.
                 double ref = (i + 2) * fundPh + (i + 1) * (Math.PI / 2.0);
@@ -177,7 +177,7 @@ class FftHarmonicStabilityTest {
     /**
      * Depth-vs-stability map: for each (frames × overlap) cell, the peak-pick
      * spread of every harmonic across {@link #SWEEP_COLLECTIONS} independent noise
-     * seeds.  {@code eff = frames × (1 − overlap)} is the independent-frame span —
+     * seeds.  {@code eff = frames × (1 − overlap)} is the independent-frame span -
      * the real noise-averaging depth.  If the near-floor spread tracks
      * {@code 1/√eff} (halving per 4× eff), it is purely averaging-limited.
      */
@@ -210,17 +210,17 @@ class FftHarmonicStabilityTest {
     /**
      * Settles whether the near-floor harmonics keep averaging down or hit a floor.
      * Overlap is held FIXED (so the window/overlap-add gain is a constant) and only
-     * the frame count varies — at fixed hop the buffer length, hence the independent
+     * the frame count varies - at fixed hop the buffer length, hence the independent
      * signal, is ∝ frames, so this is a clean 1/√N test.  Reports σ (std dev), which
-     * tracks √N far more cleanly than max−min: pure averaging ⇒ σ halves per 4× frames
-     * (−6 dB of σ per decade-ish); a flat σ tail ⇒ a systematic floor averaging can't beat.
+     * tracks √N far more cleanly than max−min: pure averaging => σ halves per 4× frames
+     * (−6 dB of σ per decade-ish); a flat σ tail => a systematic floor averaging can't beat.
      */
     @Test
     void harmonicPlateauCheck() {
         FftAnalyzer analyzer = new FftAnalyzer();
         LOG.info("=== PLATEAU CHECK: spread vs frames @ fixed {} overlap | {} seeds | {} Hz ===",
                 PLATEAU_OVERLAP.label, PLATEAU_SEEDS, FUND_HZ);
-        LOG.info("  pure 1/√N ⇒ σ halves per 4× frames.  Flat σ tail ⇒ systematic floor.  (σ = std dev, dB)");
+        LOG.info("  pure 1/√N => σ halves per 4× frames.  Flat σ tail => systematic floor.  (σ = std dev, dB)");
         for (int frames : PLATEAU_FRAMES) {
             double[][] h = new double[HARMONIC_COUNT][PLATEAU_SEEDS];
             for (int c = 0; c < PLATEAU_SEEDS; c++) {
@@ -243,10 +243,10 @@ class FftHarmonicStabilityTest {
      * synthetic ground truth (we know the true κ exactly).  Four de-rotation
      * frequencies are compared on the SAME stored per-frame spectra:
      * <ul>
-     *   <li><b>analyze</b> — one-hop phase difference (what {@code analyze()} does today),</li>
-     *   <li><b>fund-full</b> — κ refit over ALL frames using only the fundamental,</li>
-     *   <li><b>comb-full</b> — κ refit over all frames using the whole comb (h× leverage),</li>
-     *   <li><b>oracle</b> — the true κ (no estimation error at all).</li>
+     *   <li><b>analyze</b> - one-hop phase difference (what {@code analyze()} does today),</li>
+     *   <li><b>fund-full</b> - κ refit over ALL frames using only the fundamental,</li>
+     *   <li><b>comb-full</b> - κ refit over all frames using the whole comb (h× leverage),</li>
+     *   <li><b>oracle</b> - the true κ (no estimation error at all).</li>
      * </ul>
      * Logs per-harmonic σ (does a better κ flatten the drift branch toward oracle?)
      * and mean |κ̂ − κ_true| (does the full-integration / comb refit actually shrink
@@ -314,7 +314,7 @@ class FftHarmonicStabilityTest {
         }
     }
 
-    /** One-hop fundamental phase-difference κ — replicates {@code analyze()}'s estimator. */
+    /** One-hop fundamental phase-difference κ - replicates {@code analyze()}'s estimator. */
     private static double kappaOneHop(double[][] xr, double[][] xi, int k0, int hop, int fftSize) {
         double phi0 = Math.atan2(xi[0][1], xr[0][1]);
         double phi1 = Math.atan2(xi[1][1], xr[1][1]);
@@ -325,7 +325,7 @@ class FftHarmonicStabilityTest {
     }
 
     /** κ that maximizes the coherent comb energy Σ|Σ_f Xₕ·e^{j·h·Φ}| over all frames,
-     *  golden-section searched in [k0−0.5, k0+0.5].  hMax=1 → fundamental only. */
+     *  golden-section searched in [k0−0.5, k0+0.5].  hMax=1 -> fundamental only. */
     private static double kappaRefit(double[][] xr, double[][] xi, int hop, int frames,
                                      int fftSize, int k0, int hMax) {
         double lo = k0 - 0.5, hi = k0 + 0.5;

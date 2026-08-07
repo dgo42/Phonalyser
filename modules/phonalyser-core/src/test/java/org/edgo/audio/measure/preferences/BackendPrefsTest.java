@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 /**
  * Tests for {@link BackendPrefs}: default values, the {@link
  * BackendPrefs#copyFrom} sync, and {@link BackendPrefs#snapshot}.  These
- * methods support the preferences-dialog undo flow — cancel restores
+ * methods support the preferences-dialog undo flow - cancel restores
  * the snapshot, OK commits.  A regression here silently corrupts the
  * undo path.
  */
@@ -91,11 +91,11 @@ class BackendPrefsTest {
 
         BackendPrefs snap = working.snapshot();
 
-        // User edits something …
+        // User edits something ...
         working.setInputDeviceName("Edited");
         working.setInputSampleRate(192_000);
 
-        // … and cancels.
+        // ... and cancels.
         working.copyFrom(snap);
 
         assertEquals("Original", working.getInputDeviceName());

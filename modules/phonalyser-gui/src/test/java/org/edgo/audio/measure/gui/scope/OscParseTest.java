@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 /**
- * Tests for {@link OscParse} — V/div and t/div label parsing, formatting,
+ * Tests for {@link OscParse} - V/div and t/div label parsing, formatting,
  * and the lenient user-input parser used by the editable step selectors.
  */
 class OscParseTest {

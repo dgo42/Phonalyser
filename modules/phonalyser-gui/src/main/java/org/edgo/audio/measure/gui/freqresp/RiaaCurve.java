@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -25,11 +25,11 @@ import lombok.experimental.UtilityClass;
  * Response pane.  Three independent flags drive the result:
  *
  * <ul>
- *   <li>{@code reverse} — when {@code false} (the default), returns the
- *       playback (decode) curve — the canonical "RIAA curve" that drops
+ *   <li>{@code reverse} - when {@code false} (the default), returns the
+ *       playback (decode) curve - the canonical "RIAA curve" that drops
  *       from +20 dB at 20 Hz to −20 dB at 20 kHz.  When {@code true},
  *       returns the record (encode) curve, the mirror image.</li>
- *   <li>{@code iec} — when {@code true}, applies the IEC subsonic high-pass
+ *   <li>{@code iec} - when {@code true}, applies the IEC subsonic high-pass
  *       amendment (T4 = 7950 µs) on top of whichever direction (record /
  *       playback) is active.  Keeps the math invertible: record-with-IEC is
  *       exactly the inverse of playback-with-IEC, so a flat in-out chain

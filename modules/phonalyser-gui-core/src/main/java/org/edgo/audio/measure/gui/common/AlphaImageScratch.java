@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,21 +26,21 @@ import org.eclipse.swt.graphics.PaletteData;
  * blit, so a steady-state frame churns ZERO arrays.
  *
  * <p>{@code GcMeasurementPainter} is constructed fresh per paint, so the pool cannot
- * live there — the caller ({@code PhosphorRenderer}) owns ONE instance across frames
+ * live there - the caller ({@code PhosphorRenderer}) owns ONE instance across frames
  * and passes it in.  The NanoVG backend ignores it (it stages into its own native
  * buffer).
  *
- * <p><b>The SWT {@code Image} handle is still created and disposed on every blit</b> —
+ * <p><b>The SWT {@code Image} handle is still created and disposed on every blit</b> -
  * an SWT {@code Image} cannot be pixel-updated in place, so only the backing arrays
  * (and the palette) are pooled here.  The arrays are sized EXACTLY to the request and
  * reallocated only when the size changes (the plot size is stable, so a resize
- * reallocates once and every subsequent same-size frame reuses them) — exact length so
+ * reallocates once and every subsequent same-size frame reuses them) - exact length so
  * the {@code rgb} array can back an {@code ImageData} with no length ambiguity.
  */
 public final class AlphaImageScratch {
 
     /** 24-bit direct-RGB palette (red high byte) matching the packed {@link #rgb}
-     *  layout — created once so the blit allocates no palette per frame. */
+     *  layout - created once so the blit allocates no palette per frame. */
     private final PaletteData palette = new PaletteData(0xFF0000, 0x00FF00, 0x0000FF);
     /** Packed 24-bit RGB backing array (R, G, B per pixel), sized exactly {@code pixels·3}. */
     private byte[] rgb;

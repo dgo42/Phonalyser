@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -40,7 +40,7 @@ public class ColorUtil {
         return GREY_R * rgb.red + GREY_G * rgb.green + GREY_B * rgb.blue;
     }
 
-    /** True when {@code color} is dark (perceptual grey below 50%) — put light content
+    /** True when {@code color} is dark (perceptual grey below 50%) - put light content
      *  on it for contrast; light colours keep dark content. */
     public boolean isDark(Color color) {
         return color != null && grey(color.getRGB()) < DARK_GREY_MAX;

@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  phonalyser-gui-core — shared SWT infrastructure, usable by EVERY GUI module.
+  phonalyser-gui-core - shared SWT infrastructure, usable by EVERY GUI module.
 
   Holds what more than one GUI module needs and what is not the application
   itself: the message bus, i18n, the widget toolkit, the automation component
   registry, the property bindings, and the common helpers and base classes
   (Dialogs, Fonts, Icon, ColorUtil, AbstractPane, AbstractTabControl, the
-  measurement painters, ...).  It also owns BackendSettingsUi — the service
-  contract by which a backend offers its own settings panel — and the registry
+  measurement painters, ...).  It also owns BackendSettingsUi - the service
+  contract by which a backend offers its own settings panel - and the registry
   that indexes it.
 
   This module exists so a backend's UI module does NOT have to depend on
@@ -20,7 +20,7 @@
              ├── phonalyser-gui        (the application: panes, views, MainWindow)
              └── backend-qa40x-gui     (a backend's own UI)
 
-  Nothing here may import a pane, a view, a controller or MainWindow — that is
+  Nothing here may import a pane, a view, a controller or MainWindow - that is
   what keeps the two consumers independent of each other.  Verified when the
   packages were moved: none of them referenced the application layer.
 -->
@@ -32,7 +32,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.1.1</version>
+        <version>1.2.0</version>
         <relativePath>../phonalyser-parent</relativePath>
     </parent>
 
@@ -72,7 +72,7 @@
 
     <build>
         <plugins>
-            <!-- The translation bundles live here because I18n does — a resource
+            <!-- The translation bundles live here because I18n does - a resource
                  belongs with the code that reads it, and moving I18n out of the
                  application module without them left it unable to load any locale.
                  The locale VARIANTS ship as an external $APPDIR/i18n folder so users

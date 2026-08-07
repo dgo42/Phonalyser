@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -51,7 +51,6 @@ import org.eclipse.swt.widgets.ProgressBar;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
@@ -64,18 +63,19 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.sound.CalibrationStore;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PresetBar;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
-import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.OscPreset;
 import org.edgo.audio.measure.preferences.Preferences;
 
@@ -91,8 +91,8 @@ import lombok.extern.log4j.Log4j2;
  * <p>The host {@link ScopePane} keeps the chart (main + condensed views), the
  * navigation / vertical scrollbars and the Record button.  Cross-boundary
  * operations flow DOWN through the constructor-injected {@link ScopeController}
- * — redraws, view-state recomputes, persistence wipes and the open-signal file
- * load are controller duties — rather than through a global bus, because they
+ * - redraws, view-state recomputes, persistence wipes and the open-signal file
+ * load are controller duties - rather than through a global bus, because they
  * must target the one pane/controller pair whose setting changed (the
  * screenshot renderer constructs a second, offscreen pane with its own idle
  * controller that must stay independent).  The single pane-owned action, the
@@ -115,11 +115,11 @@ public final class ScopeTabControl extends AbstractTabControl {
     private static final double V_PER_DIV_MAX = 500;
     static  final double T_PER_DIV_MIN = 1e-6;
     private static final double T_PER_DIV_MAX = 1.0;
-    /** Trigger hysteresis: 0…5 divisions in 0.1-div steps, one decimal. */
+    /** Trigger hysteresis: 0...5 divisions in 0.1-div steps, one decimal. */
     private static final double HYST_MAX_DIV  = 5;
     private static final double HYST_STEP_DIV = 0.1;
-    /** Delay before a USER generator change wipes the persistence afterglow —
-     *  covers the DAC → loopback → ADC → capture-buffer latency so the wipe lands
+    /** Delay before a USER generator change wipes the persistence afterglow -
+     *  covers the DAC -> loopback -> ADC -> capture-buffer latency so the wipe lands
      *  after the OLD signal has flushed out of the display path. */
     private static final int GEN_CLEAR_DELAY_MS = 250;
     /** Save-duration field bounds (s). */
@@ -146,7 +146,7 @@ public final class ScopeTabControl extends AbstractTabControl {
     private final ScopeView         view;
     private final ScopeController   controller;
 
-    // Cached references from IconUtils — owned by the shared cache and
+    // Cached references from IconUtils - owned by the shared cache and
     // disposed centrally when the main shell tears down.  (camera / crosshair
     // live on AbstractTabControl.)
     private final Image floppyDiskIcon;
@@ -157,19 +157,19 @@ public final class ScopeTabControl extends AbstractTabControl {
     // collapse, hover tooltips and tile painting; this control only supplies
     // each custom tab's tile content (see scopeTabTiles), tooltip and padding.
 
-    /** Step selectors for V/div (left + right) and t/div — fields so the
+    /** Step selectors for V/div (left + right) and t/div - fields so the
      *  mouse-wheel zoom on the main scope (driven by the pane) can step them. */
     private NumericStepField             leftScale;
     private NumericStepField             rightScale;
     private NumericStepField             timeScale;
     private NumericStepField             hysteresisSel;
     private Button                       hysteresisEnable;
-    /** "Reconstructed beat" overlay toggle — enabled only when the
+    /** "Reconstructed beat" overlay toggle - enabled only when the
      *  generator is in DUAL_TONE mode; field-promoted so the
      *  generator-form listener can flip its enabled state without
      *  rebuilding the tab. */
     private Button                       reconstructedBeatBtn;
-    /** Per-channel and trigger control widgets — fields so the preset
+    /** Per-channel and trigger control widgets - fields so the preset
      *  load path can push saved values back into the UI without having to
      *  rebuild the toolbar. */
     private Button leftToggle, rightToggle;
@@ -185,21 +185,21 @@ public final class ScopeTabControl extends AbstractTabControl {
     /** Reference to the trigger toolbar tab content so it can be enabled/disabled
      *  when switching between live record and file (openSignal) modes. */
     private Composite                    triggerGroup;
-    /** "Start" button on the Trigger toolbar tab — enabled iff Single
+    /** "Start" button on the Trigger toolbar tab - enabled iff Single
      *  mode is selected.  Promoted to a field so {@link #syncTriggerStart}
      *  can re-apply the rule after a bulk-enable. */
     private Button                       triggerStartBtn;
-    /** Calibrate button — gated by the pane's capture state via
+    /** Calibrate button - gated by the pane's capture state via
      *  {@link #setCalibrateEnabled(boolean)}. */
     private Button                       calibrateButton;
     /** Read-only text field showing the currently loaded openSignal file path. */
     private Text                         openSignalPathField;
 
-    /** Subscriber for {@link Events#GENERATOR_SIGNAL_CHANGED} — keeps the
+    /** Subscriber for {@link Events#GENERATOR_SIGNAL_CHANGED} - keeps the
      *  "Reconstructed beat" checkbox enabled only in DUAL_TONE mode.  Bound
      *  only on the live pane; {@code null} on the screenshot variant. */
     private Consumer<GenChangeCause>     genChangeListener;
-    /** {@link Events#SCOPE_SINGLE_DISARMED} subscriber — pops the trigger Start
+    /** {@link Events#SCOPE_SINGLE_DISARMED} subscriber - pops the trigger Start
      *  toggle back out when a SINGLE shot fires.  Live pane only. */
     private Consumer<Void>               singleDisarmedListener;
 
@@ -218,7 +218,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         setLayout(gl);
 
         // CTabFolder (not native TabFolder) so the tab strip stays on a
-        // single row even when the toolbar gets narrow — native TabFolder
+        // single row even when the toolbar gets narrow - native TabFolder
         // on Win32 wraps the strip to a second row when the labels don't
         // fit, doubling the toolbar height.  CTabFolder shrinks tab labels
         // and shows scroll-chevrons instead.
@@ -255,7 +255,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         }
 
         // Select the first tab BEFORE TileTabFolder.init() sets the strip
-        // height — CTabFolder's preferred-size calculation includes the
+        // height - CTabFolder's preferred-size calculation includes the
         // selected tab's body in the total, and we want that body height
         // baked in when the first layout pass uses the taller strip height
         // (otherwise the body gets squeezed to 0 px on the first paint).
@@ -266,18 +266,18 @@ public final class ScopeTabControl extends AbstractTabControl {
 
         // Track generator-form changes so the "Reconstructed beat" checkbox
         // stays enabled only in DUAL_TONE mode without requiring a rebuild.
-        // Only the live pane reacts — the offscreen screenshot variant keeps
+        // Only the live pane reacts - the offscreen screenshot variant keeps
         // its static state.
         if (liveCapture) {
             genChangeListener = cause -> {
                 if (isDisposed()) return;
-                getDisplay().asyncExec(() -> {
+                GuiUtil.marshal(getShell(), () -> {
                     if (isDisposed()) return;
                     syncReconstructedBeatEnabled();
                     // A real generator change (not a sub-mHz FLL trim) invalidates the
                     // running scope statistics AND the persistence afterglow (it shows
                     // the OLD signal).  The afterglow wipe is DELAYED: the change takes
-                    // DAC → loopback → ADC → capture-buffer latency to reach the
+                    // DAC -> loopback -> ADC -> capture-buffer latency to reach the
                     // display, so an instant wipe would re-accumulate old-signal
                     // frames captured before the change arrived.
                     if (cause == GenChangeCause.USER_INPUT) {
@@ -286,7 +286,7 @@ public final class ScopeTabControl extends AbstractTabControl {
                             if (isDisposed()) return;
                             // The signal transition itself is a discontinuity: the
                             // glitch trigger fires on it and NORMAL would hold that
-                            // transition frame forever — drop the anchor along with
+                            // transition frame forever - drop the anchor along with
                             // the afterglow, once the change has flushed through.
                             view.resetTriggerHold();
                             controller.clearPersistence();
@@ -296,7 +296,7 @@ public final class ScopeTabControl extends AbstractTabControl {
             };
             MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
             singleDisarmedListener = ignored -> {
-                if (!isDisposed()) getDisplay().asyncExec(() -> {
+                if (!isDisposed()) GuiUtil.marshal(getShell(), () -> {
                     if (triggerStartBtn != null && !triggerStartBtn.isDisposed()) {
                         triggerStartBtn.setSelection(false);
                     }
@@ -322,8 +322,8 @@ public final class ScopeTabControl extends AbstractTabControl {
 
     /** Registers each settings tab in the component registry under
      *  {@code prefix} (e.g. {@code "multifunctional/scope/tabs"}) so automation
-     *  can select a tab by path — {@code activate} expands the tab body and
-     *  selects that tab — then screenshot this tab control showing it.  Slugs
+     *  can select a tab by path - {@code activate} expands the tab body and
+     *  selects that tab - then screenshot this tab control showing it.  Slugs
      *  are language-independent; tabs not built are skipped. */
     public void registerTabs(String prefix) {
         registerTab(prefix, "left",       TAB_LEFT);
@@ -337,18 +337,18 @@ public final class ScopeTabControl extends AbstractTabControl {
     }
 
 
-    /** Sets the t/div selector (fires its listener → pref write + view-state
+    /** Sets the t/div selector (fires its listener -> pref write + view-state
      *  recompute).  Used by the pane's auto-setup. */
     public void setTimePerDiv(double v) {
         if (timeScale != null && !timeScale.isDisposed()) timeScale.setValue(v);
     }
 
-    /** Sets the left V/div selector (fires its listener → pref write + redraw). */
+    /** Sets the left V/div selector (fires its listener -> pref write + redraw). */
     public void setLeftVoltsPerDiv(double v) {
         if (leftScale != null && !leftScale.isDisposed()) leftScale.setValue(v);
     }
 
-    /** Sets the right V/div selector (fires its listener → pref write + redraw). */
+    /** Sets the right V/div selector (fires its listener -> pref write + redraw). */
     public void setRightVoltsPerDiv(double v) {
         if (rightScale != null && !rightScale.isDisposed()) rightScale.setValue(v);
     }
@@ -359,9 +359,9 @@ public final class ScopeTabControl extends AbstractTabControl {
      *  the hysteresis selector only when hysteresis is on, Reconstructed beat
      *  only when the generator is in dual-tone form, the trigger-source
      *  buttons only for a channel whose display is on (the blanket enable would
-     *  otherwise re-open a hidden channel's button — and this re-corrects a
+     *  otherwise re-open a hidden channel's button - and this re-corrects a
      *  stale persisted selection the moment recording resumes), and the Glitch
-     *  type button only outside AUTO (glitch in AUTO makes no sense — see the
+     *  type button only outside AUTO (glitch in AUTO makes no sense - see the
      *  mode listener where the same gate lives). */
     public void setTriggerControlsEnabled(boolean enabled) {
         setSubtreeEnabled(triggerGroup, enabled);
@@ -378,7 +378,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         }
     }
 
-    /** Clears the open-signal path field — called when live recording starts
+    /** Clears the open-signal path field - called when live recording starts
      *  and the loaded file is discarded. */
     public void clearOpenSignalPath() {
         if (openSignalPathField != null && !openSignalPathField.isDisposed()) {
@@ -387,7 +387,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         }
     }
 
-    /** Drives the Utility-tab calibrate button's enabled state — the pane owns
+    /** Drives the Utility-tab calibrate button's enabled state - the pane owns
      *  the capture gate that decides {@code enable}. */
     public void setCalibrateEnabled(boolean enable) {
         if (calibrateButton != null && !calibrateButton.isDisposed()
@@ -497,7 +497,7 @@ public final class ScopeTabControl extends AbstractTabControl {
                 break;
             }
             case TAB_PRESETS: {
-                // Show the number of saved presets when there are any — a hint
+                // Show the number of saved presets when there are any - a hint
                 // that there's something to load.
                 int n = prefs.getOscPresets().size();
                 if (n > 0) tiles.add(TileTabFolder.Tile.text(n + " saved",
@@ -520,7 +520,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         }
     }
 
-    /** Trigger-tile labels — read straight from the current preferences. */
+    /** Trigger-tile labels - read straight from the current preferences. */
     private static String triggerChannelLabel() {
         return Preferences.instance().getOscTriggerChannel() == Channel.L ? "L" : "R";
     }
@@ -535,14 +535,14 @@ public final class ScopeTabControl extends AbstractTabControl {
             default:     return "?";
         }
     }
-    /** "H 0.5" — short label for the trigger hysteresis tile (only drawn
+    /** "H 0.5" - short label for the trigger hysteresis tile (only drawn
      *  when hysteresis is enabled).  Formatted with {@link Locale#ROOT} so
      *  the decimal separator is a period across all platforms. */
     private static String triggerHysteresisLabel() {
         return String.format(Locale.ROOT, "H %.1f",
                 Preferences.instance().getOscTriggerHysteresisDiv());
     }
-    /** i18n key for the tab-level hover tooltip — used as a fallback in
+    /** i18n key for the tab-level hover tooltip - used as a fallback in
      *  the MouseMove listener when the cursor isn't over any tile. */
     private static String tabLabelTooltipKey(int tabIndex) {
         switch (tabIndex) {
@@ -583,7 +583,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         leftScale.setToolTipText(I18n.t("scope.left.scale.tooltip"));
         // Coupled write: the offset fraction is re-derived from the OLD V/div
         // (preserveCanvasMiddle needs the pre-change value), so this can't use
-        // Bindings.stepSelector — the offset must be set before V/div changes
+        // Bindings.stepSelector - the offset must be set before V/div changes
         // and no helper models that pairing.  Both prefs are now bound and
         // auto-save, so the explicit save() is retired; the preset-load path
         // keeps the selector in sync via leftScale.setValue(...).
@@ -591,7 +591,7 @@ public final class ScopeTabControl extends AbstractTabControl {
             double oldV = prefs.getOscLeftVoltsPerDiv();
             double newV = leftScale.getValue();
             // Keep the voltage at the canvas vertical centre fixed when
-            // the V/div changes — feels like "zoom around the middle"
+            // the V/div changes - feels like "zoom around the middle"
             // rather than "rescale everything from y=0".
             prefs.setOscLeftOffsetFrac(
                     ScopeFormat.preserveCanvasMiddle(prefs.getOscLeftOffsetFrac(), oldV, newV));
@@ -608,7 +608,7 @@ public final class ScopeTabControl extends AbstractTabControl {
             if (leftScale != null && !leftScale.isDisposed()) leftScale.setValue(v);
         });
         // Wheel / arrows / typing on this field change ONLY this channel (via the
-        // selection listener above) — coupling both channels is the ctrl+wheel
+        // selection listener above) - coupling both channels is the ctrl+wheel
         // scope-zoom gesture alone, not the per-channel V/div field.
 
         leftAc = squareToggle(g, "AC");
@@ -691,12 +691,12 @@ public final class ScopeTabControl extends AbstractTabControl {
             controller.redrawViews();
             toolbarTabs.refreshTab(TAB_RIGHT);
         });
-        // Reverse sync — see the leftScale twin for the loop-safety argument.
+        // Reverse sync - see the leftScale twin for the loop-safety argument.
         Bindings.onChange(toolbarTabs, prefs.oscRightVoltsPerDivProperty(), v -> {
             if (rightScale != null && !rightScale.isDisposed()) rightScale.setValue(v);
         });
         // Wheel / arrows / typing on this field change ONLY this channel (selection
-        // listener above) — coupling is the ctrl+wheel scope zoom alone.
+        // listener above) - coupling is the ctrl+wheel scope zoom alone.
 
         rightAc = squareToggle(g, "AC");
         rightAc.setToolTipText(I18n.t("scope.right.ac.tooltip"));
@@ -758,7 +758,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         timeScale.setToolTipText(I18n.t("scope.time.scale.tooltip"));
         Bindings.stepField(timeScale, prefs.oscTimePerDivProperty());
         // viewCenterFrames is the primary state and does NOT change on
-        // t/div — only the window's width changes.  applyViewState
+        // t/div - only the window's width changes.  applyViewState
         // re-derives the view window, repaints, and fires the view-state
         // event so the pane's nav slider re-syncs its thumb + position and
         // the centred frame stays put.  In live-record mode
@@ -795,12 +795,12 @@ public final class ScopeTabControl extends AbstractTabControl {
         Bindings.radio(chMap, prefs.oscTriggerChannelProperty());
         Bindings.onChange(toolbarTabs, prefs.oscTriggerChannelProperty(), v -> {
             toolbarTabs.refreshTab(TAB_TRIGGER);
-            view.resetTriggerHold();   // other channel's anchor is stale — see the type listener
+            view.resetTriggerHold();   // other channel's anchor is stale - see the type listener
             controller.redrawViews();
         });
         // Grey the trigger-source button whose channel display is off (a hidden
         // channel can't be the trigger), and auto-switch off it when it's the live
-        // selection — the same two channel-enable prefs the L/R V-groups above and
+        // selection - the same two channel-enable prefs the L/R V-groups above and
         // the measurements-table selector subscribe to.
         Bindings.onChange(toolbarTabs, prefs.oscLeftChannelEnabledProperty(),  en -> syncTriggerChannelButtons());
         Bindings.onChange(toolbarTabs, prefs.oscRightChannelEnabledProperty(), en -> syncTriggerChannelButtons());
@@ -818,13 +818,13 @@ public final class ScopeTabControl extends AbstractTabControl {
         Bindings.radio(edgeMap, prefs.oscTriggerEdgeProperty());
         Bindings.onChange(toolbarTabs, prefs.oscTriggerEdgeProperty(), v -> {
             toolbarTabs.refreshTab(TAB_TRIGGER);
-            view.resetTriggerHold();   // old-edge anchor is stale — see the type listener
+            view.resetTriggerHold();   // old-edge anchor is stale - see the type listener
             controller.redrawViews();
         });
 
         // Trigger event type: E = level-crossing edge trigger, G = dV/dt
         // glitch trigger (dropped-sample DAC gaps).  The ↑/↓ edge selection
-        // applies to both — crossing direction vs. jump sign.
+        // applies to both - crossing direction vs. jump sign.
         Composite typeSet = new Composite(g, SWT.NONE);
         typeSet.setLayout(flushRowLayoutHorizontal(2));
         typeEdge   = squareToggle(typeSet, "E");
@@ -845,7 +845,7 @@ public final class ScopeTabControl extends AbstractTabControl {
             controller.redrawViews();
         });
 
-        // Glitch in AUTO makes no sense — free-run repaints at the render rate, so
+        // Glitch in AUTO makes no sense - free-run repaints at the render rate, so
         // a caught glitch frame would be overwritten immediately.  Selecting AUTO
         // flips the type back to EDGE, and G stays disabled until NORMAL / SINGLE.
         if (prefs.getOscTriggerMode() == TriggerMode.AUTO
@@ -880,7 +880,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         triggerStartBtn = new Button(g, SWT.TOGGLE);
         Image triggerPlayIcon = IconUtils.icon(g.getDisplay(), Icon.PLAY_DARK_SMALL);
         triggerStartBtn.setImage(triggerPlayIcon);
-        // Image is cached and owned by IconUtils — disposed when the
+        // Image is cached and owned by IconUtils - disposed when the
         // main shell tears down, not on button dispose.
         triggerStartBtn.setToolTipText(I18n.t("scope.trigger.start.tooltip"));
         triggerStartBtn.setLayoutData(new RowData(SQUARE_BUTTON, SQUARE_BUTTON));
@@ -895,7 +895,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         // are already updated when syncTriggerStart reads modeSingle's state.
         Bindings.onChange(toolbarTabs, prefs.oscTriggerModeProperty(), v -> syncTriggerStart());
 
-        // Hysteresis selector — 0.1-div steps from 0.0 (disabled) to 5.0 div.
+        // Hysteresis selector - 0.1-div steps from 0.0 (disabled) to 5.0 div.
         // Moved out of the global Preferences dialog so it lives alongside
         // the other trigger controls.  Checkbox gates whether hysteresis is
         // applied at all; selector value is preserved when toggled off.
@@ -924,7 +924,7 @@ public final class ScopeTabControl extends AbstractTabControl {
             toolbarTabs.refreshTab(TAB_TRIGGER);
         });
 
-        // "Reconstructed beat" overlay toggle — paints the |F1-F2|
+        // "Reconstructed beat" overlay toggle - paints the |F1-F2|
         // envelope on top of the live trace in the trigger channel's
         // colour.  Active only in DUAL_TONE; disabled (greyed) on
         // every other waveform.  Subscribed to
@@ -934,7 +934,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         reconstructedBeatBtn.setText(I18n.t("scope.trigger.reconstructedBeat"));
         reconstructedBeatBtn.setToolTipText(I18n.t("scope.trigger.reconstructedBeat.tooltip"));
         // Enabled state follows the generator form (DUAL_TONE), driven by
-        // syncReconstructedBeatEnabled on GENERATOR_SIGNAL_CHANGED — not a
+        // syncReconstructedBeatEnabled on GENERATOR_SIGNAL_CHANGED - not a
         // Preferences binding.  Only the checked value binds to the pref.
         reconstructedBeatBtn.setEnabled(isGeneratorDualTone());
         Bindings.check(reconstructedBeatBtn, prefs.oscShowReconstructedBeatProperty());
@@ -960,7 +960,7 @@ public final class ScopeTabControl extends AbstractTabControl {
     }
 
     /**
-     * Presets tab — editable name combo + Save / Load buttons.  Save reads
+     * Presets tab - editable name combo + Save / Load buttons.  Save reads
      * the current values of every preset-tracked control into a new
      * {@link OscPreset} and writes it under the typed name (or
      * overwrites if the name already exists).  Load reads back the named
@@ -1020,14 +1020,14 @@ public final class ScopeTabControl extends AbstractTabControl {
     private void applyOscPreset(OscPreset p) {
         Preferences prefs = Preferences.instance();
         // The V/T scale selectors carry their own coupled-offset logic and are
-        // NOT pref-bound, so setValue() is how their widgets update — it also
+        // NOT pref-bound, so setValue() is how their widgets update - it also
         // fires the listener that clobbers offsetFrac (overwritten below).
         if (leftScale  != null && !leftScale .isDisposed()) leftScale .setValue(p.getLeftVoltsPerDiv());
         if (rightScale != null && !rightScale.isDisposed()) rightScale.setValue(p.getRightVoltsPerDiv());
         if (timeScale  != null && !timeScale .isDisposed()) timeScale .setValue(p.getTimePerDiv());
         // Everything else is two-way bound (Bindings.check / combo / radio):
         // writing the preference propagates into its widget (and fires the
-        // tab-tile / redraw listeners), so we only touch prefs here — no manual
+        // tab-tile / redraw listeners), so we only touch prefs here - no manual
         // widget mirroring.
         prefs.setOscLeftChannelEnabled (p.isLeftChannelEnabled());
         prefs.setOscRightChannelEnabled(p.isRightChannelEnabled());
@@ -1051,7 +1051,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         // subscribers that normally run the gate), so re-apply it explicitly:
         // a hidden channel auto-switches to the visible one before save().
         syncTriggerChannelButtons();
-        // Fractions — overwrite the values the scale listeners would have
+        // Fractions - overwrite the values the scale listeners would have
         // clobbered.  Goes last so the preset wins.
         prefs.setOscLeftOffsetFrac     (p.getLeftOffsetFrac());
         prefs.setOscRightOffsetFrac    (p.getRightOffsetFrac());
@@ -1080,8 +1080,8 @@ public final class ScopeTabControl extends AbstractTabControl {
     }
 
     /** Greys the trigger-source button whose channel display is switched off (a
-     *  hidden channel can't be the trigger), and — when that channel is the live
-     *  trigger selection while the other is on — auto-switches to the remaining
+     *  hidden channel can't be the trigger), and - when that channel is the live
+     *  trigger selection while the other is on - auto-switches to the remaining
      *  channel through the button's own {@link SWT#Selection} path: the same route
      *  a user click takes (dependent-group exclusion + the radio binding's
      *  {@code oscTriggerChannel} write, whose onChange resets the trigger hold and
@@ -1123,7 +1123,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         shotBtn.setToolTipText(I18n.t("scope.screenshot.tooltip"));
         shotBtn.setLayoutData(new RowData(IconUtils.ACTION_BUTTON_PX, IconUtils.ACTION_BUTTON_PX));
         // The screenshot dialog clones the whole pane offscreen, so the pane
-        // (AbstractPane) owns it — reach it through the generic owner channel.
+        // (AbstractPane) owns it - reach it through the generic owner channel.
         shotBtn.addListener(SWT.Selection, e -> {
             AbstractPane owner = getOwner();
             if (owner != null) owner.openScreenshotDialog();
@@ -1137,12 +1137,12 @@ public final class ScopeTabControl extends AbstractTabControl {
         calibrateButton.addListener(SWT.Selection, e -> openCalibrationDialog());
     }
 
-    /** Opens the ADC-calibration dialog — always the two-row (Left / Right)
+    /** Opens the ADC-calibration dialog - always the two-row (Left / Right)
      *  form.  Only the scope's measurement channel
      *  ({@link Preferences#getOscMeasurementChannel()}) carries a measured Vrms
      *  and is seeded; the other row is disabled and blank (the scope shows one
      *  channel's measurement at a time).  Reads that channel's Vrms from the
-     *  pane's own scope view (no cross-pane fallback — the FFT pane has its own
+     *  pane's own scope view (no cross-pane fallback - the FFT pane has its own
      *  calibrate button); aborts with an info MessageBox when no live Vrms is
      *  available.  On OK the entered actual Vrms rescales that channel's ADC
      *  full-scale so the displayed Vrms matches, and persists the calibration:
@@ -1153,8 +1153,12 @@ public final class ScopeTabControl extends AbstractTabControl {
         if (isDisposed()) return;
         Shell parent = getShell();
         Preferences prefs = Preferences.instance();
-        if (prefs.isAdcCalibrationFromDevice()) {
-            // Device-provided (QA40x): show the built-in full-scale read-only.
+        // Where the calibration goes - this machine's cards or the bench that owns
+        // the device - and, first, whether it may be written at all.
+        final CalibrationStore calibration = new CalibrationStore(prefs);
+        if (calibration.isCalibrationFromDevice(true)) {
+            // Device-provided (a QA40x, here or on a bench): show the built-in
+            // full-scale read-only.
             new CalibrationDialog(parent, adcTexts(),
                     prefs.getAdcFsVoltageRms(Channel.L), prefs.getAdcFsVoltageRms(Channel.R),
                     true, (ch, v) -> { }).open();
@@ -1171,19 +1175,28 @@ public final class ScopeTabControl extends AbstractTabControl {
             return;
         }
         final double measuredVrms = currentVrms;
-        final boolean stereo = isInputBoundStereo(prefs);
+        final boolean stereo = prefs.isInputBoundStereo();
         Double seedL = measCh == Channel.L ? measuredVrms : null;
         Double seedR = measCh == Channel.R ? measuredVrms : null;
         new CalibrationDialog(parent, adcTexts(), seedL, seedR, false, (ch, actualVrms) -> {
             double scale = actualVrms / measuredVrms;
+            boolean stored;
             if (stereo) {
                 double newFs = prefs.getAdcFsVoltageRms(ch) * scale;
-                prefs.storeAdcCalibration(ch, newFs);
+                stored = calibration.storeAdcCalibration(ch, newFs);
             } else {
                 // MONO / unbound: shared both-channels full-scale (auto-creates the
                 // profile on first calibrate); also sets the FS scalar and persists.
                 double newFs = prefs.getAdcFsVoltageRms() * scale;
-                prefs.storeAdcCalibration(newFs);
+                stored = calibration.storeAdcCalibration(newFs);
+            }
+            // A bench that would not take it leaves this client's reference where
+            // it was (see CalibrationStore's apply-on-success): say so, or the
+            // operator walks away believing the value they typed is in force.
+            if (!stored) {
+                Dialogs.error(parent, I18n.t("calibrate.title"),
+                        I18n.t("preferences.audio.card.copyCalibration.failed",
+                                prefs.current().getInputDeviceName()));
             }
         }).open();
     }
@@ -1195,22 +1208,11 @@ public final class ScopeTabControl extends AbstractTabControl {
                 "calibrate.input", "calibrate.input.tooltip", "ADC");
     }
 
-    /** Whether the current backend's bound input card calibrates its two channels
-     *  separately — a bound card in any mode except {@link DeviceChannelMode#MONO}
-     *  (LINKED writes the shared active row's per-channel fields, INDEPENDENT each
-     *  channel's own row).  Resolves the profile exactly as the calibrate WRITE does
-     *  ({@link Preferences#resolveDeviceProfile}); a MONO card or an unbound device
-     *  (no profile) keeps the single-row legacy flow. */
-    private boolean isInputBoundStereo(Preferences prefs) {
-        AudioDeviceProfile p = prefs.resolveDeviceProfile(prefs.current().getInputDeviceName());
-        return p != null && p.getInput() != null
-                && p.getInput().getChannels() != DeviceChannelMode.MONO;
-    }
 
     /**
-     * Second-row "Save to…" group: path text + browse (folder-open) +
-     * duration step field + save (floppy-disk).  Clear button removed
-     * — the user's spec calls for a minimal three-control group.
+     * Second-row "Save to..." group: path text + browse (folder-open) +
+     * duration step field + save (floppy-disk).  Clear button removed:
+     * the group is deliberately a minimal three-control set.
      */
     private void buildScopeSaveToGroup(CTabFolder folder) {
         Preferences prefs = Preferences.instance();
@@ -1253,7 +1255,7 @@ public final class ScopeTabControl extends AbstractTabControl {
     }
 
     /**
-     * Second-row "Open signal…" group: read-only path text + single
+     * Second-row "Open signal..." group: read-only path text + single
      * browse button.  Picking a file in the dialog immediately decodes
      * it into a fresh buffer (no streaming thread, no measurement-
      * worker coordination), stops live recording if running, and
@@ -1323,7 +1325,7 @@ public final class ScopeTabControl extends AbstractTabControl {
             setSubtreeEnabled(triggerGroup, false);
             view.setFilePath(picked);
         } else {
-            // A null error means no loader is attached (screenshot-only pane —
+            // A null error means no loader is attached (screenshot-only pane -
             // unreachable from this live-only tab, kept for honesty).
             String err = controller.getLastOpenSignalError();
             Dialogs.error(getShell(),
@@ -1373,7 +1375,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         int sampleRate = prefs.current().getInputSampleRate();
         int bitDepth   = prefs.current().getInputBitDepth();
         // A request longer than the capture ring can hold (and not a loaded
-        // file) ⇒ record FORWARD to disk in real time (streaming) instead of
+        // file) => record FORWARD to disk in real time (streaming) instead of
         // dumping the ring.  Otherwise dump the most-recent N seconds instantly.
         SignalBufferReader reader = view.getReader();
         long requestedFrames = Math.max(1L, Math.round(durationSeconds * (double) sampleRate));
@@ -1406,7 +1408,8 @@ public final class ScopeTabControl extends AbstractTabControl {
      * releases when done or cancelled.
      */
     private void startStreamingSave(String path, int sampleRate, int bitDepth, long totalFrames) {
-        SignalBufferReader reader = MessageBus.instance().request(Events.CAPTURE_ACQUIRE);
+        // DIRECT - the bus is UI-only and carries no device traffic.
+        SignalBufferReader reader = SharedCapture.instance().acquire();
         if (reader == null) {
             Dialogs.error(getShell(), I18n.t("scope.save.error"),
                     I18n.t("scope.save.error.message", path,
@@ -1415,7 +1418,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         }
         double totalSeconds = totalFrames / (double) sampleRate;
 
-        // Floating tool window: on-top so it stays visible, but NOT modal — the
+        // Floating tool window: on-top so it stays visible, but NOT modal - the
         // user can keep watching the scope / FFT while it records.
         Shell dlg = new Shell(getShell(), SWT.TOOL | SWT.TITLE | SWT.CLOSE | SWT.ON_TOP);
         ShellIcons.apply(dlg);
@@ -1444,15 +1447,13 @@ public final class ScopeTabControl extends AbstractTabControl {
         dlg.setLocation(pb.x + (pb.width - ds.x) / 2, pb.y + (pb.height - ds.y) / 2);
         dlg.open();
 
-        Display display = getDisplay();
         Thread t = new Thread(() -> {
             Exception err = null;
             try {
                 StereoPcmIo.saveStreaming(reader, new File(path), sampleRate, bitDepth, totalFrames,
                         cancelled::get,
                         written -> {
-                            if (display.isDisposed()) return;
-                            display.asyncExec(() -> {
+                            GuiUtil.marshal(dlg, () -> {
                                 if (bar.isDisposed()) return;
                                 bar.setSelection((int) Math.min(1000L, 1000L * written / totalFrames));
                                 lbl.setText(I18n.t("scope.save.recording.progress",
@@ -1464,11 +1465,13 @@ public final class ScopeTabControl extends AbstractTabControl {
                 err = ex;
                 log.warn("Scope stream-record failed", ex);
             } finally {
-                MessageBus.instance().publish(Events.CAPTURE_RELEASE);
+                // DIRECT release from this save thread - same rule as the acquire.
+                SharedCapture.instance().release();
             }
             final Exception fe = err;
-            if (display.isDisposed()) return;
-            display.asyncExec(() -> {
+            // Via the main shell, not the progress dialog: a failure must still
+            // reach the operator when the dialog was already cancelled away.
+            GuiUtil.marshal(() -> {
                 if (!dlg.isDisposed()) dlg.close();
                 if (fe != null) {
                     Dialogs.error(getShell(), I18n.t("scope.save.error"),
@@ -1493,10 +1496,10 @@ public final class ScopeTabControl extends AbstractTabControl {
 
     /** V/div zoom anchored at mouse Y: after the zoom, the same voltage that
      *  was under the mouse before the zoom is still under the mouse.  Per
-     *  channel — each channel's V/div + offsetFrac are adjusted using that
+     *  channel - each channel's V/div + offsetFrac are adjusted using that
      *  channel's voltage-at-mouse, since the two channels can have different
      *  scales.  The V/div change itself is one step of the field's OWN value
-     *  list ({@link NumericStepField#step}) — so the wheel walks the same
+     *  list ({@link NumericStepField#step}) - so the wheel walks the same
      *  1-2-5-10 ladder the field's arrows do, with no separate float-target
      *  calculation that could stall on rounding.  Note: the {@code *Scale}
      *  selection listener overwrites offsetFrac with
@@ -1517,7 +1520,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         double anchorFrac = (height > 0) ? (double) mouseY / height : 0.5;
         // Mirrors the coupled zoom's existing per-channel V/div handling: each channel's
         // FS-fills-height zoom-out ceiling comes from its OWN full-scale (LINKED cards
-        // pass equal L/R peaks), same coupling — either channel's ceiling blocks both.
+        // pass equal L/R peaks), same coupling - either channel's ceiling blocks both.
         double peakL = prefs.getAdcPeakVolts(Channel.L);
         double peakR = prefs.getAdcPeakVolts(Channel.R);
         double[] r = view.getNav().zoomVertical(
@@ -1564,7 +1567,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         if (tDivNew == tDivOld) return;
         if (view.isFileMode()) {
             // A loaded file has no trigger: zoom around the mouse by re-centring
-            // the view — the controller owns the centre math and view state.
+            // the view - the controller owns the centre math and view state.
             controller.zoomFileAroundMouse(mouseFrac, tDivOld, tDivNew);
             controller.applyViewState();
             return;
@@ -1575,7 +1578,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         int dispNew = ScopeFormat.displaySamplesFor(tDivNew, sr);
         // Anchor on the REAL trigger offset (live + frozen both render the real,
         // virtual-capable value now): the sample under the mouse stays put while the
-        // offset may carry off-screen — the handle pins to the edge, the time mark shows
+        // offset may carry off-screen - the handle pins to the edge, the time mark shows
         // the real value.  Uses the actual displaySamples ratio so the anchor is exact
         // even at fine time bases where the t/div ratio would round-divergently drift.
         double posOld = prefs.getOscTriggerPositionFrac();
@@ -1608,7 +1611,7 @@ public final class ScopeTabControl extends AbstractTabControl {
     }
 
     /**
-     * Paints a small image of {@code sin x / x} as a stacked fraction —
+     * Paints a small image of {@code sin x / x} as a stacked fraction -
      * "sin x" over a horizontal bar over "x".  Used as the label for the
      * Vertical-group checkbox that toggles Lanczos sinc reconstruction.
      */

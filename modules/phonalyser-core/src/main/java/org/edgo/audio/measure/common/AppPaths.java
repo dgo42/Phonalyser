@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -40,7 +40,7 @@ import lombok.Getter;
  *
  * <p>A packaged macOS {@code .app} bundle (and a {@code Program Files} install
  * on Windows) is read-only, so preferences and logs must live under the user's
- * profile rather than next to the executable — otherwise the save silently
+ * profile rather than next to the executable - otherwise the save silently
  * fails and, because the log file is in the same read-only place, the failure
  * is invisible.
  *
@@ -51,7 +51,7 @@ import lombok.Getter;
  *   <li>Linux:   {@code ~/.config/Phonalyser}</li>
  * </ul>
  * Logs go under a {@code logs/} child.  The base can be overridden with
- * {@code -Dapp.data.dir=<path>} (used by the automation tests).  Singleton —
+ * {@code -Dapp.data.dir=<path>} (used by the automation tests).  Singleton -
  * access via {@link #instance()}.
  */
 public final class AppPaths {
@@ -79,7 +79,7 @@ public final class AppPaths {
         return INSTANCE;
     }
 
-    /** Lazily-obtained logger — AppPaths must NOT hold a class-load
+    /** Lazily-obtained logger - AppPaths must NOT hold a class-load
      *  ({@code @Log4j2}) logger: it is touched while {@code GuiMain} is still
      *  computing {@code app.log.dir}, and a class-load logger would initialise
      *  log4j against the wrong (default) log path before the property is set. */
@@ -134,7 +134,7 @@ public final class AppPaths {
     }
 
     /** Marker file recording which app version last staged a bundled tree
-     *  into its per-user directory — see {@link #stageBundledTree}. */
+     *  into its per-user directory - see {@link #stageBundledTree}. */
     private static final String STAGED_MARKER_FILE = ".bundle-version";
 
     /**
@@ -142,13 +142,13 @@ public final class AppPaths {
      * of the running fat JAR into {@code target}, once per app
      * {@code version}: a {@code .bundle-version} marker inside {@code target}
      * records the last staged version and short-circuits subsequent starts.
-     * The bare-JAR sibling of {@link #seedDirIfEmpty(Path, Path)} — used when
+     * The bare-JAR sibling of {@link #seedDirIfEmpty(Path, Path)} - used when
      * no external bundle directory exists to seed from.
      *
      * <p>On a version change the bundled files are re-extracted over the old
      * copy (stale content is worse than lost edits of the staged copy); files
      * the user added are left alone.  No-op in dev mode (the code source is a
-     * directory) or when the JAR carries no such entries.  Tolerant — an I/O
+     * directory) or when the JAR carries no such entries.  Tolerant - an I/O
      * failure is a guarded warn, never a throw.
      */
     public void stageBundledTree(String jarDirPrefix, Path target, String version) {
@@ -222,7 +222,7 @@ public final class AppPaths {
      * present.  The single-file, classpath-source sibling of
      * {@link #seedDirIfEmpty(Path, Path)}: {@code devices.yaml} ships as a
      * classpath resource (so it seeds in dev too, where no external bundle dir
-     * exists), which the directory-tree copier can't read.  Tolerant — a missing
+     * exists), which the directory-tree copier can't read.  Tolerant - a missing
      * resource or an I/O failure is a guarded warn, never a throw, so a broken
      * seed can't stop the app from starting; once seeded, the user's edits are
      * preserved (delete the target to re-seed after an upgrade).
@@ -284,7 +284,7 @@ public final class AppPaths {
         if (!overridden && !os.contains("win") && !os.contains("mac")) {
             // Linux/Unix: prefer the system log dir, but only when it is
             // actually writable (e.g. a .deb that pre-creates it with the
-            // right owner) — /var/log needs root, so a plain desktop launch
+            // right owner) - /var/log needs root, so a plain desktop launch
             // falls back to the per-user data dir rather than losing logs.
             Path systemLogs = Paths.get("/var/log", APP_DIR_NAME.toLowerCase());
             if (isWritableDir(systemLogs)) {

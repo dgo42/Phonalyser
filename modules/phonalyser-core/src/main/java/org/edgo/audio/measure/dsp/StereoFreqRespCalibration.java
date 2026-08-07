@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -19,7 +19,7 @@
 package org.edgo.audio.measure.dsp;
 
 /**
- * Stereo pair of frequency-response calibrations — one per ADC channel.
+ * Stereo pair of frequency-response calibrations - one per ADC channel.
  * Used by {@code FreqRespCorrectionStore} so cal-L can be divided into
  * measured-L and cal-R into measured-R independently.  Both fields are
  * non-null and share the same {@code freqs} array length (the loader and

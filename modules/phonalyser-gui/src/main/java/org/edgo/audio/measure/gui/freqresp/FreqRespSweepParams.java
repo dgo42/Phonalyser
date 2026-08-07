@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -25,7 +25,7 @@ import lombok.RequiredArgsConstructor;
  * Immutable snapshot of the sweep parameters that produced a
  * {@link FreqRespResult}.  Saved alongside the magnitude / phase arrays in
  * the on-disk CSV header so a reload knows the source's frequency range,
- * amplitude, lead-in and dither settings — enough to repeat the measurement
+ * amplitude, lead-in and dither settings - enough to repeat the measurement
  * or to detect a calibration grid mismatch when a calibration file is
  * applied at a different sweep configuration.
  */

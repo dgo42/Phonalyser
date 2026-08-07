@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -32,7 +32,7 @@ import org.edgo.audio.measure.sound.DeviceRef;
  * {@link IllegalArgumentException} at the start of {@code run()}.
  *
  * <p>The analyzer always captures both ADC channels in one playback and
- * deconvolves them in parallel — there is no per-channel mode any more.
+ * deconvolves them in parallel - there is no per-channel mode any more.
  */
 @Getter
 @Builder
@@ -70,7 +70,7 @@ public final class FreqRespAnalyzerConfig {
      *  physical transfer function (1.0 = 0 dB at unity loopback). */
     private final double adcFsVoltageRms;
 
-    /** Which output lane(s) the sweep drives — the encoder gate applied to the
+    /** Which output lane(s) the sweep drives - the encoder gate applied to the
      *  played sweep ({@code BOTH} by default, which is the only behaviour before
      *  per-channel output existed).  {@code LEFT} / {@code RIGHT} write digital
      *  silence to the un-driven lane; both channels are still deconvolved (the
@@ -89,7 +89,10 @@ public final class FreqRespAnalyzerConfig {
      *  {@link StereoCaptureProvider#real()}; tests inject a stub that
      *  returns synthetic {@link StereoSamples}. */
     @Builder.Default
-    private final StereoCaptureProvider stereoCaptureProvider = StereoCaptureProvider.real();
+    // No default: production builders pass StereoCaptureProvider.forSweep
+    // (the ONE lane-driven strategy), tests inject stubs; validate() refuses
+    // a config that set neither.
+    private final StereoCaptureProvider stereoCaptureProvider = null;
 
     /** Optional hook fired with the raw captured stereo samples between
      *  the capture and the deconvolution steps.  Used by the CLI's
@@ -99,7 +102,7 @@ public final class FreqRespAnalyzerConfig {
     @Builder.Default
     private final RawCaptureListener rawCaptureListener = null;
 
-    /** Optional per-block progress hook for the capture leg — fires on
+    /** Optional per-block progress hook for the capture leg - fires on
      *  the audio capture thread with the cumulative sample count and
      *  the block's max-channel RMS.  Used by the GUI's busy-shell live
      *  meter; CLI / unit-test callers pass {@code null}. */

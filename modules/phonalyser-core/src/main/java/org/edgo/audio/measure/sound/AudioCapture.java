@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -39,12 +39,36 @@ public interface AudioCapture extends AutoCloseable {
      * before returning and must not retain the array reference.
      *
      * <p>Replaces the intermediate {@code StereoSample[]} decode for hot
-     * consumers (the scope view) — those convert PCM straight into floats
+     * consumers (the scope view) - those convert PCM straight into floats
      * for the ring buffer, so the StereoSample dance is pure overhead.
      */
     @FunctionalInterface
     interface PcmBatchListener {
         void accept(byte[] pcm, int validBytes);
+
+        /**
+         * The stream is OVER and no {@link #accept} will ever follow - the
+         * device was lost, or its stream failed in a way the backend cannot
+         * recover from.  {@code reason} is machine-readable; the GUI layer
+         * localizes it, and everything the backend wanted to SAY about it is
+         * already in the log.
+         *
+         * <p>Carried on the SAME seam as the data on purpose: a device that
+         * fails does not necessarily throw - an unplugged card simply stops
+         * delivering, and a listener that is never called again looks exactly
+         * like silence, so everything downstream keeps believing it is
+         * measuring - on the bench the generator and the scope simply carried
+         * on.  The end therefore travels the path the data travelled,
+         * layer by layer - capture -> ring buffer -> reader -> worker -> UI -
+         * never sideways.  Raised at most once per open, on whatever thread
+         * noticed (often a driver callback thread): the listener must not
+         * block, exactly as it must not in {@link #accept}.
+         *
+         * <p>Default no-op: a consumer with its own lifetime bound elsewhere
+         * (a bounded CLI record) may ignore it; the ring-buffer feeder must
+         * not.
+         */
+        default void captureEnded(CaptureEndReason reason) { }
     }
 
     /** Receives decoded stereo samples on the capture thread. */
@@ -53,7 +77,7 @@ public interface AudioCapture extends AutoCloseable {
     /**
      * Direct PCM-bytes path that skips the {@code StereoSample[]} decode.
      * Preferred over {@link #setSampleListener(Consumer)} for consumers that
-     * convert to {@code float} themselves — avoids one full pass over the
+     * convert to {@code float} themselves - avoids one full pass over the
      * data plus all the per-sample object allocations.
      */
     void setPcmBatchListener(PcmBatchListener listener);

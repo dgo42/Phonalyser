@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -32,8 +32,8 @@ public enum FilterResponse {
     private FilterResponse() {}
 
     /** {@code true} for the families with a user-settable ripple parameter
-     *  (Chebyshev I passband ripple, Elliptic passband ripple, and — reusing
-     *  the same field — Inverse Chebyshev stopband ripple). */
+     *  (Chebyshev I passband ripple, Elliptic passband ripple, and - reusing
+     *  the same field - Inverse Chebyshev stopband ripple). */
     public boolean hasRipple() {
         return this == CHEBYSHEV || this == ELLIPTIC || this == INV_CHEBYSHEV;
     }

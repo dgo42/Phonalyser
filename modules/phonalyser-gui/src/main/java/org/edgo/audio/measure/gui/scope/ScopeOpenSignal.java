@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -35,7 +35,7 @@ import org.edgo.audio.measure.wav.PcmFileLoader;
  * Loads a WAV / FLAC / AIFF file synchronously into a fresh
  * {@link SignalBufferReader} sized to the file's exact sample count, and
  * attaches it to the scope's main and condensed views.  No threads,
- * no measurement-worker coordination, no per-tick scheduling — just
+ * no measurement-worker coordination, no per-tick scheduling - just
  * decode, populate, hand to the views.
  *
  * <p>Replaces the old {@code ScopePlayController}'s live-streaming
@@ -102,7 +102,7 @@ public final class ScopeOpenSignal {
                 return false;
             }
             // Heap guard: the whole file lands in memory at 16 B/frame (two
-            // double lanes) — a multi-minute high-rate capture would OOM
+            // double lanes) - a multi-minute high-rate capture would OOM
             // mid-load with no way back.  Refuse up-front with real numbers.
             long needBytes = totalFrames * 2L * Double.BYTES;
             Runtime rt = Runtime.getRuntime();
@@ -140,7 +140,7 @@ public final class ScopeOpenSignal {
                     String.format("%.3f", totalFrames / (double) sampleRate));
         } catch (PcmFileLoader.TooLargeException ex) {
             // The FLAC eager decode refused before the ring guard above could
-            // run — same user answer, localized here.
+            // run - same user answer, localized here.
             lastError = I18n.t("scope.openSignal.tooLarge", file.getName(), ex.needMb, ex.freeMb);
             log.warn("Scope open signal failed: {}", ex.getMessage());
             return false;
@@ -156,7 +156,7 @@ public final class ScopeOpenSignal {
             mainView.setBuffer(reader);
             mainView.setFileMode(true);
             // A loaded file has no trigger; SINGLE (unarmed) would render nothing, so
-            // switch to AUTO on load — file mode ignores the trigger anyway.
+            // switch to AUTO on load - file mode ignores the trigger anyway.
             Preferences.instance().setOscTriggerMode(TriggerMode.AUTO);
             mainView.startMeasurementThread();   // compute the measurement table for the loaded frame
         }

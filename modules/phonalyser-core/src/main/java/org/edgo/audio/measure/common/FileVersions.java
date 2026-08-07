@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -22,7 +22,7 @@ import lombok.experimental.UtilityClass;
 
 /**
  * Format versions stamped into every file the application writes, so a future
- * loader can branch per version when a format changes.  Write-only for now —
+ * loader can branch per version when a format changes.  Write-only for now -
  * no migration logic exists yet; bump the matching constant in the SAME commit
  * that changes a format.
  */
@@ -33,14 +33,14 @@ public class FileVersions {
     public final int PREFERENCES_YAML = 1;
 
     // devices.yaml carries NO constant here: its formatVersion's single source of
-    // truth is the bundled seed resource — the store writer copies it from the
+    // truth is the bundled seed resource - the store writer copies it from the
     // seed fresh at write time (Preferences.devicesFormatVersion).
 
     /** Saved {@code .fft} spectrum files ({@code # format_version=} header). */
     public final int FFT_SPECTRUM = 1;
 
     /** {@code .frc} filter-calibration files ({@code # format_version=} header).
-     *  Reset to 1 for the first release — development-era files carried up to 6. */
+     *  Reset to 1 for the first release - development-era files carried up to 6. */
     public final int FRC_CALIBRATION = 1;
 
     /** {@code applied_compensation_*.csv} DAC harmonic-predistortion files

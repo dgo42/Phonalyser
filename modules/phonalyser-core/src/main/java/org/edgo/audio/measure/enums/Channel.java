@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,7 +18,7 @@
 
 package org.edgo.audio.measure.enums;
 
-/** Stereo capture / playback channel selector — L (left) or R (right).
+/** Stereo capture / playback channel selector - L (left) or R (right).
  *  Used by the oscilloscope trigger, FFT analyser and measurement table
  *  to pick which channel of the shared signal buffer drives them. */
 public enum Channel {

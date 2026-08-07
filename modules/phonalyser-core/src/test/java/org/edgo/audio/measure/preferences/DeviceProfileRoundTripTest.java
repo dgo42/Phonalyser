@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -59,7 +59,7 @@ class DeviceProfileRoundTripTest {
     private static final double EPS = 1e-12;
 
     /** A detached, transient (never-persisting, never-loading) Preferences to
-     *  mutate freely — the same construction the dialog uses.  Any profiles the
+     *  mutate freely - the same construction the dialog uses.  Any profiles the
      *  live singleton carried into the copy are cleared so each test starts from
      *  a known-empty profile list. */
     private Preferences detached() {
@@ -71,7 +71,7 @@ class DeviceProfileRoundTripTest {
         return p;
     }
 
-    /** Invokes the private {@code writeDevicesTo(Path)} file mechanism — the
+    /** Invokes the private {@code writeDevicesTo(Path)} file mechanism - the
      *  profile store's serialisation seam, since the store moved out of
      *  preferences.yaml into its own devices.yaml. */
     /** Stamps {@code p}'s recorded content version with the live bundle's
@@ -105,7 +105,7 @@ class DeviceProfileRoundTripTest {
     }
 
     /** Invokes the private {@code loadDevicesFrom(Path)} store-establish
-     *  mechanism (seed-if-absent → read → migration-merge → rewrite). */
+     *  mechanism (seed-if-absent -> read -> migration-merge -> rewrite). */
     private void loadDevicesFrom(Preferences p, Path path) {
         try {
             Method m = Preferences.class.getDeclaredMethod("loadDevicesFrom", Path.class);
@@ -116,7 +116,7 @@ class DeviceProfileRoundTripTest {
         }
     }
 
-    /** Loads a written devices.yaml back as its raw YAML map — reproduces the
+    /** Loads a written devices.yaml back as its raw YAML map - reproduces the
      *  on-disk numeric-type coercions the readers must tolerate. */
     private Map<?, ?> readYaml(Path path) {
         try (Reader r = Files.newBufferedReader(path)) {
@@ -168,7 +168,7 @@ class DeviceProfileRoundTripTest {
         Preferences src = detached();
         src.putAudioDeviceProfile(sampleProfile());
         // Stamp the current bundle content version so the written store models one
-        // already merged by this catalog version — the load below then round-trips
+        // already merged by this catalog version - the load below then round-trips
         // the sample card alone instead of also merging the bundled seed cards in.
         stampCurrentContentVersion(src);
         writeDevicesTo(src, store);
@@ -220,20 +220,20 @@ class DeviceProfileRoundTripTest {
         Map<?, ?> input   = (Map<?, ?>) profile.get("input");
         List<?> ranges    = (List<?>) input.get("ranges");
 
-        // Per-channel row → a {left,right} map.
+        // Per-channel row -> a {left,right} map.
         Object perChFs = ((Map<?, ?>) ranges.get(0)).get("fsVrms");
         assertTrue(perChFs instanceof Map, "per-channel FS must be a {left,right} map");
         assertEquals(1.7931, ((Number) ((Map<?, ?>) perChFs).get("left")).doubleValue(),  EPS);
         assertEquals(1.7902, ((Number) ((Map<?, ?>) perChFs).get("right")).doubleValue(), EPS);
 
-        // Equal-channel row → ALSO a {left,right} map now, never a scalar shorthand.
+        // Equal-channel row -> ALSO a {left,right} map now, never a scalar shorthand.
         Object sharedFs = ((Map<?, ?>) ranges.get(1)).get("fsVrms");
         assertTrue(sharedFs instanceof Map, "an equal-channel FS is still a {left,right} map, never a scalar");
         assertEquals(4.4812, ((Number) ((Map<?, ?>) sharedFs).get("left")).doubleValue(),  EPS);
         assertEquals(4.4812, ((Number) ((Map<?, ?>) sharedFs).get("right")).doubleValue(), EPS);
 
         // On disk each range row is EXACTLY one line in the seed's style: bracket
-        // flow, spaces inside the braces, the label double-quoted — never wrapped.
+        // flow, spaces inside the braces, the label double-quoted - never wrapped.
         String yaml = Files.readString(store);
         assertTrue(yaml.contains("- { label: \""), "rows open in the seed's quoted-label bracket style");
         assertTrue(yaml.contains(" fsVrms: { left: "), "fsVrms is the inline { left, right } pair");
@@ -267,8 +267,8 @@ class DeviceProfileRoundTripTest {
         Preferences dst = detached();
         loadDevicesFrom(dst, store);
         DeviceEndpointConfig in = dst.findAudioDeviceProfile("Cosmos ADC").getInput();
-        assertEquals("DIP 1.7 Vrms", in.getActiveRange(), "map left → activeRange field");
-        assertEquals("DIP 4.5 Vrms", in.getActiveRangeRight(), "map right → activeRangeRight field");
+        assertEquals("DIP 1.7 Vrms", in.getActiveRange(), "map left -> activeRange field");
+        assertEquals("DIP 4.5 Vrms", in.getActiveRangeRight(), "map right -> activeRangeRight field");
         assertEquals("direct", dst.findAudioDeviceProfile("Cosmos ADC").getOutput().getActiveRange());
     }
 
@@ -339,6 +339,110 @@ class DeviceProfileRoundTripTest {
         assertFalse(back.getOutput().isCalibrationFromDevice(), "output flag round-trips false");
     }
 
+    /**
+     * The WIRE form of a card (net spec 4.3 {@code cards.put} / the content of a
+     * {@code cards.list} entry) is the STORE's form: one vocabulary, one reader.
+     *
+     * <p>That is the whole reason a card can be handed to the machine the device
+     * is plugged into and come back describing the same box - a second shape for
+     * the wire would drift from this one silently, and the drift would show up as
+     * a bench measuring against a range table it never received.
+     */
+    @Test
+    void cardToMap_roundTripsThroughTheSameVocabularyTheFileUses() {
+        Preferences p = detached();
+        AudioDeviceProfile card = new AudioDeviceProfile();
+        card.setName("Cosmos ADC");
+        card.getMatch().add("Cosmos ADC");
+        card.getMatch().add("Line (Cosmos ADC)");
+        card.getInput().setChannels(DeviceChannelMode.INDEPENDENT);
+        card.getInput().getRanges().add(range("default", 1.0, 1.1, true));
+        card.getInput().getRanges().add(range("attenuated", 10.0, 11.0, false));
+        card.getInput().setActiveRange("default");
+        card.getInput().setActiveRangeRight("attenuated");
+        card.getOutput().setChannels(DeviceChannelMode.LINKED);
+        card.getOutput().getRanges().add(range("default", 2.0, 2.0, true));
+        card.getOutput().setActiveRange("default");
+
+        AudioDeviceProfile back = p.cardFromMap(p.cardToMap(card));
+
+        assertNotNull(back);
+        assertEquals("Cosmos ADC", back.getName());
+        assertEquals(List.of("Cosmos ADC", "Line (Cosmos ADC)"), back.getMatch());
+        assertEquals(DeviceChannelMode.INDEPENDENT, back.getInput().getChannels());
+        assertEquals(2, back.getInput().getRanges().size());
+        assertEquals(1.0, back.getInput().getRanges().get(0).getFsLeft());
+        assertEquals(1.1, back.getInput().getRanges().get(0).getFsRight());
+        assertTrue(back.getInput().getRanges().get(0).isCalibrated());
+        assertFalse(back.getInput().getRanges().get(1).isCalibrated());
+        assertEquals("default", back.getInput().getActiveRange());
+        assertEquals("attenuated", back.getInput().getActiveRangeRight(),
+                "an INDEPENDENT endpoint's two markers travel as the file's own "
+                        + "{left,right} pair");
+        assertEquals("default", back.getOutput().getActiveRange());
+    }
+
+    /** The device-authored display text (the QA40x verbose range labels, quotes
+     *  and all) survives BOTH round trips - the file and the wire - and a row
+     *  without one stays plain.  Before this travelled, a bench's card showed its
+     *  raw range keys on every client, and a start without the analyzer attached
+     *  lost the verbose labels locally too. */
+    @Test
+    void displayLabel_survivesFileAndWireRoundTrips(@TempDir Path dir) {
+        String verbose = "0 \"dBV\" real 0 dBFS or -9 dBV";
+        AudioDeviceProfile card = sampleProfile();
+        card.getInput().getRanges().get(0).setDisplayLabel(verbose);
+
+        Preferences src = detached();
+        src.putAudioDeviceProfile(card);
+        stampCurrentContentVersion(src);
+        Path store = dir.resolve("devices.yaml");
+        writeDevicesTo(src, store);
+        Preferences dst = detached();
+        loadDevicesFrom(dst, store);
+        DeviceEndpointConfig in = dst.getAudioDeviceProfiles().get(0).getInput();
+        assertEquals(verbose, in.getRanges().get(0).getDisplayLabel(),
+                "the file keeps the device-authored text, embedded quotes intact");
+        assertNull(in.getRanges().get(1).getDisplayLabel(),
+                "a row that never had display text must not grow one");
+
+        Preferences p = detached();
+        AudioDeviceProfile back = p.cardFromMap(p.cardToMap(card));
+        assertEquals(verbose, back.getInput().getRanges().get(0).getDisplayLabel(),
+                "the wire form carries the same field the file does");
+        assertNull(back.getInput().getRanges().get(1).getDisplayLabel());
+    }
+
+    /** An endpoint with no range row calibrates nothing, so it is left out of the
+     *  wire form exactly as the file leaves it out - and a card with a nameless
+     *  shape is no card at all. */
+    @Test
+    void cardToMap_leavesOutAnEndpointWithNoRows() {
+        Preferences p = detached();
+        AudioDeviceProfile card = new AudioDeviceProfile();
+        card.setName("Input only");
+        card.getInput().getRanges().add(range("default", 1.0, 1.0, true));
+        card.getInput().setActiveRange("default");
+
+        Map<String, Object> wire = p.cardToMap(card);
+
+        assertTrue(wire.containsKey("input"));
+        assertFalse(wire.containsKey("output"), "nothing to say about that direction");
+        assertTrue(p.cardFromMap(wire).getOutput().getRanges().isEmpty());
+        assertNull(p.cardFromMap(Map.of("match", List.of("x"))),
+                "a card with no usable name is refused, as it is on disk");
+    }
+
+    private DeviceRange range(String label, double fsLeft, double fsRight,
+            boolean calibrated) {
+        DeviceRange row = new DeviceRange();
+        row.setLabel(label);
+        row.setFsLeft(fsLeft);
+        row.setFsRight(fsRight);
+        row.setCalibrated(calibrated);
+        return row;
+    }
+
     @Test
     void normalizeDeviceName_foldsBackendWrappers() {
         Preferences p = detached();
@@ -360,7 +464,7 @@ class DeviceProfileRoundTripTest {
         p.putAudioDeviceProfile(profile);
 
         // A match entry that is a case-insensitive substring of the live device
-        // name binds it — across the backend name forms.
+        // name binds it - across the backend name forms.
         assertEquals("E1DA Cosmos ADC Interface",
                 p.resolveDeviceProfile("Line (E1DA Cosmos ADC Interface)").getName());
         assertEquals("E1DA Cosmos ADC Interface",
@@ -445,7 +549,7 @@ class DeviceProfileRoundTripTest {
         DeviceRange row = created.getOutput().getRanges().get(0);
         assertEquals(fsAmpl / Constants.SQRT2, row.getFsLeft(), EPS);
 
-        // applyOutputDeviceProfile round-trips RMS→ampl back onto the global scalar.
+        // applyOutputDeviceProfile round-trips RMS->ampl back onto the global scalar.
         p.setDacFsVoltageAmpl(1.0);
         p.applyOutputDeviceProfile("E1DA Cosmos DAC");
         assertEquals(fsAmpl, p.getDacFsVoltageAmpl(), EPS);

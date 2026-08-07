@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.gui.sound;
 
+import org.edgo.audio.measure.sound.CaptureEndReason;
+
 import lombok.Getter;
 
 /**
@@ -26,9 +28,9 @@ import lombok.Getter;
  * <p>{@link SignalBuffer} is a single-writer ring with only an absolute
  * <em>write</em> position; it has no notion of "where a given consumer last
  * read".  That's fine for a consumer that always wants the most recent window
- * (the scope: "show me now") — it reads relative to {@code writePos} and can
+ * (the scope: "show me now") - it reads relative to {@code writePos} and can
  * never fall behind.  It is wrong for a consumer that needs a <b>gap-free,
- * contiguous</b> stream — the FFT cross-tick coherent accumulator, where every
+ * contiguous</b> stream - the FFT cross-tick coherent accumulator, where every
  * frame's absolute sample offset must advance by an exact, uniform hop or the
  * de-rotation smears the fundamental into a sinc.  Reading "the latest N ending
  * at writePos" each tick can't give that: between ticks the window jumps by
@@ -39,8 +41,8 @@ import lombok.Getter;
  * <p>This cursor holds <em>one consumer's</em> own absolute read position and
  * turns the ring into a wrapped FIFO for it: {@link #read} copies the next
  * contiguous samples from the cursor and advances it past them (a consuming
- * read).  If the writer has lapped the cursor — the data at the read position
- * was overwritten before it was read — {@link #read} (and {@link #available})
+ * read).  If the writer has lapped the cursor - the data at the read position
+ * was overwritten before it was read - {@link #read} (and {@link #available})
  * report {@link #OVERRUN} so the consumer can discard its stateful accumulation
  * and re-anchor with {@link #seekToLatest()}; overlap is only valid while the
  * stream has no such breaks.
@@ -48,7 +50,7 @@ import lombok.Getter;
  * <p>A "latest window" consumer ignores the cursor and uses the
  * {@link #readLatest}/{@link #readEndingAt} delegations, which read relative to
  * the live {@code writePos} and are inherently overrun-safe.  The reader is the
- * <em>only</em> handle a consumer ever holds — the raw {@link SignalBuffer} is
+ * <em>only</em> handle a consumer ever holds - the raw {@link SignalBuffer} is
  * fully encapsulated; buffer-level needs are served through the reader (e.g.
  * {@link #frozenSnapshot()} for a freeze copy, {@link #readLatest} for a save).
  *
@@ -63,7 +65,7 @@ import lombok.Getter;
 public final class SignalBufferReader {
 
     /** {@link #read}/{@link #available} return value: the cursor has been
-     *  overrun — the data it pointed at was overwritten before it was read.
+     *  overrun - the data it pointed at was overwritten before it was read.
      *  No samples were copied; the consumer must re-anchor (e.g.
      *  {@link #seekToLatest()}) and restart any stateful accumulation. */
     public static final int OVERRUN = -1;
@@ -88,6 +90,42 @@ public final class SignalBufferReader {
     public int  getCapacity()   { return buffer.getCapacity(); }
     public long getWritePos()   { return buffer.getWritePos(); }
 
+    /**
+     * Whether the stream behind this cursor has ENDED - the device feeding it is
+     * gone and nothing will ever be appended again.
+     *
+     * <p>A reader cannot work this out for itself: from here a dead lane and a
+     * silent one look identical, both being "no new samples". So the writer says
+     * so ({@link SignalBuffer#finish}) and this passes the answer on, which is
+     * what lets a consumer tell the operator instead of drawing a flat line over
+     * a device that no longer exists.
+     */
+    public boolean isFinished()        { return buffer.isFinished(); }
+
+    /** Why the stream ended, machine-readably - the pane localizes it at
+     *  display time; {@code null} while the stream is live. */
+    public CaptureEndReason getFinishedReason() { return buffer.getFinishedReason(); }
+
+    /** Claims the finished reason for the ONE operator report - first caller
+     *  across ALL readers of this capture gets it, everyone after gets
+     *  {@code null} and stops silently.
+     *  @see SignalBuffer#takeFinishedReasonForReport() */
+    public CaptureEndReason takeFinishedReasonForReport() { return buffer.takeFinishedReasonForReport(); }
+
+    /** The most recent sweep-start mark's absolute frame position, or -1 while
+     *  none arrived this stream - a remote sweep consumer seeks here.
+     *  @see SignalBuffer#getSweepMarkPos() */
+    public long getSweepMarkPos() { return buffer.getSweepMarkPos(); }
+
+    /** Blocks until at least {@code count} samples are available past this
+     *  cursor, the stream finished, or {@code maxWaitMs} elapsed; returns the
+     *  samples now available.  Owning consumer thread only - never the
+     *  display thread (the paint path reads non-blocking by design).
+     *  @see SignalBuffer#awaitAvailable(long, int, long) */
+    public long awaitAvailable(int count, long maxWaitMs) throws InterruptedException {
+        return buffer.awaitAvailable(readPos, count, maxWaitMs);
+    }
+
     /** @see SignalBuffer#readLatest(int, double[], double[]) */
     public int readLatest(int count, double[] outLeft, double[] outRight) {
         return buffer.readLatest(count, outLeft, outRight);
@@ -111,7 +149,7 @@ public final class SignalBufferReader {
 
     /** Returns a new reader over a standalone, frozen copy of this buffer's
      *  current contents.  No live writer touches the copy, so the snapshot
-     *  never changes — the scope uses it to keep showing the last captured
+     *  never changes - the scope uses it to keep showing the last captured
      *  frame after Record stops while the shared device keeps writing for
      *  other consumers.  Keeps the raw {@link SignalBuffer} encapsulated: the
      *  caller gets back a reader, never the buffer. */
@@ -160,8 +198,8 @@ public final class SignalBufferReader {
      * past them so the next call continues the stream.  Anchors at the latest
      * written sample on first use.
      *
-     * @return number of samples copied — {@code 0..maxCount}, bounded by what
-     *         has been written — or {@link #OVERRUN} if the cursor was lapped
+     * @return number of samples copied - {@code 0..maxCount}, bounded by what
+     *         has been written - or {@link #OVERRUN} if the cursor was lapped
      *         (nothing copied; re-anchor and restart any accumulation).
      */
     public int read(int maxCount, double[] outLeft, double[] outRight) {
@@ -173,7 +211,7 @@ public final class SignalBufferReader {
         buffer.readStartingAt(readPos, n, outLeft, outRight);   // forward, wrap-aware copy
         // The copy runs outside the buffer lock.  When the cursor sits close
         // to a full ring behind (large-FFT backlog), the writer can lap into
-        // the region being copied DURING the copy — the pre-check above can't
+        // the region being copied DURING the copy - the pre-check above can't
         // see that, and the out arrays would hold a silently torn window.
         // Re-check against the post-copy write position.
         if (readPos < buffer.getWritePos() - buffer.getCapacity()) return OVERRUN;
@@ -181,7 +219,7 @@ public final class SignalBufferReader {
         return n;
     }
 
-    /** Single-precision view of {@link #read(int, double[], double[])} — same
+    /** Single-precision view of {@link #read(int, double[], double[])} - same
      *  consuming-cursor + overrun semantics, narrowed into {@code float} for the
      *  WAV save path. */
     public int read(int maxCount, float[] outLeft, float[] outRight) {

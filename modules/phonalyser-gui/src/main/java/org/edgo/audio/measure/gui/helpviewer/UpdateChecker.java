@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,19 +28,19 @@ import java.util.regex.Pattern;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.program.Program;
-import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.gui.common.StoreUpdate;
 import org.edgo.audio.measure.gui.common.WindowsPackage;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.i18n.I18n;
 
 import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * GitHub-releases update check.  Hits {@link HelpUrls#RELEASES_API_URL} — the
- * releases list, newest first — extracts {@code tag_name}, {@code html_url} and
+ * GitHub-releases update check.  Hits {@link HelpUrls#RELEASES_API_URL} - the
+ * releases list, newest first - extracts {@code tag_name}, {@code html_url} and
  * {@code prerelease} from the NEWEST release, compares the tag against the
  * running app's version via
  * {@link Versions#compare(String, String)} and, if a newer release exists,
@@ -49,9 +49,9 @@ import lombok.extern.log4j.Log4j2;
  *
  * <p>Two entry points:
  * <ul>
- *   <li>{@link #checkNow(Shell)} — user invoked from the Help menu.
+ *   <li>{@link #checkNow(Shell)} - user invoked from the Help menu.
  *       Always surfaces a result (newer / up-to-date / error).</li>
- *   <li>{@link #checkOnStartup(Shell, boolean)} — silent background check
+ *   <li>{@link #checkOnStartup(Shell, boolean)} - silent background check
  *       triggered from the main window once it has opened.  Only surfaces
  *       the dialog when an update is available; up-to-date and error
  *       cases stay in the log.</li>
@@ -59,10 +59,10 @@ import lombok.extern.log4j.Log4j2;
  *
  * <p>Both paths run the network I/O on a daemon thread so the UI stays
  * responsive, and marshal the dialog back to the SWT thread via
- * {@link Display#asyncExec(Runnable)}.
+ * {@link GuiUtil#marshal}.
  *
- * <p>JSON parsing is intentionally tiny — three regexes over the response
- * body — to avoid pulling in a JSON library for two fields and a boolean.
+ * <p>JSON parsing is intentionally tiny - three regexes over the response
+ * body - to avoid pulling in a JSON library for two fields and a boolean.
  * The list is sorted newest-first, so the first match of each pattern is the
  * newest release's field.
  */
@@ -99,7 +99,7 @@ public class UpdateChecker {
      */
     public void checkOnStartup(Shell parent, boolean includeBeta) {
         if (WindowsPackage.isPackaged()) {
-            log.debug("Microsoft Store (MSIX) package — skipping startup update check (Store auto-updates)");
+            log.debug("Microsoft Store (MSIX) package - skipping startup update check (Store auto-updates)");
             return;
         }
         log.debug("Startup update check, includeBeta={}", includeBeta);
@@ -109,16 +109,14 @@ public class UpdateChecker {
     /**
      * Direct Microsoft Store update check for a Store (MSIX) install.  Asks the
      * Store via {@link StoreUpdate}: if it confirms the app is up to date, says
-     * so; otherwise — an update is available, or the query couldn't run — opens
+     * so; otherwise - an update is available, or the query couldn't run - opens
      * the Store so the user can review / install it there.
      */
     private void checkStoreInBackground(Shell parent) {
-        final Display display = parent.getDisplay();
         Thread t = new Thread(() -> {
             int count = StoreUpdate.availableUpdateCount();
             log.info("Store update check: availableUpdateCount={}", count);
-            display.asyncExec(() -> {
-                if (parent.isDisposed()) return;
+            GuiUtil.marshal(parent, () -> {
                 if (count == 0) {
                     showUpToDate(parent, Versions.appVersion());
                 } else {
@@ -130,7 +128,7 @@ public class UpdateChecker {
         t.start();
     }
 
-    /** Open the Microsoft Store — the app's product page when its Store ID is
+    /** Open the Microsoft Store - the app's product page when its Store ID is
      *  configured, otherwise the Store's "Downloads &amp; updates" list. */
     private void openStorePage() {
         String uri = HelpUrls.STORE_PRODUCT_ID.isEmpty()
@@ -140,7 +138,6 @@ public class UpdateChecker {
     }
 
     private void runCheckInBackground(Shell parent, boolean silentIfUpToDate, boolean includeBeta) {
-        final Display display = parent.getDisplay();
         Thread t = new Thread(() -> {
             ReleaseInfo info;
             try {
@@ -149,7 +146,7 @@ public class UpdateChecker {
                 log.warn("Update check failed: {}", ex.toString());
                 if (!silentIfUpToDate) {
                     final String reason = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
-                    display.asyncExec(() -> { if (!parent.isDisposed()) showError(parent, reason); });
+                    GuiUtil.marshal(parent, () -> showError(parent, reason));
                 }
                 return;
             }
@@ -161,7 +158,7 @@ public class UpdateChecker {
             if (!includeBeta && info.preRelease) {
                 log.info("Latest release {} is a pre-release; skipping (includeBeta=false)", info.tag);
                 if (!silentIfUpToDate) {
-                    display.asyncExec(() -> { if (!parent.isDisposed()) showUpToDate(parent, current); });
+                    GuiUtil.marshal(parent, () -> showUpToDate(parent, current));
                 }
                 return;
             }
@@ -169,9 +166,9 @@ public class UpdateChecker {
             log.info("Update check: latest={}, current={}, cmp={}", info.tag, current, cmp);
             if (cmp > 0) {
                 final ReleaseInfo found = info;
-                display.asyncExec(() -> { if (!parent.isDisposed()) showNewer(parent, found, current); });
+                GuiUtil.marshal(parent, () -> showNewer(parent, found, current));
             } else if (!silentIfUpToDate) {
-                display.asyncExec(() -> { if (!parent.isDisposed()) showUpToDate(parent, current); });
+                GuiUtil.marshal(parent, () -> showUpToDate(parent, current));
             }
         }, "update-check");
         t.setDaemon(true);

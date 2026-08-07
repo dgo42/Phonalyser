@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,6 +27,8 @@ import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
@@ -40,7 +42,6 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.gui.bind.Bindings;
@@ -49,35 +50,36 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.common.Dialogs;
-import org.edgo.audio.measure.gui.common.FftBinSnap;
+import org.edgo.audio.measure.gui.common.GuiUtil;
+import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.sound.CalibrationStore;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.gui.widgets.SignalFormCombo;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
-import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Generator pane — UI mirror of the CLI generator.  Hosts:
+ * Generator pane - UI mirror of the CLI generator.  Hosts:
  * <ul>
  *   <li>Signal-form combo (with 24×24 pictogram per entry)</li>
- *   <li>Frequency input — wheel ±5 %, arrows ±1 Hz, disabled for noise forms</li>
- *   <li>Amplitude input — accepts {@code mV}, {@code V}, {@code dBV},
+ *   <li>Frequency input - wheel ±5 %, arrows ±1 Hz, disabled for noise forms</li>
+ *   <li>Amplitude input - accepts {@code mV}, {@code V}, {@code dBV},
  *       {@code dBFS} (case-insensitive); wheel ±5 %, arrows ±1 unit step</li>
- *   <li>Dither bits combo — {@code Off} shown instead of 0</li>
- *   <li>Harmonics-CSV picker — Text field + Browse (…) + Reset (×) buttons</li>
- *   <li>Play button — runs the {@link org.edgo.audio.measure.generator.SignalGenerator}
+ *   <li>Dither bits combo - {@code Off} shown instead of 0</li>
+ *   <li>Harmonics-CSV picker - Text field + Browse (...) + Reset (×) buttons</li>
+ *   <li>Play button - runs the {@link org.edgo.audio.measure.generator.SignalGenerator}
  *       on a background thread when clicked</li>
  * </ul>
  *
  * <p>State persists across launches via {@link Preferences}.  The pane
- * isn't wired to {@code SignalGenerator} yet — clicking Play currently
+ * isn't wired to {@code SignalGenerator} yet - clicking Play currently
  * just snapshots the current settings into Preferences and logs them.
  */
 @Log4j2
@@ -86,7 +88,7 @@ public final class GeneratorPane extends AbstractPane {
     /** Minimum width (px) the pane will accept in the horizontal split. */
     public static final int MIN_WIDTH_PX = 200;
 
-    /** Minimum generator / dual-tone frequency — a real floor so a field can
+    /** Minimum generator / dual-tone frequency - a real floor so a field can
      *  never hold a degenerate (sub-0.01 Hz) value. */
     private static final double GEN_FREQ_MIN_HZ  = 0.01;
 
@@ -101,7 +103,7 @@ public final class GeneratorPane extends AbstractPane {
     private static final double DUTY_MAX_PCT = 99.999;
     /** Upper bound for every duration-type field (s). */
     private static final double TIME_MAX_SEC = 1_000_000;
-    /** Amplitude floor (Vrms) — keeps log-unit (dBV) entry finite. */
+    /** Amplitude floor (Vrms) - keeps log-unit (dBV) entry finite. */
     private static final double AMP_MIN_VRMS = 1e-9;
 
     private final SignalFormCombo formCombo;
@@ -122,8 +124,8 @@ public final class GeneratorPane extends AbstractPane {
     private NumericStepField      sweepFadeInField;
     private NumericStepField      sweepFadeOutField;
     private Button                sweepLoopBtn;
-    /** Dual-tone parameter block — single column, labels stacked above
-     *  fields, in the user-requested order:
+    /** Dual-tone parameter block - single column, labels stacked above
+     *  fields, in this order:
      *  Freq 1, Freq 2, snap-to-FFT-bin, Freq 1 amplitude %, Freq 2
      *  amplitude %.  amp1 + amp2 is constrained to 100 % so the two
      *  amplitude fields are coupled (editing one updates the other).
@@ -134,20 +136,20 @@ public final class GeneratorPane extends AbstractPane {
     private NumericStepField      dualToneFreq2Field;
     private NumericStepField      dualToneAmp1Field;
     private NumericStepField      dualToneAmp2Field;
-    /** Freq 1 / Freq 2 labels inside the dual-tone panel — kept as
+    /** Freq 1 / Freq 2 labels inside the dual-tone panel - kept as
      *  fields so {@link #updateDualToneFreqLabels} can append the
      *  snap-corrected frequency in brackets when snap-to-FFT-bin is
      *  active.  Mirrors how {@link #updateFreqLabel} annotates the
      *  single-tone Frequency label. */
     private Label                 dualToneFreq1Label;
     private Label                 dualToneFreq2Label;
-    /** Dither depth entry — bits or a full-scale-aware dBV view of the same
+    /** Dither depth entry - bits or a full-scale-aware dBV view of the same
      *  value; the OTHER unit is appended to {@link #ditherLabel} in brackets. */
     private final NumericStepField ditherField;
-    /** "Dither" caption — held so {@link #updateDitherLabel} can append the
+    /** "Dither" caption - held so {@link #updateDitherLabel} can append the
      *  other-unit readout in brackets (mirrors {@link #freqLabel}). */
     private final Label           ditherLabel;
-    /** Output-channel selector (Both / Left / Right) in the header row — gates
+    /** Output-channel selector (Both / Left / Right) in the header row - gates
      *  which DAC lane carries the generated signal.  READ_ONLY enum combo bound
      *  to {@code Preferences#genOutputChannelsProperty()} in the dither-combo
      *  style; the controller pushes the selection to the live encoder. */
@@ -171,7 +173,7 @@ public final class GeneratorPane extends AbstractPane {
     private final Button          playBtn;
 
     /** App-lifetime engine controller, injected by the host (lives in
-     *  {@code UIEngines}) — survives the in-place content rebuilds, so a
+     *  {@code UIEngines}) - survives the in-place content rebuilds, so a
      *  freshly built pane may find the tone already playing and only has
      *  to sync its visuals. */
     private final GeneratorController controller;
@@ -179,7 +181,7 @@ public final class GeneratorPane extends AbstractPane {
     /** "ON AIR" banner LED + label at the top right of the pane.
      *  When active: LED is always solid #FF0000, the "ON AIR" text blinks
      *  between #AA0000 and #FF0000 at ~1 Hz.  When idle: both LED and
-     *  text are grey.  All blink state lives on the SWT thread — no
+     *  text are grey.  All blink state lives on the SWT thread - no
      *  synchronisation needed. */
     private Canvas  onAirLed;
     private Label   onAirLabel;
@@ -190,15 +192,21 @@ public final class GeneratorPane extends AbstractPane {
     private boolean onAirActive;
     private boolean onAirBlinkOn;
     /** Handler for {@link Events#FFT_LENGTH_CHANGED}.  Held as a field
-     *  so the dispose listener can unsubscribe it from the bus — without
+     *  so the dispose listener can unsubscribe it from the bus - without
      *  that, the bus would keep this pane alive forever. */
     private Consumer<Void> fftLengthListener;
     /** Handler for {@link Events#FILE_PLAY_STOPPED}.  Fires on the
      *  play thread when the file player ends (user stop, EOF without
-     *  loop, or playback error) — resets the play-from LED on the UI
+     *  loop, or playback error) - resets the play-from LED on the UI
      *  thread.  Held as a field so the dispose listener can unsubscribe. */
     private Consumer<Void> filePlayStoppedListener;
-    /** Handler for {@link Events#FREQRESP_MEASUREMENT_STARTED} — stops
+    /** Handlers for {@link Events#FILE_UPLOAD_STARTED} / {@link
+     *  Events#FILE_UPLOAD_FINISHED} - the "uploading to the bench" notice. */
+    private Consumer<Void> uploadStartedListener;
+    private Consumer<Void> uploadFinishedListener;
+    /** The notice shell while an upload is in flight, else null. */
+    private Shell uploadShell;
+    /** Handler for {@link Events#FREQRESP_MEASUREMENT_STARTED} - stops
      *  the running generator (DDS tone + file player) and disables both
      *  play buttons so the FreqResp sweep can drive the DAC exclusively. */
     private Consumer<Void> freqRespStartedListener;
@@ -220,7 +228,7 @@ public final class GeneratorPane extends AbstractPane {
         super(parent);
         this.controller = controller;
         // Seed the tracked pane width from prefs BEFORE the host
-        // SashForm's first layout pass — the controlListener that picks
+        // SashForm's first layout pass - the controlListener that picks
         // up paneWidthPx fires immediately after construction and we
         // want it to honour the saved value instead of falling back to
         // the SashForm's construction-default weights.
@@ -240,7 +248,7 @@ public final class GeneratorPane extends AbstractPane {
         // 2 px padding on all four sides so the content doesn't touch the
         // SWT.BORDER.  verticalSpacing = 2 gives the same 2 px gap between
         // the title Label and the first form row (and between subsequent
-        // form rows — those Composites carry their own internal padding).
+        // form rows - those Composites carry their own internal padding).
         gl.marginWidth  = 2;
         gl.marginHeight = 2;
         gl.verticalSpacing = 2;
@@ -335,7 +343,7 @@ public final class GeneratorPane extends AbstractPane {
 
         // ----- Dual-tone Freq 1 / Freq 2 rows.  Live in the outer
         // group (not inside dualTonePanel) so the snap-to-FFT-bin
-        // checkbox keeps its position regardless of waveform —
+        // checkbox keeps its position regardless of waveform -
         // visibility flips between the regular Frequency row above
         // and these two rows.  Labels are stacked above their fields
         // (horizontalSpan = 2) per the dual-tone styling.
@@ -393,7 +401,7 @@ public final class GeneratorPane extends AbstractPane {
 
         // ----- Sweep controls (LINEAR_SWEEP / LOG_SWEEP only) -----------
         // Wrapped in their own panel that the form-combo listener
-        // shows/hides — keeps the generator pane uncluttered when the
+        // shows/hides - keeps the generator pane uncluttered when the
         // current waveform isn't a sweep.
         sweepLabel = new Label(group, SWT.NONE);
         sweepLabel.setText(I18n.t("generator.sweep"));
@@ -488,7 +496,7 @@ public final class GeneratorPane extends AbstractPane {
         dualToneAmp1Field.addSelectionListener(e -> applyDualToneAmpSplit(true));
         dualToneAmp2Field.addSelectionListener(e -> applyDualToneAmpSplit(false));
 
-        // Initial visibility matches the saved form — hide the regular
+        // Initial visibility matches the saved form - hide the regular
         // freq row + FFT-bin-snap and show the sweep panel up-front when
         // the app starts on a sweep, instead of waiting for the user to
         // poke the form combo.
@@ -501,9 +509,9 @@ public final class GeneratorPane extends AbstractPane {
         setSweepPanelVisible(initialIsSweep);
         setDualTonePanelVisible(initialIsDualTone);
 
-        // Form change: persist, then adjust the pane.  The engine side —
+        // Form change: persist, then adjust the pane.  The engine side -
         // live-swap vs. stop+start (sweep / dual-tone set up dedicated DDS
-        // state) and the FFT-invalidation publish — runs in the
+        // state) and the FFT-invalidation publish - runs in the
         // controller's genSignalForm subscription the moment the pref is
         // written; everything below is visuals.
         formCombo.addSelectionListener(e -> {
@@ -513,10 +521,10 @@ public final class GeneratorPane extends AbstractPane {
             boolean newIsSweep    = f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP;
             boolean newIsDualTone = f.isDualTone();
             // Sweep + dual-tone each hijack the single-frequency input
-            // — hide the regular Frequency row.  For DUAL_TONE, show
+            // - hide the regular Frequency row.  For DUAL_TONE, show
             // the Freq 1 / Freq 2 rows instead (placed just under the
             // regular Frequency row in the outer group).  Snap
-            // checkbox stays visible for SINE and DUAL_TONE — and
+            // checkbox stays visible for SINE and DUAL_TONE - and
             // because all three freq controls sit adjacent in the
             // same outer-group layout, the snap checkbox keeps its
             // exact on-screen position across the form switch.
@@ -538,7 +546,7 @@ public final class GeneratorPane extends AbstractPane {
             updateFreqLabel();
             updateDutyLabel();
             // A not-live-swappable change restarted the generator inside
-            // the pref write above — surface a failed restart.
+            // the pref write above - surface a failed restart.
             syncPlayButtonVisuals();
             if (wasRunning && !controller.isRunning()) {
                 String err = controller.getLastStartError();
@@ -556,7 +564,7 @@ public final class GeneratorPane extends AbstractPane {
         ampField.setLayoutData(fillH());
         ampField.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
         // The field holds canonical Vrms (unit parsing / display switching is
-        // internal) — two-way bind it like the frequency; live-apply and the
+        // internal) - two-way bind it like the frequency; live-apply and the
         // FFT-invalidation publish are the controller's subscription.
         Bindings.stepField(ampField, prefs.genAmplitudeVrmsProperty());
         // dBV display choice: seed from the persisted pref and persist the
@@ -566,12 +574,12 @@ public final class GeneratorPane extends AbstractPane {
                 prefs.setGenAmplitudeDbvDisplay(ampField.isLogDisplay()));
         // A DAC recalibration (Calibrate DAC dialog) changes the output full-scale:
         // recompute the running generator's amplitude against it so the commanded
-        // Vrms still holds (no restart, controller subscription) — the pane
+        // Vrms still holds (no restart, controller subscription) - the pane
         // only moves the field's ceiling with the new full-scale.
         Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(),
                 v -> ampField.setMax(controller.maxAmplitudeVrms(formCombo.getSelectedForm())));
         // Each waveform reaches full scale at a different V RMS, so the ceiling
-        // moves with the form — re-cap here (registered after the field exists,
+        // moves with the form - re-cap here (registered after the field exists,
         // alongside the form combo's own visual-reconfiguration listener).
         formCombo.addSelectionListener(e ->
                 ampField.setMax(controller.maxAmplitudeVrms(formCombo.getSelectedForm())));
@@ -592,7 +600,7 @@ public final class GeneratorPane extends AbstractPane {
         dutyField.setValue(initialDutyPct);
         dutyField.setLayoutData(fillH());
         dutyField.setToolTipText(I18n.t("generator.dutyCycle.tooltip"));
-        // Write only the active form's duty pref — the controller's per-pref
+        // Write only the active form's duty pref - the controller's per-pref
         // subscription live-applies it and publishes the FFT invalidation.
         dutyField.addSelectionListener(e -> {
             double frac = dutyField.getValue() / 100.0;
@@ -610,8 +618,8 @@ public final class GeneratorPane extends AbstractPane {
         // enters/sees the dither depth as whole/fractional bits OR a
         // full-scale-aware dBV VIEW of the same value (0 = Off, capped at the
         // output bit depth).  The OTHER unit is appended to the "Dither"
-        // caption in brackets — exactly like the corrected frequency on the
-        // Frequency caption — and tracks the live DAC full-scale.  Off sits at
+        // caption in brackets - exactly like the corrected frequency on the
+        // Frequency caption - and tracks the live DAC full-scale.  Off sits at
         // the top of the range.  The caption is a field so updateDitherLabel()
         // can re-annotate it.
         ditherLabel = new Label(group, SWT.NONE);
@@ -619,7 +627,7 @@ public final class GeneratorPane extends AbstractPane {
         ditherLabel.setLayoutData(fillH());
         // The dBV view states the physical TPDF level relative to the DAC peak
         // full-scale.  No window term: since the analyser's NENBW correction
-        // the integrated noise metrics (N, SNR, …) read the true level, so the
+        // the integrated noise metrics (N, SNR, ...) read the true level, so the
         // entered dBV is window-invariant and checks against them with any
         // analysis window.
         ditherField = new NumericStepField(group, UnitFamily.DITHER,
@@ -632,7 +640,7 @@ public final class GeneratorPane extends AbstractPane {
         ditherField.setValue(prefs.getGenDitherBits());
         ditherField.setLogDisplay(prefs.isGenDitherDbvDisplay());
         // On a committed change, write the bit count (the existing genDitherBits
-        // → GeneratorController.setDitherBits → publishSignalChanged path is
+        // -> GeneratorController.setDitherBits -> publishSignalChanged path is
         // unchanged), persist the bits/dBV display choice, and re-annotate the
         // caption with the other-unit readout.
         ditherField.addSelectionListener(e -> {
@@ -644,7 +652,7 @@ public final class GeneratorPane extends AbstractPane {
         // entered value: in the dBV view it keeps the shown dBV and re-solves
         // the bits under the new full-scale; in the bits view it keeps the bits
         // and only the dBV readout moves.  When the bits re-solve, persist them
-        // — that restarts the generator via the usual genDitherBits path — then
+        // - that restarts the generator via the usual genDitherBits path - then
         // re-annotate the caption.
         Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(), v -> {
             if (ditherField.reanchor()) prefs.setGenDitherBits(ditherField.getValue());
@@ -652,7 +660,7 @@ public final class GeneratorPane extends AbstractPane {
         });
         // An FFT-window change never touches the dither: bits and dBV are the
         // physical level (window-invariant since the analyser's NENBW
-        // correction).  Recalculate the rendered readouts only — no reanchor,
+        // correction).  Recalculate the rendered readouts only - no reanchor,
         // no persist, the generator output stays put.
         Bindings.onChange(group, prefs.fftWindowProperty(), w -> {
             ditherField.refresh();
@@ -672,7 +680,7 @@ public final class GeneratorPane extends AbstractPane {
         GridData corrGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         corrGd.widthHint = 220;
         correctionsField.setLayoutData(corrGd);
-        // Follow external changes to either .dpd slot — the predistortion
+        // Follow external changes to either .dpd slot - the predistortion
         // wizard's Apply writes the saved path here, and the field always shows
         // whichever slot matches the current form, without the user re-browsing.
         Bindings.onChange(group, prefs.genDpdProperty(),     v -> refreshCorrectionsRow());
@@ -686,7 +694,7 @@ public final class GeneratorPane extends AbstractPane {
         corrBrowseBtn.setToolTipText(I18n.t("generator.corrections.browse"));
         corrBrowseBtn.addListener(SWT.Selection, e -> openCorrectionsBrowse());
 
-        // Clear (×) — unloads the correction file so the field empties and the
+        // Clear (×) - unloads the correction file so the field empties and the
         // compensated form stops pre-distorting.
         corrClearBtn = new Button(corrRow, SWT.PUSH);
         Image corrXmark = IconUtils.icon(corrRow.getDisplay(), Icon.RECTANGLE_XMARK);
@@ -705,13 +713,13 @@ public final class GeneratorPane extends AbstractPane {
                 0.001, TIME_MAX_SEC, TIME_MAX_DECIMALS, 160);
         durationField.setLayoutData(fillH());
         durationField.setToolTipText(I18n.t("generator.duration.tooltip"));
-        // Pure persisted value (read only by Save-WAV) — two-way bind with
+        // Pure persisted value (read only by Save-WAV) - two-way bind with
         // no side-effects; the bind auto-persists via requestSave().
         Bindings.stepField(durationField, prefs.genWavDurationSecondsProperty());
 
         // ----- Save-to: text + single saveTo (floppy-disk) button.
         // Picking a file in the dialog (and confirming overwrite when
-        // needed) saves the file immediately — no separate Save click.
+        // needed) saves the file immediately - no separate Save click.
         // Format is picked by file extension (.wav / .flac / .aiff/.aif).
         addRowLabel(group, I18n.t("generator.saveTo"));
         Composite wavRow = new Composite(group, SWT.NONE);
@@ -738,10 +746,10 @@ public final class GeneratorPane extends AbstractPane {
         saveTo.addListener(SWT.Selection, e -> doSaveToBrowseAndWrite());
 
         // --------------------------------------------------- Load-from row
-        // Header row: "Load from…" label on the left, "In loop" checkbox
+        // Header row: "Load from..." label on the left, "In loop" checkbox
         // on the right (same vertical level).  Content row below it is
         // indented so the path/browse/play widgets sit slightly inset
-        // — checkbox itself stays flush with the right edge.
+        // - checkbox itself stays flush with the right edge.
         Composite loadFromHeader = new Composite(group, SWT.NONE);
         GridLayout hdrGl = new GridLayout(2, false);
         hdrGl.marginWidth  = 0;
@@ -760,7 +768,7 @@ public final class GeneratorPane extends AbstractPane {
         // the next EOF) is the controller's subscription.
 
         // Content row: text + browse (folder-open icon) + play (LED).
-        // No Clear (✕) button — user spec.
+        // No Clear (✕) button - the row is deliberately these three controls.
         Composite playFromRow = new Composite(group, SWT.NONE);
         GridLayout pfGl = new GridLayout(3, false);
         pfGl.marginWidth = 0; pfGl.marginHeight = 0;
@@ -795,19 +803,27 @@ public final class GeneratorPane extends AbstractPane {
         // loop) or fails on the play thread.  The bus delivers
         // FILE_PLAY_STOPPED on the play thread; marshal to the UI thread
         // before touching widgets.
-        filePlayStoppedListener = ignored -> {
+        filePlayStoppedListener = ignored -> GuiUtil.marshal(() -> {
             if (!playFromBtn.isDisposed()) {
-                playFromBtn.getDisplay().asyncExec(() -> {
-                    if (!playFromBtn.isDisposed()) {
-                        playFromBtn.setImage(tinyPlayDimImg);
-                        playFromBtn.setToolTipText(I18n.t("generator.loadFrom.play"));
-                        stopOnAirBlink();
-                    }
-                });
+                playFromBtn.setImage(tinyPlayDimImg);
+                playFromBtn.setToolTipText(I18n.t("generator.loadFrom.play"));
+                stopOnAirBlink();
             }
-        };
+            // A file session can fail LONG after the click - a bench that refused
+            // the upload, a device that died mid-file.  This is the only moment
+            // such a failure can be reported, and the claim is once, so the
+            // one-shot check in togglePlayFrom and this cannot both raise it.
+            reportFilePlayFailure();
+        });
+        // The upload to a network bench can take minutes on a slow link; without
+        // a notice the operator has a dead-looking window and no idea anything
+        // is happening.  Non-modal on purpose: Stop must stay clickable.
+        uploadStartedListener  = ignored -> GuiUtil.marshal(this::openUploadNotice);
+        uploadFinishedListener = ignored -> GuiUtil.marshal(this::closeUploadNotice);
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.FILE_PLAY_STOPPED, filePlayStoppedListener);
+        bus.subscribe(Events.FILE_UPLOAD_STARTED,  uploadStartedListener);
+        bus.subscribe(Events.FILE_UPLOAD_FINISHED, uploadFinishedListener);
 
         // --------------------------------------------------------------- Play
         // Main play button sits on its own row, indented to the right
@@ -840,12 +856,16 @@ public final class GeneratorPane extends AbstractPane {
         playBtn.setImage(playDimImg);                                  // start dim
         playBtn.setToolTipText(I18n.t("generator.play.start"));
         playBtn.addListener(SWT.Selection, e -> {
+            // DIRECT calls: the play THREAD owns the lane (open through close),
+            // and stop() only sets its flag and joins bounded - nothing here
+            // can be held by a driver.  The straight-line shape - act, then
+            // read the result - survives as-is.
             if (controller.isRunning()) {
                 controller.stop();
                 syncPlayButtonVisuals();
             } else {
                 // Generator DDS and Play-from-file share the audio output
-                // device — start() stops a running file playback itself;
+                // device - start() stops a running file playback itself;
                 // re-sync both buttons' visuals from the controller state.
                 controller.start();
                 syncPlayButtonVisuals();
@@ -875,7 +895,7 @@ public final class GeneratorPane extends AbstractPane {
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
         // Audio-format edits (Preferences OK, UI thread) move the Nyquist
-        // ceiling of every frequency field — re-pull it from the committed
+        // ceiling of every frequency field - re-pull it from the committed
         // prefs.  The fields re-clamp and echo a clamped value back to their
         // bound preference if the rate dropped below the entered frequency.
         audioFormatListener = ignored -> {
@@ -886,7 +906,7 @@ public final class GeneratorPane extends AbstractPane {
             dualToneFreq2Field.setMax(nyquist);
             sweepStartField.setMax(nyquist);
             sweepEndField.setMax(nyquist);
-            // Output bit depth is part of the audio format — it caps the dither
+            // Output bit depth is part of the audio format - it caps the dither
             // range (setMax re-clamps and echoes a clamped bit count back to the
             // pref) and shifts the dBV view; refresh the field + companion label.
             ditherField.setMax(Preferences.instance().current().getOutputBitDepth());
@@ -897,12 +917,15 @@ public final class GeneratorPane extends AbstractPane {
 
         // Dispose-time: detach the pane's own bus subscriptions and tear
         // down the icon cache owned by this pane's display.  The injected
-        // controller deliberately keeps running — a content rebuild
+        // controller deliberately keeps running - a content rebuild
         // (language / font change) must not silence the tone; it is shut
         // down by UIEngines at application exit.
         group.addDisposeListener(e -> {
             bus.unsubscribe(Events.FFT_LENGTH_CHANGED,            fftLengthListener);
             bus.unsubscribe(Events.FILE_PLAY_STOPPED,             filePlayStoppedListener);
+            bus.unsubscribe(Events.FILE_UPLOAD_STARTED,          uploadStartedListener);
+            bus.unsubscribe(Events.FILE_UPLOAD_FINISHED,         uploadFinishedListener);
+            closeUploadNotice();
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
             bus.unsubscribe(Events.AUDIO_FORMAT_CHANGED,          audioFormatListener);
@@ -912,14 +935,14 @@ public final class GeneratorPane extends AbstractPane {
             if (onAirFont        != null && !onAirFont.isDisposed())        onAirFont.dispose();
         });
 
-        // Initial label render — picks up the freq / duty values just
+        // Initial label render - picks up the freq / duty values just
         // loaded from prefs and shows the correction bracket for the
         // saved form, if any.
         updateFreqLabel();
         updateDutyLabel();
         updateDitherLabel();
 
-        // The injected controller survives content rebuilds — when this
+        // The injected controller survives content rebuilds - when this
         // pane is a rebuilt instance the tone / file playback may already
         // be running; light the Play LEDs + ON-AIR banner accordingly.
         syncPlayButtonVisuals();
@@ -963,11 +986,11 @@ public final class GeneratorPane extends AbstractPane {
 
     @Override
     protected void onTabCollapse() {
-        // No settings tab strip to collapse — nothing to re-flow.
+        // No settings tab strip to collapse - nothing to re-flow.
     }
 
     /** Programmatically starts the DDS tone and syncs the Play button +
-     *  ON-AIR visuals — the {@code gui.automation} scripts' Play.  Unlike
+     *  ON-AIR visuals - the {@code gui.automation} scripts' Play.  Unlike
      *  the Play-button click a failure is only logged: a modal error
      *  dialog would hang an unattended run.  Callers can check
      *  {@link #isToneRunning()}. */
@@ -977,6 +1000,10 @@ public final class GeneratorPane extends AbstractPane {
         // so this script-driven Play is a no-op.  A user Play-button click uses
         // its own SWT.Selection handler and is unaffected.
         if (Boolean.getBoolean("phonalyser.automation.noAudio")) return;
+        // DIRECT, and quietly, unlike the Play button: an unattended run must
+        // not be handed a window to dismiss, and this method's whole contract
+        // is that it reports through the log.  The controller's own device
+        // worker bounds the wait.
         controller.start();
         syncPlayButtonVisuals();
         syncFilePlayVisuals();
@@ -987,7 +1014,7 @@ public final class GeneratorPane extends AbstractPane {
 
     /** Which output engine was running when {@link #stopPlayForPrefs()} stopped
      *  it, so {@link #startPlayForPrefs()} restarts exactly that one.  Owned here
-     *  — the caller does not track the pane's running state.  The DDS tone and
+     *  - the caller does not track the pane's running state.  The DDS tone and
      *  file playback share the output device and are mutually exclusive, so at
      *  most one of these is set. */
     private boolean ddsWasRunningForPrefs;
@@ -997,7 +1024,7 @@ public final class GeneratorPane extends AbstractPane {
      * Stops the DDS generator / file player ahead of a Preferences audio-config
      * change (e.g. switching backend between WASAPI / WDM-KS / csjsound / QA40x),
      * remembering which one was playing.  Called BEFORE the new backend is
-     * committed — while the old backend is still active — so its output line
+     * committed - while the old backend is still active - so its output line
      * closes cleanly instead of wedging the stop; pair with
      * {@link #startPlayForPrefs()} after the commit.
      */
@@ -1007,6 +1034,10 @@ public final class GeneratorPane extends AbstractPane {
         if (ddsWasRunningForPrefs || fileWasRunningForPrefs) {
             stopOnAirBlink();
         }
+        // DIRECT: stop() flags the lane and joins bounded - stopping a REMOTE
+        // generator is three round trips against the bench being switched away
+        // from, bounded by the wire timeouts, so an unreachable one cannot
+        // hold the commit hostage.
         controller.stopEngines();
         syncPlayButtonVisuals();
         syncFilePlayVisuals();
@@ -1014,13 +1045,15 @@ public final class GeneratorPane extends AbstractPane {
 
     /**
      * Restarts, on the newly-committed backend, whichever engine was playing
-     * when {@link #stopPlayForPrefs()} stopped it — the DDS tone, or WAV/FLAC
+     * when {@link #stopPlayForPrefs()} stopped it - the DDS tone, or WAV/FLAC
      * file playback.  Both drive the selected output device, so a backend /
      * device change disturbs either; file playback resumes from the same
      * play-from path and loop flag held in the preferences.
      */
     public void startPlayForPrefs() {
         if (ddsWasRunningForPrefs) {
+            // The same chain the Play button spends - opened on the bench that
+            // was just committed, which may be another machine entirely.
             controller.start();
             syncPlayButtonVisuals();
             if (!controller.isRunning()) {
@@ -1045,7 +1078,7 @@ public final class GeneratorPane extends AbstractPane {
         }
     }
 
-    /** Records the pane's current pixel width — called by the host
+    /** Records the pane's current pixel width - called by the host
      *  {@code SashForm} sash filter on every drag.  Values below
      *  {@link #MIN_WIDTH_PX} are ignored so a transient drag past the
      *  minimum doesn't corrupt the persisted width. */
@@ -1054,7 +1087,7 @@ public final class GeneratorPane extends AbstractPane {
     }
 
     /** Generator-pane collapse extra: snapshot the pixel width on the way
-     *  down so {@link #onExpanding()} can restore it — the parent
+     *  down so {@link #onExpanding()} can restore it - the parent
      *  {@code SashForm} reads {@link #getPaneWidthPx()} for the weights.
      *  The child hide/restore itself is the base {@code setCollapsed}. */
     @Override
@@ -1068,7 +1101,7 @@ public final class GeneratorPane extends AbstractPane {
         else if (paneWidthPx < MIN_WIDTH_PX)    paneWidthPx = MIN_WIDTH_PX;
     }
 
-    /** {@link Events#FREQRESP_MEASUREMENT_STARTED} handler — the controller
+    /** {@link Events#FREQRESP_MEASUREMENT_STARTED} handler - the controller
      *  stops both engines in its own subscription; here only the visuals:
      *  dim and gray both Play buttons while the sweep drives the DAC. */
     private void onFreqRespMeasurementStarted() {
@@ -1088,7 +1121,7 @@ public final class GeneratorPane extends AbstractPane {
     }
 
     /** Mirrors the DDS engine state on the main Play button and the ON-AIR
-     *  banner — called after every controller command that may have started
+     *  banner - called after every controller command that may have started
      *  or stopped the tone (including implicitly, e.g. a form change
      *  restart or file playback claiming the device). */
     private void syncPlayButtonVisuals() {
@@ -1117,44 +1150,56 @@ public final class GeneratorPane extends AbstractPane {
      * Opens the DAC calibration dialog.  The dialog shows the
      * currently-commanded full-scale Vrms and lets the user enter the
      * voltage actually measured at the DAC output.  On accept, the new
-     * full-scale is persisted to {@link Preferences} — the generator reads
+     * full-scale is persisted to {@link Preferences} - the generator reads
      * {@link Preferences#getDacFsVoltageAmpl()} directly.
      */
     private void openDacCalibrationDialog() {
         Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
         if (parent == null) return;
         Preferences prefs = Preferences.instance();
-        if (prefs.isDacCalibrationFromDevice()) {
-            // Device-provided (QA40x): show the built-in output full-scale (Vrms) read-only.
+        // Where the calibration goes - this machine's cards or the bench that owns
+        // the device - and, first, whether it may be written at all.
+        final CalibrationStore calibration = new CalibrationStore(prefs);
+        if (calibration.isCalibrationFromDevice(false)) {
+            // Device-provided (a QA40x, here or on a bench): show the built-in
+            // output full-scale (Vrms) read-only.
             double fsL = prefs.getDacFsVoltageAmpl(Channel.L) / Math.sqrt(2.0);
             double fsR = prefs.getDacFsVoltageAmpl(Channel.R) / Math.sqrt(2.0);
             new CalibrationDialog(parent, dacTexts(), fsL, fsR, true, (ch, v) -> { }).open();
             return;
         }
         final double configuredVrms = prefs.getGenAmplitudeVrms();
-        final boolean stereo = isOutputBoundStereo(prefs);
+        final boolean stereo = prefs.isOutputBoundStereo();
         // A stereo (LINKED / INDEPENDENT) card gets both rows, each prefilled with
         // the single commanded amplitude (the generator drives both lanes from one
         // amplitude), so each channel's measured output rescales its OWN DAC
-        // full-scale.  A MONO card or an unbound device is single-row (Left only) —
+        // full-scale.  A MONO card or an unbound device is single-row (Left only) -
         // the shared both-channels full-scale.  Output RMS scales linearly with FS,
         // so the true FS satisfies measured/configured = FS_true/FS_old.
         Double seedRight = stereo ? configuredVrms : null;
         new CalibrationDialog(parent, dacTexts(), configuredVrms, seedRight, false, (ch, measuredVrms) -> {
+            boolean stored;
             if (stereo) {
                 double oldFs = prefs.getDacFsVoltageAmpl(ch);
                 double newFs = oldFs * (measuredVrms / configuredVrms);
-                prefs.storeDacCalibration(ch, newFs);
+                stored = calibration.storeDacCalibration(ch, newFs);
             } else {
                 // MONO / unbound: shared both-channels full-scale (auto-creates the
                 // profile on first calibrate); also sets the FS scalar and persists.
                 double oldFs = prefs.getDacFsVoltageAmpl();
                 double newFs = oldFs * (measuredVrms / configuredVrms);
-                prefs.storeDacCalibration(newFs);
+                stored = calibration.storeDacCalibration(newFs);
             }
             // The store fires the dacFsVoltageRms binding, which recomputes the
-            // running generator's amplitude against the new full-scale — so the
-            // calibration takes effect immediately, without a restart.
+            // running generator's amplitude against the new full-scale - so the
+            // calibration takes effect immediately, without a restart.  A bench
+            // that refused it moved nothing (CalibrationStore applies on success),
+            // and the operator has to be told that.
+            if (!stored) {
+                Dialogs.error(parent, I18n.t("calibrate.dac.title"),
+                        I18n.t("preferences.audio.card.copyCalibration.failed",
+                                prefs.current().getOutputDeviceName()));
+            }
         }).open();
     }
 
@@ -1167,7 +1212,7 @@ public final class GeneratorPane extends AbstractPane {
 
     /** Capture support (help screenshots): builds the DAC calibration dialog in its
      *  two-row (stereo) form with both channels prefilled at the configured amplitude
-     *  and shows it non-modally — no live measurement, no modal loop — returning it so
+     *  and shows it non-modally - no live measurement, no modal loop - returning it so
      *  the automation can snapshot and dispose it.  The commit callback is a no-op:
      *  the shot never presses Calibrate.  Mirrors {@link #openDacCalibrationDialog}. */
     public CalibrationDialog openDacCalibrationForCapture() {
@@ -1177,16 +1222,6 @@ public final class GeneratorPane extends AbstractPane {
         CalibrationDialog dlg = new CalibrationDialog(parent, dacTexts(), vrms, vrms, false, (ch, v) -> { });
         dlg.showForCapture();
         return dlg;
-    }
-
-    /** True when the current backend's output device resolves to a bound card whose
-     *  output endpoint calibrates its two channels separately — every mode except
-     *  {@link DeviceChannelMode#MONO}.  A MONO card (one physical channel) or an
-     *  unbound device (no profile) keeps the single-row legacy flow. */
-    private boolean isOutputBoundStereo(Preferences prefs) {
-        AudioDeviceProfile p = prefs.resolveDeviceProfile(prefs.current().getOutputDeviceName());
-        return p != null && p.getOutput() != null
-                && p.getOutput().getChannels() != DeviceChannelMode.MONO;
     }
 
     // -------------------------------------------------------------------------
@@ -1233,7 +1268,7 @@ public final class GeneratorPane extends AbstractPane {
         int n = controller.periodSamples();
         int k = (int) Math.round(dutyField.getValue() / 100.0 * n);
         // Match the DDS kernel, which never collapses the pulse to a constant
-        // level — at least one sample high and one low.  Without this clamp a
+        // level - at least one sample high and one low.  Without this clamp a
         // sub-one-sample duty rounds to 0 % in the label while the generator
         // actually emits ~one sample (the smallest achievable, f/fs).
         if (n > 1) k = Math.max(1, Math.min(n - 1, k));
@@ -1262,7 +1297,7 @@ public final class GeneratorPane extends AbstractPane {
         return new GridData(SWT.FILL, SWT.CENTER, true, false);
     }
 
-    /** Clamps a percentage to {@code [0, 100]} — used as the value
+    /** Clamps a percentage to {@code [0, 100]} - used as the value
      *  transform for the dual-tone split spinner so the field can't be
      *  scrolled out of physical bounds. */
     private double clampPct(double v) {
@@ -1277,7 +1312,7 @@ public final class GeneratorPane extends AbstractPane {
     }
 
     // -------------------------------------------------------------------------
-    // ON-AIR banner — solid red LED + blinking bold label at top right of the
+    // ON-AIR banner - solid red LED + blinking bold label at top right of the
     // pane.  When active: LED is solid #FF0000, label alternates between
     // #FF0000 (bright) and #AA0000 (dim) at ~1 Hz.  Idle: both go grey.
     // -------------------------------------------------------------------------
@@ -1317,10 +1352,34 @@ public final class GeneratorPane extends AbstractPane {
         onAirLed.getDisplay().timerExec(500, () -> {
             if (onAirLabel == null || onAirLabel.isDisposed()) return;
             if (!onAirActive) return;
+            // Lane-death consult on the pane's existing visual sync point:
+            // the play thread records WHY it ended (the lane is already down
+            // and its line closed); the pane that owns Play reports it.
+            Throwable died = controller.takePlaybackEndedFromBelow();
+            if (died != null) {
+                onPlaybackEndedFromBelow(died);
+                return;
+            }
             onAirBlinkOn = !onAirBlinkOn;
             onAirLabel.setForeground(onAirBlinkOn ? onAirRedColor : onAirRedDimColor);
             scheduleOnAirBlink();
         });
+    }
+
+    /** The playback lane ended from below - device unplugged, taken
+     *  exclusively, or the driver failed hard enough to throw.  The lane
+     *  already stopped itself, so only the visuals and the operator report
+     *  are left.  The unified stop message: same form as the capture
+     *  side's, the BACKEND is named, and the
+     *  technical detail stays in the message the play thread logged and
+     *  threw - never in the dialog. */
+    private void onPlaybackEndedFromBelow(Throwable failure) {
+        stopOnAirBlink();
+        syncPlayButtonVisuals();
+        syncFilePlayVisuals();
+        Dialogs.error(group.getShell(), I18n.t("audio.deviceError.title"),
+                I18n.t("audio.deviceError.playbackEnded",
+                        Preferences.instance().getSelectedBackend().type().getDisplayName()));
     }
 
     // -------------------------------------------------------------------------
@@ -1357,7 +1416,7 @@ public final class GeneratorPane extends AbstractPane {
     /** Syncs the corrections row to the current form: shows that form's
      *  {@code .dpd} (the single-tone slot for {@code SINE_COMP}, the
      *  dual-tone slot for {@code DUAL_TONE_COMP}) and enables the
-     *  field + browse/clear only for those two compensated forms — every other
+     *  field + browse/clear only for those two compensated forms - every other
      *  waveform has no predistortion file, so the row is emptied and disabled. */
     private void refreshCorrectionsRow() {
         if (correctionsField == null || correctionsField.isDisposed()) return;
@@ -1464,8 +1523,9 @@ public final class GeneratorPane extends AbstractPane {
                     ? dualToneFreq1Field.getValue() : prefs.getGenDualToneFreq1Hz();
             double raw2 = (dualToneFreq2Field != null && !dualToneFreq2Field.isDisposed())
                     ? dualToneFreq2Field.getValue() : prefs.getGenDualToneFreq2Hz();
-            double snap1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, raw1);
-            double snap2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, raw2);
+            int fftLen = prefs.getFftLength();
+            double snap1 = FftBinSnap.snapIfEnabled(GenSignalForm.DUAL_TONE, sr, fftLen, snap, raw1);
+            double snap2 = FftBinSnap.snapIfEnabled(GenSignalForm.DUAL_TONE, sr, fftLen, snap, raw2);
             dualToneFreq1Label.setText(base1 + "  (" + formatLabelHz(snap1) + ")");
             dualToneFreq2Label.setText(base2 + "  (" + formatLabelHz(snap2) + ")");
         } else {
@@ -1498,7 +1558,7 @@ public final class GeneratorPane extends AbstractPane {
         // and publishes the FFT invalidation.
         prefs.setGenDualToneSplitPct(a1);
         // The split sets the two-tone crest factor, hence the V RMS at which the
-        // pair reaches full scale — re-cap the amplitude field.
+        // pair reaches full scale - re-cap the amplitude field.
         ampField.setMax(controller.maxAmplitudeVrms(formCombo.getSelectedForm()));
     }
 
@@ -1606,16 +1666,73 @@ public final class GeneratorPane extends AbstractPane {
             return;
         }
         // startFilePlayback stops the DDS tone itself (shared output
-        // device) — re-sync both buttons from the controller state.
+        // device) - re-sync both buttons from the controller state.
         controller.startFilePlayback(new File(path), prefs.isGenPlayFromLoop());
         syncPlayButtonVisuals();
         syncFilePlayVisuals();
         if (!controller.isFilePlaying()) {
-            String err = controller.getFilePlayError();
-            Dialogs.error(group.getShell(),
-                    I18n.t("generator.error.playFile"),
-                    err != null ? err : I18n.t("common.error.fileOpenUnknown"));
+            // A failure that was already certain before the call returned - a
+            // missing file, a refused open.  A failure that lands LATER arrives
+            // through FILE_PLAY_STOPPED instead; the claim below makes sure only
+            // one of the two ever speaks.
+            if (!reportFilePlayFailure()) {
+                Dialogs.error(group.getShell(),
+                        I18n.t("generator.error.playFile"),
+                        I18n.t("common.error.fileOpenUnknown"));
+            }
         }
+    }
+
+    /**
+     * Puts up the "uploading to the bench" notice - a plain text shell, no
+     * progress and no cancel: the pane's own Stop already aborts the session,
+     * and a second control for it would be one more thing to get wrong.
+     *
+     * <p>NOT modal.  A modal shell would block the Stop the operator needs while
+     * a slow upload is running, which is the opposite of helping.
+     */
+    private void openUploadNotice() {
+        if (group.isDisposed() || (uploadShell != null && !uploadShell.isDisposed())) {
+            return;
+        }
+        Shell parent = group.getShell();
+        Shell s = new Shell(parent, SWT.TITLE | SWT.BORDER);
+        s.setText(I18n.t("generator.loadFrom.dialog"));
+        GridLayout gl = new GridLayout(1, false);
+        gl.marginWidth = 16;
+        gl.marginHeight = 12;
+        s.setLayout(gl);
+        Label l = new Label(s, SWT.CENTER);
+        l.setText(I18n.t("generator.upload.busy"));
+        l.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        s.pack();
+        Rectangle pb = parent.getBounds();
+        Point sz = s.getSize();
+        s.setLocation(pb.x + (pb.width - sz.x) / 2, pb.y + (pb.height - sz.y) / 2);
+        s.open();
+        uploadShell = s;
+    }
+
+    /** Takes the notice down.  Idempotent and disposal-guarded: it is called
+     *  from the finished event, and again from the pane's own teardown. */
+    private void closeUploadNotice() {
+        Shell s = uploadShell;
+        uploadShell = null;
+        if (s != null && !s.isDisposed()) {
+            s.dispose();
+        }
+    }
+
+    /** Shows the file-play failure if one is waiting to be claimed.
+     *
+     *  @return whether a message was claimed and shown */
+    private boolean reportFilePlayFailure() {
+        String err = controller.takeFilePlayErrorForReport();
+        if (err == null || group.isDisposed()) {
+            return false;
+        }
+        Dialogs.error(group.getShell(), I18n.t("generator.error.playFile"), err);
+        return true;
     }
 
     /** Builds a default file name encoding signal form + sample rate (kHz) + bit width.  WAV by default. */
@@ -1648,8 +1765,8 @@ public final class GeneratorPane extends AbstractPane {
 
     /**
      * Refreshes the "Dither" caption: appends the dither value in the OTHER
-     * unit in brackets — dBV when the field shows bits, bits when it shows dBV
-     * — mirroring how {@link #updateFreqLabel} annotates the Frequency caption.
+     * unit in brackets - dBV when the field shows bits, bits when it shows dBV
+     * - mirroring how {@link #updateFreqLabel} annotates the Frequency caption.
      * Off shows the plain caption.  The dBV side tracks the live DAC full-scale,
      * so this is re-run on calibration / output-format changes.
      */

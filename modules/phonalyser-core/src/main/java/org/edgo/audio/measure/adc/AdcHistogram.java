@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -40,8 +40,8 @@ import lombok.extern.log4j.Log4j2;
  * For bitDepth == 32: 8 chunked int[2^29] arrays (~16 GB total).
  *
  * Bin index for a sample:
- *   ≤ 24-bit  →  sample & (binCount - 1)   (masks to lower bitDepth bits)
- *   32-bit    →  unsigned chunk lookup
+ *   ≤ 24-bit  ->  sample & (binCount - 1)   (masks to lower bitDepth bits)
+ *   32-bit    ->  unsigned chunk lookup
  */
 @Log4j2
 public class AdcHistogram {

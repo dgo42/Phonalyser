@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -34,7 +34,7 @@ class MedianFilterTest {
         float orig = x[idx];
         x[idx] = 50.0f;                       // huge lone spike
         new MedianFilter(5).process(x, x.length);
-        // The spike is gone — back near the smooth waveform value.
+        // The spike is gone - back near the smooth waveform value.
         assertTrue(Math.abs(x[idx] - orig) < 0.2, "spike not removed: " + x[idx]);
     }
 

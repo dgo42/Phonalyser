@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -49,10 +49,12 @@ import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.sound.CalibrationStore;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.CaptureEndReason;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -63,7 +65,7 @@ import lombok.extern.log4j.Log4j2;
  * vertical scrollbars, the {@link ScopeTabControl} bottom toolbar, and the
  * Record toggle.  Extracted from {@link MainWindow} so the live pane can stay
  * attached to the {@code SashForm} while a second instance is constructed
- * inside a hidden offscreen Shell for screenshot rendering — that way the
+ * inside a hidden offscreen Shell for screenshot rendering - that way the
  * screenshot is a real SWT layout at the target dimensions (buttons stay at
  * their native pixel size, the scope view's canvas claims the extra space)
  * instead of a bitmap scale.
@@ -72,8 +74,8 @@ import lombok.extern.log4j.Log4j2;
  * save-load) live in the self-contained {@link ScopeTabControl}; redraws,
  * view-state recomputes, persistence wipes and the open-signal load flow DOWN
  * through the injected {@link ScopeController}, and the pane reacts to state it
- * mirrors (nav slider ← the controller's view-state event, vertical slider ←
- * offset/scale preference properties, Record button ← the bus).
+ * mirrors (nav slider <- the controller's view-state event, vertical slider <-
+ * offset/scale preference properties, Record button <- the bus).
  */
 @Log4j2
 public final class ScopePane extends AbstractPane {
@@ -83,21 +85,33 @@ public final class ScopePane extends AbstractPane {
      * full-scale p-p) required for the calibrate button to be active.
      * Below this the signal occupies too little of the ADC's range and a
      * calibration based on it would be dominated by quantisation /
-     * background noise.  Matches the "0.25 FS p-p" gate from the polish
-     * spec.
+     * background noise.  The gate is 0.25 of ADC full-scale p-p.
      */
     private static final double CALIBRATE_MIN_VPP_FRACTION = 0.25;
 
+    /**
+     * The floor under the calibrate button for an UNCALIBRATED selection: enough to
+     * tell a signal from silence, and nothing more.
+     *
+     * <p>A fraction like its sibling, deliberately: {@code vpp / fsVpp} is the
+     * reading's share of the ADC's DIGITAL full scale whatever full-scale volts the
+     * scalars happen to hold, so it is the one form of the test that means anything
+     * before a calibration exists.  0.001 is -60 dBFS peak-to-peak - above every
+     * converter's own noise floor, far below anything an operator would call a
+     * signal.
+     */
+    private static final double CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED = 0.001;
+
     private static final int SCROLLBAR_THICKNESS = 20;
-    /** Slider resolution — fixed range; {@link #navSlider}'s selection
+    /** Slider resolution - fixed range; {@link #navSlider}'s selection
      *  is derived from {@code viewCenterFrames} via the buffer's
      *  capacity.  Sized large so that arrow-click steps of 1/5 div and
      *  page-click steps of 5 divisions stay accurate at any practical
-     *  zoom (1000 was too coarse — rounding visibly distorted the step
+     *  zoom (1000 was too coarse - rounding visibly distorted the step
      *  at moderate zooms).  At one million units per slider, a single
      *  unit is sub-microsecond on most signals. */
     private static final int NAV_RANGE = 1_000_000;
-    /** Minimum thumb size as a fraction of the slider's total range —
+    /** Minimum thumb size as a fraction of the slider's total range -
      *  keeps the thumb visually grabbable (~18-25 px at typical canvas
      *  sizes) even when the visible window is a tiny slice of a huge
      *  ring buffer.  3 % of NAV_RANGE = 30 000 units, ~18 px at a 600 px
@@ -109,7 +123,7 @@ public final class ScopePane extends AbstractPane {
     private static final double PAGE_DIVISIONS  = 5.0;
 
 
-    // Cached references from IconUtils — owned by the shared cache and
+    // Cached references from IconUtils - owned by the shared cache and
     // disposed centrally when the main shell tears down.
     private final Image recordDim;
     private final Image recordLit;
@@ -130,20 +144,22 @@ public final class ScopePane extends AbstractPane {
     private ScopeTabControl              tabControl;
 
     /** Subscriber for {@link Events#SCOPE_AUTO_SETUP}.  Held as a field
-     *  so the dispose listener can unsubscribe — bound only on the live
+     *  so the dispose listener can unsubscribe - bound only on the live
      *  pane so the offscreen screenshot-renderer doesn't respond to user
      *  clicks on the live pane.  {@code null} on the offscreen variant. */
     private Consumer<Void>               autoSetupListener;
-    /** {@link Events#FREQRESP_MEASUREMENT_STARTED} subscriber — stops a
+    /** {@link Events#FREQRESP_MEASUREMENT_STARTED} subscriber - stops a
      *  running scope capture and disables the Record button so the
      *  Frequency Response sweep can use the device exclusively. */
     private Consumer<Void>               freqRespStartedListener;
-    /** {@link Events#FREQRESP_MEASUREMENT_STOPPED} subscriber — re-enables
+    /** {@link Events#FREQRESP_MEASUREMENT_STOPPED} subscriber - re-enables
      *  the Record button once the sweep finishes. */
     private Consumer<Void>               freqRespStoppedListener;
-    /** {@link Events#SCOPE_RECORDING_STOPPED} subscriber — pops the Record
+    /** {@link Events#SCOPE_RECORDING_STOPPED} subscriber - pops the Record
      *  toggle back out when the controller stops a capture programmatically
-     *  (an open-signal load).  Live pane only. */
+     *  (an open-signal load) or the capture ended from below (then the
+     *  controller's recorded reason is localized here, once).  Live pane
+     *  only. */
     private Consumer<Void>               recordingStoppedListener;
 
     /** Horizontal navigation slider sitting above the condensed strip. */
@@ -157,8 +173,8 @@ public final class ScopePane extends AbstractPane {
     private Label                        navSliderSpacer;
     /** Vertical scrollbar in the 20 px right gap.  Always visible.  Maps
      *  [0, NAV_RANGE] selection to the measurement channel's offset
-     *  fraction in [0, 1] (top of grid → bottom of grid).  In live mode
-     *  the horizontal navSlider is hidden — only this one stays active. */
+     *  fraction in [0, 1] (top of grid -> bottom of grid).  In live mode
+     *  the horizontal navSlider is hidden - only this one stays active. */
     private FlatScrollbar                vertSlider;
     /**
      * Primary state for "where in the signal the view is centred".
@@ -166,23 +182,23 @@ public final class ScopePane extends AbstractPane {
      * the canvas centre.  Sentinel: any negative value means "follow
      * latest" (used in live record mode).  The slider position and
      * {@link ScopeView#viewBackOffsetFrames} are derived from
-     * this — changing t/div recomputes those without touching
+     * this - changing t/div recomputes those without touching
      * {@code viewCenterFrames}, so the centred frame stays fixed
      * across zooms.  Kept as a {@code double} so repeated zooms don't
      * accumulate rounding error.
      */
     private final GridData               condensedGd;
-    /** Controller owning the scope's capture-device handshake — the Record
+    /** Controller owning the scope's capture-device handshake - the Record
      *  state ({@code isCapturing}), the live buffer reference and the
      *  ACQUIRE/RELEASE bus round-trip.  The pane wires the views around
      *  it: buffer attach + measurement thread on start (the realtime render
      *  loop drives repaints), frozen-snapshot re-attach on stop.  The live pane receives the
      *  app-lifetime instance (lives in {@code UIEngines}, survives content
-     *  rebuilds — a rebuilt pane re-attaches to a still-running capture);
+     *  rebuilds - a rebuilt pane re-attaches to a still-running capture);
      *  the screenshot-only variant builds its own, which stays idle. */
     private final ScopeController controller;
     /**
-     * Synchronous file loader for the "Open signal…" feature.  Owned by the
+     * Synchronous file loader for the "Open signal..." feature.  Owned by the
      * pane (cleared on dispose / record-start) and attached to the controller,
      * whose {@link ScopeController#openSignalFile} drives it.  {@code null} on
      * the screenshot-only variant.
@@ -193,7 +209,7 @@ public final class ScopePane extends AbstractPane {
      * Constructs the live pane around the injected app-lifetime capture
      * controller: the Record toggle drives it (showing an error MessageBox
      * on capture-open failure), and when the controller is already
-     * capturing — this is a rebuilt pane after a language / font change —
+     * capturing - this is a rebuilt pane after a language / font change -
      * the views re-attach to the live buffer immediately.
      */
     public ScopePane(Composite parent, ScopeController controller) {
@@ -217,7 +233,7 @@ public final class ScopePane extends AbstractPane {
         this.recordLit      = IconUtils.icon(d, Icon.RECORD_LIT);
         group.setLayout(paneLayout());
         // Clickable Label inside the content area replaces the Group's
-        // native chrome title — GTK's GtkFrame label widget consumes
+        // native chrome title - GTK's GtkFrame label widget consumes
         // clicks on the chrome title before any SWT listener (or even
         // Display.addFilter) can see them.
         title = new PaneTitle(group, Events.PANE_ID_SCOPE,
@@ -236,7 +252,7 @@ public final class ScopePane extends AbstractPane {
         }
 
         view = new ScopeView(group);
-        // Column 0 of the 2-col paneLayout — leaves column 1 free for the
+        // Column 0 of the 2-col paneLayout - leaves column 1 free for the
         // vertical scrollbar that follows.
         GridData viewGd = new GridData(SWT.FILL, SWT.FILL, true, true);
         view.setLayoutData(viewGd);
@@ -256,14 +272,14 @@ public final class ScopePane extends AbstractPane {
             });
             gl.addMouseMoveListener(ev -> view.pointerMove(ev.x, ev.y));
             // Coalesce repaints to ONE render per UI event.  A single gesture (e.g.
-            // zoom-around-cursor) sets two prefs — the scale, then the corrected
-            // offset — each requesting a repaint; rendering each immediately would
+            // zoom-around-cursor) sets two prefs - the scale, then the corrected
+            // offset - each requesting a repaint; rendering each immediately would
             // flash the intermediate stale-offset frame.  asyncExec + a pending flag
             // collapse them into one correct frame.  The realtime loop renders the
             // surface directly (not via this), so live cadence is unchanged.
             // Two request levels share one coalesced render: FULL (geometry / settings
-            // changed → renderInteractive resets the phosphor to the new coordinates)
-            // and OVERLAY-only (rect-zoom rubber band / focus border → renderOverlay
+            // changed -> renderInteractive resets the phosphor to the new coordinates)
+            // and OVERLAY-only (rect-zoom rubber band / focus border -> renderOverlay
             // re-composites, preserving a stopped scope's afterglow).  If both arrive
             // in the same batch, FULL wins.
             final boolean[] renderPending = { false };
@@ -271,12 +287,14 @@ public final class ScopePane extends AbstractPane {
             Runnable schedule = () -> {
                 if (renderPending[0] || gl.isDisposed()) return;
                 renderPending[0] = true;
+                // Deliberate SAME-thread deferral (the coalescing above depends
+                // on it) - not a marshal, so not GuiUtil.marshal.
                 gl.getDisplay().asyncExec(() -> {
                     renderPending[0] = false;
                     boolean full = fullPending[0];
                     fullPending[0] = false;
                     if (gl.isDisposed()) return;
-                    // A gesture / settings change is NOT a new captured frame — re-render the
+                    // A gesture / settings change is NOT a new captured frame - re-render the
                     // trace and reset persistence (geometry changed) instead of accumulating.
                     if (full) glSurface.renderInteractive();
                     else      glSurface.renderOverlay();
@@ -301,11 +319,11 @@ public final class ScopePane extends AbstractPane {
         vertSlider.addListener(SWT.Selection, e -> onVertSliderMoved());
         // Initial selection from the prefs.
         syncVertSliderFromPrefs();
-        // The vertical slider mirrors PERSISTED offset / scale preferences —
+        // The vertical slider mirrors PERSISTED offset / scale preferences -
         // react to the property changes directly (wheel moves, V/div zoom,
         // channel switch, presets, in-view L/R clicks) instead of piggybacking
         // on repaint requests.  FlatScrollbar.setSelection doesn't fire, so a
-        // user drag (prefs write → this sync) can't loop.
+        // user drag (prefs write -> this sync) can't loop.
         Preferences vsPrefs = Preferences.instance();
         Bindings.onChange(vertSlider, vsPrefs.oscLeftOffsetFracProperty(),      v -> syncVertSliderFromPrefs());
         Bindings.onChange(vertSlider, vsPrefs.oscRightOffsetFracProperty(),     v -> syncVertSliderFromPrefs());
@@ -342,7 +360,7 @@ public final class ScopePane extends AbstractPane {
         navGd.heightHint     = SCROLLBAR_THICKNESS;
         navGd.horizontalSpan = 1;
         // Initial state on Linux: collapse the FlatScrollbar's row and
-        // show a Label spacer in its place — GTK honours heightHint on
+        // show a Label spacer in its place - GTK honours heightHint on
         // Labels but inflates the row when given an invisible Canvas.
         // On Windows / macOS the navSlider's own heightHint is honoured,
         // so no spacer is needed and exclude stays false.
@@ -357,7 +375,7 @@ public final class ScopePane extends AbstractPane {
             GridData spacerGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
             spacerGd.heightHint     = SCROLLBAR_THICKNESS;
             spacerGd.horizontalSpan = 1;
-            // Initially visible (record mode) — toggled inside
+            // Initially visible (record mode) - toggled inside
             // setNavSliderVisible() when a file is loaded.
             navSliderSpacer.setLayoutData(spacerGd);
         }
@@ -365,7 +383,7 @@ public final class ScopePane extends AbstractPane {
         // Filler completing column 1 of the nav-slider row.  The slider (and
         // its Linux spacer) span only column 0, so without a widget here
         // GridLayout's row-major fill would flow the condensed strip into
-        // column 1 of THIS row instead of starting a fresh one — collapsing
+        // column 1 of THIS row instead of starting a fresh one - collapsing
         // the layout.  An empty gutter-width cell keeps the slider's right
         // edge flush with the vertical scrollbar's left edge.
         Label navSliderCorner = new Label(group, SWT.NONE);
@@ -389,10 +407,10 @@ public final class ScopePane extends AbstractPane {
         loader = liveCapture ? new ScopeOpenSignal(view, condensed) : null;
         controller.attachViews(view, condensed, loader);
         view.attachController(controller);   // file-mode rect zoom drives viewCenterFrames
-        controller.attachGlSurface(glSurface);   // null on the CPU path — clears any stale (disposed) surface
+        controller.attachGlSurface(glSurface);   // null on the CPU path - clears any stale (disposed) surface
         // The nav scrollbar mirrors the controller's TRANSIENT view-centre state
         // (not a preference), so it re-syncs off the controller's view-state
-        // event — fired by every applyViewState() recompute.
+        // event - fired by every applyViewState() recompute.
         controller.setOnViewStateChanged(() -> {
             setNavSliderVisible(view.isFileMode());
             syncNavSlider();
@@ -433,14 +451,14 @@ public final class ScopePane extends AbstractPane {
         // addToggleButton sets grabExcessHorizontalSpace=true to push
         // the record LED to the far right of an old single-row toolbar.
         // In the new two-cell layout the tab control already grabs the
-        // horizontal slack — clearing the flag and pinning to SWT.END
+        // horizontal slack - clearing the flag and pinning to SWT.END
         // keeps Record button width fixed and right-anchored.
         Object recGd = recordButton.getLayoutData();
         if (recGd instanceof GridData rgd) {
             rgd.grabExcessHorizontalSpace = false;
             rgd.horizontalAlignment       = SWT.END;
             // Anchor to the top of the toolbar row so the Record button sits
-            // at the tab-strip level — stays clickable when the tab content
+            // at the tab-strip level - stays clickable when the tab content
             // is collapsed (and visually nestled next to the tab strip).
             rgd.verticalAlignment         = SWT.BEGINNING;
         }
@@ -464,8 +482,8 @@ public final class ScopePane extends AbstractPane {
 
     /** Live-pane capture wiring: Record button, Auto-Setup bus subscription,
      *  and a dispose listener that unsubscribes the pane's bus handlers
-     *  (a running capture deliberately survives the pane — see the
-     *  controller field).  Called only when {@code liveCapture} is true — the
+     *  (a running capture deliberately survives the pane - see the
+     *  controller field).  Called only when {@code liveCapture} is true - the
      *  screenshot pane mirrors the Record-button visual state externally
      *  via {@link #setRecordingState} but never opens an audio device of
      *  its own.  The "Reconstructed beat" generator-form subscription lives
@@ -480,6 +498,20 @@ public final class ScopePane extends AbstractPane {
                 recordButton.setSelection(false);
                 recordButton.setImage(recordDim);
             }
+            // Capture ended from below (device lost / delivery stalled): the
+            // controller recorded the claimed reason - this pane owns the
+            // failed operation, so this pane tells the operator ONCE, in
+            // their language.  Null for a programmatic stop (open-signal
+            // load) and when the FFT pane claimed the one report.
+            CaptureEndReason reason = controller.getCaptureEndReason();
+            if (reason != null && recordButton != null && !recordButton.isDisposed()) {
+                // The unified stop message: the reason enum picks the text,
+                // the BACKEND is named, the technical detail lives in the log
+                // alone.
+                Dialogs.error(recordButton.getShell(), I18n.t("audio.deviceError.title"),
+                        I18n.t("capture.error.ended." + reason.name(),
+                                Preferences.instance().getSelectedBackend().type().getDisplayName()));
+            }
         };
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.SCOPE_AUTO_SETUP,             autoSetupListener);
@@ -493,7 +525,7 @@ public final class ScopePane extends AbstractPane {
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
             bus2.unsubscribe(Events.SCOPE_RECORDING_STOPPED,      recordingStoppedListener);
             loader.clear();
-            // The injected controller deliberately keeps capturing — a
+            // The injected controller deliberately keeps capturing - a
             // content rebuild (language / font change) must not drop the
             // device; the rebuilt pane re-attaches to the live buffer.
             // UIEngines releases the capture at application exit.  The
@@ -509,16 +541,23 @@ public final class ScopePane extends AbstractPane {
         if (controller.reattachLiveCapture()) setRecordingState(true);
     }
 
-    /** Stops a running capture and grays the Record button — fired by the
-     *  Frequency Response pane via {@link Events#FREQRESP_MEASUREMENT_STARTED}
-     *  so the FreqResp analyzer can take exclusive control of the device. */
-    private void onFreqRespMeasurementStarted() {
+    /** Stops a running capture and pops the Record toggle out - the device is
+     *  gone, or somebody else needs it.  A no-op when nothing was running. */
+    private void stopRecording() {
         if (recordButton == null || recordButton.isDisposed()) return;
         if (recordButton.getSelection()) {
             recordButton.setSelection(false);
             stopCapture();
             recordButton.setImage(recordDim);
         }
+    }
+
+    /** Stops a running capture and grays the Record button - fired by the
+     *  Frequency Response pane via {@link Events#FREQRESP_MEASUREMENT_STARTED}
+     *  so the FreqResp analyzer can take exclusive control of the device. */
+    private void onFreqRespMeasurementStarted() {
+        if (recordButton == null || recordButton.isDisposed()) return;
+        stopRecording();
         recordButton.setEnabled(false);
     }
 
@@ -563,7 +602,7 @@ public final class ScopePane extends AbstractPane {
     private void wireRecordButton() {
         recordButton.addListener(SWT.Selection, e -> {
             if (recordButton.getSelection()) {
-                // Starting a fresh recording — wipe any loaded
+                // Starting a fresh recording - wipe any loaded
                 // openSignal file so the live capture buffer takes over.
                 if (loader != null && loader.isLoaded()) {
                     loader.clear();
@@ -579,7 +618,7 @@ public final class ScopePane extends AbstractPane {
                     navSlider.setSelection(navSlider.getMaximum() - navSlider.getThumb());
                 }
                 setNavSliderVisible(false);
-                // Re-enable the trigger group — it applies again to a live
+                // Re-enable the trigger group - it applies again to a live
                 // capture (the control re-applies the "Start iff Single" rule).
                 tabControl.setTriggerControlsEnabled(true);
                 view.setViewBackOffsetFrames(0);
@@ -602,7 +641,7 @@ public final class ScopePane extends AbstractPane {
 
     /**
      * Visually mirrors a foreign Record-button state on this pane without
-     * driving the controller — used by the screenshot pane so its rendering
+     * driving the controller - used by the screenshot pane so its rendering
      * shows the same Record-LED state the user sees on the live pane.
      */
     public void setRecordingState(boolean recording) {
@@ -625,7 +664,7 @@ public final class ScopePane extends AbstractPane {
 
     /** Re-flow after the tab body collapses / expands: keep the Record button
      *  anchored to the top of the toolbar row so it stays reachable, then
-     *  cascade the layout toolbar → group so the scope view reclaims / yields
+     *  cascade the layout toolbar -> group so the scope view reclaims / yields
      *  the freed vertical space.  The control has already applied the
      *  strip-only height to the folder's layout data. */
     @Override
@@ -642,7 +681,7 @@ public final class ScopePane extends AbstractPane {
         if (group   != null && !group.isDisposed())   group.layout(true, true);
     }
 
-    /** Hide the floating GPU child window when the pane collapses to its title bar —
+    /** Hide the floating GPU child window when the pane collapses to its title bar -
      *  otherwise (on macOS) it keeps drawing over whatever expands into the freed
      *  space.  No-op for the Win/Linux GLCanvas, which SWT hides with its parent. */
     @Override
@@ -681,7 +720,7 @@ public final class ScopePane extends AbstractPane {
             // Persistence lives only in the GPU phosphor buffer; the clone renders on the
             // CPU/GC path and can't see it, so read the live afterglow back and hand it over
             // to composite beneath the overlay.  Null on the CPU/no-GPU path or with
-            // persistence off — the clone then draws the plain trace, byte-identical to today.
+            // persistence off - the clone then draws the plain trace, byte-identical to today.
             if (glSurface != null) {
                 ImageData afterglow = glSurface.persistenceSnapshot();
                 if (afterglow != null) clone.getView().setPersistenceSnapshot(afterglow);
@@ -694,7 +733,7 @@ public final class ScopePane extends AbstractPane {
     /** Overpaints the printed scope view and condensed overview strip with
      *  {@code GC(Image)} renders: {@code Control.print} drops GDI+ fractional pen
      *  widths (traces printed 1&nbsp;px whatever the preference), while the image
-     *  render keeps them — and carries the digital-phosphor blit and the
+     *  render keeps them - and carries the digital-phosphor blit and the
      *  persistence snapshot exactly like the live paint. */
     @Override
     protected void printTraceOverlays(GC outGc) {
@@ -717,10 +756,10 @@ public final class ScopePane extends AbstractPane {
     /**
      * Slider-moved handler.  In live record mode the slider is disabled
      * (so this should only fire from programmatic syncs we trigger
-     * ourselves — those are ignored because they don't move the user's
+     * ourselves - those are ignored because they don't move the user's
      * intended centre).  In file mode the user is actively scrubbing.
      * Arrow / page (track) clicks step the centre by their EXACT division
-     * counts (⅕ div / 5 div) through the controller — the slider's int
+     * counts (⅕ div / 5 div) through the controller - the slider's int
      * units can't represent a fractional-sample step, so mapping those
      * gestures through the selection quantised them (a 40 µs arrow step
      * became 41.7 µs).  A thumb drag maps the selection fraction as
@@ -808,10 +847,10 @@ public final class ScopePane extends AbstractPane {
      *  Matched to the mental model of a hardware scope's "position" /
      *  "scale" knobs:
      *  <ul>
-     *    <li>plain wheel        → vertical offset (everything in sync)</li>
-     *    <li>Shift + wheel      → horizontal offset (time scroll / trig pos)</li>
-     *    <li>Ctrl  + wheel      → vertical scale (V/div) on both channels</li>
-     *    <li>Shift + Ctrl + wheel → horizontal scale (t/div)</li>
+     *    <li>plain wheel        -> vertical offset (everything in sync)</li>
+     *    <li>Shift + wheel      -> horizontal offset (time scroll / trig pos)</li>
+     *    <li>Ctrl  + wheel      -> vertical scale (V/div) on both channels</li>
+     *    <li>Shift + Ctrl + wheel -> horizontal scale (t/div)</li>
      *  </ul>
      *  The two scale branches step the tab control's V/T selectors; the two
      *  offset branches move pane-owned navigation state. */
@@ -824,14 +863,14 @@ public final class ScopePane extends AbstractPane {
             Rectangle area = ((Scrollable) target).getClientArea();
             if (ctrl && shift) {
                 // Shift + Ctrl + wheel: t/div zoom around the mouse X
-                // (wheel up → step DOWN in t/div since smaller t/div is
+                // (wheel up -> step DOWN in t/div since smaller t/div is
                 // finer time resolution).  A frozen frame rides the same
-                // trigger-offset model as live — stepTimePerDivAround updates
+                // trigger-offset model as live - stepTimePerDivAround updates
                 // the trigger-position fraction to keep the sample under the
                 // cursor put, so no separate frozen-frame anchor is needed.
                 tabControl.stepTimePerDivAround(-dir, e.x, area.width);
             } else if (ctrl) {
-                // Ctrl + wheel: V/div zoom around the mouse Y (wheel up →
+                // Ctrl + wheel: V/div zoom around the mouse Y (wheel up ->
                 // step DOWN in V/div).
                 tabControl.stepVoltsPerDivAround(-dir, e.y, area.height);
             } else if (shift) {
@@ -850,7 +889,7 @@ public final class ScopePane extends AbstractPane {
      *  DECREASES (lower offsetFrac = trace anchored higher on the grid;
      *  see the {@code maxV / minV} math in
      *  {@link ScopeView#drawEdgeLabels}).  Trigger level stays put
-     *  — moving it together with the channels was unintuitive (trigger
+     *  - moving it together with the channels was unintuitive (trigger
      *  marker drifting with the trace rather than the user's intent). */
     private void stepMeasurementChannelOffset(int dir) {
         // Vertical-offset math lives in ScopeView; the pane re-syncs its slider + repaints.
@@ -865,7 +904,7 @@ public final class ScopePane extends AbstractPane {
      *  the trigger position fraction (which is the only horizontal-offset
      *  knob meaningful while the trace tracks the latest writePos).
      *  {@code viewCenterFrames} is clamped to the buffer's valid centre
-     *  range on every step so it can't drift past the limits — otherwise
+     *  range on every step so it can't drift past the limits - otherwise
      *  scrolling past either end would silently stash an out-of-range
      *  value and the next several wheel ticks would appear to "do nothing"
      *  while the value walks back into range. */
@@ -889,7 +928,7 @@ public final class ScopePane extends AbstractPane {
     /** Shows or hides the horizontal navigation slider.
      *  <p>On <strong>Linux</strong> the row swaps between the
      *  {@link FlatScrollbar} (file mode) and a fixed-height {@link Label}
-     *  spacer (record mode) — GTK honours heightHint on Labels but
+     *  spacer (record mode) - GTK honours heightHint on Labels but
      *  inflates an invisible Canvas's row beyond the hint.  Either way
      *  the gap above the condensed strip stays at SCROLLBAR_THICKNESS.
      *  <p>On <strong>Windows / macOS</strong> the scrollbar's own
@@ -909,23 +948,23 @@ public final class ScopePane extends AbstractPane {
     /** Maps the vertical slider's selection to an offsetFrac inside the
      *  scale-dependent bounds returned by {@link ScopeView#offsetFracBounds}, then
      *  slides BOTH channel offsets by the same delta.  Trigger level is
-     *  not moved — its position is the user's intent, not a side-effect
+     *  not moved - its position is the user's intent, not a side-effect
      *  of trace panning.  Thumb at TOP = signal up (low offsetFrac =
      *  trace anchored toward top of grid); thumb at BOTTOM = signal down. */
     private void onVertSliderMoved() {
         if (vertSlider == null || vertSlider.isDisposed()) return;
         int maxSel = vertSlider.getMaximum() - vertSlider.getThumb();
-        // maxSel <= 0 → no scroll room; pass 0.5 so the view maps to the mid-point.
+        // maxSel <= 0 -> no scroll room; pass 0.5 so the view maps to the mid-point.
         double sliderFrac = (maxSel > 0) ? vertSlider.getSelection() / (double) maxSel : 0.5;
-        // The offset mapping (bounds → frac → delta) lives in ScopeView; pane repaints.
+        // The offset mapping (bounds -> frac -> delta) lives in ScopeView; pane repaints.
         if (view.setVerticalOffsetFromSliderFraction(sliderFrac)) requestRedraw();
     }
 
     /** Reads the current measurement-channel offset from prefs and pushes
      *  the slider's thumb size + selection so it lines up with the new
      *  scale-dependent bounds.  Thumb fraction = visible offset window
-     *  (always 1.0 in offsetFrac units) divided by total bound width —
-     *  small V/div → small thumb (lots of scroll room), large V/div →
+     *  (always 1.0 in offsetFrac units) divided by total bound width -
+     *  small V/div -> small thumb (lots of scroll room), large V/div ->
      *  full-width thumb (no scrolling needed). */
     private void syncVertSliderFromPrefs() {
         if (vertSlider == null || vertSlider.isDisposed()) return;
@@ -946,10 +985,10 @@ public final class ScopePane extends AbstractPane {
         // Increment / page-increment in slider units.  1 div = 1/Y of an
         // offsetFrac unit (the whole grid spans Y divisions), so 1/5 div =
         // 1/(5·Y), 5 div = 5/Y.  Converted to slider units via the
-        // selection-range / span ratio — NOT NAV_RANGE / span, since the
+        // selection-range / span ratio - NOT NAV_RANGE / span, since the
         // usable selection range is (maximum − thumb), not maximum.  At
         // small spans (≈ 2), thumb is ~50 % of NAV_RANGE and the bug
-        // factor was 2× — that's why arrow/page clicks visually jumped
+        // factor was 2× - that's why arrow/page clicks visually jumped
         // 0.4 div / 10 div instead of 1/5 div / 5 div.
         int maxSelForSteps = NAV_RANGE - thumb;
         if (span > 0 && maxSelForSteps > 0) {
@@ -966,7 +1005,7 @@ public final class ScopePane extends AbstractPane {
         double frac = (selected == Channel.R)
                 ? prefs.getOscRightOffsetFrac()
                 : prefs.getOscLeftOffsetFrac();
-        // Clamp to current bounds — guards against a leftover offset from
+        // Clamp to current bounds - guards against a leftover offset from
         // a different V/div pushing the slider off the rails.
         if (frac < lo) frac = lo;
         if (frac > hi) frac = hi;
@@ -993,15 +1032,26 @@ public final class ScopePane extends AbstractPane {
             // Pair the full-scale with getLastVpp's channel (the measurement channel)
             // so the gate compares like against like on an INDEPENDENT card.
             double fsVpp = 2.0 * prefs.getAdcPeakVolts(prefs.getOscMeasurementChannel());
-            enable = !Double.isNaN(vpp) && fsVpp > 0.0
-                  && (vpp / fsVpp) >= CALIBRATE_MIN_VPP_FRACTION;
+            // The 25 % rule presumes a full scale worth measuring against, and an
+            // UNCALIBRATED selection is precisely the case where there is none: the
+            // volts on screen are a provisional full scale times a normalized
+            // reading, so the operator cannot even see how far off the threshold
+            // they are - and the calibration they are being refused is the thing
+            // that would make the number real.  Refused for SILENCE only then; the
+            // correction (newFs = currentFs x known / measured) reaches the same
+            // answer from any seed, so a small reading costs accuracy, not
+            // correctness.  A calibrated selection keeps the accuracy gate whole.
+            double minFraction = new CalibrationStore(prefs).isUncalibrated(true)
+                    ? CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED
+                    : CALIBRATE_MIN_VPP_FRACTION;
+            enable = !Double.isNaN(vpp) && fsVpp > 0.0 && (vpp / fsVpp) >= minFraction;
         }
         tabControl.setCalibrateEnabled(enable);
     }
 
     /** Polls the calibrate-button gate every ~250 ms.  Self-cancels when
      *  the pane is disposed; runs forever otherwise (the gate cost is
-     *  trivial — a volatile read + one float compare).  Also re-syncs
+     *  trivial - a volatile read + one float compare).  Also re-syncs
      *  the vertical scrollbar so an L/R measurement-channel switch made
      *  inside the canvas is reflected in the slider position. */
     private void scheduleCalibrateButtonRefresh() {
@@ -1019,13 +1069,13 @@ public final class ScopePane extends AbstractPane {
     //
     // Owns the UI-side Record state: the scopeLive flag, the periodic view
     // redraws, and the stop-with-frozen-snapshot behaviour.  The audio device
-    // itself is owned by SharedCapture — this just acquires / releases a
+    // itself is owned by SharedCapture - this just acquires / releases a
     // reference for the duration of the scope's Record state, so the scope and
     // the FFT pane share the same device via the SharedCapture refcount.
     // -------------------------------------------------------------------------
 
     /** {@code true} while the scope's own Record button is on.  Does NOT
-     *  reflect the shared capture device — the FFT pane can hold it open via
+     *  reflect the shared capture device - the FFT pane can hold it open via
      *  {@code SharedCapture} while this stays {@code false}. */
     public boolean isCapturing() {
         return controller.isCapturing();
@@ -1039,13 +1089,13 @@ public final class ScopePane extends AbstractPane {
 
     /** Acquires the shared capture via the controller, attaches both views
      *  to the live buffer, and starts the measurement worker + redraw
-     *  timer.  Bails out if the device fails to open — the reason is then
+     *  timer.  Bails out if the device fails to open - the reason is then
      *  available via {@link #getLastStartError()}. */
     public void startCapture() {
         controller.startCapture();
     }
 
-    /** Programmatically engages live capture and lights the Record LED —
+    /** Programmatically engages live capture and lights the Record LED -
      *  the {@code gui.automation} scripts' Record.  A failure is only
      *  logged (no modal dialog in an unattended run); callers can check
      *  {@link #isCapturing()}. */
@@ -1072,7 +1122,7 @@ public final class ScopePane extends AbstractPane {
 
     /** Whether the scope was capturing when {@link #stopCaptureForPrefs()}
      *  stopped it, so {@link #startCaptureForPrefs()} restarts exactly that.
-     *  Owned here — the caller does not track the pane's capture state. */
+     *  Owned here - the caller does not track the pane's capture state. */
     private boolean captureWasRunningForPrefs;
 
     /** Stops capture ahead of a Preferences audio-config change (remembering

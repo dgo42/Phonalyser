@@ -2,10 +2,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
     <!-- Phase-shift illustration: two full 3/4-period sine waves, drawn over
          the same x range (0 .. 270 deg).
-         Red:  sin(t)         — starts at (0, 0), peaks at 90 deg / +1,
+         Red:  sin(t)         - starts at (0, 0), peaks at 90 deg / +1,
                                 returns through 0 at 180 deg, ends at -1 at 270 deg.
          Blue: sin(t - 90 deg) = -cos(t)
-                              — starts at (0, -1), passes 0 at 90 deg,
+                              - starts at (0, -1), passes 0 at 90 deg,
                                 peaks at +1 at 180 deg, returns to 0 at 270 deg.
          X maps 0..270 deg to x = 4..44 (40 px per 270 deg).
          Y centred on y = 24 with a vertical amplitude of 16 px (+1 = y8, -1 = y40). -->

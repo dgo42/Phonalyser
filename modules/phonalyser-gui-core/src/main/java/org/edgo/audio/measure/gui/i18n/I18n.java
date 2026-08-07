@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -43,7 +43,7 @@ import lombok.extern.log4j.Log4j2;
  * Translation helper backed by a plain Java {@link ResourceBundle}.  Keys
  * live in {@code messages.properties} (English, default) and per-locale
  * variants {@code messages_<lang>.properties} (e.g. {@code messages_de.properties}).
- * Java's bundle loader handles the fallback chain {@code de_AT → de →
+ * Java's bundle loader handles the fallback chain {@code de_AT -> de ->
  * default} automatically.
  *
  * <p>The bundles are loaded from an external {@code i18n/} folder so users
@@ -55,13 +55,13 @@ import lombok.extern.log4j.Log4j2;
  *   <li>The per-user staged copy ({@code <dataDir>/i18n}): on the bare-JAR
  *       route the bundles packed inside the fat JAR are extracted there at
  *       startup, once per app version (see {@code GuiMain} /
- *       {@code AppPaths.stageBundledTree}) — BEFORE this class is first
+ *       {@code AppPaths.stageBundledTree}) - BEFORE this class is first
  *       touched, because the lookup below runs once, at class load.</li>
  *   <li>Classpath fallback (e.g. dev mode where {@code src/main/resources/i18n/}
  *       is on the classpath).</li>
  * </ol>
  *
- * <p>If a key is missing the key itself is returned (rather than throwing) —
+ * <p>If a key is missing the key itself is returned (rather than throwing) -
  * makes it easy to spot un-translated strings at runtime without crashing
  * the GUI.
  */
@@ -87,7 +87,7 @@ public class I18n {
 
     /** Switches the active locale.  Re-resolves the bundle so subsequent
      *  {@link #t} calls return strings from the new language.  Widgets
-     *  already created keep their previous text — a restart (or a manual
+     *  already created keep their previous text - a restart (or a manual
      *  re-layout) is needed to pick up the new strings everywhere. */
     public static void setLocale(Locale locale) {
         if (locale == null) return;
@@ -167,7 +167,7 @@ public class I18n {
                     return staged;
                 }
             } catch (IOException ignored) {
-                // Unreadable staged dir — behave as if absent.
+                // Unreadable staged dir - behave as if absent.
             }
         }
         return null;

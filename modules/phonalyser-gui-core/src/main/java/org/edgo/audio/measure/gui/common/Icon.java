@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ package org.edgo.audio.measure.gui.common;
 import lombok.Getter;
 
 /**
- * Every bundled UI icon — one constant per transparent PNG under {@code /icons}.
+ * Every bundled UI icon - one constant per transparent PNG under {@code /icons}.
  * The {@code -dark}/{@code -lit} pairs are the two states of a toggle (normal vs
  * filled background), {@code -big}/{@code -small}/{@code -mid} are fixed pixel
  * sizes, and {@code signal-*} are the generator signal-form pictograms.  Load an

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -75,7 +75,7 @@ public class ScopeFormat {
     }
 
     /**
-     * Returns {@code rgb} with each channel scaled to ≈⅔ brightness —
+     * Returns {@code rgb} with each channel scaled to ≈⅔ brightness -
      * still clearly visible, but visibly less prominent than the fully-
      * bright active variant.  Used for the inactive offset triangle +
      * unselected L/R button.
@@ -87,7 +87,7 @@ public class ScopeFormat {
         return (r << 16) | (g << 8) | b;
     }
 
-    /** Mean of {@code data} over {@code [start, start+count)} — used for AC-mode DC removal. */
+    /** Mean of {@code data} over {@code [start, start+count)} - used for AC-mode DC removal. */
     public double windowMean(float[] data, int start, int count) {
         if (data == null || count <= 0) return 0.0;
         double s = 0;
@@ -97,8 +97,8 @@ public class ScopeFormat {
 
     /**
      * Formats a volts-per-division value as a compact label (no "V/div"
-     * suffix, SI prefix u / m / none).  E.g. {@code 0.020 → "20m"},
-     * {@code 0.5 → "500m"}, {@code 1 → "1"}.
+     * suffix, SI prefix u / m / none).  E.g. {@code 0.020 -> "20m"},
+     * {@code 0.5 -> "500m"}, {@code 1 -> "1"}.
      */
     public String shortVoltsPerDiv(double v) {
         return shortSi(v);
@@ -106,8 +106,8 @@ public class ScopeFormat {
 
     /**
      * Formats a seconds-per-division value as a compact label (no "s/div"
-     * suffix, SI prefix n / u / m / none).  E.g. {@code 0.000050 → "50u"},
-     * {@code 0.020 → "20m"}, {@code 0.5 → "500m"}, {@code 1 → "1"}.
+     * suffix, SI prefix n / u / m / none).  E.g. {@code 0.000050 -> "50u"},
+     * {@code 0.020 -> "20m"}, {@code 0.5 -> "500m"}, {@code 1 -> "1"}.
      */
     public String shortTimePerDiv(double v) {
         if (v > 0 && v < 1e-6) return shortNum(v * 1e9) + "n";
@@ -142,7 +142,7 @@ public class ScopeFormat {
      * Number of samples the main view shows for a {@code timePerDiv} (in
      * seconds) and the buffer's {@code sampleRate} (Hz).  The display
      * spans 10 horizontal divisions, so {@code windowSeconds = 10 ·
-     * timePerDiv} → samples = round(windowSeconds · sampleRate).
+     * timePerDiv} -> samples = round(windowSeconds · sampleRate).
      */
     public int displaySamplesFor(double timePerDiv, int sampleRate) {
         double windowSeconds = timePerDiv * 10.0;
@@ -219,9 +219,9 @@ public class ScopeFormat {
      * scales by that same factor (so a follower may land off the rule).
      *
      * <ul>
-     *   <li>Both on the 1-2-5 rule → the base is whichever choice leaves the SCALED
+     *   <li>Both on the 1-2-5 rule -> the base is whichever choice leaves the SCALED
      *       channel nearest a rung (smallest {@link #distToRule absolute distance}).</li>
-     *   <li>One off the rule → the on-rule channel is the base; both off → the one
+     *   <li>One off the rule -> the on-rule channel is the base; both off -> the one
      *       nearest its next rung in the zoom direction (smallest |ln(ratio)|).</li>
      * </ul>
      *
@@ -242,7 +242,7 @@ public class ScopeFormat {
      * Per-channel-ceiling twin of {@link #coupleVoltsPerDivZoom(double, double, int,
      * double[], double)}: identical coupling, but each channel's zoom-out is capped at
      * its OWN FS-fills-height rung.  Mirrors how the couple already treats each channel's
-     * V/div independently — the ceiling (which is {@code 2·peak/Ydiv}, so purely a
+     * V/div independently - the ceiling (which is {@code 2·peak/Ydiv}, so purely a
      * function of that channel's full-scale) simply stops being shared.  A per-channel
      * FS enters exactly here, the same way per-channel V/div already does; with equal
      * L/R full-scales ({@code leftMax == rightMax}, the LINKED case) this is byte-for-byte
@@ -318,7 +318,7 @@ public class ScopeFormat {
 
     /**
      * Clamps a vertical-move {@code delta} (in offsetFrac units) so the channel's
-     * zero line stays within its {@link #offsetMoveHalfRange} band — i.e. you can
+     * zero line stays within its {@link #offsetMoveHalfRange} band - i.e. you can
      * pan the signal only until its ±FS extreme reaches the canvas middle.
      */
     public double clampOffsetDelta(double delta, double offsetFrac,

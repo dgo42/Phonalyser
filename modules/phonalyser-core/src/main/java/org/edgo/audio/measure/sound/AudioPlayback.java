@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -51,7 +51,7 @@ public interface AudioPlayback extends AutoCloseable {
     default void setDitherBits(double bits) {}
 
     /**
-     * Live-updates the per-lane full-scale scale factors (left, right) — the
+     * Live-updates the per-lane full-scale scale factors (left, right) - the
      * ratio that lets a LINKED stereo card with distinct DAC full-scales emit
      * the same physical level on both lanes.  No-op by default; honoured by the
      * in-process backends wired to the GUI.
@@ -63,6 +63,21 @@ public interface AudioPlayback extends AutoCloseable {
      * default; honoured by the in-process backends wired to the GUI.
      */
     default void setOutputChannels(OutputChannels channels) {}
+
+    /**
+     * The backend's own confession that this lane died from below - for an
+     * implementation whose {@code play} CANNOT return on device death: the
+     * csjsound provider holds the line monitor across the blocking native
+     * write, so a lane on an unplugged device wedges inside it while the
+     * backend's watchdog is the only part that knows.  Non-null once the
+     * backend detected the loss; the lane above folds it into the same
+     * ended-from-below state a returning play thread records.  Default null -
+     * a backend whose {@code play} throws or returns on death needs no
+     * confession.
+     */
+    default Throwable lostFromBelow() {
+        return null;
+    }
 
     @Override
     void close();

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Tests for {@link SineFit}.  Synthesizes a tone with a known amplitude,
  * phase, DC and a small harmonic, then checks that the exact 3-parameter fit
  * recovers the fundamental and that {@code subtractSineInto} removes only the
- * sinusoid — leaving the harmonic and DC intact.
+ * sinusoid - leaving the harmonic and DC intact.
  */
 class SineFitTest {
 
@@ -94,7 +94,7 @@ class SineFitTest {
         assertEquals(AMPLITUDE, fit.amplitude(), AMPLITUDE * 1e-4);
         assertEquals(DC, fit.getC(), 1e-4);
 
-        // subtractSineInto over the same window (kOffset=0 → k aligns with `from`)
+        // subtractSineInto over the same window (kOffset=0 -> k aligns with `from`)
         float[] res = new float[total];
         fit.subtractSineInto(buf, from, len, 0.0, res, from);
 

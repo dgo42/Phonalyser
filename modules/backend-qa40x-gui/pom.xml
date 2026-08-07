@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  backend-qa40x-gui — the QA40x's own UI surface: the settings dialog (I2S,
+  backend-qa40x-gui - the QA40x's own UI surface: the settings dialog (I2S,
   telemetry) plus the range controller and rate constraint, which react to
   MessageBus events published by the preferences dialog.
 
@@ -21,7 +21,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.1.1</version>
+        <version>1.2.0</version>
         <relativePath>../phonalyser-parent</relativePath>
     </parent>
 
@@ -37,7 +37,17 @@
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-qa40x</artifactId>
         </dependency>
-        <!-- The SHARED GUI infrastructure only — never phonalyser-gui itself.
+        <!-- The net protocol's message and field NAMES (spec 4.6 is this
+             backend's own extension), so the same panel can read a QA403 wired
+             to this machine and one on a Phonalyser server.  The wire format
+             only - no client, no server, no socket: the session that carries
+             the request belongs to the net module and is reached through
+             RemoteBackendUi. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>server-api</artifactId>
+        </dependency>
+        <!-- The SHARED GUI infrastructure only - never phonalyser-gui itself.
              A backend's UI must not sit on top of the whole application: that
              would make the app a prerequisite of one of its own plug-ins, and
              would stop phonalyser-gui ever depending on this module. -->

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -21,12 +21,12 @@ package org.edgo.audio.measure.dsp;
 import java.util.Arrays;
 
 /**
- * Chebyshev Type I low-pass filter — a cascade of 2nd-order sections, used
+ * Chebyshev Type I low-pass filter - a cascade of 2nd-order sections, used
  * to strip high-frequency spikes (e.g. switching / RF pickup above the
  * audio band) from a captured channel before it is displayed or measured.
  *
  * <p>The filter is a Chebyshev Type I of the requested (even) order with
- * {@value #RIPPLE_DB} dB pass-band ripple — chosen over Butterworth for its
+ * {@value #RIPPLE_DB} dB pass-band ripple - chosen over Butterworth for its
  * substantially steeper transition, so spikes only a little above the
  * cutoff are rejected hard.  Each conjugate analog pole pair is mapped to a
  * digital biquad by the bilinear transform (with frequency pre-warping) and
@@ -37,7 +37,7 @@ import java.util.Arrays;
  *
  * <p>When the requested cutoff is at or above Nyquist the filter is
  * {@linkplain #isActive() inactive} and {@link #process} passes the
- * signal through untouched — so an 80 kHz cutoff is a no-op at 48/96 kHz
+ * signal through untouched - so an 80 kHz cutoff is a no-op at 48/96 kHz
  * sample rates (where there is nothing above 80 kHz to remove) and only
  * does work at the high sample rates where such spikes actually appear.
  *

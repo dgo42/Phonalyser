@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * sensible THD percentage.
  *
  * <p>This expands the safety net around {@link FftAnalyzer#analyze}'s
- * harmonic-gather, harmonic-power, and THD-ratio code paths — the
+ * harmonic-gather, harmonic-power, and THD-ratio code paths - the
  * stretch where a phase split of the 860-line method is most likely
  * to introduce subtle regressions.
  */
@@ -40,7 +40,7 @@ class FftAnalyzerThdTest {
 
     @Test
     void pureSine_thdIsNearZero() {
-        // A clean sine has no harmonic content.  THD must be very low —
+        // A clean sine has no harmonic content.  THD must be very low -
         // a "0.0001 %" type number, not the 0 % a textbook would
         // report, because numerical noise leaks into the harmonic bins.
         int sampleRate = 48_000;

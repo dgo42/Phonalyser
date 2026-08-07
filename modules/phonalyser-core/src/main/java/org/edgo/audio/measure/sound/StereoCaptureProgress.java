@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,9 +20,9 @@ package org.edgo.audio.measure.sound;
 
 /**
  * Per-block progress callback for the stereo sweep-and-capture pipeline.
- * Producers ({@link CaptureWithGenerator#runStereo}) invoke this once per
- * captured audio block — typically every few ms — so consumers can show a
- * live level meter or progress bar while the sweep is in flight.
+ * Producers invoke this once per captured audio block - typically every few
+ * ms - so consumers can show a live level meter or progress bar while the
+ * sweep is in flight.
  *
  * <p>The callback fires on the audio capture thread; consumers that need
  * to touch UI widgets must marshal to their toolkit's UI thread (e.g.
@@ -37,7 +37,7 @@ public interface StereoCaptureProgress {
      * Fires once per captured block.
      *
      * @param totalSamples cumulative sample count (per channel) at the end
-     *                     of this block — combine with the sample rate to
+     *                     of this block - combine with the sample rate to
      *                     get an elapsed-time value
      * @param rmsLin       the larger of the L and R channels' RMS amplitude
      *                     for the just-finished block, in linear scale where

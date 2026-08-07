@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -39,25 +39,25 @@ import java.util.function.ObjDoubleConsumer;
 
 /**
  * Shared modal voltage-calibration dialog for the ADC (scope / FFT input) and
- * the DAC (generator output) — the two flows share one shape, only their window
+ * the DAC (generator output) - the two flows share one shape, only their window
  * title, prompt wording and log tag differ, so those are passed in as
  * {@link Texts} rather than duplicated across two classes.
  *
- * <p>One shape, always two rows — a Left row and a Right row, each
+ * <p>One shape, always two rows - a Left row and a Right row, each
  * {@code [channel label] [NumericStepField]} (no reference/readout voltage
  * column).  Each field takes a user-entered Vrms (nV / µV / mV / V, no dBV) and
  * emits it as canonical volts-RMS through an {@link ObjDoubleConsumer} tagged
  * with the row's {@link Channel}; the owner rescales that channel's full-scale.
  *
  * <p>A {@code null} seed disables its row and leaves the field <em>blank</em>
- * (the ADC's non-measured channel — no value, not the clamp-to-min "1 nV"
+ * (the ADC's non-measured channel - no value, not the clamp-to-min "1 nV"
  * artifact).  A non-null seed prefills the field.  On OK only enabled rows whose
  * field carries a valid value fire.
  */
 @Log4j2
 public final class CalibrationDialog {
 
-    /** Field range: 1 nV … 1000 V, µV precision at volts scale. */
+    /** Field range: 1 nV ... 1000 V, µV precision at volts scale. */
     private static final double MIN_VRMS = 1e-9;
     private static final double MAX_VRMS = 1000.0;
     private static final int    MAX_DECIMALS = 6;
@@ -77,7 +77,7 @@ public final class CalibrationDialog {
                         String fieldTooltipKey, String logTag) { }
 
     private final Shell dialog;
-    /** The single content composite holding every widget — the snapshot target
+    /** The single content composite holding every widget - the snapshot target
      *  for a help capture, since a top-level Shell prints blank on Windows (a
      *  Composite prints its children). */
     @Getter
@@ -87,7 +87,7 @@ public final class CalibrationDialog {
      *  seeded with that channel's reference Vrms (a {@code null} disables the
      *  row and leaves its field blank); on OK every enabled+valid row fires
      *  {@code onCalibrate} tagged with its {@link Channel}.  {@code viewOnly}
-     *  shows the seeded values read-only with OK disabled — a device-provided
+     *  shows the seeded values read-only with OK disabled - a device-provided
      *  card (QA40x) whose built-in full-scale cannot be overwritten. */
     public CalibrationDialog(Shell parent, Texts texts, Double referenceLeftVrms, Double referenceRightVrms,
                              boolean viewOnly, ObjDoubleConsumer<Channel> onCalibrate) {
@@ -108,7 +108,7 @@ public final class CalibrationDialog {
         onOk[0] = () -> {
             List<Row> committed = new ArrayList<>();
             for (Row row : rows) {
-                if (!row.field.isEnabled() || row.field.isBlank()) continue;   // disabled / blank — skip
+                if (!row.field.isEnabled() || row.field.isBlank()) continue;   // disabled / blank - skip
                 double vrms = row.field.getValue();
                 if (!isPositiveFinite(vrms)) {
                     showError();
@@ -128,7 +128,7 @@ public final class CalibrationDialog {
 
         if (viewOnly) {
             // Device-provided calibration (a QA40x): the rows show the card's
-            // built-in full-scale, but nothing can be committed — read-only.
+            // built-in full-scale, but nothing can be committed - read-only.
             ok.setEnabled(false);
             for (Row r : rows) r.field.setEnabled(false);
         }
@@ -173,7 +173,7 @@ public final class CalibrationDialog {
     }
 
     /** Builds one row (channel label + value field) inside the shared grid.  A
-     *  {@code null} reference disables the field and leaves it blank — that
+     *  {@code null} reference disables the field and leaves it blank - that
      *  channel has no measurement/configuration to calibrate against; a non-null
      *  reference prefills the field. */
     private Row buildRow(Composite grid, Texts texts, Channel channel, String rowLabel, Double reference) {
@@ -199,7 +199,7 @@ public final class CalibrationDialog {
         return row;
     }
 
-    /** Button row — OK on the right (default), Cancel to its left; {@code onOk}
+    /** Button row - OK on the right (default), Cancel to its left; {@code onOk}
      *  runs the caller's commit.  Returns the OK button for the shell default. */
     private Button buildButtonRow(Texts texts, Runnable onOk) {
         Composite buttons = new Composite(content, SWT.NONE);

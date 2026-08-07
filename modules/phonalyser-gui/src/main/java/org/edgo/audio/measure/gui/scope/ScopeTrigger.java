@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -37,17 +37,17 @@ import lombok.experimental.UtilityClass;
 @UtilityClass
 public class ScopeTrigger {
 
-    /** The shared time-domain discontinuity detector (pure math, stateless) —
+    /** The shared time-domain discontinuity detector (pure math, stateless) -
      *  the same instance the FFT worker's rejection gate uses, so the scope
      *  trigger and the FFT agree on what counts as a damaged block. */
     private static final TimeDiscontinuityDetector GLITCH_DETECTOR = new TimeDiscontinuityDetector();
 
     /**
-     * Finds the rightmost waveform discontinuity in {@code data[from .. to)} —
+     * Finds the rightmost waveform discontinuity in {@code data[from .. to)} -
      * see {@link TimeDiscontinuityDetector#findDiscontinuity} for the detection
      * model (sinusoid-recurrence prediction error, burst merging, anchoring).
-     * {@code anchorStart}: {@code true} → the last clean sample before the
-     * glitch, {@code false} → the first settled sample after it.  {@code omega}
+     * {@code anchorStart}: {@code true} -> the last clean sample before the
+     * glitch, {@code false} -> the first settled sample after it.  {@code omega}
      * = {@code 2π·fundamental/sampleRate} when the fundamental is known,
      * {@code NaN} to self-estimate.  Returns {@code -1.0} when nothing qualifies.
      */
@@ -77,7 +77,7 @@ public class ScopeTrigger {
 
     /**
      * Variant of {@link #find} that suppresses qualified crossings spaced
-     * closer than {@code minSpacingSamples} apart — the next accepted
+     * closer than {@code minSpacingSamples} apart - the next accepted
      * trigger must lie at least that many samples after the previously
      * accepted one.  Used by the scope in DUAL_TONE mode to lock the
      * display onto the slow {@code |F1-F2|} beat envelope: the carrier
@@ -106,7 +106,7 @@ public class ScopeTrigger {
         if (state == 0) state = rising ? -1 : +1;
 
         // Cheap linear estimate + left index of the COMMITTED crossing.  The costly
-        // sinc refine() runs ONCE at the end, on that single winner — not per level
+        // sinc refine() runs ONCE at the end, on that single winner - not per level
         // crossing, not per cycle.  A periodic signal above hysteresis confirms a
         // trigger every cycle (hundreds over the ~1 s search window) and a noisy
         // sub-hysteresis signal crosses the level on every wiggle; refining each was
@@ -175,7 +175,7 @@ public class ScopeTrigger {
      * Bisects the sinc-interpolated signal between {@code a} and {@code b}
      * to find the precise crossing of {@code level}.  10 iterations give
      * sub-millisample precision (2⁻¹⁰ ≈ 0.001 sample).  Uses the unit-
-     * scale Lanczos kernel — i.e. the band-limited reconstruction at the
+     * scale Lanczos kernel - i.e. the band-limited reconstruction at the
      * input sample rate.
      */
     public double refine(float[] data, int n, double a, double b,

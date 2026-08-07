@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ package org.edgo.audio.measure.gui.common;
 import lombok.experimental.UtilityClass;
 
 /**
- * Central home for compile-time DEBUG switches — hand-toggled overlays and
+ * Central home for compile-time DEBUG switches - hand-toggled overlays and
  * diagnostics that never reach the UI.  Collecting them here makes it easy to
  * see at a glance what is currently turned on (and to switch it all off before
  * a release).
@@ -47,15 +47,15 @@ public final class DebugSwitches {
     public static final boolean SHOW_DISCONTINUITY_GATES = Boolean.parseBoolean("false");
 
     /** DEBUG hard switch: log the three stages of FFT result latency, one WARN
-     *  line each per displayed frame — 1. worker analyze time
-     *  ({@code FftAnalyzerWorker}), 2. worker→UI handoff (asyncExec coalescing
+     *  line each per displayed frame - 1. worker analyze time
+     *  ({@code FftAnalyzerWorker}), 2. worker->UI handoff (asyncExec coalescing
      *  queue), 3. first repaint of the fresh result ({@code FftView}, timed via
      *  {@code startRender}/{@code gotFftResult}).  WARN so the timings show up
      *  without touching the logger config. */
     public static final boolean SHOW_FFT_ANALYZE_TIME = Boolean.parseBoolean("false");
 
     /** DEBUG hard switch: trace the generator frequency-lock chain, one WARN
-     *  line per link per displayed frame — the loop inputs/outputs in
+     *  line per link per displayed frame - the loop inputs/outputs in
      *  {@code FftController.applyFrequencyLock} (per-tone target, measured,
      *  correction, published trim, plus gate refusals) and the trim
      *  application in {@code GeneratorController}.  Shows which link breaks

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -39,7 +39,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Minimal JNA binding to the {@code libusb-1.0} shared library — a common
+ * Minimal JNA binding to the {@code libusb-1.0} shared library - a common
  * building block for any backend that talks to a USB instrument directly:
  * init/exit, VID/PID enumeration, open / close / reset / claim, synchronous
  * bulk transfers (control-style register traffic), and the asynchronous
@@ -47,7 +47,7 @@ import java.util.Map;
  * consumer (today the QA40x backend) layers its own identity, endpoints and
  * framing on top.
  *
- * <p>The library file name is platform-dependent — Windows tries the
+ * <p>The library file name is platform-dependent - Windows tries the
  * JVM-arch-suffixed name first ({@code libusb-1.0_x64.dll} on a 64-bit JVM,
  * {@code libusb-1.0_x86.dll} on the legacy 32-bit fat jar) and falls back to a
  * plain {@code libusb-1.0.dll}; both arch variants can therefore coexist in
@@ -63,7 +63,7 @@ import java.util.Map;
  * start-up.  {@link #lib()} throws only when a caller commits to using the
  * binding.
  *
- * <p>Setting {@code -Dlibusb.path=<dir>} (or the library file itself — a file
+ * <p>Setting {@code -Dlibusb.path=<dir>} (or the library file itself - a file
  * path resolves to its parent directory) pins where {@code libusb-1.0} loads
  * from: the directory is registered as a per-library JNA search path, which JNA
  * consults before {@code jna.library.path} and the system path, so it wins
@@ -73,17 +73,17 @@ import java.util.Map;
  *
  * <p>{@code libusb} uses C {@code ssize_t} for {@code get_device_list} and C
  * {@code long} for the {@code timeval} fields; this binding uses {@link NativeLong}
- * (platform {@code long}) for those — device counts and timeouts are small enough
+ * (platform {@code long}) for those - device counts and timeouts are small enough
  * that the low word carries the value on every supported platform.
  */
 @Log4j2
 public final class LibUsb {
 
     /** JNA library names to try, in order, per OS + JVM arch (see {@link #candidateLibraryNames}). */
-    private static final String WIN_LIB      = "libusb-1.0";      // plain fall-back → libusb-1.0.dll
+    private static final String WIN_LIB      = "libusb-1.0";      // plain fall-back -> libusb-1.0.dll
     private static final String WIN_LIB_X64  = "libusb-1.0_x64";  // 64-bit JVM, house arch-suffix convention
     private static final String WIN_LIB_X86  = "libusb-1.0_x86";  // legacy 32-bit fat-jar JVM
-    private static final String UNIX_LIB     = "usb-1.0";         // → libusb-1.0.so / libusb-1.0.dylib
+    private static final String UNIX_LIB     = "usb-1.0";         // -> libusb-1.0.so / libusb-1.0.dylib
     private static final String LINUX_SONAME = "libusb-1.0.so.0"; // versioned SONAME fall-back
 
     /** System property that pins the directory {@code libusb-1.0} loads from (per-library JNA search path). */
@@ -111,7 +111,7 @@ public final class LibUsb {
     private LibUsb() {}
 
     /**
-     * {@code struct libusb_device_descriptor} — callers typically read only
+     * {@code struct libusb_device_descriptor} - callers typically read only
      * {@code idVendor}/{@code idProduct}, but the full layout is mapped so the
      * struct size and field offsets match the native header.
      */
@@ -162,7 +162,7 @@ public final class LibUsb {
     }
 
     /**
-     * {@code struct libusb_transfer} — the async transfer control block.  A
+     * {@code struct libusb_transfer} - the async transfer control block.  A
      * consumer allocates it via {@link Lib#libusb_alloc_transfer}, wraps the
      * returned pointer with {@link #LibUsbTransfer(Pointer)}, fills the fields,
      * {@link #write()}s and submits it.  The trailing iso-packet flexible array
@@ -194,12 +194,12 @@ public final class LibUsb {
     }
 
     /**
-     * {@code libusb_transfer_cb_fn} — invoked by {@code libusb} on the thread
+     * {@code libusb_transfer_cb_fn} - invoked by {@code libusb} on the thread
      * that runs {@link Lib#libusb_handle_events_timeout_completed} when a transfer
      * completes, fails or is cancelled.  The argument points at the same
      * {@link LibUsbTransfer} memory that was submitted.  Must not throw.
      *
-     * <p>Register it through {@link #stdcallSafe} — on 32-bit Windows libusb calls
+     * <p>Register it through {@link #stdcallSafe} - on 32-bit Windows libusb calls
      * the callback {@code WINAPI} (stdcall), and a plain cdecl JNA thunk there
      * corrupts the stack (bench: instant {@code c0000374} heap-corruption crash
      * on Win7 x86 the moment streaming starts).
@@ -232,7 +232,7 @@ public final class LibUsb {
         return cb;
     }
 
-    /** The bound {@code libusb-1.0} entry points — the subset its consumers use. */
+    /** The bound {@code libusb-1.0} entry points - the subset its consumers use. */
     public interface Lib extends Library {
         int    libusb_init(PointerByReference context);
         void   libusb_exit(Pointer context);
@@ -273,7 +273,7 @@ public final class LibUsb {
      * {@code libusb-1.0.so.0} is tried last on Linux, where the unversioned
      * {@code .so} symlink ships only with the {@code -dev} package.
      */
-    static String[] candidateLibraryNames(String osName, String osArch) { // static-ok: pure OS→libname map, headless-testable
+    static String[] candidateLibraryNames(String osName, String osArch) { // static-ok: pure OS->libname map, headless-testable
         String os = osName == null ? "" : osName.toLowerCase(Locale.ROOT);
         if (os.contains("win")) {
             String arch = osArch == null ? "" : osArch.toLowerCase(Locale.ROOT);
@@ -296,7 +296,7 @@ public final class LibUsb {
                                                     System.getProperty("os.arch", ""));
         String injectedPath = System.getProperty(LIBUSB_PATH_PROPERTY);
         if (injectedPath != null && !injectedPath.isBlank()) {
-            // Accept the search directory or the library file itself — JNA
+            // Accept the search directory or the library file itself - JNA
             // appends the mapped file name, so a file path needs its parent.
             File injected = new File(injectedPath);
             String searchDir = injected.isFile() ? injected.getParent() : injectedPath;
@@ -316,7 +316,7 @@ public final class LibUsb {
         UnsatisfiedLinkError last = null;
         // libusb's public API is LIBUSB_CALL = WINAPI: stdcall on 32-bit Windows,
         // identical to cdecl everywhere else.  JNA defaults to cdecl, which on
-        // win32-x86 unbalances the stack on EVERY call — heap corruption
+        // win32-x86 unbalances the stack on EVERY call - heap corruption
         // (c0000374) the moment streaming starts.  Select the convention per
         // platform at the one load site (callbacks are handled by stdcallSafe).
         Map<String, Object> options = isWin32StdCall()
@@ -333,7 +333,7 @@ public final class LibUsb {
         }
         if (lib == null) {
             // WARN, not INFO: the packaged log config caps this logger at WARN, and
-            // an invisible load failure cost a field round-trip (Win7 x86 bench) —
+            // an invisible load failure cost a field round-trip (Win7 x86 bench) -
             // the QA40x backend silently showing no devices with no trace of why.
             // One line once per process; on Windows/macOS the library ships bundled,
             // so failing to load it is genuinely anomalous.
@@ -342,7 +342,7 @@ public final class LibUsb {
         }
     }
 
-    /** Probes for the native library without throwing — {@code true} iff it loaded. */
+    /** Probes for the native library without throwing - {@code true} iff it loaded. */
     public static boolean available() { // static-ok: graceful native-absence probe
         ensureLoaded();
         return lib != null;
@@ -350,7 +350,7 @@ public final class LibUsb {
 
     /**
      * Returns the initialised binding, loading {@code libusb-1.0} and calling
-     * {@code libusb_init} on first use.  Throws only here — a caller reaching for
+     * {@code libusb_init} on first use.  Throws only here - a caller reaching for
      * {@link #lib()} has committed to using the device; use {@link #available()}
      * for a non-throwing probe.
      */

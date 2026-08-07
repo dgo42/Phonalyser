@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -35,14 +35,14 @@ import org.edgo.audio.measure.gui.common.IconUtils;
  * inconsistently across GTK / win32.
  *
  * <p>Implemented as a {@link Canvas} subclass with a custom paint
- * listener rather than a {@code Label} / {@code CLabel} — both of the
+ * listener rather than a {@code Label} / {@code CLabel} - both of the
  * latter have GTK quirks with image alignment and image-swap repaint
  * that produced vanishing icons.  Drawing manually with
  * {@code GC#drawImage} is identical on every platform.
  *
  * <p>The widget has:
  * <ul>
- *   <li>no border, no rounded corners — sits flush on the parent's
+ *   <li>no border, no rounded corners - sits flush on the parent's
  *       background (we explicitly copy the parent's background colour);</li>
  *   <li>two pre-rendered icons (normal + pressed); the pressed size can be
  *       larger <em>or</em> smaller than the normal size, or equal to
@@ -52,9 +52,9 @@ import org.edgo.audio.measure.gui.common.IconUtils;
  * </ul>
  *
  * <p>The {@link Image} instances are cached by {@link IconUtils} and
- * disposed when the main shell tears down — not here.
+ * disposed when the main shell tears down - not here.
  *
- * <p>Click semantics (step, toggle popup, …) are left to the caller —
+ * <p>Click semantics (step, toggle popup, ...) are left to the caller -
  * add another {@code SWT.MouseDown} or {@code SWT.MouseUp} listener.
  */
 public final class IconStepLabel extends Canvas {
@@ -64,7 +64,7 @@ public final class IconStepLabel extends Canvas {
     private       boolean isPressed;
 
     /**
-     * Builds the arrow from two pre-rendered PNGs — {@code pressedIcon} shown
+     * Builds the arrow from two pre-rendered PNGs - {@code pressedIcon} shown
      * while pressed.  Pass the same {@link Icon} for both to disable the
      * press-state swap.
      */
@@ -81,7 +81,7 @@ public final class IconStepLabel extends Canvas {
             Image img = isPressed ? pressed : normal;
             // Teardown paint: destroying the GL child window pumps the Cocoa
             // event loop mid-shutdown, so a paint can arrive after the shared
-            // IconUtils images are disposed — skip, the widget is going away.
+            // IconUtils images are disposed - skip, the widget is going away.
             if (img.isDisposed()) return;
             Rectangle ib = img.getBounds();
             Rectangle cb = getClientArea();
@@ -112,6 +112,6 @@ public final class IconStepLabel extends Canvas {
 
     @Override
     protected void checkSubclass() {
-        // SWT forbids subclassing of most widgets by default — opt back in.
+        // SWT forbids subclassing of most widgets by default - opt back in.
     }
 }

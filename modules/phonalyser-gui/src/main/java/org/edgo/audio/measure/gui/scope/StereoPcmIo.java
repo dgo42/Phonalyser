@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -37,11 +37,11 @@ import org.edgo.audio.measure.wav.WavWriter;
  * Stereo-PCM ↔ normalised-float file I/O for the scope, shared by both
  * directions:
  * <ul>
- *   <li><b>save</b> — {@link #packStereo} quantises {@code float [-1,+1]} to
+ *   <li><b>save</b> - {@link #packStereo} quantises {@code float [-1,+1]} to
  *       signed little-endian PCM and {@link #openSink} picks the format writer
  *       ({@link ScopeFileSaver} dumps the ring; {@link #saveStreaming} records
  *       a live capture of any length straight to disk);</li>
- *   <li><b>load</b> — {@link #decodeStereo} turns a decoder's PCM bytes back
+ *   <li><b>load</b> - {@link #decodeStereo} turns a decoder's PCM bytes back
  *       into {@code float [-1,+1]} ({@code ScopeOpenSignal} fills a buffer).</li>
  * </ul>
  *
@@ -135,7 +135,7 @@ public final class StereoPcmIo {
      * Converts {@code frames} of interleaved PCM bytes into normalised
      * {@code float [-1,+1]} L/R.  A mono source ({@code channels == 1}) is
      * mirrored to both outputs.  Handles 8/16/24/32-bit, signed/unsigned,
-     * big/little-endian — the inverse of {@link #packStereo} for the common
+     * big/little-endian - the inverse of {@link #packStereo} for the common
      * (signed little-endian) case, and tolerant of the others a decoder yields.
      */
     static void decodeStereo(byte[] pcm, int frames, int channels, int bytesPerSample,
@@ -190,13 +190,13 @@ public final class StereoPcmIo {
 
     /**
      * Streams up to {@code totalFrames} of LIVE capture from {@code reader}'s
-     * contiguous cursor straight to {@code outFile} in real time — for captures
+     * contiguous cursor straight to {@code outFile} in real time - for captures
      * longer than the ring buffer.  Unlike {@link ScopeFileSaver#save}, which
      * dumps the already-captured ring, this records <em>forward</em>: it reads
      * the cursor as fresh samples arrive and writes them, so it takes about
      * {@code totalFrames / sampleRate} seconds of wall-clock to complete.
      *
-     * <p>Runs SYNCHRONOUSLY — call from a background thread.  {@code cancelled}
+     * <p>Runs SYNCHRONOUSLY - call from a background thread.  {@code cancelled}
      * is polled to stop early (the partial file is still finalised);
      * {@code progress} is notified with the running frame count for a UI bar.
      * Returns the number of frames actually written.
@@ -228,12 +228,20 @@ public final class StereoPcmIo {
                 int want = (int) Math.min(chunkFrames, totalFrames - written);
                 int n = reader.read(want, left, right);
                 if (n == SignalBufferReader.OVERRUN) {
-                    reader.seekToLatest();   // writer stalled a full ring behind — re-anchor
+                    reader.seekToLatest();   // writer stalled a full ring behind - re-anchor
                     gaps++;
                     continue;
                 }
                 if (n <= 0) {
-                    try { Thread.sleep(20); }   // caught up to the live tip — await fresh samples
+                    // Reader-terminal consult: a dead capture delivers nothing
+                    // ever again - without this the loop would await fresh
+                    // samples forever behind the progress dialog.  The caller's
+                    // save-error dialog shows the reason.
+                    if (reader.isFinished()) {
+                        throw new IOException("the capture ended - "
+                                + reader.getFinishedReason().logText());
+                    }
+                    try { Thread.sleep(20); }   // caught up to the live tip - await fresh samples
                     catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
                     continue;
                 }

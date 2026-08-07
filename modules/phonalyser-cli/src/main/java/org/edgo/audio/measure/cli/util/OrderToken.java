@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,7 +26,7 @@ import java.util.List;
 /** Order descriptor: literal integer power or {@code h+offset}/{@code h-offset}. */
 @Value
 public class OrderToken {
-    boolean hRelative;   // true → h + offset
+    boolean hRelative;   // true -> h + offset
     int     value;       // literal power (hRelative=false) OR offset added to h
     String  label;       // original textual form
 

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,7 +26,7 @@ import java.util.function.IntToDoubleFunction;
  * averaged FFT.  Where the time-domain Nth-difference test fails on weak
  * signals (the difference is a high-pass, so low SNR buries the glitch's
  * peak under broadband noise), this works on the spectrum and compares each
- * block to the running statistics of the blocks already collected — robust
+ * block to the running statistics of the blocks already collected - robust
  * because a real line references itself while a glitch lifts the floor or
  * the near-carrier pedestal.
  *
@@ -34,7 +34,7 @@ import java.util.function.IntToDoubleFunction;
  * <ol>
  *   <li><b>Near-carrier pedestal.</b>  The noise "rock" in the bins flanking
  *       each fundamental (main lobe excluded), measured as its excess over
- *       the block's own broadband noise floor — {@code pedestal − floor}.
+ *       the block's own broadband noise floor - {@code pedestal − floor}.
  *       That excess is amplitude- and window-leakage-independent; its
  *       running {@code median + k·MAD} over the collected blocks is the
  *       threshold, so the clean baseline is learned rather than fixed.</li>
@@ -51,7 +51,7 @@ import java.util.function.IntToDoubleFunction;
  * baseline.  Only the very first block (which seeds the reference) is
  * accepted unconditionally; from the second block on every gate is live,
  * the thin early history covered by small MAD floors and sharpening as more
- * clean averages accumulate.  An early glitch can't cause false rejects — it
+ * clean averages accumulate.  An early glitch can't cause false rejects - it
  * only makes a clean block's lift go negative, and the median self-heals.
  *
  * <p>Streaming, single-threaded (worker thread); not synchronized.
@@ -66,21 +66,21 @@ public final class SpectralDiscontinuityDetector {
     private static final double MIN_PEDESTAL_MAD = 0.5;
 
     /** The near-carrier pedestal is sampled in the skirt of a strong tone, where
-     *  ordinary window leakage — worse the further the tone sits off perfect
-     *  coherence — breathes block-to-block over a much heavier tail than the
+     *  ordinary window leakage - worse the further the tone sits off perfect
+     *  coherence - breathes block-to-block over a much heavier tail than the
      *  broadband floor.  It therefore gets its OWN sigma, larger than the
      *  floor/power {@code scoreSigmaK}, so steady leakage doesn't false-fire;
      *  only splatter well above the leakage envelope trips the gate. */
     private static final double PEDESTAL_SIGMA_K = 10.0;
 
     /** Minimum tone-lobe exclusion half-width, and the pedestal sampling span,
-     *  in HZ — converted to bins via {@link #binWidthHz} so they don't drift
+     *  in HZ - converted to bins via {@link #binWidthHz} so they don't drift
      *  with FFT size / sample rate. */
     private static final double PEAK_HALFWIDTH_HZ = 1.1;
     private static final double SKIRT_WIDTH_HZ    = 8.8;
 
     /** Around each fundamental the floor keeps out only the tone's OWN band plus
-     *  any band whose centre lands within this guard — instead of letting the
+     *  any band whose centre lands within this guard - instead of letting the
      *  lobe's leakage drop the neighbour bands too, which opens a wide hole in
      *  the floor at the tone.  The near bands are the most relevant local floor;
      *  bounded to ±2 bands so a tone's leakage can't pull in far-out bands.
@@ -97,7 +97,7 @@ public final class SpectralDiscontinuityDetector {
     private double binWidthHz = 1.0;
 
     private final int    numBands;
-    private final int    historyBlocks;     // L — reference median depth
+    private final int    historyBlocks;     // L - reference median depth
     private final int    calibBlocks;       // calibration-history depth
     private final double scoreSigmaK;        // reject if score > med + k·MAD
     private final double powerSigmaK;        // reject if |power−med| > k·MAD
@@ -113,7 +113,7 @@ public final class SpectralDiscontinuityDetector {
     private double[][] ref;
     private int     refFill, refHead;
 
-    // calibration histories (own fills — score only exists from block 2)
+    // calibration histories (own fills - score only exists from block 2)
     private double[] scoreHist;    private int scoreFill, scoreHead;
     private double[] powerHist;    private int powerFill, powerHead;
     private double[] pedestalHist; private int pedFill, pedHead;     // pedestal-over-floor excess (dB)
@@ -193,7 +193,7 @@ public final class SpectralDiscontinuityDetector {
         }
         lastPowerDb = 10.0 * Math.log10(totalPow + 1e-300);
 
-        // Per-block line detection (no history needed) → noise floor + pedestal excess.
+        // Per-block line detection (no history needed) -> noise floor + pedestal excess.
         for (int b = 0; b < bands; b++) lineBand[b] = isLocalLine(level, b);
         lastFloorDb        = floorMedian(level);
         lastPedestalDb     = pedestalDb(re, im, peakBins);
@@ -229,7 +229,7 @@ public final class SpectralDiscontinuityDetector {
         }
         int m = 0;
         for (int b = 0; b < bands; b++) {
-            if (lineBand[b]) continue;         // a real line / skirt — self-references, skip
+            if (lineBand[b]) continue;         // a real line / skirt - self-references, skip
             rho[m++] = level[b] - mref[b];
         }
         double score = m > 0 ? mean(rho, m) : 0.0;
@@ -270,7 +270,7 @@ public final class SpectralDiscontinuityDetector {
 
     // ---------------------------------------------------------------- internals
 
-    /** Median power (→ dB) of the bins flanking each fundamental, main lobe
+    /** Median power (-> dB) of the bins flanking each fundamental, main lobe
      *  excluded.  NaN when no peaks are supplied. */
     private double pedestalDb(double[] re, double[] im, int[] peakBins) {
         if (peakBins == null || peakBins.length == 0) return Double.NaN;
@@ -310,7 +310,7 @@ public final class SpectralDiscontinuityDetector {
 
     /** Pedestal-gate noise floor: median of the two ALREADY-computed bands
      *  flanking each fundamental (the left and right neighbours of its now-narrow
-     *  ±FLOOR_GUARD_HZ band) — the local floor right beside the tone, free of the
+     *  ±FLOOR_GUARD_HZ band) - the local floor right beside the tone, free of the
      *  jittery far-out bands.  NaN when no flanking band exists. */
     private double pedestalFloorDb(int[] peakBins) {
         if (peakBins == null || peakBins.length == 0) return Double.NaN;
@@ -332,7 +332,7 @@ public final class SpectralDiscontinuityDetector {
     }
 
     /** A band is a line / skirt when its level towers over the local median of
-     *  nearby bands — derived from the current block, so it needs no history. */
+     *  nearby bands - derived from the current block, so it needs no history. */
     private boolean isLocalLine(double[] lvl, int b) {
         int lo = Math.max(0, b - 3), hi = Math.min(bands, b + 4);
         double[] loc = new double[hi - lo];
@@ -365,7 +365,7 @@ public final class SpectralDiscontinuityDetector {
 
         // Shrink the band holding each fundamental to ±FLOOR_GUARD_HZ, handing its
         // freed bins to the immediate neighbours, so the floor's gap at the tone
-        // is the guard width — not the lobe's full leakage extent.  It's a band
+        // is the guard width - not the lobe's full leakage extent.  It's a band
         // geometry change, so the floor AND the debug overlay (which read these
         // very edges) both show the narrow gap, with no extra code.
         if (peakBins != null) {
@@ -441,7 +441,7 @@ public final class SpectralDiscontinuityDetector {
     public static final class Gates {
         public final int[]    bandLo, bandHi;   // band bin ranges (shared, immutable)
         public final double[] mref;             // gate 2: per-band median floor reference (dB)
-        public final double   floorDb;          // current noise floor (dB) — the excess anchor
+        public final double   floorDb;          // current noise floor (dB) - the excess anchor
         public final double   scoreThreshDb;    // gate 2: lift over mref that rejects (dB)
         public final double   scoreDb;          // gate 2: this block's mean lift (dB)
         public final double   pedestalExcessDb; // gate 1: current pedestal over floor (dB)

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,175 +18,221 @@
 
 package org.edgo.audio.measure.gui.generator;
 
-import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.MessageBus;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
-import org.edgo.audio.measure.gui.common.DebugSwitches;
-import org.edgo.audio.measure.gui.common.FftBinSnap;
-import org.edgo.audio.measure.gui.i18n.I18n;
-import lombok.Getter;
-import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.common.Closeables;
-import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.common.Constants;
+import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.generator.FilePlaybackGenerator;
+import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.DebugSwitches;
+import org.edgo.audio.measure.gui.common.GuiUtil;
+import org.edgo.audio.measure.gui.common.RemoteBackendRegistry;
+import org.edgo.audio.measure.gui.common.RemoteBackendUi;
+import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.sound.GeneratorLane;
+import org.edgo.audio.measure.gui.sound.GeneratorRun;
+import org.edgo.audio.measure.gui.sound.PlaybackStateEnum;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
+import org.edgo.audio.measure.sound.RemoteGenerator;
+import org.edgo.audio.measure.wav.PcmFileLoader;
 
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
-import java.util.function.Supplier;
+import lombok.Getter;
+import lombok.extern.log4j.Log4j2;
 
 /**
- * Controller of the generator pane: owns both output engines — the DDS
- * playback thread and the WAV/FLAC {@link FilePlayController} — plus the
- * signal math around them (FFT-bin snap, effective frequency, period
- * samples) and the signal file export.  {@link #start()} resolves the
- * current output device + sample rate + bit depth from {@link Preferences},
- * constructs a {@link SignalGenerator} from the saved settings, opens an
- * {@link AudioPlayback} on a background thread, and runs continuously until
- * {@link #stop()} is called.
+ * Controller of the generator pane - the UI's side of the generator and
+ * nothing more: the bidi preference bindings that live-apply the operator's
+ * edits, the bus events in and out, and the one boundary where a
+ * {@link PlaybackStateEnum} becomes operator language.
  *
- * <p>The constructor subscribes to every generator preference the engines
- * follow live (frequency, amplitude, duty, sweep params, dither, …) and to
- * the bus events that drive them (FLL trims, FFT-length re-snap, the
- * FreqResp sweep claiming the DAC) — the pane never relays.  Towards the
- * view the controller only publishes bus events and answers state getters:
- * the pane checks {@link #isRunning()} when toggling its Play button and
- * reads {@link #getLastStartError()} on a failed start so it can display
- * the reason in a MessageBox.
+ * <p>Everything between "the operator wants a tone" and the hardware emitting
+ * it lives in the {@link GeneratorLane} - one implementation for a local DDS
+ * and a bench-side one, with the playback lane and the line underneath it.
+ * This controller wraps its start/stop/restart, publishes
+ * {@link Events#GENERATOR_SIGNAL_CHANGED} on the transitions the analyzers
+ * restart their accumulators on, and answers the pane's state getters by
+ * delegation.
  */
 @Log4j2
 public final class GeneratorController {
 
-    /** Octave rows in the generator's Voss–McCartney pink-noise source — the
-     *  {@code PINK_OCTAVES + 1} summed terms set the pink forms' RMS in
-     *  {@link #rmsPerPeak}.  Mirrors the generator's own constant. */
-    private static final int PINK_OCTAVES = 16;
+    /** The exported-file amplitude convention (CEA-2006 / IEC 61938): 0 dBFS
+     *  is a 2 Vrms full-scale sine.  A file carries the SIGNAL, never this
+     *  machine's DAC calibration - a saved sine read back with unequal
+     *  channels when the export mirrored the per-lane DAC ratio - so it
+     *  plays correctly on ANY device.  Peak volts: 2 Vrms · √2. */
+    private static final double EXPORT_FS_VOLTAGE_AMPL = 2.0 * Constants.SQRT2;
+    /** How often the remote file watcher asks the bench's pushed state whether
+     *  the file is still playing.  The bench pushes on every change, so this only
+     *  bounds how late an end-of-file reaches the indicator - a tenth of a second
+     *  is below what an operator perceives, at four polls a second of nothing. */
+    private static final long REMOTE_FILE_POLL_MS = 100;
 
-    private volatile Thread          playThread;
-    private volatile SignalGenerator generator;
-    private volatile AudioPlayback   playback;
-    /** Per-session stop flag — a fresh instance per start so a stop request
-     *  to a previous (possibly join-timed-out) playback thread can never be
-     *  revoked by the next session's {@code set(false)}. */
-    private volatile AtomicBoolean   stopFlag    = new AtomicBoolean(false);
+    /** The generator itself - local or remote, resolved per call inside. */
+    private final GeneratorLane lane = new GeneratorLane();
+
+    /** The last start failure in OPERATOR language, or null - derived from the
+     *  lane's machine-readable state at the one wording boundary,
+     *  {@link #localize}. */
     @Getter
-    private volatile boolean         running;
-    @Getter
-    private volatile String          lastStartError;
-    /** WAV/FLAC file playback engine — shares the output device with the
-     *  DDS tone, so starting either engine stops the other. */
-    private final FilePlayController filePlayer = new FilePlayController();
-    /** Previous waveform — the restart-vs-live-swap decision needs both
-     *  sides of a form change. */
-    private GenSignalForm lastForm;
+    private volatile String lastStartError;
     /** Detach actions for every Preferences / bus subscription made in the
      *  constructor; run by {@link #shutdown()}. */
     private final List<Runnable> unsubscribes = new ArrayList<>();
 
+    // ----- file playback (shares the output device with the DDS tone) -----
+
+    private volatile Thread        playThread;
+    /** Per-session stop flag - a fresh instance per start so a stop request
+     *  to a previous (possibly join-timed-out) play thread can never be
+     *  revoked by the next session's reset. */
+    private volatile AtomicBoolean filePlayStopFlag = new AtomicBoolean(false);
+    private volatile boolean       filePlayRunning;
+    /** Live-updates the loop flag (bound to its preference).  Picked up at
+     *  the next EOF check by the play thread. */
+    private volatile boolean       filePlayLoop;
+    /** The source of the RUNNING file playback, or null - kept so the loop
+     *  preference can reach the lap that is already playing. */
+    private volatile FilePlaybackGenerator filePlaySource;
+    @Getter
+    private volatile String        filePlayError;
+    /** True once the BENCH has confirmed a file playing, so the remote watcher
+     *  does not read the gap between the command and the first pushed state as
+     *  an end-of-file.  Remote path only. */
+    private volatile boolean       remoteFileSeenPlaying;
+
     public GeneratorController() {
-        Preferences prefs = Preferences.instance();
-        lastForm = prefs.getGenSignalForm();
-        bindPreferences(prefs);
+        bindPreferences(Preferences.instance());
         bindBus();
     }
 
     /** Engine-driving preference subscriptions.  Each live-applies to the
-     *  running engine and publishes {@link Events#GENERATOR_SIGNAL_CHANGED}
-     *  exactly once where the emitted signal changes (the FFT averaging
-     *  restart hangs off that event). */
+     *  lane and publishes {@link Events#GENERATOR_SIGNAL_CHANGED} exactly once
+     *  where the emitted signal changes (the FFT averaging restart hangs off
+     *  that event). */
     private void bindPreferences(Preferences prefs) {
         onPref(prefs.genFrequencyHzProperty(), v -> {
-            setFrequency(effectiveFrequency());
+            // The COMMANDED value: what the operator just typed, resolved onto
+            // the grid.  Reading it back from effectiveFrequency() would feed a
+            // remote bench its own last emitted frequency as a new nominal.
+            lane.setFrequency(lane.commandedFrequency());
             publishSignalChanged();
         });
         onPref(prefs.genDualToneFreq1HzProperty(), v -> {
-            setFrequency(snapDualTone(v));
+            lane.setFrequency(lane.snapDualTone(v));
             publishSignalChanged();
         });
         onPref(prefs.genDualToneFreq2HzProperty(), v -> {
-            setDualToneFrequency2(snapDualTone(v));
+            lane.setDualToneFrequency2(lane.snapDualTone(v));
             publishSignalChanged();
         });
         onPref(prefs.genSnapToFftBinProperty(), v -> {
-            reapplySnap();
+            lane.reapplySnap();
             publishSignalChanged();
         });
-        onPref(prefs.genSignalFormProperty(), this::onFormChanged);
+        onPref(prefs.genSignalFormProperty(), f -> {
+            lane.formChanged(f);
+            publishSignalChanged();
+        });
         // Loading / clearing a .dpd must take effect now: restart the running
         // generator when the file for the ACTIVE compensated form changes (the
         // build reads the new path).  Each slot only restarts its own form.
-        onPref(prefs.genDpdProperty(),     v -> onDpdChanged(GenSignalForm.SINE_COMP));
-        onPref(prefs.genDpdDualProperty(), v -> onDpdChanged(GenSignalForm.DUAL_TONE_COMP));
+        onPref(prefs.genDpdProperty(),     v -> lane.dpdChanged(GenSignalForm.SINE_COMP));
+        onPref(prefs.genDpdDualProperty(), v -> lane.dpdChanged(GenSignalForm.DUAL_TONE_COMP));
         onPref(prefs.genAmplitudeVrmsProperty(), v -> {
-            setAmplitudeVrms(v);
+            lane.setAmplitudeVrms(v);
             publishSignalChanged();
         });
         onPref(prefs.dacFsVoltageAmplProperty(), v -> {
             // Left full-scale drives the generator's mono amplitude AND the
             // per-lane ratio (scaleR = fsLeft/fsRight), so re-push both.
-            setDacFsVoltageAmpl(v);
-            pushOutputRoutingToPlayback();
+            lane.setDacFsVoltageAmpl(v);
+            lane.pushOutputRouting();
             publishSignalChanged();
         });
         onPref(prefs.dacFsVoltageAmplRightProperty(), v -> {
-            pushOutputRoutingToPlayback();
+            lane.pushOutputRouting();
             publishSignalChanged();
         });
         onPref(prefs.genOutputChannelsProperty(), v -> {
-            pushOutputRoutingToPlayback();
+            lane.pushOutputRouting();
             publishSignalChanged();
         });
         onPref(prefs.genRectangleDutyProperty(), v -> {
-            setRectangleDuty(v);
+            lane.setRectangleDuty(v);
             publishSignalChanged();
         });
         onPref(prefs.genTriangleDutyProperty(), v -> {
-            setTriangleDuty(v);
+            lane.setTriangleDuty(v);
             publishSignalChanged();
         });
         onPref(prefs.genDualToneSplitPctProperty(), a1 -> {
-            setDualToneAmplitudes(a1, 100.0 - a1);
+            lane.setDualToneAmplitudes(a1, 100.0 - a1);
             publishSignalChanged();
         });
         onPref(prefs.genDitherBitsProperty(), this::setDitherBits);
         onPref(prefs.genSweepFreqStartHzProperty(), v -> {
-            if (!restartFarinaOnParamChange()) setSweepFreqStart(v);
+            if (!lane.restartFarinaOnParamChange()) lane.setSweepFreqStart(v);
             publishSignalChanged();
         });
         onPref(prefs.genSweepFreqEndHzProperty(), v -> {
-            if (!restartFarinaOnParamChange()) setSweepFreqEnd(v);
+            if (!lane.restartFarinaOnParamChange()) lane.setSweepFreqEnd(v);
             publishSignalChanged();
         });
         onPref(prefs.genSweepDurationSecProperty(), v -> {
-            if (!restartFarinaOnParamChange()) setSweepDurationSeconds(v);
+            if (!lane.restartFarinaOnParamChange()) lane.setSweepDurationSeconds(v);
             publishSignalChanged();
         });
         onPref(prefs.genSweepFadeInSecProperty(), v -> {
-            if (!restartFarinaOnParamChange()) setSweepFadeInSeconds(v);
+            if (!lane.restartFarinaOnParamChange()) lane.setSweepFadeInSeconds(v);
             publishSignalChanged();
         });
         onPref(prefs.genSweepFadeOutSecProperty(), v -> {
-            if (!restartFarinaOnParamChange()) setSweepFadeOutSeconds(v);
+            if (!lane.restartFarinaOnParamChange()) lane.setSweepFadeOutSeconds(v);
             publishSignalChanged();
         });
         onPref(prefs.genSweepLoopProperty(), v -> {
-            if (!restartFarinaOnParamChange()) setSweepLoop(v);
+            if (!lane.restartFarinaOnParamChange()) lane.setSweepLoop(v);
             publishSignalChanged();
         });
-        onPref(prefs.genPlayFromLoopProperty(), filePlayer::setLoop);
+        onPref(prefs.genPlayFromLoopProperty(), v -> {
+            filePlayLoop = v;
+            // Forward to the RUNNING source too - its loop flag is re-read at
+            // every end of stream, so the toggle takes effect on the next lap
+            // (clearing it during play kept looping otherwise - the field
+            // alone only reaches the NEXT start).
+            FilePlaybackGenerator playing = filePlaySource;
+            if (playing != null) {
+                playing.setLoop(v);
+            }
+            // The same toggle when the file is playing on a BENCH: the far end
+            // re-reads its own flag at each end of stream, so this reaches the
+            // lap that is ending exactly as the local setter above does.
+            RemoteGenerator remote = AudioBackend.instance().remoteGenerator();
+            if (remote != null && filePlayRunning) {
+                remote.setFileLoop(v);
+            }
+        });
     }
 
     /** Bus subscriptions that drive the engines. */
@@ -199,9 +245,9 @@ public final class GeneratorController {
             if (newHz == null || !Double.isFinite(newHz)) return;
             if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
                 log.warn("FLL apply t1: {} Hz (generator running={})",
-                        String.format(Locale.US, "%.6f", newHz), generator != null);
+                        String.format(Locale.US, "%.6f", newHz), lane.isRunning());
             }
-            setFrequency(newHz);
+            lane.trimFrequency(newHz);
             bus.publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
         };
         onBus(Events.GENERATOR_FREQ_TRIM, freqTrim);
@@ -210,37 +256,45 @@ public final class GeneratorController {
             if (newHz == null || !Double.isFinite(newHz)) return;
             if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
                 log.warn("FLL apply t2: {} Hz (generator running={})",
-                        String.format(Locale.US, "%.6f", newHz), generator != null);
+                        String.format(Locale.US, "%.6f", newHz), lane.isRunning());
             }
-            setDualToneFrequency2(newHz);
+            lane.trimFrequency2(newHz);
             bus.publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
         };
         onBus(Events.GENERATOR_FREQ_TRIM_2, freqTrim2);
-        // FLL reset: drop any residual trim — slide the running tone(s)
+        // FLL reset: drop any residual trim - slide the running tone(s)
         // back onto the configured (snapped) frequencies.  reapplySnap
         // publishes no signal-changed event itself, so no feedback loop.
         Consumer<Void> freqTrimReset = ignored -> {
             if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
                 log.warn("FLL trim reset: re-applying snap targets (generator running={})",
-                        generator != null);
+                        lane.isRunning());
             }
-            reapplySnap();
+            lane.reapplySnap();
         };
         onBus(Events.GENERATOR_FREQ_TRIM_RESET, freqTrimReset);
         // FFT length changed: slide the running tone(s) onto the new bin
         // grid without the user having to toggle the snap checkbox.
         Consumer<Void> fftLength = ignored -> {
-            if (Preferences.instance().isGenSnapToFftBin()) reapplySnap();
+            if (Preferences.instance().isGenSnapToFftBin()) lane.reapplySnap();
         };
         onBus(Events.FFT_LENGTH_CHANGED, fftLength);
-        // The FreqResp sweep needs the DAC exclusively — stop both engines.
+        // The FreqResp sweep needs the DAC exclusively - stop both engines.
         Consumer<Void> freqRespStarted = ignored -> stopEngines();
         onBus(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStarted);
-        // "Is the generator running?" — read by the FFT worker to decide
+        // "Is the generator running?" - read by the FFT worker to decide
         // whether to anchor the fundamental to the generator's frequency.
         bus.registerResponder(Events.GENERATOR_RUNNING,
                 (Supplier<Boolean>) this::isProducingSignal);
         unsubscribes.add(() -> bus.unregisterResponder(Events.GENERATOR_RUNNING));
+        // "At which frequencies is the generator emitting?" - read by the FFT's
+        // fundamental hints and clock readouts and by the scope's beat
+        // reconstruction and dual-tone comb seeds, all of which need the tones on
+        // the wire and not the ones this process would have computed: a remote
+        // bench snaps against ITS rate and applies the FLL trims itself.
+        bus.registerResponder(Events.GENERATOR_EMITTED_HZ,
+                (Function<Integer, double[]>) lane::emittedHz);
+        unsubscribes.add(() -> bus.unregisterResponder(Events.GENERATOR_EMITTED_HZ));
     }
 
     private <T> void onPref(Property<T> property, Consumer<T> action) {
@@ -259,647 +313,660 @@ public final class GeneratorController {
     }
 
     /** Detaches every Preferences / bus subscription and stops both
-     *  engines — called from the pane's dispose listener. */
+     *  engines - called from the pane's dispose listener. */
     public void shutdown() {
         for (Runnable r : unsubscribes) r.run();
         unsubscribes.clear();
         stopEngines();
     }
 
-    /**
-     * Reads the current generator settings + output device from {@link
-     * Preferences}, opens the playback line and starts streaming on a
-     * background thread.  No-op if already running.  On any failure
-     * {@link #isRunning()} returns {@code false} and {@link
-     * #getLastStartError()} carries a human-readable message.
-     */
-    public synchronized void start() {
-        if (running) return;
-        lastStartError = null;
-        // DDS tone and file playback share the output device — only one of
-        // them may drive it at a time.
-        filePlayer.stop();
+    // -------------------------------------------------------------------------
+    // The lane, wrapped - plus the one wording boundary
+    // -------------------------------------------------------------------------
 
+    /** Starts the tone - see {@link GeneratorLane#start(GeneratorRun)}.  On
+     *  failure {@link #isRunning()} answers false and
+     *  {@link #getLastStartError()} carries the operator-language reason. */
+    public void start() {
+        // DDS tone and file playback share the output device - only one of
+        // them may drive it at a time (the exclusivity the lane's start used
+        // to enforce before the file player merged up here).
+        stopFilePlayback();
+        PlaybackStateEnum state = lane.start(buildRun());
+        lastStartError = localize(state);
+        if (state == PlaybackStateEnum.STARTED) {
+            // Starting IS a signal change: what the ADC sees goes from whatever
+            // was there to the generated tone, so the scope's running statistics
+            // and amplitude distribution, and the FFT's accumulator, must
+            // restart rather than average the two together.
+            publishSignalChanged();
+        }
+    }
+
+    /**
+     * The preferences -> run derivation: THIS is where the current generator
+     * settings become the one value the lane runs (the derivation the lane
+     * used to do itself - the lane takes parameters instead, so a sweep
+     * engine can drive the same lane with its own).  Built fresh per start,
+     * so a restart after a settings change plays the changed settings.
+     */
+    private GeneratorRun buildRun() {
         Preferences prefs = Preferences.instance();
         BackendPrefs bp = prefs.current();
-        String deviceName = bp.getOutputDeviceName();
-        if (deviceName == null || deviceName.isEmpty()) {
-            lastStartError = I18n.t("generator.error.noDevice");
-            return;
-        }
-        DeviceRef device = findOutputDevice(deviceName);
-        if (device == null) {
-            lastStartError = I18n.t("generator.error.deviceUnavailable", deviceName);
-            return;
-        }
-        // Per-card FS resolution: push the selected card's active-range DAC
-        // full-scale through setDacFsVoltageAmpl; legacy scalar when unbound.
-        prefs.applyOutputDeviceProfile(device.name());
-
-        final int    sampleRate    = bp.getOutputSampleRate();
-        final int    bitDepth      = bp.getOutputBitDepth();
-        final double ditherBits    = prefs.getGenDitherBits();
-        final double amplitudeVRms = prefs.getGenAmplitudeVrms();
-        final GenSignalForm form      = prefs.getGenSignalForm();
-        // First tone frequency: the generator constructor's
-        // {@code frequency} parameter feeds the primary DDS, so for
-        // DUAL_TONE this is tone 1.  Snapped to the nearest FFT bin
-        // when the user enabled snap-to-bin; the snap helper itself
-        // gates on the waveform.
-        final double rawFrequency  = (form.isDualTone())
-                ? prefs.getGenDualToneFreq1Hz()
-                : prefs.getGenFrequencyHz();
-        final double frequency = emitFrequency(prefs, form, sampleRate, rawFrequency);
-
-        // The WASAPI exclusive-mode driver sometimes refuses to start the
-        // render stream on the first attempt when a sibling capture stream
-        // is already running in the same process (the in-built scope view).
-        // External recording works because cross-process contention is
-        // mediated by Windows' session manager; in-process, the first start
-        // can lose the race.  We retry once after a brief delay before
-        // reporting failure to the user.
-        final int    MAX_ATTEMPTS  = 2;
-        final long   RETRY_PAUSE_MS = 500;
-        final long   READY_TIMEOUT_S = 5;
-        String       attemptError  = null;
-        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            attemptError = tryStartOnce(prefs, device, sampleRate, bitDepth, ditherBits,
-                    form, frequency, amplitudeVRms, READY_TIMEOUT_S);
-            if (attemptError == null) {
-                running = true;
-                log.info("Generator started (attempt {}): device={}, form={}, freq={} Hz, amp={} Vrms, rate={} Hz, depth={} bit, dither={} bit",
-                        attempt, device.displayName(), form, frequency, amplitudeVRms, sampleRate, bitDepth, ditherBits);
-                // Starting IS a signal change: what the ADC sees goes from whatever
-                // was there to the generated tone, so the scope's running statistics
-                // and amplitude distribution, and the FFT's accumulator, must restart
-                // rather than average the two together.
-                publishSignalChanged();
-                return;
-            }
-            log.warn("Generator start attempt {}/{} failed: {}", attempt, MAX_ATTEMPTS, attemptError);
-            if (attempt < MAX_ATTEMPTS) {
-                try { Thread.sleep(RETRY_PAUSE_MS); }
-                catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
-            }
-        }
-        lastStartError = attemptError;
-    }
-
-    /**
-     * One open + play attempt.  Returns {@code null} on success (controller
-     * left in the running state — caller flips {@link #running}); a
-     * non-null string carries the failure reason and guarantees any
-     * partially-opened resources are torn down before returning.
-     */
-    private String tryStartOnce(Preferences prefs, DeviceRef device,
-                                int sampleRate, int bitDepth, double ditherBits,
-                                GenSignalForm form, double frequency, double amplitudeVRms,
-                                long readyTimeoutSeconds) {
-        Thread old = playThread;
-        if (old != null && old.isAlive()) {
-            return I18n.t("generator.error.shuttingDown");
-        }
-        SignalGenerator gen;
-        double dacFs = prefs.getDacFsVoltageAmpl();
-        try {
-            if (form == GenSignalForm.SINE_COMP) {
-                String dpd = prefs.getGenDpd(form);
-                if (dpd == null || dpd.isEmpty()) {
-                    return I18n.t("generator.error.needPredistortion");
-                }
-                gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, dacFs, dpd);
-            } else if (form == GenSignalForm.DUAL_TONE_COMP) {
-                // Plain two-tone generator, then load the dual-tone intermod
-                // corrections (freq-independent (a,b) products) onto it.  The
-                // second tone + amplitude split are pushed by start() afterwards.
-                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, dacFs);
-                String dpd = prefs.getGenDpd(form);
-                if (dpd != null && !dpd.isEmpty()) {
-                    gen.readDpd(dpd, frequency, sampleRate);
-                }
-            } else if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
-                double f0 = prefs.getGenSweepFreqStartHz();
-                double f1 = prefs.getGenSweepFreqEndHz();
-                int durationSamples = Math.max(2,
-                        (int) Math.round(prefs.getGenSweepDurationSec() * sampleRate));
-                if (form == GenSignalForm.LINEAR_SWEEP) {
-                    gen = new SignalGenerator(f0, f1, sampleRate, durationSamples, amplitudeVRms, dacFs);
-                } else {
-                    // No lead-in for the GUI-driven sweep — that's a CLI-
-                    // measurement feature, not a music-style sweep control.
-                    gen = new SignalGenerator(f0, f1, durationSamples, 0, sampleRate, amplitudeVRms, dacFs);
-                }
-            } else {
-                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, dacFs);
-            }
-        } catch (Exception ex) {
-            return I18n.t("generator.error.buildFailed", ex.getMessage());
-        }
-        // Apply any waveform-specific live-tunables before we hand the
-        // generator off to the audio thread.
-        gen.setRectangleDuty(prefs.getGenRectangleDuty());
-        gen.setTriangleDuty (prefs.getGenTriangleDuty());
+        int sampleRate = bp.getOutputSampleRate();
+        GenSignalForm form = prefs.getGenSignalForm();
+        GeneratorRun.SweepSpec sweep = null;
         if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
-            int fadeIn  = Math.max(0, (int) Math.round(prefs.getGenSweepFadeInSec()  * sampleRate));
-            int fadeOut = Math.max(0, (int) Math.round(prefs.getGenSweepFadeOutSec() * sampleRate));
-            gen.setSweepParams(prefs.isGenSweepLoop(), fadeIn, fadeOut);
+            // No lead-in for the GUI-driven sweep - that's a CLI-measurement
+            // feature, not a music-style sweep control.
+            sweep = new GeneratorRun.SweepSpec(
+                    prefs.getGenSweepFreqStartHz(),
+                    prefs.getGenSweepFreqEndHz(),
+                    Math.max(2, (int) Math.round(prefs.getGenSweepDurationSec() * sampleRate)),
+                    0,
+                    Math.max(0, (int) Math.round(prefs.getGenSweepFadeInSec() * sampleRate)),
+                    Math.max(0, (int) Math.round(prefs.getGenSweepFadeOutSec() * sampleRate)),
+                    prefs.isGenSweepLoop());
         }
-        if (form.isDualTone()) {
-            // Dual-tone: tone 1 uses the frequency the generator was
-            // constructed with (already snapped above); tone 2's
-            // frequency and the per-tone amplitude split are pushed
-            // in here.  Tone 2 is snapped to the FFT bin grid
-            // independently so both tones land on a bin centre.
-            // {@code genDualToneSplitPct} carries Freq 1's amplitude
-            // percentage; Freq 2's amplitude is the complement.
-            double rawF2  = prefs.getGenDualToneFreq2Hz();
-            double snapF2 = FftBinSnap.snapIfEnabled(prefs, form, sampleRate, rawF2);
-            gen.setDualToneFrequency2(snapF2);
-            double a1Pct = prefs.getGenDualToneSplitPct();
-            gen.setDualToneAmplitudes(a1Pct, 100.0 - a1Pct);
-        }
-        this.generator = gen;
-        final SignalGenerator generator = gen;
-
-        AudioPlayback ag;
-        try {
-            ag = AudioBackend.instance().openPlayback(device, sampleRate, bitDepth, ditherBits);
-            ag.open();
-        } catch (Exception ex) {
-            log.warn("Playback open failed", ex);
-            this.generator = null;
-            return I18n.t("generator.error.openDeviceFailed", ex.getMessage());
-        }
-        this.playback = ag;
-        // Push the per-lane scale (scaleR = fsLeft/fsRight) and the output gate
-        // before the render thread starts — the quantizer reads them per block.
-        pushOutputRoutingToPlayback();
-        final AtomicBoolean sessionStop = new AtomicBoolean(false);
-        this.stopFlag = sessionStop;
-
-        final CountDownLatch readyLatch = new CountDownLatch(1);
-        Thread t = new Thread(() -> {
-            try {
-                ag.play(generator, sessionStop, readyLatch);
-            } catch (Exception ex) {
-                log.warn("Playback thread terminated abnormally", ex);
-            } finally {
-                Closeables.closeQuietly(ag);
-            }
-        }, "generator-play");
-        t.setDaemon(true);
-        // Exclusive-mode WASAPI / WDM-KS underruns the moment the audio
-        // thread misses an event tick; bump to MAX_PRIORITY so Java's
-        // scheduler keeps it ahead of GC helpers and the GUI thread.
-        // This is the canonical fix for the "brief mid-plateau dip on a
-        // square wave" artifact you get when a buffer's worth of audio
-        // is replaced by silence during a stall.
-        t.setPriority(Thread.MAX_PRIORITY);
-        t.start();
-        this.playThread = t;
-
-        try {
-            if (!readyLatch.await(readyTimeoutSeconds, TimeUnit.SECONDS)) {
-                // Tear down so a retry starts from a clean slate.
-                stop();
-                return I18n.t("generator.error.noStreamStart", readyTimeoutSeconds);
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            stop();
-            return I18n.t("generator.error.startInterrupted");
-        }
-        return null;
+        return new GeneratorRun(form,
+                lane.resolveEmitFrequency(form, sampleRate),
+                prefs.getGenAmplitudeVrms(),
+                sampleRate,
+                bp.getOutputBitDepth(),
+                prefs.getGenDitherBits(),
+                prefs.getDacFsVoltageAmpl(),
+                prefs.dacRightLaneScale(),
+                prefs.getGenOutputChannels(),
+                false,   // the pane's tone ADAPTS to a bench's granted rate
+                true,    // ...and pushes THIS machine's DAC calibration to it
+                sweep);
     }
 
-    /**
-     * Stops the playback thread (idempotent).  Waits up to 2 s for the
-     * thread to exit and the output line to drain / close before returning.
-     */
-    public synchronized void stop() {
-        boolean wasRunning = running;
-        stopFlag.set(true);
-        Thread t = playThread;
-        if (t != null) {
-            try {
-                t.join(2_000);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-            if (t.isAlive()) {
-                // Keep the reference so tryStartOnce refuses to open a second
-                // playback on the same device while this one is wedged.  Its
-                // session stop flag stays set, so it can never resume.
-                log.warn("Playback thread did not exit within 2 s — restart refused until it does.");
-            } else {
-                playThread = null;
-            }
-        }
-        generator  = null;
-        playback   = null;
-        running    = false;
-        // Same reasoning as in start(): the signal just went away.  Only on a real
-        // transition — the failed-start paths call this with nothing running.
-        if (wasRunning) publishSignalChanged();
-    }
-
-    /** Live-applies the dither bit count to the running playback (if any), then
-     *  signals a generator change so the FFT stats/accumulator and the scope
-     *  persistence restart on the new signal. */
-    public void setDitherBits(double bits) {
-        AudioPlayback ag = playback;
-        if (ag != null) ag.setDitherBits(bits);
-        publishSignalChanged();
-    }
-
-    /** Live-applies a duty-cycle (fraction in [0.001, 0.999]) to the running rectangle generator. */
-    public void setRectangleDuty(double dutyFrac) {
-        SignalGenerator g = generator;
-        if (g != null) g.setRectangleDuty(dutyFrac);
-    }
-
-    /** Live-applies a duty-cycle (fraction in [0.001, 0.999]) to the running triangle generator. */
-    public void setTriangleDuty(double dutyFrac) {
-        SignalGenerator g = generator;
-        if (g != null) g.setTriangleDuty(dutyFrac);
-    }
-
-    /**
-     * Live-applies a new waveform to the running generator.  No-op if the
-     * generator isn't running.  Switching to / from {@link GenSignalForm#SINE_COMP}
-     * or any sweep form requires a stop+start because their state machines
-     * aren't safely live-mutable; this method skips them.
-     */
-    public void setForm(GenSignalForm form) {
-        SignalGenerator g = generator;
-        if (g == null || form == null) return;
-        if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) return;
-        if (form == GenSignalForm.SINE_COMP) return;
-        g.setForm(form);
-    }
-
-    /** Live-applies a new frequency (Hz) to the running generator.  No-op if not running. */
-    public void setFrequency(double hz) {
-        SignalGenerator g = generator;
-        if (g != null) g.setFrequency(hz);
-    }
-
-    /** Hot-applies harmonic predistortion to the running generator and
-     *  switches it to compensated sine (no restart) — the predistortion
-     *  wizard's per-round apply.  No-op when nothing is playing. */
-    public void applyCompensation(double[] ampRatios, int[] hNums, double[] phiInits) {
-        SignalGenerator g = generator;
-        if (g != null) g.applyCompensation(ampRatios, hNums, phiInits);
-    }
-
-    /** Hot-applies dual-tone intermod predistortion to the running generator
-     *  and switches it to compensated dual tone (no restart) — the dual-tone
-     *  counterpart of {@link #applyCompensation}.  No-op when nothing is
-     *  playing. */
-    public void applyDualToneCompensation(double[] ampRatios, int[] coefA, int[] coefB, double[] phiInits) {
-        SignalGenerator g = generator;
-        if (g != null) g.applyDualToneCompensation(ampRatios, coefA, coefB, phiInits);
-    }
-
-    /** Clears wizard predistortion and returns the running generator to
-     *  plain sine. */
-    public void clearCompensation() {
-        SignalGenerator g = generator;
-        if (g != null) g.clearCompensation();
-    }
-
-    /** Loads a saved predistortion file (.dpd) onto the running generator — the
-     *  wizard's Apply path.  The file is self-describing (single-tone harmonic
-     *  vs dual-tone intermod), so the generator switches to the matching
-     *  compensated form.  No-op when nothing is playing — the persisted prefs
-     *  make the next start load it. */
-    public void loadCorrectionsFromFile(String path) {
-        SignalGenerator g = generator;
-        if (g == null || path == null) return;
-        Preferences prefs = Preferences.instance();
-        try {
-            g.readDpd(path, effectiveFrequency(),
-                    prefs.current().getOutputSampleRate());
-        } catch (IOException ex) {
-            log.warn("Failed to load predistortion corrections from {}", path, ex);
+    /** Stops the tone - see {@link GeneratorLane#stop()}. */
+    public void stop() {
+        // The signal really went away: only a real transition restarts the
+        // analyzers' accumulators - the failed-start paths stop with nothing
+        // running.
+        if (lane.stop()) {
+            publishSignalChanged();
         }
     }
 
-    /** Highest output V RMS that still does NOT clip, for {@code form} at the
-     *  current DAC full scale.  The generator scales a waveform by
-     *  {@code amplitude = Vrms / (fsPeak · rawRms(form))} and clips above 1, so
-     *  digital full scale sits exactly at {@code Vrms = fsPeak · rawRms(form)} —
-     *  which is why the ceiling follows the waveform (a rectangle may go 3 dB
-     *  higher in RMS than a sine, a triangle sits between them, a dual tone
-     *  tracks its split).  The amplitude field caps itself with this, so V, dBV
-     *  and dBFS all trim to the same maximum and 0 dBFS is the top of the range. */
-    public double maxAmplitudeVrms(GenSignalForm form) {
-        return Preferences.instance().getDacFsVoltageAmpl() * rmsPerPeak(form);
-    }
-
-    /** RMS of the unit-amplitude waveform — the peak→RMS factor behind
-     *  {@link #maxAmplitudeVrms}.  Mirrors the signal generator's own raw-RMS
-     *  table (private there); keep the two in step if a waveform is added. */
-    private double rmsPerPeak(GenSignalForm form) {
-        return switch (form) {
-            case SINE, SINE_COMP, LINEAR_SWEEP, LOG_SWEEP -> 1.0 / Math.sqrt(2.0);
-            case TRIANGLE                                 -> 1.0 / Math.sqrt(3.0);
-            case RECTANGLE, WHITE_NOISE                   -> 1.0;
-            case PINK_NOISE                               -> 1.0 / Math.sqrt(PINK_OCTAVES + 1.0);
-            case PINK_NOISE_LINEAR                        -> 1.0 / Math.sqrt(3.0 * (PINK_OCTAVES + 1.0));
-            case DUAL_TONE, DUAL_TONE_COMP                -> dualToneRmsPerPeak();
-        };
-    }
-
-    /** Two-tone crest factor for the current split: the tones are uncorrelated,
-     *  so {@code RMS = √((w₁² + w₂²) / 2)} while their peaks still sum to one. */
-    private double dualToneRmsPerPeak() {
-        double w1 = Math.max(0.0, Math.min(100.0,
-                Preferences.instance().getGenDualToneSplitPct())) / 100.0;
-        double w2 = 1.0 - w1;
-        return Math.max(1e-12, Math.sqrt((w1 * w1 + w2 * w2) / 2.0));
-    }
-
-    /** Live-applies the second tone's frequency (Hz) for the
-     *  {@code DUAL_TONE} waveform.  No-op if not running; no audible
-     *  effect for non-DUAL_TONE waveforms (the second accumulator
-     *  stays idle until the form is switched to DUAL_TONE). */
-    public void setDualToneFrequency2(double hz) {
-        SignalGenerator g = generator;
-        if (g != null) g.setDualToneFrequency2(hz);
-    }
-
-    /** Live-applies the dual-tone power split (first tone's percentage
-     *  of total signal power).  Generator clamps to {@code [0, 100]}.
-     *
-     *  @deprecated Replaced by {@link #setDualToneAmplitudes} which
-     *      takes both percentages explicitly (amp1 + amp2 = 100). */
-    @Deprecated
-    public void setDualToneSplitPercent(double firstPercent) {
-        SignalGenerator g = generator;
-        if (g != null) g.setDualToneAmplitudes(firstPercent, 100.0 - firstPercent);
-    }
-
-    /** Live-applies the dual-tone per-tone amplitude percentages.
-     *  Both values together; generator clamps each to {@code [0, 100]}
-     *  and re-normalises the internal amplitude scale so the combined
-     *  signal's Vrms still matches the Amplitude field. */
-    public void setDualToneAmplitudes(double amp1Pct, double amp2Pct) {
-        SignalGenerator g = generator;
-        if (g != null) g.setDualToneAmplitudes(amp1Pct, amp2Pct);
-    }
-
-    /** Live-applies a new amplitude (V RMS) to the running generator.  No-op if not running. */
-    public void setAmplitudeVrms(double vrms) {
-        SignalGenerator g = generator;
-        if (g != null) g.setAmplitudeVrms(vrms);
-    }
-
-    /** Recomputes the running generator's amplitude scale against the current DAC
-     *  full-scale (the cached requested Vrms is unchanged).  No-op if not running.
-     *  Driven by the DAC-calibration binding so a full-scale change takes effect live. */
-    public void setDacFsVoltageAmpl(double v) {
-        SignalGenerator g = generator;
-        if (g != null) g.setDacFsVoltageAmpl(v);
-    }
-
-    /** Pushes the current per-lane scale + output gate to the running playback.
-     *  No-op if nothing is playing — the values ride the quantizer's defaults
-     *  (both scales 1.0, gate BOTH) until a session opens and re-pushes them. */
-    private void pushOutputRoutingToPlayback() {
-        AudioPlayback ag = playback;
-        if (ag == null) return;
-        Preferences prefs = Preferences.instance();
-        ag.setChannelScale(1.0, prefs.dacRightLaneScale());
-        ag.setOutputChannels(prefs.getGenOutputChannels());
-    }
-
-    /** Live-applies sweep start frequency (Hz). */
-    public void setSweepFreqStart(double hz) {
-        SignalGenerator g = generator;
-        if (g != null) g.setSweepFreqStart(hz);
-    }
-
-    /** Live-applies sweep stop frequency (Hz). */
-    public void setSweepFreqEnd(double hz) {
-        SignalGenerator g = generator;
-        if (g != null) g.setSweepFreqEnd(hz);
-    }
-
-    /** Live-applies sweep duration (seconds) by converting to samples
-     *  via the current sample rate. */
-    public void setSweepDurationSeconds(double seconds) {
-        SignalGenerator g = generator;
-        if (g == null || !Double.isFinite(seconds) || seconds <= 0) return;
-        int rate = Preferences.instance().current().getOutputSampleRate();
-        int samples = Math.max(2, (int) Math.round(seconds * rate));
-        g.setSweepDurationSamples(samples);
-    }
-
-    /** Live-applies sweep fade-in length (seconds). */
-    public void setSweepFadeInSeconds(double seconds) {
-        SignalGenerator g = generator;
-        if (g == null || !Double.isFinite(seconds) || seconds < 0) return;
-        int rate = Preferences.instance().current().getOutputSampleRate();
-        g.setSweepFadeInSamples(Math.max(0, (int) Math.round(seconds * rate)));
-    }
-
-    /** Live-applies sweep fade-out length (seconds). */
-    public void setSweepFadeOutSeconds(double seconds) {
-        SignalGenerator g = generator;
-        if (g == null || !Double.isFinite(seconds) || seconds < 0) return;
-        int rate = Preferences.instance().current().getOutputSampleRate();
-        g.setSweepFadeOutSamples(Math.max(0, (int) Math.round(seconds * rate)));
-    }
-
-    /** Live-applies the sweep loop flag. */
-    public void setSweepLoop(boolean loop) {
-        SignalGenerator g = generator;
-        if (g != null) g.setSweepLoop(loop);
-    }
-
-    /** True when the running generator can accept live form updates for the given target. */
-    public boolean canLiveSwitchForm(GenSignalForm target) {
-        if (target == null || generator == null) return false;
-        if (target == GenSignalForm.LINEAR_SWEEP || target == GenSignalForm.LOG_SWEEP) return false;
-        if (target == GenSignalForm.SINE_COMP) return false;
-        return true;
-    }
-
-    /** Stops and immediately restarts the playback so a not-live-swappable
-     *  change takes effect.  On failure {@link #isRunning()} turns false
-     *  and {@link #getLastStartError()} carries the reason. */
-    public synchronized void restart() {
+    /** Stop + start so a not-live-swappable change takes effect.  On failure
+     *  {@link #isRunning()} turns false and {@link #getLastStartError()}
+     *  carries the reason. */
+    public void restart() {
         stop();
         start();
     }
 
-    /** A Farina (LOG) sweep can't live-edit its pre-rendered buffer without the
-     *  playback dropping to silence, so a parameter change while it is running
-     *  does a full restart instead — the tone resumes with the new parameters
-     *  (start() rebuilds the generator from the just-committed prefs).  Returns
-     *  {@code true} when it restarted, so the caller skips the live setter. */
-    private boolean restartFarinaOnParamChange() {
-        if (isRunning() && Preferences.instance().getGenSignalForm() == GenSignalForm.LOG_SWEEP) {
-            restart();
-            return true;
-        }
-        return false;
-    }
-
-    /** Stops both engines — used when the FreqResp sweep claims the DAC
+    /** Stops both engines - used when the FreqResp sweep claims the DAC
      *  and on shutdown. */
-    public synchronized void stopEngines() {
-        stop();
-        filePlayer.stop();
+    public void stopEngines() {
+        boolean toneWasRunning = lane.stop();
+        stopFilePlayback();
+        if (toneWasRunning) {
+            publishSignalChanged();
+        }
     }
 
-    /** True while either engine drives the output — the
+    /** The one boundary where a start state becomes operator language - the
+     *  panes read {@link #getLastStartError()}; everything below them deals in
+     *  {@link PlaybackStateEnum} alone. */
+    private String localize(PlaybackStateEnum state) {
+        if (state == PlaybackStateEnum.PARKED || state == PlaybackStateEnum.STARTED) {
+            return null;   // not messages
+        }
+        if (state == PlaybackStateEnum.NO_STREAM_START) {
+            return I18n.t(state.i18nKey(), GeneratorLane.READY_TIMEOUT_S);
+        }
+        Preferences prefs = Preferences.instance();
+        if (state == PlaybackStateEnum.DEVICE_UNAVAILABLE) {
+            return I18n.t(state.i18nKey(), prefs.current().getOutputDeviceName());
+        }
+        if (state == PlaybackStateEnum.PREDISTORTION_FILE_MISSING) {
+            // The PATH, the same way the unavailable device names itself: the
+            // operator can only fix a file they are told the name of, and
+            // "could not build the signal generator" names nothing.
+            return I18n.t(state.i18nKey(), prefs.getGenDpd(prefs.getGenSignalForm()));
+        }
+        // The keys that carry a {0} get the REASON, localized - never the raw
+        // driver detail, which stays in the log: a code like "-9996" says the
+        // operator nothing, while "the output device does not answer" is what
+        // they can act on.  The backend that owned the error classified it;
+        // this is only where it becomes a sentence.
+        return I18n.t(state.i18nKey(), failureDetail());
+    }
+
+    /**
+     * The failure reason as one sentence - and, for a device somebody else is
+     * measuring on, WHO.
+     *
+     * <p>"The device is in use by another application" is true and useless on a
+     * bench: the operator's next move is to ask that client to let go, and they
+     * cannot ask until they are told which one it is.  The holder is the same
+     * fact the device combos already show for a locked bench device (spec 4.3
+     * publishes it with every device), read through the same seam and rendered
+     * with the same wording, so the two places can never disagree about what a
+     * held device reads like.
+     *
+     * <p>A local device in use has no holder to name - the operating system does
+     * not say which application took it - and falls back to the plain reason,
+     * as does a bench that named none.
+     */
+    private String failureDetail() {
+        DeviceFailureReason reason = lane.getLastFailureReason();
+        String plain = I18n.t(reason.i18nKey());
+        if (reason != DeviceFailureReason.DEVICE_IN_USE) {
+            return plain;
+        }
+        DeviceRef device = AudioBackend.instance().getActiveOutputDevice();
+        RemoteBackendUi remote = RemoteBackendRegistry.instance().getUi();
+        String by = (device == null || remote == null) ? null : remote.lockedBy(device);
+        return by == null ? plain
+                : I18n.t("preferences.device.lockedBy", device.displayName(), by);
+    }
+
+    /** How the last start attempt ended, machine-readably - for callers that
+     *  decide whether starting again can help at all. */
+    public PlaybackStateEnum getLastStartState() {
+        return lane.getLastStartState();
+    }
+
+    // -------------------------------------------------------------------------
+    // State getters + live-apply delegates the panes and wizards use
+    // -------------------------------------------------------------------------
+
+    public boolean isRunning() {
+        return lane.isRunning();
+    }
+
+    /** Claims the local playback lane's from-below end (device unplugged,
+     *  driver failure) for the ONE operator report - {@code null} while
+     *  healthy, after a commanded stop, and for every caller after the
+     *  first.  The pane polls this on its visual sync points. */
+    public Throwable takePlaybackEndedFromBelow() {
+        return lane.takePlaybackEndedFromBelow();
+    }
+
+    /** True while either engine drives the output - the
      *  {@link Events#GENERATOR_RUNNING} responder, read by the FFT worker's
      *  fundamental anchoring. */
     public boolean isProducingSignal() {
-        return running || filePlayer.isRunning();
+        return lane.isRunning() || isFilePlaying();
     }
 
-    // -------------------------------------------------------------------------
-    // File playback (shares the output device with the DDS tone)
-    // -------------------------------------------------------------------------
-
-    /** Starts WAV/FLAC file playback, stopping the DDS tone first.  Check
-     *  {@link #isFilePlaying()} and {@link #getFilePlayError()} after. */
-    public synchronized void startFilePlayback(File file, boolean loop) {
-        stop();
-        // File playback shares the output device with the DDS tone — open it
-        // on the user-selected device's mixer (which supports the file's
-        // format), not the JavaSound default mixer.
-        String deviceName = Preferences.instance().current().getOutputDeviceName();
-        filePlayer.start(file, loop, deviceName);
-    }
-
-    public void stopFilePlayback() {
-        filePlayer.stop();
-    }
-
-    public boolean isFilePlaying() {
-        return filePlayer.isRunning();
-    }
-
-    public String getFilePlayError() {
-        return filePlayer.getLastStartError();
-    }
-
-    // -------------------------------------------------------------------------
-    // Signal math (FFT-bin snap, period samples)
-    // -------------------------------------------------------------------------
-
-    /** The frequency the primary DDS should emit for the current prefs —
-     *  the bin-snapped value when snap-to-FFT-bin applies (SINE/DUAL_TONE),
-     *  else the raw entered value.  Mirrors {@link #start()}'s own
-     *  resolution; also feeds the pane's bracket label. */
     public double effectiveFrequency() {
-        Preferences prefs = Preferences.instance();
-        GenSignalForm form = prefs.getGenSignalForm();
-        double raw = (form.isDualTone())
-                ? prefs.getGenDualToneFreq1Hz()
-                : prefs.getGenFrequencyHz();
-        return emitFrequency(prefs, form,
-                prefs.current().getOutputSampleRate(), raw);
+        return lane.effectiveFrequency();
     }
 
-    /** The exact frequency the DDS must be driven at for {@code form}.
-     *  A RECTANGLE can only place its hard +1/−1 edge ON a sample, and a
-     *  TRIANGLE's duty corner is a derivative discontinuity with the same
-     *  problem — off an integer-sample period the edge/corner drifts
-     *  against the sample grid cycle to cycle and the tone smears.  Both
-     *  therefore run at the integer-sample-period frequency {@code fs/N},
-     *  and both duty brackets in the pane quantise against that N.  Every
-     *  other form is exact at any frequency: SINE / DUAL_TONE take the
-     *  optional FFT-bin snap and stay on their raw entered frequency
-     *  otherwise. */
-    private double emitFrequency(Preferences prefs, GenSignalForm form,
-                                 int sampleRate, double raw) {
-        if (form == GenSignalForm.RECTANGLE || form == GenSignalForm.TRIANGLE) {
-            return samplePeriodAlignedHz(raw, sampleRate);
-        }
-        return FftBinSnap.snapIfEnabled(prefs, form, sampleRate, raw);
+    public double effectiveFrequency2() {
+        return lane.effectiveFrequency2();
     }
 
-    /** Nearest frequency with a whole number of samples per period —
-     *  {@code fs / round(fs/f)}, the period floored at 2 (Nyquist). */
-    private double samplePeriodAlignedHz(double f, int sampleRate) {
-        if (f <= 0.0 || sampleRate <= 0) return f;
-        int n = Math.max(2, (int) Math.round(sampleRate / f));
-        return (double) sampleRate / n;
-    }
-
-    /** Samples in one waveform period at the current rate + entered
-     *  frequency; always ≥ 2 so duty-cycle math has something to work
-     *  with.  Feeds the pane's duty bracket label. */
     public int periodSamples() {
-        Preferences prefs = Preferences.instance();
-        int sr = prefs.current().getOutputSampleRate();
-        double f = prefs.getGenFrequencyHz();
-        if (f <= 0.0 || sr <= 0) return 2;
-        return Math.max(2, (int) Math.round(sr / f));
+        return lane.periodSamples();
     }
 
-    /** Closest frequency the period-aligned forms (RECTANGLE, TRIANGLE)
-     *  can produce with an integer-sample period — the pane's Frequency
-     *  bracket label.  This is the SAME value {@link #emitFrequency}
-     *  drives them at, so the displayed bracket and the emitted tone can
-     *  never diverge. */
     public double correctedPeriodAlignedHz() {
-        Preferences prefs = Preferences.instance();
-        return samplePeriodAlignedHz(prefs.getGenFrequencyHz(),
-                prefs.current().getOutputSampleRate());
+        return lane.correctedPeriodAlignedHz();
     }
 
-    private double snapDualTone(double rawHz) {
-        Preferences prefs = Preferences.instance();
-        return FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
-                prefs.current().getOutputSampleRate(), rawHz);
+    public double maxAmplitudeVrms(GenSignalForm form) {
+        return lane.maxAmplitudeVrms(form);
     }
 
-    /** Re-applies the FFT-bin snap to the running tone(s) — fired on a
-     *  snap toggle and on FFT-length changes. */
-    private void reapplySnap() {
-        setFrequency(effectiveFrequency());
-        Preferences prefs = Preferences.instance();
-        if (prefs.getGenSignalForm().isDualTone()) {
-            setDualToneFrequency2(snapDualTone(prefs.getGenDualToneFreq2Hz()));
-        }
+    public boolean canLiveSwitchForm(GenSignalForm target) {
+        return lane.canLiveSwitchForm(target);
     }
 
-    /** Waveform pref change: live-swap when the generator supports it,
-     *  else a full stop+start — sweep and dual-tone set up dedicated DDS
-     *  state (second accumulator, sweep state machine) that
-     *  {@link #setForm} can't hot-swap. */
-    private void onFormChanged(GenSignalForm f) {
-        boolean needsRestart = requiresRestart(lastForm) || requiresRestart(f);
-        lastForm = f;
-        if (needsRestart && running) {
-            restart();
-        } else {
-            setForm(f);
-        }
+    /** Live-applies the dither bit count, then signals a generator change so
+     *  the FFT stats/accumulator and the scope persistence restart on the new
+     *  signal. */
+    public void setDitherBits(double bits) {
+        lane.setDitherBits(bits);
         publishSignalChanged();
     }
 
-    /** Restarts the generator when the {@code .dpd} for {@code slotForm} changes
-     *  and that form is the one currently playing — so a load / clear of the
-     *  correction file takes effect immediately. */
-    private void onDpdChanged(GenSignalForm slotForm) {
-        if (running && Preferences.instance().getGenSignalForm() == slotForm) {
-            restart();
+    public void setRectangleDuty(double dutyFrac) {
+        lane.setRectangleDuty(dutyFrac);
+    }
+
+    public void setTriangleDuty(double dutyFrac) {
+        lane.setTriangleDuty(dutyFrac);
+    }
+
+    public void setForm(GenSignalForm form) {
+        lane.setForm(form);
+    }
+
+    public void setFrequency(double hz) {
+        lane.setFrequency(hz);
+    }
+
+    public void trimFrequency(double hz) {
+        lane.trimFrequency(hz);
+    }
+
+    public void trimFrequency2(double hz) {
+        lane.trimFrequency2(hz);
+    }
+
+    public void applyCompensation(double[] ampRatios, int[] hNums, double[] phiInits) {
+        lane.applyCompensation(ampRatios, hNums, phiInits);
+    }
+
+    public void applyDualToneCompensation(double[] ampRatios, int[] coefA, int[] coefB,
+            double[] phiInits) {
+        lane.applyDualToneCompensation(ampRatios, coefA, coefB, phiInits);
+    }
+
+    public void clearCompensation() {
+        lane.clearCompensation();
+    }
+
+    public void loadCorrectionsFromFile(String path) {
+        lane.loadCorrectionsFromFile(path);
+    }
+
+    public void setDualToneFrequency2(double hz) {
+        lane.setDualToneFrequency2(hz);
+    }
+
+    public void setDualToneAmplitudes(double amp1Pct, double amp2Pct) {
+        lane.setDualToneAmplitudes(amp1Pct, amp2Pct);
+    }
+
+    public void setAmplitudeVrms(double vrms) {
+        lane.setAmplitudeVrms(vrms);
+    }
+
+    // -------------------------------------------------------------------------
+    // File playback (shares the output device with the DDS tone).
+    // Stream-based player for the pane's "Play from..." row: decodes the chosen
+    // file via javax.sound.sampled.AudioSystem (WAV / AIFF built-in; FLAC via
+    // jflac-codec's SPI) and pushes the decoded PCM to the ACTIVE output
+    // device.  Looping reopens the stream from the original file on EOF.
+    // A monitoring convenience (verify a saved file sounds right), not
+    // measurement-grade output.
+    // -------------------------------------------------------------------------
+
+    /**
+     * Starts WAV/FLAC file playback, stopping the DDS tone first.  Spawns a
+     * daemon thread that decodes {@code file} on the ACTIVE output device
+     * (resolved by the backend when the play thread opens it).  No-op if
+     * already running.  On failure {@link #isFilePlaying()} returns
+     * {@code false} and {@link #getFilePlayError()} carries the reason.
+     */
+    public synchronized void startFilePlayback(File file, boolean loop) {
+        if (filePlayRunning) return;
+        lane.stop();
+        filePlayError = null;
+        Thread old = playThread;
+        if (old != null && old.isAlive()) {
+            filePlayError = I18n.t("generator.error.shuttingDown");
+            return;
+        }
+        if (file == null || !file.isFile()) {
+            filePlayError = I18n.t("generator.error.playFile.pickFirst");
+            return;
+        }
+        this.filePlayLoop = loop;
+        // A backend whose generator runs somewhere else has no downlink for audio
+        // (net protocol §7: there is no client->server PCM in v1), so the file
+        // travels the other way - up to the bench once, and the far end's own
+        // lane renders it.  Everything the pane reads is kept exactly as the
+        // local path keeps it; only who moves the samples differs.
+        RemoteGenerator remote = AudioBackend.instance().remoteGenerator();
+        if (remote != null) {
+            startRemoteFilePlayback(remote, file);
+            return;
+        }
+        AtomicBoolean sessionStop = new AtomicBoolean(false);
+        filePlayStopFlag = sessionStop;
+        Thread t = new Thread(() -> playLoop(file, sessionStop), "file-play");
+        t.setDaemon(true);
+        t.setPriority(Thread.MAX_PRIORITY);
+        playThread = t;
+        filePlayRunning = true;
+        t.start();
+    }
+
+    /**
+     * The remote half of {@link #startFilePlayback}: the file goes up to the
+     * bench and its own generator lane plays it.
+     *
+     * <p>Everything the pane reads is kept exactly as the local path keeps it -
+     * {@code filePlayRunning} true while the bench says it is playing,
+     * {@code filePlayError} carrying a refusal in the operator's language.  A
+     * watcher thread stands in for the local play loop: it polls the pushed file
+     * state and clears the running flag when a non-looping file runs out, which
+     * is the remote twin of {@code playLoop} simply returning.
+     */
+    private void startRemoteFilePlayback(RemoteGenerator remote, File file) {
+        AtomicBoolean sessionStop = new AtomicBoolean(false);
+        filePlayStopFlag = sessionStop;
+        remoteFileSeenPlaying = false;
+        // The UI state is set HERE, before the thread starts, exactly as the local
+        // branch sets it before starting its play loop: the caller is the SWT
+        // thread and it must return in microseconds.  Reading the file and pushing
+        // it up the wire can take minutes on a slow link, so neither may happen
+        // under this object's monitor - a Stop is a click on that same thread and
+        // has to be dispatchable while the bytes are still moving.
+        filePlayRunning = true;
+        Thread t = new Thread(() -> remoteFilePlayLoop(remote, file, sessionStop),
+                "file-play-remote");
+        t.setDaemon(true);
+        playThread = t;
+        t.start();
+    }
+
+    /**
+     * The whole remote session on its own thread: read, upload, command, watch.
+     *
+     * <p><b>This thread owns every command that reaches the bench.</b>  A stop is
+     * a flag, never a command sent from the caller - which is what makes the
+     * ordering safe. Were the stop to command the bench directly it could overtake
+     * an upload still in flight, and the {@code gen.playFile} landing afterwards
+     * would leave the far end playing a file this client had already forgotten.
+     * Here the flag is read at each seam, and the one place that can know the
+     * bench has the file is the line after the command returned.
+     */
+    private void remoteFilePlayLoop(RemoteGenerator remote, File file,
+            AtomicBoolean sessionStop) {
+        boolean commanded = false;
+        try {
+            // The notice covers the whole PREPARE-AND-UPLOAD phase, not the
+            // transfer alone.  On a LAN the transfer is a blink, while opening an
+            // exclusive device on the bench takes seconds and reading a large file
+            // takes more - so a notice that spanned only the HTTP put appeared and
+            // vanished after the wait it was meant to explain, leaving the operator
+            // with five seconds of nothing.  It comes down the moment playback is
+            // commanded and never covers playback itself.
+            MessageBus.instance().publish(Events.FILE_UPLOAD_STARTED);
+            try {
+                // gen.playFile names a lane that must already exist, and only the
+                // TONE's start ever opened one - so a file played without first
+                // starting the tone was refused before a byte left this machine,
+                // so Play-from silently did nothing.  The lane owns the open
+                // policy, so it is asked to make sure there is a session, with
+                // the same run the tone would have opened with.
+                PlaybackStateEnum opened = lane.ensureRemoteOpen(buildRun());
+                if (opened != PlaybackStateEnum.STARTED) {
+                    filePlayError = localize(opened);
+                    return;
+                }
+                byte[] content = Files.readAllBytes(file.toPath());
+                if (sessionStop.get()) {
+                    return;             // stopped while reading: nothing was sent
+                }
+                // The type comes from the decoder authority, so the bench is told
+                // what this file IS by the very rule that would pick the decoder
+                // here.
+                //
+                // The VOLATILE, read at command time - never the flag captured
+                // when the button was clicked.  An upload can run for minutes,
+                // and a loop ticked while the bytes were moving would otherwise
+                // be lost at both ends: the captured parameter would win here,
+                // and the live setFileLoop push would have reached a bench with
+                // no file session yet, which ignores it by design.  This is the
+                // same read the local twin makes in playLoop.
+                boolean sent = filePlayLoop;
+                remote.playFile(content, PcmFileLoader.instance().mimeTypeOf(file), sent);
+                // The upload itself can run for minutes, and the flag read above
+                // was fixed before it began.  A toggle made WHILE the bytes moved
+                // reached a bench that had no file session yet, so its live push
+                // was ignored by design - re-assert it now that the far end has
+                // one, or the operator's last choice would be silently dropped.
+                if (filePlayLoop != sent) {
+                    remote.setFileLoop(filePlayLoop);
+                }
+                commanded = true;
+            } finally {
+                // Every exit of the block above takes the notice down: a refused
+                // open, a read that failed, a stop while reading, a refused
+                // upload, and the success that follows it.
+                MessageBus.instance().publish(Events.FILE_UPLOAD_FINISHED);
+            }
+            // OUTSIDE the notice: the file is playing now, and a "being uploaded"
+            // shell must not sit over it for the length of the track.
+            watchRemoteFile(remote, sessionStop);
+        } catch (RemoteGenerator.FileTooLargeException e) {
+            filePlayError = I18n.t("generator.error.playFile.tooLargeForBench",
+                    file.getName(), megabytes(e.getBytes()), megabytes(e.getLimitBytes()));
+        } catch (IOException | OutOfMemoryError e) {
+            log.warn("File playback: cannot read {}: {}", file, e.toString());
+            filePlayError = I18n.t("generator.error.playFile");
+        } catch (RuntimeException e) {
+            // The bench's own words stay in the log; the operator is told in
+            // theirs, with the classified reason when the backend gave one.
+            log.warn("File playback on the bench failed: {}", e.toString(), e);
+            filePlayError = benchFileError(e);
+        } finally {
+            if (commanded && sessionStop.get()) {
+                // The operator stopped while the file was on its way, or while it
+                // played: the bench has it, so the bench must be told.  Sent from
+                // here and nowhere else, so it can never precede the play.
+                try {
+                    remote.stopFile();
+                } catch (RuntimeException e) {
+                    log.warn("Stopping the bench's file playback failed: {}", e.toString());
+                }
+            }
+            filePlayRunning = false;
+            // The same signal the LOCAL play loop ends on - one mechanism, both
+            // engines.  Without it a remote failure had nowhere to surface: the
+            // pane's one-shot check after startFilePlayback races this thread and
+            // usually wins, and the error died in a log line.
+            publishFilePlayStopped();
         }
     }
 
-    private boolean requiresRestart(GenSignalForm f) {
-        // Both dual-tone forms stand up a dedicated second DDS accumulator, so
-        // entering OR leaving either one needs a full rebuild — a live form-swap
-        // would leave the second tone (and its frequency) running.
-        return f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP
-                || f.isDualTone();
+    /**
+     * Claims the file-play failure for the ONE operator report, clearing it.
+     *
+     * <p>A file session can fail two ways and both must reach a dialog exactly
+     * once: synchronously, before {@code startFilePlayback} returns (a missing
+     * file), or asynchronously on the play thread minutes later (a bench that
+     * refused, a device that died).  The pane checks after the call AND on
+     * {@link Events#FILE_PLAY_STOPPED}; whichever arrives first takes the
+     * message, and the other finds nothing - so a re-sync cannot repeat a dialog
+     * the operator has already dismissed.
+     */
+    public synchronized String takeFilePlayErrorForReport() {
+        String claimed = filePlayError;
+        filePlayError = null;
+        return claimed;
+    }
+
+    /** Publishes {@link Events#FILE_PLAY_STOPPED} for a session that is ending,
+     *  from the thread that ran it - the one signal the pane resets its LED and
+     *  reports a late failure on.  Guarded on the CURRENT thread still being the
+     *  play thread so a join-timed-out session finishing late cannot notify for
+     *  a session started after it. */
+    private void publishFilePlayStopped() {
+        if (Thread.currentThread() != playThread) {
+            return;
+        }
+        // Published straight from the play thread, which is the contract
+        // Events.FILE_PLAY_STOPPED states: "subscribers must marshal to the UI
+        // thread if they touch widgets" - and the pane's listener does.
+        // Marshalling HERE instead would hand the event to GuiUtil, which is a
+        // no-op until MainWindow has published its shell: a failure raised before
+        // the window exists, or in any headless run, was simply discarded.
+        MessageBus.instance().publish(Events.FILE_PLAY_STOPPED);
+    }
+
+    /** Polls the bench's pushed file state until it stops playing - the remote
+     *  twin of the local play loop ending.  A lane that died from below reports
+     *  through the same claim-once the tone uses. */
+    private void watchRemoteFile(RemoteGenerator remote, AtomicBoolean sessionStop) {
+        try {
+            while (!sessionStop.get()) {
+                Throwable died = remote.takeFileErrorForReport();
+                if (died != null) {
+                    log.warn("File playback on the bench ended from below: {}",
+                            died.toString());
+                    filePlayError = benchFileError(died);
+                    break;
+                }
+                RemoteGenerator.FileState state = remote.fileState();
+                if (state.playing()) {
+                    remoteFileSeenPlaying = true;
+                }
+                // "Finished" is the end-of-file edge; a state that stopped
+                // playing AFTER we saw it play is the same end reached the other
+                // way.  Before the first playing push, neither reads as an end -
+                // that gap is the command still in flight.
+                if (state.finished() || (remoteFileSeenPlaying && !state.playing())) {
+                    break;
+                }
+                Thread.sleep(REMOTE_FILE_POLL_MS);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * A bench-side file failure in the operator's language, carrying the
+     * classified REASON when the backend supplied one.
+     *
+     * <p>The rest of this release established a six-reason vocabulary for a device
+     * that will not play; a file refused because the DAC is in use must not read
+     * the same as one refused because the bench's store is full.  The reason is
+     * asked of the backend that owns the error, exactly as the tone path asks.
+     */
+    private String benchFileError(Throwable failure) {
+        DeviceFailureReason reason = DeviceFailureReason.UNKNOWN;
+        DeviceRef output = AudioBackend.instance().getActiveOutputDevice();
+        if (output != null) {
+            reason = AudioBackend.instance().playbackManager(output).classifyFailure(failure);
+        }
+        if (reason == DeviceFailureReason.UNKNOWN) {
+            return I18n.t("generator.error.playFile");
+        }
+        return I18n.t("generator.error.playFile") + " - " + I18n.t(reason.i18nKey());
+    }
+
+    /** Megabytes to one decimal, so a 50.4 MB file and a 50 MB cap cannot both
+     *  print "50" and make the refusal read as though the file fitted. */
+    private String megabytes(long bytes) {
+        return String.format(Locale.US, "%.1f", bytes / (1024.0 * 1024.0));
+    }
+
+    /** Stops the play thread (idempotent).  Waits up to 2 s for it to exit.
+     *
+     *  <p>Never commands the bench itself: the remote play thread owns that, and
+     *  sends {@code gen.stopFile} when it sees this flag - see
+     *  {@link #remoteFilePlayLoop}. */
+    public synchronized void stopFilePlayback() {
+        filePlayStopFlag.set(true);
+        remoteFileSeenPlaying = false;
+        Thread t = playThread;
+        if (t != null) {
+            try { t.join(2_000); }
+            catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+            if (t.isAlive()) {
+                // Keep the reference so start refuses a second session while
+                // this one is wedged; its session stop flag stays set.
+                log.warn("File-play thread did not exit within 2 s - restart refused until it does.");
+            } else {
+                playThread = null;
+            }
+        }
+        filePlayRunning = false;
+    }
+
+    public boolean isFilePlaying() {
+        return filePlayRunning;
+    }
+
+    private void playLoop(File file, AtomicBoolean sessionStop) {
+        FilePlaybackGenerator source = null;
+        AudioPlayback playback = null;
+        try {
+            source = new FilePlaybackGenerator(file, filePlayLoop);
+            filePlaySource = source;
+
+            // The ACTIVE output device, resolved by the backend - the same
+            // handle the DDS tone opens.  That is what makes file playback come
+            // out of the SELECTED backend and device instead of always the
+            // computer's sound card.
+            DeviceRef device = AudioBackend.instance().getActiveOutputDevice();
+            if (device == null) {
+                filePlayError = I18n.t("generator.error.deviceUnavailable",
+                        Preferences.instance().current().getOutputDeviceName());
+                return;
+            }
+            // The caller's step after resolution: the DAC full scale lands on
+            // the runtime scalars via the UI thread (prefs bindings are plain
+            // UI-only listeners).
+            GuiUtil.marshal(() -> Preferences.instance().applyDeviceProfile(device, false));
+
+            // Played at the file's own rate and depth, so nothing is resampled -
+            // the SPI form via playbackManager, since the format is the FILE's,
+            // not the preferences'.  No dither: the samples are already
+            // quantised, and re-dithering a finished recording would only add
+            // noise.
+            playback = AudioBackend.instance().playbackManager(device).openPlayback(
+                    device, source.getFileSampleRate(), source.getFileBitDepth(), 0.0);
+            playback.open();
+            // The DEVICE path's half of the file convention (0 dBFS = 2 Vrms,
+            // see EXPORT_FS_VOLTAGE_AMPL): the file carries the pure signal,
+            // so the LINE applies this machine's DAC calibration - the
+            // absolute full-scale mapping and the per-lane ratio; without it
+            // file play emitted uncalibrated.  A DAC whose full
+            // scale is below 2 Vrms gets k > 1 and full-scale content clips -
+            // the honest cost of asking a small DAC for convention level.
+            Preferences filePrefs = Preferences.instance();
+            double k = EXPORT_FS_VOLTAGE_AMPL / filePrefs.getDacFsVoltageAmpl();
+            playback.setChannelScale(k, k * filePrefs.dacRightLaneScale());
+            log.info("File playback started: {} ({} Hz, {} bit{}) on {}",
+                    file.getName(), source.getFileSampleRate(), source.getFileBitDepth(),
+                    filePlayLoop ? ", looping" : "", device.name());
+
+            // The backend pulls samples until the flag is raised; raise it
+            // ourselves when a non-looping file runs out.
+            FilePlaybackGenerator watched = source;
+            Thread eof = new Thread(() -> {
+                while (!sessionStop.get() && !watched.isFinished()) {
+                    try {
+                        Thread.sleep(50);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+                sessionStop.set(true);
+            }, "file-play-eof");
+            eof.setDaemon(true);
+            eof.start();
+
+            playback.play(source, sessionStop, new CountDownLatch(1));
+            log.info("File playback stopped: {}", file.getName());
+        } catch (PcmFileLoader.TooLargeException ex) {
+            log.warn("File playback failed: {}", ex.getMessage());
+            filePlayError = I18n.t("generator.error.playFile.tooLarge",
+                    file.getName(), ex.needMb, ex.freeMb);
+        } catch (Exception ex) {
+            log.warn("File playback failed: {}", ex.getMessage(), ex);
+            filePlayError = ex.getMessage();
+        } finally {
+            Closeables.closeQuietly(playback);
+            if (source != null) {
+                if (filePlaySource == source) {
+                    filePlaySource = null;
+                }
+                source.close();
+            }
+            // A join-timed-out session finishing late must not clear the
+            // flag (or notify) for a session started after it.
+            if (Thread.currentThread() == playThread) {
+                filePlayRunning = false;
+            }
+            publishFilePlayStopped();
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -908,8 +975,8 @@ public final class GeneratorController {
 
     /** Renders the current generator settings to a WAV / FLAC / AIFF file
      *  (extension picks the format).  Returns {@code null} on success,
-     *  else a human-readable failure reason — the same contract as
-     *  {@link #start()}'s {@code lastStartError}. */
+     *  else a human-readable failure reason - the same contract as
+     *  {@link #getLastStartError()}. */
     public String exportSignal(String path) {
         Preferences prefs = Preferences.instance();
         GenSignalForm form = prefs.getGenSignalForm();
@@ -920,16 +987,16 @@ public final class GeneratorController {
         int    bitDepth      = prefs.current().getOutputBitDepth();
         double ditherBits    = prefs.getGenDitherBits();
         // RECTANGLE and TRIANGLE export at the SAME integer-sample-period
-        // frequency the live generator emits (fs/N) — so the file matches what
+        // frequency the live generator emits (fs/N) - so the file matches what
         // is heard, a looped WAV has no off-grid edge/corner seam, and the
         // integer-period truncation below lands exactly on N samples.  Every
         // other form is exact at any frequency and is exported as entered.
         double frequency     = (form == GenSignalForm.RECTANGLE || form == GenSignalForm.TRIANGLE)
-                ? samplePeriodAlignedHz(prefs.getGenFrequencyHz(), sampleRate)
+                ? lane.samplePeriodAlignedHz(prefs.getGenFrequencyHz(), sampleRate)
                 : prefs.getGenFrequencyHz();
         double amplitudeVRms = prefs.getGenAmplitudeVrms();
         // One-shot sweep: exactly one sweep (its frequency ends at the stop
-        // frequency).  A LOOPED sweep is periodic — period = the sweep duration —
+        // frequency).  A LOOPED sweep is periodic - period = the sweep duration -
         // so it is exported like other periodic forms: the WAV-duration length,
         // trimmed to a whole number of sweeps so the file loops cleanly.
         double duration;
@@ -949,46 +1016,41 @@ public final class GeneratorController {
                     return I18n.t("generator.error.needPredistortion");
                 }
                 gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms,
-                        prefs.getDacFsVoltageAmpl(), dpd);
+                        EXPORT_FS_VOLTAGE_AMPL, dpd);
             } else if (isSweep) {
                 double f0 = prefs.getGenSweepFreqStartHz();
                 double f1 = prefs.getGenSweepFreqEndHz();
                 int durationSamples = Math.max(2, (int) Math.round(sweepDurSec * sampleRate));
                 gen = (form == GenSignalForm.LINEAR_SWEEP)
                         ? new SignalGenerator(f0, f1, sampleRate, durationSamples,
-                                amplitudeVRms, prefs.getDacFsVoltageAmpl())
+                                amplitudeVRms, EXPORT_FS_VOLTAGE_AMPL)
                         : new SignalGenerator(f0, f1, durationSamples, 0, sampleRate,
-                                amplitudeVRms, prefs.getDacFsVoltageAmpl());
+                                amplitudeVRms, EXPORT_FS_VOLTAGE_AMPL);
                 int fadeIn  = Math.max(0, (int) Math.round(prefs.getGenSweepFadeInSec()  * sampleRate));
                 int fadeOut = Math.max(0, (int) Math.round(prefs.getGenSweepFadeOutSec() * sampleRate));
                 gen.setSweepParams(sweepLoops, fadeIn, fadeOut);
             } else {
                 gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms,
-                        prefs.getDacFsVoltageAmpl());
+                        EXPORT_FS_VOLTAGE_AMPL);
             }
             gen.setRectangleDuty(prefs.getGenRectangleDuty());
             // Non-sweep periodic forms truncate to an integer-period count; noise
-            // and sweeps use 0 (raw) — a sweep's length is already fixed above
+            // and sweeps use 0 (raw) - a sweep's length is already fixed above
             // (one sweep, or whole sweeps when looped).
             double freqForTruncation = (form.isPeriodic() && !isSweep) ? frequency : 0.0;
-            // Mirror the live encoder: left lane scales by 1.0, right by
-            // fsLeft/fsRight, and the output gate silences the un-selected lane.
+            // BOTH lanes at 1.0 - the file carries the signal on the 0 dBFS =
+            // 2 Vrms convention (EXPORT_FS_VOLTAGE_AMPL) and NO device
+            // calibration: the per-lane DAC ratio belongs to the live encoder,
+            // which applies it when THIS file is played on a device.  Only the
+            // output-lane gate (a routing choice, not calibration) is kept.
             long bytes = SignalFileExporter.export(gen, new File(path),
                     sampleRate, bitDepth, duration, ditherBits, freqForTruncation,
-                    1.0, prefs.dacRightLaneScale(), prefs.getGenOutputChannels());
+                    1.0, 1.0, prefs.getGenOutputChannels());
             log.info("File saved: {} ({} bytes)", path, bytes);
             return null;
         } catch (Exception ex) {
             log.warn("Save failed", ex);
             return ex.getMessage();
         }
-    }
-
-    private DeviceRef findOutputDevice(String name) {
-        List<DeviceRef> devices = AudioBackend.instance().listOutputDevices();
-        for (DeviceRef d : devices) {
-            if (name.equals(d.name())) return d;
-        }
-        return null;
     }
 }

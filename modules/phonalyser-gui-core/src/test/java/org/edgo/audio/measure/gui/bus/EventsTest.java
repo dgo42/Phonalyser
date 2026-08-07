@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -57,8 +57,6 @@ class EventsTest {
         // and assert no two strings collide.
         String[] all = {
                 Events.FFT_LENGTH_CHANGED,
-                Events.CAPTURE_ACQUIRE,
-                Events.CAPTURE_RELEASE,
                 Events.GENERATOR_RUNNING,
                 Events.FFT_RANGE_CHANGED,
                 Events.FFT_RECORDING_AUTO_STOPPED,

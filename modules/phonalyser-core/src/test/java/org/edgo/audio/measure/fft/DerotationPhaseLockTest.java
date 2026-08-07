@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,7 +28,7 @@ import org.junit.jupiter.api.Test;
  * Convergence + sign check for {@link DerotationPhaseLock}.  Models the worker
  * loop: each tick the fundamental is de-rotated with the lock's CURRENT kappa,
  * so the observed (residual) phase is 2π·(κtrue − κ)·delta/N; the loop must
- * drive κ → κtrue and lock — and stay stable (the old per-tick PLL diverged).
+ * drive κ -> κtrue and lock - and stay stable (the old per-tick PLL diverged).
  */
 class DerotationPhaseLockTest {
 

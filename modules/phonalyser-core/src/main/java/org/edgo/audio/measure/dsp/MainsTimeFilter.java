@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,7 +26,7 @@ package org.edgo.audio.measure.dsp;
  * <p>Typical use: {@link #track} occasionally on a reference block to lock the
  * mains frequency, then {@link #process} (or {@link #processPreservingDc})
  * every block.  Implementations keep state across {@code process} calls and
- * are not thread-safe — drive each from one thread.
+ * are not thread-safe - drive each from one thread.
  */
 public interface MainsTimeFilter {
 
@@ -47,11 +47,11 @@ public interface MainsTimeFilter {
      *  Stream-stateful filters (the comb) ignore it. */
     void process(float[] data, int len, long absStart);
 
-    /** Like {@link #process} but preserves the block's DC (mean) level — only
+    /** Like {@link #process} but preserves the block's DC (mean) level - only
      *  the mains hum is removed, the operating point is left intact. */
     void processPreservingDc(float[] data, int len, long absStart);
 
-    /** Double-precision {@link #process(float[], int, long)} — the FFT path
+    /** Double-precision {@link #process(float[], int, long)} - the FFT path
      *  filters its capture window in {@code double} to keep full precision. */
     void process(double[] data, int len, long absStart);
 

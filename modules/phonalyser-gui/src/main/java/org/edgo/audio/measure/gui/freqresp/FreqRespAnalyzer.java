@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -43,20 +43,20 @@ import java.util.concurrent.ExecutionException;
  * stays unit-testable:
  *
  * <ul>
- *   <li>{@link StereoCaptureProvider} — how the sweep/capture round-trip
+ *   <li>{@link StereoCaptureProvider} - how the sweep/capture round-trip
  *       runs.  Production uses {@link StereoCaptureProvider#real()}; tests
  *       inject a stub that returns synthetic stereo samples.</li>
- *   <li>{@link ProgressCallback} — optional listener for sub-step progress.</li>
- *   <li>{@link Cancellable} — optional cooperative cancellation token.</li>
+ *   <li>{@link ProgressCallback} - optional listener for sub-step progress.</li>
+ *   <li>{@link Cancellable} - optional cooperative cancellation token.</li>
  * </ul>
  */
 @Log4j2
 public final class FreqRespAnalyzer {
 
     /** Compile-time switch between log- and linear-spaced output grids.
-     *  {@code true}  → N geometrically-spaced points from startHz to stopHz
+     *  {@code true}  -> N geometrically-spaced points from startHz to stopHz
      *                  (good readout density across decades; default).
-     *  {@code false} → N evenly-spaced points; step =
+     *  {@code false} -> N evenly-spaced points; step =
      *                  {@code (stopHz - startHz) / (N - 1)}.  Useful when
      *                  downstream consumers want bins at integer Hz. */
     private static final boolean USE_LOG_GRID = true;
@@ -81,7 +81,7 @@ public final class FreqRespAnalyzer {
         long     totalGenSamples = (long) leadInSamples + sweepSamples + tailSamples;
         int      durationSec  = (int) Math.ceil(totalGenSamples / (double) cfg.getSampleRate());
 
-        log.info("FreqResp analyzer: {} Hz → {} Hz, {} {}-spaced points, sweep {} s, lead-in {} s",
+        log.info("FreqResp analyzer: {} Hz -> {} Hz, {} {}-spaced points, sweep {} s, lead-in {} s",
                 String.format(Locale.US, "%.3f", cfg.getStartHz()),
                 String.format(Locale.US, "%.3f", cfg.getStopHz()),
                 cfg.getSweepPoints(),
@@ -100,7 +100,7 @@ public final class FreqRespAnalyzer {
         // Hann fade-in/fade-out on the sweep boundaries (Tukey window)
         // suppresses the 1/T spectral-leakage ripple in the deconvolved
         // H(f).  The SAME fade length must be applied to the X reference
-        // inside computeFromLogSweep — otherwise Y and X carry mismatched
+        // inside computeFromLogSweep - otherwise Y and X carry mismatched
         // boundary shapes and the leakage stays.
         int fadeSamples = FreqRespCalHelper.sweepFadeSamples(sweepSamples);
         gen.setSweepParams(false, fadeSamples, fadeSamples);
@@ -119,8 +119,14 @@ public final class FreqRespAnalyzer {
             cfg.getRawCaptureListener().onRawCapture(rec);
         }
 
+        // Rail check on the raw capture - this is the one point every sweep
+        // passes through, local or remote, and the last one that still sees
+        // samples: after the deconvolution a clipped sweep looks like a
+        // perfectly plausible (but wrong) transfer function.
+        double rawPeakLin = rawPeak(rec);
+
         // Output grid sampled at the deconvolution's FFT bin centres so each
-        // bin is read with fractional offset 0 — no phase-sensitive complex
+        // bin is read with fractional offset 0 - no phase-sensitive complex
         // interpolation between bins (which combs the trace).  Built from the
         // ACTUAL capture length so binHz matches computeFromLogSweep's
         // nextPow2(...) FFT; a band with more bins than sweepPoints (wide band
@@ -158,7 +164,7 @@ public final class FreqRespAnalyzer {
         FreqRespCalibration calL = awaitOrFail(calLFut);
         FreqRespCalibration calR = awaitOrFail(calRFut);
 
-        // Loaded calibration is no longer divided in here — the result
+        // Loaded calibration is no longer divided in here - the result
         // carries the raw deconvolution.  Calibration is applied only
         // when the curve is rendered ({@code FreqRespView.applyCurrentCalibration})
         // and at save time, so swapping the loaded calibration retraces
@@ -178,7 +184,18 @@ public final class FreqRespAnalyzer {
                 Channel.R, cfg.getSampleRate(),
                 calR.freqs, calR.magLin, calR.phaseRad,
                 params, null, false);
-        return new StereoFreqRespResult(left, right);
+        return new StereoFreqRespResult(left, right, rawPeakLin);
+    }
+
+    /** Largest absolute sample in the capture across both channels, on the
+     *  normalised {@code [-1, +1]} scale the capture path delivers.  One pass
+     *  over the two arrays; the deconvolution's own peak search runs on the
+     *  impulse response, not on the recording, so there is nothing to reuse. */
+    private double rawPeak(StereoSamples rec) {
+        double peak = 0.0;
+        for (double v : rec.left())  peak = Math.max(peak, Math.abs(v));
+        for (double v : rec.right()) peak = Math.max(peak, Math.abs(v));
+        return peak;
     }
 
     private void validate() {

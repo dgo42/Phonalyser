@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -51,7 +51,7 @@ public abstract class AbstractTabControl extends Composite {
 
     /** Screenshot ("camera") and calibrate ("crosshair") icons, rendered once
      *  at {@link #UTILITY_ICON_HEIGHT} and shared by each pane's utility
-     *  buttons.  Owned by {@link IconUtils}'s cache — NOT disposed here. */
+     *  buttons.  Owned by {@link IconUtils}'s cache - NOT disposed here. */
     protected final Image cameraIcon;
     protected final Image crosshairIcon;
 
@@ -76,7 +76,7 @@ public abstract class AbstractTabControl extends Composite {
 
     /** Called by {@link TileTabFolder} after each tab-body collapse / expand so
      *  the owning pane can re-flow its own layout into (or out of) the freed
-     *  space.  Delegates to the pane — no callback indirection. */
+     *  space.  Delegates to the pane - no callback indirection. */
     public void onTabCollapsed() {
         if (owner != null) owner.onTabCollapse();
     }
@@ -114,7 +114,7 @@ public abstract class AbstractTabControl extends Composite {
     }
 
     /** Registers one settings tab in the {@link UiRegistry} under
-     *  {@code prefix + "/" + slug} so automation can select it by path —
+     *  {@code prefix + "/" + slug} so automation can select it by path -
      *  activation expands the tab body and selects {@code index}.  Tabs not
      *  built (e.g. Save / Load without live capture) are skipped.  Each
      *  subclass's {@code registerTabs(prefix)} supplies its own slug list. */

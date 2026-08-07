@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ package org.edgo.audio.measure.cli;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Prints the {@code Main} CLI's usage text — one mode per section,
+ * Prints the {@code Main} CLI's usage text - one mode per section,
  * each listing the required and optional flags with brief explanations.
  *
  * <p>Extracted from {@code Main} so the dispatcher / argument parser
@@ -74,10 +74,10 @@ public final class UsagePrinter {
         log.info("                              auto-estimated by inverting the sine CDF at");
         log.info("                              multiple interior quantiles when absent");
         log.info("    [--sine-fit-points <n>]   quantile points used for auto amplitude estimate");
-        log.info("                              (default 30; F in [0.10, 0.40] U [0.60, 0.90] —");
+        log.info("                              (default 30; F in [0.10, 0.40] U [0.60, 0.90] -");
         log.info("                              skips the poisoned rails and the median singularity)");
         log.info("    [--sine-edge-bins <n>]    edge bins per side replaced with extrapolated weight");
-        log.info("                              (default 2) — fixes the noise-smeared arcsine");
+        log.info("                              (default 2) - fixes the noise-smeared arcsine");
         log.info("                              singularity + clipping overflow at the rails");
         log.info("    [--histogram-chart]       additionally render the raw histogram (counts vs");
         log.info("                              voltage, before DNL weighting) as a PNG");
@@ -121,14 +121,14 @@ public final class UsagePrinter {
         log.info("    [--overlap <pct>]         0 | 50 | 75 | 87.5 | 93.75 (default 0)");
         log.info("    [--dist-min <hz>]         lower bound for SNR/noise integration (default 0)");
         log.info("    [--dist-max <hz>]         upper bound for SNR/noise integration (default Fs/2)");
-        log.info("    [--fund-v <vrms>]         true RMS voltage of the fundamental — anchors dBV scale");
+        log.info("    [--fund-v <vrms>]         true RMS voltage of the fundamental - anchors dBV scale");
         log.info("    [--fund-dbv <dbv>]        true fundamental level in dBV (alternative to --fund-v)");
         log.info("    [--adc-fs-vrms <vrms>]    ADC full-scale V_rms (sets dBV scale when --fund-v/-dbv");
         log.info("                              absent; defaults to the configured ADC full-scale)");
         log.info("    [--sub-harmonics <csv>]   subtract H2+ sinusoids loaded from this CSV before FFT");
         log.info("    [--sub-harmonics-reim]    use re/im columns of that CSV (default: phase_deg)");
         log.info("    [--no-coherent]           incoherent power averaging across frames");
-        log.info("    [--freq <hz>]             generator freq — enables clock-mismatch report and");
+        log.info("    [--freq <hz>]             generator freq - enables clock-mismatch report and");
         log.info("                              seeds fund-bin search (+/-10 bin window)");
         log.info("    [--comment <str>]         free-form chart comment");
         log.info("    [--adc-comp <csv>]        adc_correction CSV (from --deembed); logs raw vs.");
@@ -177,7 +177,7 @@ public final class UsagePrinter {
         log.info("");
         log.info("  Deembed DAC <-> ADC distortion (least-squares fit):");
         log.info("    --deembed                 toggles deembed mode");
-        log.info("    --comp <csv>              applied_compensation CSV — pass once per ADC level");
+        log.info("    --comp <csv>              applied_compensation CSV - pass once per ADC level");
         log.info("                              (need >= 1 + |orders| CSVs)");
         log.info("    --gen-out <csv>           output: DAC-side compensation (level-independent c_0)");
         log.info("    --adc-out <csv>           output: ADC-side correction (level-dependent c_k)");
@@ -199,14 +199,14 @@ public final class UsagePrinter {
         log.info("    [--amplitude <vrms>]      output amplitude in V_rms (default 1.0)");
         log.info("    [--dither <bits>]         TPDF dither at this bit depth (default 0 = off)");
         log.info("    [--device <i>]            output device index");
-        log.info("    [--harmonics-csv <file>]  fft_harmonics CSV — required for sine_compensated;");
+        log.info("    [--harmonics-csv <file>]  fft_harmonics CSV - required for sine_compensated;");
         log.info("                              injects H2..Hn at inverted phase to pre-cancel");
         log.info("                              DAC distortion");
         log.info("");
         log.info("  Gen + FFT (single shot: generate -> capture -> analyze; no WAV saved):");
         log.info("    --gen-fft                 toggles single-shot gen+fft mode");
         log.info("    --samplerate <hz>         DAC and ADC sample rate (must match)");
-        log.info("    --freq <hz>               generator fundamental — snapped to the nearest exact");
+        log.info("    --freq <hz>               generator fundamental - snapped to the nearest exact");
         log.info("                              FFT bin");
         log.info("    --amplitude <vrms>        DAC output amplitude in V_rms");
         log.info("    --fft-size <n>            FFT size, power of 2");
@@ -270,7 +270,7 @@ public final class UsagePrinter {
         log.info("  Frequency response measurement (Farina log-sweep -> per-point H(f)):");
         log.info("    --freq-response           toggles freq-response mode");
         log.info("    --samplerate <hz>         DAC and ADC sample rate");
-        log.info("    --amplitude <vrms>        DAC drive amplitude — recorded in the cal CSV header");
+        log.info("    --amplitude <vrms>        DAC drive amplitude - recorded in the cal CSV header");
         log.info("                              so the apply path knows the reference");
         log.info("    --out-device <i>          output device index (DAC)");
         log.info("    --in-device <i>           input device index  (ADC)");

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,12 +24,12 @@ import java.util.List;
 import org.eclipse.swt.widgets.Control;
 
 /**
- * Process-wide map of the live UI as an addressable tree — a "virtual
- * component hierarchy".  Each meaningful widget (pane, settings tab, …)
+ * Process-wide map of the live UI as an addressable tree - a "virtual
+ * component hierarchy".  Each meaningful widget (pane, settings tab, ...)
  * registers itself under a slash-separated path during construction; an
  * automation script (or any caller) can then resolve a component <em>by
- * path</em> and act on it — select the tab it represents, maximize the pane,
- * or grab a screenshot of it — without holding a widget reference or knowing
+ * path</em> and act on it - select the tab it represents, maximize the pane,
+ * or grab a screenshot of it - without holding a widget reference or knowing
  * the SWT layout.
  *
  * <h2>Paths</h2>
@@ -83,7 +83,7 @@ public final class UiRegistry {
         return node;
     }
 
-    /** Registers (or returns) a grouping node with no control of its own —
+    /** Registers (or returns) a grouping node with no control of its own -
      *  e.g. an intermediate {@code .../tabs} level. */
     public synchronized UiNode register(String path) {
         return ensure(path);
@@ -101,7 +101,7 @@ public final class UiRegistry {
     }
 
     /** Every registered component's path (those with a control or a
-     *  capability), depth-first — the "lookup" / discovery view, so an
+     *  capability), depth-first - the "lookup" / discovery view, so an
      *  automation author can see what is addressable. */
     public synchronized List<String> componentPaths() {
         List<String> paths = new ArrayList<>();

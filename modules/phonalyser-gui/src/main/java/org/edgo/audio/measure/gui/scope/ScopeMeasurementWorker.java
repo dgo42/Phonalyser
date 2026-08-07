@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,20 +24,19 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-import lombok.Getter;
-import lombok.extern.log4j.Log4j2;
-
-import org.edgo.audio.measure.dsp.LowPassFilter;
 import org.edgo.audio.measure.dsp.MainsFilters;
 import org.edgo.audio.measure.dsp.MainsTimeFilter;
-import org.edgo.audio.measure.dsp.MedianFilter;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.enums.GenSignalForm;
-import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
-import org.edgo.audio.measure.preferences.Preferences;
-import org.edgo.audio.measure.gui.common.FftBinSnap;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
+import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.CaptureEndReason;
+
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Background measurement worker for {@link ScopeView}.  Owns the
@@ -47,27 +46,23 @@ import org.edgo.audio.measure.gui.sound.SignalBufferReader;
  *
  * <p>Paint code in {@link ScopeView} reads worker state via
  * accessors and via {@link #walkRecentHistory} / {@link #averagedChannelMean}
- * — no direct field access, no shared lock with the view.
+ * - no direct field access, no shared lock with the view.
  */
 @Log4j2
 public final class ScopeMeasurementWorker {
 
-    /** Period between worker passes — 100 ms = 10 Hz. */
+    /** Period between worker passes - 100 ms = 10 Hz. */
     private static final long MEAS_COMPUTE_PERIOD_NANOS = 100_000_000L;
     /** Excluded prefix of the captured buffer to dodge ADC startup transient. */
     private static final long AC_WARMUP_NANOS = 500_000L;
-    /** Cap on samples used per pass — 96 000 ≈ 1 s @ 96 kHz / ¼ s @ 384 kHz.
+    /** Cap on samples used per pass - 96 000 ≈ 1 s @ 96 kHz / ¼ s @ 384 kHz.
      *  Exposed so {@link ScopeView}'s paint code can size its
      *  trigger-search lookback window to match this worker's read window
      *  (and not waste samples it'll never reach in the same paint). */
     public static final int  MEAS_MAX_SAMPLES = 96_000;
     /** Depth of the rolling history ring. */
     private static final int  MEAS_HISTORY_CAP = 1024;
-    /** Butterworth order for the scope HF spike-removal low-pass — shared
-     *  with {@link ScopeView} so display and measurement match.  The
-     *  cutoff is per-channel and comes from the {@code LpfMode} preference. */
-    public static final int    SCOPE_HF_LPF_ORDER = 8;
-    /** Notch −3 dB width (Hz) — matches the display-side combs. */
+    /** Notch −3 dB width (Hz) - matches the display-side combs. */
     private static final double MAINS_NOTCH_BW_HZ = 2.0;
     /** Half-width (Hz) of the raw-signal band used to re-pin the comb-located
      *  tone's frequency.  Wide enough to cover the comb's frequency pull, far
@@ -76,8 +71,18 @@ public final class ScopeMeasurementWorker {
 
     private volatile SignalBufferReader reader;
 
+    /** "Informed from below" seam: called ON THE WORKER THREAD, once per
+     *  capture session, when the reader answers terminally (the capture
+     *  writer finished the ring buffer - device lost / delivery stalled).
+     *  Carries the CLAIMED reason, {@code null} when another consumer of the
+     *  same dead capture already claimed the one operator report.  Wired by
+     *  {@link ScopeView#attachController} to the controller, which owns the
+     *  worker/UI border. */
+    @Setter
+    private volatile Consumer<CaptureEndReason> captureEndListener;
+
     private Thread          measThread;
-    /** Per-session run flag — a fresh instance per {@link #start()}, captured
+    /** Per-session run flag - a fresh instance per {@link #start()}, captured
      *  by the loop, so a join-timed-out predecessor polling its own (stale)
      *  flag can never be revived by the next start. */
     private volatile AtomicBoolean measThreadRunning = new AtomicBoolean(false);
@@ -105,7 +110,7 @@ public final class ScopeMeasurementWorker {
     /** Off-thread broad-band frequency scan.  A weak / noisy signal needs the
      *  costly per-bin Goertzel sweep to find its fundamental; running that on
      *  the measurement thread drops the cadence and throttles the whole table,
-     *  so it runs here instead.  Only f / period lag — every other readout
+     *  so it runs here instead.  Only f / period lag - every other readout
      *  stays real-time.  {@link #freqScanBusy} coalesces overlapping requests. */
     private ExecutorService freqScanExec;
     private final AtomicBoolean freqScanBusy = new AtomicBoolean(false);
@@ -120,13 +125,6 @@ public final class ScopeMeasurementWorker {
     private MainsSuppression measLeftMode  = MainsSuppression.NONE;
     private MainsSuppression measRightMode = MainsSuppression.NONE;
     private int             measCombSampleRate;
-    /** Per-channel HF low-pass for the measured values (matches the
-     *  display-side filter so Vpp/Vrms aren't inflated by >80 kHz spikes). */
-    private LowPassFilter   measLpfLeft, measLpfRight;
-    private int             measLpfSampleRate;
-    /** Per-channel median de-spike filters for the measured values. */
-    private MedianFilter    measDespikeLeft, measDespikeRight;
-
     /** Guards multi-field updates to the measurement history ring. */
     private final Object measHistoryLock = new Object();
     private final SignalMeasurements[] measHistoryLeft  = new SignalMeasurements[MEAS_HISTORY_CAP];
@@ -139,24 +137,24 @@ public final class ScopeMeasurementWorker {
 
     /** Amplitude-occupancy accumulators, live only while the scope's histogram
      *  window is open.  Their range tracks the signal's own extremes rather than
-     *  full scale, and is binned far finer than the drawn bars — see the
+     *  full scale, and is binned far finer than the drawn bars - see the
      *  accumulator for why.  Nothing a user does to V/div, a range switch or a
      *  recalibration invalidates the counts.  Worker-thread only. */
     private AmplitudeHistogram histLeft, histRight;
-    /** Published for the paint thread — a snapshot, never the live accumulator. */
+    /** Published for the paint thread - a snapshot, never the live accumulator. */
     private volatile AmplitudeHistogram histSnapLeft, histSnapRight;
     private volatile boolean histEnabled;
-    /** Reset asked for by the UI, consumed at the top of the next worker pass —
+    /** Reset asked for by the UI, consumed at the top of the next worker pass -
      *  see {@link #resetHistograms()}. */
     private volatile boolean histResetRequested;
     /** Peak {@code |sample|} seen since the current ranging window opened, per
-     *  channel, and when it opened — see {@link #binAmplitudes}.  Worker-thread only. */
+     *  channel, and when it opened - see {@link #binAmplitudes}.  Worker-thread only. */
     private double histWinPeakL;
     private double histWinPeakR;
     private long   histWinStartNanos;
     /** Absolute sample position already binned.  {@link SignalBufferReader#readLatest}
      *  hands back a whole window every pass, and consecutive windows OVERLAP by
-     *  roughly 20× at the worker's cadence — without this cursor every sample
+     *  roughly 20× at the worker's cadence - without this cursor every sample
      *  would be counted about twenty times, and unevenly, which would bias the
      *  distribution towards whatever the overlap happened to cover. */
     private long histBinnedUpTo;
@@ -167,7 +165,7 @@ public final class ScopeMeasurementWorker {
 
     /** Starts / stops amplitude binning.  Off is the default and costs nothing:
      *  no accumulators exist and the pass skips the block entirely.  Turning it
-     *  off drops the counts — the window owns the distribution's lifetime. */
+     *  off drops the counts - the window owns the distribution's lifetime. */
     public void setHistogramEnabled(boolean on) {
         if (on == histEnabled) return;
         if (on) {
@@ -189,7 +187,7 @@ public final class ScopeMeasurementWorker {
 
     /** Clears the accumulated distribution.  Driven from the histogram window's own
      *  reset button, and alongside the measurement statistics whenever those are
-     *  cleared — the same events invalidate both, so the two restart together.
+     *  cleared - the same events invalidate both, so the two restart together.
      *
      *  <p>Called from the UI thread (the histogram window's reset button).  While
      *  the worker is running the clear is REQUESTED and performed by the worker
@@ -222,7 +220,7 @@ public final class ScopeMeasurementWorker {
         histWinStartNanos = 0L;
     }
 
-    /** The paint thread's view of a channel's distribution — a snapshot, so it
+    /** The paint thread's view of a channel's distribution - a snapshot, so it
      *  never walks an array the worker is mutating.  {@code null} until the first
      *  pass has binned something. */
     public AmplitudeHistogram getHistogram(Channel ch) {
@@ -257,7 +255,7 @@ public final class ScopeMeasurementWorker {
 
     /**
      * Starts the worker thread.  Self-heals against a half-stopped
-     * predecessor (switching from record → play-from-file once left
+     * predecessor (switching from record -> play-from-file once left
      * {@code measThreadRunning == true} from a dying thread).
      */
     public synchronized void start() {
@@ -286,13 +284,18 @@ public final class ScopeMeasurementWorker {
         measThread = t;
     }
 
-    /** Stops the worker and waits up to 2 s for it to exit.  Idempotent. */
+    /** Stops the worker and waits up to 2 s for it to exit.  Idempotent.
+     *  Never joins itself: the capture-end reaction runs the stop ON the
+     *  worker thread (the device half must stay off the display thread), and
+     *  that thread exits its loop right after the reaction returns. */
     public synchronized void stop() {
         measThreadRunning.set(false);
         Thread t = measThread;
         if (t != null) {
-            try { t.join(2000); } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
+            if (t != Thread.currentThread()) {
+                try { t.join(2000); } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
             }
             measThread = null;
         }
@@ -309,7 +312,7 @@ public final class ScopeMeasurementWorker {
     /**
      * Walks one channel's history ring backwards from the newest entry,
      * stopping at the first one older than {@code cutoffNanos}.  Visitor is
-     * invoked under the history lock — keep it short.  Use to aggregate
+     * invoked under the history lock - keep it short.  Use to aggregate
      * stats (avg / min / max / σ) over the user's selected averaging
      * window.
      */
@@ -345,7 +348,7 @@ public final class ScopeMeasurementWorker {
             }
         }
         if (count > 0) return sum / count;
-        // History too short for the requested window — use the latest snapshot
+        // History too short for the requested window - use the latest snapshot
         // rather than 0 so AC removal isn't suddenly off-zero for half a second.
         return leftChannel ? lastLeftMeanNormalized : lastRightMeanNormalized;
     }
@@ -367,7 +370,7 @@ public final class ScopeMeasurementWorker {
      * Atomically copies all measurement state from {@code other} into
      * this worker.  Used by the offscreen screenshot pane so its passive
      * (worker-less) OscilloscopeView still draws the measurement table
-     * with the live values.  Two distinct locks — no nested deadlock
+     * with the live values.  Two distinct locks - no nested deadlock
      * even if both workers were ever live in parallel.
      */
     public void snapshotFrom(ScopeMeasurementWorker other) {
@@ -445,42 +448,6 @@ public final class ScopeMeasurementWorker {
         }
     }
 
-    /** Applies the per-channel HF low-pass to both measurement buffers in
-     *  place (rebuilt on a sample-rate change; reset each pass since reads
-     *  overlap).  No-op below the LPF's Nyquist gate.  Worker-thread only. */
-    private void applyHfLowPass(int sampleRate, int avail) {
-        Preferences prefs = Preferences.instance();
-        LpfMode lm = prefs.getOscLeftLpf();
-        LpfMode rm = prefs.getOscRightLpf();
-        if (lm == LpfMode.NONE && rm == LpfMode.NONE) return;
-        if (measLpfSampleRate != sampleRate) {
-            measLpfLeft = null; measLpfRight = null;
-            measLpfSampleRate = sampleRate;
-        }
-        applyChannelHf(lm, true,  sampleRate, measLeftBuf,  avail);
-        applyChannelHf(rm, false, sampleRate, measRightBuf, avail);
-    }
-
-    /** Applies one channel's selected HF cleanup ({@link LpfMode}) to the
-     *  measurement buffer in place — matching the display path. */
-    private void applyChannelHf(LpfMode mode, boolean left, int sampleRate, float[] buf, int len) {
-        if (mode == LpfMode.HZ_80) {
-            LowPassFilter f = left ? measLpfLeft : measLpfRight;
-            if (f == null) {
-                f = new LowPassFilter(sampleRate, mode.cutoffHz, SCOPE_HF_LPF_ORDER);
-                if (left) measLpfLeft = f; else measLpfRight = f;
-            }
-            if (f.isActive()) { f.reset(); f.process(buf, len); }
-        } else if (mode == LpfMode.DESPIKE) {
-            MedianFilter m = left ? measDespikeLeft : measDespikeRight;
-            if (m == null) {
-                m = new MedianFilter(mode.window);
-                if (left) measDespikeLeft = m; else measDespikeRight = m;
-            }
-            m.process(buf, len);
-        }
-    }
-
     /** Lazily (re)builds the per-channel measurement combs for the given
      *  sample rate.  Worker-thread only. */
     private MainsTimeFilter measFilter(boolean left, MainsSuppression mode, int sampleRate) {
@@ -507,18 +474,18 @@ public final class ScopeMeasurementWorker {
      * Bins the part of this pass's window that has not been binned before, into
      * both channels' accumulators, and publishes fresh snapshots.
      *
-     * <p>Samples are counted EXACTLY AS CAPTURED — no DC removal, no filtering.
+     * <p>Samples are counted EXACTLY AS CAPTURED - no DC removal, no filtering.
      * The {@code skip} below drops the overlap with the previous window so nothing
      * is counted twice, and that is the only thing done to them.  A DC offset is
      * part of the signal and belongs in the picture: the distribution simply sits
      * off the centre line by however much offset there is.  Subtracting the running
      * mean instead would be worse than useless here, because that estimate is still
-     * settling in the first seconds — the same voltage would land in different bins
+     * settling in the first seconds - the same voltage would land in different bins
      * as it moved, smearing one distribution into two.
      *
      * <p>If the worker misses passes under load the unread samples are simply
      * never binned.  That is an unbiased sub-sample and is fine for a
-     * distribution — but it does mean the total is not a count of captured
+     * distribution - but it does mean the total is not a count of captured
      * samples and must not be presented as one.  Worker-thread only.
      */
     private void binAmplitudes(int avail, long absStart) {
@@ -531,7 +498,7 @@ public final class ScopeMeasurementWorker {
         // A cursor sitting BEYOND the stream's write position can only mean the
         // positions restarted under us: every capture session (and every freeze
         // snapshot) builds a fresh ring numbered from 0.  Re-anchor on this window
-        // and bin from the next pass — without this, binning would silently stop for
+        // and bin from the next pass - without this, binning would silently stop for
         // as long as the previous session ran, until the new one caught up.
         if (already > avail) {
             histBinnedUpTo = absStart + avail;
@@ -543,7 +510,7 @@ public final class ScopeMeasurementWorker {
         // Range on the peak gathered over the scope's MEASUREMENT-AVERAGE window,
         // not on this 100 ms block.  A block's peak is a random draw from the
         // signal's tail, so on anything noisy it wanders enough to escape the range
-        // nearly every pass — and every escape restarts the distribution.  Over the
+        // nearly every pass - and every escape restarts the distribution.  Over the
         // averaging window it is the peak of some fifty blocks and barely moves, so
         // a restart now means the level genuinely changed.
         long now = System.nanoTime();
@@ -574,7 +541,7 @@ public final class ScopeMeasurementWorker {
     /**
      * Largest {@code |sample|} in the block, on the samples exactly as captured.
      * A magnitude is all the accumulator needs because its range is symmetric about
-     * zero — 0&nbsp;V is the axis centre — and taking it on the raw samples means a
+     * zero - 0&nbsp;V is the axis centre - and taking it on the raw samples means a
      * DC-offset signal is ranged to reach the rail it actually reaches.
      *
      * @return {@code -1} when the block holds nothing finite, in which case there
@@ -599,10 +566,21 @@ public final class ScopeMeasurementWorker {
         }
         SignalBufferReader b = reader;
         if (b == null) return;
+        // Reader-terminal consult: the capture writer finished the ring buffer
+        // from below.  Measuring a dead buffer is a measurement of nothing, so
+        // stop this session and inform upward - the listener (the controller)
+        // runs the device half of the stop RIGHT HERE on the worker thread
+        // (it must stay off the display thread) and marshals the visuals.
+        if (b.isFinished()) {
+            measThreadRunning.set(false);
+            Consumer<CaptureEndReason> listener = captureEndListener;
+            if (listener != null) listener.accept(b.takeFinishedReasonForReport());
+            return;
+        }
         Preferences prefs = Preferences.instance();
         int sampleRate = b.getSampleRate();
         // Exclude the first AC_WARMUP_NANOS of captured samples from every
-        // read — those contain the ADC's startup transient and would bias
+        // read - those contain the ADC's startup transient and would bias
         // the published DC mean (which then biases the AC-mode trace's
         // history-averaged DC subtraction).
         long warmupSamples   = (long) sampleRate * AC_WARMUP_NANOS / 1_000_000_000L;
@@ -613,26 +591,34 @@ public final class ScopeMeasurementWorker {
             measLeftBuf  = new float[measN];
             measRightBuf = new float[measN];
         }
-        // Always read both channels — even when only one is the measurement
-        // selection — so we can publish a fresh per-channel DC mean for the
+        // Always read both channels - even when only one is the measurement
+        // selection - so we can publish a fresh per-channel DC mean for the
         // paint thread's AC-mode trace offset and AC-mode trigger-level shift.
         int avail = b.readLatest(measN, measLeftBuf, measRightBuf);
         if (avail < 64) return;
         long absStart = b.getWritePos() - avail;
-        // Amplitude binning goes FIRST, on the samples exactly as captured — before
-        // the HF low-pass, before the DC mean is removed, before the mains comb.  A
-        // distribution is a statement about the signal that arrived, so anything the
-        // scope does to make the TRACE readable would be a lie in it.  The DC mean in
-        // particular is a running estimate that is still settling in the first
-        // seconds: subtracting it would bin the same voltage into different bins as
-        // the estimate moved, smearing one distribution into two.
+        // Amplitude binning goes FIRST, on the samples exactly as captured - before
+        // the DC mean is removed, before the mains comb.  A distribution is a
+        // statement about the signal that arrived, so anything the scope does to
+        // make the TRACE readable would be a lie in it.  The DC mean in particular
+        // is a running estimate that is still settling in the first seconds:
+        // subtracting it would bin the same voltage into different bins as the
+        // estimate moved, smearing one distribution into two.
         if (histEnabled) {
             binAmplitudes(avail, absStart);
         }
-        // HF spike removal (80 kHz LPF) before everything else, so the DC
-        // means, the comb, and Vpp/Vrms all see the de-spiked signal.  No-op
-        // below the LPF's Nyquist gate.
-        applyHfLowPass(sampleRate, avail);
+        // Nothing filters this window on the way to the table.  The per-channel HF
+        // cleanup (80 kHz low-pass / de-spike) used to run here so the numbers
+        // would match the drawn trace, and that was backwards: it is a DISPLAY
+        // setting the operator picks to make a trace readable, and the moment it
+        // moves Vpp, Vmean, Tr, Tf or Duty those stop being measurements of the
+        // signal and become measurements of our rendering of it.  It also lied in
+        // one direction only - the filter is reset per pass, so it was measured
+        // ringing its way out of a step of up to the full peak-to-peak, which a
+        // peak detector reads as signal (the bench saw Vpp 12 % high and rise times
+        // a quarter long on a sine that was clean).  ScopeView still filters what
+        // it draws; the same reasoning already governs the histogram above and the
+        // frequency below.
         // Each channel scales by its OWN ADC full-scale (LINKED cards give equal L/R
         // peaks), so the RIGHT channel's Vpp/Vrms/Vmean no longer inherit the LEFT
         // full-scale; the back-conversion below divides each mean by its own peak.
@@ -641,7 +627,7 @@ public final class ScopeMeasurementWorker {
         // Both channels run the SAME measurement pipeline; the view shows the
         // channel the table's L/R selector points at.  The per-channel DC
         // means (AC-coupling offset, residual baseline) are the channels' own
-        // whole-period Vmean values — identical to the table readout.
+        // whole-period Vmean values - identical to the table readout.
         SignalMeasurements resultLeft  = measureChannel(true,  avail, sampleRate, peakVoltsL, absStart, prefs);
         SignalMeasurements resultRight = measureChannel(false, avail, sampleRate, peakVoltsR, absStart, prefs);
         double leftMean  = resultLeft.getVmean()  / peakVoltsL;
@@ -663,21 +649,27 @@ public final class ScopeMeasurementWorker {
     }
 
     /**
-     * Runs the full measurement pipeline on one channel's already-LPF'd
-     * buffer: mains suppression (DC-preserving, with a raw copy kept for the
-     * two-step frequency measurement), comb-settle tail trim, whole-period
-     * measurement, weak-signal async frequency fallback, raw-band frequency
-     * re-pin, dual-tone time-field clearing.  Channels are processed
-     * sequentially, so the raw/tail scratch buffers are shared.
+     * Runs the full measurement pipeline on one channel's captured buffer:
+     * mains suppression (DC-preserving, with a raw copy kept for the two-step
+     * frequency measurement), comb-settle tail trim, whole-period measurement,
+     * weak-signal async frequency fallback, raw-band frequency re-pin, dual-tone
+     * time-field clearing.  Channels are processed sequentially, so the raw/tail
+     * scratch buffers are shared.
+     *
+     * <p>The buffer arrives exactly as captured - the operator's HF cleanup is a
+     * property of the TRACE and is applied by the view, not here.  That also makes
+     * the {@code raw} copy below what its name has always claimed: until the
+     * low-pass was taken out of this path, the "raw" signal the frequency was
+     * re-pinned on had itself been through an 8th-order Butterworth.
      *
      * <p>Two-step frequency: the comb suppresses an often-dominant mains so
      * the tone becomes the spectral peak (a reliable SEED), but its notches
      * sit at every mains harmonic and one can land within a few Hz of the
      * tone, and at high sample rates the comb never settles inside the
-     * window — both pull the combed frequency low.  So the raw (un-combed)
+     * window - both pull the combed frequency low.  So the raw (un-combed)
      * copy is re-measured in a narrow band around the seed (the mains is
      * stronger there but its harmonics are tens of Hz away, outside the
-     * band) — un-biased and free of the mains.
+     * band) - un-biased and free of the mains.
      */
     private SignalMeasurements measureChannel(boolean left, int avail, int sampleRate,
                                               double peakVolts, long absStart,
@@ -692,7 +684,7 @@ public final class ScopeMeasurementWorker {
             raw = rawChanBuf;
             MainsTimeFilter c = measFilter(left, mode, sampleRate);
             c.track(buf, avail);
-            // Comb: zeroed delay lines each pass → reset; adaptive filters keep state.
+            // Comb: zeroed delay lines each pass -> reset; adaptive filters keep state.
             if (mode == MainsSuppression.IIR_COMB) c.reset();
             c.processPreservingDc(buf, avail, absStart);
         }
@@ -702,7 +694,7 @@ public final class ScopeMeasurementWorker {
             // The comb's delay lines start zeroed each pass, so its head is an
             // un-suppressed pass-through that would skew Vpp/Vrms.  Measure the
             // settled tail instead (≈3 time-constants in; capped so at least
-            // half the window remains — at very high sample rates the window
+            // half the window remains - at very high sample rates the window
             // can be shorter than the settle time, leaving some residual hum).
             int settle = (int) (3.0 * sampleRate / (Math.PI * MAINS_NOTCH_BW_HZ));
             int from   = Math.min(settle, avail / 2);
@@ -716,7 +708,7 @@ public final class ScopeMeasurementWorker {
         SignalMeasurements result = SignalMeasurements.from(data, measLen, sampleRate, peakVolts, false);
         if (Double.isNaN(result.getFrequency())) {
             // Weak / noisy signal: the broad-band fundamental search is too
-            // costly for this thread — it would drop the 10 Hz cadence and
+            // costly for this thread - it would drop the 10 Hz cadence and
             // throttle the whole table.  Fold in the latest off-thread result
             // and kick a fresh scan; only f / period lag, the rest stays live.
             double async = left ? asyncFreqLeft : asyncFreqRight;
@@ -728,13 +720,13 @@ public final class ScopeMeasurementWorker {
             // Re-pin the comb-located tone on the raw signal, free of the
             // comb's notch bias, with a narrow band around the seed.  Skipped
             // in dual-tone mode: the single-value frequency is cleared by
-            // withoutTimes() below, so re-pinning it would be wasted work — the
+            // withoutTimes() below, so re-pinning it would be wasted work - the
             // two dual-tone frequencies are measured separately just after.
             double precise = SignalMeasurements.refineFrequencyAround(
                     raw, avail, sampleRate, result.getFrequency(), FREQ_REFINE_HALF_HZ);
             if (Double.isFinite(precise)) result = result.withFrequency(precise);
         }
-        // Dual-tone has two simultaneous fundamentals — a single Tp /
+        // Dual-tone has two simultaneous fundamentals - a single Tp /
         // Tr / Tf / f / duty value has no physical meaning.  Clear
         // the time fields so the readout shows {@code ---} for every
         // time row instead of latching onto whichever spectral peak
@@ -751,30 +743,31 @@ public final class ScopeMeasurementWorker {
             // least-squares fit can't absorb, leaving fundamental leakage.  So
             // seed from what the generator emits (mirroring ScopeView's source
             // exactly) and refine each seed on the raw signal to the AS-CAPTURED
-            // frequency — the pre-comb copy when mains suppression is on (the
+            // frequency - the pre-comb copy when mains suppression is on (the
             // comb's notches would bias the tones), the channel buffer itself
             // otherwise (with suppression off it IS the raw signal, so the pair
             // is measurable in every configuration).  ±FREQ_REFINE_HALF_HZ
             // (2 Hz) covers ~100 ppm at 20 kHz, far above any real crystal
-            // offset; the Hann window keeps the other tone — always tens of Hz
-            // or more away — out of the narrow band.
+            // offset; the Hann window keeps the other tone - always tens of Hz
+            // or more away - out of the narrow band.
             float[] src = raw != null ? raw : buf;
-            int sr = (int) Math.round(sampleRate);
-            double seed1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
-                    prefs.getGenDualToneFreq1Hz());
-            double seed2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
-                    prefs.getGenDualToneFreq2Hz());
+            double[] emitted = MessageBus.instance()
+                .request(Events.GENERATOR_EMITTED_HZ, sampleRate);
             double r1 = Double.NaN;
             double r2 = Double.NaN;
-            if (seed1 > 0) {
-                double refined = SignalMeasurements.refineFrequencyAround(
-                        src, avail, sampleRate, seed1, FREQ_REFINE_HALF_HZ);
-                if (Double.isFinite(refined)) r1 = refined;
-            }
-            if (seed2 > 0) {
-                double refined = SignalMeasurements.refineFrequencyAround(
-                        src, avail, sampleRate, seed2, FREQ_REFINE_HALF_HZ);
-                if (Double.isFinite(refined)) r2 = refined;
+            if (emitted != null) {
+                double seed1 = emitted[0];
+                double seed2 = emitted[1];
+                if (seed1 > 0) {
+                    double refined = SignalMeasurements.refineFrequencyAround(
+                            src, avail, sampleRate, seed1, FREQ_REFINE_HALF_HZ);
+                    if (Double.isFinite(refined)) r1 = refined;
+                }
+                if (seed2 > 0) {
+                    double refined = SignalMeasurements.refineFrequencyAround(
+                            src, avail, sampleRate, seed2, FREQ_REFINE_HALF_HZ);
+                    if (Double.isFinite(refined)) r2 = refined;
+                }
             }
             result = result.withDualTones(r1, r2);
         }
@@ -785,7 +778,7 @@ public final class ScopeMeasurementWorker {
      * Copies the measured window and runs the broad-band fundamental search
      * on the {@code osc-freq-scan} thread, publishing the channel's async
      * frequency.  A scan already in flight is left to finish, so requests
-     * never queue up — f / period just refresh at the scan's own (slower)
+     * never queue up - f / period just refresh at the scan's own (slower)
      * rate; when both channels are weak they take turns across ticks.
      */
     private void submitFrequencyScan(boolean left, float[] src, int n, int sampleRate,

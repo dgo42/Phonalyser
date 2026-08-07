@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ package org.edgo.audio.measure.gui.interfaces;
 import java.io.IOException;
 
 /** Tiny common surface for the format-specific writers (WAV / FLAC /
- *  AIFF) used by the generator's "Save to…" and the oscilloscope's
+ *  AIFF) used by the generator's "Save to..." and the oscilloscope's
  *  capture-save paths.  Lets a switch-on-format helper produce a single
  *  closeable sink without leaking the concrete writer types. */
 public interface PcmSink extends AutoCloseable {

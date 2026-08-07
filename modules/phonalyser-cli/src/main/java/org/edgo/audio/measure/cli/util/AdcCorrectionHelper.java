@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -38,7 +38,7 @@ public class AdcCorrectionHelper {
 
     /**
      * Parses an adc_correction CSV (kind=adc_correction) written by the deembed
-     * mode.  Supports both the multi-order format with an explicit {@code # orders=…}
+     * mode.  Supports both the multi-order format with an explicit {@code # orders=...}
      * header and the legacy single-order (h-1) format with a 4-column row.
      */
     public AdcCorrection loadCsv(String path) throws IOException {

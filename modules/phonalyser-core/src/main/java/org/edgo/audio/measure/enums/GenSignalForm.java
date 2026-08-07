@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -34,7 +34,7 @@ public enum GenSignalForm {
     DUAL_TONE(true),
     DUAL_TONE_COMP(true);
 
-    /** True for waveforms with a repeating period — the noise forms are the
+    /** True for waveforms with a repeating period - the noise forms are the
      *  exception.  Periodic forms truncate file exports to a whole number of
      *  periods and keep the generator frequency field meaningful. */
     @Getter
@@ -44,7 +44,7 @@ public enum GenSignalForm {
         this.periodic = periodic;
     }
 
-    /** True for the two-tone waveforms — plain {@link #DUAL_TONE} and its
+    /** True for the two-tone waveforms - plain {@link #DUAL_TONE} and its
      *  intermod-compensated sibling {@link #DUAL_TONE_COMP}.  Drives
      *  every "is this a two-tone signal?" branch (IMD analysis, the scope's
      *  beat reconstruction, the generator's two-frequency block) so the

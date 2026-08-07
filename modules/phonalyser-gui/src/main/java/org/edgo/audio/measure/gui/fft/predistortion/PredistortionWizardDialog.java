@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -65,7 +65,7 @@ import lombok.extern.log4j.Log4j2;
  * <p>Rendering follows the (historic) PID-autotune dialog: an intro that
  * explains the procedure, an FFT-settings group, a live <b>convergence
  * chart</b> of the distortion falling round by round, and a progress group of
- * live readouts — all refreshed by a ~{@value #TIMER_MS} ms timer that polls
+ * live readouts - all refreshed by a ~{@value #TIMER_MS} ms timer that polls
  * the engine's live {@link Phase} and the displayed FFT result, so the user
  * always sees what the loop is doing.
  *
@@ -78,11 +78,11 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class PredistortionWizardDialog implements PredistortionEngine.Listener {
 
-    /** Minimum FFT averages per round — too few can't build a deep-enough
+    /** Minimum FFT averages per round - too few can't build a deep-enough
      *  coherent average to read the harmonics cleanly. */
     private static final double MIN_AVERAGES = 10.0;
     private static final double MAX_AVERAGES = 1_000_000.0;
-    /** Live-refresh cadence (ms) for the polling render — fast enough that the
+    /** Live-refresh cadence (ms) for the polling render - fast enough that the
      *  per-round progress bar and averages climb smoothly. */
     private static final int    TIMER_MS = 100;
 
@@ -95,7 +95,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     private final CorrectionStore correctionStore;
 
     private Shell            dialog;
-    /** The margin composite holding every widget — printed for the help
+    /** The margin composite holding every widget - printed for the help
      *  screenshot (a top-level Shell prints blank on Windows), and the unit
      *  re-laid-out by {@link #retranslate()}. */
     @Getter private Composite content;
@@ -125,10 +125,10 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     /** Terminal status key set by {@link #onFinished} and shown while idle. */
     private String  terminalStatusKey = "predistortion.status.idle";
 
-    /** Per-round distortion history (%), grown as rounds complete — the
+    /** Per-round distortion history (%), grown as rounds complete - the
      *  convergence chart's trace.  UI-thread confined. */
     private double[] distHistory = new double[0];
-    /** Per-round averaging counts, parallel to {@link #distHistory} — the chart
+    /** Per-round averaging counts, parallel to {@link #distHistory} - the chart
      *  spaces markers along x in proportion to the frames each round averaged. */
     private int[]    avgHistory  = new int[0];
     /** The most recent completed round's distortion (%); {@code NaN} until the
@@ -154,7 +154,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     }
 
     /** Builds and shows the wizard non-modally (no blocking loop), returning the
-     *  shell — for automation capture, which drives it via {@link #setTargetPct},
+     *  shell - for automation capture, which drives it via {@link #setTargetPct},
      *  {@link #pressStart}, {@link #isTargetReached}, {@link #retranslate} and
      *  {@link #getContent}. */
     public Shell buildAndShow() {
@@ -226,9 +226,9 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         progressGroup.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
         roundLbl  = infoLabel(progressGroup);   // col 0
         avgLbl    = infoLabel(progressGroup);   // col 1
-        curThdLbl = infoLabel(progressGroup);   // col 0 — live distortion, directly under Round
+        curThdLbl = infoLabel(progressGroup);   // col 0 - live distortion, directly under Round
         bestLbl   = infoLabel(progressGroup);   // col 1
-        distLbl   = infoLabel(progressGroup);   // col 0 — last completed round's distortion
+        distLbl   = infoLabel(progressGroup);   // col 0 - last completed round's distortion
         snrLbl    = infoLabel(progressGroup);   // col 1
         thdNLbl   = infoLabel(progressGroup);   // col 0
         sinadLbl  = infoLabel(progressGroup);   // col 1
@@ -250,7 +250,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         c.setLayout(gl);
 
         // Seed both fields from Preferences so the user's last-used values
-        // survive reopening the wizard AND restarting the app — never reset
+        // survive reopening the wizard AND restarting the app - never reset
         // by a completed run.
         Preferences prefs = Preferences.instance();
 
@@ -261,7 +261,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
                 MIN_AVERAGES, MAX_AVERAGES, 10.0, 1.0, 0, 90);
         averagesField.setValue(prefs.getPredistortionAverages());
         averagesField.setToolTipText(I18n.t("predistortion.averages.tooltip"));
-        // Persist on EDIT (not at Start/Save) — the bound pref auto-saves, so
+        // Persist on EDIT (not at Start/Save) - the bound pref auto-saves, so
         // the value is remembered the moment the user changes it, whether or
         // not they ever run a tune.
         averagesField.addSelectionListener(e ->
@@ -290,7 +290,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         startStopBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         startStopBtn.addListener(SWT.Selection, e -> onStartStop());
 
-        // Ends only the current round early (apply now, keep going) — enabled
+        // Ends only the current round early (apply now, keep going) - enabled
         // solely while a round is averaging (see refresh()).
         stopRoundBtn = new Button(bar, SWT.PUSH);
         stopRoundBtn.setText(I18n.t("predistortion.button.stopRound"));
@@ -312,7 +312,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     }
 
     // -------------------------------------------------------------------------
-    // Automation capture hooks — drive the wizard from a body script with no
+    // Automation capture hooks - drive the wizard from a body script with no
     // modal loop.  An in-place language re-translate leaves the measurement, the
     // FFT averages and the convergence chart untouched, so ONE collection yields
     // a screenshot per language.
@@ -334,7 +334,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     }
 
     /** Re-reads every UI label in the current locale, in place, WITHOUT rebuilding
-     *  the widgets or the panes behind the wizard — so a language switch during a
+     *  the widgets or the panes behind the wizard - so a language switch during a
      *  capture leaves the measurement, the FFT averages and the convergence chart
      *  untouched.  The dynamic labels (FFT settings, metrics, status) re-translate
      *  on the {@link #refresh()} below; this re-sets the static ones. */
@@ -355,7 +355,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     }
 
     // -------------------------------------------------------------------------
-    // Live refresh timer (polls the engine — the autotune-dialog render style)
+    // Live refresh timer (polls the engine - the autotune-dialog render style)
     // -------------------------------------------------------------------------
 
     private void armTimer() {
@@ -387,34 +387,34 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // "Stop round" is meaningful only while a round is averaging.
         stopRoundBtn.setEnabled(running && engine != null && engine.getPhase() == Phase.COLLECTING);
 
-        // Dual-tone signal → the loop minimises INTERMOD, not THD; show IMD /
+        // Dual-tone signal -> the loop minimises INTERMOD, not THD; show IMD /
         // D+N in place of THD / THD+N (the figures already are IMD-based for the
-        // last/best readouts — the engine's per-round metric is the IMD %).
+        // last/best readouts - the engine's per-round metric is the IMD %).
         boolean dual = prefs.getGenSignalForm().isDualTone();
         ImdResult imd = (dual && live != null) ? fft.analyzeImd(live) : null;
 
-        roundLbl.setText(metric("round",    running ? Integer.toString(engine.getCurrentRound() + 1) : "—"));
+        roundLbl.setText(metric("round",    running ? Integer.toString(engine.getCurrentRound() + 1) : "-"));
         // Live distortion straight off the running FFT (updates within a round),
         // distinct from the last completed round's figure below.
         curThdLbl.setText(dual
-                ? metric("currentImd", imd != null ? fmtPct(imd.imdPwrPct) : "—")
-                : metric("currentThd", live != null ? fmtPct(live.thdPct) : "—"));
-        // The cross-tick averaging depth — the SAME counter the FFT view shows
+                ? metric("currentImd", imd != null ? fmtPct(imd.imdPwrPct) : "-")
+                : metric("currentThd", live != null ? fmtPct(live.thdPct) : "-"));
+        // The cross-tick averaging depth - the SAME counter the FFT view shows
         // (climbs over a round, reset each round), NOT the per-call frameCount
-        // (only the 2–3 frames of one analyze() segment).
+        // (only the 2-3 frames of one analyze() segment).
         avgLbl  .setText(metric("averages", Integer.toString(fft.completedAnalyses())));
         distLbl .setText(metric(dual ? "imd"      : "thd",      fmtPct(latestDistPct)));
         bestLbl .setText(metric(dual ? "best_imd" : "best_thd", bestText()));
         // Match the FFT pane: every dB readout carries the dBV suffix.  Absolute
-        // levels (fundamental, noise floor) get the dBFS→dBV offset; the ratio
+        // levels (fundamental, noise floor) get the dBFS->dBV offset; the ratio
         // figures (THD+N / D+N / SNR / SINAD) are relabelled only, never offset.
         thdNLbl .setText(dual
-                ? metric("d_n",   imd != null ? fmtDbv(20.0 * Math.log10(imd.tdnPct / 100.0)) : "—")
-                : metric("thd_n", live != null ? fmtDbv(-live.sinadDb) : "—"));
-        snrLbl  .setText(metric("snr",      live != null ? fmtDbv(live.snrDb) : "—"));
-        sinadLbl.setText(metric("sinad",    live != null ? fmtDbv(live.sinadDb) : "—"));
-        fundLbl .setText(metric("fund",     live != null ? fmtDbv(live.fundamentalDbFs + prefs.getDbvOffsetDb()) : "—"));
-        floorLbl.setText(metric("floor",    live != null ? fmtDbv(live.noisePeakFloorDbFs() + prefs.getDbvOffsetDb()) : "—"));
+                ? metric("d_n",   imd != null ? fmtDbv(20.0 * Math.log10(imd.tdnPct / 100.0)) : "-")
+                : metric("thd_n", live != null ? fmtDbv(-live.sinadDb) : "-"));
+        snrLbl  .setText(metric("snr",      live != null ? fmtDbv(live.snrDb) : "-"));
+        sinadLbl.setText(metric("sinad",    live != null ? fmtDbv(live.sinadDb) : "-"));
+        fundLbl .setText(metric("fund",     live != null ? fmtDbv(live.fundamentalDbFs + prefs.getDbvOffsetDb()) : "-"));
+        floorLbl.setText(metric("floor",    live != null ? fmtDbv(live.noisePeakFloorDbFs() + prefs.getDbvOffsetDb()) : "-"));
 
         chart.redraw();
     }
@@ -438,7 +438,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
 
     private String bestText() {
         double b = engine != null ? engine.getBestThdPct() : Double.NaN;
-        return (engine == null || b == Double.MAX_VALUE) ? "—" : fmtPct(b);
+        return (engine == null || b == Double.MAX_VALUE) ? "-" : fmtPct(b);
     }
 
     private String metric(String key, String value) {
@@ -464,8 +464,8 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         int n = h.length;
         if (n < 1) {
             gc.setForeground(d.getSystemColor(SWT.COLOR_DARK_GRAY));
-            Point ext = gc.textExtent("—");
-            gc.drawText("—", px + (pw - ext.x) / 2, py + (ph - ext.y) / 2, true);
+            Point ext = gc.textExtent("-");
+            gc.drawText("-", px + (pw - ext.x) / 2, py + (ph - ext.y) / 2, true);
             return;
         }
 
@@ -491,7 +491,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
             gc.drawText(lab, px - ext.x - 4, y - ext.y / 2, true);
         }
 
-        // Target line — red dashed.
+        // Target line - red dashed.
         if (target > 0) {
             int y = py + (int) Math.round((yhi - Math.log10(target)) / (yhi - ylo) * ph);
             if (y >= py && y <= py + ph) {
@@ -550,7 +550,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
                 || form == GenSignalForm.SINE_COMP
                 || form.isDualTone();
         if (!supported) {
-            // Single tone → harmonic compensation; dual tone → intermod
+            // Single tone -> harmonic compensation; dual tone -> intermod
             // compensation.  Every other waveform (noise / sweep / triangle /
             // rectangle) has no meaningful predistortion target.
             Dialogs.error(dialog, I18n.t("predistortion.wizard.title"),
@@ -558,7 +558,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
             return;
         }
         // Settings persist on edit (see buildSettings), independently of this
-        // run — Start just reads the current field values.
+        // run - Start just reads the current field values.
         int    baseAverages = (int) Math.max(MIN_AVERAGES, Math.round(averagesField.getValue()));
         double targetThdPct = targetField.getValue();
 
@@ -579,7 +579,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     }
 
     // -------------------------------------------------------------------------
-    // Engine callbacks (UI thread) — stash data; the timer renders it.
+    // Engine callbacks (UI thread) - stash data; the timer renders it.
     // -------------------------------------------------------------------------
 
     @Override
@@ -693,13 +693,13 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         String size    = humanFftSize(r.fftSize);
         String overlap = r.overlap.label.replace("%", "").replace('.', '_');
         String window  = r.windowType.name();
-        double distPpm = engine.getBestThdPct() * 1_000_000.0;   // % → ppm % (THD single-tone / IMD dual-tone)
+        double distPpm = engine.getBestThdPct() * 1_000_000.0;   // % -> ppm % (THD single-tone / IMD dual-tone)
         String dist    = String.format(Locale.US, "%.2f", distPpm).replace('.', '_');
         return "predistortion-" + kind + "-" + freq + freq2 + "-" + size + "-" + overlap
                 + "-" + window + "-" + dist + ".dpd";
     }
 
-    /** Compact power-of-two FFT length: 2097152 → "2M", 524288 → "512k". */
+    /** Compact power-of-two FFT length: 2097152 -> "2M", 524288 -> "512k". */
     private String humanFftSize(int n) {
         if (n >= 1 << 20 && n % (1 << 20) == 0) return (n >> 20) + "M";
         if (n >= 1 << 10 && n % (1 << 10) == 0) return (n >> 10) + "k";
@@ -777,15 +777,15 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     // -------------------------------------------------------------------------
 
     private String fmtPct(double v) {
-        return Double.isFinite(v) ? String.format(Locale.US, "%.8f %%", v) : "—";
+        return Double.isFinite(v) ? String.format(Locale.US, "%.8f %%", v) : "-";
     }
 
     private String fmtDbv(double v) {
-        return Double.isFinite(v) ? String.format(Locale.US, "%.2f dBV", v) : "—";
+        return Double.isFinite(v) ? String.format(Locale.US, "%.2f dBV", v) : "-";
     }
 
     private String fmtHz(double v) {
-        return Double.isFinite(v) ? String.format(Locale.US, "%.4f", v) : "—";
+        return Double.isFinite(v) ? String.format(Locale.US, "%.4f", v) : "-";
     }
 
     private String fmt(double v) {

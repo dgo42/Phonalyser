@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -29,7 +29,7 @@ import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Detects whether this process is running inside an MSIX / AppX package — i.e.
+ * Detects whether this process is running inside an MSIX / AppX package - i.e.
  * installed from the Microsoft Store. Such installs are updated automatically by
  * the Store, so the app's own GitHub update check must stand down for them (it
  * would otherwise send Store users to a GitHub download that can't update an
@@ -46,7 +46,7 @@ public class WindowsPackage {
     /** Returned by GetCurrentPackageFullName when the process is NOT packaged. */
     private static final int APPMODEL_ERROR_NO_PACKAGE = 15700;
 
-    private Boolean packaged;   // constant per process — resolved once
+    private Boolean packaged;   // constant per process - resolved once
 
     private interface Kernel32 extends Library {
         Kernel32 INSTANCE = Native.load("kernel32", Kernel32.class);

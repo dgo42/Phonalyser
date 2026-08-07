@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -30,23 +30,29 @@ import lombok.extern.log4j.Log4j2;
  * Started by {@code GuiMain} right after the main window opened when the
  * application was launched with {@code --automation=<script>}.
  *
- * <p>Two — and only two — kinds of {@code <script>} are accepted:
+ * <p>Two - and only two - kinds of {@code <script>} are accepted:
  * <ul>
  *   <li>a path ending in {@code .body}: a <b>sandboxed body-only snippet</b>
  *       compiled on the fly by {@link ScriptCompiler#compileBodyAndLoad},
  *       which can call nothing but the inherited base-class API; and</li>
  *   <li>a bare class name: a script <b>already compiled into the
  *       application</b> (e.g. the bundled doc-screenshot run), loaded
- *       reflectively — {@link Class#forName} resolves against the classpath,
+ *       reflectively - {@link Class#forName} resolves against the classpath,
  *       so it can never load arbitrary code from a file.</li>
  * </ul>
  * Compiling an arbitrary {@code .java} <em>source file</em> is deliberately
- * NOT supported — that was an arbitrary-code-execution vector.  A run-time
+ * NOT supported - that was an arbitrary-code-execution vector.  A run-time
  * script must be a sandboxed {@code .body} snippet.
  *
- * <p>When the script returns — or throws — the runner closes the main window,
+ * <p>When the script returns - or throws - the runner closes the main window,
  * ending the SWT event loop, so an unattended doc-generation run exits by
  * itself.
+ *
+ * <p>The runner owns the run's VERDICT: anything that aborts the script -
+ * a resolve / compile failure or a throw out of {@code run()} - marks the
+ * run failed, and {@code GuiMain} turns that into the process exit code.
+ * The exception is still only logged, never rethrown, so the close-the-window
+ * behaviour is unchanged for an unattended documentation run.
  */
 @Log4j2
 public final class AutomationRunner {
@@ -59,8 +65,12 @@ public final class AutomationRunner {
 
     private final Display    display;
     private final MainWindow window;
-    /** Script class name — or a {@code .java} source-file path. */
+    /** Script class name - or a {@code .java} source-file path. */
     private final String     script;
+
+    /** Set by the automation thread when the script aborted; read by the
+     *  main thread after the event loop ended - hence volatile. */
+    private volatile boolean failed;
 
     public AutomationRunner(Display display, MainWindow window, String script) {
         this.display = display;
@@ -68,7 +78,7 @@ public final class AutomationRunner {
         this.script  = script;
     }
 
-    /** Spawns the automation thread (daemon — it must never keep the JVM
+    /** Spawns the automation thread (daemon - it must never keep the JVM
      *  alive past the event loop). */
     public void start() {
         Thread t = new Thread(this::runScript, "gui-automation");
@@ -76,17 +86,41 @@ public final class AutomationRunner {
         t.start();
     }
 
+    /** Whether the script aborted - the run's verdict, for the caller that
+     *  decides the process exit code.  Hand-written rather than generated
+     *  because the name is the contract ({@code isFailed} would read wrong
+     *  for a verdict). */
+    public boolean hasFailed() {
+        return failed;
+    }
+
     private void runScript() {
         log.info("Automation: running script {}", script);
+        AbstractAutomationScript instance = null;
+        Throwable error = null;
         try {
-            AbstractAutomationScript instance = resolveScriptClass()
+            instance = resolveScriptClass()
                     .getConstructor(Display.class, MainWindow.class)
                     .newInstance(display, window);
             instance.run();
             log.info("Automation: script {} finished.", script);
-        } catch (Exception ex) {
+        } catch (Throwable ex) {
+            // Throwable, not Exception: an SWTError (display disposed under the
+            // script) or an AssertionError aborts the run just as thoroughly as
+            // an exception, and a verdict that called those runs successful
+            // would be worthless.  Still only logged, never rethrown.
+            error  = ex;
+            failed = true;
             log.error("Automation: script {} failed", script, ex);
         } finally {
+            // In the finally, and with the error, so a run that DIED still
+            // writes down every check it had already recorded plus what killed
+            // it - the post-mortem is the only thing the harness gets.  Null
+            // only when the script could not be resolved or compiled at all,
+            // and then there are no checks and no file to write.
+            if (instance != null && !instance.finishAutomation(error)) {
+                failed = true;
+            }
             if (!display.isDisposed()) {
                 display.syncExec(window::close);
             }

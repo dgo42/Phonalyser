@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  phonalyser-cli — the headless command-line modes (org.edgo.audio.measure.Main
+  phonalyser-cli - the headless command-line modes (org.edgo.audio.measure.Main
   plus cli.**).  Verified SWT-free and gui-free: nothing here imports
   org.eclipse.swt or org.edgo.audio.measure.gui.
 
@@ -17,7 +17,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.1.1</version>
+        <version>1.2.0</version>
         <relativePath>../phonalyser-parent</relativePath>
     </parent>
 
@@ -36,7 +36,7 @@
         </dependency>
 
         <!-- Backends are RUNTIME only: they are discovered through the service
-             loader, so CLI code never names one — with the single exception of
+             loader, so CLI code never names one - with the single exception of
              JavaSound below. -->
         <dependency>
             <groupId>${project.groupId}</groupId>
@@ -56,7 +56,7 @@
         <!-- COMPILE scope, unlike its siblings: CliAppPaths names the JavaSound
              backend's native-path helper to stage the csjsound provider's DLL for
              fat-jar runs, which has to happen before the JavaSound service scan.
-             Do NOT also list it in runtime scope — a second declaration of the same
+             Do NOT also list it in runtime scope - a second declaration of the same
              artifact wins with its own scope and silently demotes this one, and the
              module then fails to compile. -->
         <dependency>

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -32,7 +32,7 @@ import org.edgo.audio.measure.sound.DeviceRef;
 import java.util.Locale;
 
 /**
- * {@code --generate} — DAC playback only, no capture.
+ * {@code --generate} - DAC playback only, no capture.
  *
  * <p>Synthesises one of {@code sine | triangle | rectangle | white_noise |
  * pink_noise | pink_noise_linear | sine_compensated} on the selected output
@@ -51,7 +51,7 @@ import java.util.Locale;
 @Log4j2
 public class GenerateMode {
 
-    /** The CLI's single Preferences instance (transient mode) — injected by Main. */
+    /** The CLI's single Preferences instance (transient mode) - injected by Main. */
     @Setter
     private Preferences prefs;
 
@@ -173,7 +173,8 @@ public class GenerateMode {
         } else {
             generator = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, prefs.getDacFsVoltageAmpl());
         }
-        try (AudioPlayback ag = AudioBackend.instance().openPlayback(mixer, sampleRate, bitDepth, ditherBits)) {
+        try (AudioPlayback ag = AudioBackend.instance().playbackManager(mixer)
+                .openPlayback(mixer, sampleRate, bitDepth, ditherBits)) {
             ag.open();
             ag.play(generator, duration);
         }

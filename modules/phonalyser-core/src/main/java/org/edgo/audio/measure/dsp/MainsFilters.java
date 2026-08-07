@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -22,7 +22,7 @@ import org.edgo.audio.measure.enums.MainsSuppression;
 
 import lombok.experimental.UtilityClass;
 
-/** Builds the {@link MainsTimeFilter} for a {@link MainsSuppression} mode —
+/** Builds the {@link MainsTimeFilter} for a {@link MainsSuppression} mode -
  *  the single place the scope (display + measurement) and the FFT pre-filter
  *  map the selected mode to a filter instance.  Lives in {@code dsp} (which
  *  already depends on {@code enums}) so the enum stays a dependency-free leaf. */

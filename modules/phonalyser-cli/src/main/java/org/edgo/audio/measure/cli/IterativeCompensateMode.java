@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -54,7 +54,7 @@ import lombok.Value;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * {@code --iterative-compensate} — closed-loop DAC pre-distortion to drive
+ * {@code --iterative-compensate} - closed-loop DAC pre-distortion to drive
  * THD down toward the noise floor.
  *
  * <p>Iteration 0 captures an uncompensated sine; each subsequent iteration
@@ -68,7 +68,7 @@ import lombok.extern.log4j.Log4j2;
  *       compensation builds up across iterations.
  * </ul>
  *
- * <p>Every detected harmonic is corrected — there is no noise-floor gate.
+ * <p>Every detected harmonic is corrected - there is no noise-floor gate.
  * Stopping conditions: {@code --target-thd} reached, THD grew for
  * {@code --stop-after} consecutive iterations (default 4), or user pressed
  * Enter (manual stop offers a per-iteration pick menu).
@@ -85,7 +85,7 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public class IterativeCompensateMode {
 
-    /** The CLI's single Preferences instance (transient mode) — injected by Main. */
+    /** The CLI's single Preferences instance (transient mode) - injected by Main. */
     @Setter
     private Preferences prefs;
 
@@ -168,7 +168,7 @@ public class IterativeCompensateMode {
         } else {
             fundRefDbV = Double.NaN;
         }
-        // The analyzer speaks dBFS only — convert the user-supplied dBV anchor at the boundary.
+        // The analyzer speaks dBFS only - convert the user-supplied dBV anchor at the boundary.
         double fundRefDbFs = fundRefDbV - prefs.getDbvOffsetDb();
 
         if (!SampleRates.isValid(sampleRate)) {
@@ -188,7 +188,7 @@ public class IterativeCompensateMode {
         long   alignedBin    = Math.round(frequency * fftSize / (double) sampleRate);
         if (alignedBin < 1) alignedBin = 1;
         frequency = alignedBin * sampleRate / (double) fftSize;
-        log.info("Frequency snap: requested {} Hz → bin {} → aligned {} Hz (Δ={} Hz, bin width={} Hz)",
+        log.info("Frequency snap: requested {} Hz -> bin {} -> aligned {} Hz (Δ={} Hz, bin width={} Hz)",
                 String.format(Locale.US, "%.6f", freqRequested),
                 alignedBin,
                 String.format(Locale.US, "%.10f", frequency),
@@ -229,9 +229,9 @@ public class IterativeCompensateMode {
         // Same de-embed the GUI wizard does: the correction reads the RAW
         // measured phasors (captured by analyze before applyCompensationInPlace
         // de-embeds re/im) and divides each by the .frc response H(f), taking out
-        // both magnitude and phase.  Outside the cal's span → unit response,
+        // both magnitude and phase.  Outside the cal's span -> unit response,
         // mirroring the bin-range guard in applyCompensationInPlace.  No .frc
-        // loaded → unit response everywhere.
+        // loaded -> unit response everywhere.
         final FreqRespCalibration calForResp = freqRespCal;
         DoubleFunction<double[]> calResponseAt = (calForResp == null) ? f -> new double[]{ 1.0, 0.0 }
                 : f -> (f >= calForResp.freqs[0] && f <= calForResp.freqs[calForResp.freqs.length - 1])
@@ -244,7 +244,7 @@ public class IterativeCompensateMode {
         final double MAX_FUND_EXCLUSION_HZ = 500.0;
         final double MAX_FREQ_DRIFT_PPM = 3.0;
 
-        // The running correction accumulator (accumulate mode only) — the
+        // The running correction accumulator (accumulate mode only) - the
         // single home of the per-iteration phasor update + the applied-
         // compensation CSV, shared with the GUI predistortion wizard.
         HarmonicCompensation comp = accumulate ? new HarmonicCompensation(harmonics) : null;
@@ -275,7 +275,7 @@ public class IterativeCompensateMode {
                         windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbFs,
                         freqRespCal == null, frequency);
             } catch (IllegalStateException e) {
-                log.warn("Iteration 0 retry {}: {} — signal interrupted, retrying",
+                log.warn("Iteration 0 retry {}: {} - signal interrupted, retrying",
                         retry + 1, e.getMessage());
                 continue;
             }
@@ -292,7 +292,7 @@ public class IterativeCompensateMode {
                 FreqRespCalHelper.applyCompensationInPlace(result0, freqRespCal, calNoise);
             }
             if (result0.fundamentalDynExclusionHz > MAX_FUND_EXCLUSION_HZ) {
-                log.warn("Iteration 0 retry {}: fundamental exclusion {} Hz > {} Hz — signal interrupted, retrying",
+                log.warn("Iteration 0 retry {}: fundamental exclusion {} Hz > {} Hz - signal interrupted, retrying",
                         retry + 1,
                         String.format(Locale.US, "%.1f", result0.fundamentalDynExclusionHz),
                         String.format(Locale.US, "%.1f", MAX_FUND_EXCLUSION_HZ));
@@ -300,7 +300,7 @@ public class IterativeCompensateMode {
             }
             double ppm0 = 1e6 * (result0.fundamentalHzRefined - frequency) / frequency;
             if (Math.abs(ppm0) > MAX_FREQ_DRIFT_PPM) {
-                log.warn("Iteration 0 retry {}: frequency drift {} ppm > ±{} ppm (gen={} Hz, meas={} Hz) — clock glitch, retrying",
+                log.warn("Iteration 0 retry {}: frequency drift {} ppm > ±{} ppm (gen={} Hz, meas={} Hz) - clock glitch, retrying",
                         retry + 1,
                         String.format(Locale.US, "%+.2f", ppm0),
                         String.format(Locale.US, "%.2f", MAX_FREQ_DRIFT_PPM),
@@ -313,7 +313,7 @@ public class IterativeCompensateMode {
 
         double signalRatio = Math.pow(10.0, result0.fundamentalDbFs / 20.0);
         double adcFsVrms   = amplitude / signalRatio;
-        log.info("ADC FS derived: {} V RMS  ({} V peak)  — fundamental at {} dBFS, generator {} V RMS",
+        log.info("ADC FS derived: {} V RMS  ({} V peak)  - fundamental at {} dBFS, generator {} V RMS",
                 String.format(Locale.US, "%.4f", adcFsVrms),
                 String.format(Locale.US, "%.4f", adcFsVrms * Math.sqrt(2.0)),
                 String.format(Locale.US, "%.2f", result0.fundamentalDbFs),
@@ -352,7 +352,7 @@ public class IterativeCompensateMode {
                     if (System.in.available() > 0) {
                         r.readLine();
                         stopRequested.set(true);
-                        log.info("Keyboard stop requested — finishing current iteration then saving best result.");
+                        log.info("Keyboard stop requested - finishing current iteration then saving best result.");
                         return;
                     }
                     Thread.sleep(200);
@@ -391,7 +391,7 @@ public class IterativeCompensateMode {
                             windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbFs,
                             freqRespCal == null, frequency);
                 } catch (IllegalStateException e) {
-                    log.warn("Iteration {} retry {}: {} — signal interrupted, retrying",
+                    log.warn("Iteration {} retry {}: {} - signal interrupted, retrying",
                             iter, retry + 1, e.getMessage());
                     continue;
                 }
@@ -408,7 +408,7 @@ public class IterativeCompensateMode {
                     FreqRespCalHelper.applyCompensationInPlace(result, freqRespCal, calNoise);
                 }
                 if (result.fundamentalDynExclusionHz > MAX_FUND_EXCLUSION_HZ) {
-                    log.warn("Iteration {} retry {}: fundamental exclusion {} Hz > {} Hz — signal interrupted, retrying",
+                    log.warn("Iteration {} retry {}: fundamental exclusion {} Hz > {} Hz - signal interrupted, retrying",
                             iter, retry + 1,
                             String.format(Locale.US, "%.1f", result.fundamentalDynExclusionHz),
                             String.format(Locale.US, "%.1f", MAX_FUND_EXCLUSION_HZ));
@@ -416,7 +416,7 @@ public class IterativeCompensateMode {
                 }
                 double ppm = 1e6 * (result.fundamentalHzRefined - frequency) / frequency;
                 if (Math.abs(ppm) > MAX_FREQ_DRIFT_PPM) {
-                    log.warn("Iteration {} retry {}: frequency drift {} ppm > ±{} ppm (gen={} Hz, meas={} Hz) — clock glitch, retrying",
+                    log.warn("Iteration {} retry {}: frequency drift {} ppm > ±{} ppm (gen={} Hz, meas={} Hz) - clock glitch, retrying",
                             iter, retry + 1,
                             String.format(Locale.US, "%+.2f", ppm),
                             String.format(Locale.US, "%.2f", MAX_FREQ_DRIFT_PPM),
@@ -434,7 +434,7 @@ public class IterativeCompensateMode {
                 comp.accumulate(result, compStep, calResponseAt.apply(result.fundamentalHzRefined)[1]);
             }
 
-            // Reuses the exporter configured for iteration 0 — same ADC full-scale.
+            // Reuses the exporter configured for iteration 0 - same ADC full-scale.
             exporter.exportChart(result, chartWidth, chartHeight, "results",
                     String.format("Iteration %d", iter), false,
                     String.format("fft_chart_iter%d_", iter) + wfTs, frequency,
@@ -455,7 +455,7 @@ public class IterativeCompensateMode {
             snapshots.add(new IterSnapshot(iter, result, applied));
 
             if (targetThd > 0 && result.thdPct <= targetThd) {
-                log.info("THD {} % reached target {} % — stopping.",
+                log.info("THD {} % reached target {} % - stopping.",
                         String.format(Locale.US, "%.8f", result.thdPct),
                         String.format(Locale.US, "%.8f", targetThd));
                 break;
@@ -470,10 +470,10 @@ public class IterativeCompensateMode {
                 if (growing) {
                     StringBuilder sb = new StringBuilder("THD growing: ");
                     for (int g = stopAfter; g >= 0; g--) {
-                        if (g < stopAfter) sb.append(" → ");
+                        if (g < stopAfter) sb.append(" -> ");
                         sb.append(String.format(Locale.US, "%.8f", thdHistory.get(n - 1 - g)));
                     }
-                    sb.append(" — stopping.");
+                    sb.append(" - stopping.");
                     log.info(sb.toString());
                     break;
                 }
@@ -503,7 +503,7 @@ public class IterativeCompensateMode {
                         if (snap.getIter() == pick) { chosen = snap; break; }
                     }
                     if (chosen == null) {
-                        log.warn("Iteration {} not found in snapshots — keeping BEST iter {}.",
+                        log.warn("Iteration {} not found in snapshots - keeping BEST iter {}.",
                                 pick, bestIter);
                     } else {
                         bestIter   = chosen.getIter();

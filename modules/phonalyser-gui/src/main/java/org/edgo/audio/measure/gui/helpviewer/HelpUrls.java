@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -39,7 +39,7 @@ public final class HelpUrls {
 
     /** Microsoft Store product ID of the app's listing.  Fills the
      *  {@code ms-windows-store:} deep link the in-app update check opens when the
-     *  app runs as a Store (MSIX) package — empty until the app is in the Store,
+     *  app runs as a Store (MSIX) package - empty until the app is in the Store,
      *  in which case the generic Store "Downloads &amp; updates" page is opened. */
     public static final String STORE_PRODUCT_ID = "9NR1W5DKW71M";
 

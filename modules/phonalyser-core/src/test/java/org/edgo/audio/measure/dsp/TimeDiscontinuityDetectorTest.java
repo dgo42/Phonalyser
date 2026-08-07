@@ -9,7 +9,7 @@ import java.util.Random;
 import org.junit.jupiter.api.Test;
 
 /**
- * Tests for the shared time-domain discontinuity detector — with emphasis on the
+ * Tests for the shared time-domain discontinuity detector - with emphasis on the
  * HIGH-frequency case that motivated the sinusoid-recurrence predictor: at
  * 20 kHz / 384 kHz a plain second-difference threshold rides on the tone's own
  * curvature (~0.5·A) and misses every glitch smaller than a full-peak drop,
@@ -27,7 +27,7 @@ class TimeDiscontinuityDetectorTest {
     private static final double NEAR_FS    = 0.999;               // near full-scale tone amplitude
     private static final double SLIP       = 50e-9 * 384_000.0;   // 50 ns capture-timing slip ≈ 0.0192 sample
     private static final int    SLIP_EVERY = 200;                 // one ± slip per this many samples (isolated)
-    private static final double EVENT_FRAC = 0.2;                 // maintainer's minimum real-event deviation (×A)
+    private static final double EVENT_FRAC = 0.2;                 // minimum real-event deviation (×A)
 
     private final TimeDiscontinuityDetector detector = new TimeDiscontinuityDetector();
 
@@ -42,7 +42,7 @@ class TimeDiscontinuityDetectorTest {
     }
 
     /** Near-FS sine whose sample times carry repeated, isolated ±50 ns sub-sample
-     *  slips — the physical spur the amplitude floor must reject.  Each slip leaks
+     *  slips - the physical spur the amplitude floor must reject.  Each slip leaks
      *  a recurrence residual {@code e ≈ 2·cos ω · A·ω·δt} that grows with tone
      *  frequency; noise-referenced alone it over-fires above a few kHz. */
     private float[] slippedSine(double w) {
@@ -67,7 +67,7 @@ class TimeDiscontinuityDetectorTest {
     @Test
     void highFrequencyGapNearZeroCrossing_detected() {
         // The regression: a 60-sample dropout starting just past a zero crossing
-        // of a 20 kHz tone.  Entry step ≈ 0.2·A — far below the old Δ² curvature
+        // of a 20 kHz tone.  Entry step ≈ 0.2·A - far below the old Δ² curvature
         // threshold (~0.54·A at this f/fs), invisible to the scope while the
         // FFT's spectral gates flagged it.  The recurrence predictor must fire.
         float[] d = noisySine(W_20K, 0.0);
@@ -83,7 +83,7 @@ class TimeDiscontinuityDetectorTest {
 
     @Test
     void highFrequencyPhaseSplice_detected() {
-        // ADC-side cutoff: 30 samples removed mid-stream — the waveform splices
+        // ADC-side cutoff: 30 samples removed mid-stream - the waveform splices
         // to a later phase with a modest level step but a broken recurrence.
         Random rnd = new Random(7);
         float[] d = new float[N];
@@ -123,7 +123,7 @@ class TimeDiscontinuityDetectorTest {
     void timingSlips_neverFire_atHighFrequency() {
         // Near-FS 20 kHz tone with repeated 50 ns capture-timing slips.  The slip
         // residual (measured max |e| ≈ 0.012·A) clears the noise-referenced 8×mean
-        // (≈2e-3), so a relative-only threshold over-fires — but it stays far below
+        // (≈2e-3), so a relative-only threshold over-fires - but it stays far below
         // the amplitude floor (0.05·A ≈ 0.05), so the floored detector is silent.
         float[] d = slippedSine(W_20K);
         assertEquals(-1.0, detector.findDiscontinuity(d, 2, N, true, MERGE, W_20K),      1e-12, "known-fundamental");
@@ -135,7 +135,7 @@ class TimeDiscontinuityDetectorTest {
 
     @Test
     void realEvent_minimumDeviation_fires_overSlips() {
-        // The maintainer's smallest real event: a 0.2·A deviation spanning 3 samples,
+        // The smallest real event: a 0.2·A deviation spanning 3 samples,
         // riding on the same slip-laden 20 kHz tone.  Its recurrence error is ≈ 0.2·A
         // (12 dB above the 0.05·A floor), so it fires while the slips do not.
         float[] d = slippedSine(W_20K);
@@ -149,7 +149,7 @@ class TimeDiscontinuityDetectorTest {
     void zeroPause_fires_atLowAndHighFrequency() {
         // Zero-pause dropout: 30 samples forced to 0 V mid-tone.  The drop/recovery
         // recurrence error reaches ≈ A (measured ≈ 0.98·A), decades above the floor,
-        // at BOTH 1 kHz and 20 kHz — the floor never masks a real dropout.
+        // at BOTH 1 kHz and 20 kHz - the floor never masks a real dropout.
         for (double w : new double[] { W_1K, W_20K }) {
             float[] d = noisySine(w, 0.0);
             int pause = 2000;
@@ -161,7 +161,7 @@ class TimeDiscontinuityDetectorTest {
 
     @Test
     void pureNoise_relativeTermGoverns_floorNegligible() {
-        // No tone → amplitude floor collapses to 0.05·√2·σ ≈ 0.07·σ, ~two decades
+        // No tone -> amplitude floor collapses to 0.05·√2·σ ≈ 0.07·σ, ~two decades
         // below the relative term 8·mean|e| ≈ 9·σ, so the relative term is the
         // threshold and behaviour matches the pre-floor detector.
         final double sigma = 1e-3;
@@ -170,10 +170,10 @@ class TimeDiscontinuityDetectorTest {
         for (int i = 0; i < N; i++) d[i] = (float) (sigma * rnd.nextGaussian());
         assertEquals(-1.0, detector.findDiscontinuity(d, 2, N, true, MERGE, Double.NaN), 1e-12, "clean noise");
         // A 2σ deviation is ~28× the floor yet ~4× below the relative threshold: it
-        // must NOT fire — proving the relative term, not the floor, governs here.
+        // must NOT fire - proving the relative term, not the floor, governs here.
         d[4000] += (float) (2 * sigma);
         assertEquals(-1.0, detector.findDiscontinuity(d, 2, N, true, MERGE, Double.NaN), 1e-12, "sub-relative deviation");
-        // A full-scale spike is decades above the relative threshold — still fires.
+        // A full-scale spike is decades above the relative threshold - still fires.
         d[4000] += 1.0f;
         assertTrue(detector.findDiscontinuity(d, 2, N, true, MERGE, Double.NaN) >= 0, "large spike");
     }

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -40,12 +40,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class SignalGeneratorTest {
 
-    /** DAC full-scale RMS voltage used by every test — a literal, not Preferences. */
+    /** DAC full-scale RMS voltage used by every test - a literal, not Preferences. */
     private static final double DAC_FS_VRMS = 2.79351;
 
     @Test
     void sine_matchesAnalyticForm() {
-        // 1 kHz at 48 kHz, 1 V RMS → 480 samples = 10 full cycles.
+        // 1 kHz at 48 kHz, 1 V RMS -> 480 samples = 10 full cycles.
         // The 32-bit phase accumulator + 4096-entry table + 2nd-order
         // Taylor correction should match Math.sin to better than 1e-5.
         int    sampleRate = 48_000;
@@ -74,7 +74,7 @@ class SignalGeneratorTest {
         int    sampleRate = 48_000;
         double freqHz     = 1_000.0;
         double vrms       = 0.5;
-        int    samples    = sampleRate;  // 1 second → 1000 full periods
+        int    samples    = sampleRate;  // 1 second -> 1000 full periods
 
         SignalGenerator gen = new SignalGenerator(
                 GenSignalForm.SINE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
@@ -142,7 +142,7 @@ class SignalGeneratorTest {
     @Test
     void sine_outputClipsWithinNormalisedRange() {
         // nextSample() returns samples in [-1, +1] regardless of input
-        // amplitude — clipping the caller's responsibility.  But for a
+        // amplitude - clipping the caller's responsibility.  But for a
         // reasonable amplitude (< full-scale) every sample should stay
         // within the normalised range with room to spare.
         SignalGenerator gen = new SignalGenerator(

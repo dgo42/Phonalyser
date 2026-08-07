@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Tests the single source of truth for axis-tick math, now consolidated on
  * {@link AbstractMeasurementView} (the FFT and FreqResp views share it; the
  * former standalone {@code FftAxisTicks} / {@code FreqRespAxisTicks} copies are
- * gone).  Pure-math static methods — no SWT widget is instantiated.
+ * gone).  Pure-math static methods - no SWT widget is instantiated.
  */
 class AbstractMeasurementViewTicksTest {
 
@@ -40,12 +40,12 @@ class AbstractMeasurementViewTicksTest {
         double[] t = AbstractMeasurementView.niceLinearMajors(0.0, 100.0, 10);
         assertTrue(t.length >= 9);
         assertEquals(0.0, t[0], 1e-9);
-        assertEquals(10.0, t[1] - t[0], 1e-9);     // 1 / 2 / 2.5 / 5 × 10ⁿ family → 10
+        assertEquals(10.0, t[1] - t[0], 1e-9);     // 1 / 2 / 2.5 / 5 × 10ⁿ family -> 10
     }
 
     @Test
     void niceLinearMajors_subDecadeZoom_givesManyFineTicks() {
-        // The sub-decade improvement: a 990–1010 Hz window must produce several
+        // The sub-decade improvement: a 990-1010 Hz window must produce several
         // round ticks (≤ 2 Hz steps), not the single "1000" decade gridpoint.
         double[] t = AbstractMeasurementView.niceLinearMajors(990.0, 1010.0, 12);
         assertTrue(t.length >= 5, "expected many fine ticks, got " + t.length);
@@ -74,6 +74,37 @@ class AbstractMeasurementViewTicksTest {
         double[] fiveDecades = AbstractMeasurementView.adaptiveLogLabels(1.0, 100_000.0);
         assertTrue(countIn(oneDecade, 1.0, 9.999) > countIn(fiveDecades, 1.0, 9.999),
                 "a 1-decade view should label more sub-decade positions than a 5-decade view");
+    }
+
+    @Test
+    void tickDecimals_growOnlyOnceTheStepDropsBelowOne() {
+        // Wide spans keep the axis's classic look: 10 dB and 1 dB steps -> "%.1f".
+        assertEquals(1, AbstractMeasurementView.tickDecimals(10.0, 1));
+        assertEquals(1, AbstractMeasurementView.tickDecimals(1.0,  1));
+        // A deep magnitude zoom: one decimal place per decade below 1.
+        assertEquals(1, AbstractMeasurementView.tickDecimals(0.5,   1));
+        assertEquals(2, AbstractMeasurementView.tickDecimals(0.05,  1));
+        assertEquals(3, AbstractMeasurementView.tickDecimals(0.005, 1));
+        // Capped - a label may not outgrow the axis gutter.
+        assertEquals(4, AbstractMeasurementView.tickDecimals(1e-9, 1));
+        // No step known (a wide log axis) -> the coarse default, whatever it is.
+        assertEquals(0, AbstractMeasurementView.tickDecimals(0.0, 0));
+        assertEquals(2, AbstractMeasurementView.tickDecimals(0.0, 2));
+    }
+
+    @Test
+    void formatFreqDecadeTick_dropsTheZeroesTheDecadeDoesNotNeed() {
+        assertEquals("1 kHz",  AbstractMeasurementView.formatFreqDecadeTick(1000.0));
+        assertEquals("2 kHz",  AbstractMeasurementView.formatFreqDecadeTick(2000.0));
+        assertEquals("20 kHz", AbstractMeasurementView.formatFreqDecadeTick(20000.0));
+        assertEquals("100 Hz", AbstractMeasurementView.formatFreqDecadeTick(100.0));
+        assertEquals("20 Hz",  AbstractMeasurementView.formatFreqDecadeTick(20.0));
+        // Below 1 Hz the decade itself is fractional, so one decimal is needed.
+        // Expectation built with the same default locale the label uses, so the
+        // assertion pins the DECIMAL COUNT and not the decimal separator.
+        assertEquals(String.format("%.1f Hz", 0.5),
+                AbstractMeasurementView.formatFreqDecadeTick(0.5));
+        assertEquals("-",      AbstractMeasurementView.formatFreqDecadeTick(0.0));
     }
 
     @Test

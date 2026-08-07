@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -45,7 +45,7 @@ import lombok.extern.log4j.Log4j2;
  * <h2>Lifecycle</h2>
  * <p>Call {@link #registerShell(Shell)} on the main shell; when it is disposed
  * every cached Image is disposed and the cache cleared, so a fresh shell (e.g.
- * after a language switch) starts clean.  SWT is single-threaded — the cache is
+ * after a language switch) starts clean.  SWT is single-threaded - the cache is
  * only touched from the UI thread that owns the {@link Display}.
  */
 @Log4j2
@@ -61,7 +61,7 @@ public class IconUtils {
 
     /**
      * Returns the cached {@link Image} for {@code icon}, loading its PNG from
-     * {@code /icons} on first request.  The image is owned by this cache — never
+     * {@code /icons} on first request.  The image is owned by this cache - never
      * dispose it at the call site.  Returns {@code null} (logged) if the
      * resource is missing.
      */

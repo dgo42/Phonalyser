@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -52,7 +52,7 @@ public class Main {
         AudioBackend.instance().setActive(AudioBackendType.fromString(ArgParser.getArgValue(args, "--backend")));
         // CLI is headless and single-shot: mark Preferences transient so any value
         // injected for this run (e.g. --adc-fs-vrms) never overwrites the GUI's YAML.
-        // Main owns the instance and injects it into the modes that need it — the
+        // Main owns the instance and injects it into the modes that need it - the
         // modes never reach into the singleton themselves.
         Preferences prefs = Preferences.instance();
         prefs.setTransientMode(true);

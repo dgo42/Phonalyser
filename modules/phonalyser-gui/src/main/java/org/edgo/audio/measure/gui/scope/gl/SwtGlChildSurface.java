@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -86,18 +86,18 @@ import static org.lwjgl.system.MemoryUtil.NULL;
  * {@link GlScopeSurface} for macOS, where SWT's own {@code GLCanvas} crashes on
  * Cocoa.  A borderless GLFW OpenGL window is reparented as a Cocoa <b>child
  * window</b> of the SWT shell and tracks the on-screen rectangle of an SWT
- * placeholder control ({@link #control()}) that holds the scope's layout cell — so
+ * placeholder control ({@link #control()}) that holds the scope's layout cell - so
  * the pane lays out exactly as on Windows / Linux while the GPU draws into the
  * floating child.  Rendering uses LWJGL NanoVG (GL3 core profile).
  *
  * <p>Cross-compiles on every OS: the Cocoa reparent is reached only through
- * reflection (the SWT NSWindow pointer, matched by simple type name) and JNA →
+ * reflection (the SWT NSWindow pointer, matched by simple type name) and JNA ->
  * libobjc (the {@code addChildWindow:ordered:} message); it executes only on
  * macOS.  GLFW must be initialised first ({@link Glfw}) and the JVM launched with
  * {@code -XstartOnFirstThread}.
  *
  * <p>Unlike the probe it grew from, {@link #render()} runs on the SWT UI thread,
- * driven by the scope's realtime-frame loop — the scope's capture / trigger /
+ * driven by the scope's realtime-frame loop - the scope's capture / trigger /
  * filter state is UI-thread, so rendering there keeps it thread-safe.  Because the
  * child window floats above the placeholder, the placeholder never receives native
  * mouse events; instead GLFW's input callbacks (which fire on the UI thread during
@@ -116,7 +116,7 @@ public final class SwtGlChildSurface implements GlScopeSurface {
     }
 
     private static final long   NS_WINDOW_ABOVE   = 1L;   // NSWindowOrderingMode.NSWindowAbove
-    // NSEvent.modifierFlags bits — the floating child never becomes the key window,
+    // NSEvent.modifierFlags bits - the floating child never becomes the key window,
     // so GLFW can't see modifiers; query Cocoa for the wheel zoom/pan axis instead.
     private static final long   NS_SHIFT          = 1L << 17;
     private static final long   NS_COMMAND        = 1L << 20;
@@ -124,13 +124,13 @@ public final class SwtGlChildSurface implements GlScopeSurface {
     private static final int    GL_MAJOR          = 3;
     private static final int    GL_MINOR          = 2;
     private static final int    STENCIL_BITS      = 8;
-    /** Two presses closer than this (ms / px) count as an SWT double-click — GLFW
+    /** Two presses closer than this (ms / px) count as an SWT double-click - GLFW
      *  reports only individual button presses. */
     private static final long   DOUBLE_CLICK_MS   = 300L;
     private static final int    DOUBLE_CLICK_SLOP = 4;
 
     /** Post-open settle poll.  Cocoa finalises the shell frame asynchronously
-     *  after open, and GLFW can re-place the child at show time — a single
+     *  after open, and GLFW can re-place the child at show time - a single
      *  deferred re-track proved too early on the bench (the child sat one
      *  titlebar high until the first render).  So for the first two seconds
      *  the constructor re-tracks on a timer, each tick FORCING the reposition
@@ -152,7 +152,7 @@ public final class SwtGlChildSurface implements GlScopeSurface {
     private int winW, winH;     // child window size in points (SWT coords)
     private int fbW,  fbH;      // framebuffer size in pixels (Retina-aware)
 
-    // Last placeholder screen rectangle pushed to the child — repositioned only on
+    // Last placeholder screen rectangle pushed to the child - repositioned only on
     // change, never per frame (moving + resizing a native window 60×/s crawls).
     private int lastX = Integer.MIN_VALUE, lastY, lastW, lastH;
 
@@ -178,13 +178,13 @@ public final class SwtGlChildSurface implements GlScopeSurface {
             trackPlaceholder();
             placeholder.addListener(SWT.Resize, e -> render());
             // The child is a floating top-level window, not a real Cocoa child of
-            // the placeholder — it follows the placeholder only when something
-            // renders (renderFrame → trackPlaceholder).  Two gaps: (a) at startup
+            // the placeholder - it follows the placeholder only when something
+            // renders (renderFrame -> trackPlaceholder).  Two gaps: (a) at startup
             // the shell frame settles AFTER the one-shot placement above, and an
             // idle scope renders nothing, so the child sat visibly too high until
             // the first mouse-over / resize; (b) dragging the shell with an idle
-            // scope left the child behind.  (a) → the bounded settle poll (see
-            // SETTLE_TRACK_*); (b) → re-track on every shell move (cheap —
+            // scope left the child behind.  (a) -> the bounded settle poll (see
+            // SETTLE_TRACK_*); (b) -> re-track on every shell move (cheap -
             // repositions only on change; a shell RESIZE re-renders via the
             // placeholder listener above).
             Listener shellMoved = e -> trackPlaceholder();
@@ -194,7 +194,7 @@ public final class SwtGlChildSurface implements GlScopeSurface {
                 @Override
                 public void run() {
                     if (placeholder.isDisposed() || window == NULL) return;
-                    lastX = Integer.MIN_VALUE;   // force reposition — see SETTLE_TRACK_* docs
+                    lastX = Integer.MIN_VALUE;   // force reposition - see SETTLE_TRACK_* docs
                     trackPlaceholder();
                     if (--ticksLeft > 0) {
                         placeholder.getDisplay().timerExec(SETTLE_TRACK_INTERVAL_MS, this);
@@ -310,12 +310,13 @@ public final class SwtGlChildSurface implements GlScopeSurface {
         if (visible) {
             glfwShowWindow(window);
             // orderOut on hide drops the Cocoa child-window relationship, so the
-            // re-shown window floats detached / mispositioned — re-establish it.
+            // re-shown window floats detached / mispositioned - re-establish it.
             reparentToShell();
             lastX = Integer.MIN_VALUE;   // force trackPlaceholder to reposition
-            // Re-render once the pane's expand layout has settled — at this point the
+            // Re-render once the pane's expand layout has settled - at this point the
             // placeholder isn't resized yet, so render now would track a stale rect.
-            // (The realtime loop already covers the live-capture case.)
+            // (The realtime loop already covers the live-capture case.)  Deliberate
+            // SAME-thread deferral - not a marshal, so not GuiUtil.marshal.
             if (!placeholder.isDisposed()) placeholder.getDisplay().asyncExec(this::render);
         } else {
             glfwHideWindow(window);
@@ -325,7 +326,7 @@ public final class SwtGlChildSurface implements GlScopeSurface {
     // ─── GLFW window + Cocoa reparent ───────────────────────────────────────────
 
     private void createChildWindow() {
-        if (!Glfw.instance().ensureInit()) return;   // window stays NULL → CPU fallback
+        if (!Glfw.instance().ensureInit()) return;   // window stays NULL -> CPU fallback
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
         glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
@@ -402,7 +403,7 @@ public final class SwtGlChildSurface implements GlScopeSurface {
         glfwGetFramebufferSize(window, a, c); fbW  = a[0]; fbH  = c[0];
     }
 
-    // ─── Input: GLFW callbacks → synthetic SWT events on the placeholder ─────────
+    // ─── Input: GLFW callbacks -> synthetic SWT events on the placeholder ─────────
 
     private void installInputCallbacks() {
         glfwSetCursorPosCallback(window, (win, x, y) -> {
@@ -412,9 +413,9 @@ public final class SwtGlChildSurface implements GlScopeSurface {
         });
         glfwSetMouseButtonCallback(window, (win, button, action, mods) -> {
             int swtButton = switch (button) {
-                case 1  -> 3;   // GLFW right  → SWT button 3
-                case 2  -> 2;   // GLFW middle → SWT button 2
-                default -> 1;   // GLFW left   → SWT button 1
+                case 1  -> 3;   // GLFW right  -> SWT button 3
+                case 2  -> 2;   // GLFW middle -> SWT button 2
+                default -> 1;   // GLFW left   -> SWT button 1
             };
             if (action == GLFW_PRESS) {
                 long now = System.nanoTime();
@@ -436,7 +437,7 @@ public final class SwtGlChildSurface implements GlScopeSurface {
         });
         glfwSetScrollCallback(window, (win, dx, dy) -> {
             // macOS turns Shift+scroll into a HORIZONTAL scroll (delta in dx, dy=0),
-            // so take whichever axis carries the gesture — otherwise Shift+wheel
+            // so take whichever axis carries the gesture - otherwise Shift+wheel
             // reads count 0 and the view's wheel handler ignores it.
             double d = (Math.abs(dy) >= Math.abs(dx)) ? dy : dx;
             postMouse(SWT.MouseWheel, 0, (int) Math.round(d), wheelStateMask());
@@ -444,8 +445,8 @@ public final class SwtGlChildSurface implements GlScopeSurface {
     }
 
     /** Shift / Cmd state for a wheel event, driving the view's pan/zoom axis.
-     *  GLFW can't report it — the child never becomes the key window, so
-     *  glfwGetKey stays empty — so read Cocoa's live {@code [NSEvent modifierFlags]}.
+     *  GLFW can't report it - the child never becomes the key window, so
+     *  glfwGetKey stays empty - so read Cocoa's live {@code [NSEvent modifierFlags]}.
      *  On macOS the zoom gesture is Cmd (the platform's Ctrl-equivalent), mapped to
      *  SWT.CTRL: Cmd+wheel = V/div, Cmd+Shift+wheel = t/div, plain wheel = pan. */
     private int wheelStateMask() {

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,21 +24,21 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 /**
- * An observable, mutable value — the unit of two-way binding between a settings
+ * An observable, mutable value - the unit of two-way binding between a settings
  * control and the {@code Preferences} model.  A parameter that lives in
  * preferences is exposed as a {@code Property}; a control binds to it (via
  * {@code Bindings}) and the view subscribes to it, so neither side ever calls
- * the other — they communicate only through this value.
+ * the other - they communicate only through this value.
  *
  * <p>{@link #set} notifies listeners ONLY when the value actually changes
  * (per {@link Objects#equals}).  That guard is what makes a two-way bind safe:
  * a control echoing back the value it was just handed sets the same value, which
- * is a no-op and fires nothing — so there is no control → property → control
+ * is a no-op and fires nothing - so there is no control -> property -> control
  * feedback loop.
  *
  * <p>Threading contract: writes happen on the UI thread (listeners fire
  * synchronously on the mutating thread), but {@link #get()} is safe from ANY
- * thread — {@code value} is {@code volatile}, so worker threads (scope
+ * thread - {@code value} is {@code volatile}, so worker threads (scope
  * measurement, FFT analysis, audio render) always observe the latest committed
  * value instead of a cached stale one.  Values must stay immutable
  * (boxed primitives, enums, strings) for that hand-off to be sound.  The
@@ -74,7 +74,7 @@ public final class Property<T> {
 
     /** Registers a change listener, fired on every real {@link #set}.  The
      *  caller is responsible for {@link #removeListener} (typically from a
-     *  widget Dispose listener) so the listener — and what it captures — is
+     *  widget Dispose listener) so the listener - and what it captures - is
      *  released. */
     public void addListener(Consumer<T> listener) {
         listeners.add(listener);

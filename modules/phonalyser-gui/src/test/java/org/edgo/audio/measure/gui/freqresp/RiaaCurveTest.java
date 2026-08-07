@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -73,7 +73,7 @@ class RiaaCurveTest {
     @Test
     void recordIsNegativeOfPlayback_withIec() {
         // Even with IEC, record-with-IEC must be the algebraic inverse of
-        // playback-with-IEC so a record→playback chain is flat.
+        // playback-with-IEC so a record->playback chain is flat.
         double[] testHz = { 5, 20, 50, 100, 1000, 10000, 20000 };
         for (double f : testHz) {
             double play = RiaaCurve.evalDb(f, false, true);
@@ -116,7 +116,7 @@ class RiaaCurveTest {
 
     @Test
     void clampsNonPositiveFrequenciesWithoutThrowing() {
-        // Defensive — the view may probe the curve at 0 or even negative
+        // Defensive - the view may probe the curve at 0 or even negative
         // values when the mouse is left of the y-axis.  No NaN / Infinity
         // leaking out.
         double v0 = RiaaCurve.evalDb(0.0,  false, false);

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -31,7 +31,7 @@ import lombok.experimental.UtilityClass;
 
 /**
  * Cooley-Tukey radix-2 decimation-in-time FFT, in-place.  Size must be
- * a power of two.  Pure function on {@code double[]} arrays — no state,
+ * a power of two.  Pure function on {@code double[]} arrays - no state,
  * no allocation past the input buffers, trivially unit-testable.
  *
  * <p>Extracted from {@link FftAnalyzer} so the spectral primitive can
@@ -41,11 +41,11 @@ import lombok.experimental.UtilityClass;
  * <p>Within each butterfly stage the {@code n/len} groups are fully
  * independent (each touches a disjoint {@code [i, i+len)} slice), so for
  * large transforms the groups are split across a small daemon thread pool
- * with a barrier between stages — the big-FFT cost that otherwise can't
+ * with a barrier between stages - the big-FFT cost that otherwise can't
  * keep up with the capture rate at high overlap.  The final
  * {@code log2(THREADS)} stages have fewer groups than threads; there the
  * {@code k}-loop inside each group is chunked instead, each chunk seeding
- * its own twiddle with one {@code cos/sin} — without this the largest
+ * its own twiddle with one {@code cos/sin} - without this the largest
  * ~15-20 % of the butterfly work ran serial and Amdahl capped the whole
  * transform at ~4-5× regardless of cores.  Chunk seeding makes those
  * stages no longer bit-identical to the serial path, but numerically
@@ -59,12 +59,12 @@ public final class Fft {
 
     /** Below this transform size the serial path is faster (fork overhead). */
     private static final int PARALLEL_THRESHOLD = 1 << 16;   // 64k points
-    /** Minimum butterflies per k-chunk in the final stages — below this the
+    /** Minimum butterflies per k-chunk in the final stages - below this the
      *  per-chunk cos/sin seed + fork overhead outweighs the parallelism. */
     private static final int MIN_K_CHUNK = 1 << 14;          // 16k butterflies
-    /** Worker threads — leave one core for the rest of the analysis pipeline. */
+    /** Worker threads - leave one core for the rest of the analysis pipeline. */
     private static final int THREADS = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
-    /** Shared daemon pool; null (⇒ always serial) on ≤2-core machines. */
+    /** Shared daemon pool; null (=> always serial) on ≤2-core machines. */
     private static final ExecutorService POOL =
             THREADS < 2 ? null : Executors.newFixedThreadPool(THREADS, daemonFactory());
 
@@ -135,7 +135,7 @@ public final class Fft {
                     work.add(() -> { stageGroups(re, im, gStart, gEnd, flen, wRe, wIm); return null; });
                 }
             } else {
-                // Final stages: fewer groups than threads — chunk each
+                // Final stages: fewer groups than threads - chunk each
                 // group's k-loop instead, seeding the twiddle per chunk
                 // (see the class doc's numerics note).
                 int half    = flen >> 1;

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -71,7 +71,7 @@ public class RegressionCalibrator {
         public final int    codeCount;
         /** Refined fundamental frequency of the fitted sine in Hz. */
         public final double fundamentalHz;
-        /** Fitted sine amplitude (normalized, −1…+1 scale). */
+        /** Fitted sine amplitude (normalized, −1...+1 scale). */
         public final double amplitude;
         /** Fitted DC offset (normalized). */
         public final double dcOffset;
@@ -82,7 +82,7 @@ public class RegressionCalibrator {
         /**
          * Average error per ADC code in LSB.
          * Positive = ADC reads too high (ideal is lower than measured).
-         * Index is the unsigned ADC code 0…codeCount−1.
+         * Index is the unsigned ADC code 0...codeCount−1.
          */
         public final double[] avgErrorLsb;
         /** Number of samples that mapped to each ADC code. */
@@ -113,7 +113,7 @@ public class RegressionCalibrator {
     /**
      * Runs regression calibration on a normalized mono signal.
      *
-     * @param samples    signal samples, range −1.0…+1.0 (offset-binary origin)
+     * @param samples    signal samples, range −1.0...+1.0 (offset-binary origin)
      * @param sampleRate sample rate in Hz
      * @param bitDepth   ADC resolution in bits
      * @return populated {@link Result}
@@ -169,7 +169,7 @@ public class RegressionCalibrator {
             double error = samples[n] - ideal;   // normalized; positive = ADC read too high
             resSumSq += error * error;
 
-            // normalized sample → unsigned offset-binary ADC code
+            // normalized sample -> unsigned offset-binary ADC code
             int code = (int) Math.round(samples[n] * halfRange + halfRange);
             code = Math.max(0, Math.min(codeCount - 1, code));
             errorSum[code] += error * halfRange;   // convert to LSB
@@ -300,7 +300,7 @@ public class RegressionCalibrator {
      * Exports regression calibration as a {@code weighted_scaled}-compatible CSV.
      *
      * <p>The {@code weighted_value} column contains the effective bin width in volts
-     * for each ADC code — values close to {@code scale/2^bitDepth}, exactly like
+     * for each ADC code - values close to {@code scale/2^bitDepth}, exactly like
      * the {@code weighted_scaled} files produced by histogram-based calibration.
      *
      * <p>Per-code error averages are noisy (few samples per code), so
@@ -365,7 +365,7 @@ public class RegressionCalibrator {
         double[] result = new double[n];
         for (int k = 0; k < n; k++) {
             if (sampleCount[k] == 0 && !interpolated[k]) {
-                continue;   // extreme code — leave 0
+                continue;   // extreme code - leave 0
             }
             double weightSum = 0.0, valueSum = 0.0;
             for (int d = -radius; d <= radius; d++) {
@@ -408,7 +408,7 @@ public class RegressionCalibrator {
 
         for (int code = 0; code < r.codeCount; code++) {
             if (r.sampleCount[code] == 0 && !r.interpolated[code]) {
-                continue;   // extreme / absent code — no data
+                continue;   // extreme / absent code - no data
             }
             double deltaVoltage = -r.avgErrorLsb[code] * voltPerLsb;
             int bucket = (int) Math.min(code / bucketSize, width - 1);
@@ -428,7 +428,7 @@ public class RegressionCalibrator {
 
         XYSeriesCollection dataset = new XYSeriesCollection(series);
         JFreeChart chart = ChartFactory.createXYLineChart(
-                "Regression Calibration — Delta Voltage",
+                "Regression Calibration - Delta Voltage",
                 "Voltage (V)", "Delta (V)",
                 dataset, PlotOrientation.VERTICAL, false, false, false);
 

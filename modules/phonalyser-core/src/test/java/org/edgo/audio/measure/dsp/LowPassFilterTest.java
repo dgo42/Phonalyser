@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -75,7 +75,7 @@ class LowPassFilterTest {
 
     @Test
     void inactiveAboveNyquist() {
-        // At 48 kHz, an 80 kHz cutoff is above Nyquist → pass-through.
+        // At 48 kHz, an 80 kHz cutoff is above Nyquist -> pass-through.
         LowPassFilter f = new LowPassFilter(48_000, 80_000, 4);
         assertFalse(f.isActive());
         float[] s = tone(4800, 1000, 48_000);

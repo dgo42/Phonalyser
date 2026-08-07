@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -40,7 +40,7 @@ import org.edgo.audio.measure.preferences.Preferences;
 import lombok.Getter;
 
 /**
- * Common base for the measurement panes — Generator, Oscilloscope, FFT and
+ * Common base for the measurement panes - Generator, Oscilloscope, FFT and
  * Frequency Response.  Owns the structure every pane shares:
  *
  * <ul>
@@ -49,7 +49,7 @@ import lombok.Getter;
  *       GtkFrame label consumed title-bar clicks on GTK and broke the
  *       collapse-on-title UX; the border preserves the visual frame);</li>
  *   <li>the {@link #title} bar and the collapse machinery
- *       ({@link #setCollapsed}/{@link #isCollapsed}) — hide every child but
+ *       ({@link #setCollapsed}/{@link #isCollapsed}) - hide every child but
  *       the title, snapshotting each one's {@code visible} / {@code exclude}
  *       so per-child state survives the round-trip;</li>
  *   <li>uniform sizing + creation of the pane's primary action buttons
@@ -64,12 +64,12 @@ public abstract class AbstractPane {
 
     /** Icon / LED pixel height to render an action button's glyph at. */
     protected static final int ACTION_ICON_SIZE = 33;
-    /** Square action-button box (px) — Record / Play / wizard all share it. */
+    /** Square action-button box (px) - Record / Play / wizard all share it. */
     protected static final int ACTION_BOX_SIZE  = 48;
-    /** Default screenshot comment-caption top (px) — sits under the pane title. */
+    /** Default screenshot comment-caption top (px) - sits under the pane title. */
     private static final int   DEFAULT_COMMENT_TOP_PX = 40;
 
-    /** The pane's root composite — created here, laid out and populated by
+    /** The pane's root composite - created here, laid out and populated by
      *  the subclass. */
     @Getter
     protected final Composite group;
@@ -86,7 +86,7 @@ public abstract class AbstractPane {
     private boolean[] preCollapseChildVisible;
     private boolean[] preCollapseChildExclude;
     /** Primary action buttons (Record / Play / wizard) created via
-     *  {@link #createActionButton} — hidden in the screenshot clone so the
+     *  {@link #createActionButton} - hidden in the screenshot clone so the
      *  snapshot shows only the measurement, not the interactive controls. */
     private final List<Control> actionButtons = new ArrayList<>();
 
@@ -204,8 +204,8 @@ public abstract class AbstractPane {
 
     /**
      * Renders the whole pane offscreen at the requested size: builds a fresh
-     * clone in a hidden {@link Shell} laid out to that size — so SWT lays the
-     * chrome out crisply at native pixels instead of bitmap-scaling it — copies
+     * clone in a hidden {@link Shell} laid out to that size - so SWT lays the
+     * chrome out crisply at native pixels instead of bitmap-scaling it - copies
      * this pane's live snapshot into it, drains the event queue so it paints,
      * then prints it into a new {@link Image}.  Subclasses supply the clone via
      * {@link #createSnapshotClone}.  {@code Control.print} captures the tab
@@ -215,7 +215,7 @@ public abstract class AbstractPane {
     public final Image renderOffscreen(Display d, int targetW, int targetH) {
         targetW = Math.max(1, targetW);
         targetH = Math.max(1, targetH);
-        // Hidden Shell sized to the target.  setSize BEFORE setLocation — on
+        // Hidden Shell sized to the target.  setSize BEFORE setLocation - on
         // GTK, locating before the shell has a real size lets some WMs ignore
         // the negative offset and place it at (0,0).
         Shell offscreen = new Shell(d, SWT.NO_TRIM);
@@ -228,7 +228,7 @@ public abstract class AbstractPane {
             offscreen.setLocation(-10000, -10000);
             offscreen.open();
             // Lay the clone out EXPANDED first so the tab folder settles its
-            // real strip height — only THEN collapse it.  A folder collapsed
+            // real strip height - only THEN collapse it.  A folder collapsed
             // before its first expanded layout reports a stale, too-short strip
             // height (its bottom tiles / tab outlines then print clipped); the
             // live pane never hits this because it is always laid out expanded
@@ -245,7 +245,7 @@ public abstract class AbstractPane {
             try {
                 clone.group.print(outGc);
                 // Control.print routes through the print HDC, which drops GDI+
-                // fractional pen widths — every stroked trace prints 1 px
+                // fractional pen widths - every stroked trace prints 1 px
                 // regardless of the width preference.  A GC(Image) render keeps
                 // them, so panes overpaint their trace canvases with one.
                 clone.printTraceOverlays(outGc);
@@ -263,7 +263,7 @@ public abstract class AbstractPane {
      * Builds a fresh clone of this pane inside {@code parent}, sized by the
      * caller, with this pane's live snapshot copied in.  Screenshot-capable
      * panes override this; the default refuses (a pane with no screenshot
-     * support).  The clone is built expanded — {@link #renderOffscreen}
+     * support).  The clone is built expanded - {@link #renderOffscreen}
      * collapses the strip after the first layout.
      */
     protected AbstractPane createSnapshotClone(Composite parent) {
@@ -272,7 +272,7 @@ public abstract class AbstractPane {
     }
 
     /** Overpaints the trace canvases whose stroked content {@code Control.print}
-     *  degrades (the print HDC drops GDI+ fractional pen widths — traces print
+     *  degrades (the print HDC drops GDI+ fractional pen widths - traces print
      *  1&nbsp;px whatever the preference).  Called on the CLONE right after the
      *  print; subclasses re-render each trace canvas into a {@code GC(Image)}
      *  (where the widths survive) and blit it via {@link #overpaintCanvas}.
@@ -300,7 +300,7 @@ public abstract class AbstractPane {
 
     /** Re-flows this pane's own layout after its settings tab strip collapses or
      *  expands, reclaiming (or yielding) the freed vertical space.  The strip
-     *  calls this through {@link AbstractTabControl#onTabCollapsed()} — no
+     *  calls this through {@link AbstractTabControl#onTabCollapsed()} - no
      *  callback indirection.  A pane without a strip implements it empty. */
     protected abstract void onTabCollapse();
 
@@ -347,14 +347,14 @@ public abstract class AbstractPane {
                 }).open();
     }
 
-    /** Top y (px) of the screenshot comment caption — under this pane's header.
+    /** Top y (px) of the screenshot comment caption - under this pane's header.
      *  Default sits under the title bar; panes with extra top chrome (the FFT
      *  averages/unit overlay) override it. */
     protected int screenshotCommentTopPx() {
         return DEFAULT_COMMENT_TOP_PX;
     }
 
-    /** Initial screenshot width seeded into the dialog (0 ⇒ use the pane's
+    /** Initial screenshot width seeded into the dialog (0 => use the pane's
      *  native size).  Default = the shared screenshot-size preference. */
     protected int screenshotInitialWidth() {
         return Preferences.instance().getScreenshotWidth();

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -55,7 +55,7 @@ import lombok.Getter;
  * gesture in {@code event.detail}: {@link SWT#ARROW_UP} (start arrow / wheel
  * up), {@link SWT#ARROW_DOWN} (end arrow / wheel down), {@link SWT#PAGE_UP} /
  * {@link SWT#PAGE_DOWN} (track click), {@link SWT#DRAG} (thumb drag),
- * {@link SWT#NONE} otherwise — so a listener can apply an exact model step
+ * {@link SWT#NONE} otherwise - so a listener can apply an exact model step
  * for arrow/page gestures instead of the int-quantised selection delta.
  */
 public final class FlatScrollbar extends Canvas {
@@ -66,7 +66,7 @@ public final class FlatScrollbar extends Canvas {
     private static final int REPEAT_DELAY_MS = 300;
     /** Auto-repeat interval while an arrow is held, in ms (10 Hz). */
     private static final int ARROW_REPEAT_MS = 100;
-    /** Auto-repeat interval while the free track is held, in ms — faster than
+    /** Auto-repeat interval while the free track is held, in ms - faster than
      *  the arrows so a held track-click pages briskly toward the pointer. */
     private static final int TRACK_REPEAT_MS = 50;
 
@@ -98,7 +98,7 @@ public final class FlatScrollbar extends Canvas {
     /** True while the mouse is hovering over the thumb (paints brighter). */
     private boolean thumbHovered;
 
-    /** Auto-repeat scheduling state — non-null when an arrow is held down. */
+    /** Auto-repeat scheduling state - non-null when an arrow is held down. */
     private Runnable autoRepeatTask;
 
     private final List<Listener> selectionListeners = new ArrayList<>();
@@ -162,7 +162,7 @@ public final class FlatScrollbar extends Canvas {
     public void setIncrement(int v)     { increment     = Math.max(1, v); }
     public void setPageIncrement(int v) { pageIncrement = Math.max(1, v); }
 
-    /** Registers a {@link SWT#Selection} listener — fired whenever the user
+    /** Registers a {@link SWT#Selection} listener - fired whenever the user
      *  changes the selection via arrow click, track click, drag, or wheel. */
     public void addSelectionListener(Listener l) {
         if (l != null) selectionListeners.add(l);
@@ -281,13 +281,13 @@ public final class FlatScrollbar extends Canvas {
         int trackEnd   = (vertical ? sz.y : sz.x) - ARROW_SIZE;
 
         if (axisPx < ARROW_SIZE) {
-            // Start arrow → step backward, auto-repeat while held.
+            // Start arrow -> step backward, auto-repeat while held.
             stepBy(-increment, SWT.ARROW_UP);
             startAutoRepeat(-increment, SWT.ARROW_UP);
             return;
         }
         if (axisPx >= trackEnd) {
-            // End arrow → step forward, auto-repeat.
+            // End arrow -> step forward, auto-repeat.
             stepBy(+increment, SWT.ARROW_DOWN);
             startAutoRepeat(+increment, SWT.ARROW_DOWN);
             return;
@@ -312,7 +312,7 @@ public final class FlatScrollbar extends Canvas {
         stopAutoRepeat();
     }
 
-    /** Double-click on the thumb recentres the slider — selection lands
+    /** Double-click on the thumb recentres the slider - selection lands
      *  at the midpoint of its valid range, so the caller's
      *  {@link SWT#Selection} handler resets whatever offset the slider
      *  represents to its "centred" value. */
@@ -362,7 +362,7 @@ public final class FlatScrollbar extends Canvas {
             redraw();
             // Force the thumb repaint NOW so it tracks the mouse in
             // real-time.  Without this, Windows defers Canvas paint
-            // events while the mouse is captured for a drag — the user
+            // events while the mouse is captured for a drag - the user
             // sees the signal update smoothly (it's a different widget)
             // while the thumb only catches up on MouseUp.
             update();
@@ -420,8 +420,8 @@ public final class FlatScrollbar extends Canvas {
     /** Page-repeat while the left button is held down on the FREE track: keeps
      *  paging toward the pointer every {@value #TRACK_REPEAT_MS} ms (after the
      *  same initial hold delay as the arrows) until the thumb has travelled
-     *  under the cursor — so it stops exactly when the thumb reaches the click,
-     *  never overshooting — or until it hits an end / the button is released. */
+     *  under the cursor - so it stops exactly when the thumb reaches the click,
+     *  never overshooting - or until it hits an end / the button is released. */
     private void startTrackRepeat(int delta, int detail, int axisPx) {
         stopAutoRepeat();
         Runnable[] holder = new Runnable[1];
@@ -459,7 +459,7 @@ public final class FlatScrollbar extends Canvas {
         ev.widget = this;
         ev.detail = detail;
         // Use SWT's native listener registry so callers that registered with
-        // addListener(SWT.Selection, …) — the standard SWT idiom — get the
+        // addListener(SWT.Selection, ...) - the standard SWT idiom - get the
         // event.  Also fan out to any addSelectionListener() callers we
         // tracked separately.
         notifyListeners(SWT.Selection, ev);
@@ -477,6 +477,6 @@ public final class FlatScrollbar extends Canvas {
 
     @Override
     protected void checkSubclass() {
-        // SWT forbids subclassing of most widgets by default — opt back in.
+        // SWT forbids subclassing of most widgets by default - opt back in.
     }
 }

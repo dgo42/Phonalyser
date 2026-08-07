@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -46,12 +46,12 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
  * painted text + arrow, and publishes {@code Events.paneTitleClick(id)}
  * on the {@link MessageBus} with the NEW collapsed state as the
  * {@code Boolean} payload.  Subscribers (typically the owning pane's
- * host tab) pick their title by ID — each pane uses a distinct
+ * host tab) pick their title by ID - each pane uses a distinct
  * {@code PANE_ID_*} constant from {@link Events}.
  *
  * <p>Programmatic state changes (e.g. restoring a saved collapse state
  * at startup) go through {@link #setCollapsed(boolean)}, which updates
- * the displayed text + arrow silently — no bus event fires, since the
+ * the displayed text + arrow silently - no bus event fires, since the
  * caller already knows the state it just set.
  *
  * <h2>Why a custom Canvas?</h2>
@@ -116,9 +116,9 @@ public final class PaneTitle extends Canvas {
      *
      * @param id              identifier published on the bus when the
      *                        title is clicked.  Subscribers route by ID
-     *                        — see {@link Events#PANE_ID_GENERATOR} etc.
+     *                        - see {@link Events#PANE_ID_GENERATOR} etc.
      * @param expandedText    text painted while expanded.  Any leading
-     *                        ▼ / ▶ glyph is stripped — the arrow is
+     *                        ▼ / ▶ glyph is stripped - the arrow is
      *                        drawn from the collapsed flag, not from
      *                        the text.
      * @param collapsedText   text painted while collapsed.  Same
@@ -143,7 +143,7 @@ public final class PaneTitle extends Canvas {
         addMouseListener(MouseListener.mouseDownAdapter(e -> onClick()));
     }
 
-    /** Sets the collapsed flag silently — no bus event fires.  Use to
+    /** Sets the collapsed flag silently - no bus event fires.  Use to
      *  restore a saved state at startup.  Triggers a re-layout (the row
      *  resizes when the text grows / shrinks) and a redraw. */
     public void setCollapsed(boolean wantCollapsed) {
@@ -185,7 +185,7 @@ public final class PaneTitle extends Canvas {
             int hNeed = contentW + 2 * PAD_X;
             int vNeed = Math.max(ARROW_PX, ext.y) + 2 * PAD_Y;
             if (wHint != SWT.DEFAULT && wHint >= 0 && wHint < hNeed) {
-                // Narrow strip — rotated text: width is the line-height,
+                // Narrow strip - rotated text: width is the line-height,
                 // height is the horizontal extent of the row.
                 return new Point(vNeed, hNeed);
             }
@@ -197,7 +197,7 @@ public final class PaneTitle extends Canvas {
 
     @Override
     protected void checkSubclass() {
-        // SWT forbids subclassing of most widgets by default — opt back in.
+        // SWT forbids subclassing of most widgets by default - opt back in.
     }
 
     private String currentText() {
@@ -208,7 +208,7 @@ public final class PaneTitle extends Canvas {
         gc.setFont(getFont());
         gc.setForeground(getForeground());
         gc.setBackground(getBackground());
-        // Antialias both shape and text — matters most on the rotated
+        // Antialias both shape and text - matters most on the rotated
         // path where unfiltered glyph rasterisation along a non-axis-
         // aligned baseline produces visibly jagged edges.
         gc.setAntialias(SWT.ON);

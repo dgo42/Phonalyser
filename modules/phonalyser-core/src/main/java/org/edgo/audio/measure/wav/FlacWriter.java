@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -29,15 +29,15 @@ import net.sourceforge.javaflacencoder.StreamConfiguration;
 
 /**
  * Writes a FLAC file from interleaved little-endian PCM bytes using
- * javaFlacEncoder.  Encode-only — decoding (Play-from) goes through
+ * javaFlacEncoder.  Encode-only - decoding (Play-from) goes through
  * Project Nayuki's FLAC library on the read side.
  *
  * <p>Bit depths 16 / 24 / 32 are supported (FLAC spec range; 8-bit
  * isn't in the spec).  Bytes are interpreted as little-endian signed
- * PCM — same format the {@link WavWriter} accepts.  Samples are
+ * PCM - same format the {@link WavWriter} accepts.  Samples are
  * <strong>negated</strong> before being fed to the encoder to work
  * around a polarity quirk between javaFlacEncoder's output and the
- * common FLAC decoders' interpretation (verified empirically — file
+ * common FLAC decoders' interpretation (verified empirically - file
  * round-trips bit-equivalent to the WAV writer with the negation in
  * place).
  */
@@ -81,7 +81,7 @@ public class FlacWriter implements AutoCloseable {
 
         // Force INDEPENDENT channel coding (no LEFT_SIDE / RIGHT_SIDE /
         // MID_SIDE).  javaFlacEncoder's default picks a side-coded mode
-        // for stereo, and that path inverts polarity on this build —
+        // for stereo, and that path inverts polarity on this build -
         // INDEPENDENT writes L and R literally and avoids the bug.
         EncodingConfiguration enc = new EncodingConfiguration();
         enc.setChannelConfig(EncodingConfiguration.ChannelConfig.INDEPENDENT);

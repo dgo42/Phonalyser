@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests for {@link WeightedBuffer} — the DNL/INL weight table and the
+ * Tests for {@link WeightedBuffer} - the DNL/INL weight table and the
  * code-map linearisation derived from it.  Drives the {@code --analyze-histogram}
  * pipeline and the {@code --load-weighted} mapping used by record-mapped-wav,
  * process-wav, fft-analyze and gen-fft.  A regression here silently mis-corrects
@@ -38,7 +38,7 @@ class WeightedBufferTest {
     @Test
     void constructor_setsBinCountFromBitDepth() {
         WeightedBuffer b = new WeightedBuffer(8);
-        // bitDepth 8 → 256 bins; get() on every code returns 0 before compute().
+        // bitDepth 8 -> 256 bins; get() on every code returns 0 before compute().
         for (int code = 0; code < 256; code++) {
             assertEquals(0f, b.get(code), 0f);
         }
@@ -53,8 +53,8 @@ class WeightedBufferTest {
 
     @Test
     void compute_uniformHistogram_innerWeightsAreCloseToUnity() {
-        // Uniform histogram (one hit per code) → every bin's count matches the
-        // local moving-average baseline → weight ≈ 1.0 for every inner bin
+        // Uniform histogram (one hit per code) -> every bin's count matches the
+        // local moving-average baseline -> weight ≈ 1.0 for every inner bin
         // (the 25-tap FIR introduces small ringing, so we allow a few percent
         // tolerance and skip the rails where the moving average is incomplete).
         int bits = 8;
@@ -67,13 +67,13 @@ class WeightedBufferTest {
 
         for (int code = 64; code < (1 << bits) - 64; code++) {
             assertEquals(1.0f, b.get(code), 0.05f,
-                    "uniform histogram → near-unity weights (code " + code + ")");
+                    "uniform histogram -> near-unity weights (code " + code + ")");
         }
     }
 
     @Test
     void buildCodeMap_monotonicallyNonDecreasing() {
-        // The CDF-based map must be monotonically non-decreasing — otherwise
+        // The CDF-based map must be monotonically non-decreasing - otherwise
         // mapping inverts adjacent codes and the linearised output goes
         // backward in time.  This is the most important invariant.
         int bits = 8;
@@ -95,14 +95,14 @@ class WeightedBufferTest {
             double mapped = b.correctedCode(sample(code)).ch1;
             assertTrue(mapped >= prev,
                     "code map must be non-decreasing: code " + code
-                            + " → " + mapped + " < prev " + prev);
+                            + " -> " + mapped + " < prev " + prev);
             prev = mapped;
         }
     }
 
     @Test
     void buildCodeMap_outputCodesStayWithinRange() {
-        // Output codes must lie in [0, maxCode] — the CDF normalisation is
+        // Output codes must lie in [0, maxCode] - the CDF normalisation is
         // sized exactly so the last bin reaches maxCode.
         int bits = 8;
         AdcHistogram   h = new AdcHistogram(bits);
@@ -125,7 +125,7 @@ class WeightedBufferTest {
 
     @Test
     void correctedCode_skewedHistogram_redistributesPopularCodes() {
-        // Heavy hits on the lower half → CDF rises fast in the lower half →
+        // Heavy hits on the lower half -> CDF rises fast in the lower half ->
         // corrected codes shift the lower-half raw codes toward the top.
         int bits = 8;
         AdcHistogram h = new AdcHistogram(bits);
@@ -147,7 +147,7 @@ class WeightedBufferTest {
         assertTrue(midLow.ch1 > 64,
                 "popular low code should map toward the top, got " + midLow.ch1);
         // A code in the sparse upper half should map close to where it
-        // already is — the diagonal is already past the dense region.
+        // already is - the diagonal is already past the dense region.
         StereoSampleDouble upper = b.correctedCode(sample(200));
         assertTrue(upper.ch1 > 200,
                 "sparse upper codes stay above the diagonal too, got " + upper.ch1);

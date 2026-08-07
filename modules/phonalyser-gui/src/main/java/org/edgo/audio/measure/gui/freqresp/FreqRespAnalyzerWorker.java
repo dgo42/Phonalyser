@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,13 +18,13 @@
 
 package org.edgo.audio.measure.gui.freqresp;
 
-import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.edgo.audio.measure.sound.StereoCaptureProgress;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
@@ -51,7 +51,7 @@ import lombok.extern.log4j.Log4j2;
  * injected UI executor so widget-touching subscribers run on the SWT
  * thread, exactly as before.
  *
- * <p>Cancellation is cooperative — {@link #cancel()} sets a flag the
+ * <p>Cancellation is cooperative - {@link #cancel()} sets a flag the
  * analyzer polls at every checkpoint and inside the capture sleep loop;
  * an in-flight measurement aborts within ~50 ms.
  */
@@ -59,7 +59,7 @@ import lombok.extern.log4j.Log4j2;
 public final class FreqRespAnalyzerWorker {
 
     /** UI-thread marshaller ({@code display::asyncExec}) for the FAILED /
-     *  STOPPED publishes — their subscribers touch widgets. */
+     *  STOPPED publishes - their subscribers touch widgets. */
     private final Executor uiExecutor;
 
     private volatile Thread             workerThread;
@@ -82,7 +82,7 @@ public final class FreqRespAnalyzerWorker {
      *  time" curve while the sweep runs. */
     public synchronized void start(StereoCaptureProgress progress) {
         if (workerThread != null && workerThread.isAlive()) {
-            log.warn("FreqResp worker already running — start() ignored");
+            log.warn("FreqResp worker already running - start() ignored");
             return;
         }
         cancelFlag.set(false);
@@ -91,7 +91,7 @@ public final class FreqRespAnalyzerWorker {
         // pane) run their stop logic synchronously on this thread before
         // the worker thread launches.  The worker still spin-waits for
         // the shared capture device + generator to actually idle before
-        // opening the audio device for the sweep — synchronous
+        // opening the audio device for the sweep - synchronous
         // subscriber returns guarantee they ASKED their workers to
         // stop, not that the worker threads have terminated.
         MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
@@ -160,8 +160,10 @@ public final class FreqRespAnalyzerWorker {
             if (cancelFlag.get()) return;
             Preferences prefs = Preferences.instance();
 
-            DeviceRef out = resolveDevice(true,  prefs.current().getOutputDeviceName());
-            DeviceRef in  = resolveDevice(false, prefs.current().getInputDeviceName());
+            // The one resolution seam: the backend resolves the ACTIVE devices;
+            // this worker only words the failures.
+            DeviceRef out = AudioBackend.instance().getActiveOutputDevice();
+            DeviceRef in  = AudioBackend.instance().getActiveInputDevice();
             if (out == null) {
                 reportError(I18n.t("freqResp.error.noOutputDevice"));
                 return;
@@ -170,6 +172,13 @@ public final class FreqRespAnalyzerWorker {
                 reportError(I18n.t("freqResp.error.noInputDevice"));
                 return;
             }
+            // The caller's step after resolution: the profile write goes
+            // through the UI thread (prefs bindings are plain UI-only
+            // listeners).
+            GuiUtil.marshal(() -> {
+                prefs.applyDeviceProfile(out, false);
+                prefs.applyDeviceProfile(in, true);
+            });
 
             int sampleRate = prefs.current().getInputSampleRate();
             int bitDepth   = prefs.current().getInputBitDepth();
@@ -194,6 +203,14 @@ public final class FreqRespAnalyzerWorker {
                     .outputChannels(prefs.getFreqRespOutputChannels())
                     .applyCalibration(prefs.isFreqRespApplyCalibration())
                     .captureProgress(activeProgress)
+                    // The sweep leg belongs to whichever backend is active: a
+                    // bench on a Phonalyser server renders the chirp itself and
+                    // marks it in the capture stream (there is no uplink audio to
+                    // play into), every local backend plays it from here.
+                    .stereoCaptureProvider(StereoCaptureProvider.forSweep(sampleRate,
+                            prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
+                            prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
+                            prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmpl()))
                     .build();
             StereoFreqRespResult stereo = new FreqRespAnalyzer(cfg).run(null, cancelFlag::get);
             if (stereo == null) return;
@@ -212,17 +229,6 @@ public final class FreqRespAnalyzerWorker {
                     MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED));
             synchronized (this) { workerThread = null; }
         }
-    }
-
-    private DeviceRef resolveDevice(boolean output, String name) {
-        if (name == null || name.isEmpty()) return null;
-        List<DeviceRef> list = output
-                ? AudioBackend.instance().listOutputDevices()
-                : AudioBackend.instance().listInputDevices();
-        for (DeviceRef d : list) {
-            if (name.equals(d.name())) return d;
-        }
-        return null;
     }
 
     private void reportError(String message) {

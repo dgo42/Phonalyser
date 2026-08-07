@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -33,7 +33,7 @@ import org.edgo.audio.measure.enums.FilterType;
  *
  * <h2>What it computes</h2>
  * We only ever draw an amplitude response, so the whole design is done in the
- * magnitude-squared domain of the analog prototype — no pole/zero placement,
+ * magnitude-squared domain of the analog prototype - no pole/zero placement,
  * no bilinear transform.  Everything is built from a normalised low-pass
  * prototype |H<sub>LP</sub>(w)|² where {@code w} is the normalised radian
  * frequency (w = 1 at the prototype's reference edge), then mapped to the
@@ -41,10 +41,10 @@ import org.edgo.audio.measure.enums.FilterType;
  *
  * <ul>
  *   <li><b>Low-pass</b>: w = f / Fc.</li>
- *   <li><b>High-pass</b>: w = Fc / f (the classic s → 1/s prototype swap).</li>
- *   <li><b>Band-pass</b>: W = (f/f0 − f0/f)·(f0/B) — the standard
+ *   <li><b>High-pass</b>: w = Fc / f (the classic s -> 1/s prototype swap).</li>
+ *   <li><b>Band-pass</b>: W = (f/f0 − f0/f)·(f0/B) - the standard
  *       low-pass-to-band-pass frequency transform (Q = f0/B).</li>
- *   <li><b>Notch (band-stop)</b>: W = 1 / [ (f/f0 − f0/f)·(f0/B) ] — the
+ *   <li><b>Notch (band-stop)</b>: W = 1 / [ (f/f0 − f0/f)·(f0/B) ] - the
  *       band-stop transform (reciprocal of the band-pass mapping).</li>
  * </ul>
  *
@@ -72,8 +72,8 @@ import org.edgo.audio.measure.enums.FilterType;
  * The minimum order meeting {@code stopAttenDb} at the stop edge comes from the
  * standard closed-form order formulas per family (Butterworth / Chebyshev /
  * Inverse Chebyshev via log ratios; Elliptic via the ratio of complete elliptic
- * integrals K — all in {@link FilterMath}).  Bessel has no such formula and no
- * ripple — its order is found by numerically searching for the lowest order
+ * integrals K - all in {@link FilterMath}).  Bessel has no such formula and no
+ * ripple - its order is found by numerically searching for the lowest order
  * whose prototype reaches {@code stopAttenDb} at the stop edge, capped at
  * {@link FilterMath#MAX_ORDER}; Bessel is the only family allowed to fall short
  * of the spec (then it uses that cap).
@@ -95,7 +95,7 @@ public final class FilterDesign {
      *  attenuation spec (Mode 2, design-by-order). */
     public static final double NO_STOP_ATTEN_SPEC = Double.NaN;
 
-    /** Passband shape — read by the view's per-type curve alignment. */
+    /** Passband shape - read by the view's per-type curve alignment. */
     @Getter
     private final FilterType type;
     private final FilterResponse response;
@@ -115,7 +115,7 @@ public final class FilterDesign {
     private final double protoScale;
 
     // --- band mapping (center f0 and bandwidth B for BP / NOTCH) ----------
-    /** LP/HP cutoff Fc, or BP/NOTCH center f0 — read by the view to place the
+    /** LP/HP cutoff Fc, or BP/NOTCH center f0 - read by the view to place the
      *  per-type passband/stopband anchor region on the measured curve. */
     @Getter
     private final double fcHz;        // LP/HP cutoff, or BP/NOTCH center f0
@@ -126,7 +126,7 @@ public final class FilterDesign {
     /** User-specified stopband attenuation A in dB (Mode 1, {@link #ofSpec}); the
      *  design's realistic stopband floor sits at −A.  {@link #NO_STOP_ATTEN_SPEC}
      *  (NaN) when built by order (Mode 2, {@link #ofOrder}), which carries no
-     *  attenuation spec.  Read-only; no design math depends on it — the view uses
+     *  attenuation spec.  Read-only; no design math depends on it - the view uses
      *  it to render a monotone-family NOTCH null at its specified depth instead of
      *  the mathematically-unbounded −∞. */
     @Getter
@@ -152,7 +152,7 @@ public final class FilterDesign {
     // =====================================================================
 
     /**
-     * Mode&nbsp;1 — design by specification: the order is derived as the
+     * Mode&nbsp;1 - design by specification: the order is derived as the
      * minimum meeting {@code stopAttenDb} at the stop edge.
      *
      * <p>LP/HP: {@code passHz} is the passband edge Fc, {@code stopHz} the
@@ -188,10 +188,10 @@ public final class FilterDesign {
             if (!(stopHz > 0.0 && passHz > stopHz)) {
                 throw new IllegalArgumentException("HP requires 0 < stopHz < passHz");
             }
-            fc = passHz; bandwidth = 0.0; ws = passHz / stopHz;   // prototype swaps s → 1/s
+            fc = passHz; bandwidth = 0.0; ws = passHz / stopHz;   // prototype swaps s -> 1/s
         } else if (type == FilterType.BAND_PASS) {
             // Band-pass: PB is the INNER (narrow) passband, SB the OUTER (wide)
-            // deep-rejection band ⇒ SB > PB, and the LP→BP transform maps the
+            // deep-rejection band => SB > PB, and the LP->BP transform maps the
             // outer SB edge to the higher prototype frequency ws = SB/PB.
             if (centerHz <= 0.0) {
                 throw new IllegalArgumentException("BP requires centerHz > 0");
@@ -201,9 +201,9 @@ public final class FilterDesign {
             }
             fc = centerHz; bandwidth = passHz; ws = stopHz / passHz;
         } else {
-            // Notch (band-stop): the reciprocal band mapping inverts the roles —
+            // Notch (band-stop): the reciprocal band mapping inverts the roles -
             // PB is the OUTER (wide) passband-return band, SB the INNER (narrow)
-            // deep-rejection band ⇒ PB > SB, and the stop ratio matching the
+            // deep-rejection band => PB > SB, and the stop ratio matching the
             // reciprocal transform is ws = PB/SB.
             if (centerHz <= 0.0) {
                 throw new IllegalArgumentException("NOTCH requires centerHz > 0");
@@ -226,7 +226,7 @@ public final class FilterDesign {
     }
 
     /**
-     * Mode&nbsp;2 — design by order.
+     * Mode&nbsp;2 - design by order.
      *
      * <p>LP/HP: {@code passFreqHz} is the cutoff, {@code q} ignored.  BP/NOTCH:
      * {@code passFreqHz} is the center f0 and the bandwidth is {@code center/q}.
@@ -276,9 +276,9 @@ public final class FilterDesign {
     }
 
     /**
-     * The filter's critical frequencies in Hz — the points a resolution-limited
+     * The filter's critical frequencies in Hz - the points a resolution-limited
      * overlay sampler must hit exactly so the corner / null is never skipped by
-     * pixel-grid luck (view item 2).  BP/NOTCH return the center {@link #fcHz}
+     * pixel-grid luck.  BP/NOTCH return the center {@link #fcHz}
      * (the passband peak / stopband null); LP/HP return the pass-edge cutoff
      * {@link #fcHz}.  Read-only; no design math depends on this.
      */
@@ -287,8 +287,8 @@ public final class FilterDesign {
     }
 
     /**
-     * The anchor corners in Hz — the frequency(s) the view aligns the ideal
-     * overlay to on the measured trace (view item 1).  Each corner is a point
+     * The anchor corners in Hz - the frequency(s) the view aligns the ideal
+     * overlay to on the measured trace.  Each corner is a point
      * where the ideal magnitude is a finite, near-plateau skirt value, so the
      * measured curve there sits on its own passband plateau and the alignment
      * offset carries no stopband-depth bias.  Read-only; no design math depends
@@ -298,8 +298,8 @@ public final class FilterDesign {
      *   <li><b>LP/HP</b>: the single pass-edge cutoff {@link #fcHz}.</li>
      *   <li><b>BAND_PASS</b>: the arithmetic passband edges
      *       {@code { fc − B/2, fc + B/2 }} (B = {@link #bandwidthHz}, the
-     *       passband width) — the existing, verified BP corners, unchanged.</li>
-     *   <li><b>NOTCH</b>: the passband SHOULDERS — the geometric edges of the
+     *       passband width) - the existing, verified BP corners, unchanged.</li>
+     *   <li><b>NOTCH</b>: the passband SHOULDERS - the geometric edges of the
      *       outer passband-return band whose arithmetic width under the
      *       band-stop transform is {@link #bandwidthHz} (Mode 1: {@code passHz};
      *       Mode 2: {@code fc/Q}).  Solving {@code u − 1/u = B/f0} gives the
@@ -307,8 +307,8 @@ public final class FilterDesign {
      *       returns to its ≈−3 dB / −ripple skirt.  Anchoring there puts the
      *       ideal plateau on the measured plateau, so the clamped floor sits the
      *       user's attenuation A below it and the drawn depth tracks A.  (The
-     *       arithmetic {@code fc ± B/2} would be log-asymmetric — one edge on the
-     *       plateau, the other deep on the skirt — so the shoulders are the
+     *       arithmetic {@code fc ± B/2} would be log-asymmetric - one edge on the
+     *       plateau, the other deep on the skirt - so the shoulders are the
      *       geometric edges, not the arithmetic midpoints.)</li>
      * </ul>
      */
@@ -318,7 +318,7 @@ public final class FilterDesign {
         }
         if (type == FilterType.NOTCH) {
             // Geometric edges of the band of arithmetic width `bandwidthHz`
-            // centred (geometrically) on fcHz: u − 1/u = B/f0 ⇒
+            // centred (geometrically) on fcHz: u − 1/u = B/f0 =>
             // u = (x + √(x²+4))/2 with x = B/f0.  The shoulders are f0/u and f0·u.
             double x = bandwidthHz / fcHz;
             double u = (x + Math.sqrt(x * x + 4.0)) / 2.0;
@@ -348,7 +348,7 @@ public final class FilterDesign {
      * Maps a real frequency to the low-pass prototype's normalised frequency
      * w (w = 1 at the prototype reference edge) for the configured band type,
      * then applies {@link #protoScale} (1.0 except for Mode-1 Inverse
-     * Chebyshev, whose reference edge is the stopband — see the field doc).
+     * Chebyshev, whose reference edge is the stopband - see the field doc).
      */
     private double normalisedFrequency(double f) {
         double w;
@@ -361,7 +361,7 @@ public final class FilterDesign {
                 break;
             case NOTCH: {
                 double bt = bandTransform(f);
-                w = (bt == 0.0) ? Double.POSITIVE_INFINITY   // at f0 → deep stop
+                w = (bt == 0.0) ? Double.POSITIVE_INFINITY   // at f0 -> deep stop
                                 : Math.abs(1.0 / bt);
                 break;
             }
@@ -373,7 +373,7 @@ public final class FilterDesign {
         return w * protoScale;
     }
 
-    /** Standard LP→BP frequency mapping W = (f/f0 − f0/f)·(f0/B). */
+    /** Standard LP->BP frequency mapping W = (f/f0 − f0/f)·(f0/B). */
     private double bandTransform(double f) {
         double ratio = f / fcHz - fcHz / f;
         return ratio * (fcHz / bandwidthHz);
@@ -412,18 +412,18 @@ public final class FilterDesign {
 
     /**
      * Inverse Chebyshev |H|² = ε²Tn²(1/w) / (1 + ε²Tn²(1/w)) with w = 1 the
-     * stopband edge.  As w→0 (deep passband) Tn(1/w)→∞ so |H|²→1; at w = 1 the
-     * floor equals ε²Tn²(1)/(1+…) = ε²/(1+ε²) = 10^{−A/10}.
+     * stopband edge.  As w->0 (deep passband) Tn(1/w)->∞ so |H|²->1; at w = 1 the
+     * floor equals ε²Tn²(1)/(1+...) = ε²/(1+ε²) = 10^{−A/10}.
      */
     private double invChebyshevMagSq(double w) {
         if (w <= 0.0) return PASSBAND_MAG_SQ;
         double tn = FilterMath.chebyshevT(order, 1.0 / w);
         double e2t2 = epsilonSq * tn * tn;
-        if (!Double.isFinite(e2t2)) return PASSBAND_MAG_SQ;   // 1/w huge → passband
+        if (!Double.isFinite(e2t2)) return PASSBAND_MAG_SQ;   // 1/w huge -> passband
         return e2t2 / (1.0 + e2t2);
     }
 
-    /** |H|² = 1 / (1 + ε²·Rn²(ξ, w)) — elliptic rational function. */
+    /** |H|² = 1 / (1 + ε²·Rn²(ξ, w)) - elliptic rational function. */
     private double ellipticMagSq(double w) {
         double rn = FilterMath.ellipticRational(order, xi, w);
         return PASSBAND_MAG_SQ / (1.0 + epsilonSq * rn * rn);

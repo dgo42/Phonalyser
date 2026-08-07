@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -23,7 +23,7 @@ import lombok.experimental.UtilityClass;
 import java.util.Locale;
 
 /**
- * Pure-math formatters specific to the Frequency Response chart — dB /
+ * Pure-math formatters specific to the Frequency Response chart - dB /
  * phase readouts plus log-axis fraction math.  Shared formatters
  * (frequency labels, SI-prefix voltages, etc.) live on the
  * {@code AbstractMeasurementView} base class; this class only holds the
@@ -36,7 +36,7 @@ public class FreqRespFormat {
      *  match the FFT axis convention.  Two decimals so 1 dB rounding
      *  artefacts don't smear the readout. */
     public String formatDb(double db) {
-        if (!Double.isFinite(db)) return "—";
+        if (!Double.isFinite(db)) return "-";
         return String.format(Locale.ROOT, "%.2f dB", db);
     }
 
@@ -44,14 +44,14 @@ public class FreqRespFormat {
      *  number of decimal places in step with the value's magnitude so
      *  that ~4 significant digits always read clearly:
      *  <ul>
-     *    <li>10.1234 → "10.12 dB"</li>
-     *    <li> 0.1234 → "0.1234 dB"</li>
-     *    <li> 0.0000123 → "0.0000123 dB"</li>
+     *    <li>10.1234 -> "10.12 dB"</li>
+     *    <li> 0.1234 -> "0.1234 dB"</li>
+     *    <li> 0.0000123 -> "0.0000123 dB"</li>
      *  </ul>
      *  Stays in fixed notation (no scientific) so the readout is
      *  comfortable to read at a glance. */
     public String formatDbReadout(double db) {
-        if (!Double.isFinite(db)) return "—";
+        if (!Double.isFinite(db)) return "-";
         return String.format(Locale.ROOT, "%s dB", formatSignificant(db, 4));
     }
 
@@ -70,14 +70,14 @@ public class FreqRespFormat {
         return String.format(Locale.ROOT, "%." + decimals + "f", value);
     }
 
-    /** Magnitude label without the dB suffix — used per-tick.  Four
+    /** Magnitude label without the dB suffix - used per-tick.  Four
      *  significant digits so the precision adapts to the magnitude:
-     *  12.3456 → "12.34", 0.12345 → "0.1234", 0.001234 → "0.001234",
-     *  100 → "100.0".  Lets a high-resolution compare trace show the
+     *  12.3456 -> "12.34", 0.12345 -> "0.1234", 0.001234 -> "0.001234",
+     *  100 -> "100.0".  Lets a high-resolution compare trace show the
      *  actual gridline values without padding small numbers with
      *  meaningless trailing zeros. */
     public String formatDbBare(double db) {
-        if (!Double.isFinite(db)) return "—";
+        if (!Double.isFinite(db)) return "-";
         return formatSignificant(db, 4);
     }
 
@@ -86,7 +86,7 @@ public class FreqRespFormat {
      *  three significant fraction digits and no trailing zeros
      *  ("20 kHz", "1.5 kHz", "22.05 kHz"). */
     public String formatHzReadout(double hz) {
-        if (!Double.isFinite(hz) || hz < 0.0) return "—";
+        if (!Double.isFinite(hz) || hz < 0.0) return "-";
         if (hz < 1000.0) {
             return String.format(Locale.ROOT, "%.0f Hz", hz);
         }
@@ -100,18 +100,18 @@ public class FreqRespFormat {
 
     /** Phase label in degrees, wrapped to {@code [-180, +180]}. */
     public String formatPhase(double deg) {
-        if (!Double.isFinite(deg)) return "—";
+        if (!Double.isFinite(deg)) return "-";
         return String.format(Locale.ROOT, "%.1f°", deg);
     }
 
     /** Crosshair-readout variant of {@link #formatPhase} with ~4 sig
      *  digits, like {@link #formatDbReadout}. */
     public String formatPhaseReadout(double deg) {
-        if (!Double.isFinite(deg)) return "—";
+        if (!Double.isFinite(deg)) return "-";
         return String.format(Locale.ROOT, "%s°", formatSignificant(deg, 4));
     }
 
-    /** Linear magnitude → dB.  Returns {@code -300} for non-positive
+    /** Linear magnitude -> dB.  Returns {@code -300} for non-positive
      *  values so the renderer can clamp cleanly without NaN propagation. */
     public double linToDb(double linear) {
         return (linear > 0.0) ? 20.0 * Math.log10(linear) : -300.0;
@@ -128,7 +128,7 @@ public class FreqRespFormat {
                 / (Math.log10(freqMax) - Math.log10(freqMin));
     }
 
-    /** Inverse of {@link #freqToXFraction} — maps a fractional X position
+    /** Inverse of {@link #freqToXFraction} - maps a fractional X position
      *  back to a frequency. */
     public double xFractionToFreq(double frac, double freqMin, double freqMax) {
         if (freqMin <= 0 || freqMax <= 0 || freqMax <= freqMin) return freqMin;

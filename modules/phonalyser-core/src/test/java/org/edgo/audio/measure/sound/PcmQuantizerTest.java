@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -34,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * right-lane scale is applied only to the right slot.
  *
  * <p>Dither is left OFF ({@code ditherBits == 0}) so {@code encode} is fully
- * deterministic and the two lanes come from the same {@code nextSample()} draw —
+ * deterministic and the two lanes come from the same {@code nextSample()} draw -
  * every assertion compares within one buffer, no RNG reproducibility needed.
  * The generator is a plain SINE DDS (no internal randomness), so a fresh
  * instance per encoder yields an identical sample stream.
@@ -204,7 +204,7 @@ class PcmQuantizerTest {
 
     @Test
     void scaleR_appliedToRightLaneOnly_16bit() {
-        // Right full-scale is half the left → scaleR = 2.0: the right slot is
+        // Right full-scale is half the left -> scaleR = 2.0: the right slot is
         // twice the left slot (up to clamping), the left slot is unchanged.
         PcmQuantizer q = new PcmQuantizer(16, 0);
         q.setChannelScale(1.0, 2.0);
@@ -213,7 +213,7 @@ class PcmQuantizerTest {
 
         byte[] leftRef = legacyEncode(sine(), 16, FRAMES);
         // Expected right computed from a fresh generator with the SAME arithmetic
-        // the quantizer uses on the true (pre-quantization) sample — comparing
+        // the quantizer uses on the true (pre-quantization) sample - comparing
         // against the quantized left code would inject a spurious ±1 LSB error.
         SignalGenerator ref = sine();
         long maxVal = (1L << 15) - 1;

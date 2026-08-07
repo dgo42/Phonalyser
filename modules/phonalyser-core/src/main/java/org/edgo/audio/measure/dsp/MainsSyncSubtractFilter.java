@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,11 +27,11 @@ import lombok.Getter;
  * recurring hum waveform over one mains period and subtracts it.
  *
  * <p>One mains period contains <em>every</em> harmonic at once, so a single
- * period-locked template removes 50/60 Hz and all its harmonics together —
+ * period-locked template removes 50/60 Hz and all its harmonics together -
  * unlike a comb, it carves no per-harmonic notch and gouges no spectrum, and
  * unlike a fixed notch its width is irrelevant.  Any component that is NOT
  * periodic at the mains period (the test tone, broadband noise) does not
- * accumulate in the template and passes through untouched — which is also why
+ * accumulate in the template and passes through untouched - which is also why
  * this is safe to run ahead of coherent FFT averaging: it removes additive hum
  * without disturbing the test tone's amplitude or phase.
  *
@@ -40,14 +40,14 @@ import lombok.Getter;
  * points across one mains period.  Each input sample is mapped to its mains
  * phase (a continuous accumulator advancing by {@code f₀/fs} per sample, so it
  * tracks slow mains drift), the interpolated template value is subtracted, and
- * the template is nudged toward the input by a small step {@value #MU} — an
+ * the template is nudged toward the input by a small step {@value #MU} - an
  * LMS update whose fixed point is the mean of the input at that phase, i.e. the
  * periodic hum.  Non-periodic content averages to zero in the template.
  *
  * <p>{@link #process} removes the whole periodic component (hum + any periodic
  * DC); {@link #processPreservingDc} removes only the AC hum and keeps the
  * operating point.  Successive calls are assumed contiguous in the stream.
- * Not thread-safe — drive it from one thread.
+ * Not thread-safe - drive it from one thread.
  */
 public final class MainsSyncSubtractFilter implements MainsTimeFilter {
 
@@ -55,9 +55,9 @@ public final class MainsSyncSubtractFilter implements MainsTimeFilter {
      *  rate of 512·f₀ (≈ 25.6 kHz at 50 Hz), so any residual image of an
      *  in-band test tone lands ABOVE the audio band rather than inside it (a
      *  128-point template imaged a 1 kHz tone at 6400−1000 ≈ 5.4 kHz).
-     *  Requires ≳512 samples per mains period — true at every audio rate. */
+     *  Requires ≳512 samples per mains period - true at every audio rate. */
     private static final int    TEMPLATE_BINS = 512;
-    /** LMS step for the template update — deliberately small so the
+    /** LMS step for the template update - deliberately small so the
      *  (non-periodic) test tone is AVERAGED OUT of the template instead of
      *  leaking into it (a too-large step leaves a tone residual that the
      *  template then re-radiates as an image and partly subtracts from the
@@ -158,7 +158,7 @@ public final class MainsSyncSubtractFilter implements MainsTimeFilter {
         double p = phase;
         for (int i = 0; i < len; i++) {
             double fb = p * M;
-            int b0 = (int) fb;                              // p ∈ [0,1) ⇒ fb ∈ [0,M)
+            int b0 = (int) fb;                              // p ∈ [0,1) => fb ∈ [0,M)
             if (b0 >= M) b0 = M - 1;
             int b1 = (b0 + 1) % M;
             double w = fb - b0;

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -23,13 +23,13 @@ package org.edgo.audio.measure.dsp;
  * the median of the {@code window} samples centred on it, which removes
  * impulsive spikes (lone outliers up to {@code window/2} samples wide are
  * simply not the median, so they vanish) while preserving genuine
- * waveform edges — unlike a linear low-pass, it adds no ringing and keeps
+ * waveform edges - unlike a linear low-pass, it adds no ringing and keeps
  * the underlying shape.  Complements {@link LowPassFilter}: the LPF
  * handles continuous high-frequency content, the median handles
  * impulsive glitches.
  *
  * <p>Memoryless across blocks (each output sample depends only on its
- * neighbourhood in the current block), so — unlike the IIR filters — it
+ * neighbourhood in the current block), so - unlike the IIR filters - it
  * needs no per-block reset and produces no edge transient.  Window edges
  * shrink the neighbourhood rather than wrapping.
  */

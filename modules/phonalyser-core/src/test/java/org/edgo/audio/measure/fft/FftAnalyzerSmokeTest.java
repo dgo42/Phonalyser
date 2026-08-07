@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * known frequency, verify the analyser locks onto the correct bin and
  * returns a sensible {@link FftResult}.
  *
- * <p>The audit recommended this as the foundational FFT test — it
+ * <p>The audit recommended this as the foundational FFT test - it
  * exercises the windowing, FFT, peak detection, fractional-bin
  * refinement and metric computation paths in one shot.  A regression
  * in any of those layers shows up here as a wrong fundamental bin or
@@ -66,7 +66,7 @@ class FftAnalyzerSmokeTest {
                 "integer-bin sine should land exactly on its bin");
         assertEquals(exactFreq, r.fundamentalHz, 1e-9,
                 "fundamentalHz should match the integer-bin frequency");
-        // Refined Hz should agree to sub-Hz precision — this is the
+        // Refined Hz should agree to sub-Hz precision - this is the
         // payoff of the phase-difference k_f refinement.
         assertEquals(exactFreq, r.fundamentalHzRefined, 0.5,
                 "refined Hz within ~½ bin of the integer-bin frequency");
@@ -78,7 +78,7 @@ class FftAnalyzerSmokeTest {
 
     @Test
     void offBinSine_refinedFrequencyTracks() {
-        // Non-integer bin frequency — the integer bin will pick up the
+        // Non-integer bin frequency - the integer bin will pick up the
         // closest bin, but the refined Hz should track much more
         // precisely (sub-bin accuracy).
         int    sampleRate = 48_000;

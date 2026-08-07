@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -23,7 +23,7 @@ import lombok.Getter;
 /**
  * Magnitude unit selector for a frequency-domain view's magnitude axis.
  * Carries only the unit identity and whether it plots on a log magnitude
- * axis — display labels live in the GUI (i18n) and the dBFS→unit conversion
+ * axis - display labels live in the GUI (i18n) and the dBFS->unit conversion
  * in {@code Preferences#convertFromDbFs}.
  */
 public enum MagnitudeUnit {
@@ -31,7 +31,7 @@ public enum MagnitudeUnit {
     V_SQRT_HZ(true),
     DBV      (false),
     DBFS     (false),
-    /** dB relative to the fundamental — 0 dBr is the fundamental's level.  The reference is
+    /** dB relative to the fundamental - 0 dBr is the fundamental's level.  The reference is
      *  the cached {@code fftDbrRefDbFs} in Preferences, applied by {@code convertFromDbFs}. */
     DBR      (false);
 

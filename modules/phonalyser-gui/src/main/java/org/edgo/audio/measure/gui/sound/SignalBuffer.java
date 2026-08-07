@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,6 +18,10 @@
 
 package org.edgo.audio.measure.gui.sound;
 
+import org.edgo.audio.measure.sound.CaptureEndReason;
+
+import lombok.Getter;
+
 /**
  * Fixed-capacity stereo ring buffer holding the most recent {@code N} samples
  * of left and right channel data as normalised doubles in {@code [-1, +1]}.
@@ -29,7 +33,7 @@ package org.edgo.audio.measure.gui.sound;
  * <p>Lives in {@code gui.sound} (next to its producer
  * {@link SharedCapture}) so the scope and FFT views can both depend on
  * the sound package without dragging in scope-specific code.  Was
- * formerly in {@code gui.scope}; that placement created a cycle —
+ * formerly in {@code gui.scope}; that placement created a cycle -
  * {@code gui.sound.SharedCapture} produces the buffer and {@code gui.scope.OscilloscopeController}
  * consumes it.
  */
@@ -40,6 +44,22 @@ public final class SignalBuffer {
     private final double[] left;
     private final double[] right;
     private long          writePos;   // total samples written since construction
+    /** Why this stream ended, machine-readably - the GUI localizes it at
+     *  display time; whoever held the device already put its own words in the
+     *  log.  {@code null} while the stream is still live.  See {@link #finish}. */
+    @Getter
+    private volatile CaptureEndReason finishedReason;
+    /** Whether one consumer already claimed the finished reason for the
+     *  operator report - see {@link #takeFinishedReasonForReport}. */
+    private boolean finishReasonReported;
+    /** Absolute frame position of the most recent sweep-start mark, or -1
+     *  while none arrived this stream - see {@link #markSweepStart}.
+     *  Per-stream, like every position here: a fresh capture builds a fresh
+     *  buffer.  A consumer arming BEFORE it commands the bench compares
+     *  against its own armed position, so a stale mark from an earlier sweep
+     *  on the same stream is never mistaken for the new one. */
+    @Getter
+    private volatile long sweepMarkPos = -1;
 
     public SignalBuffer(int sampleRate, double seconds) {
         if (sampleRate <= 0 || seconds <= 0) {
@@ -60,6 +80,71 @@ public final class SignalBuffer {
         return writePos;
     }
 
+    /**
+     * Declares this stream over: nothing will ever be appended again, because the
+     * device feeding it is gone.
+     *
+     * <p>The state belongs HERE, on the data path, and not with any consumer.  The
+     * side that writes into this ring is the side holding the sound card, so it is
+     * the only side that can KNOW a stream has ended - a reader can only observe
+     * that nothing has arrived lately, which is indistinguishable from a quiet
+     * input.  Every reader over this buffer shares the one object, so telling it
+     * once tells all of them, and the reference count that hands readers out is
+     * left to do only what it is for.
+     *
+     * <p>Terminal and one-way.  A capture that comes back builds a NEW buffer -
+     * one per open - so nothing ever needs to un-finish this one and the flag
+     * cannot outlive the lane it describes.  Idempotent, because one dead device
+     * reports through more than one path (the backend's device-lost callback and
+     * the batch callback's own failure): the first reason wins.
+     *
+     * @param reason why the stream ended, machine-readably; a device that died
+     *               without saying which way falls back to
+     *               {@link CaptureEndReason#DEVICE_LOST}, so a finished stream
+     *               is never mistaken for a live one merely because the reason
+     *               was missing
+     */
+    public synchronized void finish(CaptureEndReason reason) {
+        if (finishedReason != null) return;
+        finishedReason = reason != null ? reason : CaptureEndReason.DEVICE_LOST;
+        notifyAll();   // a consumer blocked in awaitAvailable reacts to the death NOW
+    }
+
+    /** Whether the stream has ended - see {@link #finish}. */
+    public boolean isFinished() {
+        return finishedReason != null;
+    }
+
+    /**
+     * Claims the finished reason for the ONE operator report.  The scope and
+     * the FFT read the same dead capture through their own readers, and one
+     * unplugged device must produce one message, not one per pane - so the
+     * claim lives HERE, on the shared object, like the finish state itself.
+     * The first consumer to call this gets the reason and shows it; every
+     * later caller gets {@code null} and stops silently.  {@code null} also
+     * while the stream is still live.
+     */
+    public synchronized CaptureEndReason takeFinishedReasonForReport() {
+        if (finishReasonReported) return null;
+        finishReasonReported = true;
+        return finishedReason;
+    }
+
+    /**
+     * Records that the NEXT frame appended is a remote generator's sweep sample
+     * 0 - a bench that renders the sweep itself marks that position in its
+     * capture stream (in-band, spec 5), and the writer calls this at the mark's
+     * dispatch, which the stream orders exactly between two batches.  Like the
+     * finish state, the position belongs HERE, on the shared data, so every
+     * reader answers the same one: a sweep consumer seeks its cursor to it and
+     * assembles the record the mark bounds.  Notifies, so a consumer blocked in
+     * {@link #awaitAvailable} re-checks its mark without waiting out the cap.
+     */
+    public synchronized void markSweepStart() {
+        sweepMarkPos = writePos;
+        notifyAll();
+    }
+
     /** Capacity in samples (= sampleRate × seconds, rounded up). */
     public int getCapacity() {
         return capacity;
@@ -70,6 +155,7 @@ public final class SignalBuffer {
         left[idx]  = leftValue;
         right[idx] = rightValue;
         writePos++;
+        notifyAll();   // wake consumers blocked in awaitAvailable
     }
 
     /**
@@ -77,7 +163,7 @@ public final class SignalBuffer {
      * to the ring buffer in a single synchronised section.  Replaces a per-
      * sample {@link #append(double, double)} loop so the capture thread holds
      * the monitor once per chunk (~30/s) instead of once per sample (~384 k/s
-     * at 384 kHz) — dramatically reducing lock contention with the UI
+     * at 384 kHz) - dramatically reducing lock contention with the UI
      * thread's {@link #readLatest(int, double[], double[])} during paint.
      *
      * <p>Both writes use {@link System#arraycopy} so the synchronised hold
@@ -95,6 +181,35 @@ public final class SignalBuffer {
             System.arraycopy(rightValues, firstChunk, right, 0, remaining);
         }
         writePos += count;
+        notifyAll();   // wake consumers blocked in awaitAvailable
+    }
+
+    /**
+     * Blocks until at least {@code count} samples have been written past
+     * {@code fromPos}, the stream {@linkplain #finish finished}, or
+     * {@code maxWaitMs} elapsed - whichever comes first.  Returns the number
+     * of samples now available past {@code fromPos} (less than {@code count}
+     * on timeout or a finished stream; the caller re-checks its own state
+     * either way).  A negative {@code fromPos} (an unanchored cursor) waits
+     * relative to the current write position.
+     *
+     * <p>The wakeup half of the ring: the writer {@code notifyAll}s on every
+     * append AND on {@link #finish}, so a blocked consumer starts its tick the
+     * moment its data really exists - and reacts to device death immediately -
+     * instead of sleeping a rate-derived estimate.  The predicate re-check per
+     * batch costs nanoseconds; consumers still run their expensive tick once
+     * per requested span.
+     */
+    public synchronized long awaitAvailable(long fromPos, int count, long maxWaitMs)
+            throws InterruptedException {
+        if (fromPos < 0) fromPos = writePos;
+        long deadlineNanos = System.nanoTime() + maxWaitMs * 1_000_000L;
+        while (writePos - fromPos < count && finishedReason == null) {
+            long leftNanos = deadlineNanos - System.nanoTime();
+            if (leftNanos <= 0) break;
+            wait(Math.max(1L, leftNanos / 1_000_000L));
+        }
+        return writePos - fromPos;
     }
 
     /**
@@ -107,18 +222,18 @@ public final class SignalBuffer {
      * <p>Implementation: the requested span either lies entirely past the
      * ring-buffer wrap (one contiguous slice) or straddles it (two slices,
      * one to the end of the backing array, one from index 0).  Both cases
-     * are handled with up to two {@link System#arraycopy} calls — a JVM
-     * intrinsic that compiles down to a fast memmove — instead of a
+     * are handled with up to two {@link System#arraycopy} calls - a JVM
+     * intrinsic that compiles down to a fast memmove - instead of a
      * per-sample modulo loop.  At 384 kHz this drops the synchronised hold
      * time from several milliseconds per paint to tens of microseconds.
      */
     public int readLatest(int count, double[] outLeft, double[] outRight) {
-        // Snapshot the write position under the lock — only this
+        // Snapshot the write position under the lock - only this
         // critical section blocks the audio thread's appendBatch.
         // The arraycopy then runs OUTSIDE the lock: the writer can
         // race with us but only overwrites the read region after
         // (capacity − count) more samples have arrived, which at
-        // typical capture rates is seconds away — far longer than
+        // typical capture rates is seconds away - far longer than
         // the few ms an arraycopy needs.  This drops the lock-hold
         // from arraycopy-of-2M-doubles (~ms) to a single field read
         // (~µs), eliminating the WASAPI underruns the FFT reads were
@@ -220,7 +335,7 @@ public final class SignalBuffer {
     // ── Single-precision views for the display / WAV paths ───────────────────
     // The oscilloscope and WAV save/load don't need double precision, so they
     // read / write a float view of the (double) ring instead of dragging their
-    // DSP to double.  Narrowing / widening is per-element — System.arraycopy
+    // DSP to double.  Narrowing / widening is per-element - System.arraycopy
     // can't convert between float and double.
 
     /** {@link #readLatest(int, double[], double[])} into single-precision out

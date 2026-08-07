@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,6 +26,7 @@ import org.eclipse.swt.widgets.Control;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.GlScopeSurface;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
@@ -33,6 +34,7 @@ import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.widgets.ToolWindow;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.CaptureEndReason;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -40,12 +42,11 @@ import lombok.extern.log4j.Log4j2;
 
 /**
  * Controller of the oscilloscope pane: owns the scope's share of the
- * capture-device lifecycle — the Record state, the live buffer reference
- * and the {@link Events#CAPTURE_ACQUIRE} / {@link Events#CAPTURE_RELEASE}
- * handshake with {@code SharedCapture} (the scope and the FFT pane share
- * the same device via its refcount).
+ * capture-device lifecycle - the Record state, the live buffer reference
+ * and the direct acquire / release handshake with {@code SharedCapture}
+ * (the scope and the FFT pane share the same device via its refcount).
  *
- * <p>The pane orchestrates the VIEW side around these calls — attaching
+ * <p>The pane orchestrates the VIEW side around these calls - attaching
  * the returned live buffer to its canvases, starting the measurement
  * thread and redraw timer on acquire, re-attaching the frozen snapshot on
  * release.  Auto-setup, the open-signal load lifecycle
@@ -57,8 +58,8 @@ import lombok.extern.log4j.Log4j2;
  * displayed view state).
  *
  * <p>The amplitude-histogram tool window lives here for the same reason: a
- * window's lifecycle — created / disposed off a preference, switching the
- * measurement worker's accumulator on and off with it, owning its reset — is
+ * window's lifecycle - created / disposed off a preference, switching the
+ * measurement worker's accumulator on and off with it, owning its reset - is
  * orchestration.  {@link ScopeView} keeps only the header toggle that writes the
  * preference and {@link ScopeView#paintHistogram}, which renders the plot.
  */
@@ -84,10 +85,17 @@ public final class ScopeController {
     /** Registry path the histogram plot is published under, for the screenshot harness. */
     private static final String HISTOGRAM_PATH = "multifunctional/scope/histogram";
     /** True while the scope's own Record state is on.  Does NOT reflect
-     *  the shared capture device — the FFT pane can hold it open via
+     *  the shared capture device - the FFT pane can hold it open via
      *  {@code SharedCapture} while this stays {@code false}. */
     @Getter
     private volatile boolean capturing;
+    /** WHY the last capture ended from below - CLAIMED from the shared buffer
+     *  by the measurement worker's terminal consult, consumed by the pane on
+     *  {@link Events#SCOPE_RECORDING_STOPPED}.  {@code null} while capturing,
+     *  after a user / programmatic stop, and when another consumer of the same
+     *  dead capture (the FFT) claimed the one operator report. */
+    @Getter
+    private volatile CaptureEndReason captureEndReason;
     /** Live capture buffer held while {@link #capturing}; snapshotted by
      *  {@link #releaseCapture()} before the release. */
     private SignalBufferReader currentBuffer;
@@ -107,31 +115,34 @@ public final class ScopeController {
     /** Absolute (fractional) frame under the canvas centre in file / scrolled-back
      *  navigation; {@code -1} = follow the live tip.  Owned here because deriving
      *  the view window from it coordinates the main view + condensed strip (and the
-     *  pane's nav slider reads it) — a multi-entity operation, not pane-local. */
+     *  pane's nav slider reads it) - a multi-entity operation, not pane-local. */
     @Getter @Setter
     private double     viewCenterFrames = -1.0;
     /** Synchronous open-signal file loader, attached with the views; {@code null}
      *  on the screenshot-only pane (no live capture, no file loading). */
     private ScopeOpenSignal loader;
-    /** The amplitude-histogram tool window — non-null only while it is open.  Window
+    /** The amplitude-histogram tool window - non-null only while it is open.  Window
      *  LIFECYCLE is orchestration (which window exists, and when the accumulator
      *  runs), so it lives here.  What the window CONTAINS is a {@link HistogramView},
      *  which owns its own palette, buttons, channel pick and reset; the scope view
      *  contributes only the header toggle that writes the preference. */
     private ToolWindow histogramWindow;
-    /** Fired after every {@link #applyViewState()} recompute — the pane registers
+    /** Fired after every {@link #applyViewState()} recompute - the pane registers
      *  its nav-scrollbar sync here ({@code viewCenterFrames} is transient controller
      *  state, not a preference, so the widget can't observe it any other way). */
     @Setter
     private Runnable   onViewStateChanged;
 
     /** Requests the shared capture via the bus and holds the returned live
-     *  buffer.  Returns {@code null} when the device fails to open — the
+     *  buffer.  Returns {@code null} when the device fails to open - the
      *  reason is then available via {@link #getLastStartError()}.  Already
      *  capturing: returns the held buffer (idempotent). */
     public synchronized SignalBufferReader acquireCapture() {
         if (capturing) return currentBuffer;
-        SignalBufferReader buf = MessageBus.instance().request(Events.CAPTURE_ACQUIRE);
+        captureEndReason = null;   // any new record attempt invalidates the old terminal
+        // DIRECT: a worker (or the operator's thread) talks straight to the
+        // shared capture - the bus is UI-only and carries no device traffic.
+        SignalBufferReader buf = SharedCapture.instance().acquire();
         if (buf == null) return null;
         capturing = true;
         currentBuffer = buf;
@@ -139,7 +150,7 @@ public final class ScopeController {
     }
 
     /** Drops the scope's capture reference and returns a frozen snapshot
-     *  of the last captured frame for the views to keep showing —
+     *  of the last captured frame for the views to keep showing -
      *  {@code null} when not capturing or no buffer was held.  Publishes
      *  {@link Events#CAPTURE_RELEASE} so {@code SharedCapture} can close
      *  the device once every holder is gone. */
@@ -149,12 +160,13 @@ public final class ScopeController {
         SignalBufferReader frozen =
                 (currentBuffer != null) ? currentBuffer.frozenSnapshot() : null;
         currentBuffer = null;
-        MessageBus.instance().publish(Events.CAPTURE_RELEASE);
+        // DIRECT, same rule as the acquire above.
+        SharedCapture.instance().release();
         log.info("Oscilloscope stopped.");
         return frozen;
     }
 
-    /** The live capture buffer held while {@link #isCapturing()} —
+    /** The live capture buffer held while {@link #isCapturing()} -
      *  {@code null} otherwise.  Lets a rebuilt pane re-attach its views to
      *  a capture that survived an in-place content rebuild. */
     public synchronized SignalBufferReader liveBuffer() {
@@ -176,16 +188,58 @@ public final class ScopeController {
 
     /** Stops live capture but keeps a frozen snapshot of the last frame attached to
      *  both views.  Stops the measurement worker first (so it isn't reading a buffer
-     *  being torn down), then releases the device and freezes the snapshot — keeping
+     *  being torn down), then releases the device and freezes the snapshot - keeping
      *  the last measurements + DC means so a post-stop repaint still shows them. */
     public synchronized void stopCapture() {
-        if (!capturing) return;
+        attachFrozen(stopCaptureAndFreeze());
+    }
+
+    /** The device half of {@link #stopCapture()}: stops the measurement worker and
+     *  releases the capture, answering the frozen snapshot (or {@code null}).  No
+     *  widget is touched, so it may run OFF the display thread - which is what
+     *  {@link #captureEndedFromBelow} needs: a stop pumped on the display thread
+     *  from inside an error box's message filter wedged the box.  The operator's
+     *  Record toggle keeps the one-call {@link #stopCapture()} composition. */
+    public synchronized SignalBufferReader stopCaptureAndFreeze() {
+        if (!capturing) return null;
         if (view != null && !view.isDisposed()) view.stopMeasurementThread();
-        SignalBufferReader frozen = releaseCapture();
-        if (frozen != null) {
-            if (view != null && !view.isDisposed())           view.freezeBuffer(frozen);
-            if (condensed != null && !condensed.isDisposed()) condensed.setBuffer(frozen);
+        return releaseCapture();
+    }
+
+    /** The display half of {@link #stopCapture()}: attaches the frozen snapshot to
+     *  both views so a post-stop repaint still shows the last trace.  Touches
+     *  widgets - display thread only.  A {@code null} snapshot is a no-op. */
+    public synchronized void attachFrozen(SignalBufferReader frozen) {
+        if (frozen == null) return;
+        if (view != null && !view.isDisposed())           view.freezeBuffer(frozen);
+        if (condensed != null && !condensed.isDisposed()) condensed.setBuffer(frozen);
+    }
+
+    /**
+     * "Informed from below": the measurement worker's reader answered terminally -
+     * the capture died under a running Record.  Runs ON the worker thread: the
+     * device half of the stop must stay off the display thread (see
+     * {@link #stopCaptureAndFreeze()}), and that thread is already stopping, so
+     * it is the natural place.  Records the claimed reason for the pane, stops
+     * the capture, then marshals the visuals - the frozen trace onto the views
+     * and {@link Events#SCOPE_RECORDING_STOPPED} so the pane pops its Record
+     * toggle and localizes the reason.
+     *
+     * @param reason the claimed reason; {@code null} when another consumer of
+     *               the same dead capture (the FFT) already claimed the one
+     *               operator report - then the scope stops silently
+     */
+    public void captureEndedFromBelow(CaptureEndReason reason) {
+        captureEndReason = reason;
+        if (reason != null && log.isWarnEnabled()) {
+            log.warn("Oscilloscope capture ended from below: {}", reason.logText());
         }
+        SignalBufferReader frozen = stopCaptureAndFreeze();
+        if (frozen == null) return;   // lost the race to a concurrent user stop
+        GuiUtil.marshal(() -> {
+            attachFrozen(frozen);
+            MessageBus.instance().publish(Events.SCOPE_RECORDING_STOPPED);
+        });
     }
 
     /** Re-attaches the views to a capture that survived an in-place pane rebuild
@@ -226,17 +280,17 @@ public final class ScopeController {
             // Subscriptions owned by the view's lifetime: a pane rebuild disposes it
             // and takes them with it, then re-registers here against the replacement.
             Bindings.onChange(view, prefs.oscShowHistogramProperty(),       show -> syncHistogramWindow());
-            // Re-open a window the preference says should be up — persisted from the
+            // Re-open a window the preference says should be up - persisted from the
             // last run, or carried across a pane rebuild.  Deferred: at attach time the
             // main shell isn't laid out yet, and the window is parked off its bounds.
-            view.getDisplay().asyncExec(() -> {
+            GuiUtil.marshal(view.getShell(), () -> {
                 if (this.view == view && !view.isDisposed()) syncHistogramWindow();
             });
         }
     }
 
     /** Brings the histogram window into sync with its preference: creates + opens it
-     *  when on, disposes it otherwise.  Accumulation follows the window — the worker
+     *  when on, disposes it otherwise.  Accumulation follows the window - the worker
      *  bins only while it is open, and the counts go with it. */
     private void syncHistogramWindow() {
         boolean shouldBeOpen = Preferences.instance().isOscShowHistogram();
@@ -248,8 +302,8 @@ public final class ScopeController {
         view.setHistogramEnabled(shouldBeOpen);
     }
 
-    /** Builds the amplitude-histogram window.  Everything INSIDE it — the plot, the
-     *  L/R pick, its own reset, its palette — belongs to {@link HistogramView}; what
+    /** Builds the amplitude-histogram window.  Everything INSIDE it - the plot, the
+     *  L/R pick, its own reset, its palette - belongs to {@link HistogramView}; what
      *  the controller owns is the window's lifetime and where it sits.  Resizable,
      *  unlike the measurement window: the plot scales into whatever room it is given
      *  instead of laying out fixed-pixel columns. */
@@ -274,8 +328,8 @@ public final class ScopeController {
     }
 
     /** Repaints the histogram window if it is open.  Driven from the view's repaint
-     *  paths — both the CPU {@code redraw()} and the GPU overlay phase, which never
-     *  calls it — so the plot tracks a running trace instead of looking frozen. */
+     *  paths - both the CPU {@code redraw()} and the GPU overlay phase, which never
+     *  calls it - so the plot tracks a running trace instead of looking frozen. */
     void redrawHistogram() {
         if (histogramWindow != null) histogramWindow.redraw();
     }
@@ -293,8 +347,8 @@ public final class ScopeController {
     }
 
     /**
-     * Re-derives the file/scroll view window — the main view + condensed strip read
-     * back-offsets — from {@link #viewCenterFrames}, repaints both, and fires
+     * Re-derives the file/scroll view window - the main view + condensed strip read
+     * back-offsets - from {@link #viewCenterFrames}, repaints both, and fires
      * {@link #onViewStateChanged} so the pane can re-sync its nav-scrollbar widget.
      * The ONE view-state recompute in the system; the positioning maths live in
      * {@link ScopeNav#fileViewWindow}.
@@ -325,7 +379,7 @@ public final class ScopeController {
     }
 
     /** Repaints both scope canvases (main + condensed).  The settings toolbar calls
-     *  this after a preference change — required for stopped / file-mode sessions
+     *  this after a preference change - required for stopped / file-mode sessions
      *  where the realtime render loop is idle; a cheap no-op while recording. */
     public void redrawViews() {
         if (view != null && !view.isDisposed())           view.redraw();
@@ -345,7 +399,7 @@ public final class ScopeController {
      * Record toggle via {@link Events#SCOPE_RECORDING_STOPPED}), decodes the file
      * through the attached {@link ScopeOpenSignal}, then centres the view on the
      * file's start and recomputes the view state.  Returns whether the load
-     * succeeded — on {@code false} the caller surfaces
+     * succeeded - on {@code false} the caller surfaces
      * {@link #getLastOpenSignalError()}.
      */
     public boolean openSignalFile(File file) {
@@ -384,7 +438,7 @@ public final class ScopeController {
 
     /**
      * Moves the FILE / scrolled-back view centre by {@code divisions} grid divisions
-     * (signed; negative = toward older samples), clamped inside the buffer — ½ div per
+     * (signed; negative = toward older samples), clamped inside the buffer - ½ div per
      * wheel tick, ⅕ div per scrollbar arrow, 5 div per scrollbar page click.  The step
      * is computed in EXACT double samples (timePerDiv × sampleRate), never rounded to
      * whole samples or scrollbar units, so repeated fractional steps accumulate without
@@ -434,7 +488,7 @@ public final class ScopeController {
     /**
      * Zooms the FILE / scrolled-back view's t/div around the sample under the mouse
      * ({@code mouseFrac} across the width): the sample under the pointer stays put as the
-     * window resizes {@code tDivOld → tDivNew}, then the centre is clamped into the file.
+     * window resizes {@code tDivOld -> tDivNew}, then the centre is clamped into the file.
      * Owns the {@link #viewCenterFrames} math the pane used to inline; the pane forwards
      * the gesture from the t/div wheel-zoom and repaints.
      */
@@ -457,7 +511,7 @@ public final class ScopeController {
     /** Loop-driven realtime repaint of the scope, called once per frame by the
      *  main event loop's render tick (forwarded through the pane from
      *  {@code MultifunctionalTab}).  Repaints while recording OR showing a loaded
-     *  signal (file mode) — both are live / interactive; a plain stopped scope
+     *  signal (file mode) - both are live / interactive; a plain stopped scope
      *  keeps its frozen frame via ordinary paint events.  The condensed strip
      *  repaints decimated.  Returns {@code true} while it should keep the realtime
      *  cadence going. */
@@ -512,7 +566,7 @@ public final class ScopeController {
      * asked the scope to capture.  The pane's redraw timer repaints with the
      * new scale on its next tick, so no explicit redraw is issued here.
      *
-     * @param view       live scope view — source of the measured freq / Vpp and
+     * @param view       live scope view - source of the measured freq / Vpp and
      *                   the per-channel DC-centring offset fraction
      * @param tabControl settings control that owns the V/T scale selectors
      */
@@ -522,14 +576,14 @@ public final class ScopeController {
         boolean frozen = view != null && !view.isDisposed() && view.isFrozen();
         if (view == null || view.isDisposed() || (!capturing && !view.isFileMode() && !frozen)) return;
         Preferences prefs = Preferences.instance();
-        // Horizontal scale + trigger reset only when live / file — a stopped scope
+        // Horizontal scale + trigger reset only when live / file - a stopped scope
         // keeps the user's current time base and trigger; auto-setup then fixes ONLY
         // the vertical (V/div + offset) off the frozen frame.
         if (!frozen) {
             double freq = view.getLastFrequencyHz();
             // In dual-tone mode the carrier crosses 0 many times per beat envelope
             // cycle.  Pick the LOWER of the carrier and |F1-F2| so the time scale
-            // covers at least one full beat envelope — the carrier alone would
+            // covers at least one full beat envelope - the carrier alone would
             // render a packed wall of cycles with no visible envelope.
             double scaleHz = freq;
             if (prefs.getGenSignalForm().isDualTone()) {
@@ -548,7 +602,7 @@ public final class ScopeController {
         }
         // Per-channel V/div: scale each side off its own residual Vpp when its
         // residual is on, else off the captured Vpp.  When both residuals are off
-        // autoSetupVpp returns getLastVpp() for both, so both get the SAME V/div —
+        // autoSetupVpp returns getLastVpp() for both, so both get the SAME V/div -
         // today's behaviour preserved.
         double vppL = view.autoSetupVpp(true);
         double vppR = view.autoSetupVpp(false);
@@ -562,8 +616,8 @@ public final class ScopeController {
         }
         // Centre each channel: a DC-coupled channel on its DC mean (so a
         // DC-biased signal lands mid-screen instead of clipped off the top/
-        // bottom edge); an AC-coupled channel — DC already removed from the
-        // trace — at 0 V.  Trigger position + level back to centre.
+        // bottom edge); an AC-coupled channel - DC already removed from the
+        // trace - at 0 V.  Trigger position + level back to centre.
         prefs.setOscLeftOffsetFrac (view.autoSetupOffsetFrac(true,  prefs.getOscLeftVoltsPerDiv()));
         prefs.setOscRightOffsetFrac(view.autoSetupOffsetFrac(false, prefs.getOscRightVoltsPerDiv()));
         if (!frozen) {
@@ -571,7 +625,7 @@ public final class ScopeController {
             prefs.setOscTriggerLevelFrac   (0.5);
         } else {
             // Frozen: keep the user's time base + trigger, BUT recover a trigger offset
-            // that a zoom carried OFF-screen (virtual) so the signal returns to view —
+            // that a zoom carried OFF-screen (virtual) so the signal returns to view -
             // an on-screen offset (in [0,1]) is left exactly as set (don't disturb a good view).
             double pos = prefs.getOscTriggerPositionFrac();
             if (pos < 0.0 || pos > 1.0) prefs.setOscTriggerPositionFrac(0.5);
@@ -579,7 +633,7 @@ public final class ScopeController {
         prefs.save();
     }
 
-    /** Releases a still-held capture and closes the tool window it owns — called by
+    /** Releases a still-held capture and closes the tool window it owns - called by
      *  {@code UIEngines} at application exit. */
     public void shutdown() {
         releaseCapture();

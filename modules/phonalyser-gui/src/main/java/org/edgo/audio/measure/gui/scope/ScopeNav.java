@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -19,19 +19,19 @@
 package org.edgo.audio.measure.gui.scope;
 
 /**
- * The oscilloscope's pan/zoom engine — the single home for every horizontal and
+ * The oscilloscope's pan/zoom engine - the single home for every horizontal and
  * vertical move/zoom transform and the viewport mapping, as pure SWT-/Preferences-free
  * logic so it is fully unit-testable.  Callers (the view, pane, tab control) read the
  * persisted state, hand it to one of these methods, and write the result back.
  *
  * <h2>One buffer, three modes</h2>
- * All three modes render the SAME signal buffer; only its growth differs — LIVE keeps
+ * All three modes render the SAME signal buffer; only its growth differs - LIVE keeps
  * receiving samples, FROZEN (stopped) and FILE never do.  Horizontal position is one
  * model in every mode: a {@code displaySamples}-wide window whose left edge is
  * <pre>  viewLeftAbs = anchorAbs − displaySamples · offsetFrac  </pre>
  * where the <em>anchor</em> is the trigger (live/frozen) or the view centre (file, with
  * {@code offsetFrac = 0.5}).  {@code offsetFrac} is the trigger-position fraction and may
- * leave {@code [0,1]} (a <em>virtual</em> offset) — the handle pins to the screen edge but
+ * leave {@code [0,1]} (a <em>virtual</em> offset) - the handle pins to the screen edge but
  * the window, and the time-offset readout, follow the real value.  Out-of-buffer columns
  * are simply not drawn (the renderer blanks them); the zoom/pan anchor never moves to
  * compensate.
@@ -50,7 +50,7 @@ public final class ScopeNav {
     /**
      * The file/scroll view-window mapping: the read back-offsets for the main +
      * condensed views derived from the scroll centre, plus the centre range the
-     * nav-slider widget needs to position its thumb.  Pure — the caller (pane)
+     * nav-slider widget needs to position its thumb.  Pure - the caller (pane)
      * applies {@code mainBackOffset}/{@code condensedBackOffset} to its views and
      * the centre figures to its scrollbar.
      */
@@ -74,7 +74,7 @@ public final class ScopeNav {
     }
 
     // =====================================================================
-    // Horizontal — viewport mapping
+    // Horizontal - viewport mapping
     // =====================================================================
 
     /** Absolute (fractional) sample at the left edge of the display window. */
@@ -115,7 +115,7 @@ public final class ScopeNav {
         } else {
             clampedCentre = Math.max((double) minCentre, Math.min((double) maxCentre, centreFrames));
             // Keep the back-offset FRACTIONAL: a ½-div step is 15.36 samples at 384 kHz,
-            // and rounding to a whole sample would quantise the scroll (→ 41.7 µs, not
+            // and rounding to a whole sample would quantise the scroll (-> 41.7 µs, not
             // 40 µs).  The view carries the fraction into a sub-sample render.
             double viewEndAbs = clampedCentre + displaySamples / 2.0;
             mainOffset = Math.max(0.0, writePos - viewEndAbs);
@@ -129,7 +129,7 @@ public final class ScopeNav {
     }
 
     // =====================================================================
-    // Horizontal — move
+    // Horizontal - move
     // =====================================================================
 
     /** One ½-division horizontal move tick in offsetFrac units (live/frozen). */
@@ -147,7 +147,7 @@ public final class ScopeNav {
      *  negative = toward older samples), clamped so the full window stays inside the
      *  file.  {@code samplesPerDiv} is the EXACT double samples-per-division
      *  (timePerDiv × sampleRate, NOT derived from the int-rounded window width) so
-     *  fractional steps — ⅕ div = 1.764 samples at 44.1 kHz — accumulate unrounded. */
+     *  fractional steps - ⅕ div = 1.764 samples at 44.1 kHz - accumulate unrounded. */
     public double moveFileCentre(double centreAbs, double divisions, double samplesPerDiv,
                                  int displaySamples, long oldest, long latest) {
         return clampFileCentre(centreAbs + divisions * samplesPerDiv, displaySamples, oldest, latest);
@@ -157,7 +157,7 @@ public final class ScopeNav {
      * New file view centre after a horizontal zoom around the mouse: the sample
      * under the pointer (screen fraction {@code mouseFrac}) stays put as the window
      * resizes from {@code dispOld} to {@code dispNew} samples.  Caller clamps the
-     * result with {@link #clampFileCentre} — once the whole file fits the width the
+     * result with {@link #clampFileCentre} - once the whole file fits the width the
      * clamp centres it, so the anchor is free to move (per the spec's file limit).
      */
     public double zoomFileCentre(double centreAbs, double mouseFrac, int dispOld, int dispNew) {
@@ -176,15 +176,15 @@ public final class ScopeNav {
     }
 
     // =====================================================================
-    // Horizontal — zoom
+    // Horizontal - zoom
     // =====================================================================
 
     /**
      * New trigger offset after a horizontal (t/div) zoom.
      *
      * @param aroundMouse {@code true} for ctrl+shift+wheel (anchor the sample under the
-     *        mouse — the offset moves, possibly off-screen); {@code false} for the
-     *        resolution control (anchor the trigger — the offset is unchanged).
+     *        mouse - the offset moves, possibly off-screen); {@code false} for the
+     *        resolution control (anchor the trigger - the offset is unchanged).
      */
     public double zoomTriggerOffset(double offsetOld, int dispOld, int dispNew,
                                     double mouseFrac, boolean aroundMouse) {
@@ -196,7 +196,7 @@ public final class ScopeNav {
     }
 
     // =====================================================================
-    // Vertical — move (both channels together, ±FS/2-at-middle limit)
+    // Vertical - move (both channels together, ±FS/2-at-middle limit)
     // =====================================================================
 
     /** One ½-division vertical move tick in offsetFrac units. */
@@ -225,7 +225,7 @@ public final class ScopeNav {
      * ±FS/2-at-middle clamp uses its OWN full-scale.  The clamp already tightens the one
      * shared delta against each channel's own V/div in turn (the tighter wins); giving
      * each {@code clampOffsetDelta} that channel's own {@code peakVolts} lets the ADC
-     * full-scale play the exact same per-channel role V/div already does — no new policy.
+     * full-scale play the exact same per-channel role V/div already does - no new policy.
      * With equal L/R full-scales (LINKED) this is identical to the single-peak form.
      */
     public double[] moveVertical(double leftOff, double leftVdiv, boolean leftOn,
@@ -239,14 +239,14 @@ public final class ScopeNav {
     }
 
     // =====================================================================
-    // Vertical — zoom (coupled V/div + re-anchored offsets)
+    // Vertical - zoom (coupled V/div + re-anchored offsets)
     // =====================================================================
 
     /** Largest V/div allowed when zooming out: the smallest 1-2-5 rung at which the ADC
      *  full scale (±peak = 2·peak p-p) still FITS the grid height.  The exact-fill value
      *  2·peak/Ydiv usually lands between rungs (e.g. 0.506 V/div for a 2.53 V peak), so
      *  rounding UP makes the rung that shows all of FS without clipping reachable (1 V/div
-     *  there) — 500 mV/div would clip the last sliver of FS. */
+     *  there) - 500 mV/div would clip the last sliver of FS. */
     public double zoomOutVoltsPerDivCeiling(double peakVolts) {
         return ScopeFormat.ceilToStep(2.0 * peakVolts / divisionsY, vDivLadder);
     }
@@ -254,7 +254,7 @@ public final class ScopeNav {
     /**
      * Zooms both active channels' V/div one tick (coupled per the 1-2-5 proportional
      * rule) and re-anchors each channel's offset so the voltage under {@code anchorFrac}
-     * stays put — {@code anchorFrac = 0.5} for the V/div control (canvas middle),
+     * stays put - {@code anchorFrac = 0.5} for the V/div control (canvas middle),
      * {@code mouseY/h} for ctrl+wheel.  Zoom-out is capped at the FS-fills-height ceiling.
      *
      * @param dir {@code -1} zoom in (smaller V/div), {@code +1} zoom out (larger)
@@ -272,7 +272,7 @@ public final class ScopeNav {
      * double, double, boolean, int, double, double)}: identical coupled V/div zoom and
      * offset re-anchoring, but each channel's zoom-out ceiling ("±FS fills the grid
      * height") is derived from its OWN full-scale.  Mirrors the couple's existing
-     * per-channel V/div handling — the FS-fills-height rung is a pure function of that
+     * per-channel V/div handling - the FS-fills-height rung is a pure function of that
      * channel's full-scale, so it simply stops being shared; the zoom-out block stays
      * coupled (either channel hitting its own ceiling blocks both).  Equal L/R full-scales
      * (LINKED) reproduce the single-peak behaviour exactly.

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.common;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.function.Consumer;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
 
@@ -56,7 +57,7 @@ public final class BackendSettingsRegistry {
         log.info("Backend settings panels registered: {}", panels.keySet());
         // Arm each backend's UI-layer wiring once, here, where the set is known.
         // A provider that throws must not take the whole registry (and with it the
-        // Preferences dialog) down — log it and carry on without that backend.
+        // Preferences dialog) down - log it and carry on without that backend.
         for (BackendSettingsUi ui : panels.values()) {
             try {
                 ui.start();
@@ -85,7 +86,36 @@ public final class BackendSettingsRegistry {
         return panels.get(type);
     }
 
-    /** Whether {@code type} ships a settings panel — what the Preferences dialog
+    /** Starts a Preferences session for every registered panel (see
+     *  {@link BackendSettingsUi#beginEdit()}) - the dialog calls this as it
+     *  opens. */
+    public void beginEdit() {
+        each(BackendSettingsUi::beginEdit, "beginEdit");
+    }
+
+    /** Tells every registered panel that the dialog was closed with OK (see
+     *  {@link BackendSettingsUi#commitEdit()}). */
+    public void commitEdit() {
+        each(BackendSettingsUi::commitEdit, "commitEdit");
+    }
+
+    /** One session hook over every panel, guarded like {@link BackendSettingsUi#start()}
+     *  is: a panel that throws must not take the Preferences dialog - or the
+     *  commit of every OTHER panel - down with it. */
+    private void each(Consumer<BackendSettingsUi> hook, String what) {
+        for (BackendSettingsUi ui : panels.values()) {
+            try {
+                hook.accept(ui);
+            } catch (RuntimeException ex) {
+                if (log.isWarnEnabled()) {
+                    log.warn("Backend settings {} failed for {}: {}", what, ui.backendType(),
+                            ex.toString(), ex);
+                }
+            }
+        }
+    }
+
+    /** Whether {@code type} ships a settings panel - what the Preferences dialog
      *  asks before showing its settings button. */
     public boolean has(AudioBackendType type) {
         return panels.containsKey(type);

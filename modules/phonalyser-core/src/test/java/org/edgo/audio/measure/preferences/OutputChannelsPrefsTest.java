@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * The three output-channel selector preferences — {@code genOutputChannels},
+ * The three output-channel selector preferences - {@code genOutputChannels},
  * {@code freqRespOutputChannels} and {@code tuneNotchOutputChannels}: each
  * defaults to {@link OutputChannels#BOTH}, persists by enum {@code name()} and
  * round-trips through {@code toMap}/{@code fromMap}; an absent key keeps the

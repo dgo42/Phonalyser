@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,8 +27,8 @@ import org.edgo.audio.measure.generator.SignalGenerator;
 
 /**
  * Quantizes a {@link SignalGenerator}'s continuous-domain samples (double,
- * −1…+1) to interleaved-stereo signed little-endian PCM, with optional TPDF
- * dither applied immediately before the rounding step — the only place dither
+ * −1...+1) to interleaved-stereo signed little-endian PCM, with optional TPDF
+ * dither applied immediately before the rounding step - the only place dither
  * is meaningful, since its ±1 LSB amplitude is defined by the <em>target</em>
  * bit depth.  Owned by the playback backends ({@link JavaSoundGenerator},
  * {@link WasapiGenerator}, {@link WdmksGenerator}), which all emit the same
@@ -102,14 +102,14 @@ public final class PcmQuantizer {
     /**
      * Pulls {@code frames} samples from {@code gen} and encodes them as
      * stereo signed little-endian PCM into {@code buf}, honouring the per-lane
-     * scale and the output gate.  No allocation — safe on the audio hot path.
+     * scale and the output gate.  No allocation - safe on the audio hot path.
      * With both scales {@code 1.0} and the gate {@link OutputChannels#BOTH}
-     * (the default) both lanes get the identical quantised sample — byte-for-byte
+     * (the default) both lanes get the identical quantised sample - byte-for-byte
      * the pre-per-channel encoding.  Silence for a gated-off lane is mid-code 0
      * (signed PCM).
      */
     public void encode(SignalGenerator gen, byte[] buf, int frames) {
-        // Hoist the volatile scale/gate once per block — a live change lands on
+        // Hoist the volatile scale/gate once per block - a live change lands on
         // the next call.  ditherBits stays a per-sample read inside tpdfNoise().
         OutputChannels gate  = outputChannels;
         double         sl    = scaleL;
@@ -117,7 +117,7 @@ public final class PcmQuantizer {
         boolean        wantL = gate != OutputChannels.RIGHT;
         boolean        wantR = gate != OutputChannels.LEFT;
         if (bitDepth == 8) {
-            // Signed 8-bit PCM [−128, +127] — all three backends open their
+            // Signed 8-bit PCM [−128, +127] - all three backends open their
             // lines/streams in signed formats.
             for (int i = 0; i < frames; i++) {
                 double sample = clamp(gen.nextSample() + tpdfNoise());
@@ -141,7 +141,7 @@ public final class PcmQuantizer {
     }
 
     private double tpdfNoise() {
-        double bits = ditherBits;   // single read — a live change can't shift by (0 − 1)
+        double bits = ditherBits;   // single read - a live change can't shift by (0 − 1)
         if (bits <= 0.0) return 0.0;
         // Math.pow(2, bits−1) equals the old 1L<<(bits−1) for whole bits, and
         // interpolates the ±1 LSB amplitude continuously for a fractional depth.

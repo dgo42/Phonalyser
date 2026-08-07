@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
  * Whole-period Vmean / Vrms integration in {@link SignalMeasurements}: a fixed
  * measurement window holds a fractional number of signal cycles, and the mean of
  * that fraction is an amplitude-proportional, capture-phase-dependent residual
- * (up to A/(π·cycles) — ~mV at full scale, which swamped the Vmean σ over the
+ * (up to A/(π·cycles) - ~mV at full scale, which swamped the Vmean σ over the
  * 5 s stats window).  These tests pin the crossing-bounded whole-period
  * integration: Vmean stays at the true DC level regardless of the window's
  * phase or the signal's amplitude, so only the noise floor moves it.
@@ -34,7 +34,7 @@ class SignalMeasurementsStatsTest {
 
     @Test
     void vmean_fullScaleSine_phaseIndependent() {
-        // The naive full-window mean of this signal wanders ~0.1–3 mV with the
+        // The naive full-window mean of this signal wanders ~0.1-3 mV with the
         // capture phase; whole-period integration must hold Vmean within 10 µV
         // at every phase.
         for (double phase : new double[] { 0.0, 0.7, 1.3, 2.1, 2.9 }) {

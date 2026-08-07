@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -33,7 +33,7 @@ import org.edgo.audio.measure.gui.i18n.I18n;
  *
  * <p>Canonical units (what the bound preference stores): Hz, Vrms, seconds,
  * percent, pixels, dB, divisions, plain count.  {@code dBV} is the one
- * logarithmic unit — {@code x dBV = 10^(x/20)} Vrms — and the only one whose
+ * logarithmic unit - {@code x dBV = 10^(x/20)} Vrms - and the only one whose
  * displayed value may be negative.
  */
 public enum UnitFamily {
@@ -46,9 +46,9 @@ public enum UnitFamily {
 
     /** nV / µV / mV / V / dBV / dBFS; display switches nV below 1 µV, µV below
      *  1 mV, mV below 0.5 V, V above.  dBV and dBFS both stick for display once
-     *  typed — the two units the range switching can never choose; entering one
-     *  switches the sticky unit, and a suffix-less (digits-only) entry — V, the
-     *  base unit — clears it.  "d"/"db" are short aliases for dBV.  dBFS is
+     *  typed - the two units the range switching can never choose; entering one
+     *  switches the sticky unit, and a suffix-less (digits-only) entry - V, the
+     *  base unit - clears it.  "d"/"db" are short aliases for dBV.  dBFS is
      *  full-scale-relative: {@link NumericStepModel} resolves AND displays it
      *  against a live DAC full-scale, so a field with no full-scale supplier
      *  refuses it (the FFT manual-fundamental). */
@@ -60,7 +60,7 @@ public enum UnitFamily {
             new Unit("unit.dbv",  1.0,  true,  List.of("dbv", "db", "d")),
             new Unit("unit.dbfs", 1.0,  false, List.of("dbfs", "dbf"), true)),
 
-    /** nV / µV / mV / V — {@link #AMPLITUDE} without the logarithmic dBV unit,
+    /** nV / µV / mV / V - {@link #AMPLITUDE} without the logarithmic dBV unit,
      *  for calibration-value entry where a dB reference makes no sense.  Same
      *  linear switching thresholds and V default as AMPLITUDE. */
     VOLTAGE(3,
@@ -71,7 +71,7 @@ public enum UnitFamily {
 
     /** Generator dither depth: whole bits (base) or a full-scale-aware dBV VIEW
      *  of that whole-bit value.  The bits⇄dBV conversion is NOT the plain log
-     *  formula of {@code Unit} — it is full-scale- and bit-depth-aware and lives
+     *  formula of {@code Unit} - it is full-scale- and bit-depth-aware and lives
      *  in {@link NumericStepModel}'s DITHER policy (fed a live full-scale
      *  supplier); these units carry only the suffixes and the "which view"
      *  marker.  Suffix-less (digits-only) input is bits, the base unit; dBV
@@ -86,14 +86,14 @@ public enum UnitFamily {
             new Unit("unit.ms",  1e-3,  false, List.of("ms")),
             new Unit("unit.s",   1.0,   false, List.of("s"))),
 
-    /** µs/div … s/div for the scope's horizontal resolution; suffix-less
+    /** µs/div ... s/div for the scope's horizontal resolution; suffix-less
      *  (digits-only) input is s/div, the base unit. */
     TIME_PER_DIV(2,
             new Unit("unit.usdiv", 1e-6, false, List.of("us/div", "us", "µs")),
             new Unit("unit.msdiv", 1e-3, false, List.of("ms/div", "ms")),
             new Unit("unit.sdiv",  1.0,  false, List.of("s/div", "s"))),
 
-    /** µV/div … V/div for the scope's vertical resolution; suffix-less
+    /** µV/div ... V/div for the scope's vertical resolution; suffix-less
      *  (digits-only) input is V/div, the base unit. */
     VOLTS_PER_DIV(3,
             new Unit("unit.nvdiv", 1e-9, false, List.of("nv/div", "nv", "n")),
@@ -113,12 +113,12 @@ public enum UnitFamily {
     /** One display/input unit of a family: i18n suffix key ({@code null} =
      *  suffix-less), canonical-unit factor (linear) or the dB(V) marker, the
      *  locale-independent suffixes accepted on input, and whether the unit is
-     *  full-scale-relative (dBFS) — resolved by {@link NumericStepModel} against
+     *  full-scale-relative (dBFS) - resolved by {@link NumericStepModel} against
      *  a live full-scale, since {@link #toCanonical} has no full-scale here. */
     public record Unit(String i18nKey, double factor, boolean log,
                        List<String> aliases, boolean fsRelative) {
 
-        /** A plain (non-full-scale-relative) unit — the common case for every
+        /** A plain (non-full-scale-relative) unit - the common case for every
          *  family except AMPLITUDE's dBFS; delegates with {@code fsRelative =
          *  false}. */
         public Unit(String i18nKey, double factor, boolean log, List<String> aliases) {
@@ -130,17 +130,17 @@ public enum UnitFamily {
             return i18nKey == null ? "" : I18n.t(i18nKey);
         }
 
-        /** Displayed-unit value → canonical value. */
+        /** Displayed-unit value -> canonical value. */
         public double toCanonical(double x) {
             return log ? Math.pow(10.0, x / DB_PER_DECADE) : x * factor;
         }
 
-        /** Canonical value → displayed-unit value. */
+        /** Canonical value -> displayed-unit value. */
         public double fromCanonical(double v) {
             return log ? DB_PER_DECADE * Math.log10(v) : v / factor;
         }
 
-        /** True when {@code typed} (already trimmed) names this unit — the
+        /** True when {@code typed} (already trimmed) names this unit - the
          *  localized suffix or any ASCII alias, case-insensitively.
          *  {@link Locale#ROOT} folding: under the Turkish default locale
          *  {@code "US/DIV".toLowerCase()} yields a dotless ı and would miss
@@ -153,17 +153,17 @@ public enum UnitFamily {
         }
     }
 
-    /** dB per factor-of-10 amplitude — the dBV ↔ Vrms exponent scale. */
+    /** dB per factor-of-10 amplitude - the dBV <-> Vrms exponent scale. */
     private static final double DB_PER_DECADE = 20.0;
-    /** FREQUENCY display switches Hz → kHz here. */
+    /** FREQUENCY display switches Hz -> kHz here. */
     private static final double KILO_SWITCH_HZ = 1e3;
-    /** AMPLITUDE display switches mV → V and TIME switches ms → s here. */
+    /** AMPLITUDE display switches mV -> V and TIME switches ms -> s here. */
     private static final double HALF_UNIT_SWITCH = 0.5;
-    /** VOLTS_PER_DIV switches nV → µV here… */
+    /** VOLTS_PER_DIV switches nV -> µV here... */
     private static final double MICRO_SWITCH = 1e-6;
-    /** Per-div families switch µx → mx here… */
+    /** Per-div families switch µx -> mx here... */
     private static final double MILLI_SWITCH = 1e-3;
-    /** …and mx → x here. */
+    /** ...and mx -> x here. */
     private static final double UNIT_SWITCH = 1.0;
 
     private final Unit[] units;
@@ -178,7 +178,7 @@ public enum UnitFamily {
 
     /** The display unit for {@code canonical} per the family's switching
      *  thresholds.  Sticky explicitly-typed units (µV, dBV) are the model's
-     *  concern — this is the automatic choice only. */
+     *  concern - this is the automatic choice only. */
     public Unit displayUnit(double canonical) {
         switch (this) {
             case FREQUENCY:     return canonical < KILO_SWITCH_HZ   ? units[0] : units[1];
@@ -197,7 +197,7 @@ public enum UnitFamily {
     }
 
     /** The unit applied to input typed without a suffix.  {@code canonical} is
-     *  the field's current value — the per-div families default to whatever
+     *  the field's current value - the per-div families default to whatever
      *  unit is currently displayed. */
     public Unit defaultUnit(double canonical) {
         return defaultUnitIndex >= 0 ? units[defaultUnitIndex] : displayUnit(canonical);
@@ -214,7 +214,7 @@ public enum UnitFamily {
     }
 
     /** The family's logarithmic unit (dBV), or {@code null} when it has
-     *  none — used to restore a persisted dB display choice. */
+     *  none - used to restore a persisted dB display choice. */
     public Unit logUnit() {
         for (Unit u : units) {
             if (u.log()) return u;
@@ -223,7 +223,7 @@ public enum UnitFamily {
     }
 
     /** The family's full-scale-relative unit (dBFS), or {@code null} when it
-     *  has none — used to restore a persisted dBFS display choice, the parallel
+     *  has none - used to restore a persisted dBFS display choice, the parallel
      *  of {@link #logUnit()}. */
     public Unit fsRelativeUnit() {
         for (Unit u : units) {

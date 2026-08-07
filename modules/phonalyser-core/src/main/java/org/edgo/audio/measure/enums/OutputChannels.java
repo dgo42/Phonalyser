@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,7 +18,7 @@
 
 package org.edgo.audio.measure.enums;
 
-/** Output-lane gate for the signal generator — which physical DAC channel(s)
+/** Output-lane gate for the signal generator - which physical DAC channel(s)
  *  carry the tone.  {@link #BOTH} drives both lanes (the default, and the only
  *  behaviour before per-channel output existed); {@link #LEFT} / {@link #RIGHT}
  *  drive one lane and write digital silence to the other.  Applied at the sole

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -37,7 +37,7 @@ import org.junit.jupiter.api.Test;
  * coverage image is built at DEVICE resolution ({@code round(logical·pixelScale)}) and
  * blitted into the LOGICAL draw rectangle, so a HiDPI surface gets crisp 1:1 texels.
  * Driven through a recording {@link MeasurementPainter} stub that captures the final
- * {@code drawAlphaImage} image + draw dimensions (no SWT device, no GL — the stub's
+ * {@code drawAlphaImage} image + draw dimensions (no SWT device, no GL - the stub's
  * methods never touch native SWT; a {@code null} tint is fine as {@code render} passes
  * it straight through).
  */
@@ -45,7 +45,7 @@ class PhosphorRendererScaleTest {
 
     private static final int WIDTH_PX   = 100;
     private static final int HEIGHT_PX  = 60;
-    private static final int DISP_COUNT = 400;   // 4 samples/px ⇒ dense (phosphor) regime
+    private static final int DISP_COUNT = 400;   // 4 samples/px => dense (phosphor) regime
 
     private float[] sine(int n) {
         float[] d = new float[n];
@@ -59,7 +59,7 @@ class PhosphorRendererScaleTest {
                 WIDTH_PX, HEIGHT_PX, HEIGHT_PX / 2.0, 20.0, 0.0, 2f, null);
     }
 
-    /** Scale 1: the image is at logical size and drawn 1:1 — image dims equal the draw
+    /** Scale 1: the image is at logical size and drawn 1:1 - image dims equal the draw
      *  dims (byte-identical to rasterising at logical resolution). */
     @Test
     void scale1KeepsImageAtLogicalSizeAndDrawsOneToOne() {
@@ -70,8 +70,8 @@ class PhosphorRendererScaleTest {
         assertEquals(HEIGHT_PX, p.imgH);
         assertEquals(WIDTH_PX,  p.drawW);
         assertEquals(HEIGHT_PX, p.drawH);
-        assertEquals(p.drawW, p.imgW, "scale 1 ⇒ image dims == draw dims");
-        assertEquals(p.drawH, p.imgH, "scale 1 ⇒ image dims == draw dims");
+        assertEquals(p.drawW, p.imgW, "scale 1 => image dims == draw dims");
+        assertEquals(p.drawH, p.imgH, "scale 1 => image dims == draw dims");
     }
 
     /** Scale 1.5 (HiDPI): the image is at DEVICE resolution {@code round(logical·1.5)},

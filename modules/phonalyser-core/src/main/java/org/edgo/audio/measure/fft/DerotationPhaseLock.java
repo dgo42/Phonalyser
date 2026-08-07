@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -75,7 +75,7 @@ public final class DerotationPhaseLock {
      * @param lockDriftRad  per-tick drift magnitude below which a window counts
      *                      as stable.  Must be TIGHT: a tiny per-tick drift
      *                      integrates to a large smear over hundreds of ticks,
-     *                      so e.g. 0.001 rad — NOT 0.02 — is needed to force the
+     *                      so e.g. 0.001 rad - NOT 0.02 - is needed to force the
      *                      loop to correct the seed bias before locking.
      * @param lockWindows   consecutive stable windows required to declare lock.
      * @param maxWindows    safety fallback: lock with the best κ after this many

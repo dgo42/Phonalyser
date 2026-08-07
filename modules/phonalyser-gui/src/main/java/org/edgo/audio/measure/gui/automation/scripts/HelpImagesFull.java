@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -24,10 +24,10 @@ import org.edgo.audio.measure.gui.automation.AbstractAutomationScript;
 
 /**
  * Full help-screenshot run for the localized bundles: drives the live app and
- * recreates EVERY documentation image — the three measurement panes, the
+ * recreates EVERY documentation image - the three measurement panes, the
  * generator's dual-tone / sweep variants, the frequency-response pane, and all
  * settings-tab panels (oscilloscope, FFT, frequency response) plus the
- * Preferences dialog tabs — once per UI language.  Each image is written
+ * Preferences dialog tabs - once per UI language.  Each image is written
  * straight into {@code src/main/resources/help/<lang>/img/} with the same file
  * name the English bundle uses, so a localized bundle ends up with screenshots
  * whose chrome matches its translated text.
@@ -35,7 +35,7 @@ import org.edgo.audio.measure.gui.automation.AbstractAutomationScript;
  * <p>Run from a working directory holding a prepared {@code preferences.yaml}
  * (devices, FFT length), two levels under the repo root (e.g.
  * {@code target/agent-run}), with {@code -Dswt.autoScale=100}.  The images path
- * is resolved relative to that directory ({@code ../../src/main/resources/…}),
+ * is resolved relative to that directory ({@code ../../src/main/resources/...}),
  * matching the {@code HelpCapture.body} convention.
  *
  * <p>English is intentionally NOT recaptured here (its images are hand-tuned);
@@ -43,7 +43,7 @@ import org.edgo.audio.measure.gui.automation.AbstractAutomationScript;
  */
 public final class HelpImagesFull extends AbstractAutomationScript {
 
-    /** Bundles to (re)capture — English is left as-is. */
+    /** Bundles to (re)capture - English is left as-is. */
     private static final String[] LANGUAGES = { "de", "uk" };
 
     /** Help image folder, relative to the launch dir (two levels under root). */
@@ -55,7 +55,7 @@ public final class HelpImagesFull extends AbstractAutomationScript {
 
     // Window size (height tall enough to avoid a vertical scrollbar, which would
     // steal 16 px of width) and the 330 px generator pane come from the launch
-    // preferences.yaml — forcing them at runtime (sizeMainWindow) re-lays the
+    // preferences.yaml - forcing them at runtime (sizeMainWindow) re-lays the
     // multifunctional SashForm badly, so the bundle is captured at launch size.
 
     private static final int PANE_W = 1040;
@@ -148,7 +148,7 @@ public final class HelpImagesFull extends AbstractAutomationScript {
 
         // --- Preferences dialog tabs (modal): each per-tab path carries only an
         //     onActivate, so the screenshottable control is the tab folder at
-        //     "preferences" — activate the tab, then snapshot that base path. ---
+        //     "preferences" - activate the tab, then snapshot that base path. ---
         openPreferences();
         waitSeconds(SETTLE_REBUILD);
         for (String[] tab : PREF_TABS) {
