@@ -4,11 +4,11 @@
 
   It exists so that this directory is itself a Maven project: an IDE that is
   opened on modules/ (or that indexes folder by folder, as VS Code's Java
-  support does) finds a POM here and picks up all fourteen modules, instead of
-  seeing fourteen unrelated folders whose parent is nowhere in the tree.
+  support does) finds a POM here and picks up all eighteen modules, instead of
+  seeing eighteen unrelated folders whose parent is nowhere in the tree.
 
   The build root above declares this one module and nothing else, so the module
-  list lives in exactly one place — here, beside the modules it names.
+  list lives in exactly one place - here, beside the modules it names.
 
   Version and plugin policy is NOT set here: like every module, this POM's
   parent is phonalyser-parent, which happens to be one of its own children.
@@ -22,7 +22,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.1.1</version>
+        <version>1.2.0</version>
         <relativePath>phonalyser-parent</relativePath>
     </parent>
 
@@ -43,7 +43,7 @@
         <module>phonalyser-parent</module>
         <!-- Vendored third party (Project Nayuki's FLAC library, LGPLv3), built as
              part of the reactor so nobody has to install it by hand first.  It
-             keeps its own standalone POM — no phonalyser-parent, so our checkstyle
+             keeps its own standalone POM - no phonalyser-parent, so our checkstyle
              and plugin policy do not apply to source we do not own. -->
         <module>flac-library-java</module>
         <module>phonalyser-core</module>
@@ -53,11 +53,21 @@
         <module>backend-javasound</module>
         <module>backend-qa40x</module>
         <module>backend-loopback</module>
+        <!-- The net bridge, in dependency order: the shared wire format, the
+             headless server that serves local hardware, and the client backend
+             the GUI consumes. -->
+        <module>server-api</module>
+        <module>server-net</module>
         <module>backend-net</module>
         <module>phonalyser-cli</module>
         <module>phonalyser-gui-core</module>
         <module>phonalyser-gui</module>
         <module>backend-qa40x-gui</module>
+        <module>backend-net-gui</module>
         <module>phonalyser-app</module>
+        <!-- LAST: it spawns the real GUI and the real server as child JVMs, so
+             everything it drives must already be built.  Test-only; its
+             integration tests run only under -P integration. -->
+        <module>integration-test-engine</module>
     </modules>
 </project>

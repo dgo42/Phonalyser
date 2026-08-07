@@ -1,0 +1,2 @@
+org.edgo.audio.measure.net.server.StubDeviceManagerProvider
+org.edgo.audio.measure.net.server.StubSoundCardProvider

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The SERVER's FOREGROUND logging: a console for the operator watching the
+     terminal, and the same log file the service writes.  Auto-loaded by name -
+     a foreground start needs no reconfigure at all.
+
+     Its twin is log4j2-server.xml, the DAEMON flavour, which is this file
+     WITHOUT the console appender; ServerMain reconfigures to it under the
+     -d flag.  The two are deliberately identical in every other respect -
+     same file, same rolling policy, and above all the SAME LOGGER NAMES AND
+     LEVELS, so what a bench sees in a terminal is exactly what the service
+     writes to disk.  ServerLoggingTest pins that parity: the pair may differ in
+     the console and in nothing else.
+
+     Both write phonalyser-server.log, NOT phonalyser.log: a bench machine may
+     run the desktop app and a server at once, and two JVMs appending one
+     rolling file fight over the rollover.
+
+     ${sys:app.log.dir} is set by ServerMain.main BEFORE anything logs - see the
+     lazy-logger note there.  A logger touched at class-load time would resolve
+     this to the fallback and leave a stray empty logs/ file behind. -->
+<Configuration status="WARN">
+    <Appenders>
+        <!-- Bare messages on purpose: the console is the operator's terminal,
+             not a log - time and severity stay in the file's pattern. -->
+        <Console name="Console" target="SYSTEM_OUT">
+            <ThresholdFilter level="INFO"/>
+            <PatternLayout pattern="%msg%n"/>
+        </Console>
+        <RollingFile name="File"
+                     fileName="${sys:app.log.dir:-logs}/phonalyser-server.log"
+                     filePattern="${sys:app.log.dir:-logs}/phonalyser-server-%d{yyyy-MM-dd}.log">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} [%-5level] %logger{36} - %msg%n"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy/>
+            </Policies>
+        </RollingFile>
+    </Appenders>
+    <Loggers>
+        <!-- As on the desktop: the analyzer's own package stays at WARN.  It is
+             the noisiest thing on the bench and it is not what a render stall
+             is diagnosed from. -->
+        <Logger name="org.edgo.audio.measure.sound.qa40x" level="WARN" additivity="false">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="File"/>
+        </Logger>
+        <!-- The whole sound layer at INFO: device enumeration, the format and
+             MIXER of every line opened, and the native loaders (PortAudio,
+             LibUsb, the csjsound path).  A native that fails to load is the one
+             server failure that is otherwise invisible and total: the symptom
+             is an empty device list, which looks exactly like a bench with
+             nothing plugged in. -->
+        <Logger name="org.edgo.audio.measure.sound" level="INFO" additivity="false">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="File"/>
+        </Logger>
+        <!-- The server's own packages (server-net + server-api): the start-up
+             banner, client connects, streaming per card - the lines an operator
+             reads to see what the bench is doing. -->
+        <Logger name="org.edgo.audio.measure.net" level="INFO" additivity="false">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="File"/>
+        </Logger>
+        <Root level="WARN">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="File"/>
+        </Root>
+    </Loggers>
+</Configuration>

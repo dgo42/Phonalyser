@@ -1,0 +1,14 @@
+/* Smoke: bring the window up at a fixed size, let it settle, and print it.
+
+   A script body is ONLY the statements of run() - no imports, no class, and it
+   may name no type at all.  Everything below is inherited from
+   AbstractAutomationScript.
+
+   The screenshot path is RELATIVE on purpose: the engine starts this JVM with
+   the scenario directory as its working directory, so the file lands beside
+   this script and nowhere near the developer's own files.  The image, not the
+   check, is the real evidence here - the test asserts it is a genuine PNG. */
+sizeMainWindow(1366, 768);
+waitSeconds(1);
+screenshot("multifunctional", "smoke.png");
+checkTrue("window-up", true);
