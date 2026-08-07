@@ -12,7 +12,7 @@ h4 { font-size: 13px; margin: 14px 0 4px; color: #335; }
 p, ul, ol { margin: 6px 0; }
 /* Every help screenshot scales to the available width (like the SVG diagrams
    and the landing-page layout image) instead of overflowing at native pixel
-   size — so a PNG reflows and stays fully visible when the help window is
+   size - so a PNG reflows and stays fully visible when the help window is
    resized.  Width-capped (never upscaled past native) to keep raster crisp;
    .shot / .diagram keep their own rules below. */
 img { max-width: 100%; height: auto; }
@@ -65,7 +65,7 @@ sup a { text-decoration: none; color: #2222CC; }
 .shot img { display: block; max-width: 100%; height: auto; }
 .shot .callouts { position: absolute; top: 0; left: 0;
                   width: 100%; height: 100%; }
-/* Numbered feature list paired with an annotated screenshot — the red
+/* Numbered feature list paired with an annotated screenshot - the red
    number badges match the callout circles drawn on the overlay. */
 ol.features { margin: 8px 0; padding-left: 0; list-style: none;
               counter-reset: feat; }

@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Theorie: FFT-Analysator</title>
+  <title>Phonalyser - Theorie: FFT-Analysator</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -14,21 +14,21 @@
   <h2 id="purpose">Wozu er dient</h2>
   <p>Der FFT-Analysator ist das Arbeitstier im Frequenzbereich: Er zeigt das
      Spektrum und misst harmonische Verzerrung (THD, THD+N), Signal-Rausch-
-     Verhältnis, SINAD und ENOB, die einzelnen Harmonischen und — im Zweiton-
-     Modus — die Intermodulationsprodukte. Seine prägende Fähigkeit ist die
+     Verhältnis, SINAD und ENOB, die einzelnen Harmonischen und - im Zweiton-
+     Modus - die Intermodulationsprodukte. Seine prägende Fähigkeit ist die
      <b>kohärente Mittelung</b>, die ein Signal weit unter das Einzelschuss-
      Grundrauschen gräbt, sodass Verzerrungsprodukte zig dB unter dem Rauschen
      messbar werden. Das Designziel ist extrem: THD mit Vertrauen messbar bis
-     hinunter zu <b>10⁻⁸ %</b> — acht Stellen nach dem Komma — und der größte
+     hinunter zu <b>10⁻⁸ %</b> - acht Stellen nach dem Komma - und der größte
      Teil der Maschinerie in diesem Kapitel existiert, um eine komplexe Mittelung
      stabil genug und lange genug zu halten, um das zu erreichen.
-     Für die allgemeinen Grundlagen — Fensterung, Leck-Effekt, Auflösung,
-     Mittelung — empfehlen wir <b>nachdrücklich die Lektüre von S. L. Gjelstrups
+     Für die allgemeinen Grundlagen - Fensterung, Leck-Effekt, Auflösung,
+     Mittelung - empfehlen wir <b>nachdrücklich die Lektüre von S. L. Gjelstrups
      FFT-Leitfaden</b><sup id="cite-6"><a href="#ref-fftguide">[6]</a></sup>
      (lokal zusammengefasst unter <a href="../external/fft-analysis.html">FFT-
-     Analyse — Grundlagen</a>): Er erklärt viele Aspekte präziser FFT-Messung
+     Analyse - Grundlagen</a>): Er erklärt viele Aspekte präziser FFT-Messung
      hervorragend, auch wenn nicht alle Verfahren, die dieser Analysator
-     verwendet, dort auftauchen — und, der Vollständigkeit halber, Phonalysers
+     verwendet, dort auftauchen - und, der Vollständigkeit halber, Phonalysers
      Analysator wurde vor der Veröffentlichung dieses Leitfadens im Mai 2026
      entwickelt. Dieses Kapitel behandelt, was Phonalyser im Speziellen tut.</p>
 
@@ -42,18 +42,18 @@
      von Rechteck und Hann über Blackman-Harris, Flat-Top, die sehr
      leckarme HFT-Familie (Heinzel) und Kaiser-Bessel bis hin zu
      Dolph-Chebyshev-<sup id="cite-2"><a href="#ref-cheby">[2]</a></sup>
-     Fenstern mit Nebenkeulen-Böden bis hinunter zu −300 dB — der Dynamikbereich,
+     Fenstern mit Nebenkeulen-Böden bis hinunter zu −300 dB - der Dynamikbereich,
      den eine Verzerrungsmessung braucht.</p>
   <p>Eine verjüngende Fensterfunktion hat ihren Preis: Sie multipliziert die
      Abtastwerte nahe den Blockrändern mit nahezu null, sodass die Signalleistung,
-     die diese Abtastwerte tragen, schlicht <b>verworfen</b> wird — bei einer
+     die diese Abtastwerte tragen, schlicht <b>verworfen</b> wird - bei einer
      Verjüngung der Hann-Klasse erreicht etwa die Hälfte der erfassten Energie
      die Transformation nie. <b>Überlappung</b> aufeinanderfolgender Blöcke (bis
      zu 93,75 % hier) gewinnt sie zurück: Ein Abtastwert, der im verworfenen Rand
      eines Blocks sitzt, sitzt nahe dem <em>Maximum</em> der Fensterfunktion eines
      Nachbarblocks, sodass über die überlappte Menge praktisch jeder erfasste
      Abtastwert mit vollem Gewicht beiträgt. Das Grundrauschen der Mittelung fällt
-     dann mit der Rate, mit der die <em>Daten</em> eintreffen — dasselbe
+     dann mit der Rate, mit der die <em>Daten</em> eintreffen - dasselbe
      Grundrauschen wird in weniger Echtzeit erreicht, als eine nicht überlappte
      Analyse benötigen würde.</p>
 
@@ -71,7 +71,7 @@
     <text x="87"  y="170" text-anchor="middle" fill="#965">≈ zero weight</text>
     <text x="332" y="170" text-anchor="middle" fill="#965">≈ zero weight</text>
     <text x="210" y="196" text-anchor="middle" fill="#335">one tapered block: the edge samples'</text>
-    <text x="210" y="212" text-anchor="middle" fill="#335">power is captured — then thrown away</text>
+    <text x="210" y="212" text-anchor="middle" fill="#335">power is captured - then thrown away</text>
 
     <!-- right: overlapped blocks -->
     <line x1="450" y1="150" x2="800" y2="150" stroke="#446" stroke-width="1"/>
@@ -87,7 +87,7 @@
     <text x="658" y="52" fill="#557">edge of one block =</text>
     <text x="658" y="68" fill="#557">peak of the next</text>
     <text x="625" y="196" text-anchor="middle" fill="#335">overlapped blocks: every sample gets full</text>
-    <text x="625" y="212" text-anchor="middle" fill="#335">weight in some block — no power wasted,</text>
+    <text x="625" y="212" text-anchor="middle" fill="#335">weight in some block - no power wasted,</text>
     <text x="625" y="228" text-anchor="middle" fill="#335">the same noise floor in less time</text>
   </svg>
   </div>
@@ -98,7 +98,7 @@
   <ul>
     <li><b>Inkohärente (Leistungs-)Mittelung</b> addiert die <em>Beträge</em>
         aufeinanderfolgender Blöcke. Rauschen mittelt sich auf seinen Mittelwert
-        — es fällt nicht. Das Grundrauschen bleibt, wo es ist; man erhält nur eine
+        - es fällt nicht. Das Grundrauschen bleibt, wo es ist; man erhält nur eine
         glattere Schätzung davon.</li>
     <li><b>Kohärente (komplexe) Mittelung</b> addiert die Blöcke als komplexe
         Zahlen, mit Phase. Ein stationärer Ton hat in jedem Block dieselbe Phase
@@ -106,7 +106,7 @@
         sich teilweise aus. Über <i>M</i> Blöcke fällt das Grundrauschen um etwa</li>
   </ul>
   <div class="eq">10·log₁₀ <i>M</i>&nbsp;&nbsp;dB<span class="no">(1)</span></div>
-  <p>— also bringen 100 Mittelungen etwa 20 dB, 10000 etwa 40 dB. Das ist es, was
+  <p>- also bringen 100 Mittelungen etwa 20 dB, 10000 etwa 40 dB. Das ist es, was
      Harmonische freilegt, die tief unter dem Einzelschuss-Grundrauschen begraben
      sind.</p>
 
@@ -119,7 +119,7 @@
     <li><b>Ein lückenloser, zusammenhängender Strom.</b>  Der Analysator liest
         über einen vorwärtsgerichteten <a href="ring-buffer.html#reader">Lese-
         Cursor</a>, sodass aufeinanderfolgende Blöcke durch einen exakten,
-        gleichmäßigen Abtast-Hop beabstandet sind — niemals "der neueste Block,
+        gleichmäßigen Abtast-Hop beabstandet sind - niemals "der neueste Block,
         wann immer der Worker aufwachte", was die Phasenreferenz verwackeln und
         das Ergebnis verschmieren würde.</li>
     <li><b>Exakte De-Rotation pro Block.</b>  Da die absolute Position jedes
@@ -127,7 +127,7 @@
         der Analysator die Phasendifferenz jedes Blocks gegenüber dem gemeinsamen
         Zeitursprung <em>exakt</em> und dreht den Block vor dem Summieren um diese
         zurück. Die Präzision dieser Phasendifferenz ist die Präzision der ganzen
-        Methode — weshalb die fraktionale Bin-Position κ des Tons so sorgfältig
+        Methode - weshalb die fraktionale Bin-Position κ des Tons so sorgfältig
         gemessen wird (nächster Abschnitt) und weshalb der Ton aktiv auf das
         Bin-Raster gesteuert wird (der Abschnitt danach).</li>
   </ul>
@@ -142,8 +142,8 @@
   <div class="eq">Φ<sub>m</sub> = −2π · κ · <i>m·s</i> / <i>N</i><span class="no">(2)</span></div>
   <p>Die Harmonische <i>h</i> des Tons sitzt nahe Bin <i>h</i>·κ und schreitet
      <i>h</i>× so schnell fort, sodass ihre Keule um <i>h</i>·Φ de-rotiert wird.
-     Eine <em>konstante</em> Phase pro Harmonischen-Keule anzuwenden — statt einer
-     Frequenzrampe pro Bin — ist es, was auch den Leck-Saum jeder Harmonischen
+     Eine <em>konstante</em> Phase pro Harmonischen-Keule anzuwenden - statt einer
+     Frequenzrampe pro Bin - ist es, was auch den Leck-Saum jeder Harmonischen
      ausgerichtet hält; eine Rampe würde den Saum überdrehen und einen unechten
      Kamm darauf wachsen lassen.</p>
 
@@ -171,7 +171,7 @@
     <text x="216" y="100" fill="#338">m=2</text>
     <text x="206" y="160" fill="#338">m=3</text>
     <text x="140" y="215" text-anchor="middle" fill="#335">each block's tone arrives</text>
-    <text x="140" y="231" text-anchor="middle" fill="#335">rotated by m·Φ — summed naively,</text>
+    <text x="140" y="231" text-anchor="middle" fill="#335">rotated by m·Φ - summed naively,</text>
     <text x="140" y="247" text-anchor="middle" fill="#335">they cancel each other</text>
 
     <!-- middle -->
@@ -193,13 +193,13 @@
     <text x="648" y="130" fill="#888">noise: random</text>
     <text x="648" y="146" fill="#888">directions, cancels</text>
     <text x="620" y="215" text-anchor="middle" fill="#335">de-rotated: every block points</text>
-    <text x="620" y="231" text-anchor="middle" fill="#335">the same way — the average grows</text>
+    <text x="620" y="231" text-anchor="middle" fill="#335">the same way - the average grows</text>
     <text x="620" y="247" text-anchor="middle" fill="#335">while the noise floor falls</text>
   </svg>
   </div>
   <div class="note"><b>Warum κ über das ganze Segment angepasst wird.</b>  Ein κ,
      das aus nur einem Blockpaar genommen wird, trägt einen kleinen Restfehler,
-     der als langsame De-Rotations-Drift über eine lange Mittelung wirkt — die
+     der als langsame De-Rotations-Drift über eine lange Mittelung wirkt - die
      Harmonischen verlieren allmählich ihre Kohärenz und lesen zu niedrig (der
      Effekt "Harmonische fallen bei langen Erfassungen ab"). Phonalyser passt κ
      neu an, indem es die Phase des Tons über <em>jeden</em> Block im sauberen
@@ -218,30 +218,30 @@
         sodass der ausgegebene Ton nominell kohärent mit der Transformation ist.</li>
     <li><b>Die Frequenzregelschleife (FLL).</b>  Snapping allein genügt nicht:
         Der DAC und der ADC laufen auf <em>verschiedenen Quarzoszillatoren</em>,
-        deren Frequenzen nie exakt übereinstimmen — ein präzise auf einen
+        deren Frequenzen nie exakt übereinstimmen - ein präzise auf einen
         DAC-Takt-Bin ausgegebener Ton trifft auf dem ADC-Takt einige ppm daneben
         ein. Die FLL schließt diese Schleife: bei jedem Tick misst der Analysator
         die wahre erfasste Frequenz des Tons und trimmt das DDS fein, bis der
         erfasste Ton auf besser als <b>±0,05 ppm</b> auf dem Bin sitzt. (Die
-        Trim-Kommandos werden mit exakter Transport-Buchführung ausgegeben — eine
+        Trim-Kommandos werden mit exakter Transport-Buchführung ausgegeben - eine
         Korrektur wird nie erneut ausgegeben, bevor eine Messung nachweislich
         nach dem Eintreffen der vorigen durch den DAC-Puffer und das
-        Analysefenster liegt — sodass die Schleife einschwingt statt zu pendeln.)</li>
+        Analysefenster liegt - sodass die Schleife einschwingt statt zu pendeln.)</li>
   </ul>
   <p>Diese Ausrichtung beseitigt nahezu den spektralen Leck-Effekt aus den
-     Grundton- und Harmonischen-Bins. Der kleine verbleibende Rest — selbst bei
-     1/5000 eines Bins oder weniger — wird <em>dennoch</em> als κ gemessen und
+     Grundton- und Harmonischen-Bins. Der kleine verbleibende Rest - selbst bei
+     1/5000 eines Bins oder weniger - wird <em>dennoch</em> als κ gemessen und
      von der De-Rotation exakt berücksichtigt. Die Ausrichtung verringert, was
      die De-Rotation korrigieren muss; die De-Rotation garantiert in jedem Fall
      die Korrektheit.</p>
 
   <h2 id="leakage">Der Nachbar-Bin: wohin die geleckte Leistung geht</h2>
   <p>Wie gut die Ausrichtung auch sei, die wahre Position κ des Tons liegt nie
-     <em>perfekt</em> auf dem Bin — und jeder Versatz teilt die Leistung des Tons
+     <em>perfekt</em> auf dem Bin - und jeder Versatz teilt die Leistung des Tons
      zwischen den beiden umschließenden Bins auf. Die Aufteilung ist brutal
      asymmetrisch: Bei einem gut ausgerichteten Ton hält der Haupt-Bin etwa
      99,9999 % der Leistung und der Nachbar die verbleibenden 0,0001 %.
-     Verlockend, das zu ignorieren — aber das Designziel ist 10⁻⁸ %, und einen
+     Verlockend, das zu ignorieren - aber das Designziel ist 10⁻⁸ %, und einen
      Anteil von 10⁻⁶ des Grundtons oder einer Harmonischen fallenzulassen ist ein
      Fehler um Größenordnungen darüber. Daher wird der Pegel jedes Tons und jeder
      Harmonischen stets aus <b>beiden</b> Bins berechnet, gewichtet mit dem
@@ -270,25 +270,25 @@
     <text x="416" y="82" fill="#a33">(slightly off the bin)</text>
     <!-- combination -->
     <path d="M 400 36 L 400 14 L 550 14 L 550 170" fill="none" stroke="#446" stroke-width="1" stroke-dasharray="3 3"/>
-    <text x="475" y="10" text-anchor="middle" fill="#335">both enter A² — equation (3)</text>
-    <text x="700" y="242" text-anchor="end" fill="#888">(symbolic — not to scale)</text>
+    <text x="475" y="10" text-anchor="middle" fill="#335">both enter A² - equation (3)</text>
+    <text x="700" y="242" text-anchor="end" fill="#888">(symbolic - not to scale)</text>
   </svg>
   </div>
 
   <h2 id="phaseref">Die Phasenreferenz wählen</h2>
   <p>Die Phasendifferenz, die die De-Rotation treibt, muss an irgendetwas gemessen
-     werden — und woran sie gemessen wird, entscheidet, wie viel Phasenrauschen in
+     werden - und woran sie gemessen wird, entscheidet, wie viel Phasenrauschen in
      die Korrektur jedes Blocks eingeht:</p>
   <ul>
     <li><b>Starker Grundton:</b> Seine eigene Phase ist die sauberste Referenz.
         Das Φ jedes Blocks wird allein am Grundton gemessen, und jede
-        Harmonischen-Keule wird um <i>h</i>·Φ de-rotiert — die Harmonischen erben
+        Harmonischen-Keule wird um <i>h</i>·Φ de-rotiert - die Harmonischen erben
         eine Referenz, die weit stärker ist als sie selbst.</li>
     <li><b>Schwacher Grundton oder zwei starke Töne:</b> Eine einzelne schwache
         Linie würde ihr eigenes Phasenrauschen in die gesamte De-Rotation
         einspeisen. Die Rotation wird dann aus <em>allen starken Tönen zusammen</em>
-        bestimmt — jeder erkannte Ton trägt seine eigene Phasenverfolgung, und
-        ihre gepoolte Information setzt die gemeinsame Taktdrift-Korrektur —
+        bestimmt - jeder erkannte Ton trägt seine eigene Phasenverfolgung, und
+        ihre gepoolte Information setzt die gemeinsame Taktdrift-Korrektur -
         sodass das Referenzrauschen mit der kombinierten Tonleistung fällt.</li>
   </ul>
 
@@ -305,7 +305,7 @@
     <!-- left: strong fundamental -->
     <circle cx="170" cy="110" r="80" fill="none" stroke="#dde"/>
     <line x1="170" y1="110" x2="208" y2="44" stroke="#33a" stroke-width="2.5" marker-end="url(#fb)"/>
-    <text x="214" y="40" fill="#338">fundamental — sets Φ</text>
+    <text x="214" y="40" fill="#338">fundamental - sets Φ</text>
     <line x1="170" y1="110" x2="140" y2="82" stroke="#33a" stroke-width="1" marker-end="url(#fb)"/>
     <line x1="170" y1="110" x2="150" y2="138" stroke="#33a" stroke-width="1" marker-end="url(#fb)"/>
     <line x1="170" y1="110" x2="196" y2="134" stroke="#33a" stroke-width="1" marker-end="url(#fb)"/>
@@ -326,20 +326,20 @@
     <text x="700" y="66" fill="#a33">(clock drift)</text>
     <text x="488" y="34" fill="#557">tones = tines of</text>
     <text x="488" y="50" fill="#557">one rigid fork</text>
-    <text x="600" y="225" text-anchor="middle" fill="#335">weak fundamental / two tones: "rotate the fork" —</text>
+    <text x="600" y="225" text-anchor="middle" fill="#335">weak fundamental / two tones: "rotate the fork" -</text>
     <text x="600" y="241" text-anchor="middle" fill="#335">the common angle is measured from all tines pooled</text>
   </svg>
   </div>
   <p>Das Bild, das man sich merken sollte: Die starken Töne bilden eine starre
-     <b>Stimmgabel</b> — das Signal fixiert ihre Phasen <em>relativ zueinander</em>,
+     <b>Stimmgabel</b> - das Signal fixiert ihre Phasen <em>relativ zueinander</em>,
      und nur die <em>gemeinsame</em> Rotation der Gabel (die Taktdrift der Wandler)
      ändert sich von Block zu Block. Diesen einen Rotationswinkel aus allen Zinken
      zugleich zu messen, gewichtet nach ihrer Stärke, ist weit leiser als ihn an
-     einer einzelnen Zinke abzulesen — und die ganze Gabel wird dann als eine
+     einer einzelnen Zinke abzulesen - und die ganze Gabel wird dann als eine
      zurückgedreht.</p>
   <p>Dieses Pooling ist kein Sonderfall; es ist, wie eine ernsthafte THD-Messung
      aussieht. Um THD bei 1 kHz nahe dem Niveau von 10⁻⁸ % zu messen, wird der
-     Grundton durch ein <b>1-kHz-Twin-T-Kerbfilter</b> vor dem ADC entfernt — was
+     Grundton durch ein <b>1-kHz-Twin-T-Kerbfilter</b> vor dem ADC entfernt - was
      ihn um bis zu 80 dB schwächer macht (in der Größenordnung von 0,1 mV RMS),
      sodass der Wandler nicht länger seine eigene Verzerrung aus einem
      Vollaussteuerungs-Ton erzeugt und sein Dynamikbereich für die Harmonischen
@@ -348,23 +348,23 @@
      Harmonischen erst ermöglicht.</p>
 
   <h2 id="rejection">Schlechte Blöcke aus der Mittelung heraushalten</h2>
-  <p>Ein einziger korrumpierter Block — eine Strecke verschluckter Abtastwerte,
-     ein pausierter Generator, ein Klick —, in eine kohärente Mittelung gegossen,
+  <p>Ein einziger korrumpierter Block - eine Strecke verschluckter Abtastwerte,
+     ein pausierter Generator, ein Klick -, in eine kohärente Mittelung gegossen,
      kann tausende guter Blöcke zunichtemachen: Er spritzt Leistung über das
      Spektrum und stuft die Phase, was alles bisher Gesammelte de-kohäriert. Zwei
      Fehlerklassen werden erkannt und ihre Blöcke <em>ausgeschlossen</em>:</p>
 
   <h3>Pufferüberlauf</h3>
   <p>Wenn der Analysator weit genug hinter die Erfassung zurückfällt, dass
-     ungelesene Abtastwerte überschrieben werden (siehe <a href="ring-buffer.html#overrun">Ringpuffer —
+     ungelesene Abtastwerte überschrieben werden (siehe <a href="ring-buffer.html#overrun">Ringpuffer -
      Überlauf</a>), hat der Strom ein Loch unbekannter Länge. Die Leseschnittstelle
-     meldet dies explizit — zerrissene Daten werden nie stillschweigend geliefert —
+     meldet dies explizit - zerrissene Daten werden nie stillschweigend geliefert -
      und der Analysator synchronisiert sich neu: Das unvollständige Fenster wird
      verworfen und der Cursor verankert sich am neuesten Abtastwert neu.</p>
 
-  <h3>Signaldiskontinuität — im Spektrum erkannt</h3>
-  <p>Subtilere Brüche — der pausierende Generator (das Signal wird abgestanden),
-     ein Erfassungsschluckauf, der eine Spanne verschluckt, ein Phasensprung —
+  <h3>Signaldiskontinuität - im Spektrum erkannt</h3>
+  <p>Subtilere Brüche - der pausierende Generator (das Signal wird abgestanden),
+     ein Erfassungsschluckauf, der eine Spanne verschluckt, ein Phasensprung -
      hinterlassen kein gemeldetes Loch im Strom: Sie müssen im Signal selbst
      gefunden werden. Die Erkennung läuft an zwei komplementären Fronten. Die
      erste ist der Frequenzbereich, wo jeder neue Block mit der laufenden
@@ -373,19 +373,19 @@
     <li>Das Spektrum wird auf eine Menge <b>logarithmisch beabstandeter
         Bandpegel</b> reduziert (mittlere Leistung pro Band, in dB), und Bänder,
         die echte Spektrallinien enthalten, werden identifiziert und beiseitegelegt
-        — eine echte Linie referenziert sich selbst und darf nicht als "Anhebung"
+        - eine echte Linie referenziert sich selbst und darf nicht als "Anhebung"
         zählen.</li>
-    <li><b>Gate 1 — Sockel nahe dem Träger.</b>  Der Rauschpegel im Saum knapp
+    <li><b>Gate 1 - Sockel nahe dem Träger.</b>  Der Rauschpegel im Saum knapp
         außerhalb der <em>tatsächlichen</em> Hauptkeule jedes Tons (die
         Keulenausdehnung wird aus den Daten ermittelt, sodass gewöhnlicher
         Fenster-Leck-Effekt ausgeschlossen ist), gemessen als Überschuss über den
         lokalen Boden. Eine Diskontinuität spritzt Energie hier zuerst, lange bevor
         sich der Breitbandboden bewegt.</li>
-    <li><b>Gate 2 — Anhebung des Breitbandbodens.</b>  Der mittlere Anstieg der
-        Nicht-Linien-Bänder über ihren laufenden Median pro Band — fängt eine
+    <li><b>Gate 2 - Anhebung des Breitbandbodens.</b>  Der mittlere Anstieg der
+        Nicht-Linien-Bänder über ihren laufenden Median pro Band - fängt eine
         gleichmäßige Bodenanhebung ein, die das Sockel-Gate nicht sehen kann.</li>
-    <li><b>Gate 3 — Gesamtleistung.</b>  Ein Sprung <em>oder Kollaps</em> der
-        Gesamtleistung des Blocks gegen seine Historie — ein stehengebliebener
+    <li><b>Gate 3 - Gesamtleistung.</b>  Ein Sprung <em>oder Kollaps</em> der
+        Gesamtleistung des Blocks gegen seine Historie - ein stehengebliebener
         Generator oder ein langer Ausfall, wo Linien verschwinden, statt dass der
         Boden steigt.</li>
   </ol>
@@ -397,25 +397,25 @@
      saubere Basislinie <em>dieses</em> Signals auf <em>diesem</em> Pegel, statt
      feste Zahlen zu verwenden; der erste Block setzt die Referenz, und ab dem
      zweiten Block ist jedes Gate aktiv. Die Bandreferenz wird nur aus akzeptierten
-     Blöcken aktualisiert, während die Gate-Basislinien allen Blöcken folgen —
+     Blöcken aktualisiert, während die Gate-Basislinien allen Blöcken folgen -
      sodass ein früher Glitch weder die Referenz vergiften noch später falsche
      Verwerfungen verursachen kann.</p>
 
-  <h3>Signaldiskontinuität — in der rohen Wellenform erwischt</h3>
+  <h3>Signaldiskontinuität - in der rohen Wellenform erwischt</h3>
   <p>Die spektralen Gates beurteilen einen Block nach seiner Statistik, und
      Statistik lässt sich verdünnen: Ein Schnitt von gut hundert Mikrosekunden
-     — die beobachteten USB-Erfassungsausfälle liegen bei 120–160 µs — sitzt in
+     - die beobachteten USB-Erfassungsausfälle liegen bei 120-160 µs - sitzt in
      einem Block, der Sekunden umspannen kann, und seine verspritzte Energie,
      über das gesamte Spektrum verteilt, kann unter Schwellen bleiben, die
      großzügig genug sein müssen, um nicht auf gewöhnliches Leck-Atmen
      anzuschlagen. Deshalb werden auch die rohen Abtastwerte jedes Blocks
      durchleuchtet, und zwar vom <b>selben Diskontinuitätsdetektor, der den
      Glitch-Trigger des Oszilloskops antreibt</b>: einem Sinus-Rekurrenz-
-     Prädiktor, dessen Fehler-Basislinie das Grundrauschen selbst ist — nicht
-     die eigene Krümmung des Signals —, sodass eine Amplitudenstufe oder ein
+     Prädiktor, dessen Fehler-Basislinie das Grundrauschen selbst ist - nicht
+     die eigene Krümmung des Signals -, sodass eine Amplitudenstufe oder ein
      Steigungsbruch Dekaden darüber herausragt, überall auf der Wellenform und
-     bei jeder Frequenz. (Die Herleitung des Prädiktors — und warum die naive
-     zweite Differenz bei hohen Frequenzen taub wird — steht im
+     bei jeder Frequenz. (Die Herleitung des Prädiktors - und warum die naive
+     zweite Differenz bei hohen Frequenzen taub wird - steht im
      <a href="oscilloscope.html#trigger">Trigger-Abschnitt des
      Oszilloskop-Kapitels</a>.) Der Prädiktor wird auf den gemessenen Grundton
      festgelegt, wenn einer bekannt ist, und schätzt seinen Koeffizienten sonst
@@ -424,35 +424,35 @@
      sich neu, genau wie bei einer spektralen Verwerfung.</p>
   <p>Die beiden Durchleuchtungen decken gegenseitig ihre blinden Flecken ab.
      Die Zeitbereichs-Prüfung fängt den scharfen, lokalen Bruch ein, dessen
-     spektraler Fußabdruck schwach ist — verlorene Abtastwerte, ein
+     spektraler Fußabdruck schwach ist - verlorene Abtastwerte, ein
      Wandler-Abriss, ein Phasenschnitt; die spektralen Gates fangen Schäden ein,
-     bei denen jeder einzelne Abtastwert plausibel bleibt — eine gleichmäßige
+     bei denen jeder einzelne Abtastwert plausibel bleibt - eine gleichmäßige
      Bodenanhebung oder ein stehengebliebener Generator, dessen Ausgang perfekt
      glatt, aber abgestanden ist. Und weil sich der Analysator und das
      Oszilloskop einen Detektor teilen, sind sich die beiden Instrumente einig,
      was als beschädigte Erfassung zählt: Ein Glitch, auf den das Oszilloskop
      triggert, ist ein Block, den die Mittelung verweigert.</p>
   <p>Eine Timing-Feinheit betrifft die Neusynchronisation selbst. Der Detektor
-     schlägt an der <em>Eintritts</em>kante des Glitches an — aber der Ausfall,
+     schlägt an der <em>Eintritts</em>kante des Glitches an - aber der Ausfall,
      der den Alarm ausgelöst hat, kann noch im Gange sein, wenn sich der
      Lese-Cursor am neuesten Abtastwert neu verankert, sodass ein sofortiger
      Neuaufbau das neue Fenster <em>innerhalb</em> des Glitches beginnen und den
      Detektor am selben Ereignis erneut auslösen könnte. Nach einer
      Diskontinuitäts-Neusynchronisation liest der Analysator daher die ersten
-     <b>5 ms</b> frischer Abtastwerte und <b>verwirft sie</b> — etwa das 30- bis
-     40-Fache der beobachteten Ausfalllänge —, bevor er neu aufbaut, sodass der
+     <b>5 ms</b> frischer Abtastwerte und <b>verwirft sie</b> - etwa das 30- bis
+     40-Fache der beobachteten Ausfalllänge -, bevor er neu aufbaut, sodass der
      erste Block nach einer Neusynchronisation nachweislich hinter dem Ende des
      Glitches beginnt und sauber in die Mittelung eingeht.</p>
 
-  <div class="note"><b>Was eine Neusynchronisation kostet — und was nicht.</b>  In
+  <div class="note"><b>Was eine Neusynchronisation kostet - und was nicht.</b>  In
      jedem Fall wird das störende Fenster verworfen und der Strom verankert sich
      neu, aber die <em>akkumulierte Mittelung überlebt</em>: Die De-Rotation
      absorbiert die Abdeckungslücke, und die laufende Phasenverriegelung wendet beim
      nächsten sauberen Block eine einmalige vollständige Neuausrichtung an (ein neu
      synchronisierter Strom setzt im Allgemeinen mit einer neuen Phase fort), bevor
      sie zur normalen Verfolgung zurückkehrt. Die blinkende Anzeige <em>Capture
-     re-sync</em> meldet das Ereignis. Dieser Ausschluss — statt einen abgestandenen
-     oder zerrissenen Block hereinzulassen — ist es, was Leistungs-Leck-Ausbrüche
+     re-sync</em> meldet das Ereignis. Dieser Ausschluss - statt einen abgestandenen
+     oder zerrissenen Block hereinzulassen - ist es, was Leistungs-Leck-Ausbrüche
      und die langsame Dekohärenz der gesammelten Statistik nahezu vollständig
      beseitigt.</div>
 
@@ -466,18 +466,18 @@
   <div class="eq">SNR = 10·log₁₀ ( <i>A</i><sub>1</sub>² / Σ<sub>noise</sub> <i>A</i><sub>k</sub>² )<span class="no">(5)</span></div>
   <p>Ein Faktor in dieser Rauschsumme bleibt unsichtbar, bis er zuschlägt: ein
      gefensterter Spektrum-Bin enthält nicht eine Bin-Breite an
-     Breitbandleistung, sondern NENBW davon — die <b>normalisierte äquivalente
+     Breitbandleistung, sondern NENBW davon - die <b>normalisierte äquivalente
      Rauschbandbreite</b> des Fensters (Hann: 1,5, Flat-Top: ≈3,8).  Ein Sinus
      ist immun, seine Amplitude wird über die kohärente Verstärkung des
      Fensters normalisiert; eine über rohe Bins gebildete Rauschsumme
      überschätzt die Bandleistung jedoch um genau diesen Faktor, und SNR,
-     SINAD, ENOB und THD+N läsen allesamt zu pessimistisch — 1,76 dB bei Hann,
+     SINAD, ENOB und THD+N läsen allesamt zu pessimistisch - 1,76 dB bei Hann,
      fast 6 dB bei Flat-Top.  Der Analysator teilt das integrierte Rauschen
-     deshalb durch NENBW — und schlägt den Wert nicht in einer Tabelle von
+     deshalb durch NENBW - und schlägt den Wert nicht in einer Tabelle von
      Fensternamen nach, sondern berechnet ihn aus der tatsächlich verwendeten
      Fenstertabelle:</p>
   <div class="eq">NENBW = <i>N</i> · Σ <i>w</i><sub>n</sub>² / ( Σ <i>w</i><sub>n</sub> )²<span class="no">(6)</span></div>
-  <p>So trägt jedes Fenster — auch jedes künftig hinzugefügte — seinen exakten
+  <p>So trägt jedes Fenster - auch jedes künftig hinzugefügte - seinen exakten
      Faktor.  Der Wert wird in jedes Ergebnis eingeprägt, sodass eine spätere
      Bandänderung mit dem Fenster nachrechnet, das das Spektrum tatsächlich
      erzeugt hat.  Die Faktoren der Fenster des Analysators (aus ihren
@@ -500,28 +500,28 @@
     <tr><td>Dolph-Tschebyscheff 300 dB</td><td>3,3310</td><td>5,23 dB</td></tr>
   </table>
   <p><b>SINAD</b> setzt <em>sowohl</em> Rauschen als auch Verzerrung in den
-     Nenner, und <b>ENOB</b> — die effektive Anzahl der Bits — folgt daraus
+     Nenner, und <b>ENOB</b> - die effektive Anzahl der Bits - folgt daraus
      über das Ideal-Quantisierungsgesetz des
      Wandlers<sup id="cite-4"><a href="#ref-enob">[4]</a></sup>:</p>
   <div class="eq">SINAD = 10·log₁₀ ( <i>A</i><sub>1</sub>² / (Σ<sub>noise</sub> + Σ<sub>dist</sub>) )<span class="no">(7)</span></div>
   <div class="eq">ENOB = (SINAD − 1.76) / 6.02<span class="no">(8)</span></div>
   <p>THD+N ist einfach das reziproke Verhältnis zu SINAD (dasselbe Band,
      derselbe Zähler), und <b>N+D</b> ist genau dieser Nenner, bezogen auf den
-     Grundton — das gesamte Nicht-Grundton-Residuum, in dB mit dem Zusatz
+     Grundton - das gesamte Nicht-Grundton-Residuum, in dB mit dem Zusatz
      <b>A</b> angezeigt (THD+N ist derselbe Wert als Prozentzahl).  Beide Terme
-     des Nenners — das integrierte Rauschen <em>und</em> die harmonische
-     Verzerrung — werden Bin für Bin mit der A-Bewertungskurve nach IEC
+     des Nenners - das integrierte Rauschen <em>und</em> die harmonische
+     Verzerrung - werden Bin für Bin mit der A-Bewertungskurve nach IEC
      61672<sup id="cite-5"><a href="#ref-aw">[5]</a></sup> multipliziert, bevor
      sie summiert werden: Die Kurve liegt um 1&nbsp;kHz nahe eins und fällt im
      tiefen Bass und im äußersten Höhenbereich ab, wo das Ohr weit
      unempfindlicher ist, sodass N+D, THD+N, SINAD und ENOB die Hörbarkeit
-     widerspiegeln statt roher Breitbandenergie — weshalb ein Wandler mit
+     widerspiegeln statt roher Breitbandenergie - weshalb ein Wandler mit
      ansteigendem Höhenrauschen bewertet mehrere Dezibel besser abschneidet als
      unbewertet.  <b>SNR</b> (5) und der Messwert <b>N</b> bleiben bewusst
      <em>unbewertet</em>; sie geben das rohe Breitbandrauschen an und tragen
      daher kein A.</p>
 
-  <p>Die Wendung „ihre Leck-Zonen" verbirgt das Detail, das darüber entscheidet,
+  <p>Die Wendung "ihre Leck-Zonen" verbirgt das Detail, das darüber entscheidet,
      ob diese Werte ehrlich sind: Das um den Grundton ausgeschlossene Band ist
      kein fester Schutzabstand.  Ein breiter oder phasenverrauschter Grundton
      breitet zu beiden Seiten einen <b>Saum</b> angehobener Bins aus; in der
@@ -531,7 +531,7 @@
      Grundton-Bin läuft der Analysator nach außen, Bin für Bin, solange jeder
      Nachbar noch über dem Grundrauschen steht, und beendet den Lauf erst, wenn
      ein ganzes <b>Vorausschau-Fenster</b> von Bins auf dieses zurückgefallen ist
-     — ein schmaler Saum wird schmal ausgeschlossen, ein breiter bis dorthin, wo
+     - ein schmaler Saum wird schmal ausgeschlossen, ein breiter bis dorthin, wo
      er wirklich endet.  Das Fenster ist auf die Korrelationslänge der
      Frame-Überlappung bemessen, etwa 1/(1−Überlappung) Bins plus Reserve: ein
      überlappungsgemittelter Boden schwankt genau auf dieser Skala, sodass eine
@@ -543,30 +543,30 @@
      keine Boden-Statistik den Ausschluss je bis zur zweiten Harmonischen
      ausdehnen kann.  Ein zweiter, begrenzter Durchlauf überstreicht dann
      dieselbe Zone von ±½·<i>f</i>₁ um den Grundton und verwirft jeden isolierten
-     Phasenrausch-Buckel, der noch über dem Grundrauschen steht — ein durch eine
+     Phasenrausch-Buckel, der noch über dem Grundrauschen steht - ein durch eine
      Lücke länger als die Vorausschau unterbrochener Saum ließe seine äußeren
      Inseln sonst wieder in die Rauschsumme lecken.  Diese Zone ist auf die halbe
      Grundtonfrequenz begrenzt, sodass sie nie die zweite Harmonische bei
      2·<i>f</i>₁ erreichen kann, die als Verzerrung gezählt bleiben muss, nicht
      als Rauschen ausgeschlossen.</p>
 
-  <p>Wie weit die Ausschlüsse auch wachsen — die Rauschzahl können sie nicht
+  <p>Wie weit die Ausschlüsse auch wachsen - die Rauschzahl können sie nicht
      drücken, denn ausgeschlossene Bins zählen nicht als Stille: Das
      Rauschintegral wird mit dem Verhältnis der Band-Bins zu den tatsächlich
      summierten Bins reskaliert, was das unter Saum und Harmonischen verborgene
-     Rauschen auf dem Niveau des umgebenden Bodens schätzt — die einzig ehrliche
+     Rauschen auf dem Niveau des umgebenden Bodens schätzt - die einzig ehrliche
      Annahme, da das wahre Rauschen unter einem Ton nicht beobachtbar ist.</p>
 
   <h2 id="dualtone">Zweiton (Intermodulation)</h2>
   <p>Bei zwei vorhandenen Tönen sind die interessierenden Produkte nicht
      Harmonische eines Tons, sondern Kombinationen <i>a</i>·<i>f</i>₁ + <i>b</i>·<i>f</i>₂.
      Der Analysator lokalisiert die eigene Sub-Bin-Position κ₂ des zweiten Tons aus
-     einem sauberen Block (wo er noch auf vollem Pegel ist — kohärente Auslöschung
+     einem sauberen Block (wo er noch auf vollem Pegel ist - kohärente Auslöschung
      greift nur in der Mittelung), und de-rotiert dann das ganze
      Intermodulationsraster bei der <em>wahren</em> Frequenz jedes Produkts
      <i>a</i>·Φ₁ + <i>b</i>·Φ₂. Würde man stattdessen jedes Produkt auf die nächste
      Harmonische eines Tons snappen, würde das einige Produkte zwischen Blöcken um
-     ~180° auseinander rotieren und sie auslöschen — die Ursache eines früheren
+     ~180° auseinander rotieren und sie auslöschen - die Ursache eines früheren
      Bugs "IMD-Produkte verschwinden". Die richtige De-Rotation selektiert sich
      selbst: Diejenige, die ein Produkt am stärksten belässt, ist die korrekte.</p>
 
@@ -577,16 +577,34 @@
   <ul>
     <li><b>Frequenzgang-Entbetten</b> (nächster Abschnitt).</li>
     <li><b>Netzunterdrückung</b> wird hier als Frequenzbereichs-Kamm-Korrektur auf
-        der geplotteten Kurve angewendet — nicht als Zeitbereichsfilter auf dem
-        Akkumulator — sodass sie die gemittelten Daten selbst nie verzerrt.</li>
+        der geplotteten Kurve angewendet - nicht als Zeitbereichsfilter auf dem
+        Akkumulator - sodass sie die gemittelten Daten selbst nie verzerrt.</li>
     <li><b>Einheitenumrechnung.</b>  Die Basisskala ist dBFS; dBV und V/√Hz-Dichte
         werden zur Plot-Zeit aus der ADC-Vollaussteuerungs-Kalibrierung
         abgeleitet.</li>
   </ul>
+  <p><b>dBr gehört zu diesem letzten Punkt und zu nichts anderem.</b>  Es ist eine
+     <em>Anzeigetransformation</em>: die geplottete Kurve wird so verschoben, dass
+     der Grundton genau 0 anzeigt, und das ist im Log-Bereich der Abzug einer
+     einzigen Zahl von jedem Bin.</p>
+  <div class="eq">
+      <i>L</i><sub>dBr</sub>(<i>k</i>) = <i>L</i><sub>dBFS</sub>(<i>k</i>)
+      − <i>L</i><sub>dBFS</sub>(<i>f</i>₀)<span class="no">(9)</span></div>
+  <p>Zwei Eigenschaften folgen daraus, dass dies hier und nicht früher geschieht.
+     Der Bezug ist der Grundton <b>wie angezeigt</b> - der entbettete Wert oder
+     ein <a href="#manual-fund">von Hand fixierter</a>, wenn dieser gilt - und er
+     wird <b>bei jedem Neuzeichnen neu gelesen</b>, sodass ein driftender Pegel
+     sein ganzes Spektrum mitnimmt und die Harmonischen beim selben dBr bleiben,
+     während ihr Absolutpegel wandert.  Und weil der Versatz den Akkumulator nie
+     erreicht, wird <b>nie etwas dagegen integriert</b>: die gemittelten Daten
+     bleiben roh, das Umschalten auf dBr und zurück kostet keine akkumulierten
+     Blöcke, und die Rausch- und Verzerrungskennwerte - die aus dem rohen Spektrum
+     berechnet werden, nicht aus dem, was die Achse gerade zeigt - sind in jeder
+     Einheit identisch.</p>
 
   <h2 id="cal">Frequenzgang-Kompensation: die roten und blauen Punkte</h2>
-  <p>Eine Messung durch eine reale Kette — ein Kerbfilter, ein Dämpfungsglied, das
-     eigene Abrollen der Soundkarte — liest jede Harmonische durch den Frequenzgang
+  <p>Eine Messung durch eine reale Kette - ein Kerbfilter, ein Dämpfungsglied, das
+     eigene Abrollen der Soundkarte - liest jede Harmonische durch den Frequenzgang
      dieser Kette. Geladene <b>Kalibrierdateien</b> (gemessen vom
      <a href="freq-resp.html">Frequenzgang</a>-Modul, z. B. die eigene Kurve des
      Twin-T-Kerbfilters) machen dies rückgängig: zur Anzeigezeit wird der
@@ -595,33 +613,33 @@
   <p>Die Ansicht zeigt beide Welten zugleich:</p>
   <ul>
     <li><b>Rote Punkte</b> markieren den Grundton und jede Harmonische auf dem
-        <em>korrigierten</em> Spektrum — die Pegel, wie sie am Prüfling vorliegen,
+        <em>korrigierten</em> Spektrum - die Pegel, wie sie am Prüfling vorliegen,
         nachdem der Frequenzgang der Kette entfernt wurde.</li>
     <li><b>Blaue Punkte</b> markieren, wo jeder dieser Peaks <em>vor</em> der
-        Korrektur saß — die Pegel, wie der ADC sie tatsächlich sah. Der vertikale
+        Korrektur saß - die Pegel, wie der ADC sie tatsächlich sah. Der vertikale
         Abstand zwischen einem blauen und einem roten Punkt IST der Wert der
         geladenen Kalibrierung bei dieser Frequenz; mit einem geladenen
         1-kHz-Kerbfilter sitzt der blaue Punkt des Grundtons zig dB unter seinem
         roten Punkt, während die Punkte der Harmonischen nahezu zusammenfallen.</li>
   </ul>
   <p><b>Die Messtabelle folgt den roten Punkten.</b>  Nachdem die Kompensation
-     angewendet ist, wird jeder abgeleitete Wert — Grundtonpegel, Harmonischen-
-     Pegel und -Prozente, THD, THD+N, SNR — aus dem <em>korrigierten</em> Spektrum
+     angewendet ist, wird jeder abgeleitete Wert - Grundtonpegel, Harmonischen-
+     Pegel und -Prozente, THD, THD+N, SNR - aus dem <em>korrigierten</em> Spektrum
      neu berechnet, sodass die Tabelle die Zahlen des Geräts angibt, nicht die der
      Kette. Eine Feinheit: Bei einer tiefen Mittelung werden die blauen Punkte aus
      der <em>fixierten</em> kohärenten Frequenz neu abgeleitet statt aus der bei
-     jedem Tick verwackelnden Einzeltick-Schätzung — andernfalls würde die
+     jedem Tick verwackelnden Einzeltick-Schätzung - andernfalls würde die
      Kalibrierung bei jedem Tick bei einer leicht anderen Frequenz nachgeschlagen
      und die blauen Punkte würden auf einer steilen Kerbflanke sichtbar tanzen.</p>
 
   <h3 id="manual-fund">Den Grundton von Hand auf einer steilen Kerbe fixieren</h3>
   <p>Der Grundton ist der eine Pegel, den die Kerb-Kalibrierung am wenigsten
      zuverlässig zurückgewinnt. Die Flanke eines passiven <b>Twin-T-Kerbfilters</b>
-     um seine Nullstelle ist außerordentlich steil — in einem gemessenen Filter
+     um seine Nullstelle ist außerordentlich steil - in einem gemessenen Filter
      beträgt der Frequenzgang <b>−82,46 dB bei 1001,9 Hz</b>, aber
      <b>−81,73 dB bei 1002,23 Hz</b>: etwa 0,7 dB Korrektur über ein Drittel
-     Hertz. Der geringste Fehler in der nachgeschlagenen Frequenz — oder die
-     geringste Drift der Kerbe selbst — wird so zu einem großen Fehler im
+     Hertz. Der geringste Fehler in der nachgeschlagenen Frequenz - oder die
+     geringste Drift der Kerbe selbst - wird so zu einem großen Fehler im
      entbetteten Grundtonpegel. Und die Nullstelle des Twin-T <em>driftet</em>
      tatsächlich, um Zehntel-Hertz, während ihre Bauteile sich erwärmen und
      abkühlen, sodass der zurückgewonnene Grundton über einen langen Lauf wandert,
@@ -630,12 +648,12 @@
      sich diese Wanderung als Instabilität in den Verzerrungsmesswerten, selbst wenn
      der Prüfling sich nicht geändert hat. Die Abhilfe besteht darin, das
      Entbetten des Grundtons zu unterlassen und ihn <b>von Hand anzugeben</b>:
-     Seine Amplitude ist der Teil, den man tatsächlich kennt — man hat ihn am
-     Generator eingestellt oder ohne Kerbe im Stromkreis gemessen —, während die
+     Seine Amplitude ist der Teil, den man tatsächlich kennt - man hat ihn am
+     Generator eingestellt oder ohne Kerbe im Stromkreis gemessen -, während die
      Nullstelle des Filters der unsichere Teil ist. Mit aktiviertem
      <a href="../fft.html#fft-manual-fund">manuellem Grundton</a> werden die
      Verzerrungs-Metriken auf diesen festen, bekannten Wert bezogen, und nur die
-     Harmonischen werden entbettet — und sie sind robust gegen ebenjene Drift:
+     Harmonischen werden entbettet - und sie sind robust gegen ebenjene Drift:
      Bei der 2. Harmonischen (≈2004 Hz) verschiebt eine 2/3-Hz-Verschiebung der
      Kerbe die Korrektur um unter <b>0,01 dB</b>, und bei der 3. (≈3006 Hz) bleibt
      selbst eine 1-Hz-Verschiebung unter 0,01 dB, weil diese Frequenzen weit oben
@@ -650,16 +668,16 @@
      der Rest verursachen würde, gepoolte Phasenreferenzen halten die Verriegelung,
      wenn der Grundton weggekerbt ist, und strikter Blockausschluss hält Überläufe
      und Diskontinuitäten aus der Statistik. Zusammen machen sie die Mittelung über
-     <b>sehr lange Läufe stabil — 8 bis 12 Stunden kontinuierlicher kohärenter
-     Mittelung</b> — und diese Ausdauer ist die Anforderung hinter der Kennzahl:
+     <b>sehr lange Läufe stabil - 8 bis 12 Stunden kontinuierlicher kohärenter
+     Mittelung</b> - und diese Ausdauer ist die Anforderung hinter der Kennzahl:
      ein Grundrauschen, tief genug getrieben, um THD auf dem Niveau von 10⁻⁸ % mit
      Vertrauen anzugeben, nicht als einmalige Glücks-Ablesung.</p>
   <p>Dass die De-Rotation eine komplexe Mittelung so lange zusammenhalten kann,
      ohne die Harmonischen-Pegel klammheimlich zu korrumpieren, wird nicht
-     angenommen — es wird im <a href="derotation-accuracy.html">Kapitel zur
+     angenommen - es wird im <a href="derotation-accuracy.html">Kapitel zur
      De-Rotations-Genauigkeit</a> ausgearbeitet, das zeigt, dass der
      Rotationswinkelfehler bei etwa 0,023° bleibt, nur Mikro-Dezibel zu den Pegeln
-     beiträgt und — der entscheidende Punkt — sich über Stunden der Mittelung
+     beiträgt und - der entscheidende Punkt - sich über Stunden der Mittelung
      <em>nicht</em> akkumuliert.</p>
 
   <h2 id="who">Wo er sitzt</h2>
@@ -668,7 +686,7 @@
      Oszilloskop</a>. Wenn der Generator einen internen Ton fährt, kann er die
      kommandierte Frequenz als Anfangshinweis nehmen und, bei aktivem Snap-to-Bin,
      speist er einen Frequenz-Trim zurück an den <a href="generator.html#dds">
-     Generator</a>, sodass der ausgegebene Ton exakt auf einem Bin landet — die
+     Generator</a>, sodass der ausgegebene Ton exakt auf einem Bin landet - die
      engstmögliche Kohärenz. Seine Harmonischen-Messungen speisen auch die
      Verzerrungsauslöschung des <a href="generator.html#compensated">kompensierten
      Sinus</a> des Generators.</p>
@@ -676,28 +694,28 @@
   <h2 id="refs">Referenzen</h2>
   <ol class="refs">
     <li id="ref-window"><a href="#cite-1">1.</a>
-        Window functions and leakage —
+        Window functions and leakage -
         <a href="https://en.wikipedia.org/wiki/Window_function">Wikipedia: Window function</a>;
         the HFT (flat-top) family: G. Heinzel et al.,
         <a href="https://holometer.fnal.gov/GH_FFT.pdf">"Spectrum and spectral density estimation by the DFT, including a comprehensive list of window functions"</a>, 2002.</li>
     <li id="ref-cheby"><a href="#cite-2">2.</a>
-        Dolph-Chebyshev window (uniform side-lobe floor) —
-        <a href="https://en.wikipedia.org/wiki/Window_function#Dolph%E2%80%93Chebyshev_window">Wikipedia: Dolph–Chebyshev window</a>.</li>
+        Dolph-Chebyshev window (uniform side-lobe floor) -
+        <a href="https://en.wikipedia.org/wiki/Window_function#Dolph%E2%80%93Chebyshev_window">Wikipedia: Dolph-Chebyshev window</a>.</li>
     <li id="ref-mad"><a href="#cite-3">3.</a>
-        Median and median-absolute-deviation as a robust threshold —
+        Median and median-absolute-deviation as a robust threshold -
         <a href="https://en.wikipedia.org/wiki/Median_absolute_deviation">Wikipedia: Median absolute deviation</a>.</li>
     <li id="ref-enob"><a href="#cite-4">4.</a>
-        SINAD, ENOB and the 6.02 N + 1.76 dB law —
+        SINAD, ENOB and the 6.02 N + 1.76 dB law -
         <a href="https://en.wikipedia.org/wiki/Effective_number_of_bits">Wikipedia: Effective number of bits</a>;
         Analog Devices tutorial MT-003,
         <a href="https://www.analog.com/media/en/training-seminars/tutorials/MT-003.pdf">"Understand SINAD, ENOB, SNR, THD, THD + N, and SFDR"</a>.</li>
     <li id="ref-aw"><a href="#cite-5">5.</a>
-        A-weighting —
+        A-weighting -
         <a href="https://en.wikipedia.org/wiki/A-weighting">Wikipedia: A-weighting</a> (IEC 61672).</li>
     <li id="ref-fftguide"><a href="#cite-6">6.</a>
         S. L. Gjelstrup,
         <a href="https://dewesoft.com/blog/guide-to-fft-analysis">"FFT Analysis (Fast Fourier Transform): The Ultimate Guide to Frequency Analysis"</a>,
-        Dewesoft, 2026 — recommended reading on the foundations (windows,
+        Dewesoft, 2026 - recommended reading on the foundations (windows,
         leakage, averaging, scaling); <a href="../external/fft-analysis.html">local summary</a>.</li>
   </ol>
 

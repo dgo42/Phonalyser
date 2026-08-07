@@ -6,7 +6,7 @@
     </marker>
   </defs>
 
-  <text x="20" y="26" font-weight="bold" fill="#334">Verteilter Faradayscher Käfig — die Gerätegehäuse + die Kabelschirme, kein separater Raumkäfig</text>
+  <text x="20" y="26" font-weight="bold" fill="#334">Verteilter Faradayscher Käfig - die Gerätegehäuse + die Kabelschirme, kein separater Raumkäfig</text>
 
   <!-- ===== DAC (oben links) ===== -->
   <rect x="40" y="92" width="150" height="64" rx="6" fill="#eef" stroke="#777" stroke-width="3"/>
@@ -60,19 +60,19 @@
   <line x1="99"  y1="392" x2="131" y2="392" stroke="#445" stroke-width="2"/>
   <line x1="104" y1="398" x2="126" y2="398" stroke="#445" stroke-width="2"/>
   <line x1="109" y1="404" x2="121" y2="404" stroke="#445" stroke-width="2"/>
-  <text x="140" y="397" fill="#556" font-size="11">Schirm/Gehäuse → Erde (ein Punkt, am ADC)</text>
+  <text x="140" y="397" fill="#556" font-size="11">Schirm/Gehäuse -> Erde (ein Punkt, am ADC)</text>
 
   <!-- ===== Legende (rechts) ===== -->
-  <text x="572" y="104" font-weight="bold" fill="#334">Leiter (CAT.8 → XLR)</text>
+  <text x="572" y="104" font-weight="bold" fill="#334">Leiter (CAT.8 -> XLR)</text>
   <line x1="572" y1="124" x2="606" y2="124" stroke="#6fa8dc" stroke-width="3"/>
-  <text x="614" y="128" fill="#333">blau-weiß → Signal (heiß) → Pin 2</text>
+  <text x="614" y="128" fill="#333">blau-weiß -> Signal (heiß) -> Pin 2</text>
   <line x1="572" y1="146" x2="606" y2="146" stroke="#1f4e79" stroke-width="3"/>
-  <text x="614" y="150" fill="#333">blau → Signalmasse (kalt) → Pin 3</text>
+  <text x="614" y="150" fill="#333">blau -> Signalmasse (kalt) -> Pin 3</text>
   <line x1="572" y1="168" x2="606" y2="168" stroke="#aaa" stroke-width="7"/>
-  <text x="614" y="172" fill="#333">grün + Beidraht → Schirm / Gehäuse → Pin 1</text>
+  <text x="614" y="172" fill="#333">grün + Beidraht -> Schirm / Gehäuse -> Pin 1</text>
 
   <text x="572" y="204" fill="#c22"><tspan font-weight="bold">★</tspan> Signalmasse ↔ Schirm/Käfig an</text>
-  <text x="572" y="220" fill="#c22">EINEM Punkt — am DUT-Eingang (oder</text>
+  <text x="572" y="220" fill="#c22">EINEM Punkt - am DUT-Eingang (oder</text>
   <text x="572" y="236" fill="#c22">-Ausgang; beides testen, Bestwert).</text>
   <text x="572" y="258" fill="#556">Jedes Gehäuse liegt am Schirm (Pin 1),</text>
   <text x="572" y="274" fill="#556">nie an der Signalmasse (Pin 3).</text>
@@ -81,7 +81,7 @@
   <text x="572" y="328" fill="#445">Kein separater Raumkäfig. Die</text>
   <text x="572" y="344" fill="#445">Gehäuse + die Kabelschirme bilden</text>
   <text x="572" y="360" fill="#445">eine durchgehende leitende Hülle um</text>
-  <text x="572" y="376" fill="#445">das Signalpaar — das IST der Käfig.</text>
+  <text x="572" y="376" fill="#445">das Signalpaar - das IST der Käfig.</text>
   <text x="572" y="392" fill="#445">Sie schirmt elektrische Felder ab;</text>
   <text x="572" y="408" fill="#445">die verdrillte Paarung und die</text>
   <text x="572" y="424" fill="#445">Sternpunkterdung gegen Magnetfelder.</text>

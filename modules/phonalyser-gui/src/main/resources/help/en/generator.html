@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Generator</title>
+  <title>Phonalyser - Generator</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -11,8 +11,8 @@
 
   <h1>Generator</h1>
   <p>This page covers the generator's controls.  For how it synthesizes
-     signals inside — direct digital synthesis, the waveform kernels, sweeps
-     and active distortion compensation — see
+     signals inside - direct digital synthesis, the waveform kernels, sweeps
+     and active distortion compensation - see
      <a href="theory/generator.html">Theory of operation ▸ Signal
      generator</a>.</p>
   <p>Produces test signals routed to the configured output device.
@@ -20,8 +20,8 @@
      the <b>tone generator</b> (sine / sweep / noise / etc.) and the
      <b>audio-file player</b>.  Starting one stops the other.</p>
   <p class="note">Every numeric field here accepts the value four ways: type
-     it in, scroll the <b>mouse wheel</b>, click the <b>▲/▼ arrows</b>, or — with
-     the field focused — press the keyboard <b>↑/↓</b> cursor keys (same step as
+     it in, scroll the <b>mouse wheel</b>, click the <b>▲/▼ arrows</b>, or - with
+     the field focused - press the keyboard <b>↑/↓</b> cursor keys (same step as
      the arrows).</p>
 
   <div class="shot">
@@ -61,28 +61,28 @@
   </div>
   <ol class="features">
     <li><b>ON&nbsp;AIR indicator.</b>  Grey when idle; the LED lights and the
-        text blinks while the generator is emitting —
+        text blinks while the generator is emitting -
         <a href="#generator-onair">ON&nbsp;AIR indicator</a>.</li>
     <li><b>Signal form.</b>  The waveform selector (sine, dual-tone,
         triangle, rectangle, white / pink noise, linear &amp; log sweep,
-        compensated sine) — <a href="#generator-form">Signal form</a>.  The
+        compensated sine) - <a href="#generator-form">Signal form</a>.  The
         surrounding fields reconfigure per form (duty cycle for
         triangle/rectangle, the <a href="#generator-sweep">sweep controls</a>
         for sweeps).</li>
     <li><b>Snap to FFT bin.</b>  Rounds the output frequency to the exact FFT
-        bin so the tone is coherent with the analyser — the basis of the
+        bin so the tone is coherent with the analyser - the basis of the
         frequency-lock loop (<a href="theory/generator.html#dds">Theory ▸
         phase accumulator</a>).  See
         <a href="#generator-snap-fft-bin">Snap frequency to nearest</a>.</li>
     <li><b>Amplitude (RMS).</b>  Output level in volts RMS against the DAC
-        calibration; the unit selector accepts µV/mV/V, dBV and dBFS —
+        calibration; the unit selector accepts µV/mV/V, dBV and dBFS -
         <a href="#generator-amplitude">Amplitude (RMS)</a>.</li>
     <li><b>Corrections.</b>  Loads a harmonic-compensation file so the
         <em>compensated sine</em> form actively cancels the chain's measured
-        distortion — <a href="#generator-corrections">Corrections</a>.</li>
-    <li><b>WAV file.</b>  <a href="#generator-save-to">Save to…</a> exports
+        distortion - <a href="#generator-corrections">Corrections</a>.</li>
+    <li><b>WAV file.</b>  <a href="#generator-save-to">Save to...</a> exports
         the current signal to WAV/AIFF/FLAC;
-        <a href="#generator-load-from">Load from… + In loop</a> plays a file
+        <a href="#generator-load-from">Load from... + In loop</a> plays a file
         back (the In-loop box repeats it).</li>
     <li><b>Calibrate DAC &amp; Play.</b>  The crosshair button opens the
         <a href="#generator-dac-calibrate">DAC calibration</a> dialog; the green
@@ -90,7 +90,7 @@
         tone stops file playback and vice-versa.</li>
     <li><b>Output channel.</b>  The <b>Both / Left / Right</b> combo in the
         header row picks which DAC lane carries the signal; the unselected lane
-        plays digital silence — <a href="#generator-output-channel">Output
+        plays digital silence - <a href="#generator-output-channel">Output
         channel</a>.</li>
   </ol>
 
@@ -99,7 +99,7 @@
   <h3 id="generator-form">Signal form</h3>
   <p>Drop-down combo with eleven waveforms.  Each entry has a small
      pictogram showing the waveform shape.  Changing the form
-     reconfigures the surrounding controls — the duty-cycle field
+     reconfigures the surrounding controls - the duty-cycle field
      enables for <code>Rectangle</code> and <code>Triangle</code>,
      the sweep controls appear for <code>Linear sweep</code> and
      <code>Log sweep</code>, the frequency field disables for the
@@ -111,19 +111,19 @@
     <tr><td>Triangle</td><td>Adjustable duty cycle (asymmetric ramp).</td></tr>
     <tr><td>Rectangle</td><td>Adjustable duty cycle (high-time fraction).</td></tr>
     <tr><td>White noise</td><td>Uniform-random samples.</td></tr>
-    <tr><td>Pink noise</td><td>Gaussian source via Voss–McCartney.</td></tr>
-    <tr><td>Pink noise linear</td><td>Flat-amplitude white source via Voss–McCartney.</td></tr>
+    <tr><td>Pink noise</td><td>Gaussian source via Voss-McCartney.</td></tr>
+    <tr><td>Pink noise linear</td><td>Flat-amplitude white source via Voss-McCartney.</td></tr>
     <tr><td>Linear sweep</td><td>Chirp with linear-in-time frequency ramp.</td></tr>
-    <tr><td>Log sweep</td><td>Farina logarithmic chirp — equal energy per octave.</td></tr>
+    <tr><td>Log sweep</td><td>Farina logarithmic chirp - equal energy per octave.</td></tr>
   </table>
 
   <h3 id="generator-output-channel">Output channel</h3>
-  <p>Combo in the top header row — in the <a href="#generator-form">Signal&nbsp;form</a>
+  <p>Combo in the top header row - in the <a href="#generator-form">Signal&nbsp;form</a>
      label row, <b>above</b> the signal-form selector and beside the
-     <a href="#generator-onair">ON&nbsp;AIR</a> indicator — choosing which DAC lane
+     <a href="#generator-onair">ON&nbsp;AIR</a> indicator - choosing which DAC lane
      carries the generated signal: <b>Both</b>, <b>Left</b>
      or <b>Right</b>.  The unselected lane plays <b>digital silence</b>, so you can
-     drive one side of a stereo device — or one channel of the device under test — on
+     drive one side of a stereo device - or one channel of the device under test - on
      its own.  It is <b>live</b>: switching lanes while a tone is playing takes effect
      at once, without stopping the generator.</p>
 
@@ -131,7 +131,7 @@
   <p>An LED and the text <b>ON&nbsp;AIR</b> at the top-right of the pane.
      Whenever either the tone generator OR the audio-file player is driving
      the output, the LED lights solid red and the <b>ON&nbsp;AIR</b> text
-     <b>blinks</b>.  Both go grey when nothing is playing — so the indicator
+     <b>blinks</b>.  Both go grey when nothing is playing - so the indicator
      tells you, at a glance, whether the program is currently emitting
      sound.</p>
 
@@ -141,8 +141,8 @@
   <p>The output frequency, for periodic waveforms (disabled for the noise
      forms).  Accepts <code>Hz</code> and <code>kHz</code>; a number with no
      suffix is read as Hz, and the display switches to kHz above 1&nbsp;kHz.</p>
-  <p>The label may show a bracketed annotation — e.g.
-     <code>Frequency (1000.122 Hz)</code> — when the snap-to-FFT-bin
+  <p>The label may show a bracketed annotation - e.g.
+     <code>Frequency (1000.122 Hz)</code> - when the snap-to-FFT-bin
      correction or the integer-sample period (for <code>Rectangle</code>)
      produces an emitted frequency slightly different from what you typed.
      The bracketed value is the <em>actual</em> emitted frequency.</p>
@@ -161,14 +161,14 @@
      Triangle restores each one's last duty.</p>
   <p>For <code>Rectangle</code> only, the duty is <b>adapted to what the DDS
      can actually output</b>: its +1/−1 step can land only <em>on</em> a whole
-     sample, so the finest duty step is one sample per period —
+     sample, so the finest duty step is one sample per period -
      <code>f / f<sub>s</sub></code> (output frequency ÷ sample rate).  Example:
      10&nbsp;kHz at 384&nbsp;kHz gives 38.4 samples per period, so the smallest
      step is ≈ 1/38.4 ≈ <code>2.63&nbsp;%</code>, and a finer typed value snaps
      to the nearest achievable step.  The label then shows the <em>adapted</em>
-     duty in brackets — e.g. <code>Duty cycle (2.632 %)</code>.</p>
+     duty in brackets - e.g. <code>Duty cycle (2.632 %)</code>.</p>
   <p><code>Triangle</code> uses real continuous-phase DDS (its samples ride the
-     exact ramps, so the corner is sub-sample), so its duty is <b>exact</b> —
+     exact ramps, so the corner is sub-sample), so its duty is <b>exact</b> -
      no quantisation and no bracket.  See
      <a href="theory/generator.html#duty">Theory ▸ duty quantisation</a>.</p>
 
@@ -183,20 +183,20 @@
      than a single tone at the same setting.  Both tones can be
      <a href="#generator-snap-fft-bin">snapped to FFT bins</a>
      independently, and the FFT analyser measures their intermodulation
-     products — see <a href="theory/generator.html#dualtone">Theory ▸ dual
+     products - see <a href="theory/generator.html#dualtone">Theory ▸ dual
      tone</a> and <a href="theory/fft.html#dualtone">Theory ▸ two-tone</a>.</p>
 
   <h3 id="generator-dualtone-compensated">Dual tone (compensated)</h3>
   <p>The intermodulation-corrected counterpart of <code>Dual tone</code>,
      the two-tone analogue of <code>Sine compensated</code>.  Every
-     distortion product of a two-tone signal — each tone's harmonics
-     <em>and</em> their intermodulation products — sits at
+     distortion product of a two-tone signal - each tone's harmonics
+     <em>and</em> their intermodulation products - sits at
      <code>a·f<sub>1</sub> + b·f<sub>2</sub></code> for integer
      <code>a</code>, <code>b</code>, so the generator pre-distorts the
      output with an anti-phase correction tone at every such product to
      cancel it at the analyser side.  The corrections are measured for you
-     by the closed-loop <b>predistortion wizard</b> — the ★ wand button
-     beside the FFT analyser's record control — and then applied live.
+     by the closed-loop <b>predistortion wizard</b> - the ★ wand button
+     beside the FFT analyser's record control - and then applied live.
      Selecting this form from the combo without measured corrections loaded
      simply emits the plain two tones, exactly as
      <code>Sine compensated</code> falls back to a pure sine.</p>
@@ -238,15 +238,15 @@
      volts.  The metric display auto-rescales (µV / mV / V) so the number stays
      readable; typing a <code>dBV</code> or <code>dBFS</code> value keeps the
      field in that unit (the auto-rescaling never switches to a dB unit on its
-     own), and the wheel and arrow keys then step it in dB —
+     own), and the wheel and arrow keys then step it in dB -
      10&nbsp;dB per wheel notch, 1&nbsp;dB per arrow.  Typing a plain number
      with no suffix again returns the field to volts.</p>
   <p class="note"><b>Note:</b> dBV is referenced to 1 V RMS regardless of
-     device — <code>x dBV = 10<sup>x/20</sup> V<sub>RMS</sub></code>.  Its
+     device - <code>x dBV = 10<sup>x/20</sup> V<sub>RMS</sub></code>.  Its
      suffix has short forms: <code>d</code> and <code>db</code> are accepted as
      well as <code>dbv</code>.</p>
   <p><b>dBFS</b> is referenced to the converter's full scale instead.  Type the
-     level with a <code>dbfs</code> suffix — short form <code>dbf</code> — for
+     level with a <code>dbfs</code> suffix - short form <code>dbf</code> - for
      example <code>-6 dbfs</code>.  Following the AES17 convention,
      <b>0 dBFS is a full-scale sine</b>, that is the full-scale RMS level, so
      the number keeps its meaning when you change the waveform.  The value is
@@ -254,8 +254,8 @@
      recalibrating the DAC therefore changes the dBFS figure shown for the same
      physical output level.</p>
   <p class="note"><b>Ceiling.</b>  The field stops at the level where the signal
-     just reaches the converter's full scale — beyond that the output could only
-     clip — so the maximum <em>follows the waveform</em>: a rectangle may sit
+     just reaches the converter's full scale - beyond that the output could only
+     clip - so the maximum <em>follows the waveform</em>: a rectangle may sit
      3&nbsp;dB higher in RMS than a sine, a triangle a little lower, and a dual
      tone tracks its own amplitude split.  Volts, dBV and dBFS all trim to that
      same maximum, so for a sine the top of the range is exactly 0&nbsp;dBFS.
@@ -265,41 +265,41 @@
 
   <h3 id="generator-dither">Dither</h3>
   <p>Sets how much triangular (TPDF) dither is added just before the output is
-     quantised — <code>Off</code>, or a depth from 1&nbsp;LSB up to the output
+     quantised - <code>Off</code>, or a depth from 1&nbsp;LSB up to the output
      bit-depth.  Enter it as <b>bits</b>, or type a <code>dBV</code> suffix to
      set it as the noise level it makes; the caption shows the other unit, and
      the wheel/arrows step ±1&nbsp;bit (bits view) or ±10&nbsp;dBV (dBV view),
      with <code>Off</code> at the top.</p>
   <p>The dBV is the physical level of the dither noise, anchored to the DAC
      full-scale: entering, say, −100&nbsp;dBV puts the noise the
-     <a href="fft.html">FFT</a> measures at −100&nbsp;dBV — with any analysis
+     <a href="fft.html">FFT</a> measures at −100&nbsp;dBV - with any analysis
      window, since the analyser's noise metrics account for the window's noise
-     bandwidth — provided the FFT uses <b>incoherent (power) averaging</b>
+     bandwidth - provided the FFT uses <b>incoherent (power) averaging</b>
      (coherent averaging cancels noise and reads far lower).  Dither breaks up
      periodic quantisation patterns at very low output levels.</p>
 
   <h3 id="generator-dac-calibrate">DAC calibration (crosshair button)</h3>
   <p>The crosshair button at the bottom-left of the pane opens the shared DAC
      calibration dialog, which anchors the <a href="#generator-amplitude">Amplitude
-     (RMS)</a> scale — the volts RMS the DAC emits for digital full-scale — against a
+     (RMS)</a> scale - the volts RMS the DAC emits for digital full-scale - against a
      level you measure at the output.  Set the generator to a known amplitude, read
      the actual output with a trusted meter, and enter that reading.</p>
   <p><img src="img/DAC calibration.png" alt="DAC calibration dialog"/></p>
   <p>Type the <b>measured signal amplitude</b> in <code>nV</code> / <code>µV</code> /
      <code>mV</code> / <code>V</code>.  The dialog has a <b>Left</b> and a <b>Right</b>
-     row for a stereo card — <b>calibration is always per channel</b>, since two
-     physical DAC channels never match exactly — and a single row for a Mono card;
+     row for a stereo card - <b>calibration is always per channel</b>, since two
+     physical DAC channels never match exactly - and a single row for a Mono card;
      each row writes only its own channel's active range.  A card set to
      <a href="preferences.html#prefs-audio-card-editor">Coupling: Linked</a> is still
-     calibrated per channel — Linked shares only which range is selected.</p>
+     calibrated per channel - Linked shares only which range is selected.</p>
   <div class="note"><b>Windows volume is part of the calibration.</b>  Set the
      Windows sound-settings volume for the output device to <b>100</b> and never move
      it again once calibrated: exclusive-mode WASAPI and WDM-KS bypass the software
      mixer, but on many USB interfaces that slider still programs the device's
      <em>internal hardware</em> volume, so a later nudge silently rescales the
      full-scale you measured.  <b>Exception:</b> a card that uses the slider position
-     to switch modes — the <b>E1DA Cosmos</b> above position 49 ties its channels
-     (right is the main input, left carries the same signal 6&nbsp;dB lower) — must
+     to switch modes - the <b>E1DA Cosmos</b> above position 49 ties its channels
+     (right is the main input, left carries the same signal 6&nbsp;dB lower) - must
      sit where its mode requires and stay there.</div>
 
   <h2 id="generator-corrections">Corrections</h2>
@@ -312,7 +312,7 @@
      to pick a <code>.dpd</code>; the read-only field then shows the loaded
      path, and the <b>clear button</b> unloads it.  These files are produced by
      the <a href="fft.html">FFT pane's</a> predistortion wizard (the ★ wand
-     button beside the record control) — see
+     button beside the record control) - see
      <a href="#generator-dualtone-compensated">Dual tone (compensated)</a> and
      <code>Sine compensated</code>.</p>
 
@@ -320,30 +320,56 @@
 
   <h3 id="generator-duration">Duration</h3>
   <p>Seconds.  Length of audio to write when using <i>Save to</i>.
-     Independent of the live emission — the file is rendered in one
+     Independent of the live emission - the file is rendered in one
      pass using current generator settings.</p>
 
-  <h3 id="generator-save-to">Save to…</h3>
+  <h3 id="generator-save-to">Save to...</h3>
   <p>Read-only path + <b>Save button</b>.  Clicking it opens
      a save dialog; the chosen file's extension picks the format
      (<code>.wav</code> / <code>.flac</code> / <code>.aiff</code> /
      <code>.aif</code>).  Confirming writes the file immediately, using the
      current generator settings and the duration above.</p>
   <p class="note">The written file is the <b>ideal, mathematically exact</b>
-     signal — synthesised digitally and free of any DAC, amplifier or cabling
+     signal - synthesised digitally and free of any DAC, amplifier or cabling
      distortion.  Use it as a reference, or to drive another instrument with a
      known-clean source.  See
      <a href="theory/generator.html#savefile">Theory ▸ saving a signal</a>.</p>
+  <p class="note"><b>The file carries a fixed full scale, not this machine's.</b>
+     An exported waveform is rendered against a fixed full scale of
+     <b>2·√2&nbsp;V peak</b> - that is 2&nbsp;V&nbsp;RMS - rather than against
+     the live DAC calibration.  A 1&nbsp;V<sub>RMS</sub> sine therefore always
+     lands at the same digital level in the file, whichever converter happened to
+     be calibrated on the machine that wrote it, so a reference file means the
+     same thing everywhere and two files written on two benches are directly
+     comparable.  The <em>played</em> tone is unaffected: that still goes out
+     against the real calibration of the device you selected.</p>
 
   <h2 id="generator-playback">WAV playback</h2>
 
-  <h3 id="generator-load-from">Load from… + In loop</h3>
+  <h3 id="generator-load-from">Load from... + In loop</h3>
   <p>Plays back an existing audio file to the output device.  The
-     <b>open-audio button</b> picks the file — any
+     <b>open-audio button</b> picks the file - any
      <code>WAV</code> / <code>AIFF</code> / <code>FLAC</code>, not only files
      this program saved.  The <b>In&nbsp;loop</b> checkbox repeats the file on
-     end-of-file; the toggle is live — flipping it during playback takes effect
+     end-of-file; the toggle is live - flipping it during playback takes effect
      at the next loop point.</p>
+  <p>The file goes out through the same single lane the generated tone uses, so a
+     file with <b>more than one channel is averaged down to mono</b>: every
+     channel contributes and the sum is divided by their count, and no channel is
+     dropped.  A stereo file whose two sides carry different material is therefore
+     heard as their average, not as a stereo pair.</p>
+  <p><b>On a network bench.</b>  When the selected backend is a Phonalyser server,
+     the generator is a network away and the protocol carries no audio from this
+     machine to it - so the <em>file</em> travels instead.  It is uploaded once and
+     the bench's own generator lane decodes and plays it, out of the bench's
+     converter at the file's own rate and depth.  <b>In&nbsp;loop</b> is honoured
+     at the far end, and Stop reaches across.  Two differences worth knowing:
+     a file may be at most <b>50&nbsp;MB</b> - the limit the server enforces,
+     checked here before anything is sent, so an over-size file is refused at once
+     rather than after the transfer - and the play indicator goes out when the
+     bench reports the file ended, so it follows the far end rather than this
+     screen.  The upload lives in the server's memory and is dropped as soon as the
+     connection closes; nothing accumulates on the bench.</p>
 
   <h3 id="generator-play-file">Play / Stop file</h3>
   <p>Small play LED next to the path field.  Lit while the file is
