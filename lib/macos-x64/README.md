@@ -5,7 +5,7 @@ Drop the **Intel (x86_64)** PortAudio dynamic library here:
     libportaudio.dylib
 
 It powers the **CoreAudio** audio backend (stereo, 24/32-bit, high sample
-rates) on Intel Macs — JavaSound on macOS is mono-only, so CoreAudio replaces
+rates) on Intel Macs - JavaSound on macOS is mono-only, so CoreAudio replaces
 it. The macOS jpackage build (`-Pmacos-x64`) stages every `*.dylib` in this
 folder into the app at `$APPDIR`, and PortAudio is loaded from there via
 `-Djava.library.path=$APPDIR`.
@@ -20,13 +20,13 @@ On an Intel Mac, Homebrew installs under `/usr/local`, so the file is
 
 Verify the architecture (must be x86_64):
 
-    file lib/macos-x64/libportaudio.dylib      # → Mach-O ... x86_64
+    file lib/macos-x64/libportaudio.dylib      # -> Mach-O ... x86_64
 
 The dylib is a platform binary and is **not** committed. Without it, the
-CoreAudio backend cannot open — and since JavaSound is disabled on macOS, the
+CoreAudio backend cannot open - and since JavaSound is disabled on macOS, the
 app would have no working audio backend there.
 
-## libusb (QA40x backend) — optional drop-in
+## libusb (QA40x backend) - optional drop-in
 
 The QA40x (QuantAsylum QA402/QA403) backend loads `libusb-1.0.dylib` via the JNA
 binding (`org.edgo.audio.measure.sound.LibUsb`), the same `lib/<os>/` +
