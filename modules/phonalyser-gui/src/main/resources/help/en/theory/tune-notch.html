@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Theory: Tune-notch measurement</title>
+  <title>Phonalyser - Theory: Tune-notch measurement</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -24,8 +24,8 @@
      frequency and see how deep it really goes.</p>
 
   <p>It measures a transfer function the same way the
-     <a href="freq-resp.html">frequency-response</a> module does — a logarithmic
-     sweep in, a division out — but it is built for a continuously updating live
+     <a href="freq-resp.html">frequency-response</a> module does - a logarithmic
+     sweep in, a division out - but it is built for a continuously updating live
      view rather than a single careful capture, and that changes how the sweep
      is run.</p>
 
@@ -33,7 +33,7 @@
   <p>Tuning is a closed loop with a human in it: turn the trimmer a hair, see
      the null move and deepen, turn again.  A one-shot sweep that opens the
      device, plays, captures and closes takes on the order of a second and a
-     half of dead time between pictures — far too slow to tune by.  So the
+     half of dead time between pictures - far too slow to tune by.  So the
      tool keeps the sound device open and the sweep <em>running</em>, and simply
      takes a fresh look at the most recent period whenever it can.  The reward
      is a display that reacts almost as fast as your hand; the challenge is that
@@ -105,10 +105,10 @@
     <line x1="370" y1="188" x2="418" y2="188" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
     <line x1="550" y1="188" x2="598" y2="188" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
 
-    <text x="360" y="138" fill="#557">each pass ≈ 0.2 – 0.34 s — a few times a second</text>
+    <text x="360" y="138" fill="#557">each pass ≈ 0.2 - 0.34 s - a few times a second</text>
 
     <!-- Row 3: result sketch -->
-    <text x="10" y="250" fill="#557">result: the notch's magnitude, a deep V at the null —</text>
+    <text x="10" y="250" fill="#557">result: the notch's magnitude, a deep V at the null -</text>
     <path d="M 470 268 L 560 268 L 605 236 L 615 285 L 625 244 L 660 258 L 740 258"
           fill="none" stroke="#33a" stroke-width="1.5"/>
     <line x1="615" y1="232" x2="615" y2="290" stroke="#c33" stroke-width="1" stroke-dasharray="3 2"/>
@@ -123,7 +123,7 @@
   <div class="eq"><i>N</i> = nearest power of two to <i>T</i><sub>sweep</sub> ·
      <i>f</i><sub>s</sub>&nbsp;&nbsp;(<i>T</i><sub>sweep</sub> ≈ 0.26 s)<span class="no">(1)</span></div>
 
-  <p>so that the transform of one grabbed period is a <em>circular</em> one —
+  <p>so that the transform of one grabbed period is a <em>circular</em> one -
      the buffer wraps back onto itself with no gap.  A window taken at some
      random phase of the loop is then nothing more than the same periodic sweep
      rotated by a few samples, and the shift theorem of the transform says a
@@ -133,13 +133,13 @@
      = |&#8202;DFT{ <i>x</i>[<i>n</i>] }&#8202;|<span class="no">(2)</span></div>
 
   <p>Because tuning reads only magnitude, the arbitrary grab phase drops out
-     entirely — no start marker, no trigger, no alignment.  This is the whole
+     entirely - no start marker, no trigger, no alignment.  This is the whole
      reason the live loop is allowed to be careless about <em>when</em> it
      looks.  (Round the period to anything other than a power of two and the
      transform is no longer circular: an unaligned window then wraps across the
      seam and smears every bin into a spike, which is exactly the artefact this
      avoids.)<sup id="cite-2"><a href="#ref-dft">[2]</a></sup>  The one seam that
-     does exist — where the loop rejoins its own start — is smoothed by a short
+     does exist - where the loop rejoins its own start - is smoothed by a short
      raised-cosine fade applied identically to the played sweep and to the
      reference it is divided by, so the two cancel.</p>
 
@@ -147,24 +147,36 @@
   <p>Each period is turned into the notch's magnitude response by dividing the
      returned spectrum by the swept reference spectrum,
      <i>H</i>(<i>f</i>) = <i>Y</i>(<i>f</i>) ⁄ <i>X</i>(<i>f</i>)
-     — the same Farina deconvolution the
+     - the same Farina deconvolution the
      <a href="freq-resp.html#how">frequency-response</a> chapter
      describes<sup id="cite-1"><a href="#ref-farina">[1]</a></sup>.  The deepest
-     point of that curve is located to a fraction of a bin by fitting a parabola
-     through the lowest sample and its two neighbours, working in linear
-     magnitude (where a smooth dip really is parabolic near its bottom, unlike
-     in decibels):</p>
+     point of that curve is read off the trace <em>as it is painted</em>: the
+     curve is evaluated at every pixel column of the plot and the lowest one
+     wins.</p>
 
-  <div class="eq">δ = ½ · (<i>y</i><sub>−1</sub> − <i>y</i><sub>+1</sub>) ⁄
-     (<i>y</i><sub>−1</sub> − 2<i>y</i><sub>0</sub> + <i>y</i><sub>+1</sub>)&nbsp;,&nbsp;&nbsp;
-     <i>f</i><sub>null</sub> = <i>f</i><sub>i</sub> + δ · Δ<i>f</i><span class="no">(3)</span></div>
+  <div class="eq">(<i>f</i><sub>null</sub>, <i>D</i><sub>null</sub>) : <i>f</i><sub>null</sub> = arg min<sub>&thinsp;<i>k</i> ∈ [0,&thinsp;<i>W</i>)</sub> <i>D</i>(<i>f</i>(<i>k</i>))&nbsp;,&nbsp;&nbsp;
+     <i>D</i> = the painter's own estimator<span class="no">(3)</span></div>
 
-  <p>The refined null frequency and depth are what you read off the display as
+  <p>Here <i>W</i> is the plot width in pixels, <i>f</i>(<i>k</i>) the frequency
+     the painter maps to column <i>k</i>, and <i>D</i> the same reconstruction it
+     draws with - per-pixel Lanczos while that is active for the current axis and
+     width, plain interpolation between bins otherwise.  Earlier versions instead
+     refined the null to a fraction of a bin by fitting a parabola through the
+     lowest sample and its two neighbours in linear magnitude.  That fit has been
+     removed: a well-trimmed null is a <b>V</b>, not a parabola, and a curve laid
+     across its two steep walls has its vertex above the true bottom, so the
+     depth came out shallower than the notch really was.  Taking the painted
+     minimum also makes the readout, the target marker and the curve on screen
+     one number - at a sharp null the three used to disagree by 2-3 dB.  The
+     vertical auto-fit is applied <em>after</em> the null is known, so the axis
+     always leaves a decibel of room below the dip rather than clipping it.</p>
+
+  <p>The null frequency and depth are what you read off the display as
      you trim.  One deliberate difference from an ordinary sweep measurement:
      the usual smoothing that tidies a frequency-response trace is switched
      <em>off</em> here.  On the coarse grid this quick live view uses, a
      smoothing window would span many hertz and round several decibels off the
-     bottom of a sharp null — hiding exactly the depth you are trying to
+     bottom of a sharp null - hiding exactly the depth you are trying to
      maximise.  A raw, un-smoothed curve reads the true null.</p>
 
   <div class="note"><b>After tuning, capture the notch's own response.</b>
@@ -181,11 +193,11 @@
     <li id="ref-farina"><a href="#cite-1">1.</a>
         A. Farina, <a href="http://pcfarina.eng.unipr.it/Public/Papers/226-AES00.PDF"><i>Simultaneous
         measurement of impulse response and distortion with a swept-sine
-        technique</i></a>, AES 108th Convention, 2000 — the exponential sweep
+        technique</i></a>, AES 108th Convention, 2000 - the exponential sweep
         and its deconvolution reference.</li>
     <li id="ref-dft"><a href="#cite-2">2.</a>
         <a href="https://en.wikipedia.org/wiki/Circular_convolution">Circular
-        convolution and the DFT shift theorem</a> (Wikipedia) — why a circular
+        convolution and the DFT shift theorem</a> (Wikipedia) - why a circular
         transform is shift-invariant in magnitude.</li>
   </ol>
 

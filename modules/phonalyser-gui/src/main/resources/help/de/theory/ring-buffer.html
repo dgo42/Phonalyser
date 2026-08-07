@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Theorie: Ringpuffer &amp; Verbraucher</title>
+  <title>Phonalyser - Theorie: Ringpuffer &amp; Verbraucher</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -10,7 +10,7 @@
   <p class="back"><a href="index.html">◀ Zurück zur Funktionsweise</a></p>
 
   <h1>Ringpuffer &amp; Verbraucher</h1>
-  <p>Ein Aufnahmegerät versorgt mehrere unabhängige Verbraucher — das
+  <p>Ein Aufnahmegerät versorgt mehrere unabhängige Verbraucher - das
      Oszilloskop zeigt den aktuellen Moment, der FFT-Akkumulator verarbeitet
      einen lückenlosen Datenstrom, ein Speicherdialog sichert die letzten
      Sekunden.  Die Struktur, die das ermöglicht, ist ein einziger gemeinsamer
@@ -20,18 +20,18 @@
 
   <h2 id="ring">Der Ring</h2>
   <p>Der Ring enthält die jüngsten <b>22 Sekunden</b> der Stereo-Aufnahme als
-     normierte Werte in [−1, +1] — genug für zwei vollständige
+     normierte Werte in [−1, +1] - genug für zwei vollständige
      Oszilloskopfenster bei der langsamsten Einstellung 1 s/div × 10
      Divisionen, zuzüglich Puffer, damit das Trigger-Positions-Steuerelement
      das gesamte Fenster durchfahren kann, ohne den Puffer zu verlassen.
      Die Kapazität in Abtastwerten beträgt</p>
   <div class="eq"><i>C</i> = <i>f</i><sub>s</sub> · 22 s<span class="no">(1)</span></div>
-  <p>— bei 384 kHz etwa 8,4 Millionen Abtastwerte je Kanal (≈ 67 MB).</p>
+  <p>- bei 384 kHz etwa 8,4 Millionen Abtastwerte je Kanal (≈ 67 MB).</p>
 
   <p>Die einzige Position, die der Ring selbst verwaltet, ist die
      <b>Schreibposition</b> <i>w</i>: die Gesamtzahl der seit Aufnahmestart
      erfassten Abtastwerte.  Die gesamte Adressierung erfolgt mit solchen
-     absoluten Abtastindizes — Abtastwert <i>n</i> bedeutet „der
+     absoluten Abtastindizes - Abtastwert <i>n</i> bedeutet "der
      <i>n</i>-te Abtastwert seit Aufnahmestart", und der Ring speichert ihn
      an Array-Index <i>n</i> mod <i>C</i>.  Zu jedem Zeitpunkt ist genau der
      Bereich</p>
@@ -57,8 +57,8 @@
     <!-- labels -->
     <text x="65"  y="124" fill="#557">index 0</text>
     <text x="755" y="124" text-anchor="end" fill="#557">C − 1</text>
-    <text x="640" y="86" text-anchor="middle" fill="#335">älter … neuer</text>
-    <text x="150" y="86" text-anchor="middle" fill="#335">… neueste</text>
+    <text x="640" y="86" text-anchor="middle" fill="#335">älter ... neuer</text>
+    <text x="150" y="86" text-anchor="middle" fill="#335">... neueste</text>
     <text x="380" y="86" text-anchor="middle" fill="#779">älteste (wird als nächstes überschrieben)</text>
     <!-- wrap arrow -->
     <path d="M 760 50 Q 790 20 410 16 Q 70 14 62 50" fill="none" stroke="#779" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr3)"/>
@@ -82,20 +82,20 @@
      halten den Koordinationsaufwand vernachlässigbar klein:</p>
   <ul>
     <li><b>Blockübertragungen.</b>  Abtastwerte werden in Blöcken von
-        mehreren Tausend verschoben, nicht einzeln — jede Übertragung besteht
+        mehreren Tausend verschoben, nicht einzeln - jede Übertragung besteht
         aus einer oder zwei der schnellsten Blockkopieroperationen des
         Prozessors (zwei, wenn der Block den Umlaufpunkt überquert).  Der
         Schreiber belegt den Ring etwa 30-mal pro Sekunde für jeweils einige
         zehn Mikrosekunden, statt hunderttausende Male.</li>
     <li><b>Leser halten den Ring nicht während des Kopierens.</b>  Ein
-        Lesevorgang notiert zunächst den aktuellen Wert von <i>w</i> — das ist
-        der einzige Koordinationsmoment — und kopiert danach sein Fenster,
+        Lesevorgang notiert zunächst den aktuellen Wert von <i>w</i> - das ist
+        der einzige Koordinationsmoment - und kopiert danach sein Fenster,
         während der Schreiber weiterläuft.  Der Schreiber könnte den Kopiervorgang
         erst stören, nachdem er <i>C</i> − <i>N</i> weitere Abtastwerte
         produziert hat (mehrere Sekunden), während das Kopieren selbst in
         Millisekunden abgeschlossen ist.  Der einzige Verbraucher, bei dem
-        dieser Sicherheitsabstand <em>verschwinden</em> kann — ein Lesezeiger,
-        der fast einen vollen Ring zurückliegt — prüft nach dem Kopieren
+        dieser Sicherheitsabstand <em>verschwinden</em> kann - ein Lesezeiger,
+        der fast einen vollen Ring zurückliegt - prüft nach dem Kopieren
         erneut; siehe <a href="#overrun">Überlauffehler</a>.</li>
   </ul>
 
@@ -103,16 +103,16 @@
   <table class="controls">
     <tr><th>Lesemodus</th><th>Bedeutung</th></tr>
     <tr><td><b>Aktuelles Fenster</b></td>
-        <td>Die jüngsten <i>N</i> Abtastwerte, endend am aktuellen <i>w</i> —
-            „zeige mir jetzt".  Inhärent sicher: liest stets die neuesten
+        <td>Die jüngsten <i>N</i> Abtastwerte, endend am aktuellen <i>w</i> -
+            "zeige mir jetzt".  Inhärent sicher: liest stets die neuesten
             Daten.</td></tr>
     <tr><td><b>Fenster bis zu einem gewählten Zeitpunkt</b></td>
-        <td>Ein Fenster, das an einem beliebigen absoluten Index endet — das
+        <td>Ein Fenster, das an einem beliebigen absoluten Index endet - das
             Rückwärtsblättern im Oszilloskop.  Teile der Anfrage, die älter
             als <i>w</i> − <i>C</i> sind, werden abgeschnitten.</td></tr>
     <tr><td><b>Vorwärts ab dem Lesezeiger</b></td>
         <td>Die nächsten zusammenhängenden Abtastwerte nach dem eigenen
-            Lesezeiger des Verbrauchers — der lückenlose Datenstrom
+            Lesezeiger des Verbrauchers - der lückenlose Datenstrom
             (nächster Abschnitt).</td></tr>
   </table>
 
@@ -137,7 +137,7 @@
     <rect x="560" y="80" width="140" height="30" fill="#cdf" stroke="#88a"/>
     <text x="630" y="100" text-anchor="middle">aktuelles Fenster</text>
     <text x="40" y="100" fill="#335" font-weight="bold">Oszilloskop:</text>
-    <text x="110" y="100" fill="#557">liest bei jedem Neuzeichnen das aktuelle Fenster — endet stets bei w,</text>
+    <text x="110" y="100" fill="#557">liest bei jedem Neuzeichnen das aktuelle Fenster - endet stets bei w,</text>
     <text x="110" y="116" fill="#557">springt zwischen Zeichenvorgängen vor, kann nie zurückfallen.</text>
 
     <!-- FFT cursor -->
@@ -150,7 +150,7 @@
     <rect x="540" y="216" width="110" height="28" fill="#efe" stroke="#7a7" stroke-dasharray="4 3"/>
     <text x="375" y="234" text-anchor="middle">Frame k</text>
     <text x="485" y="234" text-anchor="middle">Frame k+1</text>
-    <text x="595" y="234" text-anchor="middle" fill="#575">Frame k+2 …</text>
+    <text x="595" y="234" text-anchor="middle" fill="#575">Frame k+2 ...</text>
     <line x1="320" y1="190" x2="320" y2="210" stroke="#33a" stroke-width="2"/>
     <text x="320" y="184" text-anchor="middle" fill="#33a" font-weight="bold">Lesezeiger r</text>
     <text x="110" y="170" fill="#557">verbrauchende, zusammenhängende Lesevorgänge: jeder Frame beginnt genau</text>
@@ -160,13 +160,13 @@
   </div>
 
   <ul>
-    <li><b>„Zeige mir jetzt"-Verbraucher</b> — das Oszilloskop, die
-        Messtabelle, Speichern in Datei — verwenden die aktuellen
+    <li><b>"Zeige mir jetzt"-Verbraucher</b> - das Oszilloskop, die
+        Messtabelle, Speichern in Datei - verwenden die aktuellen
         Fensterlese­vorgänge.  Kein Zustand, kein Rückstandsproblem.</li>
-    <li><b>Datenstrom-Verbraucher</b> — vor allem die kohärente Mittelung der
-        FFT — benötigen, dass jeder Frame <em>genau</em> dort beginnt, wo der
+    <li><b>Datenstrom-Verbraucher</b> - vor allem die kohärente Mittelung der
+        FFT - benötigen, dass jeder Frame <em>genau</em> dort beginnt, wo der
         vorherige endete.  Kohärente Mittelung richtet Frames an ihrer
-        absoluten Position im Datenstrom aus; würde die Position aus „wann
+        absoluten Position im Datenstrom aus; würde die Position aus "wann
         immer der Worker aufgewacht ist" entnommen, würde der Frame-Abstand
         schwanken und der gemittelte Grundton verschmieren.  Daher besitzt
         jeder solche Verbraucher einen Lesezeiger <i>r</i>: ein Lesevorgang
@@ -177,7 +177,7 @@
   <div class="eq"><i>a</i> = <i>w</i> − <i>r</i><span class="no">(3)</span></div>
 
   <h3 id="overrun">Überlauffehler: wenn ein Verbraucher zurückfällt</h3>
-  <p>Ein Verbraucher mit Lesezeiger kann in Rückstand geraten — etwa bei
+  <p>Ein Verbraucher mit Lesezeiger kann in Rückstand geraten - etwa bei
      einem sehr großen FFT oder einem stark ausgelasteten Rechner.  Der
      Schreiber wartet auf niemanden (die frischesten Daten müssen stets
      Vorrang haben), sodass bei einem Rückstand, der die gesamte
@@ -186,7 +186,7 @@
   <p>Abtastwerte, die der Lesezeiger nie gelesen hat, verloren sind und der
      Datenstrom eine Lücke aufweist.  Stillschweigendes Fortfahren würde dem
      Verbraucher ein Fenster liefern, das über eine Diskontinuität
-     hinwegreicht — ein Gift für die kohärente Mittelung.  Stattdessen meldet
+     hinwegreicht - ein Gift für die kohärente Mittelung.  Stattdessen meldet
      der Lesevorgang einen expliziten <b>Überlauffehler</b> und liefert
      keine Daten:</p>
 
@@ -204,14 +204,14 @@
     <text x="700" y="92" text-anchor="middle" fill="#c33" font-weight="bold">w</text>
     <line x1="180" y1="44" x2="180" y2="76" stroke="#33a" stroke-width="2"/>
     <text x="180" y="92" text-anchor="middle" fill="#33a" font-weight="bold">r</text>
-    <text x="180" y="110" text-anchor="middle" fill="#a33">überholt → Überlauffehler</text>
-    <text x="240" y="26" fill="#a33">Daten hier sind verloren — überschrieben, bevor sie gelesen wurden</text>
+    <text x="180" y="110" text-anchor="middle" fill="#a33">überholt -> Überlauffehler</text>
+    <text x="240" y="26" fill="#a33">Daten hier sind verloren - überschrieben, bevor sie gelesen wurden</text>
   </svg>
   </div>
 
   <p>Bei einem Überlauffehler verwirft der Verbraucher seinen angesammelten
      Zustand, verankert den Lesezeiger neu beim jüngsten Abtastwert und
-     beginnt von vorn — die FFT-Ansicht zeigt dies durch die blinkende
+     beginnt von vorn - die FFT-Ansicht zeigt dies durch die blinkende
      Warnung <em>Aufnahme-Resynchronisation</em> an.  Eine Besonderheit:
      Da Leser ohne Halten des Rings kopieren, könnte ein Lesezeiger, der
      fast einen vollen Ring zurückliegt, <em>während</em> des Kopiervorgangs
@@ -221,7 +221,7 @@
 
   <h3 id="snapshot">Eingefrorene Kopien und dateigespeiste Puffer</h3>
   <ul>
-    <li>Ein Verbraucher kann eine <b>eingefrorene Kopie</b> anfordern — ein
+    <li>Ein Verbraucher kann eine <b>eingefrorene Kopie</b> anfordern - ein
         eigenständiges Duplikat des aktuellen Ringinhalts ohne aktiven
         Schreiber.  So zeigt das Oszilloskop weiterhin den zuletzt
         aufgenommenen Frame an, nachdem die Aufnahme gestoppt wurde, während
@@ -229,12 +229,12 @@
     <li>Dieselbe Ringpuffer-plus-Lesezeiger-Struktur dient auch
         <b>geladenen Signaldateien</b>: Der Lader füllt einen privaten Puffer
         einmalig, und die Verbraucher lesen ihn über exakt dieselben
-        Lesezeiger — die Ansichten können eine Datei nicht von einer
+        Lesezeiger - die Ansichten können eine Datei nicht von einer
         Live-Aufnahme unterscheiden.</li>
   </ul>
 
   <h2 id="sharedcapture">Die Aufnahmesitzung: wer das Gerät besitzt</h2>
-  <p>Das Eingabegerät und der Live-Ringpuffer haben genau einen Eigentümer —
+  <p>Das Eingabegerät und der Live-Ringpuffer haben genau einen Eigentümer -
      die <b>Aufnahmesitzung</b>.  Ansichten öffnen das Gerät nie selbst;
      sie fordern bei der Sitzung Zugriff an und erhalten ihren eigenen
      Lesezeiger zurück:</p>
@@ -255,10 +255,10 @@
 
     <rect x="280" y="40" width="240" height="110" rx="6" fill="#eef" stroke="#88a"/>
     <text x="400" y="64" text-anchor="middle" font-weight="bold">Aufnahmesitzung</text>
-    <text x="400" y="84" text-anchor="middle" fill="#557">erster Beitritt → Gerät öffnet sich</text>
-    <text x="400" y="100" text-anchor="middle" fill="#557">weitere Beitritte → Datenstrom teilen</text>
-    <text x="400" y="116" text-anchor="middle" fill="#557">letztes Verlassen → Gerät schließt sich</text>
-    <text x="400" y="136" text-anchor="middle" fill="#557">wandelt PCM → [−1, +1) um</text>
+    <text x="400" y="84" text-anchor="middle" fill="#557">erster Beitritt -> Gerät öffnet sich</text>
+    <text x="400" y="100" text-anchor="middle" fill="#557">weitere Beitritte -> Datenstrom teilen</text>
+    <text x="400" y="116" text-anchor="middle" fill="#557">letztes Verlassen -> Gerät schließt sich</text>
+    <text x="400" y="136" text-anchor="middle" fill="#557">wandelt PCM -> [−1, +1) um</text>
 
     <path d="M 180 44 L 230 44 L 230 80 L 278 80"  fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#arr6)"/>
     <path d="M 180 114 L 230 114 L 230 110 L 278 110" fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#arr6)"/>
@@ -276,7 +276,7 @@
     <path d="M 280 214 L 95 214 L 95 140" fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#arr6)"/>
     <text x="110" y="180" fill="#557">jeder Verbraucher erhält</text>
     <text x="110" y="196" fill="#557">seinen eigenen Lesezeiger</text>
-    <text x="540" y="262" fill="#557">„neue Daten"-Benachrichtigung je Block —</text>
+    <text x="540" y="262" fill="#557">"neue Daten"-Benachrichtigung je Block -</text>
     <text x="540" y="278" fill="#557">Ansichten aktualisieren ereignisgesteuert, kein Polling</text>
   </svg>
   </div>
@@ -287,30 +287,30 @@
         legt den 22-s-Ringpuffer an und startet den Aufnahme-Thread.  Weitere
         Ansichten treten einfach der laufenden Sitzung bei; wenn die letzte
         verlässt, schließt sich das Gerät.  Oszilloskop und FFT können daher
-        in beliebiger Reihenfolge mit der Aufnahme beginnen und aufhören —
+        in beliebiger Reihenfolge mit der Aufnahme beginnen und aufhören -
         das Gerät bleibt genau so lange geöffnet, wie jemand es benötigt.</li>
     <li><b>Ein Datenstrom, private Positionen.</b>  Jeder Beitritt gibt einen
-        neuen Lesezeiger über denselben Ring zurück — konsistente Daten für
+        neuen Lesezeiger über denselben Ring zurück - konsistente Daten für
         alle, unabhängiger Fortschritt für jeden.</li>
     <li><b>Ereignisgesteuerte Verbraucher.</b>  Nachdem jeder Block im Ring
-        gelandet ist, sendet die Sitzung eine „neue Daten"-Benachrichtigung.
+        gelandet ist, sendet die Sitzung eine "neue Daten"-Benachrichtigung.
         Das Neuzeichnen des Oszilloskops und die FFT-Analyse-Takte laufen
         auf diesen Benachrichtigungen, statt auf Timern, sodass die Ansichten
-        genau so schnell wie die Daten sind — nie schneller, nie um ein
+        genau so schnell wie die Daten sind - nie schneller, nie um ein
         Polling-Intervall verzögert.</li>
     <li><b>Umwandlung am Eingang.</b>  Die Sitzung wandelt die rohen
-        Integer-Abtastwerte in normierte Werte um — Formel (1) des
-        <a href="audio-backend.html#how">Audio-Backend-Kapitels</a> — in
+        Integer-Abtastwerte in normierte Werte um - Formel (1) des
+        <a href="audio-backend.html#how">Audio-Backend-Kapitels</a> - in
         einer Blockoperation je Chunk; alles Nachgelagerte arbeitet bereits
         in derselben Einheit.</li>
   </ul>
 
   <h2 id="refs">Literatur</h2>
   <ol class="refs">
-    <li id="ref-ring">Ringpuffer allgemein —
+    <li id="ref-ring">Ringpuffer allgemein -
         <a href="https://en.wikipedia.org/wiki/Circular_buffer">Wikipedia: Circular buffer</a>.</li>
-    <li id="ref-prodcons">Das zugrundeliegende Koordinationsmuster —
-        <a href="https://en.wikipedia.org/wiki/Producer%E2%80%93consumer_problem">Wikipedia: Producer–consumer problem</a>.</li>
+    <li id="ref-prodcons">Das zugrundeliegende Koordinationsmuster -
+        <a href="https://en.wikipedia.org/wiki/Producer%E2%80%93consumer_problem">Wikipedia: Producer-consumer problem</a>.</li>
   </ol>
 
   <p class="back"><a href="audio-backend.html">◀ Audio-Backend</a> ·

@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Theorie: Kerbfilter-Abgleich</title>
+  <title>Phonalyser - Theorie: Kerbfilter-Abgleich</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -19,7 +19,7 @@
      (<a href="dac-predistortion.html">DAC-Vorverzerrung</a> erklärt, warum
      dieses Kerbfilter zwingend ist).  Doch die Nullstelle eines Twin-T ist nur
      dann tief, wenn seine drei abgeglichenen Bauteile <em>exakt</em>
-     ausbalanciert sind — und die Balance driftet mit der Temperatur.  Das
+     ausbalanciert sind - und die Balance driftet mit der Temperatur.  Das
      Werkzeug <b>Kerbfilter-Abgleich</b> ist die Live-Anzeige, die man beim
      Drehen des Trimmers beobachtet: es zeigt den eigenen Betragsgang des
      Kerbfilters, der sich mehrmals pro Sekunde aktualisiert, sodass man die
@@ -27,8 +27,8 @@
      wirklich reicht.</p>
 
   <p>Es misst eine Übertragungsfunktion genauso wie das
-     <a href="freq-resp.html">Frequenzgang</a>-Modul — ein logarithmischer
-     Sweep hinein, eine Division heraus — ist aber für eine kontinuierlich
+     <a href="freq-resp.html">Frequenzgang</a>-Modul - ein logarithmischer
+     Sweep hinein, eine Division heraus - ist aber für eine kontinuierlich
      aktualisierende Live-Ansicht gebaut statt für eine einzelne sorgfältige
      Erfassung, und das ändert, wie der Sweep abläuft.</p>
 
@@ -37,7 +37,7 @@
      den Trimmer eine Winzigkeit drehen, die Nullstelle sich bewegen und
      vertiefen sehen, wieder drehen.  Ein Einzelsweep, der das Gerät öffnet,
      abspielt, erfasst und schließt, hat in der Größenordnung von anderthalb
-     Sekunden Totzeit zwischen den Bildern — viel zu langsam zum Abgleichen.
+     Sekunden Totzeit zwischen den Bildern - viel zu langsam zum Abgleichen.
      Also hält das Werkzeug das Audiogerät offen und den Sweep am
      <em>Laufen</em> und wirft einfach einen frischen Blick auf die jüngste
      Periode, sobald es kann.  Der Lohn ist eine Anzeige, die fast so schnell
@@ -109,9 +109,9 @@
     <line x1="370" y1="188" x2="418" y2="188" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
     <line x1="550" y1="188" x2="598" y2="188" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
 
-    <text x="360" y="138" fill="#557">jeder Durchlauf ≈ 0,2 – 0,34 s — mehrmals pro Sekunde</text>
+    <text x="360" y="138" fill="#557">jeder Durchlauf ≈ 0,2 - 0,34 s - mehrmals pro Sekunde</text>
 
-    <text x="10" y="250" fill="#557">Ergebnis: der Betrag des Kerbfilters, ein tiefes V an der Nullstelle —</text>
+    <text x="10" y="250" fill="#557">Ergebnis: der Betrag des Kerbfilters, ein tiefes V an der Nullstelle -</text>
     <path d="M 470 268 L 560 268 L 605 236 L 615 285 L 625 244 L 660 258 L 740 258"
           fill="none" stroke="#33a" stroke-width="1.5"/>
     <line x1="615" y1="232" x2="615" y2="290" stroke="#c33" stroke-width="1" stroke-dasharray="3 2"/>
@@ -127,7 +127,7 @@
      <i>f</i><sub>s</sub>&nbsp;&nbsp;(<i>T</i><sub>Sweep</sub> ≈ 0,26 s)<span class="no">(1)</span></div>
 
   <p>sodass die Transformation einer herausgegriffenen Periode eine
-     <em>zirkuläre</em> ist — der Puffer schließt sich lückenlos an sich
+     <em>zirkuläre</em> ist - der Puffer schließt sich lückenlos an sich
      selbst.  Ein bei einer beliebigen Schleifenphase entnommenes Fenster ist
      dann nichts weiter als derselbe periodische Sweep, um wenige Samples
      gedreht, und der Verschiebungssatz der Transformation besagt, dass eine
@@ -137,14 +137,14 @@
      = |&#8202;DFT{ <i>x</i>[<i>n</i>] }&#8202;|<span class="no">(2)</span></div>
 
   <p>Da der Abgleich nur den Betrag liest, fällt die beliebige Greifphase völlig
-     heraus — keine Startmarke, kein Trigger, keine Ausrichtung.  Das ist der
+     heraus - keine Startmarke, kein Trigger, keine Ausrichtung.  Das ist der
      ganze Grund, warum die Live-Schleife sorglos sein darf, <em>wann</em> sie
      hinsieht.  (Rundet man die Periode auf etwas anderes als eine
      Zweierpotenz, ist die Transformation nicht mehr zirkulär: ein
      nicht ausgerichtetes Fenster schlägt dann über die Naht um und schmiert
-     jeden Bin zu einer Spitze — genau das Artefakt, das dies
+     jeden Bin zu einer Spitze - genau das Artefakt, das dies
      vermeidet.)<sup id="cite-2"><a href="#ref-dft">[2]</a></sup>  Die eine Naht,
-     die es gibt — wo die Schleife an ihren eigenen Anfang wieder anschließt —
+     die es gibt - wo die Schleife an ihren eigenen Anfang wieder anschließt -
      wird durch eine kurze Raised-Cosine-Ausblendung geglättet, die identisch
      auf den abgespielten Sweep und auf die Referenz angewandt wird, durch die
      dividiert wird, sodass beide sich aufheben.</p>
@@ -152,26 +152,42 @@
   <h2 id="null">Die Nullstelle finden</h2>
   <p>Jede Periode wird in den Betragsgang des Kerbfilters umgewandelt, indem
      das zurückkehrende Spektrum durch das Sweep-Referenzspektrum dividiert
-     wird, <i>H</i>(<i>f</i>) = <i>Y</i>(<i>f</i>) ⁄ <i>X</i>(<i>f</i>) —
+     wird, <i>H</i>(<i>f</i>) = <i>Y</i>(<i>f</i>) ⁄ <i>X</i>(<i>f</i>) -
      dieselbe Farina-Entfaltung, die das
      <a href="freq-resp.html#how">Frequenzgang</a>-Kapitel
      beschreibt<sup id="cite-1"><a href="#ref-farina">[1]</a></sup>.  Der
-     tiefste Punkt dieser Kurve wird auf einen Bruchteil eines Bins genau
-     lokalisiert, indem eine Parabel durch den niedrigsten Wert und seine beiden
-     Nachbarn gelegt wird — im linearen Betrag (wo eine glatte Senke nahe ihrem
-     Boden tatsächlich parabolisch ist, anders als in Dezibel):</p>
+     tiefste Punkt dieser Kurve wird an der Kurve <em>so abgelesen, wie sie
+     gezeichnet ist</em>: die Kurve wird an jeder Pixelspalte der Darstellung
+     ausgewertet, und der tiefste Wert gewinnt.</p>
 
-  <div class="eq">δ = ½ · (<i>y</i><sub>−1</sub> − <i>y</i><sub>+1</sub>) ⁄
-     (<i>y</i><sub>−1</sub> − 2<i>y</i><sub>0</sub> + <i>y</i><sub>+1</sub>)&nbsp;,&nbsp;&nbsp;
-     <i>f</i><sub>Null</sub> = <i>f</i><sub>i</sub> + δ · Δ<i>f</i><span class="no">(3)</span></div>
+  <div class="eq">(<i>f</i><sub>Null</sub>, <i>D</i><sub>Null</sub>) : <i>f</i><sub>Null</sub> = arg min<sub>&thinsp;<i>k</i> ∈ [0,&thinsp;<i>W</i>)</sub> <i>D</i>(<i>f</i>(<i>k</i>))&nbsp;,&nbsp;&nbsp;
+     <i>D</i> = der Schätzer des Zeichners<span class="no">(3)</span></div>
 
-  <p>Die verfeinerte Nullstellenfrequenz und -tiefe sind das, was man beim
+  <p>Dabei ist <i>W</i> die Breite der Darstellung in Pixeln,
+     <i>f</i>(<i>k</i>) die Frequenz, die der Zeichner der Spalte <i>k</i>
+     zuordnet, und <i>D</i> dieselbe Rekonstruktion, mit der er zeichnet - die
+     Lanczos-Rekonstruktion pro Pixel, solange diese für die aktuelle Achse und
+     Breite aktiv ist, sonst die einfache Interpolation zwischen den Bins.
+     Frühere Versionen verfeinerten die Nullstelle stattdessen auf einen
+     Bruchteil eines Bins, indem sie eine Parabel durch den niedrigsten Wert und
+     seine beiden Nachbarn im linearen Betrag legten.  Diese Anpassung wurde
+     entfernt: eine gut abgeglichene Nullstelle ist ein <b>V</b> und keine
+     Parabel, und eine über ihre beiden steilen Flanken gelegte Kurve hat ihren
+     Scheitel oberhalb des wahren Bodens - die Tiefe fiel damit flacher aus, als
+     die Kerbe wirklich war.  Das gezeichnete Minimum zu nehmen macht außerdem
+     Anzeige, Zielmarkierung und Kurve auf dem Bildschirm zu einer einzigen Zahl
+     - an einer scharfen Nullstelle wichen die drei um 2-3 dB voneinander ab.
+     Die vertikale Auto-Anpassung wird <em>nach</em> dem Bestimmen der
+     Nullstelle angewandt, sodass die Achse stets ein Dezibel Luft unter dem
+     Einbruch lässt, statt ihn abzuschneiden.</p>
+
+  <p>Nullstellenfrequenz und -tiefe sind das, was man beim
      Abgleichen von der Anzeige abliest.  Ein bewusster Unterschied zu einer
      gewöhnlichen Sweep-Messung: die übliche Glättung, die eine
      Frequenzgangkurve aufräumt, ist hier <em>abgeschaltet</em>.  Auf dem
      groben Raster dieser schnellen Live-Ansicht würde ein Glättungsfenster
      viele Hertz überspannen und mehrere Dezibel vom Boden einer scharfen
-     Nullstelle abrunden — und damit genau die Tiefe verbergen, die man
+     Nullstelle abrunden - und damit genau die Tiefe verbergen, die man
      maximieren will.  Eine rohe, ungeglättete Kurve zeigt die wahre
      Nullstelle.</p>
 
@@ -191,11 +207,11 @@
     <li id="ref-farina"><a href="#cite-1">1.</a>
         A. Farina, <a href="http://pcfarina.eng.unipr.it/Public/Papers/226-AES00.PDF"><i>Simultaneous
         measurement of impulse response and distortion with a swept-sine
-        technique</i></a>, AES 108th Convention, 2000 — der exponentielle Sweep
+        technique</i></a>, AES 108th Convention, 2000 - der exponentielle Sweep
         und seine Entfaltungsreferenz.</li>
     <li id="ref-dft"><a href="#cite-2">2.</a>
         <a href="https://en.wikipedia.org/wiki/Circular_convolution">Zirkuläre
-        Faltung und der DFT-Verschiebungssatz</a> (Wikipedia) — warum eine
+        Faltung und der DFT-Verschiebungssatz</a> (Wikipedia) - warum eine
         zirkuläre Transformation im Betrag verschiebungsinvariant ist.</li>
   </ol>
 
