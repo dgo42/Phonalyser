@@ -126,7 +126,10 @@ jobs:
           if (-not (Get-ChildItem src/main/packaging/msix/assets/*.png -ErrorAction SilentlyContinue)) {
             throw "No Store logos in src/main/packaging/msix/assets/ (see that folder's README.txt)."
           }
-          $pomVer = (Select-Xml -Path pom.xml -XPath "/*[local-name()='project']/*[local-name()='version']").Node.InnerText
+          # The build root inherits its version from the parent module, so the
+          # version element lives in the parent POM, not here.
+          $pomVer = (Select-Xml -Path modules/phonalyser-parent/pom.xml -XPath "/*[local-name()='project']/*[local-name()='version']").Node.InnerText
+          if (-not $pomVer) { throw "no <version> found in modules/phonalyser-parent/pom.xml" }
           $parts  = ($pomVer -replace '[^0-9.].*$','').Split('.')
           while ($parts.Count -lt 3) { $parts += '0' }
           $ver = ($parts[0..2] -join '.') + '.0'
