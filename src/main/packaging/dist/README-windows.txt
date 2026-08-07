@@ -4,7 +4,7 @@ Phonalyser - running from the platform JAR (Windows)
 This is the "bring your own Java" option.  The .exe installer already bundles a
 Java runtime; the JAR does not, so you need Java 17 or newer installed.
 
-1. Install a Java 17+ runtime (e.g. Temurin):  https://adoptium.net/
+1. Install a Java 17+ runtime.
 2. Keep these two files together in the same folder:
        phonalyser-<version>-windows.jar
        Phonalyser-windows.bat

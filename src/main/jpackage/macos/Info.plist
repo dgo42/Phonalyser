@@ -5,7 +5,7 @@
   the jpackage `--resource-dir` (see the macos-x64 / macos-aarch64 profiles in
   pom.xml).  It mirrors the plist jpackage generates by default and ADDS
   NSMicrophoneUsageDescription so macOS shows the microphone-permission prompt
-  on first CoreAudio capture — without it macOS silently denies input and the
+  on first CoreAudio capture - without it macOS silently denies input and the
   capture delivers digital silence.
 
   CFBundle*Version are pinned to the current app.version (1.0.0); bump them in
