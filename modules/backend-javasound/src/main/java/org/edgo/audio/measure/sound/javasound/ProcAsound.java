@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,153 +26,227 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.Map;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Parses {@code /proc/asound/card&lt;N&gt;/codec#&lt;M&gt;} on Linux to
- * discover the sample rates and bit depths each detected sound card's
- * codec actually supports.  The kernel's HD-Audio driver writes these
- * files; the format is a series of {@code Node 0x... [...]} sections,
- * each with its own {@code PCM:} block:
+ * Reads {@code /proc/asound} to discover what each detected sound card's
+ * hardware actually supports - the sample rates and bit depths of the silicon,
+ * not of the mixer in front of it.
  *
- * <pre>{@code
- *   Node 0x02 [Audio Output] wcaps 0x40d: Stereo Digital
- *     ...
- *     PCM:
- *       rates [0x...]: 44100 48000 88200 96000 192000
- *       bits [0x...]: 16 20 24 32
- *       formats [0x...]: PCM
+ * <p>Two layouts are understood, because the kernel writes two:
  *
- *   Node 0x09 [Audio Input] wcaps 0x10051b: Stereo Amp-In
- *     ...
- *     PCM:
- *       rates [0x...]: 44100 48000 96000 192000
- *       bits [0x...]: 16 20 24
- *       formats [0x...]: PCM
- * }</pre>
+ * <ul>
+ *   <li><b>USB audio</b> - {@code /proc/asound/card&lt;N&gt;/stream&lt;M&gt;},
+ *       with {@code Playback:} / {@code Capture:} sections whose
+ *       {@code Interface / Altset} sub-sections declare {@code Format: SXX_LE}
+ *       and an exact {@code Rates: ...} list. This is the precise case: the
+ *       list is per direction and is what the device enumerated.</li>
+ *   <li><b>HD-Audio</b> - {@code /proc/asound/card&lt;N&gt;/codec#&lt;M&gt;},
+ *       a series of {@code Node 0x.. [Audio Output|Audio Input]} sections each
+ *       with a {@code PCM:} block of {@code rates} and {@code bits}.</li>
+ * </ul>
  *
- * <p>Used by {@link JavaSoundDeviceManager} as a hardware-truth cap on
- * the rates / bit depths shown for the JAVASOUND backend on Linux — a
- * Pulse / PipeWire mixer happily advertises 768 kHz / 32-bit even on a
- * 192 kHz card, but {@code /proc/asound} reports what the silicon
- * actually does.  Direction-aware: capture lookups read only
- * "Audio Input" sections, playback lookups read only "Audio Output"
- * sections, so a codec that supports 32-bit output but 24-bit input
- * doesn't have its 32-bit advertised for capture (and vice versa).
+ * <p><b>ANSWERS ARE PER CARD.</b> Reading the whole of {@code /proc/asound} and
+ * merging it - which this class used to do - gives every device on the machine
+ * the union of every card's capabilities. On a bench with a 48 kHz onboard
+ * codec beside a 768 kHz USB interface that answer is wrong for both of them.
+ * The ALSA address in the JavaSound mixer name ({@code "CB5 [plughw:1,1]"})
+ * names the card, so {@link #cardIndexOf} turns it into the {@code cardN} whose
+ * own files are then read.
  *
- * <p>Results are queried lazily and cached for the JVM's lifetime
- * (codec capabilities don't change at runtime).  Returns empty arrays
- * on non-Linux hosts or when {@code /proc/asound} isn't readable.
+ * <p><b>"UNKNOWN" IS NOT "NOTHING".</b> A card with neither layout - a legacy
+ * PCI codec such as the Ensoniq ES1371 - is reported as
+ * {@link CardCaps#known() not known}, which the caller must treat as "this
+ * class cannot say", never as "supports no rates". Direction-aware throughout:
+ * a codec with 32-bit output and 24-bit input does not get its 32 bits
+ * advertised for capture.
+ *
+ * <p>Results are cached for the JVM's lifetime (hardware capabilities do not
+ * change at runtime) and every query answers empty on non-Linux hosts or when
+ * {@code /proc/asound} is not readable.
+ *
+ * <p>It also answers the two questions the ALSA address itself holds -
+ * {@link #cardIndexOf} / {@link #deviceIndexOf} - and, for a USB card, which
+ * AudioStreaming interface serves a PCM device ({@link #streamInterface}).
+ * Those are the same files by the same reader, and they are what
+ * {@link AlsaPorts} turns into a port's real name.
  */
 @Log4j2
 public final class ProcAsound {
 
-    private static volatile boolean scanned;
-    private static volatile int[] inputRates   = new int[0];
-    private static volatile int[] inputDepths  = new int[0];
-    private static volatile int[] outputRates  = new int[0];
-    private static volatile int[] outputDepths = new int[0];
-
     /** Matches {@code "Node 0xNN [Type Words] wcaps 0xMM: Description"}.
      *  Group 1 = bracketed node type ({@code Audio Output} / {@code Audio Input}).
      *  Group 2 = everything after the bracket (used to detect "Digital"
-     *  S/PDIF nodes — their rates / bits don't reflect the analog
+     *  S/PDIF nodes - their rates / bits don't reflect the analog
      *  ADC/DAC capability we actually want). */
     private static final Pattern NODE_HEADER =
             Pattern.compile("^Node\\s+0x[0-9a-fA-F]+\\s+\\[([^\\]]+)\\](.*)");
 
-    /** Matches the USB-Audio format header — e.g. {@code "Format: S24_3LE"}.
+    /** Matches the USB-Audio format header - e.g. {@code "Format: S24_3LE"}.
      *  We pull the number that follows the leading {@code S}.  Works for
      *  {@code S16_LE}, {@code S24_LE}, {@code S24_3LE}, {@code S32_LE},
      *  {@code U8}, etc. */
     private static final Pattern USB_FORMAT =
             Pattern.compile("(?:Format|Format \\d+)\\s*:\\s*[SU](\\d+)");
 
-    private ProcAsound() {}
+    /** Matches the ALSA address JavaSound puts in a mixer name -
+     *  {@code "CB5 [plughw:1,1]"} or {@code "[hw:0,0]"}. Group 1 is the CARD
+     *  index, which is what {@code /proc/asound/cardN} is keyed on; group 2 is
+     *  the DEVICE (PCM) number after the comma, which selects one of the card's
+     *  PCM devices and does not change the card's capability files - but does
+     *  name which physical port the device is wired to
+     *  ({@link #streamInterface}). */
+    private static final Pattern ALSA_ADDRESS =
+            Pattern.compile("\\[(?:plug)?hw:(\\d+)(?:,(\\d+))?");
 
-    /** Sample rates (Hz) the hardware supports for the requested
-     *  direction, or an empty array on non-Linux / unreadable
-     *  {@code /proc/asound}.
-     *
-     *  @param output {@code true} for playback (DAC / Audio Output),
-     *                {@code false} for capture (ADC / Audio Input). */
-    public static synchronized int[] hardwareRates(boolean output) {
-        if (!scanned) scan();
-        return (output ? outputRates : inputRates).clone();
-    }
-
-    /** Bit depths supported by the hardware for the requested
-     *  direction, or an empty array on non-Linux / unreadable
-     *  {@code /proc/asound}. */
-    public static synchronized int[] hardwareBitDepths(boolean output) {
-        if (!scanned) scan();
-        return (output ? outputDepths : inputDepths).clone();
-    }
+    /** Matches a USB stream file's {@code "Interface 2"} sub-section header -
+     *  the USB AudioStreaming interface number that serves this direction. */
+    private static final Pattern USB_INTERFACE = Pattern.compile("^Interface\\s+(\\d+)");
 
     private enum NodeKind { OUTPUT, INPUT, OTHER }
 
-    private static void scan() {
-        scanned = true;
-        Path procAsound = Paths.get("/proc/asound");
-        if (!Files.isDirectory(procAsound)) return;
-        TreeSet<Integer> inR = new TreeSet<>(), inB  = new TreeSet<>();
+    /**
+     * One card's capabilities, per direction.
+     *
+     * <p>{@code known} carries the distinction that matters: a card whose
+     * layout this class understands answers {@code known = true} even when a
+     * direction is empty, because a capture-only card really has no playback
+     * rates. A card it does not understand answers {@code known = false},
+     * meaning "cannot say" - and the caller must not read the empty arrays as
+     * "supports nothing".
+     */
+    public record CardCaps(int[] inputRates, int[] inputDepths,
+                           int[] outputRates, int[] outputDepths, boolean known) {
+
+        /** The answer for a card with neither a USB stream nor an HDA codec file. */
+        public static final CardCaps UNKNOWN =
+                new CardCaps(new int[0], new int[0], new int[0], new int[0], false);
+
+        public int[] rates(boolean output)  { return (output ? outputRates : inputRates).clone(); }
+        public int[] depths(boolean output) { return (output ? outputDepths : inputDepths).clone(); }
+    }
+
+    /** The tree the reads come from - {@code /proc/asound} in production, a
+     *  fixture directory under test. */
+    private final Path root;
+
+    /** Per-card answers, keyed by ALSA card index. */
+    private final Map<Integer, CardCaps> cardCache = new ConcurrentHashMap<>();
+
+    /** Reads the real {@code /proc/asound}. */
+    public ProcAsound() {
+        this(Paths.get("/proc/asound"));
+    }
+
+    /** Reads {@code root} instead - the seam the tests drive a fixture tree through,
+     *  which is what makes this parser testable on a machine that has no ALSA. */
+    public ProcAsound(Path root) {
+        this.root = root;
+    }
+
+    /**
+     * The ALSA card index named in a JavaSound mixer name, or -1 when the name
+     * carries no {@code [plughw:N,M]} address (every non-ALSA mixer, and Java's
+     * own "Port" mixers).
+     */
+    public int cardIndexOf(String mixerName) {
+        return addressPart(mixerName, 1);
+    }
+
+    /**
+     * The ALSA PCM DEVICE number named in a JavaSound mixer name - the {@code 1}
+     * of {@code [plughw:1,1]} - or -1 when the name carries no address or names
+     * a card without a device ({@code [hw:1]}, Java's own "Port" mixers).
+     *
+     * <p>It is the card's port that this number selects: a USB interface with a
+     * line pair and a microphone pair publishes one PCM device per pair, and
+     * {@link #streamInterface} turns the number into the USB interface that
+     * serves it.
+     */
+    public int deviceIndexOf(String mixerName) {
+        return addressPart(mixerName, 2);
+    }
+
+    /** One capture group of the {@code [plughw:C,D]} address, or -1 when the
+     *  name has no address or that part of it is absent. */
+    private int addressPart(String mixerName, int group) {
+        if (mixerName == null) return -1;
+        Matcher m = ALSA_ADDRESS.matcher(mixerName);
+        if (!m.find()) return -1;
+        String part = m.group(group);
+        if (part == null) return -1;
+        try {
+            return Integer.parseInt(part);
+        } catch (NumberFormatException ex) {
+            return -1;
+        }
+    }
+
+    /** What {@code <root>/card<card>} says, cached for this instance's lifetime. */
+    public CardCaps cardCaps(int card) {
+        if (card < 0) return CardCaps.UNKNOWN;
+        return cardCache.computeIfAbsent(card, c -> readCard(root.resolve("card" + c)));
+    }
+
+    /** The capabilities of the card named in {@code mixerName} - the whole
+     *  lookup in one call, for the caller that only has a mixer. */
+    public CardCaps capsForMixer(String mixerName) {
+        return cardCaps(cardIndexOf(mixerName));
+    }
+
+    /**
+     * Reads ONE card directory. Package-private and taking the directory
+     * outright so the tests can drive it against a fixture on any OS.
+     */
+    CardCaps readCard(Path cardDir) {
+        if (!Files.isDirectory(cardDir)) return CardCaps.UNKNOWN;
+        TreeSet<Integer> inR = new TreeSet<>(), inB = new TreeSet<>();
         TreeSet<Integer> outR = new TreeSet<>(), outB = new TreeSet<>();
-        try (DirectoryStream<Path> cards = Files.newDirectoryStream(procAsound, "card*")) {
-            for (Path cardDir : cards) {
-                if (!Files.isDirectory(cardDir)) continue;
-                // HDA codecs: rates/bits under Audio Input/Output Node sections.
-                try (DirectoryStream<Path> codecs = Files.newDirectoryStream(cardDir, "codec#*")) {
-                    for (Path codec : codecs) {
-                        parseCodec(codec, inR, inB, outR, outB);
-                    }
-                } catch (IOException ex) {
-                    log.debug("Could not list codecs under {}: {}", cardDir, ex.getMessage());
-                }
-                // USB-Audio: rates/bits under Playback/Capture sections.
-                try (DirectoryStream<Path> streams = Files.newDirectoryStream(cardDir, "stream*")) {
-                    for (Path stream : streams) {
-                        parseUsbStream(stream, inR, inB, outR, outB);
-                    }
-                } catch (IOException ex) {
-                    log.debug("Could not list streams under {}: {}", cardDir, ex.getMessage());
-                }
+        boolean known = false;
+        try (DirectoryStream<Path> streams = Files.newDirectoryStream(cardDir, "stream*")) {
+            for (Path stream : streams) {
+                known = true;                   // USB: exact per-direction rate lists
+                parseUsbStream(stream, inR, inB, outR, outB);
             }
         } catch (IOException ex) {
-            log.debug("Could not scan /proc/asound: {}", ex.getMessage());
+            log.debug("Could not list streams under {}: {}", cardDir, ex.getMessage());
         }
-        inputRates   = toArray(inR);
-        inputDepths  = toArray(inB);
-        outputRates  = toArray(outR);
-        outputDepths = toArray(outB);
-        log.info("/proc/asound hardware caps: in.rates={}, in.bits={}, out.rates={}, out.bits={}",
-                inR, inB, outR, outB);
+        try (DirectoryStream<Path> codecs = Files.newDirectoryStream(cardDir, "codec#*")) {
+            for (Path codec : codecs) {
+                known = true;                   // HD-Audio
+                parseCodec(codec, inR, inB, outR, outB);
+            }
+        } catch (IOException ex) {
+            log.debug("Could not list codecs under {}: {}", cardDir, ex.getMessage());
+        }
+        if (!known) {
+            log.debug("{} has neither stream* nor codec#* - capabilities unknown", cardDir);
+            return CardCaps.UNKNOWN;
+        }
+        CardCaps caps = new CardCaps(toArray(inR), toArray(inB), toArray(outR), toArray(outB), true);
+        log.info("{} caps: in.rates={}, in.bits={}, out.rates={}, out.bits={}",
+                cardDir.getFileName(), inR, inB, outR, outB);
+        return caps;
     }
 
     /** Parses a USB-Audio {@code /proc/asound/cardN/streamN} file.
      *
-     *  <p>Layout walks Playback: / Capture: top-level sections, each
-     *  with {@code Interface N / Altset N} sub-sections that declare
+     *  <p>Layout walks Playback: / Capture: top-level sections, each with
+     *  {@code Interface N / Altset N} sub-sections that declare
      *  {@code Format: SXX_LE} and {@code Rates: r1, r2, ...}.
      */
-    private static void parseUsbStream(Path stream,
-                                       TreeSet<Integer> inR, TreeSet<Integer> inB,
-                                       TreeSet<Integer> outR, TreeSet<Integer> outB) {
-        List<String> lines;
-        try {
-            lines = Files.readAllLines(stream);
-        } catch (IOException ex) {
-            log.debug("Could not read {}: {}", stream, ex.getMessage());
-            return;
-        }
+    private void parseUsbStream(Path stream,
+                                TreeSet<Integer> inR, TreeSet<Integer> inB,
+                                TreeSet<Integer> outR, TreeSet<Integer> outB) {
         NodeKind kind = NodeKind.OTHER;
-        for (String raw : lines) {
+        for (String raw : readLines(stream)) {
             String line = raw.trim();
-            // Top-level section headers are unindented in the source file
-            // but we trimmed — match by suffix colon and exact label.
-            if (line.equals("Playback:"))      { kind = NodeKind.OUTPUT; continue; }
-            else if (line.equals("Capture:")) { kind = NodeKind.INPUT;  continue; }
+            NodeKind section = sectionHeader(line);
+            if (section != null) { kind = section; continue; }
             if (kind == NodeKind.OTHER) continue;
 
             Matcher fm = USB_FORMAT.matcher(line);
@@ -184,7 +258,7 @@ public final class ProcAsound {
                 continue;
             }
             if (line.startsWith("Rates")) {
-                // "Rates: 44100, 48000" — strip the prefix, allow comma separators.
+                // "Rates: 44100, 48000" - strip the prefix, allow comma separators.
                 int colon = line.indexOf(':');
                 if (colon < 0 || colon + 1 >= line.length()) continue;
                 for (String tok : line.substring(colon + 1).split("[,\\s]+")) {
@@ -200,25 +274,18 @@ public final class ProcAsound {
 
     /** Walk the file once, tracking which {@code Node} section we are
      *  currently inside.  PCM rates / bits found while the section type
-     *  is "Audio Input" or "Audio Output" — <em>and</em> the node is
-     *  not the digital S/PDIF variant — go to the matching sets.  Pin
+     *  is "Audio Input" or "Audio Output" - <em>and</em> the node is
+     *  not the digital S/PDIF variant - go to the matching sets.  Pin
      *  Complex, Vendor Defined and digital (S/PDIF) sections are
      *  ignored: their PCM caps describe what the bus can carry, not
      *  what the analog DAC/ADC actually delivers, and a codec like
      *  the ALC262 advertises 32 bit / 192 kHz over S/PDIF while its
      *  analog inputs top out at 20 bit / 96 kHz. */
-    private static void parseCodec(Path codec,
-                                   TreeSet<Integer> inR, TreeSet<Integer> inB,
-                                   TreeSet<Integer> outR, TreeSet<Integer> outB) {
-        List<String> lines;
-        try {
-            lines = Files.readAllLines(codec);
-        } catch (IOException ex) {
-            log.debug("Could not read {}: {}", codec, ex.getMessage());
-            return;
-        }
+    private void parseCodec(Path codec,
+                            TreeSet<Integer> inR, TreeSet<Integer> inB,
+                            TreeSet<Integer> outR, TreeSet<Integer> outB) {
         NodeKind kind = NodeKind.OTHER;
-        for (String raw : lines) {
+        for (String raw : readLines(codec)) {
             String line = raw.trim();
             Matcher m = NODE_HEADER.matcher(line);
             if (m.find()) {
@@ -246,10 +313,71 @@ public final class ProcAsound {
     }
 
     /**
+     * The USB AudioStreaming INTERFACE that serves one PCM device in one
+     * direction - {@code /proc/asound/card<card>/stream<device>}'s
+     * {@code "Interface 2"} under its {@code Capture:} section - or -1 when the
+     * card is not USB, has no such device, or does not work in that direction.
+     *
+     * <p>The kernel names that file after the PCM device index
+     * ({@code stream->pcm_index}), which is exactly the {@code D} of
+     * {@code [plughw:C,D]}, so the address in a JavaSound mixer name resolves
+     * straight to it. The interface number is what the card's USB descriptors
+     * key their terminals on, and the terminal is what carries the port's real
+     * name (Line, Mic, Headphone) - so this is the first half of the answer to
+     * "which socket is this device?".
+     *
+     * <p>The first interface in the section wins: a direction's altsets all
+     * belong to one AudioStreaming interface, and they are listed one after
+     * another under the same header.
+     */
+    public int streamInterface(int card, int device, boolean input) {
+        if (card < 0 || device < 0) return -1;
+        Path stream = root.resolve("card" + card).resolve("stream" + device);
+        NodeKind wanted = input ? NodeKind.INPUT : NodeKind.OUTPUT;
+        NodeKind kind = NodeKind.OTHER;
+        for (String raw : readLines(stream)) {
+            String line = raw.trim();
+            NodeKind section = sectionHeader(line);
+            if (section != null) { kind = section; continue; }
+            if (kind != wanted) continue;
+            Matcher m = USB_INTERFACE.matcher(line);
+            if (m.find()) {
+                try {
+                    return Integer.parseInt(m.group(1));
+                } catch (NumberFormatException ex) {
+                    return -1;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /** The direction a {@code "Playback:"} / {@code "Capture:"} header opens,
+     *  or null for every other line. The headers are unindented in the file
+     *  itself; callers match them on the trimmed line. */
+    private NodeKind sectionHeader(String line) {
+        if (line.equals("Playback:")) return NodeKind.OUTPUT;
+        if (line.equals("Capture:"))  return NodeKind.INPUT;
+        return null;
+    }
+
+    /** Every line of a {@code /proc} file, or none when it cannot be read -
+     *  an absent file is this class's normal answer ("cannot say"), not an
+     *  error, on every host that is not the Linux box the card is in. */
+    private List<String> readLines(Path file) {
+        try {
+            return Files.readAllLines(file);
+        } catch (IOException ex) {
+            log.debug("Could not read {}: {}", file, ex.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
      * Codec lines look like {@code rates [0x5e0]: 44100 48000 88200 96000 192000}.
      * Skip the bracketed hex flag, parse every integer that follows.
      */
-    private static void extractNumbersAfter(String line, TreeSet<Integer> out) {
+    private void extractNumbersAfter(String line, TreeSet<Integer> out) {
         int colon  = line.indexOf(':');
         int rbrack = line.indexOf(']');
         int start  = Math.max(colon, rbrack);
@@ -262,7 +390,7 @@ public final class ProcAsound {
         }
     }
 
-    private static int[] toArray(TreeSet<Integer> s) {
+    private int[] toArray(TreeSet<Integer> s) {
         return s.stream().mapToInt(Integer::intValue).toArray();
     }
 }

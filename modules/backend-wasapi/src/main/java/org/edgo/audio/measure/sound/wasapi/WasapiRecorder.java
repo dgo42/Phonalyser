@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,6 +27,7 @@ import com.sun.jna.ptr.PointerByReference;
 
 import lombok.extern.log4j.Log4j2;
 
+import org.edgo.audio.measure.sound.CaptureEndReason;
 import org.edgo.audio.measure.sound.AbstractPcmCapture;
 import org.edgo.audio.measure.sound.SpscByteArrayRing;
 
@@ -45,7 +46,7 @@ import static org.edgo.audio.measure.sound.wasapi.WasapiNative.*;
  * {@code IAudioCaptureClient::GetBuffer}.
  *
  * <p>The capture-event thread only copies packet bytes into pooled buffers
- * and hands them to a consume thread over an {@link SpscByteArrayRing} —
+ * and hands them to a consume thread over an {@link SpscByteArrayRing} -
  * the same decoupling {@link WdmksRecorder} uses.  Listener work (per-sample
  * decode, ring append, bus publish) therefore can never delay the next
  * {@code WaitForSingleObject} past the event deadline, however expensive a
@@ -70,9 +71,9 @@ public class WasapiRecorder extends AbstractPcmCapture {
     private Thread captureThread;
     private Thread consumerThread;
 
-    /** SPSC ring of filled packets — capture-event thread → consume thread. */
+    /** SPSC ring of filled packets - capture-event thread -> consume thread. */
     private final SpscByteArrayRing queue      = new SpscByteArrayRing(64);
-    /** Recycled buffer pool — consume thread → capture-event thread (the
+    /** Recycled buffer pool - consume thread -> capture-event thread (the
      *  SPSC roles simply reversed). */
     private final SpscByteArrayRing bufferPool = new SpscByteArrayRing(64);
     /** Capture-thread-only spare: holds a queue-rejected buffer for the next
@@ -105,7 +106,7 @@ public class WasapiRecorder extends AbstractPcmCapture {
             audioClient = activateAudioClient(immDevice);
             // Target an exclusive-mode buffer of at least 50 ms.  The
             // device period (typically ~3-10 ms) is too small to
-            // absorb JVM GC pauses or scheduler jitter — the
+            // absorb JVM GC pauses or scheduler jitter - the
             // resulting sample drops show up as WASAPI
             // discontinuities and produce phase-coherence rejections
             // downstream.  Round up to a multiple of the device
@@ -128,11 +129,11 @@ public class WasapiRecorder extends AbstractPcmCapture {
             boolean exclusive = initializeExclusive(bufDuration);
             if (!exclusive) {
                 // WARN, not info: in shared mode the Windows audio engine sits in
-                // the signal path — its per-channel session volume / balance and
+                // the signal path - its per-channel session volume / balance and
                 // any APO scale the samples, so captured levels are no longer the
                 // raw measurement-grade input exclusive mode guarantees.
                 if (log.isWarnEnabled()) {
-                    log.warn("WASAPI exclusive refused — falling back to SHARED mode: "
+                    log.warn("WASAPI exclusive refused - falling back to SHARED mode: "
                             + "the Windows mixer (volume/balance/APOs) now scales the input; "
                             + "absolute levels are not measurement-grade");
                 }
@@ -208,7 +209,7 @@ public class WasapiRecorder extends AbstractPcmCapture {
             captureChannels = 1;
             return true;
         }
-        // Neither stereo nor mono opened exclusive — drop to shared mode.
+        // Neither stereo nor mono opened exclusive - drop to shared mode.
         return false;
     }
 
@@ -307,6 +308,11 @@ public class WasapiRecorder extends AbstractPcmCapture {
         silentPacketsSinceLog.set(0);
         silentFramesSinceLog.set(0);
         discontinuitiesSinceLog.set(0);
+        // Armed before the consume thread exists, so the write is safely
+        // published to it.  Backstop for the case the HRESULT test cannot see:
+        // an endpoint that stops signalling the event handle AND goes on
+        // answering S_OK with zero packets.
+        armDeliveryDeadline();
         consumerThread = new Thread(this::consumeLoop, "wasapi-consume");
         consumerThread.setDaemon(true);
         consumerThread.setPriority(Thread.NORM_PRIORITY + 1);
@@ -327,12 +333,9 @@ public class WasapiRecorder extends AbstractPcmCapture {
     @Override
     public void stopRecording() throws InterruptedException {
         recording.set(false);
-        if (audioClient != null) {
-            try {
-                callHR(audioClient, VT_AC_STOP);
-            } catch (Throwable t) {
-                log.warn("IAudioClient.Stop threw: {}", t.getMessage());
-            }
+        final Pointer client = audioClient;
+        if (client != null) {
+            callHR(client, VT_AC_STOP);
         }
         if (captureThread  != null) captureThread.join(2000);
         if (consumerThread != null) consumerThread.join(2000);
@@ -360,20 +363,39 @@ public class WasapiRecorder extends AbstractPcmCapture {
         IntByReference     nextPacket   = new IntByReference();
 
         while (recording.get()) {
-            int waitRc = Kernel32.INSTANCE.WaitForSingleObject(eventHandle, 200);
-            if (waitRc != WAIT_OBJECT_0) {
-                // Timed out (no audio yet) or wait failed — re-check the
-                // running flag and try again.  Don't bail out on the
-                // first idle period; the device may take a few ms to
-                // start producing frames.
-                continue;
-            }
+            // The return code is deliberately NOT branched on.  A wait that times
+            // out is not a reason to skip the device: WASAPI stops signalling this
+            // handle the moment the endpoint goes, so "not signalled" is precisely
+            // the state a removal leaves behind - and the loop used to `continue`
+            // on it, spinning on a 200 ms timeout for ever without ever reaching
+            // the GetNextPacketSize below, which is where the loss was tested for.
+            // That is why unplugging the sound card produced no reaction at all
+            // on the bench.  Falling through costs a healthy idle stream one COM
+            // call per 200 ms, which answers "0 packets" exactly as it did
+            // before.
+            Kernel32.INSTANCE.WaitForSingleObject(eventHandle, 200);
             while (true) {
                 int hr = callHR(captureClient, VT_CC_GET_NEXT_PACKET_SIZE, nextPacket);
-                if (hr != S_OK || nextPacket.getValue() == 0) break;
+                if (hr != S_OK) {
+                    // FAILED(hr), not one named code.  AUDCLNT_E_DEVICE_INVALIDATED
+                    // is the documented answer for an unplugged endpoint, but this
+                    // call has no other failure a running stream can survive
+                    // either (the audio service gone, the client torn down), and
+                    // guessing which code a given driver picks is what left the
+                    // detection silent in the first place.  S_OK with 0 packets -
+                    // an idle but healthy stream - is not a failure and is handled
+                    // below.
+                    reportDeviceInvalidated("GetNextPacketSize", hr);
+                    return;
+                }
+                if (nextPacket.getValue() == 0) break;
 
                 hr = callHR(captureClient, VT_CC_GET_BUFFER,
                         ppData, framesAvail, flags, null, null);
+                if (hr == AUDCLNT_E_DEVICE_INVALIDATED) {
+                    reportDeviceInvalidated("GetBuffer", hr);
+                    return;
+                }
                 if (hr != S_OK) {
                     log.warn("IAudioCaptureClient.GetBuffer: 0x{}", Integer.toHexString(hr));
                     break;
@@ -406,10 +428,37 @@ public class WasapiRecorder extends AbstractPcmCapture {
 
                 if (!queue.release(buf)) {
                     droppedFramesSinceLog.addAndGet(frames);
-                    captureSpare = buf;   // keep thread-local — never offer to the pool from here
+                    captureSpare = buf;   // keep thread-local - never offer to the pool from here
                 }
             }
         }
+    }
+
+    /**
+     * The endpoint has gone.  {@code AUDCLNT_E_DEVICE_INVALIDATED} is what
+     * WASAPI answers every call on a device that was unplugged (or whose format
+     * was changed out from under the stream), and this client never recovers
+     * from it - a fresh {@code IAudioClient} on a fresh endpoint is the only way
+     * back.  Without this the loop simply went on waiting on an event that will
+     * never be signalled again: the capture fell silent, and everything above it
+     * went on believing it was measuring.
+     *
+     * <p>It is an unambiguous loss, which is what makes it safe to report.  A
+     * stop WE asked for never lands here: {@link #stopRecording()} clears
+     * {@code recording} before it touches the device, and this is only reachable
+     * from inside the {@code while (recording.get())} loop.
+     *
+     * <p>The HRESULT is carried into the message rather than assumed, so a driver
+     * that answers a removal with something other than the documented code names
+     * itself in the log instead of hiding behind our guess.
+     */
+    private void reportDeviceInvalidated(String call, int hr) {
+        recording.set(false);        // the consume thread drains what is queued and exits
+        String code = "0x" + Integer.toHexString(hr);
+        log.error("WASAPI capture device invalidated at {} (hr={}) - the device was unplugged "
+                + "or reconfigured; this capture is over", call, code);
+        endCapture(CaptureEndReason.DEVICE_LOST,
+                "WASAPI capture device invalidated (" + call + " -> " + code + ")");
     }
 
     /** Consume-thread loop: drains {@link #queue}, runs the listener
@@ -435,8 +484,9 @@ public class WasapiRecorder extends AbstractPcmCapture {
             }
             byte[] buffer = queue.aquire();
             if (buffer == null) {
-                // Ring empty — park briefly instead of busy-spinning; the
+                // Ring empty - park briefly instead of busy-spinning; the
                 // packet period is ms-scale, 500 µs is plenty of resolution.
+                if (deliveryStalled()) return;
                 LockSupport.parkNanos(500_000L);
                 continue;
             }
@@ -462,7 +512,7 @@ public class WasapiRecorder extends AbstractPcmCapture {
         if (t != null && t.isAlive()) {
             try { t.join(3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
             if (t.isAlive()) {
-                log.error("WASAPI capture thread still alive — leaking COM objects instead of releasing under it.");
+                log.error("WASAPI capture thread still alive - leaking COM objects instead of releasing under it.");
                 return;
             }
         }

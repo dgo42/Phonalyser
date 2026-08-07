@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -40,7 +40,7 @@ import lombok.extern.log4j.Log4j2;
  * those classes need.
  *
  * <p>WASAPI is a pure COM API and there's no auto-generated binding
- * here — every interface method is invoked through its vtable slot via
+ * here - every interface method is invoked through its vtable slot via
  * {@link #callHR(Pointer, int, Object...)}. The vtable indices in
  * {@code Vt*} match the order of methods in the public Windows SDK
  * headers ({@code mmdeviceapi.h}, {@code audioclient.h}).
@@ -177,7 +177,7 @@ public class WasapiNative {
      *
      * <p>If the thread is already in a different apartment (typically
      * SWT's STA), {@code CoInitializeEx} returns
-     * {@code RPC_E_CHANGED_MODE} — we treat that as "already
+     * {@code RPC_E_CHANGED_MODE} - we treat that as "already
      * initialised, just go" because COM marshalling will handle the
      * cross-apartment calls for us.
      */
@@ -252,7 +252,7 @@ public class WasapiNative {
     public static byte[] guid(String s) {
         UUID u = UUID.fromString(s.replace("{", "").replace("}", ""));
         // COM on-wire layout: Data1/2/3 little-endian, Data4 (the low 8 bytes)
-        // raw big-endian — exactly the split the UUID class already exposes as
+        // raw big-endian - exactly the split the UUID class already exposes as
         // most/least-significant bits.
         return ByteBuffer.allocate(16)
                 .order(ByteOrder.LITTLE_ENDIAN)

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -36,9 +36,9 @@ import lombok.extern.log4j.Log4j2;
 /**
  * Shared base for the PortAudio callback-mode playback backends
  * ({@link WdmksGenerator} on Windows WDM-KS, {@link CoreAudioGenerator} on
- * macOS).  Both host APIs drive an identical render path — PortAudio invokes
+ * macOS).  Both host APIs drive an identical render path - PortAudio invokes
  * {@link #paCallback} on its realtime audio thread, which pulls samples from
- * the active {@link SignalGenerator} straight into the output pointer — so the
+ * the active {@link SignalGenerator} straight into the output pointer - so the
  * entire body lives here; subclasses differ only by the device index/name they
  * pass up and a backend label used in log messages.
  */
@@ -98,11 +98,11 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
             } catch (Throwable th) {
                 // A throw here would otherwise be swallowed by JNA (stderr +
                 // return 0), muting output while the stream still reports
-                // active — the "generator looks on but nothing comes out"
+                // active - the "generator looks on but nothing comes out"
                 // wedge.  Log the cause once, emit silence, keep the stream
                 // alive so the supervisor can stop it cleanly.
                 if (callbackFaultLogged.compareAndSet(false, true)) {
-                    log.error("{} generator callback failed — muting output: {}", backendLabel, th.toString(), th);
+                    log.error("{} generator callback failed - muting output: {}", backendLabel, th.toString(), th);
                 }
                 Arrays.fill(scratch, 0, bytes, (byte) 0);
             }
@@ -151,12 +151,18 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
                 "Pa_IsFormatSupported(output " + sampleRate + " Hz / " + bitDepth + " bit)");
 
         PointerByReference handle = new PointerByReference();
+        // Counted BEFORE the open, so a device-list refresh can never call
+        // Pa_Terminate while this open is in flight - see PortAudio#streamOpening.
+        PortAudio.streamOpening();
         int rc = lib.Pa_OpenStream(handle,
                 null, out,
                 sampleRate,
                 PortAudio.paFramesPerBufferUnspecified,
                 PortAudio.paClipOff,
                 paCallback, null);
+        if (rc != PortAudio.paNoError) {
+            PortAudio.streamClosed();
+        }
         PortAudio.check(rc, "Pa_OpenStream(output)");
         stream = handle.getValue();
 
@@ -176,19 +182,40 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
 
         PortAudio.check(PortAudio.lib().Pa_StartStream(stream), "Pa_StartStream(output)");
         log.info("{} playback started.", backendLabel);
+        boolean deviceVanished = false;
         try {
-            long nextUnderrunLog = System.nanoTime() + 1_000_000_000L;
+            long nextUnderrunLog   = System.nanoTime() + 1_000_000_000L;
+            long nextPresenceCheck = nextUnderrunLog;
             while (PortAudio.lib().Pa_IsStreamActive(stream) == 1) {
                 Thread.sleep(50);
                 nextUnderrunLog = maybeLogPaOutputGaps(nextUnderrunLog);
+                long now = System.nanoTime();
+                if (now >= nextPresenceCheck) {
+                    nextPresenceCheck = now + 1_000_000_000L;
+                    if (!deviceStillPresent()) {
+                        deviceVanished = true;
+                        break;
+                    }
+                }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        try { PortAudio.lib().Pa_StopStream(stream); } catch (Throwable t) {
-            log.warn("Pa_StopStream: {}", t.getMessage());
-        }
+        // The loop ends when the stream goes inactive, which happens for two
+        // quite different reasons: the callback returned paComplete because it
+        // had produced every frame asked for (ours), or the device ended it
+        // (not ours).  The frame count is what tells them apart - except for a
+        // device that left the machine under a stream the host API keeps
+        // nominally active, whose callback goes on counting frames into the
+        // void; that case is the presence check's own verdict.
+        IllegalStateException endedByItself = deviceVanished
+                ? streamEnded("the device left the machine")
+                : (framesProduced.get() < totalFrames)
+                ? streamEnded("after " + framesProduced.get() + " of " + totalFrames + " frames")
+                : null;
+        haltStream();
         currentGenerator = null;
+        if (endedByItself != null) throw endedByItself;
         log.info("{} playback finished.", backendLabel);
     }
 
@@ -199,36 +226,115 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
         currentStopFlag  = stopFlag;
         framesProduced.set(0);
 
-        // JIT warmup — see CsjsoundGenerator#warmupJit for the rationale.
+        // JIT warmup - see CsjsoundGenerator#warmupJit for the rationale.
         // We can't influence PortAudio's callback thread directly, but
         // running fillBuffer here on the GUI thread forces C2 to compile
         // it before PA's audio thread first calls it.  Same compiled
         // method body is then used by the callback.
-        warmupJit(generator);
-        // Warmup consumed nextSample() calls that advance sweep playback
-        // state; reset so the real stream sees the sweep from sample 0
-        // (otherwise a freq-response measurement captures a mid-sweep
-        // recording while the deconv reference starts at zero).
-        generator.resetSweepPosition();
+        if (generator.needsJitWarmup()) {
+            warmupJit(generator);
+            // Warmup consumed nextSample() calls that advance sweep playback
+            // state; reset so the real stream sees the sweep from sample 0
+            // (otherwise a freq-response measurement captures a mid-sweep
+            // recording while the deconv reference starts at zero).
+            generator.resetSweepPosition();
+        }
 
         PortAudio.check(PortAudio.lib().Pa_StartStream(stream), "Pa_StartStream(output)");
         log.info("{} playback started (continuous, callback mode).", backendLabel);
         readyLatch.countDown();
 
+        boolean deviceVanished = false;
         try {
-            long nextUnderrunLog = System.nanoTime() + 1_000_000_000L;
+            long nextUnderrunLog   = System.nanoTime() + 1_000_000_000L;
+            long nextPresenceCheck = nextUnderrunLog;
             while (!stopFlag.get() && PortAudio.lib().Pa_IsStreamActive(stream) == 1) {
                 Thread.sleep(50);
                 nextUnderrunLog = maybeLogPaOutputGaps(nextUnderrunLog);
+                long now = System.nanoTime();
+                if (now >= nextPresenceCheck) {
+                    nextPresenceCheck = now + 1_000_000_000L;
+                    if (!deviceStillPresent()) {
+                        deviceVanished = true;
+                        break;
+                    }
+                }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        // This loop condition already asked the one question that matters and
+        // then threw the answer away: it exits BOTH when the operator stopped
+        // the tone and when the stream ended by itself, and returned normally
+        // either way - so a device pulled mid-tone left the caller believing it
+        // was still playing.  A continuous lane has no frame budget to run out
+        // of (totalFrames == 0), so the stop flag is the only reason of OURS -
+        // and a device that left the machine under a nominally active stream is
+        // the presence check's own verdict.
+        IllegalStateException endedByItself = deviceVanished
+                ? streamEnded("the device left the machine")
+                : !stopFlag.get()
+                ? streamEnded("the tone was still running")
+                : null;
+        haltStream();
+        currentGenerator = null;
+        if (endedByItself != null) throw endedByItself;
+        log.info("{} playback stopped.", backendLabel);
+    }
+
+    /**
+     * Whether this stream's DEVICE is still on the machine - asked once a
+     * second while playback waits, because a host API may leave the stream
+     * nominally ACTIVE after the device is pulled (macOS does, aggregate
+     * devices included), and the wait loops above would then run for ever on
+     * a tone nobody hears.  The base cannot answer it - PortAudio's device
+     * snapshot never changes - so the default is {@code true} and a backend
+     * with a live device source overrides.
+     */
+    protected boolean deviceStillPresent() {
+        return true;
+    }
+
+    /** The open {@code PaStream*}, for a subclass whose host API needs its own
+     *  teardown discipline - null outside open/close. */
+    protected final Pointer stream() {
+        return stream;
+    }
+
+    /**
+     * Halts the stream at teardown.  The default is {@code Pa_StopStream},
+     * which drains what was already written.  A host API whose stop can BLOCK
+     * for ever - CoreAudio waits on a stop semaphore a vanished device never
+     * signals, hanging the play thread so the close is abandoned and the open
+     * stream vetoes every device-list rebuild until the process dies -
+     * overrides with its own discipline.
+     */
+    protected void haltStream() {
         try { PortAudio.lib().Pa_StopStream(stream); } catch (Throwable t) {
             log.warn("Pa_StopStream: {}", t.getMessage());
         }
-        currentGenerator = null;
-        log.info("{} playback stopped.", backendLabel);
+    }
+
+    /**
+     * The stream ended and it was not us - the device was unplugged, or the host
+     * API aborted it.  The loss travels UP as the returned exception, thrown out
+     * of {@code play()} on the play thread after the stream teardown - the
+     * caller that started the lane owns the failure.
+     *
+     * <p><b>Wrong only in the safe direction.</b>  Both call sites establish
+     * first that this end was not one of ours: the continuous lane checks its
+     * stop flag (the sole reason its callback ever returns {@code paComplete}),
+     * and the fixed-duration lane checks that fewer frames were produced than
+     * were asked for.  An interrupt is not mistaken for a loss either - it
+     * raises neither condition.  What is NOT promised is the converse: a host
+     * API that leaves the stream nominally active after the device is pulled is
+     * never noticed here, and playback goes on silently as it did before.
+     */
+    private IllegalStateException streamEnded(String detail) {
+        log.error("{} playback stream ended by itself - {}; the device was "
+                + "unplugged or the host API aborted it", backendLabel, detail);
+        return new IllegalStateException(
+                backendLabel + " playback stream ended (" + detail + ")");
     }
 
     /**
@@ -289,6 +395,7 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
     public void close() {
         if (stream != null) {
             Closeables.tryQuietly("Pa_CloseStream", () -> PortAudio.lib().Pa_CloseStream(stream));
+            PortAudio.streamClosed();
             stream = null;
         }
     }
