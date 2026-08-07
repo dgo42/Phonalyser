@@ -1,7 +1,7 @@
 /*
- * Phonalyser web — service-worker registration + "new version available" prompt.
+ * Phonalyser web - service-worker registration + "new version available" prompt.
  * Registers sw.js, polls for updates, and shows a reload banner when a newer
- * deploy is detected (sw.js VERSION bump → new worker waiting). Accepting the
+ * deploy is detected (sw.js VERSION bump -> new worker waiting). Accepting the
  * banner skips waiting and reloads into the fresh cache.
  * GNU AGPL v3 or later.
  */
@@ -29,17 +29,17 @@ function banner(onReload) {
 }
 
 // Reload ONLY when the user deliberately accepts the update banner. The old code
-// reloaded on ANY controllerchange — which ALSO fires on the first-load
+// reloaded on ANY controllerchange - which ALSO fires on the first-load
 // clients.claim() (an unwanted auto-reload) and, critically, could fire WHILE
 // capture/generation is running: a mid-audio location.reload() tears the whole
 // audio graph (worklets, workers, two AudioContexts) down abruptly and can crash
 // the renderer. This flag scopes the reload to an intentional update only.
 let updating = false;
 
-// Dev / debugging: do NOT install the service worker — it would serve a CACHED bundle
+// Dev / debugging: do NOT install the service worker - it would serve a CACHED bundle
 // so freshly-built source never runs and breakpoints miss. Skip it on localhost, OR on
 // ANY host (e.g. an SSL dev box like `albus2`) when the dev flag is set. The flag is
-// sticky so it survives reloads — set it once in the console:
+// sticky so it survives reloads - set it once in the console:
 //     localStorage.setItem('pf-no-sw', '1')   // then Unregister the SW + reload, once
 // and clear it with  localStorage.removeItem('pf-no-sw')  for production behaviour.
 // When skipping, unregister any worker left over and purge its caches so the next
@@ -66,6 +66,6 @@ if ('serviceWorker' in navigator && NO_SW) {
     } catch (e) { console.warn('SW registration failed', e); }
   });
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (updating) location.reload();   // intentional update only — never the first-load claim
+    if (updating) location.reload();   // intentional update only - never the first-load claim
   });
 }

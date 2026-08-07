@@ -1,10 +1,10 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Faithful port of org.edgo.audio.measure.sound.qa40x.LibUsbQa40xTransport —
+// Faithful port of org.edgo.audio.measure.sound.qa40x.LibUsbQa40xTransport -
 // the same Qa40xTransport seam, with WebUSB (navigator.usb) where the desktop
 // has libusb/JNA.
 //
@@ -19,10 +19,10 @@
 // REGISTERS go through transferOut/transferIn on endpoint 1 (doc §4): a write is
 // the 5-byte big-endian frame; a read writes 0x80|reg then decodes the 4-byte
 // big-endian reply. The frame codec is the canonical, unit-tested Qa40xProtocol
-// — this module only moves the bytes it produces. WebUSB has NO per-transfer
+// - this module only moves the bytes it produces. WebUSB has NO per-transfer
 // timeout, so Java's REG_TIMEOUT_MS (1000 ms) is imposed here in JS: every
 // register transfer races a deadline AND an abort hook, so a device that never
-// answers rejects — naming the register — instead of parking the engine forever,
+// answers rejects - naming the register - instead of parking the engine forever,
 // and cancelAll() / close() trip the same hook so a stop is never blocked by a
 // register transfer in flight.
 //
@@ -40,23 +40,23 @@
 // STOP DISCIPLINE (doc §3/§7). WebUSB has neither a per-transfer cancel nor a
 // per-transfer timeout: once the device stops sending, an outstanding transferIn
 // NEVER settles. releaseInterface() is the only thing that aborts pending
-// transfers, so it is what implements cancelAll() — followed by claimInterface()
+// transfers, so it is what implements cancelAll() - followed by claimInterface()
 // so the engine's subsequent reg 8 = RUN_STOP write still has a claimed
 // interface. Queued promises get a .catch() attached BEFORE the release, or
 // their rejections surface as unhandled. Neither cancelAll() nor close() ever
-// resets or clear-halts a pipe — that hangs the next session's first read.
+// resets or clear-halts a pipe - that hangs the next session's first read.
 //
 // A teardown is TOTAL and idempotent: releaseInterface() can itself reject (the
 // device was unplugged, another context grabbed the interface), and that must
 // never leave the transport dead. Swallow the queued rejections, trip the
-// register aborts, release inside try/catch — then ALWAYS reset the transfer
+// register aborts, release inside try/catch - then ALWAYS reset the transfer
 // bookkeeping in a finally, whatever the device did, so the next session starts
 // from a consistent state instead of a queue whose head can never settle.
 
 import { Qa40xTransport } from './qa40x-transport.js';
 import { REGISTER_REPLY_BYTES, decodeReply, readRequestFrame, writeFrame } from './qa40x-protocol.js';
 
-/** Interface index — the only interface used on QA402/QA403 (doc §3). */
+/** Interface index - the only interface used on QA402/QA403 (doc §3). */
 export const INTERFACE_0 = 0;
 
 /** Register endpoint: Java's EP 0x01 OUT / 0x81 IN, one WebUSB endpoint number. */
@@ -65,7 +65,7 @@ export const REG_ENDPOINT = 1;
 export const AUDIO_ENDPOINT = 2;
 
 /**
- * Register-transfer deadline in ms — Java's LibUsbQa40xTransport.REG_TIMEOUT_MS,
+ * Register-transfer deadline in ms - Java's LibUsbQa40xTransport.REG_TIMEOUT_MS,
  * the timeout every PyQa40x bulk call uses (doc §4/§5). libusb enforces it for
  * the desktop; WebUSB has no per-transfer timeout at all, so the same 1000 ms is
  * enforced here instead. Audio transfers keep Java's `timeout = 0` (streaming:
@@ -73,7 +73,7 @@ export const AUDIO_ENDPOINT = 2;
  */
 export const REG_TIMEOUT_MS = 1000;
 
-/** WebUSB transfer result status meaning "no error" — 'stall' / 'babble' are the failures. */
+/** WebUSB transfer result status meaning "no error" - 'stall' / 'babble' are the failures. */
 const STATUS_OK = 'ok';
 
 /** Renders a rejected transfer for TransferListener#transferFailed, mirroring LibUsb.transferStatusName. */
@@ -101,7 +101,7 @@ export class WebUsbQa40xTransport extends Qa40xTransport {
   #readPumping = false;
   /** True while the playback pump is draining #writeQueue. */
   #writePumping = false;
-  /** Reject hooks of the register transfers in flight — tripped by the deadline, cancelAll() and close(). */
+  /** Reject hooks of the register transfers in flight - tripped by the deadline, cancelAll() and close(). */
   #registerAborts = new Set();
 
   /**
@@ -120,7 +120,7 @@ export class WebUsbQa40xTransport extends Qa40xTransport {
   // --- registers -----------------------------------------------------------
 
   /**
-   * Writes `value` to register `reg` — the 5-byte big-endian frame on endpoint 1.
+   * Writes `value` to register `reg` - the 5-byte big-endian frame on endpoint 1.
    * @param {number} reg
    * @param {number} value
    * @returns {Promise<void>}
@@ -161,7 +161,7 @@ export class WebUsbQa40xTransport extends Qa40xTransport {
    * Bounds ONE register transfer, which is what libusb's REG_TIMEOUT_MS does for
    * the desktop and WebUSB does for nobody: the transfer races a REG_TIMEOUT_MS
    * deadline and an abort hook that cancelAll() / close() trip, so an unanswered
-   * register call rejects — naming the register through `op` — instead of parking
+   * register call rejects - naming the register through `op` - instead of parking
    * the engine's serialized register chain forever. WebUSB cannot cancel the
    * underlying transfer, so the loser of the race is simply abandoned; the race
    * has already attached handlers to it, so a late settlement is swallowed rather
@@ -184,7 +184,7 @@ export class WebUsbQa40xTransport extends Qa40xTransport {
   }
 
   /**
-   * Rejects every register transfer in flight so a stop is never blocked by one —
+   * Rejects every register transfer in flight so a stop is never blocked by one -
    * the WebUSB stand-in for libusb aborting a synchronous bulk transfer when the
    * handle goes away.
    */
@@ -215,7 +215,7 @@ export class WebUsbQa40xTransport extends Qa40xTransport {
   /**
    * Submits an async capture transfer filling up to `buffer.length` bytes from
    * endpoint 2. The received bytes are copied into `buffer`, which is handed to
-   * readCompleted — mirroring Java's copy out of the native transfer buffer.
+   * readCompleted - mirroring Java's copy out of the native transfer buffer.
    * @param {Uint8Array} buffer
    * @returns {void}
    */
@@ -314,8 +314,8 @@ export class WebUsbQa40xTransport extends Qa40xTransport {
 
   /**
    * The last step of every teardown: drops the in-flight bookkeeping and lets a
-   * pump start again. Without it a releaseInterface() that REJECTED — which
-   * aborts nothing — leaves a queue whose head can never settle and a pump flag
+   * pump start again. Without it a releaseInterface() that REJECTED - which
+   * aborts nothing - leaves a queue whose head can never settle and a pump flag
    * stuck true, i.e. a transport that can never be restarted.
    *
    * The queue arrays are REPLACED rather than truncated: a pump still awaiting a
@@ -350,7 +350,7 @@ export class WebUsbQa40xTransport extends Qa40xTransport {
   }
 
   /**
-   * Consumes one direction's queue in SUBMISSION order — shift the head, await
+   * Consumes one direction's queue in SUBMISSION order - shift the head, await
    * it, dispatch, repeat. A callback that re-submits pushes onto the same queue
    * and is picked up by this very loop, so the pump keeps running as long as the
    * engine keeps the pipe armed. The queue-empty test and the flag clear happen
@@ -388,7 +388,7 @@ export class WebUsbQa40xTransport extends Qa40xTransport {
     try {
       if (read) {
         // Copy out of the transfer's own buffer into the caller's, exactly as
-        // Java copies out of the native Memory — and unconditionally, before the
+        // Java copies out of the native Memory - and unconditionally, before the
         // listener check, so a transfer completed with no listener installed
         // still leaves the caller's buffer consistent.
         const view = result ? result.data : null;

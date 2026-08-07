@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -8,7 +8,7 @@
 //
 // Per-FilterType snapshot of every Frequency-Response filter parameter scalar
 // plus the by-order/by-spec mode flag. Preferences keeps one per filter type in
-// freqRespFilterParamsByType — the single source of truth for the filter scalars.
+// freqRespFilterParamsByType - the single source of truth for the filter scalars.
 // fromType() gives pinned per-type defaults whose passband/stopband edges satisfy
 // each type's edge-ordering semantics (LP stop>pass, HP stop<pass, BP SB>PB,
 // NOTCH PB>SB), pinned at a 4:1 prototype stop ratio, so a fresh type always draws.

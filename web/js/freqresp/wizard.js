@@ -1,15 +1,15 @@
 /*
- * Phonalyser web — the Frequency-Response calibration wizard (3-page guided flow:
- * loopback DAC→ADC · device-under-test · save + apply).
+ * Phonalyser web - the Frequency-Response calibration wizard (3-page guided flow:
+ * loopback DAC->ADC · device-under-test · save + apply).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  *
  * Faithful port of org.edgo.audio.measure.gui.freqresp.FreqRespWizardDialog. A modal
- * walks the user through measuring the DAC→ADC loopback transfer (page 1 → store.setDirect
+ * walks the user through measuring the DAC->ADC loopback transfer (page 1 -> store.setDirect
  * so it divides out at display), then the device under test (page 2, sweep with the page-1
- * loopback divided out), finally saving the result as a .frc (page 3 Save → divide the DUT
- * by the direct loopback → saveFrc → notify) and applying it as the active calibration
- * (page 3 Apply → loadFrc → store.setCurrent → set the primary-calibration-path +
+ * loopback divided out), finally saving the result as a .frc (page 3 Save -> divide the DUT
+ * by the direct loopback -> saveFrc -> notify) and applying it as the active calibration
+ * (page 3 Apply -> loadFrc -> store.setCurrent -> set the primary-calibration-path +
  * apply-calibration prefs). Cancel discards every measurement taken inside the wizard and
  * restores the correction store to the snapshot captured at open().
  *
@@ -81,8 +81,8 @@ export class FreqRespWizard {
     $('#frWizNext').on('click', () => { if (this.currentPageIndex < 2) this.showPage(this.currentPageIndex + 1); });
     $('#frWizCancel').on('click', async () => { if (await this.handleCancel()) this.close(); });
     // Closing via the ✕ / backdrop / Esc routes through the SAME guarded handleCancel as the
-    // Cancel button (Java SWT.Close → e.doit = handleCancel()): when there is unsaved data we
-    // veto the default hide, await the confirm, and only restore+close on Yes — on No the modal
+    // Cancel button (Java SWT.Close -> e.doit = handleCancel()): when there is unsaved data we
+    // veto the default hide, await the confirm, and only restore+close on Yes - on No the modal
     // stays open (re-shown, since Bootstrap had already begun hiding it).
     el.addEventListener('hide.bs.modal', (e) => {
       if (this._closing) return;       // an internal close() already restored / committed
@@ -118,13 +118,13 @@ export class FreqRespWizard {
   async runMeasurement(directLeg) {
     if (this.host.running) return;
     // No engine-running precondition: captureAndDeconvolve owns the full measurement
-    // lifecycle (publish STARTED → wait idle → own playback + capture), so the wizard
+    // lifecycle (publish STARTED -> wait idle -> own playback + capture), so the wizard
     // sweep works from ANY prior state, exactly like the Play button.
     const $ = this.$;
     $('#frWizPlay1, #frWizPlay2, #frWizBack, #frWizNext').prop('disabled', true);
     // Hide the wizard while the busy meter modal is up (one modal at a time).
     if (this.modal) this.modal.hide();
-    this._closing = true;   // suppress the hide→restore path: this is an internal hide
+    this._closing = true;   // suppress the hide->restore path: this is an internal hide
     try {
       // Page 2 divides out the page-1 loopback (applyDirect); page 1 captures it raw.
       const r = await this.host.captureAndDeconvolve(!directLeg);
@@ -146,10 +146,13 @@ export class FreqRespWizard {
       return;
     }
     if (r == null) { this.refreshNavEnable(); return; }
+    // BOTH legs warn (Java wizard): a clipped loopback poisons page 2's division just as surely
+    // as a clipped DUT poisons its own curve, and neither shows in the smooth deconvolved trace.
+    this.host.warnIfClipped(r);
     this.unsavedDirty = true;
     if (directLeg) {
       this.directResult = r;
-      // Only the direct (transient) slot — the view applies it alongside the entries list so
+      // Only the direct (transient) slot - the view applies it alongside the entries list so
       // page 2 gets the page-1 loopback subtracted without polluting the calibration tab.
       this.store.setDirect(this.stereoCalFromResult(r));
       this.view.setLeftResult(r.left);
@@ -200,7 +203,10 @@ export class FreqRespWizard {
       this.savedCalText = text;   // keep the text so Apply can reload without re-reading the file
       this.unsavedDirty = false;
       this.$('#frWizApply').prop('disabled', false);
-      this.host.status('saved ' + res.name);
+      // Apply still works either way - it reloads from savedCalText, not from disk - but
+      // the download path cannot claim the file was written (io/file-picker.js).
+      this.host.status(res.viaDownload
+        ? t('web.save.handedToDownload', res.name) : 'saved ' + res.name);
     } catch (e) { this.host.status(t('freqResp.error.measurement.save', e.message)); }
   }
 
@@ -221,7 +227,7 @@ export class FreqRespWizard {
 
   /** Cancel guard (Java boolean handleCancel): confirms when there's unsaved data, restores
    *  the pre-wizard snapshot, and returns whether the wizard is allowed to close. After Apply
-   *  the calibration is committed (appliedSuccessfully) → skip the prompt and the restore.
+   *  the calibration is committed (appliedSuccessfully) -> skip the prompt and the restore.
    *  Returns false (veto) when the user answers No; the caller keeps the modal open. */
   async handleCancel() {
     if (this.appliedSuccessfully) return true;

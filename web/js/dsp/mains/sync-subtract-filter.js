@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -9,7 +9,7 @@
 // Mains-hum rejection by synchronous subtraction: it learns the recurring hum
 // waveform over one mains period and subtracts it. One mains period contains
 // EVERY harmonic at once, so a single period-locked template removes 50/60 Hz
-// and all its harmonics together — unlike a comb, it carves no per-harmonic
+// and all its harmonics together - unlike a comb, it carves no per-harmonic
 // notch and gouges no spectrum. Any component that is NOT periodic at the
 // mains period (the test tone, broadband noise) does not accumulate in the
 // template and passes through untouched.
@@ -18,7 +18,7 @@
 // mains period. Each input sample is mapped to its mains phase (a continuous
 // accumulator advancing by f₀/fs per sample), the interpolated template value
 // is subtracted, and the template is nudged toward the input by a small LMS
-// step MU whose fixed point is the mean of the input at that phase — i.e. the
+// step MU whose fixed point is the mean of the input at that phase - i.e. the
 // periodic hum. Successive process calls advance the window-start phase by
 // the absStart delta so the template stays aligned across non-contiguous
 // snapshots (scope) and overlapping windows (FFT) alike.
@@ -29,7 +29,7 @@ import { MainsFrequencyTracker } from './frequency-tracker.js';
 // of 512·f₀ (≈ 25.6 kHz at 50 Hz), so any residual image of an in-band test
 // tone lands ABOVE the audio band rather than inside it.
 const TEMPLATE_BINS = 512;
-// LMS step for the template update — deliberately small so the (non-periodic)
+// LMS step for the template update - deliberately small so the (non-periodic)
 // test tone is AVERAGED OUT of the template instead of leaking into it. Mains
 // is rock-stable, so slow convergence (~5 s) is fine.
 const MU = 0.001;
@@ -77,7 +77,7 @@ export class MainsSyncSubtractFilter {
   /**
    * Filters data in place over len samples, removing the whole periodic
    * component (hum + any periodic DC). No-op until tuned. absStart is the
-   * absolute index of data[0] in the continuous capture stream — the mains
+   * absolute index of data[0] in the continuous capture stream - the mains
    * phase advances by the DELTA from the previous call's absStart.
    * @param {Float32Array|Float64Array} data
    * @param {number} len
@@ -112,7 +112,7 @@ export class MainsSyncSubtractFilter {
     this._mainsHz = NaN;
   }
 
-  /** Shared filter core (Java filter/filterD collapse to one — typed-array
+  /** Shared filter core (Java filter/filterD collapse to one - typed-array
    *  stores round to the element type automatically). */
   _filter(data, len, absStart, preserveDc) {
     if (!this.isTuned()) return;
@@ -138,7 +138,7 @@ export class MainsSyncSubtractFilter {
     let p = this._phase;
     for (let i = 0; i < len; i++) {
       const fb = p * M;
-      let b0 = Math.trunc(fb);                            // p ∈ [0,1) ⇒ fb ∈ [0,M)
+      let b0 = Math.trunc(fb);                            // p ∈ [0,1) => fb ∈ [0,M)
       if (b0 >= M) b0 = M - 1;
       const b1 = (b0 + 1) % M;
       const w = fb - b0;

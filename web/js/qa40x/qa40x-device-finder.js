@@ -1,43 +1,43 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Faithful port of org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder — it
+// Faithful port of org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder - it
 // enumerates attached QA402/QA403 analyzers and opens exactly one, exclusively.
 //
 // The Java CONTRACT is kept whole: the model/product-ID map (doc §2), the
 // model + identity record, a list() that degrades to [] instead of throwing when
 // USB is unavailable, the single-device rule as its own testable requireSingle(),
 // and an open() that hands a claimed device to the transport. What is REPLACED is
-// only the mechanics — this is the one class where WebUSB genuinely differs from
+// only the mechanics - this is the one class where WebUSB genuinely differs from
 // libusb:
 //
-//   • libusb_get_device_list → navigator.usb.getDevices(), which lists only the
+//   - libusb_get_device_list -> navigator.usb.getDevices(), which lists only the
 //     devices the ORIGIN HAS ALREADY BEEN GRANTED. A QA40x that is plugged in but
 //     never picked is invisible to it, so first contact needs the browser's own
-//     chooser, navigator.usb.requestDevice() — and that requires a USER GESTURE.
+//     chooser, navigator.usb.requestDevice() - and that requires a USER GESTURE.
 //     It therefore lives in scan() ALONE (the Preferences ▸ Scan click), never in
 //     open(): open() runs lazily from the audio path, where there is no user
 //     activation and a chooser would both throw and be user-hostile.
 //     scan() is thus an ADDITION with no Java counterpart, not a ported method:
 //     libusb hands the desktop every attached analyzer with no grant step at all,
-//     so there is nothing there to mirror. Web-only, and load-bearing — without
+//     so there is nothing there to mirror. Web-only, and load-bearing - without
 //     it a fresh browser profile can never see the device it is plugged into.
-//   • libusb_reset_device + get/set_configuration + claim_interface(0) →
+//   - libusb_reset_device + get/set_configuration + claim_interface(0) ->
 //     device.open(), selectConfiguration(1), claimInterface(0). WebUSB has NO
 //     reset_device at all, so the Java's 3-attempt / 250 ms retry loop has no
 //     counterpart and is DROPPED: it exists solely to escape the macOS
 //     re-enumeration race that the reset itself provokes, and with no reset there
 //     is no race to escape.
-//   • libusb bus/address → the serial number. WebUSB deliberately exposes neither
+//   - libusb bus/address -> the serial number. WebUSB deliberately exposes neither
 //     bus nor address (they fingerprint the host), and the serial is the closest
 //     stable per-unit identity it will give.
 //
 // The WebUSB entry point arrives through the constructor rather than being read
 // off `navigator` inside (Java reaches LibUsb.lib() directly), so the device
-// manager injects it and a unit test injects a double — or null, which is exactly
+// manager injects it and a unit test injects a double - or null, which is exactly
 // how a browser without WebUSB presents itself.
 
 import { debug } from '../util/debug.js';
@@ -50,7 +50,7 @@ export const QA_VID = 0x16C0;
 const ACTIVE_CONFIGURATION = 1;
 
 /**
- * The QA40x models — carried by their enum NAME, the same representation
+ * The QA40x models - carried by their enum NAME, the same representation
  * qa40x-protocol.js takes (sampleRatesHz), so a model resolved here feeds the
  * protocol's per-model gates unchanged.
  */
@@ -60,7 +60,7 @@ export const Qa40xModel = Object.freeze({
 });
 
 /**
- * USB product ID per model (doc §2) — Java's private Qa40xModel.productId field.
+ * USB product ID per model (doc §2) - Java's private Qa40xModel.productId field.
  * The QA401's 0x4E27 is absent because that model is deliberately out of scope.
  */
 const PRODUCT_ID = Object.freeze({
@@ -68,7 +68,7 @@ const PRODUCT_ID = Object.freeze({
   [Qa40xModel.QA403]: 0x4E39,
 });
 
-/** requestDevice() chooser filters — one VID/PID pair per supported model. */
+/** requestDevice() chooser filters - one VID/PID pair per supported model. */
 const USB_FILTERS = Object.freeze(Object.values(PRODUCT_ID)
     .map((productId) => Object.freeze({ vendorId: QA_VID, productId })));
 
@@ -76,7 +76,7 @@ const USB_FILTERS = Object.freeze(Object.values(PRODUCT_ID)
 const UNKNOWN_SERIAL = '(no serial)';
 
 /**
- * Resolves the model from a USB product ID — Java's Qa40xModel.fromProductId,
+ * Resolves the model from a USB product ID - Java's Qa40xModel.fromProductId,
  * with null for the empty Optional.
  * @param {number} pid USB product ID
  * @returns {?string} a Qa40xModel name, or null if the PID is not a QA402/QA403
@@ -96,7 +96,7 @@ function platformUsb() {
 }
 
 /**
- * An attached QA40x: its model plus the identity WebUSB will give — the serial
+ * An attached QA40x: its model plus the identity WebUSB will give - the serial
  * number where Java's record carries the USB bus/address (see the module note).
  * Immutable, like the Java record.
  */
@@ -132,7 +132,7 @@ export class Qa40xDeviceFinder {
     this.#usb = usb == null ? null : usb;
   }
 
-  /** @returns {boolean} whether this browser has WebUSB at all — Java's LibUsb.available(). */
+  /** @returns {boolean} whether this browser has WebUSB at all - Java's LibUsb.available(). */
   available() {
     return this.#usb != null;
   }
@@ -156,7 +156,7 @@ export class Qa40xDeviceFinder {
   }
 
   /**
-   * The GRANT step of the Preferences ▸ Scan click — and the ONLY place the
+   * The GRANT step of the Preferences ▸ Scan click - and the ONLY place the
    * browser's device chooser is opened, because requestDevice() requires user
    * activation (see the module note). Prompts only when nothing is granted AND
    * connected: one grant satisfies the single-device rule for good, so a Scan
@@ -164,13 +164,13 @@ export class Qa40xDeviceFinder {
    *
    * CALLED FROM the QA40x branch of audio/devices.js (scanDevicesForBackend's
    * `qa40xGranter`), which the Scan click reaches through
-   * AudioEngine.scanDevices(true) — the ONE path that carries user activation.
+   * AudioEngine.scanDevices(true) - the ONE path that carries user activation.
    * Every other enumeration goes to list() and prompts for nothing. Keep that
    * chain short: activation is a few-second budget, and awaiting a long operation
    * ahead of the chooser (the Web Audio device probe, say) spends it.
    *
    * The devices found are returned for symmetry with list(), but the caller's
-   * reason to be here is the GRANT — after it, plain getDevices() enumeration
+   * reason to be here is the GRANT - after it, plain getDevices() enumeration
    * (Qa40xDeviceManager's) sees the device for good.
    * @returns {Promise<Qa40xDevice[]>} the devices found, empty if the chooser was dismissed
    */
@@ -194,10 +194,10 @@ export class Qa40xDeviceFinder {
   }
 
   /**
-   * Arms a watch for a QA402/QA403 being UNPLUGGED — navigator.usb's 'disconnect'
+   * Arms a watch for a QA402/QA403 being UNPLUGGED - navigator.usb's 'disconnect'
    * event, filtered to this finder's models. The one signal a dead analyzer gives:
    * WebUSB has no per-transfer timeout, so mid-stream removal otherwise just means
-   * transfers stop completing — no error, no event, a measurement app silently
+   * transfers stop completing - no error, no event, a measurement app silently
    * reading nothing. The desktop needs no equivalent: libusb transfers FAIL on
    * removal and the recovery rides the error path.
    *
@@ -221,8 +221,8 @@ export class Qa40xDeviceFinder {
   }
 
   /**
-   * Opens the single granted QA40x exclusively — device.open(),
-   * selectConfiguration(1), claimInterface(0) (doc §7) — and hands it to a
+   * Opens the single granted QA40x exclusively - device.open(),
+   * selectConfiguration(1), claimInterface(0) (doc §7) - and hands it to a
    * transport. Throws when WebUSB is absent, when no device is granted and
    * connected, or when more than one is (the single-device rule). Never prompts:
    * a device the user has not picked yet is not openable from here.
@@ -230,7 +230,7 @@ export class Qa40xDeviceFinder {
    */
   async open() {
     if (!this.available()) {
-      throw new Error('WebUSB (navigator.usb) not available — cannot open a QA40x device');
+      throw new Error('WebUSB (navigator.usb) not available - cannot open a QA40x device');
     }
     const found = await this.#enumerate();
     this.requireSingle(found.length);
@@ -269,14 +269,14 @@ export class Qa40xDeviceFinder {
       throw new Error('No QA402/QA403 found on USB');
     }
     if (count > 1) {
-      throw new Error(`${count} QA40x devices attached — connect exactly one `
+      throw new Error(`${count} QA40x devices attached - connect exactly one `
           + '(the QA40x backend, like ASIO401, drives a single device)');
     }
   }
 
   /**
    * The granted-and-connected QA40x devices, each paired with the live USBDevice
-   * open() needs — the one place enumeration and the VID/PID filter live, shared
+   * open() needs - the one place enumeration and the VID/PID filter live, shared
    * by list() and open() as Java shares withDeviceList().
    * @returns {Promise<{device: USBDevice, info: Qa40xDevice}[]>}
    */
@@ -292,7 +292,7 @@ export class Qa40xDeviceFinder {
   }
 
   /**
-   * Maps a USBDevice to its record, or null when it is not a QA402/QA403 —
+   * Maps a USBDevice to its record, or null when it is not a QA402/QA403 -
    * Java's modelOf() over the device descriptor. getDevices() returns everything
    * this origin was ever granted, so the vendor check is not redundant.
    * @param {USBDevice} device

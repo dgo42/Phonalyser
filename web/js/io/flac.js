@@ -1,10 +1,10 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// FLAC encode/decode via libFLAC (libflacjs, WASM build) — the browser stand-in
+// FLAC encode/decode via libFLAC (libflacjs, WASM build) - the browser stand-in
 // for the desktop FlacWriter (javaFlacEncoder). libFLAC is used for BOTH
 // directions on purpose: decodeAudioData would route through the browser's
 // resampler and hand back float samples at the AudioContext rate, losing the
@@ -16,7 +16,7 @@
 // If the script never loaded (offline / blocked CDN), the helpers reject with a
 // clear message instead of crashing the app.
 
-/** Default FLAC compression level — matches the desktop FlacWriter. */
+/** Default FLAC compression level - matches the desktop FlacWriter. */
 const DEFAULT_COMPRESSION = 5;
 
 /** Scope saves are stereo (StereoPcmIo.CHANNELS). */
@@ -24,13 +24,13 @@ const CHANNELS = 2;
 
 /** Sentinel matching SignalBufferReader.OVERRUN (declared locally so the
  *  streaming save can test reader.read()'s return without importing the reader
- *  module — same convention as io/scope-capture.js). */
+ *  module - same convention as io/scope-capture.js). */
 const OVERRUN = -1;
 
 /** Rejects bit depths the WASM libFLAC reference encoder cannot stream: at
  *  32-bit init_encoder_stream returns INVALID_BITS_PER_SAMPLE (status 5) and the
  *  stream writes NOTHING, yielding a 0-byte file. Fail loudly here instead of
- *  silently emitting an empty .flac — the callers export FLAC at 24-bit.
+ *  silently emitting an empty .flac - the callers export FLAC at 24-bit.
  *  (Java's FlacWriter accepts 16/24/32; the browser codec caps at 24.) */
 function assertEncodableBits(bitsPerSample) {
   if (bitsPerSample !== 16 && bitsPerSample !== 24) {
@@ -115,7 +115,7 @@ function interleaveToInt32(channels, bitsPerSample) {
  */
 function unpackChannel(b, bitsPerSample) {
   const dataBytes = bitsPerSample / 8;
-  // libFLAC pads 24- and 8-bit samples by one byte (3→4, 1→2); 16/32 are exact.
+  // libFLAC pads 24- and 8-bit samples by one byte (3->4, 1->2); 16/32 are exact.
   const stride = (bitsPerSample === 24 || bitsPerSample === 8) ? dataBytes + 1 : dataBytes;
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   const n = Math.floor(b.byteLength / stride);
@@ -169,28 +169,28 @@ export async function encodeFlac(channels, sampleRate, bitsPerSample, compressio
 
 /**
  * Streams up to {@code totalFrames} of LIVE capture from {@code reader}'s
- * contiguous cursor straight to {@code writable} as FLAC, in real time — the
+ * contiguous cursor straight to {@code writable} as FLAC, in real time - the
  * FLAC branch of the scope stream-forward record. Faithful port of the FLAC case
  * of StereoPcmIo.saveStreaming (~line 209) + openSink (~line 71): Java streams
  * FLAC through FlacWriter exactly like WAV/AIFF. It lives here (not in
  * scope-capture's openStreamingSink) because libFLAC owns the container framing:
- * the encoder emits its own byte chunks via the onWrite callback — there is no
+ * the encoder emits its own byte chunks via the onWrite callback - there is no
  * header-placeholder-then-patch scheme like the streaming WAV/AIFF writers, so
  * chunks are simply appended to the writable in order. STREAMINFO's
  * total_samples stays 0 ("unknown"): a stream encoder without a seek callback
  * cannot patch the header, the spec allows it, and decodeFlac stitches frames
  * without it.
  *
- * <p>Loop semantics mirror StereoPcmIo.saveStreaming (~lines 227-244): OVERRUN →
- * re-anchor with seekToLatest; caught up to the live tip → await fresh samples
- * (20 ms); cancel → stop early, the partial file is still finalised (Java's
+ * <p>Loop semantics mirror StereoPcmIo.saveStreaming (~lines 227-244): OVERRUN ->
+ * re-anchor with seekToLatest; caught up to the live tip -> await fresh samples
+ * (20 ms); cancel -> stop early, the partial file is still finalised (Java's
  * try-with-resources close). Returns the number of frames actually written; the
  * caller owns the capture reference (acquire before, release after).
  *
  * @param {import('../audio/signal-buffer-reader.js').SignalBufferReader} reader
  * @param {FileSystemWritableFileStream} writable
  * @param {number} sampleRate
- * @param {number} bitsPerSample  16 / 24 (web codec cap — 32-bit WAV/AIFF only).
+ * @param {number} bitsPerSample  16 / 24 (web codec cap - 32-bit WAV/AIFF only).
  * @param {number} totalFrames
  * @param {() => boolean} isCancelled
  * @param {(written:number) => void} onProgress
@@ -226,11 +226,11 @@ export async function saveStreamingFlac(reader, writable, sampleRate, bitsPerSam
       const want = Math.min(chunkFrames, totalFrames - written);
       const n = reader.read(want, left, right);
       if (n === OVERRUN) {
-        reader.seekToLatest();   // writer stalled a full ring behind — re-anchor
+        reader.seekToLatest();   // writer stalled a full ring behind - re-anchor
         continue;
       }
       if (n <= 0) {
-        await new Promise((r) => setTimeout(r, 20));   // caught up to the tip — await fresh samples
+        await new Promise((r) => setTimeout(r, 20));   // caught up to the tip - await fresh samples
         continue;
       }
       const interleaved = interleaveToInt32(
@@ -245,7 +245,7 @@ export async function saveStreamingFlac(reader, writable, sampleRate, bitsPerSam
   } catch (e) {
     err = e;
   }
-  // Finalise even on cancel / error — flush the encoder's tail frames, then close
+  // Finalise even on cancel / error - flush the encoder's tail frames, then close
   // the file (a loop error wins over a finalisation error, like try-with-resources).
   try {
     Flac.FLAC__stream_encoder_finish(encoder);   // may emit final chunks via onWrite
@@ -271,7 +271,7 @@ export async function saveStreamingFlac(reader, writable, sampleRate, bitsPerSam
 
 /**
  * Decodes a FLAC byte stream to signed integer PCM channels with libFLAC
- * (bit-exact — no resampling).
+ * (bit-exact - no resampling).
  *
  * @param {Uint8Array|ArrayBuffer} bytes  Raw .flac file bytes.
  * @returns {Promise<FlacDecodeResult>}

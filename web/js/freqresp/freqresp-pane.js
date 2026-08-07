@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -7,11 +7,11 @@
 // Frequency-response (Farina) PANE shell (Java gui/freqresp/FreqRespPane): the layout + play
 // orchestration + the header L/R / phase / auto / maximize toggles + the RANGE_CHANGED repaint.
 // The heavy lifting lives in its collaborators, mirroring the Java christmas-tree split:
-//   - FreqRespController — sweep-timing rules + the measurement lifecycle (runSweep /
+//   - FreqRespController - sweep-timing rules + the measurement lifecycle (runSweep /
 //     captureAndDeconvolve + the busy live-meter), publishes FREQRESP_MEASUREMENT_* ;
-//   - FreqRespTabControl — the settings strip (dropdowns, RIAA, presets, save/load, calibration);
-//   - FreqRespView       — the interactive canvas (axes, zoom/pan, render-time .frc de-embed);
-//   - FreqRespWizard     — the 3-page guided calibration flow (reuses the sweep runner + confirm).
+//   - FreqRespTabControl - the settings strip (dropdowns, RIAA, presets, save/load, calibration);
+//   - FreqRespView       - the interactive canvas (axes, zoom/pan, render-time .frc de-embed);
+//   - FreqRespWizard     - the 3-page guided calibration flow (reuses the sweep runner + confirm).
 // All DSP comes from the ported web/js/freqresp/* modules; this is wiring.
 
 import { FreqRespController } from './freqresp-controller.js';
@@ -26,7 +26,8 @@ export class FreqRespPane {
   /**
    * @param {import('../audio/backend.js').AudioEngine} engine the live engine
    * @param {object} prefs Preferences.instance()
-   * @param {{saveFile:Function, openFile:Function, bytesToText:Function}} io file-picker glue
+   * @param {{saveFile:Function, openFile:Function, bytesToText:Function, showAlert:Function}} io
+   *        file-picker glue + the shell's one alert surface (the clipping warning)
    */
   constructor(engine, prefs, io) {
     this.engine = engine;
@@ -38,7 +39,7 @@ export class FreqRespPane {
 
     // Loaded-correction store (Java CorrectionStore): the .frc entries + wizard `direct`
     // buffer the view divides out at render time. The change callback retraces the view AND
-    // rebuilds the calibration-tab rows — both handled by the tab control's onStoreChanged.
+    // rebuilds the calibration-tab rows - both handled by the tab control's onStoreChanged.
     this.correctionStore = new CorrectionStore('FreqResp',
       () => this.tabControl.onStoreChanged());
 
@@ -51,9 +52,10 @@ export class FreqRespPane {
       onRangeChanged: null,
     });
 
-    // Sweep-timing rules (fftSize/leadIn → derived durationSec) + the measurement lifecycle
+    // Sweep-timing rules (fftSize/leadIn -> derived durationSec) + the measurement lifecycle
     // (runSweep / captureAndDeconvolve + busy meter). Drives the passive view directly.
-    this.controller = new FreqRespController(engine, prefs, this.view, this.correctionStore);
+    this.controller = new FreqRespController(engine, prefs, this.view, this.correctionStore,
+      io && io.showAlert);
 
     // Settings strip (Java FreqRespTabControl): sweep/FFT/dither dropdowns + derived-duration
     // label, RIAA tab, presets, utility, save/load, and the multi-row calibration loader.
@@ -91,8 +93,8 @@ export class FreqRespPane {
       $('#tab-fr .lr.r').addClass('on'); $('#tab-fr .lr.l').removeClass('on');
       this.view.render();
     });
-    // Header phase / auto-setup / maximize icons (Java .lr-tools: phase toggle →
-    // freqRespPhaseVisible, auto-setup → autoSetupMagnitudeRange, maximize → resetToDefaultView).
+    // Header phase / auto-setup / maximize icons (Java .lr-tools: phase toggle ->
+    // freqRespPhaseVisible, auto-setup -> autoSetupMagnitudeRange, maximize -> resetToDefaultView).
     $('#tab-fr .lr.ico').eq(0).toggleClass('on', this.prefs.freqRespPhaseVisible.get());
     $('#tab-fr .lr.ico').eq(0).on('click', () => {
       const on = !this.prefs.freqRespPhaseVisible.get();
@@ -116,7 +118,7 @@ export class FreqRespPane {
       this.view.syncScrollbars();
       this.view.render();
     });
-    // STOPPED → re-run the RIAA enable cascade (Java FreqRespPane.java:159): a successful sweep
+    // STOPPED -> re-run the RIAA enable cascade (Java FreqRespPane.java:159): a successful sweep
     // makes Compare available, a failed / aborted one leaves it off. The measurement publishes
     // STOPPED from the controller's finally on BOTH paths.
     MessageBus.instance().subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => this.tabControl.refreshRiaaEnable());
@@ -132,7 +134,7 @@ export class FreqRespPane {
   /** The set of cal-store hashes referenced by the calibration rows (app.js prune union). */
   getCalHashes() { return this.tabControl.getCalHashes(); }
 
-  /** The cal-restore promise app.js awaits (with the FFT pane's) before pruneCals (issue 2.3). */
+  /** The cal-restore promise app.js awaits (with the FFT pane's) before pruneCals. */
   get _calRestore() { return this.tabControl._calRestore; }
 
   /** Bootstrap confirm modal (the wizard's Cancel-with-unsaved prompt calls pane.showConfirm).

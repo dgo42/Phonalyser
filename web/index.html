@@ -24,14 +24,14 @@
 </div>
 
 <!-- Status sink: target for $('#status').text(...) progress/echo messages
-     (loaded-file echo, decode failures, etc.). Kept visually hidden — the web
+     (loaded-file echo, decode failures, etc.). Kept visually hidden - the web
      UI surfaces state via banners/tiles, but the message text is still written
      here so it is observable (and e2e-checkable). -->
 <div id="status" class="visually-hidden" aria-live="polite"></div>
 
 <!-- ===== menu bar =====
      Mirrors the Java MainWindow menu bar: Language (runtime locale switch) /
-     Tools (Preferences) / Help.  There is no File menu — its only Java entry is
+     Tools (Preferences) / Help.  There is no File menu - its only Java entry is
      Exit, which has no web counterpart.  The Language menu label is deliberately
      NOT translated (always "Language") so a user who can't read the current UI
      language can still find it, exactly as the Java cascade does. -->
@@ -43,8 +43,27 @@
   <div class="dropdown">
     <span class="menu-item" data-bs-toggle="dropdown" aria-expanded="false" data-i18n="menu.tools">Tools</span>
     <ul class="dropdown-menu">
-      <li><button class="dropdown-item" id="menuTuneNotch" type="button"><img src="assets/icons/notch-filter.svg" class="menu-icon" alt=""> <span data-i18n="menu.tools.tuneNotch">Tune notch…</span></button></li>
-      <li><button class="dropdown-item" id="menuPrefs" type="button"><img src="assets/icons/gear.svg" class="menu-icon" alt=""> <span data-i18n="menu.tools.preferences">Preferences…</span></button></li>
+      <li><button class="dropdown-item" id="menuTuneNotch" type="button"><img src="assets/icons/notch-filter.svg" class="menu-icon" alt=""> <span data-i18n="menu.tools.tuneNotch">Tune notch...</span></button></li>
+      <li><button class="dropdown-item" id="menuPrefs" type="button"><img src="assets/icons/gear.svg" class="menu-icon" alt=""> <span data-i18n="menu.tools.preferences">Preferences...</span></button></li>
+      <!-- ===== The two config-editor submenus, under Preferences in the Tools menu:
+           Preferences and Devices. Bootstrap 5 has no
+           submenu component, so this is the standard nested-<ul> form with the few lines of
+           CSS in css/app.css that place and reveal it.
+
+           THE ITEM LISTS ARE RUNTIME STATE, not markup: "Current" is always there, and
+           "Corrupt" only while a quarantined copy exists. They are therefore built when the
+           Tools menu opens (shell/app.js), never at load - a document quarantined during
+           this session must appear without a reload. ===== -->
+      <li class="dropdown-submenu">
+        <button class="dropdown-item dropdown-toggle" type="button" id="menuCfgPreferences"
+                data-i18n="menu.tools.config.preferences">Preferences</button>
+        <ul class="dropdown-menu" id="menuCfgPreferencesItems" aria-labelledby="menuCfgPreferences"></ul>
+      </li>
+      <li class="dropdown-submenu">
+        <button class="dropdown-item dropdown-toggle" type="button" id="menuCfgDevices"
+                data-i18n="menu.tools.config.devices">Devices</button>
+        <ul class="dropdown-menu" id="menuCfgDevicesItems" aria-labelledby="menuCfgDevices"></ul>
+      </li>
     </ul>
   </div>
   <div class="dropdown">
@@ -53,13 +72,13 @@
       <li><button class="dropdown-item" id="helpShow" type="button" data-i18n="menu.help.show">Show help</button></li>
       <li><button class="dropdown-item" id="helpShowActive" type="button" data-i18n="menu.help.showActive">Show help on active item</button></li>
       <li><hr class="dropdown-divider"/></li>
-      <li><button class="dropdown-item" id="helpReport" type="button" data-i18n="menu.help.reportProblem">Report a problem on GitHub issues…</button></li>
-      <li><button class="dropdown-item" id="helpTip" type="button" data-i18n="menu.help.tipOfDay">Tip of the day…</button></li>
+      <li><button class="dropdown-item" id="helpReport" type="button" data-i18n="menu.help.reportProblem">Report a problem on GitHub issues...</button></li>
+      <li><button class="dropdown-item" id="helpTip" type="button" data-i18n="menu.help.tipOfDay">Tip of the day...</button></li>
       <li><button class="dropdown-item" id="helpAbout" type="button" data-i18n="menu.help.about">About Phonalyser.web</button></li>
     </ul>
   </div>
   <span class="menu-spacer"></span>
-  <span class="menu-ver">v1.1.1 · web</span>
+  <span class="menu-ver">v1.2.0 · web</span>
 </div>
 
 <!-- ===== top-level tabs ===== -->
@@ -117,7 +136,7 @@
           <div class="form-check form-check-sm"><input id="snap" class="form-check-input" type="checkbox" checked data-i18n-title="generator.snapFft.tooltip"/>
             <label class="form-check-label" for="snap" data-i18n="generator.snapFft">Snap frequency to nearest FFT bin</label></div>
 
-          <!-- Java order: Sweep panel → dual-tone amp split → Amplitude → Duty (Amplitude sits
+          <!-- Java order: Sweep panel -> dual-tone amp split -> Amplitude -> Duty (Amplitude sits
                AFTER the sweep / dual-tone parameter blocks, not before them). -->
           <!-- Sweep params (LINEAR_SWEEP / LOG_SWEEP only; shown by the form handler) -->
           <div id="sweepWrap" style="display:none">
@@ -168,16 +187,16 @@
           <div class="numfield"><input id="genDuration" class="nf-input" type="text" value="5" data-i18n-title="generator.duration.tooltip"/>
             <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
 
-          <label class="field-label" for="genSaveName" data-i18n="generator.saveTo">Save to…</label>
+          <label class="field-label" for="genSaveName" data-i18n="generator.saveTo">Save to...</label>
           <div class="filefield"><input id="genSaveName" class="nf-input" type="text" value="" readonly data-i18n-title="generator.saveTo.tooltip"/><button id="genSaveBtn" class="icon-btn" data-i18n-title="generator.saveTo.tooltip"><img src="assets/icons/floppy-disk.svg" class="ff-svg" alt=""></button></div>
 
           <div class="d-flex justify-content-between align-items-center">
-            <label class="field-label mb-0" data-i18n="generator.loadFrom">Load from…</label>
+            <label class="field-label mb-0" data-i18n="generator.loadFrom">Load from...</label>
             <div class="form-check form-check-sm mb-0"><input id="genFileLoop" class="form-check-input" type="checkbox" data-i18n-title="generator.loadFrom.loop.tooltip"/><label class="form-check-label" for="genFileLoop" data-i18n="generator.loadFrom.loop">In loop</label></div>
           </div>
           <div class="filefield"><input id="genFilePath" class="nf-input" type="text" value="" readonly/><label class="icon-btn mb-0" for="genFileBrowse" data-i18n-title="generator.loadFrom.browse"><img src="assets/icons/folder-open.svg" class="ff-svg" alt=""></label><input id="genFileBrowse" type="file" accept=".wav,.aiff,.aif,.flac" class="d-none"/><button id="genFilePlay" class="icon-btn play" data-i18n-title="generator.loadFrom.play"><i class="bi bi-play-fill"></i></button></div>
 
-          <!-- Java GeneratorPane playRow: exactly two buttons — Calibrate-DAC (left) + Play (right). -->
+          <!-- Java GeneratorPane playRow: exactly two buttons - Calibrate-DAC (left) + Play (right). -->
           <div class="gen-footer">
             <button id="calibrateDac" class="btn btn-lg btn-outline-secondary util-btn" data-i18n-title="generator.calibrateDac.tooltip"><img src="assets/icons/crosshair.svg" class="util-svg" alt=""></button>
             <button id="genPlay" class="play-big" data-i18n-title="generator.play.start"><i class="bi bi-play-fill"></i></button>
@@ -201,7 +220,7 @@
           <div class="canvas-wrap">
             <div class="lr-tools">
               <!-- Scope header bar (Java ScopeView constructor): the L/R pair is the
-                   MEASUREMENT-channel picker (oscMeasurementChannel), ALWAYS visible —
+                   MEASUREMENT-channel picker (oscMeasurementChannel), ALWAYS visible -
                    NOT a channel-enable toggle (channel enable is the "Enabled" check in
                    the Left/Right tab panels). Then auto-setup, then the signal-gated
                    gauge / pop-out / stats / reset. -->
@@ -246,7 +265,7 @@
               <div class="smw-body"></div>
             </div>
             <!-- Amplitude-histogram window (Java HistogramView in a tool window): how often the
-                 signal sat at each voltage — voltage up the left axis, sample count along the
+                 signal sat at each voltage - voltage up the left axis, sample count along the
                  bottom. Its OWN view, palette, axes and paint; the scope contributes only the
                  header toggle. The L/R pair and the reset belong to THIS window: the reset clears
                  only the distribution, and the channel pick is a SEPARATE preference from the
@@ -269,7 +288,7 @@
                  keeps watching the scope / FFT. Hidden until startStreamingSave opens it. -->
             <div id="scopeRecWindow" class="scope-meas-window scope-rec-window">
               <div class="smw-titlebar">
-                <span class="smw-title" data-i18n="scope.save.recording.title">Recording to file…</span>
+                <span class="smw-title" data-i18n="scope.save.recording.title">Recording to file...</span>
               </div>
               <div class="smw-body scope-rec-body">
                 <div id="scopeRecProgress" class="scope-rec-progress"></div>
@@ -281,7 +300,7 @@
             </div>
           </div>
           <!-- Full-height vertical FlatScrollbar in the right gutter (Java ScopePane
-               vertSlider, a real scrollbar — track + arrows + draggable thumb, NOT a
+               vertSlider, a real scrollbar - track + arrows + draggable thumb, NOT a
                range slider): slides both channels' vertical offset. Spans the full
                main-view height. -->
           <canvas id="scopeVScroll" class="scope-vscroll" data-i18n-title="scope.vertSlider.tooltip"></canvas>
@@ -303,8 +322,8 @@
             <div class="tab" data-panel="scopeTrig" data-i18n-title="scope.tab.trigger.tooltip"><div class="t-title" data-i18n="scope.tab.trigger">Trigger</div><div class="t-sub"><span class="tile">R</span><span class="tile">↑</span><span class="tile">A</span></div></div>
             <div class="tab" data-panel="scopePresets" data-i18n-title="scope.tab.presets.tooltip"><div class="t-title" data-i18n="scope.tab.presets">Presets</div><div class="t-sub"></div></div>
             <div class="tab" data-panel="scopeUtility" data-i18n-title="scope.tab.utility.tooltip"><div class="t-title" data-i18n="fft.tab.utility">Utility</div></div>
-            <div class="tab" data-panel="scopeSavePanel" data-i18n-title="scope.tab.save.tooltip"><div class="t-title" data-i18n="scope.save.title">Save to…</div></div>
-            <div class="tab" data-panel="scopeLoadPanel" data-i18n-title="scope.tab.load.tooltip"><div class="t-title" data-i18n="scope.openSignal.title">Load signal…</div></div>
+            <div class="tab" data-panel="scopeSavePanel" data-i18n-title="scope.tab.save.tooltip"><div class="t-title" data-i18n="scope.save.title">Save to...</div></div>
+            <div class="tab" data-panel="scopeLoadPanel" data-i18n-title="scope.tab.load.tooltip"><div class="t-title" data-i18n="scope.openSignal.title">Load signal...</div></div>
             <div class="tab-spacer"></div>
             <button class="led-btn" data-i18n-title="scope.record.tooltip"></button>
           </div>
@@ -356,7 +375,7 @@
               </div>
               <!-- Trigger event type (Java ScopeTabControl typeSet): E = level-crossing edge
                    trigger, G = dV/dt glitch trigger (waveform discontinuities). The ↑/↓ edge
-                   selection applies to both — crossing direction vs. glitch start/end anchor.
+                   selection applies to both - crossing direction vs. glitch start/end anchor.
                    G is disabled in AUTO mode (free-run would overwrite a caught frame). -->
               <div id="scopeTrigType" class="btn-group trig-toggle-group" role="group">
                 <button type="button" class="sq-toggle" data-value="EDGE" data-i18n-title="scope.trigger.type.edge.tooltip">E</button>
@@ -379,10 +398,10 @@
                    Delete. Web mirrors it with the Bootstrap 5 input-group "buttons with
                    dropdowns" pattern: a single editable text input, a dropdown button that
                    lists the existing saved-preset names (picking one fills the input), then
-                   Save / Load / Delete — all on one compact row. -->
+                   Save / Load / Delete - all on one compact row. -->
               <div class="input-group input-group-sm preset-group">
                 <input id="scopePresetName" class="form-control" type="text" data-i18n-title="scope.presets.combo.tooltip"/>
-                <button id="scopePresetMenuBtn" class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Select a saved preset…"><span class="visually-hidden">Select a saved preset…</span></button>
+                <button id="scopePresetMenuBtn" class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Select a saved preset..."><span class="visually-hidden">Select a saved preset...</span></button>
                 <ul id="scopePresetMenu" class="dropdown-menu dropdown-menu-end"></ul>
                 <button id="scopePresetSave" class="btn btn-outline-primary" type="button" data-i18n="scope.presets.save" data-i18n-title="scope.presets.save.tooltip">Save</button>
                 <button id="scopePresetLoad" class="btn btn-outline-secondary" type="button" data-i18n="scope.presets.load" data-i18n-title="scope.presets.load.tooltip">Load</button>
@@ -399,12 +418,12 @@
           <div class="tab-panel" id="scopeSavePanel">
             <div class="scope-row">
               <!-- Java ScopeTabControl.buildScopeSaveToGroup: a COMPACT, right-grouped row
-                   with NO inline labels (the "Save to…" caption is the tab header itself,
+                   with NO inline labels (the "Save to..." caption is the tab header itself,
                    not a field label). Layout, in order, matching the Java GridLayout(4):
-                   read-only path Text (FILL → pushes the rest right) + browse (folder-open)
+                   read-only path Text (FILL -> pushes the rest right) + browse (folder-open)
                    + Duration NumericStepField + save (floppy). The path field is the
                    chosen-file display; Browse opens the save picker. The chosen file's
-                   EXTENSION derives the format (WAV/FLAC/AIFF) via formatForName — no
+                   EXTENSION derives the format (WAV/FLAC/AIFF) via formatForName - no
                    separate format dropdown. #scopeSaveName carries the suggested/chosen
                    name shown in the save dialog. -->
               <div class="filefield scope-save-file fill">
@@ -421,7 +440,7 @@
                    that triggers the hidden <input type=file>, mirroring the generator load-from
                    filefield. The chosen file name shows in #scopeLoadFileLabel; the loaded path
                    in #scopeLoadedPath (Java openSignalPathField). app.js wires #scopeLoadGo. -->
-              <!-- #15: READONLY last-loaded-file field in the SAME filefield design as the
+              <!-- READONLY last-loaded-file field in the SAME filefield design as the
                    scope Save-to row above (readonly .nf-input + attached folder icon-btn,
                    24px): populated on load in scope-tab-control.js. The folder-open <label>
                    triggers the hidden file <input>. -->
@@ -451,27 +470,27 @@
               <button id="fftDistToggle" class="lr ico" data-i18n-title="fft.distortion.tooltip"><img src="assets/icons/chart-column.svg" class="lr-svg" alt=""></button>
               <button id="fftReset" class="lr ico reset" data-i18n-title="fft.reset.tooltip"><img src="assets/icons/rotate-left.svg" class="lr-svg svg-red" alt=""></button>
               <!-- External pop-out for the THD/IMD table (Java FftView externalBtn = Icon.WINDOW_RESTORE,
-                   added LAST in the header AFTER reset). Signal-gated + toggled by the FFT pane agent;
+                   added LAST in the header AFTER reset). Signal-gated + toggled by the FFT pane;
                    opens #fftMeasWindow. Mirrors the scope #scopeTablePop button. -->
               <button id="fftTablePop" class="lr ico" data-i18n-title="fft.external.tooltip"><img src="assets/icons/window-restore.svg" class="lr-svg" alt=""></button>
             </div>
             <div class="fft-meta"><span id="pctLbl" data-i18n-title="fft.fillPercent.tooltip">0%</span><span id="avgLbl" data-i18n-title="fft.avgCount.tooltip">0 average(s)</span>
               <select id="fftMagUnit" class="form-select form-select-sm unit-sel" data-i18n-title="fft.magUnit.tooltip"><option value="V">V</option><option value="V_SQRT_HZ">V/√Hz</option><option value="DBV" selected>dBV</option><option value="DBFS">dBFS</option><option value="DBR">dBr</option></select></div>
             <canvas id="spec" width="1200" height="440" class="fft-canvas"></canvas>
-            <!-- Self-blinking discontinuity / overrun warning (Java FftView.onCaptureResync →
+            <!-- Self-blinking discontinuity / overrun warning (Java FftView.onCaptureResync ->
                  BlinkBanner): shown while the analyser re-syncs past a glitch, cleared by the
                  pane on the next fresh result. -->
             <div id="fftWarnBanner" class="fft-warn-banner" hidden></div>
-            <!-- Loaded static-.fft indicator (Java FftView.setSourceFilePath → BlinkBanner):
+            <!-- Loaded static-.fft indicator (Java FftView.setSourceFilePath -> BlinkBanner):
                  "Loaded: file" while a loaded spectrum is displayed; cleared when live recording
                  resumes. Top slot; the re-sync warning sits a little lower to avoid overlap. -->
             <div id="fftLoadedBanner" class="fft-loaded-banner" hidden></div>
             <!-- The THD / IMD measurement table is painted ON the canvas by FftView
                  (Java FftView.drawDistortionTable / drawImdTable). -->
             <!-- Popped-out THD/IMD table window (Java FftView.createToolWindow / ToolWindow): a titled
-                 floating panel on top of the pane, carrying a canvas the FFT pane agent paints the
-                 distortion table into (Java paints it straight into the ToolWindow GC). NO button row —
-                 the Java FFT tool window has no toggles. Title swaps THD↔IMD via the pane agent
+                 floating panel on top of the pane, carrying a canvas the FFT pane paints the
+                 distortion table into (Java paints it straight into the ToolWindow GC). NO button row -
+                 the Java FFT tool window has no toggles. Title swaps THD<->IMD via the pane
                  (Java externalTitle()). Reuses the .scope-meas-window floating chrome; hidden by default,
                  toggled open by #fftTablePop. -->
             <div id="fftMeasWindow" class="scope-meas-window fft-meas-window">
@@ -497,10 +516,10 @@
             <div class="tab" data-panel="fftPresetsPanel"><div class="t-title" data-i18n="fft.tab.presets">Presets</div><div class="t-sub" id="presetTabSub"></div></div>
             <div class="tab" data-panel="fftUtility"><div class="t-title" data-i18n="fft.tab.utility">Utility</div></div>
             <div class="tab" id="fftLoadCal" data-panel="fftCalPanel"><div class="t-title" data-i18n="fft.tab.calibration">Calibration</div><div class="t-sub" id="calTabSub"></div></div>
-            <div class="tab" id="fftSave" data-panel="fftSavePanel"><div class="t-title" data-i18n="fft.tab.save">Save to…</div></div>
-            <div class="tab" id="fftLoad" data-panel="fftLoadPanel"><div class="t-title" data-i18n="fft.tab.load">Load from…</div></div>
+            <div class="tab" id="fftSave" data-panel="fftSavePanel"><div class="t-title" data-i18n="fft.tab.save">Save to...</div></div>
+            <div class="tab" id="fftLoad" data-panel="fftLoadPanel"><div class="t-title" data-i18n="fft.tab.load">Load from...</div></div>
             <div class="tab-spacer"></div>
-            <!-- Predistortion wizard button — left of Record (Java FftPane: toolbarRow, mirrors the FreqResp wizard). -->
+            <!-- Predistortion wizard button - left of Record (Java FftPane: toolbarRow, mirrors the FreqResp wizard). -->
             <button id="predistBtn" class="fft-tool-btn" disabled data-i18n-title="predistortion.button.wizard.tooltip"><img src="assets/icons/wand.svg" class="tool-svg" alt=""></button>
             <button class="led-btn" data-i18n-title="fft.record.tooltip"></button>
           </div>
@@ -508,7 +527,7 @@
           <!-- THD-settings panel (THD-settings tile-tab) -->
           <div class="tab-panel" id="thdSettings">
             <!-- Java FftTabControl.buildThdTab (FftTabControl.java:554-680): a 4-column grid with
-                 ONE band per ROW — each distortion-band enable checkbox doubles as its field's
+                 ONE band per ROW - each distortion-band enable checkbox doubles as its field's
                  label and the NumericStepField sits right of it, the field "spanning" the rest of
                  the row (empty filler cells); the LAST row carries BOTH harmonic-count steppers
                  side by side (maxThd | maxCalc). All four numeric fields are .numfield steppers
@@ -532,17 +551,17 @@
             </div>
           </div>
 
-          <!-- Calibration panel (Java FftTabControl.buildCalibrationTab) — single-row .frc load + Active + With-noise.
+          <!-- Calibration panel (Java FftTabControl.buildCalibrationTab) - single-row .frc load + Active + With-noise.
                The render-time noise-floor gating (frcCorrectAllBins) is wired; multi-file stacking + persistence are a follow-up. -->
           <div class="tab-panel" id="fftCalPanel">
-            <!-- Rows are built/managed by FftTabControl: a multi-file cascade — each loaded .frc is
+            <!-- Rows are built/managed by FftTabControl: a multi-file cascade - each loaded .frc is
                  subtracted in sequence; per-row Active + With-noise; add/remove rows. -->
             <div id="fftCalRows"></div>
           </div>
 
           <!-- FFT settings panel (shown when the FFT-settings tile-tab is active) -->
           <div class="tab-panel" id="fftSettings">
-            <!-- Java FftTabControl FFT-settings grid: row pairs mirror the desktop layout —
+            <!-- Java FftTabControl FFT-settings grid: row pairs mirror the desktop layout -
                  [FFT length | Window], [Overlap | Averages], [Stop-after N | Mains suppression],
                  [Get fundamental from generator | Align generator], [Coherent | Log freq axis]. -->
             <div class="settings-grid">
@@ -571,7 +590,7 @@
               <select id="overlap" class="form-select form-select-sm" data-i18n-title="fft.settings.overlap.tooltip"><option value="PCT_0" selected>0%</option><option value="PCT_50">50%</option><option value="PCT_75">75%</option><option value="PCT_87_5">87.5%</option><option value="PCT_93_75">93.75%</option></select>
               <label data-i18n="fft.settings.averages">Averages:</label>
               <!-- Java averagesField: NumericStepField(UnitFamily.NONE, min 2, max ∞, AVERAGES_SERIES
-                   {2,4,8,16,32,64,128,∞}, 0 decimals). The ∞ is the top of the stepper series — typed
+                   {2,4,8,16,32,64,128,∞}, 0 decimals). The ∞ is the top of the stepper series - typed
                    as "∞"/"inf"; there is NO separate infinity checkbox (Java has none). -->
               <div class="numfield sm"><input id="averages" class="nf-input" type="text" data-i18n-title="fft.settings.averages.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
 
@@ -593,11 +612,11 @@
               <select id="align" class="form-select form-select-sm" data-i18n-title="fft.settings.alignGen.tooltip"><option value="off" selected>None</option><option value="fll">FLL</option></select>
 
               <!-- LAST row (full-width flex like the stop-after row): Coherent averaging |
-                   Logarithmic frequency axis | Threads. #4.1: the Threads select sits ON THIS
-                   row right after "Logarithmic frequency axis" — not on its own row below.
+                   Logarithmic frequency axis | Threads. The Threads select sits ON THIS
+                   row right after "Logarithmic frequency axis" - not on its own row below.
                    Threads is web-only WebAudio worker-pool size (no Java Settings-tab
-                   counterpart — Java parallelises automatically via the ForkJoin common pool).
-                   The JIT warm-up has NO UI field — Java hardwires it (FFT engine constant);
+                   counterpart - Java parallelises automatically via the ForkJoin common pool).
+                   The JIT warm-up has NO UI field - Java hardwires it (FFT engine constant);
                    the web keeps warmupMs as the backend default. -->
               <div class="stopafter-cell grid-span4">
                 <div class="form-check form-check-sm mb-0"><input id="coherent" class="form-check-input" type="checkbox" checked data-i18n-title="fft.settings.coherent.tooltip"/><label class="form-check-label" for="coherent" data-i18n="fft.settings.coherent" data-i18n-title="fft.settings.coherent.tooltip">Coherent averaging</label></div>
@@ -615,12 +634,12 @@
               <button id="fftAdcCalibrate" class="btn btn-lg btn-outline-secondary util-btn" data-i18n-title="fft.utility.calibrate.tooltip"><img src="assets/icons/crosshair.svg" class="util-svg" alt=""></button>
             </div>
           </div>
-          <!-- Presets tile-tab (Java FftTabControl.buildPresetsTab → PresetBar): named save / load / delete (g21). -->
+          <!-- Presets tile-tab (Java FftTabControl.buildPresetsTab -> PresetBar): named save / load / delete (g21). -->
           <div class="tab-panel" id="fftPresetsPanel">
             <div class="scope-row">
               <div class="input-group input-group-sm preset-group">
                 <input id="fftPresetName" class="form-control" type="text" data-i18n-title="fft.presets.combo.tooltip"/>
-                <button id="fftPresetMenuBtn" class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Select a saved preset…"><span class="visually-hidden">Select a saved preset…</span></button>
+                <button id="fftPresetMenuBtn" class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Select a saved preset..."><span class="visually-hidden">Select a saved preset...</span></button>
                 <ul id="fftPresetMenu" class="dropdown-menu dropdown-menu-end"></ul>
                 <button id="fftPresetSave" class="btn btn-outline-primary" type="button" data-i18n="fft.presets.save" data-i18n-title="fft.presets.save.tooltip">Save</button>
                 <button id="fftPresetLoad" class="btn btn-outline-secondary" type="button" data-i18n="fft.presets.load" data-i18n-title="fft.presets.load.tooltip">Load</button>
@@ -630,9 +649,9 @@
           </div>
 
           <!-- Save-to tile-tab (Java FftTabControl buildSaveToTab): read-only path field
-               + attached floppy save button — #15: the SAME filefield design (readonly
+               + attached floppy save button - the SAME filefield design (readonly
                .nf-input + attached icon-btn, 24px) as the scope Save-to row, WITHOUT the
-               scope-specific Duration stepper. Wiring by the FFT-JS agent. -->
+               scope-specific Duration stepper. -->
           <div class="tab-panel" id="fftSavePanel">
             <div class="scope-row">
               <div class="filefield scope-save-file fill">
@@ -643,8 +662,7 @@
           </div>
 
           <!-- Load-from tile-tab (Java FftTabControl buildLoadFromTab): read-only path field
-               + attached folder browse button (#15: scope Save-to filefield design). Wiring
-               by the FFT-JS agent. -->
+               + attached folder browse button (the scope Save-to filefield design). -->
           <div class="tab-panel" id="fftLoadPanel">
             <div class="scope-row">
               <div class="filefield scope-save-file fill">
@@ -660,7 +678,7 @@
 
   <!-- ============================ Frequency response ============================ -->
   <!-- Scope/FFT pattern: full-width plot pane with a bottom tile-tab control bar
-       (Settings / RIAA-IEC drop-down panels) — NOT a generator-style left column. -->
+       (Settings / RIAA-IEC drop-down panels) - NOT a generator-style left column. -->
   <div class="tab-pane fade" id="tab-fr" role="tabpanel">
     <div class="workspace">
       <div class="right-col">
@@ -685,15 +703,15 @@
                log [1, Nyquist] Hz). Always shown for the FreqResp view. -->
           <canvas id="frFreqScroll" class="scope-hscroll show" data-i18n-title="freqResp.button.maximize.tooltip"></canvas>
           <div class="tiletabs" id="frTabs">
-            <div class="tab active" data-panel="frSettings"><div class="t-title" data-i18n="freqResp.tab.settings">Settings</div><div class="t-sub" id="frTabSub"><span class="tile">1–192k</span><span class="tile">1.00V</span><span class="tile">192k pts</span><span class="tile">2M</span></div></div>
+            <div class="tab active" data-panel="frSettings"><div class="t-title" data-i18n="freqResp.tab.settings">Settings</div><div class="t-sub" id="frTabSub"><span class="tile">1-192k</span><span class="tile">1.00V</span><span class="tile">192k pts</span><span class="tile">2M</span></div></div>
             <div class="tab" data-panel="frRiaaPanel"><div class="t-title" data-i18n="freqResp.tab.riaa">RIAA &amp; IEC</div><div class="t-sub" id="frRiaaTabSub"></div></div>
             <div class="tab" data-panel="frFilterPanel"><div class="t-title" data-i18n="freqResp.tab.filters">Filters</div><div class="t-sub" id="frFiltersTabSub"></div></div>
             <div class="tab" data-panel="frUnevenPanel"><div class="t-title" data-i18n="freqResp.tab.unevenness">Unevenness</div><div class="t-sub" id="frUnevenTabSub"></div></div>
             <div class="tab" data-panel="frPresetsPanel"><div class="t-title" data-i18n="freqResp.tab.presets">Presets</div><div class="t-sub" id="frPresetTabSub"></div></div>
             <div class="tab" data-panel="frUtility"><div class="t-title" data-i18n="freqResp.tab.utility">Utility</div></div>
-            <div class="tab" data-panel="frCalPanel"><div class="t-title" data-i18n="freqResp.tab.calibration">Load calibration…</div><div class="t-sub" id="frCalTabSub"></div></div>
-            <div class="tab" data-panel="frSavePanel"><div class="t-title" data-i18n="freqResp.tab.saveTo">Save to…</div></div>
-            <div class="tab" data-panel="frLoadPanel"><div class="t-title" data-i18n="freqResp.tab.loadFrom">Load from…</div></div>
+            <div class="tab" data-panel="frCalPanel"><div class="t-title" data-i18n="freqResp.tab.calibration">Load calibration...</div><div class="t-sub" id="frCalTabSub"></div></div>
+            <div class="tab" data-panel="frSavePanel"><div class="t-title" data-i18n="freqResp.tab.saveTo">Save to...</div></div>
+            <div class="tab" data-panel="frLoadPanel"><div class="t-title" data-i18n="freqResp.tab.loadFrom">Load from...</div></div>
             <div class="tab-spacer"></div>
             <button class="fft-tool-btn" data-i18n-title="freqResp.button.wizard.tooltip"><img src="assets/icons/wand.svg" class="tool-svg" alt=""></button>
             <button class="led-btn fr-run-btn" id="frRunStrip" data-i18n-title="freqResp.button.play.start"><i class="bi bi-play-fill"></i></button>
@@ -854,13 +872,13 @@
             </div>
           </div>
 
-          <!-- Presets tile-tab (Java FreqRespTabControl.buildPresetsTab → PresetBar):
+          <!-- Presets tile-tab (Java FreqRespTabControl.buildPresetsTab -> PresetBar):
                named save / load / delete of all Settings + RIAA prefs. -->
           <div class="tab-panel" id="frPresetsPanel">
             <div class="scope-row">
               <div class="input-group input-group-sm preset-group">
                 <input id="frPresetName" class="form-control" type="text" data-i18n-title="freqResp.presets.combo.tooltip"/>
-                <button id="frPresetMenuBtn" class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" data-i18n-title="freqResp.presets.combo.tooltip"><span class="visually-hidden">Select a saved preset…</span></button>
+                <button id="frPresetMenuBtn" class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" data-i18n-title="freqResp.presets.combo.tooltip"><span class="visually-hidden">Select a saved preset...</span></button>
                 <ul id="frPresetMenu" class="dropdown-menu dropdown-menu-end"></ul>
                 <button id="frPresetSave" class="btn btn-outline-primary" type="button" data-i18n="freqResp.presets.save" data-i18n-title="freqResp.presets.save.tooltip">Save</button>
                 <button id="frPresetLoad" class="btn btn-outline-secondary" type="button" data-i18n="freqResp.presets.load" data-i18n-title="freqResp.presets.load.tooltip">Load</button>
@@ -870,7 +888,7 @@
           </div>
 
           <!-- Utility tile-tab (Java FreqRespTabControl.buildUtilityTab): screenshot +
-               DAC/ADC calibrate (crosshair) — 3-button parity with the desktop tray (stubs). -->
+               DAC/ADC calibrate (crosshair) - 3-button parity with the desktop tray (stubs). -->
           <div class="util-tab tab-panel" id="frUtility">
             <div class="scope-row util-row">
               <button id="frShot" class="btn btn-lg btn-outline-secondary util-btn util-btn-wd" data-i18n-title="freqResp.utility.screenshot.tooltip"><img src="assets/icons/camera.svg" class="util-svg" alt=""></button>
@@ -886,7 +904,7 @@
           </div>
 
           <!-- Save-to tile-tab (Java buildSaveToTab): write the current measurement (both
-               channels) — #15: scope Save-to filefield design (readonly .nf-input + attached
+               channels) - scope Save-to filefield design (readonly .nf-input + attached
                floppy icon-btn, 24px), no Duration stepper. -->
           <div class="tab-panel" id="frSavePanel">
             <div class="scope-row">
@@ -898,7 +916,7 @@
           </div>
 
           <!-- Load-from tile-tab (Java buildLoadFromTab): display a saved measurement on the
-               view — #15: scope Save-to filefield design with the folder browse icon-btn. -->
+               view - scope Save-to filefield design with the folder browse icon-btn. -->
           <div class="tab-panel" id="frLoadPanel">
             <div class="scope-row">
               <div class="filefield scope-save-file fill">
@@ -915,8 +933,8 @@
 
 <!-- ===== About modal =====
      Mirrors the Java About presentation (StartupSplash.showAsAbout): the SAME
-     branded artwork the startup splash draws — version, tagline, copyright,
-     license and clickable repo URL are all painted ON the canvas — with the
+     branded artwork the startup splash draws - version, tagline, copyright,
+     license and clickable repo URL are all painted ON the canvas - with the
      repo URL hit-testable to open the browser. Bootstrap gives the Esc /
      click-away dismiss that the SWT About shell wires by hand. -->
 <div class="modal fade" id="aboutModal" tabindex="-1">
@@ -931,14 +949,14 @@
       <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
     <div class="modal-body">
       <ul class="nav nav-tabs prefs-tabs mb-3" id="prefsTabs">
-        <li class="nav-item"><button class="nav-link active" data-prefs-panel="lookAndFeel" data-i18n="preferences.tab.lookAndFeel">Look &amp; Feel</button></li>
-        <li class="nav-item"><button class="nav-link" data-prefs-panel="audio" data-i18n="preferences.tab.audio">Audio</button></li>
+        <li class="nav-item"><button class="nav-link active" data-prefs-panel="audio" data-i18n="preferences.tab.audio">Audio</button></li>
+        <li class="nav-item"><button class="nav-link" data-prefs-panel="lookAndFeel" data-i18n="preferences.tab.lookAndFeel">Look &amp; Feel</button></li>
         <li class="nav-item"><button class="nav-link" data-prefs-panel="oscilloscope" data-i18n="preferences.tab.oscilloscope">Oscilloscope</button></li>
         <li class="nav-item"><button class="nav-link" data-prefs-panel="fft" data-i18n="preferences.tab.fft">FFT</button></li>
         <li class="nav-item"><button class="nav-link" data-prefs-panel="freqResp" data-i18n="preferences.tab.freqResp">Frequency response</button></li>
       </ul>
 
-      <div class="prefs-panel prefs-padding" data-prefs-panel="lookAndFeel">
+      <div class="prefs-panel prefs-padding d-none" data-prefs-panel="lookAndFeel">
         <div class="prefs-grid">
           <label data-i18n="preferences.lookAndFeel.tabOrientation">Main tab orientation:</label>
           <select id="prefTabOrientation" class="form-select form-select-sm" data-i18n-title="preferences.lookAndFeel.tabOrientation.tooltip">
@@ -966,22 +984,38 @@
         </div>
       </div>
 
-      <div class="prefs-panel d-none" data-prefs-panel="audio">
-        <!-- Scan on the left, the backend selector pushed to the right (.ms-auto), both inset 10px
-             by .scan-devices. Scan enumerates devices FOR THE SELECTED BACKEND, and for QA40x that
-             click is also the user activation WebUSB's requestDevice() requires.
-             #backendSettings is the per-backend settings button of Java's three-cell backend row
-             (label | settings | combo): PreferencesDialog.refreshCustomPrefsButton shows it only for
-             a backend whose manager hasCustomPreferences() — the QA40x today — and hidden it gives
-             up its cell, so every other backend keeps the plain two-widget row. -->
-        <div class="row g-2 align-items-center mb-3 scan-devices">
-          <div class="col-auto"><button id="scan" class="btn btn-sm btn-outline-secondary" data-i18n="web.preferences.scanDevices">Scan devices</button></div>
-          <div class="col-auto ms-auto d-flex align-items-center gap-1">
-            <button id="backendSettings" type="button" class="btn btn-sm btn-outline-secondary d-none"
-                    data-i18n="preferences.backend.customPrefs" data-i18n-title="preferences.backend.customPrefs.tooltip">Custom preferences</button>
-            <label for="backendSel" class="mb-0" data-i18n="preferences.backend">Backend:</label>
-            <select id="backendSel" class="form-select form-select-sm"></select>
-          </div>
+      <!-- Audio is the FIRST tab (Java PreferencesDialog: index 0) and therefore the panel shown
+           on open; the tab strip above lists it first for the same reason. The panel DIVs are
+           switched by data-prefs-panel (prefsTab), never by index, so their document order is
+           presentation only - Audio keeps its place beside the card sections it owns. -->
+      <div class="prefs-panel" data-prefs-panel="audio">
+        <!-- ONE flat row in the DESKTOP's order, as the Java dialog lays it out:
+             [Scan devices] [Servers...] Backend: [Custom preferences, when shown]
+             [combo]. Scan enumerates devices FOR THE SELECTED BACKEND, and for QA40x that click is
+             also the user activation WebUSB's requestDevice() requires. #backendSettings is the
+             middle cell of Java's three-cell backend row (label | settings | combo):
+             PreferencesDialog.refreshCustomPrefsButton shows it only for a backend whose manager
+             hasCustomPreferences() - the QA40x today - and hidden it gives up its cell, so every
+             other backend reads label | combo.
+             The combo owns ALL the remaining width (flex-grow-1): its left edge is the label's (or
+             the settings button's) right edge, its right edge the row's inset. That is also what
+             keeps the row on ONE line whatever a connected server is named: the option text
+             no longer decides the select's width, the row does - .flex-nowrap forbids the second
+             line, the buttons and the label carry .flex-shrink-0, and css/app.css lets the combo
+             shrink below its longest option (min-width:0) and past the shared field cap. -->
+        <div class="d-flex align-items-center gap-1 mb-3 scan-devices flex-nowrap">
+          <button id="scan" class="btn btn-sm btn-outline-secondary flex-shrink-0"
+                  data-i18n="preferences.devices.scan" data-i18n-title="preferences.devices.scan.tooltip">Scan devices</button>
+          <!-- The server list (Java NetServerListDialog, an SWT dialog -> a modal here like
+               every other): which Phonalyser servers are in the room, which one this
+               installation is talking to, and how to reach one the peer table cannot see.
+               Beside Scan, always. -->
+          <button id="netServers" type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0"
+                  data-i18n="net.servers.button" data-i18n-title="net.servers.button.tooltip">Servers...</button>
+          <label for="backendSel" class="mb-0 text-nowrap flex-shrink-0" data-i18n="preferences.backend">Backend:</label>
+          <button id="backendSettings" type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0 d-none"
+                  data-i18n-title="preferences.backend.customPrefs.tooltip">QA40x preferences</button>
+          <select id="backendSel" class="form-select form-select-sm flex-grow-1"></select>
         </div>
         <fieldset class="prefs-group mb-3"><legend data-i18n="preferences.input">Input</legend>
           <div class="prefs-grid">
@@ -994,7 +1028,7 @@
               <button id="inCardEdit" class="btn btn-sm btn-outline-secondary" type="button" data-i18n-title="preferences.audio.card.edit.tooltip"><img src="assets/icons/pencil.svg" class="util-svg" alt=""></button>
             </div>
             <label data-i18n="web.preferences.adcFullScale">ADC full-scale (V RMS):</label>
-            <div class="cal-fs-readout small" data-i18n-title="web.preferences.adcFullScale.tooltip"><span id="adcFsVrms">—</span> / <span id="adcFsVrmsRight">—</span></div>
+            <div class="cal-fs-readout small" data-i18n-title="web.preferences.adcFullScale.tooltip"><span id="adcFsVrms">-</span> / <span id="adcFsVrmsRight">-</span></div>
             <label id="inRangesLabel" class="card-ranges-label" data-i18n="preferences.audio.ranges">Ranges</label>
             <div id="inRanges" class="card-ranges"></div>
           </div>
@@ -1010,7 +1044,7 @@
               <button id="outCardEdit" class="btn btn-sm btn-outline-secondary" type="button" data-i18n-title="preferences.audio.card.edit.tooltip"><img src="assets/icons/pencil.svg" class="util-svg" alt=""></button>
             </div>
             <label data-i18n="web.preferences.dacFullScale">DAC full-scale (V peak):</label>
-            <div class="cal-fs-readout small" data-i18n-title="web.preferences.dacFullScale.tooltip"><span id="dacFsAmpl">—</span> / <span id="dacFsAmplRight">—</span></div>
+            <div class="cal-fs-readout small" data-i18n-title="web.preferences.dacFullScale.tooltip"><span id="dacFsAmpl">-</span> / <span id="dacFsAmplRight">-</span></div>
             <label id="outRangesLabel" class="card-ranges-label" data-i18n="preferences.audio.ranges">Ranges</label>
             <div id="outRanges" class="card-ranges"></div>
           </div>
@@ -1029,16 +1063,19 @@
           <div class="numfield"><input id="prefOscHistBins" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
           <label data-i18n="preferences.persistence">Display persistence:</label>
           <select id="prefOscPersistence" class="form-select form-select-sm" data-i18n-title="preferences.persistence.tooltip">
-            <option value="OFF">Off</option>
-            <option value="S_05">0.5 s</option>
-            <option value="S_1">1 s</option>
-            <option value="S_2">2 s</option>
-            <option value="S_5">5 s</option>
-            <option value="S_10">10 s</option>
-            <option value="S_15">15 s</option>
-            <option value="S_20">20 s</option>
-            <option value="INFINITE">∞</option>
-            <option value="MANUAL">Manual</option>
+            <!-- The `value` attributes are the PersistenceMode enum names the code reads
+                 (preferences-dialog.js reads .val(); nothing anywhere parses the display
+                 text) - only the labels are localized. -->
+            <option value="OFF" data-i18n="preferences.persistence.off">Off</option>
+            <option value="S_05" data-i18n="preferences.persistence.s05">0.5 s</option>
+            <option value="S_1" data-i18n="preferences.persistence.s1">1 s</option>
+            <option value="S_2" data-i18n="preferences.persistence.s2">2 s</option>
+            <option value="S_5" data-i18n="preferences.persistence.s5">5 s</option>
+            <option value="S_10" data-i18n="preferences.persistence.s10">10 s</option>
+            <option value="S_15" data-i18n="preferences.persistence.s15">15 s</option>
+            <option value="S_20" data-i18n="preferences.persistence.s20">20 s</option>
+            <option value="INFINITE" data-i18n="preferences.persistence.infinite">∞</option>
+            <option value="MANUAL" data-i18n="preferences.persistence.manualMode">Manual</option>
           </select>
           <label data-i18n="preferences.persistence.manual">Manual persistence, s:</label>
           <div class="numfield"><input id="prefOscPersistManual" class="nf-input" type="text" data-i18n-title="preferences.persistence.manual.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
@@ -1112,8 +1149,8 @@
     <div class="modal-body">
       <!-- Mandatory twin-T notch safety/usage intro (Java PredistortionWizardDialog:144-148) -->
       <p class="small text-secondary mb-2" style="white-space:pre-line" data-i18n="predistortion.intro">MANDATORY: put a passive twin-T notch filter, tuned to the fundamental, between the device under test and the ADC.</p>
-      <!-- Layout mirrors Java PredistortionWizardDialog.createContents: statusLabel (headline) →
-           buildFftGroup → buildChart → buildProgressGroup → buildSettings (Averages/Target) → buttonBar. -->
+      <!-- Layout mirrors Java PredistortionWizardDialog.createContents: statusLabel (headline) ->
+           buildFftGroup -> buildChart -> buildProgressGroup -> buildSettings (Averages/Target) -> buttonBar. -->
       <pre id="dpdProgress" class="readout" data-i18n="predistortion.status.idle">Idle. Start capture (▶) on a sine or dual-tone, then Start.</pre>
       <!-- FFT-settings group + log convergence chart + live metric panel (Java wizard, g38/g49/g50) -->
       <div class="fw-semibold small mt-1" data-i18n="predistortion.group.fft">FFT settings</div>
@@ -1141,7 +1178,7 @@
 
 <!-- ===== Tune-notch wizard (Java TuneNotchWizardDialog) =====
      Layout mirrors the Java dialog: fields row (start / stop on row 1,
-     amplitude / target on row 2) → fixed 600×400 embedded live chart → one
+     amplitude / target on row 2) -> fixed 600×400 embedded live chart -> one
      bottom row shared by the status line and the Close button. -->
 <div class="modal fade" id="tuneNotchModal" tabindex="-1">
   <div class="modal-dialog tn-dialog"><div class="modal-content prefs">
@@ -1184,7 +1221,7 @@
   </div></div>
 </div>
 
-<!-- ===== Unified ADC/DAC calibration dialog (Java CalibrationDialog) — one modal,
+<!-- ===== Unified ADC/DAC calibration dialog (Java CalibrationDialog) - one modal,
          two rows (Left / Right), opened from the scope, the FFT pane and the generator ===== -->
 <div class="modal fade" id="calibrationModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered modal-sm"><div class="modal-content">
@@ -1212,7 +1249,7 @@
 <!-- ===== Card create / edit dialog (Java CardEditorDialog) ===== -->
 <div class="modal fade" id="cardEditorModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered"><div class="modal-content prefs">
-    <div class="modal-header py-2"><h6 class="modal-title" id="cardEditorTitle" data-i18n="preferences.audio.card.new">New card…</h6>
+    <div class="modal-header py-2"><h6 class="modal-title" id="cardEditorTitle" data-i18n="preferences.audio.card.new">New card...</h6>
       <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
     <div class="modal-body">
       <div class="d-flex align-items-center gap-2 mb-2">
@@ -1305,7 +1342,7 @@
     </div>
     <div class="modal-footer py-2">
       <button id="shotCopy" class="btn btn-sm btn-outline-primary" data-i18n="screenshot.copy">Copy to clipboard</button>
-      <button id="shotSave" class="btn btn-sm btn-primary" data-i18n="screenshot.saveAs">Save as…</button>
+      <button id="shotSave" class="btn btn-sm btn-primary" data-i18n="screenshot.saveAs">Save as...</button>
       <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal" data-i18n="common.close">Close</button>
     </div>
   </div></div>
@@ -1336,34 +1373,122 @@
   </div></div>
 </div>
 
-<!-- ===== FreqResp sweep busy modal — mirror of the desktop busy shell
+<!-- ===== The JSON config editor (shell/json-config-dialog.js). ONE window for both stores and
+     both modes - it is handed a port and shown; nothing about preferences or devices appears
+     here. modal-xl + the flex body is what makes the editor FILL the window with only the
+     button row beneath it: the editor takes the entire window, with only OK and Cancel
+     below it. #jsonConfigOk is hidden for a read-only corrupt document. ===== -->
+<div class="modal fade" id="jsonConfigModal" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog json-config-dialog"><div class="modal-content prefs">
+    <div class="modal-header py-2">
+      <h6 class="modal-title"><span id="jsonConfigTitle"></span>
+        <span class="text-muted small ms-2" id="jsonConfigKey"></span></h6>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+    </div>
+    <!-- The body holds the editor and NOTHING else, with no padding of its own, so the
+         CodeMirror surface meets the window edges and only the button row sits beneath it.
+         The error line therefore lives in the footer, pushed left by me-auto. -->
+    <div class="modal-body d-flex flex-column">
+      <div id="jsonConfigEditor" class="json-config-editor flex-grow-1"></div>
+    </div>
+    <div class="modal-footer py-2">
+      <div id="jsonConfigError" class="small text-danger me-auto"></div>
+      <button id="jsonConfigOk" type="button" class="btn btn-sm btn-primary" data-initial-focus
+              data-i18n="common.ok">OK</button>
+      <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"
+              data-i18n="common.cancel">Cancel</button>
+    </div>
+  </div></div>
+</div>
+
+<!-- ===== Phonalyser servers (Java NetServerListDialog) - which servers are in the room,
+     which one this installation is talking to, and how to reach one the peer table cannot
+     see. Opened from the Servers... button beside the Backend combo in Preferences ▸ Audio;
+     an SWT dialog on the desktop, so a modal here (the same mapping the card editor, the
+     calibration dialog and the QA40x settings use).
+
+     NOTHING HERE IS SAVED. A server added or removed goes into the settings block's EDIT
+     copy, so the Preferences dialog's Cancel drops it and its OK writes it - the same
+     staging rule as the QA40x's ranges. A CONNECTION, on the other hand, is live the moment
+     it is made: it is an action, not a setting.
+
+     No proxy row (the desktop has one): a browser's WebSocket follows the system proxy and
+     gives the page no say. ===== -->
+<div class="modal fade" id="netServersModal" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog modal-dialog-centered" style="max-width: 620px;"><div class="modal-content prefs">
+    <div class="modal-header py-2"><h6 class="modal-title" data-i18n="net.servers.title">Phonalyser servers</h6>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <p class="small text-muted" data-i18n="net.servers.hint">Type the address of one server on the network; it will report every other server it can see.</p>
+      <table class="table table-sm net-servers-table">
+        <thead><tr>
+          <th data-i18n="net.servers.column.name">Name</th>
+          <th data-i18n="net.servers.column.address">Address</th>
+          <th data-i18n="net.servers.column.state">State</th>
+        </tr></thead>
+        <tbody id="netServersRows"></tbody>
+      </table>
+      <div class="d-flex align-items-center gap-2 mb-3">
+        <!-- Where the keyboard focus lands when the dialog opens (modal-stack.js): the desktop
+             opens on the server table, whose only action is Connect. Disabled - nothing selected,
+             or this row is already the session - the focus falls to the first usable control. -->
+        <button id="netConnect" type="button" class="btn btn-sm btn-outline-secondary" data-initial-focus data-i18n="net.servers.connect">Connect</button>
+        <button id="netDisconnect" type="button" class="btn btn-sm btn-outline-secondary" data-i18n="net.servers.disconnect">Disconnect</button>
+        <button id="netRemove" type="button" class="btn btn-sm btn-outline-secondary"
+                data-i18n="net.servers.remove" data-i18n-title="net.servers.remove.tooltip">Remove</button>
+      </div>
+      <fieldset class="prefs-group"><legend data-i18n="net.servers.add.title">Add a server</legend>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <label for="netHost" class="mb-0" data-i18n="net.servers.host">Host:</label>
+          <input id="netHost" type="text" class="form-control form-control-sm" style="max-width:180px">
+          <!-- ONE field: a server serves its HTTP endpoints and its control channel on the
+               same port, so there is one number to type. -->
+          <label for="netPort" class="mb-0" data-i18n="net.servers.port">Port:</label>
+          <input id="netPort" type="text" class="form-control form-control-sm" style="max-width:80px" value="8377">
+          <button id="netAdd" type="button" class="btn btn-sm btn-outline-secondary"
+                  data-i18n="net.servers.add" data-i18n-title="net.servers.add.tooltip">Add</button>
+        </div>
+      </fieldset>
+      <div id="netServersError" class="small text-danger mt-2"></div>
+    </div>
+    <div class="modal-footer py-2">
+      <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal" data-i18n="common.close">Close</button>
+    </div>
+  </div></div>
+</div>
+
+<!-- ===== FreqResp sweep busy modal - mirror of the desktop busy shell
      (FreqRespPane.openBusyShell): a SMALL, content-sized window with a title, one centered
-     status line and the fixed 520×100 live level meter, and NOTHING else — no buttons (the
-     desktop offers no cancel during collection). Dialog width = 520 meter + 2×16 body
-     padding + 2 px border = 554, so the fixed-size #frMeter is never squeezed and the box
-     wraps tightly to the content instead of Bootstrap's default 500 px empty dialog. The
-     meter is built after 'shown.bs.modal' so it sizes off the laid-out box; the shared
-     finally in captureAndDeconvolve guarantees the modal always closes on finish/error. ===== -->
+     status line, the fixed 520×100 live level meter and ONE Cancel button (the desktop gained
+     a cooperative Cancel too: a sweep the operator can see is wrong should not have
+     to be waited out). Dialog width = 520 meter + 2×16 body padding + 2 px border = 554, so
+     the fixed-size #frMeter is never squeezed and the box wraps tightly to the content instead
+     of Bootstrap's default 500 px empty dialog. The meter is built after 'shown.bs.modal' so
+     it sizes off the laid-out box; the shared finally in captureAndDeconvolve guarantees the
+     modal always closes on finish/error/cancel. ===== -->
 <div class="modal fade" id="frBusyModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
   <div class="modal-dialog modal-dialog-centered" style="max-width: 554px;"><div class="modal-content prefs">
     <div class="modal-header py-2"><h6 class="modal-title" data-i18n="freqResp.busy.title">Frequency Response Measurement</h6></div>
     <div class="modal-body">
-      <p class="mb-2 small text-center" data-i18n="freqResp.busy.message">Collecting / processing frequency response, please wait…</p>
+      <p class="mb-2 small text-center" data-i18n="freqResp.busy.message">Collecting / processing frequency response, please wait...</p>
       <canvas id="frMeter" width="520" height="100" class="fr-meter"></canvas>
+      <div class="text-center mt-2">
+        <button id="frBusyCancel" type="button" class="btn btn-sm btn-outline-secondary" data-i18n="common.cancel">Cancel</button>
+      </div>
     </div>
   </div></div>
 </div>
 
 <!-- ===== FreqResp calibration wizard (Java FreqRespWizardDialog): 3-page guided
-     flow — loopback → device-under-test → save + apply. ===== -->
+     flow - loopback -> device-under-test -> save + apply. ===== -->
 <div class="modal fade" id="frWizardModal" tabindex="-1" data-bs-backdrop="static">
   <div class="modal-dialog"><div class="modal-content prefs">
     <div class="modal-header py-2"><h6 class="modal-title" data-i18n="freqResp.wizard.title">Frequency response calibration</h6>
       <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
     <div class="modal-body">
-      <!-- Page 1: loopback (DAC → ADC). -->
+      <!-- Page 1: loopback (DAC -> ADC). -->
       <div class="fr-wiz-page" id="frWizPage1">
-        <div class="fw-semibold mb-1" data-i18n="freqResp.wizard.page1.title">1. Loopback (DAC → ADC)</div>
+        <div class="fw-semibold mb-1" data-i18n="freqResp.wizard.page1.title">1. Loopback (DAC -> ADC)</div>
         <p class="small" data-i18n="freqResp.wizard.page1.text">Connect the DAC output directly to the ADC input to measure the transfer of the measurement bench itself. When ready, press Play.</p>
         <button id="frWizPlay1" class="btn btn-sm btn-success" data-i18n-title="freqResp.button.play.start"><i class="bi bi-play-fill"></i></button>
       </div>
@@ -1377,7 +1502,7 @@
       <div class="fr-wiz-page d-none" id="frWizPage3">
         <div class="fw-semibold mb-1" data-i18n="freqResp.wizard.page3.title">3. Save calibration</div>
         <p class="small" data-i18n="freqResp.wizard.page3.text">Save the measurement as a calibration file, then press Apply to load it as the active calibration for future measurements.</p>
-        <button id="frWizSave" class="btn btn-sm btn-primary" data-i18n="freqResp.wizard.button.save">Save calibration…</button>
+        <button id="frWizSave" class="btn btn-sm btn-primary" data-i18n="freqResp.wizard.button.save">Save calibration...</button>
         <button id="frWizApply" class="btn btn-sm btn-success" disabled data-i18n="freqResp.wizard.button.apply">Apply</button>
       </div>
     </div>
@@ -1391,7 +1516,7 @@
 
 <script src="vendor/jquery/jquery.min.js"></script>
 <script src="vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
-<!-- libFLAC (WASM) for bit-exact FLAC encode/decode — vendored from npm (libflacjs).
+<!-- libFLAC (WASM) for bit-exact FLAC encode/decode - vendored from npm (libflacjs).
      FLAC_SCRIPT_LOCATION tells the loader where to fetch the companion .wasm. Optional:
      if it fails to load, the FLAC save/load paths surface a clear error. -->
 <script>window.FLAC_SCRIPT_LOCATION = 'vendor/libflac/';</script>

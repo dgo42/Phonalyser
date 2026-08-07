@@ -1,10 +1,10 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Render-time frequency-response de-embed primitives — a faithful port of the
+// Render-time frequency-response de-embed primitives - a faithful port of the
 // per-frequency helpers in org.edgo.audio.measure.dsp.FreqRespCalHelper that
 // operate on an already-loaded FreqRespCalibration ({freqs, magLin, phaseRad},
 // see io/frc.js loadFrc): interpolate (log-frequency H(f) lookup), deEmbed
@@ -13,7 +13,7 @@
 // FFT-compensation paths consume).
 //
 // CRITICAL: this is purely a RENDER-TIME correction of the measured spectrum /
-// sweep — it has NOTHING to do with the generator. The accumulator stays RAW;
+// sweep - it has NOTHING to do with the generator. The accumulator stays RAW;
 // the .frc is subtracted on the way to the screen and the measurement table.
 
 /**
@@ -66,7 +66,7 @@ export function deEmbed(re, im, magLin, phaseRad) {
 }
 
 /**
- * Convenience accessor returning H(freq) as {magLin, phaseRad} — the
+ * Convenience accessor returning H(freq) as {magLin, phaseRad} - the
  * `calResponseAt` callback shape the DAC-predistortion and FFT-compensation
  * paths inject. Returns unity (no correction) when `cal` is null.
  *

@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — the scope measurement STREAMING engine, as a pure (DOM-free) module.
+ * Phonalyser web - the scope measurement STREAMING engine, as a pure (DOM-free) module.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  *
@@ -7,7 +7,7 @@
  * processor. Its consumer (the client, on the main thread) reads every captured sample
  * exactly once from a forward SignalBufferReader and feed()s the contiguous batches here;
  * this engine carries the per-channel HF-LPF / median-despike + mains-comb filter state
- * batch to batch (never resetting the adaptive cancellers — a running absPos gives the
+ * batch to batch (never resetting the adaptive cancellers - a running absPos gives the
  * phase-locked cancellers their absStart deltas, exactly the resurrected _streamFilterGap
  * mechanics), appends the filtered samples (and a parallel RAW pre-comb copy) into a
  * rolling collection window of length oscMeasurementAverageSeconds·sampleRate, and on
@@ -16,23 +16,19 @@
  *
  * This module is DOM-free so BOTH the real Web Worker (osc-meas-worker.js) and the node
  * tests drive the exact same pipeline synchronously. It owns its per-channel filter-state
- * bags — the adaptive mains cancellers are stateful and their learned state must live
- * where the pipeline runs (the worker thread) — keyed 'L'/'R', exactly like the Java
+ * bags - the adaptive mains cancellers are stateful and their learned state must live
+ * where the pipeline runs (the worker thread) - keyed 'L'/'R', exactly like the Java
  * worker keeps measLeft/measRight etc.
  */
 import { compute, withoutTimes, withFrequency, withDualTones,
          refineFrequencyAround } from './signal-measurements.js';
-import { LowPassFilter, MedianFilter } from '../dsp/lpf.js';
 import { mainsFilterOf } from '../dsp/mains/factory.js';
 
-// Butterworth order for the scope HF spike-removal low-pass — shared with the display
-// path so display and measurement match (Java ScopeMeasurementWorker.SCOPE_HF_LPF_ORDER).
-const SCOPE_HF_LPF_ORDER = 8;
-// Notch −3 dB width (Hz) — matches the display-side combs (Java MAINS_NOTCH_BW_HZ).
+// Notch −3 dB width (Hz) - matches the display-side combs (Java MAINS_NOTCH_BW_HZ).
 const MAINS_NOTCH_BW_HZ = 2.0;
 // Half-width (Hz) of the raw-signal band used to re-pin the comb-located tone's
 // frequency (Java ScopeMeasurementWorker.FREQ_REFINE_HALF_HZ). Also the dual-tone
-// per-tone refine band around the (snapped) emitted seeds — the LONG raw window gives
+// per-tone refine band around the (snapped) emitted seeds - the LONG raw window gives
 // the residual the sub-mHz precision it needs.
 const FREQ_REFINE_HALF_HZ = 2.0;
 // Retrack the mains canceller at most this often (Java MAINS_TRACK_PERIOD ~200 ms).
@@ -40,7 +36,7 @@ const MAINS_TRACK_PERIOD_MS = 200;
 // Default measurement-average window (s) when the client hasn't posted the pref yet
 // (Java Preferences.oscMeasurementAverageSeconds default).
 const DEFAULT_AVG_SECONDS = 5.0;
-// Upper bound (samples) on the span the per-tick FREQUENCY work runs over — the compute
+// Upper bound (samples) on the span the per-tick FREQUENCY work runs over - the compute
 // crossing/Goertzel pass, the dual-tone per-tone refines, and the single-tone raw re-pin
 // (Java ScopeMeasurementWorker.MEAS_MAX_SAMPLES = 96000: measN = min(count, 96000)). A
 // Goertzel refine is O(span) × ~220 probes, so scanning the FULL prefs window (up to 5 s =
@@ -50,19 +46,25 @@ const DEFAULT_AVG_SECONDS = 5.0;
 const MEAS_MAX_SAMPLES = 96000;
 
 /**
- * The scope measurement pipeline for both channels, owning the per-channel HF-LPF +
- * mains-canceller state (stateful adaptive filters must persist across batches) AND the
- * rolling filtered/raw collection windows. Mirrors ScopeMeasurementWorker's measLpfLeft/
- * Right, measDespikeLeft/Right, measLeft/measRight, the sample-rate rebuild gates, and
- * the per-channel rolling sample collection the whole-period statistics integrate over.
+ * The scope measurement pipeline for both channels, owning the per-channel mains-canceller
+ * state (a stateful adaptive filter must persist across batches) AND the rolling
+ * filtered/raw collection windows. Mirrors ScopeMeasurementWorker's measLeft/measRight, the
+ * sample-rate rebuild gates, and the per-channel rolling sample collection the whole-period
+ * statistics integrate over.
+ *
+ * MEASUREMENTS ARE NOT HF-FILTERED (Java has no applyHfLowPass / applyChannelHf in
+ * ScopeMeasurementWorker). The display LPF / de-spike is a DISPLAY setting and lives in
+ * scope-view alone: running it over the measured window inflated Vpp by ~12 % and rise times
+ * by ~25 %, i.e. the instrument reported the filter instead of the signal. The mains comb
+ * stays - it removes a known interferer, not the signal's own band.
  */
 export class OscMeasCompute {
   constructor() {
-    // Per-channel streaming-state bags, keyed 'L'/'R'. Each holds one persistent HF
-    // filter + one persistent mains canceller (never reset — the gaps are contiguous),
-    // a running absPos for the phase-locked cancellers, the rolling filtered collection
-    // buffer + the parallel RAW (pre-comb) collection buffer used for the frequency
-    // refinement (Java refines on raw: src = raw ?: buf), and the derived window sizing.
+    // Per-channel streaming-state bags, keyed 'L'/'R'. Each holds one persistent mains
+    // canceller (never reset - the gaps are contiguous), a running absPos for the
+    // phase-locked cancellers, the rolling filtered collection buffer + the parallel RAW
+    // (pre-comb) collection buffer used for the frequency refinement (Java refines on raw:
+    // src = raw ?: buf), and the derived window sizing.
     this._st = {
       L: this._newState(),
       R: this._newState(),
@@ -73,20 +75,17 @@ export class OscMeasCompute {
     // Scratch reused by measureWindow (one-shot fallback) so the sync path allocates nothing
     // per call once warm.
     this._oneShot = {
-      L: { scratch: null, raw: null, tail: null, lpf: null, lpfMode: null, lpfRate: 0,
-           mains: null, mainsMode: null, mainsRate: 0, trackT0: 0 },
-      R: { scratch: null, raw: null, tail: null, lpf: null, lpfMode: null, lpfRate: 0,
-           mains: null, mainsMode: null, mainsRate: 0, trackT0: 0 },
+      L: { scratch: null, raw: null, tail: null, mains: null, mainsMode: null, mainsRate: 0, trackT0: 0 },
+      R: { scratch: null, raw: null, tail: null, mains: null, mainsMode: null, mainsRate: 0, trackT0: 0 },
     };
     this._nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
   }
 
   _newState() {
     return {
-      lpf: null, lpfMode: null, lpfRate: 0,
       mains: null, mainsMode: null, mainsRate: 0, trackT0: 0,
       absPos: 0,
-      // Rolling collection: filtered (post HF+comb) + raw (pre-comb) parallel copies, a
+      // Rolling collection: filtered (post-comb) + raw (pre-comb) parallel copies, a
       // circular fill head + a resident count, and the current window capacity in samples.
       collect: null, collectRaw: null, head: 0, size: 0, cap: 0,
       sampleRate: 0, avgSamples: 0,
@@ -143,45 +142,31 @@ export class OscMeasCompute {
   }
 
   /**
-   * Streaming feed: applies the channel's PERSISTENT HF-LPF / median-despike + mains
-   * comb (state carried batch to batch, running absPos for the phase-locked cancellers —
-   * NO reset, the resurrected _streamFilterGap mechanics) to a contiguous batch of raw
-   * samples, then appends both the filtered and the RAW (pre-comb) samples into the
-   * channel's rolling collection window (oldest samples drop off).
+   * Streaming feed: applies the channel's PERSISTENT mains comb (state carried batch to
+   * batch, running absPos for the phase-locked cancellers - NO reset, the resurrected
+   * _streamFilterGap mechanics) to a contiguous batch of raw samples, then appends both the
+   * combed and the RAW (pre-comb) samples into the channel's rolling collection window
+   * (oldest samples drop off). NO HF filtering: the display LPF / de-spike is a display
+   * setting and never touches a measured value (see the class comment).
    *
    * @param {'L'|'R'} ch
    * @param {Float32Array} samples  the channel's raw batch (contiguous, gapless)
    * @param {number} n              valid length of `samples`
    * @param {number} sampleRate
-   * @param {object} opts           { lpfMode, mainsMode, avgSeconds }
+   * @param {object} opts           { mainsMode, avgSeconds }
    */
   feed(ch, samples, n, sampleRate, opts) {
     if (!(n > 0) || !(sampleRate > 0)) return;
     const st = this._st[ch];
-    const lpfMode = opts.lpfMode || 'NONE';
     const mainsMode = opts.mainsMode || 'NONE';
     const avgSeconds = opts.avgSeconds > 0 ? opts.avgSeconds : DEFAULT_AVG_SECONDS;
     this._ensureCollection(st, sampleRate, avgSeconds);
 
-    // Filtered working copy (HF + mains applied in place); the RAW batch stays in
-    // `samples` so we can append the pre-comb signal in parallel.
+    // Combed working copy (mains applied in place); the RAW batch stays in `samples` so we
+    // can append the pre-comb signal in parallel.
     let out = st.scratch;
     if (!out || out.length < n) { out = new Float32Array(n); st.scratch = out; }
     out.set(samples.subarray(0, n));
-
-    // --- HF cleanup, PERSISTENT (no per-batch reset → continuous stream) ---
-    if (lpfMode === 'HZ_80') {
-      if (!st.lpf || st.lpfMode !== 'HZ_80' || st.lpfRate !== sampleRate) {
-        st.lpf = new LowPassFilter(sampleRate, 80000.0, SCOPE_HF_LPF_ORDER);
-        st.lpfMode = 'HZ_80'; st.lpfRate = sampleRate;
-      }
-      if (st.lpf.isActive()) st.lpf.process(out, n);   // NO reset → carries state
-    } else if (lpfMode === 'DESPIKE') {
-      if (!st.lpf || st.lpfMode !== 'DESPIKE') { st.lpf = new MedianFilter(7); st.lpfMode = 'DESPIKE'; }
-      st.lpf.process(out, n);
-    } else {
-      st.lpf = null; st.lpfMode = null;
-    }
 
     // --- mains-hum suppression, PERSISTENT canceller over the contiguous stream ---
     if (mainsMode !== 'NONE') {
@@ -193,7 +178,7 @@ export class OscMeasCompute {
       if ((now - st.trackT0) >= MAINS_TRACK_PERIOD_MS || !st.mains.isTuned()) {
         st.mains.track(out, n); st.trackT0 = now;
       }
-      // NO reset → continuous canceller; the running absPos gives the phase-locked
+      // NO reset -> continuous canceller; the running absPos gives the phase-locked
       // cancellers their absStart deltas across the contiguous gaps.
       st.mains.processPreservingDc(out, n, st.absPos);
     } else {
@@ -262,9 +247,10 @@ export class OscMeasCompute {
   /**
    * One-shot fallback: runs the SAME measurement pipeline over ONE already-captured raw
    * window (the view's synchronous displayed-window measurement, used when no live worker
-   * stream is publishing — e.g. the node tests / a directly-injected measurement window).
-   * Filters the window with per-call-reset filters (like the display path — a single
-   * standalone window, not a stream), then measures it exactly as publish() does.
+   * stream is publishing - e.g. the node tests / a directly-injected measurement window).
+   * Combs the window with a per-call-reset mains canceller (a single standalone window, not a
+   * stream), then measures it exactly as publish() does - and, exactly as publish() does, with
+   * no HF filtering at all.
    *
    * @param {'L'|'R'} ch
    * @param {Float32Array} rawWin  the channel's raw (unfiltered) window samples
@@ -272,30 +258,16 @@ export class OscMeasCompute {
    * @param {number} sampleRate
    * @param {number} peakVolts
    * @param {number} absStart      absolute index of rawWin[0] (mains phase)
-   * @param {object} opts          { lpfMode, mainsMode, dual, f1Hz, f2Hz }
+   * @param {object} opts          { mainsMode, dual, f1Hz, f2Hz }
    * @returns {object|null}
    */
   measureWindow(ch, rawWin, n, sampleRate, peakVolts, absStart, opts) {
     if (n < 64) return null;
-    const { lpfMode, mainsMode, dual, f1Hz, f2Hz } = opts;
+    const { mainsMode, dual, f1Hz, f2Hz } = opts;
     const os = this._oneShot[ch];
     let filt = os.scratch;
     if (!filt || filt.length < n) { filt = new Float32Array(n); os.scratch = filt; }
     filt.set(rawWin.subarray(0, n));
-
-    // HF cleanup — standalone window, so RESET before processing (display-path parity).
-    if (lpfMode === 'HZ_80') {
-      if (!os.lpf || os.lpfMode !== 'HZ_80' || os.lpfRate !== sampleRate) {
-        os.lpf = new LowPassFilter(sampleRate, 80000.0, SCOPE_HF_LPF_ORDER);
-        os.lpfMode = 'HZ_80'; os.lpfRate = sampleRate;
-      }
-      if (os.lpf.isActive()) { os.lpf.reset(); os.lpf.process(filt, n); }
-    } else if (lpfMode === 'DESPIKE') {
-      if (!os.lpf || os.lpfMode !== 'DESPIKE') { os.lpf = new MedianFilter(7); os.lpfMode = 'DESPIKE'; }
-      os.lpf.process(filt, n);
-    } else {
-      os.lpf = null; os.lpfMode = null;
-    }
 
     if (mainsMode && mainsMode !== 'NONE') {
       if (!os.mains || os.mainsRate !== sampleRate || os.mainsMode !== mainsMode) {
@@ -323,13 +295,13 @@ export class OscMeasCompute {
    * whole-period compute (for Vpp + single-tone frequency/times), the weak-signal
    * async-frequency fallback + raw-band re-pin (single tone) or the dual-tone tone-pair
    * refine (dual), then re-bounds Vmean/Vrms over the LARGEST WHOLE NUMBER OF PERIODS that
-   * fits the window ANCHORED AT ITS END — single: whole carrier periods (1/f); dual: whole
+   * fits the window ANCHORED AT ITS END - single: whole carrier periods (1/f); dual: whole
    * reconstructed-beat periods (1/|f1−f2|).
    */
   _extract(ch, filt, raw, n, sampleRate, peakVolts, mainsMode, dual, f1Hz, f2Hz) {
     // Comb-settle tail trim (Java measureChannel IIR_COMB branch): the comb's delay
     // lines start zeroed each pass, so its head is an un-suppressed pass-through that
-    // would skew Vpp/Vrms — measure the settled TAIL (≈3 time-constants in, capped so at
+    // would skew Vpp/Vrms - measure the settled TAIL (≈3 time-constants in, capped so at
     // least half remains). This trims the (oldest) head of the collection window.
     let data = filt, mN = n;
     if (mainsMode === 'IIR_COMB') {
@@ -354,7 +326,7 @@ export class OscMeasCompute {
     let wp = null;   // { mean, rms } over the largest whole-period, end-anchored window
 
     if (dual) {
-      // Two simultaneous fundamentals — clear the single-value time fields (Java
+      // Two simultaneous fundamentals - clear the single-value time fields (Java
       // withoutTimes), then refine BOTH tones over the bounded RAW tail from the emitted
       // (snap-aware) seeds ±FREQ_REFINE_HALF_HZ. The raw window is free of the comb's notch
       // bias; ≤96000 samples (≥0.5 s) already resolves the seeds to sub-mHz.
@@ -373,11 +345,11 @@ export class OscMeasCompute {
       // Whole-period Vmean/Vrms over the RECONSTRUCTED BEAT (spec §4b: 1/|f1−f2| from the
       // refined captured pair). DEVIATION (correctness, preserving §4b's whole-period,
       // end-anchored intent): a window that is a whole number of |f1−f2| beat periods only
-      // nulls the two carriers when |f1−f2| divides BOTH tone frequencies — which it does
+      // nulls the two carriers when |f1−f2| divides BOTH tone frequencies - which it does
       // NOT for a general bin-snapped pair (e.g. the spec's 9999.023/11000.977: |f1−f2| =
       // 342·bin but f1 = 3413·bin, so whole-beat integration leaves a ~3 µV per-tone
       // residual, far over the "<1 µV" target). The correct whole-period null is the
-      // window that is SIMULTANEOUSLY a whole number of BOTH tones' periods — the true
+      // window that is SIMULTANEOUSLY a whole number of BOTH tones' periods - the true
       // signal fundamental. So take the largest end-anchored window that is whole f1
       // periods AND lands within a small fraction of a whole f2 period (which recurs on the
       // beat, so the search is short). Falls back to whole f1 periods alone otherwise.
@@ -397,7 +369,7 @@ export class OscMeasCompute {
         const precise = refineFrequencyAround(rawTail, rawN, sampleRate, meas.frequency, FREQ_REFINE_HALF_HZ);
         if (Number.isFinite(precise)) meas = withFrequency(meas, precise);
       }
-      // Whole CARRIER periods (1/f) — exact for a single tone (the sub-sample rounding
+      // Whole CARRIER periods (1/f) - exact for a single tone (the sub-sample rounding
       // residual is second-order), end-anchored at the window's newest sample (§4b).
       if (Number.isFinite(meas.frequency) && meas.frequency > 0) {
         wp = this._wholePeriodMeanRms(data, mN, sampleRate, meas.frequency);
@@ -426,7 +398,7 @@ export class OscMeasCompute {
 
   /**
    * Mean + AC-RMS over the largest END-ANCHORED window that is a whole number of `f1`
-   * periods AND (within a small tolerance) a whole number of `f2` periods — i.e. the true
+   * periods AND (within a small tolerance) a whole number of `f2` periods - i.e. the true
    * common fundamental of the two tones, so BOTH carriers integrate to ~0 and only the DC
    * remains. Scans whole-f1-period windows from the largest down; the f2-aligned one
    * recurs on the beat period, so the scan terminates quickly. Falls back to the largest
@@ -437,7 +409,7 @@ export class OscMeasCompute {
     if (!(p1 >= 2) || !(p2 >= 2)) return null;
     const kMax = Math.floor(n / p1);
     if (kMax < 1) return null;
-    const TOL = 0.02;   // ≤2% of an f2 period of residual phase → sub-µV per-tone leakage
+    const TOL = 0.02;   // ≤2% of an f2 period of residual phase -> sub-µV per-tone leakage
     let win = Math.min(n, Math.round(kMax * p1));   // fallback: largest whole-f1 window
     for (let k = kMax; k >= 1; k--) {
       const w = Math.round(k * p1);

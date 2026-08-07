@@ -1,10 +1,10 @@
 /*
- * Phonalyser web — "Tip of the day" popup (browser port of gui/tips/TipOfTheDayDialog).
+ * Phonalyser web - "Tip of the day" popup (browser port of gui/tips/TipOfTheDayDialog).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * Faithful port of org.edgo.audio.measure.gui.tips.TipOfTheDayDialog: a small,
  * title-less, NON-MODAL popup docked over the viewport's bottom-left corner (12px
- * margin). It floats on top of the app but never blocks it — the user keeps
+ * margin). It floats on top of the app but never blocks it - the user keeps
  * working while it shows. Shown at startup (auto-closing after a 20 s countdown)
  * only when Preferences.showTipsAtStartup is set, and unconditionally from the
  * Help menu. "Next tip" cycles to the next tip and permanently cancels the
@@ -106,7 +106,7 @@ export class TipDialog {
     root.appendChild(this.bodyEl);
     root.appendChild(footer);
 
-    // A click in any FREE space (not the checkbox / buttons) closes it — Java wires the
+    // A click in any FREE space (not the checkbox / buttons) closes it - Java wires the
     // closer to the shell / labels / footer, but never to the controls.
     root.addEventListener('mousedown', (e) => {
       if (e.target.closest('button, label, input')) return;
@@ -116,7 +116,7 @@ export class TipDialog {
     this.root = root;
     document.body.appendChild(root);
 
-    // Escape closes (document-level listener, removed on close — Java SWT.Traverse ESCAPE).
+    // Escape closes (document-level listener, removed on close - Java SWT.Traverse ESCAPE).
     this.onKeyDown = (e) => { if (e.key === 'Escape') this.close(); };
     document.addEventListener('keydown', this.onKeyDown);
 

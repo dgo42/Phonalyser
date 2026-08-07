@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — AudioWorklet capture processor.
+ * Phonalyser web - AudioWorklet capture processor.
  * Runs on the realtime audio thread of the INPUT AudioContext: buffers BOTH
  * captured channels (L = inputs[0][0], R = inputs[0][1]||inputs[0][0]) and posts
  * fixed-size Float32 stereo blocks (transferred, zero-copy) to the main thread,
@@ -11,8 +11,8 @@
 class CaptureProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
-    // Post one batch per display frame (~60 Hz) so the ring — and therefore the scope/FFT
-    // refresh — runs at a steady rate REGARDLESS of sample rate. A fixed sample-COUNT block
+    // Post one batch per display frame (~60 Hz) so the ring - and therefore the scope/FFT
+    // refresh - runs at a steady rate REGARDLESS of sample rate. A fixed sample-COUNT block
     // made the refresh rate = sampleRate/block (≈47 fps @ 384 kHz but only ≈5.8 fps @ 48 kHz,
     // independent of time/div). `sampleRate` is the AudioWorkletGlobalScope global = the
     // input context's actual rate. A caller can still force a block via processorOptions.

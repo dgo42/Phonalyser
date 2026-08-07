@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -11,16 +11,16 @@
 //
 // Both are the time-domain filters ScopeView.applyHfLowPass applies in place to
 // a channel's display/trigger window before the trace and trigger search read
-// it. LpfMode.HZ_80 → LowPassFilter(80 kHz); LpfMode.DESPIKE → MedianFilter.
+// it. LpfMode.HZ_80 -> LowPassFilter(80 kHz); LpfMode.DESPIKE -> MedianFilter.
 
-/** Chebyshev Type I pass-band ripple (dB) — LowPassFilter.RIPPLE_DB. */
+/** Chebyshev Type I pass-band ripple (dB) - LowPassFilter.RIPPLE_DB. */
 const RIPPLE_DB = 0.5;
 
 /**
- * Chebyshev Type I low-pass filter — a cascade of 2nd-order sections, used to
+ * Chebyshev Type I low-pass filter - a cascade of 2nd-order sections, used to
  * strip HF spikes (switching / RF pickup above the audio band) from a captured
  * channel before display / measurement. Inactive (pass-through) when the cutoff
- * is at or above Nyquist — so 80 kHz is a no-op at 48/96 kHz and only does work
+ * is at or above Nyquist - so 80 kHz is a no-op at 48/96 kHz and only does work
  * at the high sample rates where such spikes appear.
  */
 export class LowPassFilter {
@@ -103,7 +103,7 @@ export class LowPassFilter {
 }
 
 /**
- * Sliding-window median ("de-spike") filter — for each sample outputs the
+ * Sliding-window median ("de-spike") filter - for each sample outputs the
  * median of the {@code window} samples centred on it, removing impulsive spikes
  * while preserving genuine waveform edges (no ringing). Memoryless across blocks.
  */

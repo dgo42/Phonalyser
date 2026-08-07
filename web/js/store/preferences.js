@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -9,7 +9,7 @@
 // CalibrationEntry).
 //
 // Every setting keeps the EXACT default value, the EXACT serialised key, and the
-// EXACT load/save semantics of the Java toMap/fromMap pair — including the
+// EXACT load/save semantics of the Java toMap/fromMap pair - including the
 // conditional omissions (only-when-non-null / only-when-positive), the colour
 // hex round-trip (#RRGGBB), the DAC full-scale ampl↔RMS conversion (× / ÷ √2 at
 // the serialisation boundary), the cached dBV offset and √(bin bandwidth)
@@ -23,7 +23,7 @@
 //     is (de)serialised is identical to the Java root map.
 //   * The desktop audio-backend POJO settings keep their inputDeviceName /
 //     outputDeviceName slots, which on the web map to Web Audio device IDs
-//     (MediaDeviceInfo.deviceId) — same string field, web meaning.
+//     (MediaDeviceInfo.deviceId) - same string field, web meaning.
 //   * The single-thread debounced save daemon becomes a setTimeout coalescer
 //     (SAVE_COALESCE_MS) writing to localStorage; flush() forces it out (hook it
 //     to 'pagehide'/'beforeunload' at the call site, mirroring the JVM shutdown
@@ -56,7 +56,7 @@ const FREQRESP_RATE_DEFAULT_SENTINEL = 0;
 /**
  * Per-OS default UI font as a {@code "family|size|style"} string (faithful port of
  * Preferences.defaultUiFont): Consolas 9 on Windows, Menlo 11 on macOS, DejaVu Sans
- * Mono 11 elsewhere (Linux) — each platform's standard monospace face. `sizeBump`
+ * Mono 11 elsewhere (Linux) - each platform's standard monospace face. `sizeBump`
  * enlarges the channel-button font above the base size.
  * @param {string} style
  * @param {number} sizeBump
@@ -78,12 +78,14 @@ function defaultUiFont(style, sizeBump) {
 
 import { FreqRespFilterTypeParams } from './freqresp-filter-type-params.js';
 import { fromNameOr as persistenceFromNameOr } from '../scope/scope-enums.js';
+import { quarantineStoreEntry } from './store-quarantine.js';
+import { remoteBackendOf } from '../net/net-device-ref.js';
 
 // --- enum value sets (the legal serialised names, mirroring the Java enums) ---
 const E = {
   // WEB_AUDIO and QA40X are the backends a BROWSER actually has (Java's OS backends have no
   // counterpart here). The four OS names stay legal so a value persisted by an earlier build still
-  // loads — enumOr() gates both `backend` and every perBackend map key, and an unknown name is
+  // loads - enumOr() gates both `backend` and every perBackend map key, and an unknown name is
   // silently dropped, which would orphan that backend's saved device selections.
   AudioBackendType: ['WASAPI', 'WDMKS', 'COREAUDIO', 'JAVASOUND', 'WEB_AUDIO', 'QA40X'],
   Channel: ['L', 'R'],
@@ -113,9 +115,25 @@ const E = {
 const DUAL_TONE_FORMS = new Set(['DUAL_TONE', 'DUAL_TONE_COMP']);
 
 /** Enum-name validity check returning the stored value or a fallback
- *  (mirrors Preferences.enumOr — invalid name keeps the current value). */
+ *  (mirrors Preferences.enumOr - invalid name keeps the current value). */
 function enumOr(setName, name, fallback) {
   return E[setName].includes(name) ? name : fallback;
+}
+
+/**
+ * The same check for a BACKEND SELECTION, which is not only an enum name: a server's backend is
+ * stored as `net:<its name>` (net-device-ref.js), and this client is not the authority on what a
+ * bench may offer - the name past the prefix is the SERVER's enum, not this build's.
+ *
+ * Gating those values against the local enum is what made a bench's whole settings block vanish
+ * on every reload: `net:JAVASOUND` matched nothing, the key was dropped, and prefsFor() then
+ * built a fresh default block - device, rates and widths all gone. Both the selection itself
+ * and every perBackend key go through here, so the two can no longer disagree about which
+ * values are storable.
+ */
+function backendKeyOr(name, fallback) {
+  if (E.AudioBackendType.includes(name)) return name;
+  return remoteBackendOf(name) != null ? name : fallback;
 }
 
 /** Formats a packed 0xRRGGBB int as '#RRGGBB' (Preferences.formatHtmlColor). */
@@ -335,7 +353,7 @@ export class Preferences {
     /** @type {Map<string, BackendPrefs>} keyed by AudioBackendType name. */
     this._perBackend = new Map();
     /** Component-owned preference blocks, keyed by their key() (Java: customPrefs).
-     *  Registered by their owners (backend managers), which are built lazily — so
+     *  Registered by their owners (backend managers), which are built lazily - so
      *  this fills up long after load() has run.
      *  @type {Map<string, import('../qa40x/qa40x-preferences.js').SubPreferences>} */
     this._customPrefs = new Map();
@@ -394,7 +412,7 @@ export class Preferences {
     this.oscMeasurementAverageSeconds = this._bound(5.0);
     this.oscLineWidth = this._bound(2.0);
     this.oscDotDiameter = this._bound(5);
-    // Display persistence ("digital phosphor") — GPU path only. Mode stored by enum name
+    // Display persistence ("digital phosphor") - GPU path only. Mode stored by enum name
     // (PersistenceMode), manual-seconds used only when mode == MANUAL.
     this.oscPersistenceMode = this._bound('OFF');
     this.oscPersistenceManualSeconds = this._bound(1.0);
@@ -409,20 +427,20 @@ export class Preferences {
     /** Amplitude-histogram window open state. */
     this.oscShowHistogram = this._bound(false);
     /** Bars the histogram DRAWS. Display resolution only: changing it re-aggregates the collected
-     *  micro-bins, and never discards a count. Dialog range 10…200, step 5. */
+     *  micro-bins, and never discards a count. Dialog range 10...200, step 5. */
     this.oscHistogramBins = this._bound(50);
     /** Channel the histogram shows. DELIBERATELY separate from oscMeasurementChannel: that one's
      *  subscriber clears the measurement statistics, so sharing it would make a histogram channel
      *  pick wipe the table's avg / min / max / σ. */
     this.oscHistogramChannel = this._bound('L');
     this.adcFsVoltageRms = this._bound(DEFAULT_ADC_FS_VRMS);
-    // RIGHT-channel ADC full-scale — the per-channel sibling of adcFsVoltageRms;
+    // RIGHT-channel ADC full-scale - the per-channel sibling of adcFsVoltageRms;
     // defaults to the same legacy value and mirrors it until a profile / calibration
     // sets it (Preferences.adcFsVoltageRmsRight).
     this.adcFsVoltageRmsRight = this._bound(DEFAULT_ADC_FS_VRMS);
     // In-memory PEAK amplitude; persisted as RMS (÷√2 on save, ×√2 on load).
     this.dacFsVoltageAmpl = this._bound(2.79351);
-    // RIGHT-channel DAC full-scale (PEAK amplitude) — the per-channel sibling of
+    // RIGHT-channel DAC full-scale (PEAK amplitude) - the per-channel sibling of
     // dacFsVoltageAmpl; defaults to the same value (Preferences.dacFsVoltageAmplRight).
     this.dacFsVoltageAmplRight = this._bound(2.79351);
 
@@ -446,7 +464,7 @@ export class Preferences {
     // True = the dither field displays in dBV (the user typed an explicit dBV suffix); persisted so a
     // restart keeps the choice. Mirrors Java Preferences.genDitherDbvDisplay.
     this.genDitherDbvDisplay = this._bound(false);
-    // Which output lane(s) the generator drives — the encoder gate ('BOTH' by
+    // Which output lane(s) the generator drives - the encoder gate ('BOTH' by
     // default = pre-feature behaviour). Applied at the interleave seam (the DDS
     // worklet for live playback, the genSave export path), like Java's
     // Preferences.genOutputChannels feeding PcmQuantizer / SignalFileExporter.
@@ -456,7 +474,7 @@ export class Preferences {
     this.genDpdFolder = this._bound(null);
     // The original .dpd basename per compensated slot, shown in the corrections row after a
     // reload (the web stores the .dpd TEXT in genDpd/genDpdDual, not an OS path, so without this
-    // there's nothing but a bare checkmark to show — the full OS path stays unavailable).
+    // there's nothing but a bare checkmark to show - the full OS path stays unavailable).
     this.genDpdName = this._bound(null);
     this.genDpdDualName = this._bound(null);
     this.predistortionAverages = this._bound(64);
@@ -493,7 +511,7 @@ export class Preferences {
     // ---- FFT pane ----
     this.fftLength = this._bound(65536);
     this.fftAverages = this._bound(4.0);
-    // Web-only: FFT worker-pool size (#threads select). No Java counterpart —
+    // Web-only: FFT worker-pool size (#threads select). No Java counterpart -
     // the desktop parallelises automatically.
     this.fftThreads = this._bound(1);
     this.fftStopAfterNEnabled = this._bound(false);
@@ -564,7 +582,7 @@ export class Preferences {
     this.freqRespFftSize = this._bound(4194304);
     this.freqRespDitherBits = this._bound(0);
     this.freqRespLeadInSec = this._bound(0.05);
-    // Which output lane(s) the sweep drives — the encoder gate ('BOTH' by default,
+    // Which output lane(s) the sweep drives - the encoder gate ('BOTH' by default,
     // the only behaviour before per-channel output existed). LEFT / RIGHT write
     // digital silence to the un-driven lane; both channels are still deconvolved
     // (Java Preferences.freqRespOutputChannels feeding CaptureWithGenerator).
@@ -624,19 +642,19 @@ export class Preferences {
     // ---- cached constants (recomputed on the relevant changes / on load) ----
     /** dBV = dBFS + dbvOffsetDb (= 20·log10(adcFsVoltageRms)). LEFT / LINKED / legacy offset. */
     this.dbvOffsetDb = 20.0 * Math.log10(DEFAULT_ADC_FS_VRMS);
-    /** Cached RIGHT-channel dBV↔dBFS offset (= 20·log10(adcFsVoltageRmsRight)) —
+    /** Cached RIGHT-channel dBV↔dBFS offset (= 20·log10(adcFsVoltageRmsRight)) -
      *  the per-channel sibling of dbvOffsetDb (Preferences.dbvOffsetDbRight). */
     this.dbvOffsetDbRight = 20.0 * Math.log10(DEFAULT_ADC_FS_VRMS);
-    /** √(bin bandwidth) = √(inputSampleRate / fftLength); the V→V/√Hz divisor. */
+    /** √(bin bandwidth) = √(inputSampleRate / fftLength); the V->V/√Hz divisor. */
     this.binBwSqrt = 1.0;
     /** dBr reference: the DISPLAYED fundamental level in dBFS, so DBR readings come out as
      *  dB relative to the fundamental (which therefore sits at exactly 0 dBr). A live cached
-     *  value like binBwSqrt — NOT persisted; the FFT paint path re-stamps it every frame
+     *  value like binBwSqrt - NOT persisted; the FFT paint path re-stamps it every frame
      *  (Java Preferences.fftDbrRefDbFs). */
     this.fftDbrRefDbFs = 0.0;
     // transientMode was already set from the `detached` ctor arg at the top of the
     // constructor. When true, save() is a no-op and load()/seed are skipped, so a
-    // dialog copy (copyForDialog) never touches localStorage. Do NOT reset it here —
+    // dialog copy (copyForDialog) never touches localStorage. Do NOT reset it here -
     // an unconditional `= false` clobbered the detached flag, making the wizard's copy
     // non-transient so its save() overwrote the main pane's persisted range/channel.
 
@@ -835,7 +853,7 @@ export class Preferences {
     this.save();
   }
 
-  /** Serialises one FreqRespFilterTypeParams to its map — the one serialization
+  /** Serialises one FreqRespFilterTypeParams to its map - the one serialization
    *  shape, shared by the per-type map and every preset's filterParams. */
   _writeFilterParams(p) {
     return {
@@ -900,31 +918,31 @@ export class Preferences {
     this.dacFsVoltageAmplRight.set(v);
   }
 
-  /** The ADC full-scale RMS voltage of {@code ch}: 'R' → the right scalar, else the
+  /** The ADC full-scale RMS voltage of {@code ch}: 'R' -> the right scalar, else the
    *  left / LINKED / legacy scalar (Preferences.getAdcFsVoltageRms(Channel)). */
   getAdcFsVoltageRms(ch = 'L') {
     return ch === 'R' ? this.adcFsVoltageRmsRight.get() : this.adcFsVoltageRms.get();
   }
 
-  /** The ±full-scale PEAK volts of {@code ch} (= fs(ch)·√2) —
+  /** The ±full-scale PEAK volts of {@code ch} (= fs(ch)·√2) -
    *  Preferences.getAdcPeakVolts(Channel). */
   getAdcPeakVolts(ch = 'L') {
     return this.getAdcFsVoltageRms(ch) * SQRT2;
   }
 
-  /** The cached dBV↔dBFS offset of {@code ch}: 'R' → dbvOffsetDbRight, else
+  /** The cached dBV↔dBFS offset of {@code ch}: 'R' -> dbvOffsetDbRight, else
    *  dbvOffsetDb (Preferences.getDbvOffsetDb(Channel)). */
   getDbvOffsetDb(ch = 'L') {
     return ch === 'R' ? this.dbvOffsetDbRight : this.dbvOffsetDb;
   }
 
-  /** The DAC full-scale PEAK amplitude of {@code ch}: 'R' → the right scalar, else
+  /** The DAC full-scale PEAK amplitude of {@code ch}: 'R' -> the right scalar, else
    *  the left / MONO-mirror / legacy scalar (Preferences.getDacFsVoltageAmpl(Channel)). */
   getDacFsVoltageAmpl(ch = 'L') {
     return ch === 'R' ? this.dacFsVoltageAmplRight.get() : this.dacFsVoltageAmpl.get();
   }
 
-  /** The per-lane RIGHT output scale — fsLeft/fsRight so a card with distinct DAC
+  /** The per-lane RIGHT output scale - fsLeft/fsRight so a card with distinct DAC
    *  full-scales emits the same physical level on both lanes; 1.0 when the right
    *  full-scale is non-positive (Preferences.dacRightLaneScale). */
   dacRightLaneScale() {
@@ -988,7 +1006,7 @@ export class Preferences {
    * @param {?number} [binBwSqrt=null]  √(bin bandwidth) of the spectrum being
    *        converted; null uses the cached live config.
    * @param {string} [ch='L']  the analysed channel: 'R' uses dbvOffsetDbRight, else
-   *        the left / LINKED / legacy offset (Preferences.convertFromDbFs(…, Channel)).
+   *        the left / LINKED / legacy offset (Preferences.convertFromDbFs(..., Channel)).
    * @returns {number}
    */
   convertFromDbFs(dbFs, unit, binBwSqrt = null, ch = 'L') {
@@ -1026,21 +1044,21 @@ export class Preferences {
     if (asMap(stored)) sub.fromMap(stored);
   }
 
-  /** Seeds every registered block's edit values from its live ones — the Preferences
+  /** Seeds every registered block's edit values from its live ones - the Preferences
    *  dialog calls this as it opens, so an edit abandoned by a previous Cancel cannot
    *  leak into this session (beginCustomPreferencesEdit). */
   beginCustomPreferencesEdit() {
     for (const sub of this._customPrefs.values()) sub.beginEdit();
   }
 
-  /** Commits every registered block's edit values into its live ones — called only
+  /** Commits every registered block's edit values into its live ones - called only
    *  when the Preferences dialog is closed with OK, alongside the ordinary
    *  apply-from-dialog and before the save (commitCustomPreferencesEdit). */
   commitCustomPreferencesEdit() {
     for (const sub of this._customPrefs.values()) sub.commitEdit();
   }
 
-  /** Persists after a bound change — no-op while loading; debounced into a
+  /** Persists after a bound change - no-op while loading; debounced into a
    *  single write SAVE_COALESCE_MS after the last change (requestSave). */
   _requestSave() {
     if (this.transientMode || this._loading) return;
@@ -1068,7 +1086,7 @@ export class Preferences {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify(this._toMap()));
     } catch (e) {
-      // Quota / disabled storage — match the desktop "log and continue".
+      // Quota / disabled storage - match the desktop "log and continue".
       console.warn('Failed to save preferences:', e && e.message);
     }
   }
@@ -1087,16 +1105,56 @@ export class Preferences {
     try {
       root = JSON.parse(raw);
     } catch (e) {
-      console.warn('Failed to load preferences:', e && e.message);
+      quarantineStoreEntry(PREFS_KEY, raw, e.toString());
       return;
     }
-    if (!asMap(root)) return;
+    if (!asMap(root)) {
+      quarantineStoreEntry(PREFS_KEY, raw, 'its content is not a map (empty or truncated entry)');
+      return;
+    }
     this._loading = true;
     try {
       this._fromMap(root);
     } finally {
       this._loading = false;
     }
+  }
+
+  /**
+   * The LIVE document as a plain object - exactly what {@link #save} would write, without
+   * writing it. The JSON config editor's read half (store/config-port.js), and the only
+   * public way to obtain it.
+   *
+   * @returns {Object} a fresh plain object; mutating it does not touch these preferences
+   */
+  configDocument() {
+    return this._toMap();
+  }
+
+  /**
+   * Applies an edited document to the LIVE preferences and persists it - the JSON config
+   * editor's write half (store/config-port.js).
+   *
+   * DELIBERATELY NOT {@link #load}. load() reads the document from localStorage, so applying
+   * an edit through it would round-trip the text through storage and hand the live object
+   * whatever storage echoed back - a save failure (quota, private mode) would then silently
+   * discard the edit while the dialog reported success. This takes the document it was given.
+   *
+   * `_loading` is raised for the same reason {@link #copyForDialog} raises it: it suppresses
+   * only the DEBOUNCED auto-save, so setting several hundred properties costs one write
+   * instead of a storm of them. It does not suppress change notification, so every consumer
+   * still reacts as the values land - which is what makes the edit take effect live.
+   *
+   * @param {Object} root the parsed document, already known to be valid JSON
+   */
+  applyConfigDocument(root) {
+    this._loading = true;
+    try {
+      this._fromMap(root);
+    } finally {
+      this._loading = false;
+    }
+    this.save();
   }
 
   /** Builds the serialisable document, mirroring Preferences.toMap key-for-key
@@ -1159,13 +1217,14 @@ export class Preferences {
     root.oscHistogramBins = this.oscHistogramBins.get();
     root.oscHistogramChannel = this.oscHistogramChannel.get();
     root.oscShowMeasurementTable = this.oscShowMeasurementTable.get();
-    // DEPRECATED shared full-scale calibration — the FALLBACK for a device with no card in the
-    // device-profile store (per-card calibration owns everything else). Kept read AND written for
-    // backwards compatibility, mirroring Java Preferences.toMap (65cd3c5). Only the left/shared
-    // scalars: adcFsVoltageRms and dacFsVoltageRms (= dacFsVoltageAmpl / √2, the on-disk RMS
-    // convention). The never-released Right siblings are deliberately NOT written (Java parity).
-    root.adcFsVoltageRms = this.adcFsVoltageRms.get();
-    root.dacFsVoltageRms = this.dacFsVoltageAmpl.get() / SQRT2;
+    // NOT WRITTEN - the deprecated shared full-scale scalars (adcFsVoltageRms / dacFsVoltageRms)
+    // are RUNTIME-ONLY since 1.2 (Java Preferences.toMap): they are the fallback for a
+    // device with no calibrated card, and a card that HAS its own calibration pushes its values
+    // into the very same scalars (applyInputDeviceProfile and siblings). Persisting them would
+    // therefore save the last selected card's calibration as the machine-wide default and hand it
+    // to the next uncalibrated device as if it were measured there. fromMap() still READS the
+    // keys so a pre-1.2 store seeds the fallback once; nothing writes them back, so the entry
+    // disappears with the first save.
     root.genSignalForm = this.genSignalForm.get();
     root.genFrequencyHz = this.genFrequencyHz.get();
     root.genDualToneFreq1Hz = this.genDualToneFreq1Hz.get();
@@ -1485,7 +1544,7 @@ export class Preferences {
     if (isBool(g('checkForUpdatesOnStartup'))) this.checkForUpdatesOnStartup.set(g('checkForUpdatesOnStartup'));
     if (isBool(g('includeBetaInUpdateChecks'))) this.includeBetaInUpdateChecks.set(g('includeBetaInUpdateChecks'));
     if (isBool(g('showTipsAtStartup'))) this.showTipsAtStartup.set(g('showTipsAtStartup'));
-    if (isStr(g('backend'))) this.backend.set(enumOr('AudioBackendType', g('backend'), this.backend.get()));
+    if (isStr(g('backend'))) this.backend.set(backendKeyOr(g('backend'), this.backend.get()));
     if (isNum(g('windowWidth'))) this.windowWidth.set(trunc(g('windowWidth')));
     if (isNum(g('windowHeight'))) this.windowHeight.set(trunc(g('windowHeight')));
     if (isNum(g('genPaneWidth'))) this.genPaneWidth.set(trunc(g('genPaneWidth')));
@@ -1536,12 +1595,13 @@ export class Preferences {
       this.oscHistogramChannel.set(enumOr('Channel', g('oscHistogramChannel'), this.oscHistogramChannel.get()));
     }
     if (isBool(g('oscShowMeasurementTable'))) this.oscShowMeasurementTable.set(g('oscShowMeasurementTable'));
-    // DEPRECATED shared full-scale fallback (unbound devices) — see _toMap(); honoured so a
-    // pre-card web document keeps its calibration (Java parity 65cd3c5). The setters validate and
-    // refresh the cached dBV offsets. ONLY the left/shared scalars are read: adcFsVoltageRms and
-    // dacFsVoltageRms. The never-released Right siblings are NOT read — the Right scalars keep
-    // their constructor defaults until a device profile / calibration sets them (Java performs no
-    // left→right mirror here either).
+    // DEPRECATED shared full-scale fallback (unbound devices) - RUNTIME-ONLY since 1.2: read
+    // here so a PRE-1.2 store seeds the fallback ONCE, never written back by _toMap(),
+    // so the entry disappears with the first save. The setters validate and refresh the cached
+    // dBV offsets. ONLY the left/shared scalars are read: adcFsVoltageRms and dacFsVoltageRms.
+    // The never-released Right siblings are NOT read - the Right scalars keep their constructor
+    // defaults until a device profile / calibration sets them (Java performs no left->right mirror
+    // here either).
     if (isNum(g('adcFsVoltageRms'))) this.setAdcFsVoltageRms(g('adcFsVoltageRms'));
     // Stored as RMS; the setter takes the in-memory peak amplitude (× √2).
     if (isNum(g('dacFsVoltageRms'))) this.setDacFsVoltageAmpl(g('dacFsVoltageRms') * SQRT2);
@@ -1552,10 +1612,10 @@ export class Preferences {
     if (isNum(g('genDualToneSplitPct'))) this.genDualToneSplitPct.set(g('genDualToneSplitPct'));
     if (isNum(g('genAmplitudeVrms'))) this.genAmplitudeVrms.set(g('genAmplitudeVrms'));
     if (isBool(g('genAmplitudeDbvDisplay'))) this.genAmplitudeDbvDisplay.set(g('genAmplitudeDbvDisplay'));
-    // Fractional double now (Java int→double): NO trunc, so a fractional dither round-trips.
+    // Fractional double now (Java int->double): NO trunc, so a fractional dither round-trips.
     if (isNum(g('genDitherBits'))) this.genDitherBits.set(g('genDitherBits'));
     if (isBool(g('genDitherDbvDisplay'))) this.genDitherDbvDisplay.set(g('genDitherDbvDisplay'));
-    // Absent / invalid key keeps the current value (default BOTH) — old files stay on BOTH
+    // Absent / invalid key keeps the current value (default BOTH) - old files stay on BOTH
     // (mirrors Java enumOr(OutputChannels.class, s, genOutputChannels.get())).
     if (isStr(g('genOutputChannels'))) this.genOutputChannels.set(enumOr('OutputChannels', g('genOutputChannels'), this.genOutputChannels.get()));
     if (isStr(g('genDpd'))) this.genDpd.set(g('genDpd'));
@@ -1686,7 +1746,7 @@ export class Preferences {
     }
     if (isNum(g('freqRespDitherBits'))) this.freqRespDitherBits.set(trunc(g('freqRespDitherBits')));
     if (isNum(g('freqRespLeadInSec'))) this.freqRespLeadInSec.set(g('freqRespLeadInSec'));
-    // Absent / invalid key keeps the current value (default BOTH) — old files stay on BOTH
+    // Absent / invalid key keeps the current value (default BOTH) - old files stay on BOTH
     // (mirrors Java enumOr(OutputChannels.class, s, freqRespOutputChannels.get())).
     if (isStr(g('freqRespOutputChannels'))) this.freqRespOutputChannels.set(enumOr('OutputChannels', g('freqRespOutputChannels'), this.freqRespOutputChannels.get()));
     if (isNum(g('tuneNotchStartHz'))) this.tuneNotchStartHz.set(g('tuneNotchStartHz'));
@@ -1854,7 +1914,7 @@ export class Preferences {
     if (asMap(g('perBackend'))) {
       for (const [key, bpMap] of Object.entries(g('perBackend'))) {
         if (!isStr(key)) continue;
-        const type = enumOr('AudioBackendType', key, null);
+        const type = backendKeyOr(key, null);
         if (type == null) continue;
         const bp = this.prefsFor(type);
         if (asMap(bpMap)) {

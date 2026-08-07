@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -10,12 +10,12 @@
 // typedef below; its registry is Preferences.registerCustomPreferences /
 // beginCustomPreferencesEdit / commitCustomPreferencesEdit in js/store/preferences.js.
 //
-// The QA402/QA403 settings block — the `custom.qa40x` section of the persisted
+// The QA402/QA403 settings block - the `custom.qa40x` section of the persisted
 // preferences document (preferences.yaml on the desktop, the localStorage JSON here).
 // Owned by Qa40xDeviceManager, which registers it with Preferences; the QA40x settings
 // dialog edits it and the Preferences dialog's OK commits it.
 
-/** This block's prefix inside the `custom` section — one per owning backend.
+/** This block's prefix inside the `custom` section - one per owning backend.
  *  Unique across implementations and stable across releases: it is what saved
  *  documents are keyed by. */
 const KEY = 'qa40x';
@@ -23,7 +23,7 @@ const KEY = 'qa40x';
 const KEY_I2S = 'i2s';
 
 /**
- * A block of preferences owned by one component rather than by Preferences itself —
+ * A block of preferences owned by one component rather than by Preferences itself -
  * the settings a single backend has and no other does (the QA40x front-panel I2S
  * port, for instance). The owner registers an implementation with
  * Preferences.registerCustomPreferences, and Preferences then persists it and drives
@@ -33,7 +33,7 @@ const KEY_I2S = 'i2s';
  * on and what gets saved) and an EDIT value (what the settings dialog is changing).
  * beginEdit() seeds edit from live when the Preferences dialog opens; commitEdit()
  * copies edit into live when that dialog is closed with OK. Cancel simply never
- * commits, so an abandoned edit dies with the dialog — the same contract as
+ * commits, so an abandoned edit dies with the dialog - the same contract as
  * Preferences.copyForDialog / applyFromDialog for the ordinary preferences.
  *
  * **Registration can arrive late.** Backend managers are built lazily, so an
@@ -49,7 +49,7 @@ const KEY_I2S = 'i2s';
  *           empty block.
  * @property {(map: *) => void} fromMap  restores LIVE values from a previously saved
  *           block. Absent or unrecognised entries must keep the current value rather
- *           than throw — the document may come from an older or newer release.
+ *           than throw - the document may come from an older or newer release.
  * @property {() => void} beginEdit  seeds the edit values from the live ones; called
  *           when the Preferences dialog opens, so a previously cancelled edit never
  *           leaks into the next session of the dialog.
@@ -59,7 +59,7 @@ const KEY_I2S = 'i2s';
 
 /**
  * The QA402/QA403 settings block: exactly one setting, held twice per the
- * {@link SubPreferences} contract — the LIVE value the backend runs on and gets
+ * {@link SubPreferences} contract - the LIVE value the backend runs on and gets
  * saved, and the EDIT value the settings dialog is changing until OK.
  *
  * @implements {SubPreferences}
@@ -74,7 +74,7 @@ export class Qa40xPreferences {
     this._i2sEnabledEdit = false;
   }
 
-  /** @returns {boolean} the live I2S port state — what the backend runs on and saves. */
+  /** @returns {boolean} the live I2S port state - what the backend runs on and saves. */
   i2sEnabled() {
     return this._i2sEnabled;
   }
@@ -93,7 +93,7 @@ export class Qa40xPreferences {
   setI2sEnabledEdit(enabled) {
     // Java's parameter is a primitive boolean; JS has no such guarantee, and a truthy
     // non-boolean stored here would be serialised as-is and then dropped by the
-    // boolean type gate in fromMap() — silently losing the setting on the next load.
+    // boolean type gate in fromMap() - silently losing the setting on the next load.
     this._i2sEnabledEdit = !!enabled;
   }
 

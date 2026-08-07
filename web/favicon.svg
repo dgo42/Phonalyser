@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Phonalyser app icon — stylised Greek Φ (phi) with a sine wave threaded
+  Phonalyser app icon - stylised Greek Φ (phi) with a sine wave threaded
   horizontally through the circle.  Designed for 256×256 base size; reads
   cleanly down to 16×16 because the phi silhouette is dominant.
 
   Colours:
     background  #0c2538  deep navy (scope-screen vibe)
-    phi glyph   #0057b8  teal — primary brand colour
-    sine wave   #ffd700  warm amber — complementary signal accent
+    phi glyph   #0057b8  teal - primary brand colour
+    sine wave   #ffd700  warm amber - complementary signal accent
 -->
 <svg xmlns="http://www.w3.org/2000/svg"
      viewBox="0 0 256 256" width="256" height="256">

@@ -1,12 +1,12 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Iterative in-place radix-2 Cooley–Tukey FFT on parallel real/imag Float64Array.
-// JavaScript `number` is IEEE-754 binary64 — the same type as the desktop's Java
-// `double` — so this produces bit-identical results to the Java FFT engine.
+// Iterative in-place radix-2 Cooley-Tukey FFT on parallel real/imag Float64Array.
+// JavaScript `number` is IEEE-754 binary64 - the same type as the desktop's Java
+// `double` - so this produces bit-identical results to the Java FFT engine.
 
 /** @returns {boolean} true when n is a power of two (and > 0). */
 export function isPow2(n) { return n > 0 && (n & (n - 1)) === 0; }
@@ -17,7 +17,7 @@ export function isPow2(n) { return n > 0 && (n & (n - 1)) === 0; }
  */
 export function fft(re, im) {
   const n = re.length;
-  // Gold–Rader bit reversal.
+  // Gold-Rader bit reversal.
   for (let i = 1, j = 0; i < n; i++) {
     let bit = n >> 1;
     for (; j & bit; bit >>= 1) j ^= bit;

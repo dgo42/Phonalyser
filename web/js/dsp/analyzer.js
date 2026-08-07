@@ -1,11 +1,11 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
 // Pure metric computation over a single-sided magnitude spectrum (dBFS).
-// Stateless — the averaging/accumulation lives in the engine; this only reads
+// Stateless - the averaging/accumulation lives in the engine; this only reads
 // out the figures of merit (fundamental level, THD, harmonic table, noise floor).
 
 /** Peak linear amplitude within ±2 bins of `bin` (robust to a fraction-of-a-bin offset). */

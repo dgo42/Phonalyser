@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -20,7 +20,7 @@
  * Generator-shaped snapshot of the non-zero correction phasors.
  * @typedef {Object} HarmonicGeneratorCorrections
  * @property {Float64Array} ampRatios       per-harmonic amplitude ratio to the DAC fundamental
- * @property {Int32Array}   harmonicNumbers harmonic number (2, 3, …) of each entry
+ * @property {Int32Array}   harmonicNumbers harmonic number (2, 3, ...) of each entry
  * @property {Float64Array} phiInits        de-embedded initial phase (rad) of each entry
  */
 
@@ -43,7 +43,7 @@ export class HarmonicCompensation {
    *
    * The fundamental phase is the per-round frame reference: φ₁ is the measured
    * arg(X₁) MINUS the .frc phase at f₁ (`calFundPhaseRad`); the whole spectrum is
-   * de-rotated by it (each harmonic by n·φ₁) so F0 → 0° and every round lands in
+   * de-rotated by it (each harmonic by n·φ₁) so F0 -> 0° and every round lands in
    * the same frame. The cal-phase subtraction removes the twin-T notch's ≈π.
    *
    * @param {import('../fft/fft-result.js').FftResult} r measured FFT result
@@ -82,15 +82,15 @@ export class HarmonicCompensation {
 
   /**
    * Converts the accumulated ABSOLUTE (ADC-dBFS) phasors to the generator's
-   * compensation triple — applying HERE (on the values that reach the DDS): the
-   * .frc de-embed (magnitude AND phase), the ADC-dBFS → absolute-volts conversion,
+   * compensation triple - applying HERE (on the values that reach the DDS): the
+   * .frc de-embed (magnitude AND phase), the ADC-dBFS -> absolute-volts conversion,
    * and the division by the DAC fundamental. Harmonics that never rose above the
    * gate are dropped.
    *
    * @param {number} fundamentalHz fundamental frequency (Hz)
    * @param {(f: number) => [number, number]} calResponseAt returns the loaded
    *        .frc response [magLin, phaseRad] at a frequency
-   * @param {number} adcFsVoltageRms ADC full-scale (Vrms) — dBFS → Vrms
+   * @param {number} adcFsVoltageRms ADC full-scale (Vrms) - dBFS -> Vrms
    * @param {number} dacFundamentalVrms DAC fundamental output (Vrms) the ratio is taken against
    * @returns {HarmonicGeneratorCorrections}
    */
@@ -108,7 +108,7 @@ export class HarmonicCompensation {
       if (re === 0.0 && im === 0.0) continue;
       const cal = calResponseAt(this.hFreqs[h]);                     // [magLin, phaseRad] of H(f_h)
       const magDe = Math.hypot(re, im) / (cal[0] > 0.0 ? cal[0] : 1.0);    // ÷ chain magnitude (de-embed)
-      const vH = magDe * adcFsVoltageRms;                            // ADC dBFS → absolute Vrms at DAC out
+      const vH = magDe * adcFsVoltageRms;                            // ADC dBFS -> absolute Vrms at DAC out
       amp[i] = dacFundamentalVrms > 0.0 ? vH / dacFundamentalVrms : 0.0;   // ratio to the DAC fundamental
       phi[i] = Math.atan2(im, re) - cal[1];                          // − chain phase (de-embed)
       num[i] = Math.round(this.hFreqs[h] / fundamentalHz);
@@ -117,7 +117,7 @@ export class HarmonicCompensation {
     return { ampRatios: amp, harmonicNumbers: num, phiInits: phi };
   }
 
-  /** Deep copy — lets the wizard snapshot the best-THD iteration's accumulator
+  /** Deep copy - lets the wizard snapshot the best-THD iteration's accumulator
    *  while the loop keeps updating the live one. */
   copy() {
     const c = new HarmonicCompensation(this.maxHarmonics);

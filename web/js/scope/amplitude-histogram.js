@@ -1,35 +1,35 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Faithful port of org.edgo.audio.measure.gui.scope.AmplitudeHistogram — the amplitude
+// Faithful port of org.edgo.audio.measure.gui.scope.AmplitudeHistogram - the amplitude
 // histogram's accumulator: geometry, ranging, aggregation. No DOM, no canvas; the plot lives in
 // scope/histogram-view.js and the binning in the measurement path.
 //
 // The rules below were each a shipped-and-rejected defect on the Java bench, so they are
 // requirements rather than preferences:
 //
-//   • RESOLUTION FOLLOWS THE SIGNAL, never full scale. Dividing ±full-scale into fixed bins gave a
-//     2.5 mV bin on a 1.79 V-RMS card — six orders of magnitude coarser than the ~1.18 nV a 32-bit
-//     converter resolves — so a millivolt signal occupied ~2 bins and the plot collapsed to two
+//   - RESOLUTION FOLLOWS THE SIGNAL, never full scale. Dividing ±full-scale into fixed bins gave a
+//     2.5 mV bin on a 1.79 V-RMS card - six orders of magnitude coarser than the ~1.18 nV a 32-bit
+//     converter resolves - so a millivolt signal occupied ~2 bins and the plot collapsed to two
 //     bars. The range comes from the signal's own peak (fit()).
-//   • ACCUMULATE FAR FINER THAN YOU DRAW. MICRO_PER_BAR micro-bins per displayed bar; the renderer
+//   - ACCUMULATE FAR FINER THAN YOU DRAW. MICRO_PER_BAR micro-bins per displayed bar; the renderer
 //     sums whole groups into bars, so a bar is never narrower than one micro-bin and the plot
 //     cannot break into a comb of stripes with gaps.
-//   • THE RANGE IS SYMMETRIC ABOUT ZERO. The samples are binned exactly as captured — no DC
-//     removal — and the plot resolves the offset at paint time by centring on the distribution's
+//   - THE RANGE IS SYMMETRIC ABOUT ZERO. The samples are binned exactly as captured - no DC
+//     removal - and the plot resolves the offset at paint time by centring on the distribution's
 //     own mean (meanBin), so a DC offset changes what the axis is measured FROM, not which bin a
 //     sample lands in.
-//   • RE-RANGING CLEARS THE COUNTS. Counts gathered at a materially different level describe a
+//   - RE-RANGING CLEARS THE COUNTS. Counts gathered at a materially different level describe a
 //     different signal; merging would present two populations as one distribution.
 
 /** Micro-bins accumulated per displayed bar. */
 export const MICRO_PER_BAR = 256;
 
 /**
- * Narrowest permitted bin, in normalised units — one code of a 32-bit converter. Not a practical
+ * Narrowest permitted bin, in normalised units - one code of a 32-bit converter. Not a practical
  * resolution limit (the analog noise floor sits tens of dB above the LSB); it exists so a
  * dead-flat digital-loopback block cannot produce a zero-width range and a divide-by-zero.
  */
@@ -46,7 +46,7 @@ export class AmplitudeHistogram {
    */
   constructor(displayBars) {
     // THROWS on unusable geometry rather than clamping (Java: IllegalArgumentException). A caller
-    // asking for one bar has a bug — a single bar is not a distribution — and silently widening it
+    // asking for one bar has a bug - a single bar is not a distribution - and silently widening it
     // would hide that behind a plot that looks plausible.
     const bars = Math.trunc(displayBars);
     if (!Number.isFinite(bars) || bars < MIN_DISPLAY_BARS) {
@@ -110,7 +110,7 @@ export class AmplitudeHistogram {
   }
 
   /**
-   * Counts one sample, EXACTLY AS CAPTURED — no DC removal, no filtering. A value outside the
+   * Counts one sample, EXACTLY AS CAPTURED - no DC removal, no filtering. A value outside the
    * range clamps to the edge bin rather than being dropped, so the tails stay visible.
    *
    * @param {number} v normalised sample
@@ -181,7 +181,7 @@ export class AmplitudeHistogram {
   }
 
   /**
-   * The count-weighted centroid, in bin units — the distribution's own middle, which is what the
+   * The count-weighted centroid, in bin units - the distribution's own middle, which is what the
    * plot centres on so a DC offset relabels the axis instead of pushing the shape off-screen.
    *
    * @returns {number} the centroid in bin units, or -1 when empty
@@ -216,7 +216,7 @@ export class AmplitudeHistogram {
     for (let i = from; i < to; i++) {
       const c = this._counts[i];
       if (c <= 0) continue;
-      // The source bin's CENTRE decides its bucket — never its edge, which would let a bin
+      // The source bin's CENTRE decides its bucket - never its edge, which would let a bin
       // straddling a boundary be counted twice or not at all.
       let bucket = Math.floor(((i + 0.5 - from) / span) * buckets);
       if (bucket < 0) bucket = 0;

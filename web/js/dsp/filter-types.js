@@ -1,11 +1,11 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
 // Faithful port of org.edgo.audio.measure.enums.FilterType, FilterResponse and
-// UnevenMode. Declaration order is load-bearing — it IS the combo / radio-group
+// UnevenMode. Declaration order is load-bearing - it IS the combo / radio-group
 // order in the Frequency-Response filter UI, so keep these object keys in order
 // (Object.values preserves insertion order).
 
@@ -28,7 +28,7 @@ export const FilterResponse = Object.freeze({
 
 /**
  * true for the families with a user-settable ripple parameter (Chebyshev I
- * passband ripple, Elliptic passband ripple, and — reusing the same field —
+ * passband ripple, Elliptic passband ripple, and - reusing the same field -
  * Inverse Chebyshev stopband ripple). Port of FilterResponse.hasRipple().
  * @param {string} response a FilterResponse value
  * @returns {boolean}

@@ -1,4 +1,4 @@
-# Phonalyser web — build targets
+# Phonalyser web - build targets
 
 All commands run from `web/`. Output goes to `docs/web/` (a static site you can serve from
 any web server).
@@ -8,8 +8,8 @@ any web server).
 | Command | What it does | When |
 |---|---|---|
 | `npm run build` | Production build: bundles the app + workers (minified, linked source maps), copies static assets (`css`, `i18n`, `assets`, favicon, manifest) and the minimal vendor files, and stamps the version from `package.json`. **Does NOT touch the help** (kept fast). | Normal deploys. |
-| `npm run build:debug` | Same as `build` but **unminified with inline source maps**, so DevTools → Sources shows the real module source and breakpoints hit. | Debugging the bundled app. |
-| `npm run build:copy-help` | Regenerates the help search index (`window.HELP_DOCS` per language, via `scripts/build-help-index.mjs`) and copies `web/help` → `docs/web/help`. Writes **into the existing `docs/web/`**, so run it **after** `npm run build`. | Only when the help changed. |
+| `npm run build:debug` | Same as `build` but **unminified with inline source maps**, so DevTools -> Sources shows the real module source and breakpoints hit. | Debugging the bundled app. |
+| `npm run build:copy-help` | Regenerates the help search index (`window.HELP_DOCS` per language, via `scripts/build-help-index.mjs`) and copies `web/help` -> `docs/web/help`. Writes **into the existing `docs/web/`**, so run it **after** `npm run build`. | Only when the help changed. |
 
 A full deploy with help: `npm run build && npm run build:copy-help`.
 

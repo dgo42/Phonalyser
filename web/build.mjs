@@ -1,16 +1,16 @@
 /*
- * Phonalyser web — production build. Bundles the app's ES modules with esbuild
+ * Phonalyser web - production build. Bundles the app's ES modules with esbuild
  * into the fewest files (cut HTTP requests) under docs/web/, copies the static
  * assets + npm-vendored libs, and rewrites index.html / sw.js with the version
  * from package.json (the single source of truth). That version is also synced back
  * into the SOURCE index.html / sw.js, so the unbundled web/ served in dev shows the
- * same version — package.json is the ONLY place the version is hand-edited.
+ * same version - package.json is the ONLY place the version is hand-edited.
  *
  * URL resolution (the load-bearing invariant): backend.js, once bundled INTO
  * the output app.js, runs `new URL('./fft-worker.js', import.meta.url)` and
  * `new URL('./worklets/<name>.js', import.meta.url)`. At runtime import.meta.url
  * is the location of app.js, so those resolve to its siblings fft-worker.js and
- * worklets/<name>.js — which is exactly where we emit them. esbuild leaves
+ * worklets/<name>.js - which is exactly where we emit them. esbuild leaves
  * `new URL(..., import.meta.url)` untouched (intended), so no code change.
  * GNU AGPL v3 or later.
  */
@@ -20,21 +20,33 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-// Compiled app output: <repo>/docs/web (was web/dist). All emitted files (app.js, workers,
-// worklets, vendor.js, index.html, sw.js, version.json, copied static assets, help) live here
-// together, so the `new URL('./x', import.meta.url)` sibling resolution below is unaffected.
-const outDir = path.join(root, '..', 'docs', 'web');
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const VERSION = pkg.version;
 
-// `node build.mjs --debug` → a readable, breakpoint-friendly build: no minification
+// `node build.mjs --debug` -> a readable, breakpoint-friendly build: no minification
 // and INLINE source maps, so the browser devtools show the original module source.
 // (Production `node build.mjs` stays minified with linked .map files.)
 const DEBUG = process.argv.includes('--debug') || process.argv.includes('-d');
 
-// Entry → output. ESM for the app/worker (modern module loaders); IIFE for the
-// AudioWorklets — addModule loads them as CLASSIC scripts, so they must be
+// `node build.mjs --embedded` -> the packaging a Phonalyser server serves at `/`: the SAME source
+// tree, built with the local backends compiled out (js/shell/build-profile.js). It lands in its
+// own directory because the two packagings must never overwrite each other - docs/web is the
+// published full app, and a server build must not be able to change it by running.
+// <repo>/target/ is the Maven output root, already ignored by git, and is where the server's
+// assembly picks the bundle up (R2.3-3).
+const EMBEDDED = process.argv.includes('--embedded');
+
+// Compiled app output: <repo>/docs/web (was web/dist). All emitted files (app.js, workers,
+// worklets, vendor.js, index.html, sw.js, version.json, copied static assets, help) live here
+// together, so the `new URL('./x', import.meta.url)` sibling resolution below is unaffected.
+const outDir = EMBEDDED
+  ? path.join(root, '..', 'target', 'web-embedded')
+  : path.join(root, '..', 'docs', 'web');
+const outLabel = EMBEDDED ? 'target/web-embedded/' : 'docs/web/';
+
+// Entry -> output. ESM for the app/worker (modern module loaders); IIFE for the
+// AudioWorklets - addModule loads them as CLASSIC scripts, so they must be
 // self-contained with no import/export (bundling inlines dds-kernel.js etc.).
 const ESM = [
   ['js/shell/app.js', 'app.js'],
@@ -43,6 +55,7 @@ const ESM = [
   ['js/fft/fft-pool-worker.js', 'fft-pool-worker.js'],
   ['js/scope/osc-freq-worker.js', 'osc-freq-worker.js'],
   ['js/scope/osc-meas-worker.js', 'osc-meas-worker.js'],
+  ['js/freqresp/deconvolve-worker.js', 'deconvolve-worker.js'],
 ];
 const IIFE = [
   ['js/audio/worklets/capture-processor.js', 'worklets/capture-processor.js'],
@@ -62,12 +75,16 @@ async function bundle(entry, out, format) {
     format,
     target: 'es2022',
     legalComments: 'none',
+    // The packaging flag, as a LITERAL: the full build carries `false`, so every embedded-only
+    // branch is dead code the minifier drops - the two packagings differ by exactly this define
+    // and by nothing else in the source.
+    define: { __PHONALYSER_EMBEDDED__: EMBEDDED ? 'true' : 'false' },
   });
 }
 
 async function copyStatic() {
   // Same relative layout as web/ so the unchanged asset paths keep resolving.
-  // NOTE: help is NOT copied here — it's a separate target (npm run build:copy-help), so a
+  // NOTE: help is NOT copied here - it's a separate target (npm run build:copy-help), so a
   // regular build stays fast and doesn't regenerate the search index every time.
   const items = ['css', 'assets', 'i18n', 'favicon.svg', 'manifest.webmanifest'];
   for (const it of items) {
@@ -78,13 +95,13 @@ async function copyStatic() {
   await copyVendorMinimal();
 }
 
-// Copy ONLY the specific vendor files the app references — NOT the whole npm dist
+// Copy ONLY the specific vendor files the app references - NOT the whole npm dist
 // trees. jQuery + Bootstrap JS are bundled into vendor.js; here we just bring
 // the Bootstrap CSS the app links, the Bootstrap-icons webfont, and the libFLAC
 // loader + its .wasm. (Everything else under vendor/ is unused build noise.)
 async function copyVendorMinimal() {
   if (!(await exists(path.join(root, 'vendor')))) {
-    throw new Error('vendor/ missing — run `npm install` (or `npm run vendor`) first.');
+    throw new Error('vendor/ missing - run `npm install` (or `npm run vendor`) first.');
   }
   const files = [
     'vendor/bootstrap/css/bootstrap.min.css',
@@ -103,16 +120,16 @@ async function copyVendorMinimal() {
   }
 }
 
-// Ship the device catalog VERBATIM from the Java single source of truth. modules/phonalyser-app/
+// Ship the device catalog VERBATIM from the Java single source of truth. modules/phonalyser-core/
 // src/main/resources/devices.yaml is authoritative; every build re-copies it into web/ (the
 // dev-served source) AND the build output, so any future Java-side catalog change (a new card,
 // range, or bumped contentVersion) flows into the web app automatically ("always copy"). The app
-// fetches + parses it at runtime (js/store/device-catalog.js) — it is NOT hard-coded.
+// fetches + parses it at runtime (js/store/device-catalog.js) - it is NOT hard-coded.
 async function copyDevicesCatalog() {
-  const javaYaml = path.join(root, '..', 'modules', 'phonalyser-app', 'src', 'main', 'resources', 'devices.yaml');
-  if (!(await exists(javaYaml))) throw new Error(`devices.yaml not found at ${javaYaml} — the build must ship the catalog`);
-  await cp(javaYaml, path.join(root, 'devices.yaml'));      // web/devices.yaml (dev-served)
-  await cp(javaYaml, path.join(outDir, 'devices.yaml'));    // built output (docs/web/devices.yaml)
+  const javaYaml = path.join(root, '..', 'modules', 'phonalyser-core', 'src', 'main', 'resources', 'devices.yaml');
+  if (!(await exists(javaYaml))) throw new Error(`devices.yaml not found at ${javaYaml} - the build must ship the catalog`);
+  if (!EMBEDDED) await cp(javaYaml, path.join(root, 'devices.yaml'));   // web/devices.yaml (dev-served)
+  await cp(javaYaml, path.join(outDir, 'devices.yaml'));                // the built output's own copy
 }
 
 async function emitIndexHtml() {
@@ -143,7 +160,7 @@ async function emitServiceWorker() {
 }
 
 // Sync the version literal in the SOURCE index.html (menu-bar chip) and sw.js (cache key)
-// from package.json, IN PLACE — so the unbundled web/ served in dev shows the same version
+// from package.json, IN PLACE - so the unbundled web/ served in dev shows the same version
 // a built docs/web/ would, leaving package.json as the only hand-edited copy. Guarded: writes
 // only when the value actually changed, so a same-version rebuild touches nothing.
 async function syncSourceVersion() {
@@ -161,7 +178,9 @@ async function syncSourceVersion() {
 async function report() {
   const outs = [...ESM, ...IIFE].map(([, o]) => o)
     .concat(['vendor.js', 'index.html', 'sw.js', 'version.json']);
-  console.log(`\nbuilt phonalyser-web v${VERSION} → docs/web/${DEBUG ? '  (DEBUG: unminified + inline source maps)' : ''}`);
+  console.log(`\nbuilt phonalyser-web v${VERSION} -> ${outLabel}`
+    + `${EMBEDDED ? '  (EMBEDDED: the net backend only - served by a Phonalyser server)' : ''}`
+    + `${DEBUG ? '  (DEBUG: unminified + inline source maps)' : ''}`);
   for (const o of outs) {
     const { size } = await stat(path.join(outDir, o));
     console.log(`  ${o.padEnd(34)} ${(size / 1024).toFixed(1)} kB`);
@@ -174,11 +193,13 @@ async function main() {
 
   for (const [entry, out] of ESM) await bundle(entry, out, 'esm');
   for (const [entry, out] of IIFE) await bundle(entry, out, 'iife');
-  await bundle('build-vendor.js', 'vendor.js', 'iife');   // jQuery + Bootstrap (+ Popper), tree-shaken → globals
+  await bundle('build-vendor.js', 'vendor.js', 'iife');   // jQuery + Bootstrap (+ Popper), tree-shaken -> globals
 
   await copyStatic();
   await copyDevicesCatalog();
-  await syncSourceVersion();
+  // The version literals in the SOURCE index.html / sw.js belong to the full build alone: an
+  // embedded build is a packaging step, and a packaging step must not edit the source tree.
+  if (!EMBEDDED) await syncSourceVersion();
   await emitIndexHtml();
   await emitServiceWorker();
   await report();

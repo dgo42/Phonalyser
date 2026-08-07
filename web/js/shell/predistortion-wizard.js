@@ -1,13 +1,13 @@
 /*
- * Phonalyser web — DAC predistortion wizard (the live UI half).
+ * Phonalyser web - DAC predistortion wizard (the live UI half).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  *
  * Mirrors gui/fft/predistortion/PredistortionWizardDialog. The DSP/convergence engine
  * (PredistortionEngine) and the engine↔host bridge (PredistortionHost) are separate modules; this
  * owns ONLY the dialog: the 100 ms live poll, the log-scale convergence chart, the metric panel,
- * and the Start / Stop / Stop-round / Save→Apply handlers. Collaborators come in via the
- * constructor — the AudioEngine, Preferences, the already-built PredistortionHost, the bootstrap
+ * and the Start / Stop / Stop-round / Save->Apply handlers. Collaborators come in via the
+ * constructor - the AudioEngine, Preferences, the already-built PredistortionHost, the bootstrap
  * modal, a getResult() view of the latest FftResult, the io saveFile, and an onApply callback that
  * performs the generator-side waveform switch (a generator-pane concern, injected for now).
  */
@@ -18,7 +18,7 @@ import { writeHarmonicDpd, writeIntermodDpd } from '../io/dpd.js';
 
 const DPD_TYPE = [{ description: 'DAC predistortion', accept: 'text/plain', extensions: ['.dpd'] }];
 
-// FftOverlap enum token → display label (mirrors enums/FftOverlap .label).
+// FftOverlap enum token -> display label (mirrors enums/FftOverlap .label).
 const OVERLAP_LABEL = { PCT_0: '0%', PCT_50: '50%', PCT_75: '75%', PCT_87_5: '87.5%', PCT_93_75: '93.75%' };
 
 export class PredistortionWizard {
@@ -29,8 +29,8 @@ export class PredistortionWizard {
    * @param deps       { modal, getResult, saveFile, onApply }
    *                   - modal: the bootstrap Modal instance for #predistModal
    *                   - getResult: () => the latest FftResult (or null)
-   *                   - saveFile: io saveFile(text, name, types) => {saved,name}
-   *                   - onApply: (applyForm, savedName) => void — switch the generator to the
+   *                   - saveFile: io saveFile(text, name, types) => {saved,name,viaDownload}
+   *                   - onApply: (applyForm, savedName) => void - switch the generator to the
    *                     compensated waveform + persist the .dpd path (generator-pane concern)
    */
   constructor(engine, prefs, host, { modal, getResult, saveFile, onApply }) {
@@ -45,16 +45,16 @@ export class PredistortionWizard {
     this.history = { dist: [], avg: [] };
     this.state = { round: 0, averages: 0, dual: false };
     this.pdEngine = null;        // the running PredistortionEngine
-    this.running = false;        // Java `running` flag — toggles #dpdStart Start<->Stop
-    this.applied = false;        // true once the .dpd has been applied to the generator (g40)
-    this.savedName = null;       // name of the just-saved .dpd; non-null ⇒ #dpdSave is in Apply mode
+    this.running = false;        // Java `running` flag - toggles #dpdStart Start<->Stop
+    this.applied = false;        // true once the .dpd has been applied to the generator
+    this.savedName = null;       // name of the just-saved .dpd; non-null => #dpdSave is in Apply mode
   }
 
-  // ---- Wizard live UI: 100 ms polling + log convergence chart + metric panel (Java g38/g49) ----
+  // ---- Wizard live UI: 100 ms polling + log convergence chart + metric panel ----
 
   _stopPoll() { if (this.poll) { clearTimeout(this.poll); this.poll = null; } }
 
-  // The single persistent 100 ms poll, armed at open (Java armTimer ⇒ tick ⇒ refresh,
+  // The single persistent 100 ms poll, armed at open (Java armTimer => tick => refresh,
   // PredistortionWizardDialog:165/290-300). It mirrors refresh() in full: the live FFT
   // info + metrics are refreshed off the running getResult() even while idle, the chart
   // is redrawn, and the phase headline tracks the engine once a run is underway.
@@ -62,7 +62,7 @@ export class PredistortionWizard {
   // arms the NEXT tick only AFTER refresh() completes) so an overrunning refresh
   // stretches the cadence instead of queueing. setInterval kept firing on schedule
   // and stacked overrunning refreshes back-to-back at large FFT sizes, saturating
-  // the main thread ("DAC predistortion makes UI unresponsive").
+  // the main thread, which left the UI unresponsive during a predistortion run.
   _startPoll() {
     this._stopPoll();
     const tick = () => {
@@ -124,7 +124,7 @@ export class PredistortionWizard {
   }
 
   // STALLED warning surfaced in-page (Java raised a separate Dialogs.info modal,
-  // PredistortionWizardDialog:547-550) — a dismissible Bootstrap alert above the
+  // PredistortionWizardDialog:547-550) - a dismissible Bootstrap alert above the
   // progress readout, alongside the terminal status headline.
   _warn(text) {
     $('#dpdWarn').remove();
@@ -138,47 +138,47 @@ export class PredistortionWizard {
     const r = this.getResult(), dual = this.state.dual, off = this.prefs.dbvOffsetDb;
     const dist = !r ? NaN : (dual ? this.host.imdPct(r) : r.thdPct);
     // bestThdPct starts at Number.MAX_VALUE (Java Double.MAX_VALUE "no best yet" sentinel), which
-    // IS finite — so the isFinite guard alone showed 1.79e+308. Guard on < MAX_VALUE too (#3).
+    // IS finite - so the isFinite guard alone showed 1.79e+308. Guard on < MAX_VALUE too.
     const best = this.pdEngine && Number.isFinite(this.pdEngine.bestThdPct)
       && this.pdEngine.bestThdPct < Number.MAX_VALUE ? this.pdEngine.bestThdPct : NaN;
-    // Java PredistortionWizardDialog:346 fmtDbv(live.noisePeakFloorDbFs() + dbvOffset) — the PEAK
+    // Java PredistortionWizardDialog:346 fmtDbv(live.noisePeakFloorDbFs() + dbvOffset) - the PEAK
     // floor, computed once (noisePeakFloorDbFs() sorts internally).
     const floor = r ? r.noisePeakFloorDbFs() + off : NaN;
     const rows = [
-      // #2 ROUND — Java :325 running ? Integer.toString(engine.getCurrentRound() + 1) : "—".
-      [t('predistortion.metric.round'), this.running && this.pdEngine ? this.pdEngine.currentRound + 1 : '—'],
-      // #2 AVERAGES — Java :334 Integer.toString(fft.completedAnalyses()); always the host's live count.
+      // ROUND - Java :325 running ? Integer.toString(engine.getCurrentRound() + 1) : "-".
+      [t('predistortion.metric.round'), this.running && this.pdEngine ? this.pdEngine.currentRound + 1 : '-'],
+      // AVERAGES - Java :334 Integer.toString(fft.completedAnalyses()); always the host's live count.
       [t('predistortion.metric.averages'), this.host.completedAnalyses()],
       // Distortion percentages: Java fmtPct is "%.8f %%" (PredistortionWizardDialog:708-710).
-      [t(dual ? 'predistortion.metric.currentImd' : 'predistortion.metric.currentThd'), Number.isFinite(dist) ? dist.toFixed(8) + ' %' : '—'],
-      [t(dual ? 'predistortion.metric.best_imd' : 'predistortion.metric.best_thd'), Number.isFinite(best) ? best.toFixed(8) + ' %' : '—'],
-      // Ratio figures: Java fmtDbv is "%.2f dBV" (PredistortionWizardDialog:712-714) —
+      [t(dual ? 'predistortion.metric.currentImd' : 'predistortion.metric.currentThd'), Number.isFinite(dist) ? dist.toFixed(8) + ' %' : '-'],
+      [t(dual ? 'predistortion.metric.best_imd' : 'predistortion.metric.best_thd'), Number.isFinite(best) ? best.toFixed(8) + ' %' : '-'],
+      // Ratio figures: Java fmtDbv is "%.2f dBV" (PredistortionWizardDialog:712-714) -
       // relabelled to dBV, never offset.
-      [t(dual ? 'predistortion.metric.d_n' : 'predistortion.metric.thd_n'), r ? r.thdNDb.toFixed(2) + ' dBV' : '—'],
-      [t('predistortion.metric.snr'), r ? r.snrDb.toFixed(2) + ' dBV' : '—'],
-      [t('predistortion.metric.sinad'), r ? r.sinadDb.toFixed(2) + ' dBV' : '—'],
-      [t('predistortion.metric.fund'), r ? (r.fundamentalDbFs + off).toFixed(2) + ' dBV' : '—'],
-      // #4 NOISE FLOOR — Java :346 fmtDbv(live.noisePeakFloorDbFs() + dbvOffset): the PEAK floor,
+      [t(dual ? 'predistortion.metric.d_n' : 'predistortion.metric.thd_n'), r ? r.thdNDb.toFixed(2) + ' dBV' : '-'],
+      [t('predistortion.metric.snr'), r ? r.snrDb.toFixed(2) + ' dBV' : '-'],
+      [t('predistortion.metric.sinad'), r ? r.sinadDb.toFixed(2) + ' dBV' : '-'],
+      [t('predistortion.metric.fund'), r ? (r.fundamentalDbFs + off).toFixed(2) + ' dBV' : '-'],
+      // NOISE FLOOR - Java :346 fmtDbv(live.noisePeakFloorDbFs() + dbvOffset): the PEAK floor,
       // now that the live result is a real FftResult and noisePeakFloorDbFs() is callable.
-      [t('predistortion.metric.floor'), Number.isFinite(floor) ? floor.toFixed(2) + ' dBV' : '—'],
+      [t('predistortion.metric.floor'), Number.isFinite(floor) ? floor.toFixed(2) + ' dBV' : '-'],
     ];
     // Java renders each metric as a PLAIN SWT Label with the text "Label:  value"
     // (PredistortionWizardDialog metric() :373-374), laid out in a 2-column grid
-    // (buildProgressGroup :197 GridLayout(2, true)) — no dotted rules, no styled
+    // (buildProgressGroup :197 GridLayout(2, true)) - no dotted rules, no styled
     // key/value split. Mirror that: one plain line per metric, "Key:  value".
     $('#dpdMetrics').html(rows.map(([k, v]) =>
       `<div class="dpd-line">${$('<span>').text(`${k}:  ${v}`).html()}</div>`).join(''));
   }
 
-  // Log-scale convergence chart — faithful port of Java paintChart
+  // Log-scale convergence chart - faithful port of Java paintChart
   // (PredistortionWizardDialog:381-460): white background, L=50/R=10/T=8/B=18
   // margins, gray border + decade gridlines with "%.0e" labels, red-dashed
   // target line clipped to the plot, dark-blue polyline + 4 px round markers
-  // spaced along X in proportion to each round's averaging depth (cum[0]=0 ⇒
+  // spaced along X in proportion to each round's averaging depth (cum[0]=0 =>
   // first point at the LEFT edge; a single point sits centered). The Y range
   // auto-widens to whole decades from the DATA (+ the target), not a fixed
-  // 10%..1e-5 span — that fixed span squashed the falling trace ("doesn't show
-  // calibration process", retest #10).
+  // 10%..1e-5 span - that fixed span squashed the falling trace, so the
+  // calibration process was not visible in it.
   _drawChart() {
     const cv = document.getElementById('dpdChart');
     if (!cv) return;
@@ -186,7 +186,7 @@ export class PredistortionWizard {
     // HiDPI backing store (the fft-view render() pattern, fft-view.js:349-360):
     // backing px = CSS px × devicePixelRatio + setTransform(dpr,...) so drawing
     // below is in CSS-px coordinates. The old fixed width=440 attribute was
-    // CSS-stretched to the (resizable) 100%-wide box — the "distorted" chart.
+    // CSS-stretched to the (resizable) 100%-wide box - the "distorted" chart.
     const rect = cv.getBoundingClientRect ? cv.getBoundingClientRect() : null;
     const W = Math.max(1, Math.round((rect && rect.width) || cv.clientWidth || cv.width || 440));
     const H = Math.max(1, Math.round((rect && rect.height) || cv.clientHeight || cv.height || 150));
@@ -208,8 +208,8 @@ export class PredistortionWizard {
     // live sample for the round in progress: while COLLECTING, the 100 ms poll
     // plots the live distortion at the live averaging depth, so the trace
     // advances DURING a round as averages accumulate and lands exactly on the
-    // committed Java point when onRound fires (retest #10 "show the
-    // calibration process"; Java shows the same live figure in curThdLbl,
+    // committed Java point when onRound fires - the calibration process has to
+    // be visible while it runs (Java shows the same live figure in curThdLbl,
     // refresh() :328-330, and redraws the chart every tick, :348).
     let h = this.history.dist, ga = this.history.avg;
     const eng = this.pdEngine;
@@ -226,7 +226,7 @@ export class PredistortionWizard {
       // Empty placeholder (Java :394-398): centered em-dash, SWT COLOR_DARK_GRAY.
       g.fillStyle = '#808080'; g.font = '11px sans-serif';
       g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText('—', px + pw / 2, py + ph / 2);
+      g.fillText('-', px + pw / 2, py + ph / 2);
       return;
     }
 
@@ -243,7 +243,7 @@ export class PredistortionWizard {
     if (yhi - ylo < 1) ylo = yhi - 1;
 
     // Decade gridlines + labels (Java :414-421): "%.0e" of 10^k right-aligned
-    // 4 px left of the plot ("1e+00" / "1e-05" — mantissa 1, 2-digit exponent).
+    // 4 px left of the plot ("1e+00" / "1e-05" - mantissa 1, 2-digit exponent).
     g.strokeStyle = '#c0c0c0'; g.fillStyle = '#c0c0c0';
     g.font = '11px sans-serif'; g.textAlign = 'right'; g.textBaseline = 'middle';
     for (let k = ylo; k <= yhi + 1e-9; k += 1) {
@@ -252,7 +252,7 @@ export class PredistortionWizard {
       g.fillText('1e' + (k < 0 ? '-' : '+') + String(Math.abs(k)).padStart(2, '0'), px - 4, y);
     }
 
-    // Target line — red dashed, only when inside the plot (Java :424-432).
+    // Target line - red dashed, only when inside the plot (Java :424-432).
     if (target > 0) {
       const y = py + Math.round((yhi - Math.log10(target)) / (yhi - ylo) * ph);
       if (y >= py && y <= py + ph) {
@@ -263,7 +263,7 @@ export class PredistortionWizard {
     }
 
     // Per-round x fractions (Java :437-444): cum[0]=0, gap i = round i's
-    // averaging depth (>0, else 1) — a deeply-averaged round occupies a
+    // averaging depth (>0, else 1) - a deeply-averaged round occupies a
     // correspondingly wide slice of the x-axis.
     const cum = new Array(n).fill(0);
     let total = 0;
@@ -292,7 +292,7 @@ export class PredistortionWizard {
   /** Java fmt(): "%.6f" (US locale). */
   _fmt(v) { return Number(v).toFixed(6); }
 
-  /** Mirrors Java buildHeader(FftResult) — the full provenance + measurement header. */
+  /** Mirrors Java buildHeader(FftResult) - the full provenance + measurement header. */
   _buildHeader(r, dual) {
     const p = this.prefs;
     const h = [
@@ -333,12 +333,12 @@ export class PredistortionWizard {
     const overlapLabel = OVERLAP_LABEL[r.overlap] || OVERLAP_LABEL[this.prefs.fftOverlap.get()] || '';
     const overlap = overlapLabel.replace('%', '').replace('.', '_');
     const window = r.windowType != null ? r.windowType : this.prefs.fftWindow.get();
-    const distPpm = this.pdEngine.bestThdPct * 1_000_000.0;   // % → ppm % (THD single / IMD dual)
+    const distPpm = this.pdEngine.bestThdPct * 1_000_000.0;   // % -> ppm % (THD single / IMD dual)
     const dist = distPpm.toFixed(2).replace('.', '_');
     return `predistortion-${kind}-${freq}${freq2}-${size}-${overlap}-${window}-${dist}.dpd`;
   }
 
-  /** Compact power-of-two FFT length: 2097152 → "2M", 524288 → "512k". */
+  /** Compact power-of-two FFT length: 2097152 -> "2M", 524288 -> "512k". */
   _humanFftSize(n) {
     if (n >= (1 << 20) && n % (1 << 20) === 0) return (n >> 20) + 'M';
     if (n >= (1 << 10) && n % (1 << 10) === 0) return (n >> 10) + 'k';
@@ -355,7 +355,7 @@ export class PredistortionWizard {
       $('#dpdAverages').val(this.prefs.predistortionAverages.get());
       $('#dpdTarget').val(this.prefs.predistortionTargetPct.get());
       // Java open() calls refresh() then armTimer() BEFORE the dialog is shown, so the FFT
-      // group, convergence chart and metric panel are live from open — not blank until Start
+      // group, convergence chart and metric panel are live from open - not blank until Start
       // (PredistortionWizardDialog:161/165). Seed the live UI once, then arm the persistent
       // 100 ms poll that keeps FFT info + metrics current off getResult() even while idle.
       this._updateFftInfo(); this._drawChart(); this._updateMetrics();
@@ -373,7 +373,7 @@ export class PredistortionWizard {
     });
 
     // Persist both fields on EDIT (not at Start/Save), mirroring the Java
-    // addSelectionListener bindings (buildSettings:239/249) — the value is
+    // addSelectionListener bindings (buildSettings:239/249) - the value is
     // remembered the moment the user changes it, whether or not a tune runs.
     $('#dpdAverages').on('change input', () => {
       this.prefs.predistortionAverages.set(Math.round(parseFloat($('#dpdAverages').val()) || 0));
@@ -409,11 +409,11 @@ export class PredistortionWizard {
         return;
       }
       if (!this.engine.running) { $('#dpdProgress').text(t('predistortion.error.noGenerator')); return; }
-      // Predistortion only supports the Sine / Dual-tone waveforms (Java validation) — g39.
+      // Predistortion only supports the Sine / Dual-tone waveforms (Java validation).
       const okForm = [GenSignalForm.SINE, GenSignalForm.SINE_COMP, GenSignalForm.DUAL_TONE, GenSignalForm.DUAL_TONE_COMP]
         .includes(this.engine.config.form);
       if (!okForm) { $('#dpdProgress').text(t('predistortion.error.notSupported')); return; }
-      // Minimum 10 averages per round (Java MIN_AVERAGES) — too few can't build
+      // Minimum 10 averages per round (Java MIN_AVERAGES) - too few can't build
       // a deep-enough coherent average to read the harmonics cleanly.
       const base = Math.max(10, parseInt($('#dpdAverages').val(), 10) || 16);
       const target = parseFloat($('#dpdTarget').val()) || 0;
@@ -443,12 +443,12 @@ export class PredistortionWizard {
           // Java onRound (PredistortionWizardDialog:519-530) only stashes the round
           // data; the polling timer renders the headline off the engine phase.
           this.state.round = round; this.state.averages = averages;
-          this.history.dist.push(distPct); this.history.avg.push(averages);   // g49 convergence history
+          this.history.dist.push(distPct); this.history.avg.push(averages);   // convergence history
           this._drawChart(); this._updateMetrics();
         },
         onFinished: (reason, bestDistPct, hasResult) => {
           // Java leaves the timer running the whole dialog lifetime (torn down only on close),
-          // so the metrics + chart stay live after a run ends — don't stop the poll here; the
+          // so the metrics + chart stay live after a run ends - don't stop the poll here; the
           // terminal headline set below survives subsequent polls (_renderPhase leaves IDLE
           // headlines untouched). The poll is torn down on hidden.bs.modal.
           this._updateMetrics();
@@ -524,8 +524,9 @@ export class PredistortionWizard {
         const res = await this.saveFile(text, name, DPD_TYPE);
         if (res.saved) {
           this.savedName = res.name;
-          $('#dpdProgress').text(t('predistortion.status.saved'));
-          $('#dpdSave').text(t('predistortion.button.apply'));   // relabel Save → Apply (g40)
+          $('#dpdProgress').text(res.viaDownload
+            ? t('web.save.handedToDownload', res.name) : t('predistortion.status.saved'));
+          $('#dpdSave').text(t('predistortion.button.apply'));   // relabel Save -> Apply
         }
       } catch (e) { $('#dpdProgress').text('save failed: ' + e.message); }
     });

@@ -1,23 +1,23 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
 // Faithful port of org.edgo.audio.measure.dsp.ToneLobeLift.
 //
-// Shared "lift a tone's main lobe" DSP. To rescale a tone — by 1/|H| for a
-// calibration, or to a user level for manual fundamental — the goal is a clean
+// Shared "lift a tone's main lobe" DSP. To rescale a tone - by 1/|H| for a
+// calibration, or to a user level for manual fundamental - the goal is a clean
 // rescaled lobe: the window's whole main lobe stretched up, its feet pinned to
 // the noise floor (a smooth dome sitting on the grass), NOT a flat-topped box.
 //
 //   1. Noise floor = median + CEIL_K·MAD over a wide flank band (robust: the
 //      lobe / harmonics / mains / spurs falling inside the band are outliers).
 //   2. Lobe extent: walk out from the peak until it drops to that floor.
-//   3. Stretch: a vertical stretch anchored on the floor — feet stay put, peak
+//   3. Stretch: a vertical stretch anchored on the floor - feet stay put, peak
 //      pulled to peak·factor, every bin scaled by its log-height above floor.
 //
-// `mag` arguments are int→double accessors, i.e. functions `(k) => magnitude`.
+// `mag` arguments are int->double accessors, i.e. functions `(k) => magnitude`.
 
 /** Noise ceiling = median + CEIL_K·MAD of the flank band. */
 const CEIL_K = 4.0;
@@ -36,7 +36,7 @@ export class ToneLobeLift {
 
   /**
    * Noise-floor ceiling (same units as mag) near peak: median + CEIL_K·MAD of
-   * the bins flanking the tone. Robust — a wide main lobe, harmonics, mains
+   * the bins flanking the tone. Robust - a wide main lobe, harmonics, mains
    * lines or spurs falling inside the band are outliers the median/MAD ignore.
    * Returns 0 when no flanks are in range.
    * @param {(k:number)=>number} mag   bin-magnitude accessor
@@ -83,7 +83,7 @@ export class ToneLobeLift {
     for (let step = 1; step <= this._maxLobeBins; step++) {
       const k = peak + dir * step;
       if (k < 1 || k > maxBin) break;
-      if (mag(k) <= floor) break;   // dropped to the noise — lobe ends
+      if (mag(k) <= floor) break;   // dropped to the noise - lobe ends
       foot = k;
     }
     return foot;
@@ -92,7 +92,7 @@ export class ToneLobeLift {
   /**
    * Vertical stretch of a lobe magnitude, anchored on the noise floor: the feet
    * stay put and the peak is pulled up to peak·factor, every bin scaled by its
-   * log-height above the floor — |X'| = |X|·factor^t with
+   * log-height above the floor - |X'| = |X|·factor^t with
    * t = ln(|X|/floor) / ln(peak/floor) (t = 1 at the peak, 0 at the floor).
    * A bin at or below the floor is left alone; a tone whose peak is itself
    * buried at/below the floor is simply scaled by factor.
@@ -106,8 +106,8 @@ export class ToneLobeLift {
     if (!(peak > floor)) return mag * factor;
     if (!(mag > floor)) return mag;
     let t = Math.log(mag / floor) / Math.log(peak / floor);
-    // A bin standing ABOVE the assumed peak (t > 1) — a noise bin in the lobe
-    // of a weak tone whose true peak isn't at round(toneHz/binWidth) — must not
+    // A bin standing ABOVE the assumed peak (t > 1) - a noise bin in the lobe
+    // of a weak tone whose true peak isn't at round(toneHz/binWidth) - must not
     // be lifted MORE than the peak itself. Cap at the peak's own factor.
     if (t > 1.0) t = 1.0;
     return mag * Math.pow(factor, t);

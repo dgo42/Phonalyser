@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -13,7 +13,7 @@
 // line, then one row per sweep point with five columns:
 //   frequency_hz, mag_left_dB, mag_right_dB, phase_left_deg, phase_right_deg
 // Magnitudes are RELATIVE dB (ADC/DAC ratio, flat passband at 0 dB). The loader
-// converts dB → linear (10^(dB/20)) and degrees → radians; the writer does the
+// converts dB -> linear (10^(dB/20)) and degrees -> radians; the writer does the
 // inverse, clamping non-positive magnitudes to -300 dB.
 
 /** .frc format version stamped in the header (FileVersions.FRC_CALIBRATION). */
@@ -103,7 +103,7 @@ export function saveFrc(stereo, meta = {}) {
  * Parses a .frc file written by {@link saveFrc}. Faithful port of
  * FreqRespCalHelper.loadFrc: skips '#' comments and the column header, accepts
  * comma- or legacy semicolon-separated rows, tolerates a comma decimal mark per
- * field, and converts dB → linear and degrees → radians.
+ * field, and converts dB -> linear and degrees -> radians.
  *
  * @param {string} text  Raw file contents.
  * @returns {StereoFreqRespCalibration}
@@ -147,9 +147,9 @@ export function loadFrc(text) {
 /**
  * Reads the capture sample rate recorded in a .frc file's leading
  * '# sample_rate_hz=' header comment (written by {@link saveFrc}). Only the
- * header block is scanned — the scan stops at the first non-comment line.
+ * header block is scanned - the scan stops at the first non-comment line.
  * Returns 0 when the header is absent or unparseable (legacy files), so callers
- * can fall back. Faithful port of FreqRespCalHelper.readSampleRateHz — the web
+ * can fall back. Faithful port of FreqRespCalHelper.readSampleRateHz - the web
  * takes the already-decoded file TEXT (no OS paths in the browser).
  *
  * @param {string} text  Raw file contents.
@@ -163,7 +163,7 @@ export function readSampleRateHz(text) {
     const eq = line.indexOf('=');
     if (eq > 0 && line.substring(1, eq).trim() === SAMPLE_RATE_HEADER_KEY) {
       const v = parseInt(line.substring(eq + 1).trim(), 10);
-      return Number.isNaN(v) ? 0 : v;   // garbled header — treat as absent
+      return Number.isNaN(v) ? 0 : v;   // garbled header - treat as absent
     }
   }
   return 0;

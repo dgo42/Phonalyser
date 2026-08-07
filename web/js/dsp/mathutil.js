@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -76,7 +76,7 @@ export function nextPow2(x) {
 }
 
 /**
- * Modified Bessel function of the first kind, order 0 — power series
+ * Modified Bessel function of the first kind, order 0 - power series
  * Σ ((x/2)ᵏ/k!)²; converges to double precision well within the iteration cap.
  * @param {number} x
  * @returns {number}  I₀(x)

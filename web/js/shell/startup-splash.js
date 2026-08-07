@@ -1,21 +1,21 @@
 /*
- * Phonalyser web — branded launch splash (browser port of gui/StartupSplash).
+ * Phonalyser web - branded launch splash (browser port of gui/StartupSplash).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * Faithful Canvas2D port of the SWT StartupSplash paint routine: a dark
- * gradient backdrop with an audio motif — a glowing composite waveform over an
- * FFT-style spectrum — and the title, version, tagline, copyright and project
+ * gradient backdrop with an audio motif - a glowing composite waveform over an
+ * FFT-style spectrum - and the title, version, tagline, copyright and project
  * link overlaid. The Java window is 560×340; the web shows the SAME artwork as
  * a 560×340 panel centred on a dimmed full-viewport backdrop.
  *
  * Shown from page load (a static overlay div in index.html covers the viewport
  * with the backdrop colour before this module even runs), and dismissed once
- * the startup audio-device scan resolves — the same scan the Preferences "Scan
+ * the startup audio-device scan resolves - the same scan the Preferences "Scan
  * devices" button runs, executed at boot.
  * GNU AGPL v3 or later.
  */
 
-// Panel geometry — matches StartupSplash.WIDTH/HEIGHT/MARGIN exactly so the
+// Panel geometry - matches StartupSplash.WIDTH/HEIGHT/MARGIN exactly so the
 // pixel layout below (text positions, bar span, waveform baseline) is faithful.
 const WIDTH = 560;
 const HEIGHT = 340;
@@ -30,12 +30,12 @@ const SCALE = 0.75;
 export const RENDER_WIDTH = WIDTH * SCALE;
 export const RENDER_HEIGHT = HEIGHT * SCALE;
 
-// Footer legal lines — fixed identifiers, not UI prose (mirrors the Java constants).
+// Footer legal lines - fixed identifiers, not UI prose (mirrors the Java constants).
 const COPYRIGHT = '© 2026 Dimitrij Goldstein';
-const LICENSE = 'GNU Affero GPL v3 — free software, no warranty';
+const LICENSE = 'GNU Affero GPL v3 - free software, no warranty';
 const REPO_URL = 'https://github.com/dgo42/Phonalyser';
 
-// Palette — the exact RGB triples StartupSplash.allocate() builds.
+// Palette - the exact RGB triples StartupSplash.allocate() builds.
 const BG_TOP = 'rgb(10,14,26)';       // also the index.html static-overlay colour
 const BG_BOTTOM = 'rgb(18,40,62)';
 const GRID = 'rgb(60,92,134)';
@@ -47,7 +47,7 @@ const TEXT_DIM = 'rgb(138,160,190)';
 const ACCENT = 'rgb(99,210,226)';
 const BORDER = 'rgb(46,74,107)';
 
-// SWT point sizes → CSS px (1pt ≈ 1.333px at 96 DPI), so the on-screen layout
+// SWT point sizes -> CSS px (1pt ≈ 1.333px at 96 DPI), so the on-screen layout
 // the Java pixel coordinates were designed against is reproduced.
 const PT = 1.333;
 const FONT_TITLE = `bold ${Math.round(30 * PT)}px "Segoe UI", system-ui, sans-serif`;
@@ -101,7 +101,7 @@ export class StartupSplash {
 
   /** Renders the SAME artwork into the About dialog's canvas and makes the repo
    *  URL clickable (Java StartupSplash.showAsAbout: same artwork, hit-testable
-   *  URL that opens the browser, Esc / click-elsewhere dismiss — the last two are
+   *  URL that opens the browser, Esc / click-elsewhere dismiss - the last two are
    *  Bootstrap-modal behaviour here). The canvas carries the version/tagline/
    *  copyright/license already, exactly like the splash. Idempotent: re-opening
    *  re-paints but wires the URL handler only once (guarded by a dataset flag). */
@@ -145,7 +145,7 @@ export class StartupSplash {
   }
 
   // -------------------------------------------------------------------------
-  // Artwork — a line-for-line port of StartupSplash.render / drawGrid /
+  // Artwork - a line-for-line port of StartupSplash.render / drawGrid /
   // drawSpectrum / drawWaveform. All coordinates are in the 560×340 panel space.
   // -------------------------------------------------------------------------
 
@@ -154,7 +154,7 @@ export class StartupSplash {
     const w = WIDTH;
     const h = HEIGHT;
 
-    // Backdrop gradient (top → bottom).
+    // Backdrop gradient (top -> bottom).
     const bg = ctx.createLinearGradient(0, 0, 0, h);
     bg.addColorStop(0, BG_TOP);
     bg.addColorStop(1, BG_BOTTOM);
@@ -195,7 +195,7 @@ export class StartupSplash {
     const ux = w - MARGIN - uw;
     const uy = h - 50;
     ctx.fillText(REPO_URL, ux, uy);
-    // FONT_SMALL is 8pt → its px line height; the emHeight metrics aren't uniform
+    // FONT_SMALL is 8pt -> its px line height; the emHeight metrics aren't uniform
     // across engines, so use the font size in px as the hit height (generous enough).
     this.urlBounds = { x: ux, y: uy, w: uw, h: Math.round(8 * PT) };
 

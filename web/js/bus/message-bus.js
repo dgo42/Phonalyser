@@ -1,18 +1,18 @@
 /*
- * Phonalyser web — in-process publish/subscribe + request/response hub.
+ * Phonalyser web - in-process publish/subscribe + request/response hub.
  *
  * Faithful port of org.edgo.audio.measure.gui.bus.MessageBus. Event names are the symbolic
- * constants in events.js — never a string literal at the call site, so renaming an event is a
+ * constants in events.js - never a string literal at the call site, so renaming an event is a
  * single-file change and a publisher typo can't silently bypass every subscriber.
  *
  * Two flavours:
- *   • Pub/sub — every subscriber is a function. publish(name) delivers null; publish(name, payload)
+ *   - Pub/sub - every subscriber is a function. publish(name) delivers null; publish(name, payload)
  *     delivers the payload. One payload shape per event name.
- *   • Request/response — request(name[, payload]) returns a value from the single registered
+ *   - Request/response - request(name[, payload]) returns a value from the single registered
  *     responder (registerResponder). Exactly one responder per name; a second registration
  *     replaces the first. Returns null when none is registered.
  *
- * Threading: JS is single-threaded and publish() dispatches synchronously on the caller — there is
+ * Threading: JS is single-threaded and publish() dispatches synchronously on the caller - there is
  * no SWT Display.asyncExec analogue to worry about; workers already marshal via postMessage.
  * GNU Affero General Public License v3 or later.
  */
@@ -58,7 +58,7 @@ export class MessageBus {
   // ---- Request / response -----------------------------------------------
 
   /** Registers the single responder producing a value for every future request() on eventName,
-   *  replacing any previous registration (with a warning) — registration is exclusive.
+   *  replacing any previous registration (with a warning) - registration is exclusive.
    *  @param {string} eventName @param {Function} responder */
   registerResponder(eventName, responder) {
     if (this._responders.has(eventName)) {

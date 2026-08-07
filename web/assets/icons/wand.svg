@@ -2,7 +2,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
     <!-- Magic wand tilted toward the upper right with three stars sparkling
          around its tip.  Two-colour palette: a dark wand and orange stars
-         — clean at small icon sizes and reproduces faithfully through
+         - clean at small icon sizes and reproduces faithfully through
          the bundled IconUtils SVG renderer (no gradients, no opacity). -->
 
     <!-- Wand (single dark polygon, tip-to-base) -->

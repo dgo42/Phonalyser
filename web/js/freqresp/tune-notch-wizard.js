@@ -1,10 +1,10 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Faithful port of org.edgo.audio.measure.gui.freqresp.TuneNotchWizardDialog —
+// Faithful port of org.edgo.audio.measure.gui.freqresp.TuneNotchWizardDialog -
 // the modal wizard that continuously re-runs a fast looping Farina sweep and
 // paints the live frequency response into an embedded FreqRespView, so the user
 // can tune a notch filter and watch the dip move in real time.
@@ -12,7 +12,7 @@
 // The dialog opens, mirrors the FREQRESP_MEASUREMENT_STARTED interlocks (the
 // scope / FFT Record + the file player are stopped and locked, the generator
 // Play + sweep buttons disabled), then drives the wave-1 NotchSweepEngine in a
-// continuous grab → deconvolve → display loop until the dialog closes. Each
+// continuous grab -> deconvolve -> display loop until the dialog closes. Each
 // finished sweep is fed DIRECTLY into the embedded view (never into the main
 // FreqResp pane). The first sweep auto-fits the magnitude axis to the measured
 // band; from then on the vertical range follows a MAG_AVG_FRAMES-sweep rolling
@@ -23,18 +23,18 @@
 // through a private in-memory copy, so opening / using the wizard never mutates
 // (nor zooms) the main FreqResp pane's view. The Java dialog instead shares the
 // prefs and snapshots+restores them around the session (savedFreqMin/Max/MagTop/
-// Bot in TuneNotchWizardDialog) — the web detaches, so no save/restore is needed.
+// Bot in TuneNotchWizardDialog) - the web detaches, so no save/restore is needed.
 //
 // The wizard is fully AUTONOMOUS (Java TuneNotchWizardDialog): it never needs the
 // generator running. Like the FreqResp sweep it publishes
-// FREQRESP_MEASUREMENT_STARTED (every consumer — scope / FFT / generator / main
-// FreqResp — stops itself), waits for the shared capture + DAC to go idle
+// FREQRESP_MEASUREMENT_STARTED (every consumer - scope / FFT / generator / main
+// FreqResp - stops itself), waits for the shared capture + DAC to go idle
 // (waitForWorkersIdle, shared with FreqRespHost), then starts its OWN silent
 // LOG_SWEEP generator + acquires the shared capture and streams the looping notch
 // sweep. On close it stops the generator, releases the capture and publishes
 // FREQRESP_MEASUREMENT_STOPPED so the consumers re-enable themselves.
 //
-// Intended web adaptations of the Java dialog (all device/thread plumbing —
+// Intended web adaptations of the Java dialog (all device/thread plumbing -
 // the analysis and display semantics are ported 1:1):
 //   - Java opens its own EXCLUSIVE JavaSound lines; the web's playback path is the
 //     shared dds-processor worklet, so the wizard starts the generator itself
@@ -50,7 +50,7 @@
 //     marker + notch readout repaint on EVERY view paint, exactly like SWT
 //     addPaintListener.
 //   - The overlay geometry mirrors the WEB FreqRespView's margins (56/4/18 and
-//     52/6 right) — Java mirrors ITS view's 68/0/28 (+52/0) — so the marker
+//     52/6 right) - Java mirrors ITS view's 68/0/28 (+52/0) - so the marker
 //     lands on the same log-frequency axis the web trace is drawn on.
 
 import { t } from '../i18n/i18n.js';
@@ -63,7 +63,7 @@ import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 import { NumericStepField, NumericStepModel, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
 import {
-  NotchSweepEngine, sweepBand, findDeepestNotch, dbAtFrequency,
+  NotchSweepEngine, sweepBand,
   powerOfTwoSweepSamples, notchFadeSamples, SWEEP_DURATION_SEC, SWEEP_LEAD_IN_SEC,
 } from './notch-sweep-engine.js';
 
@@ -72,13 +72,13 @@ import {
  *  a grid-density cap, NOT the canvas pixel width. Kept at 600 so the bin-aligned
  *  grid is never truncated (the notch band spans far fewer bins than this). */
 const CHART_WIDTH_PX = 600;
-/** Embedded canvas pixel size (CSS #tnPlot) — used only as the pre-layout fallback
+/** Embedded canvas pixel size (CSS #tnPlot) - used only as the pre-layout fallback
  *  for the overlay geometry; the live paints read the real clientWidth/Height. */
 const CANVAS_WIDTH_PX = 600;
 const CANVAS_HEIGHT_PX = 400;
 
 // --- Continuous-stream loop timing --------------------------------------------
-/** Settle poll while the ring fills to one period — re-check this often. */
+/** Settle poll while the ring fills to one period - re-check this often. */
 const SETTLE_POLL_MS = 20;
 /** Status / percentage UI refresh cadence (don't spam the UI thread). */
 const STATUS_TICK_MS = 30;
@@ -101,9 +101,12 @@ const INITIAL_MAG_TOP_DB = 20.0;
 const INITIAL_MAG_BOT_DB = -140.0;
 /** Padding above max / below min applied to the rolling auto-fit. */
 const AUTO_FIT_PAD_DB = 2.0;
+/** Extra padding kept BELOW the measured notch floor, so the deepest drawn point of the null is
+ *  never clipped by the axis (Java NOTCH_BOTTOM_PAD_DB). */
+const NOTCH_BOTTOM_PAD_DB = 1.0;
 
 // --- Notch readout overlay ------------------------------------------------------
-/** Right-edge pad of the readout text — anchored to the chart's top-RIGHT corner so
+/** Right-edge pad of the readout text - anchored to the chart's top-RIGHT corner so
  *  it stays clear of the L/R buttons on the left (Java NOTCH_TEXT_RIGHT_PAD_PX). */
 const NOTCH_TEXT_RIGHT_PAD_PX = 8;
 const NOTCH_TEXT_Y_PX = 6;
@@ -114,7 +117,7 @@ const NOTCH_OUTLINE_PX = 1;
 /** Vertical range is set from the rolling average of this many sweeps'
  *  min/max dB, so the axis doesn't jump frame-to-frame. */
 const MAG_AVG_FRAMES = 20;
-// Plot margins — mirror the WEB FreqRespView's MARGIN_* so the target marker
+// Plot margins - mirror the WEB FreqRespView's MARGIN_* so the target marker
 // lands on the same log frequency axis the trace is drawn on (Java mirrors its
 // own view's 68/0/28 + 52/0; the web view uses 56/4/18 + 52/6).
 const VIEW_MARGIN_LEFT = 56;
@@ -122,17 +125,19 @@ const VIEW_MARGIN_TOP = 4;
 const VIEW_MARGIN_BOTTOM = 18;
 const VIEW_MARGIN_RIGHT_PHASE = 52;
 const VIEW_MARGIN_RIGHT_NO_PHASE = 6;
-/** Target-frequency marker: a 3-px dashed vertical line coloured from green at
- *  TARGET_GREEN_DB (deep notch on target) to red at TARGET_RED_DB (shallow) by
- *  the measured attenuation there. */
+/** Target-frequency marker: a 3-px dashed vertical line coloured by how close the drawn response
+ *  AT the target sits to THIS measurement's notch floor - green means the target is exactly in
+ *  the notch. The scale is RELATIVE, not absolute dB, so a notch of any depth reads green
+ *  once the target is centred in it: within TARGET_GREEN_DELTA_DB of the floor -> green, more
+ *  than TARGET_RED_DELTA_DB above it -> red, linear between. */
 const TARGET_LINE_WIDTH_PX = 3;
-const TARGET_GREEN_DB = -90.0;
-const TARGET_RED_DB = -50.0;
+const TARGET_GREEN_DELTA_DB = 1.0;
+const TARGET_RED_DELTA_DB = 20.0;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * The Tune-notch wizard dialog (Tools → Tune notch…). Owns ONLY the dialog:
+ * The Tune-notch wizard dialog (Tools -> Tune notch...). Owns ONLY the dialog:
  * the four numeric fields, the embedded live FreqRespView + its overlays, the
  * status line, and the continuous-sweep session lifecycle around the injected
  * collaborators. Faithful port of gui.freqresp.TuneNotchWizardDialog (see the
@@ -143,32 +148,35 @@ export class TuneNotchWizard {
    * @param {import('../audio/backend.js').AudioEngine} engine the live engine
    *   (postGen playback path + the ref-counted shared capture)
    * @param {import('../store/preferences.js').Preferences} prefs Preferences.instance()
-   * @param {{modal: object}} deps
+   * @param {{modal: object, showAlert: Function}} deps
    *   - modal: the bootstrap Modal instance for #tuneNotchModal
+   *   - showAlert: the shell's one alert surface (the sweep-failure dialog)
    */
-  constructor(engine, prefs, { modal }) {
+  constructor(engine, prefs, { modal, showAlert }) {
     this.engine = engine;
     this.prefs = prefs;
     this.modal = modal;
+    // Absent -> console (a headless construction / the node tests).
+    this._showAlert = showAlert || ((title, message) => console.warn(title, message));
     this.$ = window.jQuery;
 
     // The embedded view runs ISOLATED on a DETACHED preferences COPY (faithful
     // port of the desktop dialog, which hands the view Preferences.copyForDialog()):
     // every range / auto-fit / zoom / channel-visibility edit stays in the copy and
-    // the shared main-pane FreqResp view is NEVER touched — no snapshot/restore
+    // the shared main-pane FreqResp view is NEVER touched - no snapshot/restore
     // dance. The copy is a full, real Preferences (all Property objects intact), so
     // the view behaves exactly as with the live prefs; its save() is a no-op
     // (transient), so nothing persists. The tune-notch fields ALSO edit this copy;
     // only the four tune-notch* params are written back to the real prefs on close
-    // (open() re-seeds them from real; _stopSweepLoop writes them back — Java's
+    // (open() re-seeds them from real; _stopSweepLoop writes them back - Java's
     // copyForDialog line 760-764 seed + saveDialogPrefs write-back).
     this.viewPrefs = prefs.copyForDialog();
     // The tune-notch view NEVER shows the phase trace, independent of how the main
-    // FreqResp is configured — force it off on the detached copy (the main pane's
+    // FreqResp is configured - force it off on the detached copy (the main pane's
     // freqRespPhaseVisible pref is untouched). Java sets the same on its dialog copy.
     this.viewPrefs.freqRespPhaseVisible.set(false);
 
-    /** Empty, silent correction store for the embedded view — the notch
+    /** Empty, silent correction store for the embedded view - the notch
      *  session never loads / saves calibrations. */
     this.correctionStore = new CorrectionStore('TuneNotch', null);
 
@@ -239,10 +247,10 @@ export class TuneNotchWizard {
     // Embedded chart (Java buildChart): a private FreqRespView over #tnPlot with
     // a silent empty correction store; no scrollbars, header controls are simply
     // not present (Java setHeaderControlsVisible(false)). The overlays are hooked
-    // by WRAPPING render() — the web equivalent of the two SWT paint listeners
+    // by WRAPPING render() - the web equivalent of the two SWT paint listeners
     // (target marker first, the notch readout text last so it stays legible).
     // The view renders through viewPrefs (its range / visibility detached from the
-    // main pane), not the shared prefs — so wizard zoom/range never touches it.
+    // main pane), not the shared prefs - so wizard zoom/range never touches it.
     this.view = new FreqRespView(this.canvas, this.viewPrefs, this.correctionStore, { engine: this.engine });
     const baseRender = this.view.render.bind(this.view);
     this.view.render = () => { baseRender(); this._paintOverlays(); };
@@ -259,6 +267,7 @@ export class TuneNotchWizard {
         this._curStartHz = v;
         this.viewPrefs.tuneNotchStartHz.set(v);   // edit the COPY; written back to real on close
         this._applyFreqAxis();
+        this._resetMagStats();   // a new band is a new measurement - see _resetMagStats
         this._retuneEngineBand();
       });
     this.stopField = mkField('tnStop',
@@ -267,19 +276,21 @@ export class TuneNotchWizard {
         this._curStopHz = v;
         this.viewPrefs.tuneNotchStopHz.set(v);   // edit the COPY; written back to real on close
         this._applyFreqAxis();
+        this._resetMagStats();   // a new band is a new measurement - see _resetMagStats
         this._retuneEngineBand();
       });
     // fsAmplSupplier (the live DAC PEAK full scale) enables dBFS entry, as on the generator and
-    // the frequency-response sweep — 0 dBFS ≡ a full-scale SINE (AES17).
+    // the frequency-response sweep - 0 dBFS ≡ a full-scale SINE (AES17).
     this.ampField = mkField('tnAmp',
       new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS,
         // Ceiling = the full-scale SINE Vrms (fsPeak/√2), the level at which the DDS hits digital
-        // full scale — so V, dBV and dBFS (0 dBFS) all clamp to the same maximum.
+        // full scale - so V, dBV and dBFS (0 dBFS) all clamp to the same maximum.
         max: prefs.getDacFsVoltageAmpl() / Math.SQRT2, maxDecimals: AMP_MAX_DECIMALS,
         fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
       (v) => {
         this._curAmpVrms = v;
         this.viewPrefs.tuneNotchAmplitudeVrms.set(v);   // edit the COPY; written back to real on close
+        this._resetMagStats();   // a new drive level is a new measurement - see _resetMagStats
       });
     this.targetField = mkField('tnTarget',
       new NumericStepModel({ family: F.FREQUENCY, min: FREQ_MIN_HZ, max: nyquist, maxDecimals: FREQ_MAX_DECIMALS }),
@@ -301,18 +312,18 @@ export class TuneNotchWizard {
     // L / R channel-select buttons (Java FreqRespView.showChannelButtonsOnly): both channels
     // are measured; the buttons toggle which trace the embedded chart shows (mutually
     // exclusive, default R). They edit the DETACHED viewPrefs, so the main pane is untouched.
-    // A toggle redraws WITHOUT a fresh sweep — _activeResult() flips, so the notch readout /
+    // A toggle redraws WITHOUT a fresh sweep - _activeResult() flips, so the notch readout /
     // target marker / crosshair follow the newly selected trace (recomputed in _paintNotch).
     $('#tnLeft').on('click', () => this._selectChannel(true));
     $('#tnRight').on('click', () => this._selectChannel(false));
 
-    // Tools-menu launcher (Java MainWindow tuneNotchItem → openTuneNotchDialog).
+    // Tools-menu launcher (Java MainWindow tuneNotchItem -> openTuneNotchDialog).
     $('#menuTuneNotch').on('click', () => this.open());
 
     // The first paint needs the modal VISIBLE (the view sizes off clientWidth);
     // repaint once the fade-in lands.
     $('#tuneNotchModal').on('shown.bs.modal', () => { if (this.view) this.view.render(); });
-    // Dialog close (Java SWT.Close → stopSweepLoop): stop the loop, close the
+    // Dialog close (Java SWT.Close -> stopSweepLoop): stop the loop, close the
     // engine, restore the DDS + the shared view prefs, unlock the panes.
     $('#tuneNotchModal').on('hidden.bs.modal', () => { this._stopSweepLoop(); });
 
@@ -382,7 +393,7 @@ export class TuneNotchWizard {
   /** Seeds the DETACHED view prefs for the notch session: show the R
    *  (measurement / ch1) channel, set the frequency axis to [start, stop], and
    *  a wide initial magnitude window until the first sweep auto-fits it. Writes
-   *  only viewPrefs (the private in-memory copy) — the main pane is untouched. */
+   *  only viewPrefs (the private in-memory copy) - the main pane is untouched. */
   _applySessionViewPrefs() {
     const prefs = this.viewPrefs;
     prefs.freqRespRightVisible.set(true);
@@ -404,7 +415,7 @@ export class TuneNotchWizard {
   }
 
   /** Live-retunes the streamed sweep to the current [start, stop] without
-   *  restarting the device — no-op until the engine is running. */
+   *  restarting the device - no-op until the engine is running. */
   _retuneEngineBand() {
     const e = this._notchEngine;
     if (!e) return;
@@ -423,8 +434,8 @@ export class TuneNotchWizard {
 
   /** Toggles which measured channel the embedded chart shows (mutually exclusive
    *  L/R, on the DETACHED viewPrefs) and re-drives the notch readout + target
-   *  marker from the newly selected trace WITHOUT a fresh sweep — the web stand-in
-   *  for Java's L/R radio → view redraw → onNotchPaint recompute. */
+   *  marker from the newly selected trace WITHOUT a fresh sweep - the web stand-in
+   *  for Java's L/R radio -> view redraw -> onNotchPaint recompute. */
   _selectChannel(left) {
     this.viewPrefs.freqRespLeftVisible.set(left);
     this.viewPrefs.freqRespRightVisible.set(!left);
@@ -434,7 +445,7 @@ export class TuneNotchWizard {
     if (this.view) this.view.render();
   }
 
-  /** The result of the channel the chart currently shows (viewPrefs L/R) — the
+  /** The result of the channel the chart currently shows (viewPrefs L/R) - the
    *  notch readout, target marker and auto-fit all follow it, so a mid-session
    *  channel toggle re-drives them from the newly selected trace (Java activeResult). */
   _activeResult() {
@@ -456,28 +467,27 @@ export class TuneNotchWizard {
     this._running = true;
     this._teardownDone = false;
     this._sweepCount = 0;
-    this._magRingPos = 0;
-    this._magRingCount = 0;
+    this._resetMagStats();
     // STARTED publish + Run-button disable moved INTO _sweepLoop's try (below) so they are
-    // covered by the finally that publishes STOPPED — a throw between here and the loop body can
+    // covered by the finally that publishes STOPPED - a throw between here and the loop body can
     // no longer orphan FREQRESP_MEASUREMENT_STARTED and latch the consumers OFF.
     this._loopPromise = this._sweepLoop();
   }
 
   /** The continuous session: open once (acquire capture + point the DDS at the
-   *  looping sweep), then grab → deconvolve → display until close. Mirrors
+   *  looping sweep), then grab -> deconvolve -> display until close. Mirrors
    *  TuneNotchWizardDialog#sweepLoop; runs as one async task instead of a
    *  daemon thread. */
   async _sweepLoop() {
     try {
-      // Publish FIRST (Java startSweepLoop): every consumer runs its stop logic —
+      // Publish FIRST (Java startSweepLoop): every consumer runs its stop logic -
       // GeneratorController.stopEngines, Scope/FftPane recorder stop + LED gray,
       // GeneratorPane Play-button visuals. The subscribers' returns only guarantee they ASKED
       // their engines to stop; the idle wait below covers the async teardown before we open the
       // device ourselves. INSIDE the try so a throw in the setup below still reaches the finally's
-      // _teardownSession → STOPPED (no orphaned START latching the consumers).
+      // _teardownSession -> STOPPED (no orphaned START latching the consumers).
       MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
-      // The main FreqResp Run buttons have no bus subscriber (a separate host owns them) —
+      // The main FreqResp Run buttons have no bus subscriber (a separate host owns them) -
       // disable them for the session; _teardownSession re-enables them on every exit.
       this.$('#frRunStrip, #frRun').prop('disabled', true);
 
@@ -486,7 +496,7 @@ export class TuneNotchWizard {
       const sampleRate = engine.config.inRate;
       // Read the DAC/ADC voltage references once: they don't change for the
       // lifetime of the session. (Java also reads ditherBits for its DAC dither;
-      // the web capture path is float — no dither, intended divergence.)
+      // the web capture path is float - no dither, intended divergence.)
       const dacFsVrms = prefs.dacFsVoltageAmpl.get();
       // Per-channel ADC full-scale: ch0 (L) deconvolves with the L scalar, ch1 (R) with
       // the R scalar (Java getAdcFsVoltageRms(Channel.L/R)). The right-lane DAC scale
@@ -496,11 +506,11 @@ export class TuneNotchWizard {
       const adcFsVrmsLeft = prefs.getAdcFsVoltageRms('L');
       const adcFsVrmsRight = prefs.getAdcFsVoltageRms('R');
 
-      // The loop period MUST be a power of two — see powerOfTwoSweepSamples (the
+      // The loop period MUST be a power of two - see powerOfTwoSweepSamples (the
       // circular-FFT invariant that makes an arbitrary-phase grab safe).
       const sweepSamples = powerOfTwoSweepSamples(sampleRate);
       const fadeSamples = notchFadeSamples(sampleRate);
-      // One loop period of the captured stream, in ms — the grab cadence and the
+      // One loop period of the captured stream, in ms - the grab cadence and the
       // percentage's denominator.
       const loopPeriodMs = Math.round((sweepSamples / sampleRate) * 1000.0);
 
@@ -533,7 +543,7 @@ export class TuneNotchWizard {
       // NotchSweepEngine owns the whole session: it snapshots the DDS config, points the
       // generator at a silent looping Farina sweep and starts it, opens its OWN measurement
       // capture line (device-isolated from scope/FFT), then un-mutes at the real amplitude.
-      // The wizard no longer touches engine.config or engine.startGenerator — Java's engine
+      // The wizard no longer touches engine.config or engine.startGenerator - Java's engine
       // owns its own playback line. notch.close() stops the generator + restores the config.
       const band = sweepBand(this._curStartHz, this._curStopHz);
       await notch.start(band[0], band[1], this._curAmpVrms, dacFsVrms, sweepSamples, fadeSamples,
@@ -546,7 +556,7 @@ export class TuneNotchWizard {
         const stopHz = this._curStopHz;
         const ampVrms = this._curAmpVrms;
         // Sample EXACTLY at the FFT bin centers (k·binHz): computeFromLogSweep
-        // then reads each bin with fractional offset 0 — no phase-sensitive
+        // then reads each bin with fractional offset 0 - no phase-sensitive
         // interpolation BETWEEN bins (which made the trace wiggle frame-to-
         // frame). The view interpolates these stable points for the display.
         const freqs = binAlignedFreqs(startHz, stopHz, binHz, CHART_WIDTH_PX);
@@ -559,7 +569,7 @@ export class TuneNotchWizard {
         this._sweepCount++;
 
         const sweepRef = notch.sweepRef();
-        // Deconvolve INLINE (the web is single-threaded — Java overlaps this on
+        // Deconvolve INLINE (the web is single-threaded - Java overlaps this on
         // a one-thread executor), then idle out the rest of the loop period.
         this._deconvolveAndPublish(win, sweepRef, fadeSamples, freqs, sampleRate,
           startHz, stopHz, ampVrms, adcFsVrmsLeft, adcFsVrmsRight);
@@ -571,11 +581,17 @@ export class TuneNotchWizard {
     } catch (e) {
       console.error('TuneNotch streaming sweep failed', e);
       this._running = false;
-      if (this._open) this._setStatus(t('freqResp.error.noDevice'));
+      // The operator was watching a chart that silently froze (an open failure otherwise
+      // lands in the log alone) - tell them, in their language; the technical detail stays in
+      // the log above. Status AND a dialog: the status line is easy to miss beside a still trace.
+      if (this._open) {
+        this._setStatus(t('tuneNotch.error.sweepFailed'));
+        this._showAlert(t('tuneNotch.title'), t('tuneNotch.error.sweepFailed'));
+      }
     } finally {
       // If the loop exited abnormally (error / device release) while the dialog is
       // still open, tear the session down NOW so the capture + generator are freed
-      // and STOPPED is published — the dialog stays fully closable either way. On a
+      // and STOPPED is published - the dialog stays fully closable either way. On a
       // normal close _stopSweepLoop has already flipped _open false and runs the
       // teardown itself after awaiting this promise (the guard makes it idempotent).
       if (this._open) await this._teardownSession();
@@ -607,7 +623,7 @@ export class TuneNotchWizard {
   }
 
   /** Deconvolves one grabbed period for BOTH capture channels and pushes both into
-   *  the embedded view — ch0 (L) with the L full-scale, ch1 (R) with the R full-scale
+   *  the embedded view - ch0 (L) with the L full-scale, ch1 (R) with the R full-scale
    *  (Java deconvolveAndPublish). The output selector gates only which DAC lane carries
    *  the stimulus, so the un-driven side's trace is flat/meaningless but still measured;
    *  the L/R buttons let the user pick which shows (default R). The window is one
@@ -634,7 +650,7 @@ export class TuneNotchWizard {
   }
 
   /** Feeds a finished sweep into the embedded view (BOTH channels), then re-fits the
-   *  magnitude axis and refreshes the notch readout from the ACTIVE (visible) channel —
+   *  magnitude axis and refreshes the notch readout from the ACTIVE (visible) channel -
    *  the one the L/R buttons select (default R). Java onSweepResult(left, right). */
   _onSweepResult(left, right) {
     if (!this._open) return;
@@ -644,20 +660,36 @@ export class TuneNotchWizard {
     this.view.setRightResult(right);
     const active = this._activeResult();
     if (active) {
-      this._applyAutoMagWindow(active);
+      // Notch FIRST: the auto-fitted bottom must include the measured notch value (the DRAWN
+      // dip goes below the raw bins) with its padding - see _applyAutoMagWindow.
       this._computeNotch(active);
+      this._applyAutoMagWindow(active);
     }
     this.view.render();
   }
 
-  /** Finds the deepest notch (sub-bin parabolic refinement, ported in
-   *  findDeepestNotch) in {@code result} and stores its frequency / depth for the
-   *  overlay, remembering the source so a channel toggle can recompute. */
+  /**
+   * The notch the operator is looking at: the lowest point of the DRAWN curve (Java
+   * computeNotch -> view.drawnMinimum). The parabolic sub-bin depth fit this used to do is gone
+   * - a deep null is a V, not a parabola, so fitting one over its tip reported a depth the
+   * curve never reaches, and the readout disagreed with the trace beside it.
+   */
   _computeNotch(result) {
     this._notchSource = result;
-    const n = findDeepestNotch(result.freqs, result.magLin);
-    this._notchValid = n.valid;
-    if (n.valid) { this._notchHz = n.hz; this._notchDb = n.db; }
+    const min = this.view.drawnMinimum(result);
+    if (min == null) { this._notchValid = false; return; }
+    this._notchHz = min[0];
+    this._notchDb = min[1];
+    this._notchValid = true;
+  }
+
+  /** Drops the rolling min/max history so the next sweep re-fits from scratch (Java
+   *  resetMagStats). An edit that changes WHAT is measured - the drive amplitude or the swept
+   *  band - invalidates every frame already in the ring: averaging the old range into the new
+   *  one leaves the axis fitted to a measurement that no longer exists. */
+  _resetMagStats() {
+    this._magRingPos = 0;
+    this._magRingCount = 0;
   }
 
   /** Sets the magnitude axis from the MAG_AVG_FRAMES-sweep rolling AVERAGE of
@@ -689,8 +721,13 @@ export class TuneNotchWizard {
     const avgMin = sumMin / this._magRingCount;
     const avgMax = sumMax / this._magRingCount;
     const prefs = this.viewPrefs;
+    // The bottom must clear the MEASURED notch as well as the rolling average: the drawn dip
+    // goes below the raw bins the average was taken from, so a purely average-derived bottom
+    // clipped the tip of the very null the wizard exists to show.
+    let bot = avgMin - AUTO_FIT_PAD_DB;
+    if (this._notchValid) bot = Math.min(bot, this._notchDb - NOTCH_BOTTOM_PAD_DB);
     prefs.freqRespMagTopDb.set(avgMax + AUTO_FIT_PAD_DB);
-    prefs.freqRespMagBotDb.set(avgMin - AUTO_FIT_PAD_DB);
+    prefs.freqRespMagBotDb.set(bot);
     prefs.save();
   }
 
@@ -698,7 +735,7 @@ export class TuneNotchWizard {
   // Status line + paint overlays
   // ---------------------------------------------------------------------------
 
-  /** Updates the status line: "Sweep {0} — {1}" where {0} is the update counter
+  /** Updates the status line: "Sweep {0} - {1}" where {0} is the update counter
    *  and {1} is the live percentage (buffer-fill during the initial settle,
    *  then progress toward the next result). Java setStatus. */
   _setStatus(message) {
@@ -714,11 +751,12 @@ export class TuneNotchWizard {
     this._paintNotch();
   }
 
-  /** Paints a TARGET_LINE_WIDTH_PX dashed vertical marker at the target
-   *  frequency, coloured by the measured attenuation AT that frequency:
-   *  TARGET_GREEN_DB → green, TARGET_RED_DB → red, linear between (a deep notch
-   *  landed on the target reads green; off-target or shallow reads red).
-   *  Java onTargetPaint. */
+  /** Paints a TARGET_LINE_WIDTH_PX dashed vertical marker at the target frequency, coloured by
+   *  how close the DRAWN response there sits to THIS sweep's notch floor: within
+   *  TARGET_GREEN_DELTA_DB -> green, more than TARGET_RED_DELTA_DB above it -> red, linear
+   *  between. Relative, so a notch of any depth reads green once the target is centred in it -
+   *  an absolute −90/−50 dB pair called a perfectly tuned shallow notch a failure. Java
+   *  onTargetPaint. */
   _paintTarget() {
     const res = this._activeResult();
     const target = this._curTargetHz;
@@ -729,10 +767,12 @@ export class TuneNotchWizard {
     const fMax = prefs.freqRespFreqMaxHz.get();
     if (!res || target <= 0.0 || fMin <= 0.0 || fMax <= fMin
       || target < fMin || target > fMax) return;
-    const dbAtTarget = dbAtFrequency(res.freqs, res.magLin, target);
+    // The DRAWN value at the target, not a bin interpolation: the marker is judged against the
+    // same curve the operator sees (Java view.drawnDb).
+    const dbAtTarget = this.view.drawnDb(res, target);
     if (!Number.isFinite(dbAtTarget)) return;
 
-    // Plot rectangle — mirrors the web FreqRespView's margins so the marker
+    // Plot rectangle - mirrors the web FreqRespView's margins so the marker
     // lands on the same log frequency axis the trace is drawn on.
     const cv = this.canvas;
     const W = cv.clientWidth || CANVAS_WIDTH_PX;
@@ -744,8 +784,10 @@ export class TuneNotchWizard {
     const frac = (Math.log(target) - Math.log(fMin)) / (Math.log(fMax) - Math.log(fMin));
     const x = VIEW_MARGIN_LEFT + Math.round(frac * plotW);
 
+    // Δ above THIS sweep's notch floor; no valid notch yet => full red (nothing to be near).
+    const delta = this._notchValid ? dbAtTarget - this._notchDb : Infinity;
     const tt = Math.max(0.0, Math.min(1.0,
-      (dbAtTarget - TARGET_GREEN_DB) / (TARGET_RED_DB - TARGET_GREEN_DB)));
+      (delta - TARGET_GREEN_DELTA_DB) / (TARGET_RED_DELTA_DB - TARGET_GREEN_DELTA_DB)));
     const r = Math.round(255.0 * tt);
     const gr = Math.round(255.0 * (1.0 - tt));
 
@@ -798,7 +840,7 @@ export class TuneNotchWizard {
     this._open = false;
     this._running = false;
     // Persist the edited tune-notch params from the dialog COPY back into the shared
-    // prefs (Java saveDialogPrefs) — the ONLY values the session writes back; the copy's
+    // prefs (Java saveDialogPrefs) - the ONLY values the session writes back; the copy's
     // view range / channel / phase edits are dropped, leaving the main pane untouched.
     const p = this.prefs, v = this.viewPrefs;
     p.tuneNotchStartHz.set(v.tuneNotchStartHz.get());
@@ -815,7 +857,7 @@ export class TuneNotchWizard {
       this._loopPromise = null;
     }
     await this._teardownSession();
-    // No shared view prefs to restore — the wizard's range lives in viewPrefs.
+    // No shared view prefs to restore - the wizard's range lives in viewPrefs.
     this._latestLeft = null;
     this._latestRight = null;
     this._notchSource = null;
@@ -827,7 +869,7 @@ export class TuneNotchWizard {
    *  restores the pre-session DDS config, publishes FREQRESP_MEASUREMENT_STOPPED
    *  so the scope / FFT / generator panes re-enable themselves, and frees the main
    *  FreqResp Run buttons (which have no bus subscriber). Safe to call from both the
-   *  close path and the loop's abnormal-exit finally — the guard runs the body once. */
+   *  close path and the loop's abnormal-exit finally - the guard runs the body once. */
   async _teardownSession() {
     if (this._teardownDone) return;
     this._teardownDone = true;

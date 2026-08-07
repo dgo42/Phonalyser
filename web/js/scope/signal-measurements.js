@@ -1,12 +1,12 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
 // Faithful port of org.edgo.audio.measure.gui.scope.SignalMeasurements, plus the
 // reconstructed |F1-F2| beat envelope from org.edgo.audio.measure.gui.scope.ScopeView
-// (reconstructBeatSignal) — DSP only, no canvas drawing.
+// (reconstructBeatSignal) - DSP only, no canvas drawing.
 //
 // compute() does a fast pass for min/max/mean/RMS and rising-edge crossings of
 // the half-amplitude threshold, derives a coarse period, then refines the
@@ -20,8 +20,8 @@
  * @property {number} vrms       volts RMS (AC component only)
  * @property {number} vmean      DC offset in volts
  * @property {number} period     seconds (NaN if unknown)
- * @property {number} riseTime   seconds, 10% → 90% on rising edges (NaN if unknown)
- * @property {number} fallTime   seconds, 90% → 10% on falling edges (NaN if unknown)
+ * @property {number} riseTime   seconds, 10% -> 90% on rising edges (NaN if unknown)
+ * @property {number} fallTime   seconds, 90% -> 10% on falling edges (NaN if unknown)
  * @property {number} frequency  Hz (NaN if unknown)
  * @property {number} dutyCycle  fraction [0, 1] (NaN if unknown)
  * @property {number} dualF1     Hz, dual-tone tone 1 as captured (NaN if not measured)
@@ -167,7 +167,7 @@ function hannWindowed(data, n, mean) {
 /**
  * Computes oscilloscope-style measurements over the first `n` samples of `data`
  * (normalised samples in [-1, +1]). `peakVolts` converts ±1.0 into the
- * full-scale ADC voltage swing — i.e. adcFsVoltageRms · √2.
+ * full-scale ADC voltage swing - i.e. adcFsVoltageRms · √2.
  * @param {Float32Array|Float64Array|number[]} data
  * @param {number} n
  * @param {number} sampleRate
@@ -197,7 +197,7 @@ export function compute(data, n, sampleRate, peakVolts, broadband = true) {
   let vmean = mean * peakVolts;
   let vrms = rms * peakVolts;
 
-  // Half-amplitude midpoint — crossing threshold for both period detection and
+  // Half-amplitude midpoint - crossing threshold for both period detection and
   // duty cycle. Independent of any DC bias on the input.
   // (Java stores threshold as float; clamp to Math.fround for bit-faithful
   // comparisons against the float samples.)
@@ -218,11 +218,11 @@ export function compute(data, n, sampleRate, peakVolts, broadband = true) {
   // Vmean / Vrms over an INTEGER number of periods. The fixed-length window
   // holds a fractional cycle count, and that fraction adds an amplitude-
   // proportional, capture-phase-random residual to the mean (up to A/(π·cycles)
-  // — ~mV at full scale over 0.25 s) that swamps the noise floor in the Vmean
+  // - ~mV at full scale over 0.25 s) that swamps the noise floor in the Vmean
   // statistics. The rising mid-threshold crossings bound whole periods, and the
   // signal sits AT its mean there, so the whole-sample boundary error is
-  // second-order (sub-µV) — Vmean then moves only with the noise floor. No
-  // crossings (DC / noise-only) → the full-window figures above stand.
+  // second-order (sub-µV) - Vmean then moves only with the noise floor. No
+  // crossings (DC / noise-only) -> the full-window figures above stand.
   if (crossCount >= 2) {
     const pn = lastCross - firstCross;
     let pSum = 0;
@@ -375,12 +375,12 @@ export function withDualTones(m, f1, f2) {
  *
  * Why: a dual tone sin(F1·t)+sin(F2·t) = 2·sin((F1+F2)/2·t)·cos((F1−F2)/2·t) has
  * a slow |F1−F2| beat envelope on top of the carrier. The plain compute() bounds
- * its Vmean window by the CARRIER's half-amplitude rising crossings — but those
+ * its Vmean window by the CARRIER's half-amplitude rising crossings - but those
  * crossings do NOT fall on whole beat periods, so the window holds a fractional
  * beat cycle whose amplitude-proportional residual jitters the mean by tens of µV
  * tick-to-tick (the ±50 µV jump). The beat is the slowest structure in the signal;
  * bounding the integration to whole beat periods drops that residual to the noise
- * floor (Vmean avg < 1 µV) — the beat-envelope analogue of compute()'s whole-
+ * floor (Vmean avg < 1 µV) - the beat-envelope analogue of compute()'s whole-
  * carrier-period bounding. Vpp is untouched (a peak, not an integral).
  *
  * The window is the largest integer multiple of the beat period `sampleRate/beatHz`
@@ -392,7 +392,7 @@ export function withDualTones(m, f1, f2) {
  * @param {number} n           valid length of `data`
  * @param {number} sampleRate
  * @param {number} beatHz      |F1 − F2|, the beat frequency (Hz)
- * @param {number} peakVolts   ±1.0 → full-scale volts
+ * @param {number} peakVolts   ±1.0 -> full-scale volts
  * @returns {SignalMeasurements}
  */
 export function withBeatPeriodMeanRms(m, data, n, sampleRate, beatHz, peakVolts) {
@@ -425,7 +425,7 @@ export function withBeatPeriodMeanRms(m, data, n, sampleRate, beatHz, peakVolts)
 /**
  * Re-pins an already-located fundamental `seedHz` to a precise frequency by a
  * Hann-windowed Goertzel peak search over the narrow band
- * [seedHz − halfHz, seedHz + halfHz] of `data`. Used by the comb-seed →
+ * [seedHz − halfHz, seedHz + halfHz] of `data`. Used by the comb-seed ->
  * raw-refine scope frequency path: the mains comb locates WHICH peak is the
  * fundamental (a good seed), but its notches bias the frequency; the raw signal
  * is un-biased and carries no competing component inside this narrow band.
@@ -446,7 +446,7 @@ export function refineFrequencyAround(data, n, sampleRate, seedHz, halfHz) {
 }
 
 /**
- * Reconstructs the signed beat modulator of a dual-tone signal — the slow
+ * Reconstructs the signed beat modulator of a dual-tone signal - the slow
  * cos((F1-F2)/2·t) factor that envelopes the carrier in
  * sin(F1·t) + sin(F2·t) = 2·sin((F1+F2)/2·t)·cos((F1-F2)/2·t).
  *
@@ -480,7 +480,7 @@ export function reconstructBeatSignal(data, available, sampleRate, f1Hz, f2Hz, s
   out.fill(0, 0, available);   // early returns must yield silence
   const beatHz = Math.abs(f2Hz - f1Hz);
   if (!(beatHz > 0) || sampleRate <= 0) return out;
-  // L = quarter-beat-period samples — bracketed so a tiny beat doesn't blow past
+  // L = quarter-beat-period samples - bracketed so a tiny beat doesn't blow past
   // the buffer length and a huge beat doesn't collapse to L = 1.
   const lFromBeat = Math.round(sampleRate / (4.0 * beatHz));
   const lMin = Math.max(2, Math.round(sampleRate / Math.max(1.0, f1Hz + f2Hz)));
@@ -489,7 +489,7 @@ export function reconstructBeatSignal(data, available, sampleRate, f1Hz, f2Hz, s
   if (available <= 2 * L) return out;
   const halfL = Math.trunc(L / 2);
 
-  // --- Step 1: rectify + boxcar LP applied TWICE in cascade → sinc² abs
+  // --- Step 1: rectify + boxcar LP applied TWICE in cascade -> sinc² abs
   // envelope. Each pass emits at its window centre (zero net group delay).
   // Boundaries filled with the nearest valid value.
   const tmp = sc.beatTmp;
@@ -582,7 +582,7 @@ const NS_PER_SECOND = 1e9;
 
 // Hard ceiling on the rolling history so push() can NEVER grow without bound,
 // independent of how often rebuild() (which prunes to the live window) runs and
-// independent of oscMeasurementAverageSeconds (which can be 0 = "keep all" → no
+// independent of oscMeasurementAverageSeconds (which can be 0 = "keep all" -> no
 // age cutoff). The averaging window is at most a handful of seconds; even at the
 // ~60 fps free-running paint rate (file mode pushes every frame) a 600 s / 64 k
 // guard is orders of magnitude beyond any real window while still bounding RAM.
@@ -667,7 +667,7 @@ export class MeasurementStats {
     if (windowSeconds > 0 && n > 0) {
       cutoff = ts[n - 1] - windowSeconds * NS_PER_SECOND;
     }
-    // Find the first index still within the window — WITHOUT dropping the older
+    // Find the first index still within the window - WITHOUT dropping the older
     // entries (Java walkRecentHistory walks its ring non-destructively): widening
     // the averaging pref back must recover the still-stored history. The hard
     // age/size bound in push() alone trims storage.

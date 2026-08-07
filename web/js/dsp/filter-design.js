@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -61,7 +61,7 @@ export class FilterDesign {
   // ===================================================================
 
   /**
-   * Mode 1 — design by specification: the order is derived as the minimum
+   * Mode 1 - design by specification: the order is derived as the minimum
    * meeting stopAttenDb at the stop edge.
    *
    * LP/HP: passHz is the passband edge Fc, stopHz the stopband edge Fs,
@@ -93,10 +93,10 @@ export class FilterDesign {
       if (!(stopHz > 0.0 && passHz > stopHz)) {
         throw new Error('HP requires 0 < stopHz < passHz');
       }
-      fc = passHz; bandwidth = 0.0; ws = passHz / stopHz;   // prototype swaps s → 1/s
+      fc = passHz; bandwidth = 0.0; ws = passHz / stopHz;   // prototype swaps s -> 1/s
     } else if (type === FilterType.BAND_PASS) {
       // Band-pass: PB is the INNER (narrow) passband, SB the OUTER (wide)
-      // deep-rejection band ⇒ SB > PB, and the LP→BP transform maps the
+      // deep-rejection band => SB > PB, and the LP->BP transform maps the
       // outer SB edge to the higher prototype frequency ws = SB/PB.
       if (centerHz <= 0.0) {
         throw new Error('BP requires centerHz > 0');
@@ -106,9 +106,9 @@ export class FilterDesign {
       }
       fc = centerHz; bandwidth = passHz; ws = stopHz / passHz;
     } else {
-      // Notch (band-stop): the reciprocal band mapping inverts the roles —
+      // Notch (band-stop): the reciprocal band mapping inverts the roles -
       // PB is the OUTER (wide) passband-return band, SB the INNER (narrow)
-      // deep-rejection band ⇒ PB > SB, and the stop ratio matching the
+      // deep-rejection band => PB > SB, and the stop ratio matching the
       // reciprocal transform is ws = PB/SB.
       if (centerHz <= 0.0) {
         throw new Error('NOTCH requires centerHz > 0');
@@ -131,7 +131,7 @@ export class FilterDesign {
   }
 
   /**
-   * Mode 2 — design by order.
+   * Mode 2 - design by order.
    *
    * LP/HP: passFreqHz is the cutoff, q ignored. BP/NOTCH: passFreqHz is the
    * center f0 and the bandwidth is center/q.
@@ -192,7 +192,7 @@ export class FilterDesign {
   get stopAttenDb() { return this._stopAttenDb; }
 
   /**
-   * The filter's critical frequencies in Hz — the points a resolution-limited
+   * The filter's critical frequencies in Hz - the points a resolution-limited
    * overlay sampler must hit exactly so the corner / null is never skipped by
    * pixel-grid luck. BP/NOTCH return the center fcHz (the passband peak /
    * stopband null); LP/HP return the pass-edge cutoff fcHz.
@@ -202,7 +202,7 @@ export class FilterDesign {
   }
 
   /**
-   * The anchor corners in Hz — the frequency(s) the view aligns the ideal
+   * The anchor corners in Hz - the frequency(s) the view aligns the ideal
    * overlay to on the measured trace. LP/HP: the single pass-edge cutoff fcHz.
    * BAND_PASS: the arithmetic passband edges { fc − B/2, fc + B/2 }. NOTCH: the
    * passband SHOULDERS, the geometric edges { f0/u, f0·u } with
@@ -214,7 +214,7 @@ export class FilterDesign {
     }
     if (this._type === FilterType.NOTCH) {
       // Geometric edges of the band of arithmetic width `bandwidthHz`
-      // centred (geometrically) on fcHz: u − 1/u = B/f0 ⇒
+      // centred (geometrically) on fcHz: u − 1/u = B/f0 =>
       // u = (x + √(x²+4))/2 with x = B/f0. The shoulders are f0/u and f0·u.
       const x = this._bandwidthHz / this._fcHz;
       const u = (x + Math.sqrt(x * x + 4.0)) / 2.0;
@@ -257,7 +257,7 @@ export class FilterDesign {
         break;
       case FilterType.NOTCH: {
         const bt = this.bandTransform(f);
-        w = (bt === 0.0) ? Infinity   // at f0 → deep stop
+        w = (bt === 0.0) ? Infinity   // at f0 -> deep stop
                          : Math.abs(1.0 / bt);
         break;
       }
@@ -269,7 +269,7 @@ export class FilterDesign {
     return w * this._protoScale;
   }
 
-  /** Standard LP→BP frequency mapping W = (f/f0 − f0/f)·(f0/B). */
+  /** Standard LP->BP frequency mapping W = (f/f0 − f0/f)·(f0/B). */
   bandTransform(f) {
     const ratio = f / this._fcHz - this._fcHz / f;
     return ratio * (this._fcHz / this._bandwidthHz);
@@ -308,18 +308,18 @@ export class FilterDesign {
 
   /**
    * Inverse Chebyshev |H|² = ε²Tn²(1/w) / (1 + ε²Tn²(1/w)) with w = 1 the
-   * stopband edge. As w→0 (deep passband) Tn(1/w)→∞ so |H|²→1; at w = 1 the
-   * floor equals ε²Tn²(1)/(1+…) = ε²/(1+ε²) = 10^{−A/10}.
+   * stopband edge. As w->0 (deep passband) Tn(1/w)->∞ so |H|²->1; at w = 1 the
+   * floor equals ε²Tn²(1)/(1+...) = ε²/(1+ε²) = 10^{−A/10}.
    */
   invChebyshevMagSq(w) {
     if (w <= 0.0) return PASSBAND_MAG_SQ;
     const tn = chebyshevT(this._order, 1.0 / w);
     const e2t2 = this._epsilonSq * tn * tn;
-    if (!Number.isFinite(e2t2)) return PASSBAND_MAG_SQ;   // 1/w huge → passband
+    if (!Number.isFinite(e2t2)) return PASSBAND_MAG_SQ;   // 1/w huge -> passband
     return e2t2 / (1.0 + e2t2);
   }
 
-  /** |H|² = 1 / (1 + ε²·Rn²(ξ, w)) — elliptic rational function. */
+  /** |H|² = 1 / (1 + ε²·Rn²(ξ, w)) - elliptic rational function. */
   ellipticMagSq(w) {
     const rn = ellipticRational(this._order, this._xi, w);
     return PASSBAND_MAG_SQ / (1.0 + this._epsilonSq * rn * rn);

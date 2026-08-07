@@ -1,10 +1,10 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// The SWT-free decision brain of gui/preferences/CardEditorDialog — the pure functions the card
+// The SWT-free decision brain of gui/preferences/CardEditorDialog - the pure functions the card
 // create/edit dialog runs (capability derivation, mono detection, name-uniqueness, drop-calibrated
 // detection, match-list parsing, and the OK profile-assembly build path). The DOM dialog
 // (shell/card-editor-dialog.js) owns only the widgets + i18n and delegates every decision here, so
@@ -13,7 +13,7 @@
 import { AudioDeviceProfile, DeviceRange } from './device-profiles.js';
 import { DeviceChannelMode } from './device-enums.js';
 
-/** Which endpoint blocks a card carries ranges for — the direction radios
+/** Which endpoint blocks a card carries ranges for - the direction radios
  *  (CardEditorDialog.Capability). */
 export const Capability = Object.freeze({
   INPUT_ONLY: 'INPUT_ONLY',
@@ -22,7 +22,7 @@ export const Capability = Object.freeze({
 });
 
 /** Derives the capability of an existing profile from which endpoints actually carry
- *  ranges — the edit-form initial selection (Capability.of). */
+ *  ranges - the edit-form initial selection (Capability.of). */
 export function capabilityOf(p) {
   const inHas = p.input.ranges.length > 0;
   const outHas = p.output.ranges.length > 0;
@@ -31,7 +31,7 @@ export function capabilityOf(p) {
   return Capability.INPUT_ONLY;
 }
 
-/** Whether the seed profile is a mono card — any endpoint declared MONO. A stereo card
+/** Whether the seed profile is a mono card - any endpoint declared MONO. A stereo card
  *  has both endpoints on a stereo mode (LINKED / INDEPENDENT) (CardEditorDialog.seedIsMono). */
 export function seedIsMono(p) {
   return p.input.channels === DeviceChannelMode.MONO
@@ -39,7 +39,7 @@ export function seedIsMono(p) {
 }
 
 /** True when {@code name} clashes (case-insensitive) with a card OTHER than the one being
- *  edited — so an unchanged edit name is allowed but a rename onto another card is rejected
+ *  edited - so an unchanged edit name is allowed but a rename onto another card is rejected
  *  (CardEditorDialog.nameTaken). */
 export function nameTaken(name, existingNames, originalName) {
   if (originalName != null && name.toLowerCase() === originalName.toLowerCase()) return false;
@@ -61,7 +61,7 @@ export function droppingCalibrated(ep, want) {
 }
 
 /** The match list as trimmed, non-blank, case-insensitively de-duplicated entries in typed
- *  order — the recognition/binding list of the built card (CardEditorDialog.parseMatch). */
+ *  order - the recognition/binding list of the built card (CardEditorDialog.parseMatch). */
 export function parseMatch(text) {
   const entries = [];
   for (const line of String(text == null ? '' : text).split(/\r\n?|\n/)) {
@@ -95,10 +95,10 @@ function applyCapability(ep, want, seedFs, defaultLabel) {
 }
 
 /**
- * Assembles a fresh profile from the seed + the editor's choices — the OK build path
+ * Assembles a fresh profile from the seed + the editor's choices - the OK build path
  * (CardEditorDialog.onOk after validation). Never mutates {@code seed}: the endpoints are
- * deep-copied so the seed's calibrated ranges survive. Mono → MONO on every enabled endpoint;
- * Stereo → each direction's own coupling (LINKED / INDEPENDENT). A newly enabled direction is
+ * deep-copied so the seed's calibrated ranges survive. Mono -> MONO on every enabled endpoint;
+ * Stereo -> each direction's own coupling (LINKED / INDEPENDENT). A newly enabled direction is
  * seeded with one {@code default} range from the passed-in full-scale; a direction turned off
  * has its ranges dropped.
  *

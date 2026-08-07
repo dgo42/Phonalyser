@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -13,7 +13,7 @@
 // into beat envelopes). Per-scale phase tables are cached so the inner loop is
 // a plain table lookup with zero Math.sin calls.
 
-/** Kernel half-width in samples (windowed-sinc lobes each side → ≥ 80 dB stop-band). */
+/** Kernel half-width in samples (windowed-sinc lobes each side -> ≥ 80 dB stop-band). */
 export const LANCZOS_A = 16;
 
 /** Largest downsample factor for which the scaled kernel is cheap enough per pixel. */
@@ -114,7 +114,7 @@ function getKernelTable(scale) {
  * @param {Float32Array|Float64Array|number[]} data   sample buffer
  * @param {number} n      valid length of `data`
  * @param {number} t      sample-domain position (may be fractional)
- * @param {number} scale  downsample factor; 1 = classic Whittaker–Shannon, >1
+ * @param {number} scale  downsample factor; 1 = classic Whittaker-Shannon, >1
  *                        widens the kernel to act as an anti-aliasing low-pass
  * @returns {number}
  */
@@ -143,7 +143,7 @@ export function lanczos(data, n, t, scale) {
 }
 
 /**
- * NaN-aware `Float64Array` overload — used by frequency-domain views whose
+ * NaN-aware `Float64Array` overload - used by frequency-domain views whose
  * magnitude/phase arrays carry NaN for invalid points (unswept regions,
  * non-positive magnitudes). NaN taps are treated as MISSING and the remaining
  * taps renormalized; a NaN center sample still returns NaN so genuine gaps
@@ -174,7 +174,7 @@ export function lanczosNaN(data, n, t, scale) {
   let sumDeltas = 0.0;
   for (let i = iLo; i <= iHi; i++) {
     const di = data[i];
-    if (Number.isNaN(di)) continue;          // missing sample — renormalized out
+    if (Number.isNaN(di)) continue;          // missing sample - renormalized out
     const wj = w[i - center + halfWidth - 1];
     sumWeights += wj;
     sumDeltas += (di - baseline) * wj;

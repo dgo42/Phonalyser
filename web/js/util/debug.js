@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — switchable debug logging.
+ * Phonalyser web - switchable debug logging.
  *
  * Off by default. Enable from the browser console with `phonalyserDebug(true)` (persists via
  * localStorage) or by adding `?debug=1` to the URL; turn it back off with `phonalyserDebug(false)`.

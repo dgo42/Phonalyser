@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — a tiny localStorage-backed file store (loaded .frc calibration
+ * Phonalyser web - a tiny localStorage-backed file store (loaded .frc calibration
  * rows · loaded .dpd predistortion), so a file the user picked survives a reload.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
@@ -9,14 +9,14 @@
  * path and re-reads the file). This module keeps the file's own bytes/text under a key
  * so the pane can restore its rows + reapply the calibration/predistortion at startup.
  *
- * API (the generator .dpd slots — SMALL text files):
- *   put(key, name, arrayBufferOrText) — store a named blob (text kept verbatim; an
+ * API (the generator .dpd slots - SMALL text files):
+ *   put(key, name, arrayBufferOrText) - store a named blob (text kept verbatim; an
  *                                       ArrayBuffer / typed array base64-encoded).
- *   get(key)  -> { name, data } | null — data is the original text or an ArrayBuffer.
- *   remove(key)                        — drop the entry.
- *   keys(prefix) -> string[]           — the stored keys starting with `prefix`.
+ *   get(key)  -> { name, data } | null - data is the original text or an ArrayBuffer.
+ *   remove(key)                        - drop the entry.
+ *   keys(prefix) -> string[]           - the stored keys starting with `prefix`.
  *
- * LARGE files (multi-MB .frc calibration text — the FFT calibration rows) use the
+ * LARGE files (multi-MB .frc calibration text - the FFT calibration rows) use the
  * async IndexedDB-backed quartet idbPut / idbGet / idbRemove / idbKeys instead:
  * localStorage's ~5M-char per-origin quota made put() silently DROP a realistic
  * Nyquist/2-sweep .frc (the setItem QuotaExceededError is swallowed), which showed
@@ -40,7 +40,7 @@ function bytesToBase64(buf) {
   return btoa(bin);
 }
 
-/** base64 → ArrayBuffer (the inverse of bytesToBase64). */
+/** base64 -> ArrayBuffer (the inverse of bytesToBase64). */
 function base64ToBytes(b64) {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -98,7 +98,7 @@ export function keys(prefix = '') {
 // IndexedDB-backed variant for LARGE files (#5). One database, one object store;
 // the store is its own namespace, so keys go in bare. Records are { name, data }
 // with `data` a string or ArrayBuffer, stored via structured clone (loss-free,
-// no base64). All four functions are async and reject on a real IDB failure —
+// no base64). All four functions are async and reject on a real IDB failure -
 // callers decide whether to surface or log it (unlike put()'s silent swallow,
 // which is exactly what hid the localStorage quota loss).
 

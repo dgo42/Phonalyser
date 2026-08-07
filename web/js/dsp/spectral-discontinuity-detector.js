@@ -1,26 +1,26 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Faithful port of org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector — the
+// Faithful port of org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector - the
 // frequency-domain glitch / discontinuity rejector for the coherently averaged FFT.
 // Where a time-domain Nth-difference test fails on weak signals (low SNR buries the
 // glitch under broadband noise), this works on the SPECTRUM and compares each block
-// to the running statistics of the blocks already collected — robust because a real
+// to the running statistics of the blocks already collected - robust because a real
 // line references itself while a glitch lifts the floor or the near-carrier pedestal.
 //
-// THREE GATES (all dB ratios, self-calibrated against the collected history → the
+// THREE GATES (all dB ratios, self-calibrated against the collected history -> the
 // test is amplitude-independent and learns its own clean baseline):
-//   1. Near-carrier pedestal — the noise "rock" in the bins flanking each
+//   1. Near-carrier pedestal - the noise "rock" in the bins flanking each
 //      fundamental (the tone's ACTUAL data-derived main lobe excluded), measured as
 //      its excess over the block's own broadband floor (pedestal − floor). Its
 //      running median + k·MAD over the collected blocks is the threshold.
-//   2. Broadband floor — reduce the spectrum to B log-spaced band levels (dB), keep
+//   2. Broadband floor - reduce the spectrum to B log-spaced band levels (dB), keep
 //      a per-band running median over the last L accepted blocks, and reject when the
 //      mean lift over the floor bands exceeds a MAD-self-calibrated median + k·MAD.
-//   3. Total power — a generator stall / long ADC dropout where the lines collapse
+//   3. Total power - a generator stall / long ADC dropout where the lines collapse
 //      instead of the floor rising.
 //
 // Only the very first block (which seeds the reference) is accepted unconditionally;
@@ -29,7 +29,7 @@
 // single-threaded (the FFT worker / pool thread); not synchronized.
 //
 // This SUPERSEDES the partial 2-gate js/dsp/discontinuity.js (gates 2 & 3 only); the
-// full detector needs ToneLobeLift, which is now ported — gate 1 lands with it. The
+// full detector needs ToneLobeLift, which is now ported - gate 1 lands with it. The
 // older stub is left in place (it has no importers; not this change's to remove).
 
 import { ToneLobeLift } from './tone-lobe-lift.js';
@@ -41,17 +41,17 @@ const MIN_POWER_MAD = 0.5;
 const MIN_PEDESTAL_MAD = 0.5;
 
 /** The near-carrier pedestal is sampled in a strong tone's skirt, where ordinary
- *  window leakage breathes over a heavier tail than the broadband floor — so it gets
+ *  window leakage breathes over a heavier tail than the broadband floor - so it gets
  *  its OWN (larger) sigma; only splatter well above the leakage envelope trips it. */
 const PEDESTAL_SIGMA_K = 10.0;
 
-/** Minimum tone-lobe exclusion half-width, and the pedestal sampling span, in HZ —
+/** Minimum tone-lobe exclusion half-width, and the pedestal sampling span, in HZ -
  *  converted to bins via binWidthHz so they don't drift with FFT size / sample rate. */
 const PEAK_HALFWIDTH_HZ = 1.1;
 const SKIRT_WIDTH_HZ = 8.8;
 
 /** Around each fundamental the floor keeps out only the tone's OWN band plus any band
- *  whose centre lands within this guard — so the lobe's leakage can't drop the
+ *  whose centre lands within this guard - so the lobe's leakage can't drop the
  *  neighbour bands and open a wide hole in the floor at the tone. */
 const FLOOR_GUARD_HZ = 100.0;
 
@@ -149,7 +149,7 @@ export class SpectralDiscontinuityDetector {
    * @param {number} halfSize
    * @param {number} binWidthHz
    * @param {?Int32Array|number[]} peakBins
-   * @returns {boolean} true ⇒ reject
+   * @returns {boolean} true => reject
    */
   reject(re, im, halfSize, binWidthHz, peakBins) {
     this._binWidthHz = binWidthHz > 0.0 ? binWidthHz : 1.0;
@@ -171,7 +171,7 @@ export class SpectralDiscontinuityDetector {
     }
     const lastPowerDb = 10.0 * Math.log10(totalPow + 1e-300);
 
-    // Per-block line detection (no history) → noise floor + pedestal excess.
+    // Per-block line detection (no history) -> noise floor + pedestal excess.
     const lineBand = this._lineBand;
     for (let b = 0; b < bands; b++) lineBand[b] = this._isLocalLine(level, b) ? 1 : 0;
     const lastFloorDb = this._floorMedian(level);
@@ -205,7 +205,7 @@ export class SpectralDiscontinuityDetector {
     const rho = this._rho;
     let m = 0;
     for (let b = 0; b < bands; b++) {
-      if (lineBand[b]) continue;         // a real line / skirt — self-references, skip
+      if (lineBand[b]) continue;         // a real line / skirt - self-references, skip
       rho[m++] = level[b] - mref[b];
     }
     const score = m > 0 ? mean(rho, m) : 0.0;
@@ -230,7 +230,7 @@ export class SpectralDiscontinuityDetector {
 
   // ---------------------------------------------------------------- internals
 
-  /** Median power (→ dB) of the bins flanking each fundamental, main lobe excluded.
+  /** Median power (-> dB) of the bins flanking each fundamental, main lobe excluded.
    *  NaN when no peaks are supplied. */
   _pedestalDb(re, im, peakBins) {
     if (peakBins == null || peakBins.length === 0) return NaN;
@@ -271,7 +271,7 @@ export class SpectralDiscontinuityDetector {
   }
 
   /** Pedestal-gate noise floor: median of the two bands flanking each fundamental
-   *  (its left/right neighbours) — the local floor right beside the tone, free of the
+   *  (its left/right neighbours) - the local floor right beside the tone, free of the
    *  jittery far-out bands. NaN when no flanking band exists. */
   _pedestalFloorDb(peakBins) {
     if (peakBins == null || peakBins.length === 0) return NaN;
@@ -293,7 +293,7 @@ export class SpectralDiscontinuityDetector {
   }
 
   /** A band is a line / skirt when its level towers over the local median of nearby
-   *  bands — derived from the current block, so it needs no history. */
+   *  bands - derived from the current block, so it needs no history. */
   _isLocalLine(lvl, b) {
     const lo = Math.max(0, b - 3), hi = Math.min(this._bands, b + 4);
     const loc = new Float64Array(hi - lo);
@@ -328,7 +328,7 @@ export class SpectralDiscontinuityDetector {
 
     // Shrink the band holding each fundamental to ±FLOOR_GUARD_HZ, handing its freed
     // bins to the immediate neighbours, so the floor's gap at the tone is the guard
-    // width — not the lobe's full leakage extent.
+    // width - not the lobe's full leakage extent.
     if (peakBins != null) {
       const guard = Math.max(1, Math.round(FLOOR_GUARD_HZ / this._binWidthHz));
       for (let i = 0; i < peakBins.length; i++) {

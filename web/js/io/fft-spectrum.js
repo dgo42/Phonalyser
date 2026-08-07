@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -18,7 +18,7 @@
 // up to (not including) the stats recompute. The Java loadSpectrum then calls
 // FftController.recomputeStaticResult (and, for IMD files, imdAnalyzer.analyze);
 // those live in the already-ported analyzer / imd-analyzer modules and are the
-// caller's responsibility — the returned object carries every field they need.
+// caller's responsibility - the returned object carries every field they need.
 // Preferences-derived inputs (dbvOffsetDb, harmCount, the minimum-fundamental
 // floor) come in as explicit arguments rather than via a global, per IoC.
 
@@ -53,15 +53,15 @@ function parseHeaderHz(line) {
  * Parses a .fft spectrum file. Faithful port of FftController.loadSpectrum: reads
  * the data rows + capture-mode / tone / bin-bandwidth header comments, then
  * reconstructs an {@link FftResult} (freqResolution, fftSize, sampleRate,
- * binBwSqrt, the complex bins from dBV→dBFS→linear, and the fundamental via
- * argmax above LOADED_FUND_MIN_HZ refined to sub-bin) — everything up to the
+ * binBwSqrt, the complex bins from dBV->dBFS->linear, and the fundamental via
+ * argmax above LOADED_FUND_MIN_HZ refined to sub-bin) - everything up to the
  * stats recompute, which the caller runs.
  *
  * @param {string} text         Raw file contents.
  * @param {number} dbvOffsetDb  Global ADC offset (prefs.getDbvOffsetDb()); subtracted on load.
  * @param {number} harmCount    Harmonic-array length = max(9, prefs.getFftCalcMaxHarmonic()).
  * @param {(re:Float64Array, im:Float64Array, bin:number, fftSize:number)=>number} parabolicBinInterp
- *        MathUtil.parabolicBinInterp — sub-bin fundamental refinement.
+ *        MathUtil.parabolicBinInterp - sub-bin fundamental refinement.
  * @returns {LoadedSpectrum}
  * @throws {Error} When the file holds fewer than 4 rows or a non-positive freq step.
  */
@@ -144,7 +144,7 @@ export function loadSpectrum(text, dbvOffsetDb, harmCount, parabolicBinInterp) {
  * from the result + Preferences at save time; all optional.
  *
  * @typedef {Object} FftSaveMeta
- * @property {boolean}  [imd=false]          true → '# mode=IMD' (else THD).
+ * @property {boolean}  [imd=false]          true -> '# mode=IMD' (else THD).
  * @property {number}   [tone1Hz=0]          Written only when imd.
  * @property {number}   [tone2Hz=0]          Written only when imd.
  * @property {number}   [dbvOffsetDb=0]      Added to every dBFS to make dBV.

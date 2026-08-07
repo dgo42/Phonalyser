@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — shared calibration persistence (issue 2.3).
+ * Phonalyser web - shared calibration persistence (issue 2.3).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  *

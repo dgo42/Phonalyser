@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  *
@@ -16,10 +16,48 @@
  * here without re-reading the Java.
  */
 
-/** MagnitudeUnit.isLog() — Java enum: V(true), V_SQRT_HZ(true), DBV(false), DBFS(false),
+/** Ceiling on the decimals a step-aware tick label may grow to (AbstractMeasurementView.
+ *  MAX_TICK_DECIMALS). Four places resolve a 0.001-unit step - the FFT pane's 0.01 dB minimum
+ *  span never needs more; a zoom with no span floor (FreqResp's magnitude wheel) can outrun it,
+ *  and this cap is then what keeps the labels from outgrowing the axis gutter. */
+const MAX_TICK_DECIMALS = 4;
+
+/** MagnitudeUnit.isLog() - Java enum: V(true), V_SQRT_HZ(true), DBV(false), DBFS(false),
  *  DBR(false). Every dB unit (dBr included) keeps the linear-in-dB axis. */
 export function unitIsLog(unit) {
   return unit === 'V' || unit === 'V_SQRT_HZ';
+}
+
+/* ---- AbstractMeasurementView.tickDecimals (:1453) ------------------------
+ *   if (!(step > 0) || step >= 1) return coarseDecimals;
+ *   return min(MAX_TICK_DECIMALS, ceil(-log10(step)));
+ */
+/** Decimal places a tick label needs to resolve a step of `step`: one place per decade below 1
+ *  (a 0.05 dB step needs two), capped at MAX_TICK_DECIMALS. A step of one unit or more needs
+ *  none of those and gets the axis's default `coarseDecimals` - which is what keeps wide spans
+ *  looking exactly as they always did. Single derivation behind every step-aware tick label, so
+ *  the frequency and dB axes can never disagree about how fine a label has to be. */
+export function tickDecimals(step, coarseDecimals) {
+  if (!(step > 0) || step >= 1) return coarseDecimals;
+  return Math.min(MAX_TICK_DECIMALS, Math.ceil(-Math.log10(step)));
+}
+
+/* ---- AbstractMeasurementView.labelStep (:1441) ---------------------------
+ *   if (axis.scale == LOG && !isSubDecade(min, max)) return 0.0;
+ *   return minSpacing(labelPositions);
+ */
+/** The uniform tick step behind `labelPositions`, or 0 when the axis has none - a LOG axis wider
+ *  than one decade is labelled at adaptively thinned decade multiples, whose spacing is a ratio,
+ *  not a step. The step-aware formats (FREQ, DB) size their decimals from it; every other format
+ *  ignores it, so the voltage / phase / count axes render independently of this value.
+ *
+ * @param {number[]} labelPositions the values that will be labelled
+ * @param {boolean} isLog true for a logarithmic axis
+ * @param {number} min axis minimum @param {number} max axis maximum
+ * @returns {number} the step, or 0 when the axis has none */
+export function labelStep(labelPositions, isLog, min, max) {
+  if (isLog && !isSubDecade(min, max)) return 0.0;
+  return minSpacing(labelPositions);
 }
 
 /* ---- AbstractMeasurementView.formatVoltsSi (:1105) -----------------------
@@ -68,7 +106,7 @@ export function formatVoltsSi(v) {
  *   case V_SQRT_HZ: return formatVoltsSi(v) + "V/√Hz";
  */
 export function formatMagnitudeWithUnit(v, unit) {
-  if (!Number.isFinite(v)) return '—';
+  if (!Number.isFinite(v)) return '-';
   switch (unit) {
     case 'DBFS':      return v.toFixed(1) + ' dBFS';
     case 'DBR':       return v.toFixed(1) + ' dBr';
@@ -79,14 +117,51 @@ export function formatMagnitudeWithUnit(v, unit) {
   }
 }
 
+/* ---- AbstractMeasurementView.formatDb (:1484) ----------------------------
+ *   return String.format("%." + tickDecimals(step, 1) + "f", v);
+ */
+/** dB tick label without unit suffix - the unit caption is painted once. One decimal while the
+ *  ticks are 1 dB apart or coarser (every default span), growing to as many as `step` needs once
+ *  the axis is zoomed below that: a 0.05 dB grid would otherwise print the same "0.0" three
+ *  times. */
+export function formatDb(v, step) {
+  if (!Number.isFinite(v)) return '-';
+  return v.toFixed(tickDecimals(step, 1));
+}
+
 /* ---- Magnitude AXIS tick label (applyLabelFormat VOLTS_SI / DB dispatch) -
- * Java drawGrid uses LabelFormat.VOLTS_SI (→ formatVoltsSi, no unit on the
- * tick — the unit caption is painted once) for log V / V√Hz axes, and
- * LabelFormat.DB (→ "%.1f") for the dBFS / dBV linear axes. */
-export function formatMagTick(v, unit) {
-  if (!Number.isFinite(v)) return '—';
-  if (unitIsLog(unit)) return formatVoltsSi(v).trimEnd();   // VOLTS_SI: "100 m" → trim trailing space
-  return v.toFixed(1);                                       // DB: "%.1f"
+ * Java drawGrid uses LabelFormat.VOLTS_SI (-> formatVoltsSi, no unit on the
+ * tick - the unit caption is painted once) for log V / V√Hz axes, and
+ * LabelFormat.DB (-> formatDb, step-aware) for the dBFS / dBV linear axes. */
+export function formatMagTick(v, unit, step = 0) {
+  if (!Number.isFinite(v)) return '-';
+  if (unitIsLog(unit)) return formatVoltsSi(v).trimEnd();   // VOLTS_SI: "100 m" -> trim trailing space
+  return formatDb(v, step);                                  // DB: step-aware decimals
+}
+
+/* ---- AbstractMeasurementView.formatCount (:1528) -------------------------
+ *   abs < 1e3 -> "%d"; else G / M / k prefix with 0 / 1 / 2 decimals, trailing zeros stripped.
+ */
+/** Occupancy tick label: a plain integer up to 999, then k / M so a count that keeps climbing
+ *  never outgrows the axis gutter - "850", "12 k", "3.4 M". Trailing zeros in the mantissa are
+ *  stripped, as in {@link formatVoltsSi}. */
+export function formatCount(v) {
+  const abs = Math.abs(v);
+  if (abs < 1e3) return String(Math.round(v));
+  let prefix, scale;
+  if      (abs >= 1e9) { prefix = 'G'; scale = 1e9; }
+  else if (abs >= 1e6) { prefix = 'M'; scale = 1e6; }
+  else                 { prefix = 'k'; scale = 1e3; }
+  const s = v / scale;
+  let m;
+  if      (Math.abs(s) >= 100) m = s.toFixed(0);
+  else if (Math.abs(s) >= 10)  m = s.toFixed(1);
+  else                         m = s.toFixed(2);
+  if (m.indexOf('.') >= 0) {
+    m = m.replace(/0+$/, '');
+    if (m.endsWith('.')) m = m.substring(0, m.length - 1);
+  }
+  return m + ' ' + prefix;
 }
 
 /* ---- AbstractMeasurementView.adaptiveLogLabels (:1166) -------------------
@@ -122,7 +197,7 @@ export function adaptiveLogLabels(min, max) {
   return out;
 }
 
-/* ---- AbstractMeasurementView.logMajorTicks (:916) — decade boundaries ----
+/* ---- AbstractMeasurementView.logMajorTicks (:916) - decade boundaries ----
  *   safeMin = max(1e-15,min); safeMax = max(safeMin+1e-9,max);
  *   lo = floor(log10(safeMin)); hi = ceil(log10(safeMax));
  *   for e in lo..hi: v=10^e; if safeMin<=v<=safeMax add.
@@ -140,7 +215,7 @@ export function logMajorTicks(min, max) {
   return out;
 }
 
-/* ---- AbstractMeasurementView.logMinorTicks (:936) — 2..9 × 10ⁿ ----------
+/* ---- AbstractMeasurementView.logMinorTicks (:936) - 2..9 × 10ⁿ ----------
  *   lo = floor(log10(safeMin))-1; hi = ceil(log10(safeMax))+1;
  *   for e in lo..hi: base=10^e; for k=2..9: v=k*base; if safeMin<v<safeMax add.
  */
@@ -160,11 +235,16 @@ export function logMinorTicks(min, max) {
   return out;
 }
 
-/* ---- AbstractMeasurementView.niceLinearMajors (:992) --------------------
+/* ---- AbstractMeasurementView.niceLinearMajors (:1345) -------------------
  *   range = max(1e-9, max-min); rough = range / max(1,targetCount);
  *   pow = 10^floor(log10(rough)); mant = rough/pow;
  *   mant<1.5 -> 1; <3 -> 2; <4 -> 2.5; <7 -> 5; else -> 10  (× pow);
- *   first = ceil(min/step)*step; for f=first; f<=max+step*1e-9; f+=step add.
+ *   k0 = ceil(min/step); for k=k0; k*step <= max+step*1e-9; k++ add k*step.
+ *
+ * Index whole multiples of the step instead of accumulating f += step. Repeated addition
+ * drifts, so on an axis that straddles zero the tick that should BE zero lands on a denormal
+ * like −3 × 10⁻¹⁹ - which an SI-prefixed label faithfully renders as "-0 f". k · step is exact
+ * at k = 0.
  */
 export function niceLinearMajors(min, max, targetCount) {
   const range = Math.max(1e-9, max - min);
@@ -177,9 +257,9 @@ export function niceLinearMajors(min, max, targetCount) {
   else if (mant < 4)   step = 2.5 * pow;
   else if (mant < 7)   step = 5 * pow;
   else                 step = 10 * pow;
-  const first = Math.ceil(min / step) * step;
+  const k0 = Math.ceil(min / step);
   const out = [];
-  for (let f = first; f <= max + step * 1e-9; f += step) out.push(f);
+  for (let k = k0; k * step <= max + step * 1e-9; k++) out.push(k * step);
   return out;
 }
 
@@ -207,7 +287,7 @@ export function niceLinearMinors(min, max, minorStep) {
  *   pow=10^floor(log10(majorStep)); mant=majorStep/pow;
  *   minorStep = majorStep / (|mant-2|<0.1 ? 2 : 5);
  *   first=ceil(min/minorStep)*minorStep; emit v in [min,max] not coinciding a major.
- * The sub-decade minor ticks for a zoomed (<1 decade) frequency axis — Java hardcodes
+ * The sub-decade minor ticks for a zoomed (<1 decade) frequency axis - Java hardcodes
  * the target count 12 inside this method (do NOT thread SUB_DECADE_TICK_TARGET here). */
 export function subDecadeMinors(min, max) {
   const majors = niceLinearMajors(min, max, 12);
@@ -254,17 +334,17 @@ export function minSpacing(vals) {
  *   if (f >= 1000) return "%.2f kHz"; return "%.2f Hz";
  */
 export function formatFrequency(f) {
-  if (!Number.isFinite(f) || f <= 0) return '—';
+  if (!Number.isFinite(f) || f <= 0) return '-';
   if (f >= 1000) return (f / 1000).toFixed(2) + ' kHz';
   return f.toFixed(2) + ' Hz';
 }
 
 /* ---- AbstractMeasurementView.formatFrequencyFine (:1352) ----------------
  *   %.4f, kHz only from 10 kHz, Locale.ROOT (period decimal, no thousands sep).
- * The crosshair frequency readout — full precision, so a zoomed cursor reads e.g.
+ * The crosshair frequency readout - full precision, so a zoomed cursor reads e.g.
  * "1002.5119 Hz" rather than the coarse axis-label "1.003 kHz". */
 export function formatFrequencyFine(f) {
-  if (!Number.isFinite(f) || f <= 0) return '—';
+  if (!Number.isFinite(f) || f <= 0) return '-';
   if (f >= 10000) return (f / 1000).toFixed(4) + ' kHz';
   return f.toFixed(4) + ' Hz';
 }
@@ -274,14 +354,26 @@ export function formatFrequencyFine(f) {
  *   dec = (step<1)?min(4,ceil(-log10(step))):0; "%.dec f Hz"
  */
 export function formatFreqTick(v, step) {
-  if (!Number.isFinite(v) || v <= 0) return '—';
+  if (!Number.isFinite(v) || v <= 0) return '-';
   if (v >= 1000) {
-    const kStep = step / 1000.0;
-    const kd = (kStep > 0 && kStep < 1) ? Math.min(4, Math.ceil(-Math.log10(kStep))) : 2;
-    return (v / 1000.0).toFixed(kd) + ' kHz';
+    return (v / 1000.0).toFixed(tickDecimals(step / 1000.0, 2)) + ' kHz';
   }
-  const dec = (step > 0 && step < 1) ? Math.min(4, Math.ceil(-Math.log10(step))) : 0;
-  return v.toFixed(dec) + ' Hz';
+  return v.toFixed(tickDecimals(step, 0)) + ' Hz';
+}
+
+/* ---- AbstractMeasurementView.formatFreqDecadeTick (:1419) ---------------
+ *   decade = 10^floor(log10(v));
+ *   v >= 1000 -> "%.<tickDecimals(decade/1000,0)>f kHz"; else "%.<tickDecimals(decade,0)>f Hz"
+ */
+/** Frequency tick label for a LOG axis spanning at least one decade, where the labelled values
+ *  are decade multiples (1 / 2 / 5 × 10ⁿ ...) rather than a uniform step: each renders with just
+ *  the decimals its own decade needs, so the axis reads "20 Hz", "1 kHz", "20 kHz" instead of
+ *  the fixed "%.2f" "20.00 Hz" / "1.00 kHz" / "20.00 kHz". */
+export function formatFreqDecadeTick(v) {
+  if (!Number.isFinite(v) || v <= 0) return '-';
+  const decade = Math.pow(10, Math.floor(Math.log10(v)));
+  if (v >= 1000) return (v / 1000.0).toFixed(tickDecimals(decade / 1000.0, 0)) + ' kHz';
+  return v.toFixed(tickDecimals(decade, 0)) + ' Hz';
 }
 
 /* ---- AbstractMeasurementView.formatFrequencyInteger (:1077) -------------
@@ -289,7 +381,7 @@ export function formatFreqTick(v, step) {
  *   return "%d Hz";
  */
 export function formatFrequencyInteger(f) {
-  if (!Number.isFinite(f)) return '—';
+  if (!Number.isFinite(f)) return '-';
   if (f >= 1000) {
     const k = f / 1000;
     if (Math.abs(k - Math.round(k)) < 0.05) return Math.round(k) + ' kHz';

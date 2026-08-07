@@ -1,22 +1,22 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
 
-// Faithful port of org.edgo.audio.measure.gui.scope.HistogramView — the amplitude histogram's
+// Faithful port of org.edgo.audio.measure.gui.scope.HistogramView - the amplitude histogram's
 // PLOT: its own view with its own palette, axes and paint. The scope contributes only the toolbar
 // toggle; this class owns everything inside the window. (In Java a lambda drawing inside the scope
 // view was rejected twice for exactly that reason.)
 //
-// The shape is the reading: sine → bathtub (two peaks at the extremes), noise → Gaussian bell,
-// clipping → a spike at the rail, one-sided clipping → unequal bars about the centre.
+// The shape is the reading: sine -> bathtub (two peaks at the extremes), noise -> Gaussian bell,
+// clipping -> a spike at the rail, one-sided clipping -> unequal bars about the centre.
 
-import { formatVoltsSi, niceLinearMajors } from '../ui/axis-format.js';
+import { formatVoltsSi, niceLinearMajors, formatCount } from '../ui/axis-format.js';
 
 /** Plot margins (Java MARGIN_*): the left gutter holds the voltage tick labels, the top line the
  *  "V" caption, the bottom line the occupancy ticks. The gutter fits the longest label the voltage
- *  axis can produce — sign + four digits + point + SI prefix ("-12.5 µ"); at 52 px the leading
+ *  axis can produce - sign + four digits + point + SI prefix ("-12.5 µ"); at 52 px the leading
  *  digit and every minus sign were clipped. */
 const MARGIN_LEFT = 68;
 const MARGIN_RIGHT = 8;
@@ -30,27 +30,6 @@ const MAJOR_TICK_LEN = 6;
 const MAJOR_TICK_WIDTH = 2;
 const LABEL_FONT = '11px system-ui, sans-serif';
 const LINE_H = 13;
-
-/**
- * Occupancy tick label (Java AbstractMeasurementView.formatCount): a plain integer up to 999, then
- * k / M / G so a count that keeps climbing never outgrows the axis gutter. Trailing mantissa zeros
- * are stripped, as in formatVoltsSi.
- */
-function formatCount(v) {
-  const abs = Math.abs(v);
-  if (abs < 1e3) return String(Math.round(v));
-  let prefix, scale;
-  if (abs >= 1e9) { prefix = 'G'; scale = 1e9; }
-  else if (abs >= 1e6) { prefix = 'M'; scale = 1e6; }
-  else { prefix = 'k'; scale = 1e3; }
-  const s = v / scale;
-  let m = (Math.abs(s) >= 100) ? s.toFixed(0) : (Math.abs(s) >= 10) ? s.toFixed(1) : s.toFixed(2);
-  if (m.indexOf('.') >= 0) {
-    m = m.replace(/0+$/, '');
-    if (m.endsWith('.')) m = m.slice(0, -1);
-  }
-  return `${m} ${prefix}`;
-}
 
 export class HistogramView {
 
@@ -99,7 +78,7 @@ export class HistogramView {
     // Centre on the distribution's OWN mean and window symmetrically about it: the samples were
     // binned exactly as captured, so a DC offset changes what the axis is measured FROM, not which
     // bin a sample landed in. Both halves are therefore always equally tall, and asymmetry shows as
-    // unequal bar LENGTHS — which is what makes one-sided clipping visible.
+    // unequal bar LENGTHS - which is what makes one-sided clipping visible.
     const centre = Math.round(h.meanBin());
     const maxReach = Math.min(centre, micro - centre);
     let reach = Math.max(centre - lo, hi + 1 - centre);
@@ -171,9 +150,9 @@ export class HistogramView {
   }
 
   /**
-   * The two axes (Java HistogramView.drawHistogramGrid → AbstractMeasurementView.drawGrid):
+   * The two axes (Java HistogramView.drawHistogramGrid -> AbstractMeasurementView.drawGrid):
    * occupancy along the bottom, voltage up the left, each nice-number LINEAR over its own
-   * auto-ranged span — neither axis is ever logarithmic here, unlike the FFT's.
+   * auto-ranged span - neither axis is ever logarithmic here, unlike the FFT's.
    *
    * Grid lines at the majors, a frame in the axis colour, outward major tick marks, tick labels
    * outside the plot (counts below, volts in the left gutter), and the "V" caption in the top
@@ -222,7 +201,7 @@ export class HistogramView {
 
     // The "V" caption sits in the top margin and deliberately over-paints the topmost tick label
     // (Java: "overpaint a small background rectangle on top of the topmost tick label so the
-    // caption stays legible"). The band covers the label's FULL height — a label centred on the
+    // caption stays legible"). The band covers the label's FULL height - a label centred on the
     // plot's top edge reaches half a line below it, and a band that stopped at the edge left the
     // lower half of the digits showing through under the caption.
     const capTy = (y >= LINE_H) ? y - LINE_H : y + 2;

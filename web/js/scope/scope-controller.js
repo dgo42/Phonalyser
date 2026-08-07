@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — the oscilloscope capture consumer.
+ * Phonalyser web - the oscilloscope capture consumer.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  *
@@ -17,12 +17,12 @@ import { OscMeasClient } from './osc-meas-client.js';
 
 // Scope window sizing (faithful to Java ScopeView.drawWaveforms line ~2007):
 //   wanted = 2·displaySamples + 2·LANCZOS_PADDING + extraLookback
-// so the CAPTURED span is ~3× the DISPLAYED window — the trigger-position slider can
+// so the CAPTURED span is ~3× the DISPLAYED window - the trigger-position slider can
 // sweep edge-to-edge and the trace never runs out before the window's far edge.
 const LANCZOS_PADDING = 80;                // dsp/lanczos LANCZOS_A·MAX_LANCZOS_DOWNSAMPLE
 // The scope DISPLAY window's extra lookback (samples) beyond 2·displaySamples so the
 // trigger-position slider can sweep edge-to-edge. The long-window Vpp/Vrms/Vmean/Tp/f/Duty
-// measurement no longer reads a window from here — it runs in the osc-meas Web Worker off
+// measurement no longer reads a window from here - it runs in the osc-meas Web Worker off
 // its OWN gapless ring reader (the measurement stream, owned by this controller's
 // OscMeasClient), integrating oscMeasurementAverageSeconds of samples off the render thread.
 const SCOPE_MEAS_MAX_SAMPLES = 8192;
@@ -32,7 +32,7 @@ const SCOPE_MIN_LEN = 1 << 15;            // floor for the scope window (Java le
 // the 60 fps Java paint), so an unbounded multi-million-sample copy per batch at a very
 // large t/div would stall capture. The cap must still admit the largest displayed window
 // (10 s/div × DIVISIONS_X = 10 s span) PLUS the ~2× trigger headroom, else the trace
-// flat-lines at large t/div (500 ms–1 s/div) when 2·displaySamples exceeds it. 1<<23 ≈
+// flat-lines at large t/div (500 ms-1 s/div) when 2·displaySamples exceeds it. 1<<23 ≈
 // 8.4 M samples covers a full 10 s window @ 384 k; the per-batch copy stays bounded and
 // the actual read is always re-clamped to the shared ring capacity below.
 const SCOPE_MAX_LEN = 1 << 23;
@@ -41,16 +41,14 @@ export class ScopeController {
   /**
    * @param capture the SharedCapture instance.
    * @param config  the SHARED engine config object.
-   * @param deps    {getSnapped, getSnapped2} — getSnapped: () => the generator's snapped tone-1
-   *                fundamental (Hz); getSnapped2: () => its snapped dual-tone second frequency (Hz).
-   *                Both must reflect the SAME snap-state the generator emits — Java ScopeView snaps
-   *                BOTH tones via FftBinSnap.snapIfEnabled(DUAL_TONE) before reconstructing the beat.
+   *
+   * No generator collaborator: the emitted tone pair is ASKED for over the bus
+   * (GENERATOR_EMITTED_HZ) at this consumer's capture rate, exactly as Java's ScopeView asks
+   * instead of re-deriving the FFT-bin snap from the same preferences.
    */
-  constructor(capture, config, { getSnapped, getSnapped2 } = {}) {
+  constructor(capture, config) {
     this._capture = capture;
     this.config = config;
-    this._getSnapped = getSnapped || (() => 0);
-    this._getSnapped2 = getSnapped2 || (() => 0);
     this._scopeOn = false;
     // Whether the scope was recording when stopCaptureForPrefs() recorded it, so
     // startCaptureForPrefs() restarts exactly that (Java ScopePane.captureWasRunningForPrefs).
@@ -60,12 +58,12 @@ export class ScopeController {
     this.scopeBufR = null;
     this._scopeFps = 0; this._scopeCount = 0; this._scopeWinT0 = 0;
     this._zoomBufL = null; this._zoomBufR = null;
-    this.onScope = null;   // (buf, info) => void — per capture batch
+    this.onScope = null;   // (buf, info) => void - per capture batch
     // The scope MEASUREMENT stream (gui/scope/ScopeMeasurementWorker): its OWN gapless
     // forward-reader consumer of the shared ring, running the per-channel filter + whole-
     // period pipeline OFF the render thread in a Web Worker. Owned here so its reader lives
     // exactly as long as the scope recording; the pane injects the prefs->params provider +
-    // the result sink (setMeasParamsProvider / setMeasResultSink) — the controller has the
+    // the result sink (setMeasParamsProvider / setMeasResultSink) - the controller has the
     // capture, the pane has the prefs.
     this._measClient = new OscMeasClient(
       this._capture,
@@ -73,8 +71,12 @@ export class ScopeController {
       (r) => { if (this._measResultSink) this._measResultSink(r); });
     this._measParamsProvider = null;
     this._measResultSink = null;
+    // Why the capture ended under this consumer, once it CLAIMED that report (Java
+    // ScopeController.captureEndReason). null for a user / programmatic stop, and when the FFT
+    // claimed the one report first - the pane shows a dialog only for a non-null one.
+    this._captureEndReason = null;
     // Self-feed off the LIVE capture: Java consumers subscribe to CAPTURE_BATCH_AVAILABLE and read
-    // their own cursor — no central dispatcher pumps us. Fires only for the live capture (the
+    // their own cursor - no central dispatcher pumps us. Fires only for the live capture (the
     // measurement capture doesn't publish), and only feeds while this scope is recording.
     MessageBus.instance().subscribe(Events.CAPTURE_BATCH_AVAILABLE, () => {
       if (this._scopeOn) this.feedScope();
@@ -84,11 +86,25 @@ export class ScopeController {
   /** True while the scope is recording. */
   get recording() { return this._scopeOn; }
 
-  /** The generator's snapped tone-1 / dual-tone tone-2 fundamentals (Hz) — the same
-   *  snap-state feedScope stamps into info.f1Hz/f2Hz, exposed so the measurement params
-   *  provider (owned by the pane, which has the prefs) can seed the dual-tone refine. */
-  get snapped() { return this._getSnapped(); }
-  get snapped2() { return this._getSnapped2(); }
+  /** Why the capture ended from below, if THIS consumer claimed the one operator report
+   *  (Java ScopeController.getCaptureEndReason). null otherwise - the pane stays silent. */
+  captureEndReason() { return this._captureEndReason; }
+
+  /** The frequencies the generator says it is EMITTING, asked per access at THIS consumer's
+   *  capture rate (Java ScopeView.dualToneEmittedHz -> the GENERATOR_EMITTED_HZ request). Never
+   *  re-derived here: an analyzer with no generator to ask has no emitted tone to report, not a
+   *  pair it may compute on its own - so a missing responder answers 0, which every consumer
+   *  already reads as "no such tone". */
+  _emittedHz() {
+    return MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, this.config.inRate)
+      || [0, 0];
+  }
+
+  /** The generator's emitted tone-1 / dual-tone tone-2 fundamentals (Hz) - the same values
+   *  feedScope stamps into info.f1Hz/f2Hz, exposed so the measurement params provider (owned by
+   *  the pane, which has the prefs) can seed the dual-tone refine. */
+  get snapped() { return this._emittedHz()[0]; }
+  get snapped2() { return this._emittedHz()[1]; }
 
   /** Turns the scope's Record state on/off: acquires/releases the shared capture
    *  and, while on, drives onScope off its own latest-window cursor. Returns the
@@ -97,6 +113,7 @@ export class ScopeController {
   async setRecording(on) {
     if (on === this._scopeOn) return this._scopeOn;
     if (on) {
+      this._captureEndReason = null;   // a fresh session invalidates the old terminal
       const reader = await this._capture.acquire();
       if (!reader) return false;
       this._scopeReader = reader;
@@ -143,16 +160,25 @@ export class ScopeController {
   feedScope() {
     const reader = this._scopeReader;
     if (!reader) return;
+    // The capture DIED under us (Java ScopeMeasurementWorker.computeMeasurementOnce, which
+    // consults the same terminal state before it measures anything): a reader cannot tell a dead
+    // lane from a quiet one, so the writer says so and this consults it. Claim the reason for the
+    // ONE operator report - the first consumer across scope and FFT gets it, the other stops
+    // silently.
+    if (reader.isFinished()) {
+      this._captureEndedFromBelow(reader.takeFinishedReasonForReport());
+      return;
+    }
     // Re-size the scope window when t/div changed (grow-only, mirroring Java's
     // leftBuf/rightBuf grow-only reallocation) so the captured span stays ~3× the
-    // displayed window at the current t/div — the trace never runs out early.
+    // displayed window at the current t/div - the trace never runs out early.
     const len = this._windowLen();
     if (!this.scopeBufL || this.scopeBufL.length < len) {
       this.scopeBufL = new Float32Array(len);
       this.scopeBufR = new Float32Array(len);
     }
     // Read exactly `len` (the current t/div's wanted span), not the grow-only buffer
-    // length — so zooming back IN shrinks the per-batch copy again (Java sizes the read
+    // length - so zooming back IN shrinks the per-batch copy again (Java sizes the read
     // to `wanted` each paint). `available` is the ACTUAL filled count (< len until the
     // ring fills); the view uses it, not the buffer length, so it never draws the
     // unfilled tail (stale / zero) as signal.
@@ -160,7 +186,7 @@ export class ScopeController {
     // write head, so readLatest(len) is equivalent (both end at the newest sample).
     const available = reader.readLatest(len, this.scopeBufL, this.scopeBufR);
     // Absolute index of the window's first sample in the capture stream (Java
-    // bufStartAbs) — the scope's phase-locked mains cancellers advance their
+    // bufStartAbs) - the scope's phase-locked mains cancellers advance their
     // mains phase by its delta across paints.
     const absStart = reader.getWritePos() - available;
     const t = performance.now();
@@ -168,17 +194,36 @@ export class ScopeController {
     if (t - this._scopeWinT0 >= 1000) { this._scopeFps = this._scopeCount * 1000 / (t - this._scopeWinT0); this._scopeCount = 0; this._scopeWinT0 = t; }
     if (this.onScope) {
       const c = this.config;
-      const snapped = this._getSnapped();
+      const [snapped, snapped2] = this._emittedHz();
       // peakVolts maps a normalised ±1.0 sample to the ADC full-scale swing
       // (adcFsVoltageRms·√2) so the scope measurements read in volts.
       this.onScope(this.scopeBufR, {
         scopeFps: this._scopeFps, period: c.inRate / snapped,
         inRate: c.inRate, snapped, available, absStart,
         peakVolts: c.adcFsVoltageRms * Math.SQRT2,
-        dualTone: isDualTone(c.form), f1Hz: snapped, f2Hz: this._getSnapped2(),
+        dualTone: isDualTone(c.form), f1Hz: snapped, f2Hz: snapped2,
         bufL: this.scopeBufL, bufR: this.scopeBufR,
       });
     }
+  }
+
+  /**
+   * The live capture lane ended under this consumer. Runs the REAL stop - the same teardown
+   * setRecording(false) does, which stops the measurement stream and releases the shared-capture
+   * reference (that release is what lets the dead device line close) - and then tells the pane,
+   * which owns the Record LED and raises the one operator message (Java
+   * ScopeController.captureEndedFromBelow -> stopCaptureAndFreeze -> SCOPE_RECORDING_STOPPED).
+   *
+   * @param {?{name: string, logText: string}} reason null when another consumer claimed the
+   *        one report first - the scope still stops, it just says nothing
+   */
+  _captureEndedFromBelow(reason) {
+    this._captureEndReason = reason;
+    if (reason) console.warn('Oscilloscope capture ended from below: ' + reason.logText);
+    if (!this._scopeOn) return;
+    this.setRecording(false).finally(() => {
+      MessageBus.instance().publish(Events.SCOPE_RECORDING_STOPPED);
+    });
   }
 
   /** Reads exactly the latest ONE SECOND of both channels from the shared ring
@@ -212,20 +257,20 @@ export class ScopeController {
     const r = await this._capture.acquire();
     this._scopeReader = r;
     if (r == null) {
-      // The device did not come back. Run the REAL stop — the same teardown setRecording(false)
-      // does — because _measClient.reattach() re-acquires unconditionally and would RE-OPEN the
+      // The device did not come back. Run the REAL stop - the same teardown setRecording(false)
+      // does - because _measClient.reattach() re-acquires unconditionally and would RE-OPEN the
       // device this consumer just disowned, after which nothing could release it (setRecording(false)
       // early-returns on !_scopeOn and never reaches the client's stop). On a QA40x that left
       // interface 0 claimed for the life of the page.
       //
       // Clearing the flag ALONE is not enough, and was the first attempt at this fix: the trace
-      // froze but the scope never stopped — the Record LED stayed lit and the measurement worker
-      // kept running, which is what made the app crawl after a while (maintainer, 2026-07-26).
+      // froze but the scope never stopped - the Record LED stayed lit and the measurement worker
+      // kept running, which is what made the app crawl after a while.
       this._scopeOn = false;
       await this._measClient.stop();     // stops the worker and releases its own capture reference
       this._scopeReader = null;
       await this._capture.release();     // guarded at zero, so this is safe with no ref held
-      // Tell the pane, which owns the Record LED and the control gating — reattach() is driven by
+      // Tell the pane, which owns the Record LED and the control gating - reattach() is driven by
       // the ENGINE (reopenCaptureDevice), so nothing else reconciles the UI with the engine's state.
       MessageBus.instance().publish(Events.SCOPE_RECORDING_STOPPED);
       return false;
@@ -242,9 +287,9 @@ export class ScopeController {
   /** Preferences-dialog audio-config bracket (Java ScopePane.stopCaptureForPrefs /
    *  startCaptureForPrefs): the scope OWNS whether it was live, so the engine's
    *  two-phase bounce restarts exactly what was running. stopCaptureForPrefs REALLY
-   *  stops — setRecording(false) stops the measurement client AND releases this
+   *  stops - setRecording(false) stops the measurement client AND releases this
    *  consumer's shared-capture ref, so the one device closes on the LAST release
-   *  (refcount), not a central hard teardown. startCaptureForPrefs REALLY restarts —
+   *  (refcount), not a central hard teardown. startCaptureForPrefs REALLY restarts -
    *  setRecording(true) re-acquires the ref (reopening the device at the committed
    *  config on the first re-acquire) and rebuilds the rate-dependent buffers. */
   async stopCaptureForPrefs() {
@@ -254,11 +299,11 @@ export class ScopeController {
   async startCaptureForPrefs() {
     if (!this._captureWasRunningForPrefs) return;
     if (await this.setRecording(true)) return;
-    // The restart FAILED — the committed device could not be opened (unplugged, held by another
+    // The restart FAILED - the committed device could not be opened (unplugged, held by another
     // app, a rate it will not grant). setRecording(true) already left this consumer off and holding
     // nothing, so the state is correct; what is missing is that the PANE still shows the scope as
-    // running, because it owns the Record LED and nothing here had told it. That is what "the trace
-    // doesn't redraw, but the scope doesn't stop" was (maintainer, 2026-07-26): a stopped controller
+    // running, because it owns the Record LED and nothing here had told it. That is the failure where
+    // the trace stops redrawing but the scope never stops: a stopped controller
     // behind a lit LED. The same publish the reattach failure uses, so both routes reconcile the UI.
     MessageBus.instance().publish(Events.SCOPE_RECORDING_STOPPED);
   }
@@ -287,7 +332,7 @@ export class ScopeController {
 
   /**
    * Clears both amplitude distributions. Fired by the histogram window's own reset AND by
-   * everything that resets the scope's running statistics — the scope reset button, a channel
+   * everything that resets the scope's running statistics - the scope reset button, a channel
    * change, a calibration change, and a generator start/stop, because starting IS a signal change
    * and averaging across it would present two signals as one distribution.
    *

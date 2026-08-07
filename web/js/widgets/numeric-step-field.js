@@ -1,5 +1,5 @@
 /*
- * Phonalyser web — precision audio measurement workbench (browser port).
+ * Phonalyser web - precision audio measurement workbench (browser port).
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  */
@@ -11,7 +11,7 @@
 // `.numfield` chrome (input.nf-input + the two `.nf-step button`s) to wheel /
 // arrow / keyboard / commit-or-revert exactly like the SWT field.  Like Java's
 // single SWT Text, the input carries the WHOLE "1 kHz" string (number + unit),
-// so an ordinary edit ("1" → "1.5") keeps its unit and reparses in-unit; there
+// so an ordinary edit ("1" -> "1.5") keeps its unit and reparses in-unit; there
 // is no separate unit label.
 
 import { t } from '../i18n/i18n.js';
@@ -27,7 +27,7 @@ const DB_PER_DECADE = 20.0;
 // dBFS ↔ amplitude: dB per factor-of-10 (voltage), as for dBV. Unlike dBV a dBFS entry needs
 // the LIVE full scale, so it is resolved through the injected supplier, never a fixed factor.
 const DBFS_DB_PER_DECADE = 20.0;
-// √2 — the peak↔RMS ratio anchoring 0 dBFS to a full-scale SINE (AES17).
+// √2 - the peak↔RMS ratio anchoring 0 dBFS to a full-scale SINE (AES17).
 const ROOT_TWO = Math.sqrt(2.0);
 const PERCENT_STEP_LABEL = '10 %';
 const WHEEL_GLYPH = '⟳';
@@ -41,12 +41,12 @@ const DITHER_DB_PER_BIT = 6.0206;       // one TPDF bit is 6.0206 dB (RMS = 2^�
 const DITHER_TPDF_OFFSET_DB = 7.782;    // constant term = 20·log10(1/√6)
 const DITHER_DBV_STEP = 10.0;           // dBV-view wheel/arrow notch
 const DITHER_DBV_DECIMALS = 1;          // decimals shown for the dBV view
-// The Off vocabulary, shared by every policy that has an Off state — a 0-bit
-// dither, an averages count of 1, …: the text such a value renders as, and the
+// The Off vocabulary, shared by every policy that has an Off state - a 0-bit
+// dither, an averages count of 1, ...: the text such a value renders as, and the
 // word _isPrefixOf accepts in full or as any prefix.
 export const OFF_LABEL = 'Off';
 // The unbounded vocabulary, for a field whose max is infinite: this word is
-// accepted in full or as any prefix (i, in, inf, …).
+// accepted in full or as any prefix (i, in, inf, ...).
 export const INFINITY_LABEL = 'Infinity';
 // Rendered form of an unbounded value, and the shortest way to type one.
 const INFINITY_SIGN = '∞';
@@ -55,9 +55,9 @@ const INFINITY_SIGN = '∞';
 // μ U+03BC) accepted.
 const NUMBER_WITH_UNIT = /^([+-]?[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?)\s*([%µμ\w./]*)$/;
 // Lenient mid-edit alphabet for the Verify filter: any characters a valid entry can
-// contain, in ANY order — NOT a positional grammar. A positional prefix-grammar
+// contain, in ANY order - NOT a positional grammar. A positional prefix-grammar
 // silently swallowed every letter typed with the caret inside/before the number
-// ("19|.002 kHz" + m → "19m.002 kHz" has digits/dot AFTER the letter and failed),
+// ("19|.002 kHz" + m -> "19m.002 kHz" has digits/dot AFTER the letter and failed),
 // making units untypeable during in-place edits. Ordering is enforced by commit(),
 // the strict gate. Mirrors Java NumericStepModel.PARTIAL_INPUT (same relaxation).
 const PARTIAL_INPUT = /^[\s+\-.,0-9a-zA-Zµμ%/∞]*$/;
@@ -66,8 +66,8 @@ const PARTIAL_INPUT = /^[\s+\-.,0-9a-zA-Zµμ%/∞]*$/;
 // ----------------------------------------------------------------------------
 
 /** One display/input unit: i18n suffix key, canonical factor (linear) or dB
- *  marker, the ASCII aliases accepted on input, and — for a unit stated RELATIVE
- *  to a live full scale (dBFS) — the fsRelative marker. A full-scale-relative unit
+ *  marker, the ASCII aliases accepted on input, and - for a unit stated RELATIVE
+ *  to a live full scale (dBFS) - the fsRelative marker. A full-scale-relative unit
  *  cannot convert through `factor`/`log`: it needs the live full-scale supplier, so
  *  the model resolves it (Java UnitFamily.Unit.fsRelative). Defaults false, leaving
  *  every existing 4-arg declaration unchanged. */
@@ -123,7 +123,7 @@ class UnitFamilyDef {
   logUnit() { for (const u of this.units) if (u.log) return u; return null; }
 }
 
-/** UNIT_FAMILIES — mirrors the UnitFamily enum. */
+/** UNIT_FAMILIES - mirrors the UnitFamily enum. */
 export const UNIT_FAMILIES = {
   // Suffix-less (digits-only) input is Hz, the base unit; "k"/"kh" are short
   // aliases for kHz (UnitFamily.FREQUENCY).
@@ -132,7 +132,7 @@ export const UNIT_FAMILIES = {
     new Unit('unit.khz', 1e3, false, ['khz', 'kh', 'k']),
   ]),
   // dBFS is stated relative to the LIVE full scale, so it carries the fsRelative marker and is
-  // resolved by the model against the injected supplier (a field with no supplier refuses it —
+  // resolved by the model against the injected supplier (a field with no supplier refuses it -
   // the FFT manual fundamental, an ADC-side reference far above DAC full scale).
   AMPLITUDE: new UnitFamilyDef('AMPLITUDE', 3, [
     new Unit('unit.nv', 1e-9, false, ['nv', 'n']),
@@ -142,7 +142,7 @@ export const UNIT_FAMILIES = {
     new Unit('unit.dbv', 1.0, true, ['dbv', 'db', 'd']),
     new Unit('unit.dbfs', 1.0, false, ['dbfs', 'dbf'], true),
   ]),
-  // nV / µV / mV / V — AMPLITUDE without the logarithmic dBV unit, for calibration-value
+  // nV / µV / mV / V - AMPLITUDE without the logarithmic dBV unit, for calibration-value
   // entry where a dB reference makes no sense (UnitFamily.VOLTAGE). Same linear switching
   // thresholds and V default as AMPLITUDE.
   VOLTAGE: new UnitFamilyDef('VOLTAGE', 3, [
@@ -152,7 +152,7 @@ export const UNIT_FAMILIES = {
     new Unit('unit.v', 1.0, false, ['v']),
   ]),
   // Generator dither depth: whole/fractional bits (base) or a full-scale-aware dBV VIEW of that
-  // value (UnitFamily.DITHER). The bits⇄dBV conversion is NOT the plain Unit log formula — it is
+  // value (UnitFamily.DITHER). The bits⇄dBV conversion is NOT the plain Unit log formula - it is
   // full-scale- and bit-depth-aware and lives in the NumericStepModel DITHER policy (fed the live
   // full-scale supplier); these units carry only the suffixes and the "which view" marker.
   // Suffix-less (digits-only) input is bits, the base unit; dBV sticks for display once typed.
@@ -206,9 +206,9 @@ export class NumericStepModel {
     this.stickyUnit = null;
     this.namedValue = NaN;
     this.namedValueLabel = null;
-    // Live PEAK full scale (Vpeak), injected as config — never a singleton reach-in. Required by
-    // the DITHER policy, and OPTIONAL on an AMPLITUDE field: present ⇒ a dBFS entry is accepted,
-    // absent ⇒ refused (the FFT manual fundamental, an ADC-side reference unrelated to DAC FS).
+    // Live PEAK full scale (Vpeak), injected as config - never a singleton reach-in. Required by
+    // the DITHER policy, and OPTIONAL on an AMPLITUDE field: present => a dBFS entry is accepted,
+    // absent => refused (the FFT manual fundamental, an ADC-side reference unrelated to DAC FS).
     this.fsAmplSupplier = cfg.fsAmplSupplier || null;
     if (cfg.maxBits !== undefined) {
       // DITHER: 0 (Off) or [1, maxBits] bits, possibly fractional, shown as bits or a
@@ -240,7 +240,7 @@ export class NumericStepModel {
       this.decimals = -1; this.maxDecimals = cfg.maxDecimals;
     }
     this.value = this.min;
-    // When set, the field renders empty and holds no value — the disabled, never-measured
+    // When set, the field renders empty and holds no value - the disabled, never-measured
     // channel row in the calibration dialog (avoids the clamp-to-min "1 nV" artifact).
     // Cleared by any value mutation (NumericStepModel.blank).
     this.blank = false;
@@ -293,32 +293,32 @@ export class NumericStepModel {
 
   // ---- DITHER policy (port of NumericStepModel DITHER methods) --------------
 
-  /** One dither step: dir=+1 up (fewer bits → toward Off) / −1 down (more bits).
+  /** One dither step: dir=+1 up (fewer bits -> toward Off) / −1 down (more bits).
    *  Bits view walks whole ±1-bit steps (a fractional value keeps its fraction);
    *  dBV view walks exactly ±10 dBV (fractional bits, no snap). Off sits at the
    *  TOP: stepping up from 1 bit reaches Off; down from Off reaches 1 bit. */
   _ditherStep(dir) {
-    if (this.value <= 0) { this.setValue(dir > 0 ? 0 : 1); return; }   // Off: up stays Off, down → 1 bit
+    if (this.value <= 0) { this.setValue(dir > 0 ? 0 : 1); return; }   // Off: up stays Off, down -> 1 bit
     if (this.currentUnit().log) {                                      // dBV view: exactly ±10 dBV
       const stepped = this._ditherBitsForDbv(this._ditherDbvForBits(this.value) + dir * DITHER_DBV_STEP);
       this.setValue(dir > 0 && stepped < 1 ? 0 : this._clampBits(stepped));
     } else {                                                           // bits view: whole ±1-bit step
-      const nv = this.value - dir;                                     // up (+1) → fewer bits, toward Off
+      const nv = this.value - dir;                                     // up (+1) -> fewer bits, toward Off
       this.setValue(dir > 0 && nv < 1 ? 0 : this._clampBits(nv));
     }
   }
 
-  /** dBV of the DAC PEAK full-scale (Vpeak) — NOT the RMS full-scale (/√2), which
+  /** dBV of the DAC PEAK full-scale (Vpeak) - NOT the RMS full-scale (/√2), which
    *  would read ~3 dB low: the TPDF dither RMS is relative to the peak full-scale. */
   _ditherFsDbv() { return DB_PER_DECADE * Math.log10(this.fsAmplSupplier()); }
 
-  /** dBV of the TPDF dither at `bits` (≥1) — the physical level relative to the peak full-scale. */
+  /** dBV of the TPDF dither at `bits` (≥1) - the physical level relative to the peak full-scale. */
   _ditherDbvForBits(bits) {
     return -(bits - 1) * DITHER_DB_PER_BIT - DITHER_TPDF_OFFSET_DB
       + this._ditherFsDbv();
   }
 
-  /** The (fractional) bit count whose TPDF dither lands at `dbv` — exact inverse
+  /** The (fractional) bit count whose TPDF dither lands at `dbv` - exact inverse
    *  of _ditherDbvForBits, un-clamped. */
   _ditherBitsForDbv(dbv) {
     return 1 + (this._ditherFsDbv() - DITHER_TPDF_OFFSET_DB - dbv) / DITHER_DB_PER_BIT;
@@ -327,10 +327,10 @@ export class NumericStepModel {
   /** Clamps a non-Off dither depth to [1, maxBits]. */
   _clampBits(bits) { return Math.max(1.0, Math.min(this.max, bits)); }
 
-  // ---- full-scale-relative unit (dBFS) — AMPLITUDE fields with a supplier ----
+  // ---- full-scale-relative unit (dBFS) - AMPLITUDE fields with a supplier ----
 
-  /** Canonical Vrms → dBFS against the live full scale. 0 dBFS ≡ a full-scale SINE (AES17), so
-   *  the reference is the RMS full scale (peak/√2) — form-independent, since the stored quantity
+  /** Canonical Vrms -> dBFS against the live full scale. 0 dBFS ≡ a full-scale SINE (AES17), so
+   *  the reference is the RMS full scale (peak/√2) - form-independent, since the stored quantity
    *  is the sine's Vrms. (Deliberately unlike the DITHER policy's PEAK anchor, a noise-floor level
    *  with different semantics.) Only reached on the sticky-dBFS display / step path, where a
    *  successful dBFS commit guaranteed a non-null supplier. */
@@ -338,7 +338,7 @@ export class NumericStepModel {
     return DBFS_DB_PER_DECADE * Math.log10(canonical * ROOT_TWO / this.fsAmplSupplier());
   }
 
-  /** dBFS → canonical Vrms against the live full scale — the inverse of _dbfsFromCanonical. */
+  /** dBFS -> canonical Vrms against the live full scale - the inverse of _dbfsFromCanonical. */
   _canonicalFromDbfs(dbfs) {
     return this.fsAmplSupplier() / ROOT_TWO * Math.pow(10.0, dbfs / DBFS_DB_PER_DECADE);
   }
@@ -359,7 +359,7 @@ export class NumericStepModel {
   }
 
   /** Renders the current dither value: Off, a bit count, or the full-scale-aware
-   *  dBV view — per the current (sticky) display unit. */
+   *  dBV view - per the current (sticky) display unit. */
   _ditherText() {
     if (this.value <= 0) return OFF_LABEL;
     const u = this.currentUnit();
@@ -371,20 +371,20 @@ export class NumericStepModel {
    *  empty for Off or a non-DITHER policy. */
   companionText() {
     if (this.policy !== POLICY.DITHER || this.value <= 0) return '';
-    if (this.currentUnit().log) {   // field shows dBV → label shows bits
+    if (this.currentUnit().log) {   // field shows dBV -> label shows bits
       return this._trimTrailingZeros(this._format(this.value, this.maxDecimals)) + ' ' + this.family.defaultUnit(this.value).suffix();
     }
     return this._format(this._ditherDbvForBits(this.value), DITHER_DBV_DECIMALS) + ' ' + this.family.logUnit().suffix();
   }
 
-  /** Parses a dither entry: `Off` — or any prefix of it (`o`, `of`) — and 0 → Off;
-   *  a bare number or a `bits` suffix → that bit count (clamped to [1, maxBits],
-   *  0 → Off), possibly fractional; a `dBV` suffix → the full-scale-aware
+  /** Parses a dither entry: `Off` - or any prefix of it (`o`, `of`) - and 0 -> Off;
+   *  a bare number or a `bits` suffix -> that bit count (clamped to [1, maxBits],
+   *  0 -> Off), possibly fractional; a `dBV` suffix -> the full-scale-aware
    *  fractional bit count (sticks the dBV view). */
   _commitDither(text) {
     const t = String(text).trim().replace(/,/g, '.');
-    if (t === '') return false;                       // empty → unchanged (Java commitDither)
-    if (this._isPrefixOf(OFF_LABEL, t)) {             // "o" / "of" / "off" — keep the current view
+    if (t === '') return false;                       // empty -> unchanged (Java commitDither)
+    if (this._isPrefixOf(OFF_LABEL, t)) {             // "o" / "of" / "off" - keep the current view
       this.blank = false;
       this.value = 0;
       return true;
@@ -397,10 +397,10 @@ export class NumericStepModel {
     const unit = suffix === '' ? this.family.defaultUnit(this.value) : this.family.match(suffix);
     if (unit == null) return false;
     this.blank = false;
-    if (unit.log) {   // dBV → fractional bits, dBV sticks
+    if (unit.log) {   // dBV -> fractional bits, dBV sticks
       this.stickyUnit = unit;
       this.value = this._clampBits(this._roundSig(this._ditherBitsForDbv(num)));
-    } else {          // bits (base): 0 → Off, else [1, maxBits]
+    } else {          // bits (base): 0 -> Off, else [1, maxBits]
       this.stickyUnit = null;
       this.value = num <= 0 ? 0 : this._clampBits(this._roundSig(num));
     }
@@ -506,7 +506,7 @@ export class NumericStepModel {
         return `${WHEEL_GLYPH} ±${this._formatStep(this.wheelStep)}, ${ARROWS_GLYPH} ±${this._formatStep(this.arrowStep)}`;
       case POLICY.PERCENT: {
         const u = this.currentUnit();
-        // dBV and dBFS step identically — both in dB.
+        // dBV and dBFS step identically - both in dB.
         if (u.log || u.fsRelative) return `${WHEEL_GLYPH} ±${LOG_WHEEL_STEP_DB} dB, ${ARROWS_GLYPH} ±1 dB`;
         const suffix = u.suffix();
         return `${WHEEL_GLYPH} ±${PERCENT_STEP_LABEL}, ${ARROWS_GLYPH} ±1${suffix === '' ? '' : ' ' + suffix}`;
@@ -528,7 +528,7 @@ export class NumericStepModel {
   _seriesHint() {
     const n = this.series.length;
     if (n === 0) return '';
-    if (n > SERIES_HINT_MAX) return this._seriesEntry(this.series[0]) + SERIES_SEP + '…' + SERIES_SEP + this._seriesEntry(this.series[n - 1]);
+    if (n > SERIES_HINT_MAX) return this._seriesEntry(this.series[0]) + SERIES_SEP + '...' + SERIES_SEP + this._seriesEntry(this.series[n - 1]);
     return this.series.map(s => this._seriesEntry(s)).join(SERIES_SEP);
   }
 
@@ -561,9 +561,9 @@ export class NumericStepModel {
       this.stickyUnit = null;
     } else {
       unit = this.family.match(suffix);
-      // Unknown suffix → reject, value unchanged (Java NumericStepModel.commit).
+      // Unknown suffix -> reject, value unchanged (Java NumericStepModel.commit).
       // Aliases are FAMILY-scoped ("k"/"kh" are kHz only in FREQUENCY, "m"/"u"
-      // are mV/µV only in AMPLITUDE) — there is deliberately no generic SI-prefix
+      // are mV/µV only in AMPLITUDE) - there is deliberately no generic SI-prefix
       // fallback, so a frequency alias can't parse in a voltage field.
       if (unit == null) return false;
       // A full-scale-relative unit (dBFS) is resolved from the live full scale below; a field with
@@ -598,14 +598,14 @@ export class NumericStepModel {
   _isNamedValue(v) { return this.namedValueLabel != null && Math.abs(v - this.namedValue) <= Math.abs(this.namedValue) * REL_EPS; }
 
   /** True when `t` is a non-empty, case-insensitive prefix of `word`. One shared
-   *  rule so a named state can be committed from a single keystroke — o/of/off,
-   *  i/in/inf/… — the way the unit suffixes already take a prefix. */
+   *  rule so a named state can be committed from a single keystroke - o/of/off,
+   *  i/in/inf/... - the way the unit suffixes already take a prefix. */
   _isPrefixOf(word, t) {
     return t.length > 0 && t.length <= word.length
         && word.slice(0, t.length).toLowerCase() === t.toLowerCase();
   }
 
-  /** Named-value label match: exact, or — when that named value IS the Off state —
+  /** Named-value label match: exact, or - when that named value IS the Off state -
    *  any prefix of OFF_LABEL. Prefixes are deliberately confined to Off: for a
    *  label like "Nyquist/2" a lone letter must never commit. */
   _matchesNamedLabel(t) {
@@ -629,19 +629,19 @@ export class NumericStepModel {
 }
 
 // ----------------------------------------------------------------------------
-// NumericStepField — thin DOM controller over the existing `.numfield` chrome
+// NumericStepField - thin DOM controller over the existing `.numfield` chrome
 // ----------------------------------------------------------------------------
 
 const REPEAT_DELAY_MS = 300, REPEAT_PERIOD_MS = 100;
 
 export class NumericStepField {
   /**
-   * DOM controller over the `.numfield` chrome — faithful to the Java NumericStepField:
-   * the value AUTO-RANGES its unit (1000 → "1 kHz", 1e-4 V → "100 µV"), the ▲▼ buttons +
+   * DOM controller over the `.numfield` chrome - faithful to the Java NumericStepField:
+   * the value AUTO-RANGES its unit (1000 -> "1 kHz", 1e-4 V -> "100 µV"), the ▲▼ buttons +
    * wheel + arrow keys step along the model's 1-2-5 / log ladder, and free-text entry
    * parses units ("1.5k", "-3 dBV", "2 kHz"). Exactly like Java's single SWT Text, the
-   * FULL composed string ("1 kHz") lives in the input — number and unit together — so an
-   * ordinary edit ("1" → "1.5") keeps its unit ("1.5 kHz" → 1500 Hz) and an untouched
+   * FULL composed string ("1 kHz") lives in the input - number and unit together - so an
+   * ordinary edit ("1" -> "1.5") keeps its unit ("1.5 kHz" -> 1500 Hz) and an untouched
    * commit round-trips the value verbatim. There is no separate unit label.
    * @param {HTMLInputElement} input  the `.nf-input` element (id kept).
    * @param {NumericStepModel} model
@@ -666,7 +666,7 @@ export class NumericStepField {
     this.refresh();
   }
 
-  /** The text to commit — the whole input, verbatim, exactly like Java's
+  /** The text to commit - the whole input, verbatim, exactly like Java's
    *  {@code field.getText()}. The input already carries "1 kHz" (number + unit),
    *  so an untouched commit round-trips the value and a digits-only edit stays
    *  suffix-less (the model then applies the family's BASE unit / clears a sticky
@@ -699,7 +699,7 @@ export class NumericStepField {
     // by explicit user order): the browser's beforeinput gating swallowed keys
     // during legitimate edits (e.g. typing "7k Hz" then deleting "Hz"), and web
     // input events / IME make keystroke-level gating unreliable. Free typing;
-    // commit on Enter / blur remains the ONLY gate — invalid text reverts there.
+    // commit on Enter / blur remains the ONLY gate - invalid text reverts there.
 
     const commitOrRevert = () => {
       const before = this.model.getValue(), logBefore = this.model.isLogDisplay();
@@ -747,7 +747,7 @@ export class NumericStepField {
   }
 
   /** Writes the whole composed string ("1 kHz", "100 µV", or a bare number for
-   *  the NONE family) into the input — exactly Java's {@code field.setText(model.text())}. */
+   *  the NONE family) into the input - exactly Java's {@code field.setText(model.text())}. */
   refresh() {
     this.input.value = this.model.text();
     const hint = this.model.stepHint();
@@ -756,7 +756,7 @@ export class NumericStepField {
 
   setValue(v) { this.model.setValue(v); this.refresh(); }
   getValue() { return this.model.getValue(); }
-  /** Renders the field empty and holding no value — the disabled, never-measured channel
+  /** Renders the field empty and holding no value - the disabled, never-measured channel
    *  row in the calibration dialog. isBlank stays true until setValue / a committed edit
    *  enters a value (NumericStepField.setBlank / isBlank). */
   setBlank() { this.model.setBlank(); this.refresh(); }
