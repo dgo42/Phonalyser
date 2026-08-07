@@ -92,6 +92,13 @@ jobs:
       - name: Build x86 legacy fat JAR
         run: mvn -B -DskipTests package -P "windows-x86,!windows-x64"
 
+      # The server serves the web bundle: server-net's prepare-package runs
+      # web/build.mjs (esbuild) and scripts/build-help.mjs, which need
+      # web/node_modules - install them from the lockfile first.
+      - name: Install web build dependencies
+        working-directory: web
+        run: npm ci
+
       # The HEADLESS SERVER, once per architecture: its own fat jar plus the
       # per-platform zip (jar + natives + launcher + service scripts + README).
       # The server-dist profile is opt-in, so the two builds above never pay for
@@ -223,6 +230,12 @@ jobs:
           EOS
           fakeroot bash /tmp/fix-deb-deps.sh
 
+      # The embedded web bundle needs web/node_modules (esbuild) - see the
+      # Windows job.
+      - name: Install web build dependencies
+        working-directory: web
+        run: npm ci
+
       # The HEADLESS SERVER, both Linux architectures from this one x86_64
       # runner.  aarch64 costs nothing extra here: the server jar is
       # architecture-neutral bytecode and the Linux bundles ship no natives at
@@ -316,6 +329,12 @@ jobs:
           for f in *.dmg; do
             mv "$f" "${f%.dmg}-${{ matrix.arch }}.dmg"
           done
+
+      # The embedded web bundle needs web/node_modules (esbuild) - see the
+      # Windows job.
+      - name: Install web build dependencies
+        working-directory: web
+        run: npm ci
 
       # The HEADLESS SERVER for this leg's architecture.  No jpackage, no app
       # bundle and no DMG - the server on macOS is the fat jar, the two dylibs
