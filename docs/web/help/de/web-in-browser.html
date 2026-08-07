@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser.web - Phonalyser im Browser</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zum Inhaltsverzeichnis</a></p>
+
+  <h1>Phonalyser im Browser</h1>
+  <p>Diese Ausgabe läuft in einem Browser-Tab.  Alles, was eine Messung
+     braucht - der Generator, das Oszilloskop, der FFT-Analysator, die
+     Sweeps -, ist derselbe Code wie in der Desktop-Anwendung; das
+     <em>untere Ende</em> des Stapels ist es nicht: Eine Seite kann eine
+     Soundkarte nicht so öffnen, wie es ein natives Programm kann.  Dieses
+     Kapitel ist die kurze Liste dessen, was daraus folgt, und es lohnt
+     sich, sie einmal zu lesen, bevor Sie einer Zahl vertrauen.</p>
+
+  <h2 id="browser">Es läuft nur auf Chromium</h2>
+  <div class="note"><b>Das ist keine Vorliebe, sondern eine harte
+     Voraussetzung.</b>  Phonalyser.web benötigt <b>Google Chrome, Microsoft
+     Edge, Opera oder Brave</b> - irgendeinen auf Chromium aufbauenden
+     Browser.  Unter Firefox oder Safari startet es überhaupt nicht: Statt
+     der Anwendung erhalten Sie eine einzige Meldung, dass der Browser nicht
+     unterstützt wird.</div>
+  <p>Der Grund ist, dass die Anwendung auf Audio-Schnittstellen angewiesen
+     ist, die nur Chromium umsetzt - das framegenaue Ermitteln der
+     tatsächlichen Aufnahmerate und die AudioWorklet-Form, in der sie die
+     Abtastwerte entgegennimmt.  Statt zu starten und dann mitten in einer
+     Messung auf verwirrende Weise zu scheitern, prüft die Anwendung die
+     Browser-Engine, bevor sie irgendetwas aufbaut, und verweigert sauber
+     den Dienst.</p>
+  <p>Beachten Sie die Reichweite: Es geht hier um die <em>gesamte
+     Anwendung</em>.  Fehlendes <a href="#webusb">WebUSB</a> kostet Sie nur
+     das QA40x-Backend; der falsche Browser kostet Sie alles.</p>
+
+  <h2 id="web-audio">Das Backend Web Audio</h2>
+  <p><b>Web Audio</b> ist das voreingestellte Backend und dasjenige, das Sie
+     mit einer gewöhnlichen Soundkarte erhalten.  Die Aufnahme kommt über
+     die Mikrofon-/Line-in-Berechtigung des Browsers herein, und die
+     Wiedergabe geht über den Audioausgang des Browsers hinaus.</p>
+  <p>Die Anwendung fordert <em>genau</em> das von Ihnen gewählte Gerät an,
+     in Stereo, und schaltet ausdrücklich <b>Echounterdrückung,
+     Rauschunterdrückung und die automatische Verstärkungsregelung ab</b>,
+     sodass nichts, was der Browser für Sprachanrufe anbietet, auf Ihr
+     Signal angewendet wird.  Verweigert das Gerät die angeforderte Rate,
+     versucht es die Anwendung erneut ohne die Ratenvorgabe, aber weiterhin
+     auf genau dieses Gerät festgenagelt - <b>sie schiebt nie
+     stillschweigend ein anderes unter</b>.  Alles Weitere erscheint als
+     sichtbarer Fehler statt als Aufnahme des Standardmikrofons.</p>
+
+  <h3 id="float32">Keine Bittiefe, und keine zu melden</h3>
+  <p>Die Abtastwerte erreichen die Seite als <b>float32</b>, hinter dem
+     Windows-Shared-Mode-Mixer.  Es gibt kein Ganzzahlwort, dessen Breite
+     Sie wählen könnten - deshalb zeigen die
+     <a href="preferences.html#prefs-audio">Einstellungen ▸ Audio</a> für
+     Web Audio <em>Gerät</em>, <em>Abtastrate</em> und <em>Karte</em> und
+     überhaupt kein Steuerelement für die <em>Bittiefe</em>.  Es ist nicht
+     ausgeblendet - auf diesem Weg existiert es nicht.</p>
+  <div class="note"><b>Die ehrliche Folge:</b> Eine Messung über Web Audio
+     ist <b>nicht bitgenau</b>.  Was immer der System-Mixer angestellt hat -
+     ein Resampling, eine Lautstärkekurve, eine "Verbesserung" -, steckt
+     bereits in den Abtastwerten, bevor diese Anwendung sie zu sehen
+     bekommt.  Einen wirklich bitgenauen Weg beschreibt
+     <a href="#bit-exact">weiter unten</a>.</div>
+
+  <h3 id="rate">Die Rate gehört dem Gerät, nicht der Anwendung</h3>
+  <p>Die Anwendung öffnet zuerst den Stream, liest die Rate, die der Browser
+     tatsächlich gewährt hat, und baut dann ihren Audiograph mit
+     <em>dieser</em> Rate auf, sodass die beiden nie auseinanderlaufen
+     können.  Was sie nicht kann, ist die Rate zu <em>ändern</em>: Das ist
+     das Windows-Shared-Mode-Format des Geräts, und das wird in Windows
+     eingestellt.  Der vollständige Ablauf - einschließlich der Tatsache,
+     dass Sie den Tab danach neu laden müssen, damit das Gerät erneut
+     geöffnet wird - steht auf einer eigenen Seite:
+     <a href="web-input-device.html">Das Windows-Eingabegerät
+     konfigurieren</a>.  Lesen Sie sie vor Ihrer ersten Messung; eine Karte,
+     die auf 48&nbsp;kHz stehen bleibt, analysiert ein Band, das bei
+     24&nbsp;kHz endet, wie lang die FFT auch gewählt wird.</p>
+
+  <h3 id="permission">Berechtigung, belegte und tote Geräte</h3>
+  <ul>
+    <li><b>Die erste Aufnahme fragt.</b>  Der Browser blendet seine eigene
+        Berechtigungsabfrage ein.  Eine Ablehnung wird als Gerätefehler mit
+        Nennung des Grundes gemeldet - sie lässt Sie nicht rätselnd vor
+        einer flachen Linie sitzen.</li>
+    <li><b>Ein belegtes Gerät wird erneut versucht.</b>  Drei Versuche im
+        Abstand einer Viertelsekunde, mit <em>input device busy (attempt
+        n/3) - retrying...</em> (Eingabegerät belegt - erneuter Versuch) in
+        der Statuszeile, bevor die Anwendung aufgibt und es sagt.</li>
+    <li><b>Ein toter Eingang kann sich nicht als leiser ausgeben.</b>  Ein
+        Browser kann eine Aufnahmespur am Leben halten und digitale Stille
+        ausliefern, nachdem die Karte abgezogen wurde - das läse sich als
+        wunderbar niedriges Grundrauschen.  Die Anwendung überwacht die Spur
+        selbst - ended heißt, das Gerät ist verloren, muted heißt, es
+        liefert nichts mehr - und wacht zusätzlich über eine
+        Zwei-Sekunden-Frist für die Lieferung: Ein Stream, der Blöcke
+        schuldet und keine sendet, wird mit einer Begründung gestoppt statt
+        mitgemittelt.</li>
+  </ul>
+
+  <h2 id="webusb">Das QA40x und was WebUSB voraussetzt</h2>
+  <p>Das Backend <b>QA40x</b> steuert einen QuantAsylum QA402 / QA403 direkt
+     über <b>WebUSB</b> an, ganz ohne einen Audioweg des Betriebssystems
+     dazwischen.  Seine Zeile erscheint in der Backend-Liste nur, wenn der
+     Browser WebUSB bereitstellt; tut er das nicht, wird die Zeile dennoch
+     <em>angezeigt</em>, deaktiviert und mit ihrem Grund versehen -
+     <em>Erfordert WebUSB über https:// oder localhost - funktioniert in
+     Chrome; andere Chromium-Browser bieten es möglicherweise nicht an</em> -,
+     sodass ihr Fehlen erklärt statt rätselhaft ist.</p>
+  <p>Was erfüllt sein muss, bevor ein Analysator genutzt werden kann:</p>
+  <ul>
+    <li><b>Google Chrome.</b>  Das ist enger gefasst als die Anforderung der
+        Anwendung selbst.  Phonalyser.web läuft auf jedem Chromium-Browser,
+        doch das QA40x ist bislang nur in Chrome als funktionierend
+        <em>bestätigt</em>: auf derselben Maschine, über <code>https://</code>
+        mit gültigem Zertifikat, erreichten Edge, Opera und Brave den
+        Analysator nicht.  Auf Chromium aufzubauen genügt also nicht - ein
+        Browser muss WebUSB auch bereitstellen und einer Seite dessen Nutzung
+        gestatten, und diese drei tun das nicht, jedenfalls nicht im
+        Auslieferungszustand.  Wenn Sie wegen des QA40x hier sind, nehmen Sie
+        Chrome.</li>
+    <li><b>Ein sicherer Kontext.</b>  Die Seite muss über
+        <code>https://</code> oder von <code>localhost</code> ausgeliefert
+        werden.</li>
+    <li><b>Ihre ausdrückliche Zustimmung, einmalig.</b>  WebUSB zeigt eine
+        Geräteauswahl, die nur ein echter Klick hervorholen kann, und
+        <b>der Klick, den es dafür annimmt, ist <em>Geräte scannen</em></b>
+        in Einstellungen ▸ Audio.  Das bloße Auswählen von QA40x in der
+        Backend-Liste fragt nicht nach - diesem Weg ist das Aufzählen
+        bewusst verwehrt.</li>
+    <li><b>Bis Sie sie erteilt haben, ist der Analysator unsichtbar.</b>
+        Der Browser meldet nur Geräte, die dieser Seite bereits zugestanden
+        wurden; ein QA403, der zwar eingesteckt ist, aber nie in der Auswahl
+        gewählt wurde, taucht also nirgends auf, und der Versuch, ihn zu
+        öffnen, scheitert mit <em>No QA402/QA403 found on USB</em> (kein
+        QA402/QA403 am USB gefunden).  Fehlt Ihr Analysator, drücken Sie
+        <b>Geräte scannen</b>.</li>
+    <li><b>Unter Windows ein Treiber der WinUSB-Klasse.</b>  Ein Schritt je
+        Maschine, den keine Webseite für Sie ausführen oder auch nur
+        erkennen kann.</li>
+  </ul>
+  <p>Es darf immer nur ein Analysator angebunden sein.  Der Anspruch ist
+     exklusiv: Die Anwendung beansprucht Schnittstelle&nbsp;0, der QA402 /
+     QA403 darf also weder in der QuantAsylum-Software noch in einem anderen
+     Tab geöffnet sein.  Ein fehlgeschlagener Anspruch lässt das Gerät
+     geschlossen zurück statt halb in Besitz genommen.</p>
+  <div class="note"><b>Er wird zurückgegeben, sobald ihn nichts mehr
+     benutzt.</b>  Sobald sich der letzte Verbraucher abmeldet, wird der
+     Analysator auf seine sicheren Bereiche gestellt, gestoppt und
+     freigegeben.  Das ist Absicht: Weil der WebUSB-Anspruch exklusiv ist,
+     würde ein zwar untätiger, aber beanspruchter Analysator die
+     Herstellersoftware und jeden anderen Tab so lange von ihm aussperren,
+     wie diese Seite geöffnet bleibt.</div>
+
+  <h3 id="bit-exact">Der bitgenaue Weg</h3>
+  <p>Da Web Audio hinter dem Mixer liegt, ist das QA40x <b>das einzige
+     bitgenaue Backend auf dieser Maschine</b>: Seine Abtastwerte queren den
+     USB als 24-Bit-Werte in 32-Bit-Wörtern und betreten überhaupt keinen
+     Audioweg des Betriebssystems.  Die andere bitgenaue Möglichkeit liegt
+     nicht auf dieser Maschine - sie ist ein
+     <a href="#served-page">Messplatz</a>, auf dem die Desktop-Anwendung
+     stellvertretend für Sie eine Karte im Exklusivmodus öffnet.</p>
+
+  <h2 id="served-page">Die Seite, die ein Messplatz ausliefert</h2>
+  <p>Ein <a href="server.html">Phonalyser-Server</a> bietet nicht nur seine
+     Soundkarten an - er liefert auch <em>diese Anwendung</em> aus.  Rufen
+     Sie die Adresse eines Messplatzes in einem Browser auf, erhalten Sie
+     eine Ausgabe von Phonalyser.web, die bereits auf diesen Messplatz
+     zeigt: Sie wählt ihren eigenen Server automatisch an, noch vor dem
+     ersten Gerätescan, sodass die Maschine, von der Sie sie geladen haben,
+     schon verbunden ist, wenn Sie die Einstellungen öffnen.</p>
+  <p><b>Diese Seite bietet die Backends des Messplatzes an und sonst
+     nichts.</b>  Es gibt keine Zeile für Web Audio und nicht einmal die
+     deaktivierte QA40x-Zeile.  Das ist Ehrlichkeit, keine Einschränkung:
+     Eine solche Seite kommt über schlichtes <code>http://</code> von einer
+     Maschine in Ihrem Netz, und das ist kein sicherer Kontext -
+     <code>getUserMedia</code> und WebUSB existieren dort schlicht nicht.
+     Dort ein lokales Backend anzubieten hieße, eine Wahl anzubieten, deren
+     jeder Öffnungsversuch scheitern muss, und eine ausgegraute Zeile lüde
+     nur zu der Frage ein, "warum sehe ich sie dann".</p>
+  <p>Wird ein zuvor gewähltes Backend nicht mehr angeboten, sagt die Seite
+     das klar, statt irgendwo tief im Browser zu scheitern.  Ein von einem
+     <em>Messplatz</em> gemerktes Backend wird dagegen nie stillschweigend
+     ersetzt: Seine Zeile wird wiederhergestellt, bevor sein Server
+     geantwortet hat, sodass Gerät, Rate und Karte, die Sie an jenem
+     Messplatz eingestellt hatten, ein Neuladen überstehen.</p>
+  <div class="note">Die Seite stellt fest, dass sie von einem Messplatz stammt,
+     indem sie ihre eigene Adresse abfragt - mit demselben Schema, demselben
+     Host und demselben Pfad, unter denen sie geladen wurde.  Ein über
+     <code>https://</code> durch einen TLS-Reverse-Proxy erreichter Server wird
+     daher genauso erkannt wie ein direkt erreichter, und die Sitzung, die sie
+     öffnet, ist entsprechend verschlüsselt.  Unerkannt bleibt allein ein
+     Messplatz, der zu langsam antwortet - mehr als etwa eine halbe Sekunde:
+     Die Seite startet dann mit der vollständigen lokalen Backend-Liste, was
+     nicht falsch ist - eine <code>https://</code>-Seite ist ein sicherer
+     Kontext, dort funktionieren Web Audio und das QA40x also tatsächlich.</div>
+
+  <h2 id="mixed-content">Eine https-Seite erreicht keinen Messplatz im LAN</h2>
+  <p>Eine Messplatz-Sitzung ist ein schlichter
+     <code>ws://</code>-WebSocket.  Ein Browser weigert sich, einen solchen
+     aus einer über <code>https://</code> geladenen Seite heraus zu öffnen -
+     die Mixed-Content-Regel -, und er weigert sich, <em>bevor</em>
+     überhaupt gewählt wird, es gibt also keine Zeitüberschreitung zu
+     deuten.  Die Anwendung sagt es Ihnen beim Namen, statt Sie raten zu
+     lassen.</p>
+  <p>Loopback ist ausgenommen, von einer <code>https://</code>-Seite aus
+     erreichen Sie also weiterhin einen Messplatz auf
+     <code>localhost</code>, <code>127.0.0.1</code> oder <code>::1</code> -
+     aber keinen sonstwo im Netz.  Es gibt keine Einstellung, die daran
+     etwas ändert.  Der unterstützte Weg ist der oben beschriebene:
+     <b>Laden Sie die Anwendung vom Messplatz selbst</b>, wo Seite und
+     Sitzung denselben schlichten <code>http://</code>-Origin teilen und die
+     Regel nie greift.</p>
+
+  <h2 id="files">Dateien speichern und öffnen</h2>
+  <p>Auf der gewöhnlichen <code>https://</code>-Seite in Chrome oder Edge
+     öffnet <b>Speichern</b> einen echten Speichern-unter-Dialog, und die
+     Datei landet dort, wo Sie sie hinlegen.  Auf einer von einem Messplatz
+     ausgelieferten Seite - die über schlichtes <code>http://</code> kommt -
+     gibt es diesen Dialog nicht.  Der Browser <b>lädt</b> die Datei
+     stattdessen ohne Rückfrage unter dem vorgeschlagenen Namen in Ihren
+     Download-Ordner <b>herunter</b>, und die Anwendung meldet sie als
+     gespeichert, sobald der Download beginnt, und nicht, wenn er fertig
+     ist.  Liegt dort bereits eine Datei dieses Namens, schreibt der Browser
+     stillschweigend <code>name (1).wav</code>, und die Anwendung bekommt
+     das nicht mit.</p>
+  <p>Das Öffnen von Dateien verhält sich auf beiden Arten von Seite gleich:
+     Sie erhalten eine Dateiauswahl, ein Abbrechen bricht wirklich ab, und
+     der von Ihnen gewählte Name ist der Name, der verwendet wird.</p>
+  <div class="note"><b>Das eine, was auf einer vom Messplatz ausgelieferten
+     Seite nicht funktioniert</b>, ist das Speichern des Oszilloskops, das
+     <em>fortlaufend auf die Platte aufnimmt</em> - jede Dauer, die länger
+     ist als der Aufnahmepuffer, oder ein Speichern, das bei gestopptem
+     Oszilloskop gestartet wird.  Das Aufnehmen in Echtzeit braucht eine
+     echte offene Datei, in die es strömen kann, und die kann sich jene
+     Seite nicht beschaffen - die Anwendung sagt das und hält an, statt
+     nichts aufzuzeichnen.</div>
+  <div class="note">Auf einer vom Messplatz ausgelieferten Seite öffnet die
+     Schaltfläche 📂 <b>Zieldatei auswählen</b> in den Reitern
+     <em>Speichern unter...</em> des Generators und des Oszilloskops keine
+     Auswahl: Sie füllt lediglich das schreibgeschützte Namensfeld aus.  Das
+     ist der Download-Weg, der wie vorgesehen arbeitet, und keine tote
+     Schaltfläche - ein zweiter Druck ist nicht nötig.</div>
+
+  <h2 id="storage">Wo Ihre Einstellungen liegen</h2>
+  <p>Einstellungen und Kartenprofile liegen im <b>lokalen Speicher</b> des
+     Browsers, nicht in Dateien auf der Platte.  Daraus folgt zweierlei.
+     Sie gelten <b>je Browser und je Seite</b>: Wer die Daten dieser Seite
+     löscht, verwirft sie, und sie folgen Ihnen nicht in einen anderen
+     Browser oder auf eine andere Maschine.  Und ein gespeicherter Wert, der
+     sich nicht auswerten lässt, wird nie stillschweigend ersetzt - er wird
+     unter demselben Schlüssel mit der Endung <code>.corrupt</code>
+     beiseitegelegt, und der Lauf startet mit den Standardwerten, sodass
+     sich ein beschädigtes Dokument mit den Entwicklerwerkzeugen des
+     Browsers noch auslesen lässt, statt vom nächsten Speichervorgang
+     überschrieben zu werden.</p>
+  <p>Beide Dokumente lassen sich über <b>Extras ▸ Einstellungen / Geräte</b> als
+     Text öffnen und bearbeiten - siehe
+     <a href="json-config.html">Die Einstellungen als JSON
+     bearbeiten</a>.  So kopieren Sie auch eine Kalibrierung in einen anderen
+     Browser oder auf eine andere Maschine, was gerade hier zählt, weil der
+     Browser-Speicher Ihnen eben nicht folgt: Speicher öffnen, Dokument
+     kopieren, es auf der anderen Maschine in dasselbe Fenster einfügen.</p>
+
+  <div class="note"><b>Das Neuladen des Tabs ist unbedenklich.</b>  Beim
+     Neuladen oder Schließen stoppt die Anwendung zuerst Aufnahme und
+     Wiedergabe und schreibt Ihre Einstellungen weg, sodass nichts Laufendes
+     verwaist und keine Kalibrierung verloren geht.  Ein Neuladen ist
+     außerdem genau das, was der
+     <a href="web-input-device.html">Windows-Ratenablauf</a> verlangt - es
+     ist also etwas Normales und nichts, wovor man sich fürchten
+     müsste.</div>
+
+<script src="help-viewer.js"></script>
+</body>
+</html>

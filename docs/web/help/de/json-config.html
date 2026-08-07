@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser.web - Einstellungen als JSON bearbeiten</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zum Inhalt</a></p>
+
+  <h1 id="json-config">Einstellungen als JSON bearbeiten</h1>
+  <p>Alles, was der Dialog <a href="preferences.html">Einstellungen</a> schreibt,
+     landet in einem von zwei gespeicherten Dokumenten - den Einstellungen und den
+     <a href="preferences.html#prefs-audio-card">Kartenprofilen</a> -, und beide
+     lassen sich unmittelbar als Text aus dem Menü <b>Extras</b> öffnen.  Das ist
+     der Weg, die gesamte Konfiguration auf einen Blick zu sehen, eine Karte von
+     einer Maschine auf eine andere zu kopieren oder etwas zu ändern, das die
+     Dialoge bewusst nicht anbieten.</p>
+  <p><img src="img/JSON config editor.png" alt="Der JSON-Konfigurationseditor, geöffnet auf dem Einstellungsdokument, mit eingeblendeter Vervollständigungsliste"/></p>
+
+  <h2 id="json-config-menu">Wo es zu finden ist</h2>
+  <p>Extras trägt zwei Untermenüs:</p>
+  <table class="controls">
+    <tr><th>Menüeintrag</th><th>Was er öffnet</th></tr>
+    <tr><td><b>Einstellungen ▸ Aktuell</b></td>
+        <td>Das lebende Einstellungsdokument - alles aus den fünf Reitern des
+            Einstellungsdialogs, dazu die Blöcke der einzelnen Backends und die
+            gemerkten Server.</td></tr>
+    <tr><td><b>Geräte ▸ Aktuell</b></td>
+        <td>Den lebenden
+            <a href="preferences.html#prefs-audio-devices-file">Gerätespeicher</a>
+            - Ihre Kartenprofile, ihre Bereiche und ihre gemessenen
+            Vollausschlagswerte.</td></tr>
+    <tr><td><b>... ▸ Beschädigt</b></td>
+        <td>Nur vorhanden, wenn ein Speicher
+            <a href="preferences.html#prefs-store-quarantine">beiseitegelegt</a>
+            wurde, weil er sich nicht lesen ließ.  Öffnet diese Kopie
+            <b>schreibgeschützt</b>.</td></tr>
+  </table>
+
+  <h2 id="json-config-editing">Bearbeiten</h2>
+  <p>Das Dokument öffnet <b>sauber formatiert</b>, und der Editor kennt seine
+     Form:</p>
+  <ul>
+    <li><b>Vervollständigung.</b>  Beginnen Sie, einen Schlüssel zu tippen, bietet
+        er die an, die dieses Dokument tatsächlich zulässt - Sie raten also weder
+        bei der Schreibweise, noch erfinden Sie Schlüssel, die die Anwendung
+        ohnehin übergeht.</li>
+    <li><b>Hilfe beim Zeigen.</b>  Zeigen Sie auf einen beliebigen Schlüssel, und
+        ein Satz erklärt, was er ist und was seine Werte bedeuten - dieselbe
+        Erläuterung für jede Einstellung, auch für die vielen, die im
+        Einstellungsdialog kein Steuerelement haben.</li>
+    <li><b>Solange Sie nur hinsehen, ändert sich nichts.</b>  <b>OK</b> überträgt
+        das Dokument in einem Schritt in die <em>laufende</em> Anwendung und
+        schreibt es in den Speicher, sodass eine Farbe, eine Abtastrate oder eine
+        ganze Karte ohne Neuladen der Seite wirksam wird.  <b>Abbrechen</b>
+        verwirft es.</li>
+    <li><b>Ein Fehler hält das Fenster offen.</b>  Text, der kein gültiges JSON
+        ist, wird mit der Position des Fehlers gemeldet, und nichts wird
+        übernommen - ein Druck auf OK wirft Ihre Arbeit also nie weg.</li>
+  </ul>
+  <p>Das Fenster lässt sich an seiner Titelleiste <b>verschieben</b> und an seiner
+     unteren rechten Ecke <b>in der Größe ändern</b>, und es merkt sich, wo und
+     wie groß Sie es zurückgelassen haben.</p>
+
+  <h2 id="json-config-refusal">Die eine abgelehnte Änderung</h2>
+  <div class="note"><b>Eine Änderung wird abgelehnt, und zwar die gefährliche.</b>
+     Ein Gerätedokument <b>ganz ohne <code>audioDevices</code>-Liste</b> wird
+     zurückgewiesen statt übernommen.  Dahin kommt man leicht - der Block wird
+     gelöscht, um "sauber anzufangen", ein vertipptes
+     <code>audiodevices</code>, oder es wird nur der Versionskopf
+     zurückgeschrieben -, und seine Übernahme würde jedes Kartenprofil und jede
+     Kalibrierung darin löschen und dabei wie ein Erfolg aussehen.  Um den
+     Speicher <em>absichtlich</em> zu leeren, schreiben Sie eine leere Liste:
+     <code>"audioDevices": []</code> wird angenommen und leert ihn
+     wirklich.</div>
+  <div class="note">Die Kopie <b>Beschädigt</b> ist schreibgeschützt und hat keine
+     OK-Schaltfläche.  Sie wird formatiert gezeigt, wenn sie sich auswerten lässt,
+     und <b>genau so, wie sie gespeichert ist</b>, wenn nicht - dieser Text ist
+     die einzige Aufzeichnung dessen, was schiefgegangen ist, der Editor räumt ihn
+     deshalb nie auf.  Kopieren Sie heraus, was Sie brauchen; die Anwendung
+     schreibt nicht hinein.</div>
+
+<script src="help-viewer.js"></script>
+</body>
+</html>

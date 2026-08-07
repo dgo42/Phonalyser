@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — Further reading: The exponential sine sweep in practice</title>
+  <title>Phonalyser.web - Further reading: The exponential sine sweep in practice</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -17,11 +17,11 @@
      I was listening to a sine sweep all day long"</a> by Mikhail Baranov
      (Medium, 2016), which walks through implementing Angelo Farina's
      exponential-sweep measurement end to end.  All credit belongs to the
-     original — read it there for the full story, code and plots.  The
+     original - read it there for the full story, code and plots.  The
      underlying method is Farina's AES paper, referenced below.</div>
 
   <h2>The problem</h2>
-  <p>A linear, time-invariant system — a room, an amplifier, a filter — is
+  <p>A linear, time-invariant system - a room, an amplifier, a filter - is
      completely described by its <b>impulse
      response</b><sup><a href="#ref-bg">[3]</a></sup>: what comes out
      when an infinitely short click goes in.  Measuring it directly with a
@@ -31,7 +31,7 @@
 
   <h2>Why the exponential sweep wins</h2>
   <p>Farina's probe<sup><a href="#ref-paper">[2]</a></sup> is a sine whose
-     frequency rises <em>exponentially</em> with time — the same signal as
+     frequency rises <em>exponentially</em> with time - the same signal as
      equation (9) of the
      <a href="../theory/generator.html#sweeps">generator chapter</a>.
      Compared to noise-like probes (MLS and relatives) it delivers a
@@ -42,7 +42,7 @@
      separates itself from the linear response</b>.  Because each frequency
      occurs at a known time, a distortion harmonic of the momentary tone
      arrives as if it belonged to a frequency the sweep reaches only
-     <em>later</em> — after deconvolution, all distortion products land at
+     <em>later</em> - after deconvolution, all distortion products land at
      negative delays, cleanly ahead of the linear impulse response, where
      they can simply be windowed away (or analysed on purpose).</p>
 
@@ -55,7 +55,7 @@
         exponentially longer in the low octaves.</li>
     <li>Convolve the recording with the inverse filter.  The result is the
         impulse response; a Fourier transform of it is the complex frequency
-        response — magnitude and phase.</li>
+        response - magnitude and phase.</li>
   </ol>
   <p>This is precisely the pipeline behind Phonalyser.web's frequency-response
      module, with one engineering refinement described in the
@@ -67,12 +67,12 @@
   <ol class="refs">
     <li id="ref-article">M. Baranov,
         <a href="https://medium.com/@baranov.mv/how-i-was-listening-to-a-sine-sweep-all-day-long-294c374995f6">"How I was listening to a sine sweep all day long"</a>,
-        Medium, 2016 — the original article this page summarises.</li>
+        Medium, 2016 - the original article this page summarises.</li>
     <li id="ref-paper">A. Farina,
         <a href="http://pcfarina.eng.unipr.it/Public/Papers/226-AES00.PDF">"Simultaneous measurement of impulse response and distortion with a swept-sine technique"</a>,
-        108th AES Convention, 2000 — the method itself.</li>
+        108th AES Convention, 2000 - the method itself.</li>
     <li id="ref-bg"><a href="https://en.wikipedia.org/wiki/Impulse_response">Wikipedia: Impulse response</a> and
-        <a href="https://en.wikipedia.org/wiki/Deconvolution">Wikipedia: Deconvolution</a> —
+        <a href="https://en.wikipedia.org/wiki/Deconvolution">Wikipedia: Deconvolution</a> -
         background on the concepts.</li>
   </ol>
 

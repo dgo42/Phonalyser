@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — Theorie: Oszilloskop</title>
+  <title>Phonalyser.web - Theorie: Oszilloskop</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -12,7 +12,7 @@
   <h1>Oszilloskop</h1>
 
   <h2 id="purpose">Zweck</h2>
-  <p>Das Oszilloskop ist die Zeitbereichs-Ansicht — und die, die man
+  <p>Das Oszilloskop ist die Zeitbereichs-Ansicht - und die, die man
      <em>zuerst</em> betrachten sollte.  Bevor einem Spektralwert vertraut
      werden kann, muss das Signal sinnvoll aussehen: vorhanden, ohne
      Übersteuerung, frei von grober DC-Verschiebung oder Netzbrummen, auf dem
@@ -29,7 +29,7 @@
      Anzeige ruhig bleibt, auch wenn die Kurve schnell aktualisiert wird.</p>
 
   <div class="diagram">
-  <svg viewBox="0 0 820 250" width="100%" height="250" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+  <svg viewBox="0 0 820 270" width="100%" height="270" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
     <defs>
       <marker id="oa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
         <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
@@ -41,7 +41,7 @@
 
     <rect x="170" y="100" width="130" height="50" rx="6" fill="#eef" stroke="#88a"/>
     <text x="235" y="120" text-anchor="middle" font-weight="bold">conditioning</text>
-    <text x="235" y="138" text-anchor="middle" fill="#557">low-pass · mains comb</text>
+    <text x="235" y="138" text-anchor="middle" fill="#557">HF cleanup · mains</text>
 
     <rect x="340" y="100" width="120" height="50" rx="6" fill="#eef" stroke="#88a"/>
     <text x="400" y="120" text-anchor="middle" font-weight="bold">trigger</text>
@@ -60,32 +60,46 @@
     <line x1="460" y1="125" x2="498" y2="125" stroke="#446" stroke-width="1.5" marker-end="url(#oa)"/>
     <line x1="630" y1="125" x2="668" y2="125" stroke="#446" stroke-width="1.5" marker-end="url(#oa)"/>
 
-    <rect x="170" y="190" width="290" height="48" rx="6" fill="#fffbe8" stroke="#cc9"/>
+    <rect x="170" y="190" width="290" height="66" rx="6" fill="#fffbe8" stroke="#cc9"/>
     <text x="315" y="210" text-anchor="middle" font-weight="bold">measurement pass (10 Hz)</text>
     <text x="315" y="228" text-anchor="middle" fill="#775">Vpp · Vrms · Vmean · f · duty · rise/fall</text>
-    <line x1="235" y1="150" x2="250" y2="188" stroke="#446" stroke-width="1.2" marker-end="url(#oa)"/>
+    <text x="315" y="246" text-anchor="middle" fill="#775">captured window · mains comb only</text>
+    <line x1="70" y1="150" x2="196" y2="188" stroke="#446" stroke-width="1.2" marker-end="url(#oa)"/>
   </svg>
   </div>
 
   <h2 id="conditioning">Aufbereitung</h2>
-  <p>Vor der Darstellung laufen zwei optionale Filter — und entscheidend —
-     <em>dieselben</em> Filter laufen auch vor der Messung, sodass die Anzeige
-     nie vom Bild abweicht:</p>
+  <p>Vor der Darstellung laufen zwei optionale Filter:</p>
   <ul>
     <li><b>Anti-Alias- / Spike-Tiefpass.</b>  Ein steiler Tiefpass (Butterworth
-        8. Ordnung) dämpft außerbanddige Spitzen, die sonst die
-        Spitze-Spitze-Messung aufblähen würden. Die Grenzfrequenz richtet sich
+        8. Ordnung) dämpft außerbanddige Spitzen, die sonst die Kurve
+        verunklaren würden. Die Grenzfrequenz richtet sich
         nach der Anzeigeeinstellung.</li>
     <li><b>Netzbrummen-Unterdrückung.</b>  Ein frequenznachgeführter
         Netz-Kammfilter entfernt 50/60 Hz und seine Oberwellen in einer
-        Struktur — siehe <a href="#mains">unten</a>.</li>
+        Struktur - siehe <a href="#mains">unten</a>.</li>
   </ul>
+  <p>Nur einer der beiden erreicht auch den
+     <a href="#measure">Messpass</a>: der <b>Netz-Kammfilter</b>, denn Brummen zu
+     unterdrücken ist eine Mess- und keine Anzeigeentscheidung - Brummen, das Sie
+     bewusst ausgefiltert haben, soll auch nicht in Vpp oder Vrms eingehen.  Die
+     <b>Hochfrequenz-Bereinigung ist dagegen allein eine Eigenschaft der
+     Kurve</b>.  Sie ist eine Einstellung, die Sie wählen, um ein Bild lesbar zu
+     machen, und in dem Moment, in dem sie Vpp, Vmean, Anstiegs- und Abfallzeit
+     oder Tastverhältnis verschiebt, sind das keine Messungen des Signals mehr,
+     sondern Messungen unserer Darstellung davon.  Hinzu kommt, dass sie nur in
+     eine Richtung irrt: der Filter wird zu Beginn jedes Durchlaufs
+     zurückgesetzt, wird also dabei gemessen, wie er aus einer Stufe von bis zu
+     der vollen Spitze-Spitze-Amplitude ausschwingt - was ein Spitzendetektor als
+     Signal liest.  Am Messplatz lag ein sauberer Sinus dadurch rund 12 % zu hoch
+     im Vpp und ein Viertel zu lang in der Anstiegszeit; deshalb sieht der
+     Messpass sie nicht mehr.</p>
 
   <h2 id="trigger">Triggern</h2>
   <p>Ein freilaufendes Oszilloskop würde die Kurve bei jedem Bild mit einer
      zufälligen Phase neu zeichnen, sodass ein periodisches Signal quer über
      den Bildschirm zu wandern scheint.  <b>Triggern</b> verankert jedes Bild
-     an demselben Merkmal — einem gewählten <em>Pegel</em>, der in einer
+     an demselben Merkmal - einem gewählten <em>Pegel</em>, der in einer
      gewählten <em>Richtung</em> überschritten wird (steigende oder fallende
      Flanke).  Die Darstellung erfolgt dann relativ zu diesem Punkt, sodass ein
      stationärer Ton stillsteht.</p>
@@ -101,15 +115,15 @@
      Pegelüberschreitungen.  Ein Aufnahmeaussetzer, der Abtastwerte
      verschluckt, hinterlässt einen Amplitudensprung oder einen
      Steigungsknick, der <em>irgendwo</em> auf der Welle sitzen kann, in
-     beliebiger Richtung — ein auf einen festen Pegel gestellter
+     beliebiger Richtung - ein auf einen festen Pegel gestellter
      Flankentrigger trifft ihn fast nie.  Der <b>Glitch-Trigger</b> löst
      stattdessen bei jeder Unstetigkeit der Wellenform aus, wo immer sie
      auftritt; Triggerpegel, Hysterese und Sub-Sample-Verfeinerung gelten
      hier nicht.  (Er ist nur im Normal- und Single-Modus verfügbar: Ein
      freilaufendes Auto-Oszilloskop würde den gefangenen Frame gleich bei der
      nächsten Neuzeichnung überschreiben.)</p>
-  <p>Der Detektor nutzt die Tatsache, dass ein abgetasteter Sinus — bei
-     <em>jeder</em> Frequenz — einer exakten dreigliedrigen
+  <p>Der Detektor nutzt die Tatsache, dass ein abgetasteter Sinus - bei
+     <em>jeder</em> Frequenz - einer exakten dreigliedrigen
      Rekurrenz<sup id="cite-1"><a href="#ref-linpred">[1]</a></sup> gehorcht:
      Jeder Abtastwert ist durch die beiden vorherigen vollständig
      vorhergesagt,</p>
@@ -127,15 +141,15 @@
      zulässt.</p>
   <p>Ein Abtastwert wird als unstetig markiert, wenn |<i>e</i>| das
      <b>8-Fache des mittleren |<i>e</i>| des eigenen Fensters</b>
-     überschreitet — ein Schwellenwert, der <em>auf dem Grundrauschen
+     überschreitet - ein Schwellenwert, der <em>auf dem Grundrauschen
      mitfährt</em>.  Auf einem sauberen Ton sind das etwa
      6,4 Standardabweichungen, die breitbandiges Rauschen praktisch nie
      erreicht, während ein echter Knick die Vorhersage um einen großen
-     Bruchteil der Signalamplitude bricht — Dekaden darüber.  Und weil die
+     Bruchteil der Signalamplitude bricht - Dekaden darüber.  Und weil die
      Basislinie aus demselben Fenster gemessen wird, heben Oberwellen oder
      ein zweiter Ton sie proportional an: Die Regel skaliert sich selbst.</p>
   <p>Das Fixieren der Frequenz hält den Detektor auch oben am Leben.  Die
-     einfache zweite Differenz — (2) mit <i>ω</i> = 0 — löscht den Ton nicht
+     einfache zweite Differenz - (2) mit <i>ω</i> = 0 - löscht den Ton nicht
      aus: Sie hinterlässt einen Rest der Amplitude
      2(1 − cos <i>ω</i>)·<i>A</i>, die eigene Krümmung des Tons.  Bei einem
      20-kHz-Ton, abgetastet mit 384 kHz, treibt dieser Rest den
@@ -143,9 +157,9 @@
      (≈ 0,5 <i>A</i>), sodass jeder Glitch unterhalb eines Halbskalen-Bruchs
      unbemerkt bliebe; die abgestimmte Rekurrenz hält die Basislinie bei
      jeder Frequenz auf dem Grundrauschen.</p>
-  <p>Ein echter Aussetzer hat <em>zwei</em> Grenzen — den Eintritt in die
+  <p>Ein echter Aussetzer hat <em>zwei</em> Grenzen - den Eintritt in die
      Lücke und die Erholung danach (beobachtete USB-Aussetzer dauern
-     120–160 µs) — und beide brechen die Vorhersage.  Überschwellige
+     120-160 µs) - und beide brechen die Vorhersage.  Überschwellige
      Abtastwerte, die näher als 1 ms beieinanderliegen, verschmelzen daher zu
      einem einzigen Glitch-Ereignis, und die Flankenrichtungs-Buttons wählen
      den Ankerpunkt: ↑ setzt den Trigger auf den <em>Anfang</em> des
@@ -159,7 +173,9 @@
      übereinstimmen, was als beschädigt gilt.</p>
 
   <h2 id="measure">Wie die Messwerte berechnet werden</h2>
-  <p>Der Messpass arbeitet im aufbereiteten Fenster in normierten Einheiten
+  <p>Der Messpass arbeitet im aufgenommenen Fenster in normierten Einheiten -
+     netzentbrummt, falls das eingeschaltet ist, aber nie
+     hochfrequenzgefiltert (siehe <a href="#conditioning">Aufbereitung</a>) -
      und rechnet erst mit der ADC-Vollaussteuerungs-Kalibrierung in Volt um
      (ein Abtastwert von ±1 entspricht <i>V</i><sub>fs</sub>·√2 Spitze).
      Pegelstatistiken sind direkt; die Frequenzbestimmung erfordert mehr
@@ -170,34 +186,34 @@
   <div class="eq"><i>V</i><sub>pp</sub> = (max − min) · <i>V</i><sub>peak</sub><span class="no">(3)</span></div>
   <div class="eq"><i>V</i><sub>mean</sub> = <i>V</i><sub>peak</sub> · (1/<i>N</i>) Σ <i>x</i><sub>i</sub><span class="no">(4)</span></div>
   <div class="eq"><i>V</i><sub>rms</sub> = <i>V</i><sub>peak</sub> · √( E[<i>x</i>²] − E[<i>x</i>]² )<span class="no">(5)</span></div>
-  <p>Der Effektivwert in (5) ist der <em>AC</em>-Effektivwert — der DC-Anteil
+  <p>Der Effektivwert in (5) ist der <em>AC</em>-Effektivwert - der DC-Anteil
      wird zuerst entfernt (die Varianzform subtrahiert den Mittelwert), da ein
      Gesamt-Effektivwert, der bei DC-belastetem Eingang auf ≈ <i>V</i><sub>mean</sub>
      zusammenbricht, auf einem Oszilloskop weit weniger aussagekräftig ist.</p>
   <p>Bei einem periodischen Signal werden (4) und (5) nicht über das rohe
      Fenster ausgewertet.  Ein Fenster mit einer <em>gebrochenen</em> Zahl
      von Zyklen lässt einen hängenden Teilzyklus übrig, dessen Beitrag zum
-     Mittelwert — bis zu <i>A</i>/(π <i>n</i>) bei Amplitude <i>A</i> und
-     <i>n</i> Zyklen im Fenster — davon abhängt, wo das Fenster zufällig
+     Mittelwert - bis zu <i>A</i>/(π <i>n</i>) bei Amplitude <i>A</i> und
+     <i>n</i> Zyklen im Fenster - davon abhängt, wo das Fenster zufällig
      beginnt.  Die Streuung von <i>V</i><sub>mean</sub> skaliert dann mit der
      Signal-<em>Amplitude</em> statt mit dem Rauschen: Millivolt an
      phasenzufälligem Wandern bei Vollaussteuerung, das ein
      Mikrovolt-Grundrauschen völlig überdeckt.  Das Oszilloskop integriert
      <i>V</i><sub>mean</sub> und <i>V</i><sub>rms</sub> daher nur zwischen
      der ersten und der letzten steigenden Überschreitung des
-     Halbamplituden-Mittelpunkts — eine ganze Zahl von Perioden.  An einer
+     Halbamplituden-Mittelpunkts - eine ganze Zahl von Perioden.  An einer
      Mittelpunktsüberschreitung liegt das Signal per Definition auf seinem
      eigenen Mittelwert, sodass der Randfehler zweiter Ordnung wird und
      <i>V</i><sub>mean</sub> sich auf das Grundrauschen einschwingt: Seine
      Standardabweichung bei einem vollausgesteuerten Signal fällt von
-     Millivolt auf unter ein Mikrovolt — dieselben ≈ 0,6 µV, die es bei
+     Millivolt auf unter ein Mikrovolt - dieselben ≈ 0,6 µV, die es bei
      einem 1-mV-Signal zeigt.  <i>V</i><sub>pp</sub>, min und max bleiben
      auf dem vollen Fenster (ein Peak darf nicht wegfallen, nur weil er im
      Teilzyklus liegt), und ein Signal ohne zwei gleichgerichtete
-     Überschreitungen — DC oder reines Rauschen — fällt auf das volle
+     Überschreitungen - DC oder reines Rauschen - fällt auf das volle
      Fenster zurück.</p>
 
-  <h3 id="freq">Frequenz — Nulldurchgänge, dann Goertzel-Verfeinerung</h3>
+  <h3 id="freq">Frequenz - Nulldurchgänge, dann Goertzel-Verfeinerung</h3>
   <p>Aus einem kurzen Puffer eine genaue Frequenz abzulesen ist der
      schwierige Teil. Eine dreistufige Strategie erreicht eine Genauigkeit von
      wenigen Millihertz:</p>
@@ -210,7 +226,7 @@
         Ergebnis liefert, anstatt sich auf eine starke Oberwelle zu sperren.</li>
     <li><b>Verfeinerung mit dem Goertzel-Algorithmus<sup id="cite-2"><a href="#ref-goertzel">[2]</a></sup>.</b>
         Der Goertzel-Algorithmus berechnet einen einzelnen DFT-Bin bei einer
-        <em>beliebigen</em> Frequenz in einem O(<i>N</i>)-Durchlauf — ein
+        <em>beliebigen</em> Frequenz in einem O(<i>N</i>)-Durchlauf - ein
         günstiger Weg, den Betrag bei einer beliebigen Prüffrequenz ohne
         vollständige FFT zu ermitteln. Drei aufeinanderfolgende Scans, jeder
         ~20× feiner als der vorherige, konvergieren auf das Maximum, und eine
@@ -218,7 +234,7 @@
         Sub-Schritt-Präzision (typischerweise ≤ 0,005 Hz bei einem Ein-Sekunden-Puffer).</li>
     <li><b>Leckage-Entzerrung.</b>  Der bloße (Rechteckfenster-) Peak wird
         durch Leckage vom negativfrequenten Spiegelbild von der wahren Frequenz
-        abgezogen — bis zu einige Zehntel Hertz bei kurzen Puffern, was früher
+        abgezogen - bis zu einige Zehntel Hertz bei kurzen Puffern, was früher
         dazu führte, dass das Oszilloskop neben der FFT zu niedrig anzeigte.
         Erneutes Verfeinern des Peaks an einer Hann-gefensterten<sup id="cite-3"><a href="#ref-hann">[3]</a></sup>
         Kopie unterdrückt dieses Spiegelbild und fixiert die Frequenz auf
@@ -235,7 +251,7 @@
   <h2 id="sinc">Zeichnen zwischen den Abtastwerten: sin x/x-Rekonstruktion</h2>
   <p>Bei schnellen Zeitbasen liegen nur wenige Abtastwerte auf dem Bildschirm.
      Die Abtastpunkte mit geraden Linien zu verbinden erzeugt Ecken, die im
-     Signal nicht existieren — das Anti-Alias-Filter des ADC garantiert, dass
+     Signal nicht existieren - das Anti-Alias-Filter des ADC garantiert, dass
      das erfasste Signal keine Energie oberhalb von Nyquist enthält, und das
      Abtasttheorem<sup id="cite-4"><a href="#ref-shannon">[4]</a></sup> besagt,
      dass ein solches bandbegrenztes Signal zwischen seinen Abtastwerten
@@ -273,15 +289,15 @@
     <circle cx="70" cy="240" r="4" fill="#222"/>
     <text x="82" y="244" fill="#335">ADC-Abtastwerte (4 pro Periode)</text>
     <line x1="300" y1="240" x2="340" y2="240" stroke="#c33" stroke-width="1.5" stroke-dasharray="5 4"/>
-    <text x="348" y="244" fill="#a33">Geradlinige Verbindung — nicht existierende Ecken</text>
+    <text x="348" y="244" fill="#a33">Geradlinige Verbindung - nicht existierende Ecken</text>
     <line x1="640" y1="240" x2="680" y2="240" stroke="#33a" stroke-width="2"/>
     <text x="688" y="244" fill="#338">sin x/x-Rekonstruktion</text>
   </svg>
   </div>
 
-  <p>Das Oszilloskop berechnet (6) in seiner praktischen, gefensterten Form —
+  <p>Das Oszilloskop berechnet (6) in seiner praktischen, gefensterten Form -
      einen Lanczos<sup id="cite-5"><a href="#ref-lanczos">[5]</a></sup>-Kern
-     mit 16 sinc-Keulen auf jeder Seite, vorberechnet in einer Phasentabelle —
+     mit 16 sinc-Keulen auf jeder Seite, vorberechnet in einer Phasentabelle -
      und erzeugt beim Hineinzoomen einen echten rekonstruierten Wert pro
      Pixelspalte.  Dieselbe Rekonstruktion verfeinert den Triggeraugenblick
      zwischen zwei Abtastwerten (eine Bisektion auf der rekonstruierten Kurve,
@@ -291,8 +307,8 @@
      auf geradlinige Interpolation zurück.</p>
   <p>Beim Herauszoomen kehrt sich das Problem um: Viele Abtastwerte fallen
      auf einen Pixel.  Der Kern wird dann verbreitert, sodass er gleichzeitig
-     als Anti-Alias-Tiefpass bei der eigenen Abtastrate des Bildschirms wirkt —
-     ohne ihn würde Energie zwischen dem „Pixel-Nyquist" und dem
+     als Anti-Alias-Tiefpass bei der eigenen Abtastrate des Bildschirms wirkt -
+     ohne ihn würde Energie zwischen dem "Pixel-Nyquist" und dem
      Aufnahme-Nyquist in störende Schwebungsmuster auf der Kurve falten.
      Ab etwa 5 Abtastwerten pro Pixel wechselt das Oszilloskop auf
      spaltenweise Min/Max-Hüllkurvendarstellung.</p>
@@ -309,7 +325,7 @@
      Netzfrequenz driftet um einige Zehntel Hertz, und die <i>k</i>-te
      Oberwelle driftet <i>k</i>× so weit, sodass ein fester Kammfilter in der
      Tiefe nach oben verliert. Durch Messung des wahren Netz-Grundtons aus
-     einem Referenzblock — mit automatischer Erkennung von 50 vs. 60 Hz — und
+     einem Referenzblock - mit automatischer Erkennung von 50 vs. 60 Hz - und
      Nachstimmung des einzelnen Werts <i>N</i> verschiebt sich jede Kerbe
      gemeinsam auf ihr genaues <i>k</i>·<i>f</i>₀. <i>N</i> ist im Allgemeinen
      nicht ganzzahlig, daher werden die Verzögerungen linear zwischen den beiden
@@ -321,8 +337,132 @@
      <em>welcher</em> Peak der Ton ist (er unterdrückt ein oft dominantes
      Netzbrummen, sodass der Ton zum spektralen Peak wird), und misst dann die
      wahre Frequenz dieses Tons erneut am <em>rohen</em>, ungekerbten Signal in
-     einem engen Band um den gefundenen Peak — schmal genug, dass keine
+     einem engen Band um den gefundenen Peak - schmal genug, dass keine
      Netzoberwelle (Zehntel Hertz entfernt) konkurriert.</div>
+
+  <h2 id="histogram">Das Amplitudenhistogramm: wie oft, nicht wann</h2>
+  <p>Das Signalbild beantwortet die Frage "wie sieht die Wellenform über die Zeit
+     aus". Das Amplitudenhistogramm beantwortet eine andere Frage zu denselben
+     Abtastwerten: <b>wie viel ihrer Zeit verbringt das Signal bei welcher
+     Spannung</b>. Die Zeit wird weggeworfen und nur die Belegung behalten, und
+     genau das macht das Bild wertvoll - die Form der Verteilung weist den
+     Charakter des Signals auf einen Blick aus, unabhängig von seiner
+     Frequenz.</p>
+  <p>Ein Sinus verbringt die meiste Zeit nahe seinen Umkehrpunkten, wo er sich
+     langsam bewegt, und rast durch die Null. Seine Wahrscheinlichkeitsdichte ist
+     die Arkussinus-Verteilung, und die Badewanne auf dem Bildschirm ist eben
+     diese Kurve:</p>
+  <div class="eq">
+      <i>p</i>(<i>v</i>) = 1 / (π √(<i>A</i>² − <i>v</i>²)),
+      &nbsp;|<i>v</i>| &lt; <i>A</i><span class="no">(8)</span></div>
+  <p>die bei ±<i>A</i> ins Unendliche steigt und bei null am flachsten ist.
+     Breitbandiges Rauschen zeichnet stattdessen eine Gaußsche Glocke; ein
+     übersteuertes Signal häuft die an der Begrenzung verbrachte Zeit zu einer
+     Spitze bei dieser Spannung; und eine nur einseitig übersteuerte Wellenform
+     zeigt sich als ungleiche Balken um die Mittellinie. Nichts sonst am
+     Messplatz trennt diese drei Fälle so unmittelbar.</p>
+
+  <h3 id="histogram-raw">Genau so gezählt, wie erfasst</h3>
+  <p>Die Abtastwerte werden <b>vor</b> der Hochfrequenz-Bereinigung, vor der
+     DC-Entfernung und vor dem Netz-Kammfilter in Bins einsortiert - aus
+     derselben Überlegung heraus wie beim
+     <a href="#measure">Messdurchlauf</a>. Eine nach einem Anzeigefilter
+     genommene Verteilung wäre eine Verteilung unserer Darstellung statt des
+     Signals, und gerade der Tiefpass verschmälert genau die Ausläufer, die zu
+     zeigen das Histogramm da ist.</p>
+
+  <h3 id="histogram-range">Die Auflösung richtet sich nach dem Signal, nicht nach dem Wandler</h3>
+  <p>Die naheliegende Konstruktion - den Vollausschlag in eine feste Anzahl Bins
+     zu teilen - bindet die Auflösung an den Bereich des Wandlers statt an das,
+     was gemessen wird. Auf einer Karte mit einem Vollausschlag von
+     1,79&nbsp;V<sub>RMS</sub> sind 2048 Teilungen ein Bin von 2,5&nbsp;mV: sechs
+     Größenordnungen gröber als die 1,18&nbsp;nV, die ein 32-Bit-Wandler
+     tatsächlich auflöst - ein Millivolt-Residuum fiele also zu zwei oder drei
+     Balken zusammen und sagte nichts aus.</p>
+  <p>Der Bereich wird daher aus <b>der eigenen Spitze des Signals</b> bemessen,
+     symmetrisch um null, und neu gesetzt, sobald das Signal ihn übersteigt. Die
+     verwendete Spitze ist eine <em>stabile</em> - über das
+     Messmittelungsfenster des Oszilloskops zusammengefasst -, denn die Spitze
+     eines einzelnen Blocks ist eine Zufallsziehung aus dem Ausläufer des Signals,
+     und darauf zu bereichen würde die Verteilung bei allem Verrauschten in
+     nahezu jedem Durchlauf neu starten.</p>
+  <div class="diagram">
+  <svg viewBox="0 0 820 150" width="100%" height="150" preserveAspectRatio="xMinYMid meet"
+       xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <rect x="60" y="30" width="90" height="40" fill="#fffbe8" stroke="#cc9"/>
+    <rect x="150" y="30" width="540" height="40" fill="#cdf" stroke="#88a"/>
+    <rect x="690" y="30" width="90" height="40" fill="#fffbe8" stroke="#cc9"/>
+    <text x="105" y="55" text-anchor="middle" fill="#557">1/8</text>
+    <text x="735" y="55" text-anchor="middle" fill="#557">1/8</text>
+    <text x="420" y="55" text-anchor="middle" fill="#446">Signal belegt die mittleren 6/8</text>
+    <line x1="420" y1="20" x2="420" y2="80" stroke="#c33" stroke-width="1.5"/>
+    <text x="420" y="16" text-anchor="middle" fill="#c33">0 V</text>
+    <text x="60" y="92" text-anchor="start" fill="#557">−Spitze − Reserve</text>
+    <text x="780" y="92" text-anchor="end" fill="#557">+Spitze + Reserve</text>
+    <text x="105" y="112" text-anchor="middle" fill="#557">Reserve</text>
+    <text x="105" y="128" text-anchor="middle" fill="#557">= Toleranz</text>
+    <text x="420" y="120" text-anchor="middle" fill="#557">256 Mikro-Bins je gezeichnetem Balken</text>
+  </svg>
+  </div>
+  <p>Zwei Konstanten tragen den Rest:</p>
+  <ul>
+    <li><b>Ein Achtel des Bereichs an jedem Ende ist Reserve</b>, und diese
+        Reserve <em>ist</em> die Neubereichs-Toleranz. Das Signal darf in sie
+        hineinwandern, ohne einen Neustart zu erzwingen, und bis sie
+        überschritten wird, wird nie ein Abtastwert begrenzt. Auf dem Bildschirm
+        kostet das nichts, weil die Anzeige nur über die belegten Bins
+        zusammenfasst - ungenutzte Polsterung wird nie zu einem Balken.</li>
+    <li><b>256 Mikro-Bins werden je gezeichnetem Balken zusammengefasst.</b>
+        Gezählt wird damit stets weit feiner als das Bild, und der Renderer
+        summiert Gruppen von Mikro-Bins zu Balken - ein Balken ist also nie
+        schmaler als ein Mikro-Bin, und der Plot kann nicht in einen Kamm aus
+        Streifen mit Lücken zerfallen. Deshalb ist die Balkenzahl unter
+        Einstellungen ▸ Oszilloskop auch reine Anzeigeauflösung: sie zu ändern
+        gruppiert das bereits Gezählte neu, statt es zu verwerfen.</li>
+  </ul>
+  <p>Die Bin-Breite ist nach unten auf einen Wandler-Code begrenzt - 1/2³¹ in
+     normierten Einheiten, dem tiefsten von der Anwendung unterstützten
+     Aufnahmeformat. Darunter könnte ein Bin nur noch die Lücken <em>zwischen</em>
+     den Codes fassen, und ein völlig flaches Signal ergäbe einen Bereich der
+     Breite null.</p>
+
+  <h3 id="histogram-rerange">Warum ein Neubereich die Zählungen löscht</h3>
+  <p>Wenn das Signal nicht mehr hineinpasst, wird der Bereich neu gesetzt und die
+     Zählungen werden <b>gelöscht</b> - mit Absicht. Auf einem wesentlich anderen
+     Pegel gesammelte Zählungen beschreiben ein anderes Signal, und beide
+     zusammenzuführen hieße, zwei Grundgesamtheiten als eine Verteilung
+     auszugeben. Ein Neustart ist das ehrliche Zeichen dafür, dass sich die
+     Messung geändert hat. Ein Signal, das <em>kleiner</em> wird, behält seinen
+     Bereich - und wird damit einfach gröber -, bis Sie zurücksetzen, was auf das
+     neu bereicht, was jetzt anliegt. Zwischen Neustarts ist die Sammlung
+     unbegrenzt: sie übersteht eine V/Div-Änderung, eine Bereichsumschaltung und
+     eine Neukalibrierung, weil keine davon eine einzige Zählung verändert.</p>
+
+  <h3 id="histogram-axis">Absolute Bins, eine mittelwertbezogene Achse</h3>
+  <p>Zwei Schichten teilen sich die Arbeit, und diese Aufteilung ist es, die
+     einen DC-Offset ehrlich hält. Der <b>Akkumulator</b> ist einheitenlos und
+     absolut: er bekommt normierte Abtastwerte, speichert nichts als Zählungen,
+     und sein Bereich ist auf null zentriert - ein Signal mit Offset sitzt also
+     genau um diesen Offset außermittig. Nichts zieht vor dem Einsortieren einen
+     laufenden Mittelwert ab; das täte, würde es eine einzige physikalische
+     Spannung in verschiedene Bins einsortieren, solange sich die Schätzung noch
+     einschwingt, und so eine einzelne Verteilung zu zweien verschmieren.</p>
+  <p>Die <b>Anzeige</b> legt dann ein symmetrisches Fenster um den eigenen
+     Mittelwert der Verteilung über diese Bins und beschriftet jeden Teilstrich
+     als Abstand davon, sodass <b>0&nbsp;V immer die Mittellinie ist</b> und die
+     sichtbare Spanne bei einem Signal mit Offset nicht aus dem Bild rutschen
+     kann. Weil die Achse nur eine Beschriftung der Bin-Grenzen ist -
+     Bin-Grenzen multipliziert mit den Spitzenvolt des Kanals -, <b>beschriftet</b>
+     eine Neukalibrierung die Achse neu, ohne eine einzige Zählung anzutasten.
+     Deshalb ist eine Bereichsumschaltung mitten in der Sammlung kein Grund, neu
+     anzufangen.</p>
+  <div class="note"><b>Nicht das Code-Dichte-Histogramm.</b> Die
+     Kommandozeilen-Modi für die ADC-Linearität bauen ebenfalls ein Histogramm,
+     aber über ADC-<em>Codes</em>, ein Bin je Code, verglichen mit einer idealen
+     Dichte, um DNL und INL zu erhalten - siehe
+     <a href="algorithms.html#adc">die Algorithmen-Referenz</a>. Jenes
+     charakterisiert den Wandler, dieses das Signal, und ihre Bin-Achsen bedeuten
+     Verschiedenes.</div>
 
   <h2 id="who">Einordnung</h2>
   <p>Das Oszilloskop teilt sein Aufnahmegerät und seinen Ringpuffer mit dem
@@ -336,22 +476,22 @@
   <h2 id="refs">Literatur</h2>
   <ol class="refs">
     <li id="ref-linpred"><a href="#cite-1">1.</a>
-        Die Sinus-Rekurrenz (1) ist der Fall zweiter Ordnung der linearen Prädiktion —
+        Die Sinus-Rekurrenz (1) ist der Fall zweiter Ordnung der linearen Prädiktion -
         <a href="https://en.wikipedia.org/wiki/Linear_prediction">Wikipedia: Linear prediction</a>.</li>
     <li id="ref-goertzel"><a href="#cite-2">2.</a>
-        Goertzel-Algorithmus (Einzel-Bin-DFT) —
+        Goertzel-Algorithmus (Einzel-Bin-DFT) -
         <a href="https://en.wikipedia.org/wiki/Goertzel_algorithm">Wikipedia: Goertzel algorithm</a>.</li>
     <li id="ref-hann"><a href="#cite-3">3.</a>
-        Hann-Fenster und spektrale Leckage —
+        Hann-Fenster und spektrale Leckage -
         <a href="https://en.wikipedia.org/wiki/Window_function#Hann_window">Wikipedia: Hann window</a>.</li>
     <li id="ref-shannon"><a href="#cite-4">4.</a>
-        Das Abtasttheorem und Formel (6) —
-        <a href="https://en.wikipedia.org/wiki/Whittaker%E2%80%93Shannon_interpolation_formula">Wikipedia: Whittaker–Shannon interpolation formula</a>.</li>
+        Das Abtasttheorem und Formel (6) -
+        <a href="https://en.wikipedia.org/wiki/Whittaker%E2%80%93Shannon_interpolation_formula">Wikipedia: Whittaker-Shannon interpolation formula</a>.</li>
     <li id="ref-lanczos"><a href="#cite-5">5.</a>
-        Der in der Praxis verwendete Fenster-sinc-Kern —
+        Der in der Praxis verwendete Fenster-sinc-Kern -
         <a href="https://en.wikipedia.org/wiki/Lanczos_resampling">Wikipedia: Lanczos resampling</a>.</li>
     <li id="ref-comb"><a href="#cite-6">6.</a>
-        Kammfilter (die Rückkopplungsform von (7)) —
+        Kammfilter (die Rückkopplungsform von (7)) -
         <a href="https://en.wikipedia.org/wiki/Comb_filter">Wikipedia: Comb filter</a>.</li>
   </ol>
 
