@@ -5,7 +5,7 @@
 cd "$(dirname "$0")" || exit 1
 
 command -v java >/dev/null 2>&1 || {
-  echo "Java 17+ not found on PATH.  Install it (e.g. 'sudo apt install openjdk-17-jre' or https://adoptium.net/)."
+  echo "Java 17+ not found on PATH."
   exit 1
 }
 

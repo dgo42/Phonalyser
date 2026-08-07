@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  phonalyser-app — the distribution module.  Carries NO source of its own: it
+  phonalyser-app - the distribution module.  Carries NO source of its own: it
   exists because a Maven reactor builds the aggregator BEFORE its modules, so
   the build root cannot package artifacts produced by its own children.  This
   module is declared last, depends on every other module, and does the two
@@ -9,7 +9,7 @@
     1. the FAT platform jar (maven-assembly-plugin + src/main/assembly/fat-jar.xml)
     2. the native installer / app-image (jpackage)
 
-  The packaging ASSETS stay at the build root — this pom reaches them with
+  The packaging ASSETS stay at the build root - this pom reaches them with
   ${project.basedir}/../.. so nothing had to be relocated.
 
   Backends are RUNTIME dependencies: the app names none of them, it just needs
@@ -23,7 +23,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.1.1</version>
+        <version>1.2.0</version>
         <relativePath>../phonalyser-parent</relativePath>
     </parent>
 
@@ -31,16 +31,19 @@
     <name>Phonalyser :: app (fat jar + installer)</name>
 
     <properties>
-        <!-- This module sits at modules/phonalyser-app, so the build root — which
-             carries the packaging assets and the native libs — is two levels up,
+        <!-- This module sits at modules/phonalyser-app, so the build root - which
+             carries the packaging assets and the native libs - is two levels up,
              and its sibling modules are one.  The staging steps below tolerate a
              missing native-lib folder. -->
         <repo.root>${project.basedir}/../..</repo.root>
         <modules.root>${project.basedir}/..</modules.root>
-        <!-- PortAudio's JNA binding lives in core, so its DLL does too.  The copy in
-             the repo-root lib/windows is a STALE build with WDM-KS compiled out
-             (rc=-9979); the resource copy here is the one that works, and it is the
-             one that must reach the installer. -->
+        <!-- PortAudio's JNA binding lives in core, so its DLL does too, and the
+             MODULE resource is the authoritative copy - it is the one that must
+             reach the installer.  The repo-root lib/windows copy was once a
+             STALE build with WDM-KS compiled out (rc=-9979); it has since been
+             refreshed and the two are byte-identical today.  Sourcing the module
+             resource is still the rule: provenance should not depend on the two
+             happening to match. -->
         <core.resources>${modules.root}/phonalyser-core/src/main/resources</core.resources>
         <!-- Staged from each module's BUILD OUTPUT, not from its src/: the reactor
              has already produced these by the time this module packages, and a
@@ -58,6 +61,14 @@
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-qa40x-gui</artifactId>
+        </dependency>
+        <!-- The net bridge's UI layer: the server list and the combo glue.  Like
+             backend-qa40x-gui it is discovered through the service loader, so it
+             is the APP that has to put it on the class path - phonalyser-gui
+             must not, or the plug-in would depend on the application. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-net-gui</artifactId>
         </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
@@ -93,6 +104,10 @@
             <artifactId>backend-loopback</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!-- The client half of the net bridge only.  server-net is deliberately
+             absent: the headless server is its own application with its own fat
+             jar (server-net's server-dist profile), not a mode of the desktop
+             one, and the wire format it shares rides in through backend-net. -->
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-net</artifactId>
@@ -111,7 +126,7 @@
                  across into another module's src/ makes this module's build depend
                  on a path rather than on a dependency, and an IDE rejects it
                  outright ("access ... outside of project base directory").  The
-                 jar layout already is i18n/… and help/…, so unpacking into
+                 jar layout already is i18n/... and help/..., so unpacking into
                  target/ lands both exactly where the staging step below expects. -->
 
             <plugin>
@@ -122,11 +137,17 @@
                         <manifest>
                             <mainClass>${app.mainClass}</mainClass>
                         </manifest>
+                        <!-- log4j ships Java-9+ classes under META-INF/versions/;
+                             without this flag the merged jar hides them and log4j
+                             warns "does not support multi-release JARs" at startup. -->
+                        <manifestEntries>
+                            <Multi-Release>true</Multi-Release>
+                        </manifestEntries>
                     </archive>
                     <descriptors>
                         <descriptor>${repo.root}/src/main/assembly/fat-jar.xml</descriptor>
                     </descriptors>
-                    <!-- Historical published name, not the module's artifactId — see
+                    <!-- Historical published name, not the module's artifactId - see
                          app.mainJar in phonalyser-parent. -->
                     <finalName>phonalyser-${project.version}-${platform.id}</finalName>
                     <appendAssemblyId>false</appendAssemblyId>
@@ -156,7 +177,7 @@
                          BUILD OUTPUT: the reactor has already produced it by now,
                          and a module reaching into a sibling's src/ is both a
                          layering inversion and something an IDE rejects outright.
-                         Kept in THIS plugin block rather than a second one — Maven
+                         Kept in THIS plugin block rather than a second one - Maven
                          merges duplicate plugin declarations and the merge reorders
                          executions, which once ran the jpackage staging below
                          before the assembly had written the fat jar. -->
@@ -188,7 +209,7 @@
                          the JavaSound SPI, so nothing compiles against it and the
                          assembly's dependencySet cannot pull it in.  Unpack its classes
                          (and its own META-INF/services registration) into this module's
-                         output BEFORE the jar is built, so the FAT jar carries them —
+                         output BEFORE the jar is built, so the FAT jar carries them -
                          the bare platform jars have no installer to stage lib/windows.
                          The matching DLL rides along as a win32-* resource in
                          backend-javasound.  Absent on non-Windows: never fail for it. -->
@@ -297,6 +318,147 @@
     </build>
 
     <profiles>
+        <!-- Per-platform jpackage configuration.  The OS-activated profiles in
+             phonalyser-parent carry only properties (jpackage.type, natives,
+             SWT artifact); everything the INSTALLER itself needs per platform -
+             icons, resource-dir templates, platform launcher options - lives
+             here, beside the one jpackage plugin that consumes it. -->
+        <profile>
+            <id>windows-jpackage</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                    <arch>amd64</arch>
+                </os>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <icon>${repo.root}/modules/phonalyser-gui/src/main/resources/icons/phonalyser.ico</icon>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Windows installer-only jpackage options.  The win-menu, win-shortcut,
+             win-menu-group and win-upgrade-uuid flags are rejected by jpackage
+             when the type is app-image.  The Windows release builds an app-image
+             (then makeappx to MSIX, see PACKAGING.md) via
+             -Djpackage.type=APP_IMAGE, so these flags MUST NOT be applied on
+             that path.  This profile activates ONLY on a plain Windows build
+             with NO -Djpackage.type override - the EXE installer - so
+             "mvn clean package" yields an EXE with a Start-menu entry while
+             -Djpackage.type=APP_IMAGE still builds a clean app-image.  (Maven
+             ANDs the two activation conditions.) -->
+        <profile>
+            <id>windows-installer-extras</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                    <arch>amd64</arch>
+                </os>
+                <property>
+                    <name>!jpackage.type</name>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <!-- Stable installer UpgradeCode: keeps every build part of the
+                                 same product line so a newer app.version performs a MAJOR
+                                 UPGRADE (removes the old, installs the new) instead of failing
+                                 with "Another version of this product is already installed".
+                                 NEVER change this GUID across releases; pair it with a strictly
+                                 increasing app.version (the installer ProductVersion). -->
+                            <winUpgradeUuid>dd3443af-6db7-442d-9fd3-dd39832a5ae5</winUpgradeUuid>
+                            <!-- Start-menu + Desktop shortcuts, with an installer dialog
+                                 letting the user choose whether to create them. -->
+                            <winMenu>true</winMenu>
+                            <winMenuGroup>Phonalyser</winMenuGroup>
+                            <winShortcut>true</winShortcut>
+                            <winShortcutPrompt>true</winShortcutPrompt>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>linux-jpackage</id>
+            <activation>
+                <os>
+                    <family>unix</family>
+                    <name>linux</name>
+                </os>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <icon>${repo.root}/modules/phonalyser-gui/src/main/resources/icons/phonalyser.png</icon>
+                            <!-- DEB maintainer-script overrides (phonalyser.postinst/.postrm):
+                                 install the QA40x udev rule (70-qa40x.rules) so the analyzer
+                                 opens without LIBUSB_ERROR_ACCESS.  jpackage token-substitutes
+                                 the scripts like its stock templates. -->
+                            <resourceDir>${repo.root}/src/main/jpackage/linux</resourceDir>
+                            <linuxPackageDeps>libusb-1.0-0</linuxPackageDeps>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>macos-jpackage</id>
+            <activation>
+                <os>
+                    <family>mac</family>
+                </os>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <icon>${repo.root}/modules/phonalyser-gui/src/main/resources/icons/phonalyser.icns</icon>
+                            <!-- Custom Info.plist template adding NSMicrophoneUsageDescription
+                                 so macOS prompts for mic access on first CoreAudio capture. -->
+                            <resourceDir>${repo.root}/src/main/jpackage/macos</resourceDir>
+                            <!-- SWT on macOS must run on the main thread. -->
+                            <javaOptions combine.children="append">
+                                <option>-XstartOnFirstThread</option>
+                            </javaOptions>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>csjsound-ide-debug</id>
+            <activation>
+                <property><name>m2e.version</name></property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>com.cleansine</groupId>
+                    <artifactId>csjsound-provider</artifactId>
+                    <version>1.0-SNAPSHOT</version>
+                    <scope>system</scope>
+                    <systemPath>${repo.root}/lib/windows/csjsound-provider.jar</systemPath>
+                </dependency>
+            </dependencies>
+        </profile>
         <!-- jpackage is opt-out: `mvn -Dskip.jpackage=true package` builds only the
              fat jar, which is what you want while iterating on the module split. -->
         <profile>
@@ -319,7 +481,7 @@
             </build>
         </profile>
 
-        <!-- Docs → PDF, unchanged from the single-module build; the converter
+        <!-- Docs -> PDF, unchanged from the single-module build; the converter
              source still lives at the PoC root. -->
         <profile>
             <id>pdf</id>
