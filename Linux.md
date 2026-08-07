@@ -1,6 +1,6 @@
 # Running Phonalyser on Linux
 
-The JAVASOUND backend talks to ALSA via the JDK's bundled native bridge —
+The JAVASOUND backend talks to ALSA via the JDK's bundled native bridge -
 no extra packages are needed beyond a working sound stack.  The only
 common gotcha is the **`audio` group**: many distros restrict raw audio
 device access to members of that group, and a fresh user account isn't
@@ -20,7 +20,7 @@ If the command prints nothing, add yourself:
 sudo usermod -aG audio "$USER"
 ```
 
-Then **log out and log back in** (or reboot) — group membership is read
+Then **log out and log back in** (or reboot) - group membership is read
 at login.  `newgrp audio` works as a one-shot for the current shell but
 doesn't affect already-running desktop processes, so a full re-login is
 simpler.
@@ -38,7 +38,7 @@ You should see entries owned by `root:audio` with mode `rw-rw----`.
 Most modern desktops (Ubuntu 22.04+, Fedora 36+, Arch with default
 install) route audio through **PulseAudio** or **PipeWire** rather than
 talking to ALSA directly.  Both transparently resample everything to a
-single mix rate — typically 48 kHz / 24-bit — regardless of what the
+single mix rate - typically 48 kHz / 24-bit - regardless of what the
 hardware actually supports.
 
 If you need bit-exact high-rate playback (96 / 192 / 384 / 768 kHz):
@@ -89,11 +89,11 @@ log out/in.
 The Preferences dialog filters audio backends to those that work on the
 running OS.  On Linux you'll only see **JAVASOUND** (WASAPI / WDM-KS are
 Windows-only and hidden).  Once selected, the **Device** dropdown lists
-every JavaSound mixer the JDK reports — pick the one whose name matches
+every JavaSound mixer the JDK reports - pick the one whose name matches
 your hardware.
 
 If no devices appear, the most common causes are:
 
 * User not in the `audio` group (see §1).
-* The device is held exclusively by another application — close anything
+* The device is held exclusively by another application - close anything
   that might be capturing or playing audio and retry.
