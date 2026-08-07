@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — Windows-Eingabegerät (Abtastrate)</title>
+  <title>Phonalyser.web - Windows-Eingabegerät (Abtastrate)</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -15,7 +15,7 @@
      <a href="preferences.html#prefs-audio">Einstellungen ▸ Audio</a> wählen.
      <b>Phonalyser.web kann das nicht.</b>  Ein Browser-Tab nimmt über die
      Mikrofon-/Line-in-Berechtigung auf, und der Browser liefert genau das,
-     womit das Gerät ohnehin bereits läuft — sein
+     womit das Gerät ohnehin bereits läuft - sein
      <em>Windows-Shared-Mode-Format</em>.  Die Anwendung kann diese Rate
      zwar <em>auslesen</em>, aber nicht <em>festlegen</em>.  Um also mit der
      vollen Bandbreite Ihrer Karte zu messen, müssen Sie die Rate zuerst in
@@ -23,12 +23,12 @@
 
   <div class="note">Bleibt das Gerät bei seinen voreingestellten 44,1 oder
      48&nbsp;kHz, analysieren Sie ein Band, das bei ~22 bzw. 24&nbsp;kHz endet
-     — unabhängig von der gewählten FFT-Länge: die Abtastwerte darüber
+     - unabhängig von der gewählten FFT-Länge: die Abtastwerte darüber
      existieren schlicht nicht.  Stellen Sie die höchste vom Gerät angebotene
      Rate ein, bevor Sie sich auf eine Messung verlassen.</div>
 
   <h2 id="set-input">Die Eingaberate in Windows einstellen</h2>
-  <p><img src="img/input-dev-samplerate.png" alt="Windows-Sound-Systemsteuerung — Reiter „Erweitert“ des Aufnahmegeräts, Standardformat auf 24 Bit, 192000 Hz gesetzt"/></p>
+  <p><img src="img/input-dev-samplerate.png" alt="Windows-Sound-Systemsteuerung - Reiter "Erweitert" des Aufnahmegeräts, Standardformat auf 24 Bit, 192000 Hz gesetzt"/></p>
   <ol>
     <li>Öffnen Sie die <b>Einstellungen</b> (oder die klassische
         <b>Systemsteuerung</b>) und gehen Sie zu <b>Sound</b>.</li>
@@ -36,7 +36,7 @@
         Sie zum Messen verwenden (der ADC / Line-in), und öffnen Sie dessen
         <b>Eigenschaften</b>.</li>
     <li>Wählen Sie auf dem Reiter <b>Erweitert</b> unter <b>Standardformat</b>
-        das höchste vom Gerät angebotene Format — zum Beispiel
+        das höchste vom Gerät angebotene Format - zum Beispiel
         <code>24 Bit, 192000 Hz</code> (oder <code>384000 Hz</code>, wenn die
         Hardware es anbietet).</li>
     <li>Klicken Sie auf <b>Übernehmen</b> und dann auf <b>OK</b>.  Laden Sie
@@ -53,10 +53,10 @@
      Browsers, und der Browser rendert mit der Windows-Shared-Mode-Rate des
      <em>Ausgabegeräts</em>.  Stimmt die interne Rate der Anwendung nicht mit
      der Geräterate überein, führt der Browser ein <b>stilles Resampling</b>
-     auf die Geräterate durch — eine unsichtbare Stufe, die einen eigentlich
+     auf die Geräterate durch - eine unsichtbare Stufe, die einen eigentlich
      sauberen Ton verfälscht.  Erkennt der Generator dies, gibt er eine Warnung
      wie diese aus:</p>
-  <p><code>WARNING: output device runs at 48000 Hz — the browser silently
+  <p><code>WARNING: output device runs at 48000 Hz - the browser silently
      resamples 192000 Hz to it; set the Windows output device format to
      192000 Hz for a clean signal</code></p>
   <p>Die Abhilfe ist identisch: Öffnen Sie in <b>Sound</b> den Reiter

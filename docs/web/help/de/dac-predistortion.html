@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — DAC-Vorverzerrungsassistent</title>
+  <title>Phonalyser.web - DAC-Vorverzerrungsassistent</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -11,19 +11,19 @@
 
   <h1>DAC-Vorverzerrungsassistent</h1>
   <p>Diese Seite beschreibt die Steuerelemente des Assistenten.  <em>Warum</em>
-     er so arbeitet, wie er arbeitet — das zwingend nötige Doppel-T-Kerbfilter,
+     er so arbeitet, wie er arbeitet - das zwingend nötige Doppel-T-Kerbfilter,
      warum die Grundwelle vom Generator genommen wird, wie tiefe kohärente
      Mittelung die Oberwellen herausgräbt und wie die Korrekturschleife
-     konvergiert — steht im
+     konvergiert - steht im
      <a href="theory/dac-predistortion.html">Funktionsprinzip ▸
      DAC-Vorverzerrung</a>.</p>
 
   <p>Der Assistent drückt die <em>eigene</em> Oberwellenverzerrung des DAC, sodass
      das Stimulus-Signal sauberer ist, als es der Wandler von sich aus erzeugen
-     kann — was der <a href="fft.html">FFT-Analysator</a> dann zeigt, ist die
+     kann - was der <a href="fft.html">FFT-Analysator</a> dann zeigt, ist die
      Verzerrung des Prüflings, nicht die der Quelle.  Er misst die Oberwellen des
      DAC hinter einem Kerbfilter und führt eine gleich große, entgegengesetzte
-     Korrektur an den laufenden Generator zurück — rundenweise wiederholt, bis die
+     Korrektur an den laufenden Generator zurück - rundenweise wiederholt, bis die
      Verzerrung Ihr Ziel erreicht oder sich nicht mehr verbessert.  Das Ergebnis
      wird als <code>.dpd</code>-Datei gespeichert und auf die
      <a href="generator.html#generator-corrections">kompensierten</a>
@@ -31,7 +31,7 @@
 
   <div class="note"><b>Ein passives Doppel-T-Kerbfilter ist Pflicht.</b>
      Schalten Sie ein passives Doppel-T-Kerbfilter, abgestimmt auf die
-     Grundwelle, zwischen den Prüfling und den ADC — sonst setzen die eigenen
+     Grundwelle, zwischen den Prüfling und den ADC - sonst setzen die eigenen
      Oberwellen des ADC das Grundrauschen und die Schleife kompensiert am Ende
      den ADC, nicht den DAC.  Stimmen Sie es zuerst mit dem
      <a href="tune-notch.html">Kerbfilter-Abgleichassistenten</a> ab.  Siehe
@@ -68,11 +68,11 @@
   </div>
   <ol class="features">
     <li><b>Ablauf.</b>  Das zwingend nötige Doppel-T-Kerbfilter und wie die
-        geschlossene Schleife arbeitet — die Oberwellen messen, eine gleich
+        geschlossene Schleife arbeitet - die Oberwellen messen, eine gleich
         große, entgegengesetzte Korrektur zurückführen, jede Runde
         wiederholen.</li>
     <li><b>Statuszeile.</b>  Die laufende Phase: den Ton ausrichten, eine Runde
-        mitteln, die Korrektur anwenden oder einschwingen — hier <em>Ziel-THD
+        mitteln, die Korrektur anwenden oder einschwingen - hier <em>Ziel-THD
         erreicht</em>.</li>
     <li><b>FFT-Einstellungen.</b>  Größe, Abtastrate und Fenster,
         schreibgeschützt aus dem <a href="fft.html">FFT</a>-Bereich
@@ -80,12 +80,12 @@
     <li><b>Konvergenz-Diagramm.</b>  Die Verzerrung jeder abgeschlossenen Runde
         auf einer logarithmischen Achse, fallend zur roten Ziellinie.</li>
     <li><b>Fortschritts-Anzeigen.</b>  Runde, Mittelungen, die aktuelle und
-        beste THD sowie SNR / SINAD / Grundwelle / Grundrauschen —
+        beste THD sowie SNR / SINAD / Grundwelle / Grundrauschen -
         <a href="#dpd-readouts">Was Sie sehen</a>.</li>
     <li><b>Mittelungen &amp; Ziel.</b>  Mittelungen pro Runde und die Ziel-THD
-        zum Stoppen — <a href="#dpd-controls">Steuerelemente</a>.</li>
+        zum Stoppen - <a href="#dpd-controls">Steuerelemente</a>.</li>
     <li><b>Schaltflächen.</b>  Start / Runde&nbsp;stoppen / Speichern /
-        Schließen — <a href="#dpd-controls">Steuerelemente</a>.</li>
+        Schließen - <a href="#dpd-controls">Steuerelemente</a>.</li>
   </ol>
 
   <h2 id="dpd-open">Den Assistenten öffnen</h2>
@@ -93,7 +93,7 @@
      Werkzeugleiste des FFT-Bereichs (links neben der Aufnahme-Schaltfläche, nur
      im Live-Bereich).  Vor dem Start muss der Generator bereits ein
      <b>Sinus</b>-, <b>kompensiertes Sinus</b>- oder <b>Zweiton</b>-Signal
-     <b>abspielen</b> — die Schleife löscht die Oberwellen eines Einzeltons oder
+     <b>abspielen</b> - die Schleife löscht die Oberwellen eines Einzeltons oder
      die Intermodulationsprodukte eines Zweiton-Signals; jede andere Signalform
      wird abgewiesen.  Der Assistent betreibt die FFT mit unbegrenzter kohärenter
      Mittelung, wobei die
@@ -109,7 +109,7 @@
     <tr><td>Mittelungen, n</td>
         <td>FFT-Mittelungen pro Runde (Minimum 10).  Jede Runde mittelt diese
             Anzahl Frames und lässt die Zahl dann proportional dazu wachsen, wie
-            weit die Verzerrung bereits gefallen ist — späte Runden mitteln also
+            weit die Verzerrung bereits gefallen ist - späte Runden mitteln also
             weit tiefer als frühe.  Das Mausrad schrittet um 10, die Pfeile um
             1.</td></tr>
     <tr><td>Ziel-THD, %</td>
@@ -122,7 +122,7 @@
             Stopp.  Die Schleife stoppt auch selbst, wenn sie das Ziel erreicht
             oder stehen bleibt.</td></tr>
     <tr><td>Runde stoppen</td>
-        <td>Die aktuelle Mittelungsrunde <em>jetzt</em> beenden — die bisher
+        <td>Die aktuelle Mittelungsrunde <em>jetzt</em> beenden - die bisher
             gemessene Korrektur anwenden und zur nächsten Runde übergehen.
             Verwenden Sie dies, wenn sich das Spektrum nicht mehr verbessert und
             Sie die verbleibenden Mittelungen nicht abwarten möchten.  Nur aktiv,
@@ -146,15 +146,15 @@
 
   <h2 id="dpd-readouts">Was Sie sehen</h2>
   <p>Ein Block <b>FFT-Einstellungen</b> gibt Größe, Abtastrate und Fenster
-     wieder, die der Lauf aus dem FFT-Bereich übernimmt (schreibgeschützt —
+     wieder, die der Lauf aus dem FFT-Bereich übernimmt (schreibgeschützt -
      stellen Sie sie dort vorab ein).  Eine <b>Statuszeile</b> meldet die
      laufende Phase: den Ton auf seinen FFT-Bin ausrichten, Rundennummer und
      verbleibende Mittelungen, die Korrektur anwenden oder danach einschwingen.</p>
   <p>Das <b>Konvergenz-Diagramm</b> trägt die Verzerrung jeder abgeschlossenen
      Runde auf einer logarithmischen Achse auf, wobei die Marker entlang der
      Waagerechten proportional dazu abgesetzt sind, wie tief diese Runde
-     gemittelt hat — eine lange, tiefe späte Runde nimmt also mehr von der Kurve
-     ein als eine schnelle frühe — und fällt zur roten Ziellinie hin.</p>
+     gemittelt hat - eine lange, tiefe späte Runde nimmt also mehr von der Kurve
+     ein als eine schnelle frühe - und fällt zur roten Ziellinie hin.</p>
   <p>Ein Block <b>Fortschritt</b> listet die Live-Werte auf.  Für einen Einzelton
      sind das Rundennummer, die aktuelle und die letzte Runden-THD, die bisher
      beste THD, die laufende Mittelungszahl sowie THD+N, SNR, SINAD, Grundwelle

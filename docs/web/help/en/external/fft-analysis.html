@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — Further reading: FFT analysis essentials</title>
+  <title>Phonalyser.web - Further reading: FFT analysis essentials</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -16,7 +16,7 @@
      <a href="https://dewesoft.com/blog/guide-to-fft-analysis">"FFT Analysis
      (Fast Fourier Transform): The Ultimate Guide to Frequency Analysis"</a>
      by Søren Linnet Gjelstrup (Dewesoft).  All credit belongs to the
-     original — read it there for the full treatment with figures and
+     original - read it there for the full treatment with figures and
      examples.  This summary exists so the key ideas are at hand offline.</div>
 
   <h2>The core trade-off: resolution vs. time</h2>
@@ -26,7 +26,7 @@
   <p>and needs a time block of duration</p>
   <div class="eq"><i>T</i> = 1 / Δ<i>f</i><span class="no">(2)</span></div>
   <p>Finer frequency resolution therefore always costs proportionally more
-     measurement time — there is no way around (2), only ways to spend the
+     measurement time - there is no way around (2), only ways to spend the
      time well (averaging, overlap).  Frequencies are only observable up to
      the Nyquist limit <i>f</i><sub>s</sub>/2.</p>
 
@@ -35,7 +35,7 @@
      whose frequency falls <em>between</em> two spectral lines violates that
      assumption at the block edges, and its energy smears
      ("leaks")<sup><a href="#ref-leak">[3]</a></sup> across
-     neighbouring lines — the level reads low and the skirt reads high.
+     neighbouring lines - the level reads low and the skirt reads high.
      Multiplying the block by a <b>window</b><sup><a href="#ref-win">[2]</a></sup>
      that tapers to zero at the edges suppresses the discontinuity.  Every
      window trades main-lobe width (frequency selectivity) against side-lobe
@@ -48,19 +48,19 @@
     <tr><td>Transients fully inside the block</td><td>Rectangular (no window)</td></tr>
   </table>
   <p>(Phonalyser.web's FFT pane offers these and several flat-top / HFT windows;
-     coherent averaging changes the trade-offs — that will be covered in the
+     coherent averaging changes the trade-offs - that will be covered in the
      FFT chapter of this help.)</p>
 
   <h2>Amplitude scaling</h2>
   <p>The same spectrum can be displayed against different references:
-     linear amplitude (same unit as the input — right for discrete tones),
+     linear amplitude (same unit as the input - right for discrete tones),
      power (amplitude squared), or spectral <em>density</em> (power or
-     amplitude normalised per Hz of bandwidth — right for noise, because a
+     amplitude normalised per Hz of bandwidth - right for noise, because a
      noise floor in density units does not move when the FFT length
      changes).  Phonalyser.web's V/√Hz unit is exactly this density scaling.</p>
 
   <h2>Averaging and overlap</h2>
-  <p>Averaging <i>n</i> spectra reduces the variance of the noise estimate —
+  <p>Averaging <i>n</i> spectra reduces the variance of the noise estimate -
      the fluctuation of an RMS-averaged spectrum falls as 1/√<i>n</i>.
      Overlapping successive blocks (typically by 2/3 or 3/4 with a Hann
      window) re-uses samples the window's taper would otherwise waste and
@@ -68,7 +68,7 @@
 
   <h2>Two-channel functions</h2>
   <p>With a reference channel, cross-spectra give the frequency-response
-     function of a system and the <b>coherence</b> — a 0…1 figure telling
+     function of a system and the <b>coherence</b> - a 0...1 figure telling
      how much of the output is linearly caused by the input.  These are the
      foundations of the frequency-response measurement described in the
      <a href="../theory/generator.html#sweeps">generator chapter</a>.</p>
@@ -77,9 +77,9 @@
   <ol class="refs">
     <li id="ref-guide">S. L. Gjelstrup,
         <a href="https://dewesoft.com/blog/guide-to-fft-analysis">"FFT Analysis (Fast Fourier Transform): The Ultimate Guide to Frequency Analysis"</a>,
-        Dewesoft Data Acquisition Knowledge Base — the original article this
+        Dewesoft Data Acquisition Knowledge Base - the original article this
         page summarises.</li>
-    <li id="ref-win"><a href="https://en.wikipedia.org/wiki/Window_function">Wikipedia: Window function</a> —
+    <li id="ref-win"><a href="https://en.wikipedia.org/wiki/Window_function">Wikipedia: Window function</a> -
         catalogue of windows with their main-lobe / side-lobe figures.</li>
     <li id="ref-leak"><a href="https://en.wikipedia.org/wiki/Spectral_leakage">Wikipedia: Spectral leakage</a>.</li>
   </ol>

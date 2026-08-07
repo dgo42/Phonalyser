@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser.web — Oscilloscope</title>
+  <title>Phonalyser.web - Oscilloscope</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -10,16 +10,16 @@
   <p class="back"><a href="index.html">◀ Back to contents</a></p>
 
   <h1>Oscilloscope</h1>
-  <p>This page covers the oscilloscope's controls.  For how it works inside —
+  <p>This page covers the oscilloscope's controls.  For how it works inside -
      triggering, sin&nbsp;x/x reconstruction between samples, mains-hum
-     rejection — see
+     rejection - see
      <a href="theory/oscilloscope.html">Theory of operation ▸
      Oscilloscope</a>.</p>
   <p>Live time-domain view of the captured signal.  Two independent
      channels (L / R) share the trigger; each has its own V/div,
      coupling, interpolation, and vertical offset.  The capture rate
      readout in the top-right corner (<code>cap/s</code>) shows how
-     many frames per second the view is rendering — or, with the
+     many frames per second the view is rendering - or, with the
      <a href="#scope-trigger-type">glitch trigger</a>, how many glitches per
      second have been caught (see
      <a href="#scope-caps">Capture-rate readout</a>).</p>
@@ -37,15 +37,15 @@
       <line x1="118" y1="47" x2="60" y2="47" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
       <circle cx="132" cy="47" r="13" fill="#c33"/>
       <text x="132" y="52" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
-      <!-- 2: trigger level — yellow horizontal marker at the edges -->
+      <!-- 2: trigger level - yellow horizontal marker at the edges -->
       <line x1="919" y1="281" x2="1020" y2="281" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
       <circle cx="905" cy="281" r="13" fill="#c33"/>
       <text x="905" y="286" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
-      <!-- 3: trigger offset — position handle at the foot of the centre line (0 s) -->
+      <!-- 3: trigger offset - position handle at the foot of the centre line (0 s) -->
       <line x1="603" y1="503" x2="516" y2="514" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
       <circle cx="617" cy="495" r="13" fill="#c33"/>
       <text x="617" y="500" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
-      <!-- 4: channel vertical-offset marker — triangle handle on the LEFT edge -->
+      <!-- 4: channel vertical-offset marker - triangle handle on the LEFT edge -->
       <line x1="128" y1="244" x2="48" y2="278" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
       <circle cx="142" cy="237" r="13" fill="#c33"/>
       <text x="142" y="242" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
@@ -64,7 +64,7 @@
   <ol class="features">
     <li><b>Channel buttons.</b>  <code>L</code> / <code>R</code>
         <a href="#scope-channel-pick">select which channel</a> drives the
-        measurement table and the movable channel-offset marker — they do
+        measurement table and the movable channel-offset marker - they do
         <em>not</em> switch settings tabs.  A button is <em>disabled</em> when
         its channel is switched off in the
         <a href="#scope-tab-left">Left</a> / <a href="#scope-tab-right">Right</a>
@@ -88,7 +88,7 @@
         it; double-click recentres); the other channel's handle is dimmed.  See
         <a href="#scope-offset-sliders">Channel offset markers</a>.</li>
     <li><b>Settings tabs.</b>  The strip along the bottom carries one tab per
-        aspect — <a href="#scope-tab-left">Left</a> /
+        aspect - <a href="#scope-tab-left">Left</a> /
         <a href="#scope-tab-right">Right</a> channel,
         <a href="#scope-tab-horizontal">Horizontal</a>,
         <a href="#scope-tab-trigger">Trigger</a>,
@@ -101,20 +101,20 @@
     <li><b>Record.</b>  Starts and stops live capture.  While recording, the
         scope and the FFT analyser share one capture session (see
         <a href="theory/ring-buffer.html#sharedcapture">capture session</a>).</li>
-    <li><b>Pan &amp; zoom (mouse wheel).</b>  Over the trace —
+    <li><b>Pan &amp; zoom (mouse wheel).</b>  Over the trace -
         <b>wheel</b>: move the trace vertically (up = up, down = down);
         <b><kbd>Shift</kbd>+wheel</b>: move it horizontally (up = right,
         down = left);
-        <b><kbd>Ctrl</kbd>+wheel</b>: vertical zoom — V/div (up = zoom in,
+        <b><kbd>Ctrl</kbd>+wheel</b>: vertical zoom - V/div (up = zoom in,
         i.e. smaller V/div);
-        <b><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+wheel</b>: horizontal zoom — s/div
+        <b><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+wheel</b>: horizontal zoom - s/div
         (up = zoom in, i.e. smaller s/div).  Both zooms are <em>anchored at the
         cursor</em>: the voltage (or time) under the pointer stays fixed while
         the scale changes around it.  The same wheel convention applies in
         every Phonalyser.web view (scope, FFT, frequency response).  For the full
-        rules — what moves, what stays fixed, the trigger offset travelling
+        rules - what moves, what stays fixed, the trigger offset travelling
         off-screen, and how it all works the same whether the scope is live,
-        stopped or showing a loaded file — see
+        stopped or showing a loaded file - see
         <a href="#scope-move-zoom">Moving &amp; zooming the signal</a> below.</li>
   </ol>
 
@@ -127,7 +127,7 @@
   <h3 id="scope-channel-pick">L / R channel pick</h3>
   <p>Select which channel drives the
      <a href="#scope-meas-table">measurement table</a> and the
-     <a href="#scope-offset-sliders">channel-offset</a> handle — they do
+     <a href="#scope-offset-sliders">channel-offset</a> handle - they do
      <em>not</em> switch settings tabs.  The button background takes the
      channel's trace colour when selected, and L and R are independent.</p>
   <p>The link to the tabs runs the other way: a header button is
@@ -143,10 +143,13 @@
 
   <h3 id="scope-histogram">Amplitude histogram</h3>
   <p>Opens and closes the
-     <a href="#scope-histogram-window">amplitude-histogram window</a>, which shows
-     how often the signal sat at each voltage.  The button stays pressed while the
-     window is open; closing the window releases it.  Collection runs only while
-     the window is open.</p>
+     <a href="#scope-histogram-window">amplitude-histogram panel</a>, which shows
+     how often the signal sat at each voltage.  The panel is part of this page -
+     drag it by its title bar to move it, drag its corner to resize it - rather
+     than a separate operating-system window, so it never disappears behind the
+     browser and it closes when the page does.  The button stays pressed while
+     the panel is open; closing the panel releases it.  Collection runs only
+     while the panel is open.</p>
 
   <h3 id="scope-gauge">Gauge (measurement-table toggle)</h3>
   <p>Toggles the entire measurement table overlay on and off.  When
@@ -168,8 +171,8 @@
      reset).  Clears the rolling-window statistics history that feeds the
      <code>avg / min / max / σ</code> columns, so the next frame starts a
      fresh averaging window.  Useful after changing test conditions.  The
-     <a href="#scope-histogram-window">amplitude histogram</a> restarts with it —
-     the same events invalidate both — and so does starting or stopping the
+     <a href="#scope-histogram-window">amplitude histogram</a> restarts with it -
+     the same events invalidate both - and so does starting or stopping the
      generator.</p>
 
   <h2 id="scope-meas-table">Measurement table</h2>
@@ -185,23 +188,52 @@
     <tr><th>Row</th><th>Meaning</th></tr>
     <tr><td id="scope-meas-vpp">Vpp</td><td>Peak-to-peak voltage (max − min over the visible frame).</td></tr>
     <tr><td id="scope-meas-vrms">Vrms</td><td>Root-mean-square voltage of the frame.</td></tr>
-    <tr><td id="scope-meas-vmean">Vmean</td><td>DC mean — useful for spotting offsets.</td></tr>
+    <tr><td id="scope-meas-vmean">Vmean</td><td>DC mean - useful for spotting offsets.</td></tr>
     <tr><td id="scope-meas-tp">Tp</td><td>Period (seconds), computed precisely as <code>1 / f</code> from the measured frequency below.</td></tr>
-    <tr><td id="scope-meas-tr">Tr</td><td>Rise time (10 % → 90 % of Vpp).</td></tr>
-    <tr><td id="scope-meas-tf">Tf</td><td>Fall time (90 % → 10 %).</td></tr>
+    <tr><td id="scope-meas-tr">Tr</td><td>Rise time (10 % -> 90 % of Vpp).</td></tr>
+    <tr><td id="scope-meas-tf">Tf</td><td>Fall time (90 % -> 10 %).</td></tr>
     <tr><td id="scope-meas-f">f</td><td>Frequency of the trigger-channel signal, measured to sub-sample precision; the period <code>Tp = 1 / f</code> is derived from it.</td></tr>
-    <tr><td id="scope-meas-duty">Duty</td><td>Duty cycle as % of period — high-time / period.</td></tr>
+    <tr><td id="scope-meas-duty">Duty</td><td>Duty cycle as % of period - high-time / period.</td></tr>
   </table>
 
   <h3 id="scope-meas-stats">Stats columns (avg / min / max / σ)</h3>
   <p>Rolling-window statistics over a configurable averaging window
-     (see <a href="#scope-tab-presets">Preferences → Oscilloscope →
+     (see <a href="#scope-tab-presets">Preferences -> Oscilloscope ->
      Measurement average</a>).  σ is the population standard
      deviation.  The window is ~33 s at 30 fps by default; the
      <a href="#scope-reset">Reset</a> button wipes the statistics.</p>
 
-  <h2 id="scope-histogram-window">Amplitude-histogram window</h2>
+  <h3 id="scope-meas-raw">The measurements are taken as captured</h3>
+  <p>Every number in this table is computed on the <b>unfiltered</b> window -
+     the per-channel <a href="#scope-lpf">LPF</a> cleanup, both the 80&nbsp;kHz
+     low-pass and the de-spike median, shapes only the <em>drawn</em> trace.
+     That is deliberate: those are display settings chosen to make a trace
+     readable, and the moment one of them moves Vpp, Vmean, rise time, fall time
+     or duty cycle, the figure stops being a measurement of the signal and
+     becomes a measurement of our rendering of it.  So you can switch the filter
+     while watching the table and nothing in it will move.  The one exception is
+     the <a href="#scope-mains">mains rejection</a>, which stays in the
+     measurement path - suppressing hum is a measurement decision, not a
+     cosmetic one.</p>
+
+  <h3 id="scope-capture-ended">When the capture stops by itself</h3>
+  <p>A capture can end without you pressing <b>Record</b>
+     again - the device unplugged, taken exclusively by another application, or
+     stopped by its driver.  The scope then stops instead of drawing a flat line
+     with the capture rate still ticking, and one <b>Audio device error</b>
+     dialog names the backend and says whether the device was <em>unplugged or
+     its stream failed</em> or whether it <em>stopped delivering samples</em> -
+     a driver that said nothing at all, caught by the delivery deadline.  The
+     playback side is watched the same way, so a converter pulled out mid-tone
+     stops the generator with a reason rather than leaving a lit Play button over
+     silence.  See
+     <a href="theory/audio-backend.html#errors">Theory ▸ when a device won't
+     open - and when it stops</a>.</p>
+
+  <h2 id="scope-histogram-window">Amplitude-histogram panel</h2>
   <p>Opened by the <a href="#scope-histogram">amplitude-histogram</a> button.  It
+     is a movable, resizable panel <em>inside the page</em>, not a window of its
+     own.  It
      answers a different question from the trace: not what the waveform looks like
      over time, but <b>how much of its time it spends at each voltage</b>.  Voltage
      runs up the left axis, the number of samples counted at that level runs along
@@ -210,7 +242,7 @@
   <p><img src="img/scope-histogram.png"
           alt="Amplitude histogram of a quiet input: a Gaussian bell centred on 0 V,
                a few tens of microvolts wide"/></p>
-  <p>Above: a converter's own noise floor, a few tens of microvolts wide — a clean
+  <p>Above: a converter's own noise floor, a few tens of microvolts wide - a clean
      Gaussian.  A bell that is visibly not Gaussian points at something other than
      thermal noise.</p>
 
@@ -219,19 +251,19 @@
     <tr><th>Shape</th><th>What it means</th></tr>
     <tr><td>Two peaks at the extremes, hollow in the middle</td>
         <td>A sine.  A sinusoid moves slowest at its turning points, so it spends
-            most of its time near ±peak — the classic bathtub.</td></tr>
+            most of its time near ±peak - the classic bathtub.</td></tr>
     <tr><td>A bell centred on zero</td>
         <td>Noise.  A clean noise floor is Gaussian, and a visibly non-Gaussian
             bell points at something other than thermal noise.</td></tr>
     <tr><td>A tall spike at one or both ends</td>
         <td>Clipping.  Samples pinned to the rail pile into the outermost bar.</td></tr>
     <tr><td>Unequal bars above and below the centre</td>
-        <td>Asymmetry — a one-sided clip, or an asymmetric distortion.</td></tr>
+        <td>Asymmetry - a one-sided clip, or an asymmetric distortion.</td></tr>
   </table>
 
   <p><b>The voltage axis is relative, and its middle is always 0 V.</b>  Samples are
-     counted exactly as captured — nothing is subtracted from them and nothing is
-     filtered — and the axis is then read from the distribution's own mean.  So a DC
+     counted exactly as captured - nothing is subtracted from them and nothing is
+     filtered - and the axis is then read from the distribution's own mean.  So a DC
      offset on the card changes what the axis is measured <i>from</i>, not which
      level a sample is counted at, and the picture neither slides off the plot nor
      changes shape.  Both halves are always the same height, so an asymmetric
@@ -249,20 +281,20 @@
   <table class="controls">
     <tr><th>Control</th><th>Function</th></tr>
     <tr><td><b>L</b> / <b>R</b></td>
-        <td>Which channel is shown — one at a time.  A channel switched off in the
+        <td>Which channel is shown - one at a time.  A channel switched off in the
             scope is greyed and cannot be picked; if it was the one being shown,
             the window moves to the other.  The choice is remembered between
             sessions.</td></tr>
     <tr><td><b>Reset</b></td>
-        <td>Clears the collected distribution and nothing else — the measurement
+        <td>Clears the collected distribution and nothing else - the measurement
             table's statistics are left alone.  Use it to re-range onto a signal
             that has become much smaller, since a shrinking signal keeps the range
             it was given.</td></tr>
   </table>
 
-  <p>Collection is unbounded while the window is open, so a distribution can be
+  <p>Collection is unbounded while the panel is open, so a distribution can be
      built over minutes.  It survives a V/div change, a range switch and a
-     recalibration — recalibrating relabels the axis rather than recounting.  It
+     recalibration - recalibrating relabels the axis rather than recounting.  It
      restarts by itself only when the level moves far enough that the old counts
      describe a different signal, and along with the measurement statistics when
      those are reset (see <a href="#scope-reset">Reset statistics</a>).</p>
@@ -275,7 +307,7 @@
        relative occupancy, not as a sample census.</p>
   </div>
 
-  <p>The number of bars is set under <b>Preferences → Oscilloscope → Histogram
+  <p>The number of bars is set under <b>Preferences -> Oscilloscope -> Histogram
      bins</b> (default 50).  It is display resolution only: the underlying
      collection is far finer, so changing it re-draws what has already been
      collected rather than discarding it.</p>
@@ -302,7 +334,7 @@
      + triangle handle), and <b>both handles are on the LEFT edge</b>.  The
      offset voltage is shown beside each handle.  Only the
      <a href="#scope-channel-pick">currently-selected channel</a>'s marker is
-     draggable — the other channel's handle is <b>dimmed</b> and shown for
+     draggable - the other channel's handle is <b>dimmed</b> and shown for
      reference only.  Move the active marker by dragging its handle;
      <b>double-click recentres it</b>.</p>
 
@@ -310,26 +342,26 @@
   <p>A <b>vertical scrollbar</b> on the right pans the trace up / down (the
      voltage offset, both channels together).  A <b>horizontal scrollbar</b>
      along the bottom pans left / right through time.  Each scrollbar pans
-     <em>one</em> axis only — it never zooms — but its thumb is resized by the
+     <em>one</em> axis only - it never zooms - but its thumb is resized by the
      view to show the visible fraction, so it <em>tracks</em> zoom: change V/div
      or t/div and the thumb grows or shrinks to match.  Click the empty track to
      page toward the pointer, or hold the button down to keep paging until the
      thumb reaches the cursor.  Zoom with the mouse wheel over the canvas.</p>
-  <p>The horizontal scrollbar appears <b>only when an audio file is loaded</b> —
+  <p>The horizontal scrollbar appears <b>only when an audio file is loaded</b> -
      it is there to move a long recording left / right.  During live capture
      there is nothing earlier to scroll back to, so it stays hidden.</p>
 
   <h3 id="scope-caps">Capture-rate readout (cap/s)</h3>
   <p>Pale-grey figure in the top-right corner of the trace area.  With the
      <b>edge</b> trigger it shows how many new frames per second the view is
-     rendering — a smoothed rate that sinks toward zero while nothing
+     rendering - a smoothed rate that sinks toward zero while nothing
      triggers.  With the <a href="#scope-trigger-type"><b>glitch</b>
      trigger</a> it becomes a <b>cumulative glitches-per-second counter</b>:
      the total number of glitches caught divided by the time spent recording,
      shown to three decimals so an event every few minutes still reads e.g.
      <code>0.008</code> instead of rounding to zero.  The count starts afresh
      when the glitch type is entered or a new record starts, and the readout
-     stays visible for the whole record — even while reading
+     stays visible for the whole record - even while reading
      <code>0.000</code>.  When recording stops, the last value stays
      <b>frozen</b> on screen until the next record.  Hidden while a file is
      loaded (nothing is being captured).</p>
@@ -366,7 +398,7 @@
   <p>AC mode subtracts the running DC mean from the displayed trace
      so a small AC component on top of a large DC offset is visible.
      The underlying measurements are still computed on the raw
-     samples — only the displayed trace is shifted.</p>
+     samples - only the displayed trace is shifted.</p>
 
   <h4 id="scope-sinc-interp">Sin / Lin (sinc interpolation)</h4>
   <p>Per-channel checkbox shown with a small sinc-shape image.
@@ -381,19 +413,26 @@
   <p>Per-channel checkbox.  When checked, the channel's trace is replaced by the
      <b>residual</b>: the captured signal minus a best-fit single tone.  The
      tone's frequency comes from the scope's frequency measurement, and its
-     amplitude and phase are fitted over the displayed window — so the
+     amplitude and phase are fitted over the displayed window - so the
      synthesized tone is phase-aligned with the triggered display, and what
      remains on screen is the <b>distortion, noise, hum and glitches</b> that
-     hide under the fundamental.  The <b>DC level is preserved</b> — only the
-     tone is taken out — so use <a href="#scope-acdc">AC</a> if you want the
+     hide under the fundamental.  The <b>DC level is preserved</b> - only the
+     tone is taken out - so use <a href="#scope-acdc">AC</a> if you want the
      residual centred on zero.</p>
   <p>The residual works with a <b>dual-tone</b> signal too.  The two
      frequencies are <b>measured from the captured signal itself</b>
-     (seeded from the generator's values, then refined on the capture) — which
+     (seeded from the generator's values, then refined on the capture) - which
      makes the subtraction immune to the DAC and the ADC running on different
      clocks; the generator's values are used only until a measurement is
-     available.  <b>Both tones are fitted</b> — the two fits refined alternately
-     so neither leaks into the other — and both are subtracted, leaving the
+     available.  The seed is what the generator says it is <b>emitting</b>, not
+     what you typed into its fields, so a
+     <a href="generator.html#generator-snap-fft-bin">bin-snapped</a> tone, a
+     rectangle or triangle rendered at the nearest whole-sample period, and a
+     tone running on a <a href="preferences.html#prefs-audio-servers">bench
+     across the network</a> all start the fit from the frequency actually going
+     out; the same answer feeds the
+     <a href="#scope-trigger-beat">reconstructed-beat</a> overlay.  <b>Both tones are fitted</b> - the two fits refined alternately
+     so neither leaks into the other - and both are subtracted, leaving the
      <b>intermodulation
      products</b>, noise and glitches under the tone pair on screen.  The fit
      window is automatically sized to span at least two beat cycles of
@@ -401,14 +440,14 @@
      trace is shown unchanged.</p>
   <p>Triggering and the frequency / period readouts still work on the captured
      signal, and the Vpp / Vrms readouts also still describe the captured
-     signal — only the trace changes.  With <a href="#scope-autosetup">Auto-Setup</a>,
+     signal - only the trace changes.  With <a href="#scope-autosetup">Auto-Setup</a>,
      a channel showing its residual takes its vertical scale from the
      <b>residual's</b> peak-to-peak value, while the time base and trigger are
      still derived from the captured signal.  When the settings-tab strip is
      collapsed, the channel's tile shows a <b>residual</b> marker while the mode
      is on.</p>
   <p>A channel in residual mode gets no
-     <a href="#scope-trigger-beat">reconstructed-beat</a> overlay — the beat
+     <a href="#scope-trigger-beat">reconstructed-beat</a> overlay - the beat
      envelope belongs to the very tones the residual has just taken out.</p>
 
   <h4 id="scope-mains">Mains</h4>
@@ -417,12 +456,12 @@
      filters what the trace shows and what the trigger and the measurements act
      on, while the <b>DC level is preserved</b>.  Four options:</p>
   <ul>
-    <li><b>None</b> — pass-through, no rejection.</li>
-    <li><b>IIR comb</b> — a frequency-tracked feedback comb filter that notches
+    <li><b>None</b> - pass-through, no rejection.</li>
+    <li><b>IIR comb</b> - a frequency-tracked feedback comb filter that notches
         the line fundamental and every harmonic.</li>
-    <li><b>Sync subtract</b> — period-locked synchronous subtraction of the
+    <li><b>Sync subtract</b> - period-locked synchronous subtraction of the
         repeating hum waveform.</li>
-    <li><b>LMS canceller</b> — an adaptive least-mean-squares line canceller.</li>
+    <li><b>LMS canceller</b> - an adaptive least-mean-squares line canceller.</li>
   </ul>
   <p>How the tracked comb works is covered in the
      <a href="theory/oscilloscope.html#mains">Theory of operation</a>.</p>
@@ -431,18 +470,18 @@
   <p>Drop-down that applies a per-channel <b>high-frequency cleanup</b> to the
      displayed trace.  Three options:</p>
   <ul>
-    <li><b>None</b> — off.</li>
-    <li><b>80kHz</b> — an 80&nbsp;kHz Chebyshev low-pass that removes continuous
+    <li><b>None</b> - off.</li>
+    <li><b>80kHz</b> - an 80&nbsp;kHz Chebyshev low-pass that removes continuous
         high-frequency content above the cut-off.  It has <b>no effect when
         80&nbsp;kHz sits above the capture's Nyquist frequency</b> (i.e. at low
         sample rates there is nothing above 80&nbsp;kHz to remove).</li>
-    <li><b>Despike</b> — a median filter that removes impulsive glitches without
+    <li><b>Despike</b> - a median filter that removes impulsive glitches without
         the ringing a linear filter would add.</li>
   </ul>
 
   <h3 id="scope-tab-right">Right tab</h3>
   <p><img src="img/Oscilloscope - Right.png" alt="Right channel tab"/></p>
-  <p>Identical layout to the Left tab — channel toggle, V/div,
+  <p>Identical layout to the Left tab - channel toggle, V/div,
      AC/DC, Sin/Lin and Residual, but for the right channel.</p>
 
   <h3 id="scope-tab-horizontal">Horizontal tab</h3>
@@ -453,7 +492,7 @@
      1&nbsp;s/div</b> (no ns/div).  The wheel / arrows / ↑↓ keys step the list,
      or <b>type any value</b> (<code>µs</code> / <code>ms</code> / <code>s</code>)
      for a setting off the list.  The trace centre stays put on a t/div change
-     — only the visible window's width changes.</p>
+     - only the visible window's width changes.</p>
 
   <h3 id="scope-tab-trigger">Trigger tab</h3>
   <p><img src="img/Oscilloscope - Trigger.png" alt="Trigger tab"/></p>
@@ -473,18 +512,18 @@
   <h4 id="scope-trigger-type">Type (E / G)</h4>
   <p>E / G pair choosing what the trigger reacts to.</p>
   <ul>
-    <li><b>E — edge</b>: the classic comparator described above — fires when
+    <li><b>E - edge</b>: the classic comparator described above - fires when
         the trigger-channel signal crosses the trigger level in the chosen
         direction.</li>
-    <li><b>G — glitch</b>: fires on <b>any waveform discontinuity</b>,
-        anywhere on the wave, in either direction — an amplitude step (a
+    <li><b>G - glitch</b>: fires on <b>any waveform discontinuity</b>,
+        anywhere on the wave, in either direction - an amplitude step (a
         dropped-sample gap from a USB hiccup or a converter under-run) as well
         as a slope break (a splice where the wave carries on from the wrong
         phase).  Made for hunting rare transfer faults: leave it recording in
         Normal mode and every discontinuity is caught and displayed, or use
         Single mode to freeze the first one.</li>
   </ul>
-  <p>The glitch detector does not use the trigger level — it predicts each
+  <p>The glitch detector does not use the trigger level - it predicts each
      sample from the sinusoid's own recurrence and fires when the prediction
      error stands well clear of the noise floor, so it catches faults far too
      small to reach any edge level.  The level marker and
@@ -499,17 +538,17 @@
      Oscilloscope ▸ Triggering</a>.</p>
 
   <h4 id="scope-trigger-mode">Mode</h4>
-  <p>A / N / S — Auto, Normal, Single.</p>
+  <p>A / N / S - Auto, Normal, Single.</p>
   <ul>
-    <li><b>Auto</b> — runs free, displays the trace whether or not
+    <li><b>Auto</b> - runs free, displays the trace whether or not
         the trigger condition is met.</li>
-    <li><b>Normal</b> — only updates on a trigger event; freezes the
+    <li><b>Normal</b> - only updates on a trigger event; freezes the
         last triggered frame if no new event arrives.</li>
-    <li><b>Single</b> — one-shot.  Arm with the play button to its
+    <li><b>Single</b> - one-shot.  Arm with the play button to its
         right; captures the next trigger event and stops.</li>
   </ul>
   <p>The <a href="#scope-trigger-type">glitch type</a> works only in Normal
-     and Single — in Auto the display free-runs and would overwrite a caught
+     and Single - in Auto the display free-runs and would overwrite a caught
      glitch immediately, so switching to Auto forces the type back to edge and
      greys the G button out.</p>
 
@@ -523,10 +562,10 @@
      trigger fires only when the signal first dropped below
      <code>(level − hyst)</code> and then crossed above
      <code>(level + hyst)</code>.  This <b>stabilises the trigger on a weak or
-     noisy signal</b> — without it, noise around the level causes a flurry of
+     noisy signal</b> - without it, noise around the level causes a flurry of
      false triggers and a jittery trace.  The selector greys out when the
      checkbox is off; the value is preserved when toggled.  Applies to the
-     edge type only — the <a href="#scope-trigger-type">glitch trigger</a>
+     edge type only - the <a href="#scope-trigger-type">glitch trigger</a>
      ignores level and hysteresis alike.</p>
 
   <h4 id="scope-trigger-beat">Reconstructed beat</h4>
@@ -547,7 +586,7 @@
   <h3 id="scope-tab-presets">Presets tab</h3>
   <p><img src="img/Oscilloscope - Presets.png" alt="Presets tab"/></p>
   <p>Save and recall complete scope set-ups.  In the <b>name field</b> type a
-     name for the current configuration and press <b>Save</b> — it stores every
+     name for the current configuration and press <b>Save</b> - it stores every
      per-channel and per-trigger setting (V/div, AC/DC, Sin/Lin, t/div, trigger
      channel / edge / mode, hysteresis enable + value).  To restore one, pick a
      previously-saved name with the <b>arrow on the right of the field</b> and
@@ -561,7 +600,7 @@
   <p>Renders the scope pane to a PNG at a chosen resolution and
      lets you <b>save it to disk</b> (or copy it).  The render uses an offscreen
      replica of the pane with the <b>settings tabs collapsed</b> (so the trace
-     dominates), and at the chosen size — independent of the visible window.</p>
+     dominates), and at the chosen size - independent of the visible window.</p>
 
   <h4 id="scope-utility-calibrate">ADC calibration</h4>
   <p>Opens the shared ADC calibration dialog, which derives the ADC's full-scale
@@ -572,28 +611,29 @@
   <p>Enter the <b>actual signal amplitude</b> now present at the input, in
      <code>nV</code> / <code>µV</code> / <code>mV</code> / <code>V</code>, and the app
      scales the digital reading so that level reads true.  The dialog has a
-     <b>Left</b> and a <b>Right</b> row for a stereo card — <b>calibration is always
+     <b>Left</b> and a <b>Right</b> row for a stereo card - <b>calibration is always
      per channel</b>, because real converter channels never match to the last
-     part-per-million — and a single row for a Mono card.  Only the row for the
+     part-per-million - and a single row for a Mono card.  Only the row for the
      <b>currently measured channel</b> is live; the other channel's row is shown
      <b>disabled and empty</b> (the shot above is a right-channel-only capture).
-     Calibrate the other channel by measuring it in turn — each row writes only its
+     Calibrate the other channel by measuring it in turn - each row writes only its
      own channel's active range.  A card set
      to <a href="preferences.html#prefs-audio-card-editor">Coupling: Linked</a> is
-     calibrated per channel just the same — Linked couples only which range is
+     calibrated per channel just the same - Linked couples only which range is
      selected, never the measured values.</p>
   <div class="note"><b>Windows volume is part of the calibration.</b>  Treat the
      Windows sound-settings volume slider for this device as a calibration setting:
      set it to <b>100</b> and never touch it again once you have calibrated.
-     Exclusive-mode WASAPI and WDM-KS bypass the Windows software mixer, but on many
-     USB interfaces that slider still programs the device's <em>internal hardware</em>
-     volume — so moving it after calibrating silently changes the full-scale you just
+     In a browser the slider matters twice over: Web Audio goes <em>through</em>
+     the Windows mixer, so the slider scales the samples directly, and on many USB
+     interfaces it additionally programs the device's <em>internal hardware</em>
+     volume - so moving it after calibrating silently changes the full-scale you just
      measured.  <b>Exception:</b> a few cards use the slider position to switch modes.
-     The <b>E1DA Cosmos</b>, above position 49, ties its two channels — right becomes
+     The <b>E1DA Cosmos</b>, above position 49, ties its two channels - right becomes
      the main input and left carries the same signal 6&nbsp;dB lower.  On such a card,
      set the slider to the position its mode needs and then keep it fixed.</div>
 
-  <h3 id="scope-tab-save">Save to… tab</h3>
+  <h3 id="scope-tab-save">Save to... tab</h3>
   <p><img src="img/Oscilloscope - Save to.png" alt="Save to tab"/></p>
   <p>Writes the most recent capture to an audio file.  The <b>duration field</b>
      (a single input in seconds) sets how much to save; the <b>open-file
@@ -603,7 +643,7 @@
   <h3 id="scope-tab-play">Load audio tab</h3>
   <p><img src="img/Oscilloscope - Load signal.png" alt="Load audio tab"/></p>
   <p>Plays back an audio file as the scope's data source instead of the live
-     ADC.  The <b>open-audio button</b> picks the file — <b>any</b>
+     ADC.  The <b>open-audio button</b> picks the file - <b>any</b>
      <code>WAV</code> / <code>AIFF</code> / <code>FLAC</code>, not only files
      this scope saved.  This is a plain waveform viewer for the file:
      <b>no triggering or measurements</b> are available on a loaded signal, and
@@ -628,18 +668,18 @@
      <code>500m</code>, <code>1</code>).</p>
 
   <h3 id="scope-tile-acdc">AC/DC tile</h3>
-  <p><code>ac</code> or <code>dc</code> — the channel's coupling.</p>
+  <p><code>ac</code> or <code>dc</code> - the channel's coupling.</p>
 
   <h3 id="scope-tile-interp">Interpolation tile</h3>
   <p><code>sin</code> when sinc interpolation is on, <code>lin</code>
      when off.</p>
 
   <h3 id="scope-tile-tdiv">Time/div tile</h3>
-  <p>The horizontal resolution, short form — e.g. <code>200u</code>,
+  <p>The horizontal resolution, short form - e.g. <code>200u</code>,
      <code>1m</code>, <code>20m</code>.</p>
 
   <h3 id="scope-tile-trigger-channel">Trigger-channel tile</h3>
-  <p><code>L</code> or <code>R</code> — which channel is currently used to arm
+  <p><code>L</code> or <code>R</code> - which channel is currently used to arm
      the trigger.</p>
 
   <h3 id="scope-tile-trigger-edge">Trigger-edge tile</h3>
@@ -647,12 +687,12 @@
      glitch's start (↑) or end (↓).</p>
 
   <h3 id="scope-tile-trigger-type">Trigger-type tile</h3>
-  <p><code>G</code> — shown only while the
+  <p><code>G</code> - shown only while the
      <a href="#scope-trigger-type">glitch trigger</a> is selected.  The absence
      of this tile means the edge type.</p>
 
   <h3 id="scope-tile-trigger-mode">Trigger-mode tile</h3>
-  <p><code>A</code>, <code>N</code> or <code>S</code> — Auto, Normal, Single.</p>
+  <p><code>A</code>, <code>N</code> or <code>S</code> - Auto, Normal, Single.</p>
 
   <h3 id="scope-tile-trigger-hysteresis">Hysteresis tile</h3>
   <p>Shown only when hysteresis is enabled; the number is the hysteresis window
@@ -662,7 +702,7 @@
   <h2 id="scope-move-zoom">Moving &amp; zooming the signal</h2>
   <p>The trace can be moved and scaled on both axes.  Everything below works the
      same way whether the scope is <b>live</b> (recording), <b>stopped</b> (showing
-     the last captured buffer) or showing a <b>loaded file</b> — the only difference
+     the last captured buffer) or showing a <b>loaded file</b> - the only difference
      is that a live capture keeps adding new samples while the other two are
      frozen.  The two axes are fully independent: a horizontal action never moves
      or rescales the trace vertically, and a vertical action never touches the
@@ -670,31 +710,31 @@
 
   <h3 id="scope-move-h">Moving horizontally</h3>
   <ul>
-    <li><b>Trigger offset</b> (live and stopped) — drag the triangle on the bottom
+    <li><b>Trigger offset</b> (live and stopped) - drag the triangle on the bottom
         edge, or use the s/div tile's neighbours.  This slides the trigger point
         left or right <em>within</em> the screen.</li>
     <li><b><kbd>Shift</kbd>+wheel</b> (live, stopped and file), or the horizontal
-        scrollbar (file) — moves the signal <b>½ a division per notch</b>, in a
+        scrollbar (file) - moves the signal <b>½ a division per notch</b>, in a
         straight line, no matter where the trigger sits.  On a stopped capture or a
         loaded file this scrolls across the <em>entire</em> buffer, not just one
         screen.</li>
     <li><b>Off-screen trigger.</b>  Moving or zooming can carry the trigger offset
         past the edge of the screen.  When that happens the offset line and its
-        handle stay pinned to the left or right edge — so you can always grab them
-        again — but the real offset keeps going, possibly many screens away, and the
+        handle stay pinned to the left or right edge - so you can always grab them
+        again - but the real offset keeps going, possibly many screens away, and the
         <b>time figure</b> next to the handle shows that true offset.  Drag the
         pinned handle back toward the centre to pull the signal into view.</li>
   </ul>
 
   <h3 id="scope-zoom-h">Zooming horizontally</h3>
   <ul>
-    <li><b>Horizontal-resolution control</b> (the s/div field) — zooms around the
+    <li><b>Horizontal-resolution control</b> (the s/div field) - zooms around the
         <b>trigger offset</b>: the trigger stays put and the trace stretches or
         compresses around it.  A loaded file has no trigger, so it zooms around the
         <b>middle</b> of the screen instead.</li>
-    <li><b><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+wheel</b> — zooms around the <b>mouse
+    <li><b><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+wheel</b> - zooms around the <b>mouse
         pointer</b>: the moment under the pointer stays fixed.  If the pointer is not
-        on the trigger, the trigger offset moves — and may travel off-screen as
+        on the trigger, the trigger offset moves - and may travel off-screen as
         described above.</li>
     <li>Zoom out far enough on a live or stopped capture and the buffer can no longer
         fill the whole screen; the parts it can't cover are simply left <b>blank</b>
@@ -706,21 +746,21 @@
   <h3 id="scope-move-v">Moving vertically</h3>
   <p>The plain <b>wheel</b>, or dragging an offset handle on either side edge, moves
      <b>both active channels together</b>, keeping their spacing.  You can move the
-     signal until <b>±FS/2</b> — the converter's full-scale edge — reaches the middle
+     signal until <b>±FS/2</b> - the converter's full-scale edge - reaches the middle
      of the screen; that is far enough to park any part of the signal at centre, and
      no further.</p>
 
   <h3 id="scope-zoom-v">Zooming vertically</h3>
   <ul>
-    <li>A channel's <b>V/div control</b> (its field — typing, arrows, ↑↓, or the wheel
+    <li>A channel's <b>V/div control</b> (its field - typing, arrows, ↑↓, or the wheel
         over the field) rescales <b>that channel alone</b>, around the <b>middle</b> of
         the screen.  The other channel is untouched.</li>
     <li><b><kbd>Ctrl</kbd>+wheel</b> over the trace is the only gesture that zooms
-        <b>both channels together</b> — around the <b>mouse pointer</b>, always keeping
-        their ratio.  One channel — the <em>base</em> — steps to its next 1‑2‑5 rung and
+        <b>both channels together</b> - around the <b>mouse pointer</b>, always keeping
+        their ratio.  One channel - the <em>base</em> - steps to its next 1‑2‑5 rung and
         the other scales by that same factor (so a value may land off the sequence).  The
         base is whichever choice leaves the <em>scaled</em> channel nearest a 1‑2‑5 value
-        — e.g. left <code>500&nbsp;µV/div</code>, right <code>1&nbsp;mV/div</code>: one
+        - e.g. left <code>500&nbsp;µV/div</code>, right <code>1&nbsp;mV/div</code>: one
         zoom-in steps the right to <code>500&nbsp;µV/div</code> and scales the left to
         <code>250&nbsp;µV/div</code> (50&nbsp;µV off the 200&nbsp;µV rung), rather than
         stepping the left to <code>200&nbsp;µV/div</code> and scaling the right to
@@ -731,10 +771,10 @@
 
   <h3 id="scope-zoom-rect">Rubber-band zoom &amp; Ctrl+Z</h3>
   <p>Drag with the <b>left button</b> across the trace to draw a rectangle;
-     release, and the selection stretches to fill the whole view — the one
+     release, and the selection stretches to fill the whole view - the one
      gesture that rescales both axes at once.  A selection smaller than
      8&nbsp;pixels either way is ignored, so a stray click does nothing.  The
-     drag must start on the open plot area — not on a marker handle, a header
+     drag must start on the open plot area - not on a marker handle, a header
      button or an axis label.  It works the same whether the scope is live,
      stopped or showing a loaded file, and the same gesture zooms the FFT and
      frequency-response views too (the condensed strip in a split layout is
@@ -745,8 +785,8 @@
         firing at the same point of the waveform after the view rescales.</li>
     <li><b><kbd>Ctrl</kbd>+<kbd>Z</kbd> rolls back.</b>  Every rubber-band zoom
         is remembered, up to 32 steps per view, and
-        <kbd>Ctrl</kbd>+<kbd>Z</kbd> — with exactly that modifier, nothing
-        else held — undoes them one at a time.  The history is cleared when
+        <kbd>Ctrl</kbd>+<kbd>Z</kbd> - with exactly that modifier, nothing
+        else held - undoes them one at a time.  The history is cleared when
         the scope switches between live capture and file mode, or a new file
         is loaded.</li>
     <li><b>Which view undoes.</b>  <kbd>Ctrl</kbd>+<kbd>Z</kbd> acts on the
@@ -762,13 +802,16 @@
      <code>Off</code>, every swept trace lingers and fades like the phosphor
      of an analog scope, so trigger jitter and noise pile up into a visible
      envelope.  Decay times of 0.5, 1, 2, 5, 10, 15 and 20&nbsp;s are offered,
-     plus <code>∞</code> (traces never fade) and a manual value.  Persistence
-     requires GPU acceleration (Preferences ▸ Look&nbsp;&amp;&nbsp;Feel) and
-     has no effect on the CPU renderer.</p>
+     plus <code>∞</code> (traces never fade) and a manual value.  Persistence is
+     drawn on the GPU and needs <b>WebGL2 with the
+     <code>EXT_color_buffer_float</code> extension</b>; where the browser or the
+     graphics driver does not offer that combination it silently falls back to a
+     non-persisting trace - the setting stays available and simply has no
+     visible effect.</p>
   <p>The afterglow follows a few rules so it never shows stale geometry:</p>
   <ul>
-    <li><b>Moving or zooming</b> the trace — any gesture above, or a V/div,
-        t/div, offset or trigger-position change — wipes the glow and
+    <li><b>Moving or zooming</b> the trace - any gesture above, or a V/div,
+        t/div, offset or trigger-position change - wipes the glow and
         immediately re-draws the current trace at its new position, so the
         picture never smears across the screen.</li>
     <li><b>Changing a trigger setting</b> (source channel, type, edge or mode)
@@ -777,7 +820,7 @@
     <li><b>Changing the generator signal</b> clears it too, after a
         quarter-second pause that lets the old signal flush through the
         loopback path.  The generator's automatic frequency-lock trims are
-        exempt — they never wipe the glow.</li>
+        exempt - they never wipe the glow.</li>
     <li>While the scope is <b>stopped</b>, the afterglow freezes exactly as it
         was and resumes fading when recording restarts.</li>
   </ul>

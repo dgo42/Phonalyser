@@ -1,17 +1,17 @@
 /*
- * Phonalyser web — service worker.
+ * Phonalyser web - service worker.
  * Caches every same-origin asset so the app loads instantly / offline
  * (stale-while-revalidate: serve from cache, refresh in the background).
- * The cache name is VERSION-keyed; bump VERSION on each deploy — the browser
+ * The cache name is VERSION-keyed; bump VERSION on each deploy - the browser
  * then sees sw.js change, installs the new worker, and the page (update.js)
- * shows a "new version — reload" banner. Accepting it skips waiting and reloads
+ * shows a "new version - reload" banner. Accepting it skips waiting and reloads
  * into the fresh cache; activate() purges the old one.
  *
  * Cross-origin requests (CDN: Bootstrap/jQuery/libFLAC) are left to the browser
- * HTTP cache — vendor them under web/vendor/ if full offline is required.
+ * HTTP cache - vendor them under web/vendor/ if full offline is required.
  * GNU AGPL v3 or later.
  */
-const VERSION = '1.1.1';                    // single source of truth = package.json version (build injects it)
+const VERSION = '1.2.0';                    // single source of truth = package.json version (build injects it)
 const CACHE = `phonalyser-${VERSION}`;
 const CORE = ['./', './index.html', './css/app.css', './favicon.svg', './manifest.webmanifest', './devices.yaml'];
 
@@ -36,10 +36,10 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== location.origin) return;            // CDN etc. → browser HTTP cache
+  if (url.origin !== location.origin) return;            // CDN etc. -> browser HTTP cache
   // NETWORK-FIRST: always serve the freshest same-origin asset when online, so a
   // rebuilt app / edited dev module shows up on the very next reload. (The old
-  // stale-while-revalidate served the PREVIOUS bundle for a whole extra reload —
+  // stale-while-revalidate served the PREVIOUS bundle for a whole extra reload -
   // which, with a version-pinned cache key, looked like "my changes never load".)
   // Falls back to the cache only when the network is unavailable (offline).
   e.respondWith(
