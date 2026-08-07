@@ -22,9 +22,8 @@
  * the exact struct layouts JNA marshals.  x64 only: __stdcall == __cdecl, so the
  * JNA cdecl mapping and libusb's WINAPI-style LIBUSB_CALL are indistinguishable.
  *
- * The nineteen exported entry points and their semantics are specified in
- * .claude/plans/qa40x-mock-libusb.md ("The 19 exported functions") and the wire
- * contract in doc/QA40X-PROTOCOL.md.
+ * The nineteen exported entry points implement that subset; the wire contract
+ * they carry is in doc/QA40X-PROTOCOL.md.
  */
 #ifndef MOCK_LIBUSB_H
 #define MOCK_LIBUSB_H
@@ -122,7 +121,7 @@ struct libusb_transfer {
     int                   num_iso_packets;
 };
 
-/* --- the 19 exported entry points (see LibUsb.java Lib) ------------------- */
+/* --- the 21 exported entry points (see LibUsb.java Lib) ------------------- */
 MOCK_API int          LIBUSB_CALL libusb_init(libusb_context **ctx);
 MOCK_API void         LIBUSB_CALL libusb_exit(libusb_context *ctx);
 MOCK_API const char * LIBUSB_CALL libusb_error_name(int errcode);
@@ -137,6 +136,8 @@ MOCK_API uint8_t      LIBUSB_CALL libusb_get_device_address(libusb_device *dev);
 MOCK_API int          LIBUSB_CALL libusb_open(libusb_device *dev, libusb_device_handle **handle);
 MOCK_API void         LIBUSB_CALL libusb_close(libusb_device_handle *handle);
 MOCK_API int          LIBUSB_CALL libusb_reset_device(libusb_device_handle *handle);
+MOCK_API int          LIBUSB_CALL libusb_get_configuration(libusb_device_handle *handle, int *configuration);
+MOCK_API int          LIBUSB_CALL libusb_set_configuration(libusb_device_handle *handle, int configuration);
 MOCK_API int          LIBUSB_CALL libusb_claim_interface(libusb_device_handle *handle, int interface_number);
 MOCK_API int          LIBUSB_CALL libusb_release_interface(libusb_device_handle *handle, int interface_number);
 

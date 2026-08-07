@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -30,7 +30,7 @@ import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.sound.AudioPlayback;
 
 /**
- * QA402/QA403 stereo playback — a thin AudioPlayback client that {@code attach}es
+ * QA402/QA403 stereo playback - a thin AudioPlayback client that {@code attach}es
  * / {@code detach}es the generator lane on the manager's one duplex engine (doc
  * §10).  This class IS the engine's generator sample source: for each frame it
  * pulls one sample from the mono {@link SignalGenerator}, applies the per-lane
@@ -40,7 +40,7 @@ import org.edgo.audio.measure.sound.AudioPlayback;
  * The generator already emits samples normalised to [-1, +1] <b>peak</b>-relative
  * to the DAC full scale it was given (its {@code dacFsVoltageAmpl} is the range's
  * peak full-scale voltage, set from the device card).  So the wire sample is just
- * {@code round(sample · MAXINT)} — the PEAK convention, with the range dBV and the
+ * {@code round(sample · MAXINT)} - the PEAK convention, with the range dBV and the
  * on-device cal factor already folded into the card's full-scale voltage.  There
  * is deliberately NO extra √2/RMS factor here (that would be ~3&nbsp;dB hot).  The
  * engine does the L/R swap and little-endian packing (doc §5).
@@ -50,12 +50,13 @@ import org.edgo.audio.measure.sound.AudioPlayback;
  * are honoured live inside the sample source.  TPDF dither is added to the mono
  * sample before the per-lane scale, mirroring {@code PcmQuantizer} (the byte-PCM
  * backends' encoder).  Its ±1 LSB amplitude is set by the <em>selected</em> target
- * bit depth, not the 32-bit wire container — so 8-bit dither raises the floor to
+ * bit depth, not the 32-bit wire container - so 8-bit dither raises the floor to
  * ~&minus;42&nbsp;dBFS, while 24-bit dither lands in the DAC's dropped low byte.
  * 0 = off.
  */
 @Log4j2
-public final class Qa40xGenerator implements AudioPlayback {
+public final class Qa40xGenerator implements AudioPlayback,
+        Qa40xDuplexEngine.SampleSource {
 
     private static final int    MAXINT   = Qa40xLevels.MAXINT;
     private static final int    CHANNELS = 2;
@@ -75,6 +76,9 @@ public final class Qa40xGenerator implements AudioPlayback {
      *  in {@link #nextFrames}. */
     private volatile double ditherBits;
     private volatile boolean attached;
+    /** Why the lane ended, or null while it is healthy - written by the engine
+     *  on its USB event thread, read by the play thread that has to fail. */
+    private volatile String laneFailure;
     /** {@link SplittableRandom}, USB-event-thread-confined (mirrors PcmQuantizer's
      *  render-thread rng); one shared across threads would be a data race. */
     private final SplittableRandom rng = new SplittableRandom();
@@ -102,22 +106,53 @@ public final class Qa40xGenerator implements AudioPlayback {
         stopLane();
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>This call renders nothing.</b>  The QA40x's samples are pulled from
+     * {@link #nextFrames} by the USB event thread inside the engine's write
+     * completions, so all this thread does is stay alive for as long as the tone
+     * should sound - and, critically, be the place where a lane that DIED gets
+     * reported.  Its caller (the desktop generator controller) already treats a
+     * throw out of here as the lane's death, stops the module and tells the
+     * operator; before {@link #laneFailed} existed there was simply nothing for
+     * it to catch, so an unplugged analyzer left the Play button lit and the
+     * application certain it was generating.
+     */
     @Override
     public void play(SignalGenerator generator, AtomicBoolean stopFlag, CountDownLatch readyLatch) {
         startLane(generator);
         // The engine primes the output past the start threshold synchronously in
         // attachGenerator(); once startLane() returns, priming is complete.
         readyLatch.countDown();
+        laneFailure = null;
         log.info("QA40x playback started (continuous).");
         try {
-            while (!stopFlag.get()) {
+            while (!stopFlag.get() && laneFailure == null) {
                 Thread.sleep(STOP_POLL_MILLIS);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        String failure = laneFailure;
+        if (failure != null) {
+            // Do NOT stopLane() first: the engine has already ended the session,
+            // and the device that just vanished is not going to answer a
+            // teardown.  Failing out of here is what reaches the operator.
+            throw new IllegalStateException("the QA40x stopped mid-stream: " + failure);
+        }
         stopLane();
         log.info("QA40x playback stopped.");
+    }
+
+    /** {@inheritDoc}
+     *
+     *  <p>Recorded rather than thrown: this arrives on the USB event thread, and
+     *  throwing there would strand every transfer still in flight.  The play
+     *  thread is the one with a caller waiting on it, so it does the failing. */
+    @Override
+    public void laneFailed(String detail) {
+        this.laneFailure = detail;
     }
 
     @Override
@@ -145,15 +180,40 @@ public final class Qa40xGenerator implements AudioPlayback {
         // freq-response sweep aligns with the deconvolution reference (audio-backends memory).
         generator.resetSweepPosition();
         attached = true;
-        engine.attachGenerator(this::nextFrames);   // live source swap if the stream is already up
+        // ITSELF, not a method reference to nextFrames: the engine also reports a
+        // lane that died through this interface, and a lambda would carry only
+        // the default no-op for that.
+        engine.attachGenerator(this);               // live source swap if the stream is already up
     }
 
+    /**
+     * Gives the generator lane back.  {@link #attached} records what was
+     * ACHIEVED, not what was attempted - so it is cleared only once the engine
+     * has really let go.
+     *
+     * <p>Cleared first, this made the caller's second teardown attempt a silent
+     * no-op.  The desktop's play thread ends in {@code closeQuietly(lane)}
+     * precisely so that a stop which died halfway is tried again; that retry
+     * arrives here, found {@code attached} already false - set before the detach
+     * that faulted - and returned without touching the engine at all.  Setting
+     * the flag on the way IN stays as it is, and is the safe direction for the
+     * same reason: an attach that faulted must still leave a stop to be
+     * attempted.
+     */
     private void stopLane() {
-        if (attached) {
-            attached = false;
-            engine.detachGenerator();
-            currentGenerator = null;
+        if (!attached) {
+            return;
         }
+        engine.detachGenerator();
+        attached = false;
+        currentGenerator = null;
+    }
+
+    /** Package-private rather than private for exactly one caller: the test that
+     *  pins what a detach which FAULTED leaves behind - a lane still attached, so
+     *  the caller's retry really does reach the engine (see {@link #stopLane()}). */
+    boolean isAttached() {
+        return attached;
     }
 
     /**
@@ -161,7 +221,8 @@ public final class Qa40xGenerator implements AudioPlayback {
      * interleaved LOGICAL L,R int32 samples ({@code [2i]} = left, {@code [2i+1]} =
      * right).  Runs on the engine's USB event thread.
      */
-    private void nextFrames(int[] destination, int frames) {
+    @Override
+    public void nextFrames(int[] destination, int frames) {
         SignalGenerator gen = currentGenerator;
         OutputChannels gate = outputChannels;
         double sl = scaleL;
@@ -188,12 +249,12 @@ public final class Qa40xGenerator implements AudioPlayback {
     }
 
     /**
-     * TPDF dither at the selected target bit depth — mirrors {@code
+     * TPDF dither at the selected target bit depth - mirrors {@code
      * PcmQuantizer.tpdfNoise}, the dither the byte-PCM backends apply.  ±1 LSB
      * at {@code ditherBits} resolution; 0 = off.
      */
     private double tpdfNoise() {
-        double bits = ditherBits;   // single read — a live change can't shift by (0 − 1)
+        double bits = ditherBits;   // single read - a live change can't shift by (0 − 1)
         if (bits <= 0.0) return 0.0;
         // Math.pow(2, bits−1) equals the old 1L<<(bits−1) for whole bits, and
         // interpolates the ±1 LSB amplitude continuously for a fractional depth.

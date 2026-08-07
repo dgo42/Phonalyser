@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -34,7 +34,7 @@ class Qa40xProtocolTest {
 
     @Test
     void writeFrame_sampleRateValue2_matchesDoc() {
-        // doc §4: register 0x09 value 2 → bytes 09 00 00 00 02
+        // doc §4: register 0x09 value 2 -> bytes 09 00 00 00 02
         assertArrayEquals(new byte[]{0x09, 0x00, 0x00, 0x00, 0x02},
                 Qa40xProtocol.writeFrame(0x09, 2));
     }
@@ -47,7 +47,7 @@ class Qa40xProtocolTest {
 
     @Test
     void readRequestFrame_setsAddressMsb() {
-        // doc §4: read request 0x19 → first byte 0x99 (0x80 | 0x19)
+        // doc §4: read request 0x19 -> first byte 0x99 (0x80 | 0x19)
         byte[] frame = Qa40xProtocol.readRequestFrame(0x19);
         assertEquals((byte) 0x99, frame[0]);
         assertArrayEquals(new byte[]{(byte) 0x99, 0x00, 0x00, 0x00, 0x00}, frame);
@@ -90,7 +90,7 @@ class Qa40xProtocolTest {
         assertEquals(0, Qa40xProtocol.sampleRateCode(48_000));
         assertEquals(1, Qa40xProtocol.sampleRateCode(96_000));
         assertEquals(2, Qa40xProtocol.sampleRateCode(192_000));
-        // doc §4: code 3 is the QA403's 384 kHz — the code map itself is universal,
+        // doc §4: code 3 is the QA403's 384 kHz - the code map itself is universal,
         // the per-model gate lives in sampleRatesHz(model).
         assertEquals(3, Qa40xProtocol.sampleRateCode(384_000));
     }

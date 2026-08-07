@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -46,7 +46,7 @@ class Qa40xDuplexEngineTest {
     private static final int CHUNK_BYTES = 16_384;
     private static final int LEFT_WORD   = 0x01020304;
     private static final int RIGHT_WORD  = 0x05060708;
-    /** The engine's per-direction double-buffer depth — two reads (see
+    /** The engine's per-direction double-buffer depth - two reads (see
      *  {@link #priming_reachesStartThresholdWithSteadyChunks}) and, after this fix,
      *  at most two outstanding writes. */
     private static final int IN_FLIGHT   = 2;
@@ -148,7 +148,7 @@ class Qa40xDuplexEngineTest {
         engine.attachCapture((buffer, length) -> { });
         int registerWritesAfterStart = fake.registerWrites.size();
 
-        fake.completeNextRead();                 // writes already at the in-flight cap — none added
+        fake.completeNextRead();                 // writes already at the in-flight cap - none added
         engine.attachGenerator(patternSource()); // live swap, no restart
 
         assertEquals(registerWritesAfterStart, fake.registerWrites.size(),
@@ -191,7 +191,7 @@ class Qa40xDuplexEngineTest {
         engine.attachCapture((buffer, length) -> { });
         int writesBefore = fake.submittedWrites.size();
 
-        fake.completeNextWrite();   // exercises writeCompleted → buffer recycled
+        fake.completeNextWrite();   // exercises writeCompleted -> buffer recycled
         fake.completeNextRead();    // read-driven pacing submits one more write
 
         assertEquals(0, fake.cancelAllCount, "completions must not tear the stream down");
@@ -210,7 +210,7 @@ class Qa40xDuplexEngineTest {
         // Teardown tail: cancelAll strictly BEFORE reg8 = 0 (§7 step 7), then
         // the idle analyzer parks at the protected ranges (§7 step 8): input
         // +42 dBV (code 7, attenuator relay engaged) and output −12 dBV
-        // (code 0) — so a sensitive range never sits live between measurements —
+        // (code 0) - so a sensitive range never sits live between measurements -
         // and finally the front-panel I2S port is stopped (reg 0x0A = 0), leaving
         // it as a fresh connect finds it.
         assertEquals("cancelAll", fake.ops.get(fake.ops.size() - 6));
@@ -219,6 +219,101 @@ class Qa40xDuplexEngineTest {
         assertEquals("reg=6:0",   fake.ops.get(fake.ops.size() - 3));
         assertEquals("reg=10:0",  fake.ops.get(fake.ops.size() - 2));
         assertEquals("reg=11:0",  fake.ops.get(fake.ops.size() - 1));
+    }
+
+    /**
+     * The safety one: a stop that faults must not cost the attenuator park.
+     *
+     * <p>Pull the analyzer's cable mid-generation and the stop's register write
+     * raises an Error out of the binding.  Written as a bare sequence, the park
+     * ({@code reg5 = 7}, +42 dBV, relay engaged) and the I2S shutdown simply never
+     * ran - the device that came back was left sitting at the sensitive range the
+     * measurement had used, which is the failure this guards against.  The
+     * fault still reaches the caller; what it may not do is take the safe state
+     * with it.
+     */
+    @Test
+    void aStopThatFaultsStillParksTheAttenuator() {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDuplexEngine engine = engine(fake, millis -> { });
+        engine.attachCapture((buffer, length) -> { });
+
+        // Exactly the stop's own register write faults - a transport that has not
+        // gone for good, which is the case where the park still reaches hardware.
+        fake.failNextWithNativeError(1);
+        assertThrows(Error.class, engine::detachCapture,
+                "the caller is still told the analyzer stopped answering");
+
+        assertTrue(fake.ops.contains("reg=5:7"),
+                "the input parks at +42 dBV (code 7, attenuator engaged) even though "
+                        + "the stop blew up - a sensitive range left live on an "
+                        + "unattended analyzer is the fault this guards");
+        assertTrue(fake.ops.contains("reg=6:0"), "and the output at the low range");
+        assertTrue(fake.ops.contains("reg=10:0"), "and the front-panel I2S port is off");
+    }
+
+    /**
+     * The device vanishing mid-stream tells BOTH lanes, and says so once.
+     *
+     * <p>This is the bench failure this test exists for: an unplugged
+     * analyzer does not throw anywhere - the transfers simply stop completing -
+     * and the read completion is the pacing clock, so the stream ends while
+     * {@code streaming} still says true.  Before this, both lanes went on
+     * believing they were running: the generator kept its Play button lit and
+     * the scope kept drawing the last trace it had.
+     */
+    @Test
+    void aTransferThatFailsMidStreamTellsBothLanes() {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDuplexEngine engine = engine(fake, millis -> { });
+        List<String> told = new ArrayList<>();
+        engine.attachCapture(new Qa40xDuplexEngine.CaptureConsumer() {
+            @Override
+            public void onAudio(byte[] buffer, int length) { }
+
+            @Override
+            public void laneFailed(String detail) {
+                told.add("capture:" + detail);
+            }
+        });
+        engine.attachGenerator(new Qa40xDuplexEngine.SampleSource() {
+            @Override
+            public void nextFrames(int[] destination, int frames) { }
+
+            @Override
+            public void laneFailed(String detail) {
+                told.add("generator:" + detail);
+            }
+        });
+
+        engine.transferFailed(true, "NO_DEVICE");
+
+        assertEquals(List.of("capture:NO_DEVICE", "generator:NO_DEVICE"), told,
+                "one clock, so half a stream is not a state either lane can use");
+    }
+
+    /** And a transfer cancelled by OUR OWN stop stays silent - that one is not a
+     *  failure, and reporting it would stop a measurement every time the
+     *  operator changed a range. */
+    @Test
+    void aTransferCancelledByTheStopTellsNobody() {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDuplexEngine engine = engine(fake, millis -> { });
+        List<String> told = new ArrayList<>();
+        engine.attachCapture(new Qa40xDuplexEngine.CaptureConsumer() {
+            @Override
+            public void onAudio(byte[] buffer, int length) { }
+
+            @Override
+            public void laneFailed(String detail) {
+                told.add(detail);
+            }
+        });
+
+        engine.detachCapture();                 // clears streaming, then cancels
+        engine.transferFailed(true, "CANCELLED");
+
+        assertTrue(told.isEmpty(), "the stop's own cancellations are not a device loss");
     }
 
     @Test
@@ -246,7 +341,7 @@ class Qa40xDuplexEngineTest {
 
         engine.detachGenerator();
 
-        assertEquals(0, fake.cancelAllCount, "one lane still attached — no teardown");
+        assertEquals(0, fake.cancelAllCount, "one lane still attached - no teardown");
         assertEquals(registerWrites, fake.registerWrites.size());
     }
 
@@ -261,7 +356,7 @@ class Qa40xDuplexEngineTest {
         // Model a transport that completes writes the instant they are accepted:
         // before every paced read, drain all outstanding writes.  A correct engine
         // must then submit EXACTLY one write per read completion (read-clocked, 1:1)
-        // — never a self-sustaining write loop off writeCompleted.
+        // - never a self-sustaining write loop off writeCompleted.
         int reads = 200;
         for (int i = 0; i < reads; i++) {
             while (!fake.pendingWriteBuffers.isEmpty()) {
@@ -282,7 +377,7 @@ class Qa40xDuplexEngineTest {
 
         engine.attachCapture((buffer, length) -> { });
 
-        // Writes are never completed — models the output endpoint draining slower
+        // Writes are never completed - models the output endpoint draining slower
         // than read completions arrive (a scheduling-jitter / unfocused-window
         // burst).  Outstanding writes MUST stay bounded at the in-flight depth; the
         // pre-fix engine submitted one write per read and grew the queue without
@@ -306,8 +401,8 @@ class Qa40xDuplexEngineTest {
         engine.attachCapture((buffer, length) -> { });
         int primedWrites = fake.submittedWrites.size();
 
-        // The 2026-07-17 bench race: reads and writes complete at the SAME average
-        // rate, but bursty — each cycle two reads land while both write slots are
+        // The bench race: reads and writes complete at the SAME average
+        // rate, but bursty - each cycle two reads land while both write slots are
         // still draining, THEN the two writes complete.  Skipping the paced write at
         // the cap without repaying it loses half the writes here (the periodic
         // underrun "meander" seen on the ZoomedView, tx≫rx in the mock counters);
@@ -321,7 +416,7 @@ class Qa40xDuplexEngineTest {
         }
 
         assertEquals(primedWrites + 2 * cycles, fake.submittedWrites.size(),
-                "every read completion's paced write is eventually submitted — skipped ones repaid");
+                "every read completion's paced write is eventually submitted - skipped ones repaid");
         assertTrue(fake.pendingWriteBuffers.size() <= IN_FLIGHT,
                 "repayment never exceeds the in-flight bound, was " + fake.pendingWriteBuffers.size());
     }
@@ -367,7 +462,7 @@ class Qa40xDuplexEngineTest {
                 new FakeTransport.RegWrite(8, 0),
                 new FakeTransport.RegWrite(5, 0),
                 new FakeTransport.RegWrite(6, 3),
-                new FakeTransport.RegWrite(9, 1),   // 96 kHz → code 1
+                new FakeTransport.RegWrite(9, 1),   // 96 kHz -> code 1
                 new FakeTransport.RegWrite(11, 0),  // frame width first, cleared here
                 new FakeTransport.RegWrite(10, 0),  // then I2S control, off here
                 new FakeTransport.RegWrite(8, 5)),

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * The QA402/QA403 settings block — the {@code custom.qa40x} section of
+ * The QA402/QA403 settings block - the {@code custom.qa40x} section of
  * preferences.yaml.  Owned by {@link Qa40xDeviceManager}, which registers it
  * with {@code Preferences}; the settings dialog edits it and the Preferences
  * dialog's OK commits it.

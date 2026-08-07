@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -22,29 +22,29 @@ import lombok.experimental.UtilityClass;
 
 /**
  * QA402/QA403 raw ↔ volts conversions and per-range full-scale voltages (see
- * {@code doc/QA40X-PROTOCOL.md} §6).  Pure and stateless — the caller supplies
+ * {@code doc/QA40X-PROTOCOL.md} §6).  Pure and stateless - the caller supplies
  * the selected range dBV and the matching on-device linear cal factor
  * ({@code 10^(dB/20)} from {@link Qa40xCalibration}).
  *
- * <h2>Range semantics (bench 2026-07-20; see doc §6 "Levels cheat-sheet")</h2>
+ * <h2>Range semantics (see doc §6 "Levels cheat-sheet")</h2>
  * The two directions' "dBV" range labels are NOT the same unit:
  * <ul>
- *   <li><b>Output label = genuine RMS dBV, per single leg</b> — a sine of
+ *   <li><b>Output label = genuine RMS dBV, per single leg</b> - a sine of
  *       {@code maxOutputDbv} dBV RMS on one leg reaches full scale.  The balanced
  *       {@code Out+ − Out−} is +6 dB, but that is the wire, not the sample.</li>
- *   <li><b>Input label is really a dBFS / peak-to-peak reference</b> — the
+ *   <li><b>Input label is really a dBFS / peak-to-peak reference</b> - the
  *       {@code N} "dBV" input range clips (0 dBFS) at {@code 10^(N/20)} Vpp
  *       <em>differential</em>, so the true RMS full scale is {@code N − 9} dB: a
  *       constant 9 dB below the label = {@code +3} (peak/RMS, √2) {@code + 6}
- *       (differential ×2 — the vendor "−6 dB differential-ADC" term).</li>
+ *       (differential ×2 - the vendor "−6 dB differential-ADC" term).</li>
  * </ul>
- * This supersedes the 2026-07-17 mock ruling ("label = RMS FS both ways"): a
- * digital mock loopback shows no differential doubling, so it could not surface
- * the input's 9 dB offset.
+ * This supersedes the earlier mock-derived assumption that the label is RMS full
+ * scale in both directions: a digital mock loopback shows no differential
+ * doubling, so it could not surface the input's 9 dB offset.
  *
  * <h2>Load-bearing conventions</h2>
  * <ul>
- *   <li><b>ADC:</b> {@code adc_volts = raw/MAXINT · cal · 10^(N/20) / 2} — the
+ *   <li><b>ADC:</b> {@code adc_volts = raw/MAXINT · cal · 10^(N/20) / 2} - the
  *       range {@code N} is {@code 20·log₁₀(Vpp clip)}, so {@code 10^(N/20)} is the
  *       peak-to-peak clip and {@code /2} makes it the peak ({@code raw/MAXINT} is
  *       the sample normalised to [-1, 1]).  A full-scale sine then has RMS
@@ -58,12 +58,12 @@ import lombok.experimental.UtilityClass;
  *
  * <h2>Per-range effective full-scale RMS</h2>
  * Full scale is the sample reaching {@code ±MAXINT}.  <b>Output</b> lands at
- * ≈ {@code 10^(maxOutputDbv/20)} — the per-leg label as an RMS voltage;
+ * ≈ {@code 10^(maxOutputDbv/20)} - the per-leg label as an RMS voltage;
  * <b>input</b> lands 9 dB lower, at ≈ {@code 10^((maxInputDbv−9)/20)}, because the
  * input label is a Vpp-differential (dBFS) reference, not RMS dBV.  Both
  * cal-corrected:
  * <ul>
- *   <li><b>Input:</b> {@code inputFullScaleRmsVolts = cal · 10^(N/20) / (2·√2) ≈ cal · 10^((maxInputDbv−9)/20)} (Vpp → peak → RMS).</li>
+ *   <li><b>Input:</b> {@code inputFullScaleRmsVolts = cal · 10^(N/20) / (2·√2) ≈ cal · 10^((maxInputDbv−9)/20)} (Vpp -> peak -> RMS).</li>
  *   <li><b>Output:</b> {@code outputFullScaleRmsVolts = 10^((maxOutputDbv+3)/20) / (cal · √2)}.</li>
  * </ul>
  * These feed the QA40x device card's per-range full-scale voltages; keep the
@@ -79,11 +79,11 @@ public class Qa40xLevels {
     /** Peak-vs-RMS (√2) term: 0 dBFS is a peak limit, dBV is RMS.  The output
      *  folds it into the per-leg full scale; the input applies it via {@link #SQRT2}. */
     private static final double PEAK_TO_RMS_DB = 3.0;
-    /** Peak-to-peak → peak divisor for the INPUT.  The "N dBV" input range is a
-     *  Vpp-differential (dBFS) reference — {@code 10^(N/20)} is the peak-to-peak
-     *  clip — so halving it gives the peak amplitude.  An EXACT factor of 2
+    /** Peak-to-peak -> peak divisor for the INPUT.  The "N dBV" input range is a
+     *  Vpp-differential (dBFS) reference - {@code 10^(N/20)} is the peak-to-peak
+     *  clip - so halving it gives the peak amplitude.  An EXACT factor of 2
      *  (6.02 dB from the balanced {@code In+ − In− = 2×}), not a rounded 6 dB
-     *  (doc §6 cheat-sheet, bench 2026-07-20). */
+     *  (doc §6 cheat-sheet). */
     private static final double VPP_TO_PEAK         = 2.0;
     /** Volts-to-dB divisor (20·log10). */
     private static final double DB_DIVISOR          = 20.0;
@@ -104,7 +104,7 @@ public class Qa40xLevels {
      * Converts a PEAK output voltage to a 32-bit DAC sample:
      * {@code round(peakVolts · dacCal · 10^(-(maxOutputDbv+3)/20) · MAXINT)},
      * saturated to {@code ±MAXINT} (§6).  {@code peakVolts} MUST be peak
-     * amplitude (RMS·√2) — see the class note.
+     * amplitude (RMS·√2) - see the class note.
      */
     public int dacInt32(double peakVolts, int maxOutputDbv, double dacCal) {
         double scaled = peakVolts * dacCal * dbToLinear(-(maxOutputDbv + PEAK_TO_RMS_DB)) * MAXINT;

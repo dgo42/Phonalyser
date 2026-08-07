@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -21,6 +21,7 @@ package org.edgo.audio.measure.sound.qa40x;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioDeviceManagerProvider;
+import org.edgo.audio.measure.sound.LibUsb;
 
 /** Registers the QuantAsylum QA402/QA403 backend with {@code AudioBackend}.
  *  Construction here must stay free of libusb: the manager opens its USB session
@@ -35,5 +36,12 @@ public final class Qa40xDeviceManagerProvider implements AudioDeviceManagerProvi
     @Override
     public AudioDeviceManager create() {
         return new Qa40xDeviceManager();
+    }
+
+    /** The analyzer is reachable only through {@code libusb-1.0}; a JVM whose
+     *  binding cannot load has no QA40x backend to offer, whatever the OS. */
+    @Override
+    public boolean available() {
+        return LibUsb.available();
     }
 }

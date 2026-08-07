@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -29,7 +29,7 @@ import lombok.Setter;
 /**
  * Recording {@link Qa40xTransport} test double.  It logs every register write in
  * order, hands back queued register-read replies, and holds audio transfers until
- * a test completes them synchronously — so the engine's async discipline can be
+ * a test completes them synchronously - so the engine's async discipline can be
  * driven step by step on the test thread.
  */
 final class FakeTransport implements Qa40xTransport {
@@ -52,17 +52,44 @@ final class FakeTransport implements Qa40xTransport {
 
     int cancelAllCount;
 
+    /** When set, every register transfer fails the way a handle to a device that
+     *  has been unplugged fails - {@code LIBUSB_ERROR_IO} out of the bulk
+     *  transfer, in both directions.  What a real analyzer does after a
+     *  detach / re-attach, and what a manager holding that handle has to
+     *  notice. */
+    @Setter
+    private boolean failTransfers;
+
+    /** How many of the next register transfers fault the way a NATIVE call
+     *  faults - see {@link #failNextWithNativeError(int)}. */
+    private int nativeFaults;
+
     @Setter
     private TransferListener listener;
 
+    /**
+     * Makes the next {@code count} register transfers raise an {@link Error},
+     * which is what JNA does when the invocation ITSELF faults: the analyzer's
+     * cable was pulled and the native call went into memory nobody owns any more
+     * ("Invalid memory access" out of {@code libusb_bulk_transfer}).  That is the
+     * failure every {@code catch (RuntimeException)} in the stack used to let
+     * straight through - quite unlike {@link #setFailTransfers},
+     * which is a device that is still there and answered an error code.
+     */
+    void failNextWithNativeError(int count) {
+        nativeFaults = count;
+    }
+
     @Override
     public void registerWrite(int reg, int value) {
+        failIfDead("registerWrite", reg);
         registerWrites.add(new RegWrite(reg, value));
         ops.add("reg=" + reg + ":" + value);
     }
 
     @Override
     public int registerRead(int reg) {
+        failIfDead("registerRead", reg);
         ops.add("read=" + reg);
         Integer reply = readReplies.poll();
         return reply == null ? 0 : reply;
@@ -77,6 +104,19 @@ final class FakeTransport implements Qa40xTransport {
     @Override
     public void submitAudioRead(byte[] buffer) {
         pendingReadBuffers.add(buffer);
+    }
+
+    /** The refusal a dead handle gives, worded as the binding words it - as an
+     *  error code, or as the native fault of {@link #failWithNativeError}. */
+    private void failIfDead(String what, int reg) {
+        String detail = what + "(0x" + Integer.toHexString(reg) + ") failed: ";
+        if (nativeFaults > 0) {
+            nativeFaults--;
+            throw new Error(detail + "Invalid memory access");
+        }
+        if (failTransfers) {
+            throw new IllegalStateException(detail + "LIBUSB_ERROR_IO");
+        }
     }
 
     @Override

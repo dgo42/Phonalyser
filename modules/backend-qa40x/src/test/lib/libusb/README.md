@@ -5,8 +5,8 @@ the Phonalyser JNA binding calls
 (`src/main/java/org/edgo/audio/measure/sound/LibUsb.java`) and emulates **one
 permanently-connected QA403** behind it, wired as if a loopback cable joined its
 output to its input. Point the Java library search at this DLL and the entire
-stack — JNA binding -> `Qa40xDeviceFinder` -> `LibUsbQa40xTransport` ->
-`Qa40xDuplexEngine` -> recorder/generator -> the full app — runs unmodified,
+stack - JNA binding -> `Qa40xDeviceFinder` -> `LibUsbQa40xTransport` ->
+`Qa40xDuplexEngine` -> recorder/generator -> the full app - runs unmodified,
 with **no Java production-code changes**, so the QA40x backend can be tested end
 to end without QA40x hardware.
 
@@ -31,10 +31,39 @@ layout, the async transfer lifecycle, event-thread dispatch, and the
   voltage the app asks the DAC for is what the app's ADC math reads back. The
   device output L/R swap is un-swapped by the "cable"; the ADC is not swapped.
 
+## Exported surface - 21 functions
+
+The export set must match the `Lib` interface in `LibUsb.java` EXACTLY: JNA
+resolves each function by name on first call, so one the binding declares and
+the mock omits fails at run time, in the middle of an open, as
+`UnsatisfiedLinkError: Error looking up function '<name>'` - not at build time.
+That is not hypothetical: `libusb_get_configuration` and
+`libusb_set_configuration` were added to the binding for the macOS
+select-the-configuration path and the mock went stale behind them, which broke
+every mock-backed test until it was extended.
+
+- Lifecycle / enumeration (8): `libusb_init`, `libusb_exit`,
+  `libusb_error_name`, `libusb_get_device_list`, `libusb_free_device_list`,
+  `libusb_get_device_descriptor`, `libusb_get_bus_number`,
+  `libusb_get_device_address`.
+- Handles (7): `libusb_open`, `libusb_close`, `libusb_reset_device`,
+  `libusb_get_configuration`, `libusb_set_configuration`,
+  `libusb_claim_interface`, `libusb_release_interface`.
+- Sync bulk (1): `libusb_bulk_transfer`.
+- Async (5): `libusb_alloc_transfer`, `libusb_free_transfer`,
+  `libusb_submit_transfer`, `libusb_cancel_transfer`,
+  `libusb_handle_events_timeout_completed`.
+
+The device has ONE configuration, value 1, and is always in it, so
+`libusb_get_configuration` always reports 1 and the binding's
+`set_configuration` branch is never taken; `set_configuration` accepts 1 and
+answers `ERROR_NOT_FOUND` for anything else. Verify the built DLL with
+`dumpbin /exports x64\Release\libusb-1.0.dll` - all 21 names, undecorated.
+
 Non-goals: no QA402/QA401, no multi-device/hot-plug, no isochronous/control
 transfers, no noise/distortion modelling (the loopback is mathematically clean).
 
-## Build — Visual Studio 2015 ONLY
+## Build - Visual Studio 2015 ONLY
 
 This library is built with **Visual Studio 2015** (Platform Toolset **v140**),
 x64 only. Do **not** build it with the VS2019/VS2022 MSBuild or a newer toolset.
@@ -56,12 +85,12 @@ Plain C, compiled `/TC` at `/W4` with zero warnings; the CRT is linked
 statically (`/MT`) so the DLL has no VC++ runtime redistributable dependency.
 `winmm.lib` is linked for `timeBeginPeriod`.
 
-### Output — two DLL names, both required
+### Output - two DLL names, both required
 
 The build writes to `x64\<Configuration>\`:
 
-- `libusb-1.0.dll` — the actual mock (`TargetName`).
-- `libusb-1.0_x64.dll` — an identical copy made by the project's post-build step.
+- `libusb-1.0.dll` - the actual mock (`TargetName`).
+- `libusb-1.0_x64.dll` - an identical copy made by the project's post-build step.
 
 Both names exist because the Java binding's `candidateLibraryNames` tries the
 **arch-suffixed** name (`libusb-1.0_x64` on a 64-bit JVM) **first**, then the
@@ -83,7 +112,7 @@ mvn -o test -Dtest=Qa40xMockLoopbackIT "-Dsurefire.excludedGroups=" ^
 ```
 
 Build the DLL first (`build.cmd`) or the test fails with a message telling you
-to. Debug builds work too — pass the `x64\Debug` directory instead.
+to. Debug builds work too - pass the `x64\Debug` directory instead.
 
 ## Run the full app against the mock
 

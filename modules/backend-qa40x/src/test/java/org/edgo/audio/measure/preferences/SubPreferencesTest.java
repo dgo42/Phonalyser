@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The component-owned preference block contract: edits reach the live value
- * only on commit, and a saved block survives a round trip.  Pure state — no
+ * only on commit, and a saved block survives a round trip.  Pure state - no
  * files, no SWT, no hardware.
  */
 class SubPreferencesTest {

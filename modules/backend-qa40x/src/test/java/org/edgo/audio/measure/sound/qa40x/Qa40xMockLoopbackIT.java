@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -48,27 +48,27 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * End-to-end integration of the REAL QA40x USB stack — JNA binding
- * ({@link LibUsb}) → {@link Qa40xDeviceFinder} → {@link LibUsbQa40xTransport} →
- * {@link Qa40xDuplexEngine} — against the native mock {@code libusb-1.0.dll} that
+ * End-to-end integration of the REAL QA40x USB stack - JNA binding
+ * ({@link LibUsb}) -> {@link Qa40xDeviceFinder} -> {@link LibUsbQa40xTransport} ->
+ * {@link Qa40xDuplexEngine} - against the native mock {@code libusb-1.0.dll} that
  * emulates one permanently-connected QA403 with an ideal loopback cable.  No
  * production code is stubbed: the mock sits below the JNA seam, exactly where a
  * real analyzer would.
  *
- * <p>Every expected value here is DERIVED from the mock's documented formulas
- * (see {@code .claude/plans/qa40x-mock-libusb.md}), not hard-coded: the cal-page
+ * <p>Every expected value here is DERIVED from the formulas the mock
+ * implements, not hard-coded: the cal-page
  * dB records ({@code ADC ±(0.10+0.02·c)}, {@code DAC ±(0.05+0.02·c)}, float32),
  * and the per-channel loopback gain
- * {@code G = 10^((outFS − inFS)/20) / (calDac · calAdc)} — the round-trip gain that
- * makes the host ADC read reproduce the DAC peak voltage under the 2026-07-17
- * range-label ruling (the former {@code +9} carried the dropped vendor ADC
+ * {@code G = 10^((outFS − inFS)/20) / (calDac · calAdc)} - the round-trip gain that
+ * makes the host ADC read reproduce the DAC peak voltage under the current
+ * range-label semantics (the former {@code +9} carried the dropped vendor ADC
  * {@code −6} dB term; {@link Qa40xLevels} now mirrors the DAC {@code +3}, zeroing it).
  *
  * <p><b>Requires the mock DLL, built manually (VS2015):</b> run
  * {@code src\test\lib\libusb\build.cmd}; Maven never builds it.  {@code @BeforeAll}
  * resolves {@code src/test/lib/libusb/x64/Release} (falling back to {@code Debug})
  * and sets the production {@code -Dlibusb.path} flag BEFORE the binding is first
- * touched — exercising the exact mechanism the app uses.  This works only in a
+ * touched - exercising the exact mechanism the app uses.  This works only in a
  * <b>fresh JVM</b> where this class runs alone, because {@link LibUsb} loads the
  * library once per process.  It is {@code @Tag}-excluded from the normal build;
  * run it isolated:
@@ -99,7 +99,7 @@ class Qa40xMockLoopbackIT {
     private static final float DAC_DB_BASE = 0.05f;
     private static final float DAC_DB_STEP = 0.02f;
     private static final double DB_DIVISOR = 20.0;
-    /** Relative tolerance for the cal factors — float32 round-trips bit-exactly. */
+    /** Relative tolerance for the cal factors - float32 round-trips bit-exactly. */
     private static final double REL_EPS    = 1e-6;
 
     /** Loopback session config: input 24 dBV, output 18 dBV, 48 kHz. */
@@ -132,7 +132,7 @@ class Qa40xMockLoopbackIT {
     private static final double SQRT2    = Math.sqrt(2.0);
 
     private final Qa40xDeviceFinder finder = new Qa40xDeviceFinder();
-    private LibUsbQa40xTransport transport;
+    private Qa40xTransport transport;
     private Qa40xDuplexEngine engine;
 
     @BeforeAll
@@ -150,7 +150,7 @@ class Qa40xMockLoopbackIT {
         if (libDir == null) {
             fail("mock " + DLL_FILENAME + " not found in " + releaseDir
                     + " or " + debugDir
-                    + " — build it with src\\test\\lib\\libusb\\build.cmd (VS2015)");
+                    + " - build it with src\\test\\lib\\libusb\\build.cmd (VS2015)");
             return;
         }
         // Must precede any LibUsb touch; only safe in a fresh, single-class fork.
@@ -237,12 +237,12 @@ class Qa40xMockLoopbackIT {
                 "left amplitude " + measuredAmplitude + " vs expected " + expectedAmplitude
                         + " (" + amplitudeErrorDb + " dB)");
 
-        // (b) Right lane is silent — proves the DAC L/R swap / ADC no-swap wiring.
+        // (b) Right lane is silent - proves the DAC L/R swap / ADC no-swap wiring.
         double rightAmplitude = rms(right) * SQRT2;
         assertTrue(rightAmplitude <= expectedAmplitude / ISOLATION_RATIO,
                 "right lane not isolated: " + rightAmplitude);
 
-        // (c) The 1 kHz bin dominates its harmonics — the tone is where we put it.
+        // (c) The 1 kHz bin dominates its harmonics - the tone is where we put it.
         double powerTone = goertzelPower(left, TONE_HZ);
         double power2nd = goertzelPower(left, HARMONIC_2ND_HZ);
         double power3rd = goertzelPower(left, HARMONIC_3RD_HZ);
@@ -253,7 +253,7 @@ class Qa40xMockLoopbackIT {
     @Test
     @Order(4)
     void stopStartCycle_streamsAgain() throws InterruptedException {
-        // A second RUN_START against the mock after the §7 cancelAll → reg8=0 stop.
+        // A second RUN_START against the mock after the §7 cancelAll -> reg8=0 stop.
         CapturingConsumer consumer = new CapturingConsumer(TARGET_FRAMES_RESTART);
         engine.attachCapture(consumer);
 
