@@ -1,4 +1,5 @@
 .claude
+.idea
 Claude.md
 preferences.yaml
 /devices.yaml
@@ -15,6 +16,7 @@ dependency-reduced-pom.xml
 buildNumber.properties
 HOWTO-RELEASE.md
 doc/store-description.txt
-src/test/lib/libusb/x64/
-src/test/lib/libusb/.vs/
+modules/backend-qa40x/src/test/lib/libusb/x64/
+modules/backend-qa40x/src/test/lib/libusb/.vs/
 *.vcxproj.user
+/modules/backend-qa40x/src/test/lib/libusb/x64
