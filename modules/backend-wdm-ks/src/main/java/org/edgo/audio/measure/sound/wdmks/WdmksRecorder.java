@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
 import org.edgo.audio.measure.common.Closeables;
-import org.edgo.audio.measure.sound.AbstractPcmCapture;
+import org.edgo.audio.measure.sound.AbstractPortAudioCapture;
 import org.edgo.audio.measure.sound.PortAudio;
 import org.edgo.audio.measure.sound.SpscByteArrayRing;
 
@@ -41,7 +41,10 @@ import lombok.extern.log4j.Log4j2;
  * listener work never blocks the audio thread.
  */
 @Log4j2
-public class WdmksRecorder extends AbstractPcmCapture {
+public class WdmksRecorder extends AbstractPortAudioCapture {
+
+    /** This backend's name in the log and in a reported device loss. */
+    private static final String BACKEND_LABEL = "WDM-KS";
 
     private final WdmksDeviceManager.WdmksDeviceRef device;
 
@@ -50,7 +53,7 @@ public class WdmksRecorder extends AbstractPcmCapture {
 
     /**
      * Hand-off from the PA audio thread to the consume thread.  Lock-free
-     * SPSC ring of {@code byte[]} references — replaces {@code
+     * SPSC ring of {@code byte[]} references - replaces {@code
      * LinkedBlockingQueue} so {@code offer}/{@code poll} don't allocate a
      * {@code Node} per chunk.  Capacity 64 matches the prior queue limit.
      */
@@ -67,13 +70,13 @@ public class WdmksRecorder extends AbstractPcmCapture {
     /** PortAudio status-flag counters since the last consumer log. */
     private final AtomicLong        paInputOverflowCount  = new AtomicLong();
     private final AtomicLong        paInputUnderflowCount = new AtomicLong();
-    /** Pool misses (callback had to allocate) since the last consumer log —
+    /** Pool misses (callback had to allocate) since the last consumer log -
      *  steady state must be 0; non-zero means the pool is poisoned with
      *  wrong-sized buffers (PortAudio changed its block size mid-stream)
      *  and the audio thread is allocating per callback. */
     private final AtomicLong        poolMissAllocSinceLog = new AtomicLong();
     /** Audio-thread-only spare: keeps a queue-rejected buffer for the next
-     *  callback instead of offering it back to {@link #bufferPool} — the
+     *  callback instead of offering it back to {@link #bufferPool} - the
      *  pool ring is SPSC with the consume thread as its sole producer, and
      *  a second producer can silently lose a slot. */
     private byte[] callbackSpare;
@@ -95,7 +98,7 @@ public class WdmksRecorder extends AbstractPcmCapture {
         if ((flags & PortAudio.paInputOverflow)  != 0) paInputOverflowCount.incrementAndGet();
         if ((flags & PortAudio.paInputUnderflow) != 0) paInputUnderflowCount.incrementAndGet();
         int frames = frameCount.intValue();
-        // Raw captured bytes — mono (captureChannels == 1) or stereo; dispatch()
+        // Raw captured bytes - mono (captureChannels == 1) or stereo; dispatch()
         // upmixes a mono channel to stereo off the audio thread.
         int bytes  = frames * sampleBytes * captureChannels;
         byte[] buf = callbackSpare;
@@ -112,7 +115,7 @@ public class WdmksRecorder extends AbstractPcmCapture {
             // capture would silently stop delivering.  Log once, keep the
             // buffer as the next spare, keep the stream running.
             if (callbackFaultLogged.compareAndSet(false, true)) {
-                log.error("WDM-KS capture callback failed — dropping block: {}", th.toString(), th);
+                log.error("WDM-KS capture callback failed - dropping block: {}", th.toString(), th);
             }
             callbackSpare = buf;
             return PortAudio.paContinue;
@@ -126,8 +129,16 @@ public class WdmksRecorder extends AbstractPcmCapture {
     };
 
     public WdmksRecorder(WdmksDeviceManager.WdmksDeviceRef device, int sampleRate, int bitDepth) {
-        super(sampleRate, bitDepth, Math.min(2, Math.max(1, device.maxInputChannels())));
+        super(BACKEND_LABEL, sampleRate, bitDepth,
+                Math.min(2, Math.max(1, device.maxInputChannels())));
         this.device = device;
+    }
+
+    /** {@inheritDoc}  The base asks for this to run its liveness check; the
+     *  stream's whole lifecycle stays here. */
+    @Override
+    protected Pointer paStream() {
+        return stream;
     }
 
     @Override
@@ -138,8 +149,8 @@ public class WdmksRecorder extends AbstractPcmCapture {
         // WDM-KS stalls after the priming callback if suggestedLatency is 0 or
         // framesPerBuffer fights the KS pin's preferred size.  Prefer the
         // device's own default-LOW latency so PortAudio asks the KS pin for
-        // small chunks (~10–20 ms) — that drives the callback rate up to
-        // 50–100 Hz so the scope cap/s isn't bound by 100–200 ms KS periods.
+        // small chunks (~10-20 ms) - that drives the callback rate up to
+        // 50-100 Hz so the scope cap/s isn't bound by 100-200 ms KS periods.
         // Fall back to defaultHighInputLatency (and finally 25 ms) if the
         // driver reports 0 for the low value.
         double suggestedLatency =
@@ -159,12 +170,18 @@ public class WdmksRecorder extends AbstractPcmCapture {
                 "Pa_IsFormatSupported(input " + sampleRate + " Hz / " + bitDepth + " bit)");
 
         PointerByReference handle = new PointerByReference();
+        // Counted BEFORE the open, so a device-list refresh can never call
+        // Pa_Terminate while this open is in flight - see PortAudio#streamOpening.
+        PortAudio.streamOpening();
         int rc = lib.Pa_OpenStream(handle,
                 in, null,
                 sampleRate,
                 PortAudio.paFramesPerBufferUnspecified,
                 PortAudio.paClipOff,
                 paCallback, null);
+        if (rc != PortAudio.paNoError) {
+            PortAudio.streamClosed();
+        }
         PortAudio.check(rc, "Pa_OpenStream(input)");
         stream = handle.getValue();
 
@@ -181,6 +198,10 @@ public class WdmksRecorder extends AbstractPcmCapture {
         queue.clear();
         bufferPool.clear();
         overflowCount.set(0);
+        // Reset before the consume thread exists, so it is safely published to
+        // it: the stream is started BELOW, after that thread is running, and a
+        // liveness check that ran in between would find it not yet active.
+        resetLivenessCheck();
         consumerThread = new Thread(this::consumeLoop, "wdmks-consume");
         consumerThread.setDaemon(true);
         consumerThread.setPriority(Thread.NORM_PRIORITY + 1);
@@ -210,14 +231,23 @@ public class WdmksRecorder extends AbstractPcmCapture {
             byte[] buffer = queue.aquire();
             if (buffer == null) {
                 // Ring empty.  Park briefly so we don't busy-spin a core
-                // while waiting for the next chunk (audio period is 10–20 ms;
+                // while waiting for the next chunk (audio period is 10-20 ms;
                 // 500 µs gives plenty of resolution without burning CPU).
                 // Windows timer granularity may stretch this to ~1 ms, which
-                // is still well below one audio period — the producer can
+                // is still well below one audio period - the producer can
                 // queue up to 63 chunks of headroom anyway.
+                //
+                // An empty ring is also the only symptom a pulled USB device
+                // has: the callback simply stops being invoked.  So a long
+                // enough silence is what prompts the one question that can tell
+                // "quiet" from "gone".
+                if (ringEmpty()) {
+                    return;
+                }
                 LockSupport.parkNanos(500_000L);
                 continue;
             }
+            ringDelivered();
             try {
                 dispatch(buffer, buffer.length);
             } finally {
@@ -233,10 +263,11 @@ public class WdmksRecorder extends AbstractPcmCapture {
         }
         if (stream != null) {
             Closeables.tryQuietly("Pa_CloseStream", () -> PortAudio.lib().Pa_CloseStream(stream));
+            PortAudio.streamClosed();
             stream = null;
         }
     }
 
     // SpscByteArrayRing was extracted to its own top-level class when
-    // WasapiRecorder adopted the same capture→consumer decoupling.
+    // WasapiRecorder adopted the same capture->consumer decoupling.
 }

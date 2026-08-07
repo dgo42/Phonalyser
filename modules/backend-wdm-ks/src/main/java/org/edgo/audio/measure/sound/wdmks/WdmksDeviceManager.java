@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
@@ -95,6 +96,15 @@ public class WdmksDeviceManager implements AudioDeviceManager {
         return list(false);
     }
 
+    /** PortAudio's enumeration is a process-lifetime snapshot, so this is one of
+     *  the two backends (with CoreAudio) where a rebuild means something.  The
+     *  shared library refuses while any PortAudio stream is open - an open
+     *  {@code PaStream*} would be freed under its owner. */
+    @Override
+    public boolean refreshDeviceList() {
+        return PortAudio.refreshDevices();
+    }
+
     private List<DeviceRef> list(boolean input) {
         List<DeviceRef> out = new ArrayList<>();
         Set<String> seenNames = new HashSet<>();
@@ -109,7 +119,7 @@ public class WdmksDeviceManager implements AudioDeviceManager {
             if (paDev < 0) continue;
             PortAudio.PaDeviceInfo info = lib.Pa_GetDeviceInfo(paDev);
             if (info == null) continue;
-            // Inputs: accept mono (>=1) too — the recorder upmixes a single
+            // Inputs: accept mono (>=1) too - the recorder upmixes a single
             // channel to stereo.  Outputs still require >=2.
             boolean canIn  = info.maxInputChannels  >= 1;
             boolean canOut = info.maxOutputChannels >= 2;
@@ -155,6 +165,15 @@ public class WdmksDeviceManager implements AudioDeviceManager {
 
     public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
         return new WdmksGenerator((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth, ditherBits);
+    }
+
+    /** Every WDM-KS open and every WDM-KS capture fails through
+     *  {@code PortAudio.check}, so the reading of its codes lives there - with
+     *  the code that writes those messages - and is shared with CoreAudio
+     *  rather than copied into both managers. */
+    @Override
+    public DeviceFailureReason classifyFailure(Throwable failure) {
+        return PortAudio.classifyFailure(failure);
     }
 
     private List<AudioFormat> probeFormats(WdmksDeviceRef d, boolean output) {

@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,6 +20,7 @@ package org.edgo.audio.measure.sound.javasound;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
@@ -35,6 +36,7 @@ import javax.sound.sampled.TargetDataLine;
 
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
@@ -47,7 +49,7 @@ import lombok.extern.log4j.Log4j2;
  * Discovery for the {@link AudioBackendType#JAVASOUND} backend.  Lists the
  * mixers reported by {@link AudioSystem#getMixerInfo()} that can supply at
  * least one {@link TargetDataLine} (capture) or {@link SourceDataLine}
- * (playback) — the same {@code javax.sound.sampled} surface
+ * (playback) - the same {@code javax.sound.sampled} surface
  * {@link JavaSoundGenerator} already uses for output.
  *
  * <p>Used as the cross-platform fallback on Linux and macOS where
@@ -74,9 +76,9 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
         }
     }
 
-    /** Playback buffer scales with the sample rate — {@value #BASE_BUFFER_FRAMES}
+    /** Playback buffer scales with the sample rate - {@value #BASE_BUFFER_FRAMES}
      *  frames per {@value #BASE_SAMPLE_RATE} Hz (so 8192 @ 768 kHz, 16384 @
-     *  1536 kHz) — keeping the underrun margin constant in TIME (a fixed frame
+     *  1536 kHz) - keeping the underrun margin constant in TIME (a fixed frame
      *  count would halve it each time the rate doubles: the ~108 µs dropouts seen
      *  on a scope at 768 kHz).  It is also the floor for rates at/below the base.
      *  Derived from the line format's sample rate, recomputed on each open so it
@@ -87,20 +89,74 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
     /**
      * Cached probe results per mixer name.  Probing actually opens lines
      * (the only reliable way past the {@code isLineSupported} false
-     * positives — see {@link #probeFormats}), so caching avoids the
+     * positives - see {@link #probeFormats}), so caching avoids the
      * latency hit on every {@code listSupportedFormats} call.
      */
     private final Map<String, List<AudioFormat>> inputFormatsCache  = new ConcurrentHashMap<>();
     private final Map<String, List<AudioFormat>> outputFormatsCache = new ConcurrentHashMap<>();
 
-    public JavaSoundDeviceManager() {}
+    /** The kernel's view of what each card can do (Linux only; every query
+     *  answers "unknown" elsewhere, which the probe treats as "ask the mixer"). */
+    private final ProcAsound procAsound;
+
+    /** Which SOCKET each Linux device is, and whether it has a plug (Linux and
+     *  USB only; every query answers null elsewhere, which {@link #list} treats
+     *  as "report the mixer exactly as it names itself"). */
+    private final AlsaPorts alsaPorts;
+
+    /** Puts an opened device's own volume controls at 0 dB, so the card's mixer
+     *  cannot sit inside a calibrated chain and scale it (Linux only; every
+     *  other host answers immediately). */
+    private final AlsaVolumes alsaVolumes;
+
+    /** Which mixer each requested output name's pin landed on, so
+     *  {@link #restoreOutputVolume} can put that mixer back at close. */
+    private final Map<String, String> pinnedOutputMixers = new ConcurrentHashMap<>();
+
+    public JavaSoundDeviceManager() {
+        ProcAsound proc = new ProcAsound();
+        AlsaJacks jacks = new AlsaJacks();
+        AlsaPorts ports = new AlsaPorts(proc, jacks);
+        this.procAsound = proc;
+        this.alsaPorts = ports;
+        this.alsaVolumes = new AlsaVolumes(proc, ports, jacks);
+    }
+
+    /** Injected so a test can point the capability reader, the port reader and
+     *  the volume writer at fixture trees. */
+    public JavaSoundDeviceManager(ProcAsound procAsound, AlsaPorts alsaPorts,
+                                  AlsaVolumes alsaVolumes) {
+        this.procAsound = procAsound;
+        this.alsaPorts = alsaPorts;
+        this.alsaVolumes = alsaVolumes;
+    }
 
     public List<DeviceRef> listInputDevices()  { return list(true);  }
     public List<DeviceRef> listOutputDevices() { return list(false); }
 
+    /**
+     * Every mixer that can supply a line in this direction - and, on Linux,
+     * every such mixer whose SOCKET is not reported empty.
+     *
+     * <p>A card's PCM devices are named after the chip ("USB Audio #1"), which
+     * says nothing about which cable an operator plugged where, and a card with
+     * a line pair and a microphone pair lists both whether or not anything is
+     * attached to either. {@link AlsaPorts} answers both questions from the
+     * card's own descriptors and the kernel's jack controls, so a Linux listing
+     * reads the way the Windows one does: the ports by name, and only the ones
+     * that are connected.
+     *
+     * <p>The port name goes into the DESCRIPTION and nowhere else. The mixer
+     * name is the device's identity - what a card binding, a saved preference
+     * and a remote client's device ref are all keyed on - and it must stay
+     * exactly what the host API calls it.
+     */
     private List<DeviceRef> list(boolean input) {
         List<DeviceRef> out = new ArrayList<>();
         Class<? extends Line> probe = input ? TargetDataLine.class : SourceDataLine.class;
+        // One enumeration, one look at the jacks: a plug pulled since the last
+        // scan must show up, and re-reading it per device would not.
+        alsaPorts.refresh();
         int slot = 0;
         for (Mixer.Info mi : AudioSystem.getMixerInfo()) {
             Mixer m;
@@ -111,15 +167,85 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
                 continue;
             }
             if (!m.isLineSupported(new DataLine.Info(probe, null))) continue;
+            AlsaPorts.Port port = alsaPorts.port(mi.getName(), input);
+            if (port != null && port.empty()) {
+                if (log.isInfoEnabled()) {
+                    log.info("{} has nothing plugged into its {} - not listed",
+                            mi.getName(), port.label());
+                }
+                continue;
+            }
             out.add(new JavaSoundDeviceRef(
                     slot++,
                     mi.getName(),
-                    mi.getDescription(),
-                    mi.getVendor(),
+                    port == null ? distinct(mi.getDescription(), mi.getName()) : port.label(),
+                    plainVendor(mi.getVendor()),
                     input, !input,
                     mi));
         }
         return out;
+    }
+
+    /**
+     * The host API's description with everything the mixer NAME already says
+     * taken out of it, part by comma-separated part.
+     *
+     * <p>The provider builds it from the card's long name, the PCM id and the
+     * PCM name, and those repeat both each other and the name the same mixer is
+     * listed under - so the line an operator reads carried the same words three
+     * times over and the one word that told two devices apart was at the end of
+     * it. Where two parts overlap the LONGER one stays: it is the one carrying
+     * the device number.
+     *
+     * <p>A description that says nothing the name does not is kept whole rather
+     * than emptied: the field is printed in brackets whatever is in it, and an
+     * empty pair of brackets reads worse than the repetition did.
+     *
+     * <p>Package-private so a test can drive it with the strings the providers
+     * emit, on a host that has none of their hardware.
+     */
+    String distinct(String description, String name) {
+        if (description == null || description.isBlank()) return "";
+        String known = name == null ? "" : name;
+        List<String> kept = new ArrayList<>();
+        for (String part : description.split(",")) {
+            String segment = part.trim();
+            if (segment.isEmpty() || repeats(known, segment)) continue;
+            kept.removeIf(earlier -> repeats(segment, earlier));
+            if (kept.stream().noneMatch(earlier -> repeats(earlier, segment))) {
+                kept.add(segment);
+            }
+        }
+        return kept.isEmpty() ? description : String.join(", ", kept);
+    }
+
+    /** Whether {@code text} already carries {@code part}, however either is
+     *  capitalised - the one test the de-duplication is built on. */
+    private boolean repeats(String text, String part) {
+        return text.toLowerCase(Locale.ROOT).contains(part.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * The vendor as far as its NAME goes.
+     *
+     * <p>The provider stamps every mixer it lists with its own name and, on
+     * this platform, its project URL in brackets after it. The address is the
+     * same on every device of the machine, so it is repeated on every row of a
+     * device combo and tells an operator nothing; the plain word still says
+     * which driver path the device came through, which is worth keeping.
+     *
+     * <p>Cut only where there is something to cut, and never down to nothing:
+     * a provider that puts its whole vendor in brackets keeps it, because an
+     * empty vendor would say less than the bracketed one did.
+     *
+     * <p>Package-private for the same reason {@link #distinct} is.
+     */
+    String plainVendor(String vendor) {
+        if (vendor == null) return "";
+        int at = vendor.indexOf('(');
+        if (at < 0) return vendor;
+        String name = vendor.substring(0, at).trim();
+        return name.isEmpty() ? vendor : name;
     }
 
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
@@ -135,11 +261,16 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      * Opens a {@link SourceDataLine} for {@code fmt} on the first mixer whose
      * name contains {@code deviceName} (and supports the format), falling back
      * to the platform-default line when {@code deviceName} is blank or no mixer
-     * matches.  This is the device-name → mixer selection both the DDS tone
+     * matches.  This is the device-name -> mixer selection both the DDS tone
      * ({@link JavaSoundGenerator}) and file playback share, so they reach the
-     * SAME selected output device — which on Windows is the csjsound
+     * SAME selected output device - which on Windows is the csjsound
      * exclusive-mode mixer that can open high formats (e.g. 384&nbsp;kHz /
      * 24-bit) the default mixer refuses.
+     *
+     * <p>It is also the ONE place every playback open goes through - the DDS
+     * tone, file playback, the server's generator lane - which is why the
+     * card's own volume controls are pinned to 0 dB here
+     * ({@link AlsaVolumes}), once per open and never per buffer.
      */
     public SourceDataLine openOutputLine(String deviceName, AudioFormat fmt) throws LineUnavailableException {
         DataLine.Info info = new DataLine.Info(SourceDataLine.class, fmt);
@@ -161,7 +292,29 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
                     fmt, chosen != null ? chosen.getName() : "<JavaSound default>",
                     bufferFrames, bufferFrames * 1000L / (long) fmt.getSampleRate());*/
         }
+        if (chosen != null) {
+            // The card's own volumes are hardware gain INSIDE the calibrated
+            // chain (plughw honours them), and a mixer left turned down scales
+            // the tone with nothing in the reading to say so.  The chosen
+            // mixer's name is the one asked about: the requested name is only a
+            // substring of it, and a fallback to the default mixer opened a
+            // device this cannot address at all.
+            alsaVolumes.pinToUnity(chosen.getName(), false);
+            // Remembered under the REQUESTED name, which is all the generator
+            // has when it closes and asks for the mixer back.
+            pinnedOutputMixers.put(deviceName == null ? "" : deviceName, chosen.getName());
+        }
         return line;
+    }
+
+    /** Puts back what {@link #openOutputLine}'s pin moved, as the playback that
+     *  borrowed the mixer closes - resolved through the requested-name mapping
+     *  the pin recorded, because the caller never sees the chosen mixer. */
+    public void restoreOutputVolume(String deviceName) {
+        String resolved = pinnedOutputMixers.remove(deviceName == null ? "" : deviceName);
+        if (resolved != null) {
+            alsaVolumes.restore(resolved, false);
+        }
     }
 
     /**
@@ -194,11 +347,51 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
     }
 
     public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
-        return new JavaSoundRecorder((JavaSoundDeviceManager.JavaSoundDeviceRef) device, sampleRate, bitDepth);
+        return new JavaSoundRecorder((JavaSoundDeviceManager.JavaSoundDeviceRef) device,
+                sampleRate, bitDepth, alsaVolumes);
     }
 
     public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
         return new JavaSoundGenerator(sampleRate, bitDepth, ditherBits, device.name(), this);
+    }
+
+    /**
+     * This backend's own reading of its own failures - JavaSound gives no error
+     * code at all, so the EXCEPTION TYPE is the primary signal and the message
+     * only refines it.
+     *
+     * <p>It classifies more than JavaSound's own devices: {@code
+     * AudioBackend.playbackManager} routes WASAPI playback here too, so a
+     * WASAPI card's open failure is read by this method.
+     *
+     * <p>{@link LineUnavailableException} is the JDK's one word for "the line
+     * exists but you cannot have it" - another application holds it, or the
+     * driver is in exclusive mode.  {@link IllegalArgumentException} is what
+     * {@code AudioSystem.getLine} throws when no line matches the asked format
+     * at all.  The stall texts are this module's own (see
+     * {@code JavaSoundGenerator}'s lost-lane details): a line that stops
+     * draining has not disappeared - it has stopped answering, which is exactly
+     * the csjsound render stall a bench sees.
+     */
+    @Override
+    public DeviceFailureReason classifyFailure(Throwable failure) {
+        if (failure == null) {
+            return DeviceFailureReason.UNKNOWN;
+        }
+        String text = failure.getMessage() == null
+                ? "" : failure.getMessage().toLowerCase(Locale.ROOT);
+        if (text.contains("no longer taking audio")
+                || text.contains("stopped draining")
+                || text.contains("accepted nothing")) {
+            return DeviceFailureReason.DEVICE_NOT_ANSWERING;
+        }
+        if (failure instanceof LineUnavailableException) {
+            return DeviceFailureReason.DEVICE_IN_USE;
+        }
+        if (failure instanceof IllegalArgumentException) {
+            return DeviceFailureReason.FORMAT_UNSUPPORTED;
+        }
+        return DeviceFailureReason.UNKNOWN;
     }
 
     /**
@@ -208,13 +401,13 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      *       not a hard-coded candidate list.  {@link ProcAsound} parses
      *       {@code /proc/asound/card*\/codec#*} and {@code /stream*} to
      *       discover the rates and bit depths the codec actually
-     *       supports — analog Audio Input / Output nodes only — and we
+     *       supports - analog Audio Input / Output nodes only - and we
      *       cross those into the AudioFormat list directly.  This is
      *       why 20-bit ADCs (Realtek ALC262 and friends) are now
      *       selectable: nothing filters them out.</li>
      *   <li>On <strong>Windows / macOS</strong> we open and immediately
      *       close a line for each (rate, bits) pair from a standard
-     *       pro-audio candidate set — the OS audio engine refuses
+     *       pro-audio candidate set - the OS audio engine refuses
      *       formats the hardware can't handle, so open-and-test is the
      *       reliable signal.</li>
      * </ul>
@@ -225,10 +418,10 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
 
         boolean linux = System.getProperty("os.name", "").toLowerCase().contains("linux");
         if (linux) {
-            return probeFormatsLinux(m, output);
+            return probeFormatsLinux(d, m, output);
         }
 
-        int[] rates  = {8000, 11025, 16000, 22050, 44100, 48000, 88200, 
+        int[] rates  = {8000, 11025, 16000, 22050, 44100, 48000, 88200,
                         96000, 176400, 192000, 352800, 384000, 705600, 768000};
         int[] depths = {16, 24, 32};
         List<AudioFormat> result = new ArrayList<>();
@@ -251,17 +444,35 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
     }
 
     /**
-     * Linux probe — hardware caps are taken straight from the kernel
-     * (analog ADC/DAC nodes in {@code /proc/asound}) or from the
-     * mixer's own {@link DataLine.Info#getFormats()} when {@code /proc}
-     * isn't readable.  No fixed candidate list, so the user sees every
-     * rate and every bit depth the silicon really supports — including
-     * unusual ones like 20 bit and 22.05 kHz.
+     * Linux probe - hardware caps come straight from the kernel, for THIS
+     * DEVICE'S OWN CARD.
+     *
+     * <p>The mixer name carries the ALSA address ({@code "CB5 [plughw:1,1]"}),
+     * so {@link ProcAsound} is asked about that card alone. Asking
+     * {@code /proc/asound} as a whole - which this method used to do - merges
+     * every card into one answer, so a machine with an onboard codec beside a
+     * USB interface reported the union for both; and on a machine whose cards
+     * are neither HD-Audio nor USB it reported nothing at all, which is how a
+     * bench came to deliver an empty format list.
+     *
+     * <p><b>ON THE LEGACY-CARD CASE, DELIBERATELY NOTHING.</b> A card with
+     * neither layout (the Ensoniq ES1371 class) is answered
+     * {@link ProcAsound.CardCaps#known() not known}, and this method then
+     * reports the mixer's own explicit formats and otherwise an empty list. It
+     * does NOT fall back to opening candidate rates the way the Windows and
+     * macOS paths do, and that is on purpose: the ALSA device JavaSound offers
+     * is the PLUG layer ({@code plughw}), which exists precisely to CONVERT -
+     * it accepts rates the hardware cannot produce and resamples silently. An
+     * open-and-test through it would therefore answer "yes" to almost
+     * everything and publish a capability list the silicon cannot honour.
+     * Reporting nothing is the honest answer until the direct {@code hw:}
+     * device can be probed instead.
      */
-    private List<AudioFormat> probeFormatsLinux(Mixer m, boolean output) {
-        // 1. /proc/asound is the source of truth when present.
-        int[] hwRates  = ProcAsound.hardwareRates(output);
-        int[] hwDepths = ProcAsound.hardwareBitDepths(output);
+    private List<AudioFormat> probeFormatsLinux(JavaSoundDeviceRef d, Mixer m, boolean output) {
+        // 1. This card's own /proc/asound entry is the source of truth when present.
+        ProcAsound.CardCaps caps = procAsound.capsForMixer(d.name());
+        int[] hwRates  = caps.rates(output);
+        int[] hwDepths = caps.depths(output);
         if (hwRates.length > 0 && hwDepths.length > 0) {
             List<AudioFormat> result = new ArrayList<>();
             for (int rate : hwRates) {
@@ -272,7 +483,7 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
             return result;
         }
 
-        // 2. /proc/asound unavailable (containers, non-Linux kernels) —
+        // 2. /proc/asound unavailable (containers, non-Linux kernels) -
         //    walk the mixer's own getFormats() for whatever explicit
         //    (rate, bits) pairs it advertises.  NOT_SPECIFIED entries
         //    carry no hardware information so they're skipped; an empty
@@ -302,7 +513,7 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
     /** Builds a stereo PCM_SIGNED little-endian AudioFormat for the
      *  given rate and bit depth.  Rounds non-byte-aligned bit widths
      *  (e.g. 20-bit packed in 24-bit containers) up to the next byte
-     *  so the frame size is correct: 20-bit stereo → 6 bytes/frame. */
+     *  so the frame size is correct: 20-bit stereo -> 6 bytes/frame. */
     private AudioFormat buildFormat(int rate, int bits) {
         int bytesPerSample = (bits + 7) / 8;
         int frameSize      = bytesPerSample * 2;

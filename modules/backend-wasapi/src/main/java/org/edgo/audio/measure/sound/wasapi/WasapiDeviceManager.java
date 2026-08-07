@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,6 +18,10 @@
 
 package org.edgo.audio.measure.sound.wasapi;
 
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.AUDCLNT_E_DEVICE_IN_USE;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.AUDCLNT_E_DEVICE_INVALIDATED;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.AUDCLNT_E_UNSUPPORTED_FORMAT;
 import static org.edgo.audio.measure.sound.wasapi.WasapiNative.AUDCLNT_SHAREMODE_EXCLUSIVE;
 import static org.edgo.audio.measure.sound.wasapi.WasapiNative.CLSCTX_ALL;
 import static org.edgo.audio.measure.sound.wasapi.WasapiNative.CLSID_MMDeviceEnumerator;
@@ -50,10 +54,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
@@ -76,12 +83,18 @@ import lombok.extern.log4j.Log4j2;
  * <p>Enumerates active render/capture endpoints via {@code IMMDeviceEnumerator}
  * and stores them as {@link WasapiDeviceRef}.  The endpoint ID
  * (the wide-string returned by {@code IMMDevice::GetId}) is the durable
- * handle — opening a stream re-fetches the {@code IMMDevice} from the
+ * handle - opening a stream re-fetches the {@code IMMDevice} from the
  * enumerator with that ID, so {@link WasapiDeviceRef} stays
  * disposable-friendly even after the underlying COM objects are released.
  */
 @Log4j2
 public class WasapiDeviceManager implements AudioDeviceManager {
+
+    /** The HRESULT this module prints into a failure message - "failed: 0x88890004". */
+    private static final Pattern HRESULT = Pattern.compile("0x([0-9a-fA-F]{1,8})");
+    /** The one refusal that names no HRESULT: the endpoint was gone before the
+     *  client was even activated (see the recorder's and the generator's open). */
+    private static final String DEVICE_GONE_TEXT = "WASAPI device disappeared";
 
     /** {@link DeviceRef} backed by a WASAPI endpoint ID (LPWSTR). */
     public record WasapiDeviceRef(int index, String name, String description, String vendor,
@@ -211,7 +224,7 @@ public class WasapiDeviceManager implements AudioDeviceManager {
     /**
      * Probes a small set of standard rates × bit depths in WASAPI
      * exclusive mode and returns the {@link AudioFormat}s the device
-     * accepts.  Cached by endpoint ID — repeat probes for the same
+     * accepts.  Cached by endpoint ID - repeat probes for the same
      * device come back from memory.
      */
     public List<AudioFormat> listSupportedFormats(DeviceRef device, boolean output) {
@@ -226,6 +239,44 @@ public class WasapiDeviceManager implements AudioDeviceManager {
 
     public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
         return new WasapiGenerator(this, (WasapiDeviceManager.WasapiDeviceRef) device, sampleRate, bitDepth, ditherBits);
+    }
+
+    /**
+     * This backend's own reading of its own failures.  Every WASAPI refusal
+     * carries its HRESULT as "0x..." in the message (that is how the recorder and
+     * the generator report a failed {@code Initialize}), so the hex is what is
+     * read back and compared against the four codes this module already names.
+     *
+     * <p>It serves CAPTURE: the GUI's playback goes through JavaSound even for a
+     * WASAPI card ({@code AudioBackend.playbackManager} reroutes the render
+     * side), so a WASAPI card's OUTPUT failure is classified there, not here.
+     * This is still the right owner of the vocabulary - the capture lane is
+     * WASAPI's own, and a later render path would find the table already here.
+     */
+    @Override
+    public DeviceFailureReason classifyFailure(Throwable failure) {
+        String text = (failure == null) ? null : failure.getMessage();
+        if (text == null) {
+            return DeviceFailureReason.UNKNOWN;
+        }
+        if (text.contains(DEVICE_GONE_TEXT)) {
+            return DeviceFailureReason.DEVICE_DISCONNECTED;
+        }
+        Matcher matcher = HRESULT.matcher(text);
+        if (!matcher.find()) {
+            return DeviceFailureReason.UNKNOWN;
+        }
+        int hr = Integer.parseUnsignedInt(matcher.group(1), 16);
+        if (hr == AUDCLNT_E_DEVICE_INVALIDATED) {
+            return DeviceFailureReason.DEVICE_DISCONNECTED;
+        }
+        if (hr == AUDCLNT_E_DEVICE_IN_USE || hr == AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED) {
+            return DeviceFailureReason.DEVICE_IN_USE;
+        }
+        if (hr == AUDCLNT_E_UNSUPPORTED_FORMAT) {
+            return DeviceFailureReason.FORMAT_UNSUPPORTED;
+        }
+        return DeviceFailureReason.UNKNOWN;
     }
 
     private List<AudioFormat> probeFormats(WasapiDeviceRef d) {
@@ -300,7 +351,7 @@ public class WasapiDeviceManager implements AudioDeviceManager {
     /**
      * Pulls {@code PKEY_Device_FriendlyName} (a {@code VT_LPWSTR}
      * PROPVARIANT) out of the endpoint's property store.  Returns
-     * {@code null} on any failure — callers fall back to the endpoint
+     * {@code null} on any failure - callers fall back to the endpoint
      * ID for display purposes.
      */
     private static String getDeviceFriendlyName(Pointer dev) {

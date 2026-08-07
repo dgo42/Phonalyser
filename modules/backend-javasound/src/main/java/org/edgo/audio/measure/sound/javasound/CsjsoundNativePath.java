@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -36,7 +36,7 @@ import lombok.extern.log4j.Log4j2;
  * Makes the bundled csjsound WASAPI-exclusive JavaSound provider loadable from
  * the FAT-JAR distribution.  The provider (com.cleansine) resolves its native
  * with {@code System.loadLibrary("csjsound_" + os.arch)}, which searches
- * {@code java.library.path} ONLY — the installed app ships the DLL in
+ * {@code java.library.path} ONLY - the installed app ships the DLL in
  * {@code lib\windows} and points the property there, but the bare platform JAR
  * had no such folder, so the provider registered no exclusive-mode mixers and
  * the JavaSound backend stayed at the DirectSound 16-bit ceiling (field
@@ -47,12 +47,12 @@ import lombok.extern.log4j.Log4j2;
  * it into the process's CURRENT DIRECTORY.  That is the only directory that is
  * both guaranteed to be on the library path and stageable at runtime: the
  * Windows JVM launcher appends {@code "."} to {@code java.library.path} at VM
- * init, and since JDK&nbsp;12 the path is snapshotted right there — setting the
+ * init, and since JDK&nbsp;12 the path is snapshotted right there - setting the
  * property later (the first version of this helper) is silently ignored, which
  * left the provider without its native on every bare-JAR run.  The launcher
  * {@code .bat} changes into the JAR's folder first, so the DLL lands next to
  * the JAR and survives for the next start.  No-ops on non-Windows, in the dev
- * tree (code source is a directory — use {@code lib\windows} there), on
+ * tree (code source is a directory - use {@code lib\windows} there), on
  * installed layouts (DLL already reachable via {@code -Djava.library.path}),
  * and on builds without the resource.
  */
@@ -62,7 +62,7 @@ public class CsjsoundNativePath {
 
     /** Stages the csjsound DLL into the current directory (the {@code "."}
      *  entry of {@code java.library.path}) so the provider's
-     *  {@code System.loadLibrary} finds it — see the class doc for why no
+     *  {@code System.loadLibrary} finds it - see the class doc for why no
      *  other location works on a bare-JAR run. */
     public void installForFatJar() {
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
@@ -70,7 +70,7 @@ public class CsjsoundNativePath {
             return;
         }
         if (!runningFromJar()) {
-            return;                                  // dev tree — lib\windows serves the DLL
+            return;                                  // dev tree - lib\windows serves the DLL
         }
         String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
         String dll  = "csjsound_" + arch + ".dll";   // the exact name the provider loads
@@ -78,7 +78,7 @@ public class CsjsoundNativePath {
         String libraryPath = System.getProperty("java.library.path", "");
         for (String dir : libraryPath.split(Pattern.quote(File.pathSeparator))) {
             if (dir.isBlank() || !Files.exists(Paths.get(dir, dll))) continue;
-            // Reachable in an installed layout / PATH dir — nothing to stage.
+            // Reachable in an installed layout / PATH dir - nothing to stage.
             // A copy in the CURRENT dir does not short-circuit: it may be a
             // stale version from an earlier run, so fall through and refresh it.
             if (!Paths.get(dir).toAbsolutePath().normalize().equals(cwd)) {
@@ -95,7 +95,7 @@ public class CsjsoundNativePath {
             try {
                 Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
             } catch (IOException locked) {
-                // Another (or an earlier) instance holds the DLL mapped — Windows
+                // Another (or an earlier) instance holds the DLL mapped - Windows
                 // forbids replacing a loaded image.  Reuse the existing copy.
                 if (!Files.exists(target)) {
                     throw locked;
@@ -103,7 +103,7 @@ public class CsjsoundNativePath {
             }
             log.info("csjsound native staged for the fat-jar run: {}", target);
         } catch (IOException e) {
-            log.warn("Could not stage the csjsound native ({}) into {} — exclusive-mode JavaSound"
+            log.warn("Could not stage the csjsound native ({}) into {} - exclusive-mode JavaSound"
                     + " mixers stay unavailable.  Manual fix: extract {} from the JAR next to it"
                     + " (or into any PATH directory).  Cause: {}",
                     resource, cwd, dll, e.toString());

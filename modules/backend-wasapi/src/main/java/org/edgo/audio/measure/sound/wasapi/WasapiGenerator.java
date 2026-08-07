@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -96,11 +96,11 @@ public class WasapiGenerator implements AudioPlayback {
             boolean exclusive = initializeExclusive(bufDuration);
             if (!exclusive) {
                 // WARN, not info: in shared mode the Windows audio engine sits in
-                // the signal path — its per-channel session volume / balance and
+                // the signal path - its per-channel session volume / balance and
                 // any APO scale the samples, so playback levels are no longer the
                 // raw measurement-grade output exclusive mode guarantees.
                 if (log.isWarnEnabled()) {
-                    log.warn("WASAPI exclusive refused — falling back to SHARED mode: "
+                    log.warn("WASAPI exclusive refused - falling back to SHARED mode: "
                             + "the Windows mixer (volume/balance/APOs) now scales the output; "
                             + "absolute levels are not measurement-grade");
                 }
@@ -211,6 +211,24 @@ public class WasapiGenerator implements AudioPlayback {
         }
     }
 
+    /**
+     * The endpoint has gone.  {@code AUDCLNT_E_DEVICE_INVALIDATED} is what
+     * WASAPI answers every call on a device that was unplugged or reconfigured,
+     * and this client never recovers from it - a fresh {@code IAudioClient} on a
+     * fresh endpoint is the only way back.  The loss travels UP as the returned
+     * exception, thrown out of {@code play()} on the play thread - the caller
+     * that started the lane owns the failure; nothing is reported sideways.
+     *
+     * <p>Unambiguous, which is what makes it safe to declare: it is only
+     * reachable from inside the render loop's {@code while (!stopFlag.get())},
+     * so a stop the operator asked for can never land here.
+     */
+    private IllegalStateException deviceInvalidated() {
+        log.error("WASAPI playback device invalidated - the device was unplugged "
+                + "or reconfigured; this tone is over");
+        return new IllegalStateException("WASAPI playback device invalidated (GetCurrentPadding)");
+    }
+
     @Override
     public void play(SignalGenerator generator, int durationSeconds) {
         AtomicBoolean stop = new AtomicBoolean(false);
@@ -240,7 +258,7 @@ public class WasapiGenerator implements AudioPlayback {
         }
         ensureComInit();
 
-        // Reusable scratch — one allocation outside the hot path so the
+        // Reusable scratch - one allocation outside the hot path so the
         // audio thread doesn't churn the young generation every tick.
         byte[] scratch = new byte[bufferFrames * bytesPerFrame];
         long framesProduced = 0;
@@ -249,12 +267,14 @@ public class WasapiGenerator implements AudioPlayback {
         // starts pulling real audio.  See CsjsoundGenerator#warmupJit
         // for the rationale; here we drive encodeIntoScratch directly
         // (no GetBuffer/ReleaseBuffer COM call, no SDR side-effect).
-        warmupJit(generator, scratch);
-        // Warmup consumed nextSample() calls that advance sweep playback
-        // state; reset so the real stream sees the sweep from sample 0
-        // (otherwise a freq-response measurement captures a mid-sweep
-        // recording while the deconv reference starts at zero).
-        generator.resetSweepPosition();
+        if (generator.needsJitWarmup()) {
+            warmupJit(generator, scratch);
+            // Warmup consumed nextSample() calls that advance sweep playback
+            // state; reset so the real stream sees the sweep from sample 0
+            // (otherwise a freq-response measurement captures a mid-sweep
+            // recording while the deconv reference starts at zero).
+            generator.resetSweepPosition();
+        }
 
         // Pre-fill the entire hardware buffer once so the device has
         // something to play the instant Start() is called.  Without
@@ -270,13 +290,13 @@ public class WasapiGenerator implements AudioPlayback {
 
         try {
             IntByReference padding = new IntByReference();
-            // Expected ns between event signals — buffer-frames converted
+            // Expected ns between event signals - buffer-frames converted
             // to time at sampleRate.  Threshold is 1.2× so we catch the
             // 200 µs-class delays that still produce audible glitches
             // even when the device doesn't fully underrun.
             final long expectedTickNanos = (long) bufferFrames * 1_000_000_000L / sampleRate;
             final long underrunThresholdNanos = (expectedTickNanos * 12L) / 10L;
-            // Time spent INSIDE fillNextBlock — if it ever exceeds half
+            // Time spent INSIDE fillNextBlock - if it ever exceeds half
             // the buffer period the next event will be missed.
             final long fillBudgetNanos = expectedTickNanos / 2L;
             log.info("WASAPI render loop: tick={} µs, underrun-threshold={} µs, fill-budget={} µs, buffer={} frames",
@@ -295,7 +315,20 @@ public class WasapiGenerator implements AudioPlayback {
             while (!stopFlag.get()) {
                 if (totalFrames > 0 && framesProduced >= totalFrames) break;
                 int waitRc = Kernel32.INSTANCE.WaitForSingleObject(eventHandle, 200);
-                if (waitRc != WAIT_OBJECT_0) continue;
+                if (waitRc != WAIT_OBJECT_0) {
+                    // A timeout must still ASK the device.  WASAPI stops
+                    // signalling this handle the moment the endpoint goes, so
+                    // "not signalled" is exactly the state a removal leaves -
+                    // and skipping straight back to the wait meant the loop could
+                    // spin on it for ever without ever reaching the test below.
+                    // Only the test is done here, not a fill: the render timing
+                    // on a healthy stream is unchanged.
+                    if (callHR(audioClient, VT_AC_GET_CURRENT_PADDING, padding)
+                            == AUDCLNT_E_DEVICE_INVALIDATED) {
+                        throw deviceInvalidated();
+                    }
+                    continue;
+                }
 
                 long now = System.nanoTime();
                 long deltaNanos = now - lastTickNanos;
@@ -308,6 +341,15 @@ public class WasapiGenerator implements AudioPlayback {
                 }
 
                 hr = callHR(audioClient, VT_AC_GET_CURRENT_PADDING, padding);
+                if (hr == AUDCLNT_E_DEVICE_INVALIDATED) {
+                    // The endpoint is gone and this client never recovers from
+                    // it.  Without this the loop simply kept going round -
+                    // WaitForSingleObject timing out every 200 ms for ever,
+                    // nothing rendered, nothing thrown and nothing returned, so
+                    // the caller's own catch never fired and the bench kept a lit
+                    // Play button over a device that had been unplugged.
+                    throw deviceInvalidated();
+                }
                 if (hr != S_OK) {
                     log.warn("GetCurrentPadding: 0x{}", Integer.toHexString(hr));
                     continue;
@@ -392,7 +434,7 @@ public class WasapiGenerator implements AudioPlayback {
         }
         Pointer dst = ppBuf.getValue();
         encodeIntoScratch(gen, scratch, frames);
-        // Single Java→native copy directly into WASAPI's mapped buffer.
+        // Single Java->native copy directly into WASAPI's mapped buffer.
         dst.write(0, scratch, 0, frames * bytesPerFrame);
         callHR(renderClient, VT_RC_RELEASE_BUFFER, frames, 0);
         return frames;

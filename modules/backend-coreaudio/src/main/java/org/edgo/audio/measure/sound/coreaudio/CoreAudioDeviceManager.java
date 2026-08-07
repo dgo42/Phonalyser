@@ -1,5 +1,5 @@
 /*
- * Phonalyser — precision audio measurement workbench.
+ * Phonalyser - precision audio measurement workbench.
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -19,7 +19,6 @@
 package org.edgo.audio.measure.sound.coreaudio;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -28,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
@@ -39,7 +39,7 @@ import org.edgo.audio.measure.sound.wdmks.WdmksDeviceManager;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Device discovery + format probing for the {@link AudioBackendType#COREAUDIO}
+ * Device discovery + HAL-read format capabilities for the {@link AudioBackendType#COREAUDIO}
  * backend (macOS only).  Constructed and owned by {@link AudioBackend}; do not
  * instantiate directly.
  *
@@ -74,10 +74,37 @@ public class CoreAudioDeviceManager implements AudioDeviceManager {
         }
     }
 
+    /** The HAL capability reader every format answer comes from. */
+    private final CoreAudioHal hal;
+
+    /** Per-device format answers, cached until a REAL device-list rebuild - the
+     *  only event on this backend after which a device's declared formats can
+     *  differ, because the PortAudio snapshot (and the device ids behind it)
+     *  only changes then.  Without this cache every enumeration walks HAL
+     *  property reads per device and direction, and a server enumerates every
+     *  two seconds UNDER A LIVE CAPTURE - continuous native load inside
+     *  coreaudiod's domain for answers that cannot have changed. */
     private final Map<String, List<AudioFormat>> inputFormatsCache  = new ConcurrentHashMap<>();
     private final Map<String, List<AudioFormat>> outputFormatsCache = new ConcurrentHashMap<>();
 
-    public CoreAudioDeviceManager() {}
+    /** The HAL device set the PortAudio snapshot this manager lists from was
+     *  built against - what {@link #deviceListStale()} compares today's HAL truth
+     *  with.  Taken at construction, which is as close to {@code Pa_Initialize}
+     *  as this class can get (the manager is built lazily, immediately before the
+     *  first enumeration, and that enumeration is what initialises PortAudio),
+     *  and re-taken on every rebuild that really happened.  Volatile: written on
+     *  the thread that rebuilds, read on a server's rescan lane. */
+    private volatile Set<String> snapshotDevices;
+
+    public CoreAudioDeviceManager() {
+        this(new CoreAudioHal());
+    }
+
+    /** Injected so a test can drive the capability reader without the framework. */
+    CoreAudioDeviceManager(CoreAudioHal hal) {
+        this.hal = hal;
+        this.snapshotDevices = hal.deviceIdentities();
+    }
 
     private int coreAudioHostApiIndex() {
         int idx = PortAudio.lib().Pa_HostApiTypeIdToHostApiIndex(PortAudio.paCoreAudio);
@@ -96,9 +123,56 @@ public class CoreAudioDeviceManager implements AudioDeviceManager {
         return list(false);
     }
 
+    /** PortAudio's enumeration is a process-lifetime snapshot, so this is one of
+     *  the two backends (with WDM-KS) where a rebuild means something.  The
+     *  shared library refuses while any PortAudio stream is open - an open
+     *  {@code PaStream*} would be freed under its owner. */
+    @Override
+    public boolean refreshDeviceList() {
+        boolean rebuilt = PortAudio.refreshDevices();
+        if (rebuilt) {
+            // The new snapshot describes THIS device set.  Only a rebuild that
+            // really happened may say so: a refusal (another PortAudio stream is
+            // open, so terminating the library would free it under its owner)
+            // has to leave the old truth standing, or the next poll would call a
+            // list that is still stale current and never try again.
+            snapshotDevices = hal.deviceIdentities();
+            // A replugged device is a new audio object: the formats read under
+            // its old identity may no longer describe it.
+            inputFormatsCache.clear();
+            outputFormatsCache.clear();
+        }
+        return rebuilt;
+    }
+
+    /**
+     * Whether the PortAudio snapshot this manager lists from still describes the
+     * machine - the guard a poll puts in front of {@link #refreshDeviceList()}.
+     *
+     * <p>PortAudio enumerates once and never rescans, so its own list can never
+     * report a device pulled out or plugged back in; the HAL is read fresh every
+     * time and does.  The comparison is therefore HAL against HAL: the device set
+     * the current snapshot was built against, versus the set right now.
+     *
+     * <p><b>Never PortAudio's list against the HAL's.</b>  The two name and filter
+     * devices by their own rules - the HAL lists every audio object, while this
+     * manager publishes only what has capture or playback channels - so a
+     * permanent difference between them is normal on a healthy machine, and a
+     * check built on it would ask for a rebuild on every tick for ever.  A
+     * DIFFERENCE OVER TIME in one source cannot say that.
+     *
+     * <p>False while the HAL cannot answer (no framework, a failed read): an
+     * empty answer is "do not know", and reading it as "every device vanished"
+     * would re-initialise the library on a host that merely failed to be asked.
+     */
+    @Override
+    public boolean deviceListStale() {
+        Set<String> live = hal.deviceIdentities();
+        return !live.isEmpty() && !live.equals(snapshotDevices);
+    }
+
     private List<DeviceRef> list(boolean input) {
         List<DeviceRef> out = new ArrayList<>();
-        Set<String> seenNames = new HashSet<>();
         PortAudio.Lib lib = PortAudio.lib();
         int hostApi = coreAudioHostApiIndex();
         PortAudio.PaHostApiInfo apiInfo = lib.Pa_GetHostApiInfo(hostApi);
@@ -114,7 +188,7 @@ public class CoreAudioDeviceManager implements AudioDeviceManager {
                 log.debug("CoreAudio device [{}] '{}': inCh={} outCh={} defRate={}",
                         paDev, info.name, info.maxInputChannels, info.maxOutputChannels, info.defaultSampleRate);
             }
-            // Inputs: accept mono (>=1) too — CoreAudioRecorder upmixes a
+            // Inputs: accept mono (>=1) too - CoreAudioRecorder upmixes a
             // single channel to stereo.  Outputs still require >=2.
             boolean canIn  = info.maxInputChannels  >= 1;
             boolean canOut = info.maxOutputChannels >= 2;
@@ -123,9 +197,7 @@ public class CoreAudioDeviceManager implements AudioDeviceManager {
                     "CoreAudio", apiInfo.name,
                     canIn, canOut, paDev, info.defaultSampleRate,
                     info.maxInputChannels));
-            seenNames.add(info.name);
         }
-        (input ? inputFormatsCache : outputFormatsCache).keySet().retainAll(seenNames);
         return out;
     }
 
@@ -139,54 +211,48 @@ public class CoreAudioDeviceManager implements AudioDeviceManager {
     }
 
     /**
-     * Probes a small set of standard rates × bit depths and returns the
-     * AudioFormats PortAudio reports as supported on the given device.  Cached
-     * per device name on first access.
+     * What the DEVICE declares, read from the CoreAudio HAL - the real (rate,
+     * bit width) pairs of its physical stream formats, never a probe and never
+     * a canned list.  {@code Pa_IsFormatSupported} cannot answer this: it asks
+     * through AUHAL's converter, which resamples silently and says yes to
+     * nearly everything - that is how a bench came to see every rate from
+     * 8 kHz to 768 kHz offered on a device.
+     *
+     * <p>Empty when the HAL cannot answer for this device - the honest
+     * nothing, same rule as the Linux legacy-card case ({@link CoreAudioHal}).
      */
     public List<AudioFormat> listSupportedFormats(DeviceRef device, boolean output) {
         if (!(device instanceof CoreAudioDeviceRef d)) return new ArrayList<>();
         Map<String, List<AudioFormat>> cache = output ? outputFormatsCache : inputFormatsCache;
-        return cache.computeIfAbsent(d.name(), k -> probeFormats(d, output));
+        return cache.computeIfAbsent(d.name(), name -> readFormats(name, output));
     }
 
-    public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
-        return new CoreAudioRecorder((CoreAudioDeviceManager.CoreAudioDeviceRef) device, sampleRate, bitDepth);
-    }
-
-    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
-        return new CoreAudioGenerator((CoreAudioDeviceManager.CoreAudioDeviceRef) device, sampleRate, bitDepth, ditherBits);
-    }
-
-    private List<AudioFormat> probeFormats(CoreAudioDeviceRef d, boolean output) {
+    private List<AudioFormat> readFormats(String deviceName, boolean output) {
         List<AudioFormat> result = new ArrayList<>();
-        int[] rates  = {8000, 11025, 16000, 22050, 44100, 48000, 88200, 96000, 
-                        176400, 192000, 352800, 384000, 705600, 768000};
-        int[] depths = {16, 24, 32};
-
-        // Probe at the device's real channel count: a mono input can't be
-        // opened as 2 channels, but CoreAudioRecorder upmixes it to the stereo
-        // AudioFormat reported below.  Outputs are always stereo (filtered >=2).
-        int channels = output ? 2 : Math.min(2, Math.max(1, d.maxInputChannels()));
-        PortAudio.PaStreamParameters params = new PortAudio.PaStreamParameters();
-        params.device                    = d.paDeviceIndex();
-        params.channelCount              = channels;
-        params.suggestedLatency          = 0.0;
-        params.hostApiSpecificStreamInfo = null;
-
-        for (int rate : rates) {
-            for (int bits : depths) {
-                params.sampleFormat = PortAudio.paSampleFormatFor(bits);
-                params.write();
-                int rc = output
-                        ? PortAudio.lib().Pa_IsFormatSupported(null,   params, rate)
-                        : PortAudio.lib().Pa_IsFormatSupported(params, null,   rate);
-                if (rc == PortAudio.paFormatIsSupported) {
-                    result.add(new AudioFormat(
-                            AudioFormat.Encoding.PCM_SIGNED,
-                            rate, bits, 2, (bits / 8) * 2, rate, false));
-                }
-            }
+        for (CoreAudioHal.PhysicalFormat format : hal.physicalFormats(deviceName, output)) {
+            int bytesPerSample = (format.bits() + 7) / 8;
+            result.add(new AudioFormat(
+                    AudioFormat.Encoding.PCM_SIGNED,
+                    format.rate(), format.bits(), 2, bytesPerSample * 2, format.rate(), false));
         }
         return result;
     }
+
+    /** The HAL travels with the stream: the line pins the device's own volume
+     *  to its 0 dB as it opens, and the reader that does it is this manager's. */
+    public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
+        return new CoreAudioRecorder((CoreAudioDeviceManager.CoreAudioDeviceRef) device, sampleRate, bitDepth, hal);
+    }
+
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
+        return new CoreAudioGenerator((CoreAudioDeviceManager.CoreAudioDeviceRef) device, sampleRate, bitDepth, ditherBits, hal);
+    }
+
+    /** CoreAudio speaks the same PortAudio error vocabulary as WDM-KS - one
+     *  table, in the class that writes those messages, not a copy here. */
+    @Override
+    public DeviceFailureReason classifyFailure(Throwable failure) {
+        return PortAudio.classifyFailure(failure);
+    }
+
 }

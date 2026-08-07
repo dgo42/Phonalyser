@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  backend-coreaudio — the CoreAudio PortAudio host API (macOS).
+  backend-coreaudio - the CoreAudio PortAudio host API (macOS).
   Reuses the shared PortAudio recorder plumbing from backend-wdm-ks.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -11,7 +11,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.1.1</version>
+        <version>1.2.0</version>
         <relativePath>../phonalyser-parent</relativePath>
     </parent>
 
