@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Phonalyser - Roadmap</title>
+  <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
+  <link rel="stylesheet" href="css/site.css"/>
+  <script src="js/site.js" defer></script>
+</head>
+<body>
+
+  <button class="menu-toggle" aria-label="Open menu" aria-expanded="false">&#8942;</button>
+  <div class="menu-backdrop"></div>
+
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <img src="img/logo.svg" alt=""/>
+      <b>Phonalyser</b>
+    </a>
+    <nav class="menu">
+      <a href="index.html">Home</a>
+      <a href="changelog.html">What's new</a>
+      <a href="screenshots.html">Screenshots</a>
+
+      <details class="submenu">
+        <summary>Download <span class="caret">▸</span></summary>
+        <a href="download.html">All downloads</a>
+        <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
+           target="_blank" rel="noopener">GitHub - latest release</a>
+        <a class="ext" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
+           target="_blank" rel="noopener">Microsoft Store</a>
+        <a class="disabled" title="Reserved - coming soon">macOS <span class="soon">soon</span></a>
+      </details>
+
+      <details class="submenu">
+        <summary>Documentation <span class="caret">▸</span></summary>
+        <a href="prefs.html">Preferences &amp; log location</a>
+        <a href="translation.html">Translation</a>
+        <a href="bench.html">Measurement bench</a>
+        <a href="theory.html">Theory of operation</a>
+        <a href="roadmap.html">Roadmap</a>
+      </details>
+
+      <a href="privacy.html">Privacy</a>
+      <a href="web/index.html">Web version</a>
+    </nav>
+    <div class="sidebar-foot">
+      AGPL-3.0 ·
+      <a href="https://github.com/dgo42/Phonalyser" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="hero">
+      <img src="img/logo.svg" alt="Phonalyser logo"/>
+      <div>
+        <h1>Roadmap</h1>
+        <p class="sub">Planned measurements, backends and architectural work -
+           sorted simple to complex.</p>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <div class="note"><b>Nothing on this page is implemented.</b> Unlike the
+         <a href="theory.html">Theory of operation</a> chapters, which describe
+         what the code actually does, this is a list of intent. Items are ordered
+         by implementation effort, not by priority or by date - there is no
+         schedule attached to any of them.</div>
+
+      <p>The early items are mostly automation and plotting on top of engines
+         that already exist; the late ones need new native bindings, new classes
+         of hardware, or cross-cutting changes to how the app is extended. The
+         canonical source for this page is
+         <a href="https://github.com/dgo42/Phonalyser/blob/main/doc/ROADMAP.md"
+            target="_blank" rel="noopener">doc/ROADMAP.md</a>.</p>
+
+      <p>&ldquo;Effort&rdquo; is a rough size, not a schedule:</p>
+      <ul>
+        <li><b>S</b> - new UI and orchestration over an existing engine; little
+            or no new DSP.</li>
+        <li><b>M</b> - genuinely new DSP or a new measurement module, but built
+            from parts that are already in the codebase.</li>
+        <li><b>L</b> - new native binding, new hardware class, or an
+            architectural change that touches many modules.</li>
+      </ul>
+
+      <table>
+        <tr><th>#</th><th>Item</th><th>Effort</th><th>Rests on</th></tr>
+        <tr><td>1</td><td><a href="#stepped">Stepped-level and stepped-frequency sweeps</a></td><td>S</td><td>FFT engine, generator</td></tr>
+        <tr><td>2</td><td><a href="#harmonic-ir">Per-harmonic impulse responses from the Farina sweep</a></td><td>S</td><td>existing ESS deconvolution</td></tr>
+        <tr><td>3</td><td><a href="#stereo">Stereo / interchannel tools</a></td><td>S</td><td>two-channel capture</td></tr>
+        <tr><td>4</td><td><a href="#loudness">Standardized filter bank and loudness metering</a></td><td>S-M</td><td>capture chain</td></tr>
+        <tr><td>5</td><td><a href="#offline">Offline file analysis</a></td><td>M</td><td>WAV/FLAC reader, analyzer chain</td></tr>
+        <tr><td>6</td><td><a href="#bit-exact">Digital-chain integrity</a></td><td>M</td><td>WASAPI-exclusive / WDM-KS backends</td></tr>
+        <tr><td>7</td><td><a href="#cross-spectrum">Cross-spectrum noise measurement</a></td><td>M</td><td>FFT engine, coherent averaging</td></tr>
+        <tr><td>8</td><td><a href="#wow-flutter">Wow and flutter</a></td><td>M</td><td>analytic signal, FLL</td></tr>
+        <tr><td>9</td><td><a href="#impedance">Impedance and output impedance</a></td><td>M</td><td>two-channel sweep</td></tr>
+        <tr><td>10</td><td><a href="#vinyl">Vinyl and tape suite</a></td><td>M</td><td>RIAA/IEC overlays, sweep engine</td></tr>
+        <tr><td>11</td><td><a href="#jitter">Jitter and phase noise</a></td><td>M-L</td><td>wow-and-flutter machinery (8)</td></tr>
+        <tr><td>12</td><td><a href="#asio">ASIO driver support</a></td><td>L</td><td>backend SPI, native bridge</td></tr>
+        <tr><td>13</td><td><a href="#nidaq">NI DAQ support</a></td><td>L</td><td>backend SPI, NI-DAQmx</td></tr>
+        <tr><td>14</td><td><a href="#scripting">Scripting and plugin SPI</a></td><td>L</td><td>whole app surface</td></tr>
+      </table>
+
+      <h2 id="stepped">1. Stepped-level and stepped-frequency sweeps</h2>
+      <p>THD and THD+N versus amplitude - which exposes crossover distortion at
+         the bottom of the range and clipping at the top - plus gain linearity
+         and deviation-from-linear, and the 1&nbsp;% and 0.1&nbsp;% THD power
+         points. A stepped-frequency variant gives the same figures across the
+         band.</p>
+      <p>Pure automation over the existing FFT engine: step the generator,
+         settle, measure, tabulate, plot. No new DSP at all, which is why it
+         leads the list.</p>
+
+      <h2 id="harmonic-ir">2. Per-harmonic impulse responses from the Farina sweep</h2>
+      <p>The log-sweep deconvolution already places the <i>N</i>-th harmonic's
+         impulse response at a known negative delay ahead of the linear IR.
+         Window each of those out separately and you get <b>THD versus
+         frequency, per harmonic, from one sweep that is already being run</b> -
+         essentially free, and far faster than a stepped-tone sweep.</p>
+      <p>The deconvolution exists; the work is the windowing arithmetic
+         (harmonic delays from the sweep rate), a per-harmonic magnitude plot,
+         and the UI to pick how many harmonics to extract. See
+         <a href="freq-resp.html">Theory ▸ Frequency response</a> for the sweep
+         itself.</p>
+
+      <h2 id="stereo">3. Stereo / interchannel tools</h2>
+      <p>Goniometer, correlation meter, crosstalk versus frequency, interchannel
+         delay with sub-sample estimation, and round-trip latency
+         measurement.</p>
+      <p>Small, well-understood DSP on capture buffers that are already
+         two-channel; most of the effort is in the displays rather than the
+         maths.</p>
+
+      <h2 id="loudness">4. Standardized filter bank and loudness metering</h2>
+      <p>A/C/Z weighting, ITU-R 468 quasi-peak, psophometric, and the AES17
+         20&nbsp;kHz brickwall for THD+N; plus BS.1770 / EBU R128 LUFS,
+         true-peak (4× oversampled) and LRA.</p>
+      <p>Mostly plumbing - filter design and gating rules straight from the
+         standards - but it is what makes Phonalyser's numbers directly
+         comparable to published figures, so it is worth doing early.</p>
+
+      <h2 id="offline">5. Offline file analysis</h2>
+      <p>Load a WAV or FLAC file, run the full analyzer chain over it, and batch
+         a whole directory. Adds lossy-transcode detection (spectral cutoff),
+         and lets people analyze captures made on other hardware.</p>
+      <p>The FLAC reader is already vendored and file playback exists; the work
+         is decoupling the analyzer chain from a live capture source and adding
+         a batch runner and report output.</p>
+
+      <h2 id="bit-exact">6. Digital-chain integrity</h2>
+      <p>Bit-transparency verification - proving the OS path applies no hidden
+         resampling, volume scaling or DSP - plus digital-black / dither
+         word-length detection and an SRC quality test (sweep through the
+         converter and look for the classic aliasing fan).</p>
+      <p>Phonalyser supports WASAPI exclusive and WDM-KS, so it is the natural
+         tool to <em>prove</em> a path is bit-exact rather than assume it. See
+         <a href="audio-backend.html">Theory ▸ The audio backend</a>.</p>
+
+      <h2 id="cross-spectrum">7. Cross-spectrum noise measurement</h2>
+      <p>Feed one DUT into two independent input channels and average the
+         cross-spectrum: uncorrelated ADC noise falls as √N while the DUT's own
+         correlated noise stays. That buys <b>10-20&nbsp;dB below the
+         single-channel floor</b>.</p>
+      <p>Given the sub-10<sup>−6</sup>&nbsp;% ambitions and two-channel
+         hardware, this is the <b>highest-leverage measurement addition on the
+         list</b>. Coherence would be displayed alongside the result so users
+         can see when it is trustworthy.</p>
+
+      <h2 id="wow-flutter">8. Wow and flutter</h2>
+      <p>Recover the instantaneous frequency of a test tone and measure its
+         modulation - the classic turntable and tape-transport figure, with the
+         standard weighting curves and peak/RMS conventions.</p>
+      <p>New DSP (analytic signal, FM demodulation, weighting), but it also
+         builds the machinery that item&nbsp;11 then reuses, so its real cost is
+         shared.</p>
+
+      <h2 id="impedance">9. Impedance and output impedance</h2>
+      <p>A two-channel sweep across a reference resistor yields |Z| and phase.
+         That unlocks loudspeaker impedance, Thiele-Small parameters
+         (added-mass and added-volume methods), headphone impedance, and
+         amplifier output impedance and damping factor via the two-load
+         method.</p>
+      <p>Needs only a trivial jig on the user's side, and it opens up the whole
+         DIY-loudspeaker audience.</p>
+
+      <h2 id="vinyl">10. Vinyl and tape suite</h2>
+      <p>The RIAA/IEC overlays are already there; this extends them into
+         test-record tooling: azimuth and channel-separation tracks, tracking
+         distortion, eccentricity from the 3150&nbsp;Hz tone, and NAB/CCIR/IEC
+         tape EQ curves with bias and level alignment.</p>
+      <p>A small niche, but an intensely loyal one, and no free tool covers it
+         well.</p>
+
+      <h2 id="jitter">11. Jitter and phase noise</h2>
+      <p>A J-test (AES17 / Dunn) stimulus plus sideband integration gives
+         ps&nbsp;RMS; an L(f) dBc/Hz plot comes from the analytic signal. ADEV
+         as a companion tab would suit oscillator work.</p>
+      <p>The analytic-signal and FLL machinery arrives with item&nbsp;8, so the
+         incremental cost here is mostly the plotting and getting the
+         integration limits right.</p>
+
+      <h2 id="asio">12. ASIO driver support</h2>
+      <p>An ASIO backend alongside the existing WASAPI, WDM-KS, CoreAudio,
+         JavaSound, QA40x and net backends.</p>
+      <p>The backend SPI and the per-backend settings mechanism already exist,
+         so the shape is known - the cost is the native bridge and the Steinberg
+         SDK licensing terms, not the app-side integration.</p>
+
+      <h2 id="nidaq">13. NI DAQ support</h2>
+      <p>National Instruments DAQ hardware as a capture and generation source,
+         via NI-DAQmx.</p>
+      <p>Same backend SPI as item&nbsp;12, but a different <em>class</em> of
+         hardware: DC-coupled, arbitrary ranges, no soundcard sample-rate
+         conventions. Expect assumptions in the shared capture path to need
+         loosening.</p>
+
+      <h2 id="scripting">14. Scripting and plugin SPI</h2>
+      <p>JSR-223 scripting (Groovy or JS) with access to the capture buffers and
+         FFT results, plus a <code>ServiceLoader</code>-based module SPI.</p>
+      <p>For a one-person project this is the <b>highest-leverage architectural
+         move on the list</b>: it lets other people add the niche measurement
+         they need without anyone having to write it for them. It is last not
+         because it is least valuable but because it touches the whole app
+         surface - every internal API it exposes becomes a compatibility
+         promise.</p>
+
+    </div>
+  </main>
+
+</body>
+</html>

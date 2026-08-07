@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Phonalyser — Measurement bench</title>
+  <title>Phonalyser - Measurement bench</title>
   <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
   <link rel="stylesheet" href="css/site.css"/>
   <script src="js/site.js" defer></script>
@@ -27,10 +27,10 @@
         <summary>Download <span class="caret">▸</span></summary>
         <a href="download.html">All downloads</a>
         <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
-           target="_blank" rel="noopener">GitHub — latest release</a>
+           target="_blank" rel="noopener">GitHub - latest release</a>
         <a class="ext" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
            target="_blank" rel="noopener">Microsoft Store</a>
-        <a class="disabled" title="Reserved — coming soon">macOS <span class="soon">soon</span></a>
+        <a class="disabled" title="Reserved - coming soon">macOS <span class="soon">soon</span></a>
       </details>
 
       <details class="submenu">
@@ -39,6 +39,7 @@
         <a href="translation.html">Translation</a>
         <a href="bench.html">Measurement bench</a>
         <a href="theory.html">Theory of operation</a>
+        <a href="roadmap.html">Roadmap</a>
       </details>
 
       <a href="privacy.html">Privacy</a>
@@ -55,7 +56,7 @@
       <img src="img/logo.svg" alt="Phonalyser logo"/>
       <div>
         <h1>Measurement bench</h1>
-        <p class="sub">A Faraday-cage bench — wiring the generator, DUT and
+        <p class="sub">A Faraday-cage bench - wiring the generator, DUT and
            capture against induced noise.</p>
       </div>
     </header>
@@ -71,13 +72,13 @@
 
       <p>There is <b>no separate room-sized cage</b>. The <b>device enclosures
          and the cable shields together build one continuous conductive
-         envelope</b> around the signal pair — a <em>distributed</em> Faraday
+         envelope</b> around the signal pair - a <em>distributed</em> Faraday
          cage, all tied through XLR pin&nbsp;1 and earthed at a single point.
          Three ideas do the work:</p>
       <ol>
         <li><b>Best-possible cable shielding</b>, with the right wire used for
             the right job.</li>
-        <li><b>A continuous shield/chassis envelope</b> — the distributed cage —
+        <li><b>A continuous shield/chassis envelope</b> - the distributed cage -
             that excludes external electric fields.</li>
         <li><b>Single-point grounding</b>: the signal ground is bonded to that
             shield at exactly one place (the DUT), so shield currents never flow
@@ -92,7 +93,7 @@
       <p>CAT.8 carries a <b>double shield</b>: an <b>aluminium/PET foil</b>
          wrapped around <em>each</em> twisted pair, plus an overall foil/braid
          around all four pairs. A foil is a <em>continuous, hole-free</em> screen
-         — unlike the braided shield of a coaxial cable, which is a mesh full of
+         - unlike the braided shield of a coaxial cable, which is a mesh full of
          small openings that leak fields, especially as frequency rises. The
          twisted pair itself is the second weapon: twisting makes the loop area
          between signal and return tiny and sign-alternating, so a magnetic field
@@ -104,7 +105,7 @@
          or outright non-existent for a measurement bench. Pay for shield
          coverage and a tight twist, not for the story.</div>
 
-      <h2>2. XLR wiring — one pair carries the signal</h2>
+      <h2>2. XLR wiring - one pair carries the signal</h2>
       <p>A standard XLR has three pins: <b>1 = shield/ground</b>,
          <b>2 = hot/positive</b>, <b>3 = cold/negative</b>. Here the connection
          is <b>unbalanced</b>, carried on <b>one twisted pair</b>, with the
@@ -113,7 +114,7 @@
         <tr><th>CAT.8 wire</th><th>XLR pin</th><th>Role</th></tr>
         <tr><td><b>blue-white</b></td><td>2 (hot)</td><td><b>Signal</b></td></tr>
         <tr><td><b>blue</b></td><td>3 (cold)</td><td><b>Signal ground</b> (the unbalanced return)</td></tr>
-        <tr><td><b>green + green-white + drain</b></td><td>1</td><td><b>Cable shield</b> → device chassis</td></tr>
+        <tr><td><b>green + green-white + drain</b></td><td>1</td><td><b>Cable shield</b> -> device chassis</td></tr>
       </table>
       <p>So the <em>signal</em> (pin&nbsp;2) and the <em>signal ground</em>
          (pin&nbsp;3) are the <b>blue/blue-white twisted pair</b>; the green pair
@@ -124,9 +125,9 @@
         <figcaption>The CAT.8 pair broken out onto XLR pins 1/2/3.</figcaption>
       </figure>
 
-      <h2>3. Single-point grounding — the key trick</h2>
+      <h2>3. Single-point grounding - the key trick</h2>
       <p><b>Signal ground (pin&nbsp;3) is connected to the shield (pin&nbsp;1) at
-         exactly one place, normally the DUT input or output — test both and keep
+         exactly one place, normally the DUT input or output - test both and keep
          whichever gives the lower noise.</b> Everywhere else the signal-ground
          wire is <em>isolated</em> from the shield and from the chassis.</p>
       <p>Why this matters: if the signal ground also acted as the shield (as it
@@ -138,7 +139,7 @@
          have their own return path and <b>do not</b> appear in series with the
          signal.</p>
       <p><b>Each device has its own shield connected to the XLR shield/ground
-         (pin&nbsp;1) — not to signal ground (pin&nbsp;3).</b> The chassis screens
+         (pin&nbsp;1) - not to signal ground (pin&nbsp;3).</b> The chassis screens
          form one continuous shield held at cage/earth potential; the signal
          ground floats on the twisted pair and touches that shield only at the
          single star point at the DUT.</p>
@@ -146,8 +147,8 @@
       <h2>4. How much noise is actually left? (order-of-magnitude)</h2>
       <p>The remaining question is whether external fields can still induce a
          meaningful voltage. Estimate it.</p>
-      <p><b>Electric fields</b> — the usual source of mains hum via capacitive
-         coupling — are <b>excluded entirely</b> by the continuous shield/chassis
+      <p><b>Electric fields</b> - the usual source of mains hum via capacitive
+         coupling - are <b>excluded entirely</b> by the continuous shield/chassis
          envelope: the foil around the pair and the metal enclosures form one
          closed conductor around the signal. That coupling path is gone.</p>
       <p><b>Magnetic fields</b> are not blocked by an electrostatic screen; they
@@ -158,26 +159,26 @@
       <div class="formula">V = ω · B · A<sub>eff</sub>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ω = 2π·f</div>
       <table>
         <tr><th>Quantity</th><th>Symbol</th><th>Estimate (50 Hz)</th></tr>
-        <tr><td>Ambient mains magnetic field in a normal room <a href="#ref-1">[1]</a></td><td>B<sub>ext</sub></td><td>~0.1 µT (≈1 mG); 0.05–1 µT</td></tr>
+        <tr><td>Ambient mains magnetic field in a normal room <a href="#ref-1">[1]</a></td><td>B<sub>ext</sub></td><td>~0.1 µT (≈1 mG); 0.05-1 µT</td></tr>
         <tr><td>Residual field inside the cage</td><td>B<sub>in</sub></td><td>a few dB lower, ~0.05 µT</td></tr>
         <tr><td>Effective loop area of the twisted pair (pessimistic)</td><td>A<sub>eff</sub></td><td>~10 mm² = 1×10⁻⁵ m²</td></tr>
         <tr><td>Angular frequency</td><td>ω</td><td>2π·50 ≈ 314 rad/s</td></tr>
         <tr><td><b>Induced EMF</b></td><td><b>V</b></td><td><b>314 · 5×10⁻⁸ · 1×10⁻⁵ ≈ 1.6×10⁻¹⁰ V ≈ 0.16 nV</b></td></tr>
         <tr><td>in dBV (re 1 V)</td><td></td><td><b>≈ −196 dBV</b></td></tr>
       </table>
-      <p>Even taking a deliberately pessimistic case — no envelope attenuation
+      <p>Even taking a deliberately pessimistic case - no envelope attenuation
          (B = 0.1 µT) and a poorly-twisted run with ten times the loop area
          (A<sub>eff</sub> = 100 mm²):</p>
       <div class="formula">V = 314 · 1×10⁻⁷ · 1×10⁻⁴ ≈ 3×10⁻⁹ V ≈ 3 nV ≈ −170 dBV</div>
       <p>That is still <b>tens of dB below the converter's own noise floor</b>
-         (a capable ADC sits around −150…−160 dBV per bin). The
+         (a capable ADC sits around −150...−160 dBV per bin). The
          magnetically-induced mains pickup is negligible.</p>
-      <p>For contrast, drop the discipline — let the signal-ground conductor
+      <p>For contrast, drop the discipline - let the signal-ground conductor
          double as the shield so the <em>whole</em> cable-to-chassis loop (tens of
-         cm²) is exposed and carries shield current — and the same field induces
+         cm²) is exposed and carries shield current - and the same field induces
          <b>micro-volts</b> (≈ −120 dBV): audible hum, and a hard floor under
          every distortion measurement. <b>The twist plus single-point ground buys
-         roughly 50–80 dB.</b></p>
+         roughly 50-80 dB.</b></p>
 
       <h2>Example DUTs</h2>
       <p>The same wiring feeds whatever sits in the cage. Two filters used on
@@ -194,7 +195,7 @@
       </div>
       <figure class="shot">
         <img src="img/anti-riaa-2.jpg" alt="Anti-RIAA filter, other side"/>
-        <figcaption>Anti-RIAA filter — the other side.</figcaption>
+        <figcaption>Anti-RIAA filter - the other side.</figcaption>
       </figure>
 
       <h2>Summary</h2>
@@ -204,7 +205,7 @@
         <li><b>Signal ground bonded to shield at one point only</b>, at the DUT.</li>
         <li><b>Every chassis on the shield (pin 1), never on signal ground.</b></li>
         <li>This continuous shield/chassis envelope drives the induced mains
-            pickup to <b>≈ −170 dBV or lower</b> — well under the noise floor of
+            pickup to <b>≈ −170 dBV or lower</b> - well under the noise floor of
             the measurement itself.</li>
       </ul>
 
@@ -220,7 +221,7 @@
                target="_blank" rel="noopener">WHO fact sheet</a>.</li>
         <li><b>Shielding &amp; grounding technique.</b> H. W. Ott,
             <i>Electromagnetic Compatibility Engineering</i> (Wiley, 2009),
-            ISBN 978-0-470-18930-6 — Chapter 2 "Cabling", esp. §2.12 Coaxial
+            ISBN 978-0-470-18930-6 - Chapter 2 "Cabling", esp. §2.12 Coaxial
             Cable Versus Twisted Pair, §2.13 Braided Shields, and §2.15.2
             Grounding of Cable Shields.</li>
       </ol>

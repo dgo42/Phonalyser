@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Phonalyser — precision audio measurement workbench</title>
+  <title>Phonalyser - precision audio measurement workbench</title>
   <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
   <link rel="stylesheet" href="css/site.css"/>
   <script src="js/site.js" defer></script>
@@ -28,10 +28,10 @@
         <summary>Download <span class="caret">▸</span></summary>
         <a href="download.html">All downloads</a>
         <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
-           target="_blank" rel="noopener">GitHub — latest release</a>
+           target="_blank" rel="noopener">GitHub - latest release</a>
         <a class="ext" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
            target="_blank" rel="noopener">Microsoft Store</a>
-        <a class="disabled" title="Reserved — coming soon">macOS <span class="soon">soon</span></a>
+        <a class="disabled" title="Reserved - coming soon">macOS <span class="soon">soon</span></a>
       </details>
 
       <details class="submenu">
@@ -40,6 +40,7 @@
         <a href="translation.html">Translation</a>
         <a href="bench.html">Measurement bench</a>
         <a href="theory.html">Theory of operation</a>
+        <a href="roadmap.html">Roadmap</a>
       </details>
 
       <a href="privacy.html">Privacy</a>
@@ -56,8 +57,8 @@
     <header class="hero">
       <img src="img/logo.svg" alt="Phonalyser logo"/>
       <div>
-        <h1>Phonalyser <span class="version">v1.1.0</span></h1>
-        <p>Precision audio measurement workbench — a desktop analyzer for
+        <h1>Phonalyser <span class="version">v1.2.0</span></h1>
+        <p>Precision audio measurement workbench - a desktop analyzer for
            THD/IMD, SNR/ENOB, frequency response, and oscilloscope-style
            inspection, built around coherent FFT averaging and bit-exact
            playback/capture.</p>
@@ -77,43 +78,50 @@
         <a class="btn btn-primary" href="https://github.com/dgo42/Phonalyser/releases/latest"
            target="_blank" rel="noopener">
           <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-          Download — latest release
+          Download - latest release
         </a>
         <a class="btn btn-store" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
            target="_blank" rel="noopener">Microsoft Store</a>
         <span class="btn disabled">macOS <span class="soon">soon</span></span>
       </div>
-      <p class="lede">Native installers bundle their own Java runtime — nothing
+      <p class="lede">Native installers bundle their own Java runtime - nothing
          else to install. Prefer not to install? The full analyzer also runs in
-         your browser — try the <a href="web/index.html">web version</a>.</p>
+         Chrome, Edge or another Chromium-based browser - try the
+         <a href="web/index.html">web version</a>.</p>
 
-      <p><img src="img/phonalyser.png" alt="Phonalyser — main window"/></p>
+      <p><img src="img/phonalyser.png" alt="Phonalyser - main window"/></p>
 
       <h2>Highlights</h2>
       <ul>
-        <li><b>FFT analyzer</b> — THD, THD+N, IMD, SNR, ENOB, per-harmonic
+        <li><b>FFT analyzer</b> - THD, THD+N, IMD, SNR, ENOB, per-harmonic
             readout, coherent averaging, selectable windows, and live
             calibration (<code>.frc</code>).</li>
-        <li><b>Ultra-low-distortion measurements</b> — sub-ppm THD with a
+        <li><b>Ultra-low-distortion measurements</b> - sub-ppm THD with a
             capable ADC/DAC (e.g. E1DA Cosmos), coherent averaging to pull the
             noise floor down.</li>
-        <li><b>Oscilloscope</b> — triggered time-domain view with
-            Vpp/Vrms/period/frequency stats.</li>
-        <li><b>Frequency response</b> — log-sweep / multitone with
+        <li><b>Oscilloscope</b> - triggered time-domain view with
+            Vpp/Vrms/period/frequency stats and an amplitude histogram.</li>
+        <li><b>Frequency response</b> - log-sweep / multitone with
             deconvolution and calibration.</li>
-        <li><b>Signal generator</b> — sine, dual-tone (IMD), sweep, DDS.</li>
-        <li><b>DAC pre-distortion calibration</b> — a closed-loop wizard that
+        <li><b>Signal generator</b> - sine, dual-tone (IMD), sweep, DDS.</li>
+        <li><b>DAC pre-distortion calibration</b> - a closed-loop wizard that
             iteratively cancels the converter's own harmonics (and dual-tone
             IMD), pushing the playback chain's distortion far below what the
             DAC produces alone.</li>
-        <li><b>Notch-filter tuning</b> — a live module for trimming a passive
+        <li><b>Notch-filter tuning</b> - a live module for trimming a passive
             twin-T notch: a continuously looping sweep tracks the null in real
             time so you can walk it onto the target frequency, then de-embed
             the notch's response from the FFT.</li>
-        <li><b>Multi-backend audio</b> — WASAPI &amp; WDM-KS (Windows),
-            CoreAudio (macOS), JavaSound (Linux); high sample rates and
-            16/24/32-bit.</li>
-        <li><b>Per-card calibration</b> — full-scale calibration follows the
+        <li><b>Multi-backend audio</b> - WASAPI &amp; WDM-KS (Windows),
+            CoreAudio (macOS), JavaSound (Linux), plus a direct QA40x
+            (QA402/QA403) USB backend - on the desktop and, over WebUSB, in
+            the browser; high sample rates and 16/24/32-bit.</li>
+        <li><b>Network bench</b> - a headless <code>phonalyser-server</code>
+            turns the machine wired to the measurement hardware into a bench;
+            the desktop app and the browser port measure through it as if the
+            hardware were local - multicast discovery, per-client device locks
+            naming the holder, cards and calibration living on the bench.</li>
+        <li><b>Per-card calibration</b> - full-scale calibration follows the
             physical card across backends via name aliases, with a range table
             per attenuator / DIP position; the crosshair calibrations write
             straight into the card's active range.</li>
@@ -122,13 +130,13 @@
       <p><img src="img/fft-ultralow-thd.png" alt="Ultra-low-distortion FFT measurement"/></p>
 
       <h2>Measurement bench</h2>
-      <p>Wiring the bench so the cabling doesn't inject its own noise — a
+      <p>Wiring the bench so the cabling doesn't inject its own noise - a
          Faraday cage, CAT.8 twisted pair with XLR connectors, single-point
-         grounding, and the resulting induced-noise budget — is described on the
+         grounding, and the resulting induced-noise budget - is described on the
          <a href="bench.html">measurement-bench</a> page.</p>
 
       <h2>License</h2>
-      <p>GNU Affero General Public License v3.0 — see
+      <p>GNU Affero General Public License v3.0 - see
          <a href="https://github.com/dgo42/Phonalyser/blob/main/LICENSE"
             target="_blank" rel="noopener">LICENSE</a>.</p>
 

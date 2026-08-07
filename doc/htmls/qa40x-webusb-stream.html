@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>QA40x WebUSB duplex stream — scope + FFT</title>
+<title>QA40x WebUSB duplex stream - scope + FFT</title>
 <style>
   :root { color-scheme: light dark; }
   body { font-family: system-ui, Segoe UI, Roboto, sans-serif; margin: 1.5rem; max-width: 1240px; line-height: 1.4; }
@@ -33,22 +33,22 @@
 </style>
 </head>
 <body>
-<h1>QA40x WebUSB duplex stream — scope + FFT</h1>
+<h1>QA40x WebUSB duplex stream - scope + FFT</h1>
 
 <p>Streams the QuantAsylum QA402 / QA403 <b>full duplex over WebUSB</b>: a sine goes out the DAC,
-the ADC comes back in, and the capture is drawn as a live scope + averaged FFT — the browser
+the ADC comes back in, and the capture is drawn as a live scope + averaged FFT - the browser
 counterpart of <code>loopback-fft.html</code>, but talking to the analyzer directly instead of
-through Web Audio. Connect a <b>loopback cable DAC → ADC</b> to see the tone.</p>
+through Web Audio. Connect a <b>loopback cable DAC -> ADC</b> to see the tone.</p>
 
 <div class="note">
 The QA40x is an <b>always-duplex</b> device on one clock: the ADC does not stream unless the DAC is
 being fed, so this page always writes (silence if the tone is off). The real question it answers is
-<b>whether WebUSB sustains the bulk rate without gaps</b> — watch <b>max gap</b> and <b>drift</b>
-under “Stream health”, not just the picture.
+<b>whether WebUSB sustains the bulk rate without gaps</b> - watch <b>max gap</b> and <b>drift</b>
+under "Stream health", not just the picture.
 </div>
 
 <div id="unsupported" class="bad" hidden>
-  <b>WebUSB is not available.</b> <code>navigator.usb</code> is undefined — use Chrome or Edge over
+  <b>WebUSB is not available.</b> <code>navigator.usb</code> is undefined - use Chrome or Edge over
   https:// or http://localhost (not file://).
 </div>
 
@@ -72,19 +72,19 @@ under “Stream health”, not just the picture.
 </div>
 
 <p>
-  <button id="connect">Connect to QA40x…</button>
+  <button id="connect">Connect to QA40x...</button>
   <button id="start" disabled>Start</button>
   <button id="stop" disabled>Stop</button>
   &nbsp; <span id="status">idle</span>
 </p>
 
-<div id="readout">—</div>
-<div id="stats">—</div>
+<div id="readout">-</div>
+<div id="stats">-</div>
 <canvas id="scope" width="1200" height="200"></canvas>
 <canvas id="spec"  width="1200" height="400"></canvas>
 
 <h2>Edge-probe matrix</h2>
-<p><small>Runs each combination for a fixed time and records the health counters — the failure edge,
+<p><small>Runs each combination for a fixed time and records the health counters - the failure edge,
 not just one lucky setting. Leave the analyzer connected and the loopback in place; each cell
 starts and stops the stream on its own.</small></p>
 <div class="row">
@@ -104,14 +104,14 @@ starts and stops the stream on its own.</small></p>
 </tr></thead><tbody id="mBody"></tbody></table>
 
 <h2>Log</h2>
-<div id="log">—</div>
+<div id="log">-</div>
 
 <h2>Reading the result</h2>
 <ul>
-  <li><b>max gap</b> — the longest wall-clock interval between two completed IN transfers. A
+  <li><b>max gap</b> - the longest wall-clock interval between two completed IN transfers. A
       dropout-free stream keeps this near <code>frames/transfer ÷ rate</code>; a spike far above it
       is exactly the stall a browser backend would have to survive.</li>
-  <li><b>drift</b> — captured frames vs frames the clock should have produced since start. A
+  <li><b>drift</b> - captured frames vs frames the clock should have produced since start. A
       steady negative drift means the host is not keeping up and the device is discarding.</li>
   <li>Depth and frames/transfer are exposed on purpose: the desktop backend keeps <b>2</b>
       transfers of <b>2048</b> frames in flight, so those are the defaults to compare against.</li>
@@ -123,8 +123,8 @@ starts and stops the stream on its own.</small></p>
 //   identity  VID 0x16C0, PID 0x4E37 (QA402) / 0x4E39 (QA403); interface 0
 //   registers 5-byte BIG-endian frame on EP1 OUT; read = 0x80|reg, reply 4 bytes BE on EP1 IN
 //   audio     EP2 OUT / EP2 IN, interleaved LITTLE-endian int32 stereo (two endiannesses!)
-//   start     RUN_STOP → INPUT_FS → OUTPUT_FS → SAMPLE_RATE → prime writes → RUN_START
-// WebUSB takes endpoint NUMBERS and infers direction, so 0x01/0x81 → 1 and 0x02/0x82 → 2.
+//   start     RUN_STOP -> INPUT_FS -> OUTPUT_FS -> SAMPLE_RATE -> prime writes -> RUN_START
+// WebUSB takes endpoint NUMBERS and infers direction, so 0x01/0x81 -> 1 and 0x02/0x82 -> 2.
 // ---------------------------------------------------------------------------
 const QA_VID = 0x16C0, MODELS = { 0x4E37: 'QA402', 0x4E39: 'QA403' };
 const IFACE = 0, REG_EP = 1, AUDIO_EP = 2, READ_FLAG = 0x80;
@@ -139,13 +139,13 @@ const START_THRESHOLD_FRAMES = 1024;               // frames queued before RUN_S
 
 const $ = (id) => document.getElementById(id);
 const status = (t) => { $('status').textContent = t; };
-function log(s) { const el = $('log'); if (el.textContent === '—') el.textContent = ''; el.textContent += s + '\n'; el.scrollTop = el.scrollHeight; }
+function log(s) { const el = $('log'); if (el.textContent === '-') el.textContent = ''; el.textContent += s + '\n'; el.scrollTop = el.scrollHeight; }
 
 let device = null, running = false, model = 'QA403';
 let rate = 48000, chunkFrames = 2048, depth = 2;
 let phase = 0, toneOn = true, toneHz = 1000, toneAmp = 0.5;
 // Outstanding transfer queues, hoisted so stopStream() can neutralise the ones still in flight
-// (a pending transferIn/Out rejects once the device stops — unhandled, that surfaces as a
+// (a pending transferIn/Out rejects once the device stops - unhandled, that surfaces as a
 // console error and, in a matrix run, poisons the next cell).
 let inQ = [], outQ = [];
 let transferErrors = 0;
@@ -163,12 +163,12 @@ function regFrame(reg, value) {
 }
 async function regWrite(reg, value) {
   const r = await device.transferOut(REG_EP, regFrame(reg, value));
-  if (r.status !== 'ok') throw new Error(`reg write 0x${reg.toString(16)} → ${r.status}`);
+  if (r.status !== 'ok') throw new Error(`reg write 0x${reg.toString(16)} -> ${r.status}`);
 }
 async function regRead(reg) {
   await device.transferOut(REG_EP, regFrame(reg | READ_FLAG, 0));
   const r = await device.transferIn(REG_EP, 4);
-  if (r.status !== 'ok') throw new Error(`reg read 0x${reg.toString(16)} → ${r.status}`);
+  if (r.status !== 'ok') throw new Error(`reg read 0x${reg.toString(16)} -> ${r.status}`);
   return r.data.getUint32(0, false);
 }
 
@@ -305,7 +305,7 @@ function drawStats() {
 }
 
 // ---- streaming ------------------------------------------------------------
-/** Snapshot of the health counters — the numbers a feasibility verdict rests on. */
+/** Snapshot of the health counters - the numbers a feasibility verdict rests on. */
 function statsSnapshot() {
   const el = Math.max(1e-3, (performance.now() - t0) / 1000);
   return {
@@ -350,7 +350,7 @@ async function startStream(cfg = {}) {
   worker = new Worker(URL.createObjectURL(new Blob([FFT_WORKER], { type: 'application/javascript' })));
   worker.onmessage = (e) => onSpectrum(e.data);
 
-  // Start sequence — exactly the desktop engine's order.
+  // Start sequence - exactly the desktop engine's order.
   log(`start: rate ${rate} (code ${rateCode}), in ${$('inFs').value} dBV (code ${inCode}), out ${$('outFs').value} dBV (code ${outCode})`);
   await regWrite(REG_RUN, RUN_STOP);
   await regWrite(REG_INPUT_FS, inCode);
@@ -369,21 +369,21 @@ async function startStream(cfg = {}) {
   await regWrite(REG_RUN, RUN_START);
   if (!quiet) log('RUN_START written');
 
-  // Writer loop — keep the queue depth outstanding, consumed in order.
+  // Writer loop - keep the queue depth outstanding, consumed in order.
   (async () => {
     try {
       while (live()) {
         const p = outQ.shift();
         if (!p) break;
         const r = await p;
-        if (!live()) break;                      // stopped while awaiting — do NOT resubmit
+        if (!live()) break;                      // stopped while awaiting - do NOT resubmit
         if (r.status !== 'ok') { transferErrors++; if (!quiet) log('! transferOut ' + r.status); break; }
         outQ.push(device.transferOut(AUDIO_EP, fillOut(new ArrayBuffer(chunkFrames * FRAME_BYTES))));
       }
     } catch (e) { if (live()) { transferErrors++; if (!quiet) log('! writer: ' + e.message); } }
   })();
 
-  // Reader loop — submit `depth` reads, then consume IN ORDER and resubmit one each time.
+  // Reader loop - submit `depth` reads, then consume IN ORDER and resubmit one each time.
   // Awaiting the queue head (rather than racing the promises) is what keeps the sample stream
   // contiguous: USB bulk completes FIFO, but concurrent transferIn promises carry no ordering
   // guarantee, so racing them would silently scramble the stream.
@@ -393,7 +393,7 @@ async function startStream(cfg = {}) {
       const p = inQ.shift();
       if (!p) break;
       const r = await p;
-      if (!live()) break;                        // stopped while awaiting — do NOT resubmit
+      if (!live()) break;                        // stopped while awaiting - do NOT resubmit
       inQ.push(device.transferIn(AUDIO_EP, chunkFrames * FRAME_BYTES));
       if (r.status !== 'ok') { transferErrors++; if (!quiet) log('! transferIn ' + r.status); break; }
       const now = performance.now();
@@ -417,7 +417,7 @@ async function stopStream(quiet = false) {
   inQ = []; outQ = [];
   try { await regWrite(REG_RUN, RUN_STOP); if (!quiet) log('RUN_STOP written'); }
   catch (e) { if (!quiet) log('! stop: ' + e.message); }
-  // CRITICAL: once the device stops sending, an outstanding bulk IN never completes — WebUSB has
+  // CRITICAL: once the device stops sending, an outstanding bulk IN never completes - WebUSB has
   // no per-transfer timeout, so the reader would park on its await forever (this is what wedged
   // the matrix). Releasing the interface aborts every pending transfer; re-claiming leaves the
   // device ready for the next run.
@@ -451,7 +451,7 @@ async function runMatrix() {
       for (const c of chunks) {
         if (matrixAbort) { log('matrix aborted'); status('connected'); return; }
         n++;
-        status(`matrix ${n}/${total}: ${r} Hz, depth ${d}, ${c} frames…`);
+        status(`matrix ${n}/${total}: ${r} Hz, depth ${d}, ${c} frames...`);
         let row;
         try {
           const done = startStream({ rate: r, depth: d, chunkFrames: c, quiet: true })
@@ -480,7 +480,7 @@ async function runMatrix() {
 /** A cell passes when it kept up (|drift| under ~1% of a second) with no transfer errors. */
 function verdict(r) {
   if (r.errors) return ['fail', 'error'];
-  if (!isFinite(r.driftMs)) return ['fail', '—'];
+  if (!isFinite(r.driftMs)) return ['fail', '-'];
   const lostMs = Math.abs(r.driftMs);
   if (lostMs > 10) return ['fail', `${lostMs.toFixed(0)} ms lost`];
   if (r.maxGapMs > 4 * r.nominalMs) return ['warn', 'gap spike'];
@@ -493,8 +493,8 @@ function addMatrixRow(r) {
   $('mBody').insertAdjacentHTML('beforeend',
     `<tr><td>${(r.rate / 1000).toFixed(0)}k</td><td>${r.depth}</td><td>${r.chunkFrames}</td>` +
     `<td>${r.mbs.toFixed(2)}</td><td>${r.nominalMs.toFixed(2)}</td>` +
-    `<td>${isFinite(r.maxGapMs) ? r.maxGapMs.toFixed(1) : '—'}</td>` +
-    `<td>${isFinite(r.driftMs) ? (r.driftMs >= 0 ? '+' : '') + r.driftMs.toFixed(1) : '—'}</td>` +
+    `<td>${isFinite(r.maxGapMs) ? r.maxGapMs.toFixed(1) : '-'}</td>` +
+    `<td>${isFinite(r.driftMs) ? (r.driftMs >= 0 ? '+' : '') + r.driftMs.toFixed(1) : '-'}</td>` +
     `<td style="color:${colour};font-weight:600">${why}</td></tr>`);
 }
 
@@ -505,8 +505,8 @@ function matrixMarkdown() {
   return head + matrixRows.map((r) => {
     const [, why] = verdict(r);
     return `| ${(r.rate / 1000).toFixed(0)} kHz | ${r.depth} | ${r.chunkFrames} | ${r.mbs.toFixed(2)} | `
-      + `${r.nominalMs.toFixed(2)} | ${isFinite(r.maxGapMs) ? r.maxGapMs.toFixed(1) : '—'} | `
-      + `${isFinite(r.driftMs) ? (r.driftMs >= 0 ? '+' : '') + r.driftMs.toFixed(1) : '—'} | ${why} |`;
+      + `${r.nominalMs.toFixed(2)} | ${isFinite(r.maxGapMs) ? r.maxGapMs.toFixed(1) : '-'} | `
+      + `${isFinite(r.driftMs) ? (r.driftMs >= 0 ? '+' : '') + r.driftMs.toFixed(1) : '-'} | ${why} |`;
   }).join('\n');
 }
 
@@ -520,7 +520,7 @@ function fillSelectors(model) {
 
 $('connect').addEventListener('click', async () => {
   try {
-    status('requesting device…');
+    status('requesting device...');
     device = await navigator.usb.requestDevice({
       filters: Object.keys(MODELS).map((pid) => ({ vendorId: QA_VID, productId: Number(pid) })),
     });
@@ -538,7 +538,7 @@ $('connect').addEventListener('click', async () => {
     status('connected');
   } catch (e) {
     status('failed'); log('! ' + e.name + ': ' + e.message);
-    if (e.name === 'NetworkError') log('  (interface busy — close Phonalyser / the vendor app — or not on WinUSB)');
+    if (e.name === 'NetworkError') log('  (interface busy - close Phonalyser / the vendor app - or not on WinUSB)');
     if (e.name === 'SecurityError') log('  (serve over https:// or http://localhost)');
   }
 });
@@ -550,7 +550,7 @@ $('start').addEventListener('click', async () => {
 });
 
 $('stop').addEventListener('click', async () => {
-  $('stop').disabled = true; status('stopping…');
+  $('stop').disabled = true; status('stopping...');
   await stopStream();
   $('start').disabled = false; status('connected');
 });
@@ -562,12 +562,12 @@ $('matrix').addEventListener('click', async () => {
   $('copy').disabled = matrixRows.length === 0;
 });
 
-$('matrixStop').addEventListener('click', () => { matrixAbort = true; log('abort requested…'); });
+$('matrixStop').addEventListener('click', () => { matrixAbort = true; log('abort requested...'); });
 
 $('copy').addEventListener('click', async () => {
   const md = matrixMarkdown();
   try { await navigator.clipboard.writeText(md); log('matrix copied to clipboard as markdown'); }
-  catch (e) { log('clipboard blocked — markdown below:\n' + md); }
+  catch (e) { log('clipboard blocked - markdown below:\n' + md); }
 });
 
 if (!('usb' in navigator)) { $('unsupported').hidden = false; $('connect').disabled = true; status('unsupported'); }

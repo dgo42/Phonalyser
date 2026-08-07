@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>QA40x from the browser — WebUSB proof of concept</title>
+<title>QA40x from the browser - WebUSB proof of concept</title>
 <style>
   :root { color-scheme: light dark; }
   body { font-family: system-ui, Segoe UI, Roboto, sans-serif; margin: 1.5rem; max-width: 1100px; line-height: 1.4; }
@@ -32,15 +32,15 @@
 </style>
 </head>
 <body>
-<h1>QA40x from the browser — WebUSB proof of concept</h1>
+<h1>QA40x from the browser - WebUSB proof of concept</h1>
 
-<p>Reads the QuantAsylum QA402 / QA403 live status registers — <b>USB bus voltage, USB bus
-current and die temperature</b> — straight from a browser tab, with no native code and no
+<p>Reads the QuantAsylum QA402 / QA403 live status registers - <b>USB bus voltage, USB bus
+current and die temperature</b> - straight from a browser tab, with no native code and no
 plugin. It is a feasibility probe for a browser-side QA40x backend, not a port: it only reads
 three registers and never starts streaming.</p>
 
 <div class="note">
-<b>WebAssembly is not what makes this possible — WebUSB is.</b> WASM is just compiled code
+<b>WebAssembly is not what makes this possible - WebUSB is.</b> WASM is just compiled code
 running in the same sandbox; it gains no I/O capability the page does not already have. Compiling
 libusb to WASM still needs a transport underneath, and in a browser that transport is
 <code>navigator.usb</code>. For three register reads the WebUSB calls are a handful of lines, so
@@ -51,18 +51,18 @@ this page talks to the device directly and skips WASM entirely.
 <ul>
   <li><b>Chrome or Edge</b> (desktop). Firefox and Safari do not implement WebUSB.</li>
   <li>A <b>secure context</b>: serve over <code>https://</code> or <code>http://localhost</code>.
-      Opening this file as <code>file://</code> will not work —
+      Opening this file as <code>file://</code> will not work -
       <code>python -m http.server 8799 -d doc/htmls</code> then
       <a href="http://localhost:8799/qa40x-webusb.html">http://localhost:8799/qa40x-webusb.html</a>.</li>
   <li>The analyzer must be bound to a <b>WinUSB-class driver</b> on Windows (the same one the
       desktop app's libusb backend uses). If the QA40x already works in Phonalyser, this is
       already the case.</li>
-  <li><b>Close Phonalyser (and the vendor app) first</b> — the interface is claimed exclusively;
+  <li><b>Close Phonalyser (and the vendor app) first</b> - the interface is claimed exclusively;
       only one process can hold it.</li>
 </ul>
 
 <p>
-  <button id="connect">Connect to QA40x…</button>
+  <button id="connect">Connect to QA40x...</button>
   <button id="read" disabled>Read once</button>
   <button id="poll" disabled>Start polling (2 Hz)</button>
   <button id="close" disabled>Close</button>
@@ -70,7 +70,7 @@ this page talks to the device directly and skips WASM entirely.
 </p>
 
 <div id="unsupported" class="bad" hidden>
-  <b>WebUSB is not available in this browser.</b> <code>navigator.usb</code> is undefined —
+  <b>WebUSB is not available in this browser.</b> <code>navigator.usb</code> is undefined -
   use Chrome or Edge over https:// or http://localhost.
 </div>
 
@@ -85,12 +85,12 @@ this page talks to the device directly and skips WASM entirely.
 </tr></thead><tbody></tbody></table>
 
 <h2>Transfer log</h2>
-<div id="log">—</div>
+<div id="log">-</div>
 
 <h2>What this proves (and what it does not)</h2>
 <ul>
   <li><b>Proves:</b> a browser tab can enumerate, open, claim and run the QA40x
-      register protocol — the same 5-byte big-endian frames the desktop backend sends.</li>
+      register protocol - the same 5-byte big-endian frames the desktop backend sends.</li>
   <li><b>Does not prove streaming.</b> Audio needs sustained bulk transfers on EP 2 / 82 with
       several transfers in flight; WebUSB's <code>transferIn/Out</code> are promise-based per
       transfer, so a real backend would need a queue depth experiment before any conclusion about
@@ -109,7 +109,7 @@ this page talks to the device directly and skips WASM entirely.
 //              on EP 0x01 OUT; read = that frame with the address MSB set (0x80|reg) and
 //              value 0, then a 4-byte big-endian reply from EP 0x81 IN.
 // WebUSB addresses endpoints by NUMBER and infers direction from the call, so
-// EP 0x01 OUT -> transferOut(1, …) and EP 0x81 IN -> transferIn(1, 4).
+// EP 0x01 OUT -> transferOut(1, ...) and EP 0x81 IN -> transferIn(1, 4).
 // ---------------------------------------------------------------------------
 const QA_VID = 0x16C0;
 const MODELS = { 0x4E37: 'QA402', 0x4E39: 'QA403' };
@@ -133,7 +133,7 @@ const $ = (id) => document.getElementById(id);
 const status = (t) => { $('status').textContent = t; };
 function log(line) {
   const el = $('log');
-  if (el.textContent === '—') el.textContent = '';
+  if (el.textContent === '-') el.textContent = '';
   el.textContent += line + '\n';
   el.scrollTop = el.scrollHeight;
 }
@@ -154,14 +154,14 @@ function writeFrame(reg, value) {
 async function readRegister(reg) {
   const frame = writeFrame(reg | READ_FLAG, 0);
   const out = await device.transferOut(REG_EP, frame);
-  if (out.status !== 'ok') throw new Error(`transferOut(reg 0x${reg.toString(16)}) → ${out.status}`);
+  if (out.status !== 'ok') throw new Error(`transferOut(reg 0x${reg.toString(16)}) -> ${out.status}`);
   const inn = await device.transferIn(REG_EP, 4);
-  if (inn.status !== 'ok') throw new Error(`transferIn(reg 0x${reg.toString(16)}) → ${inn.status}`);
+  if (inn.status !== 'ok') throw new Error(`transferIn(reg 0x${reg.toString(16)}) -> ${inn.status}`);
   const dv = inn.data;
   if (dv.byteLength < 4) throw new Error(`short reply: ${dv.byteLength} bytes`);
   const value = dv.getUint32(0, false);                    // big-endian
   const raw = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
-  log(`reg 0x${reg.toString(16).padStart(2, '0')}  →  ${hex(frame)}  ⇒  ${hex(raw)}  = ${value}`);
+  log(`reg 0x${reg.toString(16).padStart(2, '0')}  ->  ${hex(frame)}  =>  ${hex(raw)}  = ${value}`);
   return value;
 }
 
@@ -173,7 +173,7 @@ function showDevice(d) {
     ['vendorId', '0x' + d.vendorId.toString(16).toUpperCase()],
     ['productId', '0x' + d.productId.toString(16).toUpperCase() + ' (' + (MODELS[d.productId] || 'unknown model') + ')'],
     ['USB version', `${d.usbVersionMajor}.${d.usbVersionMinor}`],
-    ['configuration', String(d.configuration ? d.configuration.configurationValue : '—')],
+    ['configuration', String(d.configuration ? d.configuration.configurationValue : '-')],
   ];
   $('dev').tBodies[0].innerHTML = rows
     .map(([k, v]) => `<tr><td>${k}</td><td class="mono">${v}</td></tr>`).join('');
@@ -186,7 +186,7 @@ async function readAll() {
   for (const r of STATUS_REGS) {
     // The ISO-supply rail exists on the QA402 only; the QA403 reports 0 and its own app hides it.
     const skip = r.reg === 0x13 && !isQa402;
-    let cell = '—', rawCell = '—';
+    let cell = '-', rawCell = '-';
     if (!skip) {
       try {
         const v = await readRegister(r.reg);
@@ -205,7 +205,7 @@ async function readAll() {
 
 $('connect').addEventListener('click', async () => {
   try {
-    status('requesting device…');
+    status('requesting device...');
     device = await navigator.usb.requestDevice({
       filters: Object.keys(MODELS).map((pid) => ({ vendorId: QA_VID, productId: Number(pid) })),
     });
@@ -225,13 +225,13 @@ $('connect').addEventListener('click', async () => {
     status('failed');
     log('! ' + e.name + ': ' + e.message);
     if (e.name === 'NotFoundError') log('  (no device chosen, or none matched the VID/PID filter)');
-    if (e.name === 'SecurityError') log('  (not a secure context — serve over https:// or http://localhost)');
-    if (e.name === 'NetworkError') log('  (could not claim the interface — another app holds it, ' +
+    if (e.name === 'SecurityError') log('  (not a secure context - serve over https:// or http://localhost)');
+    if (e.name === 'NetworkError') log('  (could not claim the interface - another app holds it, ' +
       'or the device is not bound to WinUSB)');
   }
 });
 
-$('read').addEventListener('click', async () => { status('reading…'); await readAll(); status('connected'); });
+$('read').addEventListener('click', async () => { status('reading...'); await readAll(); status('connected'); });
 
 $('poll').addEventListener('click', async () => {
   if (pollTimer) {
