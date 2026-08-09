@@ -407,8 +407,17 @@ export class NumericStepModel {
     return true;
   }
 
-  /** `x` rendered with `decimals` places, dot decimal separator (Locale.ROOT). */
-  _format(x, decimals) { return x.toFixed(decimals); }
+  /** `x` rendered with `decimals` places, dot decimal separator (Locale.ROOT).
+   *  Rounded NUMERICALLY first: toFixed alone keeps the sign of a tiny negative
+   *  (a dB round-trip landing a hair under an exact zero would render "-0");
+   *  Math.round goes through a signless integer zero. */
+  _format(x, decimals) {
+    if (Number.isFinite(x)) {
+      const pow = Math.pow(10, decimals);
+      x = Math.round(x * pow) / pow;
+    }
+    return x.toFixed(decimals);
+  }
 
   _logGridStep(db, dir) {
     const d = this._roundSig(db) / LOG_WHEEL_STEP_DB;
@@ -494,8 +503,8 @@ export class NumericStepModel {
     // reaching that branch is text() via a sticky dBFS currentUnit, so the supplier is non-null.
     const x = u.fsRelative ? this._dbfsFromCanonical(canonical) : u.fromCanonical(canonical);
     const num = (this.decimals >= 0)
-      ? x.toFixed(this.decimals)
-      : this._trimTrailingZeros(x.toFixed(this.maxDecimals));
+      ? this._format(x, this.decimals)
+      : this._trimTrailingZeros(this._format(x, this.maxDecimals));
     const suffix = u.suffix();
     return suffix === '' ? num : num + ' ' + suffix;
   }

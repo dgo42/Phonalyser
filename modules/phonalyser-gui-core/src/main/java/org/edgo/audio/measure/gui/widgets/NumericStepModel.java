@@ -403,8 +403,16 @@ public final class NumericStepModel {
         return trimTrailingZeros(format(value, maxDecimals)) + " " + u.suffix();
     }
 
-    /** {@code x} rendered with {@code decimals} places, dot decimal separator. */
+    /** {@code x} rendered with {@code decimals} places, dot decimal separator.
+     *  The value is rounded NUMERICALLY to those places first: the formatter
+     *  alone keeps the sign of a tiny negative, so a computed -1e-12 (a dB
+     *  round-trip landing a hair under an exact zero) would render as "-0".
+     *  {@link Math#round} goes through integer zero, which has no sign. */
     private String format(double x, int decimals) {
+        if (Double.isFinite(x)) {
+            double pow = Math.pow(10, decimals);
+            x = Math.round(x * pow) / pow;
+        }
         return String.format(Locale.ROOT, "%." + decimals + "f", x);
     }
 
@@ -605,8 +613,8 @@ public final class NumericStepModel {
         // Without it a comma-decimal UI locale (uk, de, fr, ...) renders "0,5",
         // which downstream dot-only parsers reject.
         String num = (decimals >= 0)
-                ? String.format(Locale.ROOT, "%." + decimals + "f", x)
-                : trimTrailingZeros(String.format(Locale.ROOT, "%." + maxDecimals + "f", x));
+                ? format(x, decimals)
+                : trimTrailingZeros(format(x, maxDecimals));
         String suffix = u.suffix();
         return suffix.isEmpty() ? num : num + " " + suffix;
     }

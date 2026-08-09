@@ -354,6 +354,9 @@ public final class TuneNotchWizardDialog {
         ampField = new NumericStepField(row, UnitFamily.AMPLITUDE,
                 AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl() / Math.sqrt(2.0), AMP_MAX_DECIMALS,
                 prefs::getDacFsVoltageAmpl, FIELD_WIDTH_HINT);
+        // Same amplitude semantics as the generator's field, so it borrows that
+        // field's tooltip (unit switching, dBV, and the dbfs/dbf entry).
+        ampField.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
         ampField.setValue(prefs.getTuneNotchAmplitudeVrms());
 
         addLabel(row, I18n.t("tuneNotch.targetHz"));

@@ -357,6 +357,23 @@ class NumericStepModelTest {
     }
 
     @Test
+    void amplitude_zeroDbfsRedisplaysAsZeroNotMinusZero() {
+        // 0 dBFS stores fs/sqrt(2), which the 12-significant-digit canonical
+        // rounding can land a hair BELOW; the back-conversion then reads a few
+        // 1e-12 dB negative and the formatter keeps the sign of a tiny
+        // negative - the field showed "-0 dBFS".  Peak full scale 2.0 rounds
+        // sqrt(2) downward, reproducing the sign deterministically.
+        NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-6, 10, 5, () -> 2.0);
+        assertTrue(m.commit("0 dbfs"));
+        assertEquals("0 dBFS", m.text(), "typed zero must not redisplay signed");
+        // A wheel walk landing on the 0 dBFS grid point takes the same
+        // convert-back path and must render clean too.
+        assertTrue(m.commit("-10 dbfs"));
+        m.wheel(1);
+        assertEquals("0 dBFS", m.text(), "stepped-to zero must not redisplay signed");
+    }
+
+    @Test
     void amplitude_dbfsRejectedWithoutSupplier_leavesValueUnchanged() {
         // The FFT manual-fundamental field wires NO full-scale supplier, so it
         // must refuse a dBFS entry and keep its value - the exclusion pins here.
