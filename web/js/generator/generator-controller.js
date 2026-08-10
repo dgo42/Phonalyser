@@ -336,37 +336,54 @@ export class GeneratorController {
    *  against the sample grid cycle to cycle; SINE / SINE_COMP / DUAL_TONE take the FFT-bin
    *  snap ONLY when snap-to-bin is on (Java FftBinSnap.snapIfEnabled admits SINE_COMP since
    *  4887ecb); every other form (noise, ...) emits the raw entered value. */
-  _genEmitFreq(sampleRate = 0) {
+  _genEmitFreq(dacRateHz = 0, analysisRateHz = 0) {
     const c = this.config;
     const raw = c.toneHz;
-    // The rate the alignment / snap grid is derived from: the DAC's own rate for what this
-    // generator PLAYS (the default), or an analyzer's rate when one asks what it should EXPECT
-    // to see (GENERATOR_EMITTED_HZ - Java emitFrequency(prefs, form, sampleRate, hz), whose
-    // rate argument is the caller's for exactly the same reason).
-    const rate = sampleRate > 0 ? sampleRate : (this.outSampleRate || c.outRate);
+    // The two corrections answer to DIFFERENT clocks, which is why they take separate rates
+    // (Java emitFrequency(prefs, form, dacRateHz, analysisRateHz, raw)). A whole number of
+    // samples per period is a property of the DAC that emits them; an FFT bin is a property
+    // of the ANALYSIS, whose grid is fs_in / N on the CAPTURED signal - a tone snapped to the
+    // output clock lands between bins whenever the two rates differ, and the whole point of
+    // the snap is that it does not. Either rate may be named by a caller (an analyzer asking
+    // GENERATOR_EMITTED_HZ passes its own); omitted, they default to this lane's clocks.
+    const dacRate = dacRateHz > 0 ? dacRateHz : (this.outSampleRate || c.outRate);
+    const analysisRate = analysisRateHz > 0 ? analysisRateHz : this.analysisSampleRate();
     if (c.form === GenSignalForm.RECTANGLE || c.form === GenSignalForm.TRIANGLE) {
-      if (raw <= 0 || rate <= 0) return raw;
-      return rate / Math.max(2, Math.round(rate / raw));   // samplePeriodAlignedHz
+      if (raw <= 0 || dacRate <= 0) return raw;
+      return dacRate / Math.max(2, Math.round(dacRate / raw));   // samplePeriodAlignedHz
     }
     if ((c.form === GenSignalForm.SINE || c.form === GenSignalForm.SINE_COMP
         || isDualTone(c.form)) && c.snapToBin) {
       // Java FftBinSnap.snapIfEnabled: binHz = sampleRate / fftLength.
-      const binHz = rate / c.fftSize;
-      if (c.fftSize < 8 || rate <= 0 || binHz <= 0) return raw;
+      const binHz = analysisRate / c.fftSize;
+      if (c.fftSize < 8 || analysisRate <= 0 || binHz <= 0) return raw;
       return Math.round(raw / binHz) * binHz;
     }
     return raw;
   }
 
-  /** The second-tone frequency the DDS actually emits - Java FftBinSnap.snapIfEnabled
-   *  for DUAL_TONE: snapped to the OUTPUT-rate bin grid (outRate/fftSize) when
-   *  snap-to-bin is on and the form is dual-tone, else the raw entered value.
-   *  Keeps tone 2 on a bin centre exactly like {@link #_genEmitFreq} does tone 1. */
-  _genEmitFreq2(sampleRate = 0) {
+  /** The rate the ANALYSIS runs at - the capture side, whose bin grid the snap has to hit
+   *  (Java GeneratorLane.analysisRateHz / GeneratorController.analysisSampleRate, which read
+   *  the same input rate off the current backend configuration). config.inRate is that rate
+   *  live: the pane writes it on every rate edit and shared-capture re-pins it to what the
+   *  device actually granted. Falls back to the DAC's rate only when no capture rate is
+   *  configured at all, so a snap is never computed against 0. */
+  analysisSampleRate() {
+    const c = this.config;
+    return c.inRate > 0 ? c.inRate : (this.outSampleRate || c.outRate);
+  }
+
+  /** The second-tone frequency the DDS actually emits - Java GeneratorLane.snapDualTone:
+   *  snapped to the ANALYSIS-rate bin grid (inRate/fftSize) when snap-to-bin is on and the
+   *  form is dual-tone, else the raw entered value. Both tones therefore land on bin centres
+   *  of the SAME grid - the analysis one; tone 2 on the DAC grid while tone 1 sat on the
+   *  analysis grid would smear it across bins and manufacture the very intermodulation
+   *  products the IMD table then reports. An analyzer asking at its own rate names it. */
+  _genEmitFreq2(analysisRateHz = 0) {
     const c = this.config;
     const raw = c.tone2Hz;
     if (isDualTone(c.form) && c.snapToBin) {
-      const rate = sampleRate > 0 ? sampleRate : (this.outSampleRate || c.outRate);
+      const rate = analysisRateHz > 0 ? analysisRateHz : this.analysisSampleRate();
       const binHz = rate / c.fftSize;
       if (c.fftSize < 8 || rate <= 0 || binHz <= 0) return raw;
       return Math.round(raw / binHz) * binHz;
@@ -400,11 +417,13 @@ export class GeneratorController {
       const remote = sink.emittedHz();
       if (remote[0] > 0 || remote[1] > 0) return remote;
     }
-    if (isDualTone(c.form)) return [this._genEmitFreq(sampleRate), this._genEmitFreq2(sampleRate)];
+    // The asker's rate is the ANALYSIS rate here (Java localTonesHz), so it is the rate the
+    // snap belongs on; the DDS period alignment stays on this lane's own clock.
+    if (isDualTone(c.form)) return [this._genEmitFreq(0, sampleRate), this._genEmitFreq2(sampleRate)];
     // The noise forms have no tone at all and a sweep is a different one every sample.
     const singleTone = isPeriodic(c.form)
       && c.form !== GenSignalForm.LINEAR_SWEEP && c.form !== GenSignalForm.LOG_SWEEP;
-    return [singleTone ? this._genEmitFreq(sampleRate) : 0.0, 0.0];
+    return [singleTone ? this._genEmitFreq(0, sampleRate) : 0.0, 0.0];
   }
 
   /** Faithful port of {@link FftBinSnap#snapIfEnabled}: snaps the entered SINE / DUAL_TONE tone

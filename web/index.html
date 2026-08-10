@@ -78,7 +78,7 @@
     </ul>
   </div>
   <span class="menu-spacer"></span>
-  <span class="menu-ver">v1.2.0 · web</span>
+  <span class="menu-ver">v1.2.1 · web</span>
 </div>
 
 <!-- ===== top-level tabs ===== -->
@@ -473,6 +473,11 @@
                    added LAST in the header AFTER reset). Signal-gated + toggled by the FFT pane;
                    opens #fftMeasWindow. Mirrors the scope #scopeTablePop button. -->
               <button id="fftTablePop" class="lr ico" data-i18n-title="fft.external.tooltip"><img src="assets/icons/window-restore.svg" class="lr-svg" alt=""></button>
+              <!-- Unit of the distortion table's absolute-level cells (Java FftView
+                   distortionUnitCombo, which keeps the slot right after the external-window
+                   button). dB = the level minus the reference the row's percentage divides by.
+                   Shown on the same condition as the pop-out: the table has to be there. -->
+              <select id="fftDistUnit" class="form-select form-select-sm unit-sel"><option value="DBV" selected>dBV</option><option value="DBFS">dBFS</option><option value="DBR">dB</option></select>
             </div>
             <div class="fft-meta"><span id="pctLbl" data-i18n-title="fft.fillPercent.tooltip">0%</span><span id="avgLbl" data-i18n-title="fft.avgCount.tooltip">0 average(s)</span>
               <select id="fftMagUnit" class="form-select form-select-sm unit-sel" data-i18n-title="fft.magUnit.tooltip"><option value="V">V</option><option value="V_SQRT_HZ">V/√Hz</option><option value="DBV" selected>dBV</option><option value="DBFS">dBFS</option><option value="DBR">dBr</option></select></div>

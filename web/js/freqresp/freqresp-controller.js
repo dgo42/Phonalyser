@@ -86,6 +86,11 @@ export class FreqRespController {
     // Cooperative cancel flag (Java FreqRespAnalyzerWorker.cancelFlag), polled by the sweep's
     // wait loops every ≤50 ms - set by the busy shell's Cancel button (cancelMeasurement).
     this._cancelled = false;
+    // True while OUR OWN teardown is closing the busy modal, so its close handler can tell that
+    // from a user close (Java closeBusyShell disposes rather than closes for the same reason).
+    this._closingBusy = false;
+    // One bound reference, so the same function attaches and detaches (see _onBusyHide).
+    this._onBusyHide = (e) => this._busyHideRequested(e);
 
     // Debug/e2e hook, mirroring FftPane/ScopePane: the keepalive proof has to reach the
     // measurement's own deconvolution step (_deconvolveBoth) from the page.
@@ -528,18 +533,30 @@ export class FreqRespController {
     // Cooperative Cancel (Java's busy shell has one too): the sweep's own wait loops
     // poll the flag every ≤50 ms and every exit runs the same finally, so a cancel tears the
     // measurement down exactly like a normal finish - no half-open device, no orphaned modal.
-    this.$('#frBusyCancel').off('click.frCancel').on('click.frCancel', () => this.cancelMeasurement());
+    // One shot, like Java's cancel button, which disables itself: the teardown takes a moment.
+    this.$('#frBusyCancel').prop('disabled', false)
+      .off('click.frCancel').on('click.frCancel', () => this._requestCancel());
     const el = document.getElementById('frBusyModal');
     if (el && window.bootstrap) {
       this.busyModal = window.bootstrap.Modal.getOrCreateInstance(el);
       const onShown = () => {
         el.removeEventListener('shown.bs.modal', onShown);
         // A fast failure may have torn the sweep down while the fade-in was in flight - close
-        // (again) instead of building the meter, so the modal can never get stuck.
-        if (!this._meterArgs) { window.bootstrap.Modal.getOrCreateInstance(el).hide(); return; }
+        // (again) instead of building the meter, so the modal can never get stuck. Through
+        // closeBusyMeter, so this counts as OUR close and the veto below lets it through.
+        if (!this._meterArgs) { this.closeBusyMeter(); return; }
         this._createBusyMeter();
       };
       el.addEventListener('shown.bs.modal', onShown);
+      // ESC and the modal's own dismiss are this window's user-close. Letting it vanish would
+      // leave the sweep playing behind a locked, inert pane - so a user close IS the cancel:
+      // vetoed here, and the normal STOPPED path closes the modal exactly like a completed run.
+      // Once a cancel is already pending, a second close is let through as an escape hatch in
+      // case the teardown hangs (Java FreqRespPane's SWT.Close handler). The wizard's trial
+      // sweep runs through this same modal and this same runner, so it cancels here too, where
+      // Java's separate wizard progress window can only REFUSE the close - its analyzer has no
+      // cancel hook. Both ends at the same guarantee: no sweep is ever orphaned by a close.
+      el.addEventListener('hide.bs.modal', this._onBusyHide);
       this.busyModal.show();
     } else {
       this._createBusyMeter();   // no bootstrap (headless harness) - build it directly
@@ -580,11 +597,46 @@ export class FreqRespController {
     this.status('cancelling...');
   }
 
-  /** Closes the busy modal + drops the meter (Java closeBusyShell). Nulling _meterArgs also tells
-   *  a still-pending 'shown' handler to close instead of building the meter. */
+  /** The one-shot cancel request behind BOTH the Cancel button and a user close (Java
+   *  FreqRespPane.requestCancel): the button goes dead because the teardown takes a moment,
+   *  and the close handler reads the same disabled state as "already asked". */
+  _requestCancel() {
+    if (this.$('#frBusyCancel').prop('disabled')) return;
+    this.$('#frBusyCancel').prop('disabled', true);
+    this.cancelMeasurement();
+  }
+
+  /** hide.bs.modal on the busy modal: our own close passes, a USER close becomes the cancel
+   *  request. Reached through the bound {@code _onBusyHide} so the same reference detaches. */
+  _busyHideRequested(e) {
+    if (this._closingBusy) return;                             // Java's dispose(), not close()
+    // Nothing to protect once the measurement is over - a sweep that never started (no device
+    // configured) or one that already failed leaves the modal on screen, and vetoing THAT close
+    // is how a dialog becomes unclosable. Java's busy shell only exists while the sweep runs.
+    if (!this.running) return;
+    if (this.$('#frBusyCancel').prop('disabled')) return;      // a cancel is already pending
+    if (e && e.preventDefault) e.preventDefault();
+    this._requestCancel();
+  }
+
+  /** Closes the busy modal + drops the meter (Java closeBusyShell, which disposes rather than
+   *  closes so the teardown is not mistaken for a user close). */
   closeBusyMeter() {
     this._meterArgs = null;
-    if (this.busyModal) { this.busyModal.hide(); this.busyModal = null; }
+    const el = document.getElementById('frBusyModal');
+    if (el) el.removeEventListener('hide.bs.modal', this._onBusyHide);
+    this._closingBusy = true;
+    try {
+      // The instance is re-resolved from the element rather than read off this.busyModal alone:
+      // a close during the show transition is IGNORED by Bootstrap, and the 'shown' handler then
+      // closes again - by which time this.busyModal has already been nulled. Reading only the
+      // field there left the second attempt with nothing to hide, and the modal stayed up over a
+      // sweep that never started (no device configured) with no way to dismiss it.
+      const modal = this.busyModal
+        || (el && window.bootstrap ? window.bootstrap.Modal.getOrCreateInstance(el) : null);
+      this.busyModal = null;
+      if (modal) modal.hide();
+    } finally { this._closingBusy = false; }
     this.busyMeter = null;
   }
 }

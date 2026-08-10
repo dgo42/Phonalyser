@@ -357,6 +357,12 @@ export class PreferencesDialog {
       }
       if (outputChanged) this.engine.config.outDeviceId = outDev;
 
+      // The committed audio format is now in the engine config, so anything derived from it is
+      // stale until it re-reads: the generator's snap brackets sit on the CAPTURE rate's bin
+      // grid. Announced here, once, at the commit - Java's AUDIO_FORMAT_CHANGED, published from
+      // the same place (PreferencesDialog OK) and for the same reason.
+      if (captureChanged || outputChanged) MessageBus.instance().publish(Events.AUDIO_FORMAT_CHANGED);
+
       // Everything accumulated at the OLD settings is now inconsistent with what follows: the scope's
       // running measurement statistics and the FFT's cross-tick average were folded at a different
       // device, rate, range or full scale. Restarting the consumers alone would keep averaging the

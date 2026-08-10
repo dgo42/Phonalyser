@@ -539,6 +539,11 @@ export class Preferences {
     this.fftManualFundEnabled = this._bound(false);
     this.fftChannel = this._bound('L');
     this.fftMagUnit = this._bound('DBV');
+    // Unit the distortion table's absolute-level cells render in - independent of the
+    // magnitude axis above: 'DBV' (level + ADC offset), 'DBFS' (the measured level as
+    // stored) or 'DBR' (level minus the reference the table's percentages are computed
+    // against, shown as plain "dB").
+    this.fftDistortionUnit = this._bound('DBV');
     // Per-pane last-used screenshot size (0 = fall back to the pane's native size); mirrors
     // scopeScreenshotWidth/Height so the FFT shot remembers its OWN size independently.
     this.fftScreenshotWidth = this._bound(0);
@@ -1330,6 +1335,7 @@ export class Preferences {
     root.fftManualFundEnabled = this.fftManualFundEnabled.get();
     root.fftChannel = this.fftChannel.get();
     root.fftMagUnit = this.fftMagUnit.get();
+    root.fftDistortionUnit = this.fftDistortionUnit.get();
     if (this.fftScreenshotWidth.get() > 0) root.fftScreenshotWidth = this.fftScreenshotWidth.get();
     if (this.fftScreenshotHeight.get() > 0) root.fftScreenshotHeight = this.fftScreenshotHeight.get();
     root.fftDistortionTableVisible = this.fftDistortionTableVisible.get();
@@ -1718,6 +1724,7 @@ export class Preferences {
     if (isBool(g('fftManualFundEnabled'))) this.fftManualFundEnabled.set(g('fftManualFundEnabled'));
     if (isStr(g('fftChannel'))) this.fftChannel.set(enumOr('Channel', g('fftChannel'), this.fftChannel.get()));
     if (isStr(g('fftMagUnit'))) this.fftMagUnit.set(enumOr('MagnitudeUnit', g('fftMagUnit'), this.fftMagUnit.get()));
+    if (isStr(g('fftDistortionUnit'))) this.fftDistortionUnit.set(enumOr('MagnitudeUnit', g('fftDistortionUnit'), this.fftDistortionUnit.get()));
     if (isNum(g('fftScreenshotWidth'))) this.fftScreenshotWidth.set(g('fftScreenshotWidth'));
     if (isNum(g('fftScreenshotHeight'))) this.fftScreenshotHeight.set(g('fftScreenshotHeight'));
     if (isBool(g('fftDistortionTableVisible'))) this.fftDistortionTableVisible.set(g('fftDistortionTableVisible'));

@@ -84,6 +84,10 @@ export class GeneratorPane {
         this.setGenFileBtn(false);
       }
     });
+    // A committed INPUT-rate edit moves the FFT bin grid the snap brackets are computed on, so
+    // they are stale until re-rendered - the same follow-up the FFT-length change already makes
+    // (Java GeneratorPane's AUDIO_FORMAT_CHANGED listener).
+    bus.subscribe(Events.AUDIO_FORMAT_CHANGED, () => this.refreshFreqLabel());
   }
 
   /** FREQRESP_MEASUREMENT_STARTED handler - the controller stops both engines in its own
@@ -133,16 +137,18 @@ export class GeneratorPane {
     const raw = sfVal('toneHz', 1000);
     const fs = this._outRate();
     const snap = $('#snap').is(':checked');
-    // Bracket grid is the OUTPUT-rate bin width (outRate/fftSize), matching the emit path
-    // (_genEmitFreq) - engine.binW is the capture-side width (inRate/fftSize) and would show a
-    // bracket that differs from the emitted tone. Java updateFreqLabel/updateDualToneFreqLabels
-    // use the output sample rate (effectiveFrequency / FftBinSnap with currentOutputSampleRate).
+    // The bracket shows where the tone lands on the ANALYSIS grid, so its bin width is the
+    // CAPTURE rate's (inRate/fftSize) - the same rate the emit path snaps to
+    // (_genEmitFreq / Java GeneratorController.analysisSampleRate). The output rate is the
+    // DAC's and would put the bracket on a different grid whenever the two differ; the
+    // sample-period alignment below is the one correction that stays on the DAC's clock.
     // fftSize is read LIVE from the #fftSize select - Java FftBinSnap.snapIfEnabled reads
     // prefs.getFftLength() (the FFT pane's CURRENT length), NOT a cached engine.config.fftSize
     // that only refreshes on (re)start; reading the stale config showed a bracket that diverged
     // from the just-changed FFT length. Java guard: fftSize >= 8 (FftBinSnap.snapIfEnabled).
     const fftSize = parseInt($('#fftSize').val(), 10) || engine.config.fftSize;
-    const binW = (fs > 0 && fftSize >= 8) ? fs / fftSize : 0;
+    const analysisFs = engine.analysisSampleRate();
+    const binW = (analysisFs > 0 && fftSize >= 8) ? analysisFs / fftSize : 0;
     // DUAL_TONE: tone-1 row is "Frequency 1", tone-2 is "Frequency 2"; each gets its
     // bin-snapped value in brackets when snap is on (Java updateDualToneFreqLabels).
     if (isDualTone(form)) {

@@ -616,6 +616,10 @@ export class AudioEngine {
 
   async stopGenerator() { return this._gen.stopGenerator(); }
   retuneGenerator() { return this._gen.retuneGenerator(); }
+  /** The capture rate the FFT bin grid is built on - what the generator pane's snap brackets
+   *  are computed against, so a label and the emitted tone are read off the same grid
+   *  (Java GeneratorController.analysisSampleRate). */
+  analysisSampleRate() { return this._gen.analysisSampleRate(); }
 
   /** Claims the playback lane's from-below end for the ONE operator report - null while healthy
    *  and for every caller after the first. Polled by the generator pane's blink tick. */

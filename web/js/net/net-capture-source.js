@@ -62,6 +62,11 @@ export class NetCaptureSource {
     this._grantedRate = 0;
     this._grantedBits = 0;
     this._acquired = false;
+    /** True from the first step of OUR teardown until it has fully resolved - the stream
+     *  closed on the bench AND the device lock given back. isOpen reports it, so the
+     *  measurement idle-wait blocks until this session genuinely holds nothing any more
+     *  (the same contract WebAudioCaptureSource keeps with its own closing flag). */
+    this._closing = false;
     this._onBatch = null;
     this._onCaptureEnded = null;
     /** Whether the stream has already ended by itself; a failure is acted on exactly once. */
@@ -92,8 +97,14 @@ export class NetCaptureSource {
   /** The ACTUAL captured rate - what SharedCapture re-pins the analysis to. 0 while closed. */
   get sampleRate() { return this._grantedRate; }
 
-  /** True while the remote stream is still held. */
-  get isOpen() { return this._captureId !== NOT_OPEN; }
+  /** True while this session still holds something on the bench for this device - the stream
+   *  OR, during a teardown, its device lock. The lock matters as much as the stream: capture.stop,
+   *  capture.close and device.release are round-trips, and reporting "free" the moment the local
+   *  handle was dropped let the next measurement's device.acquire + capture.open interleave with
+   *  the previous consumer's release still in flight. The bench then processed the release BETWEEN
+   *  them and answered NOT_LOCKED - the taking-over measurement refused on a device this very
+   *  client had just given back. */
+  get isOpen() { return this._captureId !== NOT_OPEN || this._closing; }
 
   /**
    * Whether this source is bound to a session that is no longer the one to use - the socket it
@@ -135,6 +146,7 @@ export class NetCaptureSource {
    */
   async open(_deviceId, requestedRateHz) {
     const bits = this._bitsFor(requestedRateHz);
+    this._closing = false;   // a fresh open owns the flag, whatever a previous teardown left
     const taken = await this._owner.acquireDevice(this._device);
     if (taken != null) throw taken;
     this._acquired = true;
@@ -206,6 +218,9 @@ export class NetCaptureSource {
    *  buys a local backend. */
   async stop() {
     this._paused = true;
+    // A stop is the first step of every teardown, and the close that follows it is another two
+    // round-trips: from here on this source counts as still holding the device (see isOpen).
+    this._closing = true;
     await this._command(MessageType.CAPTURE_STOP);
   }
 
@@ -214,17 +229,20 @@ export class NetCaptureSource {
    *  take again. */
   async close() {
     this._paused = true;
+    this._closing = true;   // held until the release below has been ANSWERED - see isOpen
     this._onBatch = null;
     this._connection.removeEventListener(this._events);
     this._connection.removeCloseListener(this._sessionEnd);
     const open = this._captureId;
     this._captureId = NOT_OPEN;
     this._grantedRate = 0;
-    if (open !== NOT_OPEN) {
-      this._connection.removeStreamListener(open);
-      await this._closeRemote(open);
-    }
-    await this._release();
+    try {
+      if (open !== NOT_OPEN) {
+        this._connection.removeStreamListener(open);
+        await this._closeRemote(open);
+      }
+      await this._release();
+    } finally { this._closing = false; }
   }
 
   // ---------------------------------------------------------------------------

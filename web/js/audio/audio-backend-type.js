@@ -16,6 +16,7 @@ const DISPLAY_NAMES = Object.freeze({
   WDMKS: 'WDM-KS',
   COREAUDIO: 'CoreAudio',
   JAVASOUND: 'JavaSound',
+  LOOPBACK: 'Loopback',
   WEB_AUDIO: 'Web Audio',
   QA40X: 'QA40x',
 });
