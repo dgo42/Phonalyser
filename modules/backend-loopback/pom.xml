@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  backend-loopback - placeholder.  No sources yet; builds an empty jar so the
-  reactor wiring, the SPI registration point and the packaging dependency are
-  in place before the code arrives.
+  backend-loopback - a purely digital audio backend: what the playback lane
+  quantises is what the capture lane delivers, with no OS device in between.
+
+  It exists as a bench with a KNOWN noise floor - the samples are dithered at
+  the last bit of the selected depth, so the measured floor is the arithmetic
+  one and any deviation is the code under test, not a sound card.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"

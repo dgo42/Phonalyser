@@ -70,7 +70,7 @@ class BackendSelectionTest {
     private static final List<String> SERVER_BACKENDS = List.of(
             AudioBackendType.WASAPI.name(), AudioBackendType.WDMKS.name(),
             AudioBackendType.COREAUDIO.name(), AudioBackendType.JAVASOUND.name(),
-            AudioBackendType.QA40X.name());
+            AudioBackendType.QA40X.name(), AudioBackendType.LOOPBACK.name());
 
     private final ServerConfig config = new ServerConfig(new String[0]);
     private final LockRegistry locks = new LockRegistry();
