@@ -151,7 +151,10 @@ public final class GeneratorController {
             publishSignalChanged();
         });
         onPref(prefs.genSignalFormProperty(), f -> {
-            lane.formChanged(f);
+            // The run is derived HERE, from the settings as they now stand, so a
+            // form change that needs a restart plays the NEW waveform - the run
+            // carries the form, and the lane's stored one is the old session.
+            lane.formChanged(f, buildRun());
             publishSignalChanged();
         });
         // Loading / clearing a .dpd must take effect now: restart the running

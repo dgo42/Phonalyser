@@ -210,6 +210,72 @@ class GeneratorControllerRemoteTest {
         assertTrue(controller.isRunning());
     }
 
+    /** Commands recorded after {@code mark} - the stub's log is never reset
+     *  mid-scenario, because a reset also drops the pushed running state the
+     *  bench answers {@code isRunning()} from. */
+    private List<BenchGeneratorStub.Command> commandsAfter(int mark) {
+        List<BenchGeneratorStub.Command> all = bench.commands();
+        return all.subList(Math.min(mark, all.size()), all.size());
+    }
+
+    /** The waveform the bench was last told to hold, or null when none was
+     *  pushed - what a form switch has to get right. */
+    private GenSignalForm formPushedIn(List<BenchGeneratorStub.Command> commands) {
+        GenSignalForm pushed = null;
+        for (BenchGeneratorStub.Command c : commands) {
+            if ("setForm".equals(c.name()) && !c.args().isEmpty()) {
+                pushed = (GenSignalForm) c.args().get(0);
+            }
+        }
+        return pushed;
+    }
+
+    @Test
+    void switchingIntoADualToneWhilePlayingRestartsOnTheNewWaveform() {
+        Preferences prefs = Preferences.instance();
+        prefs.setGenSignalForm(GenSignalForm.SINE);
+        controller = new GeneratorController();
+        controller.start();
+        assertTrue(controller.isRunning());
+        int mark = bench.commands().size();
+
+        prefs.setGenSignalForm(GenSignalForm.DUAL_TONE);
+
+        List<BenchGeneratorStub.Command> tail = commandsAfter(mark);
+        List<String> sent = new ArrayList<>();
+        for (BenchGeneratorStub.Command c : tail) sent.add(c.name());
+        assertTrue(sent.contains("stopGenerator") && sent.contains("startGenerator"),
+                "a second tone needs its own DDS accumulator, which only a rebuild "
+                        + "stands up - a live form swap cannot: " + sent);
+        assertEquals(GenSignalForm.DUAL_TONE, formPushedIn(tail),
+                "the rebuild has to carry the JUST-SELECTED waveform; replaying the run "
+                        + "the lane was started with re-emits the single tone, and the "
+                        + "second tone never appears");
+    }
+
+    @Test
+    void switchingOutOfADualToneWhilePlayingRestartsOnTheSingleTone() {
+        Preferences prefs = Preferences.instance();
+        prefs.setGenSignalForm(GenSignalForm.DUAL_TONE);
+        controller = new GeneratorController();
+        controller.start();
+        assertTrue(controller.isRunning());
+        int mark = bench.commands().size();
+
+        prefs.setGenSignalForm(GenSignalForm.SINE);
+
+        List<BenchGeneratorStub.Command> tail = commandsAfter(mark);
+        List<String> sent = new ArrayList<>();
+        for (BenchGeneratorStub.Command c : tail) sent.add(c.name());
+        assertTrue(sent.contains("stopGenerator") && sent.contains("startGenerator"),
+                "leaving a dual tone tears the second accumulator down, which is a "
+                        + "rebuild: " + sent);
+        assertEquals(GenSignalForm.SINE, formPushedIn(tail),
+                "the rebuild has to carry the JUST-SELECTED waveform; replaying the "
+                        + "started run keeps emitting the dual tone and the second tone "
+                        + "goes on sounding");
+    }
+
     @Test
     void aCompensatedWaveformCarriesItsSavedCorrectionsToTheBench() throws IOException {
         Preferences prefs = Preferences.instance();

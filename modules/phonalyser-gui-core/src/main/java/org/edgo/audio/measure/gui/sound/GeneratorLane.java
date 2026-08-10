@@ -262,10 +262,18 @@ public final class GeneratorLane {
     /** Stop + start of the SAME run (the parameters stored by the last
      *  {@link #start(GeneratorRun)}), for a change the running session cannot
      *  take live.  A caller whose parameters changed passes a fresh run to
-     *  {@code start} instead.  The pair is atomic against a concurrent
-     *  start/stop from another control. */
+     *  {@link #restart(GeneratorRun)} instead.  The pair is atomic against a
+     *  concurrent start/stop from another control. */
     public synchronized PlaybackStateEnum restart() {
-        GeneratorRun run = lastRun;
+        return restart(lastRun);
+    }
+
+    /** Stop + start with {@code run} - for a change that the running session
+     *  cannot take live AND that alters the run itself.  The waveform is such a
+     *  change: the run carries the form, so replaying the stored one would
+     *  rebuild the generator around the form that was started rather than the
+     *  one just selected. */
+    public synchronized PlaybackStateEnum restart(GeneratorRun run) {
         if (run == null) {
             return lastStartState;   // never started - nothing to replay
         }
@@ -1005,12 +1013,18 @@ public final class GeneratorLane {
     /** Waveform pref change: live-swap when the generator supports it,
      *  else a full stop+start - sweep and dual-tone set up dedicated DDS
      *  state (second accumulator, sweep state machine) that
-     *  {@link #setForm} can't hot-swap. */
-    public void formChanged(GenSignalForm f) {
+     *  {@link #setForm} can't hot-swap.
+     *
+     *  <p>{@code freshRun} is the run derived from the JUST-CHANGED settings,
+     *  and the restart has to use it: the run carries the waveform, so
+     *  replaying the stored one would stop and start the very form the
+     *  operator switched away from - the second tone would never appear when
+     *  entering a dual tone, and would keep sounding when leaving it. */
+    public void formChanged(GenSignalForm f, GeneratorRun freshRun) {
         boolean needsRestart = requiresRestart(lastForm) || requiresRestart(f);
         lastForm = f;
         if (needsRestart && isRunning()) {
-            restart();
+            restart(freshRun);
         } else {
             setForm(f);
         }
