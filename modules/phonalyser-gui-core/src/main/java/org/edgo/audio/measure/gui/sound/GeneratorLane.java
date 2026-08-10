@@ -348,13 +348,14 @@ public final class GeneratorLane {
             // Dual-tone: tone 1 uses the frequency the generator was
             // constructed with (already snapped above); tone 2's frequency
             // and the per-tone amplitude split are pushed in here.  Tone 2 is
-            // snapped to the FFT bin grid independently so both tones land on
-            // a bin centre.  {@code genDualToneSplitPct} carries Freq 1's
-            // amplitude percentage; Freq 2's amplitude is the complement.
-            double rawF2  = prefs.getGenDualToneFreq2Hz();
-            double snapF2 = FftBinSnap.snapIfEnabled(form, sampleRate,
-                    prefs.getFftLength(), prefs.isGenSnapToFftBin(), rawF2);
-            gen.setDualToneFrequency2(snapF2);
+            // snapped through the same one authority every other tone-2 path
+            // uses, so both tones land on bin centres of the SAME grid - the
+            // analysis one.  Snapping it here against the run's rate would put
+            // tone 2 on the DAC grid while tone 1 sat on the analysis grid, and
+            // a tone smeared across bins manufactures the very intermodulation
+            // products the IMD table then reports.  {@code genDualToneSplitPct}
+            // carries Freq 1's amplitude percentage; Freq 2's is the complement.
+            gen.setDualToneFrequency2(snapDualTone(prefs.getGenDualToneFreq2Hz()));
             double a1Pct = prefs.getGenDualToneSplitPct();
             gen.setDualToneAmplitudes(a1Pct, 100.0 - a1Pct);
         }
@@ -469,7 +470,8 @@ public final class GeneratorLane {
                 return PlaybackStateEnum.REMOTE_REFUSED;
             }
             double emitHz = rate == run.sampleRate() ? run.frequencyHz()
-                    : emitFrequency(prefs, form, rate, rawFrequency(prefs, form));
+                    : emitFrequency(prefs, form, rate, analysisRateHz(),
+                            rawFrequency(prefs, form));
             remote.setForm(form);
             if (form != GenSignalForm.LINEAR_SWEEP && form != GenSignalForm.LOG_SWEEP) {
                 // A sweep has no tone frequency - its band travels in the
@@ -679,7 +681,8 @@ public final class GeneratorLane {
      *  tone preferences at start. */
     public double resolveEmitFrequency(GenSignalForm form, int sampleRate) {
         Preferences prefs = Preferences.instance();
-        return emitFrequency(prefs, form, sampleRate, rawFrequency(prefs, form));
+        return emitFrequency(prefs, form, sampleRate, analysisRateHz(),
+                rawFrequency(prefs, form));
     }
 
     /** The running log-sweep's one-period reference X(t) - what a deconvolving
@@ -1131,7 +1134,8 @@ public final class GeneratorLane {
     public double commandedFrequency() {
         Preferences prefs = Preferences.instance();
         GenSignalForm form = prefs.getGenSignalForm();
-        return emitFrequency(prefs, form, outputRateHz(), rawFrequency(prefs, form));
+        return emitFrequency(prefs, form, outputRateHz(), analysisRateHz(),
+                rawFrequency(prefs, form));
     }
 
     /**
@@ -1158,7 +1162,10 @@ public final class GeneratorLane {
                 return new double[] {state.emitHz(), state.emit2Hz()};
             }
         }
-        int rate = (sampleRate == null || sampleRate <= 0) ? outputRateHz() : sampleRate;
+        // The rate is used AS the analysis rate below, so a caller that names
+        // none falls back to the analysis rate - never the DAC's, which would
+        // reintroduce the wrong grid through the back door.
+        int rate = (sampleRate == null || sampleRate <= 0) ? analysisRateHz() : sampleRate;
         return localTonesHz(Preferences.instance(), rate);
     }
 
@@ -1183,7 +1190,11 @@ public final class GeneratorLane {
         boolean singleTone = form.isPeriodic()
                 && form != GenSignalForm.LINEAR_SWEEP && form != GenSignalForm.LOG_SWEEP;
         return new double[] {
-            singleTone ? emitFrequency(prefs, form, sampleRate, prefs.getGenFrequencyHz()) : 0.0,
+            // sampleRate is the ANALYZER's here (see emittedHz), so it is the
+            // rate the snap belongs on; the DDS period alignment stays on the
+            // lane's own clock.
+            singleTone ? emitFrequency(prefs, form, outputRateHz(), sampleRate,
+                    prefs.getGenFrequencyHz()) : 0.0,
             0.0
         };
     }
@@ -1196,14 +1207,30 @@ public final class GeneratorLane {
      * with the same problem) ON a sample, so both run at the nearest
      * integer-sample-period frequency; every other form is exact at any frequency
      * and takes the optional FFT-bin snap instead.
+     *
+     * <p>The two corrections answer to DIFFERENT clocks, which is why they take
+     * separate rates.  A whole number of samples per period is a property of the
+     * DAC that emits them, so it uses {@code dacRateHz}.  An FFT bin is a
+     * property of the ANALYSIS, whose grid is {@code fs_in / N} on the captured
+     * signal, so the snap uses {@code analysisRateHz}: a tone snapped to the
+     * output clock lands between bins whenever the two rates differ, and the
+     * whole point of the snap is that it does not.
      */
     private double emitFrequency(Preferences prefs, GenSignalForm form,
-                                 int sampleRate, double raw) {
+                                 int dacRateHz, int analysisRateHz, double raw) {
         if (form == GenSignalForm.RECTANGLE || form == GenSignalForm.TRIANGLE) {
-            return samplePeriodAlignedHz(raw, sampleRate);
+            return samplePeriodAlignedHz(raw, dacRateHz);
         }
-        return FftBinSnap.snapIfEnabled(form, sampleRate, prefs.getFftLength(),
+        return FftBinSnap.snapIfEnabled(form, analysisRateHz, prefs.getFftLength(),
                 prefs.isGenSnapToFftBin(), raw);
+    }
+
+    /** The rate the ANALYSIS runs at - the capture side, whose bin grid the snap
+     *  has to hit.  Read live from the current backend's input configuration, the
+     *  same source the cached analysis bin bandwidth is derived from, so a rate
+     *  change moves the snap with it. */
+    public int analysisRateHz() {
+        return Preferences.instance().current().getInputSampleRate();
     }
 
     /** Nearest frequency with a whole number of samples per period -
@@ -1241,7 +1268,7 @@ public final class GeneratorLane {
      *  companion of {@link #commandedFrequency()}. */
     public double snapDualTone(double rawHz) {
         Preferences prefs = Preferences.instance();
-        return FftBinSnap.snapIfEnabled(GenSignalForm.DUAL_TONE, outputRateHz(),
+        return FftBinSnap.snapIfEnabled(GenSignalForm.DUAL_TONE, analysisRateHz(),
                 prefs.getFftLength(), prefs.isGenSnapToFftBin(), rawHz);
     }
 

@@ -633,6 +633,15 @@ public class SignalGenerator implements GeneratorControls {
         this.phaseInc2 = toPhaseInc(frequencyHz);
     }
 
+    /** The second tone's frequency as the DDS is CURRENTLY driving it - the
+     *  read-back of {@link #setDualToneFrequency2}, recovered from the phase
+     *  increment, so a caller sees what is being emitted rather than what it
+     *  believes it asked for.  Exact to the phase increment's own granularity
+     *  ({@code fs/2^64}). */
+    public double getDualToneFrequency2Hz() {
+        return phaseInc2 / Constants.TWO_POW_64 * sampleRate;
+    }
+
     /** Live-updates the dual-tone amplitude split.  {@code amp1Pct} +
      *  {@code amp2Pct} are interpreted as LINEAR amplitude percentages
      *  per tone (not power) - the per-tone DDS weight is the

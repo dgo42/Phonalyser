@@ -912,6 +912,11 @@ public final class GeneratorPane extends AbstractPane {
             ditherField.setMax(Preferences.instance().current().getOutputBitDepth());
             ditherField.refresh();
             updateDitherLabel();
+            // A committed INPUT-rate edit moves the FFT bin grid the snap
+            // brackets are computed on, so they are stale until re-rendered -
+            // the same follow-up the FFT-length change already makes.
+            updateFreqLabel();
+            updateDualToneFreqLabels();
         };
         bus.subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
 
@@ -1514,7 +1519,11 @@ public final class GeneratorPane extends AbstractPane {
     private void updateDualToneFreqLabels() {
         if (dualToneFreq1Label == null || dualToneFreq1Label.isDisposed()) return;
         Preferences prefs = Preferences.instance();
-        int sr = currentOutputSampleRate();
+        // The bracket shows where the tone lands on the ANALYSIS grid, so it is
+        // computed on the capture rate the FFT runs at - the same rate the lane
+        // snaps the emitted tone to.  The output rate is the DAC's and would put
+        // the bracket on a different grid whenever the two differ.
+        int sr = controller.analysisSampleRate();
         String base1 = I18n.t("generator.dualTone.freq1");
         String base2 = I18n.t("generator.dualTone.freq2");
         boolean snap = prefs.isGenSnapToFftBin();

@@ -512,6 +512,13 @@ public final class GeneratorController {
         return lane.correctedPeriodAlignedHz();
     }
 
+    /** The capture rate the FFT bin grid is built on - what the pane's
+     *  snap brackets are computed against, so a label and the emitted tone
+     *  are read off the same grid. */
+    public int analysisSampleRate() {
+        return lane.analysisRateHz();
+    }
+
     public double maxAmplitudeVrms(GenSignalForm form) {
         return lane.maxAmplitudeVrms(form);
     }
