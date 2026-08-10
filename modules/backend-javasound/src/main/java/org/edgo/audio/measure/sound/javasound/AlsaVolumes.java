@@ -236,18 +236,43 @@ public class AlsaVolumes {
             }
             return;
         }
+        List<Saved> moved = new ArrayList<>();
         AlsaPorts.Port port = ports.port(mixerName, input);
         if (port == null) {
-            warnUnmapped(card, mixerName, volumes, null);
-            return;
-        }
-        List<Saved> moved = new ArrayList<>();
-        int pcmDevice = proc.deviceIndexOf(mixerName);
-        if (pin(card, mixerName, port.word(), direction, pcmDevice, volumes, moved) == 0) {
-            warnUnmapped(card, mixerName, volumes, port.word());
+            pinAll(card, mixerName, null, volumes, moved);
+        } else {
+            int pcmDevice = proc.deviceIndexOf(mixerName);
+            if (pin(card, mixerName, port.word(), direction, pcmDevice, volumes, moved) == 0) {
+                pinAll(card, mixerName, port.word(), volumes, moved);
+            }
         }
         if (!moved.isEmpty()) {
             restorable.put(key(mixerName, input), moved);
+        }
+    }
+
+    /**
+     * The fallback when precise addressing claims nothing: every one of these
+     * volume controls belongs to the SELECTED card and direction, so all of
+     * them are pinned rather than none - the close restores each one moved.
+     * The precise port/stream matching stays first, so a multi-port card
+     * still gets exact addressing, and a PORT-named control published twice
+     * is still refused there (it was claimed, just not resolved) rather than
+     * swept up here.
+     */
+    private void pinAll(int card, String mixerName, String word, List<Control> volumes,
+                        List<Saved> moved) {
+        if (log.isInfoEnabled()) {
+            log.info("Card {}'s controls carry {} - pinning all {} volume control(s) of the "
+                    + "selected device: {}", card,
+                    word == null ? "no port this machine can name"
+                            : "neither its port word '" + word + "' nor a stream name",
+                    volumes.size(), names(volumes));
+        }
+        for (Control control : volumes) {
+            if (!control.atUnity()) {
+                apply(card, mixerName, control, moved);
+            }
         }
     }
 
@@ -542,21 +567,6 @@ public class AlsaVolumes {
                     + "{} were NOT pinned to 0 dB - install alsa-utils (amixer) if a level "
                     + "measures low: a control left below 0 dB attenuates the calibrated "
                     + "chain silently", card, mixerName);
-        }
-    }
-
-    /** Says which controls were left where they stood, and why nobody could
-     *  claim them for this device: a socket this machine could not name at all
-     *  ({@code word} null), or one whose word none of them carries. */
-    private void warnUnmapped(int card, String mixerName, List<Control> volumes, String word) {
-        if (log.isWarnEnabled()) {
-            log.warn("Card {}'s volume controls were left untouched for {} because {}: {} - "
-                    + "check them in alsamixer if a level measures low, a control below "
-                    + "0 dB attenuates the calibrated chain silently",
-                    card, mixerName,
-                    word == null ? "this machine cannot say which socket it is wired to"
-                            : "none of them is named after its port '" + word + "'",
-                    names(volumes));
         }
     }
 

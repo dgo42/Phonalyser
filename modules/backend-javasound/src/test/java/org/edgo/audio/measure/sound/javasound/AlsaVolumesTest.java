@@ -36,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -228,17 +229,37 @@ class AlsaVolumesTest {
     }
 
     @Test
-    void aDeviceWhoseSocketCannotBeNamedIsLeftAloneAndSaidSo() {
+    void aDeviceWhoseSocketCannotBeNamedPinsAllItsOwnControls() {
         // An HD-Audio codec publishes no stream file, so nothing says which of
-        // the card's volumes is in front of it.  The controls are named in the
-        // warning, because an operator whose level reads low needs to know which
-        // ones were NOT pinned.
+        // the card's volumes is in front of the opened PCM - but every one of
+        // them belongs to the SELECTED card and direction, so all of them are
+        // pinned rather than none (the close restores each one moved).  A
+        // decision, not a defect: no warning.
         FixtureVolumes volumes = pinner(new FixtureJacks(0, TURNED_DOWN));
         List<String> said = warningsWhile(() -> volumes.pinToUnity(HDA_DEVICE, true));
-        assertEquals(List.of(), volumes.writes);
-        assertEquals(1, said.size(), said.toString());
-        assertTrue(said.get(0).contains("Mic Capture Volume")
-                && said.get(0).contains("Line Capture Volume"), said.get(0));
+        assertEquals(List.of(), said, "pin-all is a decision, not a warning");
+        assertFalse(volumes.writes.isEmpty(),
+                "the selected card's capture volumes are pinned despite the unnamed socket");
+    }
+
+    @Test
+    void aCardWhoseControlMatchesNoNameIsStillPinnedAsTheSelectedDevice() {
+        // A USB DAC with one global volume - named after the card, neither
+        // after the opened port's word nor a stream 'PCM ...' - used to be
+        // refused outright.  It is the SELECTED device's only playback volume:
+        // there is no stranger to protect, so it is pinned.
+        FixtureVolumes volumes = pinner(dump(CARD, List.of(
+                "numid=9,iface=MIXER,name='SMSL USB AUDIO  Playback Volume'",
+                "  ; type=INTEGER,access=rw---R--,values=2,min=0,max=31,step=0",
+                "  : values=2,2",
+                "  | dBscale-min=-31.00dB,step=1.00dB,mute=0")));
+        List<String> said = warningsWhile(() -> volumes.pinToUnity(LINE_DEVICE, false));
+        assertEquals(List.of(), said, "pin-all is a decision, not a warning");
+        assertEquals(List.of(CARD + ":9=31,31"), volumes.writes,
+                "the card's one playback volume pinned to its 0 dB");
+        volumes.restore(LINE_DEVICE, false);
+        assertEquals(List.of(CARD + ":9=31,31", CARD + ":9=2,2"), volumes.writes,
+                "the close puts the pre-pin value back");
     }
 
     @Test
