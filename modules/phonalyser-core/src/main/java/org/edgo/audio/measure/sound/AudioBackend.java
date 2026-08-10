@@ -516,7 +516,13 @@ public final class AudioBackend {
 
     private void setupAll() {
         for (AudioBackendType type : AudioBackendType.values()) {
-            if (!isAvailable(type)) {
+            // Both halves of availability: the OS policy AND the class-path/
+            // hardware answer.  Every platform jar carries every backend's
+            // classes, so without the OS half this sweep would CONSTRUCT
+            // foreign backends - and a constructor that touches its native
+            // (CoreAudio snapshots device identities) then probes for a
+            // library that does not exist on this OS.
+            if (!type.isAvailable() || !isAvailable(type)) {
                 continue;
             }
             try {
