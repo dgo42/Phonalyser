@@ -18,16 +18,17 @@
 
 package org.edgo.audio.measure.sound.javasound;
 
-import org.junit.jupiter.api.Test;
-
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.stream.IntStream;
-
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.stream.IntStream;
+
+import org.junit.jupiter.api.Test;
 
 /**
  * Drives {@link ProcAsound} against a fixture {@code /proc/asound} tree, so the
@@ -58,6 +59,46 @@ class ProcAsoundTest {
         assertEquals(-1, proc.cardIndexOf("Primary Sound Driver"));
         assertEquals(-1, proc.cardIndexOf("Port Speakers"));
         assertEquals(-1, proc.cardIndexOf(null));
+    }
+
+    // ------------------------------------------------------------- hw_params
+
+    @Test
+    void aHwParamsRangeIsSampledOnTheStandardLadder() {
+        // The dump of a PCI card (Xonar STX class): formats as discrete
+        // tokens, the rate as a continuous [min max] range that must come
+        // back as the standard rates inside it - never as every integer.
+        int[][] parsed = proc.parseHwParams(List.of(
+                "HW Params of device \"hw:0,0\":",
+                "--------------------",
+                "ACCESS:  MMAP_INTERLEAVED RW_INTERLEAVED",
+                "FORMAT:  S16_LE S32_LE",
+                "SUBFORMAT:  STD",
+                "SAMPLE_BITS: [16 32]",
+                "FRAME_BITS: [32 64]",
+                "CHANNELS: [2 2]",
+                "RATE: [32000 192000]",
+                "PERIOD_TIME: (166 4096000]"));
+        assertArrayEquals(new int[] {32000, 44100, 48000, 88200, 96000, 176400, 192000},
+                parsed[0], "rates: the ladder within the range");
+        assertArrayEquals(new int[] {16, 32}, parsed[1], "depths from the FORMAT tokens");
+    }
+
+    @Test
+    void aPackedAndAContainer24BothReadAsExactly24() {
+        int[][] parsed = proc.parseHwParams(List.of(
+                "FORMAT:  S24_3LE S24_LE",
+                "RATE: 44100 48000"));
+        assertArrayEquals(new int[] {44100, 48000}, parsed[0], "discrete rates verbatim");
+        assertArrayEquals(new int[] {24}, parsed[1],
+                "both 24-bit spellings are the same exact capability");
+    }
+
+    @Test
+    void anEmptyDumpAnswersNothing() {
+        int[][] parsed = proc.parseHwParams(List.of());
+        assertEquals(0, parsed[0].length);
+        assertEquals(0, parsed[1].length);
     }
 
     @Test

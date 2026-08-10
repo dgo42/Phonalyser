@@ -107,7 +107,10 @@ public abstract class AbstractPcmCapture implements AudioCapture {
     protected AbstractPcmCapture(int sampleRate, int bitDepth, int captureChannels) {
         this.sampleRate      = sampleRate;
         this.bitDepth        = bitDepth;
-        this.sampleBytes     = bitDepth / 8;
+        // Rounded UP: a depth that is not a whole number of bytes arrives
+        // right-aligned in the next larger container (20 bits in 3 bytes).
+        // Exact division for 16 / 24 / 32.
+        this.sampleBytes     = (bitDepth + 7) / 8;
         this.frameSize       = sampleBytes * 2;
         this.captureChannels = captureChannels;
         this.format = new AudioFormat(
@@ -287,26 +290,40 @@ public abstract class AbstractPcmCapture implements AudioCapture {
         }
     }
 
-    /** Offset-binary decoder - unsigned 0..2^bits-1, midpoint-shifted. */
+    /** Offset-binary decoder - unsigned 0..2^bits-1, midpoint-shifted.  The
+     *  midpoint and mask come from {@link #bitDepth}, NOT from the container
+     *  size: a depth narrower than its container (20 valid bits in 3 bytes)
+     *  would otherwise be shifted by the container's midpoint and read as
+     *  full-scale DC downstream, where the consumers derive both from the bit
+     *  depth.  For 8 / 16 / 24 / 32, where depth == 8*container, these
+     *  expressions are the constants they replace. */
     @Override
     public int readSample(byte[] pcm, int offset) {
+        long midpoint = 1L << (bitDepth - 1);
+        long mask     = (1L << bitDepth) - 1;
+        long raw;
         switch (sampleBytes) {
             case 1:
-                return (pcm[offset] + (byte) 0x80) & 0xFF;
+                raw = pcm[offset];
+                break;
             case 2:
-                return ((short) ((pcm[offset + 1] & 0xFF) << 8 | (pcm[offset] & 0xFF)) + (short) 0x8000) & 0xFFFF;
+                raw = (short) ((pcm[offset + 1] & 0xFF) << 8 | (pcm[offset] & 0xFF));
+                break;
             case 3:
-                return ((((pcm[offset + 2]) << 16)
+                raw = (((pcm[offset + 2]) << 16)
                      | ((pcm[offset + 1] & 0xFF) << 8)
-                     |  (pcm[offset]     & 0xFF)) + 0x800000) & 0xFFFFFF;
+                     |  (pcm[offset]     & 0xFF));
+                break;
             case 4:
-                return (((pcm[offset + 3] << 24)
+                raw = ((pcm[offset + 3] << 24)
                      | ((pcm[offset + 2] & 0xFF) << 16)
                      | ((pcm[offset + 1] & 0xFF) << 8)
-                     |  (pcm[offset]     & 0xFF)) + 0x80000000) & 0xFFFFFFFF;
+                     |  (pcm[offset]     & 0xFF));
+                break;
             default:
                 throw new IllegalStateException("Unsupported sampleBytes: " + sampleBytes);
         }
+        return (int) ((raw + midpoint) & mask);
     }
 
     @Override

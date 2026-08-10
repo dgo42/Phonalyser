@@ -455,22 +455,24 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      * are neither HD-Audio nor USB it reported nothing at all, which is how a
      * bench came to deliver an empty format list.
      *
-     * <p><b>ON THE LEGACY-CARD CASE, DELIBERATELY NOTHING.</b> A card with
-     * neither layout (the Ensoniq ES1371 class) is answered
-     * {@link ProcAsound.CardCaps#known() not known}, and this method then
-     * reports the mixer's own explicit formats and otherwise an empty list. It
-     * does NOT fall back to opening candidate rates the way the Windows and
-     * macOS paths do, and that is on purpose: the ALSA device JavaSound offers
-     * is the PLUG layer ({@code plughw}), which exists precisely to CONVERT -
-     * it accepts rates the hardware cannot produce and resamples silently. An
-     * open-and-test through it would therefore answer "yes" to almost
-     * everything and publish a capability list the silicon cannot honour.
-     * Reporting nothing is the honest answer until the direct {@code hw:}
-     * device can be probed instead.
+     * <p><b>ON THE LEGACY-CARD CASE, THE DIRECT {@code hw:} DEVICE.</b> A card
+     * with neither layout (a PCI codec such as the Xonar STX or the Ensoniq
+     * ES1371) is answered {@link ProcAsound.CardCaps#known() not known}, and
+     * its truth is then read from the {@code hw:} device's own hw_params
+     * ranges ({@link ProcAsound#hwParamsCaps}).  What this path still never
+     * does is open-and-test through the PLUG layer ({@code plughw}), which
+     * exists precisely to CONVERT - it accepts rates the hardware cannot
+     * produce and resamples silently, so a probe through it would publish a
+     * capability list the silicon cannot honour.
      */
     private List<AudioFormat> probeFormatsLinux(JavaSoundDeviceRef d, Mixer m, boolean output) {
         // 1. This card's own /proc/asound entry is the source of truth when present.
         ProcAsound.CardCaps caps = procAsound.capsForMixer(d.name());
+        if (!caps.known()) {
+            // 1b. No USB stream file, no HDA codec file - ask the direct hw:
+            //     device for its own hw_params ranges.
+            caps = procAsound.hwParamsCaps(d.name());
+        }
         int[] hwRates  = caps.rates(output);
         int[] hwDepths = caps.depths(output);
         if (hwRates.length > 0 && hwDepths.length > 0) {

@@ -20,15 +20,20 @@ package org.edgo.audio.measure.sound.javasound;
 
 import lombok.extern.log4j.Log4j2;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -106,6 +111,27 @@ public final class ProcAsound {
     /** Matches a USB stream file's {@code "Interface 2"} sub-section header -
      *  the USB AudioStreaming interface number that serves this direction. */
     private static final Pattern USB_INTERFACE = Pattern.compile("^Interface\\s+(\\d+)");
+
+    /** The {@code --dump-hw-params} lines of interest: {@code FORMAT:} tokens
+     *  ({@code S16_LE S24_3LE S32_LE ...} - the digits are the significant
+     *  bits) and {@code RATE:}, either discrete values or a
+     *  {@code [min max]} range. */
+    private static final String  HW_FORMAT_PREFIX = "FORMAT:";
+    private static final Pattern HW_FORMAT_TOKEN  = Pattern.compile("[SU](\\d+)_?");
+    private static final String  HW_RATE_PREFIX   = "RATE:";
+    private static final Pattern HW_RATE_RANGE    = Pattern.compile("\\[(\\d+)\\s+(\\d+)\\]");
+    private static final Pattern HW_RATE_VALUE    = Pattern.compile("(\\d+)");
+    /** The ladder a continuous {@code RATE: [min max]} range is sampled on -
+     *  the same candidates every open-probing backend walks. */
+    private static final int[] HW_PROBE_RATES = {8000, 11025, 16000, 22050, 32000, 44100,
+            48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000};
+    /** How long the dump tool may take before it is killed. */
+    private static final int HW_PARAMS_TIMEOUT_SECONDS = 5;
+
+    /** One hw_params answer per {@code card:device}, for this instance's
+     *  lifetime - like {@code cardCache}, hardware capabilities do not change
+     *  at runtime, and a fresh instance probes fresh. */
+    private final Map<String, CardCaps> hwParamsCache = new ConcurrentHashMap<>();
 
     private enum NodeKind { OUTPUT, INPUT, OTHER }
 
@@ -196,6 +222,119 @@ public final class ProcAsound {
      *  lookup in one call, for the caller that only has a mixer. */
     public CardCaps capsForMixer(String mixerName) {
         return cardCaps(cardIndexOf(mixerName));
+    }
+
+    /**
+     * The capabilities of the PCM device named in {@code mixerName}, read from
+     * the {@code hw:} device's OWN hw_params ranges - the fallback for a card
+     * {@code /proc/asound} cannot describe (a PCI codec: no USB stream file,
+     * no HDA codec file).  {@code aplay}/{@code arecord --dump-hw-params}
+     * opens the DIRECT {@code hw:} device, so the plug layer's resample-
+     * anything answer never enters; alsa-utils is the same dependency the
+     * volume discipline already leans on.  A busy device, a missing tool or a
+     * non-Linux host answer {@link CardCaps#UNKNOWN}.
+     */
+    public CardCaps hwParamsCaps(String mixerName) {
+        int card = cardIndexOf(mixerName);
+        if (card < 0 || !Files.isDirectory(root)) {
+            return CardCaps.UNKNOWN;
+        }
+        int device = Math.max(deviceIndexOf(mixerName), 0);
+        return hwParamsCache.computeIfAbsent(card + ":" + device,
+                k -> probeHwParams(card, device));
+    }
+
+    private CardCaps probeHwParams(int card, int device) {
+        int[][] out = parseHwParams(dumpHwParams(card, device, true));
+        int[][] in  = parseHwParams(dumpHwParams(card, device, false));
+        boolean known = (out[0].length > 0 && out[1].length > 0)
+                || (in[0].length > 0 && in[1].length > 0);
+        if (known && log.isInfoEnabled()) {
+            log.info("Card {} device {} answered through hw_params (no /proc/asound "
+                    + "capability file for it)", card, device);
+        }
+        return known ? new CardCaps(in[0], in[1], out[0], out[1], true) : CardCaps.UNKNOWN;
+    }
+
+    /**
+     * One direction's {@code --dump-hw-params} text -> {@code [rates, depths]}.
+     * {@code FORMAT:} tokens carry the depths ({@code S24_3LE} and
+     * {@code S24_LE} are both 24 significant bits - packed vs in-container is
+     * the transport's business, the capability is exact); {@code RATE:} is
+     * either a discrete list or a {@code [min max]} range, a range being
+     * intersected with the standard rate ladder.
+     */
+    int[][] parseHwParams(List<String> lines) {
+        TreeSet<Integer> depths = new TreeSet<>();
+        TreeSet<Integer> rates  = new TreeSet<>();
+        for (String raw : lines) {
+            String line = raw.trim();
+            if (line.startsWith(HW_FORMAT_PREFIX)) {
+                Matcher m = HW_FORMAT_TOKEN.matcher(line);
+                while (m.find()) {
+                    depths.add(Integer.parseInt(m.group(1)));
+                }
+            } else if (line.startsWith(HW_RATE_PREFIX)) {
+                Matcher range = HW_RATE_RANGE.matcher(line);
+                if (range.find()) {
+                    int min = Integer.parseInt(range.group(1));
+                    int max = Integer.parseInt(range.group(2));
+                    for (int rate : HW_PROBE_RATES) {
+                        if (rate >= min && rate <= max) {
+                            rates.add(rate);
+                        }
+                    }
+                } else {
+                    Matcher discrete = HW_RATE_VALUE.matcher(line.substring(HW_RATE_PREFIX.length()));
+                    while (discrete.find()) {
+                        rates.add(Integer.parseInt(discrete.group(1)));
+                    }
+                }
+            }
+        }
+        return new int[][] {
+                rates.stream().mapToInt(Integer::intValue).toArray(),
+                depths.stream().mapToInt(Integer::intValue).toArray(),
+        };
+    }
+
+    /** Runs {@code aplay}/{@code arecord --dump-hw-params} against the direct
+     *  {@code hw:card,device} address and returns whatever it printed (the
+     *  dump goes to stderr, merged here).  {@code -d 1} bounds the run when a
+     *  device actually accepts the probe file's format; the watchdog kills a
+     *  hung tool.  Empty on any trouble - the caller treats that as
+     *  "cannot say". */
+    List<String> dumpHwParams(int card, int device, boolean output) {
+        List<String> lines = new ArrayList<>();
+        Process process = null;
+        try {
+            process = new ProcessBuilder(output ? "aplay" : "arecord",
+                    "-D", "hw:" + card + "," + device,
+                    "--dump-hw-params", "-d", "1",
+                    output ? "/dev/zero" : "/dev/null")
+                    .redirectErrorStream(true)
+                    .start();
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                for (String line; (line = reader.readLine()) != null; ) {
+                    lines.add(line);
+                }
+            }
+            if (!process.waitFor(HW_PARAMS_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+            }
+        } catch (IOException e) {
+            if (log.isDebugEnabled()) {
+                log.debug("hw_params dump unavailable for hw:{},{}: {}", card, device, e.toString());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+        }
+        return lines;
     }
 
     /**
