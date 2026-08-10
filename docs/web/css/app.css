@@ -514,6 +514,15 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 
 .fft-meta { position: absolute; top: 5px; right: 18px; display: flex; align-items: center; gap: 12px; z-index: 3; font-size: 11px; color: #555; }
 .fft-meta .unit-sel { width: auto; font-size: 11px; padding: 1px 18px 1px 6px; }
+/* Distortion-table level unit (Java FftView distortionUnitCombo, 42px x BTN_H at a 4px gap):
+   it keeps the slot right after the external-window button but is NOT one of the flat
+   buttons - a drop-down needs its own width and its own chrome, so it is spaced off the
+   row's right edge and follows it as buttons come and go. Sized to the widest label
+   ("dBFS") plus the arrow rather than Java's fixed 42px, which the browser's own select
+   chrome would clip. */
+.canvas-wrap .lr-tools .unit-sel { width: auto; min-width: 42px; height: 22px; margin-left: 4px;
+  font-size: 11px; padding: 0 16px 0 5px; border: 1px solid #606060; border-radius: 0;
+  background-color: #dcdcdc; color: #202020; }
 
 /* ===== tile tabs ===== */
 .tiletabs { display: flex; align-items: stretch; height: 46px; background: #f0f0f0;

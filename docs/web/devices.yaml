@@ -51,7 +51,7 @@
 #                   { left: ..., right: ... } map (each channel's own label).
 
 formatVersion: 1
-contentVersion: 1
+contentVersion: 2
 audioDevices:
   - name: E1DA Cosmos ADC
     match: [ "E1DA Cosmos ADC" ]
@@ -88,4 +88,23 @@ audioDevices:
       channels: LINKED
       ranges:
         - { label: "default", fsVrms: { left: 1.2, right: 1.2 } }
+      activeRange: "default"
+
+  # The digital loopback backend's own device.  It has no analogue side, so its
+  # full scale is a convention rather than a measurement: 1 V RMS both ways
+  # makes a full-scale digital signal read as 1 V, and the ranges stay editable
+  # like any other card's.  The match pattern carries the application name
+  # because binding is by name substring - a bare "Loopback" would also claim
+  # the WASAPI loopback capture endpoints Windows exposes.
+  - name: Phonalyser Loopback
+    match: [ "Phonalyser Loopback" ]
+    input:
+      channels: LINKED
+      ranges:
+        - { label: "default", fsVrms: { left: 1, right: 1 } }
+      activeRange: "default"
+    output:
+      channels: LINKED
+      ranges:
+        - { label: "default", fsVrms: { left: 1, right: 1 } }
       activeRange: "default"
