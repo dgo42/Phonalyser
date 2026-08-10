@@ -5,6 +5,78 @@ All notable changes to **Phonalyser** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - xxxx.xx.xx
+
+### Changed
+
+- **Server downloads are the per-platform ZIPs alone.** Each ZIP already
+  carries the server's fat jar beside the natives, the launcher and the
+  service scripts; the separate bare jars were duplicate downloads and are no
+  longer attached to a release.
+
+### Fixed
+
+- **A typed 0 dBFS redisplayed as "-0 dBFS".** The amplitude fields store
+  volts, and the conversion back to the sticky dBFS display could land a few
+  1e-12 dB below exact zero - the formatter then kept the minus sign of the
+  tiny negative. Display values are now rounded numerically to the shown
+  decimals before formatting, which goes through a signless integer zero, so
+  every unit's zero point renders clean. Fixed in the desktop app and the web
+  version alike.
+- **The amplitude tooltips did not mention dBFS.** The generator and
+  frequency-response amplitude tooltips now name the `dbfs` / `dbf` suffix and
+  its full-scale reference, in every UI language; the tune-notch amplitude
+  field, which had no explanatory tooltip at all, shares the generator's.
+- **Exclusive-mode devices taking 24 or 32 bits only as plain WAVEFORMATEX
+  were refused.** The JavaSound WASAPI-exclusive path applied the documented
+  legacy-format retry only to 16-bit formats, so a driver that accepts higher
+  depths for mono or stereo only in the legacy spelling was reported
+  unsupported and refused at open. The retry now runs wherever the legacy
+  structure can express the format, and the exclusive format enumeration
+  answers in a stable order, so a device's default format no longer varies
+  from run to run.
+- **The scope's calibrate button stayed off on wide input ranges.** The gate
+  demanded that the signal fill a quarter of the ADC's range whatever the
+  range's width, so on a 10 V RMS front end nothing under about 7 V
+  peak-to-peak could be calibrated from - refusing levels whose absolute
+  accuracy is beyond question. A calibrated selection now also enables at
+  0.5 V RMS regardless of how much of the range it occupies; the
+  anti-silence floor of an uncalibrated selection is unchanged. Desktop and
+  web alike.
+- **Closing the frequency-response progress window did not stop the sweep.**
+  ESC or a window-manager close only disposed the window: the sweep kept
+  playing and the pane's controls stayed locked until it ran out on its own.
+  A user close now issues the same cooperative cancel as the Cancel button,
+  and the window closes when the teardown finishes; the calibration wizard's
+  progress window, whose trial sweep has no cancel path, refuses to close
+  instead of orphaning a running sweep.
+- **Backends of other platforms were probed at startup.** Every build
+  carries all backend classes, and each backend tried to load its native
+  library wherever it found itself - a Linux machine logged failed loads of
+  the CoreAudio and Windows audio libraries it can never have. Every
+  native-library loader now checks the operating system and architecture
+  first, so a platform's log shows only its own backends.
+- **Linux capability scans covered only cards /proc/asound can describe.**
+  The format and rate probe read the USB stream descriptors, so a PCI or
+  HDA card answered with nothing. When /proc/asound has no answer, the
+  exact formats and rates are now read from the direct hardware device
+  (`aplay`/`arecord --dump-hw-params` on `hw:card,device`), never through
+  the resampling plug layer, so every card reports what its converter
+  actually takes.
+- **ALSA unity-gain pinning skipped cards whose volume controls match no
+  port name.** The pin looked a control up by the selected jack's port word
+  and gave up when the card names its controls differently - the
+  measurement then ran at whatever volume the mixer happened to hold. When
+  no name matches, every volume control of the selected card's direction is
+  now pinned to unity and restored afterwards.
+- **WASAPI-exclusive devices taking 24 valid bits in a 32-bit container
+  were not offered at 24.** The exclusive probe tested only the packed
+  spelling of each depth, so such devices scanned as 16- or 32-bit only.
+  The probe now reports the exact valid bits whichever container the driver
+  takes, and the open path resolves the container separately, repacking
+  samples at the device boundary - the depth selected is the converter's
+  true depth.
+
 ## [1.2.0] - 2026-08-07
 
 ### Added
