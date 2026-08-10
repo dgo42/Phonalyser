@@ -249,8 +249,14 @@
                                      and non-fatal: a running app-image can hold
                                      runtime\lib\modules open on Windows, and that is
                                      the user's problem to close, not a build error
-                                     to raise before jpackage has even spoken. -->
-                                <delete dir="${project.build.directory}/installer"
+                                     to raise before jpackage has even spoken.
+                                     ONLY the app-image directory - plain files in
+                                     installer/ overwrite fine, and the release build
+                                     runs package again after the EXE exists (the x86
+                                     legacy jar and the MSIX app-image), so deleting
+                                     the whole directory would discard the EXE
+                                     installer already built there. -->
+                                <delete dir="${project.build.directory}/installer/${app.name}"
                                         quiet="true" failonerror="false"/>
                                 <mkdir dir="${project.build.directory}/jpackage-input"/>
                                 <copy file="${project.build.directory}/${app.mainJar}"
