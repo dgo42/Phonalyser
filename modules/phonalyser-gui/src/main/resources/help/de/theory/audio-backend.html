@@ -38,7 +38,8 @@
   <p>Soundhardware ist über verschiedene Treiberinterfaces erreichbar.
      Phonalyser implementiert drei Allzweckpfade - jeder funktioniert mit
      praktisch jedem Interface - sowie ein gerätespezifisches Backend für den
-     QuantAsylum QA402 / QA403 Analysator (<a href="#qa40x">unten</a>).  Sie
+     QuantAsylum QA402 / QA403 Analysator (<a href="#qa40x">unten</a>) sowie ein
+     hardwarefreies <a href="#loopback">Loopback</a>.  Sie
      wählen einen in den Einstellungen aus; alle Module arbeiten identisch,
      unabhängig davon, welcher aktiv ist.</p>
   <table class="controls">
@@ -135,6 +136,43 @@
      besitzt jeweils nur eine Anwendung das Instrument - der QA402 / QA403 darf
      nicht in der QuantAsylum-Software geöffnet sein, während Phonalyser ihn
      verwendet.</div>
+
+  <h2 id="loopback">Das Loopback-Backend</h2>
+  <p>Ein weiteres Backend erreicht überhaupt keine Hardware. Das
+     <b>Loopback</b> ist ein rein digitaler Pfad: Was die Wiedergabespur
+     erzeugt, kommt Sample für Sample an der Aufnahmespur an, ohne ein
+     Audiogerät des Betriebssystems dazwischen. Es gibt nichts in einer
+     Sound-Systemsteuerung auszuwählen und nichts anzustecken - es ist auf jedem
+     System verfügbar.</p>
+  <p>Sein Zweck ist ein Messplatz mit <em>bekanntem</em> Grundrauschen. Jedes
+     übergehende Sample wird von demselben Quantisierer quantisiert, den auch
+     die echten Wiedergabepfade verwenden, mit TPDF-Dither unmittelbar vor dem
+     Runden, auf dem letzten Bit der gewählten Bittiefe. Das Grundrauschen ist
+     damit das rechnerische und keine Eigenschaft irgendeines Wandlers: Die
+     gelieferten Samples digitaler Stille messen <b>0,500&nbsp;LSB
+     Effektivwert</b>, und eine tiefere Wortbreite senkt dieses Grundrauschen
+     um genau die 6&nbsp;dB pro Bit, die die Rechnung vorgibt. Was eine Messung
+     dann darüber zeigt, gehört dem geprüften Code - denn sonst ist nichts im
+     Pfad.</p>
+  <ul>
+    <li><b>Auch Stille ist gedithert.</b>  Läuft kein Generator, liefert die
+        Aufnahmespur weiter, und zwar geditherte Stille statt digitaler Nullen -
+        das Grundrauschen ist da, ob ein Signal anliegt oder nicht.</li>
+    <li><b>Die Lieferung folgt der Uhr.</b>  Blöcke treffen mit der gewählten
+        Abtastrate ein, wie von einem Gerät. Die Analysen darüber setzen einen
+        Echtzeitstrom voraus: Ein Loopback, das so schnell liefe wie der
+        Prozessor erlaubt, gäbe ihnen ein ganzes Tonleben in einem Augenblick
+        und ihrer Mittelung jeden Zeitbezug.</li>
+    <li><b>Die Formate sind die volle Leiter.</b>  Fünfzehn Abtastraten von
+        8&nbsp;kHz bis 768&nbsp;kHz, jede mit 16, 20, 24 oder 32 Bit, in beiden
+        Richtungen - Eingang und Ausgang laufen auf einer Uhr.</li>
+    <li><b>Bereiche und Kalibrierung verhalten sich wie bei einer Soundkarte.</b>
+        Die Vollaussteuerungsbereiche sind editierbar, und der
+        Kalibrierungsspeicher gilt für sie wie für jede gewöhnliche Karte.
+        Nichts davon gehört dem Gerät: Es gibt keinen von der Hardware
+        vorgegebenen Bereich und keine aus einem Instrument zurückgelesene
+        Kalibrierung - es gibt kein Instrument.</li>
+  </ul>
 
   <h2 id="how">Wie es funktioniert, grob umrissen</h2>
 

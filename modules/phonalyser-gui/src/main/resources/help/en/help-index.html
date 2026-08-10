@@ -327,6 +327,7 @@
       <li><a href="freqresp.html#freqresp-uneven-readout">The flatness readout</a> <span class="small">(Frequency response)</span> - <span class="small">The result is written as a short line, shown in a small outlined table below the header buttons (stacking below the compare...</span></li>
       <li><a href="theory/oscilloscope.html#glitch">The glitch trigger: firing on damage, not on a level</a> <span class="small">(Theory ▸ Oscilloscope)</span> - <span class="small">Some events worth catching are not level crossings at all. A capture hiccup that swallows samples leaves an amplitude step or a...</span></li>
       <li><a href="theory/audio-backend.html#volume">The hardware volume is part of the chain</a> <span class="small">(Theory ▸ Audio backend)</span> - <span class="small">On Linux and macOS the card&#x27;s own volume controls sit between the socket and the converter, so they scale every sample INSIDE the</span></li>
+      <li><a href="theory/audio-backend.html#loopback">The loopback backend</a> <span class="small">(Theory ▸ Audio backend)</span> - <span class="small">One more backend reaches no hardware at all. The loopback is a purely digital path: whatever the playback lane produces arrives...</span></li>
       <li><a href="oscilloscope.html#scope-meas-raw">The measurements are taken as captured</a> <span class="small">(Oscilloscope)</span> - <span class="small">Every number in this table is computed on the unfiltered window - the per-channel LPF cleanup, both the 80 kHz low-pass and the...</span></li>
       <li><a href="theory/fft.html#leakage">The neighbour bin: where the leaked power goes</a> <span class="small">(Theory ▸ FFT analyser)</span> - <span class="small">However good the alignment, the tone&#x27;s true position κ is never perfectly on the bin - and any offset splits the tone&#x27;s power...</span></li>
       <li><a href="theory/dac-predistortion.html#drift">The notch drifts - so the fundamental must be defined manually</a> <span class="small">(Theory ▸ DAC pre-distortion)</span> - <span class="small">A twin-T notch nulls at f 0 = 1 / (2π RC ) (1) so its null frequency tracks the product RC . Resistors and capacitors change...</span></li>
@@ -668,7 +669,7 @@
       <li><b>Low pass</b> - <a href="freqresp.html#">Frequency response</a></li>
       <li><b>LP</b> - <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="fft.html#fft-distortion-band-dim">FFT analyser ▸ Distortion-band dimming</a>, <a href="fft.html#fft-tile-distrange">FFT analyser ▸ Distortion-range tile</a></li>
       <li><b>LPF</b> - <a href="oscilloscope.html#scope-meas-raw">Oscilloscope ▸ The measurements are taken as captured</a>, <a href="oscilloscope.html#scope-tab-left">Oscilloscope ▸ Left tab</a>, <a href="oscilloscope.html#">Oscilloscope</a></li>
-      <li><b>LSB</b> - <a href="generator.html#generator-dither">Generator ▸ Dither</a>, <a href="theory/algorithms.html#adc">Theory ▸ Algorithm reference ▸ ADC characterisation</a>, <a href="theory/generator.html#quantizer">Theory ▸ Signal generator ▸ Quantization and dither</a></li>
+      <li><b>LSB</b> - <a href="generator.html#generator-dither">Generator ▸ Dither</a>, <a href="theory/algorithms.html#adc">Theory ▸ Algorithm reference ▸ ADC characterisation</a>, <a href="theory/audio-backend.html#loopback">Theory ▸ Audio backend ▸ The loopback backend</a>, <a href="theory/generator.html#quantizer">Theory ▸ Signal generator ▸ Quantization and dither</a></li>
     </ul>
     <h3>M</h3>
     <ul>
@@ -819,7 +820,7 @@
       <li><b>THD settings</b> - <a href="fft.html#">FFT analyser</a></li>
       <li><b>Tips</b> - <a href="index.html#">Help</a></li>
       <li><b>Tools ▸ Preferences</b> - <a href="preferences.html#">Preferences</a></li>
-      <li><b>TPDF</b> - <a href="generator.html#generator-dither">Generator ▸ Dither</a>, <a href="theory/algorithms.html#synth">Theory ▸ Algorithm reference ▸ Signal synthesis &amp; quantization</a>, <a href="theory/generator.html#quantizer">Theory ▸ Signal generator ▸ Quantization and dither</a>, <a href="theory/generator.html#dither-dbv">Theory ▸ Signal generator ▸ Setting dither by the noise floor it makes</a>, <a href="theory/generator.html#refs">Theory ▸ Signal generator ▸ References</a></li>
+      <li><b>TPDF</b> - <a href="generator.html#generator-dither">Generator ▸ Dither</a>, <a href="theory/algorithms.html#synth">Theory ▸ Algorithm reference ▸ Signal synthesis &amp; quantization</a>, <a href="theory/audio-backend.html#loopback">Theory ▸ Audio backend ▸ The loopback backend</a>, <a href="theory/generator.html#quantizer">Theory ▸ Signal generator ▸ Quantization and dither</a>, <a href="theory/generator.html#dither-dbv">Theory ▸ Signal generator ▸ Setting dither by the noise floor it makes</a>, <a href="theory/generator.html#refs">Theory ▸ Signal generator ▸ References</a></li>
       <li><b>TPDF dither</b> - <a href="theory/generator.html#">Theory ▸ Signal generator</a></li>
       <li><b>Triangle</b> - <a href="theory/generator.html#">Theory ▸ Signal generator</a></li>
       <li><b>Trigger</b> - <a href="oscilloscope.html#">Oscilloscope</a></li>
@@ -833,7 +834,7 @@
       <li><b>UDP</b> - <a href="server.html#server-discovery">The Phonalyser server ▸ Discovery and the firewall</a></li>
       <li><b>Unevenness</b> - <a href="freqresp.html#">Frequency response</a>, <a href="tips.html#">Tips</a></li>
       <li><b>Unevenness mode</b> - <a href="freqresp.html#">Frequency response</a></li>
-      <li><b>USB</b> - <a href="backend.html#backend-list">Audio backends ▸ Which backend on which system</a>, <a href="backend.html#backend-mac-glitches">Audio backends ▸ macOS: capture glitches on some devices</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a>, <a href="fft.html#fft-utility-calibrate">FFT analyser ▸ ADC calibration</a></li>
+      <li><b>USB</b> - <a href="backend.html#backend-list">Audio backends ▸ Which backend on which system</a>, <a href="backend.html#backend-mac-glitches">Audio backends ▸ macOS: capture glitches on some devices</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a>, <a href="faq.html#">FAQ ▸ The scope and FFT report frequent &quot;time discontinuity&quot; events - on every backend</a></li>
     </ul>
     <h3>V</h3>
     <ul>
@@ -846,7 +847,7 @@
     <ul>
       <li><b>Wait</b> - <a href="howto.html#">World&#x27;s shortest HOW-TO</a></li>
       <li><b>Wannamaker</b> - <a href="theory/generator.html#refs">Theory ▸ Signal generator ▸ References</a></li>
-      <li><b>WASAPI</b> - <a href="backend.html#backend-list">Audio backends ▸ Which backend on which system</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ Changed</a>, <a href="changelog.html#">What&#x27;s new ▸ 1.0-RC1 - 2026-06-19</a>, <a href="fft.html#fft-utility-calibrate">FFT analyser ▸ ADC calibration</a></li>
+      <li><b>WASAPI</b> - <a href="backend.html#backend-list">Audio backends ▸ Which backend on which system</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ Changed</a>, <a href="changelog.html#">What&#x27;s new ▸ 1.0-RC1 - 2026-06-19</a>, <a href="faq.html#">FAQ ▸ The scope and FFT report frequent &quot;time discontinuity&quot; events - on every backend</a></li>
       <li><b>WASAPI exclusive</b> - <a href="backend.html#">Audio backends</a></li>
       <li><b>Watch ΔF settle</b> - <a href="howto.html#">World&#x27;s shortest HOW-TO</a></li>
       <li><b>WAV</b> - <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="generator.html#">Generator ▸ Generator</a>, <a href="generator.html#generator-load-from">Generator ▸ Load from... + In loop</a>, <a href="generator.html#generator-play">Generator ▸ Play / Stop</a>, <a href="index.html#">Help ▸ Modules</a></li>

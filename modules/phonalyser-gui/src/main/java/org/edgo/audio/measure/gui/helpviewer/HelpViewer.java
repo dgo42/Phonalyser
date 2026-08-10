@@ -210,6 +210,7 @@ public final class HelpViewer {
             "external/fft-analysis.html",
             "external/sine-sweep.html",
             "tips.html",
+            "faq.html",
             "credits.html",
             "changelog.html",
             "help-index.html",

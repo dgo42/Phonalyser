@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser - FAQ</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <h1>FAQ</h1>
+  <p class="small">Answers to questions that reach the project repeatedly.
+     Type to filter, or pick a question from the list.</p>
+
+  <p><input id="faqSearch" type="text" placeholder="Search the FAQ..."
+            style="width:100%;max-width:32em;padding:0.4em;"/></p>
+
+  <h2>Questions</h2>
+  <div class="toc" id="faqCatalog">
+    <a href="#discontinuities">The scope and FFT report frequent "time discontinuity" events - on every backend</a>
+    <a href="#one-rate">My interface offers only one sample rate everywhere</a>
+    <a href="#device-in-use">The capture will not open - the device is in use</a>
+    <a href="#volume-pinning">Why does measuring change my hardware volume (Linux / macOS)</a>
+    <a href="#bug-report">What should I attach to a bug report</a>
+    <a href="#server-auth">Does the Phonalyser server need authentication</a>
+  </div>
+
+  <div class="faq-item" id="discontinuities">
+    <h2>The scope and FFT report frequent "time discontinuity" events - on every backend</h2>
+    <div class="pane">
+      <p><b>Symptoms.</b> The FFT discards windows with "Found signal
+         discontinuity - re-synced", the scope's glitch trigger fires, the
+         capture rate drops - and it happens with WASAPI, WDM-KS and JavaSound
+         alike, while the analog output, checked with an external oscilloscope,
+         is perfectly continuous.</p>
+      <p><b>What it is.</b> Genuine sample loss in the OS/USB stack below the
+         application. The capture path cannot create gaps by design - the ring
+         buffer accepts every delivered sample and each consumer keeps its own
+         overrun-protected cursor - and both detectors (the scope's glitch
+         trigger and the FFT's time gate are the same detector class) fire on
+         the signal itself, so what they report is a real splice in the stream.
+         The same loss is known to affect other measurement software on the
+         same machines.</p>
+      <p><b>Typical cause.</b> An overloaded or degraded USB host controller:
+         several high-traffic devices sharing one controller, a hub shared with
+         disks or cameras, or controller/driver state that has degraded since
+         boot - a reboot often clears the problem for a while before it
+         returns.</p>
+      <p><b>Remedies.</b> Connect the audio interface to a dedicated USB
+         controller - its own PCIe USB card, or at least a port group no other
+         high-traffic device shares. Avoid hubs, especially hubs shared with
+         storage, cameras or network adapters. A reboot resets the controller
+         state and buys clean time; if the problem creeps back, the controller
+         load is the thing to fix.</p>
+      <p><b>Why it looks worse at high frequencies.</b> A splice of n lost
+         samples steps the waveform by roughly A&nbsp;&middot;&nbsp;2&pi;f/f<sub>s</sub>&nbsp;&middot;&nbsp;n
+         - proportional to the signal's derivative. The same loss rate that is
+         barely visible on a 2 kHz tone fires the detectors constantly on a
+         5 kHz tone at the same amplitude. When comparing before/after a
+         hardware change, compare at the same tone frequency.</p>
+    </div>
+  </div>
+
+  <div class="faq-item" id="one-rate">
+    <h2>My interface offers only one sample rate everywhere</h2>
+    <div class="pane">
+      <p><b>Symptoms.</b> The device offers a single sample rate - in this
+         application and in every other one - and the rate list cannot be
+         changed from the operating system's sound settings either.</p>
+      <p><b>What it is.</b> Some interfaces do not take their clock from the
+         host at all: the rate is selected in the manufacturer's own control
+         utility, and the driver then presents that one rate to the system.
+         Audient-class interfaces work this way. Nothing above the driver can
+         override it - the operating system and every application can only use
+         the rate the utility has selected.</p>
+      <p><b>Remedy.</b> Open the manufacturer's control utility, set the rate
+         there, then rescan devices in Preferences so the new rate is picked
+         up.</p>
+    </div>
+  </div>
+
+  <div class="faq-item" id="device-in-use">
+    <h2>The capture will not open - the device is in use</h2>
+    <div class="pane">
+      <p><b>Symptoms.</b> Starting a capture fails and the device is reported
+         as unavailable or already in use.</p>
+      <p><b>What it is.</b> An exclusive-mode conflict. The measurement paths
+         take the device exclusively, so exactly one application may hold it at
+         a time - and the holder is not always an obvious one: another audio
+         application, or the system's own sound panel while it is showing a
+         level meter for that device. The application itself never holds a line
+         across captures: a device it is not measuring with is released, so a
+         previous measurement of its own is not what is blocking the device.</p>
+      <p><b>Remedies.</b> Close the application that holds the device, and the
+         sound panel if it is open on that device's page. Check the device's
+         exclusive-mode allowances in the system sound settings - a device that
+         forbids exclusive use cannot be measured bit-exactly. Then retry.</p>
+    </div>
+  </div>
+
+  <div class="faq-item" id="volume-pinning">
+    <h2>Why does measuring change my hardware volume (Linux / macOS)</h2>
+    <div class="pane">
+      <p><b>What happens.</b> When a measurement starts, the card's hardware
+         volume controls are set to unity gain, and they are put back to their
+         previous positions when it ends.</p>
+      <p><b>Why.</b> A measurement states levels in volts and in dBV, which is
+         only meaningful when digital full scale maps to a known analog level.
+         A hardware volume anywhere in the path scales that mapping without
+         appearing in the data, so a figure measured at one slider position
+         would not match the same measurement made at another. Pinning the
+         controls to unity gain removes that unknown, and restoring them
+         afterwards leaves the card as it was found.</p>
+      <p><b>The broad case.</b> The controls are matched by port name. On cards
+         whose controls match no port name, every volume control of the card is
+         pinned - and every one of them is restored afterwards.</p>
+    </div>
+  </div>
+
+  <div class="faq-item" id="bug-report">
+    <h2>What should I attach to a bug report</h2>
+    <div class="pane">
+      <p><b>The device scanner's report.</b> The project ships a standalone
+         diagnostic beside the application: a self-contained jar, one jar for
+         every operating system, attached to each release.</p>
+      <p>Run it from a terminal:</p>
+      <p><code>java -jar device-scanner-&lt;version&gt;.jar</code></p>
+      <p><b>What it does.</b> It enumerates every audio backend present on the
+         machine cache-free - it builds fresh device managers, so every figure
+         in the report was probed by that run rather than read from a cache -
+         and writes a human-readable <code>device-scan-&lt;stamp&gt;.txt</code>
+         in the working directory, listing every device with its supported
+         sample rates and bit depths. No stream is opened.</p>
+      <p><b>Attach that file.</b> It answers, in one place, which backends the
+         machine has, which devices each of them sees, and what formats those
+         devices really accept.</p>
+    </div>
+  </div>
+
+  <div class="faq-item" id="server-auth">
+    <h2>Does the Phonalyser server need authentication</h2>
+    <div class="pane">
+      <p><b>No, and that is by design.</b> The server is a bench instrument for
+         a trusted network, which is what the server documentation states as
+         well. It carries no user accounts, no passwords and no tokens.</p>
+      <p><b>What that means in practice.</b> Anyone who can reach the server on
+         the network can use the bench: list its devices, drive its generator
+         and take its measurements.</p>
+      <p><b>How to run it.</b> Keep it on the trusted segment it was meant for,
+         and do not expose it beyond that - no port forwarding to the internet,
+         and no untrusted network. Where the reach has to be wider, put the
+         access control in front of it, in the network rather than in the
+         instrument.</p>
+    </div>
+  </div>
+
+  <script>
+    // Live filter: hides catalog rows and answer blocks whose full text does
+    // not contain the query.  Plain substring match, case-insensitive - the
+    // page-local complement to the manual-wide index search.
+    (function () {
+      var box = document.getElementById('faqSearch');
+      box.addEventListener('input', function () {
+        var q = box.value.toLowerCase();
+        var items = document.getElementsByClassName('faq-item');
+        for (var i = 0; i < items.length; i++) {
+          var hit = !q || items[i].textContent.toLowerCase().indexOf(q) >= 0;
+          items[i].style.display = hit ? '' : 'none';
+        }
+        var links = document.getElementById('faqCatalog').getElementsByTagName('a');
+        for (var j = 0; j < links.length; j++) {
+          var target = document.getElementById(links[j].getAttribute('href').substring(1));
+          var show = !target || target.style.display !== 'none';
+          links[j].style.display = show ? '' : 'none';
+        }
+      });
+    })();
+  </script>
+
+</body>
+</html>
