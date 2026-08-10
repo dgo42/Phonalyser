@@ -113,6 +113,28 @@ public final class FftView extends AbstractFreqDomainView {
     /** Left padding (px) for the THD table inside the external window. */
     private static final int EXT_LEFT_PAD = 4;
 
+    /** Units the distortion table's absolute-level cells can render in - a SUBSET of
+     *  {@link MagnitudeUnit}: the linear units say nothing about a cell that already
+     *  prints a percentage beside the level.  {@code DBR} is the level minus the
+     *  reference the table's percentages are computed against. */
+    private static final MagnitudeUnit[] DISTORTION_UNITS = {
+            MagnitudeUnit.DBV, MagnitudeUnit.DBFS, MagnitudeUnit.DBR };
+    /** Labels for {@link #DISTORTION_UNITS}, in that order.  Unit symbols are the same
+     *  in every language, so they are literals rather than i18n keys. */
+    private static final String[] DISTORTION_UNIT_LABELS = { "dBV", "dBFS", "dB" };
+    /** Width (px) of the distortion-unit combo. */
+    private static final int DISTORTION_COMBO_W = 42;
+    /** Gap (px) from the header bar's right edge - the button row's own spacing
+     *  plus the tuning offset that sets the combo apart from the flat buttons. */
+    private static final int DISTORTION_COMBO_GAP = 4;
+    /** Top inset (px) of the distortion-unit combo, measured like the header
+     *  bar's: a native drop-down sits slightly higher than the flat buttons so
+     *  their visual centres line up. */
+    private static final int DISTORTION_COMBO_TOP = 2;
+    /** Floor (V_rms) for the IMD reference level, mirroring the divisor floor in
+     *  ImdAnalyzer: two muted tones must not divide by zero. */
+    private static final double MIN_REF_VRMS = 1e-12;
+
     /** A spectrum has a "real" signal only when its measured fundamental sits at
      *  least this far (dB) above the LOCAL noise floor (the grass in its near
      *  range).  Below it, F and the harmonics are just grass (indistinguishable,
@@ -355,6 +377,7 @@ public final class FftView extends AbstractFreqDomainView {
     private ToolButton distortionBtn;
     private ToolButton resetBtn;
     private ToolButton externalBtn;
+    private Combo      distortionUnitCombo;       // unit of the table's absolute-level cells
     private TransparentComposite dataSpacer;      // wide gap before the data trio
     private boolean    dataButtonsShown = true;   // sync gate; the trio starts hidden (no data)
     private boolean    externalShown    = true;   // sync gate for externalBtn (needs the table visible)
@@ -565,6 +588,29 @@ public final class FftView extends AbstractFreqDomainView {
             if (externalBtn.isToggled() != tableExtracted) {
                 setTableExtracted(externalBtn.isToggled());
             }
+        });
+        // Unit of the distortion table's absolute-level cells.  It keeps the slot
+        // right after the external-window button, but hangs off the canvas rather
+        // than sitting IN the button row: a native drop-down needs its own inset
+        // and width to sit level with the flat buttons, and a RowLayout gives a
+        // single child neither.  Anchored to the bar's right edge, so it follows
+        // when the row's buttons come and go.  The table is drawn on the canvas,
+        // so a unit change only needs a repaint (the extracted window repaints
+        // through the same draw methods).
+        distortionUnitCombo = new Combo(this, SWT.READ_ONLY);
+        distortionUnitCombo.setItems(DISTORTION_UNIT_LABELS);
+        FormData ucd = new FormData(DISTORTION_COMBO_W, BTN_H);
+        ucd.top  = new FormAttachment(0, DISTORTION_COMBO_TOP);
+        ucd.left = new FormAttachment(headerBar, DISTORTION_COMBO_GAP);
+        distortionUnitCombo.setLayoutData(ucd);
+        distortionUnitCombo.setCursor(d.getSystemCursor(SWT.CURSOR_ARROW));
+        Bindings.combo(distortionUnitCombo, viewPrefs.fftDistortionUnitProperty(), DISTORTION_UNITS);
+        // The paint pass repaints the extracted window too, so one redraw covers
+        // both; the extracted shell is also re-fitted, because the value columns
+        // (and so the window's natural width) follow the unit label's width.
+        Bindings.onChange(this, viewPrefs.fftDistortionUnitProperty(), v -> {
+            resizeExternalShellToContent();
+            redraw();
         });
         syncDataButtons();
 
@@ -2186,6 +2232,11 @@ public final class FftView extends AbstractFreqDomainView {
         private final boolean tableVisible;
         private final boolean tableImd;
         private final boolean tableIsExtracted;
+        /** Unit of the table's per-harmonic / per-product levels.  Independent of
+         *  {@link #unit} (the magnitude axis): switching it re-renders the table
+         *  alone, and without it here the cached layer would keep the old cells
+         *  until something else invalidated the image. */
+        private final MagnitudeUnit tableUnit;
         // Manual-fundamental + max-harmonic THD inputs.  Changing them recomputes
         // the displayed STATIC result's THD / harmonics IN PLACE (same result
         // reference), so without them in the key the cached image would not
@@ -2215,6 +2266,7 @@ public final class FftView extends AbstractFreqDomainView {
                 prefs.getFftFreqRespColor(), prefs.getFftCalOverlayColor(),
                 correctionStore.getEntries(),
                 prefs.isFftDistortionTableVisible(), tableModeIsImd, tableExtracted,
+                prefs.getFftDistortionUnit(),
                 prefs.isFftManualFundEnabled(), prefs.getFftManualFundVrms(),
                 prefs.getFftCalcMaxHarmonic(), prefs.getFftThdMaxHarmonic()).hashCode();
     }
@@ -2565,6 +2617,10 @@ public final class FftView extends AbstractFreqDomainView {
         distortionBtn.setExcluded(!hasData);
         resetBtn.setExcluded(!hasData);
         externalBtn.setExcluded(!extVisible);
+        // The unit selector belongs to the table, so it shows on the same
+        // condition.  It is not part of the row, so it is only hidden - the
+        // reflow below re-lays the canvas and slides it to the bar's new edge.
+        distortionUnitCombo.setVisible(extVisible);
         headerBar.reflow();   // re-size the bar (its width changed), then re-flow the row
     }
 
@@ -2664,14 +2720,26 @@ public final class FftView extends AbstractFreqDomainView {
         y += lineH + 2;
 
         // ── dnL / dnH rows, two per line. ──────────────────────────────
+        // The products are stored in dBV; drop the ADC offset to get the measured
+        // dBFS the unit selector works from.  The relative unit measures against
+        // |F1| + |F2|, the divisor ImdAnalyzer uses for every product percentage,
+        // floored like it is there so muted tones cannot divide by zero.
+        double dbvOff    = prefs.getDbvOffsetDb(prefs.getFftChannel());
+        MagnitudeUnit tableUnit = prefs.getFftDistortionUnit();
+        String unitLabel = distortionUnitLabel(tableUnit);
+        double refDbFs   = 20.0 * Math.log10(Math.max(MIN_REF_VRMS, imd.f1Mag + imd.f2Mag)) - dbvOff;
         int dKey = 5  * charW;         // "d5L:"
-        int dVal = 26 * charW;         // " -108.42 dBV  0.00045123 %"
+        // " -108.42 dBV  0.00045123 %" - follows the label width, as the THD table's
+        // harmonic column does.
+        int dVal = (23 + unitLabel.length()) * charW;
         int dRight = xLeft + dKey + dVal + colGap;
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
             String lKey = String.format("d%dL:", k);
-            String lVal = imdRowText(imd.dnLDbV[k], imd.dnLPct[k]);
+            String lVal = imdRowText(levelInDistortionUnit(imd.dnLDbV[k] - dbvOff,
+                    refDbFs, tableUnit, dbvOff), imd.dnLPct[k], unitLabel);
             String rKey = String.format("d%dH:", k);
-            String rVal = imdRowText(imd.dnHDbV[k], imd.dnHPct[k]);
+            String rVal = imdRowText(levelInDistortionUnit(imd.dnHDbV[k] - dbvOff,
+                    refDbFs, tableUnit, dbvOff), imd.dnHPct[k], unitLabel);
             drawKv(gc, xLeft, y, dKey, lKey, lVal, dRight, dKey, rKey, rVal);
             y += lineH;
         }
@@ -2687,11 +2755,11 @@ public final class FftView extends AbstractFreqDomainView {
         return Double.isFinite(pct) ? String.format("%.8f %%", pct) : "---";
     }
 
-    /** IMD-table dnL/dnH cell (dBV + percent) - "---" for a product whose
-     *  frequency lies outside the measurable range at this sample rate. */
-    private String imdRowText(double dbv, double pct) {
-        return Double.isFinite(dbv)
-                ? String.format("%8.2f dBV  %.8f %%", dbv, pct)
+    /** IMD-table dnL/dnH cell (level in the selected unit + percent) - "---" for a
+     *  product whose frequency lies outside the measurable range at this sample rate. */
+    private String imdRowText(double level, double pct, String unitLabel) {
+        return Double.isFinite(level)
+                ? String.format("%8.2f %s  %.8f %%", level, unitLabel, pct)
                 : "     ---";
     }
 
@@ -2816,6 +2884,14 @@ public final class FftView extends AbstractFreqDomainView {
         int mValR = 14 * charW;       // covers "0.00035790 %"
         int mRightColX = xLeft + mKeyL + mValL + colGap;
 
+        // Unit of the absolute-level cells, and the reference the relative unit
+        // measures against: the fundamental this table already reports in its header
+        // (manual override when set), which is the very level the analyzer divides by
+        // for the harmonic percentages beside them.
+        MagnitudeUnit tableUnit = prefs.getFftDistortionUnit();
+        String unitLabel = distortionUnitLabel(tableUnit);
+        double refDbFs   = fundDbV - dbvOffsetDb;
+
         drawKv(gc, xLeft, y, mKeyL,
                 "N+D:",  fmtDb(r.thdNDb)  + " A",
                 mRightColX, mKeyR,
@@ -2837,19 +2913,24 @@ public final class FftView extends AbstractFreqDomainView {
         // ("H2:" / "H10:") but wide values to fit the ~25-char
         // "%+8.2f dBV  %.8f %%" string.
         int hKey = 4  * charW;         // "H10:" + ":"
-        int hVal = 24 * charW;         // covers "-109.72 dBV 0.00031899 %"
+        // Covers "-109.72 dBV 0.00031899 %"; the unit sits inside the value, so the
+        // column follows the label's width - a wider "dBFS" would otherwise push the
+        // value into the right-hand key.
+        int hVal = (21 + unitLabel.length()) * charW;
         int hRightColX = xLeft + hKey + hVal + colGap;
         int harmCount = (r.harmonicDbFs == null) ? 0 : r.harmonicDbFs.length;
         double dbvOff = prefs.getDbvOffsetDb(prefs.getFftChannel());   // dBV = dBFs + analyzed-channel ADC offset
         for (int i = 0; i < harmCount; i += 2) {
             String l = String.format("H%d:", i + 2);
-            String lv = String.format("%8.2f dBV %.8f %%",
-                    r.harmonicDbFs[i] + dbvOff, r.harmonicPct[i]);
+            String lv = String.format("%8.2f %s %.8f %%",
+                    levelInDistortionUnit(r.harmonicDbFs[i], refDbFs, tableUnit, dbvOff),
+                    unitLabel, r.harmonicPct[i]);
             String rkey = "", rval = "";
             if (i + 1 < harmCount) {
                 rkey = String.format("H%d:", i + 3);
-                rval = String.format("%8.2f dBV  %.8f %%",
-                        r.harmonicDbFs[i + 1] + dbvOff, r.harmonicPct[i + 1]);
+                rval = String.format("%8.2f %s  %.8f %%",
+                        levelInDistortionUnit(r.harmonicDbFs[i + 1], refDbFs, tableUnit, dbvOff),
+                        unitLabel, r.harmonicPct[i + 1]);
             }
             drawKv(gc, xLeft, y, hKey, l, lv, hRightColX, hKey, rkey, rval);
             y += lineH;
@@ -2901,6 +2982,10 @@ public final class FftView extends AbstractFreqDomainView {
         drawOutlinedText(gc, text, centreX - ext.x / 2, y);
     }
 
+    /** Fixed-unit cell for the metric rows (N+D, N, SNR).  The level-unit selector
+     *  covers the per-harmonic / per-product rows only; N+D and SNR are ratios
+     *  against the fundamental rather than levels, so a unit switch would not even
+     *  apply to them. */
     private String fmtDb(double v) {
         return Double.isFinite(v) ? String.format("%7.2f dBV", v) : "-";
     }
@@ -2911,6 +2996,29 @@ public final class FftView extends AbstractFreqDomainView {
         // analyzed channel's ADC offset.
         Preferences prefs = Preferences.instance();
         return 10 * Math.log10(r.noisePower) + prefs.getDbvOffsetDb(prefs.getFftChannel());
+    }
+
+    /** An absolute level, stored in dBFS, rendered in the table's selected unit:
+     *  dBV adds the analysed channel's ADC offset, dBFS is the measured value
+     *  itself, and dB subtracts {@code refDbFs} - the SAME reference the row's
+     *  percentage divides by, so the two columns always agree
+     *  ({@code dB == 20·log10(pct/100)}). */
+    private double levelInDistortionUnit(double dbFs, double refDbFs,
+                                         MagnitudeUnit unit, double dbvOff) {
+        switch (unit) {
+            case DBFS: return dbFs;
+            case DBR:  return dbFs - refDbFs;
+            default:   return dbFs + dbvOff;
+        }
+    }
+
+    /** Label for a distortion-table unit - the plain "dB" for the relative one. */
+    private String distortionUnitLabel(MagnitudeUnit unit) {
+        switch (unit) {
+            case DBFS: return DISTORTION_UNIT_LABELS[1];
+            case DBR:  return DISTORTION_UNIT_LABELS[2];
+            default:   return DISTORTION_UNIT_LABELS[0];
+        }
     }
 
     private double thdNPct(FftResult r) {
@@ -3045,13 +3153,17 @@ public final class FftView extends AbstractFreqDomainView {
             if (tableModeIsImd) {
                 // Rows = F1/F2 + span + optional Δf1/Δf2 + 2 metric rows +
                 // (MAX_ORDER−1) dnL/dnH rows.  Width is set by a dnL/dnH row:
-                // its right-column value is drawn 38·charW from the left
-                // (dKey 5 + dVal 26 + colGap 2 + dKey 5, per drawImdTable), so
-                // MEASURE the worst-case value - the mono "M" cell under-counts
-                // digit width and the trailing % would otherwise clip.
+                // its right-column value is drawn (dKey 5 + dVal + colGap 2 +
+                // dKey 5) from the left, and dVal follows the unit label's width
+                // per drawImdTable, so MEASURE the worst-case value - the mono
+                // "M" cell under-counts digit width and the trailing % would
+                // otherwise clip.
                 int charW = gc.textExtent("M").x;
-                String worstVal = String.format("%8.2f dBV %.8f %%", -9999.99, 99.99999999);
-                int contentW = EXT_LEFT_PAD + 38 * charW + gc.textExtent(worstVal).x + 34;
+                String unitLabel = distortionUnitLabel(prefs.getFftDistortionUnit());
+                String worstVal = String.format("%8.2f %s %.8f %%", -9999.99,
+                        unitLabel, 99.99999999);
+                int contentW = EXT_LEFT_PAD + (35 + unitLabel.length()) * charW
+                        + gc.textExtent(worstVal).x + 34;
                 boolean clk = isGeneratorActive()
                         && prefs.isFftFundFromGenerator();
                 int rows = 2 + 1 + (clk ? 2 : 0) + 2 + (ImdResult.MAX_ORDER - 1);
@@ -3065,9 +3177,10 @@ public final class FftView extends AbstractFreqDomainView {
             // under-counted on systems where the mono "M" cell is a
             // pixel narrower than the actual digit / percent glyphs;
             // measuring the entire row text removes that gap.
+            String unitLabel = distortionUnitLabel(prefs.getFftDistortionUnit());
             String widestRow = String.format(
-                    "H10: %+8.2f dBV %.8f %%  H11: %+8.2f dBV %.8f %%",
-                    -9999.99, 99.99999999, -9999.99, 99.99999999);
+                    "H10: %+8.2f %s %.8f %%  H11: %+8.2f %s %.8f %%",
+                    -9999.99, unitLabel, 99.99999999, -9999.99, unitLabel, 99.99999999);
             int rowW = gc.textExtent(widestRow).x;
             int contentW = EXT_LEFT_PAD + rowW + 32;
             // Rows (no top button row in the external window):

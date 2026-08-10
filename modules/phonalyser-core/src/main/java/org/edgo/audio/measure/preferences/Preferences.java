@@ -542,6 +542,11 @@ public final class Preferences {
     private final Property<Channel> fftChannel = bound(Channel.L);
     /** {@code MagnitudeUnit} enum name: {@code V}, {@code V_SQRT_HZ}, {@code DBV}, {@code DBFS}. */
     private final Property<MagnitudeUnit> fftMagUnit = bound(MagnitudeUnit.DBV);
+    /** Unit the distortion table's absolute-level cells render in - independent of the
+     *  magnitude axis above: {@code DBV} (level + ADC offset), {@code DBFS} (the measured
+     *  level as stored) or {@code DBR} (level minus the reference the table's percentages
+     *  are computed against, shown as plain "dB"). */
+    private final Property<MagnitudeUnit> fftDistortionUnit = bound(MagnitudeUnit.DBV);
     /** Whether the THD overlay table is shown on top of the spectrum view. */
     private final Property<Boolean> fftDistortionTableVisible = bound(true);
     private final Property<Double>  fftFreqMinHz         = bound(20.0);
@@ -1506,6 +1511,10 @@ public final class Preferences {
     public MagnitudeUnit getFftMagUnit()    { return fftMagUnit.get(); }
     public void setFftMagUnit(MagnitudeUnit v) { fftMagUnit.set(v); }
     public Property<MagnitudeUnit> fftMagUnitProperty() { return fftMagUnit; }
+
+    public MagnitudeUnit getFftDistortionUnit() { return fftDistortionUnit.get(); }
+    public void setFftDistortionUnit(MagnitudeUnit v) { fftDistortionUnit.set(v); }
+    public Property<MagnitudeUnit> fftDistortionUnitProperty() { return fftDistortionUnit; }
 
     public boolean isFftDistortionTableVisible() { return fftDistortionTableVisible.get(); }
     public void setFftDistortionTableVisible(boolean v) { fftDistortionTableVisible.set(v); }
@@ -2479,6 +2488,7 @@ public final class Preferences {
         root.put("fftManualFundEnabled",      fftManualFundEnabled.get());
         root.put("fftChannel",                fftChannel.get().name());
         root.put("fftMagUnit",                fftMagUnit.get().name());
+        root.put("fftDistortionUnit",         fftDistortionUnit.get().name());
         root.put("fftDistortionTableVisible", fftDistortionTableVisible.get());
         root.put("fftFreqMinHz",              fftFreqMinHz.get());
         root.put("fftFreqMaxHz",              fftFreqMaxHz.get());
@@ -2868,6 +2878,7 @@ public final class Preferences {
         if (root.get("fftManualFundEnabled")      instanceof Boolean b) fftManualFundEnabled.set(b);
         if (root.get("fftChannel")                instanceof String  s) fftChannel.set(enumOr(Channel.class, s, fftChannel.get()));
         if (root.get("fftMagUnit")                instanceof String  s) fftMagUnit.set(enumOr(MagnitudeUnit.class, s, fftMagUnit.get()));
+        if (root.get("fftDistortionUnit")         instanceof String  s) fftDistortionUnit.set(enumOr(MagnitudeUnit.class, s, fftDistortionUnit.get()));
         if (root.get("fftDistortionTableVisible") instanceof Boolean b) fftDistortionTableVisible.set(b);
         if (root.get("fftFreqMinHz")              instanceof Number  n) fftFreqMinHz.set(n.doubleValue());
         if (root.get("fftFreqMaxHz")              instanceof Number  n) fftFreqMaxHz.set(n.doubleValue());
