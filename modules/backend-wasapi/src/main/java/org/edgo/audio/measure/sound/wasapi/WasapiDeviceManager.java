@@ -33,6 +33,8 @@ import static org.edgo.audio.measure.sound.wasapi.WasapiNative.IID_IMMDeviceEnum
 import static org.edgo.audio.measure.sound.wasapi.WasapiNative.PKEY_Device_FriendlyName_FMTID;
 import static org.edgo.audio.measure.sound.wasapi.WasapiNative.PKEY_Device_FriendlyName_PID;
 import static org.edgo.audio.measure.sound.wasapi.WasapiNative.S_OK;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.CONTAINER_BITS_32;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VALID_BITS_24;
 import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VT_AC_IS_FORMAT_SUPPORTED;
 import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VT_COLLECTION_GET_COUNT;
 import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VT_COLLECTION_ITEM;
@@ -290,10 +292,18 @@ public class WasapiDeviceManager implements AudioDeviceManager {
         try {
             for (int rate : rates) {
                 for (int bits : depths) {
+                    // The reported depth is the VALID bits - the exact
+                    // capability.  24 is genuinely 24 whether the device takes
+                    // it 3-byte packed or only inside a 32-bit container (the
+                    // open resolves that transport detail); 32 means 32 valid
+                    // bits, never a folded 24-in-32.
                     // A mono-only capture device won't pass the stereo probe;
                     // WasapiRecorder captures it mono and upmixes, so accept it.
-                    if (isExclusiveFormatSupported(dev, rate, bits, 2)
-                            || isExclusiveFormatSupported(dev, rate, bits, 1)) {
+                    if (isExclusiveFormatSupported(dev, rate, bits, bits, 2)
+                            || isExclusiveFormatSupported(dev, rate, bits, bits, 1)
+                            || (bits == VALID_BITS_24
+                                && (isExclusiveFormatSupported(dev, rate, CONTAINER_BITS_32, VALID_BITS_24, 2)
+                                    || isExclusiveFormatSupported(dev, rate, CONTAINER_BITS_32, VALID_BITS_24, 1)))) {
                         result.add(new AudioFormat(
                                 AudioFormat.Encoding.PCM_SIGNED,
                                 rate, bits, 2, (bits / 8) * 2, rate, false));
@@ -306,14 +316,15 @@ public class WasapiDeviceManager implements AudioDeviceManager {
         return result;
     }
 
-    private boolean isExclusiveFormatSupported(Pointer dev, int rate, int bits, int channels) {
+    private boolean isExclusiveFormatSupported(Pointer dev, int rate, int storeBits,
+                                               int validBits, int channels) {
         PointerByReference ppClient = new PointerByReference();
         int hr = callHR(dev, VT_DEVICE_ACTIVATE,
                 IID_IAudioClient, CLSCTX_ALL, null, ppClient);
         if (hr != S_OK || ppClient.getValue() == null) return false;
         Pointer client = ppClient.getValue();
         try {
-            Memory wfx = buildWaveFormatExtensible(rate, bits, channels);
+            Memory wfx = buildWaveFormatExtensible(rate, storeBits, validBits, channels);
             PointerByReference closest = new PointerByReference();
             int rc = callHR(client, VT_AC_IS_FORMAT_SUPPORTED,
                     AUDCLNT_SHAREMODE_EXCLUSIVE, wfx, closest);

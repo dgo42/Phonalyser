@@ -80,6 +80,13 @@ public class WasapiRecorder extends AbstractPcmCapture {
      *  packet instead of offering it back to {@link #bufferPool} (which
      *  would make the capture thread a second producer on that ring). */
     private byte[] captureSpare;
+    /** The DEVICE sample width - equal to the lane's sample bytes except when
+     *  the exclusive open resolved a wider container (24 valid bits carried
+     *  in 32-bit words); the decode lane stays at the exact selected depth
+     *  and the capture loop narrows per sample on the way in. */
+    private int containerSampleBytes;
+    /** Reusable narrowing stage for the container != lane case. */
+    private byte[] containerScratch;
     /** Frames dropped on a full queue since the last consumer-side log. */
     private final AtomicLong droppedFramesSinceLog  = new AtomicLong();
     /** WASAPI packet-flag counters since the last consumer-side log. */
@@ -222,7 +229,15 @@ public class WasapiRecorder extends AbstractPcmCapture {
      * leaves the client unusable, so it is re-activated before returning.
      */
     private Boolean tryInitializeExclusive(int channels, long initialBufDuration) {
-        Memory wfx = buildWaveFormatExtensible(sampleRate, bitDepth, channels);
+        // The selected bit depth IS the valid bits - the exact capability;
+        // the device picks the container it wants them in (a 24-bit converter
+        // behind a 32-bit transport refuses 3-byte packed 24).  The decode
+        // lane stays at the exact depth; the capture loop narrows per sample
+        // on the way in.
+        int containerBits = WasapiNative.resolveExclusiveContainerBits(
+                audioClient, sampleRate, bitDepth, channels);
+        containerSampleBytes = containerBits / 8;
+        Memory wfx = buildWaveFormatExtensible(sampleRate, containerBits, bitDepth, channels);
         long bufDuration = initialBufDuration;
         for (int attempt = 0; attempt < 2; attempt++) {
             int hr = callHR(audioClient, VT_AC_INITIALIZE,
@@ -263,6 +278,7 @@ public class WasapiRecorder extends AbstractPcmCapture {
     }
 
     private void initializeShared() {
+        containerSampleBytes = sampleBytes;   // shared mode: engine converts
         // Shared mode always requests stereo; the Windows audio engine remixes
         // a mono device up to it, so no mono fallback is needed here.
         Memory wfx = buildWaveFormatExtensible(sampleRate, bitDepth, 2);
@@ -417,9 +433,25 @@ public class WasapiRecorder extends AbstractPcmCapture {
                     silentPacketsSinceLog.incrementAndGet();
                     silentFramesSinceLog.addAndGet(frames);
                     Arrays.fill(buf, 0, bytes, (byte) 0);
-                } else {
+                } else if (containerSampleBytes == sampleBytes) {
                     Pointer data = ppData.getValue();
                     if (data != null) data.read(0, buf, 0, bytes);
+                } else {
+                    // 32-bit little-endian container words carrying 24 valid
+                    // bits on top: keep the three significant bytes per
+                    // sample, drop the padding byte below them.
+                    Pointer data = ppData.getValue();
+                    int samples = frames * captureChannels;
+                    int deviceBytes = samples * containerSampleBytes;
+                    if (containerScratch == null || containerScratch.length < deviceBytes) {
+                        containerScratch = new byte[deviceBytes];
+                    }
+                    if (data != null) data.read(0, containerScratch, 0, deviceBytes);
+                    for (int i = 0; i < samples; i++) {
+                        buf[3 * i]     = containerScratch[4 * i + 1];
+                        buf[3 * i + 1] = containerScratch[4 * i + 2];
+                        buf[3 * i + 2] = containerScratch[4 * i + 3];
+                    }
                 }
                 if ((flagValue & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0) {
                     discontinuitiesSinceLog.incrementAndGet();
