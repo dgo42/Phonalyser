@@ -43,6 +43,12 @@ const CALIBRATE_MIN_VPP_FRACTION = 0.25;
  *  -60 dBFS p-p (Java ScopePane.CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED). */
 const CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED = 0.001;
 
+/** The absolute alternative to the fraction gate, as the Vpp of a 0.5 Vrms sine: on a wide
+ *  range (a Cosmos in its 10 V position) a healthy absolute level carries calibration-grade
+ *  SNR long before it fills a quarter of the range.  Calibrated selections only - an
+ *  uncalibrated selection's volts are provisional (Java ScopePane.CALIBRATE_MIN_VPP_ABSOLUTE). */
+const CALIBRATE_MIN_VPP_ABSOLUTE = 0.5 * 2 * Math.SQRT2;
+
 export class ScopeTabControl {
   /**
    * @param engine the AudioEngine (record state via host; ADC-cal reads the live scope view).
@@ -385,10 +391,14 @@ export class ScopeTabControl {
   syncCalibrateEnabled() {
     const m = this.view.latest;
     const fsPp = this.prefs.adcFsVoltageRms.get() * Math.SQRT2 * 2;
-    const minFraction = this._inputUncalibrated()
+    const uncalibrated = this._inputUncalibrated();
+    const minFraction = uncalibrated
       ? CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED : CALIBRATE_MIN_VPP_FRACTION;
+    // A calibrated selection also opens at 0.5 Vrms regardless of range
+    // occupancy - the wide-range case in the constant's comment.
     const ok = this.host.recState() && m && m.vpp > 0 && fsPp > 0
-      && m.vpp >= minFraction * fsPp;
+      && (m.vpp >= minFraction * fsPp
+          || (!uncalibrated && m.vpp >= CALIBRATE_MIN_VPP_ABSOLUTE));
     $('#scopeCalibrate').prop('disabled', !ok);
   }
 

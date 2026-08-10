@@ -90,6 +90,16 @@ public final class ScopePane extends AbstractPane {
     private static final double CALIBRATE_MIN_VPP_FRACTION = 0.25;
 
     /**
+     * The absolute alternative to the fraction gate, as the Vpp of a 0.5 Vrms
+     * sine: on a wide range (a Cosmos in its 10 V position) a healthy
+     * absolute level carries calibration-grade SNR long before it fills a
+     * quarter of the range, so demanding 25 % there would refuse perfectly
+     * usable signals.  Calibrated selections only - an uncalibrated
+     * selection's volts are provisional, so an absolute test means nothing.
+     */
+    private static final double CALIBRATE_MIN_VPP_ABSOLUTE = 0.5 * 2.0 * Math.sqrt(2.0);
+
+    /**
      * The floor under the calibrate button for an UNCALIBRATED selection: enough to
      * tell a signal from silence, and nothing more.
      *
@@ -1041,10 +1051,15 @@ public final class ScopePane extends AbstractPane {
             // correction (newFs = currentFs x known / measured) reaches the same
             // answer from any seed, so a small reading costs accuracy, not
             // correctness.  A calibrated selection keeps the accuracy gate whole.
-            double minFraction = new CalibrationStore(prefs).isUncalibrated(true)
+            boolean uncalibrated = new CalibrationStore(prefs).isUncalibrated(true);
+            double minFraction = uncalibrated
                     ? CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED
                     : CALIBRATE_MIN_VPP_FRACTION;
-            enable = !Double.isNaN(vpp) && fsVpp > 0.0 && (vpp / fsVpp) >= minFraction;
+            boolean fractionOk = (vpp / fsVpp) >= minFraction;
+            // A calibrated selection also opens at 0.5 Vrms regardless of
+            // range occupancy - the wide-range case above.
+            boolean absoluteOk = !uncalibrated && vpp >= CALIBRATE_MIN_VPP_ABSOLUTE;
+            enable = !Double.isNaN(vpp) && fsVpp > 0.0 && (fractionOk || absoluteOk);
         }
         tabControl.setCalibrateEnabled(enable);
     }
