@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  device-scanner - a reactor module carrying a STANDALONE field-diagnostic
+  tool.  It versions with the project (version inherited from the parent), and
+  its only artifact is the self-contained fat jar below: not part of the
+  application or the server, and nothing depends on it.  The jar IS attached to
+  a release - one build serves every OS, since all platforms' natives ride
+  inside it - so a user can download just the scanner to file a bug report.
+
+  It enumerates every audio backend present on the machine (WASAPI, WDM-KS,
+  JavaSound incl. the csjsound WASAPI-exclusive mixers, CoreAudio, and the
+  software loopback, which is always present) through the
+  UNCHANGED backend modules, cache-free (fresh managers, no AudioBackend
+  singleton), and writes the devices with their sample rates and bit depths to
+  a human-readable text file - the file a user attaches to a bug report.
+
+  Build - the normal reactor build covers it; on its own:
+      mvn -B -DskipTests package -pl modules/device-scanner -am
+  Run:
+      java -jar target/device-scanner-<version>.jar
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.2.1</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>device-scanner</artifactId>
+    <name>Phonalyser device scanner</name>
+    <description>Standalone diagnostic: lists every audio device with its supported sample rates and bit depths, cache-free</description>
+
+    <properties>
+        <!-- Not an inherited property: the modules that stage repo-root assets
+             each declare it themselves.  This module sits at modules/<name>, so
+             the build root - which carries the native libs - is two levels up. -->
+        <repo.root>${project.basedir}/../..</repo.root>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-wasapi</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-wdm-ks</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-javasound</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-coreaudio</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-loopback</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>device-scanner-${project.version}</finalName>
+        <plugins>
+            <!-- The csjsound MixerProvider is discovered through the JavaSound
+                 SPI, nothing compiles against it, so the assembly cannot pull
+                 it in as a dependency - unpack its classes (and its
+                 META-INF/services registration) into this module's output
+                 before the jar is built.  Absent on non-Windows checkouts:
+                 never fail for it. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <executions>
+                    <!-- ALL natives ride inside the one fat jar.  The Windows
+                         DLLs (portaudio, csjsound) already live as win32-*
+                         classpath resources of phonalyser-core and
+                         backend-javasound; the macOS PortAudio dylibs exist
+                         only under lib/macos-*, so they are staged here under
+                         JNA's darwin-* resource prefixes - Native.load then
+                         extracts the right one for the running OS/arch by
+                         itself. -->
+                    <execution>
+                        <id>bundle-macos-natives</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <copy file="${repo.root}/lib/macos-arm64/libportaudio.dylib"
+                                      todir="${project.build.outputDirectory}/darwin-aarch64"
+                                      failonerror="false"/>
+                                <copy file="${repo.root}/lib/macos-x64/libportaudio.dylib"
+                                      todir="${project.build.outputDirectory}/darwin-x86-64"
+                                      failonerror="false"/>
+                            </target>
+                            <failOnError>false</failOnError>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>unpack-csjsound-provider</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <unzip src="${repo.root}/lib/windows/csjsound-provider.jar"
+                                       dest="${project.build.outputDirectory}"
+                                       failOnEmptyArchive="false">
+                                    <patternset>
+                                        <exclude name="META-INF/MANIFEST.MF"/>
+                                        <exclude name="META-INF/maven/**"/>
+                                    </patternset>
+                                </unzip>
+                            </target>
+                            <failOnError>false</failOnError>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>fat-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                        <configuration>
+                            <archive>
+                                <manifest>
+                                    <mainClass>org.edgo.audio.measure.scanner.DeviceScanner</mainClass>
+                                </manifest>
+                            </archive>
+                            <descriptors>
+                                <descriptor>src/main/assembly/fat-jar.xml</descriptor>
+                            </descriptors>
+                            <finalName>device-scanner-${project.version}</finalName>
+                            <appendAssemblyId>false</appendAssemblyId>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- The parent binds jpackage for application modules; a diagnostic
+                 jar has no installer. -->
+            <plugin>
+                <groupId>org.panteleyev</groupId>
+                <artifactId>jpackage-maven-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -155,6 +155,10 @@ jobs:
             modules/phonalyser-app/target/installer/*.msix
             modules/phonalyser-app/target/phonalyser-*-windows.jar
             modules/phonalyser-app/target/phonalyser-*-windows-x86.jar
+            # The device scanner rides with the Windows artifact although it is
+            # not a Windows build: its fat jar carries every platform's natives,
+            # so the one jar runs on any supported OS and is uploaded once.
+            modules/device-scanner/target/device-scanner-*.jar
 
       # A separate artifact from the desktop one: the server bundles have their
       # own audience and their own download rows, and keeping them apart leaves
