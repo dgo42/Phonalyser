@@ -363,9 +363,23 @@ public final class FreqRespPane extends AbstractPane {
         Button cancel = new Button(s, SWT.PUSH);
         cancel.setText(I18n.t("common.cancel"));
         cancel.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, true, false));
-        cancel.addListener(SWT.Selection, e -> {
+        Runnable requestCancel = () -> {
+            if (!cancel.isEnabled()) return;
             cancel.setEnabled(false);   // one shot; the teardown takes a moment
             controller.cancelMeasurement();
+        };
+        cancel.addListener(SWT.Selection, e -> requestCancel.run());
+        // ESC and the window-manager close arrive as SWT.Close.  Letting the
+        // shell vanish would leave the sweep playing behind a locked, inert
+        // pane - so a user close IS the cancel: vetoed here, and the normal
+        // STOPPED path closes the shell exactly like a completed run.  Once a
+        // cancel is already pending, a second close is let through as an
+        // escape hatch in case the teardown hangs.
+        s.addListener(SWT.Close, e -> {
+            if (cancel.isEnabled()) {
+                e.doit = false;
+                requestCancel.run();
+            }
         });
 
         s.pack();
@@ -382,7 +396,9 @@ public final class FreqRespPane extends AbstractPane {
     }
 
     private void closeBusyShell() {
-        if (busyShell != null && !busyShell.isDisposed()) busyShell.close();
+        // dispose(), not close(): close() raises SWT.Close, which is the
+        // user-close channel that turns into a cancel request above.
+        if (busyShell != null && !busyShell.isDisposed()) busyShell.dispose();
         busyShell = null;
         busyMeter = null;
     }
