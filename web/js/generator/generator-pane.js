@@ -443,7 +443,15 @@ export class GeneratorPane {
       prefs.genTriangleDuty, prefs.genDualToneSplitPct, prefs.genSweepFreqStartHz, prefs.genSweepFreqEndHz,
       prefs.genSweepDurationSec, prefs.genSweepFadeInSec, prefs.genSweepFadeOutSec, prefs.genSweepLoop,
       prefs.genDitherBits, prefs.genOutputChannels, prefs.dacFsVoltageAmpl, prefs.dacFsVoltageAmplRight]) {
-      pref.addListener(() => MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT));
+      pref.addListener(() => {
+        // Published only while the lane is ON AIR: the event's contract is "the EMITTED
+        // signal changed", and with the generator off the output is silence before and
+        // after any edit - the FFT/scope statistics keep accumulating. The start itself
+        // publishes the silence->tone transition, so edits made while off land then.
+        if (this.engine.generatorOn) {
+          MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
+        }
+      });
     }
 
     // A DAC recalibration shifts the dBV mapping. reanchor() HOLDS the entered value: in the dBV

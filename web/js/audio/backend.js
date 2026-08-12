@@ -169,7 +169,8 @@ export class AudioEngine {
     this._scope = new ScopeController(this._capture, this.config);
     // FFT consumer (gui/fft/FftController): the worker pool + cross-frame coherent accumulator +
     // FLL steer + stop-after-N + the render-time .frc/mains de-embed. Reads/steers the generator.
-    this._fft = new FftController(this._capture, this._gen, this.config, { status: (t) => this._status(t) });
+    this._fft = new FftController(this._capture, this._gen, this.config,
+      { status: (t) => this._status(t), prefs: this._prefs });
 
     this.onStatus = null;   // (text) => void  (onResult / onFftAutoStopped delegate to this._fft)
 
@@ -608,6 +609,10 @@ export class AudioEngine {
   get outSampleRate() { return this._gen.outSampleRate; }
   get genNode() { return this._gen.genNode; }
   get _genOn() { return this._gen.running; }
+
+  /** True while the generator lane is on air - the publish gate for signal-change
+   *  events: an edit with the lane silent changes no emitted signal. */
+  get generatorOn() { return this._gen.running; }
   // FLL state (genFreq/fllErrHz/fllLocked/fllStable/rejectedCount) now lives on FftController;
   // the FFT loop publishes GENERATOR_FREQ_TRIM and the generator applies it. Not exposed here -
   // the display reads it off the emitted FftResult.fll.

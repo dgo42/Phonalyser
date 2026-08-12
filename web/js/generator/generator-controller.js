@@ -18,7 +18,7 @@
  */
 import { GenSignalForm, isDualTone, isPeriodic } from './dds-kernel.js';
 import { MessageBus } from '../bus/message-bus.js';
-import { Events } from '../bus/events.js';
+import { Events, GenChangeCause } from '../bus/events.js';
 import { openOutputContext, WebAudioPlaybackSink } from './web-audio-playback-sink.js';
 import { FileTooLargeError } from '../net/net-playback-sink.js';
 import { DeviceFailureReason, failureDetailText } from '../audio/device-failure-reason.js';
@@ -526,6 +526,10 @@ export class GeneratorController {
       });
       this._genOn = true;
       this._status(`generator running - out ${this.outSampleRate} Hz, tone ${this.snapped.toFixed(3)} Hz`);
+      // The emitted signal just changed from silence to the tone (Java GeneratorController.start):
+      // the FFT averaging restart hangs off this event, so a stale accumulator never blends
+      // pre-start spectra into the running tone's statistics.
+      MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
       return null;
     } catch (e) {
       // The SINK that owns the error says what it meant; this controller only turns the answer
@@ -552,6 +556,9 @@ export class GeneratorController {
     // unplugged device must never block the stop, and the lane is dropped either way.
     try { if (sink) await sink.close(); } catch (_) {}
     this._sink = null;
+    // Silence replaced the tone (Java GeneratorController.stop publishes on the same
+    // transition): the FFT accumulator resets rather than averaging tone and silence together.
+    MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
   }
 
   /** Live retune of generator parameters that don't change structure (no restart):
