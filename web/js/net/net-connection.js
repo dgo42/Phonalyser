@@ -7,11 +7,18 @@
  * request/response correlation of spec 4.0, the keepalive of spec 4.1 and the binary-frame
  * demux of spec 5.
  *
- * WHAT IT OWNS. The socket, the id space, the requests still waiting for their `resp`, the
- * keepalive counters and the routing table from streamId to the capture that asked for it.
- * What the messages MEAN is not here: the device catalogue belongs to net-device-manager.js
- * and a stream's own vocabulary to net-capture-source.js, so this type never has to grow a
- * case for a message a later phase adds.
+ * WHAT IT OWNS. Every SOCKET of the session, the id space, the requests still waiting for
+ * their `resp`, the keepalive counters and the routing table from streamId to the capture that
+ * asked for it. What the messages MEAN is not here: the device catalogue belongs to
+ * net-device-manager.js and a stream's own vocabulary to net-capture-source.js, so this type
+ * never has to grow a case for a message a later phase adds.
+ *
+ * TWO PLANES, ONE URL (spec 4). The control connection is dialled by open() and declares itself
+ * with `hello`; every open capture adds a data connection of its own, dialled by attachData()
+ * and declared with `capture.attach`. The frames arrive on those and are demuxed by streamId
+ * exactly as they were when one socket carried everything - which is the point of leaving the
+ * spec-5 header alone. What changed is that a ping answer no longer queues behind a megabyte
+ * of PCM, so the keepalive of spec 4.1 measures liveness again instead of measuring intake.
  *
  * KEEPALIVE. The client pings every 500 ms and counts the unanswered ones; four in a row (2 s
  * of silence) and the connection is dead - spec 4.1's rule, run against the SERVER by the same
@@ -48,6 +55,11 @@ const FRAME_DRAIN_BUDGET_MS = 8;
  *  said once per slice rather than silently absorbed, because it is the client-side half of the
  *  server's own "the client is not keeping up". */
 const FRAME_BACKLOG_WARN = 200;
+
+/** The WebSocket close code of an ORDERLY close (RFC 6455 "normal closure"), which is what the
+ *  server closes a finished capture's data connection with (spec 4.7). Anything else on an
+ *  attached data connection is spec 4.1's drop. */
+const WS_NORMAL_CLOSURE = 1000;
 
 /**
  * Runs a callback on the NEXT turn of the event loop - the yield between two drain slices.
@@ -140,6 +152,15 @@ export class NetConnection {
     /** id -> ping sequence number, for the pings still unanswered (see onText). */
     this._pingSequences = new Map();
     this._closed = false;
+    /** The data connections of spec 4.7, one per open capture - held so the end of the session
+     *  can close them all, and so none outlives the socket that carries the requests that
+     *  opened them. */
+    this._dataConnections = [];
+    /** This session's own handle, answered by `hello` (spec 4.1), and the ticket every data
+     *  connection attaches with (spec 4.7). A SECRET: never logged and never shown, because
+     *  anyone holding it could attach to this session's captures - which is why it is not a
+     *  public field like serverId is, and why the only thing that spends it is attachData(). */
+    this._clientId = null;
     /** The negotiated session version (spec 1); 0 until `hello` succeeded. */
     this.proto = 0;
     /** The server's installation UUID (spec 2.1) - what a remembered-server list keys on,
@@ -205,6 +226,7 @@ export class NetConnection {
     this.proto = chosen;
     this.serverId = textOf(data, NetFields.SERVER_ID);
     this.serverName = textOf(data, NetFields.NAME);
+    this._clientId = textOf(data, NetFields.CLIENT_ID);
     this.caps = Array.isArray(data[NetFields.CAPS]) ? data[NetFields.CAPS].map(String) : [];
     this._ticker.start(NetProto.PING_INTERVAL_MS, () => this._keepaliveTick());
     console.info(`net client: connected to '${this.serverName}' (${this.serverId}) at `
@@ -293,6 +315,9 @@ export class NetConnection {
       this._sendRaw({ t: MessageType.BYE, id: ++this._lastRequestId });
     }
     try { if (this._socket) this._socket.close(); } catch (_) { /* already gone */ }
+    // Every socket of the session goes with it (spec 4.1), marked as this end's so a close that
+    // is merely the tail of THIS teardown cannot report the session as dying a second time.
+    for (const data of this._dataConnections.splice(0)) data.close();
     const ended = new Error(`the connection to ${this._url} ended: ${reason.detail}`);
     for (const [id, entry] of [...this._pending]) {
       this._pending.delete(id);
@@ -308,6 +333,104 @@ export class NetConnection {
       try { listener(reason); } catch (e) { console.error('net client: close listener failed (continuing)', e); }
     }
     console.info(`net client: session with ${this._url} ended - ${reason.detail}`);
+  }
+
+  /**
+   * Spec 4.7: dials this capture's DATA connection and attaches it.
+   *
+   * Called between `capture.open` - which is where the captureId comes from - and
+   * `capture.start`, which the server refuses NOT_ATTACHED until this has returned. The socket
+   * goes to the SAME url as the control connection: spec 4 gives the two planes one address on
+   * purpose, so there is no second setting that could drift out of step with the one the
+   * operator typed (and no second mixed-content rule to explain).
+   *
+   * A refusal or a dial that fails closes whatever came up and throws, so the caller can report
+   * it as what it is - a capture that could not be opened, not a socket that could not be
+   * dialled.
+   *
+   * @param {number} captureId
+   * @returns {Promise<NetDataConnection>}
+   */
+  async attachData(captureId) {
+    const handle = this._clientId;
+    if (handle == null) {
+      throw new Error('this session has no clientId - the server\'s hello did not carry one, '
+        + 'so no capture can be attached (spec 4.1)');
+    }
+    const socket = await this._dialData(captureId);
+    const data = new NetDataConnection(this, socket, captureId);
+    socket.onmessage = (ev) => {
+      if (typeof ev.data !== 'string') { this.onBinary(ev.data); return; }
+      data._text(ev.data);
+    };
+    socket.onclose = (ev) => data._closed(ev);
+    socket.onerror = () => data._faulted();
+    let answer;
+    try {
+      answer = await this._requestOn(socket, {
+        t: MessageType.CAPTURE_ATTACH,
+        id: ++this._lastRequestId,
+        [NetFields.CLIENT_ID]: handle,
+        [NetFields.CAPTURE_ID]: captureId,
+      }, REQUEST_TIMEOUT_MS);
+    } catch (e) {
+      data.close();
+      throw e;
+    }
+    if (answer.ok === false) {
+      // The server answers the refusal and then closes the socket itself (spec 4.7); closing it
+      // here too is idempotent and is what marks the close as expected, so it cannot read as a
+      // drop.
+      data.close();
+      throw this.refusal(`cannot attach the data connection of capture ${captureId}`, answer);
+    }
+    // The attach is answered, so this socket has said everything it will ever say (spec 4.7).
+    // From here any text on it is a protocol error.
+    data._attached();
+    this._dataConnections.push(data);
+    return data;
+  }
+
+  /** A data connection has ended and is no longer the session's to close - called by the
+   *  connection itself, so the list stays this type's own state (Java: dataConnections). */
+  _forgetData(data) {
+    const at = this._dataConnections.indexOf(data);
+    if (at >= 0) this._dataConnections.splice(at, 1);
+  }
+
+  /** The data socket, up - or an error saying the capture could not be opened. Its own dial and
+   *  not the control one's: a control socket that closes before it opens means "no Phonalyser
+   *  server answered", and this one means a session that IS answering could not take a second
+   *  connection. */
+  _dialData(captureId) {
+    return new Promise((resolve, reject) => {
+      let socket;
+      try {
+        socket = this._socketFactory(this._url);
+      } catch (e) {
+        reject(new Error(`cannot dial a data connection for capture ${captureId}: ${e.message}`));
+        return;
+      }
+      socket.binaryType = 'arraybuffer';
+      let settled = false;
+      const fail = (why) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        try { socket.close(); } catch (_) { /* already gone */ }
+        reject(new Error(why));
+      };
+      const timer = setTimeout(
+        () => fail(`the data connection for capture ${captureId} did not open within `
+          + `${REQUEST_TIMEOUT_MS} ms`), REQUEST_TIMEOUT_MS);
+      if (timer && typeof timer.unref === 'function') timer.unref();
+      socket.onopen = () => {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        resolve(socket);
+      };
+      socket.onclose = () => fail(`the data connection for capture ${captureId} was refused`);
+      socket.onerror = () => fail(`cannot reach ${this._url} for capture ${captureId}`);
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -331,7 +454,14 @@ export class NetConnection {
   uiRequest(message) { return this._request(message, UI_REQUEST_TIMEOUT_MS); }
 
   _request(message, timeoutMs) {
-    const answer = this.send(message);
+    return this._requestOn(this._socket, message, timeoutMs);
+  }
+
+  /** The same wait, on a named socket: a `capture.attach` is answered on the DATA connection it
+   *  arrived on (spec 4.0, 4.7), not on the control one, so the write has to be aimed even
+   *  though the correlation is the session's own pending table either way. */
+  _requestOn(socket, message, timeoutMs) {
+    const answer = this._sendOn(socket, message);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this._pending.delete(message.id);   // nobody is waiting for it any more
@@ -350,6 +480,14 @@ export class NetConnection {
    * @param {Object} message @returns {Promise<Object>}
    */
   send(message) {
+    return this._sendOn(this._socket, message);
+  }
+
+  /** The same, on a named socket. The pending table is the SESSION's and not a socket's,
+   *  because the ids are: spec 4.0 makes them a per-connection monotonic integer and this
+   *  client draws every one of them from one counter, so an answer correlates wherever it
+   *  comes back. */
+  _sendOn(socket, message) {
     if (message.id == null) {
       throw new Error(`spec 4.0: a request needs an id to be answered - ${message.t}`);
     }
@@ -362,7 +500,7 @@ export class NetConnection {
         return;
       }
       try {
-        this._socket.send(JSON.stringify(message));
+        socket.send(JSON.stringify(message));
       } catch (e) {
         this._failPending(message.id, `cannot send ${message.t}: ${e.message}`);
       }
@@ -601,6 +739,84 @@ export class NetConnection {
   _failPending(id, reason) {
     const entry = this._pending.get(id);
     if (entry) { this._pending.delete(id); entry.reject(new Error(reason)); }
+  }
+}
+
+/**
+ * One capture's data connection (spec 4.7, Java NetConnection.DataConnection): a second socket
+ * to the same url, carrying that capture's binary frames and nothing else once its
+ * `capture.attach` has been answered.
+ *
+ * DROP OR ORDERLY CLOSE. Spec 4.1 kills the whole session when a connection DROPS, and spec 4.7
+ * exempts the close that ends a capture in the ordinary way - so this end has to know which it
+ * is looking at, and the answer is on the wire: an orderly close carries the NORMAL status
+ * code, and only an abnormal one (1006 and its kin - a socket that died without a close frame)
+ * is a drop. That is what makes the decision race-free: the bench closes this socket as it
+ * handles a `capture.close`, and its `resp` travels on the OTHER connection, so the close can
+ * arrive first - a rule that depended on this end having marked the socket in time would end
+ * the session over an ordinary teardown.
+ *
+ * expectClose() is kept as the cheap local answer for the case this end already knows about,
+ * not as the correctness rule. It is deliberately this connection's own flag and NOT
+ * net-capture-source.js's `_closing` - that one is raised by a plain `capture.stop` as well,
+ * and a stop leaves this socket open.
+ */
+export class NetDataConnection {
+
+  constructor(connection, socket, captureId) {
+    this._connection = connection;
+    this._socket = socket;
+    this._captureId = captureId;
+    this._closing = false;
+    /** Whether the attach has been answered. Before it, one text message is expected on this
+     *  socket; after it, none ever again (spec 4.7). */
+    this._attachedYet = false;
+  }
+
+  /** The attach was answered: this socket carries nothing but audio now. */
+  _attached() { this._attachedYet = true; }
+
+  /**
+   * One text message on this socket. Only the answer to its own attach may ever arrive - spec
+   * 4.7's planes do not mix, and an event or a request here is a peer that has lost track of
+   * which socket it is writing to. Acting on it would put control traffic behind whatever audio
+   * this connection is carrying, which is the very thing the split exists to prevent, so it
+   * ends the session exactly as a malformed frame does.
+   */
+  _text(text) {
+    if (!this._attachedYet) { this._connection.onText(text); return; }
+    console.error(`net client: text on the data connection of capture ${this._captureId} - a `
+      + 'data connection carries nothing but audio after its attach');
+    this._connection.close(NetCloseReason.PROTOCOL_ERROR);
+  }
+
+  /** The close is COMING, from the far end, because this client asked for something that ends
+   *  the capture (`capture.close`, `device.release`) or was told the lane failed. An
+   *  optimisation only - the status code decides (see the class comment). */
+  expectClose() { this._closing = true; }
+
+  /** Marks and closes. Idempotent - a bench that already closed this socket leaves nothing to
+   *  do but the mark. */
+  close() {
+    this._closing = true;
+    try { this._socket.close(); } catch (_) { /* already gone */ }
+  }
+
+  /** The socket ended. An abnormal code with nothing of ours behind it is spec 4.1's drop and
+   *  the session is dead; a NORMAL one is the ordinary end of a capture, marked or not. */
+  _closed(event) {
+    this._connection._forgetData(this);
+    if (this._closing || (event && event.code === WS_NORMAL_CLOSURE)) return;
+    console.warn(`net client: the data connection of capture ${this._captureId} dropped `
+      + `(${event ? event.code : 'no code'}) - the session is dead`);
+    this._connection.close(NetCloseReason.TRANSPORT_CLOSED);
+  }
+
+  /** Same rule for a fault: a data connection that faulted is one whose audio has stopped. */
+  _faulted() {
+    if (this._closing) return;
+    console.warn(`net client: transport error on the data connection of capture ${this._captureId}`);
+    this._connection.close(NetCloseReason.TRANSPORT_ERROR);
   }
 }
 

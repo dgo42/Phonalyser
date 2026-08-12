@@ -62,6 +62,14 @@ public enum ErrorCode {
      *  {@code DEVICE_STALE}: nothing moved, and re-listing would not help. */
     BACKEND_MISMATCH,
 
+    /** {@code capture.start} on a capture whose DATA connection has not attached
+     *  yet (spec 4.4, 4.7).  Deliberately its own code rather than
+     *  {@code BAD_REQUEST}: nothing about the request is malformed, the client
+     *  is one step early, and the frames the start would produce would have
+     *  nowhere to go - a stream running into a socket that does not exist is a
+     *  measurement the client waits for and never gets. */
+    NOT_ATTACHED,
+
     /** No uploaded file with that id (never uploaded, or already dropped). */
     NO_SUCH_FILE,
 

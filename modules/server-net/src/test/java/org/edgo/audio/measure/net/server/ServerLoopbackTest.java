@@ -90,6 +90,9 @@ class ServerLoopbackTest {
     private static final String SERVER_NAME = "Bench loopback";
     private static final String CLIENT_NAME = "Developer's laptop";
     private static final String OBSERVER_NAME = "Bench tablet";
+    /** A handle no session was ever given - what an attach from a client that
+     *  never said hello, or whose session has since ended, carries (spec 4.7). */
+    private static final String UNKNOWN_CLIENT_ID = "00000000-0000-4000-8000-000000000000";
     private static final String CLIENT_APP = "Phonalyser desktop test";
     private static final String LOOPBACK = "127.0.0.1";
     private static final String WS_SCHEME = "ws://";
@@ -200,7 +203,7 @@ class ServerLoopbackTest {
     }
 
     @Test
-    void aCaptureSessionRunsOverOneSocketAndTheAudioArrivesByteForByte() throws Exception {
+    void aCaptureSessionRunsOverTwoSocketsAndTheAudioArrivesByteForByte() throws Exception {
         LoopbackClient client = open();
         NetMessage hello = greet(client, CLIENT_NAME);
         assertEquals(config.getServerId(), hello.getData().path(NetFields.SERVER_ID).asText());
@@ -228,6 +231,13 @@ class ServerLoopbackTest {
         assertEquals(FRAME_BYTES, opened.getData().path(NetFields.FRAME_BYTES).asInt());
 
         StubCapture capture = stubBench(bench).getLastCapture();
+        // Spec 4.7: a second socket to the SAME url, declared by capture.attach,
+        // and only then may the stream start.
+        assertTrue(client.request(client.newRequest(MessageType.CAPTURE_START)
+                .put(NetFields.CAPTURE_ID, captureId)).getError().is(ErrorCode.NOT_ATTACHED),
+                "spec 4.4: the start is refused while the frames would have nowhere "
+                        + "to go");
+        LoopbackClient data = attachData(hello, captureId);
         assertTrue(client.request(client.newRequest(MessageType.CAPTURE_START)
                 .put(NetFields.CAPTURE_ID, captureId)).isOk());
         byte[] recorded = new byte[SECOND_BYTES];
@@ -237,7 +247,11 @@ class ServerLoopbackTest {
             capture.feed(batch);
         }
 
-        List<BinaryFrame> frames = client.awaitFrames(BATCHES, AWAIT_MS);
+        List<BinaryFrame> frames = data.awaitFrames(BATCHES, AWAIT_MS);
+        assertTrue(client.frames().isEmpty(),
+                "spec 4.7: the control connection carries no audio at all - which is "
+                        + "what keeps a ping answer from queueing behind a megabyte "
+                        + "of PCM and the session from being declared dead over it");
         byte[] delivered = new byte[SECOND_BYTES];
         for (int i = 0; i < BATCHES; i++) {
             BinaryFrame frame = frames.get(i);
@@ -260,6 +274,10 @@ class ServerLoopbackTest {
         assertTrue(client.request(client.newRequest(MessageType.CAPTURE_CLOSE)
                 .put(NetFields.CAPTURE_ID, captureId)).isOk());
         assertTrue(capture.isClosed(), "spec 4.4: the device line goes back");
+        assertTrue(data.awaitHangUp(AWAIT_MS),
+                "spec 4.7: capture.close ends the capture AND its data connection");
+        assertFalse(client.isHungUp(),
+                "and the control connection outlives every capture on it");
         assertTrue(client.request(bench.input()
                 .into(client.newRequest(MessageType.DEVICE_RELEASE))).isOk());
     }
@@ -321,7 +339,7 @@ class ServerLoopbackTest {
     void aClientThatStopsAnsweringLosesItsDevicesAndEveryOtherClientIsTold()
             throws Exception {
         LoopbackClient dying = open();
-        greet(dying, CLIENT_NAME);
+        NetMessage hello = greet(dying, CLIENT_NAME);
         Bench bench = benchOf(dying);
         assertTrue(acquire(dying, bench.input()).isOk());
         NetMessage opened = dying.request(bench.input()
@@ -330,9 +348,10 @@ class ServerLoopbackTest {
                 .put(NetFields.BITS, BITS));
         assertTrue(opened.isOk());
         StubCapture capture = stubBench(bench).getLastCapture();
+        int captureId = opened.getData().path(NetFields.CAPTURE_ID).asInt();
+        LoopbackClient data = attachData(hello, captureId);
         assertTrue(dying.request(dying.newRequest(MessageType.CAPTURE_START)
-                .put(NetFields.CAPTURE_ID,
-                        opened.getData().path(NetFields.CAPTURE_ID).asInt())).isOk());
+                .put(NetFields.CAPTURE_ID, captureId)).isOk());
         // Taken while this is the only connection, so there is no doubt whose
         // keepalive it is.
         FakeTicker keepalive = theOnlyKeepalive();
@@ -368,8 +387,193 @@ class ServerLoopbackTest {
                 "and it was free only AFTER the line went back - spec 4.1's teardown in "
                         + "its one order (streams, generator, locks, park), which is why "
                         + "the broadcast arriving is proof the close already happened");
+        assertTrue(data.awaitHangUp(AWAIT_MS),
+                "spec 4.1: the session is ONE thing, so the dead client's data "
+                        + "connection is closed with its control one");
         assertTrue(acquire(observer, bench.input()).isOk(),
                 "the device really is available, not merely announced as such");
+    }
+
+    /**
+     * Spec 4.1's death rule against spec 4.7's discriminator, from the server's
+     * side: a data connection that DROPS - the client's process halted, its
+     * socket pulled - kills the whole session, locks and all.
+     *
+     * <p>It has to, and it is the half a single-socket protocol never had to
+     * answer: the control connection is still perfectly healthy here, answering
+     * pings, so nothing else would ever notice that the audio of a running
+     * measurement has stopped reaching anybody.  The devices would stay in the
+     * name of a client that is no longer there.
+     */
+    @Test
+    void aDataConnectionThatDropsKillsTheWholeSession() throws Exception {
+        LoopbackClient client = open();
+        NetMessage hello = greet(client, CLIENT_NAME);
+        Bench bench = benchOf(client);
+        assertTrue(acquire(client, bench.input()).isOk());
+        NetMessage opened = client.request(bench.input()
+                .into(client.newRequest(MessageType.CAPTURE_OPEN))
+                .put(NetFields.RATE, RATE_HZ)
+                .put(NetFields.BITS, BITS));
+        int captureId = opened.getData().path(NetFields.CAPTURE_ID).asInt();
+        LoopbackClient data = attachData(hello, captureId);
+        assertTrue(client.request(client.newRequest(MessageType.CAPTURE_START)
+                .put(NetFields.CAPTURE_ID, captureId)).isOk());
+        StubCapture capture = stubBench(bench).getLastCapture();
+
+        LoopbackClient observer = open();
+        greet(observer, OBSERVER_NAME);
+        assertTrue(acquire(observer, bench.input()).getError().is(ErrorCode.DEVICE_LOCKED));
+        int told = observer.events(MessageType.EV_DEVICES_CHANGED).size();
+
+        data.die();
+
+        assertTrue(client.awaitHangUp(AWAIT_MS),
+                "spec 4.1: one connection dropping is the whole session dead, so the "
+                        + "control connection is hung up too - a healthy keepalive on it "
+                        + "would otherwise hold the bench's devices for a client whose "
+                        + "audio is going nowhere");
+        NetMessage changed = observer.awaitEvent(MessageType.EV_DEVICES_CHANGED, told + 1,
+                AWAIT_MS);
+        assertTrue(lockOf(changed, bench.input()).isNull(),
+                "and the devices come back to everyone else");
+        assertTrue(capture.isClosed(), "spec 4.1: the line goes back before the lock does");
+    }
+
+    /**
+     * Spec 4: a connection is what its FIRST message says it is, so one that
+     * opens with anything else is not a session and is closed.
+     */
+    @Test
+    void aConnectionWhoseFirstMessageIsNeitherHelloNorAttachIsClosed() throws Exception {
+        LoopbackClient stranger = open();
+
+        stranger.send(codec.write(stranger.newRequest(MessageType.DEVICES_LIST)));
+
+        assertTrue(stranger.awaitHangUp(AWAIT_MS),
+                "spec 4: hello (control) or capture.attach (data), and nothing else");
+    }
+
+    /**
+     * Spec 4: a connection that upgrades and then says nothing is closed, and
+     * nothing was ever built for it in the meantime.
+     *
+     * <p>It is the only liveness such a socket can have: a keepalive belongs to
+     * a session, and this is not one - so without this timer a peer that
+     * completed the upgrade and went quiet would sit on the server for ever.
+     */
+    @Test
+    void aConnectionThatNeverDeclaresItsPlaneIsClosedWhenTheTimerFires() throws Exception {
+        LoopbackClient silent = open();
+
+        theOnlyTickerAt(NetProto.PLANE_DECLARATION_TIMEOUT_MS,
+                "an upgraded connection that has not spoken should have exactly one timer")
+                .advance(1);
+
+        assertTrue(silent.awaitHangUp(AWAIT_MS),
+                "spec 4: no hello and no capture.attach within "
+                        + NetProto.PLANE_DECLARATION_TIMEOUT_MS + " ms, so it is not a session");
+    }
+
+    /**
+     * A {@code ping} as a connection's FIRST message is not a session either.
+     *
+     * <p>Spec 4 makes the first message the plane, and a ping declares neither -
+     * so it is closed like any other wrong opening.  There is deliberately no
+     * "answer a ping before hello" path anywhere: the keepalive is a session's
+     * heartbeat, and until {@code hello} there is nothing to keep alive.
+     */
+    @Test
+    void aPingAsAFirstMessageDeclaresNoPlaneAndIsClosed() throws Exception {
+        LoopbackClient stranger = open();
+
+        stranger.send(codec.write(stranger.newRequest(MessageType.PING)));
+
+        assertTrue(stranger.awaitHangUp(AWAIT_MS),
+                "spec 4: hello (control) or capture.attach (data), and nothing else");
+    }
+
+    /**
+     * Spec 4.7's refusals: the socket is answered and THEN closed, so a client
+     * learns why instead of watching a connection vanish.
+     */
+    @Test
+    void anAttachNamingASessionThisServerIsNotServingIsRefusedAndClosed() throws Exception {
+        LoopbackClient stranger = open();
+
+        NetMessage refused = stranger.request(stranger.newRequest(MessageType.CAPTURE_ATTACH)
+                .put(NetFields.CLIENT_ID, UNKNOWN_CLIENT_ID)
+                .put(NetFields.CAPTURE_ID, 1));
+
+        assertTrue(refused.getError().is(ErrorCode.BAD_REQUEST),
+                "the refusal is answered on the socket that asked");
+        assertTrue(stranger.awaitHangUp(AWAIT_MS),
+                "and then the server closes it - a connection that may not attach has "
+                        + "no other purpose");
+    }
+
+    /**
+     * Spec 4.7: a data connection's attach is its ONLY client message, so text
+     * after it is a protocol error - the socket closes and the session with it.
+     *
+     * <p>Ending the session is the point: the client will read that close as the
+     * unexpected end of an attached data connection and stop measuring, so a
+     * server that kept the session alive would hold the bench's devices for a
+     * peer that has already gone quiet.
+     */
+    @Test
+    void textOnAnAttachedDataConnectionEndsTheSession() throws Exception {
+        LoopbackClient client = open();
+        NetMessage hello = greet(client, CLIENT_NAME);
+        Bench bench = benchOf(client);
+        assertTrue(acquire(client, bench.input()).isOk());
+        NetMessage opened = client.request(bench.input()
+                .into(client.newRequest(MessageType.CAPTURE_OPEN))
+                .put(NetFields.RATE, RATE_HZ)
+                .put(NetFields.BITS, BITS));
+        int captureId = opened.getData().path(NetFields.CAPTURE_ID).asInt();
+        LoopbackClient data = attachData(hello, captureId);
+
+        data.send(codec.write(data.newRequest(MessageType.DEVICES_LIST)));
+
+        assertTrue(data.awaitHangUp(AWAIT_MS), "the data connection is closed");
+        assertTrue(client.awaitHangUp(AWAIT_MS),
+                "and the session goes with it rather than sitting on the bench's locks");
+    }
+
+    /**
+     * Spec 4.7: the events of spec 4.3 go out on CONTROL connections only, even
+     * while data connections are attached.
+     *
+     * <p>An event on a capture's data connection would arrive behind whatever
+     * audio that socket is carrying - the very delay the split exists to remove -
+     * and the client ends the session over it.  So the fan-out has to know the
+     * difference, and this asks it with a data connection open and listening.
+     */
+    @Test
+    void theDevicesChangedBroadcastReachesOnlyControlConnections() throws Exception {
+        LoopbackClient client = open();
+        NetMessage hello = greet(client, CLIENT_NAME);
+        Bench bench = benchOf(client);
+        assertTrue(acquire(client, bench.input()).isOk());
+        NetMessage opened = client.request(bench.input()
+                .into(client.newRequest(MessageType.CAPTURE_OPEN))
+                .put(NetFields.RATE, RATE_HZ)
+                .put(NetFields.BITS, BITS));
+        LoopbackClient data = attachData(hello,
+                opened.getData().path(NetFields.CAPTURE_ID).asInt());
+        int told = client.events(MessageType.EV_DEVICES_CHANGED).size();
+
+        // A second client taking a device is a lock change, which spec 4.3
+        // broadcasts to every session.
+        LoopbackClient other = open();
+        greet(other, OBSERVER_NAME);
+        assertTrue(acquire(other, bench.output()).isOk());
+
+        client.awaitEvent(MessageType.EV_DEVICES_CHANGED, told + 1, AWAIT_MS);
+        assertTrue(data.events(MessageType.EV_DEVICES_CHANGED).isEmpty(),
+                "spec 4.7: not one event on the data connection");
+        assertTrue(data.frames().isEmpty(), "and no audio either - nothing was started");
     }
 
     /**
@@ -522,13 +726,20 @@ class ServerLoopbackTest {
      * 100 ms and only while something plays, so it cannot be mistaken for one.
      */
     private FakeTicker theOnlyKeepalive() {
+        return theOnlyTickerAt(NetProto.PING_INTERVAL_MS,
+                "exactly one connection should be pinging here");
+    }
+
+    /** The one RUNNING ticker started at {@code periodMs} - each period in this
+     *  server names exactly one job, so the period identifies the clock. */
+    private FakeTicker theOnlyTickerAt(long periodMs, String what) {
         List<FakeTicker> started = new ArrayList<>();
         for (FakeTicker ticker : sessionTickers) {
-            if (ticker.getPeriodMs() == NetProto.PING_INTERVAL_MS) {
+            if (ticker.getPeriodMs() == periodMs && !ticker.isStopped()) {
                 started.add(ticker);
             }
         }
-        assertEquals(1, started.size(), "exactly one connection should be pinging here");
+        assertEquals(1, started.size(), what);
         return started.get(0);
     }
 
@@ -542,6 +753,25 @@ class ServerLoopbackTest {
         assertTrue(client.connectBlocking(AWAIT_MS, TimeUnit.MILLISECONDS),
                 "the client could not reach the server on " + wsUri);
         return client;
+    }
+
+    /**
+     * Spec 4.7's data connection: a SECOND socket to the same url, whose first
+     * message is {@code capture.attach} - which is what makes it one - naming the
+     * {@code clientId} the {@code hello} answered and the capture it will carry.
+     */
+    private LoopbackClient attachData(NetMessage hello, int captureId)
+            throws InterruptedException {
+        LoopbackClient data = new LoopbackClient(wsUri, codec);
+        clients.add(data);
+        assertTrue(data.connectBlocking(AWAIT_MS, TimeUnit.MILLISECONDS),
+                "the data connection could not reach the server on " + wsUri);
+        NetMessage attached = data.request(data.newRequest(MessageType.CAPTURE_ATTACH)
+                .put(NetFields.CLIENT_ID, hello.getData().path(NetFields.CLIENT_ID).asText())
+                .put(NetFields.CAPTURE_ID, captureId));
+        assertTrue(attached.isOk(),
+                "spec 4.7: the attach is answered on the data connection itself");
+        return data;
     }
 
     /** The handshake of spec 1, answered with the version that governs the

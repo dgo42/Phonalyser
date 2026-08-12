@@ -34,8 +34,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * A {@link SessionChannel} on a real WebSocket connection: control messages go
- * out as text frames on the same socket the audio frames will use (spec 4, 5).
+ * A {@link SessionChannel} on one real WebSocket connection - a session's
+ * control connection, or one capture's data connection (spec 4, 4.7).  The two
+ * planes are the same code because they are the same transport; what differs is
+ * only what is written: JSON text on the one, spec-5 binary frames on the other.
  *
  * <p>A send onto a connection that died between the liveness check and the
  * write is swallowed on purpose.  Whether the peer is still there is decided by
@@ -62,11 +64,26 @@ public final class WsSessionChannel implements SessionChannel {
      * and well under a megabyte still held by Jetty's frame flusher, which is
      * long before the heap notices and well inside the stream's own one-second
      * queue bound.
+     *
+     * <p>The count is now a DATA connection's own, which is what the number was
+     * always meant to describe.  While both planes shared one socket, a
+     * {@code devices.list} still in Jetty's flusher answered "behind" to a
+     * capture drain that had nothing to do with it and throttled audio over a
+     * control message; the split makes "something is still outstanding" mean
+     * "this capture's own bytes are".
      */
     private static final int MAX_HEALTHY_IN_FLIGHT_SENDS = 1;
 
     private final Session session;
     private final JsonCodec codec;
+
+    /** Whether THIS end closed the connection.  A data connection's close is
+     *  read as the session's death only when nothing here caused it (spec 4.1's
+     *  death rule, spec 4.7's discriminator): a socket closed as part of an
+     *  orderly {@code capture.close} is the ordinary end of a stream, and the
+     *  identical close arriving unasked-for is a drop.  Written by whichever
+     *  thread closes, read by the transport's close callback. */
+    private final AtomicBoolean closedHere = new AtomicBoolean();
 
     /** Sends handed to Jetty that it has not finished writing.  Jetty's frame
      *  flusher queues without a bound, so this count is the only thing that can
@@ -127,7 +144,16 @@ public final class WsSessionChannel implements SessionChannel {
 
     @Override
     public void close(String reason) {
+        closedHere.set(true);
         session.close(StatusCode.NORMAL, reason, Callback.NOOP);
+    }
+
+    /** True when the close this connection is ending on was started HERE - the
+     *  discriminator of spec 4.7.  The mark is raised before the socket is
+     *  closed, so the transport's close callback can never see the close
+     *  without it. */
+    public boolean isClosedByThisEnd() {
+        return closedHere.get();
     }
 
     /**

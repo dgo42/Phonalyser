@@ -224,6 +224,12 @@ final class LoopbackClient extends WebSocketClient {
     // What arrived, and waiting for it
     // -------------------------------------------------------------------------
 
+    /** The binary frames that have arrived on THIS connection so far, without
+     *  waiting - what proves the control connection carries none (spec 4.7). */
+    List<BinaryFrame> frames() {
+        return List.copyOf(frames);
+    }
+
     /** Waits for {@code count} binary frames (spec 5) and answers them in
      *  arrival order. */
     List<BinaryFrame> awaitFrames(int count, long timeoutMs) {

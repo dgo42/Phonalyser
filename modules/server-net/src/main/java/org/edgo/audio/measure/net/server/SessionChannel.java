@@ -27,6 +27,13 @@ import org.edgo.audio.measure.net.proto.NetMessage;
  * keepalive, teardown) be tested without a socket, and it keeps every
  * WebSocket type inside {@link WsFront} and {@link WsSessionChannel}.
  *
+ * <p>ONE interface for both planes of spec 4, because a control connection and
+ * a capture's data connection are the same transport: what differs is only who
+ * holds one and what they write.  {@link ClientSession} holds the control
+ * connection and writes messages; a {@link CaptureStream} holds its own data
+ * connection and writes frames.  Neither writes the other's kind - a binary
+ * frame on the control connection is a protocol error (spec 4.7).
+ *
  * <p>The channel takes a whole {@link NetMessage} rather than text, so the
  * serialisation stays in one place and a test can assert on the message
  * instead of on its JSON.
@@ -37,9 +44,9 @@ public interface SessionChannel {
      *  liveness is the keepalive's business, not the sender's. */
     void send(NetMessage message);
 
-    /** Sends one audio frame - spec 5 puts them on the SAME socket as the
-     *  control messages, as binary rather than text, which is what keeps a PCM
-     *  batch and the {@code capture.stop} that ends it in one order. */
+    /** Sends one audio frame, as binary rather than text, on the data
+     *  connection of the capture it belongs to (spec 4.7 - the control
+     *  connection never carries one). */
     void send(BinaryFrame frame);
 
     /**
@@ -52,9 +59,14 @@ public interface SessionChannel {
      * {@link CaptureStream} stops feeding the socket while this is true and lets
      * its own BOUNDED queue take the strain, which turns an unbounded leak into
      * the honest GAP frame of spec 5.
+     *
+     * <p>Asked of a DATA connection, so what it answers is about that capture's
+     * own bytes and nothing else.
      */
     boolean isSendBacklogged();
 
-    /** Closes the transport with a human-readable reason. */
+    /** Closes the transport with a human-readable reason.  On a data connection
+     *  this is the orderly close of spec 4.7 - the far end must be able to tell
+     *  it from a drop, so the implementation marks it as this end's. */
     void close(String reason);
 }

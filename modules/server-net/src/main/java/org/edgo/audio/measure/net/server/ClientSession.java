@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
@@ -44,9 +45,18 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * One WebSocket connection, for its whole life: the {@code hello} handshake of
- * spec 1, the request dispatch of spec 4, the keepalive of spec 4.1 and the
- * teardown that gives the hardware back.
+ * One session, for its whole life: the {@code hello} handshake of spec 1, the
+ * request dispatch of spec 4, the keepalive of spec 4.1 and the teardown that
+ * gives the hardware back.
+ *
+ * <p><b>It is the CONTROL connection's session.</b>  Spec 4 splits a session
+ * across two kinds of connection, and everything here rides the control one:
+ * the requests, the responses, the events and the keepalive.  The audio never
+ * touches it - each open capture has a data connection of its own (spec 4.7),
+ * held by the {@link CaptureStream} that writes into it, which is what keeps a
+ * ping answer from queueing behind a megabyte of PCM.  This session exists only
+ * once {@code hello} has arrived: until then the connection has not said which
+ * plane it is, and there is nothing to keep alive.
  *
  * <p><b>Keepalive.</b>  The server pings every 500 ms with a NEGATIVE id (spec
  * 4.0 - server request ids cannot collide with the client's) and counts the
@@ -120,6 +130,23 @@ public final class ClientSession {
     private final Ticker ticker;
     private final SessionWorker worker;
 
+    /**
+     * This session's own handle (spec 4.1), answered by {@code hello} and spent
+     * by the {@code capture.attach} of every data connection this client dials
+     * (spec 4.7).
+     *
+     * <p>A SECRET, and therefore never logged and never put in a message other
+     * than the {@code hello} response that hands it over: it is what proves a
+     * fresh socket belongs to THIS session, so anyone who can read it can attach
+     * to this client's captures.  {@link UUID#randomUUID()} is the source
+     * because it is specified to draw from a cryptographically strong generator;
+     * a counter or a hash of the address would be guessable from another bench
+     * on the same LAN.  Final and generated with the session, which is the
+     * moment {@code hello} creates it.
+     */
+    @Getter
+    private final String clientId = UUID.randomUUID().toString();
+
     /** The negotiated session version (spec 1); {@link #NO_PROTO} until the
      *  handshake succeeds, which is also the "hello was first" flag.  Written on
      *  the worker thread, read wherever the session is inspected. */
@@ -186,9 +213,12 @@ public final class ClientSession {
             return;
         }
         if (type == MessageType.PING) {
-            // Spec 4.1 lists ping as "both, every 500 ms" and marks only hello
-            // as MUST-be-first: the server pings from the moment the socket
-            // opens, so it answers from then too.
+            // Answered here rather than on the worker: liveness must never be
+            // reported from behind a device call (see the class comment).  A
+            // session exists only once hello has been answered, so there is no
+            // "before the handshake" case to consider - a ping as a connection's
+            // FIRST message never reaches a session at all, it is a plane that
+            // was never declared and the front closes it (spec 4).
             channel.send(new NetMessage(id));
             return;
         }
@@ -234,6 +264,7 @@ public final class ClientSession {
                 case CAPTURE_START:   captureCommand(id, message, captures::start); break;
                 case CAPTURE_STOP:    captureCommand(id, message, captures::stop); break;
                 case CAPTURE_CLOSE:   captureCommand(id, message, captures::close); break;
+                case CAPTURE_ATTACH:  captureAttachMisdirected(id); break;
                 case GEN_OPEN:        genOpen(id, message); break;
                 case GEN_CONFIG:      genConfig(id, message); break;
                 case GEN_START:       genCommand(id, message, generator::start); break;
@@ -316,6 +347,10 @@ public final class ClientSession {
         data.put(NetFields.SERVER_ID, config.getServerId());
         data.put(NetFields.NAME, config.getName());
         data.put(NetFields.APP, config.getApp());
+        // Spec 4.1: the session's own handle, and the ticket its data
+        // connections attach with (spec 4.7).  It goes out here and nowhere
+        // else - the log line above deliberately names the client and not this.
+        data.put(NetFields.CLIENT_ID, clientId);
         data.put(NetFields.CAPS, caps());
         channel.send(new NetMessage(id, codec.toNode(data)));
     }
@@ -614,10 +649,51 @@ public final class ClientSession {
     }
 
     /** The three commands of spec 4.4 that name nothing but a {@code captureId}
-     *  and answer an empty payload: start, stop and close. */
+     *  and answer an empty payload: start, stop and close.  {@code start} is
+     *  where the streamer refuses {@code NOT_ATTACHED} (spec 4.4). */
     private void captureCommand(int id, NetMessage message, Consumer<Integer> command) {
         command.accept(message.optInt(NetFields.CAPTURE_ID));
         channel.send(new NetMessage(id));
+    }
+
+    /**
+     * Spec 4.7: {@code capture.attach} on the CONTROL connection, which is any
+     * position after {@code hello} - the first message is what decides the
+     * plane, so this socket's plane was settled long ago.
+     *
+     * <p>{@code BAD_REQUEST} and not {@code UNSUPPORTED}: this build knows the
+     * type perfectly well, it is simply misdirected, and telling a client its
+     * message is unknown would send it looking for a version mismatch that is
+     * not there.  The connection stays open - nothing about a misdirected attach
+     * says the session is broken, and closing the one connection that carries it
+     * would turn a client's mistake into a lost bench.
+     */
+    private void captureAttachMisdirected(int id) {
+        fail(id, ErrorCode.BAD_REQUEST, "capture.attach belongs on a data connection, as its "
+                + "first message - this is the control connection (spec 4.7)");
+    }
+
+    /**
+     * Spec 4.7: a freshly dialled connection named this session's
+     * {@code clientId} and one of its captures, so it becomes that capture's
+     * data connection.
+     *
+     * <p>Called from the transport thread that read the attach, not from the
+     * request worker: the whole operation is a map lookup and a volatile write,
+     * and the worker may be seconds deep inside a device open that the client
+     * cannot start streaming behind anyway.  A session that has already ended
+     * refuses - its captures are gone, and a socket bound to one of them would
+     * carry nothing for ever.
+     *
+     * @throws NetException {@code BAD_REQUEST} for an unknown capture, one that
+     *         is already attached, or a session that is over
+     */
+    public void attachCapture(Integer captureId, SessionChannel connection) {
+        if (closed.get()) {
+            throw new NetException(ErrorCode.BAD_REQUEST,
+                    "the session this capture belongs to has ended");
+        }
+        captures.attach(captureId, connection);
     }
 
     /** Spec 4.5: opens the server-side playback and creates the generator.  It
@@ -824,22 +900,24 @@ public final class ClientSession {
     /**
      * The client was heard from - ANY frame it sent, not only an answer to a ping.
      *
-     * <p><b>Why any frame counts.</b>  A web client was killed repeatedly while
-     * it was demonstrably alive and talking.
-     * The server log says what happened: {@code net capture 1: 47784 stereo
-     * frame(s) dropped - the client is not keeping up}, then 36924 more, then
-     * {@code 4 pings unanswered - connection dead}.  A browser delivers WebSocket
-     * messages IN ORDER, so a client that has fallen behind on the AUDIO lane has
-     * the server's ping sitting behind thousands of binary frames in its own
-     * receive queue - and answers it seconds late however promptly it handles it.
-     * Counting only ping answers therefore measures the client's INTAKE RATE, not
-     * whether it is alive, and it kills the exact client that is working hardest.
+     * <p><b>Why any frame counts.</b>  A WebSocket delivers in order, so anything
+     * queued ahead of the server's {@code ping} in a client's receive buffer
+     * delays the answer to it however promptly that client handles the ping.
+     * Counting only ping ANSWERS therefore measures how fast the peer is
+     * draining its socket, not whether it is alive.  Its own pings are the
+     * honest signal: they are produced by a timer of the client's rather than by
+     * its receive backlog, so they keep arriving on time while it is busy and
+     * stop the moment it really goes.
      *
-     * <p>Its own pings are the honest signal: they are produced by a timer of the
-     * client's, not by its receive backlog, so they keep arriving on time while it
-     * is digesting a flood - and they stop the moment it really goes.  A client
-     * that sends nothing at all is still dead at the same 2 s (spec 4.1's promise
-     * to the other clients waiting for its devices is unchanged).
+     * <p>Spec 4's split of the planes removed the flood this rule was written
+     * for - audio no longer shares the control connection with the keepalive
+     * (spec 4.7), which is what used to put thousands of PCM frames in front of
+     * a ping and kill the client that was working hardest.  The rule stays
+     * because its reasoning does: it costs one atomic write per message, and it
+     * is the difference between measuring liveness and measuring throughput on
+     * any connection that ever carries a burst.  A client that sends nothing at
+     * all is still dead at the same 2 s (spec 4.1's promise to the other clients
+     * waiting for its devices is unchanged).
      *
      * <p>Written as "nothing is outstanding" rather than a counter of its own: the
      * death test is {@code pingCounter - lastAnsweredPing}, and the keepalive tick
@@ -937,6 +1015,11 @@ public final class ClientSession {
      * its render thread and its DAC line back, THEN the locks are freed (which
      * broadcasts {@code ev.devices.changed} and lets the next client take the
      * device), and only then is the analyzer parked.
+     *
+     * <p>Closing the streams is also what closes this session's DATA connections
+     * (spec 4.7): each stream owns its own, and marks the close as this end's,
+     * so the client reads it as the ordinary end of a stream rather than as a
+     * second death report on top of the one it is already handling.
      *
      * <p>Every step of that order is a hardware fact rather than a preference.
      * A lock freed while this connection's play thread is still inside the

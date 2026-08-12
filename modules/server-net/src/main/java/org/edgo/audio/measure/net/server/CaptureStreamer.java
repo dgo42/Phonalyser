@@ -30,7 +30,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import org.edgo.audio.measure.net.proto.ErrorCode;
 import org.edgo.audio.measure.net.proto.JsonCodec;
+import org.edgo.audio.measure.net.proto.MessageType;
 import org.edgo.audio.measure.net.proto.NetFields;
+import org.edgo.audio.measure.net.proto.NetMessage;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
@@ -58,6 +60,11 @@ import lombok.extern.log4j.Log4j2;
  *   <li><b>Input only.</b>  A capture on an output ref is a client bug; the
  *       backend would open a capture line on a device the ref does not describe.
  *       </li>
+ *   <li><b>A capture streams into its own connection.</b>  Spec 4.7 gives every
+ *       open capture a data connection of its own, and {@link #attach} is where
+ *       one is bound; {@link #start(Integer)} is refused {@code NOT_ATTACHED}
+ *       until it has been, because a started stream with nowhere to write is a
+ *       measurement the client waits for and never gets.</li>
  *   <li><b>The QA40x runs one clock.</b>  Spec 4.4's equal-rates rule is asked
  *       of the {@link Qa40xGuard}, not decided here: the analyzer's clock is the
  *       SERVER's, and a bench with two units attached hands them out as two
@@ -85,6 +92,10 @@ public final class CaptureStreamer {
     private final AudioBackend audio;
     private final DeviceCatalog catalog;
     private final JsonCodec codec;
+    /** The session's CONTROL connection (spec 4.7) - never a stream's.  The
+     *  audio leaves on each capture's own data connection, which the stream
+     *  holds; what goes out from here is the one control-plane message a
+     *  capture can produce, the {@code ev.device.error} of a lane that died. */
     private final SessionChannel channel;
     private final SessionWorker sender;
     private final Qa40xGuard qa40x;
@@ -130,7 +141,7 @@ public final class CaptureStreamer {
             throw e;
         }
         streams.put(captureId, new CaptureStream(captureId, device, ref.name(),
-                catalog.boundCard(ref.name()), capture, captureManager, channel,
+                catalog.boundCard(ref.name()), capture, captureManager,
                 sender, this::streamFailed));
         nextCaptureId = afterCaptureId(captureId);
         AudioFormat format = capture.getFormat();
@@ -211,11 +222,49 @@ public final class CaptureStreamer {
                 manager.classifyFailure(failure));
     }
 
+    /**
+     * Spec 4.7: binds a capture to the data connection that just attached to it.
+     *
+     * <p>Runs on the transport thread that read the {@code capture.attach}, NOT
+     * on the session's request worker - deliberately, and for the reason the
+     * keepalive bypasses that queue too: the attach is one map lookup and one
+     * volatile write, while the worker may be seconds deep in a device open, and
+     * a client that cannot attach cannot start streaming either.  Both sides of
+     * the write are safe there: the stream map is concurrent, and the stream's
+     * own connection field is volatile.
+     *
+     * @throws NetException {@code BAD_REQUEST} for a capture this session does
+     *         not have, or one a data connection has already attached to - spec
+     *         4.7 gives a capture exactly one, and a second would leave the
+     *         first client's frames going to the wrong socket
+     */
+    public void attach(Integer captureId, SessionChannel connection) {
+        CaptureStream stream = stream(captureId);
+        if (stream.isAttached()) {
+            throw new NetException(ErrorCode.BAD_REQUEST,
+                    "capture " + captureId + " already has a data connection");
+        }
+        stream.attach(connection);
+        if (log.isInfoEnabled()) {
+            log.info("net capture {}: data connection attached on {}", captureId,
+                    stream.getDeviceName());
+        }
+    }
+
     /** Spec 4.4: the binary frames begin.  The streaming lines live HERE, on
      *  the wire-command path, not in the stream - its own stop() also runs
-     *  inside every close, and a teardown must not read as an operator stop. */
+     *  inside every close, and a teardown must not read as an operator stop.
+     *
+     *  <p>Refused until the capture's data connection has attached (spec 4.4,
+     *  4.7): the frames a start produces have nowhere to go before that, and a
+     *  stream running into a socket that does not exist is a measurement the
+     *  client waits for and never gets. */
     public void start(Integer captureId) {
         CaptureStream stream = stream(captureId);
+        if (!stream.isAttached()) {
+            throw new NetException(ErrorCode.NOT_ATTACHED, "capture " + captureId
+                    + " has no data connection yet - attach one before starting it");
+        }
         stream.start();
         if (log.isInfoEnabled()) {
             log.info("net capture {}: streaming started on {} (card {})", captureId,
@@ -275,14 +324,40 @@ public final class CaptureStreamer {
     }
 
     /**
-     * A stream that failed, after it confessed {@code ev.device.error}: the
-     * honest-loss rule is the error AND the close, so the line goes back here
-     * and the handle is spent.
+     * A stream that failed: the honest-loss rule is the {@code ev.device.error}
+     * of spec 4.3 AND the close, and BOTH of them live here.
+     *
+     * <p>The event because the control connection does (spec 4.7): a capture
+     * stream owns a data connection and writes audio into it, so a control-plane
+     * message could not leave from there at all.  The close because only the map
+     * this stream is registered in can spend its handle and give the device's
+     * rate claim back.
+     *
+     * <p>The event goes out on the failing thread, before the close is queued,
+     * so the client hears WHY while the line is still being given back - the
+     * close reaches the audio worker, which is where a device call belongs and
+     * never the device's own callback thread (this may be running on it).
+     */
+    private void streamFailed(CaptureStream stream, Throwable fault) {
+        // This event is ALWAYS about a device, so it always carries a reason -
+        // the backend's own reading of its own fault, UNKNOWN included.  The
+        // detail stays the server's raw text (its log line); the reason is what
+        // the client can put in front of ITS operator, in ITS language.
+        DeviceLock device = stream.getDevice();
+        channel.send(new NetMessage(MessageType.EV_DEVICE_ERROR)
+                .put(NetFields.DIRECTION, device.input() ? NetFields.INPUT : NetFields.OUTPUT)
+                .put(NetFields.DETAIL, device + ": " + fault)
+                .put(NetFields.REASON, stream.getBackend().classifyFailure(fault).name()));
+        sender.submit(() -> closeFailed(stream));
+    }
+
+    /**
+     * The failed stream's line, given back.
      *
      * <p>Silent for a stream that has already gone - a teardown racing the
      * failure is the ordinary case, and both may not close the same line twice.
      */
-    private void streamFailed(CaptureStream stream) {
+    private void closeFailed(CaptureStream stream) {
         if (streams.remove(stream.getCaptureId()) == null) {
             return;
         }

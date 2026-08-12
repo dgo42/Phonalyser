@@ -31,34 +31,47 @@ import org.eclipse.jetty.websocket.api.Session;
 import org.eclipse.jetty.websocket.server.ServerWebSocketContainer;
 
 import org.edgo.audio.measure.net.proto.BinaryFrame;
+import org.edgo.audio.measure.net.proto.ErrorCode;
 import org.edgo.audio.measure.net.proto.JsonCodec;
 import org.edgo.audio.measure.net.proto.MessageType;
+import org.edgo.audio.measure.net.proto.NetError;
 import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.net.proto.NetMessage;
+import org.edgo.audio.measure.net.proto.NetProto;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;
 
 /**
- * The control plane's front door: the WebSocket endpoint of spec 4, and the only
+ * The front door of both planes: the WebSocket endpoint of spec 4, and the only
  * type in the package that names a WebSocket type at all.  It turns transport
  * events into session calls and nothing else - the protocol lives in
  * {@link ClientSession}.
  *
  * <p>It no longer owns a listener.  {@link CombinedFront} binds the ONE port and
  * hands the requests that carry a WebSocket upgrade here; this type says WHAT
- * the endpoint is ({@link #configure}) and holds the sessions it produces.
+ * the endpoint is ({@link #configure}) and holds the connections it produces.
  *
- * <p>It is also where a connection's collaborators are assembled: one session
- * per socket, wired to its own channel, its own request thread and its own
- * tickers, drawn from the clock the composition root handed it.  Constructing
- * them here is the point - a connection cannot exist before its socket does, so
- * this is the only place that can.  WHAT a ticker is remains
+ * <p><b>Which plane a connection is.</b>  Spec 4 dials both planes at the same
+ * url, so an upgraded socket is nothing yet: its FIRST text message decides.
+ * {@code hello} makes it a control connection and builds the session behind it;
+ * {@code capture.attach} makes it the data connection of one capture (spec 4.7).
+ * Anything else, or {@link NetProto#PLANE_DECLARATION_TIMEOUT_MS} of silence,
+ * and it is closed.  Nothing is built before that message arrives - no session,
+ * no worker, no keepalive - because a socket that has not said what it is is not
+ * a session, and a keepalive belongs to a session.
+ *
+ * <p>It is therefore where a connection's collaborators are assembled: one
+ * session per control connection, wired to its own channel, its own request
+ * thread and its own tickers, drawn from the clock the composition root handed
+ * it.  Constructing them here is the point - a connection cannot exist before
+ * its socket does, so this is the only place that can.  WHAT a ticker is remains
  * {@link ServerMain}'s decision: this type schedules nothing itself.
  *
  * <p>And it is the only type that holds every live session at once, which makes
  * it the one that can fan a server event out to all of them - the
- * {@code ev.devices.changed} broadcast of spec 4.3.
+ * {@code ev.devices.changed} broadcast of spec 4.3 - and the one that can answer
+ * which session a {@code clientId} names.
  */
 @Log4j2
 public final class WsFront {
@@ -116,7 +129,20 @@ public final class WsFront {
      *  and handing this front a scheduler would make every connection's sense of
      *  time impossible to drive from a test. */
     private final Supplier<Ticker> tickers;
+    /** The live sessions, keyed by their CONTROL connection (spec 4). */
     private final Map<Session, ClientSession> sessions = new ConcurrentHashMap<>();
+    /** The same sessions by the handle a {@code capture.attach} names (spec
+     *  4.1, 4.7).  A separate index rather than a scan: an attach arrives on the
+     *  transport thread and must not walk every session on the bench, and the
+     *  handle is a secret whose only use is exactly this lookup. */
+    private final Map<String, ClientSession> byClientId = new ConcurrentHashMap<>();
+    /** Sockets that have upgraded but not yet declared their plane (spec 4),
+     *  each with the clock that will close it if it never does. */
+    private final Map<Session, PendingConnection> pending = new ConcurrentHashMap<>();
+    /** The attached data connections of spec 4.7, keyed by their socket - what
+     *  turns a close callback into "which capture of which session just lost its
+     *  audio". */
+    private final Map<Session, DataConnection> dataSockets = new ConcurrentHashMap<>();
 
     public WsFront(ServerConfig config, LockRegistry locks, Qa40xGuard qa40x,
             Qa40xSession qa40xSession, DeviceCatalog catalog, AudioBackend audio,
@@ -152,10 +178,84 @@ public final class WsFront {
                 (request, response, callback) -> new Endpoint());
     }
 
-    /** One connection, with everything it needs built around it. */
+    /**
+     * A socket upgraded, and that is ALL that is known about it: spec 4 leaves
+     * the plane to the first message, so nothing is built here but the channel
+     * to answer on and the clock that closes a connection which never speaks.
+     */
     private void opened(Session session) {
-        String peer = String.valueOf(session.getRemoteSocketAddress());
-        SessionChannel channel = new WsSessionChannel(session, codec);
+        WsSessionChannel channel = new WsSessionChannel(session, codec);
+        Ticker undeclared = tickers.get();
+        pending.put(session, new PendingConnection(channel, undeclared));
+        undeclared.start(NetProto.PLANE_DECLARATION_TIMEOUT_MS,
+                () -> planeUndeclared(session));
+        if (log.isDebugEnabled()) {
+            log.debug("net server: a connection from {} upgraded, waiting for its plane",
+                    peerOf(session));
+        }
+    }
+
+    /**
+     * The first message never came (spec 4): the connection is closed, and
+     * nothing has to be given back because nothing was ever built for it.
+     *
+     * <p>It stops its own ticker first, which is what makes this repeating task
+     * a one-shot - the same shape the session's teardown watchdog uses.
+     */
+    private void planeUndeclared(Session session) {
+        PendingConnection waiting = pending.remove(session);
+        if (waiting == null) {
+            return;
+        }
+        waiting.ticker().stop();
+        if (log.isWarnEnabled()) {
+            log.warn("net server: {} said nothing within {} ms - closing a connection that "
+                    + "never declared its plane", peerOf(session),
+                    NetProto.PLANE_DECLARATION_TIMEOUT_MS);
+        }
+        waiting.channel().close("no hello and no capture.attach");
+    }
+
+    /**
+     * The first message on a fresh connection, which is what it IS (spec 4).
+     *
+     * <p>An undecodable one is treated exactly like a wrong one: the point of
+     * the rule is that a connection whose plane cannot be read is not a
+     * connection this server can serve.
+     */
+    private void declarePlane(Session session, WsSessionChannel channel, String message) {
+        NetMessage first;
+        try {
+            first = codec.read(message);
+        } catch (JsonProcessingException | IllegalArgumentException e) {
+            if (log.isWarnEnabled()) {
+                log.warn("net server: undecodable first message from {}: {}",
+                        peerOf(session), e.toString());
+            }
+            channel.close("a connection's first message must be hello or capture.attach");
+            return;
+        }
+        MessageType type = first.getType();
+        if (type == MessageType.HELLO) {
+            openControl(session, channel, first);
+            return;
+        }
+        if (type == MessageType.CAPTURE_ATTACH) {
+            openData(session, channel, first);
+            return;
+        }
+        if (log.isWarnEnabled()) {
+            log.warn("net server: {} opened with '{}' - a connection's first message must be "
+                    + "hello (control) or capture.attach (data)", peerOf(session), first.getT());
+        }
+        channel.close("a connection's first message must be hello or capture.attach");
+    }
+
+    /** One control connection, with everything its session needs built around
+     *  it - the assembly that used to happen at the upgrade, now that the
+     *  {@code hello} has proved this is the plane it belongs to (spec 4). */
+    private void openControl(Session session, WsSessionChannel channel, NetMessage hello) {
+        String peer = peerOf(session);
         CaptureStreamer captures = new CaptureStreamer(audio, catalog, codec, channel,
                 new ThreadSessionWorker(AUDIO_LANE + peer), qa40x);
         SessionWorker worker = new ThreadSessionWorker(peer);
@@ -164,16 +264,91 @@ public final class WsFront {
         ClientSession clientSession = new ClientSession(config, locks, qa40x, catalog,
                 captures, generator, qa40xSession, codec, channel, tickers.get(), worker);
         sessions.put(session, clientSession);
+        byClientId.put(clientSession.getClientId(), clientSession);
+        // The keepalive of spec 4.1 starts HERE and not at the upgrade: it is a
+        // session's heartbeat, and until this message there was no session.
         clientSession.start();
         if (log.isInfoEnabled()) {
-            log.info("net server: connection from {}", peer);
+            log.info("net server: control connection from {}", peer);
+        }
+        clientSession.onMessage(hello);
+    }
+
+    /**
+     * One data connection (spec 4.7): the socket names the session it belongs to
+     * and the capture it will carry, and from the answer on it carries nothing
+     * but that capture's binary frames.
+     *
+     * <p>A refusal is ANSWERED and then closes the socket - a connection that
+     * may not attach has no other purpose, and the client reads the pair as the
+     * failure of the {@code capture.open} it dialled for.  The {@code clientId}
+     * is never named in a log line: it is the ticket to somebody's captures.
+     */
+    private void openData(Session session, WsSessionChannel channel, NetMessage attach) {
+        Integer id = attach.getId();
+        String handle = attach.optString(NetFields.CLIENT_ID);
+        Integer captureId = attach.optInt(NetFields.CAPTURE_ID);
+        ClientSession owner = handle == null ? null : byClientId.get(handle);
+        try {
+            if (owner == null) {
+                throw new NetException(ErrorCode.BAD_REQUEST,
+                        "capture.attach names no session this server is serving");
+            }
+            owner.attachCapture(captureId, channel);
+        } catch (NetException e) {
+            if (log.isWarnEnabled()) {
+                log.warn("net server: {} could not attach to capture {}: {}",
+                        peerOf(session), captureId, e.getMessage());
+            }
+            if (id != null) {
+                channel.send(new NetMessage(id, new NetError(e.getCode(), e.getMessage())));
+            }
+            channel.close("capture.attach refused");
+            return;
+        }
+        dataSockets.put(session, new DataConnection(owner, channel, captureId));
+        // After the bind, so a refusal answers nothing but the refusal - and
+        // immediately, so the answer is on the socket before anything else can
+        // be: the frames of this capture cannot start until the client has read
+        // it and sent capture.start (spec 4.4).
+        if (id != null) {
+            channel.send(new NetMessage(id));
         }
     }
 
     /**
-     * The connection ended - the only announcement a client that was killed,
-     * halted or unplugged ever makes, and therefore the path its devices come
-     * back on.
+     * Spec 4.7: a data connection's attach is its only client message, so
+     * anything after it is a protocol error - the socket closes.
+     *
+     * <p>And the session goes with it.  The client will see this close as the
+     * unexpected end of an attached data connection, which its own death rule
+     * (spec 4.1) turns into a dead session; a server that kept the session alive
+     * would sit on the bench's locks until its keepalive noticed, holding
+     * devices for a peer that has already stopped measuring.
+     */
+    private void strayTextOnData(Session session) {
+        DataConnection data = dataSockets.remove(session);
+        if (data == null) {
+            return;
+        }
+        if (log.isWarnEnabled()) {
+            log.warn("net session {}: text on the data connection of capture {} - a data "
+                    + "connection carries nothing but its attach", data.owner().getClientName(),
+                    data.captureId());
+        }
+        data.channel().close("a data connection carries no client messages after its attach");
+        data.owner().close("protocol error on a data connection");
+    }
+
+    /**
+     * A connection ended - for a control connection, the only announcement a
+     * client that was killed, halted or unplugged ever makes, and therefore the
+     * path its devices come back on.
+     *
+     * <p>Which of the three registries the socket is in says what its close
+     * MEANS: a connection that never declared its plane simply goes away, a data
+     * connection is measured against spec 4.7's discriminator, and a control
+     * connection takes the whole session with it.
      *
      * <p>The session is named by ITS OWN name and not by the socket's address.
      * This method runs on a connection that is already gone, and it has just
@@ -189,22 +364,79 @@ public final class WsFront {
     private void closed(Session session, int code) {
         // Null when the connection never opened - Jetty still reports the close
         // of an upgrade that failed, and there is nothing behind it.
-        ClientSession clientSession = session == null ? null : sessions.remove(session);
+        if (session == null) {
+            return;
+        }
+        PendingConnection waiting = pending.remove(session);
+        if (waiting != null) {
+            waiting.ticker().stop();
+            return;
+        }
+        DataConnection data = dataSockets.remove(session);
+        if (data != null) {
+            onTransportThread("ending the data connection of capture " + data.captureId(),
+                    () -> dataClosed(data, code));
+            return;
+        }
+        ClientSession clientSession = sessions.remove(session);
         if (clientSession != null) {
+            byClientId.remove(clientSession.getClientId());
             onTransportThread("closing the session of " + clientSession.getClientName(),
                     () -> clientSession.close("transport closed (" + code + ")"));
         }
     }
 
-    private void received(Session session, String message) {
-        ClientSession clientSession = sessions.get(session);
-        if (clientSession == null) {
-            if (log.isWarnEnabled()) {
-                log.warn("net server: message on an unknown connection {}",
-                        session.getRemoteSocketAddress());
-            }
+    /**
+     * Spec 4.1's death rule against spec 4.7's discriminator: a data
+     * connection's close kills the session unless THIS end started it.
+     *
+     * <p>The mark is the channel's own, raised before the socket is closed, so
+     * every orderly end is covered by the one test - the {@code capture.close}
+     * or {@code device.release} that closed the stream, the lane failure that
+     * closed it, the session teardown, and the refused attach that never became
+     * a data connection at all.  Anything else is the client's transport going
+     * away under a capture that is still open, and a session whose audio has
+     * stopped arriving is not one to keep the bench's locks for.
+     */
+    private void dataClosed(DataConnection data, int code) {
+        if (data.channel().isClosedByThisEnd()) {
             return;
         }
+        if (log.isWarnEnabled()) {
+            log.warn("net session {}: the data connection of capture {} dropped ({}) - "
+                    + "the session is dead", data.owner().getClientName(), data.captureId(),
+                    code);
+        }
+        data.owner().close("a data connection dropped (" + code + ")");
+    }
+
+    private void received(Session session, String message) {
+        ClientSession clientSession = sessions.get(session);
+        if (clientSession != null) {
+            deliver(clientSession, message);
+            return;
+        }
+        PendingConnection waiting = pending.remove(session);
+        if (waiting != null) {
+            // The plane is declared, so the connection is no longer waiting to
+            // be closed for saying nothing - whatever it turns out to be.
+            waiting.ticker().stop();
+            onTransportThread("reading the first message from " + peerOf(session),
+                    () -> declarePlane(session, waiting.channel(), message));
+            return;
+        }
+        if (dataSockets.containsKey(session)) {
+            onTransportThread("ending a data connection that spoke out of turn",
+                    () -> strayTextOnData(session));
+            return;
+        }
+        if (log.isWarnEnabled()) {
+            log.warn("net server: message on an unknown connection {}", peerOf(session));
+        }
+    }
+
+    /** One control message, on the session it belongs to. */
+    private void deliver(ClientSession clientSession, String message) {
         onTransportThread("delivering a message to " + clientSession.getClientName(), () -> {
             try {
                 clientSession.onMessage(codec.read(message));
@@ -232,15 +464,52 @@ public final class WsFront {
             return;
         }
         ClientSession clientSession = sessions.get(session);
+        DataConnection data = dataSockets.get(session);
         if (log.isWarnEnabled()) {
-            log.warn("net session {}: transport error: {}",
-                    clientSession == null ? session.getRemoteSocketAddress()
-                            : clientSession.getClientName(), error.toString());
+            log.warn("net session {}: transport error: {}", nameOf(clientSession, data, session),
+                    error.toString());
         }
-        if (clientSession != null) {
-            onTransportThread("closing the session of " + clientSession.getClientName(),
-                    () -> clientSession.close("transport error"));
+        ClientSession dying = faultedSession(clientSession, data);
+        if (dying != null) {
+            onTransportThread("closing the session of " + dying.getClientName(),
+                    () -> dying.close("transport error"));
         }
+    }
+
+    /**
+     * The session a transport fault ends, or null when it ends none.
+     *
+     * <p>A fault on EITHER plane is the session's death (spec 4.1): a data
+     * connection that faulted is one whose audio has stopped, and the close
+     * callback that follows would find the socket already out of the map.
+     * Except one this end was already closing - a transport that faults while a
+     * stream is being shut down is reporting the shutdown, and spec 4.7's
+     * discriminator applies to a fault exactly as it does to a close.
+     */
+    private ClientSession faultedSession(ClientSession control, DataConnection data) {
+        if (control != null) {
+            return control;
+        }
+        if (data != null && !data.channel().isClosedByThisEnd()) {
+            return data.owner();
+        }
+        return null;
+    }
+
+    /** What to call a faulted connection in a log line: the session's own name
+     *  where there is one, and the socket's address for a connection that never
+     *  declared its plane. */
+    private String nameOf(ClientSession control, DataConnection data, Session session) {
+        if (control != null) {
+            return control.getClientName();
+        }
+        return data == null ? peerOf(session) : data.owner().getClientName();
+    }
+
+    /** The socket's address, for a log line - the ONLY thing a connection that
+     *  has not declared its plane can be named by. */
+    private String peerOf(Session session) {
+        return String.valueOf(session.getRemoteSocketAddress());
     }
 
     /**
@@ -278,11 +547,28 @@ public final class WsFront {
     public void closeSessions(String reason, long timeoutMs) {
         List<ClientSession> open = new ArrayList<>(sessions.values());
         sessions.clear();
+        byClientId.clear();
+        // The connections that never became a session: nothing to tear down,
+        // but a socket the shutdown would otherwise leave to Jetty.
+        List<PendingConnection> undeclared = new ArrayList<>(pending.values());
+        pending.clear();
+        for (PendingConnection waiting : undeclared) {
+            waiting.ticker().stop();
+            waiting.channel().close(reason);
+        }
         for (ClientSession session : open) {
             session.close(reason);
         }
         for (ClientSession session : open) {
             session.awaitClosed(timeoutMs);
+        }
+        // AFTER the teardowns, which close the data connections of the captures
+        // they stop (spec 4.7) - what is left here is a socket whose teardown
+        // could not reach it, and it is closed rather than left to the JVM.
+        List<DataConnection> streaming = new ArrayList<>(dataSockets.values());
+        dataSockets.clear();
+        for (DataConnection data : streaming) {
+            data.channel().close(reason);
         }
     }
 
@@ -315,8 +601,31 @@ public final class WsFront {
     }
 
     /**
+     * A socket that has upgraded and not yet said which plane it is (spec 4):
+     * the channel to answer or close it on, and the clock that will close it if
+     * the first message never comes.
+     *
+     * <p>Its own state and its own lifetime, both shorter than any session's -
+     * which is why it is not carried as two parallel maps.
+     */
+    private record PendingConnection(WsSessionChannel channel, Ticker ticker) {
+    }
+
+    /**
+     * An attached data connection (spec 4.7): the session it was let in by, the
+     * channel that knows whether a close was ours, and the capture it carries.
+     *
+     * <p>The capture id is kept for the log lines: a bench with three streams
+     * open has three of these sockets, and "a data connection dropped" says
+     * nothing an operator can act on.
+     */
+    private record DataConnection(ClientSession owner, WsSessionChannel channel,
+            Integer captureId) {
+    }
+
+    /**
      * One socket's end of the transport: Jetty's callbacks, routed to the
-     * session assembly above.
+     * dispatch above.
      *
      * <p>It holds its own {@link Session} because Jetty passes one only to the
      * open callback, and it is {@code AutoDemanding} because this server reads

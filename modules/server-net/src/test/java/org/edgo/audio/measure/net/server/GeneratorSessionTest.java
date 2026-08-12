@@ -167,6 +167,10 @@ class GeneratorSessionTest {
     private final DeviceCatalog catalog = new DeviceCatalog(AudioBackend.instance(), locks,
             codec, List.of(AudioBackendType.QA40X), cards.getPrefs());
     private final FakeChannel channel = new FakeChannel();
+    /** The capture's DATA connection (spec 4.7): where the sweep marker of spec
+     *  4.5 goes, since it is a binary frame and the control connection carries
+     *  none. */
+    private final FakeChannel data = new FakeChannel();
     private final FakeTicker ticker = new FakeTicker();
     private final FileStore files = new FileStore();
     private final Qa40xGuard qa40x = new Qa40xGuard(AudioBackend.instance(), locks);
@@ -633,7 +637,7 @@ class GeneratorSessionTest {
 
         generator.start(FIRST_GEN_ID);
 
-        List<BinaryFrame> frames = channel.getFrames();
+        List<BinaryFrame> frames = data.getFrames();
         assertEquals(FrameType.PCM, frames.get(FIRST).type());
         assertEquals(FrameType.MARKER, frames.get(SECOND).type(),
                 "spec 5: the first PCM byte AFTER the marker is the one aligned with "
@@ -1008,9 +1012,13 @@ class GeneratorSessionTest {
                 OutputChannels.LEFT.name());
     }
 
+    /** Spec 4.7's sequence: a capture streams only once its data connection has
+     *  attached, and the sweep marker of spec 4.5 travels on THAT connection -
+     *  so a capture opened without one would have nowhere to be marked. */
     private int openCapture() {
         int captureId = captures.open(input, StubDeviceManager.FIRST_INPUT, RATE_HZ, BITS)
                 .path(NetFields.CAPTURE_ID).asInt();
+        captures.attach(captureId, data);
         captures.start(captureId);
         return captureId;
     }
@@ -1094,11 +1102,11 @@ class GeneratorSessionTest {
                 .put(NetFields.GEN_ID, FIRST_GEN_ID);
     }
 
-    /** The MARKER frames written so far - spec 5 puts them on the audio lane
-     *  beside the PCM. */
+    /** The MARKER frames written so far - spec 5 puts them on the capture's data
+     *  connection beside the PCM (spec 4.7), never on the control one. */
     private List<BinaryFrame> markerFrames() {
         List<BinaryFrame> markers = new ArrayList<>();
-        for (BinaryFrame frame : channel.getFrames()) {
+        for (BinaryFrame frame : data.getFrames()) {
             if (frame.type() == FrameType.MARKER) {
                 markers.add(frame);
             }

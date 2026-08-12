@@ -47,6 +47,7 @@ import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.net.proto.NetMessage;
 import org.edgo.audio.measure.net.proto.NetProto;
 import org.java_websocket.client.WebSocketClient;
+import org.java_websocket.framing.CloseFrame;
 import org.java_websocket.handshake.ServerHandshake;
 
 import lombok.Getter;
@@ -57,12 +58,22 @@ import lombok.extern.log4j.Log4j2;
  * {@code hello} of spec 1, the request/response correlation of spec 4.0, the
  * keepalive of spec 4.1 and the binary-frame demux of spec 5.
  *
- * <p><b>What it owns.</b>  The socket, the id space, the requests still waiting
- * for their {@code resp}, the keepalive counters and the routing table from
- * {@code streamId} to the capture that asked for it.  What the messages MEAN is
- * not here: the device catalogue belongs to {@link NetDeviceManager} and a
- * stream's own vocabulary to {@link NetPcmCapture}, so this type never has to
- * grow a case for a message a later phase adds.
+ * <p><b>What it owns.</b>  Every SOCKET of the session, the id space, the
+ * requests still waiting for their {@code resp}, the keepalive counters and the
+ * routing table from {@code streamId} to the capture that asked for it.  What
+ * the messages MEAN is not here: the device catalogue belongs to
+ * {@link NetDeviceManager} and a stream's own vocabulary to
+ * {@link NetPcmCapture}, so this type never has to grow a case for a message a
+ * later phase adds.
+ *
+ * <p><b>Two planes, one url (spec 4).</b>  The control connection is dialled by
+ * {@link #open(long)} and declares itself with {@code hello}; every open capture
+ * adds a data connection of its own, dialled by {@link #attachData(int)} and
+ * declared with {@code capture.attach}.  The frames arrive on those and are
+ * demuxed by {@code streamId} exactly as they were when one socket carried
+ * everything - which is the point of leaving the header alone.  What changed is
+ * that a ping answer no longer queues behind a megabyte of PCM, so the keepalive
+ * of spec 4.1 measures liveness again.
  *
  * <p><b>Keepalive.</b>  The client pings every 500 ms and counts the unanswered
  * ones; four in a row (2 s of silence) and the connection is dead - spec 4.1's
@@ -133,6 +144,10 @@ public final class NetConnection {
     private final Map<Integer, CompletableFuture<NetMessage>> pending =
             new ConcurrentHashMap<>();
     private final Map<Integer, FrameListener> streams = new ConcurrentHashMap<>();
+    /** The data connections of spec 4.7, one per open capture - held so the end
+     *  of the session can close them all, and so none outlives the socket that
+     *  carries the requests that opened them. */
+    private final List<DataConnection> dataConnections = new CopyOnWriteArrayList<>();
     private final List<Consumer<NetMessage>> eventListeners = new CopyOnWriteArrayList<>();
     private final List<Consumer<NetCloseReason>> closeListeners = new CopyOnWriteArrayList<>();
     /** Spec 4.0: "a per-connection monotonically increasing integer". */
@@ -154,6 +169,14 @@ public final class NetConnection {
      *  keys on, never the address. */
     @Getter
     private volatile String serverId;
+    /** This session's own handle, answered by {@code hello} (spec 4.1), and the
+     *  ticket every data connection attaches with (spec 4.7).
+     *
+     *  <p>A SECRET: it is never logged and never shown, because anyone holding
+     *  it could attach to this session's captures.  Deliberately NOT exposed -
+     *  the one thing that spends it is {@link #attachData(int)}, which is in
+     *  here with it. */
+    private volatile String clientId;
     /** The operator-configured server name, for the window title and the combo. */
     @Getter
     private volatile String serverName;
@@ -255,6 +278,7 @@ public final class NetConnection {
         proto = chosen;
         serverId = text(data, NetFields.SERVER_ID);
         serverName = text(data, NetFields.NAME);
+        clientId = text(data, NetFields.CLIENT_ID);
         caps = capsOf(data);
         ticker.start(NetProto.PING_INTERVAL_MS, this::keepaliveTick);
         if (log.isInfoEnabled()) {
@@ -293,6 +317,13 @@ public final class NetConnection {
             sendRaw(new NetMessage(MessageType.BYE, lastRequestId.incrementAndGet()));
         }
         transport.close();
+        // Every socket of the session goes with it (spec 4.1), marked as this
+        // end's so a close that is merely the tail of THIS teardown cannot
+        // report the session as dying a second time.
+        for (DataConnection data : dataConnections) {
+            data.close();
+        }
+        dataConnections.clear();
         IllegalStateException ended = new IllegalStateException(
                 "the connection to " + server + " ended: " + reason.getDetail());
         for (Integer id : List.copyOf(pending.keySet())) {
@@ -308,6 +339,76 @@ public final class NetConnection {
         if (log.isInfoEnabled()) {
             log.info("net client: session with {} ended - {}", server, reason.getDetail());
         }
+    }
+
+    /**
+     * Spec 4.7: dials this capture's DATA connection and attaches it.
+     *
+     * <p>Called between {@code capture.open} - which is where the
+     * {@code captureId} comes from - and {@code capture.start}, which the server
+     * refuses {@code NOT_ATTACHED} until this has returned.  The socket goes to
+     * the SAME url as the control connection and through the same proxy: spec 4
+     * gives the two planes one address on purpose, so there is no second setting
+     * that could drift out of step with the one the operator configured.
+     *
+     * <p>A refusal or a dial that fails closes whatever came up and throws, so
+     * the caller can report it as what it is - a capture that could not be
+     * opened, not a socket that could not be dialled.
+     *
+     * @throws IllegalStateException when the socket does not come up, the server
+     *         refuses the attach, or this session never got its handle
+     */
+    public DataConnection attachData(int captureId) {
+        String handle = clientId;
+        if (handle == null) {
+            throw new IllegalStateException("this session has no clientId - the server's "
+                    + "hello did not carry one, so no capture can be attached (spec 4.1)");
+        }
+        DataConnection data = new DataConnection(server, captureId);
+        if (proxy != null) {
+            // Before THIS socket is dialled: the library reads the proxy when it
+            // opens a connection, so it has to be set on the one that has not
+            // been opened yet.  The control socket's own proxy was set before
+            // its dial, in open(), and setting it again here would reach a
+            // connection that is already up.
+            data.setProxy(proxy);
+        }
+        try {
+            if (!data.connectBlocking(REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                throw new IllegalStateException("the data connection for capture " + captureId
+                        + " could not be opened to " + server);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            data.close();
+            throw new IllegalStateException("interrupted while opening the data connection "
+                    + "for capture " + captureId, e);
+        }
+        NetMessage answer;
+        try {
+            answer = requestOn(data, newRequest(MessageType.CAPTURE_ATTACH)
+                    .put(NetFields.CLIENT_ID, handle)
+                    .put(NetFields.CAPTURE_ID, captureId), REQUEST_TIMEOUT_MS);
+        } catch (RuntimeException e) {
+            data.close();
+            throw e;
+        }
+        if (!answer.isOk()) {
+            // The server answers the refusal and then closes the socket itself
+            // (spec 4.7); closing it here too is idempotent and is what marks
+            // the close as expected, so it cannot read as a drop.
+            data.close();
+            throw refusal("cannot attach the data connection of capture " + captureId, answer);
+        }
+        // The attach is answered, so this socket has said everything it will
+        // ever say (spec 4.7).  From here any text on it is a protocol error.
+        data.attached();
+        dataConnections.add(data);
+        if (log.isDebugEnabled()) {
+            log.debug("net client: capture {} attached its data connection to {}",
+                    captureId, server);
+        }
+        return data;
     }
 
     // -------------------------------------------------------------------------
@@ -344,8 +445,16 @@ public final class NetConnection {
      *  for.  Private: every other request is a device operation, and those get
      *  the generous {@link #REQUEST_TIMEOUT_MS} on purpose. */
     private NetMessage request(NetMessage message, long timeoutMs) {
+        return requestOn(transport, message, timeoutMs);
+    }
+
+    /** The same wait, on a named socket: a {@code capture.attach} is answered on
+     *  the DATA connection it arrived on (spec 4.0, 4.7), not on the control
+     *  one, so the write has to be aimed even though the correlation is the
+     *  session's own {@link #pending} table either way. */
+    private NetMessage requestOn(WebSocketClient socket, NetMessage message, long timeoutMs) {
         try {
-            return send(message).get(timeoutMs, TimeUnit.MILLISECONDS);
+            return sendOn(socket, message).get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             abandon(message);
@@ -375,6 +484,14 @@ public final class NetConnection {
      * from a listener (see the class comment on threading).
      */
     public CompletableFuture<NetMessage> send(NetMessage message) {
+        return sendOn(transport, message);
+    }
+
+    /** The same, on a named socket.  The {@link #pending} table is the SESSION's
+     *  and not a socket's, because the ids are: spec 4.0 makes them a
+     *  per-connection monotonic integer and this client draws every one of them
+     *  from one counter, so an answer correlates wherever it comes back. */
+    private CompletableFuture<NetMessage> sendOn(WebSocketClient socket, NetMessage message) {
         Integer id = message.getId();
         if (id == null) {
             throw new IllegalArgumentException(
@@ -390,7 +507,7 @@ public final class NetConnection {
             return answer;
         }
         try {
-            transport.send(codec.write(message));
+            socket.send(codec.write(message));
         } catch (RuntimeException e) {
             failPending(id, "cannot send " + message.getT() + ": " + e);
         }
@@ -735,6 +852,134 @@ public final class NetConnection {
     private String text(JsonNode owner, String field) {
         JsonNode node = owner.path(field);
         return node.isTextual() ? node.asText() : null;
+    }
+
+    /**
+     * One capture's data connection (spec 4.7): a second socket to the same url,
+     * carrying that capture's binary frames and nothing else after its
+     * {@code capture.attach} has been answered.
+     *
+     * <p><b>Drop or orderly close.</b>  Spec 4.1 kills the whole session when a
+     * connection DROPS, and spec 4.7 exempts the close that ends a capture in
+     * the ordinary way - so this end has to know which it is looking at, and the
+     * answer is on the wire: an orderly close carries the NORMAL status code,
+     * and only an abnormal one ({@code 1006} and its kin - a socket that died
+     * without a close frame) is a drop.  That is what makes the decision
+     * race-free: the bench closes this socket as it handles a
+     * {@code capture.close}, and its {@code resp} travels on the OTHER
+     * connection, so the close can arrive first - a rule that depended on this
+     * end having marked the socket in time would end the session over an
+     * ordinary teardown.
+     *
+     * <p>{@link #expectClose()} is kept as the cheap local answer for the case
+     * this end already knows about, not as the correctness rule.  It is
+     * deliberately this connection's own flag and not the capture's "I am
+     * closing" state - that one is raised by a plain {@code capture.stop} as
+     * well, and a stop leaves this socket open.
+     *
+     * <p>Its frames go into the session's demux ({@link #onBinary(byte[])}), so
+     * a capture is routed by {@code streamId} exactly as it was when one socket
+     * carried everything.  The only TEXT it may ever carry is the answer to its
+     * own attach.
+     */
+    public final class DataConnection extends WebSocketClient {
+
+        /** The capture this socket carries - for the log lines, which must be
+         *  able to name which of a session's streams lost its transport. */
+        private final int captureId;
+        /** Whether THIS end knows the connection is ending - see the class
+         *  comment.  Atomic because the mark is raised on the caller's thread
+         *  and read on the socket's reader thread. */
+        private final AtomicBoolean closing = new AtomicBoolean();
+        /** Whether the attach has been answered.  Before it, one text message is
+         *  expected on this socket; after it, none ever again (spec 4.7). */
+        private final AtomicBoolean attached = new AtomicBoolean();
+
+        private DataConnection(URI address, int captureId) {
+            super(address);
+            this.captureId = captureId;
+            setConnectionLostTimeout(LIBRARY_KEEPALIVE_OFF);
+        }
+
+        /** The attach was answered: this socket carries nothing but audio now. */
+        void attached() {
+            attached.set(true);
+        }
+
+        /** The close is COMING, from the far end, because this client asked for
+         *  something that ends the capture ({@code capture.close},
+         *  {@code device.release}) or was told the lane failed.  An optimisation
+         *  only - the status code decides (see the class comment). */
+        public void expectClose() {
+            closing.set(true);
+        }
+
+        @Override
+        public void close() {
+            closing.set(true);
+            super.close();
+        }
+
+        @Override
+        public void onOpen(ServerHandshake handshake) {
+            // Nothing: this connection's own handshake is `capture.attach`,
+            // which attachData sends once the socket is up.
+        }
+
+        @Override
+        public void onMessage(String text) {
+            if (attached.get()) {
+                // Spec 4.7: the planes do not mix.  An event or a request on a
+                // data connection is a peer that has lost track of which socket
+                // it is writing to, and acting on it would put control traffic
+                // behind whatever audio is queued - the very thing the split
+                // exists to prevent.  Ended like a malformed frame, for the same
+                // reason: a peer whose framing is broken is not one to keep
+                // measuring with.
+                if (log.isErrorEnabled()) {
+                    log.error("net client: text on the data connection of capture {} - a data "
+                            + "connection carries nothing but audio after its attach",
+                            captureId);
+                }
+                NetConnection.this.close(NetCloseReason.PROTOCOL_ERROR);
+                return;
+            }
+            // The answer to this connection's own attach, and only that; it
+            // correlates through the session's pending table like any other.
+            onText(text);
+        }
+
+        @Override
+        public void onMessage(ByteBuffer binary) {
+            byte[] raw = new byte[binary.remaining()];
+            binary.get(raw);
+            onBinary(raw);
+        }
+
+        @Override
+        public void onClose(int code, String reason, boolean remote) {
+            dataConnections.remove(this);
+            if (closing.get() || code == CloseFrame.NORMAL) {
+                return;
+            }
+            if (log.isWarnEnabled()) {
+                log.warn("net client: the data connection of capture {} dropped ({}) - "
+                        + "the session with {} is dead", captureId, code, server);
+            }
+            NetConnection.this.close(NetCloseReason.TRANSPORT_CLOSED);
+        }
+
+        @Override
+        public void onError(Exception e) {
+            if (closing.get()) {
+                return;
+            }
+            if (log.isWarnEnabled()) {
+                log.warn("net client: transport error on the data connection of capture {}: {}",
+                        captureId, e.toString());
+            }
+            NetConnection.this.close(NetCloseReason.TRANSPORT_ERROR);
+        }
     }
 
     /**

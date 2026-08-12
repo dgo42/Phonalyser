@@ -26,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -373,13 +374,17 @@ final class BenchSocket extends WebSocketServer {
     }
 
     /** Spec 4.1's {@code hello} response, with the capability tokens a bench
-     *  that really has an analyzer behind it advertises. */
+     *  that really has an analyzer behind it advertises - and the session handle
+     *  a data connection of spec 4.7 would attach with.  This bench serves no
+     *  captures, so nothing here ever spends it; it is answered because the
+     *  field is part of the handshake and a client is entitled to read it. */
     private Map<String, Object> hello() {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put(NetFields.PROTO, NetProto.PROTO_VERSION);
         data.put(NetFields.SERVER_ID, serverId);
         data.put(NetFields.NAME, SERVER_NAME);
         data.put(NetFields.APP, SERVER_APP);
+        data.put(NetFields.CLIENT_ID, UUID.randomUUID().toString());
         data.put(NetFields.CAPS, List.of(NetFields.CAP_QA40X, NetFields.CAP_GEN));
         return data;
     }

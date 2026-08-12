@@ -26,6 +26,7 @@ import javax.sound.sampled.AudioFormat;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import org.edgo.audio.measure.enums.DeviceFailureReason;
+import org.edgo.audio.measure.net.client.NetConnection.DataConnection;
 import org.edgo.audio.measure.net.proto.BinaryFrame;
 import org.edgo.audio.measure.net.proto.MessageType;
 import org.edgo.audio.measure.net.proto.NetFields;
@@ -56,6 +57,14 @@ import lombok.extern.log4j.Log4j2;
  * this client is not capturing from is a device another client may have.  It is
  * the same discipline the local backends follow - a line is never held open
  * across captures.
+ *
+ * <p><b>So does the data connection.</b>  Spec 4.7 gives every open capture a
+ * socket of its own, dialled between {@code capture.open} and
+ * {@code capture.start} - the server refuses the start {@code NOT_ATTACHED}
+ * before it - and closed with the capture.  It is marked as expected first: the
+ * {@code capture.close} that ends the stream is what makes the BENCH close that
+ * socket, and an unmarked close is spec 4.1's drop, which would report this
+ * stream's ordinary teardown as the bench dying.
  *
  * <p><b>Two kinds of loss, told apart.</b>  A GAP frame is the server's honest
  * confession that it dropped capture data (spec 5); it is forwarded to the
@@ -122,6 +131,11 @@ public final class NetPcmCapture extends AbstractPcmCapture implements MarkedCap
     /** True once the device lock is held, so the close gives back exactly what
      *  the open took. */
     private volatile boolean acquired;
+    /** This capture's own data connection (spec 4.7), or null before the open
+     *  and after the close.  Volatile for the same reason {@link #captureId} is:
+     *  opened and closed on the caller's thread, marked from wherever the stream
+     *  is told it is over. */
+    private volatile DataConnection dataConnection;
 
     /** Who is assembling a bounded record out of this stream - the MARKER frames
      *  of spec 5 and the losses of a GAP - or null while nobody is, and then a
@@ -218,8 +232,23 @@ public final class NetPcmCapture extends AbstractPcmCapture implements MarkedCap
                 grantedChannels, grantedChannels * (grantedBits / 8), grantedRate, false);
         nextPacket = 0;
         // MUTATION 2: the byte position is NOT restarted per open.
-        captureId = handle;
         connection.addStreamListener(handle, this::onFrame);
+        // Spec 4.7: the audio arrives on a socket of its own, and it has to be
+        // attached BEFORE capture.start - which the server refuses
+        // NOT_ATTACHED until it is.  A dial or an attach that fails is reported
+        // as what it is, a capture that could not be opened, and costs nothing:
+        // the stream routing, the remote capture and the lock all go back.
+        DataConnection stream;
+        try {
+            stream = connection.attachData(handle);
+        } catch (RuntimeException e) {
+            connection.removeStreamListener(handle);
+            closeRemote(handle);
+            release();
+            throw e;
+        }
+        dataConnection = stream;
+        captureId = handle;
         // The two ways this stream can end without the socket saying anything:
         // the bench's input lane failing (spec 4.3) and the session dying
         // (spec 4.1).  Both look exactly like a quiet bench until they are heard.
@@ -266,6 +295,14 @@ public final class NetPcmCapture extends AbstractPcmCapture implements MarkedCap
      * Ends the stream and gives the device back, in that order and whatever went
      * wrong on the way: the SPI's close may not throw, and a lock left behind is
      * a device no other client can ever take again.
+     *
+     * <p>The data connection is MARKED before the {@code capture.close} goes out
+     * and closed after it (spec 4.7).  That order is the whole discrimination:
+     * the bench closes this socket as it handles the close, on a connection that
+     * carries no answers, so the close can reach this client before the
+     * {@code resp} does - and an unmarked one is spec 4.1's drop, which would
+     * end the session over an ordinary teardown.  Closing it here as well is
+     * idempotent and is what covers a bench that left the socket to us.
      */
     @Override
     public void close() {
@@ -274,9 +311,17 @@ public final class NetPcmCapture extends AbstractPcmCapture implements MarkedCap
         connection.removeCloseListener(sessionEnd);
         int open = captureId;
         captureId = NOT_OPEN;
+        DataConnection stream = dataConnection;
+        dataConnection = null;
+        if (stream != null) {
+            stream.expectClose();
+        }
         if (open != NOT_OPEN) {
             connection.removeStreamListener(open);
             closeRemote(open);
+        }
+        if (stream != null) {
+            stream.close();
         }
         release();
     }
@@ -510,12 +555,22 @@ public final class NetPcmCapture extends AbstractPcmCapture implements MarkedCap
      * answer only that same thread can deliver.  The handle is deliberately
      * kept, so the caller's {@link #close()} still closes the remote stream and
      * releases the lock.
+     *
+     * <p>The data connection is marked as expected here too.  All three endings
+     * are ones the bench either caused or already knows about - a failed input
+     * lane it confessed (spec 4.3), a session that is going down, a stream this
+     * client has declared broken - so the socket closing after them is the end
+     * of a stream and not the drop of spec 4.1.
      */
     private boolean halt() {
         if (!ended.compareAndSet(false, true)) {
             return false;
         }
         recording.set(false);
+        DataConnection stream = dataConnection;
+        if (stream != null) {
+            stream.expectClose();
+        }
         int open = captureId;
         if (open != NOT_OPEN) {
             connection.removeStreamListener(open);

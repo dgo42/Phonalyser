@@ -35,13 +35,23 @@ public class NetProto {
 
     /** Highest wire-protocol version this build speaks - the value carried by
      *  {@code hello}, the beacon and {@code /info} (spec 1). */
-    public static final int PROTO_VERSION = 1;
+    public static final int PROTO_VERSION = 2;
 
-    /** Lowest wire-protocol version this build still speaks.  Spec 1 negotiates
-     *  RANGES: each side offers {@code [protoMin..proto]} and the server picks
-     *  the highest version inside BOTH ranges, so a v2 peer keeps talking to a
-     *  v1 peer.  Only a truly empty intersection is {@code PROTO_MISMATCH}. */
-    public static final int PROTO_MIN_VERSION = 1;
+    /**
+     * Lowest wire-protocol version this build still speaks.  Spec 1 negotiates
+     * RANGES: each side offers {@code [protoMin..proto]} and the server picks
+     * the highest version inside BOTH ranges.  Only a truly empty intersection
+     * is {@code PROTO_MISMATCH}.
+     *
+     * <p>Equal to {@link #PROTO_VERSION}, so this build's range is {@code 2..2}
+     * and a v1 peer is refused at {@code hello}.  Spec 1 calls that a hard cut
+     * and gives the reason: v2 carries the audio on a SECOND connection a v1
+     * peer never dials (spec 4.7) and refuses {@code capture.start} until that
+     * connection has attached (spec 4.4), so there is no subset of v2 a v1 peer
+     * could be served with.  The negotiation itself is untouched - it is what a
+     * v3 will be agreed through; only the range moved.
+     */
+    public static final int PROTO_MIN_VERSION = PROTO_VERSION;
 
     /** Default port, ONE for both planes: the HTTP endpoints of spec 3 and the
      *  WebSocket upgrade of spec 4 are served by the same listener. */
@@ -84,6 +94,21 @@ public class NetProto {
 
     /** Unanswered pings that declare the connection dead - 2 s (spec 4.1). */
     public static final int MAX_MISSED_PINGS = 4;
+
+    /**
+     * How long a freshly upgraded connection may stay silent before the server
+     * closes it (spec 4).
+     *
+     * <p>A connection's PLANE is decided by its first text message - {@code
+     * hello} makes it the control connection, {@code capture.attach} a data one
+     * - and until that message arrives the server holds no session state for it
+     * at all.  This is what stops a socket that upgrades and then says nothing
+     * from being held for ever: it has no keepalive to declare it dead, because
+     * a keepalive belongs to a session and this is not one yet.  Long enough
+     * that a client dialling its data connection over a slow link still gets to
+     * send its attach.
+     */
+    public static final int PLANE_DECLARATION_TIMEOUT_MS = 10_000;
 
     /** Upload cap for {@code PUT /files}; above it the answer is 413 (spec 3). */
     public static final int MAX_UPLOAD_BYTES = 50 * 1024 * 1024;

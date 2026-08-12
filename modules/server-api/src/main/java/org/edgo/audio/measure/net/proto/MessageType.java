@@ -64,6 +64,12 @@ public enum MessageType {
     CAPTURE_STOP("capture.stop"),
     CAPTURE_CLOSE("capture.close"),
 
+    /** The only message a DATA connection ever sends (spec 4.7): it is that
+     *  connection's first message, which is what MAKES it a data connection,
+     *  and its last.  Everything else on that socket is audio going the other
+     *  way. */
+    CAPTURE_ATTACH("capture.attach"),
+
     /* Remote generator - spec 4.5. */
     GEN_OPEN("gen.open"),
     GEN_CONFIG("gen.config"),

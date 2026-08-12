@@ -252,6 +252,147 @@ class NetLoopbackTest {
     }
 
     /**
+     * Spec 4.7: the audio arrives on the capture's OWN connection, and the
+     * control connection carries none of it.
+     *
+     * <p>That is the whole point of the split, and it is measured from the
+     * bench's side because the client cannot see which socket a frame came in
+     * on: this bench sends every frame on the socket the {@code capture.attach}
+     * arrived on, so a client that never dialled one would receive nothing at
+     * all - and a client that started the stream before attaching would be
+     * refused {@code NOT_ATTACHED} first.
+     */
+    @Test
+    void theCaptureDialsItsOwnDataConnectionAndTheAudioArrivesOnIt() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        List<byte[]> delivered = new ArrayList<>();
+        CountDownLatch batches = new CountDownLatch(1);
+        NetPcmCapture capture = (NetPcmCapture) manager.openCapture(
+                manager.listInputDevices().get(0), RATE_HZ, BITS);
+        capture.setPcmBatchListener((pcm, validBytes) -> {
+            synchronized (delivered) {
+                delivered.add(Arrays.copyOf(pcm, validBytes));
+            }
+            batches.countDown();
+        });
+
+        capture.open();
+
+        assertEquals(1, bench.sessions(),
+                "spec 4: a data connection is not a session - only hello makes one");
+        capture.startRecording();
+        bench.getLastCapture().feed(batch(0));
+        awaitTrue(() -> batches.getCount() == 0,
+                "the audio did not arrive on the data connection");
+        assertArrayEquals(batch(0), delivered.get(0));
+
+        capture.close();
+        assertTrue(manager.getConnection().isOpen(),
+                "spec 4.7: closing a capture closes ITS socket and leaves the session "
+                        + "running - the control connection outlives every capture on it");
+    }
+
+    /**
+     * Spec 4.7: an attach the bench refuses is the failure of the
+     * {@code capture.open} it belongs to - not a socket error, and not a session
+     * that quietly has no audio.
+     *
+     * <p>And it must cost nothing: the capture is closed on the bench and the
+     * device lock goes back, exactly as a refused open does.
+     */
+    @Test
+    void anAttachTheBenchRefusesIsReportedAsTheCaptureOpenFailing() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        bench.setRefuseAttach(true);
+        NetPcmCapture capture = (NetPcmCapture) manager.openCapture(
+                manager.listInputDevices().get(0), RATE_HZ, BITS);
+
+        assertThrows(IllegalStateException.class, capture::open,
+                "the operator is told the capture could not be opened, not that a "
+                        + "socket could not be dialled");
+
+        awaitTrue(() -> !bench.isLocked(MockBench.FIRST_INPUT, true),
+                "an open that failed must cost nothing - the lock goes back");
+        assertTrue(manager.getConnection().isOpen(),
+                "and the SESSION survives: a refused attach is answered and its socket "
+                        + "closed by the bench, which is expected at both ends");
+    }
+
+    /**
+     * Spec 4.1's death rule: a data connection that DROPS kills the whole
+     * session, both ends.
+     *
+     * <p>The control connection is perfectly healthy here and answering pings,
+     * so nothing else would ever notice that the audio of a running measurement
+     * has stopped arriving - the client would sit in front of a frozen scope
+     * believing it was measuring.
+     */
+    @Test
+    void aDataConnectionThatDropsEndsTheWholeSession() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        NetPcmCapture capture = openFirstInput(manager);
+
+        bench.getLastCapture().dropDataConnection();
+
+        awaitTrue(() -> !manager.getConnection().isOpen(),
+                "spec 4.1: one connection dropping is the session dead");
+        awaitTrue(() -> !capture.isRecording(),
+                "and the stream stops with it, so no pane goes on drawing a "
+                        + "measurement of nothing");
+    }
+
+    /**
+     * The other half of that rule, and the one a local mark cannot decide: an
+     * ORDERLY close of a data connection ends the capture and nothing else -
+     * even when this end had not marked the socket first.
+     *
+     * <p>Spec 4.7 puts the answer on the wire rather than in local state for
+     * exactly this reason: the bench closes the socket as it handles a
+     * {@code capture.close}, and its {@code resp} travels on the OTHER
+     * connection, so the close can arrive first.  A client that required its own
+     * mark to have been set in time would end the whole session over an ordinary
+     * teardown - and the operator would lose the bench for closing a stream.
+     */
+    @Test
+    void anOrderlyCloseOfADataConnectionEndsNoSession() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        NetPcmCapture capture = openFirstInput(manager);
+
+        bench.getLastCapture().closeDataConnectionNormally();
+
+        assertTrue(manager.getConnection().isOpen(),
+                "a NORMAL close is the ordinary end of a stream, not spec 4.1's drop - "
+                        + "and no mark of ours was needed to know it");
+        capture.close();
+        assertTrue(manager.getConnection().isOpen(),
+                "and the session is still there afterwards, which is what lets the next "
+                        + "measurement reuse it");
+    }
+
+    /**
+     * Spec 4.7: the planes do not mix, so a control message arriving on a data
+     * connection is a protocol error and the session ends.
+     *
+     * <p>A client that simply HANDLED it would be back where the split started:
+     * control traffic queued behind whatever audio that socket is carrying, and
+     * a peer that has lost track of which connection it is writing to is not one
+     * to keep measuring with (the same rule a malformed frame gets).
+     */
+    @Test
+    void aControlMessageOnADataConnectionEndsTheSession() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        openFirstInput(manager);
+
+        bench.getLastCapture().pushTextOnDataConnection(
+                new NetMessage(MessageType.EV_DEVICE_ERROR)
+                        .put(NetFields.DIRECTION, NetFields.INPUT)
+                        .put(NetFields.DETAIL, DEVICE_FAILURE));
+
+        awaitTrue(() -> !manager.getConnection().isOpen(),
+                "the planes do not mix: text after the attach ends the session");
+    }
+
+    /**
      * Spec 4.4: "the granted rate may differ (device reality), client re-pins" -
      * so the format a module reads off the capture is the BENCH's answer and not
      * the request.
@@ -981,6 +1122,11 @@ class NetLoopbackTest {
                 "spec 4.3: the client surfaces it exactly like a local device error - "
                         + "message + stop the affected modules");
         assertEquals(NetFields.INPUT, faults.direction.get());
+        assertTrue(manager.getConnection().isOpen(),
+                "spec 4.7: the event arrived on the CONTROL connection - the same event "
+                        + "pushed down the capture's data connection is a protocol error "
+                        + "that ends the session, so a session still open is the proof it "
+                        + "took the right socket");
         awaitTrue(() -> !capture.isRecording(),
                 "and the stream really did stop: the server closed its side, so a client "
                         + "that stayed 'live' would show a frozen scope with no audio and "

@@ -71,6 +71,9 @@ class CaptureStreamerTest {
     private static final int BACKLOGGED_ANSWERS = 2;
     /** The u16 the binary header carries the stream id in (spec 5). */
     private static final int MAX_STREAM_ID = 0xFFFF;
+    /** A handle no open ever handed out - what an attach naming a capture this
+     *  session does not have is refused for (spec 4.7). */
+    private static final int UNKNOWN_CAPTURE_ID = 4_242;
     /** The card the names pin binds to the first input - the value the
      *  streaming lines' "(card ...)" slot must carry. */
     private static final String CARD_NAME = "Bench ADC";
@@ -84,7 +87,12 @@ class CaptureStreamerTest {
     private final StubCardStore cards = new StubCardStore();
     private final DeviceCatalog catalog = new DeviceCatalog(AudioBackend.instance(), locks,
             codec, List.of(AudioBackendType.QA40X), cards.getPrefs());
+    /** The session's CONTROL connection (spec 4.7): what a lane's
+     *  {@code ev.device.error} leaves on, and what must never carry a frame. */
     private final FakeChannel channel = new FakeChannel();
+    /** The capture's DATA connection - every binary frame of spec 5 is asserted
+     *  on THIS one, which is what proves the planes really are apart. */
+    private final FakeChannel data = new FakeChannel();
     private final FakeWorker sender = new FakeWorker();
     private final Qa40xGuard qa40x = new Qa40xGuard(AudioBackend.instance(), locks);
     private final CaptureStreamer captures = new CaptureStreamer(AudioBackend.instance(),
@@ -187,7 +195,7 @@ class CaptureStreamerTest {
         Arrays.fill(first, (byte) 0);
         capture.feed(batch(2));
 
-        List<BinaryFrame> frames = channel.getFrames();
+        List<BinaryFrame> frames = data.getFrames();
         assertEquals(2, frames.size());
         assertEquals(FrameType.PCM, frames.get(FIRST).type());
         assertEquals(captureId, frames.get(FIRST).streamId(),
@@ -216,10 +224,10 @@ class CaptureStreamerTest {
         for (int i = 0; i < fed; i++) {
             capture.feed(batch(i));
         }
-        assertEquals(0, channel.getFrames().size(), "nothing leaves while the drain is stalled");
+        assertEquals(0, data.getFrames().size(), "nothing leaves while the drain is stalled");
         sender.release();
 
-        List<BinaryFrame> frames = channel.getFrames();
+        List<BinaryFrame> frames = data.getFrames();
         assertEquals(capacity + 1, frames.size(),
                 "what the queue held - one second of THIS format's audio - plus the "
                         + "one frame that admits the rest is gone");
@@ -239,12 +247,12 @@ class CaptureStreamerTest {
     void aPassWhosePeerWasAlreadyBehindHoldsItsBatchesBack() {
         int captureId = openFirstInput();
         captures.start(captureId);
-        channel.backlogFor(BACKLOGGED_ANSWERS);
+        data.backlogFor(BACKLOGGED_ANSWERS);
 
         capture().feed(batch(1));
 
-        assertEquals(1, channel.getFrames().size(), "the batch is held back, not lost");
-        assertTrue(channel.getBacklogQuestions() > BACKLOGGED_ANSWERS,
+        assertEquals(1, data.getFrames().size(), "the batch is held back, not lost");
+        assertTrue(data.getBacklogQuestions() > BACKLOGGED_ANSWERS,
                 "send() neither blocks nor refuses and the library's outgoing queue "
                         + "is unbounded, so ASKING the transport is the only "
                         + "backpressure this lane has - without it a client that "
@@ -275,8 +283,8 @@ class CaptureStreamerTest {
 
         sender.release();
 
-        assertEquals(PASS_BATCHES, channel.getFrames().size(), "everything queued went out");
-        assertEquals(1, channel.getBacklogQuestions(),
+        assertEquals(PASS_BATCHES, data.getFrames().size(), "everything queued went out");
+        assertEquals(1, data.getBacklogQuestions(),
                 "one question for the whole pass: a drain that asked per batch would "
                         + "be answering for the write it had just made");
     }
@@ -286,7 +294,7 @@ class CaptureStreamerTest {
         int captureId = openFirstInput();
         captures.start(captureId);
         StubCapture capture = capture();
-        channel.failFrames();
+        data.failFrames();
 
         capture.feed(batch(1));
 
@@ -296,6 +304,96 @@ class CaptureStreamerTest {
                         + "it and refuse the client's next capture.open on it");
         assertThrows(NetException.class, () -> captures.stop(captureId),
                 "and the handle is spent");
+    }
+
+    @Test
+    void startingACaptureThatHasNoDataConnectionIsRefusedNotAttached() {
+        int captureId = openOnly();
+
+        NetException refused = assertThrows(NetException.class,
+                () -> captures.start(captureId));
+
+        assertEquals(ErrorCode.NOT_ATTACHED, refused.getCode(),
+                "spec 4.4: the frames of a started stream would have nowhere to go, "
+                        + "and a measurement the client waits for and never gets is "
+                        + "worse than a refusal it can act on");
+        assertEquals(0, capture().getStartCount(),
+                "and the device was never started either");
+    }
+
+    @Test
+    void aCaptureTakesOneDataConnectionAndOnlyOne() {
+        int captureId = openOnly();
+        captures.attach(captureId, data);
+
+        NetException refused = assertThrows(NetException.class,
+                () -> captures.attach(captureId, new FakeChannel()));
+
+        assertEquals(ErrorCode.BAD_REQUEST, refused.getCode(),
+                "spec 4.7: a second connection on one capture would send this "
+                        + "stream's frames to a socket its client is not reading");
+        captures.start(captureId);
+        capture().feed(batch(1));
+        assertEquals(1, data.getFrames().size(), "and the first one still has the audio");
+    }
+
+    @Test
+    void attachingToACaptureThisSessionDoesNotHaveIsRefused() {
+        NetException refused = assertThrows(NetException.class,
+                () -> captures.attach(UNKNOWN_CAPTURE_ID, data));
+
+        assertEquals(ErrorCode.BAD_REQUEST, refused.getCode(),
+                "spec 4.7: the server answers the refusal and closes that socket");
+    }
+
+    @Test
+    void theAudioIsOnTheDataConnectionAndTheDeviceErrorOnTheControlOne() {
+        int captureId = openFirstInput();
+        captures.start(captureId);
+        StubCapture capture = capture();
+
+        capture.feed(batch(1));
+
+        assertEquals(1, data.getFrames().size(), "spec 4.7: the frames are the data lane's");
+        assertEquals(0, channel.getFrames().size(),
+                "and a binary frame on the control connection is a protocol error - "
+                        + "the whole point of the split is that a ping answer never "
+                        + "queues behind a megabyte of PCM");
+
+        data.failFrames();
+        capture.feed(batch(2));
+
+        assertEquals(1, channel.events(MessageType.EV_DEVICE_ERROR).size(),
+                "while the one CONTROL message a capture can produce still goes out "
+                        + "where the control plane is");
+        assertEquals(0, data.events(MessageType.EV_DEVICE_ERROR).size());
+    }
+
+    @Test
+    void closingACaptureClosesItsDataConnection() {
+        int captureId = openFirstInput();
+        captures.start(captureId);
+
+        captures.close(captureId);
+
+        assertEquals(1, data.getCloseCount(),
+                "spec 4.7: the socket exists to carry THIS stream, so the stream "
+                        + "ending is what ends it");
+        assertEquals(0, channel.getCloseCount(),
+                "and the control connection outlives every capture on it");
+    }
+
+    @Test
+    void theTeardownClosesTheDataConnectionsToo() {
+        int captureId = openFirstInput();
+        captures.start(captureId);
+
+        captures.closeAll();
+
+        assertEquals(1, data.getCloseCount(),
+                "spec 4.1: the session's teardown takes its data connections with it, "
+                        + "marked as this end's so the client reads the ordinary end of "
+                        + "a stream and not a second death report");
     }
 
     @Test
@@ -354,7 +452,7 @@ class CaptureStreamerTest {
         int captureId = openFirstInput();
         captures.start(captureId);
         StubCapture capture = capture();
-        channel.failFrames();
+        data.failFrames();
 
         capture.feed(batch(1));
         capture.feed(batch(2));
@@ -374,12 +472,12 @@ class CaptureStreamerTest {
     void aCaptureIdNeverOutgrowsTheStreamIdTheFramesCarry() {
         int last = 0;
         for (int i = 0; i < MAX_STREAM_ID; i++) {
-            last = openFirstInput();
+            last = openOnly();
             captures.close(last);
         }
         assertEquals(MAX_STREAM_ID, last, "the last id of the range is still handed out");
 
-        assertEquals(1, openFirstInput(),
+        assertEquals(1, openOnly(),
                 "and then it wraps: an id past 65 535 would be answered on the "
                         + "control channel but stamped as 0 in every frame, and the "
                         + "client could no longer route them");
@@ -407,7 +505,7 @@ class CaptureStreamerTest {
                 firstInput, "Some other card", RATE_HZ, BITS));
 
         assertEquals(ErrorCode.DEVICE_STALE, refused.getCode());
-        assertEquals(0, channel.getFrames().size());
+        assertEquals(0, data.getFrames().size());
     }
 
     @Test
@@ -430,7 +528,7 @@ class CaptureStreamerTest {
         captures.start(captureId);
         capture.feed(batch(2));
 
-        assertEquals(1, channel.getFrames().get(SECOND).packetCounter(),
+        assertEquals(1, data.getFrames().get(SECOND).packetCounter(),
                 "spec 4.4: a stopped stream keeps its counters");
         captures.close(captureId);
         assertTrue(capture.isClosed());
@@ -460,7 +558,20 @@ class CaptureStreamerTest {
         assertThrows(NetException.class, () -> captures.stop(captureId));
     }
 
+    /** Spec 4.7's sequence, as every streaming test needs it: open, then attach
+     *  the capture's data connection - {@code capture.start} is refused until
+     *  that has happened, so an "open" that stopped short of it could not
+     *  stream at all. */
     private int openFirstInput() {
+        int captureId = openOnly();
+        captures.attach(captureId, data);
+        return captureId;
+    }
+
+    /** {@code capture.open} alone - the half-open state spec 4.7 leaves a capture
+     *  in until its data connection attaches, and all a test that only wants a
+     *  HANDLE needs. */
+    private int openOnly() {
         return captures.open(firstInput, StubDeviceManager.FIRST_INPUT, RATE_HZ, BITS)
                 .path(NetFields.CAPTURE_ID).asInt();
     }

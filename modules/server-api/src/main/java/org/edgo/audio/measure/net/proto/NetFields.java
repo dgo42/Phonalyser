@@ -81,6 +81,18 @@ public class NetFields {
     public static final String PROTO_MIN = "protoMin";
     /** Client application and version, for the server log and lock info. */
     public static final String CLIENT = "client";
+    /**
+     * The session's own handle, answered by {@code hello} and spent by
+     * {@code capture.attach} (spec 4.1, 4.7): a cryptographically random UUID
+     * the server generates per session.
+     *
+     * <p>A SECRET.  It is the ticket that binds a fresh socket to the session
+     * that opened the capture, so it must never be logged, shown in a UI, or
+     * carried in a beacon, a peer-table row or an error message.  What a client
+     * is KNOWN by is {@link #NAME}, which is what a {@code DEVICE_LOCKED}
+     * refusal quotes.
+     */
+    public static final String CLIENT_ID = "clientId";
     /** Optional capability tokens the server advertises in the hello response. */
     public static final String CAPS = "caps";
     /** {@link #CAPS} token: the QA40x extension of 4.6 is served. */
