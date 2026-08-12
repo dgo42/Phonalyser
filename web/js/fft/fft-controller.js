@@ -941,15 +941,19 @@ export class FftController {
     // so rejected / straddling ticks don't count - exactly as the desktop.
     this._analysesTicks++;
 
-    // Per-tick depth readout. When averaging, the displayed "N×" is the accumulator
-    // depth in tick-equivalents (accumFrames / framesPerTick), capped at the target
-    // N - so it climbs 1/N, 2/N, ... as the cross-tick average deepens. With no
-    // averaging (ringN = 1) there is no accumulator; show the single window's own
-    // frame count (1/1).
+    // Per-tick depth readout. In ∞ mode the displayed "N×" is the accumulator depth
+    // in tick-equivalents (accumFrames / framesPerTick) - unbounded, it climbs with
+    // every fold. A finite ring CANNOT read its depth for this: the exponential
+    // window saturates at exactly the target depth, and the emitted readout
+    // subtracts the seed tick (framesDone - 1 below) - depth-derived, the moving
+    // average was stuck one short of N forever. The ring therefore counts PROCESSED
+    // ticks, as the desktop's fill readout does (completedAnalyses - 1, capped at
+    // N). With no averaging (ringN = 1) there is no accumulator; show the single
+    // window's own frame count (1/1).
     const accumFrames = this._accum.accumFrames;
     if (accumulate) {
       const depthTicks = Math.round(accumFrames / perTickFrames);
-      this.framesDone = forever ? depthTicks : Math.min(this.avgTarget, depthTicks);
+      this.framesDone = forever ? depthTicks : Math.min(this.avgTarget + 1, this._analysesTicks);
       // Frame depth (Java getAccumulatedFrames) - the predistortion frame-depth readout,
       // NOT the stop-after-N / completedAnalyses key (that's the per-tick count above).
       this._analysesDone = accumFrames;
