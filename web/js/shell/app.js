@@ -1666,6 +1666,8 @@ async function init() {
       // the dialog re-opens it. The generator pane owns the restart (busy guard + readConfig) and
       // it is a no-op while nothing is playing.
       restartGenerator: () => genPane.restartGenerator(),
+      // The shell's one alert surface - the same one the card section's refused copy uses.
+      showAlert,
     }).bind();
   });
   // Oscilloscope PANE (Java ScopePane): the trace canvas wiring, the two nav scrollbars,

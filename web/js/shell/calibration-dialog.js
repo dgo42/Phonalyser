@@ -26,7 +26,8 @@ export class CalibrationDialog {
    * @param engine the AudioEngine (live generator retune after a DAC calibrate).
    * @param prefs  Preferences (per-channel full-scale getters + save).
    * @param deviceStore the DeviceProfileStore (the calibrate write path).
-   * @param deps  {getLeftField, getRightField, inputLabel, outputLabel, bench, restartGenerator}
+   * @param deps  {getLeftField, getRightField, inputLabel, outputLabel, bench, restartGenerator,
+   *               showAlert}
    *   - getLeftField / getRightField: () => the Left / Right NumericStepField (canonical Vrms).
    *   - inputLabel / outputLabel: () => the current in/out device LABEL (recognition patterns
    *     match the human label, not the deviceId the <select> value carries).
@@ -35,9 +36,11 @@ export class CalibrationDialog {
    *     after this one, and the selected backend changes under it.
    *   - restartGenerator: () => re-opens the playback lane (a no-op while nothing is playing) -
    *     how a DAC calibration reaches a tone the BENCH is emitting, see {@link #_applyToLiveTone}.
+   *   - showAlert: (title, message) => the shared alert modal - the one failure this dialog
+   *     raises is a bench that refused the calibration write. Absent -> console.
    */
   constructor(engine, prefs, deviceStore,
-      { getLeftField, getRightField, inputLabel, outputLabel, bench, restartGenerator }) {
+      { getLeftField, getRightField, inputLabel, outputLabel, bench, restartGenerator, showAlert }) {
     this.engine = engine;
     this.prefs = prefs;
     this.deviceStore = deviceStore;
@@ -47,6 +50,7 @@ export class CalibrationDialog {
     this._outputLabel = outputLabel;
     this._bench = bench;
     this._restartGenerator = restartGenerator;
+    this._showAlert = showAlert || ((title, message) => console.warn(title, message));
     // The onCalibrate committed for the currently open dialog; replaced per open().
     this._onCalibrate = null;
     // What that dialog does ONCE, after the whole submit; replaced per open().
@@ -54,6 +58,8 @@ export class CalibrationDialog {
     // Which rows are enabled this open (a null seed -> disabled + skipped on OK).
     this._leftEnabled = false;
     this._rightEnabled = false;
+    // A refused store this submit, as the [title, message] to say once the modal is down.
+    this._refused = null;
     this._okBound = false;
   }
 
@@ -100,6 +106,7 @@ export class CalibrationDialog {
     this._rightEnabled = this._seedRow(this._getRightField(), cfg.seedRight, cfg.tooltipKey);
     this._onCalibrate = cfg.onCalibrate;
     this._onCommitted = cfg.onCommitted || null;
+    this._refused = null;   // a submit abandoned by Cancel must not report itself at the next OK
     this._modal().show();
   }
 
@@ -129,6 +136,11 @@ export class CalibrationDialog {
     for (const c of committed) await this._onCalibrate(c.ch, c.v);
     if (this._onCommitted) await this._onCommitted();
     this._modal().hide();
+    // AFTER the hide: an alert raised while this modal is still up sits behind it. One report per
+    // submit, whichever row was refused - the store that refused one channel refused the device.
+    const refused = this._refused;
+    this._refused = null;
+    if (refused && this._showAlert) this._showAlert(refused[0], refused[1]);
   }
 
   // -------------------------------------------------------------------------
@@ -216,7 +228,14 @@ export class CalibrationDialog {
       onCalibrate: async (ch, actualVrms) => {
         const scale = actualVrms / measuredVrms;
         const newFs = this.prefs.getAdcFsVoltageRms(stereo ? ch : 'L') * scale;
-        if (!await this._storeAdc(ch, newFs, label, stereo)) return;
+        // A bench that would not take it leaves this client's reference where it was (the store
+        // applies on success): say so rather than let the operator believe the typed value is in
+        // force (ScopeTabControl / FftTabControl.openCalibrationDialog).
+        if (!await this._storeAdc(ch, newFs, label, stereo)) {
+          this._refused = [t('calibrate.title'),
+            t('preferences.audio.card.copyCalibration.failed', label)];
+          return;
+        }
         this.prefs.save();
       },
     });
@@ -247,7 +266,13 @@ export class CalibrationDialog {
       seedRight: stereo ? configured : null,
       onCalibrate: async (ch, measuredVrms) => {
         const newFs = this.prefs.getDacFsVoltageAmpl(stereo ? ch : 'L') * (measuredVrms / configured);
-        if (!await this._storeDac(ch, newFs, label, stereo)) return;
+        // A refused write moved nothing - neither the scalars nor the tone that is playing - and
+        // the operator has to be told (GeneratorPane.openDacCalibrationDialog).
+        if (!await this._storeDac(ch, newFs, label, stereo)) {
+          this._refused = [t('calibrate.dac.title'),
+            t('preferences.audio.card.copyCalibration.failed', label)];
+          return;
+        }
         this.prefs.save();
         stored = true;
       },
