@@ -34,8 +34,10 @@
      wieder - beides unterhalb des System-Mixers.  Was der Mixer getan hat -
      ein Resampling, eine Lautstärkekurve, eine "Verbesserung" -, steckt
      bereits in den Samples, wenn diese Anwendung sie zu sehen bekommt.  Die
-     beiden Backends, die dieser Build hat, teilen sich daher sauber danach
-     auf, was sie versprechen können:</p>
+     Wege, die dieser Build anbietet - der browsereigene, ein QA40x über USB,
+     ein hardwarefreies <a href="#loopback">Loopback</a> und ein Messplatz im
+     Netz -, teilen sich daher sauber danach auf, was sie versprechen
+     können:</p>
   <table class="controls">
     <tr><th>Backend</th><th>Was es ist</th><th>Was es versprechen kann</th></tr>
     <tr><td><b>Web Audio</b></td>
@@ -56,6 +58,15 @@
             solches gelesen.  Das ist die Antwort des Browsers auf den
             Exklusivmodus, und deshalb entsteht eine ernsthafte Messung in
             diesem Build meist an einem QA40x oder an einem Messplatz.</td></tr>
+    <tr><td><b>Loopback</b></td>
+        <td>Überhaupt keine Hardware (<a href="#loopback">unten</a>): Was die
+            Wiedergabespur erzeugt, kommt Sample für Sample an der Aufnahmespur
+            an, ohne die Seite je zu verlassen.</td>
+        <td><b>Bitgenau von Bauart</b>, und der einzige lokale Weg hier, der das
+            ohne ein Instrument ist - es gibt weder Mixer noch Wandler, die
+            dazwischenkämen.  Sein Grundrauschen ist das rechnerische der
+            gewählten Bittiefe, was ihn zu einem Messplatz macht, den man
+            vorhersagen kann, bevor man ihn misst.</td></tr>
     <tr><td><b>Ein Messplatz</b><br/><code>&lt;Server&gt; -> &lt;Backend&gt;</code></td>
         <td>Das Backend eines <a href="#network">Phonalyser-Servers</a>, über das
             Netz erreicht.  Das exklusive Öffnen geschieht auf <em>jener</em>
@@ -141,6 +152,66 @@
 
   <div class="note"><b>Was der Browser braucht.</b>  WebUSB setzt <b>Google Chrome</b> voraus - eine engere Anforderung als die der Anwendung selbst. Phonalyser.web läuft auf jedem Chromium-Browser, doch der Analysator ist bislang nur in Chrome als funktionierend bestätigt: auf derselben Maschine, über <code>https://</code> mit gültigem Zertifikat, erreichten Edge, Opera und Brave ihn nicht. Auf Chromium aufzubauen genügt also nicht; der Browser muss WebUSB auch bereitstellen und einer Seite dessen Nutzung gestatten. Firefox und Safari setzen es überhaupt nicht um, doch so weit kommen Sie dort gar nicht: Die Anwendung selbst <a href="../web-in-browser.html#browser">startet auf einer Nicht-Chromium-Engine nicht</a>.  Die Seite muss über <code>https://</code> oder <code>localhost</code> ausgeliefert werden, und die erste Verbindung erfordert einen Klick: Der Browser öffnet seinen eigenen Geräteauswahldialog, den nur Sie bestätigen können.  Unter Windows muss der Analysator an einen WinUSB-Klassentreiber gebunden sein - ein Schritt pro Rechner, den eine Webseite nicht für Sie ausführen kann.  Wie beim Exklusivmodus besitzt jeweils eine Anwendung das Instrument: Der QA402 / QA403 darf währenddessen weder in der QuantAsylum-Software noch in einem anderen Tab geöffnet sein.</div>
 
+  <h2 id="loopback">Das Loopback-Backend</h2>
+  <p>Ein Backend dieses Builds erreicht überhaupt keine Hardware.  Das
+     <b>Loopback</b> ist ein rein digitaler Pfad: Was die Wiedergabespur
+     erzeugt, kommt Sample für Sample an der Aufnahmespur an, ohne ein
+     Audiogerät und ohne System-Mixer dazwischen.  Es gibt nichts in einer
+     Sound-Systemsteuerung auszuwählen, nichts anzustecken und nichts zu
+     erlauben - es ist in jedem Browser da, in dem diese Anwendung läuft.</p>
+  <p>Damit ist es zugleich der einzige <em>lokale</em> Weg hier, der ohne
+     Instrument bitgenau ist.  Web Audio kann es nicht sein, weil der Mixer
+     davor sitzt; der QA40x kann es sein, weil WebUSB am Mixer vorbei zu einem
+     echten Wandler geht.  Das Loopback ist aus einem einfacheren Grund
+     bitgenau - die Samples verlassen die Seite nie.</p>
+  <p>Sein Zweck ist ein Messplatz mit <em>bekanntem</em> Grundrauschen.  Jedes
+     übergehende Sample wird von demselben Quantisierer quantisiert, den auch
+     die echten Wiedergabepfade verwenden, mit TPDF-Dither unmittelbar vor dem
+     Runden, auf dem letzten Bit der gewählten Bittiefe.  Das Grundrauschen ist
+     damit das rechnerische und keine Eigenschaft irgendeines Wandlers: Die
+     gelieferten Samples digitaler Stille messen <b>0,500&nbsp;LSB
+     Effektivwert</b>, was für ein Wort von <i>N</i>&nbsp;Bit das
+     Breitbandrauschen auf</p>
+  <div class="eq">3,01 - 6,02&nbsp;<i>N</i> dBFS<span class="no">(2)</span></div>
+  <p>legt - also etwa −93&nbsp;dBFS bei 16&nbsp;Bit, −141 bei 24 und −190 bei
+     32, jede Bittiefe genau 6&nbsp;dB pro Bit unter der darüberliegenden.  Was
+     eine Messung dann darüber zeigt, gehört dem geprüften Code - denn sonst ist
+     nichts im Pfad.</p>
+  <ul>
+    <li><b>Auch Stille ist gedithert.</b>  Läuft kein Generator, liefert die
+        Aufnahmespur weiter, und zwar geditherte Stille statt digitaler Nullen -
+        das Grundrauschen ist da, ob ein Signal anliegt oder nicht.</li>
+    <li><b>Die Lieferung folgt der Uhr, nicht dem Prozessor.</b>  Blöcke treffen
+        mit der gewählten Abtastrate ein wie von einem Gerät - fünfzig pro
+        Sekunde, getaktet gegen einen absoluten Zeitplan statt gegen eine
+        Verzögerung nach der anderen, sodass der Strom nicht aus der Echtzeit
+        laufen kann.  Der Desktop gibt jeder Spur einen Thread, der den Rest
+        ihrer Periode verschläft; eine Seite hat keine Threads, also fahren
+        beide Spuren auf Timer-Rückrufen - und ein Rückruf, der zu spät kommt,
+        liefert jeden fälligen Block statt nur einen.  Die Analysen darüber
+        setzen einen Echtzeitstrom voraus: Ein Loopback, das so schnell liefe
+        wie der Prozessor erlaubt, gäbe ihnen ein ganzes Tonleben in einem
+        Augenblick und ihrer Mittelung jeden Zeitbezug.</li>
+    <li><b>Ein Hintergrund-Tab bremst diese Timer.</b>  Browser drosseln die
+        Timer eines Tabs, das nicht im Vordergrund ist, auf etwa einen Rückruf
+        pro Sekunde.  Verloren geht nichts - der ganze Rückstand wird geliefert,
+        sobald das Tab wieder bedient wird -, aber die Blöcke kommen dann
+        schubweise statt gleichmäßig.  Lassen Sie das Tab also im Vordergrund,
+        während eine Loopback-Messung läuft.</li>
+    <li><b>Die Formate sind die volle Leiter.</b>  Fünfzehn Abtastraten von
+        8&nbsp;kHz bis 768&nbsp;kHz, jede mit 16, 20, 24 oder 32 Bit, in beiden
+        Richtungen.  Eingang und Ausgang sind die zwei Enden einer Schleife und
+        laufen deshalb auf einer Uhr: Stellen Sie beide auf dieselbe Rate, sonst
+        liest die Aufnahme einen Strom zurück, der in einem anderen Takt
+        geschrieben wurde.</li>
+    <li><b>Bereiche und Kalibrierung verhalten sich wie bei einer Soundkarte.</b>
+        Die Vollaussteuerungsbereiche sind editierbar, und der
+        Kalibrierungsspeicher gilt für sie wie für jede gewöhnliche Karte.
+        Nichts davon gehört dem Gerät: Es gibt keinen von der Hardware
+        vorgegebenen Bereich und keine aus einem Instrument zurückgelesene
+        Kalibrierung - es gibt kein Instrument.</li>
+  </ul>
+
   <h2 id="how">Wie es funktioniert, grob umrissen</h2>
 
   <div class="diagram">
@@ -205,7 +276,7 @@
      Ganzzahl-Samples in ihrem eigenen Takt.  Jedes Sample <i>u</i> (eine
      vorzeichenlose Ganzzahl mit <i>b</i> Bit) wird einmalig in einen
      dimensionslosen Bruchteil des Vollausschlags umgewandelt:</p>
-  <div class="eq"><i>x</i> = (<i>u</i> − 2<sup><i>b</i>−1</sup>) / 2<sup><i>b</i>−1</sup>&nbsp;&nbsp;∈ [−1, +1)<span class="no">(2)</span></div>
+  <div class="eq"><i>x</i> = (<i>u</i> − 2<sup><i>b</i>−1</sup>) / 2<sup><i>b</i>−1</sup>&nbsp;&nbsp;∈ [−1, +1)<span class="no">(3)</span></div>
   <p>und im <a href="ring-buffer.html">Ringpuffer</a> gespeichert.  Die gesamte
      Analysepipeline arbeitet in diesen normierten Einheiten; die Umrechnung in
      Volt erfolgt erst zur Anzeigezeit, unter Verwendung der ADC-Vollausschlag-
