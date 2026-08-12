@@ -600,6 +600,16 @@ export class PreferencesDialog {
     root.setProperty('--ui-font-size', Math.round((parseFloat(p[1]) || 9) * 1.333) + 'px');
     root.setProperty('--ui-font-weight', style.includes('bold') ? 'bold' : 'normal');
     root.setProperty('--ui-font-style', style.includes('italic') ? 'italic' : 'normal');
+    // The emphasised variant (uiFontBold) rides its own variable set - canvas readouts
+    // resolve it through ui-font.js exactly as the base font (falls back to the base
+    // face in bold, per the preference's own default).
+    const b = String(prefs.uiFontBold.get()).split('|');
+    const bStyle = b[2] || 'bold';
+    root.setProperty('--ui-font-bold', b[0] || p[0] || 'Consolas');
+    root.setProperty('--ui-font-bold-size',
+      Math.round((parseFloat(b[1]) || parseFloat(p[1]) || 9) * 1.333) + 'px');
+    root.setProperty('--ui-font-bold-weight', bStyle.includes('bold') ? 'bold' : 'normal');
+    root.setProperty('--ui-font-bold-style', bStyle.includes('italic') ? 'italic' : 'normal');
   }
 
   // Enumerate input/output devices and populate the selects. THE ONLY ENUMERATION PATH, and there

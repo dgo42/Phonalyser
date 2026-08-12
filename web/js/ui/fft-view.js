@@ -20,6 +20,7 @@ import {
 // installRectZoom base machinery); this view supplies the log-aware freq / dB
 // pixel↔value mappings through the injected callbacks (Java FftView overrides).
 import { RectZoom } from './rect-zoom.js';
+import { uiFont } from './ui-font.js';
 // Shared per-tone lobe lift (data-derived floor + lobe extent + log-domain
 // stretch) - the SAME mechanism the .frc de-embed uses (fft-compensation.js
 // correctToneLobe). Reused here to lift the manual-fundamental lobe to the user
@@ -1193,10 +1194,12 @@ export class FftView {
     return (v >= 0 ? '+' : '') + v.toFixed(digits);
   }
 
-  /** Sets the mono font + returns its char metrics (Java textExtent("M")). */
+  /** Sets the preference-driven UI font + returns its char metrics (Java textExtent("M");
+   *  the desktop draws these readouts in uiFontNormal/uiFontBold, not a hard-coded face). */
   _monoMetrics(g, bold) {
-    g.font = (bold ? 'bold ' : '') + '12px Consolas, "Courier New", monospace';
-    return { charW: g.measureText('M').width, lineH: 14 };
+    const f = uiFont(bold);
+    g.font = f.css;
+    return { charW: g.measureText('M').width, lineH: Math.round(f.px + 2) };
   }
 
   /** Java FftView.drawCentred - text horizontally centred on centreX, top at y. */

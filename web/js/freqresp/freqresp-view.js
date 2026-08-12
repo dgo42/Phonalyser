@@ -37,6 +37,7 @@ import { lanczosNaN, LANCZOS_A, MAX_LANCZOS_DOWNSAMPLE } from '../dsp/lanczos.js
 // installRectZoom base machinery); this view supplies the log-freq / dB
 // pixel↔value mappings + clamps (Java FreqRespView zoom overrides).
 import { RectZoom } from '../ui/rect-zoom.js';
+import { uiFont } from '../ui/ui-font.js';
 // Shared axis tick generation + label formatters (Java AbstractMeasurementView) - the adaptive
 // log / sub-decade frequency ticks + the fine crosshair frequency readout.
 import {
@@ -1156,10 +1157,13 @@ export class FreqRespView {
   /** Top-left two-row min/max table of the smoothed diff curve (FreqRespView.drawCompareMeasurementTable). */
   _drawCompareMeasurementTable(g, plot) {
     if (Number.isNaN(this.compareSmoothedMin) || Number.isNaN(this.compareSmoothedMax)) return;
-    g.font = '11px "Segoe UI", sans-serif';
+    // Measurement table: drawn in the preference-driven UI font (the axes and the cursor
+    // readout keep the chart font - the preference governs measurement tables only).
+    const f = uiFont();
+    g.font = f.css;
     g.textBaseline = 'top'; g.textAlign = 'left';
     g.fillStyle = '#222';
-    const x = plot.x + 6, y = OVERLAY_TABLE_TOP, lineH = 14;
+    const x = plot.x + 6, y = OVERLAY_TABLE_TOP, lineH = Math.round(f.px + 2);
     g.fillText('max: ' + formatDbReadout(this.compareSmoothedMax), x, y);
     g.fillText('min: ' + formatDbReadout(this.compareSmoothedMin), x, y + lineH);
   }
@@ -1432,10 +1436,13 @@ export class FreqRespView {
   _drawUnevennessTable(g, plot, belowCompareTable) {
     const text = this._unevennessReadout();
     if (text == null) return;
-    g.font = '11px "Segoe UI", sans-serif';
+    // Measurement table (see _drawCompareMeasurementTable): preference-driven UI font;
+    // the shared lineH keeps the two tables' stacking consistent.
+    const f = uiFont();
+    g.font = f.css;
     g.textBaseline = 'top'; g.textAlign = 'left';
     g.fillStyle = '#222';
-    const lineH = 14;
+    const lineH = Math.round(f.px + 2);
     const x = plot.x + 6;
     const y = OVERLAY_TABLE_TOP + (belowCompareTable ? 2 * lineH + 4 : 0);
     g.fillText(text, x, y);
