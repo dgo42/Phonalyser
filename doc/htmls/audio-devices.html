@@ -16,8 +16,8 @@
   table { border-collapse: collapse; margin: .6rem 0 1.2rem; width: 100%; font-size: .9rem; }
   th, td { border: 1px solid #8888; padding: .25rem .5rem; text-align: left; white-space: nowrap; }
   th { background: #8881; }
-  td.ok  { color: #1a8f1a; font-weight: 600; }
-  td.no  { color: #b00; }
+  td.ok, span.ok { color: #1a8f1a; font-weight: 600; }
+  td.no, span.no { color: #b00; }
   td.mono, code { font-family: Consolas, Menlo, monospace; }
   #status { font-style: italic; opacity: .8; }
   small { opacity: .75; }
@@ -56,6 +56,20 @@ capabilities, only attempt a context at a given rate.</small></p>
   <th>requested rate</th><th>created?</th><th>actual ctx.sampleRate</th>
 </tr></thead><tbody></tbody></table>
 
+<h2>3b. Per-output probe (<code>new AudioContext({sinkId})</code>)</h2>
+<p><small>Where the engine implements the <code>sinkId</code> context option (Chromium 110+), a
+context can be OPENED on a specific output sink - which makes the sink's own default rate and a
+rate grid probeable after all, the closest a tab gets to section 2 for outputs. The binding is
+verified through <code>ctx.sinkId</code>: an engine that predates the option ignores the unknown
+dictionary member and would silently re-probe the default path instead. <b>ok</b> = granted at the
+requested rate, <b>~n</b> = opened but running at n, <b>x</b> = refused, <b>(default path)</b> =
+the option was ignored. A missing device here is missing one layer LOWER: the browser only ever
+sees the sound server's sinks - a card whose output profile is off (or whose playback is held by a
+direct ALSA client) has no sink to list.</small></p>
+<p id="outApis"><small></small></p>
+<p><button id="pickOut">Pick an output (selectAudioOutput)</button> <span id="pickResult"></span></p>
+<table id="sinkRates"><thead><tr><th>output device</th><th>default rate</th></tr></thead><tbody></tbody></table>
+
 <h2>4. Bit-depth probe, per device (<code>sampleSize</code>)</h2>
 <p><small>The Media Capture spec lists <code>sampleSize</code> as a constrainable property, so
 "bit depth is not exposed" deserves measuring rather than asserting. Each INPUT is opened in turn and
@@ -79,7 +93,9 @@ for completeness with the reason.</small></p>
       handed to the page are float32 taken <b>post-mixer</b>, so the device's own converter depth is
       already gone by the time anything is read. Treat a reported depth as information, not control.</li>
   <li><b>Exclusive mode</b> - none. Every stream goes through the shared OS mixer + its resampler.</li>
-  <li><b>Per-output-device formats</b> - not queryable; <code>setSinkId</code> only routes.</li>
+  <li><b>Per-output-device formats</b> - depth: never. Rates: probeable only through the
+      <code>sinkId</code> context option where implemented (section 3b); elsewhere
+      <code>setSinkId</code> only routes.</li>
 </ul>
 
 <script>
@@ -146,6 +162,65 @@ async function depthOf(deviceId){
   } catch (e) {
     return { err: e.name };
   } finally { await stopStream(stream); }
+}
+
+/**
+ * Opens a context ON a specific sink (rate == null probes the sink's own default rate).
+ * An engine that predates the sinkId option IGNORES the unknown dictionary member instead of
+ * throwing - which would silently re-probe the default path and report it as the sink's - so
+ * the binding is verified through ctx.sinkId, never assumed. The spec spells the DEFAULT
+ * binding as the empty string, which is why "default" is accepted either way.
+ */
+async function probeCtxOnSink(sinkId, rate){
+  let ctx;
+  try {
+    ctx = new AudioContext(rate ? { sinkId, sampleRate: rate } : { sinkId });
+    const bound = ("sinkId" in ctx)
+      ? (ctx.sinkId === sinkId || (sinkId === "default" && ctx.sinkId === ""))
+      : null;
+    return { ok: true, actual: ctx.sampleRate, bound };
+  } catch (e) {
+    return { ok: false, err: e.name };
+  } finally { if (ctx) try { await ctx.close(); } catch(_){} }
+}
+
+/** Section 3b - which output-routing APIs exist here, and the per-sink rate grid. */
+async function runSinkProbe(outputs){
+  const ctxSink  = "setSinkId" in AudioContext.prototype;
+  const elSink   = !!(window.HTMLMediaElement && HTMLMediaElement.prototype.setSinkId);
+  const pickable = !!(navigator.mediaDevices && navigator.mediaDevices.selectAudioOutput);
+  const mark = (b, yes, no) => b ? `<span class="ok">${yes}</span>` : `<span class="no">${no}</span>`;
+  $("#outApis").innerHTML = "<small>"
+    + "<code>AudioContext</code> sinkId: " + mark(ctxSink, "implemented", "not implemented")
+    + " &nbsp; <code>HTMLMediaElement.setSinkId</code> (route only): " + mark(elSink, "implemented", "not implemented")
+    + " &nbsp; <code>selectAudioOutput</code> (the picker Firefox gates outputs behind): "
+    + mark(pickable, "implemented", "not implemented") + "</small>";
+
+  const head = $("#sinkRates thead tr");
+  head.innerHTML = "<th>output device</th><th>default rate</th>" + RATES.map(r=>`<th>${r/1000} k</th>`).join("");
+  const tb = $("#sinkRates tbody"); tb.innerHTML = "";
+  if (!ctxSink){
+    tb.innerHTML = `<tr><td colspan="${2+RATES.length}"><i>sinkId option absent - outputs stay`
+      + ` route-only in this browser; section 3 probes the default path</i></td></tr>`;
+    return;
+  }
+  for (const d of outputs){
+    const name = d.label || trunc(d.deviceId);
+    status(`probing output "${name}" ...`);
+    let cells = `<td>${name}</td>`;
+    const def = await probeCtxOnSink(d.deviceId, null);
+    cells += def.ok
+      ? `<td class="ok">${def.actual}${def.bound===false ? " <i>(default path)</i>" : ""}</td>`
+      : `<td class="no">${def.err}</td>`;
+    for (const r of RATES){
+      const res = await probeCtxOnSink(d.deviceId, r);
+      if (!res.ok)                  cells += `<td class="no" title="${res.err}">x</td>`;
+      else if (res.bound === false) cells += `<td title="sinkId ignored">(default path)</td>`;
+      else if (res.actual === r)    cells += `<td class="ok">ok</td>`;
+      else                          cells += `<td title="running at ${res.actual}">~${res.actual}</td>`;
+    }
+    const tr = document.createElement("tr"); tr.innerHTML = cells; tb.appendChild(tr);
+  }
 }
 
 /** Section 4 - what each device reports about its own bit depth, and which depths it will accept. */
@@ -263,11 +338,30 @@ async function run(){
     ctb.appendChild(tr);
   }
 
+  await runSinkProbe(audio.filter(d => d.kind === "audiooutput"));
   await runDepthProbe(audio);
 
   status(`done - ${inputs.length} input(s), ${audio.length-inputs.length} output(s).`);
   $("#scan").disabled = false;
 }
+
+// selectAudioOutput needs its own click (a user gesture per call), so it cannot ride the Scan
+// run. On engines that gate output enumeration behind it (Firefox), a successful pick is ALSO
+// the grant - re-run Scan afterwards and the sink list may grow.
+$("#pickOut").addEventListener("click", async () => {
+  const out = $("#pickResult");
+  if (!(navigator.mediaDevices && navigator.mediaDevices.selectAudioOutput)){
+    out.innerHTML = "<small><span class='no'>selectAudioOutput is not implemented here</span></small>";
+    return;
+  }
+  try {
+    const d = await navigator.mediaDevices.selectAudioOutput();
+    out.innerHTML = `<small><span class="ok">picked:</span> ${d.label || "(no label)"} `
+      + `<code>${trunc(d.deviceId)}</code> - re-run Scan, the grant may have widened the list</small>`;
+  } catch (e) {
+    out.innerHTML = `<small><span class="no">${e.name}</span> - the picker was dismissed or refused</small>`;
+  }
+});
 
 $("#scan").addEventListener("click", () => run().catch(e => {
   status("error: " + e.message); $("#scan").disabled = false; console.error(e);
