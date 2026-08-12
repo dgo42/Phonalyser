@@ -65,7 +65,7 @@ export function createConfigPorts({ prefs, deviceStore }) {
   return [
     {
       id: 'preferences',
-      titleKey: 'jsonConfig.title.preferences',
+      titleKey: 'web.jsonConfig.title.preferences',
       storageKey: PREFS_KEY,
       schema: PREFERENCES_SCHEMA,
       loadLive: () => prefs.configDocument(),
@@ -74,7 +74,7 @@ export function createConfigPorts({ prefs, deviceStore }) {
     },
     {
       id: 'devices',
-      titleKey: 'jsonConfig.title.devices',
+      titleKey: 'web.jsonConfig.title.devices',
       storageKey: DEVICES_KEY,
       schema: DEVICES_SCHEMA,
       loadLive: () => deviceStore.configDocument(),

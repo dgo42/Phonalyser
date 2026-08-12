@@ -170,7 +170,6 @@ export class NetDeviceManager {
    */
   async connect(server) {
     await this.disconnect();
-    if (this._openConnection == null) return t('net.error.noConnector');
     let connection;
     try {
       connection = await this._openConnection(server);
@@ -913,7 +912,7 @@ export class NetDeviceManager {
    *  BEFORE it dials (spec §3) - the one connect failure with an explanation worth giving, and
    *  the one an operator cannot otherwise diagnose from "connection failed". */
   _connectFailureText(server, error) {
-    if (isMixedContentBlock(server)) return t('net.error.mixedContent', `${server.host}:${server.port}`);
+    if (isMixedContentBlock(server)) return t('web.net.error.mixedContent', `${server.host}:${server.port}`);
     // The Java bundle already carries this exact sentence ({0} = host:port, {1} = the reason),
     // translated into all 31 locales - so the web reuses the key instead of inventing a twin the
     // i18n round would have had to translate a second time.

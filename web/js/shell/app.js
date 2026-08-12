@@ -1519,8 +1519,8 @@ function buildConfigMenus(ports, dialog) {
         $('<button type="button" class="dropdown-item">').text(labelText)
           .on('click', () => dialog.open(port, mode)),
       );
-      host.append(item(t('menu.tools.config.current'), 'live'));
-      if (port.corruptEntry() != null) host.append(item(t('menu.tools.config.corrupt'), 'corrupt'));
+      host.append(item(t('web.menu.tools.config.current'), 'live'));
+      if (port.corruptEntry() != null) host.append(item(t('web.menu.tools.config.corrupt'), 'corrupt'));
     }
   };
   // The Tools dropdown is the one holding the Preferences item; it carries no id of its own,
