@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selected depth, so the measured floor is the arithmetic one and any
   deviation is the code under test rather than a sound card. It needs no
   hardware and is available on every platform.
+- **The web app gains that loopback backend too.** The browser port picks up
+  the same hardware-free bench: playback returns to capture with nothing but
+  arithmetic in between, TPDF dither on the last bit of the selected depth, and
+  a noise floor that is therefore the computed one - 0.500 LSB RMS, one bit
+  deeper moving it down by 6 dB. It is selectable beside Web Audio and the
+  QA40x, offers the full rate ladder at 16, 20, 24 or 32 bits on both
+  directions, and needs no device, no permission and no hardware at all. Where
+  the desktop gives each lane a thread, a page has none, so both lanes are
+  paced by timer callbacks against an absolute schedule.
 - **A standalone device scanner.** A small command-line tool that prints,
   for every audio backend of the running platform, the devices with the
   exact rates and depths they take - the same listing the app itself sees -
