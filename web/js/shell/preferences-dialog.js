@@ -193,7 +193,7 @@ export class PreferencesDialog {
     // refreshBackendCombo). Subscribed HERE rather than in bind(): the combo build is guarded on
     // the element existing, so this is safe before the DOM is wired and cannot be forgotten by a
     // caller that only constructs the dialog.
-    MessageBus.instance().subscribe(Events.NET_BACKENDS_CHANGED, (e) => this.onNetBackendsChanged(e));
+    MessageBus.instance().subscribe(Events.REMOTE_BACKENDS_CHANGED, (e) => this.onNetBackendsChanged(e));
   }
 
   // ----- Preferences dialog: stage on open, commit on OK, discard on Cancel -----
@@ -1444,7 +1444,7 @@ export class PreferencesDialog {
       // selected one. So the row is SHOWN instead, marked with the state
       // the server list already has a word for, and the combo still cannot disagree with the
       // preference - which is all that was ever required. The moment the bench answers,
-      // NET_BACKENDS_CHANGED rebuilds this combo and the real entry takes its place.
+      // REMOTE_BACKENDS_CHANGED rebuilds this combo and the real entry takes its place.
       opts.push({ value: wanted, enabled: true, why: '',
         label: `${remoteBackendOf(wanted)} (${t('net.servers.state.offline')})` });
     } else if (opts.length > 0 && !opts.some((o) => o.value === wanted)) {

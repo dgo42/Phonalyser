@@ -745,13 +745,13 @@ export class AudioEngine {
 
   /** Acquires a fresh forward-read capture cursor over the shared ring for the
    *  scope stream-forward record, opening the device if no consumer holds it yet
-   *  (mirror MessageBus.request(CAPTURE_ACQUIRE)). Returns the SignalBufferReader,
-   *  or null when the device could not be opened. The caller MUST pair each
-   *  successful acquire with {@link #releaseCaptureReader}. */
+   *  (mirror SharedCapture.acquire - a direct call, not a bus round trip). Returns
+   *  the SignalBufferReader, or null when the device could not be opened. The caller
+   *  MUST pair each successful acquire with {@link #releaseCaptureReader}. */
   async acquireCaptureReader() { return this._capture.acquire(); }
 
   /** Releases one capture reference taken by {@link #acquireCaptureReader}
-   *  (mirror MessageBus.publish(CAPTURE_RELEASE)). */
+   *  (mirror SharedCapture.release). */
   async releaseCaptureReader() { return this._capture.release(); }
 
   /** Acquires a cursor over the DEDICATED MEASUREMENT capture ring (the Tune-notch wizard's

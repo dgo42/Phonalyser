@@ -149,7 +149,7 @@ export class NetDeviceManager {
    */
   _setBackendEntries(entries) {
     this._backendEntries = entries;
-    MessageBus.instance().publish(Events.NET_BACKENDS_CHANGED, entries);
+    MessageBus.instance().publish(Events.REMOTE_BACKENDS_CHANGED, entries);
   }
 
   /** The cached remote-backend entries - read SYNCHRONOUSLY by the combo build. Empty with no

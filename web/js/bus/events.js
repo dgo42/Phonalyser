@@ -53,13 +53,11 @@ export const Events = Object.freeze({
    *  pick their pane by ID - one subscriber per ID. */
   PANE_TITLE_CLICK_PREFIX: 'paneTitle.click.',
 
-  /** Request - opens (or refcount-increments) the shared input capture device. Responder: the
-   *  SharedCapture singleton. Response: the live SignalBuffer on success, or null on failure. */
-  CAPTURE_ACQUIRE: 'capture.acquire',
-
-  /** Notification - releases one reference on the shared capture device. The device is closed only
-   *  when the last consumer has released. */
-  CAPTURE_RELEASE: 'capture.release',
+  // capture.acquire / capture.release are GONE, as in the Java baseline: consumers call the
+  // shared capture's acquire()/release() directly and hold the reference they took.
+  // capture.batch.available below is the deliberate divergence and STAYS: Java wakes its
+  // consumers on the ring buffer's own monitor, and a browser has no blocking threads to wake -
+  // this event is the web's equivalent of that notification.
 
   /** Notification - the shared capture device just appended a fresh batch of samples to its
    *  SignalBuffer. No payload. Drives the oscilloscope's capture-driven redraw. */
@@ -136,11 +134,17 @@ export const Events = Object.freeze({
   FFT_CAPTURE_RESYNC: 'fft.capture.resync',
 
   /** Notification - the backends a connected Phonalyser server offers changed: a session opened
-   *  or ended, or the bench sent ev.devices.changed. Payload: the new entry list (possibly
-   *  empty). The Preferences backend combo rebuilds from it - WEB-ONLY in the sense that Java
-   *  calls refreshBackendCombo() directly when its server-list dialog closes; the web's session
-   *  can also open from elsewhere, so the change is announced instead of assumed. */
-  NET_BACKENDS_CHANGED: 'net.backends.changed',
+   *  or ended, or the bench sent ev.devices.changed. The Preferences backend combo rebuilds from
+   *  it. Both baselines carry this event under this name and value; the PAYLOAD differs. Here it
+   *  is the new entry list (possibly empty) and the handler branches on an empty one - a session
+   *  that is gone takes the bench's transient card with it. Java publishes no payload and its
+   *  subscriber re-reads the list from the remote-backend UI.
+   *
+   *  <p>The web also announces MORE moments than Java does: Java re-composes the combo by a
+   *  direct call when its server-list dialog closes, whereas a web session can open or end from
+   *  elsewhere (an auto-connect, a page served by a server), so every change is announced instead
+   *  of assumed. */
+  REMOTE_BACKENDS_CHANGED: 'remote.backends.changed',
 
   /** Notification - the FFT pane's loaded calibration list changed (file added/removed/replaced/
    *  cleared). No payload - subscribers read the correction store; the view re-derives the

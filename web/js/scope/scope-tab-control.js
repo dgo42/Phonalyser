@@ -243,7 +243,7 @@ export class ScopeTabControl {
       return;
     }
     // Acquire a forward-read capture cursor, opening the device if the scope isn't
-    // already recording (Java MessageBus.request(CAPTURE_ACQUIRE)).
+    // already recording (Java SharedCapture.acquire - a direct call, not a bus round trip).
     const reader = await this.engine.acquireCaptureReader();
     if (!reader) {
       setStatus(t('scope.save.error') + ': '
