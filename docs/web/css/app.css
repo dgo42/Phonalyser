@@ -349,10 +349,12 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
    whole table never shifts when the auto-ranging unit in the row name
    ("Vpp, µV" vs "Vpp, mV" vs "Vpp, V") changes width. Wide enough to hold the
    longest name+unit ("Vmean, µV"); table-layout:fixed + the table's definite
-   max-content width make the per-cell widths authoritative so no boundary moves. */
-.scope-meas-table .mt-name { text-align: left; width: 76px; min-width: 76px; max-width: 76px; }
-.scope-meas-table .mt-cur, .scope-meas-table th.mt-cur { width: 52px; min-width: 52px; max-width: 52px; }
-.scope-meas-table .mt-stat, .scope-meas-table th.mt-stat { width: 52px; min-width: 52px; max-width: 52px; }
+   max-content width make the per-cell widths authoritative so no boundary moves.
+   Sized in ch, not px: the columns stay fixed against VALUE changes but scale
+   with the configured UI font - a larger font would clip inside pixel widths. */
+.scope-meas-table .mt-name { text-align: left; width: 11.5ch; min-width: 11.5ch; max-width: 11.5ch; }
+.scope-meas-table .mt-cur, .scope-meas-table th.mt-cur { width: 8ch; min-width: 8ch; max-width: 8ch; }
+.scope-meas-table .mt-stat, .scope-meas-table th.mt-stat { width: 8ch; min-width: 8ch; max-width: 8ch; }
 .scope-meas-table .mt-cur, .scope-meas-table .mt-stat,
 .scope-meas-table td.mt-num { text-align: right; }
 /* Floating pop-out window (Java createMeasurementWindow / ToolWindow): a titled
@@ -514,15 +516,13 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 
 .fft-meta { position: absolute; top: 5px; right: 18px; display: flex; align-items: center; gap: 12px; z-index: 3; font-size: 11px; color: #555; }
 .fft-meta .unit-sel { width: auto; font-size: 11px; padding: 1px 18px 1px 6px; }
-/* Distortion-table level unit (Java FftView distortionUnitCombo, 42px x BTN_H at a 4px gap):
-   it keeps the slot right after the external-window button but is NOT one of the flat
-   buttons - a drop-down needs its own width and its own chrome, so it is spaced off the
-   row's right edge and follows it as buttons come and go. Sized to the widest label
-   ("dBFS") plus the arrow rather than Java's fixed 42px, which the browser's own select
-   chrome would clip. */
-.canvas-wrap .lr-tools .unit-sel { width: auto; min-width: 42px; height: 22px; margin-left: 4px;
-  font-size: 11px; padding: 0 16px 0 5px; border: 1px solid #606060; border-radius: 0;
-  background-color: #dcdcdc; color: #202020; }
+/* Distortion-table level unit (Java FftView distortionUnitCombo): it keeps the slot right
+   after the external-window button, spaced off the row's edge so it follows as buttons come
+   and go - but its LOOK is the magnitude-axis unit combo's (.fft-meta .unit-sel above), the
+   one drop-down design the pane already has; only placement and a floor wide enough for
+   "dBFS" plus the arrow are its own. */
+.canvas-wrap .lr-tools .unit-sel { width: auto; min-width: 57px; margin-left: 4px;
+  font-size: 11px; padding: 1px 18px 1px 6px; }
 
 /* ===== tile tabs ===== */
 .tiletabs { display: flex; align-items: stretch; height: 46px; background: #f0f0f0;
