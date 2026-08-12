@@ -701,7 +701,9 @@ export class GeneratorPane {
         // throws - it lands in filePlayError, and the status line is where it belongs.
         const refused = engine.filePlayError;
         if (refused) { $('#status').text(refused); this.setGenFileBtn(false); return; }
-        this.setGenFileBtn(true);
+        // Read back rather than assumed: an upload the operator cancelled resolves here with no
+        // error and nothing playing, and the LED must not claim otherwise.
+        this.setGenFileBtn(engine.filePlaying);
       } catch (e) { $('#status').text('play failed: ' + e.message); this.setGenFileBtn(false); }
     });
     $('#genFileLoop').on('change', () => {
@@ -717,22 +719,62 @@ export class GeneratorPane {
   }
 
   /**
-   * Puts up the "uploading to the bench" notice - a plain titled panel, no progress and no
-   * cancel: the pane's own Stop already aborts the session, and a second control for it would be
-   * one more thing to get wrong.
+   * Puts up the "uploading to the bench" notice - a MODAL with one Cancel, in the same busy-shell
+   * shape the sweep uses. Nothing is playing while the bytes travel, so what the operator needs
+   * is not the pane's file Stop but a Cancel of this transfer, and the page underneath stays
+   * blocked until the upload ends one way or another. Static backdrop and no keyboard dismissal
+   * (markup): the only ways out are Cancel and the transfer finishing, so no dismissal can leave
+   * an upload running behind a page that looks idle - and with no user-close path there is
+   * nothing for a hide veto to catch.
    *
-   * <p>NOT modal. A modal would block the Stop the operator needs while a slow upload runs -
-   * #genFilePlay IS that Stop for as long as the file is playing - which is the opposite of
-   * helping. A second STARTED while the notice is up changes nothing: the class is already set.
+   * <p>A second STARTED while it is up changes nothing: the Cancel handler is re-bound in place
+   * rather than stacked, and showing a shown modal is a no-op.
    */
   openUploadNotice() {
-    $('#genUploadNotice').addClass('open');
+    this._uploadWanted = true;
+    $('#genUploadCancel').prop('disabled', false)
+      .off('click.genUpload').on('click.genUpload', () => this._cancelUpload());
+    const el = (typeof document === 'undefined') ? null : document.getElementById('genUploadModal');
+    if (!el || typeof window === 'undefined' || !window.bootstrap) return;
+    const modal = window.bootstrap.Modal.getOrCreateInstance(el);
+    const onShown = () => {
+      el.removeEventListener('shown.bs.modal', onShown);
+      // A refusal can end the transfer inside the fade-in, and a hide issued during that
+      // transition is ignored - re-issue it here, or the notice would stay up over nothing.
+      if (!this._uploadWanted) this.closeUploadNotice();
+    };
+    el.addEventListener('shown.bs.modal', onShown);
+    modal.show();
   }
 
   /** Takes the notice down. Idempotent, and harmless without a preceding open: it is driven by
-   *  the finished event, which fires on every outcome of the upload. */
+   *  the finished event, which fires on every outcome of the upload - the file playing, a
+   *  refusal, a link that died, or the operator's Cancel. */
   closeUploadNotice() {
-    $('#genUploadNotice').removeClass('open');
+    this._uploadWanted = false;
+    const el = (typeof document === 'undefined') ? null : document.getElementById('genUploadModal');
+    if (!el || typeof window === 'undefined' || !window.bootstrap) return;
+    // Re-resolved from the element instead of a stored instance: a close that arrives before
+    // this pane ever opened the notice must find nothing and do nothing.
+    const modal = window.bootstrap.Modal.getInstance(el);
+    if (modal) modal.hide();
+  }
+
+  /**
+   * Cancel: stops the transfer through the same cooperative seam the pane's file button uses -
+   * the controller's stop flag, which the upload span reads at its next look and which turns
+   * into the bench's own stop once the command in flight has returned. The notice is NOT taken
+   * down here: it comes down with the finished event the span publishes on its way out, so a
+   * cancel ends exactly like a refusal.
+   *
+   * <p>One shot - the button goes dead as soon as it is pressed, because the stop is honoured
+   * where the span next looks, not immediately.
+   */
+  _cancelUpload() {
+    if ($('#genUploadCancel').prop('disabled')) return;
+    $('#genUploadCancel').prop('disabled', true);
+    Promise.resolve(this.engine.stopFile())
+      .catch((e) => console.warn('Cancelling the bench upload failed: ' + e.message));
   }
 
   setGenFileBtn(on) {

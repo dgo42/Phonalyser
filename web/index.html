@@ -202,16 +202,6 @@
             <button id="genPlay" class="play-big" data-i18n-title="generator.play.start"><i class="bi bi-play-fill"></i></button>
           </div>
         </div>
-        <!-- Bench-upload notice (Java GeneratorPane.openUploadNotice): a titled NON-MODAL panel
-             in the floating tool-window chrome the scope's record progress already uses, with no
-             progress bar and no cancel. No backdrop, and pointer-events off because it carries no
-             control at all: every click reaches what is under it, above all the generator's own
-             Stop (#genFilePlay), which has to stay dispatchable for the whole upload. Sits OUTSIDE
-             .gen-controls, which a collapsed generator pane hides. -->
-        <div id="genUploadNotice" class="scope-meas-window scope-rec-window" style="pointer-events:none">
-          <div class="smw-titlebar"><span class="smw-title" data-i18n="generator.loadFrom.dialog">Play from...</span></div>
-          <div class="scope-rec-body"><span class="scope-rec-progress" data-i18n="generator.upload.busy">The audio file is being uploaded to the bench...</span></div>
-        </div>
       </section>
 
       <!-- horizontal sash between the generator column and the right column -->
@@ -1489,6 +1479,26 @@
       <canvas id="frMeter" width="520" height="100" class="fr-meter"></canvas>
       <div class="text-center mt-2">
         <button id="frBusyCancel" type="button" class="btn btn-sm btn-outline-secondary" data-i18n="common.cancel">Cancel</button>
+      </div>
+    </div>
+  </div></div>
+</div>
+
+<!-- ===== Bench-upload notice (the desktop's GeneratorPane.openUploadNotice, deliberately
+     diverged): while a playback file travels to a bench this is a MODAL, in the same busy-shell
+     shape as the sweep's above - title, one message line, one Cancel. Nothing is playing yet, so
+     the button that ends this wait is a Cancel of its own rather than the pane's file Stop, and
+     the page underneath is deliberately blocked for the duration. Static backdrop, no keyboard
+     dismissal and no close X: a dismissal that bypassed Cancel would leave the transfer running
+     behind a page that looks idle. The notice comes down on every outcome of the upload span
+     (fileUpload.finished), so it can never outlive the transfer. ===== -->
+<div class="modal fade" id="genUploadModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-dialog-centered" style="max-width: 460px;"><div class="modal-content prefs">
+    <div class="modal-header py-2"><h6 class="modal-title" data-i18n="generator.loadFrom.dialog">Play from...</h6></div>
+    <div class="modal-body">
+      <p class="mb-2 small text-center" data-i18n="generator.upload.busy">The audio file is being uploaded to the bench...</p>
+      <div class="text-center mt-2">
+        <button id="genUploadCancel" type="button" class="btn btn-sm btn-outline-secondary" data-i18n="common.cancel">Cancel</button>
       </div>
     </div>
   </div></div>
