@@ -253,10 +253,12 @@ export class FftTabControl {
     // Stop-after-N (enable + count) and mains-suppression combo (FftTabControl).
     $('#fftStopAfterNEn').prop('checked', prefs.fftStopAfterNEnabled.get());
     // Stop-after-N NumericStepField (Java stopAfterNField) - push the pref count into the field
-    // (setValue is silent) and grey it when the toggle is off; the full forever-AND-checked gate
-    // is recomputed by refreshStopAfterEnable() off the averages/checkbox flow.
+    // (setValue is silent), then apply the full forever-AND-checked gate: seeded state must be
+    // gated exactly like a change (finite averages + a checked box saved from an earlier
+    // forever session otherwise renders the checkbox live where it must be greyed).
     const fStopN = this._getField('fftStopAfterN');
-    if (fStopN) { fStopN.setValue(prefs.fftStopAfterN.get()); fStopN.setDisabled(!prefs.fftStopAfterNEnabled.get()); }
+    if (fStopN) fStopN.setValue(prefs.fftStopAfterN.get());
+    this.refreshStopAfterEnable();
     $('#fftMains').val(prefs.fftMainsSuppression.get());
 
     $('.fft-pane .lr.l, .fft-pane .lr.r').removeClass('on');
