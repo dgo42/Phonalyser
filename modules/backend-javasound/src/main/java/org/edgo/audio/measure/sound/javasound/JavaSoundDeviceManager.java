@@ -211,6 +211,19 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
                 }
                 continue;
             }
+            // A device that reports no formats is a phantom - a PCM with nothing
+            // behind it (an HDMI codec without a sink) that cannot open at any
+            // rate.  Dropped HERE so every consumer - the GUI combos, a server's
+            // device list, the scanner - sees the same set.  The system default
+            // stays listed: it is a role, not a PCM, and reports no formats by
+            // construction.  The probe rides the formats cache.
+            if (!name.equals(SYSTEM_DEFAULT_LABEL)
+                    && listSupportedFormats(ref, !input).isEmpty()) {
+                if (log.isInfoEnabled()) {
+                    log.info("{} reports no formats - not listed", ref.displayName());
+                }
+                continue;
+            }
             slot++;
             out.add(ref);
         }

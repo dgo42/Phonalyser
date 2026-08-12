@@ -212,11 +212,10 @@ public final class DeviceScanner {
             // The backend's own rendering, not one composed here: a device that
             // knows how it should read - a card name and a port instead of an
             // ALSA address - would otherwise have that answer ignored.
-            // A device that reports NO formats is omitted entirely, like a
-            // backend the machine does not have: a phantom PCM with nothing
-            // behind it (an HDMI codec without a sink) tells the reader
-            // nothing the bench could use.  A probe ERROR still prints - that
-            // one is a finding, not an absence.
+            // Formats print exactly as the backend reports them - this report
+            // shows what the live backends DO, so filtering happens in the
+            // backend or not at all (JavaSound itself omits phantom
+            // format-less devices from its listing).
             formats(manager, device, output);
         }
     }
@@ -231,6 +230,8 @@ public final class DeviceScanner {
             return;
         }
         if (formats.isEmpty()) {
+            line(INDENT_DEVICE + device.displayName());
+            line(INDENT_FORMAT + "(no formats reported)");
             return;
         }
         line(INDENT_DEVICE + device.displayName());
