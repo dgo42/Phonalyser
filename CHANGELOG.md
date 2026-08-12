@@ -7,8 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.1] - xxxx.xx.xx
 
+### Added
+
+- **A digital loopback backend.** What the playback lane quantises is what
+  the capture lane delivers, with no OS device in between - a bench with a
+  known noise floor: the samples are dithered at the last bit of the
+  selected depth, so the measured floor is the arithmetic one and any
+  deviation is the code under test rather than a sound card. It needs no
+  hardware and is available on every platform.
+- **A standalone device scanner.** A small command-line tool that prints,
+  for every audio backend of the running platform, the devices with the
+  exact rates and depths they take - the same listing the app itself sees -
+  for bug reports and bench setup.
+- **An FAQ chapter in the help.** A question catalog with its own live
+  search box, covering among others the time-discontinuity warnings, busy
+  devices, volume pinning and server security; the audio-backend theory
+  chapter gains a loopback measurement section. All help languages.
+- **The distortion table's level cells have a unit selector.** The THD/IMD
+  table's per-line levels can be read in the unit of choice instead of dBV
+  alone. Desktop and web alike.
+
 ### Changed
 
+- **The net protocol is v2: every capture streams on its own connection.**
+  Audio no longer shares the control WebSocket - a capture attaches its own
+  data connection, so control commands stay responsive while PCM streams at
+  full rate. Server and clients speak v2 only: a 1.2.1 client pairs with a
+  1.2.1 server.
+- **Linux audio devices carry their real names.** A device is named by its
+  card's product name and socket - "CUBILUX CB5 - Line In" - taken from the
+  kernel's own card list, instead of the chip-and-address spelling
+  ("CB5 [plughw:1,1]"). Devices that report no formats at all - phantom
+  PCMs with nothing behind them, such as an HDMI output without a sink -
+  are no longer listed: the device combos, a server's device list and the
+  scanner all show the same set. The system default entry stays, and
+  Windows/macOS names are unchanged.
 - **Server downloads are the per-platform ZIPs alone.** Each ZIP already
   carries the server's fat jar beside the natives, the launcher and the
   service scripts; the separate bare jars were duplicate downloads and are no
@@ -76,6 +109,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes, and the open path resolves the container separately, repacking
   samples at the device boundary - the depth selected is the converter's
   true depth.
+- **"Snap frequency to nearest FFT bin" used the output clock.** With
+  unequal input and output rates the snapped tone landed off the analysis
+  bin grid - and the pane's rate label followed the wrong clock - so the
+  averaged spectrum smeared. The snap, the labels and the dual-tone bracket
+  now follow the input rate the analysis actually runs at; the waveform
+  period alignment keeps the DAC clock. Desktop and web alike.
+- **Switching between sine and dual-sine while playing rebuilt the previous
+  waveform.** The live restart replayed the record of the tone before the
+  change - entering dual-tone kept a single tone sounding, leaving it kept
+  both. The restart now rebuilds from the just-committed form.
+- **The web generator could not start from a deployed build.** The DDS
+  worklet was addressed relative to the source tree, which resolves outside
+  the app once bundled - every production deployment answered the start
+  with "could not open the output device" while a dev-served tree worked.
+  The worklet address now resolves in both layouts.
+- **Web: generator start and stop did not restart the statistics.** The FFT
+  accumulator and the scope's running statistics averaged across the
+  silence/tone boundary. Both transitions now reset them, exactly like a
+  form change - and form edits made while the generator is off no longer
+  reset anything, because the emitted signal did not change.
+- **Web: the interface font preferences reached only plain text.** The FFT
+  statistics block and the frequency-response tables are drawn on the
+  canvas and stayed on built-in fonts whatever the preference said; they
+  now follow the normal and bold interface fonts, and the scope table's
+  columns scale with the font size instead of clipping larger fonts.
+- **Web: infinite averaging fell back to the default on reload.** The
+  forever entry of the averages selector has no JSON spelling, so it saved
+  as nothing and every reload silently restored the default; it now
+  round-trips.
+- **Web: Firefox offered no output devices.** Firefox reveals audio outputs
+  only through its speaker picker; a scan that comes back bare now raises
+  the picker - on the scan click itself - so an output can be selected at
+  all.
 
 ## [1.2.0] - 2026-08-07
 

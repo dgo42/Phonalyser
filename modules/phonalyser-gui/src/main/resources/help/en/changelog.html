@@ -14,8 +14,17 @@
      <a href="https://github.com/dgo42/Phonalyser/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a>.</p>
 
   <h2><a name="v1.2.1" id="v1.2.1"></a>1.2.1 - xxxx.xx.xx</h2>
+    <h3>Added</h3>
+    <ul>
+      <li><b>A digital loopback backend.</b> What the playback lane quantises is what the capture lane delivers, with no OS device in between - a bench with a known noise floor: the samples are dithered at the last bit of the selected depth, so the measured floor is the arithmetic one and any deviation is the code under test rather than a sound card. It needs no hardware and is available on every platform.</li>
+      <li><b>A standalone device scanner.</b> A small command-line tool that prints, for every audio backend of the running platform, the devices with the exact rates and depths they take - the same listing the app itself sees - for bug reports and bench setup.</li>
+      <li><b>An FAQ chapter in the help.</b> A question catalog with its own live search box, covering among others the time-discontinuity warnings, busy devices, volume pinning and server security; the audio-backend theory chapter gains a loopback measurement section. All help languages.</li>
+      <li><b>The distortion table's level cells have a unit selector.</b> The THD/IMD table's per-line levels can be read in the unit of choice instead of dBV alone. Desktop and web alike.</li>
+    </ul>
     <h3>Changed</h3>
     <ul>
+      <li><b>The net protocol is v2: every capture streams on its own connection.</b> Audio no longer shares the control WebSocket - a capture attaches its own data connection, so control commands stay responsive while PCM streams at full rate. Server and clients speak v2 only: a 1.2.1 client pairs with a 1.2.1 server.</li>
+      <li><b>Linux audio devices carry their real names.</b> A device is named by its card's product name and socket - "CUBILUX CB5 - Line In" - taken from the kernel's own card list, instead of the chip-and-address spelling ("CB5 [plughw:1,1]"). Devices that report no formats at all - phantom PCMs with nothing behind them, such as an HDMI output without a sink - are no longer listed: the device combos, a server's device list and the scanner all show the same set. The system default entry stays, and Windows/macOS names are unchanged.</li>
       <li><b>Server downloads are the per-platform ZIPs alone.</b> Each ZIP already carries the server's fat jar beside the natives, the launcher and the service scripts; the separate bare jars were duplicate downloads and are no longer attached to a release.</li>
     </ul>
     <h3>Fixed</h3>
@@ -29,6 +38,13 @@
       <li><b>Linux capability scans covered only cards /proc/asound can describe.</b> The format and rate probe read the USB stream descriptors, so a PCI or HDA card answered with nothing. When /proc/asound has no answer, the exact formats and rates are now read from the direct hardware device (<code>aplay</code>/<code>arecord --dump-hw-params</code> on <code>hw:card,device</code>), never through the resampling plug layer, so every card reports what its converter actually takes.</li>
       <li><b>ALSA unity-gain pinning skipped cards whose volume controls match no port name.</b> The pin looked a control up by the selected jack's port word and gave up when the card names its controls differently - the measurement then ran at whatever volume the mixer happened to hold. When no name matches, every volume control of the selected card's direction is now pinned to unity and restored afterwards.</li>
       <li><b>WASAPI-exclusive devices taking 24 valid bits in a 32-bit container were not offered at 24.</b> The exclusive probe tested only the packed spelling of each depth, so such devices scanned as 16- or 32-bit only. The probe now reports the exact valid bits whichever container the driver takes, and the open path resolves the container separately, repacking samples at the device boundary - the depth selected is the converter's true depth.</li>
+      <li><b>"Snap frequency to nearest FFT bin" used the output clock.</b> With unequal input and output rates the snapped tone landed off the analysis bin grid - and the pane's rate label followed the wrong clock - so the averaged spectrum smeared. The snap, the labels and the dual-tone bracket now follow the input rate the analysis actually runs at; the waveform period alignment keeps the DAC clock. Desktop and web alike.</li>
+      <li><b>Switching between sine and dual-sine while playing rebuilt the previous waveform.</b> The live restart replayed the record of the tone before the change - entering dual-tone kept a single tone sounding, leaving it kept both. The restart now rebuilds from the just-committed form.</li>
+      <li><b>The web generator could not start from a deployed build.</b> The DDS worklet was addressed relative to the source tree, which resolves outside the app once bundled - every production deployment answered the start with "could not open the output device" while a dev-served tree worked. The worklet address now resolves in both layouts.</li>
+      <li><b>Web: generator start and stop did not restart the statistics.</b> The FFT accumulator and the scope's running statistics averaged across the silence/tone boundary. Both transitions now reset them, exactly like a form change - and form edits made while the generator is off no longer reset anything, because the emitted signal did not change.</li>
+      <li><b>Web: the interface font preferences reached only plain text.</b> The FFT statistics block and the frequency-response tables are drawn on the canvas and stayed on built-in fonts whatever the preference said; they now follow the normal and bold interface fonts, and the scope table's columns scale with the font size instead of clipping larger fonts.</li>
+      <li><b>Web: infinite averaging fell back to the default on reload.</b> The forever entry of the averages selector has no JSON spelling, so it saved as nothing and every reload silently restored the default; it now round-trips.</li>
+      <li><b>Web: Firefox offered no output devices.</b> Firefox reveals audio outputs only through its speaker picker; a scan that comes back bare now raises the picker - on the scan click itself - so an output can be selected at all.</li>
     </ul>
 
   <h2><a name="v1.2.0" id="v1.2.0"></a>1.2.0 - 2026-08-07</h2>
