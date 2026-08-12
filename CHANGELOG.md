@@ -26,6 +26,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The distortion table's level cells have a unit selector.** The THD/IMD
   table's per-line levels can be read in the unit of choice instead of dBV
   alone. Desktop and web alike.
+- **Web version catch-up.** The browser port picks up this release's bench-side
+  work. An upload to a bench now says so: the same notice the desktop raises
+  while the bytes move, covering the whole prepare-and-upload phase rather than
+  the transfer alone, and coming down on every outcome - the file playing, a
+  refusal, a link that died. It is a modal carrying its own Cancel, because
+  nothing is playing yet: the page underneath is blocked for as long as the
+  bytes move, and the one way out is to cancel the transfer. A calibration the
+  bench refuses is no longer
+  silent either: the crosshair calibrate of the scope, of the FFT and of the
+  generator all report it, through the same message the card-copy path already
+  used, so a full scale that never reached the server cannot be mistaken for one
+  in force. The message bus is the desktop's own: the event announcing that a
+  server's backends appeared or vanished carries the desktop's name and value,
+  and the shared capture is acquired and released by direct call as it is there,
+  leaving on the bus the one batch notification a page still needs, having no
+  blocking threads to wake. The help gains the FAQ chapter in English, German
+  and Ukrainian - adapted where the browser measures through a bench rather than
+  a local driver - alongside this release's help refresh and rebuilt search
+  indexes.
 
 ### Changed
 
