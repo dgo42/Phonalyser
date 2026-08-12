@@ -83,11 +83,12 @@ import { remoteBackendOf } from '../net/net-device-ref.js';
 
 // --- enum value sets (the legal serialised names, mirroring the Java enums) ---
 const E = {
-  // WEB_AUDIO and QA40X are the backends a BROWSER actually has (Java's OS backends have no
-  // counterpart here). The four OS names stay legal so a value persisted by an earlier build still
+  // WEB_AUDIO, QA40X and LOOPBACK are the backends a BROWSER actually has (Java's OS backends
+  // have no counterpart here; the digital loopback needs no device at all, so it ports as it
+  // stands). The four OS names stay legal so a value persisted by an earlier build still
   // loads - enumOr() gates both `backend` and every perBackend map key, and an unknown name is
   // silently dropped, which would orphan that backend's saved device selections.
-  AudioBackendType: ['WASAPI', 'WDMKS', 'COREAUDIO', 'JAVASOUND', 'WEB_AUDIO', 'QA40X'],
+  AudioBackendType: ['WASAPI', 'WDMKS', 'COREAUDIO', 'JAVASOUND', 'WEB_AUDIO', 'QA40X', 'LOOPBACK'],
   Channel: ['L', 'R'],
   TriggerEdge: ['RISE', 'FALL'],
   TriggerType: ['EDGE', 'GLITCH'],

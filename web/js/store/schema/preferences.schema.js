@@ -32,8 +32,8 @@ export const PREFERENCES_SCHEMA = {
     "backend": {
       "type": "string",
       "default": "WASAPI",
-      "examples": ["WEB_AUDIO", "QA40X", "net:JAVASOUND"],
-      "description": "The audio backend measurements run on. In the browser the real choices are WEB_AUDIO (the browser's own audio input and output) and QA40X (a QuantAsylum QA402/QA403 driven over WebUSB); the desktop names WASAPI, WDMKS, COREAUDIO and JAVASOUND stay legal so a document written by the desktop build still loads. A remote bench is stored as net:<the server's own backend name>, because the server, not this client, decides what it offers."
+      "examples": ["WEB_AUDIO", "QA40X", "LOOPBACK", "net:JAVASOUND"],
+      "description": "The audio backend measurements run on. In the browser the real choices are WEB_AUDIO (the browser's own audio input and output), QA40X (a QuantAsylum QA402/QA403 driven over WebUSB) and LOOPBACK (a digital loopback with no hardware, whose playback returns to its own capture at a known noise floor); the desktop names WASAPI, WDMKS, COREAUDIO and JAVASOUND stay legal so a document written by the desktop build still loads. A remote bench is stored as net:<the server's own backend name>, because the server, not this client, decides what it offers."
     },
     "uiLanguage": {
       "type": "string",
@@ -1635,7 +1635,7 @@ export const PREFERENCES_SCHEMA = {
     // ---- per-backend device selections -----------------------------------
     "perBackend": {
       "type": "object",
-      "description": "Device selection and stream format remembered separately for each audio backend, keyed by the backend name (WEB_AUDIO, QA40X, the desktop names WASAPI, WDMKS, COREAUDIO and JAVASOUND, or net:<name> for a remote bench). Switching backend therefore brings back the devices and rates that backend was last used with, rather than resetting them. Keys that are neither a known backend name nor a net: reference are dropped when read.",
+      "description": "Device selection and stream format remembered separately for each audio backend, keyed by the backend name (WEB_AUDIO, QA40X, LOOPBACK, the desktop names WASAPI, WDMKS, COREAUDIO and JAVASOUND, or net:<name> for a remote bench). Switching backend therefore brings back the devices and rates that backend was last used with, rather than resetting them. Keys that are neither a known backend name nor a net: reference are dropped when read.",
       "additionalProperties": {
         "type": "object",
         "description": "One backend's remembered input and output setup.",

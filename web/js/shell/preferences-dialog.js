@@ -11,6 +11,7 @@ import { Events } from '../bus/events.js';
 import { NumericStepField, NumericStepModel, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
 import { CardSection } from './card-section.js';
 import { QA40X_BACKEND } from '../qa40x/qa40x-rate-constraint.js';
+import { LOOPBACK_BACKEND } from '../loopback/loopback-device-ref.js';
 import { netBackendValue, remoteBackendOf } from '../net/net-device-ref.js';
 import { backendDisplayName } from '../audio/audio-backend-type.js';
 import { EMBEDDED } from './build-profile.js';
@@ -1403,6 +1404,12 @@ export class PreferencesDialog {
         // (web.browser.unsupported.message) - it used to say "Chrome or Edge", which told an
         // Opera or Brave operator their browser was the problem when it is not.
         why: webUsb ? '' : t('web.preferences.qa40x.requiresWebUsb') },
+      // The digital loopback: pure arithmetic, so it is never disabled - it needs no device, no
+      // permission and no secure context. It shares the local gate above all the same, because a
+      // page served by a Phonalyser server offers that server's backends and nothing of this
+      // machine's. Its label comes from the one table that already holds every backend's shown
+      // name, rather than a second spelling of it here.
+      { value: LOOPBACK_BACKEND, label: backendDisplayName(LOOPBACK_BACKEND), enabled: true, why: '' },
     ];
     // A CONNECTED server's backends stand beside the local ones, one entry each, named
     // "<server> -> <backend>" (spec 4.3's explicit listing rule). Read SYNCHRONOUSLY from the

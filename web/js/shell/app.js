@@ -13,6 +13,8 @@ import { deviceErrorText } from '../audio/device-failure-reason.js';
 import { Qa40xDeviceFinder } from '../qa40x/qa40x-device-finder.js';
 import { Qa40xDeviceManager } from '../qa40x/qa40x-device-manager.js';
 import { QA40X_BACKEND } from '../qa40x/qa40x-rate-constraint.js';
+import { LoopbackDeviceManager } from '../loopback/loopback-device-manager.js';
+import { LOOPBACK_BACKEND } from '../loopback/loopback-device-ref.js';
 import { FftViewCorrection } from '../fft/fft-view-correction.js';
 import { CorrectionStore } from '../common/correction-store.js';
 import { CalibrationDialog } from './calibration-dialog.js';
@@ -100,6 +102,11 @@ const formIcon = (form) => `assets/icons/signal-${form.toLowerCase().replace(/_/
 // settles, so no pane handler can fire in between.
 let engine;
 let qa40xManager;
+// The digital loopback backend's manager. Built in the same init block, and for the same reason
+// held here rather than inside the engine: it OWNS the crossing its capture and playback lanes
+// meet on, so one instance per page is what makes a lane pair a loop at all. It needs no device
+// and no permission - only the two depth suppliers below.
+let loopbackManager;
 // The net backend (doc/NET-PROTOCOL.md): the session + remote catalogue, and the remembered
 // servers block the server-list modal edits. Both are constructed in init's modals step, where
 // the Preferences store is already loaded - registration replays the stored block into it.
@@ -1610,7 +1617,17 @@ async function init() {
   // as it asks activeBackend() per open.
   // The forward the audio layer holds instead of the manager (net-manager-facade.js owns the
   // member list, the absent-session answers and the arity that must match the manager's).
-  engine = new AudioEngine({ prefs, qa40xManager, qa40xFinder,
+  // The loopback's depths come from the LOOPBACK block of the per-backend preferences, read at
+  // each session boundary through these two suppliers: the operator can change a depth without
+  // changing backend, and the engine keeps its capture source across sessions, so a value read
+  // once here would go on encoding at the resolution that was selected when the page loaded.
+  // Read from the LOOPBACK block by name rather than from current(): a session may well be opened
+  // while the Preferences dialog is showing another backend's block.
+  loopbackManager = new LoopbackDeviceManager({
+    inputDepthOf: () => prefs.prefsFor(LOOPBACK_BACKEND).inputBitDepth,
+    outputDepthOf: () => prefs.prefsFor(LOOPBACK_BACKEND).outputBitDepth,
+  });
+  engine = new AudioEngine({ prefs, qa40xManager, qa40xFinder, loopbackManager,
     netManager: netManagerFacade(() => netManager) });
   fftViewCorrection = new FftViewCorrection(engine.config, fftCorrectionStore);
   fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running, correction: fftViewCorrection });
@@ -2067,6 +2084,11 @@ async function init() {
       // different question and are resolved by TYPE - see PreferencesDialog.settingsManager.
       backendManager: (name) => {
         if (name === QA40X_BACKEND) return qa40xManager;
+        // The loopback enumerates its OWN formats - the full rate ladder at four sample widths -
+        // so the dialog must reach its manager, or the rate combo would fall back to the static
+        // Web Audio list and the depth rows would stay hidden on the one backend whose whole
+        // subject is the sample width.
+        if (name === LOOPBACK_BACKEND) return loopbackManager;
         return (netManager && netManager.isRemoteBackend(name)) ? netManager : null;
       },
       // The connected server's backends, read synchronously at each combo build from the

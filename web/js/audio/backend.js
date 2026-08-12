@@ -57,6 +57,7 @@ import { FftController } from '../fft/fft-controller.js';
 import { Qa40xCaptureSource } from '../qa40x/qa40x-capture-source.js';
 import { Qa40xPlaybackSink } from '../qa40x/qa40x-playback-sink.js';
 import { QA40X_BACKEND } from '../qa40x/qa40x-rate-constraint.js';
+import { LOOPBACK_BACKEND } from '../loopback/loopback-device-ref.js';
 import { scanDevicesForBackend } from './devices.js';
 
 const HARMONIC_COUNT = 9;                  // H2..H10 default (overridable via config.harmonicCount)
@@ -83,11 +84,19 @@ export class AudioEngine {
    *     Scan that carries user activation needs the same instance to raise the chooser once
    *     (see {@link #scanDevices}). Omitted -> an analyzer this origin has never been granted can
    *     never become visible, so the QA40X backend stays empty forever.
+   *   - loopbackManager: the LoopbackDeviceManager the LOOPBACK backend runs on. Injected for the
+   *     same reason the QA40x one is - it OWNS the crossing its two lanes meet on, so both lanes
+   *     of one session must come from the same instance, and a module-level one would join lanes
+   *     across every engine in the page. It carries no device and no permission, so the shell
+   *     builds it unconditionally. Omitted -> the LOOPBACK backend has no crossing and says so
+   *     when selected.
    */
-  constructor({ prefs = null, qa40xManager = null, qa40xFinder = null, netManager = null } = {}) {
+  constructor({ prefs = null, qa40xManager = null, qa40xFinder = null, netManager = null,
+    loopbackManager = null } = {}) {
     this._prefs = prefs;
     this._qa40x = qa40xManager;
     this._qa40xFinder = qa40xFinder;
+    this._loopback = loopbackManager;
     // The net backend's session + remote catalogue (doc/NET-PROTOCOL.md). Injected exactly as
     // the QA40x manager is, and for the same reason: the shell owns the server list and the
     // dial, neither of which belongs in the audio layer. Omitted -> selecting a server backend
@@ -420,8 +429,10 @@ export class AudioEngine {
     // The net manager is handed on so devices.js can take its net branch: without it a scan on a
     // server backend falls through to the LOCAL getUserMedia probe and fills the combos with THIS
     // machine's devices while the backend is remote - and the first open then fails on a device
-    // name the bench never offered.
-    return scanDevicesForBackend(backend, manager, (t) => this._status(t), granter, this._net);
+    // name the bench never offered. The loopback manager travels for exactly the same reason: its
+    // branch must not fall through to the microphone probe either.
+    return scanDevicesForBackend(backend, manager, (t) => this._status(t), granter, this._net,
+      backend === LOOPBACK_BACKEND ? this._requireLoopback() : null);
   }
 
   /** The WebUSB grant seam for a scan that carries user activation: the injected finder on the
@@ -466,9 +477,24 @@ export class AudioEngine {
   _newCaptureSource(backend) {
     if (remoteBackendOf(backend) != null) return this._newNetCaptureSource();
     this._requireNotEmbedded(backend);
+    if (backend === LOOPBACK_BACKEND) {
+      // The manager builds the lane, unlike the two branches around it, because the crossing the
+      // lane meets its playback twin on is the MANAGER's state (loopback-device-manager.js).
+      return this._requireLoopback().openCapture(null);
+    }
     return (backend === QA40X_BACKEND)
       ? new Qa40xCaptureSource(this._requireQa40x())
       : new WebAudioCaptureSource({ status: (t) => this._status(t) });
+  }
+
+  /** The injected loopback manager, or a loud failure - the same rule the QA40x manager follows:
+   *  a backend whose manager the shell never wired must fail visibly, never silently as "no
+   *  devices". */
+  _requireLoopback() {
+    if (this._loopback == null) {
+      throw new Error('LOOPBACK backend selected but no LoopbackDeviceManager was injected into the AudioEngine');
+    }
+    return this._loopback;
   }
 
   /** The EMBEDDED packaging has no local devices at all - the page a server serves is not a
@@ -527,6 +553,12 @@ export class AudioEngine {
       });
     }
     this._requireNotEmbedded(backend);
+    if (backend === LOOPBACK_BACKEND) {
+      // The dither argument Java's openPlayback carries is deliberately absent here: this backend
+      // dithers at its own selected depth and discards the caller's setting, so there is nothing
+      // to pass (loopback-playback.js states why a movable floor would defeat the backend).
+      return this._requireLoopback().openPlayback(null, this.config.ditherBits);
+    }
     return (backend === QA40X_BACKEND)
       ? new Qa40xPlaybackSink(this._requireQa40x())
       : new WebAudioPlaybackSink(deps);
