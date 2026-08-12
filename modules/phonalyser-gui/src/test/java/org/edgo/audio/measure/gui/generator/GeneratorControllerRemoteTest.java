@@ -148,7 +148,7 @@ class GeneratorControllerRemoteTest {
                 RemoteBackendRegistry.instance().getUi(),
                 "META-INF/services/...RemoteBackendUi must name the recording stub");
         remoteUi.reset();
-        // The full remote key: what it IS (QA40X) and where (SERVER_ID); the NET
+        // The full remote key: what it IS (QA40X) and where (SERVER_ID); the net
         // carrier is derived, never selected by itself (dual-level rule).
         audio.setActive(BackendKey.of(SERVER_ID, AudioBackendType.QA40X));
 

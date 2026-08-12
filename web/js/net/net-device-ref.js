@@ -8,7 +8,7 @@
  * this device must carry.
  *
  * `backend` answers what the device IS - the TRUE remote type (a QA403 on a bench answers
- * QA40X); `carrier` answers NET. The carrier is what routes every backend dispatch at the net
+ * QA40X); `carrier` answers NET_BACKEND. The carrier is what routes every backend dispatch at the net
  * manager instead of at the LOCAL driver of the same name - a QA40x on the bench across the
  * room must not be opened over this machine's USB - while the true type is what type-specific
  * control keys on, local or remote alike. The wire text stays in `remoteBackend`: it is the
@@ -30,7 +30,7 @@ export const NET_BACKEND = 'NET';
 /**
  * The prefix that makes a SERVER backend's name a distinct choice in the client's backend combo
  * - the web's spelling of Java's carrier/type split (NetDeviceRef: backend() is the true remote
- * type, carrier() is NET).
+ * type, carrier() is the net carrier).
  *
  * It exists because the two namespaces genuinely collide: a bench's "QA40X" and this machine's
  * "QA40X" are different devices reached over different transports, and a combo value of plain
@@ -57,8 +57,8 @@ export function remoteBackendOf(value) {
     ? value.substring(NET_BACKEND_PREFIX.length) : null;
 }
 
-/** The backend enum names this build knows, so a server backend it does not can answer NET as
- *  its true type too - the honest "reachable but not identifiable here". */
+/** The backend enum names this build knows, so a server backend it does not can answer
+ *  NET_BACKEND as its true type too - the honest "reachable but not identifiable here". */
 const KNOWN_BACKENDS = new Set(['WASAPI', 'WDMKS', 'COREAUDIO', 'JAVASOUND', 'QA40X', 'WEB_AUDIO', 'NET']);
 
 /**
@@ -71,7 +71,7 @@ export function makeNetDeviceRef({ index, name, description, vendor, isInput, re
     index, name, description, vendor, isInput, remoteBackend, calibration, boundCard,
     /** The carrier (spec 4.3's routing rule). */
     carrier: NET_BACKEND,
-    /** The TRUE type, or NET for a backend this build has no constant for. */
+    /** The TRUE type, or NET_BACKEND for a backend this build has no constant for. */
     backend: KNOWN_BACKENDS.has(remoteBackend) ? remoteBackend : NET_BACKEND,
     isOutput: !isInput,
     /** How the device combo names this device - Java DeviceRef.displayName(), character for

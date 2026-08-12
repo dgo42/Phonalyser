@@ -129,7 +129,7 @@ class BackendSelectionTest {
 
         JsonNode backends = channel.responseTo(id).getData().path(NetFields.BACKENDS);
         assertFalse(names(backends).contains(AudioBackendType.NET.name()),
-                "NET is how a CLIENT reaches a server, not something a server can "
+                "the net carrier is how a CLIENT reaches a server, not something a server can "
                         + "serve: listed, it would become a '<server> -> Network' "
                         + "entry in the client's combo that backend.select could "
                         + "only refuse");

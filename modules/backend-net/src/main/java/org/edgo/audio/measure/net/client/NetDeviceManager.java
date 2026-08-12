@@ -203,7 +203,7 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
     /** The TRUE type of the backend this manager is routed at, or {@code null}
      *  when nothing is selected - or the server serves a backend this build
      *  has no constant for (dual-level rule: identity by true type, reachability
-     *  by the NET carrier). */
+     *  by the net carrier). */
     public AudioBackendType remoteBackendType() {
         String name = remoteBackend;
         return name == null ? null : AudioBackendType.fromNameOrNull(name);

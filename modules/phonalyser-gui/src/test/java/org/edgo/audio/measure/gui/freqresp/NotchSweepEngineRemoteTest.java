@@ -96,7 +96,7 @@ class NotchSweepEngineRemoteTest {
                 "META-INF/services/...AudioDeviceManagerProvider must name the stub, or this "
                         + "test would silently exercise the LOCAL loop");
         bench.reset();
-        // The full remote key - a bare NET is a carrier, not a selection.
+        // The full remote key - a bare net carrier is not a selection.
         audio.setActive(BackendKey.of("b7e0-bench-uuid", AudioBackendType.QA40X));
         out = bench.listOutputDevices().get(0);
         in = bench.listInputDevices().get(0);

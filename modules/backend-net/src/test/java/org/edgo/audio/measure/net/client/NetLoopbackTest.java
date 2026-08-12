@@ -197,7 +197,7 @@ class NetLoopbackTest {
         DeviceRef device = inputs.get(0);
         assertEquals(MockBench.FIRST_INPUT, device.name());
         assertEquals(AudioBackendType.NET, device.carrier(),
-                "the ref ROUTES at the NET manager, never at the LOCAL manager of the "
+                "the ref ROUTES at the net manager, never at the LOCAL manager of the "
                         + "same name - a bench across the room is not this machine's USB");
         assertEquals(MockBench.REMOTE_BACKEND, device.backend().name(),
                 "while what it IS is the bench's TRUE backend type - the dual-level "

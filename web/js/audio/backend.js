@@ -417,7 +417,7 @@ export class AudioEngine {
     // activation is a 5-second budget the Web Audio probe (getUserMedia + ~½ s per device) would
     // blow outright, which is why the QA40x branch grants FIRST and never probes.
     const granter = fromUserGesture ? this._qa40xGranter(backend) : null;
-    // The net manager is handed on so devices.js can take its NET branch: without it a scan on a
+    // The net manager is handed on so devices.js can take its net branch: without it a scan on a
     // server backend falls through to the LOCAL getUserMedia probe and fills the combos with THIS
     // machine's devices while the backend is remote - and the first open then fails on a device
     // name the bench never offered.

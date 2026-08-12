@@ -70,7 +70,8 @@ public record BackendKey(String serverId, AudioBackendType type) {
      * <p>Also refuses a {@link AudioBackendType#isDualLevel() dual-level} carrier
      * as the TYPE: the two levels of a selection are (how it is reached; what it
      * is), and a carrier can only ever be the first - a key whose "what it is"
-     * said {@code NET} would be the exact identity lie this type exists to end.
+     * named the net carrier would be the exact identity lie this type exists
+     * to end.
      */
     public BackendKey {
         if (serverId != null && (serverId.isEmpty() || serverId.contains(SEPARATOR))) {
@@ -120,8 +121,8 @@ public record BackendKey(String serverId, AudioBackendType type) {
     }
 
     /** A name that can be the TYPE of a key: known to this build and not a
-     *  dual-level carrier (a hand-edited {@code backend: NET} line is as
-     *  unreadable as an unknown name - callers keep their current value). */
+     *  dual-level carrier (a hand-edited backend line naming the net carrier is
+     *  as unreadable as an unknown name - callers keep their current value). */
     private static AudioBackendType fromTypeName(String name) {
         AudioBackendType type = AudioBackendType.fromNameOrNull(name);
         return type == null || type.isDualLevel() ? null : type;

@@ -57,7 +57,7 @@ import lombok.Setter;
  * swallows with a single log line.
  *
  * <p>It claims {@link AudioBackendType#JAVASOUND} because a LOCAL slot is the
- * whole point: the NET slot's manager is a remote generator, and the controller
+ * whole point: the net slot's manager is a remote generator, and the controller
  * COMMANDS those instead of rendering into them - so {@code BenchGeneratorStub},
  * the sibling this would otherwise extend, refuses to open a playback at all.
  * The claim is contested (the CLI module puts the real JavaSound backend on this

@@ -133,7 +133,7 @@ export async function scanDevicesForBackend(activeBackend, qa40xManager, status 
 }
 
 /**
- * The NET branch: the bench's own catalogue, already parsed by the net device manager (spec
+ * The net branch: the bench's own catalogue, already parsed by the net device manager (spec
  * 4.3 inlines the formats with each device, so nothing is asked here - backend.select filled
  * it in one round trip, and ev.devices.changed keeps it fresh).
  *

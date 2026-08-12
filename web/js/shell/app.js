@@ -2060,7 +2060,7 @@ async function init() {
       // enumerates its own formats - the sample-rate list. Web Audio has no manager, so it answers
       // null and that backend keeps the native-rate probe.
       //
-      // A net: value answers the NET manager, because THAT is the manager of that backend
+      // A net: value answers the net manager, because THAT is the manager of that backend
       // INSTANCE: the bench's catalogue is where its devices' formats live, and asking it is
       // what makes the dialog offer the rates and sample widths the server declared instead of
       // the web's static list and a hidden depth row. Settings are a
