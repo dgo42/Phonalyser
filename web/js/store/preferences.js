@@ -1311,7 +1311,14 @@ export class Preferences {
 
     // ---- FFT pane state ----
     root.fftLength = this.fftLength.get();
-    root.fftAverages = this.fftAverages.get();
+    // The averages series ends in the forever entry, and JSON has no Infinity -
+    // JSON.stringify would silently write null, which the loader ignores, so the one
+    // series entry that never survived a reload was the forever averaging. Round-trip
+    // it as the string 'Infinity' instead.
+    {
+      const avg = this.fftAverages.get();
+      root.fftAverages = Number.isFinite(avg) ? avg : 'Infinity';
+    }
     root.fftThreads = this.fftThreads.get();
     root.fftStopAfterNEnabled = this.fftStopAfterNEnabled.get();
     root.fftStopAfterN = this.fftStopAfterN.get();
@@ -1695,7 +1702,10 @@ export class Preferences {
 
     // ---- FFT pane state ----
     if (isNum(g('fftLength'))) this.fftLength.set(trunc(g('fftLength')));
+    // Two spellings: a plain number, or 'Infinity' - the forever entry's JSON-safe
+    // form (see _toMap). A null from a pre-fix store is neither and keeps the default.
     if (isNum(g('fftAverages'))) this.fftAverages.set(g('fftAverages'));
+    else if (g('fftAverages') === 'Infinity') this.fftAverages.set(Infinity);
     if (isNum(g('fftThreads'))) this.fftThreads.set(Math.max(1, Math.min(16, trunc(g('fftThreads')))));
     if (isBool(g('fftStopAfterNEnabled'))) this.fftStopAfterNEnabled.set(g('fftStopAfterNEnabled'));
     if (isNum(g('fftStopAfterN'))) this.fftStopAfterN.set(trunc(g('fftStopAfterN')));

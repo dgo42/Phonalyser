@@ -687,9 +687,9 @@ export const PREFERENCES_SCHEMA = {
       "description": "Samples per FFT block. Longer blocks resolve finer detail - the bin spacing is the sample rate divided by this - and take proportionally longer to fill, so the display updates less often."
     },
     "fftAverages": {
-      "type": "number",
+      "type": ["number", "string"],
       "default": 4,
-      "description": "How many FFT frames are folded into one displayed spectrum. More averaging lowers the visible noise floor and steadies the trace, at the cost of reaction time."
+      "description": "How many FFT frames are folded into one displayed spectrum, or 'Infinity' for forever averaging (JSON cannot carry the infinity number itself). More averaging lowers the visible noise floor and steadies the trace, at the cost of reaction time."
     },
     "fftThreads": {
       "type": "integer",
