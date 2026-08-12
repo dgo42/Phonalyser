@@ -37,7 +37,7 @@ import { DeviceProfileStore } from '../store/device-profiles.js';
 import { loadDeviceCatalog } from '../store/device-catalog.js';
 import { createConfigPorts } from '../store/config-port.js';
 import { JsonConfigDialog } from './json-config-dialog.js';
-import { t, initBase, setLocale } from '../i18n/i18n.js';
+import { t, initBase, setLocale, stripMnemonics } from '../i18n/i18n.js';
 import { LOCALES } from '../i18n/locales.js';
 import { WavWriter, AiffWriter, readWav, readAiff } from '../io/wav.js';
 import { saveScopeCapture, saveStreaming, findFullPeriodWindow, formatForName } from '../io/scope-capture.js';
@@ -572,22 +572,22 @@ function initStepFields() {
 // the generator step-field onChanges reach them via the genPane instance.
 
 // ----- i18n: replace every [data-i18n] element's text with its translation -----
-// SWT mnemonics ('&') and the literal "..." suffix from the desktop bundles are
-// stripped so the web chrome reads cleanly.
+// SWT mnemonics are stripped (and '&&' unescaped to '&') so the desktop bundle
+// values render cleanly in a chrome that draws no accelerators.
 function applyI18n() {
   document.querySelectorAll('[data-i18n]').forEach((el) => {
-    el.textContent = t(el.getAttribute('data-i18n')).replace(/&/g, '').replace(/\.\.\.$/, '...');
+    el.textContent = stripMnemonics(t(el.getAttribute('data-i18n'))).replace(/\.\.\.$/, '...');
   });
   document.querySelectorAll('[data-i18n-title]').forEach((el) => {
-    el.title = t(el.getAttribute('data-i18n-title')).replace(/&/g, '');
+    el.title = stripMnemonics(t(el.getAttribute('data-i18n-title')));
   });
   document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
-    el.placeholder = t(el.getAttribute('data-i18n-placeholder')).replace(/&/g, '');
+    el.placeholder = stripMnemonics(t(el.getAttribute('data-i18n-placeholder')));
   });
   // Custom-file "Browse" button text lives in a ::after pseudo-element; localize it
   // through a CSS custom property the stylesheet reads.
   document.querySelectorAll('[data-i18n-browse]').forEach((el) => {
-    el.style.setProperty('--browse-label', '"' + t(el.getAttribute('data-i18n-browse')).replace(/&/g, '') + '"');
+    el.style.setProperty('--browse-label', '"' + stripMnemonics(t(el.getAttribute('data-i18n-browse'))) + '"');
   });
 }
 

@@ -15,7 +15,7 @@
  * predistortion-wizard onApply, the fft init seed, the prefs dialog). Status-line writes go
  * straight to #status inline (verbatim from app.js), matching the moved handlers.
  */
-import { t } from '../i18n/i18n.js';
+import { t, stripMnemonics } from '../i18n/i18n.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
 import { GenSignalForm, isDualTone, isPeriodic, DdsKernel, quantizePcm, outputLaneGate,
@@ -293,7 +293,7 @@ export class GeneratorPane {
     // dualToneFreq1Field tooltip); restore the single-tone frequency tooltip otherwise. Set the
     // data-i18n-title attr + re-run the title refresh so the live title tracks the form.
     const toneTip = dual ? 'generator.dualTone.freq1.tooltip' : 'generator.frequency.tooltip';
-    $('#toneHz').attr('data-i18n-title', toneTip).attr('title', t(toneTip).replace(/&/g, ''));
+    $('#toneHz').attr('data-i18n-title', toneTip).attr('title', stripMnemonics(t(toneTip)));
     $('#sweepWrap').css('display', sweep ? 'grid' : 'none');   // sweep params: 2-col grid (Java sweepPanel) when on
     // Duty row stays ALWAYS laid out (Java updateDutyFieldEnabled) - never hidden by form.
     // Only enable/disable the duty field + grey its label per form (RECTANGLE / TRIANGLE).
