@@ -543,8 +543,7 @@ public final class NetBenchUi implements RemoteBackendUi, NetFaultListener {
                 log.warn("net bench: connecting to {} failed: {}", server.host(),
                         e.toString());
             }
-            return new Dialled(null, null, List.of(),
-                    I18n.t("net.error.connect", server.host(), reason(e)));
+            return new Dialled(null, null, List.of(), connectFailureText(server, e));
         }
         // The id is the server's, never the one we happened to have remembered:
         // spec 2.1 keys a remembered bench on its installation UUID, and a
@@ -616,10 +615,21 @@ public final class NetBenchUi implements RemoteBackendUi, NetFaultListener {
             if (log.isWarnEnabled()) {
                 log.warn("net bench: probing {} failed: {}", candidate.host(), e.toString());
             }
-            return I18n.t("net.error.connect", candidate.host(), reason(e));
+            return connectFailureText(candidate, e);
         } finally {
             open.close(NetCloseReason.BYE);
         }
+    }
+
+    /** The sentence a failed dial shows.  A dead address is the one failure with
+     *  a translation of its own - nothing answered, so there is no diagnostic
+     *  string worth quoting; every other failure keeps the server's or the
+     *  library's own words inside the translated frame (see {@link #reason}). */
+    private String connectFailureText(NetServerEntry server, RuntimeException failure) {
+        if (failure instanceof NetConnection.NoAnswerException) {
+            return I18n.t("net.servers.error.noAnswer", server.host() + ":" + server.port());
+        }
+        return I18n.t("net.error.connect", server.host(), reason(failure));
     }
 
     /** The technical half of a failure sentence - what the session itself said,

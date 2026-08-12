@@ -228,10 +228,13 @@ public final class NetConnection {
      * generous by design (see {@link #REQUEST_TIMEOUT_MS}) and ten times longer
      * than a connect attempt is allowed to feel.
      *
-     * @throws IllegalStateException when the server cannot be reached within
-     *         {@code timeoutMs} or refuses the session; the message carries the
-     *         error code of spec 4.2, because "cannot connect" and "your
-     *         protocol is too old" are different problems for the operator
+     * @throws NoAnswerException when nothing answered within {@code timeoutMs} -
+     *         typed, so a caller can tell the dead address apart from a refusal
+     *         and word the two differently for the operator
+     * @throws IllegalStateException when the server answered but refuses the
+     *         session; the message carries the error code of spec 4.2, because
+     *         "cannot connect" and "your protocol is too old" are different
+     *         problems for the operator
      */
     public void open(long timeoutMs) {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
@@ -243,7 +246,7 @@ public final class NetConnection {
         }
         try {
             if (!transport.connectBlocking(timeoutMs, TimeUnit.MILLISECONDS)) {
-                throw new IllegalStateException(
+                throw new NoAnswerException(
                         "no Phonalyser server answered at " + server);
             }
         } catch (InterruptedException e) {
@@ -979,6 +982,16 @@ public final class NetConnection {
                         captureId, e.toString());
             }
             NetConnection.this.close(NetCloseReason.TRANSPORT_ERROR);
+        }
+    }
+
+    /** The transport never connected: nothing listens at the address, or the
+     *  timeout ran out first.  A subtype of the refusal exceptions so existing
+     *  catches keep working, but typed, because "nobody answered" is the one
+     *  connect failure with a translation of its own. */
+    public static final class NoAnswerException extends IllegalStateException {
+        private NoAnswerException(String message) {
+            super(message);
         }
     }
 

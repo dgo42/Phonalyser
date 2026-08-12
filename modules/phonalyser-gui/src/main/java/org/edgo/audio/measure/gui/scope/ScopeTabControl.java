@@ -748,7 +748,7 @@ public final class ScopeTabControl extends AbstractTabControl {
     }
 
     private void buildHorizontalGroup(CTabFolder folder) {
-        Composite g = groupCell(folder, "Horizontal");
+        Composite g = groupCell(folder, I18n.t("scope.tab.horizontal"));
         g.setLayout(rowLayoutHorizontal(6));
 
         Preferences prefs = Preferences.instance();
@@ -776,7 +776,7 @@ public final class ScopeTabControl extends AbstractTabControl {
     }
 
     private void buildTriggerGroup(CTabFolder folder) {
-        Composite g = groupCell(folder, "Trigger");
+        Composite g = groupCell(folder, I18n.t("scope.tab.trigger"));
         triggerGroup = g;
         g.setLayout(rowLayoutHorizontal(10));
 
