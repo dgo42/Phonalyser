@@ -202,6 +202,16 @@
             <button id="genPlay" class="play-big" data-i18n-title="generator.play.start"><i class="bi bi-play-fill"></i></button>
           </div>
         </div>
+        <!-- Bench-upload notice (Java GeneratorPane.openUploadNotice): a titled NON-MODAL panel
+             in the floating tool-window chrome the scope's record progress already uses, with no
+             progress bar and no cancel. No backdrop, and pointer-events off because it carries no
+             control at all: every click reaches what is under it, above all the generator's own
+             Stop (#genFilePlay), which has to stay dispatchable for the whole upload. Sits OUTSIDE
+             .gen-controls, which a collapsed generator pane hides. -->
+        <div id="genUploadNotice" class="scope-meas-window scope-rec-window" style="pointer-events:none">
+          <div class="smw-titlebar"><span class="smw-title" data-i18n="generator.loadFrom.dialog">Play from...</span></div>
+          <div class="scope-rec-body"><span class="scope-rec-progress" data-i18n="generator.upload.busy">The audio file is being uploaded to the bench...</span></div>
+        </div>
       </section>
 
       <!-- horizontal sash between the generator column and the right column -->

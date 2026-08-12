@@ -88,6 +88,11 @@ export class GeneratorPane {
     // they are stale until re-rendered - the same follow-up the FFT-length change already makes
     // (Java GeneratorPane's AUDIO_FORMAT_CHANGED listener).
     bus.subscribe(Events.AUDIO_FORMAT_CHANGED, () => this.refreshFreqLabel());
+    // A file played on a BENCH is uploaded first, and that wait needs saying (Java GeneratorPane
+    // openUploadNotice / closeUploadNotice). The controller publishes FINISHED on every outcome
+    // of the upload, so the notice cannot outlive the transfer it explains.
+    bus.subscribe(Events.FILE_UPLOAD_STARTED, () => this.openUploadNotice());
+    bus.subscribe(Events.FILE_UPLOAD_FINISHED, () => this.closeUploadNotice());
   }
 
   /** FREQRESP_MEASUREMENT_STARTED handler - the controller stops both engines in its own
@@ -709,6 +714,25 @@ export class GeneratorPane {
     });
 
     return this;
+  }
+
+  /**
+   * Puts up the "uploading to the bench" notice - a plain titled panel, no progress and no
+   * cancel: the pane's own Stop already aborts the session, and a second control for it would be
+   * one more thing to get wrong.
+   *
+   * <p>NOT modal. A modal would block the Stop the operator needs while a slow upload runs -
+   * #genFilePlay IS that Stop for as long as the file is playing - which is the opposite of
+   * helping. A second STARTED while the notice is up changes nothing: the class is already set.
+   */
+  openUploadNotice() {
+    $('#genUploadNotice').addClass('open');
+  }
+
+  /** Takes the notice down. Idempotent, and harmless without a preceding open: it is driven by
+   *  the finished event, which fires on every outcome of the upload. */
+  closeUploadNotice() {
+    $('#genUploadNotice').removeClass('open');
   }
 
   setGenFileBtn(on) {

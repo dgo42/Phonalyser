@@ -155,6 +155,17 @@ export const Events = Object.freeze({
    *  Subscribers (the generator pane) reset the play-from LED. No payload. */
   FILE_PLAY_STOPPED: 'filePlay.stopped',
 
+  /** Notification - the generator is uploading a file to a bench. Subscribers (the generator pane)
+   *  put a "being uploaded" notice on screen. No payload.
+   *
+   *  <p>ALWAYS paired with FILE_UPLOAD_FINISHED, on the success path and on every failure path
+   *  alike: a notice that outlives its transfer is worse than none. */
+  FILE_UPLOAD_STARTED: 'fileUpload.started',
+
+  /** Notification - the upload above ended, however it ended (the bench has the file, or it was
+   *  refused, or the link died). Subscribers take the notice down. No payload. */
+  FILE_UPLOAD_FINISHED: 'fileUpload.finished',
+
   /** Notification - the user clicked the scope's Auto-Setup button. Subscribers (the scope pane)
    *  re-fit the vertical/horizontal scales to the current signal. No payload. */
   SCOPE_AUTO_SETUP: 'scope.autoSetup',

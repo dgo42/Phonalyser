@@ -840,12 +840,21 @@ export class GeneratorController {
     this._remoteFileSeenPlaying = false;
     this.filePlayError = null;
     try {
+      // The notice covers the whole PREPARE-AND-UPLOAD phase, not the transfer alone: on a fast
+      // link the transfer is a blink, while opening an exclusive device on the bench takes
+      // seconds and pushing a large file takes more, so a notice spanning only the HTTP put
+      // appeared and vanished in front of the wait it was meant to explain.
+      MessageBus.instance().publish(Events.FILE_UPLOAD_STARTED);
       if (session.stopped) { await this._endRemoteFile(sink, session, false); return; }
       await sink.playFile(file.bytes, !!loop);
     } catch (e) {
       this._reportRemoteFileFailure(e, file);
       await this._endRemoteFile(sink, session, false);   // nothing was commanded
       return;
+    } finally {
+      // Every exit of the block above takes the notice down: a stop while preparing, a refused
+      // or failed upload, and the success that falls through to the watch below.
+      MessageBus.instance().publish(Events.FILE_UPLOAD_FINISHED);
     }
     // THE AWAIT ENDS HERE. The bench has the file, which is everything the caller needs to know
     // - Java's thread returns "in microseconds" at exactly this point, and the pane's Play
