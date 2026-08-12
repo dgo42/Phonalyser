@@ -123,14 +123,14 @@ public final class FftView extends AbstractFreqDomainView {
      *  in every language, so they are literals rather than i18n keys. */
     private static final String[] DISTORTION_UNIT_LABELS = { "dBV", "dBFS", "dB" };
     /** Width (px) of the distortion-unit combo. */
-    private static final int DISTORTION_COMBO_W = 42;
+    private static final int DISTORTION_COMBO_W = 36;
     /** Gap (px) from the header bar's right edge - the button row's own spacing
      *  plus the tuning offset that sets the combo apart from the flat buttons. */
     private static final int DISTORTION_COMBO_GAP = 4;
     /** Top inset (px) of the distortion-unit combo, measured like the header
      *  bar's: a native drop-down sits slightly higher than the flat buttons so
      *  their visual centres line up. */
-    private static final int DISTORTION_COMBO_TOP = 2;
+    private static final int DISTORTION_COMBO_TOP = 5;
     /** Floor (V_rms) for the IMD reference level, mirroring the divisor floor in
      *  ImdAnalyzer: two muted tones must not divide by zero. */
     private static final double MIN_REF_VRMS = 1e-12;
