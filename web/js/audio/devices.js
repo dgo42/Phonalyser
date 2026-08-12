@@ -73,10 +73,23 @@ export async function scanDevices(status = () => {}) {
   }
   const inputs = determined.length > 0 ? determined
     : audioIn.map((d) => ({ id: d.deviceId, label: d.label || d.deviceId || 'Default', nativeRate: null }));
-  return {
-    inputs,
-    outputs: devs.filter((d) => d.kind === 'audiooutput').map((d) => ({ id: d.deviceId, label: d.label || d.deviceId })),
-  };
+  const outputs = devs.filter((d) => d.kind === 'audiooutput').map((d) => ({ id: d.deviceId, label: d.label || d.deviceId }));
+  // Firefox hides audiooutput entries until the page asks through selectAudioOutput()
+  // (its speaker-selection permission; Chrome lists sinks right after the mic grant, so
+  // there the picker must never appear). Asked only when enumeration came back BARE -
+  // nothing, or the bare synthetic default - and only where the API exists: the Scan
+  // click that got us here carries the user gesture the call requires. A dismissed
+  // picker is a normal answer, not a failure.
+  if (navigator.mediaDevices.selectAudioOutput
+      && (outputs.length === 0 || (outputs.length === 1 && outputs[0].id === 'default'))) {
+    try {
+      const picked = await navigator.mediaDevices.selectAudioOutput();
+      if (picked && !outputs.some((o) => o.id === picked.deviceId)) {
+        outputs.push({ id: picked.deviceId, label: picked.label || picked.deviceId });
+      }
+    } catch (e) { status('output picker dismissed - ' + e.name); }
+  }
+  return { inputs, outputs };
 }
 
 /**
