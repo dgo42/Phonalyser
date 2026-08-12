@@ -242,6 +242,12 @@ export class FftAccumulator {
     return this._spectralDetector.reject(re, im, halfSize, binWidthHz, peakBins);
   }
 
+  /** The spectral gate's last-decision diagnostics (which gate fired, values vs
+   *  thresholds) - read by the controller's debug logging after a reject. */
+  get spectralDiagnostics() {
+    return this._spectralDetector;
+  }
+
   /**
    * Folds one tick's RAW per-window spectrum into the running accumulator
    * (Java FftAnalyzerWorker.accumulateIntoForeverBuffer). For coherent mode it

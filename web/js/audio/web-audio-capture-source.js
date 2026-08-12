@@ -117,6 +117,7 @@ export class WebAudioCaptureSource {
     // Bounded retry on NotReadableError/AbortError (the just-stopped modules may still be
     // releasing the OS device - a self-contention, not an external grab); pause + retry before
     // letting the failure propagate to acquire()'s catch (which raises the visible alert).
+    debug(`[capture] getUserMedia (device ${deviceId}, ${requestedRateHz} Hz)...`);
     for (let attempt = 1; ; attempt++) {
       try {
         this.#stream = await this.#openStream(deviceId, requestedRateHz);
@@ -150,6 +151,7 @@ export class WebAudioCaptureSource {
       if (!this.#closing) this.#captureEnded(CaptureEndReason.DELIVERY_STALLED, 'track muted');
     });
     const trackRate = track.getSettings().sampleRate || requestedRateHz;
+    debug(`[capture] stream open (track ${JSON.stringify(track.getSettings())}) - creating context at ${trackRate} Hz...`);
     this.#ctx = new AudioContext({ sampleRate: trackRate });   // MATCH the stream so it can't rate-mismatch
     // Surface an unexpected device loss to the user: the async 'AudioContext encountered an error
     // from the audio device' fires onerror, and losing the device exclusively (another app grabbed
@@ -165,13 +167,16 @@ export class WebAudioCaptureSource {
         this.#captureEnded(CaptureEndReason.DEVICE_LOST, 'AudioContext state=' + st);
       }
     });
+    debug(`[capture] context ${this.#ctx.state} at ${this.#ctx.sampleRate} Hz - loading capture worklet...`);
     await this.#ctx.audioWorklet.addModule(new URL('./worklets/capture-processor.js', import.meta.url));
+    debug('[capture] worklet loaded - building the capture graph...');
     // Keep references so close() can disconnect the whole capture graph BEFORE closing the
     // context (closing with worklets still wired can crash the renderer).
     this.#capNode = new AudioWorkletNode(this.#ctx, 'capture-processor');
     this.#silentNode = this.#ctx.createGain(); this.#silentNode.gain.value = 0;
     this.#srcNode = this.#ctx.createMediaStreamSource(this.#stream);
     this.#srcNode.connect(this.#capNode).connect(this.#silentNode).connect(this.#ctx.destination);
+    debug('[capture] input open complete');
   }
 
   /**

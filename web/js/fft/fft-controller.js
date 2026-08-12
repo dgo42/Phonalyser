@@ -22,6 +22,7 @@ import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
 import { FrequencyFll } from '../dsp/fll.js';
 import { refinePeak, TONE_SEARCH_BINS } from './imd-analyzer.js';
+import { debug } from '../util/debug.js';
 
 /** Output-pipeline drain to skip after a generator/form/frequency change, in seconds
  *  (Java OUTPUT_DRAIN_SKIP_SEC). The DAC's hardware buffer (~480 ms on the render path)
@@ -81,9 +82,11 @@ export class FftController {
    * @param capture the SharedCapture instance.
    * @param gen     the GeneratorController (read + FLL-steered, not owned).
    * @param config  the SHARED engine config object.
-   * @param deps    {status} - status: (text) => void.
+   * @param deps    {status, prefs} - status: (text) => void; prefs: the live Preferences,
+   *                read for the settings whose change must reset this controller's own
+   *                accumulator (absent in bare test constructions - the reaction stays unwired).
    */
-  constructor(capture, gen, config, { status } = {}) {
+  constructor(capture, gen, config, { status, prefs } = {}) {
     this._capture = capture;
     this._gen = gen;
     this.config = config;
@@ -205,8 +208,28 @@ export class FftController {
       this._fll.reset();
       this._fll2.reset();               // dual-tone second loop resets in lockstep
       this.fllErrHz = 0; this.fllLocked = false; this.fllStable = 0; this.genFreq = this.snapped;
+      // And the STATISTICS with them (Java FftView's GENERATOR_SIGNAL_CHANGED subscriber
+      // calls resetStatisticsAfterSignalChange, which is resetStatistics plus the drain
+      // skip): the averaged spectrum and the analyses count were measured for the OLD
+      // signal. Arming the drain alone reset the accumulator but left the counter running,
+      // so the readout went on claiming an average depth built from a tone that is gone.
+      // Unconditional, like the Java subscriber - the drain skip below is what needs a
+      // live reader, not the counters.
+      this.resetAnalyses();
       if (this._fftOn) this._armOutputDrainSkip();
     });
+
+    // The multi-tone detect threshold reshapes which peaks count as TONES, and with them how
+    // the coherent average is de-rotated - a change invalidates the running accumulator, so
+    // the reaction lives HERE with the state it resets, beside the signal-change reset above;
+    // the preferences dialog only writes the value (Java FftView:498 wires the same property
+    // to resetStatistics, and the field's own tooltip promises "Changing it restarts FFT
+    // averaging"). The Property notifies on a real change only, so an OK that re-writes the
+    // same threshold stays silent.
+    // Guarded on the PROPERTY, not just the object: the engine tests hand in partial
+    // preference stubs (backend only), and a stub without this field simply leaves the
+    // reaction unwired, like the bare constructions do.
+    if (prefs && prefs.fftStrongToneRelDb) prefs.fftStrongToneRelDb.addListener(() => this.resetAnalyses());
 
     // Self-feed off the LIVE capture: Java consumers subscribe to CAPTURE_BATCH_AVAILABLE and read
     // their own cursor - no central dispatcher pumps us. feedFft self-gates on pausedByStopN and a
@@ -900,6 +923,11 @@ export class FftController {
         const binW = r.freqResolution;
         const peakBins = this._fundamentalBins(r);
         if (this._accum.reject(r.re, r.im, r.fftSize / 2, binW, peakBins)) {
+          const d = this._accum.spectralDiagnostics;
+          debug('[fft] spectral gate reject - gates ' + JSON.stringify(d.lastGates)
+            + ` score ${d.lastScore != null ? d.lastScore.toFixed(2) : '?'} thr ${d.lastScoreThresh != null ? d.lastScoreThresh.toFixed(2) : '?'}`
+            + ` | power ${d.lastPowerDb != null ? d.lastPowerDb.toFixed(1) : '?'} med ${d.lastPowerMed != null ? d.lastPowerMed.toFixed(1) : '?'} thr ${d.lastPowerThresh != null ? d.lastPowerThresh.toFixed(1) : '?'}`
+            + ` | pedestal ${Number.isFinite(d.lastPedestalExcess) ? d.lastPedestalExcess.toFixed(1) : '-'} thr ${Number.isFinite(d.lastPedestalThresh) ? d.lastPedestalThresh.toFixed(1) : '-'}`);
           this._onSignalDiscontinuity();
           return;
         }
