@@ -82,7 +82,8 @@ public class JavaSoundRecorder extends AbstractPcmCapture {
             DataLine.Info monoInfo = new DataLine.Info(TargetDataLine.class, mono);
             if (!mixer.isLineSupported(monoInfo)) {
                 throw new LineUnavailableException(
-                        "Mixer '" + device.name() + "' does not support " + captureFmt + " or " + mono);
+                        "Device '" + device.displayName() + "' does not support "
+                                + captureFmt + " or " + mono);
             }
             captureFmt      = mono;
             info            = monoInfo;
@@ -107,7 +108,7 @@ public class JavaSoundRecorder extends AbstractPcmCapture {
         // measurement taken through it with nothing in the reading to say so -
         // a bench read 1 V as 34 mV that way.  Once per open, here, where the
         // device is known and the line is up.
-        volumes.pinToUnity(device.name(), true);
+        volumes.pinToUnity(device.mixerInfo().getName(), true);
     }
 
     @Override
@@ -223,6 +224,6 @@ public class JavaSoundRecorder extends AbstractPcmCapture {
             open.close();
         }
         // The line is no longer ours: put the mixer back as the open found it.
-        volumes.restore(device.name(), true);
+        volumes.restore(device.mixerInfo().getName(), true);
     }
 }

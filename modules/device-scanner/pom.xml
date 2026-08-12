@@ -7,9 +7,9 @@
   a release - one build serves every OS, since all platforms' natives ride
   inside it - so a user can download just the scanner to file a bug report.
 
-  It enumerates every audio backend present on the machine (WASAPI, WDM-KS,
-  JavaSound incl. the csjsound WASAPI-exclusive mixers, CoreAudio, and the
-  software loopback, which is always present) through the
+  It enumerates the audio backends that reach real hardware on the machine
+  (WASAPI, WDM-KS, JavaSound incl. the csjsound WASAPI-exclusive mixers,
+  CoreAudio) through the
   UNCHANGED backend modules, cache-free (fresh managers, no AudioBackend
   singleton), and writes the devices with their sample rates and bit depths to
   a human-readable text file - the file a user attaches to a bug report.
@@ -32,6 +32,8 @@
     </parent>
 
     <artifactId>device-scanner</artifactId>
+    <!-- The scanner versions on its own, independent of the application. -->
+    <version>1.2.2</version>
     <name>Phonalyser device scanner</name>
     <description>Standalone diagnostic: lists every audio device with its supported sample rates and bit depths, cache-free</description>
 
@@ -46,26 +48,27 @@
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>phonalyser-core</artifactId>
+            <version>${project.parent.version}</version>
         </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-wasapi</artifactId>
+            <version>${project.parent.version}</version>
         </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-wdm-ks</artifactId>
+            <version>${project.parent.version}</version>
         </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-javasound</artifactId>
+            <version>${project.parent.version}</version>
         </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-coreaudio</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>${project.groupId}</groupId>
-            <artifactId>backend-loopback</artifactId>
+            <version>${project.parent.version}</version>
         </dependency>
     </dependencies>
 

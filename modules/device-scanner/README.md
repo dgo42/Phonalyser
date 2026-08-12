@@ -2,12 +2,12 @@
 
 A standalone console diagnostic, attached to each release as a single jar that
 runs on every supported OS (all platforms' natives ride inside it), separate
-from the application and the server. It enumerates every
-audio backend present on the machine (WASAPI, WDM-KS, JavaSound including the
-csjsound WASAPI-exclusive mixers, CoreAudio on macOS, and the software
-loopback, which is present everywhere) and writes each device
+from the application and the server. It enumerates the audio backends that
+reach real hardware on the machine (WASAPI, WDM-KS, JavaSound including the
+csjsound WASAPI-exclusive mixers, CoreAudio on macOS) and writes each device
 with its supported sample rates and bit depths to a text file for a bug
-report.
+report. A backend the running system does not have is left out entirely, so
+everything in the report describes the machine it was taken on.
 
 Cache-free by construction: the tool builds fresh device managers from their
 service providers - never through the application's backend singleton - and a

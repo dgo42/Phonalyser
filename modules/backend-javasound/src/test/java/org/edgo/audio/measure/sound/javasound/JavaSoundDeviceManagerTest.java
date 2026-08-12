@@ -86,4 +86,70 @@ class JavaSoundDeviceManagerTest {
         assertEquals("CB5", manager.distinct("CB5", "CB5 [plughw:1,1]"));
         assertEquals("", manager.distinct(null, "CB5 [plughw:1,1]"));
     }
+
+    // ------------------------------------------------------------ the built name
+
+    @Test
+    void theBuiltNameIsTheCardAndThePort() {
+        // The address is consumed to build the name and is not in it: C named
+        // the card, D named the port, and neither the short id nor
+        // [plughw:...] tells an operator anything they can act on.
+        assertEquals("SMSL USB AUDIO - Headphone Out",
+                manager.deviceName("AUDIO [plughw:0,0]", "Headphone Out", "SMSL USB AUDIO"));
+        // A port ALSA could name outright needs no cleaning.
+        assertEquals("CUBILUX CB5 - Line In",
+                manager.deviceName("CB5 [plughw:2,1]", "Line In", "CUBILUX CB5"));
+    }
+
+    @Test
+    void theProvidersBoilerplateAndTheRepeatedCardNameAreTakenOff() {
+        // "Direct Audio Device: HDA Intel PCH, ALC262 Analog" is the card's own
+        // name in front of the one part that says which device this is.
+        assertEquals("HDA Intel PCH - ALC262 Analog",
+                manager.deviceName("PCH [plughw:0,0]",
+                        "Direct Audio Device: HDA Intel PCH, ALC262 Analog", "HDA Intel PCH"));
+        assertEquals("HDA Intel PCH - ALC262 Alt Analog",
+                manager.deviceName("PCH [plughw:0,2]",
+                        "Direct Audio Device: HDA Intel PCH, ALC262 Alt Analog", "HDA Intel PCH"));
+        assertEquals("HDA NVidia - HDMI 0",
+                manager.deviceName("NVidia [plughw:1,3]",
+                        "Direct Audio Device: HDA NVidia, HDMI 0", "HDA NVidia"));
+    }
+
+    @Test
+    void theSystemDefaultEntryNamesNoCard() {
+        // "PCH [default]" named a card the selection does not actually pin: the
+        // entry follows whatever the system is set to.
+        assertEquals("System default",
+                manager.deviceName("PCH [default]",
+                        "Direct Audio Device: HDA Intel PCH, ALC262 Analog", "HDA Intel PCH"));
+    }
+
+    @Test
+    void theBuiltNameIsAlsoTheIdentity() {
+        // One source of truth: the ref receives the FINISHED name and carries
+        // it as name and identity alike; the raw mixer name lives only in the
+        // Mixer.Info reference beside it.
+        JavaSoundDeviceManager.JavaSoundDeviceRef d =
+                new JavaSoundDeviceManager.JavaSoundDeviceRef(
+                        0, "SMSL USB AUDIO - Headphone Out", "", "ALSA", true, false, null);
+        assertEquals("SMSL USB AUDIO - Headphone Out", d.name());
+        assertEquals("SMSL USB AUDIO - Headphone Out", d.identity());
+        assertEquals("[0] SMSL USB AUDIO - Headphone Out - ALSA", d.displayName(),
+                "a name that already says everything is not echoed in brackets");
+    }
+
+    @Test
+    void withoutACardNameTheNameIsExactlyWhatItWasBefore() {
+        // Every non-ALSA host: no cards file, so no card name, and the listing
+        // keeps the rendering Windows and macOS have always shown.
+        assertEquals("AUDIO [plughw:0,0]",
+                manager.deviceName("AUDIO [plughw:0,0]", "Headphone Out", ""));
+        assertEquals("AUDIO [plughw:0,0]",
+                manager.deviceName("AUDIO [plughw:0,0]", "Headphone Out", null));
+        JavaSoundDeviceManager.JavaSoundDeviceRef d =
+                new JavaSoundDeviceManager.JavaSoundDeviceRef(
+                        0, "Speakers (Realtek)", "Headphone Out", "ALSA", true, false, null);
+        assertEquals("[0] Speakers (Realtek) (Headphone Out) - ALSA", d.displayName());
+    }
 }

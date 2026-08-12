@@ -29,8 +29,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -112,6 +116,42 @@ public final class ProcAsound {
      *  the USB AudioStreaming interface number that serves this direction. */
     private static final Pattern USB_INTERFACE = Pattern.compile("^Interface\\s+(\\d+)");
 
+    /** Matches one card line of {@code /proc/asound/cards}, which the kernel
+     *  writes as {@code "%2i [%-15s]: %s - %s"} - index, the 15-char-padded
+     *  short id, then the DRIVER and the card's SHORTNAME.  Group 1 is the
+     *  index, group 2 is everything after {@code "]: "}, which the caller
+     *  splits on its FIRST {@code " - "}: the driver may contain spaces of its
+     *  own ({@code "ThinkPad EC"}), so only the first separator is structural.
+     *  The line following each of these is an indented longname; it carries no
+     *  leading index and therefore does not match. */
+    private static final Pattern CARDS_LINE =
+            Pattern.compile("^\\s*(\\d+)\\s*\\[[^\\]]*\\]\\s*:\\s*(.+?)\\s*$");
+
+    /** The separator between the driver and the shortname; only the FIRST one
+     *  in the line is structural. */
+    private static final String DRIVER_SEPARATOR = " - ";
+
+    /** How wide the kernel's own driver field is before it truncates. */
+    private static final int DRIVER_FIELD_WIDTH = 15;
+
+    /** The shortest token that can carry meaning when comparing a driver with a
+     *  shortname - below this they are initials and bus letters. */
+    private static final int SIGNIFICANT_TOKEN_LENGTH = 3;
+
+    /** Tokens that say what KIND of thing a card is rather than which one, so
+     *  finding one on both sides means nothing.  Without this, every
+     *  {@code *-audio} driver would look like it repeated its card's name. */
+    private static final Set<String> GENERIC_TOKENS = Set.of(
+            "audio", "sound", "card", "hdmi", "usb", "pcm", "device", "dev");
+
+    /** Drivers that name a BUS or a device class rather than a product.  They
+     *  are prefixed to cards they say nothing about, so they are dropped from
+     *  the display even when they share no word with the shortname.  Compared
+     *  lowercase, and an entry also matches the form the kernel's 15-character
+     *  driver field would have truncated it to. */
+    private static final Set<String> BUS_DRIVERS = Set.of(
+            "hda-intel", "usb-audio", "simple-card", "audio-hdmi");
+
     /** The {@code --dump-hw-params} lines of interest: {@code FORMAT:} tokens
      *  ({@code S16_LE S24_3LE S32_LE ...} - the digits are the significant
      *  bits) and {@code RATE:}, either discrete values or a
@@ -163,6 +203,12 @@ public final class ProcAsound {
     /** Per-card answers, keyed by ALSA card index. */
     private final Map<Integer, CardCaps> cardCache = new ConcurrentHashMap<>();
 
+    /** {@code <root>/cards} parsed into card index -> full card name, read once
+     *  on the first ask and kept for this instance's lifetime like every other
+     *  answer here. Empty when the file is absent or unreadable, which is the
+     *  normal case off Linux; {@code null} until the first read. */
+    private volatile Map<Integer, String> cardNames;
+
     /** Reads the real {@code /proc/asound}. */
     public ProcAsound() {
         this(Paths.get("/proc/asound"));
@@ -212,10 +258,167 @@ public final class ProcAsound {
         }
     }
 
+    /**
+     * The full product name of card {@code index} as {@code <root>/cards} states
+     * it - {@code "SMSL USB AUDIO"} for a line reading
+     * {@code " 0 [AUDIO          ]: USB-Audio - SMSL USB AUDIO"} - or an empty
+     * string when the file has no such card, cannot be read, or does not exist
+     * at all (every non-Linux host).
+     *
+     * <p>The point of asking is that the name ALSA puts in the JavaSound mixer
+     * name is the SHORT id from the brackets, which is an identifier and not a
+     * product: two different interfaces can both call themselves {@code AUDIO},
+     * and neither tells an operator which box on the bench it is. The cards file
+     * is the one place the kernel keeps the string the device reported.
+     */
+    public String cardName(int index) {
+        if (index < 0) return "";
+        return cardNames().getOrDefault(index, "");
+    }
+
+    /** The parsed cards file, read on first use. */
+    private Map<Integer, String> cardNames() {
+        Map<Integer, String> names = cardNames;
+        if (names == null) {
+            synchronized (this) {
+                names = cardNames;
+                if (names == null) {
+                    names = readCards(root.resolve("cards"));
+                    cardNames = names;
+                }
+            }
+        }
+        return names;
+    }
+
+    /**
+     * Parses a {@code cards} file. Package-private and taking the file outright
+     * so the tests can drive it against a fixture on any OS.
+     *
+     * <p>Only the card lines are read. Each is followed by an indented long
+     * description that repeats the name with the bus address appended, and it is
+     * skipped: it has no leading index, so it simply does not match.
+     */
+    Map<Integer, String> readCards(Path cardsFile) {
+        Map<Integer, String> names = new HashMap<>();
+        for (String line : readLines(cardsFile)) {
+            Matcher m = CARDS_LINE.matcher(line);
+            if (!m.matches()) continue;
+            try {
+                String rest = m.group(2);
+                int split = rest.indexOf(DRIVER_SEPARATOR);
+                String label = split < 0 ? rest.trim()
+                        : cardLabel(rest.substring(0, split),
+                                    rest.substring(split + DRIVER_SEPARATOR.length()));
+                if (!label.isEmpty()) {
+                    names.put(Integer.parseInt(m.group(1)), label);
+                }
+            } catch (NumberFormatException ignored) { /* not a card line */ }
+        }
+        if (!names.isEmpty() && log.isInfoEnabled()) {
+            log.info("Card names from {}: {}", cardsFile, names);
+        }
+        return names;
+    }
+
+    /**
+     * What to SHOW for a card the kernel describes as {@code driver - shortname}.
+     *
+     * <p>The driver is worth showing only when it adds something. Often it does
+     * not: it repeats the shortname, or it names the bus the card hangs on, and
+     * printing it then costs width and tells the operator nothing. But dropping
+     * it always is wrong too - {@code ICE1712} and {@code AV200} are the chips
+     * that distinguish two otherwise similarly named cards, and an operator with
+     * several interfaces needs them.
+     *
+     * <p>So the driver is dropped when, and only when, one of three things
+     * holds, and kept otherwise:
+     * <ul>
+     *   <li>it IS the shortname, once punctuation and case are taken out;</li>
+     *   <li>it shares a MEANINGFUL word with the shortname - meaningful being
+     *       at least {@value #SIGNIFICANT_TOKEN_LENGTH} characters and not one
+     *       of the words that merely say "this is a sound card". A substring
+     *       test cannot do this job: {@code CMI8738-MC6} is not a substring of
+     *       {@code C-Media CMI8738}, yet the two plainly name the same chip;</li>
+     *   <li>it is a known bus or class driver.</li>
+     * </ul>
+     *
+     * <p>Package-private so the rule can be driven with the pairs real machines
+     * produce, on a host that has none of the hardware.
+     */
+    String cardLabel(String driver, String shortname) {
+        String name = shortname == null ? "" : shortname.trim();
+        String drv  = driver == null ? "" : driver.trim();
+        if (drv.isEmpty()) return name;
+        if (name.isEmpty()) return drv;
+        if (normalized(drv).equals(normalized(name))
+                || sharesSignificantToken(drv, name)
+                || isBusDriver(drv)) {
+            return name;
+        }
+        return drv + DRIVER_SEPARATOR + name;
+    }
+
+    /** Case and punctuation taken out, for the "it IS the shortname" test. */
+    private String normalized(String s) {
+        return s.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+    }
+
+    /** Whether the two strings name the same thing in at least one word that
+     *  carries meaning - the test that catches {@code C-Media CMI8738} against
+     *  {@code CMI8738-MC6}, which no substring comparison would. */
+    private boolean sharesSignificantToken(String driver, String shortname) {
+        Set<String> driverTokens = significantTokens(driver);
+        for (String token : significantTokens(shortname)) {
+            if (driverTokens.contains(token)) return true;
+        }
+        return false;
+    }
+
+    /** The words of {@code s} that can identify a product: lowercase, split on
+     *  everything that is not a letter or a digit, short ones and the
+     *  {@link #GENERIC_TOKENS generic} ones dropped. */
+    private Set<String> significantTokens(String s) {
+        Set<String> tokens = new HashSet<>();
+        for (String token : s.toLowerCase(Locale.ROOT).split("[^a-z0-9]+")) {
+            if (token.length() >= SIGNIFICANT_TOKEN_LENGTH && !GENERIC_TOKENS.contains(token)) {
+                tokens.add(token);
+            }
+        }
+        return tokens;
+    }
+
+    /** Whether {@code driver} names a bus or a device class rather than a
+     *  product - including the form the kernel's 15-character driver field
+     *  would have cut it down to. */
+    private boolean isBusDriver(String driver) {
+        String lower = driver.toLowerCase(Locale.ROOT);
+        for (String known : BUS_DRIVERS) {
+            if (lower.equals(known)) return true;
+            if (known.length() > DRIVER_FIELD_WIDTH
+                    && lower.equals(known.substring(0, DRIVER_FIELD_WIDTH))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** What {@code <root>/card<card>} says, cached for this instance's lifetime. */
     public CardCaps cardCaps(int card) {
         if (card < 0) return CardCaps.UNKNOWN;
-        return cardCache.computeIfAbsent(card, c -> readCard(root.resolve("card" + c)));
+        return cardCache.computeIfAbsent(card, c -> {
+            CardCaps caps = readCard(root.resolve("card" + c));
+            // Named the way the device listing names it, so a log line and the
+            // report cannot call the same card two different things.
+            if (caps.known() && log.isInfoEnabled()) {
+                String named = cardName(c);
+                log.info("Card {} ({}) caps: in.rates={}, in.depths={}, out.rates={}, out.depths={}",
+                        c, named.isEmpty() ? "unnamed" : named,
+                        caps.inputRates().length, caps.inputDepths().length,
+                        caps.outputRates().length, caps.outputDepths().length);
+            }
+            return caps;
+        });
     }
 
     /** The capabilities of the card named in {@code mixerName} - the whole

@@ -72,9 +72,10 @@ public final class DeviceScanner {
         // System.loadLibrary reads java.library.path only, snapshotted at VM
         // start, so on Windows it must be staged beside the process BEFORE
         // anything triggers the JavaSound SPI scan.
+        // No progress line here: the console has to read exactly like the file
+        // it writes, and the report's own header already states the OS and the
+        // architecture this run was taken on.
         String os = System.getProperty("os.name");
-        String arch = System.getProperty("os.arch");
-        System.out.println("running on " + os + " / " + arch);
         if (os.toLowerCase(Locale.ROOT).contains("win")) {
             CsjsoundNativePath.installForFatJar();
         }
@@ -166,12 +167,13 @@ public final class DeviceScanner {
 
     private void scanBackend(AudioDeviceManagerProvider provider) {
         AudioBackendType type = provider.backendType();
-        line("=== " + type.getDisplayName() + " ===");
+        // A backend the running OS does not have says nothing about the machine
+        // being reported on, and a reader looking for a real device should not
+        // have to step over it - it is left out of the report entirely.
         if (!type.isAvailable()) {
-            line("  not available on this OS (" + osDescription + ")");
-            line("");
             return;
         }
+        line("=== " + type.getDisplayName() + " ===");
         if (!provider.available()) {
             line("  module present, but its hardware probe answered unavailable");
             line("");
@@ -207,8 +209,14 @@ public final class DeviceScanner {
             return;
         }
         for (DeviceRef device : devices) {
-            line(INDENT_DEVICE + "[" + device.index() + "] " + device.name()
-                    + " (" + device.description() + ") - " + device.vendor());
+            // The backend's own rendering, not one composed here: a device that
+            // knows how it should read - a card name and a port instead of an
+            // ALSA address - would otherwise have that answer ignored.
+            // A device that reports NO formats is omitted entirely, like a
+            // backend the machine does not have: a phantom PCM with nothing
+            // behind it (an HDMI codec without a sink) tells the reader
+            // nothing the bench could use.  A probe ERROR still prints - that
+            // one is a finding, not an absence.
             formats(manager, device, output);
         }
     }
@@ -218,13 +226,14 @@ public final class DeviceScanner {
         try {
             formats = manager.listSupportedFormats(device, output);
         } catch (Throwable t) {
+            line(INDENT_DEVICE + device.displayName());
             line(INDENT_FORMAT + "ERROR probing formats: " + describe(t));
             return;
         }
         if (formats.isEmpty()) {
-            line(INDENT_FORMAT + "(no formats reported)");
             return;
         }
+        line(INDENT_DEVICE + device.displayName());
         // One AudioFormat per (rate, depth) pair - fold into rate -> depths.
         SortedMap<Integer, SortedSet<Integer>> byRate = new TreeMap<>();
         for (AudioFormat f : formats) {
