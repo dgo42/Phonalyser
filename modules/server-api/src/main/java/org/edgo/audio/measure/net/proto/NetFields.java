@@ -245,7 +245,9 @@ public class NetFields {
 
     /** Generator handle returned by {@code gen.open}. */
     public static final String GEN_ID = "genId";
-    /** {@code gen.open}: dither depth in bits. */
+    /** {@code gen.open} and {@code gen.config}: TPDF dither depth in bits.
+     *  The open carries the initial depth; the config push is the live half,
+     *  applied to the tone that is playing. */
     public static final String DITHER_BITS = "ditherBits";
     /** {@code gen.open}: which physical DAC lane carries the signal, as the
      *  server's {@code OutputChannels} name - {@code "BOTH"}, {@code "LEFT"} or

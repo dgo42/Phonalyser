@@ -65,10 +65,6 @@
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-qa40x</artifactId>
         </dependency>
-        <dependency>
-            <groupId>${project.groupId}</groupId>
-            <artifactId>backend-loopback</artifactId>
-        </dependency>
         <!-- The combined HTTP+WebSocket front: Jetty 12 core, ONE port
              (versions in phonalyser-parent).  Java-WebSocket is gone from
              the server - it stays the CLIENT's transport. -->

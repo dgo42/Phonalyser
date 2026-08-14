@@ -936,6 +936,11 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
     }
 
     @Override
+    public void setDitherBits(double bits) {
+        config(NetFields.DITHER_BITS, bits);
+    }
+
+    @Override
     public void setRectangleDuty(double dutyFrac) {
         config(NetFields.RECTANGLE_DUTY, dutyFrac);
     }

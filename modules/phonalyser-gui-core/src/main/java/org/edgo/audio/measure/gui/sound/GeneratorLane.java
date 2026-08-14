@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.sound;
 import java.io.File;
 import java.io.IOException;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.enums.GenSignalForm;
@@ -758,9 +759,16 @@ public final class GeneratorLane {
     // Live-apply setters (each a one-line no-op when nothing is playing)
     // -------------------------------------------------------------------------
 
-    /** Live-applies the dither bit count to the running local playback (a
-     *  remote line's dither is fixed at {@code gen.open}). */
+    /** Live-applies the dither bit count to the running playback line - the
+     *  local lane's quantizer, or the far end's through {@code gen.config}
+     *  (spec 4.5): the operator's dither edit reaches the tone that is
+     *  playing on either kind of bench. */
     public void setDitherBits(double bits) {
+        RemoteGenerator remote = remote();
+        if (remote != null) {
+            remote.setDitherBits(bits);
+            return;
+        }
         AudioPlayback ag = playbackLane.getPlayback();
         if (ag != null) ag.setDitherBits(bits);
     }
@@ -1088,7 +1096,7 @@ public final class GeneratorLane {
      *  table (private there); keep the two in step if a waveform is added. */
     private double rmsPerPeak(GenSignalForm form) {
         return switch (form) {
-            case SINE, SINE_COMP, LINEAR_SWEEP, LOG_SWEEP -> 1.0 / Math.sqrt(2.0);
+            case SINE, SINE_COMP, LINEAR_SWEEP, LOG_SWEEP -> 1.0 / Constants.SQRT2;
             case TRIANGLE                                 -> 1.0 / Math.sqrt(3.0);
             case RECTANGLE, WHITE_NOISE                   -> 1.0;
             case PINK_NOISE                               -> 1.0 / Math.sqrt(PINK_OCTAVES + 1.0);

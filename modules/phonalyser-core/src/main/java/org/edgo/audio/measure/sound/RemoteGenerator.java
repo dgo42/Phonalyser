@@ -120,6 +120,18 @@ public interface RemoteGenerator extends GeneratorControls {
     void setRightLaneScale(double scale);
 
     /**
+     * The TPDF dither depth in bits, live-applied to the far end's quantizer.
+     *
+     * <p>Not part of {@link GeneratorControls} for the same reason as the lane
+     * scale above: locally dither is a playback-line setting, pushed to the
+     * quantizer rather than to the generator - and on a remote bench that
+     * quantizer is the far end's.  {@link #openGenerator} carries the initial
+     * depth; this is the live half, so the operator's dither edit reaches the
+     * tone that is playing instead of the next open.
+     */
+    void setDitherBits(double bits);
+
+    /**
      * The silence a sweep emits BEFORE its first chirp sample, in samples of the
      * lane's own clock.
      *

@@ -142,6 +142,8 @@ class NetLoopbackTest {
     private static final double TRIMMED_HZ = 1_000.5;
     private static final double AMPLITUDE_VRMS = 0.5;
     private static final double DITHER_BITS = 1.0;
+    /** A depth far from the open's, so the live push cannot pass by echo. */
+    private static final double LIVE_DITHER_BITS = 4.0;
     /** The sweep the mark test starts - any real chirp will do; what is asserted
      *  is WHERE its mark lands in the byte stream. */
     private static final double SWEEP_F0_HZ = 20.0;
@@ -1310,8 +1312,8 @@ class NetLoopbackTest {
         assertEquals(RATE_HZ, lane.getRate());
         assertEquals(BITS, lane.getBits());
         assertEquals(DITHER_BITS, lane.getDitherBits(),
-                "spec 4.5 fixes the dither depth at gen.open - it is the LINE's, not a "
-                        + "live parameter");
+                "spec 4.5: gen.open fixes the INITIAL dither depth; the live half "
+                        + "travels as gen.config");
         assertEquals(OutputChannels.LEFT.name(), lane.getOutputChannels(),
                 "the lane gate travelled with the open, so the bench drives the side "
                         + "the operator selected");
@@ -1342,6 +1344,32 @@ class NetLoopbackTest {
         assertTrue(lane.isClosed(), "spec 4.5: gen.close gives the output line back");
         assertFalse(bench.isLocked(MockBench.OUTPUT, false),
                 "and the device lock goes with it");
+    }
+
+    /** The live half of the dither depth: the operator's edit crosses the wire
+     *  as {@code gen.config} and lands on the tone that is playing - it must
+     *  not wait for the next {@code gen.open}. */
+    @Test
+    void aDitherEditReachesTheToneThatIsPlaying() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        DeviceRef output = manager.listOutputDevices().get(0);
+
+        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, OutputChannels.BOTH);
+        manager.startGenerator();
+        MockBench.Generator lane = bench.getLastGenerator();
+        assertNotNull(lane, "the client opened no generator on the bench");
+        assertEquals(DITHER_BITS, lane.getDitherBits(),
+                "the open carried the initial depth");
+        assertNull(lane.getLiveDitherBits(),
+                "and no config push has touched it yet");
+
+        manager.setDitherBits(LIVE_DITHER_BITS);
+        awaitTrue(() -> lane.getLiveDitherBits() != null,
+                "the dither edit never crossed the wire");
+        assertEquals(LIVE_DITHER_BITS, lane.getLiveDitherBits(),
+                "spec 4.5: the config push carries the depth the operator set");
+
+        manager.closeGenerator();
     }
 
     /**

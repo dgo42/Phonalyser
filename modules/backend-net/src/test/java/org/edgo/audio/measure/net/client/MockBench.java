@@ -689,6 +689,12 @@ final class MockBench extends WirePeer {
         if (fileLoop != null) {
             generator.fileLoop = fileLoop;
         }
+        // Spec 4.5: the live half of the dither depth - routed to a lane field
+        // for the same reason as the loop flag above.
+        Double dither = request.optDouble(NetFields.DITHER_BITS);
+        if (dither != null) {
+            generator.liveDitherBits = dither;
+        }
         return new NetMessage(id);
     }
 
@@ -1159,6 +1165,10 @@ final class MockBench extends WirePeer {
         /** The {@code loop} flag of that command. */
         @Getter
         private volatile boolean fileLoop;
+        /** The dither depth as last pushed through {@code gen.config}, or null
+         *  while the line still runs at the depth {@code gen.open} fixed. */
+        @Getter
+        private volatile Double liveDitherBits;
         /** The configuration as it stood when {@code gen.start} arrived - what a
          *  bench would have built its waveform from, and therefore the only
          *  honest answer to "had the lead-in reached it in time". */

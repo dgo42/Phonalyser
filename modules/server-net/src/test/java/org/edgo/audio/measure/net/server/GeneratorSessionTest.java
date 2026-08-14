@@ -75,6 +75,8 @@ class GeneratorSessionTest {
     private static final int RATE_HZ = StubDeviceManager.RATE_48K;
     private static final int BITS = StubDeviceManager.BITS_24;
     private static final double DITHER_BITS = 1.5;
+    /** A depth far from the open's, so the live push cannot pass by echo. */
+    private static final double LIVE_DITHER_BITS = 4.0;
     private static final int DEVICE_INDEX = 0;
     private static final int FIRST_GEN_ID = 1;
     private static final int UNOPENED_GEN_ID = 7;
@@ -405,6 +407,17 @@ class GeneratorSessionTest {
         assertEquals(TONE_HZ, state.path(NetFields.NOMINAL_HZ).asDouble(), EXACT);
         assertEquals(QUIETER_VRMS, state.path(NetFields.AMPLITUDE_VRMS).asDouble(), EXACT,
                 "and the one field that WAS present did change");
+    }
+
+    @Test
+    void aDitherEditLandsOnTheToneThatIsPlaying() {
+        open();
+        generator.config(FIRST_GEN_ID, config()
+                .put(NetFields.DITHER_BITS, LIVE_DITHER_BITS));
+
+        assertEquals(LIVE_DITHER_BITS, playback().getDitherBits(), EXACT,
+                "spec 4.5: gen.config's ditherBits is the live half of the depth - "
+                        + "it reaches the OPEN lane's quantizer, not the next open");
     }
 
     @Test
