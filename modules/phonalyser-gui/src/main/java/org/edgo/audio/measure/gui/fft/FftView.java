@@ -235,9 +235,18 @@ public final class FftView extends AbstractFreqDomainView {
      *  Ignores FLL_TRIM (that's our own trim coming back round the bus). */
     private final Consumer<GenChangeCause> onGenChangeForFll = cause -> {
         if (cause == GenChangeCause.USER_INPUT) {
+            // A STOPPED analyser is holding a FROZEN result the operator is
+            // reading - the averages count and the measurement table's delta-F
+            // row among it.  Nothing on the generator side may wipe that: there
+            // is no running average that could blend the old tone with the new,
+            // and the next start resets the statistics anyway.  Switching the
+            // generator off is itself such a change (the controller publishes on
+            // its stop), which is how merely ending a measurement erased the
+            // measurement.
             // this-qualified: controller is a blank final at initializer
             // time (assigned in the ctor); a simple-name read here fails
             // javac's definite-assignment analysis.
+            if (!this.controller.isRecording()) return;
             this.controller.resetFrequencyLock();
             lastImd = null;
             // Signal-change variant: the worker also skips the DAC-buffer

@@ -40,6 +40,7 @@ import org.edgo.audio.measure.gui.helpviewer.Versions;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.Glfw;
 import org.edgo.audio.measure.preferences.BackendKey;
+import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 
@@ -171,6 +172,27 @@ public final class GuiMain {
                 prefs.save();
             }
             AudioBackend.instance().setActive(local);
+        }
+
+        // The SELECTED devices' calibration, into the runtime scalars, before any
+        // lane can open.  The backend above is only half the saved selection: the
+        // full-scale voltages that turn a commanded level into volts live on the
+        // devices' cards, and until this ran nothing applied them at start-up -
+        // the Preferences dialog's OK did (applyCommittedProfile), which is why
+        // switching the backend away and back "fixed" a session that had been
+        // driving the DAC at whatever scalar the defaults left behind.  A
+        // preconfigured installation never touches that dialog.
+        //
+        // By NAME, which is what the saved selection holds and needs no
+        // enumeration: the device lists are not scanned yet at this point, and the
+        // name lookup is exactly what the dialog falls back to for a device its
+        // own enumeration no longer offers.  A remote bench is skipped for the
+        // same reason it is not activated above - its calibration lives on the
+        // server and arrives with the session.
+        if (!saved.remote()) {
+            BackendPrefs selection = prefs.current();
+            prefs.applyInputDeviceProfile(selection.getInputDeviceName());
+            prefs.applyOutputDeviceProfile(selection.getOutputDeviceName());
         }
 
         // Bring every backend this build offers to a known, safe, idle state -

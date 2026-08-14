@@ -39,6 +39,7 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.sound.StereoSamples;
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
@@ -352,12 +353,14 @@ public final class TuneNotchWizardDialog {
         // at the PEAK full scale would have allowed 3 dB of clipping; V, dBV and
         // dBFS now all trim to the same maximum (0 dBFS is the top).
         ampField = new NumericStepField(row, UnitFamily.AMPLITUDE,
-                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl() / Math.sqrt(2.0), AMP_MAX_DECIMALS,
+                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl() / Constants.SQRT2, AMP_MAX_DECIMALS,
                 prefs::getDacFsVoltageAmpl, FIELD_WIDTH_HINT);
         // Same amplitude semantics as the generator's field, so it borrows that
         // field's tooltip (unit switching, dBV, and the dbfs/dbf entry).
         ampField.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
-        ampField.setValue(prefs.getTuneNotchAmplitudeVrms());
+        // The pair as entered - the store resolves it to Vrms at use, so a
+        // full-scale-relative entry still means what was typed.
+        ampField.seedPair(prefs.getTuneNotchAmplitude());
 
         addLabel(row, I18n.t("tuneNotch.targetHz"));
         targetField = new NumericStepField(row, UnitFamily.FREQUENCY,
@@ -400,7 +403,7 @@ public final class TuneNotchWizardDialog {
         });
         ampField.addSelectionListener(e -> {
             curAmpVrms = ampField.getValue();
-            prefs.setTuneNotchAmplitudeVrms(curAmpVrms);
+            prefs.setTuneNotchAmplitude(ampField.enteredValue());
             resetMagStats();
         });
         targetField.addSelectionListener(e -> {
@@ -612,10 +615,17 @@ public final class TuneNotchWizardDialog {
             return;
         }
         // The caller's step after resolution: the profile write goes through
-        // the UI thread (prefs bindings are plain UI-only listeners).
+        // the UI thread (prefs bindings are plain UI-only listeners).  The
+        // amplitude field's ceiling was frozen at build against the copy's
+        // then-current full scale - re-pull it and replay the entered pair so
+        // a dBFS entry resolves and re-renders against ONE full scale (a
+        // stale ceiling clamped the committed voltage and re-displayed a
+        // typed 0 dBFS as a negative level).
         GuiUtil.marshal(dialog, () -> {
             prefs.applyDeviceProfile(out, false);
             prefs.applyDeviceProfile(in, true);
+            ampField.setMax(prefs.getDacFsVoltageAmpl() / Constants.SQRT2);
+            ampField.seedPair(prefs.getTuneNotchAmplitude());
         });
         int sampleRate = prefs.current().getInputSampleRate();
         int bitDepth   = prefs.current().getInputBitDepth();
@@ -1011,7 +1021,7 @@ public final class TuneNotchWizardDialog {
         Preferences globPrefs = Preferences.instance();
         globPrefs.setTuneNotchStartHz(prefs.getTuneNotchStartHz());
         globPrefs.setTuneNotchStopHz(prefs.getTuneNotchStopHz());
-        globPrefs.setTuneNotchAmplitudeVrms(prefs.getTuneNotchAmplitudeVrms());
+        globPrefs.setTuneNotchAmplitude(prefs.getTuneNotchAmplitude());
         globPrefs.setTuneNotchTargetHz(prefs.getTuneNotchTargetHz());
         globPrefs.setTuneNotchOutputChannels(prefs.getTuneNotchOutputChannels());
         globPrefs.save();

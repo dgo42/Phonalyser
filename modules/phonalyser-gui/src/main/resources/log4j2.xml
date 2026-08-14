@@ -14,28 +14,35 @@
         </RollingFile>
     </Appenders>
     <Loggers>
-        <Logger name="org.edgo.audio.measure.sound.qa40x" level="WARN" additivity="false">
+        <!--Logger name="org.edgo.audio.measure.sound.qa40x" level="WARN" additivity="false">
             <AppenderRef ref="Console" level="ERROR"/>
             <AppenderRef ref="File" level="WARN"/>
-        </Logger>
+        </Logger-->
         <!-- PortAudio native-library loading logs at INFO (which DLL / folder was
              resolved) for field diagnostics, without raising the rest of the app
              above WARN. -->
-        <Logger name="org.edgo.audio.measure.sound.PortAudio" level="WARN" additivity="false">
+        <!--Logger name="org.edgo.audio.measure.sound.PortAudio" level="WARN" additivity="false">
             <AppenderRef ref="Console" level="ERROR"/>
             <AppenderRef ref="File" level="WARN"/>
-        </Logger>
+        </Logger-->
         <!-- The Tune-notch wizard logs per-sweep capture/deconv timing at INFO for
              tuning diagnostics, without raising the rest of the app above WARN. -->
-        <Logger name="org.edgo.audio.measure.gui.freqresp.TuneNotchWizardDialog" level="WARN" additivity="false">
+        <!--Logger name="org.edgo.audio.measure.gui.freqresp.TuneNotchWizardDialog" level="WARN" additivity="false">
             <AppenderRef ref="Console" level="ERROR"/>
             <AppenderRef ref="File" level="WARN"/>
         </Logger>
         <Logger name="org.edgo.audio.measure.sound.LibUsb" level="WARN" additivity="false">
             <AppenderRef ref="Console" level="ERROR"/>
             <AppenderRef ref="File" level="WARN"/>
-        </Logger>
-        <Root level="WARN">
+        </Logger-->
+        <!-- JavaSound enumeration diagnostics: every mixer the walk sees and
+             every list/drop decision, for chasing a device that should list
+             and does not.  Lower back to WARN when the chase is over. >
+        <Logger name="org.edgo.audio.measure.sound.javasound" level="DEBUG" additivity="false">
+            <AppenderRef ref="Console" level="ERROR"/>
+            <AppenderRef ref="File" level="DEBUG"/>
+        </Logger-->
+        <Root level="INFO">
             <AppenderRef ref="Console" level="ERROR" />
             <AppenderRef ref="File" level="WARN" />
         </Root>

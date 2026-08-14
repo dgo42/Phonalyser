@@ -51,6 +51,7 @@ import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.GuiUtil;
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
@@ -60,6 +61,7 @@ import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.gui.widgets.SignalFormCombo;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
+import org.edgo.audio.measure.gui.widgets.UnitValue;
 import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.Getter;
@@ -563,21 +565,26 @@ public final class GeneratorPane extends AbstractPane {
                 prefs::getDacFsVoltageAmpl, 160);
         ampField.setLayoutData(fillH());
         ampField.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
-        // The field holds canonical Vrms (unit parsing / display switching is
-        // internal) - two-way bind it like the frequency; live-apply and the
-        // FFT-invalidation publish are the controller's subscription.
-        Bindings.stepField(ampField, prefs.genAmplitudeVrmsProperty());
-        // dBV display choice: seed from the persisted pref and persist the
-        // user's typed unit (the field fires on display-unit changes too).
-        ampField.setLogDisplay(prefs.isGenAmplitudeDbvDisplay());
-        ampField.addSelectionListener(e ->
-                prefs.setGenAmplitudeDbvDisplay(ampField.isLogDisplay()));
+        // The field holds the pair the operator entered - the displayed number
+        // and its unit - and the store resolves it to Vrms at use, so a dBFS
+        // entry keeps meaning what was typed when the calibration moves.  Seed
+        // before the listener so the seed cannot re-enter the pref write;
+        // live-apply and the FFT-invalidation publish are the controller's
+        // subscription.
+        ampField.seedPair(prefs.getGenAmplitude());
+        ampField.addSelectionListener(e -> prefs.setGenAmplitude(ampField.enteredValue()));
+        // A value written from elsewhere (a programmatic writer, a preset) has
+        // to reach the field.
+        Bindings.onChange(group, prefs.genAmplitudeProperty(), v -> seedAmpFieldFromPrefs());
         // A DAC recalibration (Calibrate DAC dialog) changes the output full-scale:
-        // recompute the running generator's amplitude against it so the commanded
-        // Vrms still holds (no restart, controller subscription) - the pane
-        // only moves the field's ceiling with the new full-scale.
-        Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(),
-                v -> ampField.setMax(controller.maxAmplitudeVrms(formCombo.getSelectedForm())));
+        // the ceiling moves with it, and replaying the stored pair leaves the
+        // entered text exactly as it stands while re-solving what it resolves to
+        // (0 dBFS is a different voltage now).  The running generator is
+        // re-pushed by the controller's own subscription.
+        Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(), v -> {
+            ampField.setMax(controller.maxAmplitudeVrms(formCombo.getSelectedForm()));
+            seedAmpFieldFromPrefs();
+        });
         // Each waveform reaches full scale at a different V RMS, so the ceiling
         // moves with the form - re-cap here (registered after the field exists,
         // alongside the form combo's own visual-reconfiguration listener).
@@ -635,27 +642,24 @@ public final class GeneratorPane extends AbstractPane {
                 160);
         ditherField.setLayoutData(fillH());
         ditherField.setToolTipText(I18n.t("generator.dither.tooltip"));
-        // Seed value + display unit BEFORE wiring the listener so the seed
-        // doesn't re-enter the pref write / signal path.
-        ditherField.setValue(prefs.getGenDitherBits());
-        ditherField.setLogDisplay(prefs.isGenDitherDbvDisplay());
-        // On a committed change, write the bit count (the existing genDitherBits
-        // -> GeneratorController.setDitherBits -> publishSignalChanged path is
-        // unchanged), persist the bits/dBV display choice, and re-annotate the
-        // caption with the other-unit readout.
+        // Seed the entered pair BEFORE wiring the listener so the seed doesn't
+        // re-enter the pref write / signal path.
+        ditherField.seedPair(prefs.getGenDither());
+        // On a committed change, write the pair (the store resolves it to bits
+        // for GeneratorController.setDitherBits -> publishSignalChanged, that
+        // path is unchanged) and re-annotate the caption with the other-unit
+        // readout.
         ditherField.addSelectionListener(e -> {
-            prefs.setGenDitherBits(ditherField.getValue());
-            prefs.setGenDitherDbvDisplay(ditherField.isLogDisplay());
+            prefs.setGenDither(ditherField.enteredValue());
             updateDitherLabel();
         });
-        // A DAC recalibration shifts the dBV mapping.  reanchor() HOLDS the
-        // entered value: in the dBV view it keeps the shown dBV and re-solves
-        // the bits under the new full-scale; in the bits view it keeps the bits
-        // and only the dBV readout moves.  When the bits re-solve, persist them
-        // - that restarts the generator via the usual genDitherBits path - then
-        // re-annotate the caption.
+        // A DAC recalibration shifts the dBV mapping.  The ENTERED pair is what
+        // holds: replaying it leaves the field text exactly as typed and
+        // re-solves the bits underneath, so a dither entered as a level keeps
+        // that level and only the companion readout moves.  The running
+        // generator is re-pushed by the controller's own subscription.
         Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(), v -> {
-            if (ditherField.reanchor()) prefs.setGenDitherBits(ditherField.getValue());
+            ditherField.seedPair(prefs.getGenDither());
             updateDitherLabel();
         });
         // An FFT-window change never touches the dither: bits and dBV are the
@@ -1168,8 +1172,8 @@ public final class GeneratorPane extends AbstractPane {
         if (calibration.isCalibrationFromDevice(false)) {
             // Device-provided (a QA40x, here or on a bench): show the built-in
             // output full-scale (Vrms) read-only.
-            double fsL = prefs.getDacFsVoltageAmpl(Channel.L) / Math.sqrt(2.0);
-            double fsR = prefs.getDacFsVoltageAmpl(Channel.R) / Math.sqrt(2.0);
+            double fsL = prefs.getDacFsVoltageAmpl(Channel.L) / Constants.SQRT2;
+            double fsR = prefs.getDacFsVoltageAmpl(Channel.R) / Constants.SQRT2;
             new CalibrationDialog(parent, dacTexts(), fsL, fsR, true, (ch, v) -> { }).open();
             return;
         }
@@ -1779,6 +1783,16 @@ public final class GeneratorPane extends AbstractPane {
      * Off shows the plain caption.  The dBV side tracks the live DAC full-scale,
      * so this is re-run on calibration / output-format changes.
      */
+    /** Replays the stored amplitude into the field, unless it is already
+     *  showing exactly that value - which is the case right after the field
+     *  itself wrote it, and re-seeding then would fight the operator's caret. */
+    private void seedAmpFieldFromPrefs() {
+        UnitValue stored = Preferences.instance().getGenAmplitude();
+        if (!ampField.enteredValue().equals(stored)) {
+            ampField.seedPair(stored);
+        }
+    }
+
     private void updateDitherLabel() {
         String other = ditherField.companionText();
         ditherLabel.setText(other.isEmpty()

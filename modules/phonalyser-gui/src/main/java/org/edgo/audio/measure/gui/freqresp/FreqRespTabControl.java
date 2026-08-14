@@ -51,6 +51,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.bind.Property;
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
@@ -72,6 +73,7 @@ import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PresetBar;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
+import org.edgo.audio.measure.gui.widgets.UnitValue;
 import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FreqRespFilterTypeParams;
 import org.edgo.audio.measure.preferences.FreqRespPreset;
@@ -659,24 +661,31 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // trim to it (0 dBFS is exactly the top).  The field holds V RMS, so
         // capping it at the PEAK full scale would have allowed 3 dB of clipping.
         NumericStepField ampField = new NumericStepField(g, UnitFamily.AMPLITUDE,
-                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl() / Math.sqrt(2.0), AMP_MAX_DECIMALS,
+                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl() / Constants.SQRT2, AMP_MAX_DECIMALS,
                 prefs::getDacFsVoltageAmpl, 110);
         ampField.setLayoutData(comboGd());
         // Follow a DAC recalibration - the ceiling was previously read once, at
-        // construction, and never moved again.
-        Bindings.onChange(toolbarTabs, prefs.dacFsVoltageAmplProperty(),
-                v -> ampField.setMax(v / Math.sqrt(2.0)));
+        // construction, and never moved again.  Replaying the stored pair after
+        // it leaves the entered text where it stands and re-solves what a
+        // full-scale-relative entry resolves to.
+        Bindings.onChange(toolbarTabs, prefs.dacFsVoltageAmplProperty(), v -> {
+            ampField.setMax(v / Constants.SQRT2);
+            ampField.seedPair(prefs.getFreqRespAmplitude());
+        });
         ampField.setToolTipText(I18n.t("freqResp.settings.amplitude.tooltip"));
-        // Two-way bind; the floor clamp (≥ 0.0001 V) and the tab-tile refresh
-        // ride an onChange so a sub-floor text entry is corrected in the pref.
-        Bindings.stepField(ampField, prefs.freqRespAmplitudeVrmsProperty());
-        // dBV display choice: seed from the persisted pref and persist the
-        // user's typed unit (the field fires on display-unit changes too).
-        ampField.setLogDisplay(prefs.isFreqRespAmplitudeDbvDisplay());
-        ampField.addSelectionListener(e ->
-                prefs.setFreqRespAmplitudeDbvDisplay(ampField.isLogDisplay()));
-        Bindings.onChange(toolbarTabs, prefs.freqRespAmplitudeVrmsProperty(), v -> {
-            if (v < 0.0001) prefs.setFreqRespAmplitudeVrms(0.0001);
+        // The field carries the pair the operator entered; the store resolves it
+        // to Vrms at use.  Seed first, then wire, so the seed cannot re-enter
+        // the pref write.
+        ampField.seedPair(prefs.getFreqRespAmplitude());
+        ampField.addSelectionListener(e -> prefs.setFreqRespAmplitude(ampField.enteredValue()));
+        // The floor clamp and the tab-tile refresh ride the ONE entered value,
+        // so an edit runs them once.  The floor is written in the unit the
+        // operator is working in - clamping must not silently move them back to
+        // volts.
+        Bindings.onChange(toolbarTabs, prefs.freqRespAmplitudeProperty(), v -> {
+            if (prefs.getFreqRespAmplitudeVrms() < AMP_MIN_VRMS) {
+                prefs.setFreqRespAmplitude(prefs.freqRespAmplitudeIn(AMP_MIN_VRMS));
+            }
             toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
         });
 
@@ -1544,7 +1553,10 @@ public final class FreqRespTabControl extends AbstractTabControl {
         FreqRespPreset p = new FreqRespPreset();
         p.setStartHz(prefs.getFreqRespStartHz());
         p.setStopHz(prefs.getFreqRespStopHz());
-        p.setAmplitudeVrms(prefs.getFreqRespAmplitudeVrms());
+        // The preset carries the pair as entered, so recalling it under another
+        // calibration replays what was typed, not a voltage frozen out of it.
+        p.setAmplitude(prefs.getFreqRespAmplitude().value());
+        p.setAmplitudeUnit(prefs.getFreqRespAmplitude().unit());
         p.setSweepPoints(prefs.getFreqRespSweepPoints());
         p.setFftSize(prefs.getFreqRespFftSize());
         p.setLeadInSec(prefs.getFreqRespLeadInSec());
@@ -1574,7 +1586,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         Preferences prefs = Preferences.instance();
         prefs.setFreqRespStartHz(p.getStartHz());
         prefs.setFreqRespStopHz(p.getStopHz());
-        prefs.setFreqRespAmplitudeVrms(p.getAmplitudeVrms());
+        prefs.setFreqRespAmplitude(new UnitValue(p.getAmplitude(), p.getAmplitudeUnit()));
         prefs.setFreqRespSweepPoints(p.getSweepPoints());
         prefs.setFreqRespFftSize(p.getFftSize());
         prefs.setFreqRespLeadInSec(p.getLeadInSec());
