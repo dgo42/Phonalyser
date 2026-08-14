@@ -63,6 +63,7 @@
         <module>phonalyser-gui-core</module>
         <module>phonalyser-gui</module>
         <module>backend-qa40x-gui</module>
+        <module>backend-loopback-gui</module>
         <module>backend-net-gui</module>
         <module>phonalyser-app</module>
         <!-- Tools: built by the reactor, shipped with nothing.  The scanner is

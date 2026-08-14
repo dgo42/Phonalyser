@@ -31,11 +31,13 @@ import org.edgo.audio.measure.preferences.Preferences;
  * owns that backend's UI.  Implementations are found through the service loader
  * and keyed by {@link #backendType()}; see {@code BackendSettingsRegistry}.
  *
- * <p>This replaces {@code hasCustomPreferences()} / {@code openCustomPreferences(Shell)},
- * which used to sit on the core audio contract.  A device-manager interface has no
+ * <p>This replaces the {@code hasCustomPreferences()} / {@code openCustomPreferences(Shell)}
+ * pair that used to sit on the core audio contract.  A device-manager interface has no
  * business naming a UI toolkit: it put SWT in the signature of every backend and
  * made a headless build impossible.  The direction is now inverted - the audio
- * layer knows nothing about a UI, and the UI asks whether one exists.
+ * layer knows nothing about a UI, and the UI asks whether one exists.  The
+ * {@link #hasCustomPreferences()} below is that question asked of the panel itself,
+ * where the answer belongs.
  *
  * <h2>Why this lives in the GUI module and not in core</h2>
  * The methods below traffic in {@code Shell} and {@code Control}.  Declaring the
@@ -55,6 +57,24 @@ public interface BackendSettingsUi {
     /** The backend these settings belong to.  Exactly one implementation may
      *  claim a given type. */
     AudioBackendType backendType();
+
+    /**
+     * Whether this backend has a settings panel at all - what the Preferences
+     * dialog asks before it offers the per-backend settings button.
+     *
+     * <p>Registering a service is not the same as having something to configure:
+     * an implementation may exist ONLY for its {@link #start()} wiring, because
+     * that hook is where a backend's bus listeners are armed and there is no other
+     * seam for them.  Such a backend has no custom preferences, and a button that
+     * opened nothing would be worse than no button - so it answers {@code false}
+     * and the dialog offers none.
+     *
+     * <p>Default {@code true}: a service that says nothing is one that came for
+     * its panel, which is what every implementation with a panel does.
+     */
+    default boolean hasCustomPreferences() {
+        return true;
+    }
 
     /**
      * One-time bootstrap for this backend's UI layer, called by the registry as

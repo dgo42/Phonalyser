@@ -19,13 +19,16 @@
 package org.edgo.audio.measure.sound.loopback;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.ServiceLoader;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.sound.sampled.AudioFormat;
 
@@ -47,6 +50,11 @@ import org.junit.jupiter.api.Test;
 class LoopbackBackendTest {
 
     private static final int RATE = 48000;
+    /** Another rung of the ladder - what a lane opened for a file recorded at a
+     *  different rate asks the session to move to. */
+    private static final int MOVED_RATE = 96000;
+    /** The session's block at {@link #RATE}: 50 blocks per second. */
+    private static final int BLOCK_FRAMES = RATE / 50;
     private static final int LADDER_RATES = 15;
     private static final int DEPTHS = 4;
     /** Delivered TPDF total error: dither (0.408 LSB RMS) plus the rounding it
@@ -206,6 +214,45 @@ class LoopbackBackendTest {
     }
 
     @Test
+    @DisplayName("a configured dither overrides the last-bit default")
+    void configuredDitherOverridesTheDefault() throws Exception {
+        LoopbackDeviceManager manager = new LoopbackDeviceManager();
+        DeviceRef device = manager.listInputDevices().get(0);
+        int depth = 24;
+        double configuredBits = 12.0;
+        // A dither of b bits on a d-bit lane floors at sqrt(4^(d-b)/6 + 1/12)
+        // LSB of d: the triangular noise keeps its own grid while the rounding
+        // keeps the quantiser's.  The 0.500 figure is the b = d case.  Here
+        // that is ~1672 LSB - far above both the default floor and the capture
+        // lane's own silence, which is what separates the playback blocks.
+        double expectedFloor = Math.sqrt(Math.pow(4, depth - configuredBits) / 6 + 1.0 / 12);
+        double tolerance = expectedFloor * (FLOOR_TOLERANCE_LSB / EXPECTED_FLOOR_LSB);
+        AudioPlayback playback = manager.openPlayback(device, RATE, depth, configuredBits);
+        playback.open();
+        AtomicBoolean stop = new AtomicBoolean(false);
+        SignalGenerator silent = new SignalGenerator(GenSignalForm.SINE, 1000.0, RATE, 0.0, 1.0);
+        Thread player = new Thread(() -> playback.play(silent, stop, null), "test-player");
+
+        List<int[]> blocks = capture(manager.openCapture(device, RATE, depth), CAPTURE_MS,
+                player::start);
+        stop.set(true);
+        player.join(2000);
+        playback.close();
+
+        List<int[]> dithered = new ArrayList<>();
+        for (int[] block : blocks) {
+            if (rmsLsb(List.of(block), 0) > expectedFloor / 2) {
+                dithered.add(block);
+            }
+        }
+        assertTrue(!dithered.isEmpty(), "no configured-dither block reached the capture lane");
+        double rms = rmsLsb(dithered, 0);
+        assertTrue(Math.abs(rms - expectedFloor) < tolerance,
+                "a 12-bit dither on a 24-bit lane should floor at ~" + expectedFloor
+                        + " LSB, was " + rms);
+    }
+
+    @Test
     @DisplayName("delivery is paced by the wall clock, not by the CPU")
     void deliveryIsWallClockPaced() throws Exception {
         LoopbackDeviceManager manager = new LoopbackDeviceManager();
@@ -221,6 +268,159 @@ class LoopbackBackendTest {
         assertTrue(frames > 0, "nothing delivered");
         assertTrue(Math.abs(elapsedMs - expectedMs) < CAPTURE_MS / 2,
                 "delivered " + frames + " frames (" + expectedMs + " ms of audio) in " + elapsedMs + " ms");
+    }
+
+    @Test
+    @DisplayName("the first attach starts the session and the last detach ends it")
+    void firstAttachStartsTheSessionAndTheLastDetachEndsIt() throws Exception {
+        LoopbackDeviceManager manager = new LoopbackDeviceManager();
+        DeviceRef device = manager.listInputDevices().get(0);
+        LoopbackDuplexEngine engine = manager.acquireEngine(RATE, 24);
+        assertFalse(engine.isStreaming(), "an engine with no lane attached does not run");
+
+        AudioCapture capture = manager.openCapture(device, RATE, 24);
+        capture.open();
+        capture.startRecording();
+        assertTrue(engine.isStreaming(), "the first attach starts the session");
+
+        // A generator lane joins the RUNNING session - no restart - and the session
+        // outlives the capture that started it for as long as that lane is there.
+        LoopbackDuplexEngine.SampleSource lane = (destination, frames) -> { };
+        engine.attachGenerator(lane);
+        assertTrue(engine.isStreaming());
+
+        capture.stopRecording();
+        capture.close();
+        assertTrue(engine.isStreaming(), "the generator lane still holds the session open");
+
+        engine.detachGenerator();
+        assertFalse(engine.isStreaming(), "the last detach ends the session");
+    }
+
+    @Test
+    @DisplayName("ONE session thread: the second lane joins it, and the last detach stops it promptly")
+    void oneSessionThreadForBothLanes() throws Exception {
+        LoopbackDeviceManager manager = new LoopbackDeviceManager();
+        LoopbackDuplexEngine engine = manager.acquireEngine(RATE, 24);
+        // The count is JVM-wide by thread name, and a sibling test's pacer is not
+        // waited for by anything - so let the last one leave before counting.
+        assertTrue(awaitNoPacerThread(), "a previous test's pacer is gone");
+        assertEquals(0, pacerThreads(), "no session, no thread");
+
+        engine.attachCapture((block, length) -> { });
+        assertEquals(1, pacerThreads(), "the first attach starts the one thread");
+
+        // The second lane RENDERS ON THE THREAD THAT IS ALREADY RUNNING - a second
+        // one would be a second clock, which is the whole thing this engine exists
+        // to prevent.
+        engine.attachGenerator((destination, frames) -> { });
+        assertEquals(1, pacerThreads(), "the second lane uses the same thread");
+
+        engine.detachCapture();
+        assertEquals(1, pacerThreads(), "one lane still attached, so the thread lives");
+
+        engine.detachGenerator();
+        // Nothing waits for the pacer: the detach clears its run flag and returns,
+        // and the thread exits at its current iteration - within one block period,
+        // with no join and no timeout anywhere on the path.
+        assertTrue(awaitNoPacerThread(), "the last detach stops the thread promptly");
+        assertFalse(engine.isStreaming());
+    }
+
+    @Test
+    @DisplayName("a lane with no generator behind it emits the session's DITHERED silence, never zeros")
+    void aGeneratorlessLaneBlockCarriesTheFloor() throws Exception {
+        LoopbackDeviceManager manager = new LoopbackDeviceManager();
+        DeviceRef device = manager.listInputDevices().get(0);
+        int depth = 24;
+        LoopbackPlayback playback = (LoopbackPlayback) manager.openPlayback(device, RATE, depth, 0.0);
+        playback.open();
+        // The window between a detach and the lane's own bookkeeping: the session
+        // still pulls this lane, and it has no generator to pull from.
+        byte[] block = new byte[BLOCK_FRAMES * ((depth + 7) / 8) * 2];
+
+        playback.nextBlock(block, BLOCK_FRAMES);
+
+        int[] left = new int[BLOCK_FRAMES];
+        int frameSize = ((depth + 7) / 8) * 2;
+        boolean anyNonZero = false;
+        for (int f = 0; f < BLOCK_FRAMES; f++) {
+            left[f] = readLittleEndian24(block, f * frameSize);
+            if (left[f] != 0) anyNonZero = true;
+        }
+        assertTrue(anyNonZero, "digital zeros would read as minus infinity, not as the known floor");
+        double rms = rmsLsb(List.of(left), 0);
+        assertTrue(Math.abs(rms - EXPECTED_FLOOR_LSB) < FLOOR_TOLERANCE_LSB,
+                "the block carries the session's last-bit floor, was " + rms);
+    }
+
+    /** Signed 24-bit little-endian sample - the encoding the lane writes. */
+    private int readLittleEndian24(byte[] pcm, int offset) {
+        return (pcm[offset + 2] << 16) | ((pcm[offset + 1] & 0xFF) << 8) | (pcm[offset] & 0xFF);
+    }
+
+    /** How many loopback session threads are alive right now. */
+    private int pacerThreads() {
+        int alive = 0;
+        for (Thread t : Thread.getAllStackTraces().keySet()) {
+            if (t.isAlive() && "loopback-session".equals(t.getName())) alive++;
+        }
+        return alive;
+    }
+
+    /** Waits out the one block period the pacer may still be sleeping through. */
+    private boolean awaitNoPacerThread() throws InterruptedException {
+        for (int i = 0; i < 100 && pacerThreads() > 0; i++) {
+            Thread.sleep(10);
+        }
+        return pacerThreads() == 0;
+    }
+
+    @Test
+    @DisplayName("a second capture consumer on one engine is refused")
+    void secondCaptureConsumerIsRefused() {
+        LoopbackDeviceManager manager = new LoopbackDeviceManager();
+        LoopbackDuplexEngine engine = manager.acquireEngine(RATE, 24);
+        LoopbackDuplexEngine.CaptureConsumer first = (block, length) -> { };
+        engine.attachCapture(first);
+        try {
+            assertThrows(IllegalStateException.class,
+                    () -> engine.attachCapture((block, length) -> { }),
+                    "one engine has a single capture consumer");
+        } finally {
+            engine.detachCapture();
+        }
+        assertFalse(engine.isStreaming());
+    }
+
+    @Test
+    @DisplayName("a lane opened at another ladder rate moves the whole session, and capture keeps delivering")
+    void openingALaneAtAnotherRateMovesTheSession() throws Exception {
+        LoopbackDeviceManager manager = new LoopbackDeviceManager();
+        DeviceRef device = manager.listInputDevices().get(0);
+        LoopbackDuplexEngine engine = manager.acquireEngine(RATE, 24);
+        AtomicInteger delivered = new AtomicInteger();
+        AudioCapture capture = manager.openCapture(device, RATE, 24);
+        capture.setPcmBatchListener((pcm, validBytes) -> delivered.incrementAndGet());
+        capture.open();
+        capture.startRecording();
+        Thread.sleep(CAPTURE_MS / 2);
+        assertTrue(delivered.get() > 0, "nothing was delivered before the move");
+
+        // A file recorded at another rate: its playback lane opens at 96 kHz and the
+        // WHOLE session follows it, because the loop has exactly one clock to move.
+        AudioPlayback playback = manager.openPlayback(device, MOVED_RATE, 24, 0.0);
+        playback.open();
+        assertEquals(MOVED_RATE, engine.getSampleRateHz(), "the session moved to the lane's rate");
+        assertTrue(engine.isStreaming(), "the running capture survived the move");
+
+        int beforeSecondHalf = delivered.get();
+        Thread.sleep(CAPTURE_MS / 2);
+        assertTrue(delivered.get() > beforeSecondHalf,
+                "the capture stopped delivering across the session move");
+        playback.close();
+        capture.stopRecording();
+        capture.close();
     }
 
     @Test

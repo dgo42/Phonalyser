@@ -30,12 +30,13 @@ import org.edgo.audio.measure.sound.DeviceRef;
 
 /**
  * Manager for the digital loopback backend: one device, listed for both
- * directions, and the crossing the two lanes meet on.
+ * directions, and the one always-duplex session the two lanes attach to.
  *
- * <p>It owns that crossing because both lanes are created here - a playback and
- * a capture opened from this manager are the two ends of the same loop.  The
- * formats are the standard rate ladder at the four depths the encoder supports;
- * nothing is probed, since there is no hardware to ask.
+ * <p>It owns that session because both lanes are created here - a playback and
+ * a capture opened from this manager are the two ends of the same loop, and the
+ * loop has ONE clock.  The formats are the standard rate ladder at the four
+ * depths the encoder supports; nothing is probed, since there is no hardware to
+ * ask.
  */
 public final class LoopbackDeviceManager implements AudioDeviceManager {
 
@@ -52,7 +53,10 @@ public final class LoopbackDeviceManager implements AudioDeviceManager {
     private static final int CHANNELS = 2;
 
     private final LoopbackDeviceRef device = new LoopbackDeviceRef();
-    private final LoopbackCrossing crossing = new LoopbackCrossing();
+
+    private LoopbackDuplexEngine engine;      // the one duplex session
+    private int currentRateHz;                // 0 = engine not yet built
+    private int currentBitDepth;
 
     @Override
     public List<DeviceRef> listInputDevices() {
@@ -88,16 +92,39 @@ public final class LoopbackDeviceManager implements AudioDeviceManager {
         return formats;
     }
 
+    /** Opens a capture client bound to this manager's one duplex session. */
     @Override
     public AudioCapture openCapture(DeviceRef ref, int sampleRate, int bitDepth) {
-        return new LoopbackCapture(sampleRate, bitDepth, crossing);
+        return new LoopbackCapture(this, sampleRate, bitDepth);
     }
 
-    /** {@code ditherBits} is accepted to satisfy the contract and deliberately
-     *  not passed on - see {@link LoopbackPlayback} for why this backend always
-     *  dithers at its own selected depth. */
+    /** Opens a playback client bound to this manager's one duplex session.  A
+     *  configured {@code ditherBits} reaches the lane; zero falls back to the
+     *  last-bit default - see {@link LoopbackPlayback}. */
     @Override
     public AudioPlayback openPlayback(DeviceRef ref, int sampleRate, int bitDepth, double ditherBits) {
-        return new LoopbackPlayback(sampleRate, bitDepth, crossing);
+        return new LoopbackPlayback(this, sampleRate, bitDepth, ditherBits);
+    }
+
+    /**
+     * Returns the one duplex session, building it on first use and MOVING it to
+     * {@code sampleRate} / {@code bitDepth} when a lane opens at another format.
+     * Package-private - the lane clients acquire the session here, then
+     * {@code attach}/{@code detach}.
+     *
+     * <p>The whole session moves, which is what makes a file played at another
+     * rate simply work: the lane that opens names the format, the running lanes
+     * keep delivering on it, and nothing has to negotiate.  There is only one
+     * clock to move, so there is nothing else it could mean.
+     */
+    synchronized LoopbackDuplexEngine acquireEngine(int sampleRate, int bitDepth) {
+        if (engine == null) {
+            engine = new LoopbackDuplexEngine(sampleRate, bitDepth);
+        } else if (currentRateHz != sampleRate || currentBitDepth != bitDepth) {
+            engine.changeFormat(sampleRate, bitDepth);
+        }
+        currentRateHz   = sampleRate;
+        currentBitDepth = bitDepth;
+        return engine;
     }
 }

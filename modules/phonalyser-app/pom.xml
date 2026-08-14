@@ -62,6 +62,14 @@
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-qa40x-gui</artifactId>
         </dependency>
+        <!-- The digital loopback's UI layer: the constraint that keeps its two
+             directions on one rate and one bit depth.  Discovered through the
+             service loader like the two beside it, so it is the APP that has to
+             put it on the class path. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-loopback-gui</artifactId>
+        </dependency>
         <!-- The net bridge's UI layer: the server list and the combo glue.  Like
              backend-qa40x-gui it is discovered through the service loader, so it
              is the APP that has to put it on the class path - phonalyser-gui

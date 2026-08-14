@@ -131,8 +131,11 @@
      nothing to plug in - it is available on every system.</p>
   <p>Its purpose is a bench whose noise floor is <em>known</em>. Every sample
      that crosses is quantised by the same quantiser the real playback paths
-     use, with TPDF dither applied immediately before the rounding step, at the
-     last bit of the selected depth. The floor is therefore the arithmetic one
+     use, with TPDF dither applied immediately before the rounding step - by
+     default at the last bit of the selected depth; a dither the generator
+     configures takes precedence, and the lane is never undithered, because a
+     loop with no noise at all would hand the FFT the artifacts of bare
+     rounding. With nothing configured the floor is therefore the arithmetic one
      rather than a property of some converter: the delivered samples of digital
      silence measure <b>0.500&nbsp;LSB RMS</b>, and choosing a deeper word moves
      that floor down by exactly the 6&nbsp;dB per bit the arithmetic says it
