@@ -519,7 +519,7 @@ public class SignalGenerator implements GeneratorControls {
             case SINE, SINE_COMP   -> 1.0 / Constants.SQRT2;                       // sine RMS = peak / √2
             case LINEAR_SWEEP             -> 1.0 / Constants.SQRT2;                       // sweep is sin(φ(n)); RMS = peak / √2
             case LOG_SWEEP                -> 1.0 / Constants.SQRT2;                       // sweep is sin(φ(n)); RMS = peak / √2
-            case TRIANGLE                 -> 1.0 / Constants.SQRT2;                       // triangle RMS = peak / √3 (independent of duty)
+            case TRIANGLE                 -> 1.0 / Constants.SQRT3;                       // triangle RMS = peak / √3 (independent of duty)
             case RECTANGLE                -> 1.0;                                         // ±peak square wave (any duty) -> RMS = peak
             case WHITE_NOISE              -> 1.0;                                         // Gaussian std dev = 1
             case PINK_NOISE               -> 1.0 / Math.sqrt(PINK_OCTAVES + 1.0);        // Gaussian source, 17 summed terms / 17
