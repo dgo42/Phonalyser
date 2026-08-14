@@ -160,6 +160,29 @@ public class WasapiDeviceManager implements AudioDeviceManager {
     public List<DeviceRef> listInputDevices()  { return list(true);  }
     public List<DeviceRef> listOutputDevices() { return list(false); }
 
+    /**
+     * Drops every cached format probe, so the operator's scan re-asks the
+     * endpoints.
+     *
+     * <p>The endpoint enumeration itself is live, so the device LIST was never
+     * the stale part - the exclusive-mode answers behind it were.  The
+     * per-enumeration eviction in {@link #list} only drops endpoints that left
+     * the active state; an endpoint that survived kept its old answer for the
+     * process's life even after the driver was changed under it, and no gesture
+     * could refresh it.  Answers {@code true} because the next list can now
+     * differ from the last.
+     *
+     * <p>The {@code IMMDeviceEnumerator} is deliberately NOT recreated: it is a
+     * COM handle to the endpoint service, not a snapshot, and it enumerates the
+     * current truth on every call.
+     */
+    @Override
+    public boolean refreshDeviceList() {
+        inputFormatsCache.clear();
+        outputFormatsCache.clear();
+        return true;
+    }
+
     private List<DeviceRef> list(boolean input) {
         ensureComInit();
         List<DeviceRef> out = new ArrayList<>();

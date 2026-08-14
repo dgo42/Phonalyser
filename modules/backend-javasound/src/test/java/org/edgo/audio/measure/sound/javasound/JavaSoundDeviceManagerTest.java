@@ -39,7 +39,29 @@ class JavaSoundDeviceManagerTest {
         // The two shapes the providers emit: a bare name, and a name with the
         // project URL after it - the same URL on every device of the machine.
         assertEquals("ALSA", manager.plainVendor("ALSA (http://www.alsa-project.org)"));
-        assertEquals("Unknown Vendor", manager.plainVendor("Unknown Vendor"));
+        assertEquals("E1DA", manager.plainVendor("E1DA"));
+    }
+
+    @Test
+    void theProvidersPlaceholderIsNoVendorAtAll() {
+        // It names no maker, and it stood at the end of every device line
+        // saying so.
+        assertEquals("", manager.plainVendor("Unknown Vendor"));
+        assertEquals("", manager.plainVendor("unknown vendor"));
+        assertEquals("", manager.plainVendor("Unknown Vendor (http://example.org)"));
+    }
+
+    @Test
+    void aDeviceWithNoVendorEndsAtItsName() {
+        // The separator would otherwise trail the line with nothing after it.
+        JavaSoundDeviceManager.JavaSoundDeviceRef bare =
+                new JavaSoundDeviceManager.JavaSoundDeviceRef(
+                        0, "Microphone (Jabra Evolve2 40)", "", "", true, false, null);
+        assertEquals("[0] Microphone (Jabra Evolve2 40)", bare.displayName());
+        JavaSoundDeviceManager.JavaSoundDeviceRef described =
+                new JavaSoundDeviceManager.JavaSoundDeviceRef(
+                        1, "Line In", "USB Audio #1", "", true, false, null);
+        assertEquals("[1] Line In (USB Audio #1)", described.displayName());
     }
 
     @Test
@@ -152,4 +174,5 @@ class JavaSoundDeviceManagerTest {
                         0, "Speakers (Realtek)", "Headphone Out", "ALSA", true, false, null);
         assertEquals("[0] Speakers (Realtek) (Headphone Out) - ALSA", d.displayName());
     }
+
 }

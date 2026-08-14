@@ -70,6 +70,10 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
     /** The JavaSound provider's own prefix on every ALSA description; it is
      *  followed by the card's name and then the PCM device's designation. */
     private static final String DIRECT_AUDIO_PREFIX = "Direct Audio Device:";
+    /** The placeholder the provider stamps on a device whose maker it cannot
+     *  name.  It is not a vendor, and it read as one at the end of every
+     *  device line. */
+    private static final String UNKNOWN_VENDOR = "Unknown Vendor";
 
     /**
      * A listed JavaSound device - a value container over the mixer behind it.
@@ -88,6 +92,20 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
         @Override
         public AudioBackendType backend() {
             return AudioBackendType.JAVASOUND;
+        }
+
+        /** The shared line, minus a vendor there is none of: the provider
+         *  stamps a placeholder on every device whose maker it cannot name
+         *  ({@link #plainVendor} drops it), and the separator in front of it
+         *  would then trail every device line with nothing after it. */
+        @Override
+        public String displayName() {
+            if (vendor != null && !vendor.isBlank()) {
+                return DeviceRef.super.displayName();
+            }
+            return description == null || description.isBlank()
+                    ? String.format("[%d] %s", index, name)
+                    : String.format("[%d] %s (%s)", index, name, description);
         }
 
         @Override
@@ -114,6 +132,12 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      */
     private final Map<String, List<AudioFormat>> inputFormatsCache  = new ConcurrentHashMap<>();
     private final Map<String, List<AudioFormat>> outputFormatsCache = new ConcurrentHashMap<>();
+
+    /** Whether this host is the one the ALSA cleanup was written for.  The
+     *  phantom filter in {@link #list} runs only here - see it for why its
+     *  evidence is ambiguous anywhere else. */
+    private final boolean linux = System.getProperty("os.name", "")
+            .toLowerCase(Locale.ROOT).contains("linux");
 
     /** The kernel's view of what each card can do (Linux only; every query
      *  answers "unknown" elsewhere, which the probe treats as "ask the mixer"). */
@@ -155,6 +179,23 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
     public List<DeviceRef> listOutputDevices() { return list(false); }
 
     /**
+     * Drops every cached probe, so the operator's scan re-asks the hardware.
+     *
+     * <p>The enumeration itself is live - {@link AudioSystem#getMixerInfo()} is
+     * read on every list - but the format probe behind each mixer is cached,
+     * and that cache is what a scan is really aimed at: a device that was held
+     * when it was first probed answers from the stale entry for ever otherwise,
+     * and a device whose formats changed with it keeps reporting the old set.
+     * Answers {@code true} because the next list can now differ from the last.
+     */
+    @Override
+    public boolean refreshDeviceList() {
+        inputFormatsCache.clear();
+        outputFormatsCache.clear();
+        return true;
+    }
+
+    /**
      * Every mixer that can supply a line in this direction - and, on Linux,
      * every such mixer whose SOCKET is not reported empty.
      *
@@ -176,11 +217,23 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
     private List<DeviceRef> list(boolean input) {
         List<DeviceRef> out = new ArrayList<>();
         Class<? extends Line> probe = input ? TargetDataLine.class : SourceDataLine.class;
+        String direction = input ? "input" : "output";
         // One enumeration, one look at the jacks: a plug pulled since the last
         // scan must show up, and re-reading it per device would not.
         alsaPorts.refresh();
+        Mixer.Info[] mixers = AudioSystem.getMixerInfo();
         int slot = 0;
-        for (Mixer.Info mi : AudioSystem.getMixerInfo()) {
+        int seen = 0;
+        for (Mixer.Info mi : mixers) {
+            // EVERY mixer the walk sees, before any filter can drop it: a device
+            // missing from the finished list is either one this line named and a
+            // later line dropped, or one the host API never offered at all, and
+            // nothing downstream can tell those two apart.
+            if (log.isDebugEnabled()) {
+                log.debug("mixer {} seen for {}: name='{}', description='{}'",
+                        seen, direction, mi.getName(), mi.getDescription());
+            }
+            seen++;
             Mixer m;
             try {
                 m = AudioSystem.getMixer(mi);
@@ -188,41 +241,67 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
                 log.warn("Could not open mixer {}: {}", mi.getName(), t.getMessage());
                 continue;
             }
-            if (!m.isLineSupported(new DataLine.Info(probe, null))) continue;
-            AlsaPorts.Port port = alsaPorts.port(mi.getName(), input);
-            // Built before the skip decision so that a device left out is named
-            // in the log the same way a listed one is named in the report -
-            // there is one authority for how a device reads, and it is the ref.
-            // The slot is only consumed by a device that is actually listed.
-            String designation = port == null ? distinct(mi.getDescription(), mi.getName()) : port.label();
-            String name = deviceName(mi.getName(), designation);
-            JavaSoundDeviceRef ref = new JavaSoundDeviceRef(
-                    slot,
-                    name,
-                    // A name that already carries the port needs no echo of it.
-                    name.equals(mi.getName()) ? designation : "",
-                    plainVendor(mi.getVendor()),
-                    input, !input,
-                    mi);
-            if (port != null && port.empty()) {
-                if (log.isInfoEnabled()) {
-                    log.info("{} has nothing plugged into its {} - not listed",
-                            ref.displayName(), port.label());
+            if (!m.isLineSupported(new DataLine.Info(probe, null))) {
+                if (log.isDebugEnabled()) {
+                    log.debug("{} supplies no {} line - not listed", mi.getName(), direction);
                 }
                 continue;
             }
-            // A device that reports no formats is a phantom - a PCM with nothing
-            // behind it (an HDMI codec without a sink) that cannot open at any
-            // rate.  Dropped HERE so every consumer - the GUI combos, a server's
-            // device list, the scanner - sees the same set.  The system default
-            // stays listed: it is a role, not a PCM, and reports no formats by
-            // construction.  The probe rides the formats cache.
-            if (!name.equals(SYSTEM_DEFAULT_LABEL)
-                    && listSupportedFormats(ref, !input).isEmpty()) {
-                if (log.isInfoEnabled()) {
-                    log.info("{} reports no formats - not listed", ref.displayName());
+            JavaSoundDeviceRef ref = null;
+            if (linux) {
+                AlsaPorts.Port port = alsaPorts.port(mi.getName(), input);
+                // Built before the skip decision so that a device left out is named
+                // in the log the same way a listed one is named in the report -
+                // there is one authority for how a device reads, and it is the ref.
+                // The slot is only consumed by a device that is actually listed.
+                String designation = port == null ? distinct(mi.getDescription(), mi.getName()) : port.label();
+                String name = deviceName(mi.getName(), designation);
+                ref = new JavaSoundDeviceRef(
+                        slot,
+                        name,
+                        // A name that already carries the port needs no echo of it.
+                        name.equals(mi.getName()) ? designation : "",
+                        plainVendor(mi.getVendor()),
+                        input, !input,
+                        mi);
+                if (port != null && port.empty()) {
+                    if (log.isDebugEnabled()) {
+                        log.debug("{} has nothing plugged into its {} - not listed",
+                                ref.displayName(), port.label());
+                    }
+                    continue;
                 }
-                continue;
+                // A device that reports no formats is a phantom - a PCM with nothing
+                // behind it (an HDMI codec without a sink) that cannot open at any
+                // rate.  Dropped HERE so every consumer - the GUI combos, a server's
+                // device list, the scanner - sees the same set.  The system default
+                // stays listed: it is a role, not a PCM, and reports no formats by
+                // construction.  The probe rides the formats cache.
+                //
+                // LINUX ONLY, because that is the host whose subdevice cleanup this
+                // was written for and the only one where an empty answer means what
+                // it says.  Elsewhere the probe's silence is ambiguous: a mixer that
+                // advertises its lines with NOT_SPECIFIED rate or sample size
+                // enumerates no concrete pair, and a device that is already held
+                // refuses the read - both answer empty while being perfectly real
+                // hardware, and both were then dropped from the list.  Not probing
+                // also takes the probe's cost off enumeration, which every backend
+                // switch pays on the UI thread.
+                if (linux && !name.equals(SYSTEM_DEFAULT_LABEL)
+                        && listSupportedFormats(ref, !input).isEmpty()) {
+                    if (log.isDebugEnabled()) {
+                        log.debug("{} reports no formats - not listed", ref.displayName());
+                    }
+                    continue;
+                }
+            } else {
+                ref = new JavaSoundDeviceRef(
+                        slot,
+                        mi.getName(),
+                        mi.getName(),
+                        mi.getVendor(),
+                        input, !input,
+                        mi);
             }
             slot++;
             out.add(ref);
@@ -328,14 +407,18 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      * a provider that puts its whole vendor in brackets keeps it, because an
      * empty vendor would say less than the bracketed one did.
      *
+     * <p>The one vendor that is dropped entirely is the provider's own
+     * placeholder for "I could not find out": it names no maker, and it stood
+     * at the end of every device line saying so.  A real vendor stays.
+     *
      * <p>Package-private for the same reason {@link #distinct} is.
      */
     String plainVendor(String vendor) {
         if (vendor == null) return "";
         int at = vendor.indexOf('(');
-        if (at < 0) return vendor;
-        String name = vendor.substring(0, at).trim();
-        return name.isEmpty() ? vendor : name;
+        String name = at < 0 ? vendor : vendor.substring(0, at).trim();
+        if (name.isEmpty()) return vendor;
+        return name.equalsIgnoreCase(UNKNOWN_VENDOR) ? "" : name;
     }
 
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
@@ -512,6 +595,7 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      *       formats the hardware can't handle, so open-and-test is the
      *       reliable signal.</li>
      * </ul>
+     *
      */
     private List<AudioFormat> probeFormats(JavaSoundDeviceRef d, boolean output) {
         Class<? extends DataLine> cls = output ? SourceDataLine.class : TargetDataLine.class;
@@ -627,8 +711,10 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
                 rate, bits, 2, frameSize, rate, false);
     }
 
-    /** Mono (1-channel) variant of {@link #buildFormat}, used only to detect
-     *  whether a mono-only capture device supports a given rate/bit depth. */
+
+    /** Mono (1-channel) variant of {@link #buildFormat} - the capture candidate
+     *  a 1-channel device opens at, and the format {@link JavaSoundRecorder}
+     *  then falls back to. */
     private AudioFormat buildMonoFormat(int rate, int bits) {
         int bytesPerSample = (bits + 7) / 8;
         return new AudioFormat(
