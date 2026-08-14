@@ -554,9 +554,9 @@ export class AudioEngine {
     }
     this._requireNotEmbedded(backend);
     if (backend === LOOPBACK_BACKEND) {
-      // The dither argument Java's openPlayback carries is deliberately absent here: this backend
-      // dithers at its own selected depth and discards the caller's setting, so there is nothing
-      // to pass (loopback-playback.js states why a movable floor would defeat the backend).
+      // The configured dither opens the lane, exactly as Java's openPlayback argument does; the
+      // start spec then carries the live value. A zero falls back to the lane's last-bit
+      // default - it is never undithered (loopback-playback.js states the rule).
       return this._requireLoopback().openPlayback(null, this.config.ditherBits);
     }
     return (backend === QA40X_BACKEND)
@@ -668,7 +668,12 @@ export class AudioEngine {
 
   // `file` = the RAW picked file ({bytes, name}), which only the BENCH path uses: a server
   // decodes for itself, so what goes up the wire is the file, not these decoded channels.
-  async playFileBuffer(channels, sampleRate, loop, file) { return this._gen.playFileBuffer(channels, sampleRate, loop, file); }
+  // `bitsPerSample` = the DECODED file's own depth, which the refusal compares against the
+  // configured output: dropped here it renders as the word undefined and the depth half of that
+  // check is dead in the shipped path.
+  async playFileBuffer(channels, sampleRate, loop, file, bitsPerSample) {
+    return this._gen.playFileBuffer(channels, sampleRate, loop, file, bitsPerSample);
+  }
   async openSweepContext(requestedRate, opts) { return this._gen.openSweepContext(requestedRate, opts); }
   async playSweepBuffer(buf, sampleRate, opts) { return this._gen.playSweepBuffer(buf, sampleRate, opts); }
   setFilePlayLoop(loop) { this._gen.setFilePlayLoop(loop); }

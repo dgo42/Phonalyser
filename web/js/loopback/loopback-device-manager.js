@@ -5,13 +5,13 @@
  */
 
 // Faithful port of org.edgo.audio.measure.sound.loopback.LoopbackDeviceManager - the manager of
-// the digital loopback backend: one device, listed for both directions, and the crossing the two
-// lanes meet on.
+// the digital loopback backend: one device, listed for both directions, and the one always-duplex
+// session the two lanes attach to.
 //
-// IT OWNS THE CROSSING because both lanes are created here: a playback and a capture opened from
-// this manager are the two ends of the same loop. One crossing per manager, eagerly built - not
-// a module-level singleton (which would join lanes across managers) and not one per lane (which
-// would join nothing at all).
+// IT OWNS THE SESSION because both lanes are created here: a playback and a capture opened from
+// this manager are the two ends of the same loop, and the loop has ONE clock. One session per
+// manager, built lazily at the first acquire - not a module-level singleton (which would join
+// lanes across managers) and not one per lane (which would join nothing at all).
 //
 // The formats are the standard rate ladder at the four depths the encoder supports; nothing is
 // probed, because there is no hardware to ask.
@@ -26,8 +26,9 @@
 // remote bench offers no local backend at all.
 
 import { LoopbackCapture } from './loopback-capture.js';
-import { LoopbackCrossing } from './loopback-crossing.js';
 import { LoopbackDeviceRef } from './loopback-device-ref.js';
+import { LoopbackDuplexEngine } from './loopback-duplex-engine.js';
+import { LoopbackFormatConstraint } from './loopback-format-constraint.js';
 import { LoopbackPlayback } from './loopback-playback.js';
 
 /** The standard sample-rate ladder, 8 k to 768 k. Both directions offer the same list - the loop
@@ -52,12 +53,18 @@ export class LoopbackDeviceManager {
 
   /** @type {LoopbackDeviceRef} the one device, the same handle on both directions. */
   #device = new LoopbackDeviceRef();
-  /** @type {LoopbackCrossing} the one crossing both lanes of this manager meet on. */
-  #crossing = new LoopbackCrossing();
+  /** @type {?LoopbackDuplexEngine} the one session both lanes of this manager attach to; built at
+   *  the first acquire, because the format it runs at is the format the first lane asks for. */
+  #engine = null;
+  /** The format the session is on; 0 while it has not been built. */
+  #currentRate = 0;
+  #currentBits = 0;
   /** @type {function():number} */
   #inputDepthOf;
   /** @type {function():number} */
   #outputDepthOf;
+  /** @type {function():number} uniform [0,1) source handed to the session's silence lane. */
+  #rng;
 
   /**
    * The two depths arrive as SUPPLIERS rather than values, and are handed to the lanes unread:
@@ -69,13 +76,48 @@ export class LoopbackDeviceManager {
    * @param {Object} deps
    * @param {function():number} deps.inputDepthOf the selected capture bit depth
    * @param {function():number} deps.outputDepthOf the selected playback bit depth
+   * @param {function():number} [deps.rng=Math.random] uniform [0,1) source for the session's
+   *        silence lane; injected so a test can pin the noise
+   * @param {boolean} [deps.armBus=true] arm the format constraint - off for a test that drives the
+   *        manager without wanting a bus subscriber, the same seam the QA40x manager offers
    */
-  constructor({ inputDepthOf, outputDepthOf } = {}) {
+  constructor({ inputDepthOf, outputDepthOf, rng = Math.random, armBus = true } = {}) {
     if (typeof inputDepthOf !== 'function' || typeof outputDepthOf !== 'function') {
       throw new Error('inputDepthOf / outputDepthOf');
     }
     this.#inputDepthOf = inputDepthOf;
     this.#outputDepthOf = outputDepthOf;
+    this.#rng = rng;
+    if (armBus) {
+      // The format constraint keeps this backend's two directions on ONE rate and ONE depth; its
+      // subscription must be live before the Preferences dialog can move a combo. Java arms it
+      // from the backend's settings-UI service, which the web has no equivalent of - the manager
+      // is built once at composition time and is the only thing that owns this backend here.
+      LoopbackFormatConstraint.instance();
+    }
+  }
+
+  /**
+   * The one duplex session, built at the first acquire and MOVED to `sampleRateHz` / `bitDepth`
+   * when a lane goes live at another format (Java acquireEngine).
+   *
+   * The whole session moves, which is what makes a file played at another rate simply work: the
+   * lane that goes live names the format, the running lanes keep delivering on it, and nothing has
+   * to negotiate. There is only one clock to move, so there is nothing else it could mean.
+   *
+   * @param {number} sampleRateHz
+   * @param {number} bitDepth
+   * @returns {LoopbackDuplexEngine}
+   */
+  acquireEngine(sampleRateHz, bitDepth) {
+    if (this.#engine == null) {
+      this.#engine = new LoopbackDuplexEngine(sampleRateHz, bitDepth, { rng: this.#rng });
+    } else if (this.#currentRate !== sampleRateHz || this.#currentBits !== bitDepth) {
+      this.#engine.changeFormat(sampleRateHz, bitDepth);
+    }
+    this.#currentRate = sampleRateHz;
+    this.#currentBits = bitDepth;
+    return this.#engine;
   }
 
   /** @returns {LoopbackDeviceRef[]} the one device, as a capture handle. Synchronous: there is
@@ -142,7 +184,7 @@ export class LoopbackDeviceManager {
   }
 
   /**
-   * The capture lane, sharing this manager's crossing. The session rate reaches it at its own
+   * The capture lane, bound to this manager's one session. The session rate reaches it at its own
    * open(), which is where every web capture source takes it (Java passes it to the constructor
    * because its capture is built fresh per acquire), and so does the depth.
    *
@@ -150,19 +192,20 @@ export class LoopbackDeviceManager {
    * @returns {LoopbackCapture}
    */
   openCapture(device) {
-    return new LoopbackCapture(this.#crossing, this.#inputDepthOf);
+    return new LoopbackCapture(this, this.#inputDepthOf);
   }
 
   /**
-   * The playback lane, sharing this manager's crossing.
+   * The playback lane, bound to this manager's one session.
    *
    * @param {LoopbackDeviceRef} device ignored - the backend has exactly one
-   * @param {number} ditherBits accepted to satisfy the contract and deliberately NOT passed on:
-   *        this backend always dithers at its own selected depth, because a floor that moved
-   *        with a setting would be no reference at all (loopback-playback.js states the rule)
+   * @param {number} ditherBits the configured dither, handed to the lane as its opening value;
+   *        zero means the last-bit default - the lane is never undithered
+   *        (loopback-playback.js states the rule)
    * @returns {LoopbackPlayback}
    */
   openPlayback(device, ditherBits) {
-    return new LoopbackPlayback(this.#crossing, this.#outputDepthOf);
+    return new LoopbackPlayback(this, this.#outputDepthOf,
+      { ditherBits: ditherBits != null ? ditherBits : 0, rng: this.#rng });
   }
 }

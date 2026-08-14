@@ -869,7 +869,7 @@ export class PreferencesDialog {
     // The depth rows belong to the backend, so they are re-derived here too - this is the path a
     // backend SWITCH takes, and without it the QA40x rows survived a switch to Web Audio.
     await this.refreshDepths();
-    this.publishRateChange(true);
+    this.publishFormatChange(true);
     if (this.inputCard) this.inputCard.refresh();
     if (this.outputCard) this.outputCard.refresh();
     this.refreshFsReadouts();
@@ -1027,9 +1027,9 @@ export class PreferencesDialog {
 
   /** Repopulates both rate combos for the SHOWN backend, then announces the input rate on the bus
    *  (Java refreshDevices: the two refresh*RatesAndDepths calls plus the unconditional
-   *  publishRateChange(true) tail). A backend that enumerates no formats keeps the native-probe
-   *  input rate and its static output list; the QA40x lands already rate-coupled, on a dialog
-   *  open, a backend switch AND the load-time scan. */
+   *  publishFormatChange(true) tail). A backend that enumerates no formats keeps the native-probe
+   *  input rate and its static output list; the QA40x lands already rate-coupled and the loopback
+   *  format-coupled, on a dialog open, a backend switch AND the load-time scan. */
   /**
    * @param {Object} [opts]
    * @param {boolean} [opts.preferOnScreen] keep the depth currently SHOWN when the new list still
@@ -1051,7 +1051,7 @@ export class PreferencesDialog {
     }
     // The DEPTHS go with them (Java refresh*RatesAndDepths does both in one call).
     await this.refreshDepths({ preferOnScreen });
-    this.publishRateChange(true);
+    this.publishFormatChange(true);
   }
 
   /**
@@ -1102,16 +1102,24 @@ export class PreferencesDialog {
       bp.outputBitDepth, ' bits');
   }
 
-  /** Announces one direction's chosen sample rate so a rate-constraint subscriber (today
-   *  Qa40xRateConstraint, which holds the QA40x's one reg-9 clock) can mirror it onto the other
-   *  direction. Device-agnostic and UNGUARDED by backend, exactly as Java's publishRateChange: the
-   *  payload carries the shown backend AND the resolved card, and a backend nobody constrains
-   *  simply gets no answer back. */
-  publishRateChange(input) {
+  /** Announces one direction's chosen sample rate AND bit depth so a format-constraint subscriber
+   *  (Qa40xRateConstraint, which holds the QA40x's one reg-9 clock and ignores the depth;
+   *  LoopbackFormatConstraint, whose backend is one digital format in both directions) can mirror
+   *  what it constrains onto the other direction. Device-agnostic and UNGUARDED by backend, exactly
+   *  as Java's publishFormatChange: the payload carries the shown backend AND the resolved card,
+   *  and a backend nobody constrains simply gets no answer back. The depth rides as 0 - Java's
+   *  SampleRateChange.NO_BIT_DEPTH - when the backend hides its width combos altogether. */
+  publishFormatChange(input) {
     const hz = parseInt($(input ? '#inRate' : '#outRate').val(), 10);
     if (!hz) return;
-    MessageBus.instance().publish(Events.PREFS_SAMPLE_RATE_CHANGED,
-      { input, sampleRateHz: hz, backend: this.prefs.backend.get(), card: this.cardNameFor(input) });
+    const bits = parseInt($(input ? '#inDepth' : '#outDepth').val(), 10);
+    MessageBus.instance().publish(Events.PREFS_SAMPLE_RATE_CHANGED, {
+      input,
+      sampleRateHz: hz,
+      bitDepth: bits > 0 ? bits : 0,
+      backend: this.prefs.backend.get(),
+      card: this.cardNameFor(input),
+    });
   }
 
   /** The resolved card name for a direction's selected device, or null when the device maps to no
@@ -1204,12 +1212,13 @@ export class PreferencesDialog {
     publishMoved(this._outRangeBefore, this.activeRangeOf(false));
   }
 
-  /** Selects the rate option worth `hz`, a no-op when that rate isn't offered. Setting a
+  /** Selects the option worth `value` - a rate in hertz, or a depth in bits - and a no-op when
+   *  that value isn't offered. Setting a
    *  <select>'s value fires no change event (as SWT's Combo.select fires no Selection), so the
    *  correction this applies never re-announces - the coupling round-trip ends here. */
-  selectRateItem(sel, hz) {
+  selectComboItem(sel, value) {
     const $s = $(sel);
-    if ($s.find(`option[value="${hz}"]`).length) $s.val(String(hz));
+    if ($s.find(`option[value="${value}"]`).length) $s.val(String(value));
   }
 
   /** Shows the per-backend Settings button only for a backend whose manager has settings of its
@@ -1631,17 +1640,24 @@ export class PreferencesDialog {
     // is what lets the QA40x branch raise the WebUSB chooser.
     $('#scan').on('click', () => this.scan(true));
 
-    // Rate coupling for a backend with ONE shared clock (the QA40x's reg 9), as a MessageBus
-    // round-trip: each combo announces its pick with PREFS_SAMPLE_RATE_CHANGED, the owning
-    // subscriber (Qa40xRateConstraint) compares the pair and answers with PREFS_SAMPLE_RATE_SET,
-    // and this listener aligns the OTHER combo - which fires no change event, so the trip ends.
+    // Format coupling for a backend with ONE shared clock (the QA40x's reg 9) or ONE digital
+    // format in both directions (the loopback, rate AND depth), as a MessageBus round-trip: each
+    // combo announces its pick with PREFS_SAMPLE_RATE_CHANGED, the owning subscriber compares the
+    // pair and answers with PREFS_SAMPLE_RATE_SET, and this listener aligns the OTHER combos -
+    // which fire no change event, so the trip ends. The depth combos announce the SAME event: a
+    // backend whose two directions are one digital format has no second round-trip to make of it.
     // Java subscribes in open() and unsubscribes on dispose; this dialog is built once and lives as
     // long as the page, so one subscription covers the same span.
-    $('#inRate').on('change', () => this.publishRateChange(true));
-    $('#outRate').on('change', () => this.publishRateChange(false));
+    $('#inRate').on('change', () => this.publishFormatChange(true));
+    $('#outRate').on('change', () => this.publishFormatChange(false));
+    $('#inDepth').on('change', () => this.publishFormatChange(true));
+    $('#outDepth').on('change', () => this.publishFormatChange(false));
     MessageBus.instance().subscribe(Events.PREFS_SAMPLE_RATE_SET, (set) => {
       if (set == null || this.prefs.backend.get() !== set.backend) return;
-      this.selectRateItem(set.input ? '#inRate' : '#outRate', set.sampleRateHz);
+      this.selectComboItem(set.input ? '#inRate' : '#outRate', set.sampleRateHz);
+      // Only when the answer NAMES a depth: a constraint that couples the clock alone leaves the
+      // width combos where the operator put them.
+      if (set.bitDepth) this.selectComboItem(set.input ? '#inDepth' : '#outDepth', set.bitDepth);
     });
 
     $('#prefsTabs').on('click', '.nav-link', (ev) => this.prefsTab(ev.currentTarget.dataset.prefsPanel));

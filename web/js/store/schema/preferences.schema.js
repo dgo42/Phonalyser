@@ -342,25 +342,27 @@ export const PREFERENCES_SCHEMA = {
       "default": 50,
       "description": "Share of the total amplitude given to tone 1, in percent; tone 2 takes the remainder. 50 is the equal-amplitude pair used for the usual IMD tests."
     },
-    "genAmplitudeVrms": {
+    "genAmplitude": {
       "type": "number",
       "default": 0.5,
-      "description": "Output level in volts RMS, referred to the DAC full-scale calibration. It is the true amplitude of the tone, not a digital fraction."
+      "description": "Output level as it was entered, in the unit named by genAmplitudeUnit. The number and its unit are read together: the same figure means a different tone in volts than in dBV, and a dBFS figure means a different tone under every DAC calibration. The engine resolves the pair to volts RMS at use, so recalibrating moves what a full-scale-relative entry produces instead of quietly rewriting what was entered."
     },
-    "genAmplitudeDbvDisplay": {
-      "type": "boolean",
-      "default": false,
-      "description": "Show the generator amplitude field in dBV instead of volts. Display only - the stored level stays in volts RMS."
+    "genAmplitudeUnit": {
+      "type": "string",
+      "enum": ["v", "dbv", "dbfs"],
+      "default": "v",
+      "description": "Unit genAmplitude is stated in. v is volts RMS - the canonical level, and what a value written by anything other than the field carries. dbv is decibels relative to 1 V. dbfs is relative to the DAC full scale, where 0 dBFS is a full-scale sine. Scaled volt units (mV, uV, nV) are display steps only and are stored as v."
     },
-    "genDitherBits": {
+    "genDither": {
       "type": "number",
       "default": 0,
-      "description": "Depth in bits of the TPDF dither added before quantisation; may be fractional. 0 disables dither. Fewer bits leave more quantisation distortion, more bits raise the noise floor but linearise the converter."
+      "description": "Depth of the TPDF dither added before quantisation, as it was entered, in the unit named by genDitherUnit. In bits: may be fractional, and 0 disables dither - fewer bits leave more quantisation distortion, more bits raise the noise floor but linearise the converter. In dBV it is the physical noise level instead, which the DAC full scale resolves back to a depth."
     },
-    "genDitherDbvDisplay": {
-      "type": "boolean",
-      "default": false,
-      "description": "Show the dither field in dBV rather than bits, because the value was last entered with an explicit dBV suffix. Display only."
+    "genDitherUnit": {
+      "type": "string",
+      "enum": ["bits", "dbv"],
+      "default": "bits",
+      "description": "Unit genDither is stated in. bits is the depth itself, the canonical form, and the only unit dither-off (0) is stored in, since silence has no level. dbv is the dither's noise level against the DAC peak full scale, resolved to a depth at use."
     },
     "genOutputChannels": {
       "type": "string",
@@ -958,15 +960,16 @@ export const PREFERENCES_SCHEMA = {
       "default": 0,
       "description": "Frequency in hertz the measurement sweep ends at. The stored 0 is a placeholder meaning \"not yet chosen\": on first use it is replaced by the current device's Nyquist frequency (half the sample rate). Any value saved afterwards is used as it stands."
     },
-    "freqRespAmplitudeVrms": {
+    "freqRespAmplitude": {
       "type": "number",
       "default": 1,
-      "description": "Sweep level in volts RMS. High enough to sit above the noise floor, low enough not to drive the device under test into compression."
+      "description": "Sweep level as it was entered, in the unit named by freqRespAmplitudeUnit - high enough to sit above the noise floor, low enough not to drive the device under test into compression. Resolved to volts RMS at use, so a full-scale-relative entry follows the calibration instead of being frozen into a voltage."
     },
-    "freqRespAmplitudeDbvDisplay": {
-      "type": "boolean",
-      "default": false,
-      "description": "Show the sweep amplitude field in dBV rather than volts. Display only - the level is stored in volts RMS."
+    "freqRespAmplitudeUnit": {
+      "type": "string",
+      "enum": ["v", "dbv", "dbfs"],
+      "default": "v",
+      "description": "Unit freqRespAmplitude is stated in: v is volts RMS, the canonical level; dbv is decibels relative to 1 V; dbfs is relative to the DAC full scale, where 0 dBFS is a full-scale sine."
     },
     "freqRespSweepPoints": {
       "type": "integer",
@@ -1011,10 +1014,16 @@ export const PREFERENCES_SCHEMA = {
       "default": 1100,
       "description": "Upper edge in hertz of the notch-tuning wizard's sweep band - wide enough to see the notch move, narrow enough to resolve it."
     },
-    "tuneNotchAmplitudeVrms": {
+    "tuneNotchAmplitude": {
       "type": "number",
       "default": 1,
-      "description": "Level in volts RMS the notch-tuning wizard drives while measuring the notch depth."
+      "description": "Level the notch-tuning wizard drives while measuring the notch depth, as it was entered, in the unit named by tuneNotchAmplitudeUnit. Resolved to volts RMS at use."
+    },
+    "tuneNotchAmplitudeUnit": {
+      "type": "string",
+      "enum": ["v", "dbv", "dbfs"],
+      "default": "v",
+      "description": "Unit tuneNotchAmplitude is stated in: v is volts RMS, the canonical level; dbv is decibels relative to 1 V; dbfs is relative to the DAC full scale, where 0 dBFS is a full-scale sine."
     },
     "tuneNotchTargetHz": {
       "type": "number",
@@ -1389,10 +1398,16 @@ export const PREFERENCES_SCHEMA = {
             "default": 20000,
             "description": "Frequency in hertz the sweep ends at."
           },
-          "amplitudeVrms": {
+          "amplitude": {
             "type": "number",
             "default": 0.5,
-            "description": "Sweep level in volts RMS."
+            "description": "Sweep level the preset restores, as it was entered, in the unit named by amplitudeUnit."
+          },
+          "amplitudeUnit": {
+            "type": "string",
+            "enum": ["v", "dbv", "dbfs"],
+            "default": "v",
+            "description": "Unit the preset's amplitude is stated in: v is volts RMS, dbv is decibels relative to 1 V, dbfs is relative to the DAC full scale. A preset saved before the unit was recorded carries its level in v."
           },
           "sweepPoints": {
             "type": "integer",

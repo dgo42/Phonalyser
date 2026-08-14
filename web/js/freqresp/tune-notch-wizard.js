@@ -289,7 +289,8 @@ export class TuneNotchWizard {
         fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
       (v) => {
         this._curAmpVrms = v;
-        this.viewPrefs.tuneNotchAmplitudeVrms.set(v);   // edit the COPY; written back to real on close
+        // The pair as entered - edit the COPY; written back to the real store on close.
+        this.viewPrefs.tuneNotchAmplitude.set(this.ampField.enteredValue());
         this._resetMagStats();   // a new drive level is a new measurement - see _resetMagStats
       });
     this.targetField = mkField('tnTarget',
@@ -351,12 +352,12 @@ export class TuneNotchWizard {
     // the fields edit the copy, and _stopSweepLoop writes them back to real on close.
     this.viewPrefs.tuneNotchStartHz.set(prefs.tuneNotchStartHz.get());
     this.viewPrefs.tuneNotchStopHz.set(prefs.tuneNotchStopHz.get());
-    this.viewPrefs.tuneNotchAmplitudeVrms.set(prefs.tuneNotchAmplitudeVrms.get());
+    this.viewPrefs.tuneNotchAmplitude.set(prefs.tuneNotchAmplitude.get());
     this.viewPrefs.tuneNotchTargetHz.set(prefs.tuneNotchTargetHz.get());
     this.viewPrefs.tuneNotchOutputChannels.set(prefs.tuneNotchOutputChannels.get());
     this.startField.setValue(this.viewPrefs.tuneNotchStartHz.get());
     this.stopField.setValue(this.viewPrefs.tuneNotchStopHz.get());
-    this.ampField.setValue(this.viewPrefs.tuneNotchAmplitudeVrms.get());
+    this.ampField.seedPair(this.viewPrefs.tuneNotchAmplitude.get());
     this.targetField.setValue(this.viewPrefs.tuneNotchTargetHz.get());
     this.$('#tnOutputChannel').val(this.viewPrefs.tuneNotchOutputChannels.get());
     this._curStartHz = this.startField.getValue();
@@ -845,7 +846,7 @@ export class TuneNotchWizard {
     const p = this.prefs, v = this.viewPrefs;
     p.tuneNotchStartHz.set(v.tuneNotchStartHz.get());
     p.tuneNotchStopHz.set(v.tuneNotchStopHz.get());
-    p.tuneNotchAmplitudeVrms.set(v.tuneNotchAmplitudeVrms.get());
+    p.tuneNotchAmplitude.set(v.tuneNotchAmplitude.get());
     p.tuneNotchTargetHz.set(v.tuneNotchTargetHz.get());
     p.tuneNotchOutputChannels.set(v.tuneNotchOutputChannels.get());
     p.save();

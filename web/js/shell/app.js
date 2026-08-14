@@ -68,6 +68,7 @@ import { GeneratorPane } from '../generator/generator-pane.js';
 import { PredistortionEngine } from '../predistortion/engine.js';
 import { writeHarmonicDpd, writeIntermodDpd } from '../io/dpd.js';
 import { NumericStepField, NumericStepModel, OFF_LABEL, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
+import { unitValueEquals } from '../widgets/unit-conversion.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 
@@ -304,18 +305,19 @@ function initStepFields() {
     (v) => { prefs.genDualToneFreq2Hz.set(v); engine.config.tone2Hz = v; engine.retuneGenerator(); genPane.refreshFreqLabel(); });
   fTone2.setValue(prefs.genDualToneFreq2Hz.get());
 
-  // Amplitude: AMPLITUDE family, PERCENT policy, canonical V RMS. dBV display is sticky +
-  // persisted via genAmplitudeDbvDisplay. fsAmplSupplier (the live DAC PEAK full scale) also
-  // enables dBFS entry - 0 dBFS ≡ a full-scale SINE (AES17), so the anchor is fsPeak/√2.
+  // Amplitude: AMPLITUDE family, PERCENT policy. What is STORED is the entered value - the
+  // displayed number and its unit - and the store resolves it to V RMS at use, so a dBFS entry
+  // still means what was typed after a recalibration. fsAmplSupplier (the live DAC PEAK full
+  // scale) enables that dBFS entry - 0 dBFS is a full-scale SINE (AES17), anchored at fsPeak/√2.
   const fAmp = mk('ampDbfs', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: ampMaxVrms(), maxDecimals: 5,
     fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
     (v) => {
-      prefs.genAmplitudeVrms.set(v);
-      prefs.genAmplitudeDbvDisplay.set(fAmp.model.isLogDisplay());
+      // The pair the operator entered - number and unit as ONE write, so nothing
+      // downstream can see the new unit against the old number.
+      prefs.genAmplitude.set(fAmp.enteredValue());
       engine.config.ampVrms = v; engine.retuneGenerator();
     });
-  fAmp.model.setLogDisplay(prefs.genAmplitudeDbvDisplay.get());
-  fAmp.setValue(prefs.genAmplitudeVrms.get());
+  fAmp.seedPair(prefs.genAmplitude.get());
   // Keep the no-clip ceiling live (Bindings.onChange(... ampField::setMax)): it moves with the DAC
   // full-scale CALIBRATION and with the waveform (and its dual-tone split), so re-apply it on every
   // input that feeds ampMaxVrms(). setMax re-clamps the current value, so switching to a form with
@@ -333,19 +335,18 @@ function initStepFields() {
   // checks against them with any analysis window. maxBits = 32. The TPDF dither is applied LIVE to
   // the generated signal in the dds worklet (Java PcmQuantizer live-apply) so it shows
   // on the FFT floor exactly where the dBV view sets it - hence the engine push below, mirroring the
-  // amplitude field. Seed value + display unit BEFORE the change path re-enters (setValue /
-  // setLogDisplay never fire onChange). On a committed change: persist the bits + the bits/dBV display
-  // choice, push the depth to the running worklet, then re-annotate the "Dither" caption.
+  // amplitude field. Seed the ENTERED value BEFORE the change path re-enters (seedPair replays it
+  // through commit without firing onChange). On a committed change: persist the entered value,
+  // push the depth to the running worklet, then re-annotate the "Dither" caption.
   const fDither = mk('dither', new NumericStepModel({ family: F.DITHER, maxBits: 32,
     fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
     (v) => {
-      prefs.genDitherBits.set(v);
-      prefs.genDitherDbvDisplay.set(fDither.isLogDisplay());
+      prefs.genDither.set(fDither.enteredValue());
       engine.config.ditherBits = v; engine.retuneGenerator();
       if (genPane) genPane.updateDitherLabel();
     });
   if (fDither) {
-    fDither.setValue(prefs.genDitherBits.get()); fDither.setLogDisplay(prefs.genDitherDbvDisplay.get());
+    fDither.seedPair(prefs.genDither.get());
     // Render the "Dither" caption's companion-unit bracket NOW: initStepFields runs AFTER the first
     // applyPrefsToUi -> seedGeneratorControls (which called updateDitherLabel while the field didn't
     // yet exist), so without this the bracket stays empty until the first change. genPane is built
@@ -460,8 +461,19 @@ function initStepFields() {
   // Two-way bind the generator step fields to their prefs (external changes update the field).
   bidiBind(fTone, prefs.genFrequencyHz);
   bidiBind(fTone2, prefs.genDualToneFreq2Hz);
-  bidiBind(fAmp, prefs.genAmplitudeVrms);
-  bidiBind(fDither, prefs.genDitherBits);   // external genDitherBits change (reanchor persist / reload) -> field
+  // The amplitude and the dither are bound as ENTERED values, so an external write replays the
+  // pair and the field shows the unit it was stored in - a canonical writer (a calibration, a
+  // preset) stores the base unit, which replays as volts or bits exactly as before.
+  if (fAmp) {
+    prefs.genAmplitude.addListener((v) => {
+      if (!unitValueEquals(fAmp.enteredValue(), v)) fAmp.seedPair(v);
+    });
+  }
+  if (fDither) {
+    prefs.genDither.addListener((v) => {
+      if (!unitValueEquals(fDither.enteredValue(), v)) fDither.seedPair(v);
+    });
+  }
   bidiBind(fSwStart, prefs.genSweepFreqStartHz);
   bidiBind(fSwStop, prefs.genSweepFreqEndHz);
   bidiBind(fSwDur, prefs.genSweepDurationSec);
@@ -484,11 +496,17 @@ function initStepFields() {
   // has no live setMax listener, so its max is frozen at construction - the supplier still reads live.
   const fAmpFr = fr('frAmp', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: sweepAmpMaxVrms(), maxDecimals: 5,
     fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
-    (v) => { prefs.freqRespAmplitudeVrms.set(v); prefs.freqRespAmplitudeDbvDisplay.set(fAmpFr.model.isLogDisplay()); });
+    () => prefs.freqRespAmplitude.set(fAmpFr.enteredValue()));
   // Track the live DAC full-scale calibration, as the generator field does (this one previously
-  // froze its ceiling at construction).
-  if (fAmpFr) prefs.dacFsVoltageAmpl.addListener(() => fAmpFr.setMax(sweepAmpMaxVrms()));
-  if (fAmpFr) { fAmpFr.model.setLogDisplay(prefs.freqRespAmplitudeDbvDisplay.get()); fAmpFr.setValue(prefs.freqRespAmplitudeVrms.get()); }
+  // froze its ceiling at construction). Replaying the stored value after the ceiling moves leaves
+  // the entered text where it stands and re-solves what a dBFS entry resolves to.
+  if (fAmpFr) {
+    prefs.dacFsVoltageAmpl.addListener(() => {
+      fAmpFr.setMax(sweepAmpMaxVrms());
+      fAmpFr.seedPair(prefs.freqRespAmplitude.get());
+    });
+    fAmpFr.seedPair(prefs.freqRespAmplitude.get());
+  }
   const fLead = fr('frLeadIn', new NumericStepModel({ family: F.TIME, min: 0.05, max: 1000000, maxDecimals: 3 }),
     (v) => prefs.freqRespLeadInSec.set(v));
   if (fLead) fLead.setValue(prefs.freqRespLeadInSec.get());
@@ -526,7 +544,13 @@ function initStepFields() {
   // field display through the same NumericStepField, like the generator fields above.
   bidiBind(fStart, prefs.freqRespStartHz);
   bidiBind(fStop, prefs.freqRespStopHz);
-  bidiBind(fAmpFr, prefs.freqRespAmplitudeVrms);
+  // The amplitude is bound as the ENTERED value: an external write (preset recall, wizard)
+  // replays the pair, so the field shows the unit it was saved in - not a voltage.
+  if (fAmpFr) {
+    prefs.freqRespAmplitude.addListener((v) => {
+      if (!unitValueEquals(fAmpFr.enteredValue(), v)) fAmpFr.seedPair(v);
+    });
+  }
   bidiBind(fLead, prefs.freqRespLeadInSec);
   bidiBind(fPts, prefs.freqRespSweepPoints);
 
@@ -1654,6 +1678,9 @@ async function init() {
       isGenRunning: () => engine.generator.running,
       isBusy: () => busy, setBusy: (v) => { busy = v; },
       readConfig, syncFftAlign: () => { if (fftTabControl) fftTabControl.syncAlign(); },
+      // The shell's one alert surface - how a refused file reaches the operator (Java shows its
+      // Cannot-play-file MessageBox); the same seam the tune-notch wizard and the card section use.
+      showAlert,
     });
   });
   step('applyPrefsToUi', applyPrefsToUi);

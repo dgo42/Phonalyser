@@ -15,6 +15,16 @@
 // is no separate unit label.
 
 import { t } from '../i18n/i18n.js';
+import { ditherDbvForBits, ditherBitsForDbv } from '../dsp/dither-math.js';
+// The unit vocabulary and the conversions between two units of one family live
+// one layer down, with the preference store as their other consumer: a stored
+// value is resolved against the unit it was ENTERED in, and field and store must
+// use the same arithmetic to do it. Re-exported so the widget stays the single
+// import for everything that builds a field.
+import { UNIT_FAMILIES, unitValue, unitToken, convert, baseToken }
+  from './unit-conversion.js';
+
+export { UNIT_FAMILIES };
 
 // ----------------------------------------------------------------------------
 // constants (1:1 with NumericStepModel)
@@ -23,22 +33,15 @@ const REL_EPS = 1e-9;
 const VALUE_SIG_DIGITS = 12;
 const PERCENT_STEP_FACTOR = 1.1;
 const LOG_WHEEL_STEP_DB = 10;
-const DB_PER_DECADE = 20.0;
-// dBFS ↔ amplitude: dB per factor-of-10 (voltage), as for dBV. Unlike dBV a dBFS entry needs
-// the LIVE full scale, so it is resolved through the injected supplier, never a fixed factor.
-const DBFS_DB_PER_DECADE = 20.0;
-// √2 - the peak↔RMS ratio anchoring 0 dBFS to a full-scale SINE (AES17).
-const ROOT_TWO = Math.sqrt(2.0);
 const PERCENT_STEP_LABEL = '10 %';
 const WHEEL_GLYPH = '⟳';
 const ARROWS_GLYPH = '▲▼';
 const SERIES_SEP = '·';
 const SERIES_HINT_MAX = 7;
 
-// DITHER policy constants (1:1 with NumericStepModel). The 20 dB/decade term is
-// the existing DB_PER_DECADE.
-const DITHER_DB_PER_BIT = 6.0206;       // one TPDF bit is 6.0206 dB (RMS = 2^−(bits−1)/√6)
-const DITHER_TPDF_OFFSET_DB = 7.782;    // constant term = 20·log10(1/√6)
+// DITHER policy constants (1:1 with NumericStepModel). The bits <-> dBV
+// arithmetic lives in dsp/dither-math.js; the wrappers below only close over
+// this field's live full-scale supplier.
 const DITHER_DBV_STEP = 10.0;           // dBV-view wheel/arrow notch
 const DITHER_DBV_DECIMALS = 1;          // decimals shown for the dBV view
 // The Off vocabulary, shared by every policy that has an Off state - a 0-bit
@@ -61,130 +64,6 @@ const NUMBER_WITH_UNIT = /^([+-]?[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?)\s*([%µμ\
 // making units untypeable during in-place edits. Ordering is enforced by commit(),
 // the strict gate. Mirrors Java NumericStepModel.PARTIAL_INPUT (same relaxation).
 const PARTIAL_INPUT = /^[\s+\-.,0-9a-zA-Zµμ%/∞]*$/;
-// ----------------------------------------------------------------------------
-// Unit / UnitFamily (port of UnitFamily.java)
-// ----------------------------------------------------------------------------
-
-/** One display/input unit: i18n suffix key, canonical factor (linear) or dB
- *  marker, the ASCII aliases accepted on input, and - for a unit stated RELATIVE
- *  to a live full scale (dBFS) - the fsRelative marker. A full-scale-relative unit
- *  cannot convert through `factor`/`log`: it needs the live full-scale supplier, so
- *  the model resolves it (Java UnitFamily.Unit.fsRelative). Defaults false, leaving
- *  every existing 4-arg declaration unchanged. */
-class Unit {
-  constructor(i18nKey, factor, log, aliases, fsRelative = false) {
-    this.i18nKey = i18nKey; this.factor = factor; this.log = log; this.aliases = aliases;
-    this.fsRelative = fsRelative;
-  }
-  suffix() { return this.i18nKey == null ? '' : t(this.i18nKey); }
-  toCanonical(x) { return this.log ? Math.pow(10.0, x / DB_PER_DECADE) : x * this.factor; }
-  fromCanonical(v) { return this.log ? DB_PER_DECADE * Math.log10(v) : v / this.factor; }
-  matches(typed) {
-    if (!typed) return false;
-    if (typed.toLowerCase() === this.suffix().toLowerCase()) return true;
-    return this.aliases.includes(typed.toLowerCase());
-  }
-}
-
-const KILO_SWITCH_HZ = 1e3, HALF_UNIT_SWITCH = 0.5, MICRO_SWITCH = 1e-6, MILLI_SWITCH = 1e-3, UNIT_SWITCH = 1.0;
-
-/** Unit family: an ordered unit list + the automatic display-unit switching +
- *  the suffix-less default-unit index (-1 = use the currently displayed unit). */
-class UnitFamilyDef {
-  constructor(name, defaultUnitIndex, units) {
-    this.name = name; this.defaultUnitIndex = defaultUnitIndex; this.units = units;
-  }
-  displayUnit(canonical) {
-    const u = this.units;
-    switch (this.name) {
-      case 'FREQUENCY': return canonical < KILO_SWITCH_HZ ? u[0] : u[1];
-      case 'AMPLITUDE':
-      case 'VOLTAGE': return canonical < MICRO_SWITCH ? u[0]
-        : canonical < MILLI_SWITCH ? u[1]
-          : (canonical < HALF_UNIT_SWITCH ? u[2] : u[3]);
-      case 'TIME': return canonical < HALF_UNIT_SWITCH ? u[0] : u[1];
-      case 'TIME_PER_DIV': return canonical < MILLI_SWITCH ? u[0] : canonical < UNIT_SWITCH ? u[1] : u[2];
-      case 'VOLTS_PER_DIV': return canonical < MICRO_SWITCH ? u[0]
-        : canonical < MILLI_SWITCH ? u[1]
-          : canonical < UNIT_SWITCH ? u[2] : u[3];
-      default: return u[0];
-    }
-  }
-  defaultUnit(canonical) {
-    // The unit applied to suffix-less input: the family's fixed BASE unit
-    // (Hz / V / s / s/div / V/div); -1 = the unit currently displayed (no
-    // family uses it any more). Mirrors UnitFamily.defaultUnit exactly.
-    return this.defaultUnitIndex >= 0 ? this.units[this.defaultUnitIndex] : this.displayUnit(canonical);
-  }
-  match(typedSuffix) {
-    for (const u of this.units) if (u.matches(typedSuffix)) return u;
-    return null;
-  }
-  logUnit() { for (const u of this.units) if (u.log) return u; return null; }
-}
-
-/** UNIT_FAMILIES - mirrors the UnitFamily enum. */
-export const UNIT_FAMILIES = {
-  // Suffix-less (digits-only) input is Hz, the base unit; "k"/"kh" are short
-  // aliases for kHz (UnitFamily.FREQUENCY).
-  FREQUENCY: new UnitFamilyDef('FREQUENCY', 0, [
-    new Unit('unit.hz', 1.0, false, ['hz']),
-    new Unit('unit.khz', 1e3, false, ['khz', 'kh', 'k']),
-  ]),
-  // dBFS is stated relative to the LIVE full scale, so it carries the fsRelative marker and is
-  // resolved by the model against the injected supplier (a field with no supplier refuses it -
-  // the FFT manual fundamental, an ADC-side reference far above DAC full scale).
-  AMPLITUDE: new UnitFamilyDef('AMPLITUDE', 3, [
-    new Unit('unit.nv', 1e-9, false, ['nv', 'n']),
-    new Unit('unit.uv', 1e-6, false, ['uv', 'u', 'µ', 'μ']),
-    new Unit('unit.mv', 1e-3, false, ['mv', 'm']),
-    new Unit('unit.v', 1.0, false, ['v']),
-    new Unit('unit.dbv', 1.0, true, ['dbv', 'db', 'd']),
-    new Unit('unit.dbfs', 1.0, false, ['dbfs', 'dbf'], true),
-  ]),
-  // nV / µV / mV / V - AMPLITUDE without the logarithmic dBV unit, for calibration-value
-  // entry where a dB reference makes no sense (UnitFamily.VOLTAGE). Same linear switching
-  // thresholds and V default as AMPLITUDE.
-  VOLTAGE: new UnitFamilyDef('VOLTAGE', 3, [
-    new Unit('unit.nv', 1e-9, false, ['nv', 'n']),
-    new Unit('unit.uv', 1e-6, false, ['uv', 'u', 'µ', 'μ']),
-    new Unit('unit.mv', 1e-3, false, ['mv', 'm']),
-    new Unit('unit.v', 1.0, false, ['v']),
-  ]),
-  // Generator dither depth: whole/fractional bits (base) or a full-scale-aware dBV VIEW of that
-  // value (UnitFamily.DITHER). The bits⇄dBV conversion is NOT the plain Unit log formula - it is
-  // full-scale- and bit-depth-aware and lives in the NumericStepModel DITHER policy (fed the live
-  // full-scale supplier); these units carry only the suffixes and the "which view" marker.
-  // Suffix-less (digits-only) input is bits, the base unit; dBV sticks for display once typed.
-  DITHER: new UnitFamilyDef('DITHER', 0, [
-    new Unit('unit.bits', 1.0, false, ['b', 'bi', 'bit', 'bits']),
-    new Unit('unit.dbv', 1.0, true, ['d', 'db', 'dbv']),
-  ]),
-  TIME: new UnitFamilyDef('TIME', 1, [
-    new Unit('unit.ms', 1e-3, false, ['ms']),
-    new Unit('unit.s', 1.0, false, ['s']),
-  ]),
-  // Suffix-less (digits-only) input is s/div, the base unit (UnitFamily.TIME_PER_DIV).
-  TIME_PER_DIV: new UnitFamilyDef('TIME_PER_DIV', 2, [
-    new Unit('unit.usdiv', 1e-6, false, ['us/div', 'us', 'µs']),
-    new Unit('unit.msdiv', 1e-3, false, ['ms/div', 'ms']),
-    new Unit('unit.sdiv', 1.0, false, ['s/div', 's']),
-  ]),
-  // Suffix-less (digits-only) input is V/div, the base unit (UnitFamily.VOLTS_PER_DIV).
-  VOLTS_PER_DIV: new UnitFamilyDef('VOLTS_PER_DIV', 3, [
-    new Unit('unit.nvdiv', 1e-9, false, ['nv/div', 'nv', 'n']),
-    new Unit('unit.uvdiv', 1e-6, false, ['uv/div', 'uv', 'µv', 'u', 'µ', 'μ']),
-    new Unit('unit.mvdiv', 1e-3, false, ['mv/div', 'mv', 'm']),
-    new Unit('unit.vdiv', 1.0, false, ['v/div', 'v']),
-  ]),
-  PERCENT: new UnitFamilyDef('PERCENT', 0, [new Unit('unit.percent', 1.0, false, ['%'])]),
-  PIXEL: new UnitFamilyDef('PIXEL', 0, [new Unit('unit.px', 1.0, false, ['px'])]),
-  DECIBEL: new UnitFamilyDef('DECIBEL', 0, [new Unit('unit.db', 1.0, false, ['db'])]),
-  SECONDS: new UnitFamilyDef('SECONDS', 0, [new Unit('unit.s', 1.0, false, ['s'])]),
-  DIVISIONS: new UnitFamilyDef('DIVISIONS', 0, [new Unit('unit.div', 1.0, false, ['div'])]),
-  NONE: new UnitFamilyDef('NONE', 0, [new Unit(null, 1.0, false, [])]),
-};
-
 // ----------------------------------------------------------------------------
 // NumericStepModel (port of NumericStepModel.java)
 // ----------------------------------------------------------------------------
@@ -220,9 +99,6 @@ export class NumericStepModel {
       this.wheelStep = 0; this.arrowStep = 0;
       this.series = null;
       this.decimals = -1; this.maxDecimals = DITHER_DBV_DECIMALS;
-      // The config dBV (the full-scale term) that `value` was last reconciled against; reanchor()
-      // moves the bits by the config delta to hold the displayed dBV across a full-scale change.
-      this.ditherConfigDbv = this._ditherFsDbv();
     } else if (Array.isArray(cfg.series)) {
       this.policy = POLICY.LIST;
       this.wheelStep = 0; this.arrowStep = 0;
@@ -308,21 +184,17 @@ export class NumericStepModel {
     }
   }
 
-  /** dBV of the DAC PEAK full-scale (Vpeak) - NOT the RMS full-scale (/√2), which
-   *  would read ~3 dB low: the TPDF dither RMS is relative to the peak full-scale. */
-  _ditherFsDbv() { return DB_PER_DECADE * Math.log10(this.fsAmplSupplier()); }
+  /** dBV of the DAC PEAK full-scale - see dsp/dither-math.js for why the
+   *  reference is the peak, not the RMS, full-scale. */
+  _ditherFsDbv() { return ditherFsDbv(this.fsAmplSupplier()); }
 
-  /** dBV of the TPDF dither at `bits` (≥1) - the physical level relative to the peak full-scale. */
-  _ditherDbvForBits(bits) {
-    return -(bits - 1) * DITHER_DB_PER_BIT - DITHER_TPDF_OFFSET_DB
-      + this._ditherFsDbv();
-  }
+  /** dBV of the TPDF dither at the given bits (>= 1) - the physical level
+   *  relative to the live peak full-scale. */
+  _ditherDbvForBits(bits) { return ditherDbvForBits(bits, this.fsAmplSupplier()); }
 
-  /** The (fractional) bit count whose TPDF dither lands at `dbv` - exact inverse
-   *  of _ditherDbvForBits, un-clamped. */
-  _ditherBitsForDbv(dbv) {
-    return 1 + (this._ditherFsDbv() - DITHER_TPDF_OFFSET_DB - dbv) / DITHER_DB_PER_BIT;
-  }
+  /** The (fractional) bit count whose TPDF dither lands at the given dBV -
+   *  exact inverse of _ditherDbvForBits, un-clamped. */
+  _ditherBitsForDbv(dbv) { return ditherBitsForDbv(dbv, this.fsAmplSupplier()); }
 
   /** Clamps a non-Off dither depth to [1, maxBits]. */
   _clampBits(bits) { return Math.max(1.0, Math.min(this.max, bits)); }
@@ -335,27 +207,54 @@ export class NumericStepModel {
    *  with different semantics.) Only reached on the sticky-dBFS display / step path, where a
    *  successful dBFS commit guaranteed a non-null supplier. */
   _dbfsFromCanonical(canonical) {
-    return DBFS_DB_PER_DECADE * Math.log10(canonical * ROOT_TWO / this.fsAmplSupplier());
+    return convert(this.family, canonical, baseToken(this.family),
+      unitToken(this.family.fsRelativeUnit()), this.fsAmplSupplier());
   }
 
   /** dBFS -> canonical Vrms against the live full scale - the inverse of _dbfsFromCanonical. */
   _canonicalFromDbfs(dbfs) {
-    return this.fsAmplSupplier() / ROOT_TWO * Math.pow(10.0, dbfs / DBFS_DB_PER_DECADE);
+    return convert(this.family, dbfs, unitToken(this.family.fsRelativeUnit()),
+      baseToken(this.family), this.fsAmplSupplier());
   }
 
-  /** Reacts to a config change (full-scale) holding the CURRENTLY DISPLAYED value:
-   *  dBV view keeps the shown dBV and re-solves the bits under the new full-scale;
-   *  bits view (and Off) keep the bits, only the dBV readout moves. Returns true when
-   *  the stored bit count changed. */
-  reanchor() {
-    if (this.policy !== POLICY.DITHER) return false;
-    const newConfigDbv = this._ditherFsDbv();
-    const before = this.value;
-    if (this.isLogDisplay() && this.value > 0) {
-      this.value = this._clampBits(this.value + (newConfigDbv - this.ditherConfigDbv) / DITHER_DB_PER_BIT);
+  /**
+   * What this field currently SHOWS as one entered value: the operator's own
+   * figure and the unit it is stated in. That pair is what a preference stores,
+   * because a canonical value alone cannot say what was entered - the same
+   * voltage is a different dBFS figure under every calibration.
+   * @returns {{value: number, unit: string}}
+   */
+  enteredValue() {
+    const u = this._storedUnit();
+    let number;
+    if (this.policy === POLICY.DITHER) {
+      number = u.log && this.value > 0 ? this._ditherDbvForBits(this.value) : this.value;
+    } else {
+      number = u.fsRelative ? this._dbfsFromCanonical(this.value) : u.fromCanonical(this.value);
     }
-    this.ditherConfigDbv = newConfigDbv;
-    return this.value !== before;
+    return unitValue(number, unitToken(u));
+  }
+
+  /**
+   * Replays a stored entered value through the ordinary commit path, so the
+   * sticky unit, the clamps and the full-scale resolution are the ones the
+   * operator's own typing goes through - there is no second way in.
+   * @returns {boolean} false (value unchanged) when the token names no unit of
+   *          this family, exactly as a typed suffix would be refused
+   */
+  seedPair(entered) {
+    return this.commit(entered.value + ' ' + entered.unit);
+  }
+
+  /** The unit a stored value carries: the sticky logarithmic or
+   *  full-scale-relative choice, else the family's base unit. A scaled linear
+   *  unit (mV, uV, nV) never sticks - the display auto-ranges through it - so
+   *  what such a display means is the base-unit number. A dither of Off has no
+   *  level, so it too is the base unit whatever is sticky. */
+  _storedUnit() {
+    const u = this.currentUnit();
+    if (this.policy === POLICY.DITHER && this.value <= 0) return this.family.defaultUnit(this.value);
+    return (u.log || u.fsRelative) ? u : this.family.defaultUnit(this.value);
   }
 
   /** Renders the current dither value: Off, a bit count, or the full-scale-aware
@@ -711,10 +610,11 @@ export class NumericStepField {
     // commit on Enter / blur remains the ONLY gate - invalid text reverts there.
 
     const commitOrRevert = () => {
-      const before = this.model.getValue(), logBefore = this.model.isLogDisplay();
+      const before = this.model.getValue(), unitBefore = this.model.enteredValue().unit;
       if (this.model.commit(this._committed())) {
         this.refresh();
-        if ((!Object.is(before, this.model.getValue()) || logBefore !== this.model.isLogDisplay()) && this.onChange) {
+        if ((!Object.is(before, this.model.getValue())
+          || unitBefore !== this.model.enteredValue().unit) && this.onChange) {
           this.onChange(this.model.getValue());
         }
       } else this.refresh();
@@ -746,11 +646,15 @@ export class NumericStepField {
     btn.addEventListener('pointerleave', stop);
   }
 
+  // The unit is half of what a preference stores and it can change on its own -
+  // the same figure re-entered as dBFS moves the meaning without moving the
+  // number - so the snapshot is the entered UNIT, not just the dBV flag.
   _mutate(fn) {
-    const before = this.model.getValue(), logBefore = this.model.isLogDisplay();
+    const before = this.model.getValue(), unitBefore = this.model.enteredValue().unit;
     fn();
     this.refresh();
-    if ((!Object.is(before, this.model.getValue()) || logBefore !== this.model.isLogDisplay()) && this.onChange) {
+    if ((!Object.is(before, this.model.getValue())
+      || unitBefore !== this.model.enteredValue().unit) && this.onChange) {
       this.onChange(this.model.getValue());
     }
   }
@@ -777,10 +681,14 @@ export class NumericStepField {
   /** The current value in the alternate unit (a DITHER field's bits⇄dBV), for a
    *  companion label beside the field; empty when there is no alternate view. */
   companionText() { return this.model.companionText(); }
-  /** DITHER: re-solve for a config change (full-scale) holding the displayed value,
-   *  then re-render. Returns true when the stored bit count changed so the caller can
-   *  persist + restart. */
-  reanchor() { const changed = this.model.reanchor(); this.refresh(); return changed; }
+  /** What the field SHOWS as one entered value - the pair a preference stores. */
+  enteredValue() { return this.model.enteredValue(); }
+  /** Replays a stored entered value through the ordinary commit path (sticky unit,
+   *  clamps and full-scale resolution included) and re-renders. A SEED, so no
+   *  listener fires: what it lays in is what it was read from, and a write-back
+   *  would only echo. Also the re-solve after a recalibration - the entered text
+   *  lands unchanged and the canonical value underneath it moves. */
+  seedPair(entered) { this.model.seedPair(entered); this.refresh(); }
   setDisabled(d) {
     this.disabled = d;
     this.input.disabled = d;

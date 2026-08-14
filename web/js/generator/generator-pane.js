@@ -47,10 +47,13 @@ export class GeneratorPane {
    *   - syncFftAlign: () => re-gate the FFT align combo (snap gates it; FftTabControl).
    */
   constructor(engine, prefs, { getField, io, WAV_TYPE, formLabel, formIcon, sfVal, outRate,
-    isGenRunning, isBusy, setBusy, readConfig, syncFftAlign }) {
+    isGenRunning, isBusy, setBusy, readConfig, syncFftAlign, showAlert }) {
     this.engine = engine;
     this.prefs = prefs;
     this._getField = getField;
+    // The shell's one alert surface, with the same console fallback every other holder of it
+    // keeps (preferences-dialog.js, tune-notch-wizard.js, calibration-dialog.js).
+    this._showAlert = showAlert || ((title, message) => console.warn(title, message));
     this.io = io;
     this.WAV_TYPE = WAV_TYPE;
     this._formLabel = formLabel;
@@ -200,7 +203,8 @@ export class GeneratorPane {
   // "Dither" caption (Java GeneratorPane.updateDitherLabel): append the dither value in the OTHER
   // unit in brackets - dBV when the field shows bits, bits when it shows dBV - mirroring how
   // refreshFreqLabel annotates the Frequency caption. Off shows the plain caption. The dBV side
-  // tracks the live DAC full-scale, so this is re-run on the dither reanchor / refresh listeners.
+  // tracks the live DAC full-scale, so this is re-run wherever the dither field is re-seeded or
+  // re-rendered (a recalibration, an FFT-window change, a committed edit).
   updateDitherLabel() {
     const f = this._getField('dither');
     const other = f ? f.companionText() : '';
@@ -439,15 +443,18 @@ export class GeneratorPane {
     // beat checkbox) hang off this event in the SCOPE layer - the generator never reaches into a
     // scope widget. The web has no closed-loop FLL trim path, so only the USER_INPUT cause is
     // emitted here; the FLL_TRIM cause is kept for fidelity with the bus contract.
-    // genDitherBits, genOutputChannels and the two DAC full-scale prefs join the list per Java's
+    // The dither, genOutputChannels and the two DAC full-scale prefs join the list per Java's
     // dither/routing fix (GeneratorController.setDitherBits + the dacFsVoltageAmpl/dacFsVoltageAmplRight/
     // genOutputChannels listeners each now publishSignalChanged): a dither, output-routing or DAC-
     // full-scale change restarts the FFT stats/accumulator and clears the scope persistence.
+    // The amplitude and the dither are stored AS ENTERED (number plus unit as ONE value), so each
+    // subscribes once and an edit that moves both halves publishes once - never twice, and never
+    // with a half-changed value in between.
     for (const pref of [prefs.genSignalForm, prefs.genFrequencyHz, prefs.genDualToneFreq1Hz,
-      prefs.genDualToneFreq2Hz, prefs.genSnapToFftBin, prefs.genAmplitudeVrms, prefs.genRectangleDuty,
+      prefs.genDualToneFreq2Hz, prefs.genSnapToFftBin, prefs.genAmplitude, prefs.genRectangleDuty,
       prefs.genTriangleDuty, prefs.genDualToneSplitPct, prefs.genSweepFreqStartHz, prefs.genSweepFreqEndHz,
       prefs.genSweepDurationSec, prefs.genSweepFadeInSec, prefs.genSweepFadeOutSec, prefs.genSweepLoop,
-      prefs.genDitherBits, prefs.genOutputChannels, prefs.dacFsVoltageAmpl, prefs.dacFsVoltageAmplRight]) {
+      prefs.genDither, prefs.genOutputChannels, prefs.dacFsVoltageAmpl, prefs.dacFsVoltageAmplRight]) {
       pref.addListener(() => {
         // Published only while the lane is ON AIR: the event's contract is "the EMITTED
         // signal changed", and with the generator off the output is silence before and
@@ -459,22 +466,23 @@ export class GeneratorPane {
       });
     }
 
-    // A DAC recalibration shifts the dBV mapping. reanchor() HOLDS the entered value: in the dBV
-    // view it keeps the shown dBV and re-solves the bits under the new full-scale; in the bits view
-    // it keeps the bits and only the dBV readout moves. When the bits re-solve, persist them - that
-    // restarts via the usual genDitherBits path (the publisher loop above) - then re-annotate the
-    // caption. Mirrors Java GeneratorPane's Bindings.onChange for dacFsVoltageAmplProperty. Dither is
-    // NOT live-applied to the worklet (accepted Web-Audio divergence, like Java's live ag.setDitherBits)
+    // A DAC recalibration shifts the dBV mapping. The ENTERED value is what holds: replaying it
+    // leaves the field text exactly as typed and re-solves the bits underneath, so a dither entered
+    // as a level keeps that level and only the companion readout moves. The entered value itself
+    // does not change here, so nothing re-publishes from it - dacFsVoltageAmpl is in the publisher
+    // list above and is what announces the signal change.
+    // Mirrors Java GeneratorPane's Bindings.onChange for dacFsVoltageAmplProperty. Dither is NOT
+    // live-applied to the worklet (accepted Web-Audio divergence, like Java's live ag.setDitherBits)
     // - readConfig reads the field fresh at each (re)start and the Save-to export path applies it via quantizePcm.
-    const reanchorDither = () => {
+    const reseedDither = () => {
       const f = this._getField('dither');
-      if (f && f.reanchor()) prefs.genDitherBits.set(f.getValue());
+      if (f) f.seedPair(prefs.genDither.get());
       this.updateDitherLabel();
     };
-    prefs.dacFsVoltageAmpl.addListener(reanchorDither);
+    prefs.dacFsVoltageAmpl.addListener(reseedDither);
     // An FFT-window change NEVER touches the dither: bits and dBV are the physical level, window-
     // invariant since the analyser's NENBW correction. A pure re-render (field text + caption) -
-    // no reanchor, no persist, no restart; the generated output stays put (the values won't change).
+    // nothing is re-solved, nothing is stored, nothing restarts; the generated output stays put.
     prefs.fftWindow.addListener(() => {
       const f = this._getField('dither');
       if (f) f.refresh();
@@ -501,7 +509,7 @@ export class GeneratorPane {
     // ----- generator prefs bindings (Java GeneratorPane) -----
     $('#signalForm').on('change', () => prefs.genSignalForm.set($('#signalForm').val()));
     // toneHz / ampDbfs / dither prefs are written by their NumericStepField onChange handlers
-    // (the dither field also persists genDitherDbvDisplay and re-annotates #ditherLabel).
+    // (the dither field writes its ENTERED value - number plus unit - and re-annotates #ditherLabel).
     // Output-lane gate: persist + push the routing to the running worklet (Java
     // GeneratorController.pushOutputRoutingToPlayback on genOutputChannels change). rightLaneScale
     // is recomputed fresh (= fsLeft/fsRight); retuneGenerator is a no-op when nothing is playing.
@@ -680,7 +688,11 @@ export class GeneratorPane {
         // The RAW bytes are kept beside the decoded channels: a generator on a Phonalyser server
         // has no downlink for audio, so playing there uploads the FILE and lets the bench decode
         // it (spec §3 + 4.5). The local paths use the channels exactly as before.
-        this.genFileSig = { channels: [ch0, ch1], sampleRate: dec.sampleRate, file: { bytes, name: file.name } };
+        // The decoded FORMAT travels with the samples - rate and depth both: what a lane can be
+        // asked to play is a property of the file, and a caller that only knows the rate cannot
+        // tell whether the depth is one the output can carry.
+        this.genFileSig = { channels: [ch0, ch1], sampleRate: dec.sampleRate,
+          bitsPerSample: dec.bitsPerSample, file: { bytes, name: file.name } };
         $('#status').text('loaded ' + file.name);
       } catch (e) { this.genFileSig = null; $('#status').text('load failed: ' + e.message); }
     });
@@ -696,11 +708,20 @@ export class GeneratorPane {
         }
         engine.onFileEnded = () => this.setGenFileBtn(false);
         await engine.playFileBuffer(this.genFileSig.channels, this.genFileSig.sampleRate,
-          $('#genFileLoop').is(':checked'), this.genFileSig.file);
+          $('#genFileLoop').is(':checked'), this.genFileSig.file, this.genFileSig.bitsPerSample);
         // A refusal the controller localized (an over-size upload, a bench that said no) never
         // throws - it lands in filePlayError, and the status line is where it belongs.
+        // A refusal is shown where every other error in this app is shown - the shell's one alert
+        // modal, the web twin of the desktop's Cannot-play-file MessageBox. The #status write
+        // beside it is the aria-live region and reaches a screen reader only, which is why a
+        // refused file used to look like nothing at all.
         const refused = engine.filePlayError;
-        if (refused) { $('#status').text(refused); this.setGenFileBtn(false); return; }
+        if (refused) {
+          $('#status').text(refused);
+          this._showAlert(t('generator.error.playFile'), refused);
+          this.setGenFileBtn(false);
+          return;
+        }
         // Read back rather than assumed: an upload the operator cancelled resolves here with no
         // error and nothing playing, and the LED must not claim otherwise.
         this.setGenFileBtn(engine.filePlaying);
@@ -781,6 +802,7 @@ export class GeneratorPane {
     // Java tinyPlayDim -> tinyPlayLit: the play glyph stays, lit green while playing (no stop swap).
     $('#genFilePlay').toggleClass('playing', on)
       .attr('title', t(on ? 'generator.loadFrom.stop' : 'generator.loadFrom.play'));
+    // The BIG play button is the DDS tone's alone - a file plays on the small button above it.
     // ON-AIR banner mirrors EITHER engine (Java syncFilePlayVisuals startOnAirBlink while playing;
     // syncPlayButtonVisuals stops the blink only when the DDS tone is also stopped). Light it while
     // the file plays; on file stop / natural end clear it only if the DDS generator isn't running.

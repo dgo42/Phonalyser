@@ -126,6 +126,11 @@ export class Qa40xPlaybackSink {
    */
   async open(spec) {
     this.#sampleRate = spec.sampleRate;
+    // The DAC-side dither is carried by the OPEN as well as by start(): a buffer lane
+    // (file play, a pre-rendered sweep) never goes through start(), and it exposes no live
+    // control port either - so a dither the open dropped could not reach it afterwards by any
+    // route at all, and the lane would quantise undithered for its whole life.
+    this.setDitherBits(spec.ditherBits);
     this.#engine = await this.#manager.acquireEngine(this.#sampleRate);
     debug(`[qa40x] generator opened : ${this.#sampleRate} Hz / 32 bit`);
     return this.#sampleRate;
@@ -288,7 +293,11 @@ export class Qa40xPlaybackSink {
           ended = true;
           if (onEnded) onEnded();
         }
-        const v = this.#toInt32(sample);
+        // Dithered like the DDS lane above, and for the same reason: these samples are rounded
+        // onto the DAC's int32 grid here, and a rounding with nothing under it is what dither
+        // exists to linearise. The depth comes from the open (0 = off), read once per frame so a
+        // live change can never split one noise value across two depths.
+        const v = this.#toInt32(clamp(sample + tpdfNoise(this.#ditherBits, this.#rng)));
         destination[CHANNELS * f] = wantL ? v : 0;
         destination[CHANNELS * f + 1] = wantR ? v : 0;
       }

@@ -29,20 +29,25 @@ export const Events = Object.freeze({
    *  range for the next open. */
   DEVICE_ACTIVE_RANGE_CHANGED: 'preferences.device.activeRange.changed',
 
-  /** Fired by the Preferences dialog while a rate combo is being edited - the user just picked a
-   *  sample rate for one direction, or a (re)populate seeded a fresh selection. Payload:
-   *  SampleRateChange - { input: boolean, sampleRateHz: number, backend: string, card: ?string }
-   *  (direction + rate + the edited backend + the resolved card). Device-agnostic: any backend or
-   *  card that constrains its two rates may subscribe and decide FROM the payload's backend or card
-   *  whether the change concerns it - the dialog edits an UNCOMMITTED working copy, so the
-   *  subscriber gates on the payload, not live Preferences. Today's subscriber is
+  /** Fired by the Preferences dialog while a rate or bit-depth combo is being edited - the user
+   *  just picked a format for one direction, or a (re)populate seeded a fresh selection. Payload:
+   *  SampleRateChange - { input: boolean, sampleRateHz: number, bitDepth: number, backend: string,
+   *  card: ?string } (direction + rate + depth + the edited backend + the resolved card).
+   *  Device-agnostic: any backend or
+   *  card that constrains its two directions may subscribe and decide FROM the payload's backend or
+   *  card whether the change concerns it - the dialog edits an UNCOMMITTED working copy, so the
+   *  subscriber gates on the payload, not live Preferences. The DEPTH is optional: 0 (Java's
+   *  SampleRateChange.NO_BIT_DEPTH) means the payload says nothing about it. Subscribers today are
    *  Qa40xRateConstraint, which enforces the QA402/QA403's single shared reg-9 clock (input rate ==
-   *  output rate) and answers, when the other direction must follow, with PREFS_SAMPLE_RATE_SET. */
+   *  output rate) and ignores the depth, and LoopbackFormatConstraint, whose backend is one digital
+   *  format in both directions and so couples rate AND depth. Either answers, when the other
+   *  direction must follow, with PREFS_SAMPLE_RATE_SET. */
   PREFS_SAMPLE_RATE_CHANGED: 'preferences.sampleRate.changed',
 
-  /** The other half of the PREFS_SAMPLE_RATE_CHANGED round-trip: fired by a rate-constraint
-   *  subscriber to tell the Preferences dialog to align the OTHER direction's rate combo. Payload:
-   *  SampleRateChange - the direction to correct, the rate to adopt, the backend, and the echoed
+  /** The other half of the PREFS_SAMPLE_RATE_CHANGED round-trip: fired by a format-constraint
+   *  subscriber to tell the Preferences dialog to align the OTHER direction's combos. Payload:
+   *  SampleRateChange - the direction to correct, the rate to adopt, the depth to adopt (0 when the
+   *  constraint leaves the width alone), the backend, and the echoed
    *  card. The dialog acts only while it is still open and the edited backend matches the payload,
    *  selecting the combo item programmatically - setting a <select>'s value fires no change event
    *  (as SWT's Combo.select fires no Selection), so the correction does not re-publish

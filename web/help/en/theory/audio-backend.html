@@ -153,9 +153,12 @@
      samples never leave the page.</p>
   <p>Its purpose is a bench whose noise floor is <em>known</em>.  Every sample
      that crosses is quantised by the same quantiser the real playback paths
-     use, with TPDF dither applied immediately before the rounding step, at the
-     last bit of the selected depth.  The floor is therefore the arithmetic one
-     rather than a property of some converter: the delivered samples of digital
+     use, with TPDF dither applied immediately before the rounding step - by
+     default at the last bit of the selected depth; a dither the generator
+     configures takes precedence, and the lane is never undithered, because a
+     loop with no noise at all would hand the FFT the artifacts of bare
+     rounding.  With nothing configured the floor is therefore the arithmetic
+     one rather than a property of some converter: the delivered samples of digital
      silence measure <b>0.500&nbsp;LSB RMS</b>, which for a word of
      <i>N</i>&nbsp;bits puts the broadband floor at</p>
   <div class="eq">3.01 - 6.02&nbsp;<i>N</i> dBFS<span class="no">(2)</span></div>
