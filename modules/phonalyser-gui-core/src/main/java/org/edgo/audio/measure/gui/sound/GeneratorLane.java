@@ -1097,7 +1097,7 @@ public final class GeneratorLane {
     private double rmsPerPeak(GenSignalForm form) {
         return switch (form) {
             case SINE, SINE_COMP, LINEAR_SWEEP, LOG_SWEEP -> 1.0 / Constants.SQRT2;
-            case TRIANGLE                                 -> 1.0 / Math.sqrt(3.0);
+            case TRIANGLE                                 -> 1.0 / Constants.SQRT3;
             case RECTANGLE, WHITE_NOISE                   -> 1.0;
             case PINK_NOISE                               -> 1.0 / Math.sqrt(PINK_OCTAVES + 1.0);
             case PINK_NOISE_LINEAR                        -> 1.0 / Math.sqrt(3.0 * (PINK_OCTAVES + 1.0));

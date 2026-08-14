@@ -23,6 +23,8 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.edgo.audio.measure.common.Constants;
+
 /**
  * Tests for the pure-math helpers in {@link MathUtil}.  Three families:
  * Chebyshev polynomial T_n(x), inverse hyperbolic cosine, and the
@@ -44,7 +46,7 @@ class MathUtilTest {
     void acosh_matchesMathDefinition() {
         // acosh(x) = ln(x + sqrt(x^2 - 1)).  Check against a hand-computed
         // sample: acosh(2) = ln(2 + sqrt(3)) ≈ 1.3169578969.
-        double expected = Math.log(2.0 + Math.sqrt(3.0));
+        double expected = Math.log(2.0 + Constants.SQRT3);
         assertEquals(expected, MathUtil.acosh(2.0), EPS);
     }
 
