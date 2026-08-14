@@ -210,7 +210,7 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .filefield .icon-btn { display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--field-border); border-left: none; background: #f1f1f1; width: 26px; height: 24px; font-size: 13px; line-height: 1; cursor: pointer; color: #444; padding: 0; }
 .filefield .icon-btn:hover { background: #e4e4e4; }
 .filefield .icon-btn.play { color: var(--green); opacity: .7; font-size: 21px; }  /* green like the big play button, bigger icon */
-.filefield .icon-btn.play.playing { color: var(--green); opacity: 1; }            /* full-bright green while playing */
+.filefield .icon-btn.play.playing { color: var(--green); opacity: 1; filter: brightness(1.45) drop-shadow(0 0 4px var(--green)); }  /* lit like the big play button, smaller glow radius */
 .form-check-sm { font-size: 12px; margin: 6px 0; min-height: auto; }
 .form-check-sm .form-check-label { font-size: 12px; }
 

@@ -167,8 +167,11 @@
   <p>Sein Zweck ist ein Messplatz mit <em>bekanntem</em> Grundrauschen.  Jedes
      übergehende Sample wird von demselben Quantisierer quantisiert, den auch
      die echten Wiedergabepfade verwenden, mit TPDF-Dither unmittelbar vor dem
-     Runden, auf dem letzten Bit der gewählten Bittiefe.  Das Grundrauschen ist
-     damit das rechnerische und keine Eigenschaft irgendeines Wandlers: Die
+     Runden - standardmäßig auf dem letzten Bit der gewählten Bittiefe; ein im
+     Generator eingestellter Dither hat Vorrang, und die Spur läuft nie
+     ungedithert, denn ganz ohne Rauschen zeigte die FFT die Artefakte des
+     nackten Rundens.  Ohne eigene Einstellung ist das Grundrauschen damit das
+     rechnerische und keine Eigenschaft irgendeines Wandlers: Die
      gelieferten Samples digitaler Stille messen <b>0,500&nbsp;LSB
      Effektivwert</b>, was für ein Wort von <i>N</i>&nbsp;Bit das
      Breitbandrauschen auf</p>
