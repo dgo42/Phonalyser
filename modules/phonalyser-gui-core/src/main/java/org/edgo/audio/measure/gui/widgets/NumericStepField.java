@@ -272,7 +272,7 @@ public final class NumericStepField extends Composite {
     public void setValue(double v) {
         double before = model.getValue();
         model.setValue(v);
-        afterMutation(before, model.isLogDisplay());
+        afterMutation(before, model.enteredValue().unit());
     }
 
     /** Renders the field empty and holding no value - the disabled,
@@ -304,9 +304,9 @@ public final class NumericStepField extends Composite {
      *  listeners only when the value actually moved. */
     public void step(int direction) {
         double before = model.getValue();
-        boolean logBefore = model.isLogDisplay();
+        String unitBefore = model.enteredValue().unit();
         model.wheel(direction);
-        afterMutation(before, logBefore);
+        afterMutation(before, unitBefore);
     }
 
     /** Updates the lower bound; the re-clamped value is mirrored to the
@@ -315,7 +315,7 @@ public final class NumericStepField extends Composite {
     public void setMin(double min) {
         double before = model.getValue();
         model.setMin(min);
-        afterMutation(before, model.isLogDisplay());
+        afterMutation(before, model.enteredValue().unit());
     }
 
     /** Updates the upper bound (e.g. Nyquist after a sample-rate change, the
@@ -323,7 +323,7 @@ public final class NumericStepField extends Composite {
     public void setMax(double max) {
         double before = model.getValue();
         model.setMax(max);
-        afterMutation(before, model.isLogDisplay());
+        afterMutation(before, model.enteredValue().unit());
     }
 
     /** Replaces a LIST field's series (e.g. the sweep-points list whose head
@@ -331,7 +331,7 @@ public final class NumericStepField extends Composite {
     public void setSeries(double[] series) {
         double before = model.getValue();
         model.setSeries(series);
-        afterMutation(before, model.isLogDisplay());
+        afterMutation(before, model.enteredValue().unit());
     }
 
     /** Declares one value that renders and parses as {@code label} instead of
@@ -361,13 +361,21 @@ public final class NumericStepField extends Composite {
         applyToolTip();   // keep the unit-dependent step hint current
     }
 
-    /** DITHER: re-solve for a config change (full-scale) holding the displayed
-     *  value, then re-render.  Returns {@code true} when the stored bit count
-     *  changed so the caller can persist + restart. */
-    public boolean reanchor() {
-        boolean changed = model.reanchor();
+    /** What the field SHOWS as one entered value - the pair a preference
+     *  stores. */
+    public UnitValue enteredValue() {
+        return model.enteredValue();
+    }
+
+    /** Replays a stored entered value through the ordinary commit path (sticky
+     *  unit, clamps and full-scale resolution included) and re-renders.  A
+     *  SEED, so no listener fires: what it lays in is what it was read from,
+     *  and a write-back would only echo.  Also the re-solve after a
+     *  recalibration - the entered text lands unchanged and the canonical
+     *  value underneath it moves to the new full scale. */
+    public void seedPair(UnitValue entered) {
+        model.seedPair(entered);
         refresh();
-        return changed;
     }
 
     /**
@@ -413,42 +421,42 @@ public final class NumericStepField extends Composite {
 
     private void stepWheel(int direction) {
         double before = model.getValue();
-        boolean logBefore = model.isLogDisplay();
+        String unitBefore = model.enteredValue().unit();
         model.commit(field.getText());   // step from the ENTERED value, not the last committed
         model.wheel(direction);
-        afterMutation(before, logBefore);
+        afterMutation(before, unitBefore);
     }
 
     private void stepArrow(int direction) {
         double before = model.getValue();
-        boolean logBefore = model.isLogDisplay();
+        String unitBefore = model.enteredValue().unit();
         model.commit(field.getText());   // step from the ENTERED value, not the last committed
         model.arrow(direction);
-        afterMutation(before, logBefore);
+        afterMutation(before, unitBefore);
     }
 
     private void commitText() {
         double before = model.getValue();
-        boolean logBefore = model.isLogDisplay();
+        String unitBefore = model.enteredValue().unit();
         if (!model.commit(field.getText())) {
             // Reject: restore the last good value.
             refresh();
             return;
         }
-        afterMutation(before, logBefore);
+        afterMutation(before, unitBefore);
     }
 
     /** Refreshes the display and fires the listeners only when the canonical
-     *  value - or the persisted-worthy dBV display choice - moved away from
-     *  the snapshot; the single funnel every model mutation goes through, so
-     *  the no-event-on-unchanged contract can't be missed at one of the call
-     *  sites.  (Typing "0.5 V" over a dBV display changes the unit without
-     *  the value; the pane's display-unit persistence still needs the
-     *  event.) */
-    private void afterMutation(double beforeValue, boolean logBefore) {
+     *  value - or the UNIT the field states it in - moved away from the
+     *  snapshot; the single funnel every model mutation goes through, so the
+     *  no-event-on-unchanged contract can't be missed at one of the call sites.
+     *  The unit is half of what a preference stores, and it can change on its
+     *  own: typing "0.5 V" over a dBV display, or the same figure re-entered
+     *  as dBFS, moves the meaning without moving the number. */
+    private void afterMutation(double beforeValue, String unitBefore) {
         refresh();
         if (Double.compare(beforeValue, model.getValue()) != 0
-                || logBefore != model.isLogDisplay()) {
+                || !unitBefore.equals(model.enteredValue().unit())) {
             fire();
         }
     }
