@@ -186,12 +186,18 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      * and that cache is what a scan is really aimed at: a device that was held
      * when it was first probed answers from the stale entry for ever otherwise,
      * and a device whose formats changed with it keeps reporting the old set.
+     * The ALSA collaborators forget with it: their card-index-keyed answers
+     * (capabilities, card names, USB descriptors) survive a replug otherwise,
+     * and a card moved to another USB port re-enumerates at a NEW index while
+     * the old index may now belong to different hardware.
      * Answers {@code true} because the next list can now differ from the last.
      */
     @Override
     public boolean refreshDeviceList() {
         inputFormatsCache.clear();
         outputFormatsCache.clear();
+        procAsound.forget();
+        alsaPorts.forget();
         return true;
     }
 

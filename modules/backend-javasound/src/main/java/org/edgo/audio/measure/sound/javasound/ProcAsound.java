@@ -214,6 +214,16 @@ public final class ProcAsound {
         this(Paths.get("/proc/asound"));
     }
 
+    /** Drops every remembered answer, so the next ask re-reads the tree.
+     *  Capabilities do not change at runtime, but the CARD SET does: a USB
+     *  card replugged into another port re-enumerates at a new index, and the
+     *  operator's explicit rescan is the gesture that must see it. */
+    public void forget() {
+        hwParamsCache.clear();
+        cardCache.clear();
+        cardNames = null;
+    }
+
     /** Reads {@code root} instead - the seam the tests drive a fixture tree through,
      *  which is what makes this parser testable on a machine that has no ALSA. */
     public ProcAsound(Path root) {
