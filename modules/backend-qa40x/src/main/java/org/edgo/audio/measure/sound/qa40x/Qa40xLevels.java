@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.sound.qa40x;
 
+import org.edgo.audio.measure.common.Constants;
+
 import lombok.experimental.UtilityClass;
 
 /**
@@ -87,7 +89,6 @@ public class Qa40xLevels {
     private static final double VPP_TO_PEAK         = 2.0;
     /** Volts-to-dB divisor (20·log10). */
     private static final double DB_DIVISOR          = 20.0;
-    private static final double SQRT2               = Math.sqrt(2.0);
 
     /**
      * Converts a raw ADC sample to instantaneous (differential) volts:
@@ -125,7 +126,7 @@ public class Qa40xLevels {
      * ≈ 9 dB below the "N dBV" label (see the class note).
      */
     public double inputFullScaleRmsVolts(int maxInputDbv, double adcCal) {
-        return inputFullScalePeakVolts(maxInputDbv, adcCal) / SQRT2;
+        return inputFullScalePeakVolts(maxInputDbv, adcCal) / Constants.SQRT2;
     }
 
     /**
@@ -145,7 +146,7 @@ public class Qa40xLevels {
      * voltage, cal-corrected (see class note).
      */
     public double outputFullScaleRmsVolts(int maxOutputDbv, double dacCal) {
-        return dbToLinear(maxOutputDbv + PEAK_TO_RMS_DB) / (dacCal * SQRT2);
+        return dbToLinear(maxOutputDbv + PEAK_TO_RMS_DB) / (dacCal * Constants.SQRT2);
     }
 
     private double dbToLinear(double db) {

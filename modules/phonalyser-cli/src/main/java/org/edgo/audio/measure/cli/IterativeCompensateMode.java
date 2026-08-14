@@ -39,6 +39,7 @@ import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.HarmonicCompensation;
 import org.edgo.audio.measure.dsp.HarmonicCompensation.GeneratorCorrections;
 import org.edgo.audio.measure.cli.util.SampleRates;
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.WindowType;
@@ -315,7 +316,7 @@ public class IterativeCompensateMode {
         double adcFsVrms   = amplitude / signalRatio;
         log.info("ADC FS derived: {} V RMS  ({} V peak)  - fundamental at {} dBFS, generator {} V RMS",
                 String.format(Locale.US, "%.4f", adcFsVrms),
-                String.format(Locale.US, "%.4f", adcFsVrms * Math.sqrt(2.0)),
+                String.format(Locale.US, "%.4f", adcFsVrms * Constants.SQRT2),
                 String.format(Locale.US, "%.2f", result0.fundamentalDbFs),
                 String.format(Locale.US, "%.4f", amplitude));
 

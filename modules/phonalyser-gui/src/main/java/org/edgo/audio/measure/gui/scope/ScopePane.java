@@ -37,6 +37,7 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Scrollable;
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.MainWindow;
 import org.edgo.audio.measure.gui.bind.Bindings;
@@ -97,7 +98,7 @@ public final class ScopePane extends AbstractPane {
      * usable signals.  Calibrated selections only - an uncalibrated
      * selection's volts are provisional, so an absolute test means nothing.
      */
-    private static final double CALIBRATE_MIN_VPP_ABSOLUTE = 0.5 * 2.0 * Math.sqrt(2.0);
+    private static final double CALIBRATE_MIN_VPP_ABSOLUTE = 0.5 * 2.0 * Constants.SQRT2;
 
     /**
      * The floor under the calibrate button for an UNCALIBRATED selection: enough to

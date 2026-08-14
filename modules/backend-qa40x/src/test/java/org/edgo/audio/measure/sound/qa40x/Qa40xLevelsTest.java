@@ -22,6 +22,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import org.edgo.audio.measure.common.Constants;
+
 /**
  * {@link Qa40xLevels} raw ↔ volts math, pinning the range semantics of the
  * REAL device (doc §6 cheat-sheet - supersedes the earlier mock-derived
@@ -62,7 +64,7 @@ class Qa40xLevelsTest {
     @Test
     void dacInt32_rmsTrapIsAboutThreeDbLow() {
         double vrms = 1.0;
-        int correct = Qa40xLevels.dacInt32(Math.sqrt(2.0) * vrms, 18, 1.0);   // PEAK - correct
+        int correct = Qa40xLevels.dacInt32(Constants.SQRT2 * vrms, 18, 1.0);   // PEAK - correct
         int trap    = Qa40xLevels.dacInt32(vrms, 18, 1.0);                    // RMS - the ~3 dB trap
         double errDb = 20.0 * Math.log10((double) correct / trap);
         assertEquals(3.0103, errDb, 0.01);
@@ -80,7 +82,7 @@ class Qa40xLevelsTest {
         // scale = 10^(N/20)/(2√2), i.e. a constant 9.03 dB below the label
         // (doc §6; supersedes the mock-era label-is-RMS case).
         double fs18 = Qa40xLevels.inputFullScaleRmsVolts(18, 1.0);
-        assertEquals(Math.pow(10.0, 18 / 20.0) / (2.0 * Math.sqrt(2.0)), fs18, TOL);
+        assertEquals(Math.pow(10.0, 18 / 20.0) / (2.0 * Constants.SQRT2), fs18, TOL);
         assertEquals(Math.pow(10.0, (18 - 9.0) / 20.0), fs18, 0.02);
     }
 

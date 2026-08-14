@@ -39,6 +39,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import javax.sound.sampled.AudioFormat;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.enums.GenSignalForm;
@@ -630,7 +631,7 @@ class Qa40xDeviceManagerTest {
         Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, BITS, 0);
         gen.open();
 
-        SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 1.0, Math.sqrt(2.0));
+        SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 1.0, Constants.SQRT2);
         AtomicBoolean alreadyStopped = new AtomicBoolean(true);
         gen.play(sig, alreadyStopped, new CountDownLatch(1));   // attaches, primes, exits immediately
 

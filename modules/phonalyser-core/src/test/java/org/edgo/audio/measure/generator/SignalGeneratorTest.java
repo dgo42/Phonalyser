@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.generator;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.junit.jupiter.api.Test;
 
@@ -56,7 +57,7 @@ class SignalGeneratorTest {
         SignalGenerator gen = new SignalGenerator(
                 GenSignalForm.SINE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
 
-        double expectedPeak = vrms * Math.sqrt(2.0) / DAC_FS_VRMS;
+        double expectedPeak = vrms * Constants.SQRT2 / DAC_FS_VRMS;
         for (int n = 0; n < samples; n++) {
             double actual   = gen.nextSample();
             double expected = expectedPeak
@@ -156,7 +157,7 @@ class SignalGeneratorTest {
         }
         // Peak should approach (within 1 %) the analytic value
         // vrms * √2 / dacFsVoltageRms = 1.0 * √2 / 2.79351 ≈ 0.5063.
-        double expectedPeak = Math.sqrt(2.0) / DAC_FS_VRMS;
+        double expectedPeak = Constants.SQRT2 / DAC_FS_VRMS;
         assertEquals(expectedPeak, peak, expectedPeak * 1e-2);
     }
 }
