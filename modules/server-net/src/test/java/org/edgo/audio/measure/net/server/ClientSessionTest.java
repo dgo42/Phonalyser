@@ -533,6 +533,9 @@ class ClientSessionTest {
     @Test
     void theDeviceListIsAnsweredWithEveryBackendAndItsDevices() {
         greet(session, CLIENT_NAME);
+        // The start-up priming scan ServerMain runs before the transports
+        // accept anything - devices.list answers from the last enumeration.
+        catalog.scan();
 
         session.onMessage(new NetMessage(MessageType.DEVICES_LIST, REQUEST_ID));
 

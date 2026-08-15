@@ -107,37 +107,23 @@ public final class DeviceCatalog {
      *  in two different orders. */
     private final Object scanLock = new Object();
 
-    /** The last enumeration, re-used by {@link #lastScan()}.  Written by
-     *  {@link #scan()} on a session's request thread and read by whichever
-     *  thread a lock change arrives on, hence volatile; the list itself is never
+    /** The last enumeration - what every client answer is served from.
+     *  Written by the start-up priming {@link #scan()} and by the hot-plug
+     *  {@link #rescan()}, read by request threads and by whichever thread a
+     *  lock change arrives on, hence volatile; the list itself is never
      *  mutated after publication. */
     private volatile List<DeviceEntry> lastDevices = List.of();
 
     /**
      * Re-enumerates every served backend and answers the {@code backends} array
-     * of spec 4.3, lock state included.  This is the fresh read: what
-     * {@code devices.list} answers, and what a client re-reads after
-     * {@code DEVICE_STALE}.
+     * of spec 4.3, lock state included.  The priming read: {@link
+     * ServerMain} runs it once before the transports accept anything, so no
+     * client ever sees an empty bench.  Requests are answered from {@link
+     * #lastScan()} - enumeration stays off the request threads, and the
+     * hot-plug {@link #rescan()} keeps the snapshot at most one tick old.
      */
     public JsonNode scan() {
         return payload(scanned(), served);
-    }
-
-    /**
-     * The operator's scan gesture arrived over the wire: {@code devices.list}
-     * rebuilds the SNAPSHOT backends' enumeration first, exactly like the
-     * desktop's Scan button - WDM-KS and CoreAudio ride one process-lifetime
-     * PortAudio snapshot, so a card replugged since start-up could never
-     * appear on the server at all (a replug reappears in WASAPI, never in
-     * WDM-KS).  Deliberately NOT part of the 2 s hot-plug tick: PortAudio's
-     * rebuild is a full library re-initialisation, and it refuses while any
-     * stream is open anyway - a refusal costs nothing, the list is simply as
-     * stale as it was.
-     */
-    public void refreshSnapshotBackends() {
-        for (AudioBackendType type : served) {
-            audio.refreshDeviceLists(type);
-        }
     }
 
     /**
@@ -200,8 +186,10 @@ public final class DeviceCatalog {
     /**
      * One backend's entry in {@code devices.list} shape - what
      * {@code backend.select} answers, so a single round-trip fills the device
-     * combos (spec 4.3).  Freshly enumerated: the client is committing to this
-     * backend and will open devices from what it is told here.
+     * combos (spec 4.3).  Served from the hot-plug watcher's last enumeration,
+     * like {@code devices.list}: the watcher re-scans every two seconds, so
+     * the committing client is at most one tick behind the bench - and never
+     * behind a multi-second native walk on its own selection.
      *
      * @throws NetException {@code BAD_REQUEST} when this server does not serve
      *         {@code type} - a selection that cannot be honoured must fail at the
@@ -212,7 +200,7 @@ public final class DeviceCatalog {
             throw new NetException(ErrorCode.BAD_REQUEST,
                     type + " is not served by this server");
         }
-        return payload(scanned(), List.of(type)).get(0);
+        return payload(lastDevices, List.of(type)).get(0);
     }
 
     /**
@@ -278,12 +266,13 @@ public final class DeviceCatalog {
     /**
      * Rebuilds the enumeration of every served backend that says its own list has
      * gone stale, so the comparison above looks at the bench and not at a
-     * start-up snapshot.
+     * start-up snapshot.  This is the ONLY snapshot-rebuild path: WDM-KS and
+     * CoreAudio ride one process-lifetime PortAudio snapshot, and a card
+     * replugged since start-up reappears only through this rebuild (a replug
+     * reappears in WASAPI, never in WDM-KS, which is what flips the stale flag).
      *
-     * <p>This is the hot-plug half of what {@link #refreshSnapshotBackends()}
-     * does for the operator's explicit scan, and the guard is the whole
-     * difference: the scan rebuilds unconditionally because somebody asked, this
-     * rebuilds only when the backend itself reports the hardware moved under it
+     * <p>The guard is load-bearing: it rebuilds only when the backend itself
+     * reports the hardware moved under it
      * ({@code AudioDeviceManager#deviceListStale}).
      * Without the guard a 2 s tick would re-initialise a native library twice a
      * second; without the rebuild a snapshot backend can never report a hot-plug

@@ -138,6 +138,9 @@ class BackendSelectionTest {
     @Test
     void selectingABackendAnswersItsWholeDevicesListEntry() {
         greet(session, CLIENT_NAME);
+        // The start-up priming scan ServerMain runs before the transports
+        // accept anything - backend.select answers from the last enumeration.
+        catalog.scan();
         int id = nextId();
 
         select(session, id, AudioBackendType.QA40X);

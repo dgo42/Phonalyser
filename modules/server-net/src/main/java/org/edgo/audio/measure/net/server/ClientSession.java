@@ -403,14 +403,17 @@ public final class ClientSession {
     }
 
     /** Spec 4.3: everything this server has, with each device's formats inlined
-     *  and the current lock state overlaid.  A fresh enumeration, on this
-     *  connection's own thread - the client asked, so the client waits.  The
-     *  ask is the operator's scan gesture, so the snapshot backends rebuild
-     *  first (see {@link DeviceCatalog#refreshSnapshotBackends()}). */
+     *  and the current lock state overlaid.  Answered from the hot-plug
+     *  watcher's LAST enumeration - the watcher re-scans the bench every two
+     *  seconds anyway, so a request answers in milliseconds instead of paying
+     *  a native walk over every backend, which is how one of these used to
+     *  hold the session's worker for seconds and time every queued request
+     *  out.  A device plugged or pulled reaches every client as
+     *  {@code ev.devices.changed} within one tick, and the locks and
+     *  calibration are overlaid fresh on every answer either way. */
     private void devicesList(int id) {
-        catalog.refreshSnapshotBackends();
         channel.send(new NetMessage(id,
-                codec.toNode(Map.of(NetFields.BACKENDS, catalog.scan()))));
+                codec.toNode(Map.of(NetFields.BACKENDS, catalog.lastScan()))));
     }
 
     /** Spec 4.3: an exclusive lock on the device and direction, or
