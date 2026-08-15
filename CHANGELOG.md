@@ -24,6 +24,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directions, and needs no device, no permission and no hardware at all. Where
   the desktop gives each lane a thread, a page has none, so both lanes are
   paced by timer callbacks against an absolute schedule.
+- **The QA40x is free the moment nothing measures with it.** The analyzer is
+  claimed while a measurement runs and handed back when the last of the
+  generator, the scope and the FFT stops - so the vendor software, a second
+  Phonalyser or another browser tab can have it without anything being
+  restarted. Reading its telemetry or its calibration page is atomic in the
+  same sense: the device is opened, read and released again, instead of the
+  panel keeping it for the life of the session. An analyzer another program
+  is holding is not offered as a local device at all, and reappears by itself
+  once it is free. Desktop and web alike.
+- **The analyzer's factory data is read once.** The calibration page - a
+  hundred and twenty-eight register round trips - and the telemetry reading
+  are kept per analyzer SERIAL NUMBER, so a panel that only displays values
+  touches no hardware, and a reopen after a release costs nothing. The device
+  scan maintains that store: an analyzer that has just appeared is read once,
+  one that has left the bus is forgotten, and a unit swapped for another of
+  the same model cannot inherit the first one's factors. The open no longer
+  resets the USB device either - the analyzer is taken as the operating system
+  initialised it.
 - **A standalone device scanner.** A small command-line tool that prints,
   for every audio backend of the running platform, the devices with the
   exact rates and depths they take - the same listing the app itself sees -
@@ -70,6 +88,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are no longer listed: the device combos, a server's device list and the
   scanner all show the same set. The system default entry stays, and
   Windows/macOS names are unchanged.
+- **A QA40x range nobody has chosen is the protected one.** A card created for
+  an analyzer that has never had a range selected now comes up at +42 dBV in
+  and -12 dBV out - maximum input attenuation and the low output range, the
+  same state every teardown parks to - instead of the vendor's 0 dBV / +18 dBV
+  pair. An unconfigured analyzer therefore starts protected rather than at full
+  input sensitivity. Desktop and web alike.
+- **The browser's tips are the browser's own.** The tip that advised picking a
+  driver backend for a faster oscilloscope described something a page cannot
+  do, so the web catalogue drops it; the desktop keeps it. A tip that promises
+  what its platform lacks is worse than no tip.
 - **Server downloads are the per-platform ZIPs alone.** Each ZIP already
   carries the server's fat jar beside the natives, the launcher and the
   service scripts; the separate bare jars were duplicate downloads and are no
@@ -77,6 +105,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The oscilloscope's Utility tab stayed English in every language.** Its
+  caption was the one of the eight tab captions built from a literal rather
+  than the message catalogue, so it never translated. Desktop and web alike.
 - **A typed 0 dBFS redisplayed as "-0 dBFS".** The amplitude fields store
   volts, and the conversion back to the sticky dBFS display could land a few
   1e-12 dB below exact zero - the formatter then kept the minus sign of the
