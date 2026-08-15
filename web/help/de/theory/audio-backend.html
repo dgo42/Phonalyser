@@ -119,6 +119,25 @@
      USB-Verbindung als 32-Bit-Wörter, deren obere 24 Bit das Signal tragen
      (das niederwertige Byte ist Null-Auffüllung), sodass die effektive
      Auflösung 24 Bit beträgt.</p>
+  <h3 id="qa40x-sharing">Wer den Analysator hält, und wie lange</h3>
+  <p>WebUSB beansprucht Schnittstelle 0 exklusiv, weshalb ein stehen gelassener
+     Anspruch den Analysator für die Lebensdauer der Seite jedem anderen
+     Programm entzieht. Der Browser hält den QA40x, solange eine Messung läuft,
+     und gibt ihn zurück, sobald der letzte von Generator, Oszilloskop und FFT
+     stoppt - die Herstellersoftware, die Desktop-Anwendung oder ein anderer Tab
+     können ihn dann übernehmen, ohne dass etwas neu gestartet wird. Auch die
+     Auswahl des Analysators hält ihn nicht mehr: Die Karte wird gelesen und das
+     Gerät im selben Schritt freigegeben, und die Telemetrie hinter dem
+     Einstellungsdialog wird ebenso genommen.</p>
+  <p>Was gelesen wurde, bleibt erhalten, sodass die Freigabe nichts kostet. Die
+     Kalibrierseite ist Werksdaten, die sich nicht ändern können, und sie wird
+     unter der SERIENNUMMER des Analysators zusammen mit dem letzten
+     Telemetriewert gehalten, sodass ein Dialog, der nur Werte anzeigt, keine
+     Hardware berührt und die nächste Messung erneut öffnet, ohne
+     einhundertachtundzwanzig Register noch einmal zu lesen. WebUSB liefert die
+     Seriennummer schon mit der Aufzählung, sodass ein vom Bus verschwundener
+     Analysator seine gespeicherte Seite verliert, ohne dass das Gerät überhaupt
+     geöffnet wird.</p>
   <h3 id="qa40x-ranges">Was ein "dBV"-Eingangsbereich wirklich ist</h3>
   <p>Der Analysator benennt seine Eingangsbereiche in dBV - <code>0 dBV</code>,
      <code>+18 dBV</code> und so fort - und wer diese Namen für
