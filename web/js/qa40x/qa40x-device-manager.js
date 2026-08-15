@@ -113,8 +113,8 @@ const BITS_PER_BYTE = 8;
  * (input 0 dBV, output +18 dBV), a deliberate pick per doc §9 item 11 (no hardware
  * power-on default; drivers disagree).
  */
-const DEFAULT_INPUT_DBV = 0;
-const DEFAULT_OUTPUT_DBV = 18;
+const DEFAULT_INPUT_DBV = SAFE_INPUT_DBV;
+const DEFAULT_OUTPUT_DBV = SAFE_OUTPUT_DBV;
 
 /** Real settle clock for the engine's ABA rate-write delay (§8); instant in tests. */
 const PRODUCTION_SLEEPER = (millis) => new Promise((resolve) => setTimeout(resolve, millis));
@@ -234,6 +234,13 @@ export class Qa40xDeviceManager {
 
   /** @type {?Object} the claimed transport; null until the device is opened. */
   #transport = null;
+  /** What each analyzer this page has opened told about itself, BY SERIAL: the factory
+   *  page and the last telemetry reading. The page cannot change, so it survives every
+   *  release - what ends when the analyzer is handed back is the CLAIM, not the data.
+   *  An entry goes when the unit leaves the bus (see #listDevices). */
+  #units = new Map();
+  /** The serial of the analyzer currently open, so the readings land in its entry. */
+  #openSerial = null;
   /** @type {?Qa40xCalibration} read once at open. */
   #calibration = null;
   /** @type {?string} a Qa40xModel name; null until the device is opened. */
@@ -359,11 +366,23 @@ export class Qa40xDeviceManager {
    */
   async #listDevices() {
     const out = [];
+    const attached = new Set();
     let index = 0;
     for (const device of await this.#finder.list()) {
+      if (device.serialNumber != null) {
+        attached.add(device.serialNumber);
+      }
       // Java passes model.name() as the name and the enum as the model; the web
       // model IS its name, so both arguments are that one string.
       out.push(new Qa40xDeviceRef(index++, device.model, device.model));
+    }
+    // What is on the bus decides what is remembered: a unit that has been unplugged
+    // keeps nothing here, so the one that comes back is read fresh. WebUSB hands the
+    // serial out with the enumeration, so this costs no open at all.
+    for (const serial of [...this.#units.keys()]) {
+      if (!attached.has(serial)) {
+        this.#units.delete(serial);
+      }
     }
     return out;
   }
@@ -681,6 +700,12 @@ export class Qa40xDeviceManager {
   }
 
   async #readDeviceInfo() {
+    const cached = this.#openSerial == null ? null : this.#units.get(this.#openSerial);
+    if (this.#transport == null && cached != null && cached.info != null) {
+      // Taken while this unit was open anyway, and a panel that opens must not cost
+      // the operator a USB cycle for a voltage display.
+      return cached.info;
+    }
     try {
       // Opening the device is what makes the registers readable at all: the session
       // opens lazily on the first capture, so without this the panel would only ever
@@ -702,8 +727,13 @@ export class Qa40xDeviceManager {
       const capability = formatCapability(await transport.registerRead(REG_CAPABILITY));
       const capability2 = formatCapability(await transport.registerRead(REG_CAPABILITY2));
       const serialNumber = formatSerialNumber(await transport.registerRead(REG_SERIAL_NUMBER));
-      return new Qa40xDeviceInfo(firmwareVersion, usbVoltage, usbCurrent, isoCurrent,
+      const info = new Qa40xDeviceInfo(firmwareVersion, usbVoltage, usbCurrent, isoCurrent,
         temperature, capability, capability2, serialNumber);
+      const unit = this.#openSerial == null ? null : this.#units.get(this.#openSerial);
+      if (unit != null) {
+        unit.info = info;
+      }
+      return info;
     } catch (error) {
       console.warn(`QA40x device info read failed: ${error}`);
       return Qa40xDeviceInfo.NONE;
@@ -858,7 +888,17 @@ export class Qa40xDeviceManager {
     try {
       // The OPEN path's own read + build + persist (#refreshDeviceCard), not a second builder:
       // one place derives a QA40x card from a cal page, whichever moment asks for it.
-      await this.#serialize(() => this.#ensureOpen());
+      //
+      // And HANDED BACK in the same step. Reading a card is not using the analyzer:
+      // WebUSB claims interface 0 exclusively, so a selection that left the claim
+      // standing locked the device out of every other program for the life of the
+      // page - merely switching the backend to QA40x, with nothing started, was
+      // enough to make the desktop refuse to open it.  A live session is untouched:
+      // the release is a no-op while lanes are attached.
+      await this.#serialize(async () => {
+        await this.#ensureOpen();
+        await this.#releaseIfIdle();
+      });
     } catch (e) {
       console.warn(`QA40x card sync: the local analyzer did not open - the full-scale card `
         + `stays as stored (${e && e.message})`);
@@ -979,8 +1019,19 @@ export class Qa40xDeviceManager {
       throw new Error('No QA402/QA403 attached (or WebUSB unavailable)');
     }
     this.#model = devices[0].model;
+    this.#openSerial = devices[0].serialNumber;
     this.#transport = await this.#finder.open();   // claims interface 0; enforces the single-device rule
-    this.#calibration = await Qa40xCalibration.fromTransport(this.#transport);
+    const known = this.#openSerial == null ? null : this.#units.get(this.#openSerial);
+    if (known != null) {
+      // This unit's own page, read before and unchanged since: factory data, and
+      // the slowest part of an open (a page select plus 128 register round trips).
+      this.#calibration = known.page;
+    } else {
+      this.#calibration = await Qa40xCalibration.fromTransport(this.#transport);
+      if (this.#openSerial != null) {
+        this.#units.set(this.#openSerial, { page: this.#calibration, info: null });
+      }
+    }
     this.#refreshDeviceCard();
     debug(`[qa40x] session open: ${this.#model}`
       + ` (input ${this.#inputRangeDbv} dBV, output ${this.#outputRangeDbv} dBV)`);
