@@ -93,46 +93,45 @@ class Qa40xReattachTest {
         assertTrue(first.ops.contains("close"),
                 "the handle to the analyzer that is no longer there was given up");
         manager.acquireEngine(RATE_HZ);
-        // Three, not two: the scan above both dropped the moved analyzer's cached
-        // calibration page and warmed the fresh unit's, and that warm cycle IS the
-        // second open (it opens, reads the page, parks and releases).  What this
-        // asserts is unchanged - the dead handle was given up and the next open
-        // ran the FINDER again rather than writing a handle the device no longer
-        // answers to, which is every operation failing until the process restarts.
-        assertEquals(3, bus.opens());
+        assertEquals(2, bus.opens(),
+                "and the next open ran the FINDER again - without this the manager "
+                        + "goes on writing a handle the device no longer answers to, "
+                        + "which is every operation failing until the process restarts");
         assertNotSame(first, bus.lastOpened(), "on the analyzer that is actually there");
     }
 
     /**
-     * The cached calibration page belongs to ONE analyzer, and the scan is what
-     * says so.
+     * A unit moved to another port keeps its calibration page: the SESSION goes,
+     * the DATA stays.
      *
-     * <p>The page is kept across releases because it is factory data - but only
-     * of the unit it was read from.  A unit swapped for another (or the same one
-     * back at another address, which is all this can tell) must never be
-     * described by the page still in memory: every full scale would be that other
-     * unit's, and nothing on screen would say so.  So the scan that finds the
-     * analyzer moved drops the cache with the session, and warms the fresh one.
+     * <p>The two identities are different things.  A handle is bound to the bus
+     * address it was opened on, so an analyzer that re-enumerated elsewhere makes
+     * that handle dead - which is what the discard above is for.  The factory
+     * page is bound to the ANALYZER, and the analyzer is what its serial number
+     * says it is; the same unit on another port has the same factors, and reading
+     * the page again would be a hundred and twenty-eight register round trips to
+     * learn what was already known.
      */
     @Test
-    void aMovedAnalyzerDoesNotAnswerWithTheCachedPage() {
+    void aReplugAtAnotherPortKeepsTheCachedPage() {
         Qa40xDeviceManager manager = new Qa40xDeviceManager(bus);
         manager.listInputDevices();                  // warms: one cycle on this unit
         assertEquals(1, bus.opens());
-        FakeTransport first = bus.lastOpened();
 
         bus.detach();
         bus.attach(ADDRESS_AFTER);
         manager.listInputDevices();                  // the scan the re-plug triggers
 
-        assertEquals(2, bus.opens(),
-                "the cache went with the unit that left, so the scan read the page "
-                        + "of the analyzer that is actually there");
-        assertNotSame(first, bus.lastOpened());
-        int opsAfterWarm = bus.lastOpened().ops.size();
-        manager.calibration(true);
-        assertEquals(opsAfterWarm, bus.lastOpened().ops.size(),
-                "and the fresh page answers from memory again");
+        assertEquals(1, bus.opens(),
+                "nothing had to be opened: the page is still this unit's, and the "
+                        + "enumeration opens a device only when it needs something");
+
+        manager.acquireEngine(RATE_HZ);              // the first real use afterwards
+
+        assertEquals(2, bus.opens(), "which does open it, at its new address");
+        assertTrue(bus.lastOpened().ops.size() < Qa40xCalibration.CAL_READ_COUNT,
+                "and the page was NOT read again - the serial says it is the same "
+                        + "analyzer, whatever port it hangs on");
     }
 
     /** And with nothing on the bus at all: the session goes, and the next open
@@ -254,6 +253,13 @@ class Qa40xReattachTest {
             }
             opened.add(transport);
             return transport;
+        }
+
+        /** The scan's single-attempt open reaches the same bus: this one has no
+         *  other process on it, so one pass and three are the same answer. */
+        @Override
+        public Qa40xTransport openWithoutRetry() {
+            return open();
         }
 
         private void setNativeFault(boolean fault) {

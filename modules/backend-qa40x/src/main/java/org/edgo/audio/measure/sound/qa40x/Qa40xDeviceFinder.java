@@ -140,11 +140,14 @@ public class Qa40xDeviceFinder {
      * left off the list; the machine that really has it serves it as a remote
      * backend.
      *
-     * <p>ONLY that code filters.  {@code ACCESS} / {@code BUSY} answers stay
-     * listed - they are what an analyzer this process (or another) is actively
-     * holding says, and dropping those would empty the combo mid-measurement.
-     * The probe handle claims nothing and is closed at once, so it never
-     * disturbs a running session.
+     * <p>ONLY that code filters HERE.  An {@code ACCESS} / {@code BUSY} answer is
+     * what a device somebody is actively holding says, and this probe cannot tell
+     * whose it is - the holder may be this very process, whose own device must
+     * never vanish from its own list mid-measurement.  That verdict therefore
+     * belongs to the caller that knows: the manager's scan, which has just tried
+     * to open the analyzer once and knows whether the session is its own.  The
+     * probe handle claims nothing and is closed at once, so it never disturbs a
+     * running session.
      */
     private boolean openableHere(LibUsb.Lib lib, Pointer device, Qa40xModel model) {
         PointerByReference handleRef = new PointerByReference();
@@ -203,6 +206,26 @@ public class Qa40xDeviceFinder {
             }
         }
         throw last;
+    }
+
+    /**
+     * ONE open attempt - no retry, no settle: the answer to "can this process
+     * have the analyzer right now", for a caller that is only asking.
+     *
+     * <p>The retry loop above exists for the macOS re-enumeration race an
+     * operator's own open must survive, and it pays {@link #RESET_SETTLE_MS} for
+     * each pass it needs.  A background scan asking about a device another
+     * process holds would pay all of them, every scan, for an answer that cannot
+     * change in half a second: the refusal comes from {@code libusb_open} itself,
+     * before the reset, so there is no race to wait out.  So the scan asks once
+     * and comes back on its next pass; the user-facing {@link #open()} keeps the
+     * loop it needs.
+     */
+    public Qa40xTransport openWithoutRetry() {
+        if (!LibUsb.available()) {
+            throw new IllegalStateException("libusb-1.0 not available - cannot open a QA40x device");
+        }
+        return openOnce(true);
     }
 
     /**

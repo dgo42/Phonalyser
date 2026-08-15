@@ -85,6 +85,9 @@ class Qa40xDeviceManagerTest {
     /** Where {@link #analyzerOn} says its analyzer sits. */
     private static final int ATTACHED_BUS = 1;
     private static final int ATTACHED_ADDRESS = 5;
+    /** A serial-register word that is NOT the zero a fresh fake answers, so a
+     *  second analyzer is a different analyzer to anything that compares them. */
+    private static final int OTHER_SERIAL_WORD = 0x4A5B;
     /** The parked positions, as register codes on the wire: input code 7 is
      *  +42 dBV (the attenuator relay engaged) and output code 0 is −12 dBV. */
     private static final FakeTransport.RegWrite PARKED_INPUT = new FakeTransport.RegWrite(5, 7);
@@ -191,6 +194,13 @@ class Qa40xDeviceManagerTest {
 
             @Override
             public Qa40xTransport open() {
+                return transport;
+            }
+
+            /** The same analyzer to the scan's single-attempt open - this bench
+             *  has nobody else on it to lose a race with. */
+            @Override
+            public Qa40xTransport openWithoutRetry() {
                 return transport;
             }
         };
@@ -837,6 +847,177 @@ class Qa40xDeviceManagerTest {
     }
 
     /**
+     * The one swap a bus address cannot see: another unit of the same model, on
+     * the same port, answering a different serial number.
+     *
+     * <p>The cached page is keyed by what the analyzer calls ITSELF, so the
+     * mismatch re-reads it.  Reused, it would describe this analyzer with the
+     * other one's factory factors - every full scale wrong by whatever the two
+     * units differ by, and nothing on screen to say so.
+     */
+    @Test
+    void aDifferentSerialAtTheSameAddressIsNotTheCachedAnalyzer() throws Exception {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+        mgr.listInputDevices();                      // warms the page of the unit there
+        int opsAfterWarm = fake.ops.size();
+
+        // The next open finds another unit: the serial register answers something
+        // else (it is the first register an open reads).
+        fake.readReplies.add(OTHER_SERIAL_WORD);
+        AudioCapture rec = mgr.openCapture(null, RATE_HZ, BITS);
+        rec.open();
+
+        assertTrue(fake.ops.size() - opsAfterWarm > Qa40xCalibration.CAL_READ_COUNT,
+                "the page was read again, all of it");
+    }
+
+    /**
+     * A bench with two analyzers on it keeps two pages, each under the serial of
+     * the unit that answered it.
+     *
+     * <p>One cache for "the analyzer" would hand whichever unit was opened last
+     * the factors of the one before it - a full scale wrong by the difference
+     * between two units, on a bench where swapping them is the ordinary way to
+     * compare them.  So each is read once, and each answers with its own.
+     */
+    @Test
+    void twoAnalyzersEachKeepTheirOwnPage() throws Exception {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+        mgr.listInputDevices();                          // the first unit: page of zeros
+        double factorOfFirst = mgr.calibration(true).get(0).left();
+
+        // The other unit is on the bench now: its own serial, its own page.
+        answerPage(fake, OTHER_SERIAL_WORD, syntheticBlob());
+        runOneCapture(mgr);
+        double factorOfSecond = mgr.calibration(true).get(0).left();
+
+        assertNotEquals(factorOfFirst, factorOfSecond,
+                "each analyzer answers with the factors IT was calibrated with");
+        int opsAfterSecond = fake.ops.size();
+
+        // And back to the first, which says the serial it said before.
+        runOneCapture(mgr);
+
+        assertEquals(factorOfFirst, mgr.calibration(true).get(0).left(), TOL,
+                "its own page again, not the other unit's");
+        assertTrue(fake.ops.size() - opsAfterSecond < Qa40xCalibration.CAL_READ_COUNT,
+                "and it was not read again - the entry was still there under its serial");
+    }
+
+    // --- an analyzer another process holds does not exist ----------------------
+
+    /**
+     * A QA40x another process has claimed is left out of the lists entirely.
+     *
+     * <p>It cannot be measured with from here - the open would be refused - so
+     * offering it only moves that refusal into the middle of somebody's
+     * measurement, after they picked it in a combo.
+     *
+     * <p>And the verdict costs ONE attempt: the refusal comes from
+     * {@code libusb_open} before any reset, so there is no re-enumeration race to
+     * wait out and the finder's retrying open - three passes with a settle
+     * between them, on the thread holding the manager's monitor - is never used
+     * for it.
+     */
+    @Test
+    void anAnalyzerAnotherProcessHoldsIsNotOfferedAtAll() {
+        HeldAnalyzer bus = new HeldAnalyzer(new FakeTransport());
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(bus);
+
+        assertTrue(mgr.listInputDevices().isEmpty(),
+                "a device that cannot be opened is not a device this host can offer");
+        assertEquals(1, bus.singleAttempts, "asked once");
+        assertEquals(0, bus.retryingOpens,
+                "and never through the retrying open, whose settles would be paid on "
+                        + "every scan for an answer that cannot change in half a second");
+
+        assertTrue(mgr.listOutputDevices().isEmpty(), "the same analyzer, either direction");
+        assertEquals(2, bus.singleAttempts, "each scan asks once - and only once");
+    }
+
+    /** Nothing is remembered against it, so it comes back by itself: the scan
+     *  after the other process lets go lists it and warms it in the same pass. */
+    @Test
+    void aFreedAnalyzerIsListedAndWarmedByTheNextScan() {
+        FakeTransport fake = new FakeTransport();
+        HeldAnalyzer bus = new HeldAnalyzer(fake);
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(bus);
+        assertTrue(mgr.listInputDevices().isEmpty());
+
+        bus.held = false;
+
+        assertEquals(1, mgr.listInputDevices().size(),
+                "no verdict was kept against the device - the next cheap attempt is "
+                        + "what notices that it is free");
+        assertEquals(1, Collections.frequency(fake.ops, "close"),
+                "and that same scan warmed it: opened, read, parked, released");
+    }
+
+    /** The analyzer THIS process is measuring with stays listed.  It is blocked
+     *  for everyone else, which is not the same thing as being unusable here -
+     *  and a device that vanished from its owner's own combo mid-measurement is
+     *  the fault this distinction exists for. */
+    @Test
+    void theAnalyzerThisProcessIsUsingIsAlwaysListed() throws Exception {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+        AudioCapture rec = mgr.openCapture(null, RATE_HZ, BITS);
+        rec.open();
+        rec.startRecording();
+
+        assertEquals(1, mgr.listInputDevices().size());
+
+        rec.stopRecording();
+        rec.close();
+    }
+
+    /**
+     * A bus whose analyzer another process holds until {@link #held} is cleared.
+     *
+     * <p>Counts the two kinds of open separately, so a test can prove the scan
+     * asked once through the single-attempt seam and never through the retrying
+     * one - the point being the settle delays the retry loop would pay.
+     */
+    private static final class HeldAnalyzer extends Qa40xDeviceFinder {
+
+        private final FakeTransport transport;
+        private int singleAttempts;
+        private int retryingOpens;
+        private boolean held = true;
+
+        private HeldAnalyzer(FakeTransport transport) {
+            this.transport = transport;
+        }
+
+        @Override
+        public List<Qa40xDevice> list() {
+            return List.of(new Qa40xDevice(Qa40xModel.QA403, ATTACHED_BUS, ATTACHED_ADDRESS));
+        }
+
+        @Override
+        public Qa40xTransport open() {
+            retryingOpens++;
+            return answer();
+        }
+
+        @Override
+        public Qa40xTransport openWithoutRetry() {
+            singleAttempts++;
+            return answer();
+        }
+
+        /** What libusb answers for a device somebody else has open. */
+        private Qa40xTransport answer() {
+            if (held) {
+                throw new IllegalStateException("libusb_open failed: LIBUSB_ERROR_ACCESS (-3)");
+            }
+            return transport;
+        }
+    }
+
+    /**
      * A detach that FAULTED leaves the lane to be torn down again.
      *
      * <p>The desktop's play thread ends in {@code Closeables.closeQuietly(lane)}
@@ -925,6 +1106,27 @@ class Qa40xDeviceManagerTest {
     }
 
     // --- helpers -------------------------------------------------------------
+
+    /** One whole capture session: opens the analyzer, streams, and gives it back
+     *  - which is how a test puts a particular unit in the manager's hands. */
+    private void runOneCapture(Qa40xDeviceManager mgr) throws Exception {
+        AudioCapture rec = mgr.openCapture(null, RATE_HZ, BITS);
+        rec.open();
+        rec.startRecording();
+        rec.stopRecording();
+        rec.close();
+    }
+
+    /** Queues what an analyzer answers to the reads of one open, in the order the
+     *  manager makes them: its serial first, then the 128 words of its
+     *  calibration page. */
+    private void answerPage(FakeTransport fake, int serialWord, byte[] page) {
+        fake.readReplies.add(serialWord);
+        ByteBuffer words = ByteBuffer.wrap(page).order(ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < Qa40xCalibration.CAL_READ_COUNT; i++) {
+            fake.readReplies.add(words.getInt());
+        }
+    }
 
     private int leInt(byte[] b, int o) {
         return (b[o] & 0xFF) | (b[o + 1] & 0xFF) << 8 | (b[o + 2] & 0xFF) << 16 | b[o + 3] << 24;
