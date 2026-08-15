@@ -2937,29 +2937,42 @@ public final class PreferencesDialog {
          * device itself supplied.  An ordinary local card that merely shares a
          * name with one of the server's can therefore never put its own ranges,
          * and its own full scales, under a device calibrated on another machine.
+         *
+         * <p><b>For a device-calibrated card the WORKING COPY outranks the
+         * bench's {@code cards.list} parse.</b>  Both describe the same analyzer,
+         * but the {@code cards.list} answer is a detached throwaway: a range
+         * radio moving it moves nothing anyone reads, while the analyzer's
+         * settings panel commits its range deltas from the working-copy card it
+         * rendered at selection time.  Rendering that same object is what makes
+         * a radio click and the OK-time comparison see one card.
          */
         private AudioDeviceProfile rangeCard() {
             AudioDeviceProfile p;
             if (remoteCards) {
                 String dev = deviceName();
-                // The BENCH's own card first (spec 4.3 v1.1: `cards.list` carries
+                // The device-provided card FIRST - the one the QA40x settings
+                // panel rendered into the working copy from the analyzer's own
+                // factors, resolved by the DEVICE it belongs to, never by a bench
+                // card's NAME.  It outranks the bench's cards.list copy because
+                // the panel's commit compares exactly this object against the
+                // bench's in-force positions: the range radios must move the card
+                // the OK reads, or a click lands on a throwaway parse, the
+                // comparison sees no change, and no range write ever leaves the
+                // dialog.
+                p = dev == null ? null : edit.resolveDeviceProfile(dev);
+                if (p != null && endpointOf(p).isCalibrationFromDevice()) {
+                    return endpointOf(p).getRanges().isEmpty() ? null : p;
+                }
+                // Else the BENCH's own card (spec 4.3 v1.1: cards.list carries
                 // each card's content).  It is the card actually in force there,
-                // rows and active marker included, so the table shows the truth for
-                // an ordinary bench card too - and its radios have something real
-                // to move (`device.setActiveRange`).
+                // rows and active marker included, so the table shows the truth
+                // for an ordinary bench card - and its radios have something real
+                // to move (device.setActiveRange).  An ordinary LOCAL card that
+                // merely shares a bench card's name is never rendered here.
                 BackendKey bench = edit.getSelectedBackend();
                 DeviceRef ref = dev == null ? null : refFor(refs(), dev);
                 p = bench == null ? null
                         : benchCards.card(bench, benchCards.boundCard(bench, ref, dev));
-                if (p != null) {
-                    return endpointOf(p).getRanges().isEmpty() ? null : p;
-                }
-                // Else the device-provided card the QA40x settings panel rendered
-                // into the working copy from the analyzer's own factors - resolved
-                // by the DEVICE it belongs to, never by a bench card's NAME, and
-                // shown only when the device itself supplied it.
-                p = dev == null ? null : edit.resolveDeviceProfile(dev);
-                if (p != null && !endpointOf(p).isCalibrationFromDevice()) return null;
             } else {
                 p = selectedName == null ? null : edit.findAudioDeviceProfile(selectedName);
             }
@@ -3113,8 +3126,11 @@ public final class PreferencesDialog {
          *
          * <p>A {@code calibrationFromDevice} endpoint is deliberately NOT staged
          * here: a QA40x's attenuator is the DEVICE's own state and spec 4.6 owns
-         * it - that path still rides {@code DEVICE_ACTIVE_RANGE_CHANGED} into the
-         * analyzer's own range commands, and sending both would move it twice.
+         * it.  That path is committed by the analyzer's own settings panel, which
+         * compares the staged position against the one the bench reported in
+         * force and sends {@code qa40x.setInputRange} /
+         * {@code qa40x.setOutputRange} on this dialog's OK; staging it here as
+         * well would move the same attenuator twice.
          */
         private void stageBenchRange(DeviceEndpointConfig ep, String label, Channel side) {
             BackendKey bench = edit.getSelectedBackend();
