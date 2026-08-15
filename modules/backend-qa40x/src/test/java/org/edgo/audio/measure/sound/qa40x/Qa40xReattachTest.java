@@ -115,16 +115,16 @@ class Qa40xReattachTest {
     @Test
     void aReplugAtAnotherPortKeepsTheCachedPage() {
         Qa40xDeviceManager manager = new Qa40xDeviceManager(bus);
-        manager.listInputDevices();                  // warms: one cycle on this unit
+        manager.refreshDeviceList();                 // warms: one cycle on this unit
         assertEquals(1, bus.opens());
 
         bus.detach();
         bus.attach(ADDRESS_AFTER);
-        manager.listInputDevices();                  // the scan the re-plug triggers
+        manager.listInputDevices();                  // asking what is attached
 
         assertEquals(1, bus.opens(),
-                "nothing had to be opened: the page is still this unit's, and the "
-                        + "enumeration opens a device only when it needs something");
+                "nothing had to be opened: a client's device list is the enumeration "
+                        + "and nothing more");
 
         manager.acquireEngine(RATE_HZ);              // the first real use afterwards
 
@@ -242,7 +242,7 @@ class Qa40xReattachTest {
 
         @Override
         public List<Qa40xDevice> list() {
-            return List.copyOf(attached);
+            return new ArrayList<>(attached);
         }
 
         @Override

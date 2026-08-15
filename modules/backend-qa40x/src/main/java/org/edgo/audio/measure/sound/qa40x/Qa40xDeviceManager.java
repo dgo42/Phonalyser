@@ -19,10 +19,12 @@
 package org.edgo.audio.measure.sound.qa40x;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 
 import javax.sound.sampled.AudioFormat;
@@ -125,6 +127,10 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
      *  {@code LIBUSB_ERROR_IO} until the process is restarted.  See
      *  {@link #dropSessionIfMoved}. */
     private Qa40xDevice       openSession;
+    /** The analyzers the last scan could not have - held by another process, or
+     *  gone while it asked.  Not offered as local devices: nothing here can use
+     *  them, and the next scan is what lets them back in. */
+    private final Set<Qa40xDevice> unusable = new HashSet<>();
     /**
      * What each analyzer this process has opened told about itself, BY SERIAL
      * NUMBER - the factory page and the last reading, per unit.
@@ -221,19 +227,12 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
         // still the analyzer on the bus - see dropSessionIfMoved for why a scan
         // is the right place and what it costs not to.
         dropSessionIfMoved(attached);
-        Qa40xDevice heldElsewhere = warmFromScan(attached);
+        if (!unusable.isEmpty()) {
+            attached.removeAll(unusable);
+        }
         List<DeviceRef> out = new ArrayList<>();
         int index = 0;
         for (Qa40xDevice device : attached) {
-            if (device.equals(heldElsewhere)) {
-                // Another process has it, so for this one it does not exist: a
-                // device that cannot be opened cannot be measured with, and
-                // offering it only moves the refusal to the middle of somebody's
-                // measurement.  Nothing is remembered about it - the next scan
-                // asks again, with one cheap attempt, and lists it the moment the
-                // other process lets go.
-                continue;
-            }
             out.add(new Qa40xDeviceRef(index++, device.model().name(), device.model(),
                     device.toString()));
         }
@@ -261,38 +260,90 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
      * @return the analyzer another process is holding, which this scan must not
      *         offer, or {@code null} when there is none
      */
-    private synchronized Qa40xDevice warmFromScan(List<Qa40xDevice> attached) {
-        if (attached.isEmpty()) {
-            return null;
+    /** The serial an entry is filed under. */
+    private String keyOf(CachedUnit unit) {
+        for (Map.Entry<String, CachedUnit> entry : units.entrySet()) {
+            if (entry.getValue() == unit) {
+                return entry.getKey();
+            }
         }
-        if (transport != null) {
+        return null;
+    }
+
+    /**
+     * The operator's device scan: what is on the bus decides what this manager
+     * knows.  Every analyzer it cannot yet name is opened once - the serial lives
+     * in a register, so that is the only way to ask - and every entry whose unit
+     * is no longer there is dropped, page and reading with it.
+     *
+     * <p>Deliberately NOT part of listing devices: a client asking what is
+     * attached pays the enumeration and nothing else.
+     */
+    @Override
+    public boolean refreshDeviceList() {
+        scanUnits(new ArrayList<>(finder.list()));
+        return true;
+    }
+
+    private synchronized void scanUnits(List<Qa40xDevice> attached) {
+        Set<String> scanned = new HashSet<>();
+        unusable.clear();
+        for (Qa40xDevice device : attached) {
+            String serial = readSerialOf(device);
+            if (serial != null) {
+                scanned.add(serial);
+            } else {
+                // Held by another process, or gone between the enumeration and
+                // this line: either way it is not a device this process has.
+                unusable.add(device);
+            }
+        }
+        units.keySet().retainAll(scanned);
+        if (inHand != null && !units.containsValue(inHand)) {
+            inHand = null;
+        }
+    }
+
+    /**
+     * What the analyzer at this address calls itself - the one thing a scan has
+     * to ask the device for, since the serial lives in a register and no
+     * descriptor carries it.
+     *
+     * <p>An analyzer this manager already has open answers for free.  Otherwise
+     * it is opened - no reset, so this costs the claim and one register read -
+     * and released again at once; the first such open of a unit also reads its
+     * factory page, every later one finds the page already filed under that
+     * serial and reads nothing more.
+     *
+     * <p>Null means the scan could not name the device: another process holds it
+     * or it would not answer at all.  Either way it keeps no entry and is not a
+     * device this process has.
+     */
+    private String readSerialOf(Qa40xDevice device) {
+        if (transport != null && device.equals(openSession)) {
             refreshTelemetry();              // free: the device is already open
-            return null;                     // ours: blocked for others, not for us
-        }
-        if (inHand != null) {
-            return null;                     // warm, so there is nothing to open for
+            return keyOf(inHand);
         }
         try {
             onTheDevice(() -> {
-                ensureOpen(false);           // the page, and the card behind it
+                ensureOpen(false);
                 return null;
             });
+            return keyOf(inHand);
         } catch (Throwable t) {
             if (classifyFailure(t) == DeviceFailureReason.DEVICE_IN_USE) {
                 if (log.isInfoEnabled()) {
                     log.info("QA40x {} is held by another process - not offered as a "
-                            + "local device until it is free", attached.get(0));
+                            + "local device until it is free", device);
                 }
-                return attached.get(0);
+            } else if (log.isDebugEnabled()) {
+                log.debug("QA40x {} did not answer this scan ({}); the next one asks again",
+                        device, t.toString());
             }
-            if (log.isDebugEnabled()) {
-                log.debug("QA40x cache warm skipped ({}); the next scan tries again",
-                        t.toString());
-            }
+            return null;
         } finally {
-            releaseIfIdle();                 // the reading is taken by the park
+            releaseIfIdle();
         }
-        return null;
     }
 
     @Override

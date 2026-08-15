@@ -189,7 +189,10 @@ class Qa40xDeviceManagerTest {
         return new Qa40xDeviceFinder() {
             @Override
             public List<Qa40xDevice> list() {
-                return List.of(new Qa40xDevice(Qa40xModel.QA403, ATTACHED_BUS, ATTACHED_ADDRESS));
+                // Modifiable, like the finder's own answer: the scan takes the
+                // devices it cannot open out of it.
+                return new ArrayList<>(
+                        List.of(new Qa40xDevice(Qa40xModel.QA403, ATTACHED_BUS, ATTACHED_ADDRESS)));
             }
 
             @Override
@@ -774,7 +777,7 @@ class Qa40xDeviceManagerTest {
         FakeTransport fake = new FakeTransport();
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
 
-        mgr.listInputDevices();
+        mgr.refreshDeviceList();
 
         assertEquals(1, Collections.frequency(fake.ops, "close"),
                 "exactly one cycle: opened, read, parked, released - the scan does "
@@ -785,8 +788,8 @@ class Qa40xDeviceManagerTest {
         mgr.listInputDevices();
 
         assertEquals(opsAfterWarm, fake.ops.size(),
-                "and the second scan touches the device not at all - a factory page "
-                        + "cannot have changed since the first");
+                "and asking what is attached touches the device not at all - a "
+                        + "client's list is the enumeration and nothing more");
     }
 
     /** What the warm cache is for: the answer is arithmetic over a page already
@@ -795,7 +798,7 @@ class Qa40xDeviceManagerTest {
     void aWarmCalibrationReadTouchesTheDeviceNotAtAll() {
         FakeTransport fake = new FakeTransport();
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
-        mgr.listInputDevices();
+        mgr.refreshDeviceList();
         int opsAfterWarm = fake.ops.size();
 
         List<Qa40xControl.CalibrationRow> rows = mgr.calibration(true);
@@ -834,7 +837,7 @@ class Qa40xDeviceManagerTest {
     void telemetryIsAnsweredFromTheLastReadingAfterTheSessionClosed() {
         FakeTransport fake = new FakeTransport();
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
-        mgr.listInputDevices();
+        mgr.refreshDeviceList();
         int opsAfterWarm = fake.ops.size();
 
         Qa40xDeviceInfo info = mgr.readDeviceInfo();
@@ -926,15 +929,18 @@ class Qa40xDeviceManagerTest {
         HeldAnalyzer bus = new HeldAnalyzer(new FakeTransport());
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(bus);
 
+        mgr.refreshDeviceList();
+
         assertTrue(mgr.listInputDevices().isEmpty(),
                 "a device that cannot be opened is not a device this host can offer");
-        assertEquals(1, bus.singleAttempts, "asked once");
+        assertEquals(1, bus.singleAttempts, "the scan asked once");
         assertEquals(0, bus.retryingOpens,
                 "and never through the retrying open, whose settles would be paid on "
                         + "every scan for an answer that cannot change in half a second");
 
         assertTrue(mgr.listOutputDevices().isEmpty(), "the same analyzer, either direction");
-        assertEquals(2, bus.singleAttempts, "each scan asks once - and only once");
+        assertEquals(1, bus.singleAttempts,
+                "and listing devices asks the bus nothing at all - only a scan does");
     }
 
     /** Nothing is remembered against it, so it comes back by itself: the scan
@@ -944,13 +950,15 @@ class Qa40xDeviceManagerTest {
         FakeTransport fake = new FakeTransport();
         HeldAnalyzer bus = new HeldAnalyzer(fake);
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(bus);
+        mgr.refreshDeviceList();
         assertTrue(mgr.listInputDevices().isEmpty());
 
         bus.held = false;
+        mgr.refreshDeviceList();
 
         assertEquals(1, mgr.listInputDevices().size(),
-                "no verdict was kept against the device - the next cheap attempt is "
-                        + "what notices that it is free");
+                "no verdict was kept against the device - the next scan's cheap "
+                        + "attempt is what notices that it is free");
         assertEquals(1, Collections.frequency(fake.ops, "close"),
                 "and that same scan warmed it: opened, read, parked, released");
     }
@@ -993,7 +1001,8 @@ class Qa40xDeviceManagerTest {
 
         @Override
         public List<Qa40xDevice> list() {
-            return List.of(new Qa40xDevice(Qa40xModel.QA403, ATTACHED_BUS, ATTACHED_ADDRESS));
+            return new ArrayList<>(
+                    List.of(new Qa40xDevice(Qa40xModel.QA403, ATTACHED_BUS, ATTACHED_ADDRESS)));
         }
 
         @Override
