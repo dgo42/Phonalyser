@@ -18,24 +18,15 @@
 
 package org.edgo.audio.measure.gui.backend.qa40x;
 
-import lombok.extern.log4j.Log4j2;
-
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.gui.bus.ActiveRange;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 
-import org.edgo.audio.measure.gui.common.RemoteBackendRegistry;
-import org.edgo.audio.measure.gui.common.RemoteBackendUi;
-import org.edgo.audio.measure.net.proto.MessageType;
-import org.edgo.audio.measure.net.proto.NetFields;
-import org.edgo.audio.measure.preferences.BackendKey;
-import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceManager;
 import org.edgo.audio.measure.sound.qa40x.Qa40xProtocol;
 
-import java.util.Map;
 import java.util.function.Consumer;
 
 /**
@@ -51,16 +42,15 @@ import java.util.function.Consumer;
  * - and the event is published AFTER the Preferences commit, so that state is the
  * committed one.
  *
- * <p><b>The bench, not the cable.</b>  A QA403 wired to this machine and one
- * reached on a Phonalyser server are the same analyzer with the same attenuator,
- * so both are re-ranged, exactly as {@link Qa40xRateConstraint} constrains both
- * clocks.  Locally that means {@link AudioBackendType#QA40X} is the active backend
- * and the device is open, and the change goes to the open device's card - the
- * manager applies it (a live session restart, or the stored range for the next
- * open).  Remotely the selected bench is a remote QA40x, and the change goes over
- * the net protocol's range commands (spec 4.6).
+ * <p><b>The LOCAL analyzer only.</b>  This is the USB path: {@link
+ * AudioBackendType#QA40X} is the active backend, the device is open, and the
+ * change goes to the open device's card - the manager applies it (a live session
+ * restart, or the stored range for the next open).  An analyzer on a server is
+ * re-ranged by the settings panel's own commit, which compares the staged
+ * position against the one that bench reported in force and sends spec 4.6's
+ * range commands itself ({@link Qa40xSettingsUi#commitEdit()}); routing it
+ * through here as well would move the same attenuator twice.
  */
-@Log4j2
 public final class Qa40xRangeController {
 
     /** Not a valid full-scale dBV - a range label the QA40x code maps don't
@@ -93,45 +83,11 @@ public final class Qa40xRangeController {
                 : Qa40xProtocol.outputRangeDbvValues();
         int dbv = Qa40xProtocol.rangeDbv(change.getActiveRangeLabel(), candidates, NO_RANGE);
         if (dbv == NO_RANGE) return;                              // not a QA40x range label
-        BackendKey selected = Preferences.instance().getSelectedBackend();
-        if (selected != null && selected.remote() && selected.type() == AudioBackendType.QA40X) {
-            sendToBench(selected, change.isInput(), dbv);
-            return;
-        }
         AudioBackend backend = AudioBackend.instance();
         if (backend.active() != AudioBackendType.QA40X) return;   // only QA40x re-ranges hardware
         Qa40xDeviceManager manager = (Qa40xDeviceManager) backend.qa40xManager();
         String cardName = manager.cardName();
         if (cardName == null) return;                             // device not open - next open reads the store
         manager.applyActiveRangeChange(backend.active(), cardName, change.isInput(), dbv);
-    }
-
-    /**
-     * The same re-range on an analyzer that is not in this room: net protocol 4.6
-     * makes {@code qa40x.setInputRange} / {@code qa40x.setOutputRange} the
-     * attenuator, and the write is LOCKED because the bench requires the
-     * analyzer's device lock for it (nothing here holds one - the modules are
-     * stopped while Preferences is open).
-     *
-     * <p>There is no card to match against, unlike the local branch: a remote
-     * selection names ONE backend of ONE server, so the analyzer this event
-     * belongs to is the analyzer that selection reaches.  The label having
-     * resolved to a QA40x range dBV at all is what says the row describes this
-     * hardware.
-     */
-    private void sendToBench(BackendKey bench, boolean input, int dbv) {
-        RemoteBackendUi remote = RemoteBackendRegistry.instance().getUi();
-        if (remote == null) return;
-        MessageType request = input
-                ? MessageType.QA40X_SET_INPUT_RANGE
-                : MessageType.QA40X_SET_OUTPUT_RANGE;
-        // A locked write is three round trips (acquire, the write, release),
-        // DIRECT on the caller's thread and bounded by the wire timeouts.
-        Map<String, Object> answer = remote.callLocked(bench, request.getWire(),
-                Map.of(NetFields.DBV, dbv));
-        if (answer == null && log.isWarnEnabled()) {
-            log.warn("QA40x range: {} did not take the {} range {} dBV", bench.key(),
-                    input ? "input" : "output", dbv);
-        }
     }
 }

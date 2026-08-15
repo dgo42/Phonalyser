@@ -77,9 +77,22 @@ import lombok.extern.log4j.Log4j2;
  * is exactly why this is not a {@code SubPreferences} block.  A persistence
  * interface implemented for its lifecycle callbacks would have this panel storing
  * an empty section in every user's preferences file to learn one UI event.
+ *
+ * <p>The bench's ATTENUATOR is staged the same way and sent from the same OK: the
+ * ranges the analyzer reported in force when its panel was selected are kept
+ * here, and a row the operator moved to a different position becomes a
+ * {@code qa40x.setInputRange} / {@code qa40x.setOutputRange} write.  It has to be
+ * compared against the BENCH's values - the card of that name in this
+ * installation's store describes a local analyzer, and comparing against it is
+ * what swallowed a remote range change as "no change" and sent nothing.
  */
 @Log4j2
 public final class Qa40xSettingsUi implements BackendSettingsUi {
+
+    /** Not a valid full-scale dBV: a range label the QA40x code maps do not
+     *  recognise resolves to this, and a row that describes no analyzer position
+     *  is nothing to send. */
+    private static final int NO_RANGE = Integer.MIN_VALUE;
 
     /** Non-null only between {@link #showForCapture} and {@link #close} - the
      *  screenshot automation needs the instance to survive across calls.  The
@@ -106,6 +119,24 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
      *  with.  So the card is undone at commit: restored to whatever the operator's
      *  own store held, or removed when it held nothing. */
     private final Map<String, AudioDeviceProfile> syncedCards = new LinkedHashMap<>();
+    /** The remote selection the values below were read from, and the card they
+     *  were rendered into - so a range the operator stages is compared against
+     *  the analyzer those numbers describe, and sent to that same bench. */
+    private BackendKey syncedBench;
+    private String syncedCardName;
+    /** What the bench reported IN FORCE when its panel was selected
+     *  ({@code qa40x.ranges}, spec 4.6).
+     *
+     *  <p>The only honest thing a staged choice can be compared against.  The
+     *  card in this installation's store describes a LOCAL analyzer of the same
+     *  model, and comparing against that is how a range change for a bench came
+     *  to be swallowed as "no change" and never sent at all.
+     *
+     *  <p>Null when that read did not answer - and then nothing is sent for
+     *  ranges, because there is no in-force value to differ from and a guess
+     *  would move an attenuator nobody asked to move. */
+    private Integer benchInputDbv;
+    private Integer benchOutputDbv;
 
     @Override
     public AudioBackendType backendType() {
@@ -147,7 +178,9 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
      * otherwise would re-create exactly the display lie this sync exists to end
      * (the attenuator shown as 18 dBV while the output was driven to its full
      * scale).  Committing a DIFFERENT range stays the operator's move, on the
-     * dialog's OK, through the range controller - unchanged.
+     * dialog's OK: those two values are kept here and are what
+     * {@link #commitEdit()} compares the staged row against before it sends
+     * {@code qa40x.setInputRange} / {@code qa40x.setOutputRange}.
      *
      * <p>A local selection is left alone: its card is built from the EEPROM by
      * the device manager when the analyzer opens.  A bench that will not answer
@@ -202,6 +235,12 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
         syncedInto = editCopy;
         syncedCards.putIfAbsent(cardName, editCopy.findAudioDeviceProfile(cardName));
         editCopy.putAudioDeviceProfile(card);
+        // Kept, not just rendered: what the analyzer is running under NOW is what
+        // the operator's staged choice has to be measured against on OK.
+        syncedBench = selection;
+        syncedCardName = cardName;
+        benchInputDbv = activeIn;
+        benchOutputDbv = activeOut;
         if (log.isInfoEnabled()) {
             log.info("QA40x card sync: '{}' calibrated from the bench, in {} dBV / out {} dBV",
                     cardName, activeIn, activeOut);
@@ -341,6 +380,17 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
         // one went away with it.
         syncedInto = null;
         syncedCards.clear();
+        forgetBenchRanges();
+    }
+
+    /** Drops the synced selection's in-force ranges: once they have been compared
+     *  and sent - or once a new dialog session starts - they describe a state
+     *  nobody has read since, and a stale one would decide a later comparison. */
+    private void forgetBenchRanges() {
+        syncedBench = null;
+        syncedCardName = null;
+        benchInputDbv = null;
+        benchOutputDbv = null;
     }
 
     /**
@@ -373,37 +423,108 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
         syncedCards.clear();
     }
 
-    /** The operator pressed OK - the one moment a remote analyzer may be told to
-     *  switch its front-panel port.  The write is a request like any other: a
-     *  bench that has gone away in the meantime simply does not get it, and the
-     *  panel reads the real state again the next time it opens.
+    /**
+     * The operator pressed OK - the one moment a remote analyzer may be told to
+     * move: its attenuator (spec 4.6 {@code qa40x.setInputRange} /
+     * {@code qa40x.setOutputRange}) and its front-panel port
+     * ({@code qa40x.settings}).  Each write is a request like any other: a bench
+     * that has gone away in the meantime simply does not get it, and the panel
+     * reads the real state again the next time it opens.
      *
-     *  <p>It goes through the LOCKED seam because the port is hardware: spec 4.6
-     *  requires the analyzer's lock for a write, and a settings panel holds
-     *  nothing of its own, so an ordinary call was answered {@code NOT_LOCKED}
-     *  and the port never moved.  Whether the lock has to be TAKEN - the modules
-     *  may well be streaming from this bench while the dialog is up - is the
-     *  seam's business, not this panel's. */
+     * <p>Both go through the LOCKED seam because both are hardware: spec 4.6
+     * requires the analyzer's lock for a write, and a settings panel holds
+     * nothing of its own, so an ordinary call was answered {@code NOT_LOCKED}
+     * and nothing moved.  Whether the lock has to be TAKEN - the modules may
+     * well be streaming from this bench while the dialog is up - is the seam's
+     * business, not this panel's.
+     *
+     * <p><b>The two writes are independent.</b>  A port change and a range change
+     * are separate operator gestures and either can be the only one made, so
+     * neither leg may sit behind the other's "nothing pending" test.
+     *
+     * <p><b>The ranges are read out of the working copy before the undo.</b>  The
+     * rendered bench card IS the card the ranges table edited, and
+     * {@link #undoRenderedCards()} puts the operator's own card back in its
+     * place - so after it there is nothing left in the copy that describes what
+     * was staged for the bench.
+     */
     @Override
     public void commitEdit() {
-        // FIRST, whatever else this commit does: the rendered bench cards leave the
-        // working copy before it is handed to the live store.
+        Integer stagedInput = stagedRangeDbv(true);
+        Integer stagedOutput = stagedRangeDbv(false);
+        BackendKey rangeBench = syncedBench;
+        Integer inForceInput = benchInputDbv;
+        Integer inForceOutput = benchOutputDbv;
+        // The rendered bench cards leave the working copy before it is handed to
+        // the live store.
         undoRenderedCards();
-        BackendKey bench = pendingBench;
+        forgetBenchRanges();
+        BackendKey portBench = pendingBench;
         pendingBench = null;
-        if (bench == null) {
-            return;
-        }
         RemoteBackendUi remote = RemoteBackendRegistry.instance().getUi();
         if (remote == null) {
             return;
         }
-        Map<String, Object> answer = offDisplayThread(() -> remote.callLocked(bench,
+        sendRangeDelta(remote, rangeBench, true, stagedInput, inForceInput);
+        sendRangeDelta(remote, rangeBench, false, stagedOutput, inForceOutput);
+        if (portBench == null) {
+            return;
+        }
+        Map<String, Object> answer = offDisplayThread(() -> remote.callLocked(portBench,
                 MessageType.QA40X_SETTINGS.getWire(),
                 Map.of(NetFields.I2S_ENABLED, pendingI2s)));
         if (answer == null && log.isWarnEnabled()) {
-            log.warn("QA40x settings: {} did not accept the I2S port change", bench.key());
+            log.warn("QA40x settings: {} did not accept the I2S port change", portBench.key());
         }
+    }
+
+    /**
+     * One direction's range write, when the operator staged a position the bench
+     * is not already on.
+     *
+     * <p>Equal sends nothing: the analyzer is on that position, and a write would
+     * restart its session - which, while modules stream from that bench, is a gap
+     * in somebody's measurement for no change at all.  A missing value on either
+     * side sends nothing either: no staged position means the operator touched no
+     * row, and no in-force value means the bench never said where it was.
+     */
+    private void sendRangeDelta(RemoteBackendUi remote, BackendKey bench, boolean input,
+            Integer staged, Integer inForce) {
+        if (bench == null || staged == null || inForce == null || staged.equals(inForce)) {
+            return;
+        }
+        MessageType request = input
+                ? MessageType.QA40X_SET_INPUT_RANGE
+                : MessageType.QA40X_SET_OUTPUT_RANGE;
+        Map<String, Object> answer = offDisplayThread(() -> remote.callLocked(bench,
+                request.getWire(), Map.of(NetFields.DBV, staged)));
+        if (answer == null && log.isWarnEnabled()) {
+            log.warn("QA40x range: {} did not take the {} range {} dBV", bench.key(),
+                    input ? "input" : "output", staged);
+        }
+    }
+
+    /**
+     * The position the operator has staged for one direction, out of the bench
+     * card this dialog session rendered - or null when there is no such card, or
+     * its active row is not an analyzer position at all.
+     *
+     * <p>Read from the WORKING COPY rather than from the store: the store holds
+     * this installation's own card, and a bench's ranges never reach it.
+     */
+    private Integer stagedRangeDbv(boolean input) {
+        Preferences copy = syncedInto;
+        if (copy == null || syncedCardName == null) {
+            return null;
+        }
+        AudioDeviceProfile card = copy.findAudioDeviceProfile(syncedCardName);
+        if (card == null) {
+            return null;
+        }
+        String label = (input ? card.getInput() : card.getOutput()).getActiveRange();
+        int dbv = Qa40xProtocol.rangeDbv(label, input ? Qa40xProtocol.inputRangeDbvValues()
+                : Qa40xProtocol.outputRangeDbvValues(), NO_RANGE);
+        return dbv == NO_RANGE ? null : dbv;
     }
 
     /** The remote QA40x's device name - the card's key.  First input, else first
