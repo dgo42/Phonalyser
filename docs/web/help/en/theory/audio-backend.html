@@ -110,6 +110,22 @@
      ride the same open instrument rather than opening it twice.  Samples cross the
      USB link as 32-bit words whose top 24 bits carry the signal (the low byte is
      zero padding), so the effective resolution is 24-bit.</p>
+  <h3 id="qa40x-sharing">Who holds the analyzer, and for how long</h3>
+  <p>WebUSB claims interface 0 exclusively, so a claim left standing locks the
+     analyzer out of every other program for the life of the page. The browser
+     holds the QA40x while a measurement runs and hands it back when the last of
+     the generator, the oscilloscope and the FFT stops - the vendor software, the
+     desktop application or another tab can then have it with nothing restarted.
+     Selecting the analyzer no longer holds it either: the card is read and the
+     device released in the same step, and the telemetry behind the settings
+     panel is taken the same way.</p>
+  <p>What is read is kept, so releasing costs nothing. The calibration page is
+     factory data that cannot change, and it is stored under the analyzer's own
+     SERIAL NUMBER together with the last telemetry reading, so a panel that only
+     shows values touches no hardware and the next measurement reopens without
+     re-reading a hundred and twenty-eight registers. WebUSB carries the serial
+     with the enumeration itself, so an analyzer that has left the bus loses its
+     stored page without the device being opened at all.</p>
   <h3 id="qa40x-ranges">What a "dBV" input range actually is</h3>
   <p>The analyzer names its input ranges in dBV - <code>0 dBV</code>,
      <code>+18 dBV</code>, and so on - and taking those names for RMS full-scale
