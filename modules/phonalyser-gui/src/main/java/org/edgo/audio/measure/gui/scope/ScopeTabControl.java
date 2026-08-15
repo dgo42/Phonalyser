@@ -1116,7 +1116,7 @@ public final class ScopeTabControl extends AbstractTabControl {
      * and is gated by the pane via {@link #setCalibrateEnabled(boolean)}.
      */
     private void buildScreenshotGroup(CTabFolder folder, Image cameraIcon, Image crosshairIcon) {
-        Composite g = groupCell(folder, "Utility");
+        Composite g = groupCell(folder, I18n.t("scope.tab.utility"));
         g.setLayout(rowLayoutHorizontal(6));
         Button shotBtn = new Button(g, SWT.PUSH);
         shotBtn.setImage(cameraIcon);
