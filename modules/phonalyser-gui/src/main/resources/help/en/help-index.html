@@ -399,6 +399,7 @@
       <li><a href="backend.html#backend-list">Which backend on which system</a> <span class="small">(Audio backends)</span> - <span class="small">Backend OS Notes WASAPI exclusive Windows The EXCL: devices - bit-exact exclusive mode through the csjsound provider, and the...</span></li>
       <li><a href="theory/derotation-accuracy.html#window">Which window - and why it is not chosen for noise</a> <span class="small">(Theory ▸ De-rotation accuracy)</span> - <span class="small">Because the floor-per-time is equal above the recommended overlap, the window is chosen on the other two axes: window NENBW...</span></li>
       <li><a href="server.html#server-hotplug">While it runs</a> <span class="small">(The Phonalyser server)</span> - <span class="small">Hardware is re-enumerated every two seconds , so a device plugged in or pulled out on the bench is noticed without restarting...</span></li>
+      <li><a href="theory/audio-backend.html#qa40x-sharing">Who holds the analyzer, and for how long</a> <span class="small">(Theory ▸ Audio backend)</span> - <span class="small">USB gives the instrument to one program at a time, so holding it matters. Phonalyser claims the QA40x while a measurement runs...</span></li>
       <li><a href="theory/audio-backend.html#who">Who uses the backend</a> <span class="small">(Theory ▸ Audio backend)</span> - <span class="small">Module Direction How Oscilloscope, FFT analyser capture Share one capture session and one ring buffer - see capture session . The</span></li>
       <li><a href="theory/tune-notch.html#why">Why a live display, not a single sweep</a> <span class="small">(Theory ▸ Tune-notch measurement)</span> - <span class="small">Tuning is a closed loop with a human in it: turn the trimmer a hair, see the null move and deepen, turn again. A one-shot sweep...</span></li>
       <li><a href="theory/dac-predistortion.html#notch">Why a passive twin-T notch in front - and why it is mandatory</a> <span class="small">(Theory ▸ DAC pre-distortion)</span> - <span class="small">The correction tones the generator must produce are the DAC&#x27;s harmonics, inverted. A 2nd harmonic at −110 dBc has to be measured...</span></li>
@@ -707,6 +708,7 @@
       <li><b>Notch readout</b> - <a href="tune-notch.html#">Tune-notch wizard</a></li>
       <li><b>Notch tuning</b> - <a href="changelog.html#">What&#x27;s new</a></li>
       <li><b>NP0</b> - <a href="theory/dac-predistortion.html#tempco">Theory ▸ DAC pre-distortion ▸ How much does each resistor class drift?</a>, <a href="theory/dac-predistortion.html#imd">Theory ▸ DAC pre-distortion ▸ Measuring intermodulation - the two-tone notch</a></li>
+      <li><b>NUMBER</b> - <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="theory/audio-backend.html#qa40x-sharing">Theory ▸ Audio backend ▸ Who holds the analyzer, and for how long</a></li>
       <li><b>Numeric fields</b> - <a href="index.html#">Help</a></li>
       <li><b>Nyquist</b> - <a href="changelog.html#">What&#x27;s new ▸ Changed</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="external/fft-analysis.html#">Further reading ▸ FFT analysis essentials ▸ The core trade-off: resolution vs. time</a>, <a href="fft.html#fft-maximize">FFT analyser ▸ Maximise</a>, <a href="freqresp.html#freqresp-buttons">Frequency response ▸ Header buttons</a>, <a href="freqresp.html#freqresp-panzoom">Frequency response ▸ Pan &amp; zoom</a></li>
     </ul>
@@ -759,6 +761,7 @@
       <li><b>Range mode</b> - <a href="freqresp.html#">Frequency response</a></li>
       <li><b>RC</b> - <a href="theory/dac-predistortion.html#drift">Theory ▸ DAC pre-distortion ▸ The notch drifts - so the fundamental must be defined manually</a>, <a href="theory/dac-predistortion.html#tempco">Theory ▸ DAC pre-distortion ▸ How much does each resistor class drift?</a>, <a href="theory/dac-predistortion.html#">Theory ▸ DAC pre-distortion</a>, <a href="theory/tune-notch.html#">Theory ▸ Tune-notch measurement ▸ Tune-notch measurement</a></li>
       <li><b>README</b> - <a href="changelog.html#">What&#x27;s new ▸ Changed</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a></li>
+      <li><b>READS</b> - <a href="theory/audio-backend.html#qa40x-sharing">Theory ▸ Audio backend ▸ Who holds the analyzer, and for how long</a></li>
       <li><b>Reason unknown</b> - <a href="theory/audio-backend.html#">Theory ▸ Audio backend</a></li>
       <li><b>Recognized device names</b> - <a href="preferences.html#">Preferences</a></li>
       <li><b>Reconstructed beat</b> - <a href="tips.html#">Tips</a></li>
@@ -781,6 +784,7 @@
       <li><b>Scan devices</b> - <a href="changelog.html#">What&#x27;s new</a>, <a href="preferences.html#">Preferences</a>, <a href="tips.html#">Tips</a></li>
       <li><b>Schmitt</b> - <a href="oscilloscope.html#scope-trigger-hysteresis">Oscilloscope ▸ Hysteresis</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Algorithm reference ▸ Filtering &amp; estimation</a></li>
       <li><b>Scope pan/zoom engine</b> - <a href="changelog.html#">What&#x27;s new</a></li>
+      <li><b>SERIAL</b> - <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="theory/audio-backend.html#qa40x-sharing">Theory ▸ Audio backend ▸ Who holds the analyzer, and for how long</a></li>
       <li><b>Server</b> - <a href="preferences.html#">Preferences</a></li>
       <li><b>Settings</b> - <a href="freqresp.html#">Frequency response</a></li>
       <li><b>SFDR</b> - <a href="theory/fft.html#refs">Theory ▸ FFT analyser ▸ References</a></li>
@@ -835,7 +839,7 @@
       <li><b>UDP</b> - <a href="server.html#server-discovery">The Phonalyser server ▸ Discovery and the firewall</a></li>
       <li><b>Unevenness</b> - <a href="freqresp.html#">Frequency response</a>, <a href="tips.html#">Tips</a></li>
       <li><b>Unevenness mode</b> - <a href="freqresp.html#">Frequency response</a></li>
-      <li><b>USB</b> - <a href="backend.html#backend-list">Audio backends ▸ Which backend on which system</a>, <a href="backend.html#backend-mac-glitches">Audio backends ▸ macOS: capture glitches on some devices</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a>, <a href="faq.html#">FAQ ▸ The scope and FFT report frequent &quot;time discontinuity&quot; events - on every backend</a></li>
+      <li><b>USB</b> - <a href="backend.html#backend-list">Audio backends ▸ Which backend on which system</a>, <a href="backend.html#backend-mac-glitches">Audio backends ▸ macOS: capture glitches on some devices</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a>, <a href="faq.html#">FAQ ▸ The scope and FFT report frequent &quot;time discontinuity&quot; events - on every backend</a></li>
     </ul>
     <h3>V</h3>
     <ul>

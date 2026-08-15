@@ -98,6 +98,32 @@
      USB-Verbindung als 32-Bit-Wörter, deren obere 24 Bit das Signal tragen
      (das niederwertige Byte ist Null-Auffüllung), sodass die effektive
      Auflösung 24 Bit beträgt.</p>
+  <h3 id="qa40x-sharing">Wer den Analysator hält, und wie lange</h3>
+  <p>USB gibt das Instrument immer nur einem Programm, also fällt ins Gewicht,
+     wer es hält. Phonalyser beansprucht den QA40x, solange eine Messung läuft,
+     und gibt ihn zurück, sobald der letzte von Generator, Oszilloskop und FFT
+     stoppt - die Herstellersoftware, ein zweites Phonalyser oder die Web-Version
+     können ihn dann übernehmen, ohne dass etwas neu gestartet wird. Alles, was
+     das Instrument nur LIEST, ist im selben Sinne atomar: Die Telemetrie hinter
+     dem Einstellungsdialog und die Kalibrierseite werden gelesen, indem das
+     Gerät geöffnet, gelesen und wieder freigegeben wird.</p>
+  <p>Was gelesen wurde, bleibt erhalten, sodass die Freigabe nichts kostet. Die
+     Kalibrierseite ist Werksdaten, die sich nicht ändern können, und sie wird
+     unter der SERIENNUMMER des Analysators zusammen mit dem letzten
+     Telemetriewert gehalten: Ein Dialog, der Werte anzeigt, berührt keine
+     Hardware, und die nächste Messung öffnet erneut, ohne einhundertachtundzwanzig Register noch einmal zu lesen. Der Gerätesuchlauf hält diesen
+     Bestand ehrlich - ein soeben aufgetauchter Analysator wird einmal gelesen,
+     ein vom Bus verschwundener mitsamt seinen Daten vergessen, und ein gegen ein
+     anderes Gerät desselben Modells am selben Port getauschtes kann die
+     Faktoren des ersten nicht erben, weil es eine andere Seriennummer
+     antwortet.</p>
+  <p>Zwei Folgen, die am Messplatz zählen. Ein Analysator, den ein anderes
+     Programm hält, wird nicht als lokales Gerät angeboten - mit ihm lässt
+     sich nicht messen, und ihn anzubieten würde die Absage nur in die Mitte
+     einer Messung verschieben - und er kehrt von selbst in die Liste zurück,
+     sobald er frei ist. Und das Öffnen setzt das USB-Gerät nicht zurück: Der
+     Analysator wird so übernommen, wie das Betriebssystem ihn initialisiert
+     hat, weshalb ein Suchlauf im Sekundentakt auf dem Bus nichts kostet.</p>
   <h3 id="qa40x-ranges">Was ein "dBV"-Eingangsbereich wirklich ist</h3>
   <p>Der Analysator benennt seine Eingangsbereiche in dBV - <code>0 dBV</code>,
      <code>+18 dBV</code> und so fort - und wer diese Namen für

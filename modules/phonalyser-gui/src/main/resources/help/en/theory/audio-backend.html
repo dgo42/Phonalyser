@@ -89,6 +89,30 @@
      ride the same open instrument rather than opening it twice.  Samples cross the
      USB link as 32-bit words whose top 24 bits carry the signal (the low byte is
      zero padding), so the effective resolution is 24-bit.</p>
+  <h3 id="qa40x-sharing">Who holds the analyzer, and for how long</h3>
+  <p>USB gives the instrument to one program at a time, so holding it matters.
+     Phonalyser claims the QA40x while a measurement runs and gives it back when
+     the last of the generator, the oscilloscope and the FFT stops - the vendor
+     software, a second Phonalyser or the web version can then have it with
+     nothing restarted.  Everything that only READS the instrument is atomic in
+     the same sense: the telemetry behind the settings panel and the calibration
+     page are taken by opening the device, reading it and releasing it again.</p>
+  <p>What is read is kept, so releasing costs nothing.  The calibration page is
+     factory data that cannot change, and it is stored under the analyzer's own
+     SERIAL NUMBER together with the last telemetry reading: a panel that shows
+     values touches no hardware at all, and the next measurement reopens without
+     re-reading a hundred and twenty-eight registers.  The device scan keeps that
+     store honest - an analyzer that has just appeared is read once, one that has
+     left the bus is forgotten with its data, and a unit swapped for another of
+     the same model on the same port cannot inherit the first one's factors,
+     because it answers a different serial.</p>
+  <p>Two consequences worth knowing at the bench.  An analyzer that another
+     program is holding is not offered as a local device - it cannot be measured
+     with, so offering it would only move the refusal into the middle of a
+     measurement - and it comes back into the list by itself once it is free.
+     And the open does not reset the USB device: the analyzer is taken as the
+     operating system initialised it, which is why a scan that runs every couple
+     of seconds costs nothing on the bus.</p>
   <h3 id="qa40x-ranges">What a "dBV" input range actually is</h3>
   <p>The analyzer names its input ranges in dBV - <code>0 dBV</code>,
      <code>+18 dBV</code>, and so on - and taking those names for RMS full-scale
