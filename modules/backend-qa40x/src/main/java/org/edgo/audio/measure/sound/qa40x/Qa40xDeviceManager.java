@@ -131,6 +131,12 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
      *  gone while it asked.  Not offered as local devices: nothing here can use
      *  them, and the next scan is what lets them back in. */
     private final Set<Qa40xDevice> unusable = new HashSet<>();
+    /** Which analyzer sits where: the USB device the enumeration reports, to the
+     *  serial that device answered when it was opened.  This is what lets a scan
+     *  recognise a unit it already knows WITHOUT opening it - the serial itself
+     *  lives in a register, and asking for it every two seconds is a USB open
+     *  every two seconds. */
+    private final Map<Qa40xDevice, String> serialAt = new LinkedHashMap<>();
     /**
      * What each analyzer this process has opened told about itself, BY SERIAL
      * NUMBER - the factory page and the last reading, per unit.
@@ -285,20 +291,34 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
         return true;
     }
 
+    /**
+     * Always: the hot-plug tick is what keeps this backend's picture of the bench
+     * current, and it costs an enumeration - a device already known is recognised
+     * by where it sits and is not touched at all.  Only an analyzer that has just
+     * appeared is opened, once, to ask which unit it is.
+     */
+    @Override
+    public boolean deviceListStale() {
+        return true;
+    }
+
     private synchronized void scanUnits(List<Qa40xDevice> attached) {
-        Set<String> scanned = new HashSet<>();
         unusable.clear();
         for (Qa40xDevice device : attached) {
+            if (serialAt.containsKey(device)) {
+                continue;                    // known where it is: nothing to ask
+            }
             String serial = readSerialOf(device);
             if (serial != null) {
-                scanned.add(serial);
+                serialAt.put(device, serial);
             } else {
                 // Held by another process, or gone between the enumeration and
                 // this line: either way it is not a device this process has.
                 unusable.add(device);
             }
         }
-        units.keySet().retainAll(scanned);
+        serialAt.keySet().retainAll(attached);
+        units.keySet().retainAll(serialAt.values());
         if (inHand != null && !units.containsValue(inHand)) {
             inHand = null;
         }
