@@ -4760,11 +4760,9 @@ public final class Preferences {
            .append(", right: ").append(r.getFsRight()).append(" }");
         // Emitted ONLY when set by a real calibration - a nominal (seed) row stays clean.
         if (r.isCalibrated()) out.append(", calibrated: true");
-        // Device-authored display text (QA40x verbose labels) - kept so a start
-        // without the analyzer attached still shows the ranges as the device names them.
-        if (r.getDisplayLabel() != null) {
-            out.append(", displayLabel: ").append(quoted(r.getDisplayLabel()));
-        }
+        // The device-authored display text (QA40x verbose labels) is DISPLAY
+        // ONLY and never persisted: the analyzer regenerates it at every open,
+        // and the wire form carries it to clients that cannot ask the device.
         out.append(" }\n");
     }
 
