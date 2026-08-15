@@ -223,23 +223,12 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
     private List<DeviceRef> list(boolean input) {
         List<DeviceRef> out = new ArrayList<>();
         Class<? extends Line> probe = input ? TargetDataLine.class : SourceDataLine.class;
-        String direction = input ? "input" : "output";
         // One enumeration, one look at the jacks: a plug pulled since the last
         // scan must show up, and re-reading it per device would not.
         alsaPorts.refresh();
         Mixer.Info[] mixers = AudioSystem.getMixerInfo();
         int slot = 0;
-        int seen = 0;
         for (Mixer.Info mi : mixers) {
-            // EVERY mixer the walk sees, before any filter can drop it: a device
-            // missing from the finished list is either one this line named and a
-            // later line dropped, or one the host API never offered at all, and
-            // nothing downstream can tell those two apart.
-            if (log.isDebugEnabled()) {
-                log.debug("mixer {} seen for {}: name='{}', description='{}'",
-                        seen, direction, mi.getName(), mi.getDescription());
-            }
-            seen++;
             Mixer m;
             try {
                 m = AudioSystem.getMixer(mi);
@@ -248,17 +237,11 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
                 continue;
             }
             if (!m.isLineSupported(new DataLine.Info(probe, null))) {
-                if (log.isDebugEnabled()) {
-                    log.debug("{} supplies no {} line - not listed", mi.getName(), direction);
-                }
                 continue;
             }
             JavaSoundDeviceRef ref = null;
             if (linux) {
                 AlsaPorts.Port port = alsaPorts.port(mi.getName(), input);
-                // Built before the skip decision so that a device left out is named
-                // in the log the same way a listed one is named in the report -
-                // there is one authority for how a device reads, and it is the ref.
                 // The slot is only consumed by a device that is actually listed.
                 String designation = port == null ? distinct(mi.getDescription(), mi.getName()) : port.label();
                 String name = deviceName(mi.getName(), designation);
@@ -271,10 +254,6 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
                         input, !input,
                         mi);
                 if (port != null && port.empty()) {
-                    if (log.isDebugEnabled()) {
-                        log.debug("{} has nothing plugged into its {} - not listed",
-                                ref.displayName(), port.label());
-                    }
                     continue;
                 }
                 // A device that reports no formats is a phantom - a PCM with nothing
@@ -295,9 +274,6 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
                 // switch pays on the UI thread.
                 if (linux && !name.equals(SYSTEM_DEFAULT_LABEL)
                         && listSupportedFormats(ref, !input).isEmpty()) {
-                    if (log.isDebugEnabled()) {
-                        log.debug("{} reports no formats - not listed", ref.displayName());
-                    }
                     continue;
                 }
             } else {
