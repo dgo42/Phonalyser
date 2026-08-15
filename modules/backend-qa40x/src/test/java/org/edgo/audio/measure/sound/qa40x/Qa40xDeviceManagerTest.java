@@ -89,6 +89,10 @@ class Qa40xDeviceManagerTest {
      *  +42 dBV (the attenuator relay engaged) and output code 0 is −12 dBV. */
     private static final FakeTransport.RegWrite PARKED_INPUT = new FakeTransport.RegWrite(5, 7);
     private static final FakeTransport.RegWrite PARKED_OUTPUT = new FakeTransport.RegWrite(6, 0);
+    /** The run-register write that starts a session - counted to tell one session
+     *  from the next on the same transport. */
+    private static final FakeTransport.RegWrite STREAM_START =
+            new FakeTransport.RegWrite(Qa40xProtocol.REG_RUN, Qa40xProtocol.RUN_START);
 
     /** The card name a QA403 session writes: the model name (see
      *  {@code refreshDeviceCard}), which is also what a range change looks the
@@ -97,7 +101,8 @@ class Qa40xDeviceManagerTest {
     /** A valid input range that is NOT the default the card comes up on, so a
      *  full scale that failed to follow the attenuator is visible. */
     private static final int MOVED_INPUT_DBV = 24;
-    private static final int DEFAULT_INPUT_DBV = 0;
+    /** The never-chosen default: the protected range the manager seeds. */
+    private static final int DEFAULT_INPUT_DBV = Qa40xProtocol.SAFE_INPUT_DBV;
 
     /** Whether the store was already in transient mode before this test - the
      *  process-wide singleton is restored to it afterwards. */
@@ -364,9 +369,11 @@ class Qa40xDeviceManagerTest {
                     row.getFsRight(), TOL, "output fsRight at " + dbv + " dBV");
         }
 
-        // Default active ranges when the card is first created (PyQa40x defaults).
-        assertEquals("0 dBV", in.getActiveRange());
-        assertEquals("18 dBV", out.getActiveRange());
+        // Default active ranges when the card is first created: the protected
+        // (parked) state, so a never-configured analyzer starts at maximum
+        // input attenuation and the low output range.
+        assertEquals(Qa40xProtocol.SAFE_INPUT_DBV + " dBV", in.getActiveRange());
+        assertEquals(Qa40xProtocol.SAFE_OUTPUT_DBV + " dBV", out.getActiveRange());
     }
 
     @Test
@@ -556,6 +563,277 @@ class Qa40xDeviceManagerTest {
         stop.set(true);
         player.join(2_000);
         assertEquals(1, fake.cancelAllCount, "last client detach tears the session down");
+    }
+
+    /**
+     * The last lane goes, and the analyzer goes with it: parked, closed, and
+     * forgotten.
+     *
+     * <p>An exclusively claimed USB device that this process no longer measures
+     * with is a device no OTHER session on the machine can open - the second
+     * application is refused {@code LIBUSB_ERROR_ACCESS} for as long as the
+     * holder lives.  So the claim ends with the last lane rather than with the
+     * process.
+     *
+     * <p>The FINDER seam, not the open-transport one: this is the state after a
+     * release, where the next open has to run the finder again.
+     */
+    @Test
+    void theLastLaneDetachReleasesTheAnalyzer() throws Exception {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+        AudioCapture rec = mgr.openCapture(null, RATE_HZ, BITS);
+        rec.open();
+        rec.startRecording();
+        assertFalse(fake.ops.contains("close"), "a lane is streaming - it is in use");
+
+        rec.stopRecording();
+        rec.close();
+
+        assertTrue(fake.registerWrites.contains(PARKED_INPUT),
+                "the input parks at +42 dBV before the claim ends - the next host "
+                        + "must not find it at whatever sensitivity was measured at");
+        assertTrue(fake.registerWrites.contains(PARKED_OUTPUT), "and the output at −12 dBV");
+        assertTrue(fake.ops.contains("close"),
+                "and the transport is released: held past the last measurement, it is "
+                        + "a device nobody else on this machine can open");
+        assertNull(mgr.cardName(),
+                "the session state went with it, so nothing stale can be reused - "
+                        + "everything this manager knows was read from the analyzer");
+    }
+
+    /**
+     * And while ANY lane is still attached, nothing is released - the
+     * back-to-back session model (doc §10) is what keeps one engine across a
+     * capture that closes while the generator plays, and a release there would
+     * stop a measurement that is running.
+     */
+    @Test
+    void anAttachedLaneKeepsTheAnalyzerClaimed() throws Exception {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+        AudioCapture rec = mgr.openCapture(null, RATE_HZ, BITS);
+        rec.open();
+        rec.startRecording();
+        Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, BITS, 0);
+        gen.open();
+        SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 0.1, 1.0);
+
+        // Attaches the generator lane beside the running capture and gives it
+        // straight back: the stop flag is set before the call, so play() returns
+        // as soon as the lane has primed.
+        gen.play(sig, new AtomicBoolean(true), new CountDownLatch(1));
+
+        assertFalse(fake.ops.contains("close"),
+                "the capture is still attached, and a release would pull the transport "
+                        + "out from under it");
+
+        rec.stopRecording();
+        rec.close();
+
+        assertTrue(fake.ops.contains("close"), "the LAST detach is the one that releases");
+    }
+
+    /**
+     * After a release the analyzer is opened again lazily, exactly as one that
+     * was never opened: the finder runs, the calibration page is re-read, and the
+     * session streams.  A release that could not be undone would trade a held
+     * claim for a bench that works once.
+     */
+    @Test
+    void aReleasedAnalyzerIsReopenedByTheNextCapture() throws Exception {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+        AudioCapture first = mgr.openCapture(null, RATE_HZ, BITS);
+        first.open();
+        first.startRecording();
+        first.stopRecording();
+        first.close();
+        assertEquals(1, Collections.frequency(fake.ops, "close"));
+
+        AudioCapture second = mgr.openCapture(null, RATE_HZ, BITS);
+        second.open();                       // runs the finder again
+        second.startRecording();
+
+        assertEquals(2, Collections.frequency(fake.registerWrites, STREAM_START),
+                "the second session really started on the reopened handle");
+
+        second.stopRecording();
+        second.close();
+
+        assertEquals(2, Collections.frequency(fake.ops, "close"),
+                "and it is released again - the claim lasts a measurement, not a process");
+    }
+
+    // --- control reads are atomic --------------------------------------------
+
+    /**
+     * A telemetry read is connected, read out, disconnected.
+     *
+     * <p>The panel that shows an analyzer's firmware and temperature is not
+     * measuring with it, and the read opens the device only because the
+     * registers are unreadable otherwise.  Holding the claim afterwards is what
+     * makes the analyzer unopenable everywhere else - including for the operator
+     * standing in front of it.
+     */
+    @Test
+    void aTelemetryReadWithNoLaneAnswersAndReleasesTheAnalyzer() {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+
+        Qa40xDeviceInfo info = mgr.readDeviceInfo();
+
+        assertNotEquals(Qa40xDeviceInfo.NONE, info,
+                "the registers were read - a release that came too early would "
+                        + "leave the panel showing dashes");
+        assertEquals(1, Collections.frequency(fake.ops, "close"),
+                "and the analyzer is given back before the answer is used");
+        assertNull(mgr.cardName(), "with nothing of the session left behind");
+    }
+
+    /** The calibration page the same way: the answer is complete, and the device
+     *  is free again the moment it has been read. */
+    @Test
+    void aCalibrationReadWithNoLaneAnswersAndReleasesTheAnalyzer() {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+
+        List<Qa40xControl.CalibrationRow> rows = mgr.calibration(true);
+
+        assertEquals(Qa40xProtocol.inputRangeDbvValues().length, rows.size(),
+                "one row per attenuator position");
+        assertEquals(1, Collections.frequency(fake.ops, "close"));
+    }
+
+    /** And a read that arrives while a lane streams rides the open session: the
+     *  claim belongs to the measurement, and ending it to answer a telemetry
+     *  question would stop what the operator is watching. */
+    @Test
+    void aReadWhileALaneStreamsKeepsTheSession() throws Exception {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+        AudioCapture rec = mgr.openCapture(null, RATE_HZ, BITS);
+        rec.open();
+        rec.startRecording();
+
+        mgr.readDeviceInfo();
+        mgr.calibration(false);
+
+        assertFalse(fake.ops.contains("close"), "the running measurement keeps it");
+        assertEquals(0, fake.cancelAllCount, "and nothing tore the stream down");
+
+        rec.stopRecording();
+        rec.close();
+
+        assertTrue(fake.ops.contains("close"), "the LAST detach still releases");
+    }
+
+    /** A range write with the analyzer closed opens nothing at all - it is a card
+     *  edit, and the register it describes is written when a session next starts.
+     *  An atomic read must not turn every range commit into a USB cycle. */
+    @Test
+    void anIdleRangeWriteStillOpensNothing() {
+        Preferences prefs = Preferences.instance();
+        Qa40xCalibration cal = Qa40xCalibration.fromBlob(syntheticBlob());
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager builder = new Qa40xDeviceManager(new FakeTransport(), INSTANT);
+        prefs.putAudioDeviceProfile(builder.buildProfile(CARD_NAME, cal, null));
+
+        new Qa40xDeviceManager(analyzerOn(fake)).setInputRange(MOVED_INPUT_DBV);
+
+        assertTrue(fake.ops.isEmpty(),
+                "no open, no register, no close: the analyzer was never touched");
+        assertEquals(MOVED_INPUT_DBV + " dBV",
+                prefs.findAudioDeviceProfile(CARD_NAME).getInput().getActiveRange(),
+                "and the operator's choice still landed in the card");
+    }
+
+    // --- the factory page and the last reading are cached ---------------------
+
+    /**
+     * The scan warms the cache, and the scan after it costs nothing.
+     *
+     * <p>The calibration page is a page select plus a hundred and twenty-eight
+     * register round trips - the slowest part of an open, and the reason a
+     * client's card sync timed out waiting for an answer that had to open the
+     * analyzer first.  It is factory data, so the enumeration reads it once and
+     * everything afterwards is answered from memory.
+     */
+    @Test
+    void theScanWarmsTheCacheWithOneCycleAndTheNextScanCostsNothing() {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+
+        mgr.listInputDevices();
+
+        assertEquals(1, Collections.frequency(fake.ops, "close"),
+                "exactly one cycle: opened, read, parked, released - the scan does "
+                        + "not leave the analyzer claimed");
+        int opsAfterWarm = fake.ops.size();
+        assertTrue(opsAfterWarm > 0, "the page really was read");
+
+        mgr.listInputDevices();
+
+        assertEquals(opsAfterWarm, fake.ops.size(),
+                "and the second scan touches the device not at all - a factory page "
+                        + "cannot have changed since the first");
+    }
+
+    /** What the warm cache is for: the answer is arithmetic over a page already
+     *  in memory, with no open, no claim and nothing to wait for. */
+    @Test
+    void aWarmCalibrationReadTouchesTheDeviceNotAtAll() {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+        mgr.listInputDevices();
+        int opsAfterWarm = fake.ops.size();
+
+        List<Qa40xControl.CalibrationRow> rows = mgr.calibration(true);
+
+        assertEquals(Qa40xProtocol.inputRangeDbvValues().length, rows.size(),
+                "one row per attenuator position, exactly as the cold read gives");
+        assertEquals(opsAfterWarm, fake.ops.size(), "and not one transfer for it");
+    }
+
+    /** A measurement session releases the analyzer when its last lane goes - and
+     *  keeps the page, because what the release ends is the CLAIM, not the
+     *  factory data behind it. */
+    @Test
+    void theParkKeepsTheFactoryPage() throws Exception {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+        AudioCapture rec = mgr.openCapture(null, RATE_HZ, BITS);
+        rec.open();
+        rec.startRecording();
+        rec.stopRecording();
+        rec.close();
+        assertEquals(1, Collections.frequency(fake.ops, "close"), "the analyzer is released");
+        int opsAfterRelease = fake.ops.size();
+
+        mgr.calibration(false);
+
+        assertEquals(opsAfterRelease, fake.ops.size(),
+                "the page survived the release - re-reading it would make every "
+                        + "measurement pay for the one before it having ended");
+    }
+
+    /** The telemetry reading is taken while the analyzer is open anyway - the park
+     *  that ends a cycle takes the last one - so a panel that opens afterwards is
+     *  answered in microseconds instead of paying a USB reset for a voltage. */
+    @Test
+    void telemetryIsAnsweredFromTheLastReadingAfterTheSessionClosed() {
+        FakeTransport fake = new FakeTransport();
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(analyzerOn(fake));
+        mgr.listInputDevices();
+        int opsAfterWarm = fake.ops.size();
+
+        Qa40xDeviceInfo info = mgr.readDeviceInfo();
+
+        assertNotEquals(Qa40xDeviceInfo.NONE, info,
+                "the reading taken during the cycle is a real one");
+        assertEquals(opsAfterWarm, fake.ops.size(),
+                "and answering it opened nothing: an idle analyzer is not reset every "
+                        + "scan tick for a display value");
     }
 
     /**

@@ -63,6 +63,12 @@ import lombok.extern.log4j.Log4j2;
  * shared reg-9 clock - the app's input/output rates are constrained equal for
  * this backend, wired in the Preferences dialog).
  *
+ * <p>The DETACH goes through this manager ({@link #detachCapture()} /
+ * {@link #detachGenerator()}), and the last one RELEASES the analyzer: the
+ * exclusive USB claim is held while the device is in use and given back the
+ * moment it is not, so a second session on the same machine can have it without
+ * waiting for this process to exit.  See {@link #releaseIfIdle()}.
+ *
  * <p>Supported formats are 32-bit, stereo, little-endian in both directions, at
  * 48/96/192&nbsp;kHz on either model plus 384&nbsp;kHz on the QA403 (reg-9 code 3,
  * which the QA402 does not have - doc §4).
@@ -83,12 +89,16 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
     private static final int CHANNELS      = 2;
 
     /**
-     * Default active ranges when a card is first created - the vendor PyQa40x
-     * defaults (input 0&nbsp;dBV, output +18&nbsp;dBV), a deliberate pick per
-     * doc §9 item 11 (no hardware power-on default; drivers disagree).
+     * Default active ranges while the operator has never chosen one - the
+     * PROTECTED state (maximum input attenuation, low output range), the same
+     * ranges every teardown parks to.  A hotter silent default would leave an
+     * unconfigured analyzer's input at full sensitivity - locally after a fresh
+     * install, and on a server whose card has never had a range saved, where
+     * the client dialog then shows a default indistinguishable from a real
+     * choice and sends no range write at all.
      */
-    private static final int DEFAULT_INPUT_DBV  = 0;
-    private static final int DEFAULT_OUTPUT_DBV = 18;
+    private static final int DEFAULT_INPUT_DBV  = Qa40xProtocol.SAFE_INPUT_DBV;
+    private static final int DEFAULT_OUTPUT_DBV = Qa40xProtocol.SAFE_OUTPUT_DBV;
 
     /** Real settle clock for the engine's ABA rate-write delay (doc §8); instant in tests. */
     private static final Qa40xDuplexEngine.Sleeper PRODUCTION_SLEEPER = millis -> {
@@ -103,7 +113,12 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
     private final Qa40xDuplexEngine.Sleeper sleeper;
 
     private Qa40xTransport    transport;      // null until the device is opened
-    private Qa40xCalibration  calibration;    // read once at open
+    /** The factory calibration page.  KEPT across releases: it is burned into the
+     *  analyzer at the factory and never changes for the life of the device, so
+     *  re-reading it per open cost half a second of USB for a page that could
+     *  not have moved.  What invalidates it is a different analyzer, not a
+     *  closed session - see {@link #cachedFrom}. */
+    private Qa40xCalibration  calibration;
     private Qa40xModel        model;
     private Qa40xDuplexEngine engine;         // the one duplex session
     /** WHICH physical analyzer the open session is bound to - the finder's model
@@ -114,6 +129,20 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
      *  {@code LIBUSB_ERROR_IO} until the process is restarted.  See
      *  {@link #dropSessionIfMoved}. */
     private Qa40xDevice       openSession;
+    /** WHICH analyzer {@link #calibration} and {@link #telemetry} were read from
+     *  - the same model plus bus/address the session is keyed on.  Outlives the
+     *  session, because the readings do: a released manager still has to notice
+     *  that the unit on the bench is not the one it read, or a swapped analyzer
+     *  would be described by another unit's factory page and another unit's
+     *  serial number.  See {@link #dropSessionIfMoved}. */
+    private Qa40xDevice       cachedFrom;
+    /** The last decoded identity/telemetry reading, or null while none was ever
+     *  taken.  Answered in microseconds; refreshed whenever the device is open
+     *  anyway (see {@link #refreshTelemetry()}), and left to AGE while the
+     *  analyzer sits released - opening a released analyzer costs a
+     *  {@code libusb_reset_device} and its re-enumeration, which is not a price
+     *  a voltage display may charge the device every scan tick. */
+    private Qa40xDeviceInfo   telemetry;
     private int currentRateHz;                // 0 = engine not yet built
     private int inputRangeDbv  = DEFAULT_INPUT_DBV;
     private int outputRangeDbv = DEFAULT_OUTPUT_DBV;
@@ -179,6 +208,7 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
         // still the analyzer on the bus - see dropSessionIfMoved for why a scan
         // is the right place and what it costs not to.
         dropSessionIfMoved(attached);
+        warmFromScan(attached);
         List<DeviceRef> out = new ArrayList<>();
         int index = 0;
         for (Qa40xDevice device : attached) {
@@ -186,6 +216,48 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
                     device.toString()));
         }
         return out;
+    }
+
+    /**
+     * The scan is what fills the caches, so nothing that ASKS ever has to wait
+     * for a USB open.
+     *
+     * <p>Three cases, in the order they are tested.  A bus with no analyzer on it
+     * has nothing to warm.  A LIVE session needs no open at all - the transport
+     * is up, so the reading is eight free register reads and the page is already
+     * here.  Otherwise, a cold cache on an attached analyzer is worth exactly one
+     * atomic cycle: open, page, park, release - after which the panels and the
+     * clients across the network are answered from memory.
+     *
+     * <p>A cycle that cannot have the analyzer is not an error and is not
+     * retried here: an analyzer another process holds refuses at
+     * {@code libusb_open}, BEFORE the reset in the finder's open dance, so
+     * nothing on the bus is disturbed and the next scan simply tries again.
+     */
+    private synchronized void warmFromScan(List<Qa40xDevice> attached) {
+        if (attached.isEmpty()) {
+            return;
+        }
+        if (transport != null) {
+            refreshTelemetry();              // free: the device is already open
+            return;
+        }
+        if (calibration != null) {
+            return;                          // warm, and the identity was just checked
+        }
+        try {
+            onTheDevice(() -> {
+                ensureOpen();                // the page, and the card behind it
+                return null;
+            });
+        } catch (Throwable t) {
+            if (log.isDebugEnabled()) {
+                log.debug("QA40x cache warm skipped ({}); the next scan tries again",
+                        t.toString());
+            }
+        } finally {
+            releaseIfIdle();                 // the reading is taken by the park
+        }
     }
 
     @Override
@@ -308,6 +380,69 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
         return engine;
     }
 
+    /**
+     * Gives the capture lane back - and with it the analyzer, when that lane was
+     * the last one.
+     *
+     * <p>The lanes detach THROUGH the manager rather than on the engine they were
+     * handed, because what happens after the last detach is not the engine's to
+     * decide: the transport claim is this manager's, and only it knows there is
+     * nothing left to keep it for.
+     *
+     * @see #releaseIfIdle()
+     */
+    synchronized void detachCapture() {
+        if (engine == null) {
+            return;                          // nothing was ever attached to
+        }
+        engine.detachCapture();
+        releaseIfIdle();
+    }
+
+    /** Gives the generator lane back, and the analyzer with it when that lane was
+     *  the last one - see {@link #detachCapture()}. */
+    synchronized void detachGenerator() {
+        if (engine == null) {
+            return;
+        }
+        engine.detachGenerator();
+        releaseIfIdle();
+    }
+
+    /**
+     * Releases the analyzer once no lane is attached any more: the safe-state
+     * write, the transport close and the session state, exactly as an orderly
+     * exit does them.
+     *
+     * <p><b>Held claims are what this exists to end.</b>  A USB analyzer is
+     * claimed exclusively, so a host that keeps the claim after the last
+     * measurement stopped owns a device nobody is using: a second session on the
+     * same machine - a desktop beside a running server, a second application -
+     * is then refused with {@code LIBUSB_ERROR_ACCESS} until the holder exits.
+     * The device is not needed between measurements, so it is not held between
+     * them.
+     *
+     * <p>While ANY lane is still attached this does nothing: the back-to-back
+     * session model (doc §10) keeps one engine across a capture that closes and
+     * reopens while the generator plays, and releasing there would stop a
+     * measurement that is running.
+     *
+     * <p>The next {@link #acquireEngine} opens lazily again - the finder re-runs,
+     * the calibration page is re-read and the card refreshed - which is what
+     * makes a released analyzer indistinguishable from one that was never opened.
+     *
+     * <p>Two callers, one rule: the last lane's detach, and each control read
+     * that had to open the analyzer to answer ({@link #readDeviceInfo()},
+     * {@link #calibration(boolean)}).  Both mean the same thing - this process
+     * has nothing left it needs the device for right now.
+     */
+    private void releaseIfIdle() {
+        if (engine != null && engine.anyLaneAttached()) {
+            return;
+        }
+        parkAndRelease();
+    }
+
     // --- Qa40xControl: what the settings panel and the net server read --------
 
     /** {@inheritDoc}  The vendor's attenuator positions (doc §6). */
@@ -343,16 +478,41 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
      * the net gets exactly what a locally attached analyzer would give it.  The
      * device is opened if no session has done so yet - the page lives on the
      * hardware and there is no honest answer without it.
+     *
+     * <p><b>And given back before the answer leaves.</b>  A read is ATOMIC:
+     * connected, read out, disconnected.  What opened the analyzer only to
+     * describe it has no further use for it, and a claim held past that is a
+     * device the operator cannot open anywhere else.  While a lane IS attached
+     * the read rides the open session and releases nothing - see
+     * {@link #releaseIfIdle()}.
+     *
+     * <p>The release is in a finally OUTSIDE {@link #onTheDevice}: a read that
+     * failed has already given the session up there, with the reason it failed,
+     * and this must neither repeat that nor hide it.  It costs a reopen per
+     * call, which is the price of not holding hardware nobody is measuring with.
      */
     @Override
     public synchronized List<CalibrationRow> calibration(boolean input) {
-        return onTheDevice(() -> calibrationRows(input));
+        if (calibration != null) {
+            // Warm: the page is already here and cannot have changed, so this is
+            // arithmetic over it - no open, no claim, no wait.  The far end of a
+            // network asks for both directions as two calls, and a cycle each was
+            // more than a client dialog waits before it gives up on the answer.
+            return calibrationRows(input);
+        }
+        try {
+            return onTheDevice(() -> {
+                ensureOpen();                // reads the page and caches it
+                return calibrationRows(input);
+            });
+        } finally {
+            releaseIfIdle();
+        }
     }
 
-    /** The cal page as rows - on the device, so it runs inside
-     *  {@link #onTheDevice}: reading it is what opens the session. */
+    /** The cached cal page as rows - pure arithmetic over the factors, so the
+     *  caller decides whether the device has to be opened for it first. */
     private List<CalibrationRow> calibrationRows(boolean input) {
-        ensureOpen();
         List<CalibrationRow> rows = new ArrayList<>();
         for (int dbv : input ? Qa40xProtocol.inputRangeDbvValues()
                 : Qa40xProtocol.outputRangeDbvValues()) {
@@ -558,26 +718,34 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
      * panel, so an absent or wedged analyzer must show dashes rather than break
      * the dialog it is on.  The ISO-supply current exists on the QA402 only; a
      * QA403 reports it as unavailable.
+     *
+     * <p><b>Answered from the last reading when there is one.</b>  The registers
+     * are a display: firmware, serial, supply voltage and temperature, asked for
+     * by a panel that opens and by a client across a network, neither of which
+     * may wait for a USB open.  A reading is taken whenever the analyzer is open
+     * anyway - a scan tick during a session, the park that ends a cycle - so what
+     * this answers is at worst as old as the last time the device was in use.
+     *
+     * <p>Cold - nothing has ever read this analyzer - it falls back to the atomic
+     * cycle: opened for the readout and released again when no lane is attached
+     * (see {@link #releaseIfIdle()}).  The release is in a finally, after the
+     * failure path below has had its say - that path discards the session itself,
+     * and this one then finds nothing left to release.
      */
     @Override
     public synchronized Qa40xDeviceInfo readDeviceInfo() {
+        Qa40xDeviceInfo lastReading = telemetry;
+        if (lastReading != null) {
+            return lastReading;
+        }
         try {
             // Opening the device is what makes the registers readable at all: the
             // session opens lazily on the first capture, so without this the
             // panel would only ever show values after a measurement had run.
             // Same open the session uses - idempotent when one is already live.
             ensureOpen();
-            boolean hasIso = model == Qa40xModel.QA402;
-            return new Qa40xDeviceInfo(
-                    Integer.toString(transport.registerRead(Qa40xProtocol.REG_FIRMWARE_VERSION)),
-                    Qa40xProtocol.formatUsbVoltage(transport.registerRead(Qa40xProtocol.REG_TELEM_USB_VOLTAGE)),
-                    Qa40xProtocol.formatCurrent(transport.registerRead(Qa40xProtocol.REG_TELEM_USB_CURRENT)),
-                    hasIso ? Qa40xProtocol.formatCurrent(transport.registerRead(Qa40xProtocol.REG_TELEM_ISO_CURRENT))
-                           : Qa40xDeviceInfo.UNAVAILABLE,
-                    Qa40xProtocol.formatTemperature(transport.registerRead(Qa40xProtocol.REG_TELEM_TEMPERATURE)),
-                    Qa40xProtocol.formatCapability(transport.registerRead(Qa40xProtocol.REG_CAPABILITY)),
-                    Qa40xProtocol.formatCapability(transport.registerRead(Qa40xProtocol.REG_CAPABILITY2)),
-                    Qa40xProtocol.formatSerialNumber(transport.registerRead(Qa40xProtocol.REG_SERIAL_NUMBER)));
+            telemetry = readTelemetry();
+            return telemetry;
         } catch (Throwable t) {
             log.warn("QA40x device info read failed: {}", t.toString());
             // Dashes are the right answer for the panel, but they are not a reason
@@ -585,6 +753,54 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
             // and the next open finds whatever is really on the bus.
             discardSession("a telemetry read failed: " + t);
             return Qa40xDeviceInfo.NONE;
+        } finally {
+            releaseIfIdle();
+        }
+    }
+
+    /** The eight identity and telemetry registers, decoded as the panel and spec
+     *  4.6 show them.  The caller has an open transport; the ISO-supply current
+     *  exists on the QA402 only. */
+    private Qa40xDeviceInfo readTelemetry() {
+        boolean hasIso = model == Qa40xModel.QA402;
+        return new Qa40xDeviceInfo(
+                Integer.toString(transport.registerRead(Qa40xProtocol.REG_FIRMWARE_VERSION)),
+                Qa40xProtocol.formatUsbVoltage(transport.registerRead(Qa40xProtocol.REG_TELEM_USB_VOLTAGE)),
+                Qa40xProtocol.formatCurrent(transport.registerRead(Qa40xProtocol.REG_TELEM_USB_CURRENT)),
+                hasIso ? Qa40xProtocol.formatCurrent(transport.registerRead(Qa40xProtocol.REG_TELEM_ISO_CURRENT))
+                       : Qa40xDeviceInfo.UNAVAILABLE,
+                Qa40xProtocol.formatTemperature(transport.registerRead(Qa40xProtocol.REG_TELEM_TEMPERATURE)),
+                Qa40xProtocol.formatCapability(transport.registerRead(Qa40xProtocol.REG_CAPABILITY)),
+                Qa40xProtocol.formatCapability(transport.registerRead(Qa40xProtocol.REG_CAPABILITY2)),
+                Qa40xProtocol.formatSerialNumber(transport.registerRead(Qa40xProtocol.REG_SERIAL_NUMBER)));
+    }
+
+    /**
+     * Takes a reading through a transport that is ALREADY open - eight register
+     * round trips, no open, no claim, nothing the running stream notices.
+     *
+     * <p>Best effort, and that is deliberate: a reading is a display value, so a
+     * register that will not answer keeps the previous one rather than costing
+     * the caller the session it was doing something else with.  The paths that
+     * MUST notice a dead handle (the engine build, the range writes, the cold
+     * reads) all still run through {@link #onTheDevice}.
+     *
+     * <p>Every register READ in this backend runs on this monitor - this method,
+     * {@link #readTelemetry()} and the calibration page - so two readers can
+     * never interleave one's request with the other's reply.  The engine only
+     * WRITES registers, and a write consumes no reply.
+     */
+    private void refreshTelemetry() {
+        if (transport == null) {
+            return;
+        }
+        try {
+            telemetry = readTelemetry();
+        } catch (Throwable t) {
+            if (log.isDebugEnabled()) {
+                log.debug("QA40x telemetry refresh failed, keeping the last reading: {}",
+                        t.toString());
+            }
         }
     }
 
@@ -610,9 +826,11 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
     }
 
     /** The safe-state write followed by the release, shared by the start-up
-     *  {@link #setup()} and the exit {@link #shutdown()} - the analyzer is left
-     *  in the same protected state whichever end of the application's life it
-     *  is reached from.  No-op when the device was never opened. */
+     *  {@link #setup()}, the exit {@link #shutdown()} and the last lane's detach
+     *  ({@link #releaseIfIdle()}) - the analyzer is left in the same protected
+     *  state whichever of them reaches it.  No-op when the device was never
+     *  opened, or when it has already been released: the transport is what says
+     *  so, and it is null in both cases. */
     private void parkAndRelease() {
         if (transport == null) {
             return;
@@ -628,17 +846,23 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
         } catch (Throwable t) {
             log.warn("QA40x safe-state write failed (device unplugged?): {}", t.toString());
         }
+        // The device is still open and already safe, so the reading costs eight
+        // register round trips and is what the panels answer from for as long as
+        // the analyzer stays released.  After the safe state and in a guard of its
+        // own: a device that will not answer a telemetry read must not be the
+        // reason the park did not finish.
+        refreshTelemetry();
         try {
             transport.close();
         } catch (Throwable t) {
             log.warn("QA40x transport close failed: {}", t.toString());
         }
         transport     = null;
-        calibration   = null;
         model         = null;
         engine        = null;
         currentRateHz = 0;
         openSession   = null;
+        // calibration and telemetry deliberately survive - see the fields.
     }
 
     /**
@@ -697,9 +921,33 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
         openSession = devices.get(0);
         model = openSession.model();
         transport = finder.open();           // reset + claim; enforces the single-device rule
-        calibration = Qa40xCalibration.fromTransport(transport);
+        readCalibrationPageIfStale();
         refreshDeviceCard();
         log.info("QA40x session open: {} (input {} dBV, output {} dBV)", model, inputRangeDbv, outputRangeDbv);
+    }
+
+    /**
+     * Reads the factory calibration page - unless this manager already holds the
+     * page of the analyzer it has just opened.
+     *
+     * <p>The page is the slowest thing in an open: a page select plus a hundred
+     * and twenty-eight register round trips, which is what made every reopen
+     * expensive enough to be felt at the far end of a network.  It is also
+     * IMMUTABLE - factory data, written once per unit - so a page already read
+     * from THIS analyzer is the page this analyzer would answer with again.
+     *
+     * <p>A page from another unit is not reused, and the identity is the whole
+     * of that decision: same model at another address is a different analyzer as
+     * far as anything here can tell, and describing one unit with another's
+     * factory factors would mis-scale every measurement silently.
+     */
+    private void readCalibrationPageIfStale() {
+        if (calibration != null && openSession.equals(cachedFrom)) {
+            return;
+        }
+        calibration = Qa40xCalibration.fromTransport(transport);
+        cachedFrom = openSession;
+        telemetry = null;                    // the previous unit's reading is not this one's
     }
 
     /**
@@ -740,11 +988,13 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
                     + "is gone): {}", why, t.toString());
         }
         transport     = null;
-        calibration   = null;
         model         = null;
         engine        = null;
         currentRateHz = 0;
         openSession   = null;
+        // The factory page and the last reading stay: a transfer that failed says
+        // the HANDLE is spent, not that the analyzer's factory data changed.  What
+        // clears them is a different analyzer on the bus (see dropSessionIfMoved).
     }
 
     /**
@@ -764,12 +1014,22 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
      */
     private synchronized void dropSessionIfMoved(List<Qa40xDevice> attached) {
         Qa40xDevice open = openSession;
-        if (open == null) {
-            return;                          // nothing to lose
-        }
-        if (!attached.contains(open)) {
+        if (open != null && !attached.contains(open)) {
             discardSession(attached.isEmpty() ? "the analyzer was detached"
                     : "the analyzer came back at another address (was " + open + ")");
+        }
+        // The cached readings outlive the session, so they are checked against the
+        // bus in their own right: after a release there IS no session to compare,
+        // and a page kept from a unit that is no longer there would describe
+        // whatever took its place.  Same identity, same rule, one scan.
+        if (cachedFrom != null && !attached.contains(cachedFrom)) {
+            if (log.isInfoEnabled()) {
+                log.info("QA40x cache dropped: {} is no longer on the bus, so its "
+                        + "calibration page describes nothing that is here", cachedFrom);
+            }
+            calibration = null;
+            telemetry   = null;
+            cachedFrom  = null;
         }
     }
 

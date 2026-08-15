@@ -93,11 +93,46 @@ class Qa40xReattachTest {
         assertTrue(first.ops.contains("close"),
                 "the handle to the analyzer that is no longer there was given up");
         manager.acquireEngine(RATE_HZ);
-        assertEquals(2, bus.opens(),
-                "and the next open ran the FINDER again - without this the manager "
-                        + "goes on writing a handle the device no longer answers to, "
-                        + "which is every operation failing until the process restarts");
+        // Three, not two: the scan above both dropped the moved analyzer's cached
+        // calibration page and warmed the fresh unit's, and that warm cycle IS the
+        // second open (it opens, reads the page, parks and releases).  What this
+        // asserts is unchanged - the dead handle was given up and the next open
+        // ran the FINDER again rather than writing a handle the device no longer
+        // answers to, which is every operation failing until the process restarts.
+        assertEquals(3, bus.opens());
         assertNotSame(first, bus.lastOpened(), "on the analyzer that is actually there");
+    }
+
+    /**
+     * The cached calibration page belongs to ONE analyzer, and the scan is what
+     * says so.
+     *
+     * <p>The page is kept across releases because it is factory data - but only
+     * of the unit it was read from.  A unit swapped for another (or the same one
+     * back at another address, which is all this can tell) must never be
+     * described by the page still in memory: every full scale would be that other
+     * unit's, and nothing on screen would say so.  So the scan that finds the
+     * analyzer moved drops the cache with the session, and warms the fresh one.
+     */
+    @Test
+    void aMovedAnalyzerDoesNotAnswerWithTheCachedPage() {
+        Qa40xDeviceManager manager = new Qa40xDeviceManager(bus);
+        manager.listInputDevices();                  // warms: one cycle on this unit
+        assertEquals(1, bus.opens());
+        FakeTransport first = bus.lastOpened();
+
+        bus.detach();
+        bus.attach(ADDRESS_AFTER);
+        manager.listInputDevices();                  // the scan the re-plug triggers
+
+        assertEquals(2, bus.opens(),
+                "the cache went with the unit that left, so the scan read the page "
+                        + "of the analyzer that is actually there");
+        assertNotSame(first, bus.lastOpened());
+        int opsAfterWarm = bus.lastOpened().ops.size();
+        manager.calibration(true);
+        assertEquals(opsAfterWarm, bus.lastOpened().ops.size(),
+                "and the fresh page answers from memory again");
     }
 
     /** And with nothing on the bus at all: the session goes, and the next open
