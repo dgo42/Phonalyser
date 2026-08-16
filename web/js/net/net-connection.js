@@ -264,9 +264,9 @@ export class NetConnection {
         if (typeof ev.data === 'string') this.onText(ev.data);
         else this.onBinary(ev.data);
       };
-      socket.onclose = () => {
+      socket.onclose = (ev) => {
         if (!settled) { settled = true; clearTimeout(timer); reject(new Error(`no Phonalyser server answered at ${this._url}`)); return; }
-        this.close(NetCloseReason.TRANSPORT_CLOSED);
+        this.close(NetCloseReason.TRANSPORT_CLOSED, ev && ev.code);
       };
       socket.onerror = () => {
         if (!settled) { settled = true; clearTimeout(timer); reject(new Error(`cannot reach ${this._url}`)); return; }
@@ -306,8 +306,13 @@ export class NetConnection {
    * can still be stopped.
    *
    * @param {{name: string, detail: string, messageKey: string}} reason
+   * @param {number} [closeCode] the WebSocket close code the socket reported, when there was
+   *        one. The reason says WHAT this end concluded; the code says what the wire saw -
+   *        1000 an orderly close by the server, 1006 an abnormal drop with no close frame
+   *        (a machine asleep, a killed process, a link that died), the protocol and policy
+   *        codes a refusal. A close this end decides itself carries none.
    */
-  close(reason) {
+  close(reason, closeCode) {
     if (this._closed) return;
     this._closed = true;
     this._ticker.stop();
@@ -332,7 +337,14 @@ export class NetConnection {
     for (const listener of [...this._closeListeners]) {
       try { listener(reason); } catch (e) { console.error('net client: close listener failed (continuing)', e); }
     }
-    console.info(`net client: session with ${this._url} ended - ${reason.detail}`);
+    // How long the far end had already been silent, in keepalive periods: a session that
+    // dies with nothing outstanding was answering until the moment it went, while one that
+    // had missed pings had been ailing for that many periods before anything noticed.
+    const silentPings = this._pingCounter - this._lastAnsweredPing;
+    const silence = silentPings <= 0 ? 'answering until the end'
+      : `${silentPings} ping(s) unanswered`;
+    const code = typeof closeCode === 'number' ? ` (close code ${closeCode})` : '';
+    console.info(`net client: session with ${this._url} ended - ${reason.detail}${code} [${silence}]`);
   }
 
   /**
@@ -809,7 +821,7 @@ export class NetDataConnection {
     if (this._closing || (event && event.code === WS_NORMAL_CLOSURE)) return;
     console.warn(`net client: the data connection of capture ${this._captureId} dropped `
       + `(${event ? event.code : 'no code'}) - the session is dead`);
-    this._connection.close(NetCloseReason.TRANSPORT_CLOSED);
+    this._connection.close(NetCloseReason.TRANSPORT_CLOSED, event && event.code);
   }
 
   /** Same rule for a fault: a data connection that faulted is one whose audio has stopped. */
