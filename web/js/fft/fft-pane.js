@@ -597,6 +597,13 @@ export class FftPane {
       if (pct < 0) pct = 0; else if (pct > 100) pct = 100;
       const txt = pct + '%';
       if ($('#pctLbl').text() !== txt) $('#pctLbl').text(txt);   // Java: setText only on change
+      // Both readouts belong to this one timer, as on the desktop (FftView
+      // .startFillPercentTimer paints the fill % and the averages count in the same
+      // tick, each read LIVE from the analyser). Painted only when a result arrived,
+      // the count kept the PREVIOUS run's depth after a start or a stats reset until
+      // the next frame landed - minutes of it at the large FFT lengths.
+      const avg = t('fft.avgCount.label', this.engine.fft.averagesDisplayed());
+      if ($('#avgLbl').text() !== avg) $('#avgLbl').text(avg);
     }, 100);
   }
 
