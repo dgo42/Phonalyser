@@ -115,6 +115,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both ends now carries the WebSocket close code the socket reported and how
   many keepalive pings had gone unanswered, so an orderly server shutdown reads
   differently from a bench that had been failing for a while.
+- **The server's jar is one file for every platform.** The headless server ships
+  as `phonalyser-server-<version>.jar`, with no architecture in its name: it
+  carries the device libraries for all of them, so the same jar runs on Windows,
+  Linux and macOS, on x86-64 and on arm64, and a bare `java -jar` opens devices
+  with nothing staged beside it. What the six downloads still do is bring their
+  platform's natives, launcher and service scripts around that one jar.
 - **Server downloads are the per-platform ZIPs alone.** Each ZIP already
   carries the server's fat jar beside the natives, the launcher and the
   service scripts; the separate bare jars were duplicate downloads and are no
