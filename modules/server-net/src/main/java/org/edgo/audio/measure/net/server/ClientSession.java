@@ -1059,8 +1059,17 @@ public final class ClientSession {
             int freed = locks.releaseAll(this);
             step(qa40x::parkIfIdle, "parking the QA40x");
             if (log.isInfoEnabled()) {
-                log.info("net session {} closed ({}), {} lock(s) freed",
-                        clientName, reason, freed);
+                // How long the client had already been silent, in keepalive
+                // periods: a session that dies with nothing outstanding was
+                // answering until the moment it went, while one that had missed
+                // pings had been ailing for that many periods before anything
+                // noticed.  The reason says WHAT ended it - a transport close
+                // carries its code - and this says how healthy it was until then.
+                int silentPings = pingCounter - lastAnsweredPing.get();
+                log.info("net session {} closed ({}), {} lock(s) freed [{}]",
+                        clientName, reason, freed,
+                        silentPings <= 0 ? "answering until the end"
+                                : silentPings + " ping(s) unanswered");
             }
         }
     }

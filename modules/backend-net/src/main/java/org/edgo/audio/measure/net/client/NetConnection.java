@@ -358,11 +358,19 @@ public final class NetConnection {
             notifyClosed(listener, reason);
         }
         if (log.isInfoEnabled()) {
+            // How long the far end had already been silent, in keepalive periods:
+            // a session that dies with nothing outstanding was answering until the
+            // moment it went, while one that had missed pings had been ailing for
+            // that many periods before anything noticed.
+            int silentPings = pingCounter - lastAnsweredPing.get();
+            String silence = silentPings <= 0 ? "answering until the end"
+                    : silentPings + " ping(s) unanswered";
             if (closeCode == NO_CLOSE_CODE) {
-                log.info("net client: session with {} ended - {}", server, reason.getDetail());
+                log.info("net client: session with {} ended - {} [{}]",
+                        server, reason.getDetail(), silence);
             } else {
-                log.info("net client: session with {} ended - {} (close code {})",
-                        server, reason.getDetail(), closeCode);
+                log.info("net client: session with {} ended - {} (close code {}) [{}]",
+                        server, reason.getDetail(), closeCode, silence);
             }
         }
     }
