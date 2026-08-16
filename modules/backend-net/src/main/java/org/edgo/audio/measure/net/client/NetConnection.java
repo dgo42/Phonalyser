@@ -108,6 +108,9 @@ public final class NetConnection {
      *  is decided by the 500 ms keepalive of spec 4.1 instead, so the second,
      *  slower detector is switched off rather than left to disagree. */
     private static final int LIBRARY_KEEPALIVE_OFF = 0;
+    /** No close code to report: this end ended the session itself (the operator's
+     *  Disconnect, the keepalive verdict), so no socket reported one. */
+    private static final int NO_CLOSE_CODE = -1;
     /** How long a request may go unanswered before the caller is told the server
      *  is not answering.  Generous on purpose: an exclusive-mode device open on
      *  the far end really can take seconds, and the keepalive - not this - is
@@ -260,7 +263,7 @@ public final class NetConnection {
                 .put(NetFields.NAME, clientName), remainingMs(deadline));
         if (!hello.isOk()) {
             NetError error = hello.getError();
-            close(NetCloseReason.HANDSHAKE_REFUSED);
+            connClose(NetCloseReason.HANDSHAKE_REFUSED);
             throw new IllegalStateException("the server at " + server
                     + " refused the session: " + (error == null
                             ? "no reason given" : error.code() + " - " + error.message()));
@@ -273,7 +276,7 @@ public final class NetConnection {
         // testing the value rather than its presence.
         int chosen = data.path(NetFields.PROTO).asInt();
         if (chosen < NetProto.PROTO_MIN_VERSION || chosen > NetProto.PROTO_VERSION) {
-            close(NetCloseReason.HANDSHAKE_REFUSED);
+            connClose(NetCloseReason.HANDSHAKE_REFUSED);
             throw new IllegalStateException(ErrorCode.PROTO_MISMATCH + ": the server at "
                     + server + " chose proto " + chosen + ", and this client speaks "
                     + NetProto.PROTO_MIN_VERSION + ".." + NetProto.PROTO_VERSION);
@@ -311,7 +314,22 @@ public final class NetConnection {
      * seconds later, because a caller blocked on a device open must learn that
      * the bench is gone while its measurement can still be stopped.
      */
-    public void close(NetCloseReason reason) {
+    public void connClose(NetCloseReason reason) {
+        connClose(reason, NO_CLOSE_CODE);
+    }
+
+    /**
+     * The same close, carrying the WebSocket close code the socket reported.
+     *
+     * <p>The reason says WHAT this end concluded; the code says what the wire
+     * saw, and the two answer different questions after a bench disappears
+     * mid-measurement.  {@code 1000} is an orderly close by the server,
+     * {@code 1006} an abnormal drop with no close frame at all - a pulled cable,
+     * a killed process, a machine that went to sleep - and the protocol and
+     * policy codes name a refusal.  Without it every death read alike in the
+     * log.
+     */
+    public void connClose(NetCloseReason reason, int closeCode) {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
@@ -340,7 +358,12 @@ public final class NetConnection {
             notifyClosed(listener, reason);
         }
         if (log.isInfoEnabled()) {
-            log.info("net client: session with {} ended - {}", server, reason.getDetail());
+            if (closeCode == NO_CLOSE_CODE) {
+                log.info("net client: session with {} ended - {}", server, reason.getDetail());
+            } else {
+                log.info("net client: session with {} ended - {} (close code {})",
+                        server, reason.getDetail(), closeCode);
+            }
         }
     }
 
@@ -729,7 +752,7 @@ public final class NetConnection {
                 log.error("net client: malformed binary frame from {}: {}", server,
                         e.toString());
             }
-            close(NetCloseReason.PROTOCOL_ERROR);
+            connClose(NetCloseReason.PROTOCOL_ERROR);
             return;
         }
         FrameListener listener = streams.get(frame.streamId());
@@ -770,7 +793,7 @@ public final class NetConnection {
                     log.warn("net client: {} pings to {} unanswered - the server is gone",
                             unanswered, server);
                 }
-                close(NetCloseReason.KEEPALIVE_TIMEOUT);
+                connClose(NetCloseReason.KEEPALIVE_TIMEOUT);
                 return;
             }
             int sequence = ++pingCounter;
@@ -780,7 +803,7 @@ public final class NetConnection {
             if (log.isWarnEnabled()) {
                 log.warn("net client: keepalive to {} failed: {}", server, e.toString());
             }
-            close(NetCloseReason.TRANSPORT_ERROR);
+            connClose(NetCloseReason.TRANSPORT_ERROR);
         }
     }
 
@@ -944,7 +967,7 @@ public final class NetConnection {
                             + "connection carries nothing but audio after its attach",
                             captureId);
                 }
-                NetConnection.this.close(NetCloseReason.PROTOCOL_ERROR);
+                connClose(NetCloseReason.PROTOCOL_ERROR);
                 return;
             }
             // The answer to this connection's own attach, and only that; it
@@ -969,7 +992,7 @@ public final class NetConnection {
                 log.warn("net client: the data connection of capture {} dropped ({}) - "
                         + "the session with {} is dead", captureId, code, server);
             }
-            NetConnection.this.close(NetCloseReason.TRANSPORT_CLOSED);
+            connClose(NetCloseReason.TRANSPORT_CLOSED, code);
         }
 
         @Override
@@ -981,7 +1004,7 @@ public final class NetConnection {
                 log.warn("net client: transport error on the data connection of capture {}: {}",
                         captureId, e.toString());
             }
-            NetConnection.this.close(NetCloseReason.TRANSPORT_ERROR);
+            connClose(NetCloseReason.TRANSPORT_ERROR);
         }
     }
 
@@ -1028,7 +1051,7 @@ public final class NetConnection {
 
         @Override
         public void onClose(int code, String reason, boolean remote) {
-            NetConnection.this.close(NetCloseReason.TRANSPORT_CLOSED);
+            connClose(NetCloseReason.TRANSPORT_CLOSED, code);
         }
 
         @Override
@@ -1036,7 +1059,7 @@ public final class NetConnection {
             if (log.isWarnEnabled()) {
                 log.warn("net client: transport error on {}: {}", server, e.toString());
             }
-            NetConnection.this.close(NetCloseReason.TRANSPORT_ERROR);
+            connClose(NetCloseReason.TRANSPORT_ERROR);
         }
     }
 }

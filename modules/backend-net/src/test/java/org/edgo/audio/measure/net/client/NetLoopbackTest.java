@@ -183,7 +183,7 @@ class NetLoopbackTest {
     @AfterEach
     void stopTheBench() {
         for (NetConnection connection : connections) {
-            connection.close(NetCloseReason.BYE);
+            connection.connClose(NetCloseReason.BYE);
         }
         bench.shutDown(SHUTDOWN_MS);
     }
@@ -619,7 +619,7 @@ class NetLoopbackTest {
         NetDeviceManager manager = new NetDeviceManager();
 
         manager.connect(connection, select(connection, servedBackend(connection)));
-        connection.close(NetCloseReason.BYE);
+        connection.connClose(NetCloseReason.BYE);
 
         assertEquals(2, manager.listInputDevices().size(),
                 "the bench's inputs came with the selection, so there is nothing left "
@@ -1163,7 +1163,7 @@ class NetLoopbackTest {
         Faults faults = subscribe(manager);
         NetPcmCapture capture = openFirstInput(manager);
 
-        connection.close(NetCloseReason.KEEPALIVE_TIMEOUT);
+        connection.connClose(NetCloseReason.KEEPALIVE_TIMEOUT);
 
         assertFalse(capture.isRecording(),
                 "spec 4.1: \"Client: stop all modules\" - a capture whose connection died "

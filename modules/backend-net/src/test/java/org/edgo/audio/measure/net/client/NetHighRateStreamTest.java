@@ -124,7 +124,7 @@ class NetHighRateStreamTest {
     @AfterEach
     void stopTheBench() {
         for (NetConnection connection : connections) {
-            connection.close(NetCloseReason.BYE);
+            connection.connClose(NetCloseReason.BYE);
         }
         bench.shutDown(SHUTDOWN_MS);
     }
