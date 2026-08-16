@@ -311,6 +311,15 @@ public final class SignalBuffer {
      */
     int readStartingAt(long absoluteStart, int count,
                        double[] outLeft, double[] outRight) {
+        return readStartingAt(absoluteStart, count, outLeft, outRight, 0);
+    }
+
+    /** {@link #readStartingAt(long, int, double[], double[])} writing at
+     *  {@code outOffset} instead of index 0, so a consumer can gather one frame
+     *  from SEVERAL forward reads - the only way to assemble a frame longer than
+     *  the ring itself. */
+    int readStartingAt(long absoluteStart, int count,
+                       double[] outLeft, double[] outRight, int outOffset) {
         long currentWrite;
         synchronized (this) {
             currentWrite = writePos;
@@ -322,12 +331,12 @@ public final class SignalBuffer {
         if (available <= 0) return 0;
         int srcStart   = (int) (start % capacity);
         int firstChunk = Math.min(available, capacity - srcStart);
-        if (outLeft  != null) System.arraycopy(left,  srcStart, outLeft,  0, firstChunk);
-        if (outRight != null) System.arraycopy(right, srcStart, outRight, 0, firstChunk);
+        if (outLeft  != null) System.arraycopy(left,  srcStart, outLeft,  outOffset, firstChunk);
+        if (outRight != null) System.arraycopy(right, srcStart, outRight, outOffset, firstChunk);
         int remaining = available - firstChunk;
         if (remaining > 0) {
-            if (outLeft  != null) System.arraycopy(left,  0, outLeft,  firstChunk, remaining);
-            if (outRight != null) System.arraycopy(right, 0, outRight, firstChunk, remaining);
+            if (outLeft  != null) System.arraycopy(left,  0, outLeft,  outOffset + firstChunk, remaining);
+            if (outRight != null) System.arraycopy(right, 0, outRight, outOffset + firstChunk, remaining);
         }
         return available;
     }

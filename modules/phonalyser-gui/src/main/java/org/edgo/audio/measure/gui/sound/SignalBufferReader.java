@@ -203,12 +203,26 @@ public final class SignalBufferReader {
      *         (nothing copied; re-anchor and restart any accumulation).
      */
     public int read(int maxCount, double[] outLeft, double[] outRight) {
+        return read(maxCount, outLeft, outRight, 0);
+    }
+
+    /**
+     * {@link #read(int, double[], double[])} writing at {@code outOffset} rather
+     * than index 0, so a consumer can GATHER one frame from several consecutive
+     * reads.  That is what lets a frame longer than the ring exist at all: a
+     * 4 M-point FFT at 48 kS/s spans 87 s of audio, far beyond any sane capture
+     * ring, and demanding it in one contiguous read could only ever end in an
+     * {@link #OVERRUN} - the cursor would have to stand still for longer than
+     * the ring holds.  Consuming each tick's share into the consumer's own
+     * buffer keeps the cursor right behind the writer instead.
+     */
+    public int read(int maxCount, double[] outLeft, double[] outRight, int outOffset) {
         long write = buffer.getWritePos();
         if (readPos < 0) readPos = write;                       // anchor on first use
         if (readPos < write - buffer.getCapacity()) return OVERRUN;
         int n = (int) Math.min((long) maxCount, write - readPos);
         if (n <= 0) return 0;
-        buffer.readStartingAt(readPos, n, outLeft, outRight);   // forward, wrap-aware copy
+        buffer.readStartingAt(readPos, n, outLeft, outRight, outOffset);   // forward, wrap-aware copy
         // The copy runs outside the buffer lock.  When the cursor sits close
         // to a full ring behind (large-FFT backlog), the writer can lap into
         // the region being copied DURING the copy - the pre-check above can't
