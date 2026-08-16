@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.preferences;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
@@ -294,7 +295,7 @@ class PerChannelAdcFsTest {
         Preferences p = detached();
         p.setAdcFsVoltageRms(2.0);
         p.setAdcFsVoltageRmsRight(3.0);
-        assertEquals(2.0 * Math.sqrt(2.0), p.getAdcPeakVolts(Channel.L), EPS);
-        assertEquals(3.0 * Math.sqrt(2.0), p.getAdcPeakVolts(Channel.R), EPS);
+        assertEquals(2.0 * Constants.SQRT2, p.getAdcPeakVolts(Channel.L), EPS);
+        assertEquals(3.0 * Constants.SQRT2, p.getAdcPeakVolts(Channel.R), EPS);
     }
 }

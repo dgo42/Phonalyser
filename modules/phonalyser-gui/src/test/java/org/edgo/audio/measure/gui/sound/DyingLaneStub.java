@@ -57,7 +57,7 @@ import lombok.Setter;
  * swallows with a single log line.
  *
  * <p>It claims {@link AudioBackendType#JAVASOUND} because a LOCAL slot is the
- * whole point: the NET slot's manager is a remote generator, and the controller
+ * whole point: the net slot's manager is a remote generator, and the controller
  * COMMANDS those instead of rendering into them - so {@code BenchGeneratorStub},
  * the sibling this would otherwise extend, refuses to open a playback at all.
  * The claim is contested (the CLI module puts the real JavaSound backend on this
@@ -133,6 +133,13 @@ public final class DyingLaneStub implements AudioDeviceManager {
         return playbacks.get(index).closed;
     }
 
+    /** The DDS the most recently opened line was handed, or null before its
+     *  render thread reached {@code play} - for a test that asks what the lane
+     *  actually configured rather than what it was asked for. */
+    public SignalGenerator lastPlayedGenerator() {
+        return playbacks.isEmpty() ? null : playbacks.get(playbacks.size() - 1).getPlayed();
+    }
+
     @Override
     public List<DeviceRef> listInputDevices() {
         return List.of(input);
@@ -181,6 +188,10 @@ public final class DyingLaneStub implements AudioDeviceManager {
         /** Set by the render thread's own teardown - see
          *  {@link DyingLaneStub#playbackClosed(int)}. */
         private volatile boolean closed;
+        /** The generator handed to {@link #play}; null until the render thread
+         *  reaches it.  Volatile: written there, read from the test's thread. */
+        @Getter
+        private volatile SignalGenerator played;
 
         @Override
         public void open() {
@@ -195,6 +206,9 @@ public final class DyingLaneStub implements AudioDeviceManager {
         @Override
         public void play(SignalGenerator generator, AtomicBoolean stopFlag,
                 CountDownLatch readyLatch) {
+            // The very DDS the lane built and configured, kept so a test can ask
+            // what it was actually set to rather than what the caller meant.
+            played = generator;
             readyLatch.countDown();          // the buffer is primed: the tone is up
             try {
                 kill.await(KILL_WAIT_MINUTES, TimeUnit.MINUTES);

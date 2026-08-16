@@ -184,6 +184,68 @@ class DeviceStoreTest {
                 "the choice is read even with no audioDevices block to reach it past");
     }
 
+    /**
+     * Establishing the store TWICE against the same file must leave the same store.
+     *
+     * <p>The reader used to append every parsed card to a list that nothing cleared,
+     * so a second establish held every card twice - and the next ordinary save wrote
+     * the doubled store back, which doubled again on the following launch.  Storing
+     * cards under their own name makes the second read a no-op instead.
+     */
+    @Test
+    void establishingTheStoreTwiceLeavesTheSameCards(@TempDir Path dir) throws IOException {
+        Path store = dir.resolve("devices.yaml");
+        Files.writeString(store, ONE_CARD_STORE);
+
+        Preferences p = detached();
+        loadDevicesFrom(p, store);
+        int afterFirst = p.getAudioDeviceProfiles().size();
+        loadDevicesFrom(p, store);
+
+        assertEquals(1, afterFirst, "the file's one card");
+        assertEquals(afterFirst, p.getAudioDeviceProfiles().size(),
+                "and re-reading the same file adds nothing");
+    }
+
+    /**
+     * A store file that already carries the same card several times - what the
+     * append bug left behind - collapses to ONE on load, and the FIRST occurrence
+     * is the one that stands.  Matching is case-insensitive, exactly as every card
+     * lookup here has always been.
+     */
+    @Test
+    void aFileListingOneCardTwiceLoadsItOnce(@TempDir Path dir) throws IOException {
+        Path store = dir.resolve("devices.yaml");
+        Files.writeString(store, TWICE_LISTED_STORE);
+
+        Preferences p = detached();
+        loadDevicesFrom(p, store);
+
+        assertEquals(1, p.getAudioDeviceProfiles().size(), "one card, not two");
+        AudioDeviceProfile card = p.findAudioDeviceProfile("Duplicated Card");
+        assertEquals(List.of("first"), card.getMatch(),
+                "the FIRST entry stands - a later copy does not overwrite it");
+    }
+
+    /** A minimal store the seed merge cannot touch: the recorded content version is
+     *  above any bundled one, so what the file says is the whole store. */
+    private static final String ONE_CARD_STORE =
+            "formatVersion: 1\n"
+            + "contentVersion: 999999\n"
+            + "audioDevices:\n"
+            + "  - name: \"Duplicated Card\"\n"
+            + "    match:\n"
+            + "      - \"first\"\n";
+
+    /** The same file with the card listed a second time, under another spelling of
+     *  its name and with a different recognition pattern, so which copy won is
+     *  visible in the result. */
+    private static final String TWICE_LISTED_STORE =
+            ONE_CARD_STORE
+            + "  - name: \"duplicated card\"\n"
+            + "    match:\n"
+            + "      - \"second\"\n";
+
     /** A card recognising {@code match}, with one calibrated LINKED input row so
      *  it is a usable card in either resolution path. */
     private AudioDeviceProfile matchCard(String name, String match) {

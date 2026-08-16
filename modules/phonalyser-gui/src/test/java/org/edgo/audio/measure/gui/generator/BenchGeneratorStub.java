@@ -269,6 +269,11 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
     }
 
     @Override
+    public void setDitherBits(double bits) {
+        record("setDitherBits", bits);
+    }
+
+    @Override
     public void fftGrid(int fftSize, boolean snapEnabled) {
         record("fftGrid", fftSize, snapEnabled);
     }

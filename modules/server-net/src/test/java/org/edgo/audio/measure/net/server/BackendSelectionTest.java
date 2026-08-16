@@ -70,7 +70,7 @@ class BackendSelectionTest {
     private static final List<String> SERVER_BACKENDS = List.of(
             AudioBackendType.WASAPI.name(), AudioBackendType.WDMKS.name(),
             AudioBackendType.COREAUDIO.name(), AudioBackendType.JAVASOUND.name(),
-            AudioBackendType.QA40X.name());
+            AudioBackendType.QA40X.name(), AudioBackendType.LOOPBACK.name());
 
     private final ServerConfig config = new ServerConfig(new String[0]);
     private final LockRegistry locks = new LockRegistry();
@@ -129,7 +129,7 @@ class BackendSelectionTest {
 
         JsonNode backends = channel.responseTo(id).getData().path(NetFields.BACKENDS);
         assertFalse(names(backends).contains(AudioBackendType.NET.name()),
-                "NET is how a CLIENT reaches a server, not something a server can "
+                "the net carrier is how a CLIENT reaches a server, not something a server can "
                         + "serve: listed, it would become a '<server> -> Network' "
                         + "entry in the client's combo that backend.select could "
                         + "only refuse");
@@ -138,6 +138,9 @@ class BackendSelectionTest {
     @Test
     void selectingABackendAnswersItsWholeDevicesListEntry() {
         greet(session, CLIENT_NAME);
+        // The start-up priming scan ServerMain runs before the transports
+        // accept anything - backend.select answers from the last enumeration.
+        catalog.scan();
         int id = nextId();
 
         select(session, id, AudioBackendType.QA40X);

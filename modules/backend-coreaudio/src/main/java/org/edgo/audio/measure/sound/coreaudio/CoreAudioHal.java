@@ -21,6 +21,7 @@ package org.edgo.audio.measure.sound.coreaudio;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -653,6 +654,17 @@ public final class CoreAudioHal {
         }
         synchronized (this) {
             if (lib == null && !loadFailed) {
+                // OS gate BEFORE the load attempt: off macOS there is no
+                // CoreAudio framework and never will be - asking JNA for it
+                // would spell the mac framework name in the host OS's library
+                // dialect (libCoreAudio.so on Linux) and warn about a library
+                // nothing ever packaged.  Silent by design: an unavailable
+                // backend's HAL simply has no capabilities to offer.
+                String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+                if (!os.contains("mac")) {
+                    loadFailed = true;
+                    return null;
+                }
                 try {
                     lib = Native.load("CoreAudio", Lib.class);
                 } catch (UnsatisfiedLinkError e) {

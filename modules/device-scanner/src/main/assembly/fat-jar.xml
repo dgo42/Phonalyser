@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Self-contained diagnostic jar: every dependency unpacked, and - unlike
+     the application's per-platform fat jars - EVERY platform's natives kept
+     (win32-* portaudio + csjsound DLLs from the module resources, darwin-*
+     dylibs staged by the pom, all of JNA's jnidispatch variants), so the one
+     artifact runs on any supported OS/arch.
+
+     META-INF/services is merged across the unpacked jars: all four backend
+     providers register under the same file name, and without the handler one
+     module's registration silently overwrites the others - the first build
+     scanned WASAPI alone. -->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.1.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.1.0 http://maven.apache.org/xsd/assembly-2.1.0.xsd">
+    <id>fat-jar</id>
+    <formats>
+        <format>jar</format>
+    </formats>
+    <includeBaseDirectory>false</includeBaseDirectory>
+    <containerDescriptorHandlers>
+        <containerDescriptorHandler>
+            <handlerName>metaInf-services</handlerName>
+        </containerDescriptorHandler>
+    </containerDescriptorHandlers>
+    <dependencySets>
+        <dependencySet>
+            <outputDirectory>/</outputDirectory>
+            <useProjectArtifact>true</useProjectArtifact>
+            <unpack>true</unpack>
+            <scope>runtime</scope>
+        </dependencySet>
+    </dependencySets>
+</assembly>

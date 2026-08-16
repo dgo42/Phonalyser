@@ -1060,6 +1060,10 @@ export class ScopePane {
         }, GEN_CLEAR_DELAY_MS);
       }
     });
+    // The checkbox gate follows the FORM directly: the bus event above fires only when the
+    // EMITTED signal changes (generator on air), but the grey/un-grey must track form edits
+    // made while the generator is off too.
+    this.prefs.genSignalForm.addListener(() => this.syncReconstructedBeatEnabled());
     return this;
   }
 }

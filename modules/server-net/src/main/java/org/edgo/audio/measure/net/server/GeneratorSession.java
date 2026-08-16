@@ -510,6 +510,14 @@ public final class GeneratorSession {
             // playing instead of at the next open.
             applyLaneScale();
         }
+        Double dither = message.optDouble(NetFields.DITHER_BITS);
+        if (dither != null) {
+            ditherBits = dither;
+            // Live like the lane scale: the client's dither edit lands on the
+            // tone that is playing, and the stored value carries it across the
+            // lane reopen a device swap performs.
+            applyDither();
+        }
         Double rectDuty = message.optDouble(NetFields.RECTANGLE_DUTY);
         if (rectDuty != null) {
             rectangleDuty = rectDuty;
@@ -1238,6 +1246,15 @@ public final class GeneratorSession {
         AudioPlayback lane = playback;
         if (lane != null) {
             lane.setChannelScale(LEFT_LANE_SCALE, rightLaneScale);
+        }
+    }
+
+    /** Pushes the dither depth to the line that is open, if one is - the live
+     *  half of {@code gen.config}'s {@code ditherBits} (spec 4.5). */
+    private void applyDither() {
+        AudioPlayback lane = playback;
+        if (lane != null) {
+            lane.setDitherBits(ditherBits);
         }
     }
 

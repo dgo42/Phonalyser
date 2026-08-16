@@ -21,6 +21,8 @@ package org.edgo.audio.measure.preferences;
 import org.edgo.audio.measure.enums.FilterResponse;
 import org.edgo.audio.measure.enums.FilterType;
 import org.edgo.audio.measure.enums.UnevenMode;
+import org.edgo.audio.measure.gui.widgets.UnitConversion;
+import org.edgo.audio.measure.gui.widgets.UnitFamily;
 
 import lombok.Data;
 
@@ -38,7 +40,11 @@ public class FreqRespPreset {
     // Sweep
     private double startHz        = 20.0;
     private double stopHz         = 20_000.0;
-    private double amplitudeVrms  = 0.5;
+    /** Drive amplitude AS ENTERED, with {@link #amplitudeUnit} naming its
+     *  unit - a preset recalled under a different calibration replays the pair
+     *  the operator saved, not a voltage frozen out of it. */
+    private double amplitude      = 0.5;
+    private String amplitudeUnit  = UnitConversion.baseToken(UnitFamily.AMPLITUDE);
     private int    sweepPoints    = 65536;
     private int    fftSize        = 524288;
     private double leadInSec      = 0.2;

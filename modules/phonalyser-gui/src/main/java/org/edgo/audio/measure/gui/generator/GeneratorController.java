@@ -114,6 +114,11 @@ public final class GeneratorController {
     /** The source of the RUNNING file playback, or null - kept so the loop
      *  preference can reach the lap that is already playing. */
     private volatile FilePlaybackGenerator filePlaySource;
+    /** The OPEN file-playback line, or null when no file is playing.  Held so a
+     *  live dither change reaches the file lane the same way it reaches the tone
+     *  lane - the play loop runs on its own thread and the setter is called from
+     *  the UI thread, so the reference is volatile rather than a local. */
+    private volatile AudioPlayback filePlayback;
     @Getter
     private volatile String        filePlayError;
     /** True once the BENCH has confirmed a file playing, so the remote watcher
@@ -151,7 +156,10 @@ public final class GeneratorController {
             publishSignalChanged();
         });
         onPref(prefs.genSignalFormProperty(), f -> {
-            lane.formChanged(f);
+            // The run is derived HERE, from the settings as they now stand, so a
+            // form change that needs a restart plays the NEW waveform - the run
+            // carries the form, and the lane's stored one is the old session.
+            lane.formChanged(f, buildRun());
             publishSignalChanged();
         });
         // Loading / clearing a .dpd must take effect now: restart the running
@@ -159,8 +167,11 @@ public final class GeneratorController {
         // build reads the new path).  Each slot only restarts its own form.
         onPref(prefs.genDpdProperty(),     v -> lane.dpdChanged(GenSignalForm.SINE_COMP));
         onPref(prefs.genDpdDualProperty(), v -> lane.dpdChanged(GenSignalForm.DUAL_TONE_COMP));
-        onPref(prefs.genAmplitudeVrmsProperty(), v -> {
-            lane.setAmplitudeVrms(v);
+        // The amplitude is stored as the operator entered it - number and unit
+        // as ONE value - so this fires once per edit and what reaches the lane
+        // is always the RESOLVED voltage, never the raw number.
+        onPref(prefs.genAmplitudeProperty(), v -> {
+            lane.setAmplitudeVrms(prefs.getGenAmplitudeVrms());
             publishSignalChanged();
         });
         onPref(prefs.dacFsVoltageAmplProperty(), v -> {
@@ -168,6 +179,12 @@ public final class GeneratorController {
             // per-lane ratio (scaleR = fsLeft/fsRight), so re-push both.
             lane.setDacFsVoltageAmpl(v);
             lane.pushOutputRouting();
+            // A full-scale-relative amplitude and a dither entered as a level
+            // both resolve to a different quantity under the new calibration -
+            // the stored pairs are unchanged, so nothing else would re-push
+            // them and a running lane would keep the old figures.
+            lane.setAmplitudeVrms(prefs.getGenAmplitudeVrms());
+            setDitherBits(prefs.getGenDitherBits());
             publishSignalChanged();
         });
         onPref(prefs.dacFsVoltageAmplRightProperty(), v -> {
@@ -190,7 +207,9 @@ public final class GeneratorController {
             lane.setDualToneAmplitudes(a1, 100.0 - a1);
             publishSignalChanged();
         });
-        onPref(prefs.genDitherBitsProperty(), this::setDitherBits);
+        // The entered dither, resolved to bits - one notification per edit, for
+        // the same reason as the amplitude above.
+        onPref(prefs.genDitherProperty(), v -> setDitherBits(prefs.getGenDitherBits()));
         onPref(prefs.genSweepFreqStartHzProperty(), v -> {
             if (!lane.restartFarinaOnParamChange()) lane.setSweepFreqStart(v);
             publishSignalChanged();
@@ -512,6 +531,13 @@ public final class GeneratorController {
         return lane.correctedPeriodAlignedHz();
     }
 
+    /** The capture rate the FFT bin grid is built on - what the pane's
+     *  snap brackets are computed against, so a label and the emitted tone
+     *  are read off the same grid. */
+    public int analysisSampleRate() {
+        return lane.analysisRateHz();
+    }
+
     public double maxAmplitudeVrms(GenSignalForm form) {
         return lane.maxAmplitudeVrms(form);
     }
@@ -522,9 +548,17 @@ public final class GeneratorController {
 
     /** Live-applies the dither bit count, then signals a generator change so
      *  the FFT stats/accumulator and the scope persistence restart on the new
-     *  signal. */
+     *  signal.
+     *
+     *  <p>BOTH lanes: the tone's, and the file line when a file is playing.  A
+     *  file is scaled and re-quantised on its way out exactly as a tone is, so a
+     *  dither the operator changes mid-file has to reach it - the same push, not
+     *  a mechanism of its own.  Null whenever no file is playing. */
     public void setDitherBits(double bits) {
         lane.setDitherBits(bits);
+        if (filePlayback != null) {
+            filePlayback.setDitherBits(bits);
+        }
         publishSignalChanged();
     }
 
@@ -849,6 +883,37 @@ public final class GeneratorController {
         return I18n.t("generator.error.playFile") + " - " + I18n.t(reason.i18nKey());
     }
 
+    /**
+     * The refusal for a file whose format is not the one the output is configured
+     * for, or {@code null} when the two agree.
+     *
+     * <p>A file is played at its OWN rate and depth - nothing is resampled and
+     * nothing is re-quantised - so the output line has to be opened at the file's
+     * format.  On a backend whose two directions share one clock that would drag
+     * the whole session onto the file's rate, and on any backend it silently
+     * replaces the format the operator configured in Preferences.  The honest
+     * answer is to refuse and say which two formats disagree, so the next move
+     * (set the output to the file's format) is one the operator can make.
+     *
+     * <p>Package-private for the test: the comparison is the whole decision and it
+     * needs neither a device nor a display to be driven.
+     */
+    String filePlayFormatMismatch(String fileName, int fileSampleRate, int fileBitDepth) {
+        BackendPrefs output = Preferences.instance().current();
+        int rate = output.getOutputSampleRate();
+        int bits = output.getOutputBitDepth();
+        if (fileSampleRate == rate && fileBitDepth == bits) {
+            return null;
+        }
+        // The four numbers travel as STRINGS: a rate handed to MessageFormat as an
+        // Integer comes back grouped for the locale ("44,100 Hz"), which is not how
+        // any rate is written in this application - the combo the message sends the
+        // operator to reads "44100 Hz".
+        return I18n.t("generator.error.playFile.formatMismatch", fileName,
+                String.valueOf(fileSampleRate), String.valueOf(fileBitDepth),
+                String.valueOf(rate), String.valueOf(bits));
+    }
+
     /** Megabytes to one decimal, so a 50.4 MB file and a 50 MB cap cannot both
      *  print "50" and make the refusal read as though the file fitted. */
     private String megabytes(long bytes) {
@@ -899,6 +964,20 @@ public final class GeneratorController {
                         Preferences.instance().current().getOutputDeviceName());
                 return;
             }
+            // The file is played at its OWN rate and depth, so a file that does
+            // not match the configured output format is refused here rather than
+            // silently reconfiguring the output the operator set up.
+            String mismatch = filePlayFormatMismatch(file.getName(),
+                    source.getFileSampleRate(), source.getFileBitDepth());
+            if (mismatch != null) {
+                log.warn("File playback refused: {} is {} Hz / {} bit, output configured for "
+                                + "{} Hz / {} bit", file.getName(), source.getFileSampleRate(),
+                        source.getFileBitDepth(),
+                        Preferences.instance().current().getOutputSampleRate(),
+                        Preferences.instance().current().getOutputBitDepth());
+                filePlayError = mismatch;
+                return;
+            }
             // The caller's step after resolution: the DAC full scale lands on
             // the runtime scalars via the UI thread (prefs bindings are plain
             // UI-only listeners).
@@ -906,12 +985,21 @@ public final class GeneratorController {
 
             // Played at the file's own rate and depth, so nothing is resampled -
             // the SPI form via playbackManager, since the format is the FILE's,
-            // not the preferences'.  No dither: the samples are already
-            // quantised, and re-dithering a finished recording would only add
-            // noise.
+            // not the preferences'.
+            //
+            // The CONFIGURED generator dither applies, exactly as it does to the
+            // tone.  "The samples are already quantised" was the old reasoning and
+            // it is not true of what leaves this lane: the calibration scale below
+            // multiplies every sample by k, and the line re-quantises the product
+            // at the DAC's depth - a rounding with no dither under it, which is
+            // precisely what dither exists to linearise.  Off still means zero on
+            // a hardware backend; the loopback keeps its own last-bit fallback, so
+            // its known floor now shows on file play too.
             playback = AudioBackend.instance().playbackManager(device).openPlayback(
-                    device, source.getFileSampleRate(), source.getFileBitDepth(), 0.0);
+                    device, source.getFileSampleRate(), source.getFileBitDepth(),
+                    Preferences.instance().getGenDitherBits());
             playback.open();
+            filePlayback = playback;      // live dither changes reach it from here on
             // The DEVICE path's half of the file convention (0 dBFS = 2 Vrms,
             // see EXPORT_FS_VOLTAGE_AMPL): the file carries the pure signal,
             // so the LINE applies this machine's DAC calibration - the
@@ -953,6 +1041,9 @@ public final class GeneratorController {
             log.warn("File playback failed: {}", ex.getMessage(), ex);
             filePlayError = ex.getMessage();
         } finally {
+            if (filePlayback == playback) {
+                filePlayback = null;      // a later session's line must not be pushed through this one
+            }
             Closeables.closeQuietly(playback);
             if (source != null) {
                 if (filePlaySource == source) {

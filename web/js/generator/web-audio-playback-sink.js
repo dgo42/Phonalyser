@@ -16,6 +16,7 @@
  */
 import { debug } from '../util/debug.js';
 import { classifyBrowserFailure } from '../audio/device-failure-reason.js';
+import { ddsProcessorUrl } from '../audio/worklet-urls.js';
 
 /** Bounded output-device-open retry - faithful to GeneratorController's MAX_ATTEMPTS /
  *  RETRY_PAUSE_MS: a measurement takeover stops the other modules then opens the DAC itself,
@@ -181,7 +182,7 @@ export class WebAudioPlaybackSink {
    * @returns {Promise<void>}
    */
   async start(spec) {
-    await this.#ctx.audioWorklet.addModule(new URL('../audio/worklets/dds-processor.js', import.meta.url));
+    await this.#ctx.audioWorklet.addModule(ddsProcessorUrl());
     this.#node = new AudioWorkletNode(this.#ctx, 'dds-processor', {
       // Stereo out: the worklet writes each lane explicitly to honour the output-lane
       // gate (Java's interleave seam, PcmQuantizer). A mono [1] lane up-mixed by the

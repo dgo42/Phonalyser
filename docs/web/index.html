@@ -56,12 +56,12 @@
            this session must appear without a reload. ===== -->
       <li class="dropdown-submenu">
         <button class="dropdown-item dropdown-toggle" type="button" id="menuCfgPreferences"
-                data-i18n="menu.tools.config.preferences">Preferences</button>
+                data-i18n="web.menu.tools.config.preferences">Preferences</button>
         <ul class="dropdown-menu" id="menuCfgPreferencesItems" aria-labelledby="menuCfgPreferences"></ul>
       </li>
       <li class="dropdown-submenu">
         <button class="dropdown-item dropdown-toggle" type="button" id="menuCfgDevices"
-                data-i18n="menu.tools.config.devices">Devices</button>
+                data-i18n="web.menu.tools.config.devices">Devices</button>
         <ul class="dropdown-menu" id="menuCfgDevicesItems" aria-labelledby="menuCfgDevices"></ul>
       </li>
     </ul>
@@ -78,7 +78,7 @@
     </ul>
   </div>
   <span class="menu-spacer"></span>
-  <span class="menu-ver">v1.2.0 · web</span>
+  <span class="menu-ver">v1.2.1 · web</span>
 </div>
 
 <!-- ===== top-level tabs ===== -->
@@ -321,7 +321,7 @@
             <div class="tab" data-panel="scopeHoriz" data-i18n-title="scope.tab.horizontal.tooltip"><div class="t-title" data-i18n="scope.tab.horizontal">Horizontal</div><div class="t-sub"><span class="tile">1m</span></div></div>
             <div class="tab" data-panel="scopeTrig" data-i18n-title="scope.tab.trigger.tooltip"><div class="t-title" data-i18n="scope.tab.trigger">Trigger</div><div class="t-sub"><span class="tile">R</span><span class="tile">↑</span><span class="tile">A</span></div></div>
             <div class="tab" data-panel="scopePresets" data-i18n-title="scope.tab.presets.tooltip"><div class="t-title" data-i18n="scope.tab.presets">Presets</div><div class="t-sub"></div></div>
-            <div class="tab" data-panel="scopeUtility" data-i18n-title="scope.tab.utility.tooltip"><div class="t-title" data-i18n="fft.tab.utility">Utility</div></div>
+            <div class="tab" data-panel="scopeUtility" data-i18n-title="scope.tab.utility.tooltip"><div class="t-title" data-i18n="scope.tab.utility">Utility</div></div>
             <div class="tab" data-panel="scopeSavePanel" data-i18n-title="scope.tab.save.tooltip"><div class="t-title" data-i18n="scope.save.title">Save to...</div></div>
             <div class="tab" data-panel="scopeLoadPanel" data-i18n-title="scope.tab.load.tooltip"><div class="t-title" data-i18n="scope.openSignal.title">Load signal...</div></div>
             <div class="tab-spacer"></div>
@@ -473,6 +473,11 @@
                    added LAST in the header AFTER reset). Signal-gated + toggled by the FFT pane;
                    opens #fftMeasWindow. Mirrors the scope #scopeTablePop button. -->
               <button id="fftTablePop" class="lr ico" data-i18n-title="fft.external.tooltip"><img src="assets/icons/window-restore.svg" class="lr-svg" alt=""></button>
+              <!-- Unit of the distortion table's absolute-level cells (Java FftView
+                   distortionUnitCombo, which keeps the slot right after the external-window
+                   button). dB = the level minus the reference the row's percentage divides by.
+                   Shown on the same condition as the pop-out: the table has to be there. -->
+              <select id="fftDistUnit" class="form-select form-select-sm unit-sel"><option value="DBV" selected>dBV</option><option value="DBFS">dBFS</option><option value="DBR">dB</option></select>
             </div>
             <div class="fft-meta"><span id="pctLbl" data-i18n-title="fft.fillPercent.tooltip">0%</span><span id="avgLbl" data-i18n-title="fft.avgCount.tooltip">0 average(s)</span>
               <select id="fftMagUnit" class="form-select form-select-sm unit-sel" data-i18n-title="fft.magUnit.tooltip"><option value="V">V</option><option value="V_SQRT_HZ">V/√Hz</option><option value="DBV" selected>dBV</option><option value="DBFS">dBFS</option><option value="DBR">dBr</option></select></div>
@@ -1011,7 +1016,7 @@
                installation is talking to, and how to reach one the peer table cannot see.
                Beside Scan, always. -->
           <button id="netServers" type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0"
-                  data-i18n="net.servers.button" data-i18n-title="net.servers.button.tooltip">Servers...</button>
+                  data-i18n="preferences.backend.servers" data-i18n-title="preferences.backend.servers.tooltip">Servers...</button>
           <label for="backendSel" class="mb-0 text-nowrap flex-shrink-0" data-i18n="preferences.backend">Backend:</label>
           <button id="backendSettings" type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0 d-none"
                   data-i18n-title="preferences.backend.customPrefs.tooltip">QA40x preferences</button>
@@ -1066,16 +1071,18 @@
             <!-- The `value` attributes are the PersistenceMode enum names the code reads
                  (preferences-dialog.js reads .val(); nothing anywhere parses the display
                  text) - only the labels are localized. -->
-            <option value="OFF" data-i18n="preferences.persistence.off">Off</option>
-            <option value="S_05" data-i18n="preferences.persistence.s05">0.5 s</option>
-            <option value="S_1" data-i18n="preferences.persistence.s1">1 s</option>
-            <option value="S_2" data-i18n="preferences.persistence.s2">2 s</option>
-            <option value="S_5" data-i18n="preferences.persistence.s5">5 s</option>
-            <option value="S_10" data-i18n="preferences.persistence.s10">10 s</option>
-            <option value="S_15" data-i18n="preferences.persistence.s15">15 s</option>
-            <option value="S_20" data-i18n="preferences.persistence.s20">20 s</option>
-            <option value="INFINITE" data-i18n="preferences.persistence.infinite">∞</option>
-            <option value="MANUAL" data-i18n="preferences.persistence.manualMode">Manual</option>
+            <!-- Untranslated by design: the desktop combo shows PersistenceMode.LABELS
+                 verbatim, and these entries mirror that array one to one. -->
+            <option value="OFF">Off</option>
+            <option value="S_05">0.5 s</option>
+            <option value="S_1">1 s</option>
+            <option value="S_2">2 s</option>
+            <option value="S_5">5 s</option>
+            <option value="S_10">10 s</option>
+            <option value="S_15">15 s</option>
+            <option value="S_20">20 s</option>
+            <option value="INFINITE">∞</option>
+            <option value="MANUAL">Manual</option>
           </select>
           <label data-i18n="preferences.persistence.manual">Manual persistence, s:</label>
           <div class="numfield"><input id="prefOscPersistManual" class="nf-input" type="text" data-i18n-title="preferences.persistence.manual.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
@@ -1191,7 +1198,7 @@
         <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.stopHz">Stop frequency, Hz</label>
         <div class="numfield sm"><input id="tnStop" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
         <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.amplitude">Amplitude (RMS)</label>
-        <div class="numfield sm"><input id="tnAmp" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+        <div class="numfield sm"><input id="tnAmp" class="nf-input" type="text" data-i18n-title="generator.amplitudeRms.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
         <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.targetHz">Target frequency, Hz</label>
         <div class="numfield sm"><input id="tnTarget" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
         <!-- Output-lane gate (Java TuneNotchWizardDialog outputChannelCombo): which DAC lane(s)
@@ -1415,7 +1422,7 @@
      No proxy row (the desktop has one): a browser's WebSocket follows the system proxy and
      gives the page no say. ===== -->
 <div class="modal fade" id="netServersModal" tabindex="-1" data-bs-backdrop="static">
-  <div class="modal-dialog modal-dialog-centered" style="max-width: 620px;"><div class="modal-content prefs">
+  <div class="modal-dialog modal-dialog-centered" style="max-width: 515px;"><div class="modal-content prefs">
     <div class="modal-header py-2"><h6 class="modal-title" data-i18n="net.servers.title">Phonalyser servers</h6>
       <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
     <div class="modal-body">
@@ -1437,18 +1444,18 @@
         <button id="netRemove" type="button" class="btn btn-sm btn-outline-secondary"
                 data-i18n="net.servers.remove" data-i18n-title="net.servers.remove.tooltip">Remove</button>
       </div>
-      <fieldset class="prefs-group"><legend data-i18n="net.servers.add.title">Add a server</legend>
-        <div class="d-flex align-items-center gap-2 flex-wrap">
-          <label for="netHost" class="mb-0" data-i18n="net.servers.host">Host:</label>
-          <input id="netHost" type="text" class="form-control form-control-sm" style="max-width:180px">
-          <!-- ONE field: a server serves its HTTP endpoints and its control channel on the
-               same port, so there is one number to type. -->
-          <label for="netPort" class="mb-0" data-i18n="net.servers.port">Port:</label>
-          <input id="netPort" type="text" class="form-control form-control-sm" style="max-width:80px" value="8377">
-          <button id="netAdd" type="button" class="btn btn-sm btn-outline-secondary"
-                  data-i18n="net.servers.add" data-i18n-title="net.servers.add.tooltip">Add</button>
-        </div>
-      </fieldset>
+      <!-- One row, the desktop's shape: the row label names the action, the host field
+           carries no label of its own. -->
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <label for="netHost" class="mb-0" data-i18n="net.servers.add.title">Add server manually:</label>
+        <input id="netHost" type="text" class="form-control form-control-sm" style="max-width:180px">
+        <!-- ONE field: a server serves its HTTP endpoints and its control channel on the
+             same port, so there is one number to type. -->
+        <label for="netPort" class="mb-0" data-i18n="net.servers.port">Port:</label>
+        <input id="netPort" type="text" class="form-control form-control-sm" style="max-width:80px" value="8377">
+        <button id="netAdd" type="button" class="btn btn-sm btn-outline-secondary"
+                data-i18n="net.servers.add" data-i18n-title="net.servers.add.tooltip">Add</button>
+      </div>
       <div id="netServersError" class="small text-danger mt-2"></div>
     </div>
     <div class="modal-footer py-2">
@@ -1474,6 +1481,26 @@
       <canvas id="frMeter" width="520" height="100" class="fr-meter"></canvas>
       <div class="text-center mt-2">
         <button id="frBusyCancel" type="button" class="btn btn-sm btn-outline-secondary" data-i18n="common.cancel">Cancel</button>
+      </div>
+    </div>
+  </div></div>
+</div>
+
+<!-- ===== Bench-upload notice (the desktop's GeneratorPane.openUploadNotice, deliberately
+     diverged): while a playback file travels to a bench this is a MODAL, in the same busy-shell
+     shape as the sweep's above - title, one message line, one Cancel. Nothing is playing yet, so
+     the button that ends this wait is a Cancel of its own rather than the pane's file Stop, and
+     the page underneath is deliberately blocked for the duration. Static backdrop, no keyboard
+     dismissal and no close X: a dismissal that bypassed Cancel would leave the transfer running
+     behind a page that looks idle. The notice comes down on every outcome of the upload span
+     (fileUpload.finished), so it can never outlive the transfer. ===== -->
+<div class="modal fade" id="genUploadModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-dialog-centered" style="max-width: 460px;"><div class="modal-content prefs">
+    <div class="modal-header py-2"><h6 class="modal-title" data-i18n="generator.loadFrom.dialog">Play from...</h6></div>
+    <div class="modal-body">
+      <p class="mb-2 small text-center" data-i18n="generator.upload.busy">The audio file is being uploaded to the bench...</p>
+      <div class="text-center mt-2">
+        <button id="genUploadCancel" type="button" class="btn btn-sm btn-outline-secondary" data-i18n="common.cancel">Cancel</button>
       </div>
     </div>
   </div></div>

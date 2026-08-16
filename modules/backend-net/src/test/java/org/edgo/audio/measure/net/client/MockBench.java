@@ -50,6 +50,7 @@ import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.net.proto.NetMessage;
 import org.edgo.audio.measure.net.proto.NetProto;
 import org.java_websocket.WebSocket;
+import org.java_websocket.framing.CloseFrame;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -142,6 +143,11 @@ final class MockBench extends WirePeer {
      *  request could never show whether the client re-pins at all. */
     @Setter
     private volatile int grantRate;
+    /** Whether every {@code capture.attach} is refused (spec 4.7) - the stale
+     *  handle and the capture that is already attached reach the client the same
+     *  way, and what a test is asking is what the client DOES with a refusal. */
+    @Setter
+    private volatile boolean refuseAttach;
 
     /** This bench's own loopback host - {@link WirePeer}'s is private, and the
      *  HTTP side binds the same interface the socket does. */
@@ -359,31 +365,78 @@ final class MockBench extends WirePeer {
     // The conversation
     // -------------------------------------------------------------------------
 
-    @Override
-    protected void opened(WebSocket conn) {
-        sessions.put(conn, new Session(conn));
-    }
-
-    /** Spec 4.1: the client's own name arrives with the handshake, and it is
-     *  what a {@code DEVICE_LOCKED} refusal has to quote - "in use by Developer's
-     *  laptop" is actionable, "cannot open device" is not. */
+    /**
+     * Spec 4.1: the client's own name arrives with the handshake, and it is what
+     * a {@code DEVICE_LOCKED} refusal has to quote - "in use by Developer's
+     * laptop" is actionable, "cannot open device" is not.
+     *
+     * <p>And this is where the session BEGINS, not at the upgrade: spec 4 leaves
+     * a fresh connection's plane to its first message, so a socket that has not
+     * said {@code hello} is not a session and must not be counted as one - a
+     * bench that opened a session per socket would report a client's data
+     * connections (spec 4.7) as extra clients.
+     */
     @Override
     protected void greeted(WebSocket conn, NetMessage hello) {
-        Session session = sessions.get(conn);
-        if (session != null) {
-            session.clientName = hello.optString(NetFields.NAME);
-        }
+        Session session = new Session(conn);
+        session.clientName = hello.optString(NetFields.NAME);
+        sessions.put(conn, session);
     }
 
     /** The session died with the socket: spec 4.1 tears down everything it held,
-     *  which is what makes "the locks really are free afterwards" askable. */
+     *  which is what makes "the locks really are free afterwards" askable.
+     *
+     *  <p>A DATA connection closing is not that (spec 4.7): it is one capture's
+     *  socket going away, and this bench simply forgets it - the capture and the
+     *  session it belongs to are the client's to close. */
     @Override
     protected void closed(WebSocket conn) {
+        for (Session open : sessions.values()) {
+            open.detach(conn);
+        }
         Session session = sessions.remove(conn);
         if (session != null) {
             session.tearDown();
             broadcastDevices();
         }
+    }
+
+    /**
+     * Spec 4.7's {@code capture.attach}: the connection this arrived on becomes
+     * the data connection of the named capture, and every frame of that stream
+     * goes out on it from now on.
+     *
+     * <p>The handle is resolved through the {@code clientId} the {@code hello}
+     * answered, so an attach that names a session this bench never opened - or
+     * one that has since gone - is refused exactly as the spec says, and the
+     * client has to surface it as the capture's own failure.
+     */
+    @Override
+    protected synchronized NetMessage attached(WebSocket conn, NetMessage attach) {
+        Integer id = attach.getId();
+        if (id == null) {
+            return null;
+        }
+        if (refuseAttach) {
+            return new NetMessage(id, new NetError(ErrorCode.BAD_REQUEST,
+                    "this bench refuses the attach"));
+        }
+        Session session = sessions.get(controlOf(attach.optString(NetFields.CLIENT_ID)));
+        if (session == null) {
+            return new NetMessage(id, new NetError(ErrorCode.BAD_REQUEST,
+                    "capture.attach names no session on this bench"));
+        }
+        Capture capture = session.captures.get(attach.optInt(NetFields.CAPTURE_ID));
+        if (capture == null) {
+            return new NetMessage(id, new NetError(ErrorCode.BAD_REQUEST,
+                    "no such capture on this session"));
+        }
+        if (capture.data != null) {
+            return new NetMessage(id, new NetError(ErrorCode.BAD_REQUEST,
+                    "capture " + capture.id + " already has a data connection"));
+        }
+        capture.data = conn;
+        return new NetMessage(id);
     }
 
     @Override
@@ -554,7 +607,7 @@ final class MockBench extends WirePeer {
         int asked = request.optInt(NetFields.RATE);
         int bits = request.optInt(NetFields.BITS);
         int granted = grantRate == 0 ? asked : grantRate;
-        Capture capture = new Capture(lastCaptureId.incrementAndGet(), session, device);
+        Capture capture = new Capture(lastCaptureId.incrementAndGet(), device);
         session.captures.put(capture.id, capture);
         lastCapture = capture;
         ObjectNode data = json.objectNode();
@@ -572,14 +625,26 @@ final class MockBench extends WirePeer {
             return new NetMessage(id, new NetError(ErrorCode.BAD_REQUEST,
                     "no such capture stream on this session"));
         }
+        if (start && capture.data == null) {
+            return new NetMessage(id, new NetError(ErrorCode.NOT_ATTACHED,
+                    "spec 4.4: capture " + capture.id + " has no data connection yet"));
+        }
         capture.started = start;
         return new NetMessage(id);
     }
 
+    /** Spec 4.4 and 4.7: the capture ends and its data connection with it -
+     *  closed from HERE, which is the order a client has to survive (the socket
+     *  can die before the answer to the close arrives on the other one). */
     private NetMessage captureClose(Session session, int id, NetMessage request) {
         Capture capture = session.captures.remove(request.optInt(NetFields.CAPTURE_ID));
         if (capture != null) {
             capture.closed = true;
+            WebSocket stream = capture.data;
+            capture.data = null;
+            if (stream != null) {
+                stream.close();
+            }
         }
         return new NetMessage(id);
     }
@@ -623,6 +688,12 @@ final class MockBench extends WirePeer {
         Boolean fileLoop = request.optBoolean(NetFields.FILE_LOOP);
         if (fileLoop != null) {
             generator.fileLoop = fileLoop;
+        }
+        // Spec 4.5: the live half of the dither depth - routed to a lane field
+        // for the same reason as the loop flag above.
+        Double dither = request.optDouble(NetFields.DITHER_BITS);
+        if (dither != null) {
+            generator.liveDitherBits = dither;
         }
         return new NetMessage(id);
     }
@@ -900,6 +971,17 @@ final class MockBench extends WirePeer {
             this.conn = conn;
         }
 
+        /** One of this session's data connections went away (spec 4.7): the
+         *  capture it carried keeps its handle and simply has no socket again,
+         *  which is what an orderly {@code capture.close} leaves behind. */
+        private void detach(WebSocket conn) {
+            for (Capture capture : captures.values()) {
+                if (capture.data == conn) {
+                    capture.data = null;
+                }
+            }
+        }
+
         /** Spec 4.3: releasing a device closes anything open on it. */
         private void closeEverythingOn(BenchDevice device) {
             for (Capture capture : List.copyOf(captures.values())) {
@@ -946,26 +1028,29 @@ final class MockBench extends WirePeer {
         @Getter
         private final int id;
 
-        private final Session session;
         private final BenchDevice device;
         /** Spec 5: per stream, starts at 0, +1 per frame of any type. */
         private final AtomicLong packet = new AtomicLong();
 
+        /** This capture's data connection (spec 4.7), or null until one attaches
+         *  - and the socket every frame below goes out on, which is what makes
+         *  "the audio never touches the control connection" a thing a client
+         *  test can be wrong about. */
+        private volatile WebSocket data;
         /** Volatile: set on a reader thread, read from the test's. */
         @Getter
         private volatile boolean closed;
         @Getter
         private volatile boolean started;
 
-        private Capture(int id, Session session, BenchDevice device) {
+        private Capture(int id, BenchDevice device) {
             this.id = id;
-            this.session = session;
             this.device = device;
         }
 
         /** One capture batch, as the bench's own audio worker would send it. */
         void feed(byte[] pcm) {
-            send(session.conn, new BinaryFrame(FrameType.PCM, id,
+            send(data, new BinaryFrame(FrameType.PCM, id,
                     packet.getAndIncrement(), pcm).toBytes());
         }
 
@@ -979,28 +1064,63 @@ final class MockBench extends WirePeer {
          */
         void feedAt(long packetCounter, byte[] pcm) {
             packet.set(packetCounter + 1);
-            send(session.conn, new BinaryFrame(FrameType.PCM, id, packetCounter,
+            send(data, new BinaryFrame(FrameType.PCM, id, packetCounter,
                     pcm).toBytes());
         }
 
         /** Spec 5's GAP: the bench's honest confession that it dropped
          *  {@code lostFrames} stereo frames. */
         void gap(long lostFrames) {
-            send(session.conn, new BinaryFrame(FrameType.GAP, id,
+            send(data, new BinaryFrame(FrameType.GAP, id,
                     packet.getAndIncrement(), lostFrames).toBytes());
         }
 
         /** Spec 5's MARKER: an in-band position mark - the first PCM byte after
          *  it is aligned with sweep output sample 0. */
         void mark(long markerKind) {
-            send(session.conn, new BinaryFrame(FrameType.MARKER, id,
+            send(data, new BinaryFrame(FrameType.MARKER, id,
                     packet.getAndIncrement(), markerKind).toBytes());
+        }
+
+        /** This capture's data connection DROPS - the socket pulled, with no
+         *  close frame and nothing on the control connection to say so (spec
+         *  4.1's death rule against spec 4.7's discriminator).  It is the one
+         *  thing only a bench can do to a client, and the client has to read it
+         *  as the session dying rather than as a stream that ended. */
+        void dropDataConnection() {
+            WebSocket stream = data;
+            data = null;
+            if (stream != null) {
+                // closeConnection, not close: no close handshake, so the far end
+                // sees the ABNORMAL code a pulled socket really produces rather
+                // than the NORMAL one an orderly close carries.
+                stream.closeConnection(CloseFrame.ABNORMAL_CLOSE, "the socket was pulled");
+            }
+        }
+
+        /** The bench closes this data connection the ORDERLY way (spec 4.7):
+         *  a close frame carrying NORMAL, which is what a {@code capture.close}
+         *  produces - and what a client must not read as the session dying even
+         *  when nothing local marked the socket first. */
+        void closeDataConnectionNormally() {
+            WebSocket stream = data;
+            data = null;
+            if (stream != null) {
+                stream.close(CloseFrame.NORMAL, "capture " + id + " closed");
+            }
+        }
+
+        /** A control-plane message pushed down the DATA connection - the one
+         *  thing spec 4.7 forbids a bench outright, and therefore the only way
+         *  to ask what a client does when its peer mixes the planes. */
+        void pushTextOnDataConnection(NetMessage message) {
+            send(data, message);
         }
 
         /** A binary frame of a type this build has no meaning for (spec 1: an
          *  unknown frame is skipped whole, counter included). */
         void unknownFrame() {
-            send(session.conn, new BinaryFrame(FrameType.UPLINK_PCM, id,
+            send(data, new BinaryFrame(FrameType.UPLINK_PCM, id,
                     packet.getAndIncrement(), 0L).toBytes());
         }
     }
@@ -1045,6 +1165,10 @@ final class MockBench extends WirePeer {
         /** The {@code loop} flag of that command. */
         @Getter
         private volatile boolean fileLoop;
+        /** The dither depth as last pushed through {@code gen.config}, or null
+         *  while the line still runs at the depth {@code gen.open} fixed. */
+        @Getter
+        private volatile Double liveDitherBits;
         /** The configuration as it stood when {@code gen.start} arrived - what a
          *  bench would have built its waveform from, and therefore the only
          *  honest answer to "had the lead-in reached it in time". */

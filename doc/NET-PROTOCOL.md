@@ -1,4 +1,4 @@
-# Phonalyser net protocol - v1
+# Phonalyser net protocol - v2
 
 Network bridge between a headless Phonalyser server (the machine wired to the
 measurement hardware) and Phonalyser GUI clients (desktop Java app, web app).
@@ -11,18 +11,25 @@ Transport summary:
 |------------|------------------------------------|----------|
 | Discovery  | UDP multicast beacon               | JSON, UTF-8 |
 | Info       | HTTP GET (stateless)               | JSON |
-| Control    | WebSocket text frames              | JSON, UTF-8 |
-| Audio data | WebSocket binary frames (same socket) | fixed 16-byte header + payload, little-endian |
+| Control    | WebSocket text frames (control connection) | JSON, UTF-8 |
+| Audio data | WebSocket binary frames (one data connection per capture) | fixed 16-byte header + payload, little-endian |
 | File upload| HTTP PUT                           | raw bytes |
 
 **One port, one number.** Everything is served on a single port, default
 **8377** (`--port`): `http://host:8377/info` and `ws://host:8377/` are the same
 listener, and discovery multicasts to 8377/**udp** (§2.1). A WebSocket upgrade
-at `/` becomes a control channel; any other request is served as HTTP, so
-`GET /` still returns the web bundle. The wire therefore carries exactly one
-`port` field - two numbers would be two firewall rules, two fields in every
-beacon and remembered server, and a browser that loaded the bundle from one of
-them would have to be told the other.
+at `/` becomes a session connection - control or data, decided by its first
+message (§4); any other request is served as HTTP, so `GET /` still returns the
+web bundle. The wire therefore carries exactly one `port` field - two numbers
+would be two firewall rules, two fields in every beacon and remembered server,
+and a browser that loaded the bundle from one of them would have to be told the
+other.
+
+**One url, two planes.** A session dials that same `ws://host:8377/` more than
+once (§4): one connection carries the control plane, and one more carries the
+audio of each open capture. The split is what keeps a keepalive answer from
+queueing behind a megabyte of PCM; it costs no second port, no second path and
+no second field anywhere, so everything above still holds.
 
 Design rules: reliable ordered transport only (a measurement gap is data
 corruption, not an inconvenience - no UDP for audio); WebSocket because the web
@@ -30,7 +37,8 @@ client has nothing else and one server implementation must serve both GUIs;
 JSON control because it is debuggable and both sides parse it natively; all
 binary data little-endian (QA40x native order, JS `DataView` friendly).
 
-The server ships as its own fat jar, `phonalyser-server-<version>-<platform>.jar`
+The server ships as its own fat jar, `phonalyser-server-<version>.jar` - one
+file for every platform and architecture -
 (`java -jar ...`), built from the `server-net` module - it carries no SWT and no
 GUI code at all, so no Display can be initialised even by accident.
 
@@ -38,17 +46,24 @@ GUI code at all, so no Display can be initialised even by accident.
 
 ## 1. Versioning
 
-- `PROTO = 1` - a single integer. Any change that breaks an existing peer bumps
+- `PROTO = 2` - a single integer. Any change that breaks an existing peer bumps
   it; additive features are announced in the `caps` list instead.
-- **Version negotiation** (designed for backwards compatibility from day one):
-  the client's `hello` carries the range it speaks - `proto` (highest) and
-  `protoMin` (lowest; absent = same as `proto`). The server picks the highest
-  version inside both ranges; the `hello` response's `proto` field is the
-  **chosen** version and governs the whole session. No overlap -> error
-  `PROTO_MISMATCH` (message names both ranges) and close. A future v2 client
-  therefore still talks v1 to a v1 server, and a v2 server still serves v1
-  clients - no flag day. Beacons and `/info` advertise the server's highest
-  version.
+- **v2 is a hard cut.** This build speaks the range **2..2**: a v1 peer is
+  refused at `hello` with `PROTO_MISMATCH` and the connection closes. There is
+  no compatibility path and no capability token for the change, because there
+  is no subset of v2 a v1 peer could be served with - v2 puts the audio on a
+  SECOND connection a v1 peer never dials (§4, §4.7) and refuses
+  `capture.start` until that connection has attached (§4.4). A server that
+  answered v1 would be a second protocol to keep alive on both ends, for peers
+  that exist only while an operator updates the other half of the bench.
+- **Version negotiation** is unchanged, and stays the mechanism a v3 will be
+  agreed through: the client's `hello` carries the range it speaks - `proto`
+  (highest) and `protoMin` (lowest; absent = same as `proto`). The server picks
+  the highest version inside both ranges; the `hello` response's `proto` field
+  is the **chosen** version and governs the whole session. No overlap -> error
+  `PROTO_MISMATCH` (message names both ranges) and close. Only this build's
+  RANGE moved. Beacons and `/info` advertise the server's highest version, so a
+  client can see the mismatch before it dials.
 - Unknown JSON fields MUST be ignored by both sides (forward compatibility).
   Unknown message types answer error `UNSUPPORTED`. Unknown binary frame types
   are skipped whole - the WebSocket message boundary delimits the frame, so
@@ -75,7 +90,7 @@ GUI code at all, so no Display can be initialised even by accident.
 - Payload - one JSON datagram:
 
 ```json
-{ "phonalyser": 1, "proto": 1, "serverId": "b7e0...-uuid", "name": "Bench QA403",
+{ "phonalyser": 1, "proto": 2, "serverId": "b7e0...-uuid", "name": "Bench QA403",
   "app": "1.2.0", "port": 8377 }
 ```
 
@@ -97,7 +112,7 @@ self included:
 
 ```json
 { "servers": [ { "serverId": "...", "name": "Bench QA403", "host": "192.168.1.40",
-                 "port": 8377, "app": "1.2.0", "proto": 1,
+                 "port": 8377, "app": "1.2.0", "proto": 2,
                  "self": true } ] }
 ```
 
@@ -108,9 +123,11 @@ remembered) to see every server on the LAN.
 
 Default port **8377** (`--port`) - the same port serves HTTP and the WebSocket
 upgrade at `/` (§4), so a plain `GET /` is the web bundle and an upgrade request
-on that same URL is a control channel. All responses `application/json` unless
-noted; permissive CORS (`Access-Control-Allow-Origin: *`). No authentication
-in v1 - this is a LAN instrument protocol; `--bind` restricts the interface.
+on that same URL is a session connection. All responses `application/json`
+unless noted; permissive CORS (`Access-Control-Allow-Origin: *`). No
+authentication - this is a LAN instrument protocol; `--bind` restricts the
+interface. (The `clientId` of §4.1 is not one: it binds a data connection to
+the session that already exists and grants nothing else.)
 
 | Endpoint | Meaning |
 |---|---|
@@ -118,7 +135,7 @@ in v1 - this is a LAN instrument protocol; `--bind` restricts the interface.
 | `GET /devices` | Same device list as `devices.list` (§4.3), lock state included - for curl debugging |
 | `GET /servers` | Peer table (§2.2) |
 | `GET /health`  | `200 {"ok":true}` |
-| `PUT /files`   | File upload for remote playback. Raw body, limit **50 MB** (`413` above); the server also bounds the store as a whole and answers `413` when it is full. Response `{"fileId":"f-1","bytes":N}`. Files live in server RAM, owned by nobody until referenced by `gen.playFile`, and are dropped when the referencing connection closes or on `DELETE /files/{id}`, which answers `200 {"ok":true}` (v1.1: documented - same body as `/health`). **`Content-Type` (v1.1):** the client sends the file's audio MIME type - `audio/wav`, `audio/flac`, `audio/aiff` - and the server stores it beside the bytes and picks the decoder from it at `gen.playFile`. A content sniff is the fallback, used only when the header is absent (`application/octet-stream` included) or names a type this server does not know; it is what every upload relied on before the type travelled. Declaring the type is what makes a FLAC behind an ID3 tag and an AIFF decodable at all, neither being reliably distinguishable from its first bytes. An unrecognised type is **not** an upload error: the upload succeeds and the decode fails at `gen.playFile` with the existing `BAD_REQUEST`, so one refusal path covers every undecodable file. |
+| `PUT /files`   | File upload for remote playback. Raw body, limit **50 MB** (`413` above); the server also bounds the store as a whole and answers `413` when it is full. Response `{"fileId":"f-1","bytes":N}`. Files live in server RAM, owned by nobody until referenced by `gen.playFile`, and are dropped when the referencing SESSION ends (§4.1 - not when one of its data connections closes; a capture going away must not pull a file out from under a generator that is playing it) or on `DELETE /files/{id}`, which answers `200 {"ok":true}` (v1.1: documented - same body as `/health`). **`Content-Type` (v1.1):** the client sends the file's audio MIME type - `audio/wav`, `audio/flac`, `audio/aiff` - and the server stores it beside the bytes and picks the decoder from it at `gen.playFile`. A content sniff is the fallback, used only when the header is absent (`application/octet-stream` included) or names a type this server does not know; it is what every upload relied on before the type travelled. Declaring the type is what makes a FLAC behind an ID3 tag and an AIFF decodable at all, neither being reliably distinguishable from its first bytes. An unrecognised type is **not** an upload error: the upload succeeds and the decode fails at `gen.playFile` with the existing `BAD_REQUEST`, so one refusal path covers every undecodable file. |
 | `GET /`        | The static web app bundle (when built with it). Served over plain HTTP the page is **not a secure context**: `getUserMedia`/WebUSB do not exist there, so the served app offers the net backend only. |
 
 **Refused requests carry a code.** Any non-2xx answer from the JSON endpoints
@@ -136,39 +153,101 @@ backend is still offered in an https-served app, but connecting to a non-local
 server will be blocked by the browser; the supported web route is loading the
 app from the server itself (`GET /`).
 
-## 4. Control channel (WebSocket upgrade at `/`, default port 8377)
+## 4. Session connections (WebSocket upgrade at `/`, default port 8377)
+
+A session is **two kinds of WebSocket connection to the same url**,
+`ws://host:8377/` - no second port, no second path, no query string. What a
+freshly upgraded connection IS is decided by its **first text message**:
+
+| First message | The connection is | Carries from then on |
+|---|---|---|
+| `hello` (§4.1) | the CONTROL connection | every request, response and event of §4.0 - §4.6, and no audio |
+| `capture.attach` (§4.7) | a DATA connection | nothing but the binary frames (§5) of one capture |
+
+Anything else as the first message is a protocol error and the server closes
+the connection. So is silence: a connection that has not declared its plane
+within **10 s** of the upgrade is closed. Until that first message arrives the
+server starts no session machinery for it at all - no keepalive, no ids, no
+locks - because an upgraded socket that never says what it is is not a session.
+The keepalive of §4.1 starts at `hello`, on the control connection alone.
+
+One control connection per session; **one data connection per OPEN capture**, so
+a session measuring on three inputs has three of them (§4.7).
+
+**Why two connections and not two message kinds on one.** PCM saturates the
+socket it travels on, and a WebSocket delivers in order: on a single connection
+the server's `ping` - and the client's answer to it - sits BEHIND whatever audio
+is already queued, so a client that is streaming answers late however promptly
+it handles the ping, and the keepalive of §4.1 declares a perfectly healthy peer
+dead about two seconds into every stream. Splitting the planes makes the
+keepalive measure liveness again instead of measuring throughput: the control
+connection carries kilobytes of JSON and nothing else, so its round trip is the
+network's and not the bench's data rate.
 
 ### 4.0 Message envelope
 
 - Client requests: `{"t":"<type>", "id":<int>, ...}` - `id` is a per-connection
-  monotonically increasing integer.
+  monotonically increasing integer. A data connection has an id space of its
+  own and sends exactly one request in it, its `capture.attach` (§4.7).
 - Responses: `{"t":"resp", "id":<same>, "ok":true, "data":{...}}` or
   `{"t":"resp", "id":<same>, "ok":false, "error":{"code":"DEVICE_LOCKED",
-  "message":"...", "by":"Developer's laptop"}}`.
+  "message":"...", "by":"Developer's laptop"}}`. A response always travels on
+  the connection its request arrived on.
 - Server-initiated events: `{"t":"ev.<name>", ...}` - no `id`, never answered.
-- The server also sends *requests* (only `ping`); the client answers with the
-  same `resp` form. Server request ids are negative to avoid collision.
+  Control connection only.
+- The server also sends *requests* (only `ping`, and only on the control
+  connection); the client answers with the same `resp` form. Server request ids
+  are negative to avoid collision.
 
 ### 4.1 Session
 
 | Type | Direction | Fields | Response data |
 |---|---|---|---|
-| `hello` | c->s, MUST be first | `proto` (highest supported), `protoMin` (lowest; optional), `client` (app+version string), `name` (user-visible client name, shown in lock info) | `proto` (**chosen** session version, §1), `serverId`, `name`, `app`, `caps:["qa40x","gen","files"]` |
-| `ping` | both, every **500 ms** | - | `{}` |
-| `bye`  | c->s | - | `{}`; server releases everything, closes |
+| `hello` | c->s, MUST be the control connection's first message - and is what MAKES it the control connection (§4) | `proto` (highest supported), `protoMin` (lowest; optional), `client` (app+version string), `name` (user-visible client name, shown in lock info) | `proto` (**chosen** session version, §1), `serverId`, `name`, `app`, `clientId` (v2), `caps:["qa40x","gen","files"]` |
+| `ping` | both, every **500 ms**, control connection only | - | `{}` |
+| `bye`  | c->s | - | `{}`; server releases everything, closes every connection of the session |
+
+**`clientId` (v2)** is a cryptographically random UUID the server generates per
+session and answers `hello` with. It is the ticket a data connection attaches
+with (§4.7) and nothing else: it names nobody, grants nothing the session does
+not already have, and dies with the session. It is a **secret** - never logged,
+never shown in a UI, never carried in a beacon, a `/servers` row or an error
+message. What a client is KNOWN by stays the human-readable `name` above,
+which is what a `DEVICE_LOCKED` refusal quotes.
 
 **Keepalive contract:** each side sends `ping` every 500 ms and counts
-unanswered pings. **4 consecutive unanswered (2 s) or transport close =
-connection dead.** Client: stop all modules, show the connection error.
-Server: stop streams and generator, release this connection's locks and
-files, park hardware (QA40x attenuator safe). Reconnection is a **new
-session** - there are no resume semantics; locks are re-acquired explicitly.
+unanswered pings. **4 consecutive unanswered (2 s) = connection dead.**
+Data connections carry no pings at all: they carry audio one way and nothing
+else, and their liveness is the session's (§4.7).
+
+**Death rule (v2): the session is ONE thing.** If EITHER connection drops
+unexpectedly, or 4 keepalives go unanswered, the whole session is dead at both
+ends - every connection, every capture, the generator included. Client: stop
+all modules, show the connection error. Server: stop streams and generator,
+release this SESSION's locks and files, park hardware (QA40x attenuator
+safe), and close whatever sockets of the session are still open. Reconnection
+is a **new session** - there are no resume semantics; locks are re-acquired
+explicitly.
+
+A data connection closed as part of an orderly `capture.close` is **not** a
+drop (§4.7). Either end may close that socket, and both orders are correct, so
+each end has to know whether IT was the one closing before it reads a close as
+the session's death - a stream that ended because it was asked to must not take
+the bench down with it.
 
 ### 4.2 Errors
 
 `PROTO_MISMATCH`, `BAD_REQUEST`, `UNSUPPORTED`, `NOT_LOCKED`,
 `DEVICE_LOCKED` (extra field `by`), `DEVICE_STALE`, `DEVICE_ERROR`,
-`BACKEND_MISMATCH`, `NO_SUCH_FILE`, `FILE_TOO_LARGE`, `INTERNAL`.
+`BACKEND_MISMATCH`, `NOT_ATTACHED`, `NO_SUCH_FILE`, `FILE_TOO_LARGE`,
+`INTERNAL`.
+
+`NOT_ATTACHED` (v2) is the answer to `capture.start` on a capture whose data
+connection has not attached yet (§4.4, §4.7). It is deliberately its own code
+and not `BAD_REQUEST`: nothing about the request is malformed, the client is
+simply one step early, and the frames the start would produce have nowhere to
+go - a stream running into a socket that does not exist is a measurement the
+client waits for and never gets.
 
 A `DEVICE_ERROR` from `capture.open`/`gen.open` MAY carry the optional extra
 field `reason` - the name of a device-failure reason
@@ -197,9 +276,9 @@ device with a client that has no way left to let go of it.
 | Type | Fields | Response data / notes |
 |---|---|---|
 | `backend.list` | - | `{backends:[{backend, displayName, available, operational, hasBitDepth}]}` - the server's backends WITHOUT device detail (fast; feeds the client's combo entries). `operational` distinguishes present-but-nonfunctional platforms (e.g. CoreAudio on Windows). |
-| `backend.select` | `backend` | **Session-scoped** backend selection (each connection has its own; other sessions are unaffected). Response data: the selected backend's full entry in `devices.list` shape (devices + formats inlined) - one round-trip fills the device combos. After selection, device refs in `capture.open`/`gen.open` MUST name the selected backend, else error `BACKEND_MISMATCH`. Re-selecting switches; locks already held stay valid (locks are device-scoped, not selection-scoped). |
+| `backend.select` | `backend` | **Session-scoped** backend selection (each session has its own, committed on its control connection; other sessions are unaffected). Response data: the selected backend's full entry in `devices.list` shape (devices + formats inlined) - one round-trip fills the device combos. After selection, device refs in `capture.open`/`gen.open` MUST name the selected backend, else error `BACKEND_MISMATCH`. Re-selecting switches; locks already held stay valid (locks are device-scoped, not selection-scoped). |
 | `devices.list` | - | `{backends:[{backend, devices:[{index,name,description,vendor,input,output, formats:[{rate,bits,channels}], hasBitDepth, lock:null\|{by}, cal:null\|{fsRmsLeft,fsRmsRight}, card:null\|"<card name>", calFromDevice:bool}]}]}` - ALL backends, formats inlined; the lock-overview view (graying). **One object per device AND DIRECTION**: a backend's index space is per-direction, so a duplex interface appears twice, once with `input:true` and its input index and once with `input:false` and its output index. `output` is therefore the exact negation of `input` - the pair names WHICH list the `index` belongs to, not the hardware's duplex capability - and a client copies `{backend,index,input,name}` straight into a device ref. **`cal` is the server-stored calibration for this device+direction** - the full-scale RMS volts per channel of the device card row in force on the SERVER, whose devices.yaml owns the calibration of every device plugged into it (v1.1: calibration lives where the device is connected, so every client arrives already calibrated). `cal: null` when the server has no card for it; the device is then **uncalibrated** on every client - since 1.2 the client's legacy default full scales are a runtime-only fallback (never persisted, never sent), so clients are expected to warn the user and may offer to hand a matching local card up to the server - the WHOLE card via `cards.put` + `device.setCard` (v1.1: the range table and the channel mode are what make the values mean anything), falling back to the values alone via `device.setCalibration` when the bench already has a card of that name. A client never calibrates a server's device from its own store: a local card is the source of an offer, never a silent substitute. **`card` (v1.1) is the logical name of the server card IN FORCE for this device** - the user's saved binding (`device.setCard`) when one exists, else the server's name-match resolution; `null` only when NO card correlates at all.  It names the card the `cal` values actually come from, so a chooser can show the truth instead of an empty combo for a device the server recognises without an explicit binding. The binding is keyed on the device NAME: a card describes a physical box, so a backend that lists one name in both directions (the QA40x) carries the SAME `card` in both entries - one box, one card; where a backend names its directions apart (the usual sound-card case) bindings are per-direction by construction. A bound card that lacks usable rows for one direction leaves that direction uncalibrated (`cal: null`) - the honest state, never a silent fallback to another card. **`calFromDevice` (v1.1)** says the full scales of this device AND direction are the DEVICE's own - a QA40x reads them from its EEPROM - so a client shows them read-only instead of offering an edit `device.setCalibration` would answer `BAD_REQUEST` after the operator had already typed a value. Plain `false` (not an omission) when no card correlates or the card is an ordinary one: "editable" must be what a server SAYS, never what an absent field is read as. |
-| `device.acquire` | device ref | Grants this connection an **exclusive lock** on that device+direction, or `DEVICE_LOCKED{by}`. All streaming/generator calls require the lock. |
+| `device.acquire` | device ref | Grants this SESSION an **exclusive lock** on that device+direction, or `DEVICE_LOCKED{by}`. The control connection is the one that takes it (§4.7: a data connection sends nothing but its attach), and it is held by the session, not by a socket - so a capture's data connection coming and going moves no lock. All streaming/generator calls require the lock. |
 | `device.release` | device ref | Also closes any open stream/generator on it |
 | `device.setCalibration` | device ref + `fsRmsLeft`, `fsRmsRight` | Writes the calibration of a SERVER-owned device (v1.1): the server stores the two full-scale RMS volts into its device card for that device+direction (creating the card if none exists), persists, and broadcasts `ev.devices.changed` - every client's `cal` view refreshes. **Requires the lock on the device+direction the ref names** (it changes what every measurement on that device means) - NOT the QA40x rule of "either direction", which belongs to writes that name no device (§4.6): a DAC calibration sent under an input lock is `NOT_LOCKED`, and must be, or it would land on a device its sender never took. Not answered for a `calibrationFromDevice` card (the QA40x): its values come from the analyzer itself and are not a client's to write - `BAD_REQUEST`. The card it creates when none exists is a bare one - one `default` range row - which is also the "empty card" fallback used when the operator declines to author one. |
 | `device.setCard` | device ref + `card` (string \| `null`) | Binds the server's device - keyed by NAME, see the `card` field note on granularity - to one of the server's device cards by logical name (v1.1): the user's card choice, persisted where the device lives, so a QA402-vs-QA403 pick survives restarts and reaches every client. `null` unbinds (back to name-match resolution). The named card must exist on the server - `BAD_REQUEST` otherwise (a typo must not silently uncalibrate a device). `calibrationFromDevice` cards ARE bindable: binding **chooses** a card, it writes no values into it (contrast `device.setCalibration`). **Requires the device lock** (the ref's device+direction is the write ticket; the binding covers the whole box); persists and broadcasts `ev.devices.changed` (the binding changes which `cal` is in force). Response data: none. |
@@ -209,9 +288,10 @@ device with a client that has no way left to let go of it.
 | `ev.devices.changed` | s->c broadcast | Full `devices.list` payload; sent on hot-plug, on any lock change, and (v1.1) on an accepted `device.setCalibration`/`device.setCard`/`device.setActiveRange`/`qa40x.setInputRange`/`qa40x.setOutputRange` - a calibration write, a card binding or an active-range move changes the payload's `cal`/`card`, and the range in force IS the QA40x's full scale. (`cards.put` does NOT broadcast: it creates a card nothing is bound to, so no device's `cal` moves.) Clients gray out locked devices live. **A client must ACT on a changed `cal`, not merely cache it** (v1.1): when the payload's calibration for the device it is currently measuring on differs from the one it holds, it re-applies it there and then - another operator recalibrating that device, or moving its range, changes what every reading means, and a client that waited for its next device open would go on showing volts computed against a full scale the bench no longer holds. |
 | `ev.device.error` | s->c | `{direction:"input"\|"output", detail, reason}` - server-side capture/playback failure or QA40x detach. The client surfaces it exactly like a local device error (message + stop the affected modules). `reason` is the §4.2 device-failure reason name, always present on this event (it is always a device's failure, `UNKNOWN` included) and read as `UNKNOWN` when absent or unknown to the client. |
 
-Locks are per `(backend, index, direction)`, owned by one WS connection, and
-auto-released on connection death (§4.1). A multi-client server: every client
-sees all devices; each device streams to at most one.
+Locks are per `(backend, index, direction)`, owned by one session - its control
+connection is the one that takes them - and auto-released when the session dies
+(§4.1). A multi-client server: every client sees all devices; each device
+streams to at most one.
 
 **Backend listing and selection** (an explicit API, by design): a
 client presents each server backend as its own selectable entry
@@ -227,12 +307,19 @@ local backends; the server still re-validates.
 
 | Type | Fields | Response data |
 |---|---|---|
-| `capture.open` | device ref + `rate`, `bits` | `{captureId, rate, bits, channels:2, frameBytes}` - requires input lock; the granted `rate` may differ (device reality), client re-pins. Payload is the **native PCM byte stream** of the server-side capture (signed little-endian interleaved stereo at `bits`), so the client decodes with the same code path a local device uses. |
-| `capture.start` | `captureId` | Binary PCM frames (§5) begin |
-| `capture.stop` | `captureId` | Stream pauses; counters keep their values |
-| `capture.close` | `captureId` | - |
+| `capture.open` | device ref + `rate`, `bits` | `{captureId, rate, bits, channels:2, frameBytes}` - requires input lock; the granted `rate` may differ (device reality), client re-pins. Payload is the **native PCM byte stream** of the server-side capture (signed little-endian interleaved stereo at `bits`), so the client decodes with the same code path a local device uses. The answered `captureId` is what the capture's data connection then attaches with (§4.7). |
+| `capture.start` | `captureId` | Binary PCM frames (§5) begin, on this capture's DATA connection. **Refused `NOT_ATTACHED` until that connection has attached** (§4.7). |
+| `capture.stop` | `captureId` | Stream pauses; counters keep their values. The data connection stays open - a pause is not an end. |
+| `capture.close` | `captureId` | The capture ends and its data connection is closed with it; either end may close that socket first (§4.7) |
 
-One open capture per device. QA40x equal-rates rule is enforced server-side:
+**The order is fixed** (v2): `device.acquire` -> `capture.open` -> dial the data
+connection and `capture.attach` -> `capture.start`. Nothing earlier is
+possible: the `captureId` does not exist before the open, so there is nothing
+to attach to, and until the attach is answered the frames have nowhere to go -
+which is exactly what `NOT_ATTACHED` says.
+
+One open capture per device, and therefore one data connection per open
+capture. QA40x equal-rates rule is enforced server-side:
 `capture.open`/`gen.open` on QA40x with mismatched rates -> `BAD_REQUEST`.
 
 ### 4.5 Remote generator
@@ -241,11 +328,16 @@ The generator runs **on the server** (DDS next to the DAC, no uplink audio).
 The command vocabulary mirrors the desktop `GeneratorController` setter
 surface. All `gen.*` require the output-device lock.
 
+**No audio travels for the generator in either direction**, which is why it
+opens no data connection (§4.7): what crosses the wire is the setter surface
+below and the `ev.gen.state` pushes, all of it JSON on the control connection.
+A file to be played is uploaded once over `PUT /files` (§3) and named by handle.
+
 | Type | Fields | Notes |
 |---|---|---|
 | `gen.open` | device ref + `rate`, `bits`, `ditherBits`, `outputChannels` | -> `{genId, rate}`. Opens server-side playback; creates the generator (silent until `gen.start`). |
-| `gen.config` | `genId` + any of: `form`, `frequency`, `amplitudeVrms`, `dacFsVoltageAmpl`, `rightLaneScale`, `rectangleDuty`, `triangleDuty`, `dual:{frequency2, amp1Pct, amp2Pct}`, `sweep:{f0, f1, durationSamples, leadInSamples, fadeInSamples, fadeOutSamples, loop}`, `compensation:{ampRatios[], hNums[], phiInits[]}`, `dualCompensation:{ampRatios[], aCoef[], bCoef[], phiInits[]}`, `clearCompensation:true`, `fileLoop` | Partial update - only present fields are applied. Numeric values are final (the client applies calibration/full-scale math exactly as it does locally). `rightLaneScale` is `fsLeft/fsRight` for a card whose two DAC full-scales differ (`dacFsVoltageAmpl` is the LEFT one, which the mono amplitude is computed against); it goes to the playback lane's quantizer, not to the DDS. **Defaults at `gen.open` (v1.1):** `dacFsVoltageAmpl` and `rightLaneScale` initialise from the SERVER's stored calibration for the opened output device (its device card - calibration lives where the device is connected), falling back to `1.0` only for a device the server has no card for. A client push still overrides; a client that never sends them now runs at the bench's true full scale instead of a placeholder. **`fileLoop` (v1.1):** the live repeat flag of the file currently playing (§3, `gen.playFile`). The server re-reads it at each end of stream, so setting it true mid-play makes the lap that is ending repeat, and setting it false lets that lap **finish** rather than cutting playback off - matching what a local player does with the same toggle. Applied only when a file session exists on that generator; ignored like any other inapplicable field otherwise. |
-| `gen.start` / `gen.stop` | `genId` | Start/stop emission. Starting a sweep resets the sweep position and injects a `sweepStart` marker (§5) into this connection's open capture streams. |
+| `gen.config` | `genId` + any of: `form`, `frequency`, `amplitudeVrms`, `ditherBits`, `dacFsVoltageAmpl`, `rightLaneScale`, `rectangleDuty`, `triangleDuty`, `dual:{frequency2, amp1Pct, amp2Pct}`, `sweep:{f0, f1, durationSamples, leadInSamples, fadeInSamples, fadeOutSamples, loop}`, `compensation:{ampRatios[], hNums[], phiInits[]}`, `dualCompensation:{ampRatios[], aCoef[], bCoef[], phiInits[]}`, `clearCompensation:true`, `fileLoop` | Partial update - only present fields are applied. Numeric values are final (the client applies calibration/full-scale math exactly as it does locally). `rightLaneScale` is `fsLeft/fsRight` for a card whose two DAC full-scales differ (`dacFsVoltageAmpl` is the LEFT one, which the mono amplitude is computed against); it goes to the playback lane's quantizer, not to the DDS. **Defaults at `gen.open` (v1.1):** `dacFsVoltageAmpl` and `rightLaneScale` initialise from the SERVER's stored calibration for the opened output device (its device card - calibration lives where the device is connected), falling back to `1.0` only for a device the server has no card for. A client push still overrides; a client that never sends them now runs at the bench's true full scale instead of a placeholder. **`fileLoop` (v1.1):** the live repeat flag of the file currently playing (§3, `gen.playFile`). The server re-reads it at each end of stream, so setting it true mid-play makes the lap that is ending repeat, and setting it false lets that lap **finish** rather than cutting playback off - matching what a local player does with the same toggle. Applied only when a file session exists on that generator; ignored like any other inapplicable field otherwise. **`ditherBits` (v1.2.1):** the live half of the depth `gen.open` fixed - pushed to the playback lane's quantizer mid-tone, exactly as a local dither edit lands on the running line, and stored so a later lane reopen keeps it. An older server ignores the field and the depth then changes only at the next `gen.open`. |
+| `gen.start` / `gen.stop` | `genId` | Start/stop emission. Starting a sweep resets the sweep position and injects a `sweepStart` marker (§5) into this SESSION's open capture streams - each on its own data connection (§4.7), in stream order behind the audio already queued. |
 | `gen.fftGrid` | `genId`, `fftSize`, `snapEnabled` | Server snaps the emitted frequency to the FFT bin grid `k·rate/fftSize` when enabled - same math as the client-side snap, so both compute identical values. |
 | `gen.trim` / `gen.trim2` | `genId`, `hz` | FLL feedback - absolute corrected frequency for tone 1 / tone 2 (the servo lives client-side in the FFT, the actuator here). |
 | `gen.trimReset` | `genId` | Back to nominal |
@@ -268,16 +360,113 @@ Mirrors the local `Qa40xDeviceManager` surface; requires the QA40x lock
 | `qa40x.calibration` | - (read-only) | `{adc:[{dbv,left,right}...], dac:[{dbv,left,right}...]}` - linear factors, so the client's `calibrationFromDevice` card pipeline works unchanged |
 | `qa40x.settings` | optional `{i2sEnabled}` | Get (no field, **read-only**) or set (lock required); affects supported bit depths exactly as locally |
 
+### 4.7 Data connections (`capture.attach`)
+
+A data connection carries the binary frames (§5) of **one** capture, in one
+direction (server -> client), and nothing else: no pings, no events, no
+requests. A session with three open captures has three of them, dialled to the
+same `ws://host:8377/` as the control connection.
+
+| Type | Direction | Fields | Response data |
+|---|---|---|---|
+| `capture.attach` | c->s, MUST be the connection's first message - and is its ONLY client message ever | `clientId` (§4.1), `captureId` (§4.4) | `{}`, on the same connection; the frames of that capture follow it |
+
+**The sequence.** `capture.open` answers a `captureId`; the client then dials a
+second WebSocket to the same url, sends `capture.attach` naming the session's
+`clientId` and that `captureId`, and waits for the ordinary `resp` envelope
+(§4.0) - which comes back on the data connection, because a response always
+travels on the connection its request arrived on. From the moment that `ok` is
+written, the socket carries spec-5 binary frames and nothing else. Only then
+may `capture.start` be sent, on the CONTROL connection (§4.4).
+
+**Refusals.** An unknown or stale `clientId`, an unknown `captureId`, or a
+capture that already has a data connection are all `BAD_REQUEST`: the refusal
+is answered **and then the server closes that socket**, because a connection
+that may not attach has no other purpose. The client surfaces it as a failure
+of the `capture.open` it belongs to - the capture cannot stream, so it is
+closed and the operator is told the capture could not be opened, not that a
+socket could not be. That closure is expected by both ends and is NOT the drop
+of §4.1.
+
+A `capture.attach` arriving on the CONTROL connection - which is any position
+after `hello`, since the first message is what decides the plane - is refused
+`BAD_REQUEST` like any other request that does not belong where it was sent,
+and **the control connection stays open**. Nothing about a misdirected attach
+says the session is broken, and closing the one connection that carries the
+session would turn a client's mistake into a lost bench.
+
+**Any further client text on a data connection is a protocol error** and the
+server closes it - and ends the session with it, rather than sitting on the
+bench's locks for a client that has lost track of which socket it is writing to.
+One attach, then silence: a data connection has nothing to say.
+
+**And it holds in the other direction.** No response, no event and no request
+travels from the server on a data connection either, the attach's own answer
+excepted. A client that receives text on an attached data connection treats it
+as a protocol error and ends the session, exactly as it does a binary frame it
+cannot parse: control traffic on that socket would sit behind whatever audio is
+queued there, which is the one thing the split exists to prevent, and a peer
+that mixes the planes is not one to keep measuring with.
+
+**Orderly close.** `capture.close` ends the capture and its data connection
+together. Either end may close that socket first and both orders are correct:
+the client that just closed the capture may drop it immediately, and a server
+closing it as the capture goes away is doing the same thing from the other
+side.
+
+**An orderly close is told from a drop by its STATUS CODE**, not by what either
+end remembers: a close ending a capture carries the WebSocket **normal closure**
+code (1000), and only an abnormal end - 1006 and its kin, a socket that died
+without a close frame - is the drop of §4.1. That is what makes the rule
+race-free. The server closes this socket while handling a `capture.close`, and
+the answer to that `capture.close` travels on the CONTROL connection, so the
+close can arrive first; an end that required its own bookkeeping to have caught
+up would tear the whole session down over an ordinary teardown. Remembering
+"I am closing this one" is a legitimate shortcut, never the rule.
+
+Anything else that ends a capture ends its data connection the same way and is
+equally not a drop: `device.release` (§4.3, which "also closes any open stream
+on it"), a lane failure the server confesses with `ev.device.error`, and the
+session teardown itself. The rule is about the CAUSE, not about which end moved
+first - a socket that closes because the capture behind it is gone is an
+orderly close on both ends.
+
+**The discriminator, stated so both ends can implement it.** A data
+connection's close is **ORDERLY**, and ends nothing but that capture, when
+either holds:
+
+- it carries the **normal closure** code - which every close listed above does,
+  because every one of them is a close frame sent on purpose;
+- this end initiated it, whatever code comes back.
+
+A close of a **successfully attached** data connection that is neither - an
+abnormal end this side did not cause - is a **DROP**, and by §4.1 it kills the
+session. The first test is the one that decides; the second only saves an end
+from having to wait for a code it already knows the answer to.
+
+Both ends may therefore keep an "I am closing this one" mark, raised before
+they close the socket and before they send the message that will make the other
+end close it, and neither may DEPEND on it: the message that ends a capture is
+answered on the control connection while the close arrives on this one, and
+those two orders are not fixed.
+
+**The planes do not mix.** No binary frame ever travels on the control
+connection, in either direction, and none of the vocabulary of §4.0 - §4.6
+travels on a data one. A binary message on the control connection is a protocol
+error.
+
 ## 5. Binary frames (audio data)
 
-WebSocket **binary** messages on the same socket. Fixed 16-byte header, all
-fields little-endian:
+WebSocket **binary** messages on the capture's DATA connection (§4.7) - never
+on the control connection, where a binary message is a protocol error. The
+layout is unchanged from v1; only the socket they travel on moved. Fixed
+16-byte header, all fields little-endian:
 
 | Offset | Size | Field |
 |---|---|---|
-| 0 | u8  | `frameType`: 1 = PCM, 2 = MARKER, 3 = GAP, 4 = *reserved: uplink PCM (NetPcmPlayback - NOT implemented in v1)* |
+| 0 | u8  | `frameType`: 1 = PCM, 2 = MARKER, 3 = GAP, 4 = *reserved: uplink PCM (NetPcmPlayback - NOT implemented)* |
 | 1 | u8  | reserved, 0 |
-| 2 | u16 | `streamId` (= `captureId`) |
+| 2 | u16 | `streamId` (= `captureId`) - constant on any one data connection, which carries exactly one capture; it stays in the header because the frame layout did not change and it is what correlates a frame in a log or a dump |
 | 4 | u64 | `packetCounter` - per stream, starts at 0, +1 per frame **of any type** |
 | 12| u32 | `n` - see per-type meaning |
 | 16| ...   | payload |
@@ -302,25 +491,33 @@ armed regardless - they cover everything between the server's RAM and the ADC.
 
 ## 6. Lifecycle walkthroughs
 
-**Scope/FFT session:** `hello` -> `devices.list` -> `device.acquire(in)` ->
-`capture.open` -> `capture.start` -> PCM frames -> ... -> `capture.stop` ->
-`device.release` -> `bye`.
+**Scope/FFT session:** `hello` (answers `clientId`) -> `devices.list` ->
+`device.acquire(in)` -> `capture.open` (answers `captureId`) -> dial a second
+socket and `capture.attach{clientId, captureId}` -> `capture.start` -> PCM
+frames on that data connection -> ... -> `capture.stop` -> `capture.close` (the
+data connection closes with it) -> `device.release` -> `bye`.
 
 **Generator + FFT with FLL:** acquire out + in, `gen.open`, `gen.config{form,
 frequency, amplitudeVrms, dacFsVoltageAmpl}`, `gen.fftGrid{N, snap}`,
-`gen.start`, `capture....` - FFT measures, sends `gen.trim{hz}`; `ev.gen.state`
-confirms `emitHz`; hints feed from the confirmed state.
+`gen.start`, `capture....` (open, attach, start) - FFT measures, sends
+`gen.trim{hz}`; `ev.gen.state` confirms `emitHz`; hints feed from the confirmed
+state. The generator's whole half of this is control-connection traffic - it
+streams nothing (§4.5); the audio it is measured against arrives on the
+capture's data connection.
 
-**FreqResp sweep:** acquire out + in, `capture.open/start`, `gen.open`,
-`gen.config{sweep..., form:LOG_SWEEP}`, `gen.start` -> MARKER `sweepStart`
-arrives in the capture stream -> client collects `leadIn + duration` samples ->
-`gen.stop` -> analysis runs client-side on the assembled record.
+**FreqResp sweep:** acquire out + in, `capture.open` + `capture.attach` +
+`capture.start`, `gen.open`, `gen.config{sweep..., form:LOG_SWEEP}`,
+`gen.start` -> MARKER `sweepStart` arrives on the capture's data connection ->
+client collects `leadIn + duration` samples -> `gen.stop` -> analysis runs
+client-side on the assembled record.
 
-**Client vanishes mid-capture:** server misses 4 pings -> stops capture +
-generator, parks QA40x, releases locks, broadcasts `ev.devices.changed` -
-other clients see the devices free ≤ 2.5 s later.
+**Client vanishes mid-capture:** the server misses 4 pings on the control
+connection, or either of the session's connections drops -> stops capture +
+generator, parks QA40x, releases locks, closes the session's remaining sockets,
+broadcasts `ev.devices.changed` - other clients see the devices free ≤ 2.5 s
+later.
 
-## 7. Explicitly out of scope in v1
+## 7. Explicitly out of scope in v2
 
 Client->server audio streaming (frame type 4 reserved; the Java
 `NetPcmPlayback` skeleton throws `UnsupportedOperationException`), TLS/auth,

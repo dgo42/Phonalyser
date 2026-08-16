@@ -38,7 +38,8 @@
   <p>Soundhardware ist über verschiedene Treiberinterfaces erreichbar.
      Phonalyser implementiert drei Allzweckpfade - jeder funktioniert mit
      praktisch jedem Interface - sowie ein gerätespezifisches Backend für den
-     QuantAsylum QA402 / QA403 Analysator (<a href="#qa40x">unten</a>).  Sie
+     QuantAsylum QA402 / QA403 Analysator (<a href="#qa40x">unten</a>) sowie ein
+     hardwarefreies <a href="#loopback">Loopback</a>.  Sie
      wählen einen in den Einstellungen aus; alle Module arbeiten identisch,
      unabhängig davon, welcher aktiv ist.</p>
   <table class="controls">
@@ -97,6 +98,32 @@
      USB-Verbindung als 32-Bit-Wörter, deren obere 24 Bit das Signal tragen
      (das niederwertige Byte ist Null-Auffüllung), sodass die effektive
      Auflösung 24 Bit beträgt.</p>
+  <h3 id="qa40x-sharing">Wer den Analysator hält, und wie lange</h3>
+  <p>USB gibt das Instrument immer nur einem Programm, also fällt ins Gewicht,
+     wer es hält. Phonalyser beansprucht den QA40x, solange eine Messung läuft,
+     und gibt ihn zurück, sobald der letzte von Generator, Oszilloskop und FFT
+     stoppt - die Herstellersoftware, ein zweites Phonalyser oder die Web-Version
+     können ihn dann übernehmen, ohne dass etwas neu gestartet wird. Alles, was
+     das Instrument nur LIEST, ist im selben Sinne atomar: Die Telemetrie hinter
+     dem Einstellungsdialog und die Kalibrierseite werden gelesen, indem das
+     Gerät geöffnet, gelesen und wieder freigegeben wird.</p>
+  <p>Was gelesen wurde, bleibt erhalten, sodass die Freigabe nichts kostet. Die
+     Kalibrierseite ist Werksdaten, die sich nicht ändern können, und sie wird
+     unter der SERIENNUMMER des Analysators zusammen mit dem letzten
+     Telemetriewert gehalten: Ein Dialog, der Werte anzeigt, berührt keine
+     Hardware, und die nächste Messung öffnet erneut, ohne einhundertachtundzwanzig Register noch einmal zu lesen. Der Gerätesuchlauf hält diesen
+     Bestand ehrlich - ein soeben aufgetauchter Analysator wird einmal gelesen,
+     ein vom Bus verschwundener mitsamt seinen Daten vergessen, und ein gegen ein
+     anderes Gerät desselben Modells am selben Port getauschtes kann die
+     Faktoren des ersten nicht erben, weil es eine andere Seriennummer
+     antwortet.</p>
+  <p>Zwei Folgen, die am Messplatz zählen. Ein Analysator, den ein anderes
+     Programm hält, wird nicht als lokales Gerät angeboten - mit ihm lässt
+     sich nicht messen, und ihn anzubieten würde die Absage nur in die Mitte
+     einer Messung verschieben - und er kehrt von selbst in die Liste zurück,
+     sobald er frei ist. Und das Öffnen setzt das USB-Gerät nicht zurück: Der
+     Analysator wird so übernommen, wie das Betriebssystem ihn initialisiert
+     hat, weshalb ein Suchlauf im Sekundentakt auf dem Bus nichts kostet.</p>
   <h3 id="qa40x-ranges">Was ein "dBV"-Eingangsbereich wirklich ist</h3>
   <p>Der Analysator benennt seine Eingangsbereiche in dBV - <code>0 dBV</code>,
      <code>+18 dBV</code> und so fort - und wer diese Namen für
@@ -135,6 +162,46 @@
      besitzt jeweils nur eine Anwendung das Instrument - der QA402 / QA403 darf
      nicht in der QuantAsylum-Software geöffnet sein, während Phonalyser ihn
      verwendet.</div>
+
+  <h2 id="loopback">Das Loopback-Backend</h2>
+  <p>Ein weiteres Backend erreicht überhaupt keine Hardware. Das
+     <b>Loopback</b> ist ein rein digitaler Pfad: Was die Wiedergabespur
+     erzeugt, kommt Sample für Sample an der Aufnahmespur an, ohne ein
+     Audiogerät des Betriebssystems dazwischen. Es gibt nichts in einer
+     Sound-Systemsteuerung auszuwählen und nichts anzustecken - es ist auf jedem
+     System verfügbar.</p>
+  <p>Sein Zweck ist ein Messplatz mit <em>bekanntem</em> Grundrauschen. Jedes
+     übergehende Sample wird von demselben Quantisierer quantisiert, den auch
+     die echten Wiedergabepfade verwenden, mit TPDF-Dither unmittelbar vor dem
+     Runden - standardmäßig auf dem letzten Bit der gewählten Bittiefe; ein im
+     Generator eingestellter Dither hat Vorrang, und die Spur läuft nie
+     ungedithert, denn ganz ohne Rauschen zeigte die FFT die Artefakte des
+     nackten Rundens. Ohne eigene Einstellung ist das Grundrauschen damit das
+     rechnerische und keine Eigenschaft irgendeines Wandlers: Die
+     gelieferten Samples digitaler Stille messen <b>0,500&nbsp;LSB
+     Effektivwert</b>, und eine tiefere Wortbreite senkt dieses Grundrauschen
+     um genau die 6&nbsp;dB pro Bit, die die Rechnung vorgibt. Was eine Messung
+     dann darüber zeigt, gehört dem geprüften Code - denn sonst ist nichts im
+     Pfad.</p>
+  <ul>
+    <li><b>Auch Stille ist gedithert.</b>  Läuft kein Generator, liefert die
+        Aufnahmespur weiter, und zwar geditherte Stille statt digitaler Nullen -
+        das Grundrauschen ist da, ob ein Signal anliegt oder nicht.</li>
+    <li><b>Die Lieferung folgt der Uhr.</b>  Blöcke treffen mit der gewählten
+        Abtastrate ein, wie von einem Gerät. Die Analysen darüber setzen einen
+        Echtzeitstrom voraus: Ein Loopback, das so schnell liefe wie der
+        Prozessor erlaubt, gäbe ihnen ein ganzes Tonleben in einem Augenblick
+        und ihrer Mittelung jeden Zeitbezug.</li>
+    <li><b>Die Formate sind die volle Leiter.</b>  Fünfzehn Abtastraten von
+        8&nbsp;kHz bis 768&nbsp;kHz, jede mit 16, 20, 24 oder 32 Bit, in beiden
+        Richtungen - Eingang und Ausgang laufen auf einer Uhr.</li>
+    <li><b>Bereiche und Kalibrierung verhalten sich wie bei einer Soundkarte.</b>
+        Die Vollaussteuerungsbereiche sind editierbar, und der
+        Kalibrierungsspeicher gilt für sie wie für jede gewöhnliche Karte.
+        Nichts davon gehört dem Gerät: Es gibt keinen von der Hardware
+        vorgegebenen Bereich und keine aus einem Instrument zurückgelesene
+        Kalibrierung - es gibt kein Instrument.</li>
+  </ul>
 
   <h2 id="how">Wie es funktioniert, grob umrissen</h2>
 

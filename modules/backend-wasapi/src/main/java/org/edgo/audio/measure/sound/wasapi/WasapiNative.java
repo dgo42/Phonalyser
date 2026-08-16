@@ -63,6 +63,11 @@ public class WasapiNative {
 
     public static final int AUDCLNT_SHAREMODE_SHARED    = 0;
     public static final int AUDCLNT_SHAREMODE_EXCLUSIVE = 1;
+    /** The one non-full valid-bits split in use: 24 significant bits in a
+     *  32-bit container, the spelling 24-bit converters behind a 32-bit
+     *  transport insist on. */
+    public static final int VALID_BITS_24 = 24;
+    public static final int CONTAINER_BITS_32 = 32;
 
     public static final int AUDCLNT_STREAMFLAGS_EVENTCALLBACK = 0x00040000;
     public static final int AUDCLNT_STREAMFLAGS_NOPERSIST     = 0x00080000;
@@ -225,8 +230,19 @@ public class WasapiNative {
      * Allocated as native {@link Memory} so it can be passed straight to
      * {@code IAudioClient::Initialize} / {@code IsFormatSupported}.
      */
+    /** The common spelling: the container carries as many valid bits as it is
+     *  wide. */
     public static Memory buildWaveFormatExtensible(int sampleRate, int bitDepth, int channels) {
-        int blockAlign  = (bitDepth / 8) * channels;
+        return buildWaveFormatExtensible(sampleRate, bitDepth, bitDepth, channels);
+    }
+
+    /** {@code storeBits} is the container (frame width), {@code validBits} the
+     *  significant bits inside it - 24-bit converters behind a 32-bit
+     *  transport accept ONLY the 32/24 split and refuse both 24/24 packed and
+     *  32/32, so the two must be spellable independently. */
+    public static Memory buildWaveFormatExtensible(int sampleRate, int storeBits, // static-ok: native-interop struct builder
+                                                   int validBits, int channels) {
+        int blockAlign  = (storeBits / 8) * channels;
         int channelMask = channels == 1 ? SPEAKER_FRONT_CENTER : SPEAKER_STEREO_MASK;
         Memory wfx = new Memory(40);
         wfx.clear();
@@ -235,12 +251,40 @@ public class WasapiNative {
         wfx.setInt  (4,  sampleRate);
         wfx.setInt  (8,  sampleRate * blockAlign);
         wfx.setShort(12, (short) blockAlign);
-        wfx.setShort(14, (short) bitDepth);
+        wfx.setShort(14, (short) storeBits);
         wfx.setShort(16, (short) 22);              // cbSize = sizeof(extension)
-        wfx.setShort(18, (short) bitDepth);        // wValidBitsPerSample
+        wfx.setShort(18, (short) validBits);       // wValidBitsPerSample
         wfx.setInt  (20, channelMask);
         wfx.write   (24, KSDATAFORMAT_SUBTYPE_PCM, 0, 16);
         return wfx;
+    }
+
+    /** The container width this device accepts for {@code validBits}
+     *  significant bits at this rate and channel count.  The bit depth the
+     *  operator selected IS the valid bits - the exact capability - and the
+     *  container is a transport detail: normally as wide as the valid bits,
+     *  but a 24-bit converter behind a 32-bit transport refuses 3-byte packed
+     *  24 and takes only 24-in-32.  When the device answers neither spelling,
+     *  the plain container comes back and Initialize reports the real
+     *  refusal. */
+    public static int resolveExclusiveContainerBits(Pointer audioClient, int sampleRate, // static-ok: native-interop query
+                                                    int validBits, int channels) {
+        if (isExclusiveSpellingSupported(audioClient, sampleRate, validBits, validBits, channels)) {
+            return validBits;
+        }
+        if (validBits == VALID_BITS_24
+                && isExclusiveSpellingSupported(audioClient, sampleRate, CONTAINER_BITS_32, VALID_BITS_24, channels)) {
+            return CONTAINER_BITS_32;
+        }
+        return validBits;
+    }
+
+    private static boolean isExclusiveSpellingSupported(Pointer audioClient, int sampleRate, // static-ok: native-interop query
+                                                        int storeBits, int validBits, int channels) {
+        Memory wfx = buildWaveFormatExtensible(sampleRate, storeBits, validBits, channels);
+        PointerByReference closest = new PointerByReference();
+        return callHR(audioClient, VT_AC_IS_FORMAT_SUPPORTED,
+                AUDCLNT_SHAREMODE_EXCLUSIVE, wfx, closest) == S_OK;
     }
 
     /**

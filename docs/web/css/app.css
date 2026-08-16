@@ -210,7 +210,7 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .filefield .icon-btn { display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--field-border); border-left: none; background: #f1f1f1; width: 26px; height: 24px; font-size: 13px; line-height: 1; cursor: pointer; color: #444; padding: 0; }
 .filefield .icon-btn:hover { background: #e4e4e4; }
 .filefield .icon-btn.play { color: var(--green); opacity: .7; font-size: 21px; }  /* green like the big play button, bigger icon */
-.filefield .icon-btn.play.playing { color: var(--green); opacity: 1; }            /* full-bright green while playing */
+.filefield .icon-btn.play.playing { color: var(--green); opacity: 1; filter: brightness(1.45) drop-shadow(0 0 4px var(--green)); }  /* lit like the big play button, smaller glow radius */
 .form-check-sm { font-size: 12px; margin: 6px 0; min-height: auto; }
 .form-check-sm .form-check-label { font-size: 12px; }
 
@@ -349,10 +349,12 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
    whole table never shifts when the auto-ranging unit in the row name
    ("Vpp, µV" vs "Vpp, mV" vs "Vpp, V") changes width. Wide enough to hold the
    longest name+unit ("Vmean, µV"); table-layout:fixed + the table's definite
-   max-content width make the per-cell widths authoritative so no boundary moves. */
-.scope-meas-table .mt-name { text-align: left; width: 76px; min-width: 76px; max-width: 76px; }
-.scope-meas-table .mt-cur, .scope-meas-table th.mt-cur { width: 52px; min-width: 52px; max-width: 52px; }
-.scope-meas-table .mt-stat, .scope-meas-table th.mt-stat { width: 52px; min-width: 52px; max-width: 52px; }
+   max-content width make the per-cell widths authoritative so no boundary moves.
+   Sized in ch, not px: the columns stay fixed against VALUE changes but scale
+   with the configured UI font - a larger font would clip inside pixel widths. */
+.scope-meas-table .mt-name { text-align: left; width: 11.5ch; min-width: 11.5ch; max-width: 11.5ch; }
+.scope-meas-table .mt-cur, .scope-meas-table th.mt-cur { width: 8ch; min-width: 8ch; max-width: 8ch; }
+.scope-meas-table .mt-stat, .scope-meas-table th.mt-stat { width: 8ch; min-width: 8ch; max-width: 8ch; }
 .scope-meas-table .mt-cur, .scope-meas-table .mt-stat,
 .scope-meas-table td.mt-num { text-align: right; }
 /* Floating pop-out window (Java createMeasurementWindow / ToolWindow): a titled
@@ -513,7 +515,14 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
   border-bottom: 10px solid var(--slider-color, #fff); }
 
 .fft-meta { position: absolute; top: 5px; right: 18px; display: flex; align-items: center; gap: 12px; z-index: 3; font-size: 11px; color: #555; }
-.fft-meta .unit-sel { width: auto; font-size: 11px; padding: 1px 18px 1px 6px; }
+.fft-meta .unit-sel { width: 71px; font-size: 11px; padding: 1px 18px 1px 6px; }
+/* Distortion-table level unit (Java FftView distortionUnitCombo): it keeps the slot right
+   after the external-window button, spaced off the row's edge so it follows as buttons come
+   and go - but its LOOK is the magnitude-axis unit combo's (.fft-meta .unit-sel above), the
+   one drop-down design the pane already has; only placement and a floor wide enough for
+   "dBFS" plus the arrow are its own. */
+.canvas-wrap .lr-tools .unit-sel { width: auto; min-width: 62px; margin-left: 4px;
+  font-size: 11px; padding: 1px 18px 1px 6px; }
 
 /* ===== tile tabs ===== */
 .tiletabs { display: flex; align-items: stretch; height: 46px; background: #f0f0f0;

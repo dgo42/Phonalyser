@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.stream.IntStream;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 
@@ -636,7 +637,7 @@ public class FftAnalyzer {
         final double peakAmp;
         if (frameRejection || log.isDebugEnabled()) {
             dcMean  = sampleMean(samples);
-            peakAmp = dcRemovedRms(samples, dcMean) * Math.sqrt(2.0);
+            peakAmp = dcRemovedRms(samples, dcMean) * Constants.SQRT2;
         } else {
             dcMean  = 0.0;
             peakAmp = 0.0;
@@ -2351,7 +2352,7 @@ public class FftAnalyzer {
             sumD2Sq += d2 * d2;
         }
         double rmsD2             = Math.sqrt(sumD2Sq / Math.max(1, samples.length - 2));
-        double expectedSineRmsD2 = peakAmp * omegaPerSample * omegaPerSample / Math.sqrt(2.0);
+        double expectedSineRmsD2 = peakAmp * omegaPerSample * omegaPerSample / Constants.SQRT2;
         return rmsD2 / Math.max(1e-30, expectedSineRmsD2);
     }
 }

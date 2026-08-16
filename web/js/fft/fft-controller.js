@@ -22,6 +22,7 @@ import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
 import { FrequencyFll } from '../dsp/fll.js';
 import { refinePeak, TONE_SEARCH_BINS } from './imd-analyzer.js';
+import { debug } from '../util/debug.js';
 
 /** Output-pipeline drain to skip after a generator/form/frequency change, in seconds
  *  (Java OUTPUT_DRAIN_SKIP_SEC). The DAC's hardware buffer (~480 ms on the render path)
@@ -81,9 +82,11 @@ export class FftController {
    * @param capture the SharedCapture instance.
    * @param gen     the GeneratorController (read + FLL-steered, not owned).
    * @param config  the SHARED engine config object.
-   * @param deps    {status} - status: (text) => void.
+   * @param deps    {status, prefs} - status: (text) => void; prefs: the live Preferences,
+   *                read for the settings whose change must reset this controller's own
+   *                accumulator (absent in bare test constructions - the reaction stays unwired).
    */
-  constructor(capture, gen, config, { status } = {}) {
+  constructor(capture, gen, config, { status, prefs } = {}) {
     this._capture = capture;
     this._gen = gen;
     this.config = config;
@@ -205,8 +208,28 @@ export class FftController {
       this._fll.reset();
       this._fll2.reset();               // dual-tone second loop resets in lockstep
       this.fllErrHz = 0; this.fllLocked = false; this.fllStable = 0; this.genFreq = this.snapped;
+      // And the STATISTICS with them (Java FftView's GENERATOR_SIGNAL_CHANGED subscriber
+      // calls resetStatisticsAfterSignalChange, which is resetStatistics plus the drain
+      // skip): the averaged spectrum and the analyses count were measured for the OLD
+      // signal. Arming the drain alone reset the accumulator but left the counter running,
+      // so the readout went on claiming an average depth built from a tone that is gone.
+      // Unconditional, like the Java subscriber - the drain skip below is what needs a
+      // live reader, not the counters.
+      this.resetAnalyses();
       if (this._fftOn) this._armOutputDrainSkip();
     });
+
+    // The multi-tone detect threshold reshapes which peaks count as TONES, and with them how
+    // the coherent average is de-rotated - a change invalidates the running accumulator, so
+    // the reaction lives HERE with the state it resets, beside the signal-change reset above;
+    // the preferences dialog only writes the value (Java FftView:498 wires the same property
+    // to resetStatistics, and the field's own tooltip promises "Changing it restarts FFT
+    // averaging"). The Property notifies on a real change only, so an OK that re-writes the
+    // same threshold stays silent.
+    // Guarded on the PROPERTY, not just the object: the engine tests hand in partial
+    // preference stubs (backend only), and a stub without this field simply leaves the
+    // reaction unwired, like the bare constructions do.
+    if (prefs && prefs.fftStrongToneRelDb) prefs.fftStrongToneRelDb.addListener(() => this.resetAnalyses());
 
     // Self-feed off the LIVE capture: Java consumers subscribe to CAPTURE_BATCH_AVAILABLE and read
     // their own cursor - no central dispatcher pumps us. feedFft self-gates on pausedByStopN and a
@@ -221,14 +244,26 @@ export class FftController {
    *  before the next window so it sees only the new signal. Re-anchors the cursor + the
    *  accumulator like an overrun so the discarded span can't leak into the average. */
   _armOutputDrainSkip() {
-    const reader = this._fftReader;
-    if (reader) { reader.seekToLatest(); this._absNextSample = reader.getReadPos(); }
-    this.bufFilled = 0; this.bufW = 0; this._refill = this.hop;
-    this._winAbsStart = 0; this._dispatchedOnce = false;
+    this._restartWindow();
     this._accum.reset();
     this._accumEpoch++;
     this._workerResetPending = true;
     this._drainSkipRemaining = Math.ceil(OUTPUT_DRAIN_SKIP_SEC * (this.config.inRate || 0));
+  }
+
+  /** Restarts the analysis window: re-anchor the cursor at the live tip and drop
+   *  whatever had been gathered towards the current one, so the next window is built
+   *  from FRESH samples only - the web analog of Java's reAnchorPending +
+   *  invalidateWindow(). Without it a restart keeps the buffer full, and the next
+   *  window is the OLD one slid forward by a single hop: an average that was meant
+   *  to start from zero opens with a frame that is mostly pre-restart signal.
+   *  What the ACCUMULATOR does about the restart differs per caller (a reset drops
+   *  the collected depth, a re-sync keeps it), so that stays outside. */
+  _restartWindow() {
+    const reader = this._fftReader;
+    if (reader) { reader.seekToLatest(); this._absNextSample = reader.getReadPos(); }
+    this.bufFilled = 0; this.bufW = 0; this._refill = this.hop;
+    this._winAbsStart = 0; this._dispatchedOnce = false;
   }
 
   // ---- Generator state read + FLL-steered through delegating accessors (this._gen) ----
@@ -335,16 +370,34 @@ export class FftController {
    *  getAccumulatedFrames) - the predistortion frame-depth readout, distinct from
    *  the per-tick completedAnalyses count stop-after-N keys off. */
   accumulatedFrames() { return this._analysesDone; }
-  /** Resets the accumulated-averages counter AND the cross-tick accumulator
-   *  (predistortion round boundary). Mirrors Java resetStatistics: a fresh round
-   *  must start the average from zero, so bump the epoch to drop any in-flight
-   *  window from before the reset. */
+
+  /** The average COUNT to display, read LIVE - the same expression the emitted result
+   *  carries (the first tick is the seed, not an average, hence one less, clamped at
+   *  0), so the two never disagree. The desktop's ~100 ms indicator timer reads its
+   *  count from the analyser the same way (FftView.startFillPercentTimer); the web
+   *  label was painted only when a result arrived, so after a stop / start or a reset
+   *  it went on showing the PREVIOUS run's depth until the next frame landed - minutes
+   *  of it at the large FFT lengths. */
+  averagesDisplayed() { return Math.max(0, this.framesDone - 1); }
+  /** Resets the accumulated-averages counter, the ANALYSIS WINDOW and the cross-tick
+   *  accumulator (the Reset-statistics button, a predistortion round boundary).
+   *  Mirrors Java resetStatistics: a fresh round must start the average from zero, so
+   *  the window is re-anchored at the live tip and rebuilt from fresh samples, and the
+   *  epoch bump drops any in-flight window from before the reset. Restarting the
+   *  average WITHOUT restarting the window left the analysis buffer full, so the first
+   *  frame of the new average was the last frame of the old one slid forward by one
+   *  hop - the reset only appeared to take effect a whole window later.
+   *  The frequency lock is deliberately NOT touched: the generator did not change, so
+   *  the converged correction stays valid (a user-driven signal change resets it, in
+   *  the GENERATOR_SIGNAL_CHANGED subscriber). */
   resetAnalyses() {
     this._analysesTicks = 0;
     this._analysesDone = 0;
+    this.framesDone = 0;        // the READOUT too - a restarted average shows 0, not the old depth
     // Java resetStatistics calls paused.set(false): a predistortion-round reset must
     // RESUME the feed after a prior stop-after-N auto-stop, else the next round starves.
     this._fftPausedByStopN = false;
+    this._restartWindow();
     if (this._accum) { this._accum.reset(); this._accumEpoch++; this._workerResetPending = true; }
   }
 
@@ -584,7 +637,7 @@ export class FftController {
     // transition) - the Java worker re-reads Preferences every tick; NO reset here.
     this._syncLiveConfig();
     let avail = reader.available();
-    if (avail === OVERRUN) { this._onOverrun(reader); return; }
+    if (avail === OVERRUN) { this._onOverrun(); return; }
     if (avail <= 0) return;
     // Output-drain skip (Java FftAnalyzerWorker): after a signal-change re-anchor,
     // consume and DISCARD the span still carrying the old tone (the DAC buffer keeps it
@@ -593,7 +646,7 @@ export class FftController {
     // the cursor without copying); return until the drain is exhausted.
     if (this._drainSkipRemaining > 0) {
       const got = reader.read(Math.min(avail, this._drainSkipRemaining), null, null);
-      if (got === OVERRUN) { this._onOverrun(reader); return; }
+      if (got === OVERRUN) { this._onOverrun(); return; }
       if (got > 0) this._drainSkipRemaining -= got;
       return;
     }
@@ -606,25 +659,33 @@ export class FftController {
     // rdr.read(needed, wantLeft ? winBuf : null, wantLeft ? null : winBuf)):
     // L -> ch0 fills the left arg, R -> ch1 fills the right arg. Consuming forward read.
     const n = this._wantLeft ? reader.read(avail, tmpR, null) : reader.read(avail, null, tmpR);
-    if (n === OVERRUN) { this._onOverrun(reader); return; }
+    if (n === OVERRUN) { this._onOverrun(); return; }
     this._absNextSample = absBase;
     this._accumulate(tmpR, n);
   }
 
-  /** Ring overrun: the writer lapped the cursor (the worker fell a full ring
-   *  behind). Re-anchor at "now" and rebuild the window from a fresh contiguous
-   *  span. Like the Java onCaptureOverrun, this RE-ANCHORS the accumulator's
-   *  reference (a torn window would inject a phase jump) - bump the epoch so the
-   *  worker result for the discarded window is dropped, and reset the accumulator
-   *  so deep averaging restarts from the fresh unbroken span. */
-  _onOverrun(reader) {
-    reader.seekToLatest();
-    this._absNextSample = reader.getReadPos();
-    this.bufFilled = 0; this.bufW = 0; this._refill = this.hop;
-    this._winAbsStart = 0; this._dispatchedOnce = false;
-    this._accum.reset();
+  /** Ring overrun: the writer lapped the cursor (the analyser fell a full ring
+   *  behind). ONLY the window starts over - re-anchored at "now" and rebuilt from a
+   *  fresh contiguous span. The collected average SURVIVES (Java onCaptureOverrun:
+   *  a COVERAGE gap, not corrupted data - the absolute sample positions stay true
+   *  across it, so the de-rotation absorbs the gap and averaging continues). Losing
+   *  a deep average to a momentary stall is the worse failure by far: the depth is
+   *  minutes of work, the gap is one window. onResync re-anchors the κ slope / PLL
+   *  for the jumped window, and the epoch bump discards only the ONE window that was
+   *  in flight across the gap. */
+  _onOverrun() {
+    this._restartWindow();
+    this._accum.onResync();   // KEEP the collected depth; re-anchor κ slope + PLL
     this._accumEpoch++;
-    this._workerResetPending = true;
+    this._workerResyncPending = true;
+    // Say which re-sync this was. The desktop logs it and blinks its own banner
+    // (Java onCaptureOverrun -> publishCaptureBanner); the browser re-anchored in
+    // silence, so an overrun and a signal discontinuity were indistinguishable on
+    // screen even though they mean different things - one is the analysis falling
+    // behind, the other damaged samples.
+    console.warn('FFT ring overrun - analyser fell a full buffer behind; window re-anchored, '
+      + 'averaging continues (lower the overlap or FFT length if this repeats)');
+    MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, 'fft.warning.overrun');
   }
 
   /** Recovery for a detected in-window signal discontinuity (Java FftAnalyzerWorker
@@ -638,15 +699,9 @@ export class FftController {
    *  time-domain and the spectral gates, exactly as Java. Publishes the re-sync banner
    *  message-key (Java publishCaptureBanner - same event + i18n key). */
   _onSignalDiscontinuity() {
-    const reader = this._fftReader;
-    if (reader) {
-      reader.seekToLatest();
-      this._absNextSample = reader.getReadPos();
-    }
+    this._restartWindow();
     this._drainSkipRemaining = Math.max(this._drainSkipRemaining,
       Math.ceil(POST_GLITCH_SKIP_SEC * (this.config.inRate || 0)));
-    this.bufFilled = 0; this.bufW = 0; this._refill = this.hop;
-    this._winAbsStart = 0; this._dispatchedOnce = false;
     this._accum.onResync();   // KEEP the collected depth; re-anchor κ slope + PLL
     this._accumEpoch++;       // drop any in-flight window straddling the re-sync
     this._workerResyncPending = true;
@@ -662,7 +717,12 @@ export class FftController {
       this.buf[this.bufW] = samples[i]; this.bufW = (this.bufW + 1) % L;
       if (this.bufFilled < L) this.bufFilled++;
       if (this.warmup > 0) { this.warmup--; continue; }
-      if (this.bufFilled >= L && --this._refill <= 0) {
+      // The FIRST window goes out the moment the buffer is full; only the ones after
+      // it wait a hop (the desktop dispatches as soon as its span is gathered). The
+      // countdown started at a full hop even for the first window, so the fill sat at
+      // 100 % for one more hop before anything was analysed - 42 s at 4 M / 50 % /
+      // 48 kS/s, and again after every restart.
+      if (this.bufFilled >= L && (!this._dispatchedOnce || --this._refill <= 0)) {
         this._refill = this.hop;
         // Uniform-hop absolute window start (the cross-tick de-rotation delta).
         // First dispatched window starts at 0; each later one advances one hop -
@@ -900,6 +960,11 @@ export class FftController {
         const binW = r.freqResolution;
         const peakBins = this._fundamentalBins(r);
         if (this._accum.reject(r.re, r.im, r.fftSize / 2, binW, peakBins)) {
+          const d = this._accum.spectralDiagnostics;
+          debug('[fft] spectral gate reject - gates ' + JSON.stringify(d.lastGates)
+            + ` score ${d.lastScore != null ? d.lastScore.toFixed(2) : '?'} thr ${d.lastScoreThresh != null ? d.lastScoreThresh.toFixed(2) : '?'}`
+            + ` | power ${d.lastPowerDb != null ? d.lastPowerDb.toFixed(1) : '?'} med ${d.lastPowerMed != null ? d.lastPowerMed.toFixed(1) : '?'} thr ${d.lastPowerThresh != null ? d.lastPowerThresh.toFixed(1) : '?'}`
+            + ` | pedestal ${Number.isFinite(d.lastPedestalExcess) ? d.lastPedestalExcess.toFixed(1) : '-'} thr ${Number.isFinite(d.lastPedestalThresh) ? d.lastPedestalThresh.toFixed(1) : '-'}`);
           this._onSignalDiscontinuity();
           return;
         }
@@ -913,15 +978,19 @@ export class FftController {
     // so rejected / straddling ticks don't count - exactly as the desktop.
     this._analysesTicks++;
 
-    // Per-tick depth readout. When averaging, the displayed "N×" is the accumulator
-    // depth in tick-equivalents (accumFrames / framesPerTick), capped at the target
-    // N - so it climbs 1/N, 2/N, ... as the cross-tick average deepens. With no
-    // averaging (ringN = 1) there is no accumulator; show the single window's own
-    // frame count (1/1).
+    // Per-tick depth readout. In ∞ mode the displayed "N×" is the accumulator depth
+    // in tick-equivalents (accumFrames / framesPerTick) - unbounded, it climbs with
+    // every fold. A finite ring CANNOT read its depth for this: the exponential
+    // window saturates at exactly the target depth, and the emitted readout
+    // subtracts the seed tick (framesDone - 1 below) - depth-derived, the moving
+    // average was stuck one short of N forever. The ring therefore counts PROCESSED
+    // ticks, as the desktop's fill readout does (completedAnalyses - 1, capped at
+    // N). With no averaging (ringN = 1) there is no accumulator; show the single
+    // window's own frame count (1/1).
     const accumFrames = this._accum.accumFrames;
     if (accumulate) {
       const depthTicks = Math.round(accumFrames / perTickFrames);
-      this.framesDone = forever ? depthTicks : Math.min(this.avgTarget, depthTicks);
+      this.framesDone = forever ? depthTicks : Math.min(this.avgTarget + 1, this._analysesTicks);
       // Frame depth (Java getAccumulatedFrames) - the predistortion frame-depth readout,
       // NOT the stop-after-N / completedAnalyses key (that's the per-tick count above).
       this._analysesDone = accumFrames;

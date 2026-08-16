@@ -67,15 +67,12 @@ public class Qa40xDeviceFinder {
      *  claim because macOS, unlike Linux / Windows, does not auto-configure. */
     private static final int ACTIVE_CONFIGURATION = 1;
 
-    /** Open attempts and the settle pause between them.  macOS: {@code
-     *  libusb_reset_device} drops and re-enumerates the device, so the first
-     *  configure/claim can race the re-enumeration - the interface (or the whole
-     *  device) is momentarily gone: {@code LIBUSB_ERROR_NOT_FOUND} on the claim,
-     *  or an empty device list on the next pass.  A short settle plus a fresh
-     *  open WITHOUT another reset recovers; Linux / Windows restore state
-     *  synchronously and never retry in practice. */
+    /** Open attempts and the settle pause between them: a device that is
+     *  re-enumerating after a hot-plug can be momentarily gone - {@code
+     *  LIBUSB_ERROR_NOT_FOUND} on the claim, or an empty device list on the next
+     *  pass - and a short settle plus a fresh open recovers. */
     private static final int  OPEN_ATTEMPTS   = 3;
-    private static final long RESET_SETTLE_MS = 250;
+    private static final long SETTLE_MS = 250;
 
     /** A QA40x model and its USB product ID (doc §2).  QA401 is deliberately out of scope. */
     public enum Qa40xModel {
@@ -140,11 +137,14 @@ public class Qa40xDeviceFinder {
      * left off the list; the machine that really has it serves it as a remote
      * backend.
      *
-     * <p>ONLY that code filters.  {@code ACCESS} / {@code BUSY} answers stay
-     * listed - they are what an analyzer this process (or another) is actively
-     * holding says, and dropping those would empty the combo mid-measurement.
-     * The probe handle claims nothing and is closed at once, so it never
-     * disturbs a running session.
+     * <p>ONLY that code filters HERE.  An {@code ACCESS} / {@code BUSY} answer is
+     * what a device somebody is actively holding says, and this probe cannot tell
+     * whose it is - the holder may be this very process, whose own device must
+     * never vanish from its own list mid-measurement.  That verdict therefore
+     * belongs to the caller that knows: the manager's scan, which has just tried
+     * to open the analyzer once and knows whether the session is its own.  The
+     * probe handle claims nothing and is closed at once, so it never disturbs a
+     * running session.
      */
     private boolean openableHere(LibUsb.Lib lib, Pointer device, Qa40xModel model) {
         PointerByReference handleRef = new PointerByReference();
@@ -164,12 +164,9 @@ public class Qa40xDeviceFinder {
     }
 
     /**
-     * Opens the single attached QA40x exclusively: {@code reset_device} then
+     * Opens the single attached QA40x exclusively: {@code libusb_open} then
      * {@code claim_interface(0)} (doc §7).  Throws if {@code libusb} is absent, if
      * no device is attached, or if more than one is (the single-device rule).
-     * The reset runs only on the FIRST attempt; a retry re-opens without it -
-     * resetting again would just re-arm the macOS re-enumeration race the retry
-     * is there to escape (see {@link #OPEN_ATTEMPTS}).
      */
     // Declared as the INTERFACE, not the libusb implementation it happens to
     // build: its one production caller assigns it to a Qa40xTransport, and a
@@ -183,7 +180,7 @@ public class Qa40xDeviceFinder {
         IllegalStateException last = null;
         for (int attempt = 1; attempt <= OPEN_ATTEMPTS; attempt++) {
             try {
-                return openOnce(attempt == 1);
+                return openOnce();
             } catch (Throwable t) {
                 // Throwable: the open dance is native from the first call, and a
                 // device that re-enumerates under it faults the invocation itself
@@ -196,7 +193,7 @@ public class Qa40xDeviceFinder {
                 if (attempt < OPEN_ATTEMPTS) {
                     if (log.isInfoEnabled()) {
                         log.info("QA40x open attempt {}/{} failed ({}); settling {} ms before retry",
-                                attempt, OPEN_ATTEMPTS, last.getMessage(), RESET_SETTLE_MS);
+                                attempt, OPEN_ATTEMPTS, last.getMessage(), SETTLE_MS);
                     }
                     settleBeforeRetry();
                 }
@@ -206,12 +203,26 @@ public class Qa40xDeviceFinder {
     }
 
     /**
-     * One pass of the open dance: {@code libusb_open}, optional {@code
-     * reset_device}, configuration select, {@code claim_interface(0)}.  The
-     * handle is closed on ANY failure - an opened-but-unclaimed handle left
-     * dangling on a re-enumerating device poisons the next attempt.
+     * ONE open attempt - no retry, no settle: the answer to "can this process
+     * have the analyzer right now", for a caller that is only asking.  A device
+     * another process holds refuses at {@code libusb_open}, and that answer does
+     * not change while the caller waits, so a scan asks once and comes back on
+     * its next pass; the user-facing {@link #open()} keeps the retry loop.
      */
-    private LibUsbQa40xTransport openOnce(boolean reset) {
+    public Qa40xTransport openWithoutRetry() {
+        if (!LibUsb.available()) {
+            throw new IllegalStateException("libusb-1.0 not available - cannot open a QA40x device");
+        }
+        return openOnce();
+    }
+
+    /**
+     * One pass of the open dance: {@code libusb_open}, configuration select,
+     * {@code claim_interface(0)}.  The handle is closed on ANY failure - an
+     * opened-but-unclaimed handle left dangling on a re-enumerating device
+     * poisons the next attempt.
+     */
+    private LibUsbQa40xTransport openOnce() {
         return withDeviceList((lib, devices) -> {
             Pointer match = null;
             Qa40xModel model = null;
@@ -231,15 +242,11 @@ public class Qa40xDeviceFinder {
             Pointer handle = handleRef.getValue();
             boolean claimed = false;
             try {
-                if (reset) {
-                    checkRc(lib.libusb_reset_device(handle), "libusb_reset_device");
-                }
                 // macOS: unlike Linux / Windows the OS does not auto-select the
-                // device configuration - after enumeration (or the reset-induced
-                // re-enumeration above) the QA40x can sit UNCONFIGURED, and claiming
-                // interface 0 of configuration 0 fails with LIBUSB_ERROR_NOT_FOUND.
-                // Select the device's only configuration first; a no-op wherever the
-                // OS already configured it.
+                // device configuration - after enumeration the QA40x can sit
+                // UNCONFIGURED, and claiming interface 0 of configuration 0 fails
+                // with LIBUSB_ERROR_NOT_FOUND.  Select the device's only
+                // configuration first; a no-op wherever the OS already configured it.
                 IntByReference cfg = new IntByReference();
                 checkRc(lib.libusb_get_configuration(handle, cfg), "libusb_get_configuration");
                 if (cfg.getValue() != ACTIVE_CONFIGURATION) {
@@ -259,11 +266,11 @@ public class Qa40xDeviceFinder {
         });
     }
 
-    /** Waits {@link #RESET_SETTLE_MS} between open attempts; an interrupt aborts
+    /** Waits {@link #SETTLE_MS} between open attempts; an interrupt aborts
      *  the open (flag restored) rather than shortening the pause. */
     private void settleBeforeRetry() {
         try {
-            Thread.sleep(RESET_SETTLE_MS);
+            Thread.sleep(SETTLE_MS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while waiting for the QA40x to re-enumerate", e);

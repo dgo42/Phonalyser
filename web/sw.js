@@ -11,7 +11,7 @@
  * HTTP cache - vendor them under web/vendor/ if full offline is required.
  * GNU AGPL v3 or later.
  */
-const VERSION = '1.2.0';                    // single source of truth = package.json version (build injects it)
+const VERSION = '1.2.1';                    // single source of truth = package.json version (build injects it)
 const CACHE = `phonalyser-${VERSION}`;
 const CORE = ['./', './index.html', './css/app.css', './favicon.svg', './manifest.webmanifest', './devices.yaml'];
 

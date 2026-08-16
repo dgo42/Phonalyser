@@ -32,7 +32,9 @@
      <code>AudioContext</code>, both of them downstream of the system mixer.
      Whatever the mixer did - a resample, a volume taper, an "enhancement" -
      is already in the samples by the time this application sees them.  So the
-     two backends this build has divide cleanly by what they can promise:</p>
+     paths this build offers - the browser's own, a QA40x over USB, a
+     hardware-free <a href="#loopback">loopback</a> and a bench across the
+     network - divide cleanly by what they can promise:</p>
   <table class="controls">
     <tr><th>Backend</th><th>What it is</th><th>What it can promise</th></tr>
     <tr><td><b>Web Audio</b></td>
@@ -53,6 +55,15 @@
             is the browser's answer to exclusive mode, and it is why a serious
             measurement in this build is usually made on a QA40x or on a
             bench.</td></tr>
+    <tr><td><b>Loopback</b></td>
+        <td>No hardware at all (<a href="#loopback">below</a>): what the
+            playback lane produces arrives at the capture lane, sample for
+            sample, without ever leaving the page.</td>
+        <td><b>Bit-exact by construction</b>, and the only local path here that
+            is so without an instrument - there is no mixer and no converter to
+            get in the way. Its noise floor is the arithmetic one of the
+            selected bit depth, which makes it a bench you can predict before
+            you measure it.</td></tr>
     <tr><td><b>A bench</b><br/><code>&lt;server&gt; -> &lt;backend&gt;</code></td>
         <td>A <a href="#network">Phonalyser server</a>'s backend, reached over
             the network.  The exclusive-mode open happens on <em>that</em>
@@ -99,6 +110,22 @@
      ride the same open instrument rather than opening it twice.  Samples cross the
      USB link as 32-bit words whose top 24 bits carry the signal (the low byte is
      zero padding), so the effective resolution is 24-bit.</p>
+  <h3 id="qa40x-sharing">Who holds the analyzer, and for how long</h3>
+  <p>WebUSB claims interface 0 exclusively, so a claim left standing locks the
+     analyzer out of every other program for the life of the page. The browser
+     holds the QA40x while a measurement runs and hands it back when the last of
+     the generator, the oscilloscope and the FFT stops - the vendor software, the
+     desktop application or another tab can then have it with nothing restarted.
+     Selecting the analyzer no longer holds it either: the card is read and the
+     device released in the same step, and the telemetry behind the settings
+     panel is taken the same way.</p>
+  <p>What is read is kept, so releasing costs nothing. The calibration page is
+     factory data that cannot change, and it is stored under the analyzer's own
+     SERIAL NUMBER together with the last telemetry reading, so a panel that only
+     shows values touches no hardware and the next measurement reopens without
+     re-reading a hundred and twenty-eight registers. WebUSB carries the serial
+     with the enumeration itself, so an analyzer that has left the bus loses its
+     stored page without the device being opened at all.</p>
   <h3 id="qa40x-ranges">What a "dBV" input range actually is</h3>
   <p>The analyzer names its input ranges in dBV - <code>0 dBV</code>,
      <code>+18 dBV</code>, and so on - and taking those names for RMS full-scale
@@ -127,6 +154,66 @@
      peak-to-peak reference.</p>
 
   <div class="note"><b>What the browser needs.</b>  WebUSB needs <b>Google Chrome</b> - a narrower requirement than the application's own. Phonalyser.web runs on any Chromium browser, but the analyzer has only been verified to work in Chrome: on the same machine, over <code>https://</code> with a valid certificate, Edge, Opera and Brave did not reach it. Being built on Chromium is not sufficient; the browser must also expose WebUSB and permit a page to use it. Firefox and Safari do not implement it at all, though you will not get that far there: the application itself <a href="../web-in-browser.html#browser">refuses to start</a> on a non-Chromium engine.  The page must be served over <code>https://</code> or <code>localhost</code>, and the first connection needs a click: the browser opens its own device chooser, which only you can confirm.  On Windows the analyzer must be bound to a WinUSB-class driver - a per-machine step a web page cannot perform for you.  As with exclusive mode, one application owns the instrument at a time: the QA402 / QA403 must not be open in the QuantAsylum software, or in another tab, while Phonalyser.web uses it.</div>
+
+  <h2 id="loopback">The loopback backend</h2>
+  <p>One backend in this build reaches no hardware at all.  The <b>loopback</b>
+     is a purely digital path: whatever the playback lane produces arrives at
+     the capture lane, sample for sample, with no audio device and no system
+     mixer anywhere in between.  There is nothing to select in a sound panel,
+     nothing to plug in and nothing to grant - it is there in every browser this
+     application runs in.</p>
+  <p>That also makes it the one <em>local</em> path here that is bit-exact
+     without an instrument.  Web Audio cannot be, because the mixer sits in
+     front of it; the QA40x can be, because WebUSB goes around the mixer to a
+     real converter.  The loopback is bit-exact for a simpler reason - the
+     samples never leave the page.</p>
+  <p>Its purpose is a bench whose noise floor is <em>known</em>.  Every sample
+     that crosses is quantised by the same quantiser the real playback paths
+     use, with TPDF dither applied immediately before the rounding step - by
+     default at the last bit of the selected depth; a dither the generator
+     configures takes precedence, and the lane is never undithered, because a
+     loop with no noise at all would hand the FFT the artifacts of bare
+     rounding.  With nothing configured the floor is therefore the arithmetic
+     one rather than a property of some converter: the delivered samples of digital
+     silence measure <b>0.500&nbsp;LSB RMS</b>, which for a word of
+     <i>N</i>&nbsp;bits puts the broadband floor at</p>
+  <div class="eq">3.01 - 6.02&nbsp;<i>N</i> dBFS<span class="no">(2)</span></div>
+  <p>- about −93&nbsp;dBFS at 16 bits, −141 at 24 and −190 at 32, each depth
+     exactly 6&nbsp;dB per bit below the one above it.  Anything a measurement
+     then shows above that floor belongs to the code under test, because nothing
+     else is in the path.</p>
+  <ul>
+    <li><b>Silence is dithered too.</b>  With no generator running the capture
+        lane keeps delivering, and what it delivers is dithered silence rather
+        than digital zeros - the floor is present whether or not a signal
+        is.</li>
+    <li><b>Delivery is paced by the clock, not by the processor.</b>  Blocks
+        arrive at the selected sample rate as they would from a device - fifty
+        a second, timed against an absolute schedule rather than one delay after
+        another, so the stream cannot drift away from real time.  The desktop
+        gives each lane a thread that sleeps out the rest of its period; a page
+        has no threads, so both lanes ride timer callbacks instead, and a
+        callback that arrives late delivers every block that has fallen due
+        rather than one.  The analysers above assume a real-time stream: a
+        loopback that ran as fast as the processor allows would hand them a
+        lifetime of audio in a moment and leave their averaging with no time
+        reference at all.</li>
+    <li><b>A background tab slows those timers down.</b>  Browsers clamp the
+        timers of a tab that is not in front to roughly one callback a second.
+        Nothing is lost - the whole backlog is delivered when the tab is next
+        serviced - but the blocks then arrive in bursts rather than smoothly, so
+        keep the tab in front while a loopback measurement runs.</li>
+    <li><b>The formats are the full ladder.</b>  Fifteen sample rates from
+        8&nbsp;kHz to 768&nbsp;kHz, each at 16, 20, 24 or 32 bits, on both
+        directions.  Input and output are two ends of one loop and therefore run
+        on one clock: set them to the same rate, or the capture reads back a
+        stream that was written at another tempo.</li>
+    <li><b>Ranges and calibration behave like a sound card's.</b>  The
+        full-scale ranges are editable and the calibration store applies to
+        them, exactly as for any ordinary card.  Nothing here is device-owned:
+        there is no range the hardware dictates and no calibration read back
+        from an instrument, because there is no instrument.</li>
+  </ul>
 
   <h2 id="how">How it works, roughly</h2>
 
@@ -192,7 +279,7 @@
      samples on its own clock.  Each sample <i>u</i> (an unsigned integer of
      <i>b</i> bits) is converted once to a dimensionless fraction of
      full-scale:</p>
-  <div class="eq"><i>x</i> = (<i>u</i> − 2<sup><i>b</i>−1</sup>) / 2<sup><i>b</i>−1</sup>&nbsp;&nbsp;∈ [−1, +1)<span class="no">(2)</span></div>
+  <div class="eq"><i>x</i> = (<i>u</i> − 2<sup><i>b</i>−1</sup>) / 2<sup><i>b</i>−1</sup>&nbsp;&nbsp;∈ [−1, +1)<span class="no">(3)</span></div>
   <p>and stored in the <a href="ring-buffer.html">ring buffer</a>.  The whole
      analysis pipeline works in these normalised units; conversion to volts
      happens only at display time, using the ADC full-scale calibration.

@@ -56,6 +56,7 @@ public enum AudioBackendType {
     COREAUDIO("CoreAudio", false),
     JAVASOUND("JavaSound", false),
     QA40X("QA40x", false),
+    LOOPBACK("Loopback", false),
     NET("Network", true);
 
     /** Human-readable name shown in the Preferences dialog. */
@@ -151,6 +152,7 @@ public enum AudioBackendType {
             case COREAUDIO: return mac;
             case JAVASOUND: return !mac;   // hidden on macOS - CoreAudio replaces it
             case QA40X:     return true;   // cross-platform; the driver probes libusb
+            case LOOPBACK:  return true;   // pure software - no device, so every OS
             default:        return false;
         }
     }

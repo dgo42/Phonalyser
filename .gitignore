@@ -6,6 +6,7 @@ preferences.yaml
 .vscode
 download/
 logs/
+serv_logs/
 results/
 target/
 tmp/
@@ -18,5 +19,7 @@ HOWTO-RELEASE.md
 doc/store-description.txt
 modules/backend-qa40x/src/test/lib/libusb/x64/
 modules/backend-qa40x/src/test/lib/libusb/.vs/
+modules/backend-qa40x/src/test/lib/libusb/libusb-mock.VC*
 *.vcxproj.user
 /modules/backend-qa40x/src/test/lib/libusb/x64
+make-server-winx64.cmd

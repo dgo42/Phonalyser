@@ -108,19 +108,21 @@ The quotes are **required**, for a different reason per shell:
 ### The headless server
 
 The server is not part of a normal `package`. It has its own opt-in profile in
-`modules/server-net`, and its own platform id - `server.platform.id`, which
-exists because the two macOS profiles deliberately share `platform.id=macos` to
-keep the desktop's historical artifact names, while the server has no such
-history and names its architecture honestly:
+`modules/server-net`, and it takes no platform profile at all - one build makes
+every bundle:
 
 ```pwsh
 mvn -DskipTests package -P server-dist -pl modules/server-net -am
 ```
 
-That writes `phonalyser-server-<version>-<platform>.jar` and the matching
-distribution ZIP into `modules/server-net/target/`. See
-[PACKAGING.md §7](PACKAGING.md) for what is in the ZIP and how the service
-scripts install it.
+That writes `phonalyser-server-<version>.jar` - one jar for every platform and
+architecture - and **all six** distribution ZIPs around it into
+`modules/server-net/target/`: `windows-x64`, `windows-x86`, `linux-x64`,
+`linux-aarch64`, `macos-x64`, `macos-aarch64`. They differ only in the natives
+staged beside the jar and the launch and service scripts, all of them files that
+are already in the checkout, so no second machine and no second build is
+involved. See [PACKAGING.md §7](PACKAGING.md) for what is in the ZIP and how the
+service scripts install it.
 
 ### 32-bit Windows
 

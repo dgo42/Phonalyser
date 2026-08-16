@@ -100,6 +100,40 @@ class Qa40xReattachTest {
         assertNotSame(first, bus.lastOpened(), "on the analyzer that is actually there");
     }
 
+    /**
+     * A unit moved to another port keeps its calibration page: the SESSION goes,
+     * the DATA stays.
+     *
+     * <p>The two identities are different things.  A handle is bound to the bus
+     * address it was opened on, so an analyzer that re-enumerated elsewhere makes
+     * that handle dead - which is what the discard above is for.  The factory
+     * page is bound to the ANALYZER, and the analyzer is what its serial number
+     * says it is; the same unit on another port has the same factors, and reading
+     * the page again would be a hundred and twenty-eight register round trips to
+     * learn what was already known.
+     */
+    @Test
+    void aReplugAtAnotherPortKeepsTheCachedPage() {
+        Qa40xDeviceManager manager = new Qa40xDeviceManager(bus);
+        manager.refreshDeviceList();                 // warms: one cycle on this unit
+        assertEquals(1, bus.opens());
+
+        bus.detach();
+        bus.attach(ADDRESS_AFTER);
+        manager.listInputDevices();                  // asking what is attached
+
+        assertEquals(1, bus.opens(),
+                "nothing had to be opened: a client's device list is the enumeration "
+                        + "and nothing more");
+
+        manager.acquireEngine(RATE_HZ);              // the first real use afterwards
+
+        assertEquals(2, bus.opens(), "which does open it, at its new address");
+        assertTrue(bus.lastOpened().ops.size() < Qa40xCalibration.CAL_READ_COUNT,
+                "and the page was NOT read again - the serial says it is the same "
+                        + "analyzer, whatever port it hangs on");
+    }
+
     /** And with nothing on the bus at all: the session goes, and the next open
      *  says so honestly instead of writing into a handle that leads nowhere. */
     @Test
@@ -208,7 +242,7 @@ class Qa40xReattachTest {
 
         @Override
         public List<Qa40xDevice> list() {
-            return List.copyOf(attached);
+            return new ArrayList<>(attached);
         }
 
         @Override
@@ -219,6 +253,13 @@ class Qa40xReattachTest {
             }
             opened.add(transport);
             return transport;
+        }
+
+        /** The scan's single-attempt open reaches the same bus: this one has no
+         *  other process on it, so one pass and three are the same answer. */
+        @Override
+        public Qa40xTransport openWithoutRetry() {
+            return open();
         }
 
         private void setNativeFault(boolean fault) {

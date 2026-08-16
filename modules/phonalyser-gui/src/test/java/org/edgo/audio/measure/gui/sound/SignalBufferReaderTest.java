@@ -121,6 +121,28 @@ class SignalBufferReaderTest {
     }
 
     @Test
+    void frameLongerThanTheRingIsGatheredAcrossReads() {
+        SignalBuffer b = bufferOfCapacity(100);
+        SignalBufferReader rd = new SignalBufferReader(b);
+        rd.seekToLatest();
+
+        // 250 samples out of a 100-sample ring: impossible in one read, and the
+        // cursor is never lapped because every batch is consumed as it lands.
+        double[] frame = new double[250];
+        int fill = 0;
+        for (int batch = 0; batch < 5; batch++) {
+            append(b, batch * 50, 50);
+            int n = rd.read((int) rd.available(), frame, null, fill);
+            assertEquals(50, n);
+            fill += n;
+        }
+        assertEquals(250, fill);
+        assertEquals(0.0, frame[0]);
+        assertEquals(99.0, frame[99]);             // spans the ring's own wrap
+        assertEquals(249.0, frame[249]);
+    }
+
+    @Test
     void frozenSnapshotIsIndependentOfLaterWrites() {
         SignalBuffer b = bufferOfCapacity(100);
         SignalBufferReader rd = new SignalBufferReader(b);

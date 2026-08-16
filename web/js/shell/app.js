@@ -13,6 +13,8 @@ import { deviceErrorText } from '../audio/device-failure-reason.js';
 import { Qa40xDeviceFinder } from '../qa40x/qa40x-device-finder.js';
 import { Qa40xDeviceManager } from '../qa40x/qa40x-device-manager.js';
 import { QA40X_BACKEND } from '../qa40x/qa40x-rate-constraint.js';
+import { LoopbackDeviceManager } from '../loopback/loopback-device-manager.js';
+import { LOOPBACK_BACKEND } from '../loopback/loopback-device-ref.js';
 import { FftViewCorrection } from '../fft/fft-view-correction.js';
 import { CorrectionStore } from '../common/correction-store.js';
 import { CalibrationDialog } from './calibration-dialog.js';
@@ -37,7 +39,7 @@ import { DeviceProfileStore } from '../store/device-profiles.js';
 import { loadDeviceCatalog } from '../store/device-catalog.js';
 import { createConfigPorts } from '../store/config-port.js';
 import { JsonConfigDialog } from './json-config-dialog.js';
-import { t, initBase, setLocale } from '../i18n/i18n.js';
+import { t, initBase, setLocale, stripMnemonics } from '../i18n/i18n.js';
 import { LOCALES } from '../i18n/locales.js';
 import { WavWriter, AiffWriter, readWav, readAiff } from '../io/wav.js';
 import { saveScopeCapture, saveStreaming, findFullPeriodWindow, formatForName } from '../io/scope-capture.js';
@@ -66,6 +68,7 @@ import { GeneratorPane } from '../generator/generator-pane.js';
 import { PredistortionEngine } from '../predistortion/engine.js';
 import { writeHarmonicDpd, writeIntermodDpd } from '../io/dpd.js';
 import { NumericStepField, NumericStepModel, OFF_LABEL, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
+import { unitValueEquals } from '../widgets/unit-conversion.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 
@@ -100,6 +103,11 @@ const formIcon = (form) => `assets/icons/signal-${form.toLowerCase().replace(/_/
 // settles, so no pane handler can fire in between.
 let engine;
 let qa40xManager;
+// The digital loopback backend's manager. Built in the same init block, and for the same reason
+// held here rather than inside the engine: it OWNS the crossing its capture and playback lanes
+// meet on, so one instance per page is what makes a lane pair a loop at all. It needs no device
+// and no permission - only the two depth suppliers below.
+let loopbackManager;
 // The net backend (doc/NET-PROTOCOL.md): the session + remote catalogue, and the remembered
 // servers block the server-list modal edits. Both are constructed in init's modals step, where
 // the Preferences store is already loaded - registration replays the stored block into it.
@@ -297,18 +305,19 @@ function initStepFields() {
     (v) => { prefs.genDualToneFreq2Hz.set(v); engine.config.tone2Hz = v; engine.retuneGenerator(); genPane.refreshFreqLabel(); });
   fTone2.setValue(prefs.genDualToneFreq2Hz.get());
 
-  // Amplitude: AMPLITUDE family, PERCENT policy, canonical V RMS. dBV display is sticky +
-  // persisted via genAmplitudeDbvDisplay. fsAmplSupplier (the live DAC PEAK full scale) also
-  // enables dBFS entry - 0 dBFS ≡ a full-scale SINE (AES17), so the anchor is fsPeak/√2.
+  // Amplitude: AMPLITUDE family, PERCENT policy. What is STORED is the entered value - the
+  // displayed number and its unit - and the store resolves it to V RMS at use, so a dBFS entry
+  // still means what was typed after a recalibration. fsAmplSupplier (the live DAC PEAK full
+  // scale) enables that dBFS entry - 0 dBFS is a full-scale SINE (AES17), anchored at fsPeak/√2.
   const fAmp = mk('ampDbfs', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: ampMaxVrms(), maxDecimals: 5,
     fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
     (v) => {
-      prefs.genAmplitudeVrms.set(v);
-      prefs.genAmplitudeDbvDisplay.set(fAmp.model.isLogDisplay());
+      // The pair the operator entered - number and unit as ONE write, so nothing
+      // downstream can see the new unit against the old number.
+      prefs.genAmplitude.set(fAmp.enteredValue());
       engine.config.ampVrms = v; engine.retuneGenerator();
     });
-  fAmp.model.setLogDisplay(prefs.genAmplitudeDbvDisplay.get());
-  fAmp.setValue(prefs.genAmplitudeVrms.get());
+  fAmp.seedPair(prefs.genAmplitude.get());
   // Keep the no-clip ceiling live (Bindings.onChange(... ampField::setMax)): it moves with the DAC
   // full-scale CALIBRATION and with the waveform (and its dual-tone split), so re-apply it on every
   // input that feeds ampMaxVrms(). setMax re-clamps the current value, so switching to a form with
@@ -326,19 +335,18 @@ function initStepFields() {
   // checks against them with any analysis window. maxBits = 32. The TPDF dither is applied LIVE to
   // the generated signal in the dds worklet (Java PcmQuantizer live-apply) so it shows
   // on the FFT floor exactly where the dBV view sets it - hence the engine push below, mirroring the
-  // amplitude field. Seed value + display unit BEFORE the change path re-enters (setValue /
-  // setLogDisplay never fire onChange). On a committed change: persist the bits + the bits/dBV display
-  // choice, push the depth to the running worklet, then re-annotate the "Dither" caption.
+  // amplitude field. Seed the ENTERED value BEFORE the change path re-enters (seedPair replays it
+  // through commit without firing onChange). On a committed change: persist the entered value,
+  // push the depth to the running worklet, then re-annotate the "Dither" caption.
   const fDither = mk('dither', new NumericStepModel({ family: F.DITHER, maxBits: 32,
     fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
     (v) => {
-      prefs.genDitherBits.set(v);
-      prefs.genDitherDbvDisplay.set(fDither.isLogDisplay());
+      prefs.genDither.set(fDither.enteredValue());
       engine.config.ditherBits = v; engine.retuneGenerator();
       if (genPane) genPane.updateDitherLabel();
     });
   if (fDither) {
-    fDither.setValue(prefs.genDitherBits.get()); fDither.setLogDisplay(prefs.genDitherDbvDisplay.get());
+    fDither.seedPair(prefs.genDither.get());
     // Render the "Dither" caption's companion-unit bracket NOW: initStepFields runs AFTER the first
     // applyPrefsToUi -> seedGeneratorControls (which called updateDitherLabel while the field didn't
     // yet exist), so without this the bracket stays empty until the first change. genPane is built
@@ -453,8 +461,19 @@ function initStepFields() {
   // Two-way bind the generator step fields to their prefs (external changes update the field).
   bidiBind(fTone, prefs.genFrequencyHz);
   bidiBind(fTone2, prefs.genDualToneFreq2Hz);
-  bidiBind(fAmp, prefs.genAmplitudeVrms);
-  bidiBind(fDither, prefs.genDitherBits);   // external genDitherBits change (reanchor persist / reload) -> field
+  // The amplitude and the dither are bound as ENTERED values, so an external write replays the
+  // pair and the field shows the unit it was stored in - a canonical writer (a calibration, a
+  // preset) stores the base unit, which replays as volts or bits exactly as before.
+  if (fAmp) {
+    prefs.genAmplitude.addListener((v) => {
+      if (!unitValueEquals(fAmp.enteredValue(), v)) fAmp.seedPair(v);
+    });
+  }
+  if (fDither) {
+    prefs.genDither.addListener((v) => {
+      if (!unitValueEquals(fDither.enteredValue(), v)) fDither.seedPair(v);
+    });
+  }
   bidiBind(fSwStart, prefs.genSweepFreqStartHz);
   bidiBind(fSwStop, prefs.genSweepFreqEndHz);
   bidiBind(fSwDur, prefs.genSweepDurationSec);
@@ -477,11 +496,17 @@ function initStepFields() {
   // has no live setMax listener, so its max is frozen at construction - the supplier still reads live.
   const fAmpFr = fr('frAmp', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: sweepAmpMaxVrms(), maxDecimals: 5,
     fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
-    (v) => { prefs.freqRespAmplitudeVrms.set(v); prefs.freqRespAmplitudeDbvDisplay.set(fAmpFr.model.isLogDisplay()); });
+    () => prefs.freqRespAmplitude.set(fAmpFr.enteredValue()));
   // Track the live DAC full-scale calibration, as the generator field does (this one previously
-  // froze its ceiling at construction).
-  if (fAmpFr) prefs.dacFsVoltageAmpl.addListener(() => fAmpFr.setMax(sweepAmpMaxVrms()));
-  if (fAmpFr) { fAmpFr.model.setLogDisplay(prefs.freqRespAmplitudeDbvDisplay.get()); fAmpFr.setValue(prefs.freqRespAmplitudeVrms.get()); }
+  // froze its ceiling at construction). Replaying the stored value after the ceiling moves leaves
+  // the entered text where it stands and re-solves what a dBFS entry resolves to.
+  if (fAmpFr) {
+    prefs.dacFsVoltageAmpl.addListener(() => {
+      fAmpFr.setMax(sweepAmpMaxVrms());
+      fAmpFr.seedPair(prefs.freqRespAmplitude.get());
+    });
+    fAmpFr.seedPair(prefs.freqRespAmplitude.get());
+  }
   const fLead = fr('frLeadIn', new NumericStepModel({ family: F.TIME, min: 0.05, max: 1000000, maxDecimals: 3 }),
     (v) => prefs.freqRespLeadInSec.set(v));
   if (fLead) fLead.setValue(prefs.freqRespLeadInSec.get());
@@ -519,7 +544,13 @@ function initStepFields() {
   // field display through the same NumericStepField, like the generator fields above.
   bidiBind(fStart, prefs.freqRespStartHz);
   bidiBind(fStop, prefs.freqRespStopHz);
-  bidiBind(fAmpFr, prefs.freqRespAmplitudeVrms);
+  // The amplitude is bound as the ENTERED value: an external write (preset recall, wizard)
+  // replays the pair, so the field shows the unit it was saved in - not a voltage.
+  if (fAmpFr) {
+    prefs.freqRespAmplitude.addListener((v) => {
+      if (!unitValueEquals(fAmpFr.enteredValue(), v)) fAmpFr.seedPair(v);
+    });
+  }
   bidiBind(fLead, prefs.freqRespLeadInSec);
   bidiBind(fPts, prefs.freqRespSweepPoints);
 
@@ -572,22 +603,22 @@ function initStepFields() {
 // the generator step-field onChanges reach them via the genPane instance.
 
 // ----- i18n: replace every [data-i18n] element's text with its translation -----
-// SWT mnemonics ('&') and the literal "..." suffix from the desktop bundles are
-// stripped so the web chrome reads cleanly.
+// SWT mnemonics are stripped (and '&&' unescaped to '&') so the desktop bundle
+// values render cleanly in a chrome that draws no accelerators.
 function applyI18n() {
   document.querySelectorAll('[data-i18n]').forEach((el) => {
-    el.textContent = t(el.getAttribute('data-i18n')).replace(/&/g, '').replace(/\.\.\.$/, '...');
+    el.textContent = stripMnemonics(t(el.getAttribute('data-i18n'))).replace(/\.\.\.$/, '...');
   });
   document.querySelectorAll('[data-i18n-title]').forEach((el) => {
-    el.title = t(el.getAttribute('data-i18n-title')).replace(/&/g, '');
+    el.title = stripMnemonics(t(el.getAttribute('data-i18n-title')));
   });
   document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
-    el.placeholder = t(el.getAttribute('data-i18n-placeholder')).replace(/&/g, '');
+    el.placeholder = stripMnemonics(t(el.getAttribute('data-i18n-placeholder')));
   });
   // Custom-file "Browse" button text lives in a ::after pseudo-element; localize it
   // through a CSS custom property the stylesheet reads.
   document.querySelectorAll('[data-i18n-browse]').forEach((el) => {
-    el.style.setProperty('--browse-label', '"' + t(el.getAttribute('data-i18n-browse')).replace(/&/g, '') + '"');
+    el.style.setProperty('--browse-label', '"' + stripMnemonics(t(el.getAttribute('data-i18n-browse'))) + '"');
   });
 }
 
@@ -1519,8 +1550,8 @@ function buildConfigMenus(ports, dialog) {
         $('<button type="button" class="dropdown-item">').text(labelText)
           .on('click', () => dialog.open(port, mode)),
       );
-      host.append(item(t('menu.tools.config.current'), 'live'));
-      if (port.corruptEntry() != null) host.append(item(t('menu.tools.config.corrupt'), 'corrupt'));
+      host.append(item(t('web.menu.tools.config.current'), 'live'));
+      if (port.corruptEntry() != null) host.append(item(t('web.menu.tools.config.corrupt'), 'corrupt'));
     }
   };
   // The Tools dropdown is the one holding the Preferences item; it carries no id of its own,
@@ -1610,7 +1641,17 @@ async function init() {
   // as it asks activeBackend() per open.
   // The forward the audio layer holds instead of the manager (net-manager-facade.js owns the
   // member list, the absent-session answers and the arity that must match the manager's).
-  engine = new AudioEngine({ prefs, qa40xManager, qa40xFinder,
+  // The loopback's depths come from the LOOPBACK block of the per-backend preferences, read at
+  // each session boundary through these two suppliers: the operator can change a depth without
+  // changing backend, and the engine keeps its capture source across sessions, so a value read
+  // once here would go on encoding at the resolution that was selected when the page loaded.
+  // Read from the LOOPBACK block by name rather than from current(): a session may well be opened
+  // while the Preferences dialog is showing another backend's block.
+  loopbackManager = new LoopbackDeviceManager({
+    inputDepthOf: () => prefs.prefsFor(LOOPBACK_BACKEND).inputBitDepth,
+    outputDepthOf: () => prefs.prefsFor(LOOPBACK_BACKEND).outputBitDepth,
+  });
+  engine = new AudioEngine({ prefs, qa40xManager, qa40xFinder, loopbackManager,
     netManager: netManagerFacade(() => netManager) });
   fftViewCorrection = new FftViewCorrection(engine.config, fftCorrectionStore);
   fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running, correction: fftViewCorrection });
@@ -1637,6 +1678,9 @@ async function init() {
       isGenRunning: () => engine.generator.running,
       isBusy: () => busy, setBusy: (v) => { busy = v; },
       readConfig, syncFftAlign: () => { if (fftTabControl) fftTabControl.syncAlign(); },
+      // The shell's one alert surface - how a refused file reaches the operator (Java shows its
+      // Cannot-play-file MessageBox); the same seam the tune-notch wizard and the card section use.
+      showAlert,
     });
   });
   step('applyPrefsToUi', applyPrefsToUi);
@@ -1666,6 +1710,8 @@ async function init() {
       // the dialog re-opens it. The generator pane owns the restart (busy guard + readConfig) and
       // it is a no-op while nothing is playing.
       restartGenerator: () => genPane.restartGenerator(),
+      // The shell's one alert surface - the same one the card section's refused copy uses.
+      showAlert,
     }).bind();
   });
   // Oscilloscope PANE (Java ScopePane): the trace canvas wiring, the two nav scrollbars,
@@ -2058,13 +2104,18 @@ async function init() {
       // enumerates its own formats - the sample-rate list. Web Audio has no manager, so it answers
       // null and that backend keeps the native-rate probe.
       //
-      // A net: value answers the NET manager, because THAT is the manager of that backend
+      // A net: value answers the net manager, because THAT is the manager of that backend
       // INSTANCE: the bench's catalogue is where its devices' formats live, and asking it is
       // what makes the dialog offer the rates and sample widths the server declared instead of
       // the web's static list and a hidden depth row. Settings are a
       // different question and are resolved by TYPE - see PreferencesDialog.settingsManager.
       backendManager: (name) => {
         if (name === QA40X_BACKEND) return qa40xManager;
+        // The loopback enumerates its OWN formats - the full rate ladder at four sample widths -
+        // so the dialog must reach its manager, or the rate combo would fall back to the static
+        // Web Audio list and the depth rows would stay hidden on the one backend whose whole
+        // subject is the sample width.
+        if (name === LOOPBACK_BACKEND) return loopbackManager;
         return (netManager && netManager.isRemoteBackend(name)) ? netManager : null;
       },
       // The connected server's backends, read synchronously at each combo build from the

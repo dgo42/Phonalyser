@@ -184,15 +184,19 @@ export class SpectralDiscontinuityDetector {
       this._pushPower(lastPowerDb);
       this._pushPedestal(lastPedestalExcess);
       this._pushRef(level);
+      this.lastGates = null;                      // seed block - no gate ran
+      this.lastFloorDb = lastFloorDb; this.lastPowerDb = lastPowerDb;
+      this.lastPedestalExcess = lastPedestalExcess;
       return false;
     }
 
     // --- gate 1: near-carrier pedestal excess vs its collected median ---
     let pedestalOut = false;
+    let pedestalThresh = NaN;
     if (!Number.isNaN(lastPedestalExcess) && this._pedFill > 0) {
       const pedMed = median(this._pedestalHist, this._pedFill);
       const pedMad = mad(this._pedestalHist, this._pedFill, pedMed);
-      const pedestalThresh = pedMed + PEDESTAL_SIGMA_K * Math.max(pedMad, MIN_PEDESTAL_MAD);
+      pedestalThresh = pedMed + PEDESTAL_SIGMA_K * Math.max(pedMad, MIN_PEDESTAL_MAD);
       pedestalOut = lastPedestalExcess > pedestalThresh;
     }
 
@@ -225,6 +229,15 @@ export class SpectralDiscontinuityDetector {
     this._pushPower(lastPowerDb);
     this._pushPedestal(lastPedestalExcess);
     if (!rejected) this._pushRef(level);         // reference only from accepted blocks
+
+    // Live diagnostics of THIS decision (the desktop's lastScore/lastThreshold/
+    // lastPedestalExcess/lastFloorDb/lastPowerDb fields) - which gate fired and
+    // against what threshold, for the controller's debug line.
+    this.lastGates = { pedestal: pedestalOut, score: scoreOut, power: powerOut };
+    this.lastScore = score; this.lastScoreThresh = scoreThresh;
+    this.lastPowerDb = lastPowerDb; this.lastPowerMed = pMed; this.lastPowerThresh = powerThresh;
+    this.lastPedestalExcess = lastPedestalExcess; this.lastPedestalThresh = pedestalThresh;
+    this.lastFloorDb = lastFloorDb;
     return rejected;
   }
 

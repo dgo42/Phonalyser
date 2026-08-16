@@ -383,12 +383,12 @@ class DeviceProfileRoundTripTest {
     }
 
     /** The device-authored display text (the QA40x verbose range labels, quotes
-     *  and all) survives BOTH round trips - the file and the wire - and a row
-     *  without one stays plain.  Before this travelled, a bench's card showed its
-     *  raw range keys on every client, and a start without the analyzer attached
-     *  lost the verbose labels locally too. */
+     *  and all) is DISPLAY ONLY: the wire carries it - a bench's card shows the
+     *  verbose labels on every client that cannot ask the analyzer - while the
+     *  FILE never does, because the analyzer regenerates the text at every open
+     *  and a persisted copy would only go stale in devices.yaml. */
     @Test
-    void displayLabel_survivesFileAndWireRoundTrips(@TempDir Path dir) {
+    void displayLabel_travelsTheWireButNeverTheFile(@TempDir Path dir) {
         String verbose = "0 \"dBV\" real 0 dBFS or -9 dBV";
         AudioDeviceProfile card = sampleProfile();
         card.getInput().getRanges().get(0).setDisplayLabel(verbose);
@@ -401,15 +401,15 @@ class DeviceProfileRoundTripTest {
         Preferences dst = detached();
         loadDevicesFrom(dst, store);
         DeviceEndpointConfig in = dst.getAudioDeviceProfiles().get(0).getInput();
-        assertEquals(verbose, in.getRanges().get(0).getDisplayLabel(),
-                "the file keeps the device-authored text, embedded quotes intact");
+        assertNull(in.getRanges().get(0).getDisplayLabel(),
+                "the file must not persist display text - the device regenerates it");
         assertNull(in.getRanges().get(1).getDisplayLabel(),
                 "a row that never had display text must not grow one");
 
         Preferences p = detached();
         AudioDeviceProfile back = p.cardFromMap(p.cardToMap(card));
         assertEquals(verbose, back.getInput().getRanges().get(0).getDisplayLabel(),
-                "the wire form carries the same field the file does");
+                "the wire form keeps the device-authored text, embedded quotes intact");
         assertNull(back.getInput().getRanges().get(1).getDisplayLabel());
     }
 

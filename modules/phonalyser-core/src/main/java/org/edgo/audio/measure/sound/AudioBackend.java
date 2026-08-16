@@ -169,7 +169,7 @@ public final class AudioBackend {
      *  while another backend measures (the QA40x parks at maximum attenuation
      *  and releases its USB session; it reopens on the next activation).
      *  Compared at the carrier level on purpose: switching between two servers
-     *  keeps the one NET manager and its session alive.  After the teardown the
+     *  keeps the one net manager and its session alive.  After the teardown the
      *  switch waits {@link #CARRIER_SWITCH_SETTLE_MS} before returning, so the
      *  first open on the new carrier cannot race the old driver's teardown -
      *  activation itself is lazy, which makes this return the last gate. */
@@ -516,7 +516,13 @@ public final class AudioBackend {
 
     private void setupAll() {
         for (AudioBackendType type : AudioBackendType.values()) {
-            if (!isAvailable(type)) {
+            // Both halves of availability: the OS policy AND the class-path/
+            // hardware answer.  Every platform jar carries every backend's
+            // classes, so without the OS half this sweep would CONSTRUCT
+            // foreign backends - and a constructor that touches its native
+            // (CoreAudio snapshots device identities) then probes for a
+            // library that does not exist on this OS.
+            if (!type.isAvailable() || !isAvailable(type)) {
                 continue;
             }
             try {

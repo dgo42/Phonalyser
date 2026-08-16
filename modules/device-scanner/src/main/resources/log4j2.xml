@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The console must read exactly like the report file: the scan output and
+     nothing else.  The backends log their progress at INFO, which interleaved
+     with the report and made the console the harder of the two to read, so the
+     console takes WARN and above only - a warning or an error still surfaces
+     there, because a device that misbehaved while being probed is part of what
+     the report is for.  The root stays at INFO so the level is a property of
+     the console rather than of the logging, and a file appender added here
+     later would still receive everything. -->
+<!-- status="error": log4j's OWN status logger writes to the console before any
+     appender exists, and in a fat jar it announces that the runtime does not
+     support multi-release JARs - a line about the packaging, not about the
+     machine being scanned, in the middle of the report. -->
+<Configuration status="error">
+    <Appenders>
+        <Console name="console" target="SYSTEM_OUT">
+            <PatternLayout pattern="[%level] %logger{1} - %msg%n"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Root level="info">
+            <AppenderRef ref="console" level="warn"/>
+        </Root>
+    </Loggers>
+</Configuration>

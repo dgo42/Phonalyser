@@ -64,7 +64,7 @@ class AudioBackendTypeTest {
 
     @Test
     void fromStringDoesNotPretendNetIsALocalBackend() {
-        // NET is the carrier for a bench reached over the network: it owns no
+        // AudioBackendType.NET is the carrier for a bench reached over the network: it owns no
         // local hardware, so --backend can never select it.  A token that parsed
         // and then failed the availability gate would answer "not available on
         // Windows", which is not what is wrong with it.

@@ -20,6 +20,7 @@ package org.edgo.audio.measure.gui.scope;
 
 import java.util.function.BooleanSupplier;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
@@ -65,7 +66,7 @@ class ScopeMeasurementDisplayFilterTest {
     private static final double BUFFER_SEC = 1.0;
     private static final long   AWAIT_MS   = 10_000;
     /** Peak-to-peak over AC RMS for a sine: {@code 2A / (A/√2)}. */
-    private static final double SINE_VPP_OVER_VRMS = 2.0 * Math.sqrt(2.0);
+    private static final double SINE_VPP_OVER_VRMS = 2.0 * Constants.SQRT2;
     /** Fraction of the 10-90 % band's half-width, as a sine argument: the levels
      *  sit at ∓0.8 of the amplitude about the midpoint. */
     private static final double RISE_LEVEL_FRACTION = 0.8;

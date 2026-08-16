@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser.web - FAQ</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <h1>FAQ</h1>
+  <p class="small">Antworten auf Fragen, die das Projekt immer wieder erreichen.
+     Tippen filtert; oder eine Frage aus der Liste wählen.</p>
+
+  
+  <p><input id="faqSearch" type="text" placeholder="FAQ durchsuchen..."
+            style="width:100%;max-width:32em;padding:0.4em;"/></p>
+
+  <h2>Fragen</h2>
+  <div class="toc" id="faqCatalog">
+    <a href="#discontinuities">Oszilloskop und FFT melden häufige Zeit-Diskontinuitäten - auf jedem Backend</a>
+    <a href="#one-rate">Mein Interface bietet überall nur eine Abtastrate</a>
+    <a href="#device-in-use">Die Aufnahme lässt sich nicht öffnen - das Gerät ist belegt</a>
+    <a href="#volume-pinning">Warum ändert eine Messung die Hardware-Lautstärke am Messplatz (Linux / macOS)</a>
+    <a href="#bug-report">Was gehört an einen Fehlerbericht</a>
+    <a href="#server-auth">Braucht der Phonalyser-Server eine Authentifizierung</a>
+  </div>
+
+  <div class="faq-item" id="discontinuities">
+    <h2>Oszilloskop und FFT melden häufige Zeit-Diskontinuitäten - auf jedem Backend</h2>
+      <div class="pane">
+        <p><b>Symptome.</b> Die FFT verwirft Fenster mit der Meldung über eine
+           gefundene Signal-Diskontinuität, der Glitch-Trigger des Oszilloskops
+           löst aus, die Aufnahmerate sinkt - und wenn die Messung auf einem
+           Messplatz läuft, geschieht das mit WASAPI, WDM-KS und JavaSound
+           gleichermaßen, während der Analogausgang, mit einem externen
+           Oszilloskop geprüft, völlig kontinuierlich ist. Eine lokale
+           Web-Audio-Aufnahme zeigt dieselben Warnungen: Auch der geteilte
+           Audiopfad des Browsers kann Samples verlieren, und die Warnung
+           bedeutet dort dasselbe.</p>
+        <p><b>Was es ist.</b> Echter Sample-Verlust im OS-/USB-Stack unterhalb
+           der Anwendung - auf der Maschine, in der das Interface steckt, bei
+           einer Messung über einen Messplatz also dort und nicht auf der
+           Maschine, die diese Seite zeigt. Der Aufnahmepfad kann konstruktionsbedingt keine
+           Lücken erzeugen - der Ringpuffer nimmt jedes gelieferte Sample an,
+           und jeder Konsument führt einen eigenen überlaufgeschützten
+           Lesezeiger - und beide Detektoren (der Glitch-Trigger des Oszilloskops
+           und das Zeit-Gatter der FFT sind dieselbe Detektorklasse) reagieren
+           auf das Signal selbst: gemeldet wird eine reale Nahtstelle im Strom.
+           Derselbe Verlust ist auf denselben Maschinen auch von anderer
+           Messsoftware bekannt.</p>
+        <p><b>Typische Ursache.</b> Ein überlasteter oder degradierter
+           USB-Hostcontroller: mehrere Geräte mit hohem Datenaufkommen an einem
+           Controller, ein mit Festplatten oder Kameras geteilter Hub, oder seit
+           dem Systemstart degradierter Controller-/Treiberzustand - ein Neustart
+           beseitigt das Problem oft für eine Weile, bevor es zurückkehrt.</p>
+        <p><b>Abhilfen.</b> Auf der Maschine, der das Interface gehört - dem
+           Messplatz, oder dieser Maschine bei einer lokalen Aufnahme -, das
+           Audio-Interface an einen dedizierten
+           USB-Controller anschließen: eine eigene PCIe-USB-Karte oder
+           zumindest eine Port-Gruppe, die kein anderes Gerät mit hohem
+           Datenaufkommen teilt. Hubs vermeiden, besonders solche, die mit
+           Speicher, Kameras oder Netzwerkadaptern geteilt werden. Ein Neustart
+           setzt den Controllerzustand zurück und verschafft saubere Zeit;
+           kehrt das Problem zurück, ist die Controllerlast das eigentliche
+           Ziel.</p>
+        <p><b>Warum es bei hohen Frequenzen schlimmer aussieht.</b> Eine
+           Nahtstelle von n verlorenen Samples verschiebt die Wellenform um etwa
+           A&nbsp;&middot;&nbsp;2&pi;f/f<sub>s</sub>&nbsp;&middot;&nbsp;n -
+           proportional zur Ableitung des Signals. Dieselbe Verlustrate, die bei
+           einem 2-kHz-Ton kaum sichtbar ist, löst die Detektoren bei einem
+           5-kHz-Ton gleicher Amplitude ständig aus. Bei Vergleichen vor/nach
+           einer Hardware-Änderung mit derselben Tonfrequenz vergleichen.</p>
+      </div>
+  </div>
+
+  <div class="faq-item" id="one-rate">
+    <h2>Mein Interface bietet überall nur eine Abtastrate</h2>
+      <div class="pane">
+        <p><b>Symptome.</b> Das Gerät bietet eine einzige Abtastrate - in dieser
+           Anwendung wie in jeder anderen - und die Liste lässt sich auch in den
+           Sound-Einstellungen des Betriebssystems nicht ändern.</p>
+        <p><b>Was es ist.</b> Manche Interfaces beziehen ihren Takt gar nicht
+           vom Rechner: Die Rate wird im Bedienprogramm des Herstellers gewählt,
+           und der Treiber meldet dem System dann genau diese eine Rate.
+           Interfaces der Audient-Klasse arbeiten so. Oberhalb des Treibers
+           lässt sich das nicht übergehen - Betriebssystem und Anwendungen
+           können nur die Rate nutzen, die dort eingestellt ist.</p>
+        <p><b>Abhilfe.</b> Das Bedienprogramm des Herstellers öffnen, die Rate
+           dort setzen, danach in den Einstellungen die Geräte scannen, damit
+           die neue Rate übernommen wird.</p>
+      </div>
+  </div>
+
+  <div class="faq-item" id="device-in-use">
+    <h2>Die Aufnahme lässt sich nicht öffnen - das Gerät ist belegt</h2>
+      <div class="pane">
+        <p><b>Symptome.</b> Der Start einer Aufnahme schlägt fehl, das Gerät
+           wird als nicht verfügbar oder bereits belegt gemeldet.</p>
+        <p><b>Was es ist.</b> Das Gerät wird anderswo gehalten, und dafür gibt
+           es zwei Fälle. <b>Auf einem Messplatz</b> ist es ein Konflikt im
+           Exclusive-Modus auf dem Server: Dessen Backends belegen das Gerät
+           exklusiv, es misst also immer nur ein Client damit - die Geräteliste
+           nennt den Client, der es hält, und ein als belegt gezeigtes Gerät
+           bleibt es, bis dieser Client es freigibt. <b>Lokal</b> hängt es vom
+           Backend ab. Web Audio teilt seinen Audiopfad und belegt nichts
+           exklusiv, doch das Gerät kann trotzdem von einer anderen Anwendung
+           gehalten werden, oder von der Sound-Systemsteuerung, solange sie
+           dafür eine Pegelanzeige zeigt - dann wird auch der Browser
+           abgewiesen. Ein über WebUSB erreichter QA40x ist der umgekehrte
+           Fall: Der Analysator wird jeweils von einer Anwendung beansprucht, er
+           darf also weder in der QuantAsylum-Software noch in einem anderen Tab
+           geöffnet sein, und eine gescheiterte Beanspruchung lässt ihn hier
+           ungeöffnet. Weder diese Seite noch der
+           Server hält zwischen zwei Aufnahmen eine Leitung offen: Ein Gerät,
+           mit dem gerade nicht gemessen wird, wird freigegeben - eine eigene
+           frühere Messung blockiert es also nicht.</p>
+        <p><b>Abhilfen.</b> Bei einem Gerät des Messplatzes auf den Client
+           warten, den die Liste nennt, oder ein anderes Gerät wählen. Bei Web
+           Audio die Anwendung schließen, die das Gerät hält, und die
+           Sound-Systemsteuerung, falls sie auf der Seite dieses Geräts steht;
+           bei einem QA40x die QuantAsylum-Software schließen und jeden anderen
+           Tab, der den Analysator beansprucht hat.
+           Auf der Maschine, der das Gerät gehört, in den Sound-Einstellungen
+           prüfen, ob es die exklusive Nutzung erlaubt - ein Gerät, das sie
+           verbietet, lässt sich dort nicht bitgenau messen. Danach erneut
+           versuchen.</p>
+      </div>
+  </div>
+
+  <div class="faq-item" id="volume-pinning">
+    <h2>Warum ändert eine Messung die Hardware-Lautstärke am Messplatz (Linux / macOS)</h2>
+      <div class="pane">
+        <p><b>Was geschieht.</b> Zu Beginn einer Messung auf einem Messplatz
+           unter Linux oder macOS werden dort die Lautstärkeregler der Karte auf
+           Einheitsverstärkung gesetzt; am Ende werden sie auf ihre vorherigen
+           Positionen zurückgestellt. Das tut der Messplatz selbst: Ein Browser
+           erreicht überhaupt keinen Mixer, eine lokale Web-Audio-Messung
+           ändert dort also nichts und kann eine Lautstärke, die nicht auf
+           Einheitsverstärkung steht, auch nicht ausgleichen.</p>
+        <p><b>Warum.</b> Eine Messung gibt Pegel in Volt und in dBV an, was nur
+           dann eine Aussage hat, wenn die digitale Vollaussteuerung auf einen
+           bekannten analogen Pegel abgebildet ist. Eine Hardware-Lautstärke
+           irgendwo im Pfad skaliert diese Abbildung, ohne in den Daten
+           aufzutauchen: Ein bei einer Reglerstellung gemessener Wert passte
+           dann nicht zu derselben Messung bei einer anderen. Das Festsetzen auf
+           Einheitsverstärkung nimmt diese Unbekannte heraus, und das
+           Zurückstellen danach hinterlässt die Karte so, wie sie vorgefunden
+           wurde.</p>
+        <p><b>Der weite Fall.</b> Die Regler werden über den Portnamen
+           zugeordnet. Bei Karten, deren Regler zu keinem Portnamen passen, wird
+           jeder Lautstärkeregler der Karte festgesetzt - und jeder von ihnen
+           danach zurückgestellt.</p>
+      </div>
+  </div>
+
+  <div class="faq-item" id="bug-report">
+    <h2>Was gehört an einen Fehlerbericht</h2>
+      <div class="pane">
+        <p><b>Der Bericht des Geräte-Scanners.</b> Das Projekt liefert neben der
+           Anwendung ein eigenständiges Diagnosewerkzeug: ein in sich
+           geschlossenes Jar, ein Jar für jedes Betriebssystem, jeder
+           Veröffentlichung beigelegt. Es läuft auf der Maschine, der die
+           Hardware gehört - dem Messplatz, wenn Sie über einen Server messen,
+           oder einer Maschine mit der Desktop-Anwendung -, nie im Browser.</p>
+        <p>Aufruf im Terminal dort:</p>
+        <p><code>java -jar device-scanner-&lt;version&gt;.jar</code></p>
+        <p><b>Was es tut.</b> Es zählt jedes auf der Maschine vorhandene
+           Audio-Backend cachefrei auf - es baut frische Geräteverwaltungen, jede
+           Angabe im Bericht stammt also aus diesem Lauf und nicht aus einem
+           Cache - und schreibt eine lesbare Datei
+           <code>device-scan-&lt;stempel&gt;.txt</code> ins Arbeitsverzeichnis,
+           mit allen Geräten samt ihren Abtastraten und Bittiefen. Es wird kein
+           Stream geöffnet.</p>
+        <p><b>Diese Datei anhängen.</b> Sie beantwortet an einer Stelle, welche
+           Backends die Maschine hat, welche Geräte jedes davon sieht und welche
+           Formate diese Geräte wirklich annehmen. Bei einem im Browser
+           beobachteten Problem zusätzlich den Browser und seine Version nennen
+           und ausgeben, was die Seite auf der Entwicklerkonsole geschrieben
+           hat.</p>
+      </div>
+  </div>
+
+  <div class="faq-item" id="server-auth">
+    <h2>Braucht der Phonalyser-Server eine Authentifizierung</h2>
+      <div class="pane">
+        <p><b>Nein, und das ist so gewollt.</b> Der Server ist ein Messgerät für
+           ein vertrauenswürdiges Netz - so steht es auch in der
+           Server-Dokumentation. Er kennt keine Benutzerkonten, keine Passwörter
+           und keine Tokens.</p>
+        <p><b>Was das praktisch heißt.</b> Wer den Server im Netz erreicht, kann
+           den Messplatz benutzen: seine Geräte auflisten, seinen Generator
+           fahren und seine Messungen abrufen.</p>
+        <p><b>Wie er zu betreiben ist.</b> In dem vertrauenswürdigen Segment
+           belassen, für das er gedacht ist, und nicht darüber hinaus
+           veröffentlichen - keine Portweiterleitung ins Internet, kein
+           unvertrautes Netz. Wo die Reichweite größer sein muss, gehört die
+           Zugangskontrolle davor, ins Netz und nicht ins Messgerät.</p>
+      </div>
+  </div>
+
+  <script>
+    // Live filter: hides catalog rows and answer blocks whose full text does
+    // not contain the query.  Plain substring match, case-insensitive - the
+    // page-local complement to the manual-wide index search.
+    (function () {
+      var box = document.getElementById('faqSearch');
+      box.addEventListener('input', function () {
+        var q = box.value.toLowerCase();
+        var items = document.getElementsByClassName('faq-item');
+        for (var i = 0; i < items.length; i++) {
+          var hit = !q || items[i].textContent.toLowerCase().indexOf(q) >= 0;
+          items[i].style.display = hit ? '' : 'none';
+        }
+        var links = document.getElementById('faqCatalog').getElementsByTagName('a');
+        for (var j = 0; j < links.length; j++) {
+          var target = document.getElementById(links[j].getAttribute('href').substring(1));
+          var show = !target || target.style.display !== 'none';
+          links[j].style.display = show ? '' : 'none';
+        }
+      });
+    })();
+  </script>
+
+<script src="help-viewer.js"></script>
+</body>
+</html>

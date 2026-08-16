@@ -64,6 +64,11 @@ class Qa40xCardSyncTest {
      *  starts on, so a sync that never happened cannot pass for one that did. */
     private static final int ACTIVE_INPUT_DBV = 42;
     private static final int ACTIVE_OUTPUT_DBV = -12;
+    /** Where the operator moves the rows - other positions the analyzer really
+     *  has, so a delta that was computed against the wrong reference shows up as
+     *  a wrong dBV rather than as a missing write. */
+    private static final int STAGED_INPUT_DBV = 0;
+    private static final int STAGED_OUTPUT_DBV = 18;
     /** Per-channel cal factors, unequal so a payload that crossed or dropped a
      *  channel fails on the values rather than passing. */
     private static final double LEFT_FACTOR = 1.02;
@@ -177,6 +182,130 @@ class Qa40xCardSyncTest {
         assertNotNull(restored, "the operator's own card was displaced, not deleted");
         assertFalse(restored.getInput().isCalibrationFromDevice(),
                 "and what is back is THEIRS, not the analyzer's");
+    }
+
+    // -------------------------------------------------------------------------
+    // The range the operator stages, and what leaves the machine on OK
+    // -------------------------------------------------------------------------
+
+    /**
+     * The defect this half exists for: a range committed for a bench never
+     * reached it.  The publish gate compared the staged label against an
+     * open-time value describing the LOCAL card and swallowed it as "no change",
+     * so nothing was ever sent - no write on the server, no warning here.
+     *
+     * <p>Compared against the BENCH's own in-force value, the difference is real
+     * and the write goes out.  There is no port change pending in this test,
+     * which is the second half of the same defect: the range leg must not sit
+     * behind the I2S leg's "nothing pending" test.
+     */
+    @Test
+    void aStagedInputRangeIsSentEvenWithNoPortChangePending() {
+        Preferences edit = live.copyForDialog();
+        Qa40xSettingsUi panel = new Qa40xSettingsUi();
+        panel.beginEdit();
+        panel.onSelected(REMOTE_QA40X, edit);
+        stageActiveRange(edit, true, STAGED_INPUT_DBV);
+
+        panel.commitEdit();
+
+        List<StubRemoteBench.Call> writes = writes();
+        assertEquals(1, writes.size(), "exactly one range write, and only for the "
+                + "direction the operator moved");
+        StubRemoteBench.Call write = writes.get(0);
+        assertEquals(REMOTE_QA40X, write.selection(),
+                "aimed at the bench whose ranges were read, not at 'the QA40x'");
+        assertEquals(MessageType.QA40X_SET_INPUT_RANGE.getWire(), write.request());
+        assertEquals(STAGED_INPUT_DBV, write.fields().get(NetFields.DBV),
+                "the staged row is resolved back to the dBV the analyzer takes");
+        assertTrue(write.locked(), "spec 4.6 requires the analyzer's lock for a write");
+    }
+
+    @Test
+    void bothDirectionsMovedSendBothCommands() {
+        Preferences edit = live.copyForDialog();
+        Qa40xSettingsUi panel = new Qa40xSettingsUi();
+        panel.beginEdit();
+        panel.onSelected(REMOTE_QA40X, edit);
+        stageActiveRange(edit, true, STAGED_INPUT_DBV);
+        stageActiveRange(edit, false, STAGED_OUTPUT_DBV);
+
+        panel.commitEdit();
+
+        List<StubRemoteBench.Call> writes = writes();
+        assertEquals(2, writes.size());
+        assertEquals(MessageType.QA40X_SET_INPUT_RANGE.getWire(), writes.get(0).request());
+        assertEquals(STAGED_INPUT_DBV, writes.get(0).fields().get(NetFields.DBV));
+        assertEquals(MessageType.QA40X_SET_OUTPUT_RANGE.getWire(), writes.get(1).request());
+        assertEquals(STAGED_OUTPUT_DBV, writes.get(1).fields().get(NetFields.DBV));
+    }
+
+    /** The position the bench is already on is not written again: the write
+     *  restarts the analyzer's session, which is a gap in whatever is streaming
+     *  from that bench - for no change at all. */
+    @Test
+    void aRangeTheBenchIsAlreadyOnIsNotSent() {
+        Preferences edit = live.copyForDialog();
+        Qa40xSettingsUi panel = new Qa40xSettingsUi();
+        panel.beginEdit();
+        panel.onSelected(REMOTE_QA40X, edit);
+        stageActiveRange(edit, true, ACTIVE_INPUT_DBV);
+        stageActiveRange(edit, false, ACTIVE_OUTPUT_DBV);
+
+        panel.commitEdit();
+
+        assertTrue(writes().isEmpty(), "the operator confirmed what was already in "
+                + "force, which is not a range change");
+    }
+
+    /**
+     * A bench whose ranges could not be read is not guessed at.
+     *
+     * <p>Without an in-force value there is nothing to differ FROM, and the
+     * obvious substitute - the card of that name in this installation's store -
+     * describes a local analyzer: comparing against it is exactly how a remote
+     * range change came to be swallowed, and trusting it would be the same
+     * mistake pointed the other way, moving an attenuator nobody asked to move.
+     */
+    @Test
+    void aBenchThatDidNotAnswerItsRangesIsNotWrittenTo() {
+        bench.answer(MessageType.QA40X_RANGES.getWire(), Map.of());
+        Preferences edit = live.copyForDialog();
+        // This installation's own card of that name, on another position - what a
+        // comparison that fell back to the local store would find.
+        AudioDeviceProfile mine = new AudioDeviceProfile();
+        mine.setName(StubNetBackend.DEVICE_NAME);
+        mine.getMatch().add(StubNetBackend.DEVICE_NAME);
+        mine.getInput().setActiveRange(Qa40xProtocol.rangeLabel(STAGED_INPUT_DBV));
+        edit.putAudioDeviceProfile(mine);
+        Qa40xSettingsUi panel = new Qa40xSettingsUi();
+        panel.beginEdit();
+        panel.onSelected(REMOTE_QA40X, edit);
+
+        panel.commitEdit();
+
+        assertTrue(writes().isEmpty(),
+                "no in-force value was read, so nothing is sent for ranges");
+    }
+
+    /** The writes the panel really made.  The stub records READS as calls too -
+     *  the sync makes two per selection - and a write is the LOCKED one. */
+    private List<StubRemoteBench.Call> writes() {
+        List<StubRemoteBench.Call> locked = new ArrayList<>();
+        for (StubRemoteBench.Call call : bench.calls()) {
+            if (call.locked()) {
+                locked.add(call);
+            }
+        }
+        return locked;
+    }
+
+    /** What the ranges table does when the operator picks a row: the active range
+     *  of the rendered card, in the dialog's working copy. */
+    private void stageActiveRange(Preferences edit, boolean input, int dbv) {
+        AudioDeviceProfile card = edit.findAudioDeviceProfile(StubNetBackend.DEVICE_NAME);
+        (input ? card.getInput() : card.getOutput())
+                .setActiveRange(Qa40xProtocol.rangeLabel(dbv));
     }
 
     /** One {@code {dbv,left,right}} row per range, as spec 4.6 shapes

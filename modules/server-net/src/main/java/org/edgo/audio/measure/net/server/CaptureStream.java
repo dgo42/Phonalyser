@@ -23,15 +23,12 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.net.proto.BinaryFrame;
 import org.edgo.audio.measure.net.proto.FrameType;
-import org.edgo.audio.measure.net.proto.MessageType;
-import org.edgo.audio.measure.net.proto.NetFields;
-import org.edgo.audio.measure.net.proto.NetMessage;
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.sound.CaptureEndReason;
 import org.edgo.audio.measure.sound.AudioCapture;
@@ -44,6 +41,17 @@ import lombok.extern.log4j.Log4j2;
  * One open capture, from {@code capture.open} to {@code capture.close} (spec
  * 4.4): the device's PCM batches on the way out as the binary frames of spec 5,
  * numbered by this stream's own {@code packetCounter}.
+ *
+ * <p><b>It writes to ONE connection, and it is not the session's.</b>  Spec 4.7
+ * gives every open capture a data connection of its own, dialled by the client
+ * after {@code capture.open} answered the handle and bound here by
+ * {@link #attach(SessionChannel)}.  Until that happens this stream has nowhere
+ * to write, which is why {@code capture.start} is refused {@code NOT_ATTACHED}
+ * before it (spec 4.4) - and why the closing of that connection is this
+ * stream's own {@link #close()}, the orderly end spec 4.7 tells apart from a
+ * drop.  Nothing of the control plane goes out from here: a lane that dies
+ * hands its fault to the streamer, which owns the control connection and
+ * publishes the {@code ev.device.error}.
  *
  * <p><b>Why a queue sits in the middle.</b>  The batch listener runs on the
  * capture thread, and that thread must never wait: a device whose consumer
@@ -169,15 +177,18 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
 
     private final AudioCapture capture;
     /** The backend this line was opened through - the one type that can say
-     *  what a fault on it MEANT, asked when the lane dies. */
+     *  what a fault on it MEANT, asked when the lane dies.  Read by the streamer
+     *  that publishes the failure, which is where the control connection is. */
+    @Getter
     private final AudioDeviceManager backend;
-    private final SessionChannel channel;
     private final SessionWorker sender;
-    /** Told once, when this stream has failed and confessed it.  The honest-loss
-     *  rule wants an {@code ev.device.error} AND a close, and only the streamer
-     *  that registered this stream can take it out of its map and give the
-     *  device's rate claim back - so it is asked, not reached into. */
-    private final Consumer<CaptureStream> onFailure;
+    /** Told once, when this stream has failed.  The honest-loss rule wants an
+     *  {@code ev.device.error} AND a close, and neither is this stream's to do:
+     *  the event goes out on the CONTROL connection (spec 4.7 - nothing of the
+     *  control plane leaves here), and only the streamer that registered this
+     *  stream can take it out of its map and give the device's rate claim back.
+     *  So it is handed the fault and asked, not reached into. */
+    private final BiConsumer<CaptureStream, Throwable> onFailure;
 
     /** The batches waiting for the socket.  Unbounded as a COLLECTION and bounded
      *  in BYTES by {@link #maxQueuedBytes}: the bound is a duration of audio, and
@@ -198,21 +209,26 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
      *  must not send one per batch.  Either lane may be the first to see it,
      *  hence atomic. */
     private final AtomicBoolean deviceErrorSent = new AtomicBoolean();
+    /** This capture's data connection (spec 4.7), or null while none has
+     *  attached - which is every moment between {@code capture.open} and the
+     *  {@code capture.attach} that binds one.  Written once by the transport
+     *  thread that answers the attach, read by the capture thread and the drain,
+     *  hence volatile.  Every write site reads it into a local first: a stream
+     *  whose connection went away mid-drain must drop the batch, not fault. */
+    private volatile SessionChannel data;
     /** Spec 5: per stream, starts at 0, +1 per frame of ANY type.  Drain thread
      *  only. */
     private long packetCounter;
 
     public CaptureStream(int captureId, DeviceLock device, String deviceName,
             String cardName, AudioCapture capture, AudioDeviceManager backend,
-            SessionChannel channel, SessionWorker sender,
-            Consumer<CaptureStream> onFailure) {
+            SessionWorker sender, BiConsumer<CaptureStream, Throwable> onFailure) {
         this.captureId = captureId;
         this.device = device;
         this.deviceName = deviceName;
         this.cardName = cardName;
         this.capture = capture;
         this.backend = backend;
-        this.channel = channel;
         this.sender = sender;
         this.onFailure = onFailure;
         this.format = capture.getFormat();
@@ -225,6 +241,21 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
         // and the client would never hear it: a WASAPI card going away
         // mid-capture left the client with no notice that it was gone.
         capture.setPcmBatchListener(this);
+    }
+
+    /**
+     * Spec 4.7: this capture's data connection has attached, so the stream now
+     * has somewhere to write.  Called once, from the transport thread that
+     * answers the {@code capture.attach}.
+     */
+    public void attach(SessionChannel connection) {
+        this.data = connection;
+    }
+
+    /** Whether a data connection has attached (spec 4.7) - what makes
+     *  {@code capture.start} answerable rather than {@code NOT_ATTACHED}. */
+    public boolean isAttached() {
+        return data != null;
     }
 
     /** Spec 4.4: the binary frames begin.  The listener is registered from the
@@ -258,11 +289,18 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
      */
     public void markSweepStart() {
         sender.submit(() -> {
+            SessionChannel out = data;
+            if (out == null) {
+                // No data connection has attached (spec 4.7), so this capture
+                // is not streaming at all - a marker into a stream nobody can
+                // receive would only spend a packet number.
+                return;
+            }
             // Everything still queued was captured before the sweep, so it goes
             // out first even if the transport is behind - the queue is bounded,
             // so that flush is bounded too.
             drain(true);
-            channel.send(new BinaryFrame(FrameType.MARKER, captureId,
+            out.send(new BinaryFrame(FrameType.MARKER, captureId,
                     packetCounter++, BinaryFrame.MARKER_SWEEP_START));
         });
     }
@@ -279,6 +317,13 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
      *
      * <p>The queue is emptied in a finally: a stream left holding a second of
      * captured audio per lane is heap this connection can no longer reach.
+     *
+     * <p>And the capture's data connection goes with it (spec 4.7): the socket
+     * exists to carry THIS stream, so the stream ending is what ends it.  The
+     * close is marked as this end's, which is what tells the far side's drop
+     * detector - and our own - that this was the orderly end of a stream and
+     * not the session dying (spec 4.1).  Last, so a drain that was already
+     * queued has still had its socket.
      */
     public void close() {
         try {
@@ -290,6 +335,11 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
         } finally {
             queue.clear();
             queuedBytes.set(0);
+            SessionChannel out = data;
+            data = null;
+            if (out != null) {
+                out.close("capture " + captureId + " closed");
+            }
             if (log.isInfoEnabled()) {
                 log.info("net capture {}: closed on {} after {} frame(s)",
                         captureId, device, packetCounter);
@@ -349,6 +399,15 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
      */
     private void drain(boolean flush) {
         try {
+            SessionChannel out = data;
+            if (out == null) {
+                // The capture's data connection is gone (closed, or never
+                // attached): there is nowhere to write, and holding the batches
+                // would only grow the heap of a stream that is over.
+                queue.clear();
+                queuedBytes.set(0);
+                return;
+            }
             // Asked ONCE, and BEFORE this pass writes anything.  The transport's
             // answer is "is something still buffered", which is true of a write
             // this very drain queued a moment ago - so asking it per batch made
@@ -361,7 +420,7 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
             boolean peerWasBehind = false;
             for (byte[] batch = take(); batch != null; batch = take()) {
                 if (!flush && !asked) {
-                    peerWasBehind = channel.isSendBacklogged();
+                    peerWasBehind = out.isSendBacklogged();
                     asked = true;
                 }
                 if (peerWasBehind) {
@@ -373,7 +432,7 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
                     // own to work off.  A peer that never clears keeps the
                     // throttle, which is what fills the allowance and makes the
                     // loss confessable.
-                    peerWasBehind = !awaitTransport();
+                    peerWasBehind = !awaitTransport(out);
                 }
                 long lost = lostFrames.getAndSet(0);
                 if (lost > 0) {
@@ -381,9 +440,9 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
                         log.warn("net capture {}: {} stereo frame(s) dropped - the "
                                 + "client is not keeping up", captureId, lost);
                     }
-                    channel.send(new BinaryFrame(FrameType.GAP, captureId, packetCounter++, lost));
+                    out.send(new BinaryFrame(FrameType.GAP, captureId, packetCounter++, lost));
                 }
-                channel.send(new BinaryFrame(FrameType.PCM, captureId, packetCounter++, batch));
+                out.send(new BinaryFrame(FrameType.PCM, captureId, packetCounter++, batch));
             }
         } catch (Throwable t) {
             // A drain that dies takes nothing with it but this task: the audio
@@ -412,15 +471,17 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
      * <p>Costs nothing at all while the client keeps up: the first question
      * answers "nothing buffered" and the batch goes straight out.
      *
+     * @param out this capture's data connection, read once by the caller so a
+     *        close racing the drain cannot turn a wait into a fault
      * @return true when the backlog CLEARED - the peer is reading again, so the
      *         caller stops holding batches back; false when it was still there
      *         after {@link #MAX_BACKPRESSURE_WAIT_MS}, which is the peer this
      *         lane must go on throttling until the allowance overflows and the
      *         loss can be confessed
      */
-    private boolean awaitTransport() {
+    private boolean awaitTransport(SessionChannel out) {
         for (int waited = 0; waited < MAX_BACKPRESSURE_WAIT_MS; waited += BACKPRESSURE_POLL_MS) {
-            if (!channel.isSendBacklogged()) {
+            if (!out.isSendBacklogged()) {
                 return true;
             }
             try {
@@ -430,7 +491,7 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
                 return false;
             }
         }
-        return !channel.isSendBacklogged();
+        return !out.isSendBacklogged();
     }
 
     /**
@@ -445,9 +506,15 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
      * {@code ev.device.error} AND a close.  A stream left registered would keep
      * the device line open with nothing reading it, hold the QA40x rate claim,
      * and refuse the client's next {@code capture.open} on that device as "a
-     * capture is already open".  The close is handed to the audio worker rather
-     * than done here because this may be running on the device's own callback
-     * thread, which must never be inside a close of its own line.
+     * capture is already open".
+     *
+     * <p>Neither half happens here.  The event is a CONTROL-plane message and
+     * this stream owns a data connection only (spec 4.7), and the close has to
+     * take this stream out of the streamer's map and give the device's rate
+     * claim back - so the fault is handed to the streamer, which owns both.
+     * The once-guard stays here, where the failure is seen: a device that fails
+     * on every batch must produce one report, not one per batch, and either
+     * lane may be the one to notice.
      */
     private void reportDeviceError(Throwable fault) {
         if (!deviceErrorSent.compareAndSet(false, true)) {
@@ -456,15 +523,7 @@ public final class CaptureStream implements AudioCapture.PcmBatchListener {
         if (log.isErrorEnabled()) {
             log.error("net capture {}: {} failed - telling the client", captureId, device, fault);
         }
-        // This event is ALWAYS about a device, so it always carries a reason -
-        // the backend's own reading of its own fault, UNKNOWN included.  The
-        // detail stays the server's raw text (its log line); the reason is what
-        // the client can put in front of ITS operator, in ITS language.
-        channel.send(new NetMessage(MessageType.EV_DEVICE_ERROR)
-                .put(NetFields.DIRECTION, device.input() ? NetFields.INPUT : NetFields.OUTPUT)
-                .put(NetFields.DETAIL, device + ": " + fault)
-                .put(NetFields.REASON, backend.classifyFailure(fault).name()));
-        sender.submit(() -> onFailure.accept(this));
+        onFailure.accept(this, fault);
     }
 
     /** The backend's own end-of-stream, on the seam the batches travelled -

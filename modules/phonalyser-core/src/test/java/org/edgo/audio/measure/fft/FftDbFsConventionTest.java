@@ -20,6 +20,7 @@ package org.edgo.audio.measure.fft;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 import org.junit.jupiter.api.Test;
@@ -65,7 +66,7 @@ class FftDbFsConventionTest {
         double expectedPeakDbFs = 20.0 * Math.log10(PEAK_FRACTION);
         assertEquals(expectedPeakDbFs, result.fundamentalDbFs, TOLERANCE_DB,
                 "fundamentalDbFs must be peak-referenced; an rms reference would "
-                        + "read " + (expectedPeakDbFs - 20.0 * Math.log10(Math.sqrt(2.0)))
+                        + "read " + (expectedPeakDbFs - 20.0 * Math.log10(Constants.SQRT2))
                         + " dBFS instead");
     }
 

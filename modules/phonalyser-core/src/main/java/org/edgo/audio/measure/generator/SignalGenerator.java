@@ -516,10 +516,10 @@ public class SignalGenerator implements GeneratorControls {
      */
     private double rawRms(GenSignalForm form) {
         return switch (form) {
-            case SINE, SINE_COMP   -> 1.0 / Math.sqrt(2.0);                       // sine RMS = peak / √2
-            case LINEAR_SWEEP             -> 1.0 / Math.sqrt(2.0);                       // sweep is sin(φ(n)); RMS = peak / √2
-            case LOG_SWEEP                -> 1.0 / Math.sqrt(2.0);                       // sweep is sin(φ(n)); RMS = peak / √2
-            case TRIANGLE                 -> 1.0 / Math.sqrt(3.0);                       // triangle RMS = peak / √3 (independent of duty)
+            case SINE, SINE_COMP   -> 1.0 / Constants.SQRT2;                       // sine RMS = peak / √2
+            case LINEAR_SWEEP             -> 1.0 / Constants.SQRT2;                       // sweep is sin(φ(n)); RMS = peak / √2
+            case LOG_SWEEP                -> 1.0 / Constants.SQRT2;                       // sweep is sin(φ(n)); RMS = peak / √2
+            case TRIANGLE                 -> 1.0 / Constants.SQRT3;                       // triangle RMS = peak / √3 (independent of duty)
             case RECTANGLE                -> 1.0;                                         // ±peak square wave (any duty) -> RMS = peak
             case WHITE_NOISE              -> 1.0;                                         // Gaussian std dev = 1
             case PINK_NOISE               -> 1.0 / Math.sqrt(PINK_OCTAVES + 1.0);        // Gaussian source, 17 summed terms / 17
@@ -631,6 +631,15 @@ public class SignalGenerator implements GeneratorControls {
      *  DUAL_TONE).  Phase-continuous like {@link #setFrequency}. */
     public void setDualToneFrequency2(double frequencyHz) {
         this.phaseInc2 = toPhaseInc(frequencyHz);
+    }
+
+    /** The second tone's frequency as the DDS is CURRENTLY driving it - the
+     *  read-back of {@link #setDualToneFrequency2}, recovered from the phase
+     *  increment, so a caller sees what is being emitted rather than what it
+     *  believes it asked for.  Exact to the phase increment's own granularity
+     *  ({@code fs/2^64}). */
+    public double getDualToneFrequency2Hz() {
+        return phaseInc2 / Constants.TWO_POW_64 * sampleRate;
     }
 
     /** Live-updates the dual-tone amplitude split.  {@code amp1Pct} +

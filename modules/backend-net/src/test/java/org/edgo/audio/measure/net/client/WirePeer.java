@@ -25,14 +25,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 
+import org.edgo.audio.measure.net.proto.ErrorCode;
 import org.edgo.audio.measure.net.proto.JsonCodec;
 import org.edgo.audio.measure.net.proto.MessageType;
+import org.edgo.audio.measure.net.proto.NetError;
 import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.net.proto.NetMessage;
 import org.edgo.audio.measure.net.proto.NetProto;
@@ -89,11 +92,19 @@ abstract class WirePeer extends WebSocketServer {
     private final List<String> caps;
     /** Everything the client sent that was not the handshake. */
     private final List<NetMessage> received = synchronizedList(new ArrayList<>());
+    /** The handle each control connection's {@code hello} was answered with
+     *  (spec 4.1) - what a {@code capture.attach} names its session by. */
+    private final Map<WebSocket, String> clientIds = new ConcurrentHashMap<>();
     private final CountDownLatch listening = new CountDownLatch(1);
     /** Everything a waiter waits on is notified here, by the reader thread. */
     private final Object arrivals = new Object();
 
-    /** The client that connected most recently; null until one does. */
+    /** The CONTROL connection that greeted most recently; null until one does.
+     *  Set at {@code hello} and not at the upgrade, because that is what makes
+     *  a socket the control connection (spec 4) - a peer that pushed to
+     *  whichever socket connected last would send its events down a capture's
+     *  data connection the moment one was dialled, which is exactly the mixing
+     *  spec 4.7 forbids. */
     private volatile WebSocket lastClient;
     /** The version this peer claims to have CHOSEN in its handshake (spec 1).
      *  Settable so a test can be a peer that answers a version the client never
@@ -155,12 +166,12 @@ abstract class WirePeer extends WebSocketServer {
 
     @Override
     public final void onOpen(WebSocket conn, ClientHandshake handshake) {
-        lastClient = conn;
         opened(conn);
     }
 
     @Override
     public final void onClose(WebSocket conn, int code, String reason, boolean remote) {
+        clientIds.remove(conn);
         closed(conn);
         wake();
     }
@@ -177,12 +188,19 @@ abstract class WirePeer extends WebSocketServer {
     // -------------------------------------------------------------------------
 
     /**
-     * Answers {@code hello}, records the rest, and hands it to the peer.
+     * Answers {@code hello}, routes a {@code capture.attach}, records the rest,
+     * and hands it to the peer.
      *
      * <p>The handshake is answered here because {@link NetConnection#open} sends
      * it before anything else and refuses to go on without it (spec 4.1: hello
      * MUST be first), so no peer of any kind can decline it and still be talked
      * to.  Everything after it is {@link #answer}'s business.
+     *
+     * <p>Spec 4 makes the FIRST message the plane: {@code hello} means this
+     * socket is the control connection, {@code capture.attach} means it is a
+     * capture's data connection.  Both are recognised here because both are the
+     * transport's business rather than the bench's - what a peer then DOES with
+     * an attach is {@link #attached}'s.
      */
     @Override
     public final void onMessage(WebSocket conn, String message) {
@@ -193,19 +211,45 @@ abstract class WirePeer extends WebSocketServer {
             throw new IllegalStateException("the client sent undecodable text: " + message, e);
         }
         if (request.getType() == MessageType.HELLO) {
+            clientIds.put(conn, UUID.randomUUID().toString());
+            lastClient = conn;
             greeted(conn, request);
             if (answerHello) {
-                send(conn, new NetMessage(request.getId(), codec.toNode(hello())));
+                send(conn, new NetMessage(request.getId(), codec.toNode(hello(conn))));
             }
             return;
         }
         received.add(request);
         wake();
-        NetMessage answer = answer(conn, request);
+        NetMessage answer = request.getType() == MessageType.CAPTURE_ATTACH
+                ? attached(conn, request) : answer(conn, request);
         if (answer != null) {
             send(conn, answer);
         }
         wake();
+    }
+
+    /** A connection declared itself a capture's data connection (spec 4.7).  The
+     *  default refuses: a peer with no captures has none to attach to. */
+    protected NetMessage attached(WebSocket conn, NetMessage attach) {
+        Integer id = attach.getId();
+        return id == null ? null : new NetMessage(id, new NetError(ErrorCode.BAD_REQUEST,
+                "this peer serves no captures to attach to"));
+    }
+
+    /** The control connection whose {@code hello} was answered with this handle,
+     *  or null - the lookup a {@code capture.attach} is resolved through (spec
+     *  4.7).  A stale or invented handle simply names nothing. */
+    protected final WebSocket controlOf(String clientId) {
+        if (clientId == null) {
+            return null;
+        }
+        for (Map.Entry<WebSocket, String> session : clientIds.entrySet()) {
+            if (clientId.equals(session.getValue())) {
+                return session.getKey();
+            }
+        }
+        return null;
     }
 
     /**
@@ -233,22 +277,38 @@ abstract class WirePeer extends WebSocketServer {
         // Nothing: a peer with no per-session state has nothing to release.
     }
 
-    /** The {@code hello} response of spec 4.1. */
-    private Map<String, Object> hello() {
+    /** The {@code hello} response of spec 4.1, including the session handle this
+     *  connection's data connections will attach with (spec 4.7). */
+    private Map<String, Object> hello(WebSocket conn) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put(NetFields.PROTO, helloProto);
         data.put(NetFields.SERVER_ID, UUID.randomUUID().toString());
         data.put(NetFields.NAME, serverName);
         data.put(NetFields.APP, SERVER_APP);
+        data.put(NetFields.CLIENT_ID, clientIds.get(conn));
         data.put(NetFields.CAPS, caps);
         return data;
     }
 
-    /** Sends one message to the client that connected most recently - the
-     *  server-initiated {@code ping} of spec 4.0 (whose id is NEGATIVE) and the
-     *  events of spec 4.3 and 4.5. */
+    /**
+     * Sends one message to the CONTROL connection of the session that greeted
+     * most recently - the server-initiated {@code ping} of spec 4.0 (whose id is
+     * NEGATIVE) and the events of spec 4.3 and 4.5.
+     *
+     * <p>The control connection, and never merely the newest socket: spec 4.7
+     * says the planes do not mix, so an event pushed down a capture's data
+     * connection is a bench doing the one thing the split exists to prevent -
+     * and a client that accepted it would be proving the wrong contract.
+     */
     final void push(NetMessage message) {
-        send(lastClient, message);
+        send(controlConnection(), message);
+    }
+
+    /** The control connection this peer pushes on, still open; null when the
+     *  session it belonged to has gone. */
+    final WebSocket controlConnection() {
+        WebSocket control = lastClient;
+        return control != null && clientIds.containsKey(control) ? control : null;
     }
 
     /** Sends one control message, tolerating a socket that has already gone: a

@@ -154,8 +154,16 @@ so both are built natively and shipped; each macOS DMG is tagged with its arch
 Windows and macOS jobs need are committed under `lib/` (§2), so the runners just
 check out the repository - there is nothing to restore from an artifact store.
 
+The **headless server bundles have a job of their own** (`build-servers`, on
+`ubuntu-latest`) that produces all six zips: nothing in the server path is
+host-bound - one jar serves every platform, the natives beside it are prebuilt
+files from the checkout and the scripts are text, and the Windows Launch4j stub
+cross-builds from that runner (the job verifies it landed in both Windows zips
+rather than trusting it).  It runs beside the three installer jobs instead of
+inside them.
+
 A draft GitHub release is created when the matrix finishes, with the EXE,
-DEB, both DMGs and the platform fat JARs attached.
+DEB, both DMGs, the platform fat JARs and the six server zips attached.
 
 ## 4b. Microsoft Store (MSIX)
 
@@ -265,13 +273,16 @@ mvn -DskipTests package -P server-dist -pl modules/server-net -am
 ```
 
 `-pl ... -am` builds only the server's own subtree (core, the wire format, the
-backends) instead of the whole desktop reactor. Output in
+backends) instead of the whole desktop reactor. **That one command produces all
+six bundles** - no platform profile is named and none is needed: the jar is
+universal, so the six zip assemblies simply pack it with different natives and
+scripts, and Launch4j writes both Windows stubs in the same pass. Output in
 `modules/server-net/target/`:
 
 | Artifact | Contents |
 | -------- | -------- |
-| `phonalyser-server-<version>-<platform>.jar` | the server fat JAR - no SWT, no LWJGL, no help bundle, no locale bundles |
-| `phonalyser-server-<version>-<platform>.zip` | that JAR plus everything around it (below) |
+| `phonalyser-server-<version>.jar` | the server fat JAR - no SWT, no LWJGL, no help bundle, no locale bundles. ONE file for every platform and architecture: it carries the JNA dispatch libraries for all of them and the device natives (PortAudio, libusb, csjsound) for every arch that has any, so a bare `java -jar` opens devices wherever it runs |
+| `phonalyser-server-<version>-<platform>.zip` | that JAR plus everything around it (below) - the natives staged beside it and the platform's launch and service scripts, which is all that makes a bundle belong to a platform |
 
 `<platform>` is one of `windows-x64`, `windows-x86`, `linux-x64`,
 `linux-aarch64`, `macos-x64`, `macos-aarch64` - six bundles, one per row of the
@@ -292,10 +303,11 @@ Windows additionally carries two executables, neither of which is a bundled JRE:
 
 * **`phonalyser-server-x64.exe`** / **`phonalyser-server-x86.exe`** - a ~430 KB
   [Launch4j](https://launch4j.sourceforge.net/) thin launcher wrapping the JAR,
-  built by the `launch4j-maven-plugin` in the `server-dist` profile and named
-  from `${server.exeName}`. It sets the same three library properties the `.cmd`
-  does, requires a JRE 17+ and shows a dialog with the download page when none
-  is found. `runtimeBits` is pinned per architecture - the x86 launcher must
+  built by the `launch4j-maven-plugin` in the `server-dist` profile, which has
+  one execution per stub and spells each name out. It sets the same three
+  library properties the `.cmd` does, requires a JRE 17+ and shows a dialog with
+  the download page when none is found. `runtimeBits` is pinned per stub - the
+  x86 launcher must
   refuse a 64-bit JVM, because the JAR is architecture-neutral but the DLLs in
   `natives\` are not. **The suffix names the target, not the stub**: Launch4j
   emits a 32-bit PE head in both cases, and the x64 stub goes on to start a

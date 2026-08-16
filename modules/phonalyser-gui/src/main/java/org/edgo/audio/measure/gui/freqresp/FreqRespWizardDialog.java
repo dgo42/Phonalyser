@@ -503,6 +503,13 @@ public final class FreqRespWizardDialog {
         mg.heightHint = 100;
         busyMeter.setLayoutData(mg);
 
+        // ESC and the window-manager close arrive as SWT.Close.  This trial
+        // sweep has no cancel hook (the analyzer runs without one), and a
+        // vanished shell would leave the wizard's buttons dead while the
+        // sweep still owns the device - refuse the close; onMeasurementDone
+        // disposes the shell when the (bounded) sweep ends.
+        s.addListener(SWT.Close, e -> e.doit = false);
+
         s.pack();
         Rectangle pb = dialog.getBounds();
         Point sz = s.getSize();
@@ -515,7 +522,9 @@ public final class FreqRespWizardDialog {
     }
 
     private void closeBusyShell() {
-        if (busyShell != null && !busyShell.isDisposed()) busyShell.close();
+        // dispose(), not close(): close() raises SWT.Close, which the busy
+        // shell refuses as a user-close.
+        if (busyShell != null && !busyShell.isDisposed()) busyShell.dispose();
         busyShell = null;
         busyMeter = null;
     }

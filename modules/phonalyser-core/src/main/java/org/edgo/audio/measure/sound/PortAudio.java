@@ -344,8 +344,18 @@ public final class PortAudio {
         return new String[] { "portaudio" };
     }
 
-    public static synchronized Lib lib() {
+    public static synchronized Lib lib() { // static-ok: process-global native holder, one Pa_Initialize per process
         if (LIB == null) {
+            // OS gate BEFORE any load attempt: the PortAudio-backed backends
+            // exist on Windows (WDM-KS) and macOS (CoreAudio) only, and the
+            // platform fat jars carry no PortAudio binary for anything else -
+            // a load attempt elsewhere could only ever fail, with a message
+            // blaming a library that was never meant to be there.
+            String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+            if (!os.contains("win") && !os.contains("mac")) {
+                throw new IllegalStateException(
+                        "PortAudio-backed backends are not available on " + System.getProperty("os.name"));
+            }
             if (log.isInfoEnabled()) {
                 log.info("Loading PortAudio: candidates={}, jna.library.path={}, java.library.path={}",
                         Arrays.toString(candidateLibraryNames()),

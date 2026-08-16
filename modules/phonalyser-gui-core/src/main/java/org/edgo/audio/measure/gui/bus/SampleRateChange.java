@@ -22,7 +22,7 @@ import org.edgo.audio.measure.preferences.BackendKey;
 
 /**
  * Payload of {@link Events#PREFS_SAMPLE_RATE_CHANGED} and
- * {@link Events#PREFS_SAMPLE_RATE_SET}: one direction's sample rate as the
+ * {@link Events#PREFS_SAMPLE_RATE_SET}: one direction's audio FORMAT as the
  * Preferences dialog is being edited, tagged with BOTH the backend and the
  * resolved card it belongs to so a subscriber can key off whichever it
  * constrains - a whole backend, or one specific card.  Both ride ON the payload
@@ -35,12 +35,32 @@ import org.edgo.audio.measure.preferences.BackendKey;
  * same one clock on a server as on this machine), while the dialog still has to
  * tell one server's QA40x from another's when it applies the answer.
  *
+ * <p><b>The bit depth is optional</b> - {@link #NO_BIT_DEPTH} means "this payload
+ * says nothing about the depth", which is what the four-argument constructor
+ * produces.  A backend whose two directions share only a clock (the QA40x's one
+ * reg-9 register) constrains the rate alone and both publishes and answers
+ * without a depth; a backend that is one digital format in both directions (the
+ * loopback) carries the depth as well and has its depth combo aligned from the
+ * same round-trip.  A subscriber that does not constrain the depth ignores the
+ * field, and the dialog leaves a depth combo alone unless the answer names one.
+ *
  * @param input        {@code true} for the input (capture) direction, {@code false} for output
  * @param sampleRateHz the direction's sample rate in hertz
+ * @param bitDepth     the direction's bit depth, or {@link #NO_BIT_DEPTH} when
+ *                     the payload carries no depth
  * @param backend      the selected backend the edited direction belongs to -
  *                     local, or one server's
  * @param card         the resolved card name for the edited direction's device,
  *                     or {@code null} when the device maps to no card
  */
-public record SampleRateChange(boolean input, int sampleRateHz, BackendKey backend, String card) {
+public record SampleRateChange(boolean input, int sampleRateHz, int bitDepth,
+                               BackendKey backend, String card) {
+
+    /** {@link #bitDepth()} of a payload that says nothing about the depth. */
+    public static final int NO_BIT_DEPTH = 0;
+
+    /** The rate alone - for a constraint whose backend couples only its clock. */
+    public SampleRateChange(boolean input, int sampleRateHz, BackendKey backend, String card) {
+        this(input, sampleRateHz, NO_BIT_DEPTH, backend, card);
+    }
 }

@@ -19,6 +19,7 @@
 package org.edgo.audio.measure.cli;
 
 import org.edgo.audio.measure.cli.util.*;
+import org.edgo.audio.measure.common.Constants;
 
 import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
@@ -108,7 +109,7 @@ public class HistogramMode {
         }
         double scaleVolts = scaleArg != null
                 ? Double.parseDouble(scaleArg)
-                : 2.0 * Math.sqrt(2.0) * prefs.getAdcFsVoltageRms();
+                : 2.0 * Constants.SQRT2 * prefs.getAdcFsVoltageRms();
         if (scaleVolts <= 0) {
             log.error("--scale must be a positive number.");
             System.exit(1);

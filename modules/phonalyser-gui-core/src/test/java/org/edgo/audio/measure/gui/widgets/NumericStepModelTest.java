@@ -20,6 +20,7 @@ package org.edgo.audio.measure.gui.widgets;
 
 import java.util.Locale;
 
+import org.edgo.audio.measure.common.Constants;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -335,7 +336,7 @@ class NumericStepModelTest {
         // dBFS is full-scale-relative: 0 dBFS ≡ a full-scale SINE, so the
         // anchor is the RMS full scale (peak/√2).  Peak full scale = 4.0 Vpeak.
         NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-6, 10, 5, () -> 4.0);
-        double fsRms = 4.0 / Math.sqrt(2.0);
+        double fsRms = 4.0 / Constants.SQRT2;
         assertTrue(m.commit("0 dbfs"));
         assertEquals(fsRms, m.getValue(), EPS, "0 dBFS = full-scale sine Vrms ≈ 2.8284");
         assertTrue(m.commit("-20 dbfs"));
@@ -354,6 +355,23 @@ class NumericStepModelTest {
         // A suffix-less entry releases the sticky unit back to automatic volts.
         assertTrue(m.commit("0.5"));
         assertTrue(m.text().endsWith("V") && !m.text().endsWith("dBFS"), m.text());
+    }
+
+    @Test
+    void amplitude_zeroDbfsRedisplaysAsZeroNotMinusZero() {
+        // 0 dBFS stores fs/sqrt(2), which the 12-significant-digit canonical
+        // rounding can land a hair BELOW; the back-conversion then reads a few
+        // 1e-12 dB negative and the formatter keeps the sign of a tiny
+        // negative - the field showed "-0 dBFS".  Peak full scale 2.0 rounds
+        // sqrt(2) downward, reproducing the sign deterministically.
+        NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-6, 10, 5, () -> 2.0);
+        assertTrue(m.commit("0 dbfs"));
+        assertEquals("0 dBFS", m.text(), "typed zero must not redisplay signed");
+        // A wheel walk landing on the 0 dBFS grid point takes the same
+        // convert-back path and must render clean too.
+        assertTrue(m.commit("-10 dbfs"));
+        m.wheel(1);
+        assertEquals("0 dBFS", m.text(), "stepped-to zero must not redisplay signed");
     }
 
     @Test
@@ -576,33 +594,81 @@ class NumericStepModelTest {
         double expBits = 1 + (fsDbv - DITHER_OFFSET_DB - (-100)) / DITHER_DB_PER_BIT;
         assertEquals(expBits, m.getValue(), 1e-9);
         // The RMS anchor (/√2) would give bits 3.01/6.0206 ≈ 0.5 lower.
-        double rmsBits = 1 + (fsDbv - 20 * Math.log10(Math.sqrt(2.0)) - DITHER_OFFSET_DB - (-100)) / DITHER_DB_PER_BIT;
+        double rmsBits = 1 + (fsDbv - 20 * Math.log10(Constants.SQRT2) - DITHER_OFFSET_DB - (-100)) / DITHER_DB_PER_BIT;
         assertTrue(Math.abs(m.getValue() - rmsBits) > 0.4, "must not use the RMS anchor");
     }
 
     @Test
-    void dither_reanchor_dbvMode_holdsDbvAndResolvesBits() {
-        // A full-scale change with a dBV entered keeps the shown dBV and moves
-        // the bits by the config delta (so the entered physical level holds
-        // under the new calibration).
+    void dither_enteredValue_isTheLevelAndHoldsItAcrossAFullScaleChange() {
+        // What a dBV entry stores is the LEVEL that was typed.  Replaying that
+        // value under a new calibration therefore shows the same figure and
+        // re-solves the bits beneath it.
         double[] fs = { 1.0 };
         NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 30, () -> fs[0]);
         assertTrue(m.commit("-100 dBV"));
+        // The number is compared with a tolerance, the unit exactly: a level
+        // that has been through the bits and back carries float drift.
+        assertEquals("dbv", m.enteredValue().unit());
+        assertEquals(-100, m.enteredValue().value(), 1e-9);
         double bits0 = m.getValue();
+        // The value as the store holds it - captured under the OLD calibration,
+        // which is the whole point: it is not re-derived from the canonical
+        // value afterwards.
+        UnitValue stored = m.enteredValue();
+
         fs[0] = 2.0;                                   // +6.02 dB full-scale
-        assertTrue(m.reanchor(), "dBV view re-solves the bits");
+        assertTrue(m.seedPair(stored));
+        assertEquals(-100, m.enteredValue().value(), 1e-9, "the entered level is what holds");
         assertEquals(bits0 + 20 * Math.log10(2.0) / DITHER_DB_PER_BIT, m.getValue(), 1e-9,
-                "bits move by the full-scale delta -> the shown dBV is held");
+                "bits move by the full-scale delta -> the entered dBV is held");
     }
 
     @Test
-    void dither_reanchor_bitsMode_holdsBits() {
+    void dither_bitsValue_holdsTheDepth() {
         double[] fs = { 1.0 };
         NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 30, () -> fs[0]);
-        assertTrue(m.commit("16 bits"));               // bits view = fixed physical dither
+        assertTrue(m.commit("16 bits"));               // bits view = fixed depth
+        assertEquals(new UnitValue(16, "bits"), m.enteredValue());
         fs[0] = 2.0;
-        assertFalse(m.reanchor(), "bits view holds the physical dither");
-        assertEquals(16, m.getValue(), EPS);
+        assertTrue(m.seedPair(m.enteredValue()));
+        assertEquals(16, m.getValue(), EPS, "bits view holds the physical dither");
+    }
+
+    @Test
+    void dither_off_storesTheBaseUnitWhateverTheView() {
+        NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 24, () -> 1.0);
+        assertTrue(m.commit("-100 dBV"));
+        assertTrue(m.commit("off"));                   // Off keeps the dBV view
+        assertEquals(new UnitValue(0, "bits"), m.enteredValue(),
+                "Off is a depth of none, not a level");
+    }
+
+    @Test
+    void amplitude_dbfsValue_reSolvesAgainstTheLiveFullScale() {
+        // A dBFS entry is only meaningful against the calibration: the same
+        // entry is a different voltage once the full scale moves, which is why
+        // the entered value - not the voltage - is what a preference stores.
+        double[] fs = { 2.0 };
+        NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-4, 100, 5, () -> fs[0]);
+        assertTrue(m.commit("-6 dBFS"));
+        assertEquals("dbfs", m.enteredValue().unit());
+        assertEquals(-6, m.enteredValue().value(), 1e-9);
+        double vrms = m.getValue();
+        UnitValue stored = m.enteredValue();            // as stored, under the old scale
+
+        fs[0] = 4.0;
+        assertTrue(m.seedPair(stored));
+        assertEquals(-6, m.enteredValue().value(), 1e-9, "the entered figure is unmoved");
+        assertEquals(2 * vrms, m.getValue(), 1e-9, "twice the full scale is twice the volts");
+    }
+
+    @Test
+    void amplitude_scaledLinearUnit_storesTheBaseUnit() {
+        // mV never sticks - the display auto-ranges through it - so what a
+        // millivolt entry means is its volts figure.
+        NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-9, 100, 9);
+        assertTrue(m.commit("300 mV"));
+        assertEquals(new UnitValue(0.3, "v"), m.enteredValue());
     }
 
     @Test

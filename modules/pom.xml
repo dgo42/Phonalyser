@@ -22,7 +22,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.2.0</version>
+        <version>1.2.1</version>
         <relativePath>phonalyser-parent</relativePath>
     </parent>
 
@@ -63,8 +63,13 @@
         <module>phonalyser-gui-core</module>
         <module>phonalyser-gui</module>
         <module>backend-qa40x-gui</module>
+        <module>backend-loopback-gui</module>
         <module>backend-net-gui</module>
         <module>phonalyser-app</module>
+        <!-- Tools: built by the reactor, shipped with nothing.  The scanner is
+             a standalone field diagnostic whose only artifact is its own fat
+             jar; no module depends on it. -->
+        <module>device-scanner</module>
         <!-- LAST: it spawns the real GUI and the real server as child JVMs, so
              everything it drives must already be built.  Test-only; its
              integration tests run only under -P integration. -->

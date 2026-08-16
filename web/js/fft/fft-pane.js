@@ -381,6 +381,16 @@ export class FftPane {
     // in the markup, so the float button did nothing. Bind the real ids.
     $('#fftTablePop').on('click', () => this.setTableExtracted(!this.tableExtracted));
     $('#fftWinClose').on('click', () => this.setTableExtracted(false));   // Java ToolWindow close -> setTableExtracted(false)
+    // Level unit of the distortion table's cells (Java FftView distortionUnitCombo, bound with
+    // Bindings.combo to fftDistortionUnitProperty). The table is canvas-drawn, so a unit change
+    // only needs a repaint - of the inline table AND the float window, whose natural width
+    // follows the unit label. Seeded from the persisted pref like the toggle above.
+    $('#fftDistUnit').val(prefs.fftDistortionUnit.get());
+    $('#fftDistUnit').on('change', () => {
+      prefs.fftDistortionUnit.set($('#fftDistUnit').val()); prefs.save();
+      this.paintDistortionFloat();     // re-fits the float window to the new label width
+      this.view.applyPrefs();          // Java redraw()
+    });
     this.makeMeasWindowDraggable();
   }
 
@@ -394,6 +404,9 @@ export class FftPane {
     // Java externalBtn.setExcluded(!extVisible) where extVisible = hasData && table visible.
     const extVisible = hasData && this.prefs.fftDistortionTableVisible.get();
     $('#fftTablePop').toggle(extVisible).toggleClass('on', this.tableExtracted);
+    // The unit selector belongs to the table, so it shows on the same condition
+    // (Java distortionUnitCombo.setVisible(extVisible)).
+    $('#fftDistUnit').toggle(extVisible);
   }
 
   // ----- THD/IMD float window (Java FftView externalBtn / setTableExtracted / syncExternalShell /
@@ -584,6 +597,13 @@ export class FftPane {
       if (pct < 0) pct = 0; else if (pct > 100) pct = 100;
       const txt = pct + '%';
       if ($('#pctLbl').text() !== txt) $('#pctLbl').text(txt);   // Java: setText only on change
+      // Both readouts belong to this one timer, as on the desktop (FftView
+      // .startFillPercentTimer paints the fill % and the averages count in the same
+      // tick, each read LIVE from the analyser). Painted only when a result arrived,
+      // the count kept the PREVIOUS run's depth after a start or a stats reset until
+      // the next frame landed - minutes of it at the large FFT lengths.
+      const avg = t('fft.avgCount.label', this.engine.fft.averagesDisplayed());
+      if ($('#avgLbl').text() !== avg) $('#avgLbl').text(avg);
     }, 100);
   }
 

@@ -23,6 +23,7 @@ import java.util.function.DoubleSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.edgo.audio.measure.dsp.DitherMath;
 import org.edgo.audio.measure.gui.widgets.UnitFamily.Unit;
 
 import lombok.Getter;
@@ -90,22 +91,12 @@ public final class NumericStepModel {
     /** LIST series longer than this are abbreviated to first·...·last. */
     private static final int SERIES_HINT_MAX = 7;
 
-    /** DITHER: dB per factor-of-10 amplitude - the dBV <-> Vrms scale. */
-    private static final double DITHER_DB_PER_DECADE  = 20.0;
-    /** DITHER: one TPDF bit is 6.0206 dB (RMS = 2^−(bits−1)/√6) ... */
-    private static final double DITHER_DB_PER_BIT     = 6.0206;
-    /** ... and the constant term is 20·log10(1/√6) = −7.782 dBFS. */
-    private static final double DITHER_TPDF_OFFSET_DB = 7.782;
+    /* The dither bits <-> dBV arithmetic lives in {@link DitherMath}; the
+     * wrappers below only close over this field's live full-scale supplier. */
     /** DITHER dBV-view wheel/arrow notch: 10 dBV, snapped to the nearest bit. */
     private static final double DITHER_DBV_STEP       = 10.0;
     /** Decimals shown for the DITHER dBV view. */
     private static final int    DITHER_DBV_DECIMALS   = 1;
-    /** dBFS ↔ amplitude conversion: dB per factor-of-10 (voltage), as for dBV.
-     *  A dBFS entry needs the live full-scale, so - unlike dBV - it is resolved
-     *  here in {@link #commit}, not in {@link Unit#toCanonical}. */
-    private static final double DBFS_DB_PER_DECADE    = 20.0;
-    /** √2 - the peak<->RMS ratio anchoring 0 dBFS to a full-scale SINE. */
-    private static final double ROOT_TWO              = Math.sqrt(2.0);
     /** The Off vocabulary, shared by every policy that has an Off state - a 0-bit
      *  dither, an averages count of 1, ... : the text such a value renders as, and
      *  the word {@link #isOffWord} accepts in full or as any prefix. */
@@ -137,10 +128,6 @@ public final class NumericStepModel {
      *  reach-in), {@code null} for every other policy and for a PERCENT field
      *  that must refuse dBFS (the FFT manual-fundamental). */
     private final DoubleSupplier fsAmplSupplier;
-    /** DITHER only: the config dBV (the full-scale term) that {@link #value}
-     *  was last reconciled against - {@link #reanchor} moves the bits by the
-     *  config delta to hold the displayed dBV across a full-scale change. */
-    private double ditherConfigDbv;
     /** ≥ 0: fixed decimal count; −1: trim mode capped at {@link #maxDecimals}. */
     private final int decimals;
     private final int maxDecimals;
@@ -240,7 +227,6 @@ public final class NumericStepModel {
         this.maxDecimals = DITHER_DBV_DECIMALS;
         this.fsAmplSupplier = fsAmplSupplier;
         this.value      = 0;   // Off
-        this.ditherConfigDbv = ditherFsDbv();
     }
 
     // -------------------------------------------------------------------------
@@ -346,50 +332,21 @@ public final class NumericStepModel {
         }
     }
 
-    /** dBV of the DAC PEAK full-scale.  The TPDF dither is added to the
-     *  peak-normalised sample (±1 ≡ peak FS = {@code dacFsVoltageAmpl}) and its
-     *  RMS = 2^−(bits−1)/√6 is relative to that PEAK full-scale, so the dBV
-     *  reference is the peak full-scale voltage itself - NOT the RMS full-scale
-     *  ({@code /√2}), which would read ~3 dB low. */
-    private double ditherFsDbv() {
-        return DITHER_DB_PER_DECADE * Math.log10(fsAmplSupplier.getAsDouble());
-    }
-
     /** dBV of the TPDF dither noise at {@code bits} bits (bits ≥ 1) - the
-     *  physical level relative to the peak full-scale. */
+     *  physical level relative to the live peak full-scale. */
     private double ditherDbvForBits(double bits) {
-        return -(bits - 1) * DITHER_DB_PER_BIT - DITHER_TPDF_OFFSET_DB
-                + ditherFsDbv();
+        return DitherMath.dbvForBits(bits, fsAmplSupplier.getAsDouble());
     }
 
     /** The (fractional) bit count whose TPDF dither lands at {@code dbv} - the
      *  exact inverse of {@link #ditherDbvForBits}, un-clamped. */
     private double ditherBitsForDbv(double dbv) {
-        return 1 + (ditherFsDbv() - DITHER_TPDF_OFFSET_DB - dbv)
-                / DITHER_DB_PER_BIT;
+        return DitherMath.bitsForDbv(dbv, fsAmplSupplier.getAsDouble());
     }
 
     /** Clamps a non-Off dither depth to {@code [1, maxBits]}. */
     private double clampBits(double bits) {
         return Math.max(1.0, Math.min(max, bits));
-    }
-
-    /** Reacts to a config change (DAC full-scale) while holding the CURRENTLY
-     *  DISPLAYED value.  In the dBV view the shown dBV is kept and the bits
-     *  move by the config delta (so the entered level is maintained under the
-     *  new calibration); in the bits view (and for Off) the bits are kept and
-     *  only the dBV readout moves.  Returns {@code true} when the stored bit
-     *  count changed (dBV view) so the caller can persist the re-solved dither
-     *  and restart the generator. */
-    public boolean reanchor() {
-        if (policy != Policy.DITHER) return false;
-        double newConfigDbv = ditherFsDbv();
-        double before = value;
-        if (isLogDisplay() && value > 0) {
-            value = clampBits(value + (newConfigDbv - ditherConfigDbv) / DITHER_DB_PER_BIT);
-        }
-        ditherConfigDbv = newConfigDbv;
-        return value != before;
     }
 
     /** Renders the current dither value: {@code Off}, a bit count, or the
@@ -403,8 +360,16 @@ public final class NumericStepModel {
         return trimTrailingZeros(format(value, maxDecimals)) + " " + u.suffix();
     }
 
-    /** {@code x} rendered with {@code decimals} places, dot decimal separator. */
+    /** {@code x} rendered with {@code decimals} places, dot decimal separator.
+     *  The value is rounded NUMERICALLY to those places first: the formatter
+     *  alone keeps the sign of a tiny negative, so a computed -1e-12 (a dB
+     *  round-trip landing a hair under an exact zero) would render as "-0".
+     *  {@link Math#round} goes through integer zero, which has no sign. */
     private String format(double x, int decimals) {
+        if (Double.isFinite(x)) {
+            double pow = Math.pow(10, decimals);
+            x = Math.round(x * pow) / pow;
+        }
         return String.format(Locale.ROOT, "%." + decimals + "f", x);
     }
 
@@ -605,8 +570,8 @@ public final class NumericStepModel {
         // Without it a comma-decimal UI locale (uk, de, fr, ...) renders "0,5",
         // which downstream dot-only parsers reject.
         String num = (decimals >= 0)
-                ? String.format(Locale.ROOT, "%." + decimals + "f", x)
-                : trimTrailingZeros(String.format(Locale.ROOT, "%." + maxDecimals + "f", x));
+                ? format(x, decimals)
+                : trimTrailingZeros(format(x, maxDecimals));
         String suffix = u.suffix();
         return suffix.isEmpty() ? num : num + " " + suffix;
     }
@@ -758,6 +723,48 @@ public final class NumericStepModel {
         return true;
     }
 
+    /**
+     * What this field currently SHOWS, as one entered value: the operator's own
+     * figure and the unit it is stated in.  That pair is what a preference
+     * stores, because a canonical value alone cannot say what was entered - the
+     * same voltage is a different dBFS figure under every calibration.
+     */
+    public UnitValue enteredValue() {
+        Unit u = storedUnit();
+        double number;
+        if (policy == Policy.DITHER) {
+            number = u.log() && value > 0 ? ditherDbvForBits(value) : value;
+        } else {
+            number = u.fsRelative() ? dbfsFromCanonical(value) : u.fromCanonical(value);
+        }
+        return new UnitValue(number, UnitConversion.token(u));
+    }
+
+    /**
+     * Replays a stored entered value through the ordinary {@link #commit} path,
+     * so the sticky unit, the clamps and the full-scale resolution are the ones
+     * the operator's own typing goes through - there is no second way in.
+     *
+     * @return {@code false} (value unchanged) when the token names no unit of
+     *         this family, exactly as a typed suffix would be refused
+     */
+    public boolean seedPair(UnitValue entered) {
+        return commit(entered.value() + " " + entered.unit());
+    }
+
+    /** The unit a stored pair carries: the sticky logarithmic or
+     *  full-scale-relative choice, else the family's base unit.  A scaled
+     *  linear unit (mV, uV, nV) never sticks - the display auto-ranges through
+     *  it - so what such a display means is the base-unit number.  A dither of
+     *  Off has no level, so it too is the base unit whatever is sticky. */
+    private Unit storedUnit() {
+        Unit u = currentUnit();
+        if (policy == Policy.DITHER && value <= 0) {
+            return family.defaultUnit(value);
+        }
+        return (u.log() || u.fsRelative()) ? u : family.defaultUnit(value);
+    }
+
     /** Unit the field currently renders in: the explicitly-typed sticky unit
      *  if any, else the family's automatic choice for the value. */
     public Unit currentUnit() {
@@ -826,20 +833,23 @@ public final class NumericStepModel {
                 || (OFF_LABEL.equalsIgnoreCase(label) && isPrefixOf(OFF_LABEL, t));
     }
 
-    /** Canonical Vrms -> dBFS against the live full-scale, the inverse of
-     *  {@link #canonicalFromDbfs}: 0 dBFS ≡ a full-scale SINE, so the reference
-     *  is the RMS full scale (peak/√2).  Only reached on the sticky-dBFS
-     *  display / step path, where a successful dBFS commit (or
-     *  {@link #setDbfsDisplay}) guaranteed a non-null supplier. */
+    /** Canonical Vrms -> dBFS against the live full-scale: 0 dBFS is a
+     *  full-scale SINE, so the reference is the RMS full scale (peak/√2).  The
+     *  arithmetic is {@link UnitConversion}'s - the same one the preference
+     *  store resolves a stored dBFS pair with, so a field and the value behind
+     *  it cannot drift apart.  Only reached on the sticky-dBFS display / step
+     *  path, where a successful dBFS commit guaranteed a non-null supplier. */
     private double dbfsFromCanonical(double canonical) {
-        return DBFS_DB_PER_DECADE * Math.log10(canonical * ROOT_TWO / fsAmplSupplier.getAsDouble());
+        return UnitConversion.convert(family, canonical, UnitConversion.baseToken(family),
+                UnitConversion.token(family.fsRelativeUnit()), fsAmplSupplier.getAsDouble());
     }
 
     /** dBFS -> canonical Vrms against the live full-scale - the inverse of
      *  {@link #dbfsFromCanonical} and the shared form of the {@link #commit}
      *  conversion. */
     private double canonicalFromDbfs(double dbfs) {
-        return fsAmplSupplier.getAsDouble() / ROOT_TWO * Math.pow(10.0, dbfs / DBFS_DB_PER_DECADE);
+        return UnitConversion.convert(family, dbfs, UnitConversion.token(family.fsRelativeUnit()),
+                UnitConversion.baseToken(family), fsAmplSupplier.getAsDouble());
     }
 
     /** Rounds to {@link #VALUE_SIG_DIGITS} significant digits so wheel walks

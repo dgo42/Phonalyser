@@ -67,9 +67,8 @@
 
              The -x86 suffix names the JRE and the natives\ this stub is paired
              with, not the stub's own bitness - Launch4j emits a 32-bit head in
-             both bundles.  Spelled out rather than ${server.exeName} so the x64
-             stub left in a shared target/ by the previous pass cannot be packed
-             here. -->
+             both bundles.  Spelled out, since one build writes BOTH stubs into
+             this target/ and only one of them belongs here. -->
         <fileSet>
             <directory>${project.build.directory}</directory>
             <outputDirectory>/</outputDirectory>

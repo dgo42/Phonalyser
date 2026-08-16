@@ -17,9 +17,13 @@
 /** The protocol's fixed numbers (Java NetProto). */
 export const NetProto = Object.freeze({
   /** Highest wire-protocol version this build speaks (spec 1). */
-  PROTO_VERSION: 1,
-  /** Lowest version this build still speaks - spec 1 negotiates the RANGE. */
-  PROTO_MIN_VERSION: 1,
+  PROTO_VERSION: 2,
+  /** Lowest version this build still speaks - spec 1 negotiates the RANGE. Equal to
+   *  PROTO_VERSION, so this build's range is 2..2 and a v1 peer is refused at hello: spec 1
+   *  calls v2 a hard cut, because v2 carries the audio on a SECOND connection a v1 peer never
+   *  dials (spec 4.7) and refuses capture.start until it has attached (spec 4.4) - there is no
+   *  subset of v2 a v1 peer could be served with. The negotiation itself is untouched. */
+  PROTO_MIN_VERSION: 2,
   /** Default port, ONE for both planes: the HTTP endpoints of spec 3 and the WebSocket
    *  upgrade of spec 4 are served by the same listener. */
   DEFAULT_PORT: 8377,
@@ -69,6 +73,9 @@ export const MessageType = Object.freeze({
   CAPTURE_START: 'capture.start',
   CAPTURE_STOP: 'capture.stop',
   CAPTURE_CLOSE: 'capture.close',
+  /** The only message a DATA connection ever sends (spec 4.7): its first, which is what MAKES
+   *  it a data connection, and its last - everything after it is audio going the other way. */
+  CAPTURE_ATTACH: 'capture.attach',
   // Remote generator - spec 4.5.
   GEN_OPEN: 'gen.open',
   GEN_CONFIG: 'gen.config',
@@ -109,6 +116,10 @@ export const ErrorCode = Object.freeze({
   DEVICE_STALE: 'DEVICE_STALE',
   DEVICE_ERROR: 'DEVICE_ERROR',
   BACKEND_MISMATCH: 'BACKEND_MISMATCH',
+  /** capture.start on a capture whose DATA connection has not attached yet (spec 4.4, 4.7).
+   *  Its own code and not BAD_REQUEST: nothing is malformed, the client is one step early, and
+   *  the frames the start would produce would have nowhere to go. */
+  NOT_ATTACHED: 'NOT_ATTACHED',
   NO_SUCH_FILE: 'NO_SUCH_FILE',
   FILE_TOO_LARGE: 'FILE_TOO_LARGE',
   INTERNAL: 'INTERNAL',
@@ -131,7 +142,10 @@ export const NetFields = Object.freeze({
   NAME: 'name', PROTO: 'proto', APP: 'app', SERVER_ID: 'serverId', PORT: 'port',
   RATE: 'rate', BITS: 'bits', CHANNELS: 'channels', LOOP: 'loop', FILE_ID: 'fileId',
   // session - 4.1
-  PROTO_MIN: 'protoMin', CLIENT: 'client', CAPS: 'caps',
+  // CLIENT_ID is the session's own handle, answered by hello and spent by capture.attach
+  // (spec 4.7). A SECRET: never logged, never shown, never in a beacon or an error - what a
+  // client is KNOWN by is NAME, which is what a DEVICE_LOCKED refusal quotes.
+  PROTO_MIN: 'protoMin', CLIENT: 'client', CLIENT_ID: 'clientId', CAPS: 'caps',
   CAP_QA40X: 'qa40x', CAP_GEN: 'gen', CAP_FILES: 'files',
   // HTTP - 2.2 and 3
   SERVERS: 'servers', HOST: 'host', SELF: 'self', OS: 'os', UPTIME_S: 'uptimeS',

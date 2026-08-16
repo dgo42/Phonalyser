@@ -282,6 +282,10 @@ export class NetPlaybackSink {
     // come out at a different level on each client. The amplitude itself is absolute volts and
     // travels unchanged.
     this._config({ [NetFields.AMPLITUDE_VRMS]: spec.amplitudeVRms });
+    // The live half of the depth gen.open fixed (spec 4.5), re-asserted at every session start:
+    // the stored value must reach the bench when the tone starts, not only when the operator
+    // moves the control. Sent unconditionally, so a lane opened by someone else is corrected too.
+    if (spec.ditherBits != null) this._config({ [NetFields.DITHER_BITS]: spec.ditherBits });
     if (control.rectDuty != null) this._config({ [NetFields.RECTANGLE_DUTY]: control.rectDuty });
     if (control.triDuty != null) this._config({ [NetFields.TRIANGLE_DUTY]: control.triDuty });
     if (isDualTone(spec.form)) {
@@ -340,6 +344,9 @@ export class NetPlaybackSink {
     const fields = {};
     if (msg.frequency != null) fields[NetFields.FREQUENCY] = msg.frequency;
     if (msg.amplitudeVRms != null) fields[NetFields.AMPLITUDE_VRMS] = msg.amplitudeVRms;
+    // The live half of the dither depth (spec 4.5): gen.open carried the initial
+    // value, and the retunes land on the tone that is playing.
+    if (msg.ditherBits != null) fields[NetFields.DITHER_BITS] = msg.ditherBits;
     // dacFsVoltageAmpl / rightLaneScale are deliberately dropped here: a live calibration
     // change belongs to the bench's card, which the server applies itself (see start()).
     if (msg.rectDuty != null) fields[NetFields.RECTANGLE_DUTY] = msg.rectDuty;

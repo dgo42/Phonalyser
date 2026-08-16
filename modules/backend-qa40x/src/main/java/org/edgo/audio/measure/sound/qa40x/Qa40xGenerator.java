@@ -204,7 +204,10 @@ public final class Qa40xGenerator implements AudioPlayback,
         if (!attached) {
             return;
         }
-        engine.detachGenerator();
+        // Through the MANAGER, not the engine this lane holds: the stream stops
+        // only if this was the last client, and the analyzer itself is released
+        // only if the manager has nothing left attached to it.
+        manager.detachGenerator();
         attached = false;
         currentGenerator = null;
     }

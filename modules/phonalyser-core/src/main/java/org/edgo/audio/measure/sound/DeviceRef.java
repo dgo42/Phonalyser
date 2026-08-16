@@ -136,7 +136,13 @@ public interface DeviceRef {
         return false;
     }
 
+    /** The operator-facing line.  A device whose name already says everything
+     *  carries no description, and an empty pair of parentheses would only
+     *  decorate it with noise. */
     default String displayName() {
-        return String.format("[%d] %s (%s) - %s", index(), name(), description(), vendor());
+        String description = description();
+        return description == null || description.isBlank()
+                ? String.format("[%d] %s - %s", index(), name(), vendor())
+                : String.format("[%d] %s (%s) - %s", index(), name(), description, vendor());
     }
 }

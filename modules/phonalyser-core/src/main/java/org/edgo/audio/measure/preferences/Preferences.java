@@ -62,6 +62,9 @@ import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.enums.TriggerType;
 import org.edgo.audio.measure.enums.UnevenMode;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.gui.widgets.UnitConversion;
+import org.edgo.audio.measure.gui.widgets.UnitFamily;
+import org.edgo.audio.measure.gui.widgets.UnitValue;
 import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.yaml.snakeyaml.DumperOptions;
@@ -118,7 +121,11 @@ public final class Preferences {
     private static final long SAVE_COALESCE_MS = 250;
 
     /** Factory-default ADC full-scale RMS voltage, used until the user calibrates. */
-    private static final double DEFAULT_ADC_FS_VRMS = 1.7931;
+    private static final double DEFAULT_ADC_FS_VRMS = 1.0;
+    /** The DAC full scale an uncalibrated installation starts at: unit RMS, held
+     *  in the PEAK amplitude form this field carries, until a calibration
+     *  replaces it.  The same figure the web port seeds. */
+    private static final double DEFAULT_DAC_FS_AMPL = 1.0 * Constants.SQRT2;
 
     /** Sentinel "unset" value for the rate-dependent FreqResp defaults
      *  (stop = Nyquist, points = FS/2).  A fresh install with no saved value
@@ -127,6 +134,10 @@ public final class Preferences {
      *  overrides it. */
     private static final double FREQRESP_RATE_DEFAULT_SENTINEL = 0.0;
     private static final int    FREQRESP_RATE_DEFAULT_SENTINEL_INT = 0;
+
+    /** What the unit half of an entered value adds to its yaml key: the number
+     *  keeps the field's own key, the unit token sits beside it. */
+    private static final String UNIT_KEY_SUFFIX = "Unit";
 
     private static volatile Preferences instance;
 
@@ -366,14 +377,14 @@ public final class Preferences {
      *  {@link #adcFsVoltageRms}: a pre-1.2 {@code dacFsVoltageRms} yaml entry is
      *  converted RMS->ampl on load at the {@link #fromMap} boundary and never
      *  written back - see {@link #toMap}. */
-    private final Property<Double> dacFsVoltageAmpl = bound(2.79351);
+    private final Property<Double> dacFsVoltageAmpl = bound(DEFAULT_DAC_FS_AMPL);
     /** RIGHT-channel DAC full-scale PEAK amplitude - the per-channel sibling of
      *  {@link #dacFsVoltageAmpl}.  Equals the left value in MONO mode (and for old
      *  preference files that lack the key); LINKED reads both {@code fsLeft} /
      *  {@code fsRight} of the shared active row, an INDEPENDENT card resolves it
      *  from its right active range.  Persisted as RMS ({@code dacFsVoltageRmsRight}
      *  in the yaml), converted ampl↔RMS at the {@link #toMap}/{@link #fromMap} boundary. */
-    private final Property<Double> dacFsVoltageAmplRight = bound(2.79351);
+    private final Property<Double> dacFsVoltageAmplRight = bound(DEFAULT_DAC_FS_AMPL);
 
     /** Path to the most recently chosen scope "Save to..." file (last N seconds of capture). */
     private final Property<String> oscSavePath   = bound(null);
@@ -405,16 +416,18 @@ public final class Preferences {
      *  {@code DUAL_TONE}; the second tone receives {@code 100 − this}.
      *  Range [0, 100], default 50 = equal split. */
     private final Property<Double> genDualToneSplitPct = bound(50.0);
-    private final Property<Double> genAmplitudeVrms = bound(0.5);
-    /** True = the generator amplitude field displays in dBV (the user typed
-     *  an explicit dBV suffix); persisted so a restart keeps the choice. */
-    private final Property<Boolean> genAmplitudeDbvDisplay = bound(false);
-    /** Unit the amplitude field renders in: one of {@code mV}, {@code V}, {@code dBV}, {@code dBFS}. */
-    /** Dither depth in bits, 0..N (may be fractional); 0 means "Off". */
-    private final Property<Double> genDitherBits  = bound(0.0);
-    /** True = the generator dither field displays in dBV (the user typed an
-     *  explicit dBV suffix); persisted so a restart keeps the choice. */
-    private final Property<Boolean> genDitherDbvDisplay = bound(false);
+    /** Generator amplitude AS ENTERED: the number the operator typed and the
+     *  unit they typed it in ({@code v}, {@code dbv}, {@code dbfs}), resolved
+     *  to canonical V RMS at USE ({@link #getGenAmplitudeVrms()}) - so a unit
+     *  that only means something against the calibration (dBFS) cannot be
+     *  silently redefined by a backend, device or full-scale change under a
+     *  value already stored.  ONE property, because a number and a unit are one
+     *  value: written apart, an observer would see the new unit against the old
+     *  number and drive the lane with a quantity nobody entered. */
+    private final Property<UnitValue> genAmplitude = bound(baseAmplitude(0.5));
+    /** Generator dither AS ENTERED ({@code bits} or {@code dbv}); 0 bits means
+     *  "Off". */
+    private final Property<UnitValue> genDither = bound(baseDither(0.0));
     /** Which output lane(s) the generator drives - the encoder gate ({@code BOTH}
      *  by default = today's behaviour). */
     private final Property<OutputChannels> genOutputChannels = bound(OutputChannels.BOTH);
@@ -542,6 +555,11 @@ public final class Preferences {
     private final Property<Channel> fftChannel = bound(Channel.L);
     /** {@code MagnitudeUnit} enum name: {@code V}, {@code V_SQRT_HZ}, {@code DBV}, {@code DBFS}. */
     private final Property<MagnitudeUnit> fftMagUnit = bound(MagnitudeUnit.DBV);
+    /** Unit the distortion table's absolute-level cells render in - independent of the
+     *  magnitude axis above: {@code DBV} (level + ADC offset), {@code DBFS} (the measured
+     *  level as stored) or {@code DBR} (level minus the reference the table's percentages
+     *  are computed against, shown as plain "dB"). */
+    private final Property<MagnitudeUnit> fftDistortionUnit = bound(MagnitudeUnit.DBV);
     /** Whether the THD overlay table is shown on top of the spectrum view. */
     private final Property<Boolean> fftDistortionTableVisible = bound(true);
     private final Property<Double>  fftFreqMinHz         = bound(20.0);
@@ -613,7 +631,7 @@ public final class Preferences {
      *  {@link #putAudioDeviceProfile} / {@link #removeAudioDeviceProfile} + a
      *  direct {@link #saveDevices()} (preset style), so a structural change can't
      *  race a save iterating this list. */
-    private final List<AudioDeviceProfile> audioDevices = new ArrayList<>();
+    private final Map<String, AudioDeviceProfile> audioDevices = new LinkedHashMap<>();
 
     /** The user's SAVED card choice per device - which card a device uses is a
      *  decision, not a guess, and it must survive restarts: telling a QA402 from
@@ -643,10 +661,10 @@ public final class Preferences {
      *  the current device Nyquist ({@code rate/2}) at first use (see
      *  {@link #seedRateDependentFreqRespDefaults()}).  A saved value overrides. */
     private final Property<Double>  freqRespStopHz           = bound(FREQRESP_RATE_DEFAULT_SENTINEL);
-    /** Generator drive amplitude at the DAC, V RMS. */
-    private final Property<Double>  freqRespAmplitudeVrms    = bound(1.0);
-    /** True = the sweep amplitude field displays in dBV; persisted. */
-    private final Property<Boolean> freqRespAmplitudeDbvDisplay = bound(false);
+    /** Generator drive amplitude at the DAC AS ENTERED - see
+     *  {@link #genAmplitude} for why the entered value is stored rather than
+     *  the canonical voltage. */
+    private final Property<UnitValue> freqRespAmplitude      = bound(baseAmplitude(1.0));
     /** Number of log-spaced output frequency points the deconvolution emits.
      *  Sentinel {@code 0} = "unset" - resolved to the FS/2 point count
      *  ({@code rate/2}) at first use (see
@@ -679,8 +697,8 @@ public final class Preferences {
     private final Property<Double>  tuneNotchStartHz         = bound(900.0);
     /** Tune-notch wizard sweep stop frequency in Hz. */
     private final Property<Double>  tuneNotchStopHz          = bound(1100.0);
-    /** Tune-notch wizard generator drive amplitude at the DAC, V RMS. */
-    private final Property<Double>  tuneNotchAmplitudeVrms   = bound(1.0);
+    /** Tune-notch wizard generator drive amplitude at the DAC AS ENTERED. */
+    private final Property<UnitValue> tuneNotchAmplitude     = bound(baseAmplitude(1.0));
     /** Tune-notch wizard target (desired) notch frequency in Hz - the dashed
      *  marker the live readout is tuned onto. */
     private final Property<Double>  tuneNotchTargetHz        = bound(1000.0);
@@ -999,7 +1017,7 @@ public final class Preferences {
         // used for isolated FreqRespView
         c.setTuneNotchStartHz(tuneNotchStartHz.get());
         c.setTuneNotchStopHz(tuneNotchStopHz.get());
-        c.setTuneNotchAmplitudeVrms(tuneNotchAmplitudeVrms.get());
+        c.setTuneNotchAmplitude(tuneNotchAmplitude.get());
         c.setTuneNotchTargetHz(tuneNotchTargetHz.get());
         c.setTuneNotchOutputChannels(tuneNotchOutputChannels.get());
 
@@ -1019,7 +1037,9 @@ public final class Preferences {
         c.setDacFsVoltageAmplRight(dacFsVoltageAmplRight.get());
         // Deep-copy the per-card profiles so the dialog edits them freely.
         synchronized (audioDevices) {
-            for (AudioDeviceProfile p : audioDevices) c.audioDevices.add(copyProfile(p));
+            for (Map.Entry<String, AudioDeviceProfile> e : audioDevices.entrySet()) {
+                c.audioDevices.put(e.getKey(), copyProfile(e.getValue()));
+            }
         }
         // ...and the card choices with them: the combo shows what is bound and
         // the OK commit carries any change back.
@@ -1052,7 +1072,9 @@ public final class Preferences {
         // save() below no longer carries the profiles).
         synchronized (audioDevices) {
             audioDevices.clear();
-            for (AudioDeviceProfile p : edit.audioDevices) audioDevices.add(copyProfile(p));
+            for (Map.Entry<String, AudioDeviceProfile> e : edit.audioDevices.entrySet()) {
+                audioDevices.put(e.getKey(), copyProfile(e.getValue()));
+            }
         }
         // The card CHOICES travel with the cards - a pick made in the dialog is
         // committed by the same OK that commits the card it names.
@@ -1507,6 +1529,10 @@ public final class Preferences {
     public void setFftMagUnit(MagnitudeUnit v) { fftMagUnit.set(v); }
     public Property<MagnitudeUnit> fftMagUnitProperty() { return fftMagUnit; }
 
+    public MagnitudeUnit getFftDistortionUnit() { return fftDistortionUnit.get(); }
+    public void setFftDistortionUnit(MagnitudeUnit v) { fftDistortionUnit.set(v); }
+    public Property<MagnitudeUnit> fftDistortionUnitProperty() { return fftDistortionUnit; }
+
     public boolean isFftDistortionTableVisible() { return fftDistortionTableVisible.get(); }
     public void setFftDistortionTableVisible(boolean v) { fftDistortionTableVisible.set(v); }
     public Property<Boolean> fftDistortionTableVisibleProperty() { return fftDistortionTableVisible; }
@@ -1786,7 +1812,7 @@ public final class Preferences {
     /** The ±full-scale PEAK volts of {@code ch} (= {@code fs(ch) · √2}) - the ±1.0 -> volts scale
      *  every scope / measurement site derives inline today from the single scalar. */
     public double getAdcPeakVolts(Channel ch) {
-        return getAdcFsVoltageRms(ch) * Math.sqrt(2.0);
+        return getAdcFsVoltageRms(ch) * Constants.SQRT2;
     }
 
     /** The cached dBV↔dBFS offset of {@code ch}: LEFT -> {@link #dbvOffsetDb} (also the LINKED /
@@ -1948,18 +1974,44 @@ public final class Preferences {
     public void setGenDualToneSplitPct(double v) { genDualToneSplitPct.set(v); }
     public Property<Double> genDualToneSplitPctProperty() { return genDualToneSplitPct; }
 
-    public double getGenAmplitudeVrms()        { return genAmplitudeVrms.get(); }
-    public void setGenAmplitudeVrms(double v)  { genAmplitudeVrms.set(v); }
-    public Property<Double> genAmplitudeVrmsProperty() { return genAmplitudeVrms; }
-    public boolean isGenAmplitudeDbvDisplay() { return genAmplitudeDbvDisplay.get(); }
-    public void setGenAmplitudeDbvDisplay(boolean v) { genAmplitudeDbvDisplay.set(v); }
+    /** An amplitude entered in the base unit, where the number IS the canonical
+     *  V RMS - what a programmatic writer stores. */
+    private UnitValue baseAmplitude(double vrms) {
+        return new UnitValue(vrms, UnitConversion.baseToken(UnitFamily.AMPLITUDE));
+    }
 
+    /** A dither entered in the base unit, where the number IS the bit count;
+     *  Off (0) is only ever stored in it. */
+    private UnitValue baseDither(double bits) {
+        return new UnitValue(bits, UnitConversion.baseToken(UnitFamily.DITHER));
+    }
 
-    public double getGenDitherBits()           { return genDitherBits.get(); }
-    public void setGenDitherBits(double v)     { genDitherBits.set(v); }
-    public Property<Double> genDitherBitsProperty() { return genDitherBits; }
-    public boolean isGenDitherDbvDisplay()     { return genDitherDbvDisplay.get(); }
-    public void setGenDitherDbvDisplay(boolean v) { genDitherDbvDisplay.set(v); }
+    /** Canonical V RMS of an entered amplitude, resolved against the LIVE DAC
+     *  peak full scale - so a recalibration moves what a dBFS entry means
+     *  instead of quietly changing what was entered. */
+    private double amplitudeVrms(UnitValue entered) {
+        return UnitConversion.convert(UnitFamily.AMPLITUDE, entered.value(), entered.unit(),
+                UnitConversion.baseToken(UnitFamily.AMPLITUDE), getDacFsVoltageAmpl());
+    }
+
+    /** Dither depth in bits of an entered value, resolved against the live DAC
+     *  peak full scale (a dBV dither is a level, not a depth). */
+    private double ditherBits(UnitValue entered) {
+        return UnitConversion.convert(UnitFamily.DITHER, entered.value(), entered.unit(),
+                UnitConversion.baseToken(UnitFamily.DITHER), getDacFsVoltageAmpl());
+    }
+
+    public double getGenAmplitudeVrms()        { return amplitudeVrms(genAmplitude.get()); }
+    public void setGenAmplitudeVrms(double v)  { genAmplitude.set(baseAmplitude(v)); }
+    public UnitValue getGenAmplitude()         { return genAmplitude.get(); }
+    public void setGenAmplitude(UnitValue v)   { genAmplitude.set(v); }
+    public Property<UnitValue> genAmplitudeProperty() { return genAmplitude; }
+
+    public double getGenDitherBits()           { return ditherBits(genDither.get()); }
+    public void setGenDitherBits(double v)     { genDither.set(baseDither(v)); }
+    public UnitValue getGenDither()            { return genDither.get(); }
+    public void setGenDither(UnitValue v)      { genDither.set(v); }
+    public Property<UnitValue> genDitherProperty() { return genDither; }
 
     public OutputChannels getGenOutputChannels()       { return genOutputChannels.get(); }
     public void setGenOutputChannels(OutputChannels v) { genOutputChannels.set(v); }
@@ -2061,11 +2113,19 @@ public final class Preferences {
     public void setFreqRespStopHz(double v)    { freqRespStopHz.set(v); }
     public Property<Double> freqRespStopHzProperty() { return freqRespStopHz; }
 
-    public double getFreqRespAmplitudeVrms()   { return freqRespAmplitudeVrms.get(); }
-    public void setFreqRespAmplitudeVrms(double v) { freqRespAmplitudeVrms.set(v); }
-    public Property<Double> freqRespAmplitudeVrmsProperty() { return freqRespAmplitudeVrms; }
-    public boolean isFreqRespAmplitudeDbvDisplay() { return freqRespAmplitudeDbvDisplay.get(); }
-    public void setFreqRespAmplitudeDbvDisplay(boolean v) { freqRespAmplitudeDbvDisplay.set(v); }
+    public double getFreqRespAmplitudeVrms()   { return amplitudeVrms(freqRespAmplitude.get()); }
+    public void setFreqRespAmplitudeVrms(double v) { freqRespAmplitude.set(baseAmplitude(v)); }
+    public UnitValue getFreqRespAmplitude()    { return freqRespAmplitude.get(); }
+    public void setFreqRespAmplitude(UnitValue v) { freqRespAmplitude.set(v); }
+    public Property<UnitValue> freqRespAmplitudeProperty() { return freqRespAmplitude; }
+    /** {@code vrms} as an entered value in the unit the freqresp amplitude is
+     *  CURRENTLY stored in - so a clamp writes the floor without rewriting the
+     *  operator's unit choice underneath them. */
+    public UnitValue freqRespAmplitudeIn(double vrms) {
+        String unit = freqRespAmplitude.get().unit();
+        return new UnitValue(UnitConversion.convert(UnitFamily.AMPLITUDE, vrms,
+                UnitConversion.baseToken(UnitFamily.AMPLITUDE), unit, getDacFsVoltageAmpl()), unit);
+    }
 
     public int getFreqRespSweepPoints()        { return freqRespSweepPoints.get(); }
     public void setFreqRespSweepPoints(int v)  { freqRespSweepPoints.set(v); }
@@ -2095,9 +2155,11 @@ public final class Preferences {
     public void setTuneNotchStopHz(double v)   { tuneNotchStopHz.set(v); }
     public Property<Double> tuneNotchStopHzProperty() { return tuneNotchStopHz; }
 
-    public double getTuneNotchAmplitudeVrms()  { return tuneNotchAmplitudeVrms.get(); }
-    public void setTuneNotchAmplitudeVrms(double v) { tuneNotchAmplitudeVrms.set(v); }
-    public Property<Double> tuneNotchAmplitudeVrmsProperty() { return tuneNotchAmplitudeVrms; }
+    public double getTuneNotchAmplitudeVrms()  { return amplitudeVrms(tuneNotchAmplitude.get()); }
+    public void setTuneNotchAmplitudeVrms(double v) { tuneNotchAmplitude.set(baseAmplitude(v)); }
+    public UnitValue getTuneNotchAmplitude()   { return tuneNotchAmplitude.get(); }
+    public void setTuneNotchAmplitude(UnitValue v) { tuneNotchAmplitude.set(v); }
+    public Property<UnitValue> tuneNotchAmplitudeProperty() { return tuneNotchAmplitude; }
 
     public double getTuneNotchTargetHz()       { return tuneNotchTargetHz.get(); }
     public void setTuneNotchTargetHz(double v) { tuneNotchTargetHz.set(v); }
@@ -2380,10 +2442,12 @@ public final class Preferences {
         root.put("genDualToneFreq1Hz",           genDualToneFreq1Hz.get());
         root.put("genDualToneFreq2Hz",           genDualToneFreq2Hz.get());
         root.put("genDualToneSplitPct",          genDualToneSplitPct.get());
-        root.put("genAmplitudeVrms",             genAmplitudeVrms.get());
-        root.put("genAmplitudeDbvDisplay",       genAmplitudeDbvDisplay.get());
-        root.put("genDitherBits",                genDitherBits.get());
-        root.put("genDitherDbvDisplay",          genDitherDbvDisplay.get());
+        // An entered value is ONE property but TWO keys on disk, so the file
+        // stays readable: the number where it always was, the unit beside it.
+        root.put("genAmplitude",                 genAmplitude.get().value());
+        root.put("genAmplitudeUnit",             genAmplitude.get().unit());
+        root.put("genDither",                    genDither.get().value());
+        root.put("genDitherUnit",                genDither.get().unit());
         root.put("genOutputChannels",            genOutputChannels.get().name());
         if (genDpd.get()     != null) root.put("genDpd",     genDpd.get());
         if (genDpdDual.get() != null) root.put("genDpdDual", genDpdDual.get());
@@ -2479,6 +2543,7 @@ public final class Preferences {
         root.put("fftManualFundEnabled",      fftManualFundEnabled.get());
         root.put("fftChannel",                fftChannel.get().name());
         root.put("fftMagUnit",                fftMagUnit.get().name());
+        root.put("fftDistortionUnit",         fftDistortionUnit.get().name());
         root.put("fftDistortionTableVisible", fftDistortionTableVisible.get());
         root.put("fftFreqMinHz",              fftFreqMinHz.get());
         root.put("fftFreqMaxHz",              fftFreqMaxHz.get());
@@ -2512,8 +2577,8 @@ public final class Preferences {
         // ---- Frequency Response pane --------------------------------------
         root.put("freqRespStartHz",           freqRespStartHz.get());
         root.put("freqRespStopHz",            freqRespStopHz.get());
-        root.put("freqRespAmplitudeVrms",     freqRespAmplitudeVrms.get());
-        root.put("freqRespAmplitudeDbvDisplay", freqRespAmplitudeDbvDisplay.get());
+        root.put("freqRespAmplitude",         freqRespAmplitude.get().value());
+        root.put("freqRespAmplitudeUnit",     freqRespAmplitude.get().unit());
         root.put("freqRespSweepPoints",       freqRespSweepPoints.get());
         root.put("freqRespDurationSec",       freqRespDurationSec.get());
         root.put("freqRespFftSize",           freqRespFftSize.get());
@@ -2522,7 +2587,8 @@ public final class Preferences {
         root.put("freqRespOutputChannels",    freqRespOutputChannels.get().name());
         root.put("tuneNotchStartHz",          tuneNotchStartHz.get());
         root.put("tuneNotchStopHz",           tuneNotchStopHz.get());
-        root.put("tuneNotchAmplitudeVrms",    tuneNotchAmplitudeVrms.get());
+        root.put("tuneNotchAmplitude",        tuneNotchAmplitude.get().value());
+        root.put("tuneNotchAmplitudeUnit",    tuneNotchAmplitude.get().unit());
         root.put("tuneNotchTargetHz",         tuneNotchTargetHz.get());
         root.put("tuneNotchOutputChannels",   tuneNotchOutputChannels.get().name());
         root.put("freqRespLeftVisible",       freqRespLeftVisible.get());
@@ -2613,7 +2679,8 @@ public final class Preferences {
                 Map<String, Object> pm = new LinkedHashMap<>();
                 pm.put("startHz",        p.getStartHz());
                 pm.put("stopHz",         p.getStopHz());
-                pm.put("amplitudeVrms",  p.getAmplitudeVrms());
+                pm.put("amplitude",      p.getAmplitude());
+                pm.put("amplitudeUnit",  p.getAmplitudeUnit());
                 pm.put("sweepPoints",    p.getSweepPoints());
                 pm.put("fftSize",        p.getFftSize());
                 pm.put("leadInSec",      p.getLeadInSec());
@@ -2763,10 +2830,8 @@ public final class Preferences {
         if (root.get("genDualToneFreq1Hz")           instanceof Number n) genDualToneFreq1Hz.set(n.doubleValue());
         if (root.get("genDualToneFreq2Hz")           instanceof Number n) genDualToneFreq2Hz.set(n.doubleValue());
         if (root.get("genDualToneSplitPct")          instanceof Number n) genDualToneSplitPct.set(n.doubleValue());
-        if (root.get("genAmplitudeVrms")             instanceof Number n) genAmplitudeVrms.set(n.doubleValue());
-        if (root.get("genAmplitudeDbvDisplay")       instanceof Boolean b) genAmplitudeDbvDisplay.set(b);
-        if (root.get("genDitherBits")                instanceof Number n) genDitherBits.set(n.doubleValue());
-        if (root.get("genDitherDbvDisplay")          instanceof Boolean b) genDitherDbvDisplay.set(b);
+        readEntered(root, "genAmplitude", genAmplitude);
+        readEntered(root, "genDither", genDither);
         if (root.get("genOutputChannels")            instanceof String s) genOutputChannels.set(enumOr(OutputChannels.class, s, genOutputChannels.get()));
         if (root.get("genDpd")                        instanceof String s) genDpd.set(s);
         if (root.get("genDpdDual")                    instanceof String s) genDpdDual.set(s);
@@ -2868,6 +2933,7 @@ public final class Preferences {
         if (root.get("fftManualFundEnabled")      instanceof Boolean b) fftManualFundEnabled.set(b);
         if (root.get("fftChannel")                instanceof String  s) fftChannel.set(enumOr(Channel.class, s, fftChannel.get()));
         if (root.get("fftMagUnit")                instanceof String  s) fftMagUnit.set(enumOr(MagnitudeUnit.class, s, fftMagUnit.get()));
+        if (root.get("fftDistortionUnit")         instanceof String  s) fftDistortionUnit.set(enumOr(MagnitudeUnit.class, s, fftDistortionUnit.get()));
         if (root.get("fftDistortionTableVisible") instanceof Boolean b) fftDistortionTableVisible.set(b);
         if (root.get("fftFreqMinHz")              instanceof Number  n) fftFreqMinHz.set(n.doubleValue());
         if (root.get("fftFreqMaxHz")              instanceof Number  n) fftFreqMaxHz.set(n.doubleValue());
@@ -2880,8 +2946,7 @@ public final class Preferences {
         // ---- Frequency Response pane --------------------------------------
         if (root.get("freqRespStartHz")           instanceof Number  n) freqRespStartHz.set(n.doubleValue());
         if (root.get("freqRespStopHz")            instanceof Number  n) freqRespStopHz.set(n.doubleValue());
-        if (root.get("freqRespAmplitudeVrms")     instanceof Number  n) freqRespAmplitudeVrms.set(n.doubleValue());
-        if (root.get("freqRespAmplitudeDbvDisplay") instanceof Boolean b) freqRespAmplitudeDbvDisplay.set(b);
+        readEntered(root, "freqRespAmplitude", freqRespAmplitude);
         if (root.get("freqRespSweepPoints")       instanceof Number  n) freqRespSweepPoints.set(n.intValue());
         if (root.get("freqRespDurationSec")       instanceof Number  n) freqRespDurationSec.set(n.doubleValue());
         if (root.get("freqRespFftSize")           instanceof Number  n) {
@@ -2900,7 +2965,7 @@ public final class Preferences {
         if (root.get("freqRespOutputChannels")    instanceof String  s) freqRespOutputChannels.set(enumOr(OutputChannels.class, s, freqRespOutputChannels.get()));
         if (root.get("tuneNotchStartHz")          instanceof Number  n) tuneNotchStartHz.set(n.doubleValue());
         if (root.get("tuneNotchStopHz")           instanceof Number  n) tuneNotchStopHz.set(n.doubleValue());
-        if (root.get("tuneNotchAmplitudeVrms")    instanceof Number  n) tuneNotchAmplitudeVrms.set(n.doubleValue());
+        readEntered(root, "tuneNotchAmplitude", tuneNotchAmplitude);
         if (root.get("tuneNotchTargetHz")         instanceof Number  n) tuneNotchTargetHz.set(n.doubleValue());
         if (root.get("tuneNotchOutputChannels")   instanceof String  s) tuneNotchOutputChannels.set(enumOr(OutputChannels.class, s, tuneNotchOutputChannels.get()));
         if (root.get("freqRespLeftVisible")       instanceof Boolean b) freqRespLeftVisible.set(b);
@@ -3053,7 +3118,11 @@ public final class Preferences {
                 FreqRespPreset p = new FreqRespPreset();
                 if (pm.get("startHz")        instanceof Number  n) p.setStartHz(n.doubleValue());
                 if (pm.get("stopHz")         instanceof Number  n) p.setStopHz(n.doubleValue());
-                if (pm.get("amplitudeVrms")  instanceof Number  n) p.setAmplitudeVrms(n.doubleValue());
+                // A preset saved before the pair carried the canonical voltage
+                // alone, which IS the base-unit number of the same pair.
+                if (pm.get("amplitudeVrms")  instanceof Number  n) p.setAmplitude(n.doubleValue());
+                if (pm.get("amplitude")      instanceof Number  n) p.setAmplitude(n.doubleValue());
+                if (pm.get("amplitudeUnit")  instanceof String  s) p.setAmplitudeUnit(s);
                 if (pm.get("sweepPoints")    instanceof Number  n) p.setSweepPoints(n.intValue());
                 if (pm.get("fftSize")        instanceof Number  n) p.setFftSize(n.intValue());
                 if (pm.get("leadInSec")      instanceof Number  n) p.setLeadInSec(n.doubleValue());
@@ -3105,6 +3174,106 @@ public final class Preferences {
                 }
             }
         }
+
+        // LAST: converting a pre-pair configuration needs the DAC full scale of
+        // the SELECTED output device, and the selection only arrives with the
+        // perBackend block above.
+        seedEnteredFromPrePairKeys(root);
+    }
+
+    /**
+     * One-time conversion of a configuration written before the entered pairs
+     * existed: the canonical number plus the dbv-display flag that went with it
+     * become the pair the operator would have entered.  Applied only where the
+     * pair keys themselves are absent, and nothing writes the old keys again -
+     * so they disappear with the first save.
+     *
+     * <p>The old storage could not express a full-scale-relative entry, so no
+     * conversion here ever produces one.
+     */
+    private void seedEnteredFromPrePairKeys(Map<?, ?> root) {
+        // A config that carries no pre-pair key needs no conversion - and no
+        // full-scale resolution, whose device lookup is what used to force a
+        // second read of the card store on every launch.
+        if (!(root.get("genAmplitudeVrms") instanceof Number
+                || root.get("freqRespAmplitudeVrms") instanceof Number
+                || root.get("tuneNotchAmplitudeVrms") instanceof Number
+                || root.get("genDitherBits") instanceof Number)) {
+            return;
+        }
+        double fsAmpl = prePairConversionFsAmpl();
+        seedEntered(root, UnitFamily.AMPLITUDE, "genAmplitude", "genAmplitudeVrms",
+                "genAmplitudeDbvDisplay", genAmplitude, fsAmpl);
+        seedEntered(root, UnitFamily.AMPLITUDE, "freqRespAmplitude", "freqRespAmplitudeVrms",
+                "freqRespAmplitudeDbvDisplay", freqRespAmplitude, fsAmpl);
+        // The tune-notch dialog never had a display flag of its own: its
+        // amplitude was stored, and is read back, in volts.
+        seedEntered(root, UnitFamily.AMPLITUDE, "tuneNotchAmplitude", "tuneNotchAmplitudeVrms",
+                null, tuneNotchAmplitude, fsAmpl);
+        seedEntered(root, UnitFamily.DITHER, "genDither", "genDitherBits",
+                "genDitherDbvDisplay", genDither, fsAmpl);
+    }
+
+    /**
+     * Seeds ONE entered value from the pre-pair keys of its field:
+     * {@code legacyKey} held the canonical number and {@code flagKey} (null
+     * where the field never had one) whether it was displayed logarithmically.
+     * A value already stored - either of its two keys - wins, and the old keys
+     * are then simply stale.
+     *
+     * <p>A logarithmic dither is a LEVEL, which Off has none of, so a zero
+     * stays in the base unit whatever the old flag said.
+     */
+    private void seedEntered(Map<?, ?> root, UnitFamily family, String key, String legacyKey,
+                             String flagKey, Property<UnitValue> entered, double fsAmpl) {
+        if (root.containsKey(key) || root.containsKey(key + UNIT_KEY_SUFFIX)) {
+            return;
+        }
+        if (!(root.get(legacyKey) instanceof Number n)) {
+            return;
+        }
+        double canonical = n.doubleValue();
+        String base = UnitConversion.baseToken(family);
+        String log  = UnitConversion.logToken(family);
+        boolean asLog = flagKey != null && canonical > 0
+                && Boolean.TRUE.equals(root.get(flagKey));
+        entered.set(asLog
+                ? new UnitValue(UnitConversion.convert(family, canonical, base, log, fsAmpl), log)
+                : new UnitValue(canonical, base));
+    }
+
+    /** Composes one entered value from its two yaml keys, each independently
+     *  optional: a file that carries only the number keeps the unit the
+     *  defaults (or an earlier read) established. */
+    private void readEntered(Map<?, ?> root, String key, Property<UnitValue> entered) {
+        UnitValue current = entered.get();
+        double number = root.get(key) instanceof Number n ? n.doubleValue() : current.value();
+        String unit = root.get(key + UNIT_KEY_SUFFIX) instanceof String s ? s : current.unit();
+        entered.set(new UnitValue(number, unit));
+    }
+
+    /**
+     * DAC PEAK full scale the one-time pre-pair conversion is measured against:
+     * the calibration of the OUTPUT device the loaded configuration selects.
+     *
+     * <p>The card store is a separate file, normally read after the preferences,
+     * so it is established here on demand.  A selection with no local
+     * calibration converts against unity: a device on a server is calibrated
+     * there and never here, and an unbound device has no full scale to speak of
+     * - the same answer the store itself falls back to.
+     */
+    private double prePairConversionFsAmpl() {
+        String deviceName = current().getOutputDeviceName();
+        if (deviceName == null || deviceName.isBlank()) {
+            return 1.0;
+        }
+        synchronized (audioDevices) {
+            if (audioDevices.isEmpty()) {
+                loadDevices();
+            }
+        }
+        DeviceCalibration cal = deviceCalibration(deviceName, false);
+        return cal == null ? 1.0 : cal.fsRmsLeft() * Constants.SQRT2;
     }
 
     private <E extends Enum<E>> E enumOr(Class<E> type, String name, E fallback) {
@@ -3365,7 +3534,8 @@ public final class Preferences {
                 if (seed == null || seed.getName() == null || seed.getName().isEmpty()) continue;
                 AudioDeviceProfile store = findStoreCardForSeed(seed);
                 if (store == null) {
-                    audioDevices.add(copyProfile(seed));
+                    AudioDeviceProfile added = copyProfile(seed);
+                    audioDevices.put(cardKey(added.getName()), added);
                 } else {
                     unionMatch(store.getMatch(), seed.getMatch());
                     mergeSeedRanges(store.getInput(),  seed.getInput());
@@ -3395,10 +3565,9 @@ public final class Preferences {
      *  seed card is new to the store.  Called under the {@code audioDevices} lock
      *  {@link #mergeSeed} already holds. */
     private AudioDeviceProfile findStoreCardForSeed(AudioDeviceProfile seed) {
-        for (AudioDeviceProfile p : audioDevices) {
-            if (seed.getName().equalsIgnoreCase(p.getName())) return p;
-        }
-        for (AudioDeviceProfile p : audioDevices) {
+        AudioDeviceProfile byName = audioDevices.get(cardKey(seed.getName()));
+        if (byName != null) return byName;
+        for (AudioDeviceProfile p : audioDevices.values()) {
             if (matchOverlap(seed.getMatch(), p.getMatch())) return p;
         }
         return null;
@@ -3500,7 +3669,12 @@ public final class Preferences {
                 for (Object o : raw) {
                     if (!(o instanceof Map<?, ?> m)) continue;
                     AudioDeviceProfile p = readDeviceProfile(m);
-                    if (p != null) audioDevices.add(p);
+                    // putIfAbsent, not put: a file that lists the same card more than
+                    // once collapses to the FIRST occurrence, and a second read of the
+                    // same file adds nothing - which is what makes a load idempotent.
+                    // The explicit mutators keep their replace semantics; only READING
+                    // the file lets the earlier entry stand.
+                    if (p != null) audioDevices.putIfAbsent(cardKey(p.getName()), p);
                 }
             }
             if (log.isInfoEnabled()) {
@@ -3558,7 +3732,7 @@ public final class Preferences {
                 out.append("audioDevices: []\n");
             } else {
                 out.append("audioDevices:\n");
-                for (AudioDeviceProfile p : audioDevices) writeDeviceProfile(out, p);
+                for (AudioDeviceProfile p : audioDevices.values()) writeDeviceProfile(out, p);
             }
         }
         // The user's saved device->card choices.  Omitted entirely
@@ -3600,7 +3774,7 @@ public final class Preferences {
         List<AudioDeviceProfile> out;
         synchronized (audioDevices) {
             out = new ArrayList<>(audioDevices.size());
-            for (AudioDeviceProfile p : audioDevices) out.add(copyProfile(p));
+            for (AudioDeviceProfile p : audioDevices.values()) out.add(copyProfile(p));
         }
         return out;
     }
@@ -3611,11 +3785,17 @@ public final class Preferences {
     public AudioDeviceProfile findAudioDeviceProfile(String name) {
         if (name == null) return null;
         synchronized (audioDevices) {
-            for (AudioDeviceProfile p : audioDevices) {
-                if (name.equalsIgnoreCase(p.getName())) return p;
-            }
+            return audioDevices.get(cardKey(name));
         }
-        return null;
+    }
+
+    /** The STORAGE key of a card: its logical name folded with {@link Locale#ROOT} -
+     *  the canonical form of the case-insensitive name identity every lookup here
+     *  already treats as the card's own, so two spellings of one name cannot become
+     *  two cards.  Device RECOGNITION is a different question entirely and stays
+     *  with the {@code match} patterns (see {@link #resolveDeviceProfile}). */
+    private String cardKey(String name) {
+        return name == null ? "" : name.toLowerCase(Locale.ROOT);
     }
 
     /** Adds {@code p}, or replaces the existing profile with the same logical
@@ -3625,8 +3805,7 @@ public final class Preferences {
     public synchronized void putAudioDeviceProfile(AudioDeviceProfile p) {
         if (p == null || p.getName() == null || p.getName().isEmpty()) return;
         synchronized (audioDevices) {
-            audioDevices.removeIf(e -> p.getName().equalsIgnoreCase(e.getName()));
-            audioDevices.add(p);
+            audioDevices.put(cardKey(p.getName()), p);
         }
         saveDevices();
     }
@@ -3637,7 +3816,7 @@ public final class Preferences {
         if (name == null) return;
         boolean removed;
         synchronized (audioDevices) {
-            removed = audioDevices.removeIf(e -> name.equalsIgnoreCase(e.getName()));
+            removed = audioDevices.remove(cardKey(name)) != null;
         }
         if (removed) saveDevices();
     }
@@ -3656,7 +3835,7 @@ public final class Preferences {
         AudioDeviceProfile best = null;
         int bestStrength = -1;
         synchronized (audioDevices) {
-            for (AudioDeviceProfile p : audioDevices) {
+            for (AudioDeviceProfile p : audioDevices.values()) {
                 int strength = p.matchStrength(deviceName);
                 if (strength > bestStrength) {
                     best = p;
@@ -4581,11 +4760,9 @@ public final class Preferences {
            .append(", right: ").append(r.getFsRight()).append(" }");
         // Emitted ONLY when set by a real calibration - a nominal (seed) row stays clean.
         if (r.isCalibrated()) out.append(", calibrated: true");
-        // Device-authored display text (QA40x verbose labels) - kept so a start
-        // without the analyzer attached still shows the ranges as the device names them.
-        if (r.getDisplayLabel() != null) {
-            out.append(", displayLabel: ").append(quoted(r.getDisplayLabel()));
-        }
+        // The device-authored display text (QA40x verbose labels) is DISPLAY
+        // ONLY and never persisted: the analyzer regenerates it at every open,
+        // and the wire form carries it to clients that cannot ask the device.
         out.append(" }\n");
     }
 

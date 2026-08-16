@@ -90,6 +90,7 @@
     <ul>
       <li><a href="fft.html#fft-resync-banner">Банер повторної синхронізації захоплення</a> <span class="small">(FFT аналізатор)</span> - <span class="small">Під час усереднення кожен блок захоплення перевіряється, перш ніж він потрапить у середнє. На кожному блоці виконуються дві...</span></li>
       <li><a href="theory/audio-backend.html#qa40x">Бекенд аналізатора QA40x</a> <span class="small">(Theory ▸ Теорія: Аудіо-бекенд)</span> - <span class="small">Поряд із трьома універсальними шляхами Phonalyser може керувати аудіо-аналізатором QuantAsylum QA402 / QA403 безпосередньо, через</span></li>
+      <li><a href="theory/audio-backend.html#loopback">Бекенд петлевого тесту</a> <span class="small">(Theory ▸ Теорія: Аудіо-бекенд)</span> - <span class="small">Ще один бекенд не звертається до обладнання взагалі. Петлевий тест - це суто цифровий шлях: усе, що видає тракт відтворення,...</span></li>
     </ul>
     <h3>В</h3>
     <ul>
@@ -417,6 +418,7 @@
       <li><a href="theory/algorithms.html#adc">Характеризація ADC</a> <span class="small">(Theory ▸ Теорія: Довідник алгоритмів)</span> - <span class="small">Алгоритм Що він тут робить У цій довідці Гістограма щільності кодів Розкладає кожен захоплений відлік за його кодом ADC (2 біт...</span></li>
       <li><a href="freqresp.html#freqresp-measure-clipping">Хвиляста крива - перевірте кліпування</a> <span class="small">(Частотна характеристика)</span> - <span class="small">Тепер свіп перевіряє це за вас. Найбільший за модулем відлік сирого захоплення фіксується до будь-якої деконволюції, і якщо він...</span></li>
       <li><a href="theory/audio-backend.html#who">Хто використовує бекенд</a> <span class="small">(Theory ▸ Теорія: Аудіо-бекенд)</span> - <span class="small">Модуль Напрямок Спосіб Осцилограф, FFT-аналізатор захоплення Спільно використовують одну сесію захоплення та один кільцевий буфер</span></li>
+      <li><a href="theory/audio-backend.html#qa40x-sharing">Хто тримає аналізатор і як довго</a> <span class="small">(Theory ▸ Теорія: Аудіо-бекенд)</span> - <span class="small">USB віддає прилад лише одній програмі за раз, тож те, хто його тримає, має значення. Phonalyser займає QA40x, доки триває...</span></li>
     </ul>
     <h3>Ц</h3>
     <ul>
@@ -462,6 +464,7 @@
   <div class="azindex">
     <h3>#</h3>
     <ul>
+      <li><b>0,500 LSB СКЗ</b> - <a href="theory/audio-backend.html#">Theory ▸ Теорія: Аудіо-бекенд</a></li>
       <li><b>2·√2 В піку</b> - <a href="generator.html#">Генератор</a></li>
       <li><b>50 МБ</b> - <a href="generator.html#">Генератор</a>, <a href="preferences.html#">Налаштування</a>, <a href="theory/audio-backend.html#">Theory ▸ Теорія: Аудіо-бекенд</a></li>
     </ul>
@@ -472,7 +475,7 @@
       <li><b>AES</b> - <a href="external/sine-sweep.html#">Further reading ▸ Додаткове читання: Експоненційний синусоїдальний свіп на практиці ▸ Експоненційний синусоїдальний свіп на практиці</a>, <a href="external/sine-sweep.html#refs">Further reading ▸ Додаткове читання: Експоненційний синусоїдальний свіп на практиці ▸ Список літератури</a>, <a href="theory/freq-resp.html#refs">Theory ▸ Теорія: Частотна характеристика ▸ Посилання</a>, <a href="theory/generator.html#refs">Theory ▸ Теорія: Генератор сигналів ▸ Посилання</a>, <a href="theory/tune-notch.html#refs">Theory ▸ Теорія: Налаштування режектора ▸ Посилання</a></li>
       <li><b>AES17</b> - <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="generator.html#generator-amplitude">Генератор ▸ Амплітуда (RMS)</a></li>
       <li><b>AIFF</b> - <a href="generator.html#">Генератор ▸ Генератор</a>, <a href="generator.html#generator-load-from">Генератор ▸ Завантажити з... + В циклі</a>, <a href="oscilloscope.html#scope-tab-play">Осцилограф ▸ Вкладка «Завантажити аудіо»</a>, <a href="preferences.html#prefs-audio-server-measuring">Налаштування ▸ Що ще йде дротом</a></li>
-      <li><b>ALSA</b> - <a href="backend.html#backend-list">Аудіо-бекенди ▸ Який бекенд у якій системі</a>, <a href="backend.html#">Аудіо-бекенди</a>, <a href="preferences.html#prefs-audio-card">Налаштування ▸ Карта - профілі калібрування для кожної карти</a>, <a href="server.html#server-what">Сервер Phonalyser ▸ Що це таке і що вам потрібно</a>, <a href="theory/audio-backend.html#volume">Theory ▸ Теорія: Аудіо-бекенд ▸ Апаратна гучність - частина тракту</a></li>
+      <li><b>ALSA</b> - <a href="backend.html#backend-list">Аудіо-бекенди ▸ Який бекенд у якій системі</a>, <a href="backend.html#">Аудіо-бекенди</a>, <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="preferences.html#prefs-audio-card">Налаштування ▸ Карта - профілі калібрування для кожної карти</a>, <a href="server.html#server-what">Сервер Phonalyser ▸ Що це таке і що вам потрібно</a>, <a href="theory/audio-backend.html#volume">Theory ▸ Теорія: Аудіо-бекенд ▸ Апаратна гучність - частина тракту</a></li>
       <li><b>Analog</b> - <a href="theory/fft.html#refs">Theory ▸ Теорія: FFT-аналізатор ▸ Посилання</a>, <a href="theory/generator.html#refs">Theory ▸ Теорія: Генератор сигналів ▸ Посилання</a></li>
       <li><b>API</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a></li>
       <li><b>APPDATA</b> - <a href="preferences.html#prefs-audio-devices-file">Налаштування ▸ Файл devices.yaml - редагування вручну</a>, <a href="server.html#server-files">Сервер Phonalyser ▸ Де що лежить</a></li>
@@ -499,7 +502,7 @@
       <li><b>Cancel</b> - <a href="freqresp.html#">Частотна характеристика</a>, <a href="preferences.html#">Налаштування</a>, <a href="tips.html#">Поради</a></li>
       <li><b>Card</b> - <a href="preferences.html#">Налаштування</a></li>
       <li><b>CAT</b> - <a href="bench.html#">Вимірювальний стенд і проводка ▸ Кабель: патч-кабель CAT.8, а не «аудіо»-коаксіал</a>, <a href="bench.html#">Вимірювальний стенд і проводка ▸ Розводка XLR - одна пара несе сигнал</a>, <a href="index.html#">Довідка ▸ Інструменти та стенд</a></li>
-      <li><b>CB5</b> - <a href="backend.html#backend-mac-glitches">Аудіо-бекенди ▸ macOS: збої запису з деякими пристроями</a>, <a href="preferences.html#prefs-audio-card">Налаштування ▸ Карта - профілі калібрування для кожної карти</a></li>
+      <li><b>CB5</b> - <a href="backend.html#backend-mac-glitches">Аудіо-бекенди ▸ macOS: збої запису з деякими пристроями</a>, <a href="changelog.html#">Що нового ▸ Змінено</a>, <a href="preferences.html#prefs-audio-card">Налаштування ▸ Карта - профілі калібрування для кожної карти</a></li>
       <li><b>CCIF</b> - <a href="theory/algorithms.html#spectral">Theory ▸ Теорія: Довідник алгоритмів ▸ Спектральний аналіз</a>, <a href="theory/dac-predistortion.html#imd">Theory ▸ Теорія: попереднє спотворення DAC ▸ Вимірювання інтермодуляції - двотональний фільтр</a></li>
       <li><b>CHANGELOG</b> - <a href="changelog.html#">Що нового ▸ Що нового</a></li>
       <li><b>Chebyshev</b> - <a href="fft.html#fft-window">FFT аналізатор ▸ Віконна функція</a>, <a href="theory/algorithms.html#spectral">Theory ▸ Теорія: Довідник алгоритмів ▸ Спектральний аналіз</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Теорія: Довідник алгоритмів ▸ Фільтрація та оцінювання</a>, <a href="theory/derotation-accuracy.html#overlap">Theory ▸ Теорія: точність де-ротації ▸ Перекриття: ефективна кількість усереднень</a>, <a href="theory/derotation-accuracy.html#window">Theory ▸ Теорія: точність де-ротації ▸ Яка віконна функція - і чому вона не обирається заради шуму</a>, <a href="theory/fft.html#refs">Theory ▸ Теорія: FFT-аналізатор ▸ Посилання</a></li>
@@ -511,7 +514,7 @@
       <li><b>Ctrl+Shift+колесо</b> - <a href="fft.html#">FFT аналізатор</a>, <a href="freqresp.html#">Частотна характеристика</a>, <a href="tips.html#">Поради</a></li>
       <li><b>Ctrl+Z</b> - <a href="fft.html#">FFT аналізатор</a>, <a href="freqresp.html#">Частотна характеристика</a></li>
       <li><b>Ctrl+колесо</b> - <a href="fft.html#">FFT аналізатор</a>, <a href="freqresp.html#">Частотна характеристика</a>, <a href="tips.html#">Поради</a></li>
-      <li><b>CUBILUX</b> - <a href="preferences.html#prefs-audio-card">Налаштування ▸ Карта - профілі калібрування для кожної карти</a></li>
+      <li><b>CUBILUX</b> - <a href="changelog.html#">Що нового ▸ Змінено</a>, <a href="preferences.html#prefs-audio-card">Налаштування ▸ Карта - профілі калібрування для кожної карти</a></li>
       <li><b>CUBILUX CB5</b> - <a href="preferences.html#">Налаштування</a></li>
     </ul>
     <h3>D</h3>
@@ -522,7 +525,7 @@
       <li><b>DC200</b> - <a href="fft.html#fft-window">FFT аналізатор ▸ Віконна функція</a>, <a href="fft.html#fft-tile-window">FFT аналізатор ▸ Плитка віконної функції</a></li>
       <li><b>DC250</b> - <a href="fft.html#fft-window">FFT аналізатор ▸ Віконна функція</a>, <a href="fft.html#fft-tile-window">FFT аналізатор ▸ Плитка віконної функції</a></li>
       <li><b>DC300</b> - <a href="fft.html#fft-window">FFT аналізатор ▸ Віконна функція</a>, <a href="fft.html#fft-tile-window">FFT аналізатор ▸ Плитка віконної функції</a>, <a href="theory/algorithms.html#spectral">Theory ▸ Теорія: Довідник алгоритмів ▸ Спектральний аналіз</a></li>
-      <li><b>DDS</b> - <a href="changelog.html#">Що нового ▸ 1.0-RC1 - 2026-06-19</a>, <a href="generator.html#generator-form">Генератор ▸ Форма сигналу</a>, <a href="generator.html#generator-duty">Генератор ▸ Прогальність</a>, <a href="index.html#">Довідка ▸ Теорія роботи</a>, <a href="theory/algorithms.html#synth">Theory ▸ Теорія: Довідник алгоритмів ▸ Синтез сигналу та квантування</a>, <a href="theory/dac-predistortion.html#bigpicture">Theory ▸ Теорія: попереднє спотворення DAC ▸ Загальна картина: дрейф зсуває основний тон, ледь торкається гармонік</a></li>
+      <li><b>DDS</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="changelog.html#">Що нового ▸ 1.0-RC1 - 2026-06-19</a>, <a href="generator.html#generator-form">Генератор ▸ Форма сигналу</a>, <a href="generator.html#generator-duty">Генератор ▸ Прогальність</a>, <a href="index.html#">Довідка ▸ Теорія роботи</a>, <a href="theory/algorithms.html#synth">Theory ▸ Теорія: Довідник алгоритмів ▸ Синтез сигналу та квантування</a></li>
       <li><b>Despike</b> - <a href="oscilloscope.html#">Осцилограф</a></li>
       <li><b>Detach readout</b> - <a href="freqresp.html#">Частотна характеристика</a></li>
       <li><b>Device</b> - <a href="preferences.html#">Налаштування</a></li>
@@ -554,6 +557,7 @@
       <li><b>Enter</b> - <a href="preferences.html#">Налаштування</a></li>
       <li><b>EQ</b> - <a href="credits.html#credits-inspiration">Подяки ▸ Натхнення</a>, <a href="theory/index.html#">Theory ▸ Принцип роботи ▸ Принцип роботи</a></li>
       <li><b>ERROR</b> - <a href="preferences.html#prefs-audio-devices-file">Налаштування ▸ Файл devices.yaml - редагування вручну</a></li>
+      <li><b>ESC</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a></li>
       <li><b>EXCL</b> - <a href="backend.html#backend-list">Аудіо-бекенди ▸ Який бекенд у якій системі</a>, <a href="server.html#server-what">Сервер Phonalyser ▸ Що це таке і що вам потрібно</a></li>
     </ul>
     <h3>F</h3>
@@ -561,7 +565,7 @@
       <li><b>F1</b> - <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="fft.html#fft-thd-header">FFT аналізатор ▸ Рядок заголовка</a>, <a href="index.html#">Довідка ▸ Phonalyser</a>, <a href="oscilloscope.html#scope-residual">Осцилограф ▸ Залишок</a>, <a href="tips.html#">Поради ▸ Поради</a></li>
       <li><b>F2</b> - <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="fft.html#fft-thd-header">FFT аналізатор ▸ Рядок заголовка</a>, <a href="oscilloscope.html#scope-residual">Осцилограф ▸ Залишок</a></li>
       <li><b>Farina</b> - <a href="changelog.html#">Що нового ▸ 1.0-RC1 - 2026-06-19</a>, <a href="external/sine-sweep.html#">Further reading ▸ Додаткове читання: Експоненційний синусоїдальний свіп на практиці ▸ Експоненційний синусоїдальний свіп на практиці</a>, <a href="external/sine-sweep.html#">Further reading ▸ Додаткове читання: Експоненційний синусоїдальний свіп на практиці ▸ Чому перемагає експоненційний свіп</a>, <a href="external/sine-sweep.html#refs">Further reading ▸ Додаткове читання: Експоненційний синусоїдальний свіп на практиці ▸ Список літератури</a>, <a href="freqresp.html#">Частотна характеристика ▸ Частотна характеристика</a>, <a href="generator.html#generator-form">Генератор ▸ Форма сигналу</a></li>
-      <li><b>FFT</b> - <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="changelog.html#">Що нового ▸ Змінено</a>, <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="changelog.html#">Що нового ▸ 1.0-RC1 - 2026-06-19</a>, <a href="dac-predistortion.html#">Майстер предспотворення ЦАП ▸ Майстер предспотворення ЦАП</a>, <a href="dac-predistortion.html#dpd-open">Майстер предспотворення ЦАП ▸ Відкриття майстра</a></li>
+      <li><b>FFT</b> - <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="changelog.html#">Що нового ▸ Змінено</a>, <a href="changelog.html#">Що нового ▸ 1.0-RC1 - 2026-06-19</a>, <a href="dac-predistortion.html#">Майстер предспотворення ЦАП ▸ Майстер предспотворення ЦАП</a>, <a href="dac-predistortion.html#dpd-open">Майстер предспотворення ЦАП ▸ Відкриття майстра</a></li>
       <li><b>FFT-аналізатор</b> - <a href="index.html#">Довідка</a>, <a href="theory/index.html#">Theory ▸ Принцип роботи</a></li>
       <li><b>FFT-аналізатором</b> - <a href="index.html#">Довідка</a></li>
       <li><b>FIR</b> - <a href="theory/algorithms.html#adc">Theory ▸ Теорія: Довідник алгоритмів ▸ Характеризація ADC</a></li>
@@ -588,6 +592,8 @@
       <li><b>Hann</b> - <a href="external/fft-analysis.html#">Further reading ▸ Додаткове читання: основи FFT-аналізу ▸ Розтікання спектра та віконні функції</a>, <a href="external/fft-analysis.html#">Further reading ▸ Додаткове читання: основи FFT-аналізу ▸ Усереднення та перекриття</a>, <a href="fft.html#fft-window">FFT аналізатор ▸ Віконна функція</a>, <a href="fft.html#fft-tile-window">FFT аналізатор ▸ Плитка віконної функції</a>, <a href="theory/algorithms.html#synth">Theory ▸ Теорія: Довідник алгоритмів ▸ Синтез сигналу та квантування</a>, <a href="theory/algorithms.html#spectral">Theory ▸ Теорія: Довідник алгоритмів ▸ Спектральний аналіз</a></li>
       <li><b>Hans Rosenberg</b> - <a href="credits.html#">Подяки</a></li>
       <li><b>Harris</b> - <a href="fft.html#fft-window">FFT аналізатор ▸ Віконна функція</a>, <a href="theory/algorithms.html#spectral">Theory ▸ Теорія: Довідник алгоритмів ▸ Спектральний аналіз</a>, <a href="theory/derotation-accuracy.html#overlap">Theory ▸ Теорія: точність де-ротації ▸ Перекриття: ефективна кількість усереднень</a>, <a href="theory/derotation-accuracy.html#window">Theory ▸ Теорія: точність де-ротації ▸ Яка віконна функція - і чому вона не обирається заради шуму</a></li>
+      <li><b>HDA</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a></li>
+      <li><b>HDMI</b> - <a href="changelog.html#">Що нового ▸ Змінено</a></li>
       <li><b>HFT</b> - <a href="external/fft-analysis.html#">Further reading ▸ Додаткове читання: основи FFT-аналізу ▸ Розтікання спектра та віконні функції</a>, <a href="fft.html#fft-window">FFT аналізатор ▸ Віконна функція</a>, <a href="theory/algorithms.html#spectral">Theory ▸ Теорія: Довідник алгоритмів ▸ Спектральний аналіз</a>, <a href="theory/fft.html#resolution">Theory ▸ Теорія: FFT-аналізатор ▸ Роздільна здатність, віконні функції, перекриття</a>, <a href="theory/fft.html#refs">Theory ▸ Теорія: FFT-аналізатор ▸ Посилання</a></li>
       <li><b>HFT144D</b> - <a href="fft.html#fft-window">FFT аналізатор ▸ Віконна функція</a>, <a href="fft.html#fft-tile-window">FFT аналізатор ▸ Плитка віконної функції</a>, <a href="theory/fft.html#metrics">Theory ▸ Теорія: FFT-аналізатор ▸ Метрики спотворень і шуму</a></li>
       <li><b>HFT248D</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="dac-predistortion.html#dpd-open">Майстер предспотворення ЦАП ▸ Відкриття майстра</a>, <a href="fft.html#fft-window">FFT аналізатор ▸ Віконна функція</a>, <a href="fft.html#fft-tile-window">FFT аналізатор ▸ Плитка віконної функції</a>, <a href="theory/dac-predistortion.html#averaging">Theory ▸ Теорія: попереднє спотворення DAC ▸ Когерентне усереднення: як слабкі гармоніки стають надійними</a>, <a href="theory/dac-predistortion.html#window">Theory ▸ Теорія: попереднє спотворення DAC ▸ Вікно й перекриття - HFT248D при 87.5 %</a></li>
@@ -622,6 +628,7 @@
       <li><b>JLsounds I2SoverUSB</b> - <a href="preferences.html#">Налаштування</a></li>
       <li><b>JOGL</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a></li>
       <li><b>JRE</b> - <a href="server.html#server-what">Сервер Phonalyser ▸ Що це таке і що вам потрібно</a></li>
+      <li><b>JSON</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a></li>
       <li><b>JVM</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="server.html#server-what">Сервер Phonalyser ▸ Що це таке і що вам потрібно</a></li>
     </ul>
     <h3>K</h3>
@@ -642,7 +649,7 @@
       <li><b>LMS</b> - <a href="oscilloscope.html#scope-mains">Осцилограф ▸ Мережа</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Теорія: Довідник алгоритмів ▸ Фільтрація та оцінювання</a></li>
       <li><b>LMS canceller</b> - <a href="oscilloscope.html#">Осцилограф</a></li>
       <li><b>LP</b> - <a href="fft.html#fft-distortion-band-dim">FFT аналізатор ▸ Затінення смуги спотворень</a>, <a href="fft.html#fft-tile-distrange">FFT аналізатор ▸ Плитка діапазону спотворень</a></li>
-      <li><b>LSB</b> - <a href="generator.html#generator-dither">Генератор ▸ Дитеринг</a>, <a href="theory/algorithms.html#adc">Theory ▸ Теорія: Довідник алгоритмів ▸ Характеризація ADC</a>, <a href="theory/generator.html#quantizer">Theory ▸ Теорія: Генератор сигналів ▸ Квантування і дизеринг</a></li>
+      <li><b>LSB</b> - <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="generator.html#generator-dither">Генератор ▸ Дитеринг</a>, <a href="theory/algorithms.html#adc">Theory ▸ Теорія: Довідник алгоритмів ▸ Характеризація ADC</a>, <a href="theory/audio-backend.html#loopback">Theory ▸ Теорія: Аудіо-бекенд ▸ Бекенд петлевого тесту</a>, <a href="theory/generator.html#quantizer">Theory ▸ Теорія: Генератор сигналів ▸ Квантування і дизеринг</a></li>
     </ul>
     <h3>M</h3>
     <ul>
@@ -678,7 +685,8 @@
       <li><b>PACKAGING</b> - <a href="changelog.html#">Що нового ▸ Змінено</a></li>
       <li><b>PATH</b> - <a href="server.html#server-what">Сервер Phonalyser ▸ Що це таке і що вам потрібно</a></li>
       <li><b>PB</b> - <a href="freqresp.html#">Частотна характеристика ▸ Група «Налаштування»</a></li>
-      <li><b>PCM</b> - <a href="backend.html#backend-volume">Аудіо-бекенди ▸ Апаратна гучність у Linux і macOS</a>, <a href="theory/audio-backend.html#volume">Theory ▸ Теорія: Аудіо-бекенд ▸ Апаратна гучність - частина тракту</a>, <a href="theory/audio-backend.html#network">Theory ▸ Теорія: Аудіо-бекенд ▸ Стенд у мережі</a>, <a href="theory/generator.html#quantizer">Theory ▸ Теорія: Генератор сигналів ▸ Квантування і дизеринг</a></li>
+      <li><b>PCI</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a></li>
+      <li><b>PCM</b> - <a href="backend.html#backend-volume">Аудіо-бекенди ▸ Апаратна гучність у Linux і macOS</a>, <a href="changelog.html#">Що нового ▸ Змінено</a>, <a href="theory/audio-backend.html#volume">Theory ▸ Теорія: Аудіо-бекенд ▸ Апаратна гучність - частина тракту</a>, <a href="theory/audio-backend.html#network">Theory ▸ Теорія: Аудіо-бекенд ▸ Стенд у мережі</a>, <a href="theory/generator.html#quantizer">Theory ▸ Теорія: Генератор сигналів ▸ Квантування і дизеринг</a></li>
       <li><b>PDF</b> - <a href="theory/algorithms.html#synth">Theory ▸ Теорія: Довідник алгоритмів ▸ Синтез сигналу та квантування</a>, <a href="theory/algorithms.html#adc">Theory ▸ Теорія: Довідник алгоритмів ▸ Характеризація ADC</a></li>
       <li><b>Phase</b> - <a href="freqresp.html#">Частотна характеристика</a></li>
       <li><b>PhonalyserServer</b> - <a href="server.html#">Сервер Phonalyser</a></li>
@@ -703,7 +711,7 @@
       <li><b>REW</b> - <a href="credits.html#credits-inspiration">Подяки ▸ Натхнення</a>, <a href="theory/index.html#">Theory ▸ Принцип роботи ▸ Принцип роботи</a></li>
       <li><b>RGBA16F</b> - <a href="theory/algorithms.html#stats">Theory ▸ Теорія: Довідник алгоритмів ▸ Статистика та графіка</a></li>
       <li><b>RIAA</b> - <a href="bench.html#">Вимірювальний стенд і проводка ▸ Приклади DUT</a>, <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="freqresp.html#">Частотна характеристика ▸ Частотна характеристика</a>, <a href="freqresp.html#freqresp-overview">Частотна характеристика ▸ Короткий огляд</a>, <a href="freqresp.html#freqresp-tabs">Частотна характеристика ▸ Вкладки налаштувань</a>, <a href="freqresp.html#freqresp-tab-riaa">Частотна характеристика ▸ RIAA &amp; IEC</a></li>
-      <li><b>RMS</b> - <a href="changelog.html#">Що нового ▸ Змінено</a>, <a href="external/fft-analysis.html#">Further reading ▸ Додаткове читання: основи FFT-аналізу ▸ Усереднення та перекриття</a>, <a href="freqresp.html#freqresp-tab-settings">Частотна характеристика ▸ Параметри</a>, <a href="freqresp.html#freqresp-tab-utility">Частотна характеристика ▸ Утиліти</a>, <a href="freqresp.html#freqresp-measure">Частотна характеристика ▸ Проведення вимірювання</a>, <a href="generator.html#">Генератор ▸ Генератор</a></li>
+      <li><b>RMS</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="changelog.html#">Що нового ▸ Змінено</a>, <a href="external/fft-analysis.html#">Further reading ▸ Додаткове читання: основи FFT-аналізу ▸ Усереднення та перекриття</a>, <a href="freqresp.html#freqresp-tab-settings">Частотна характеристика ▸ Параметри</a>, <a href="freqresp.html#freqresp-tab-utility">Частотна характеристика ▸ Утиліти</a>, <a href="freqresp.html#freqresp-measure">Частотна характеристика ▸ Проведення вимірювання</a></li>
     </ul>
     <h3>S</h3>
     <ul>
@@ -722,15 +730,15 @@
     <ul>
       <li><b>TCP</b> - <a href="server.html#server-discovery">Сервер Phonalyser ▸ Пошук у мережі та брандмауер</a>, <a href="theory/audio-backend.html#network">Theory ▸ Теорія: Аудіо-бекенд ▸ Стенд у мережі</a></li>
       <li><b>TCR</b> - <a href="theory/dac-predistortion.html#refs">Theory ▸ Теорія: попереднє спотворення DAC ▸ Посилання</a></li>
-      <li><b>THD</b> - <a href="bench.html#">Вимірювальний стенд і проводка ▸ Вимірювальний стенд і проводка</a>, <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="changelog.html#">Що нового ▸ 1.0-RC1 - 2026-06-19</a>, <a href="credits.html#credits-thanks">Подяки ▸ Із вдячністю</a>, <a href="credits.html#credits-hardware">Подяки ▸ Вимірювальне обладнання</a>, <a href="dac-predistortion.html#">Майстер предспотворення ЦАП ▸ Майстер предспотворення ЦАП</a></li>
+      <li><b>THD</b> - <a href="bench.html#">Вимірювальний стенд і проводка ▸ Вимірювальний стенд і проводка</a>, <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="changelog.html#">Що нового ▸ 1.0-RC1 - 2026-06-19</a>, <a href="credits.html#credits-thanks">Подяки ▸ Із вдячністю</a>, <a href="credits.html#credits-hardware">Подяки ▸ Вимірювальне обладнання</a></li>
       <li><b>Tools ▸ Preferences</b> - <a href="preferences.html#">Налаштування</a></li>
-      <li><b>TPDF</b> - <a href="generator.html#generator-dither">Генератор ▸ Дитеринг</a>, <a href="theory/algorithms.html#synth">Theory ▸ Теорія: Довідник алгоритмів ▸ Синтез сигналу та квантування</a>, <a href="theory/generator.html#quantizer">Theory ▸ Теорія: Генератор сигналів ▸ Квантування і дизеринг</a>, <a href="theory/generator.html#dither-dbv">Theory ▸ Теорія: Генератор сигналів ▸ Задання дитерингу за рівнем шуму, який він створює</a>, <a href="theory/generator.html#refs">Theory ▸ Теорія: Генератор сигналів ▸ Посилання</a></li>
+      <li><b>TPDF</b> - <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="generator.html#generator-dither">Генератор ▸ Дитеринг</a>, <a href="theory/algorithms.html#synth">Theory ▸ Теорія: Довідник алгоритмів ▸ Синтез сигналу та квантування</a>, <a href="theory/audio-backend.html#loopback">Theory ▸ Теорія: Аудіо-бекенд ▸ Бекенд петлевого тесту</a>, <a href="theory/generator.html#quantizer">Theory ▸ Теорія: Генератор сигналів ▸ Квантування і дизеринг</a>, <a href="theory/generator.html#dither-dbv">Theory ▸ Теорія: Генератор сигналів ▸ Задання дитерингу за рівнем шуму, який він створює</a></li>
       <li><b>TPDF-дизеринг</b> - <a href="theory/generator.html#">Theory ▸ Теорія: Генератор сигналів</a></li>
     </ul>
     <h3>U</h3>
     <ul>
       <li><b>UDP</b> - <a href="server.html#server-discovery">Сервер Phonalyser ▸ Пошук у мережі та брандмауер</a></li>
-      <li><b>USB</b> - <a href="backend.html#backend-list">Аудіо-бекенди ▸ Який бекенд у якій системі</a>, <a href="backend.html#backend-mac-glitches">Аудіо-бекенди ▸ macOS: збої запису з деякими пристроями</a>, <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="credits.html#credits-hardware">Подяки ▸ Вимірювальне обладнання</a>, <a href="fft.html#fft-utility-calibrate">FFT аналізатор ▸ Калібрування ADC</a>, <a href="freqresp.html#freqresp-measure-clipping">Частотна характеристика ▸ Хвиляста крива - перевірте кліпування</a></li>
+      <li><b>USB</b> - <a href="backend.html#backend-list">Аудіо-бекенди ▸ Який бекенд у якій системі</a>, <a href="backend.html#backend-mac-glitches">Аудіо-бекенди ▸ macOS: збої запису з деякими пристроями</a>, <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="credits.html#credits-hardware">Подяки ▸ Вимірювальне обладнання</a>, <a href="faq.html#">FAQ ▸ Осцилограф і FFT повідомляють про часті часові розриви - на кожному бекенді</a></li>
     </ul>
     <h3>V</h3>
     <ul>
@@ -741,10 +749,11 @@
     <h3>W</h3>
     <ul>
       <li><b>Wannamaker</b> - <a href="theory/generator.html#refs">Theory ▸ Теорія: Генератор сигналів ▸ Посилання</a></li>
-      <li><b>WASAPI</b> - <a href="backend.html#backend-list">Аудіо-бекенди ▸ Який бекенд у якій системі</a>, <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="changelog.html#">Що нового ▸ 1.0-RC1 - 2026-06-19</a>, <a href="fft.html#fft-utility-calibrate">FFT аналізатор ▸ Калібрування ADC</a>, <a href="generator.html#generator-dac-calibrate">Генератор ▸ Калібрування DAC (кнопка з перехрестям)</a></li>
+      <li><b>WASAPI</b> - <a href="backend.html#backend-list">Аудіо-бекенди ▸ Який бекенд у якій системі</a>, <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="changelog.html#">Що нового ▸ 1.0-RC1 - 2026-06-19</a>, <a href="faq.html#">FAQ ▸ Осцилограф і FFT повідомляють про часті часові розриви - на кожному бекенді</a>, <a href="fft.html#fft-utility-calibrate">FFT аналізатор ▸ Калібрування ADC</a></li>
       <li><b>WASAPI ексклюзивний</b> - <a href="backend.html#">Аудіо-бекенди</a></li>
       <li><b>WAV</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="generator.html#">Генератор ▸ Генератор</a>, <a href="generator.html#generator-load-from">Генератор ▸ Завантажити з... + В циклі</a>, <a href="generator.html#generator-play">Генератор ▸ Відтворити / Зупинити</a>, <a href="index.html#">Довідка ▸ Модулі</a>, <a href="oscilloscope.html#scope-tab-play">Осцилограф ▸ Вкладка «Завантажити аудіо»</a></li>
-      <li><b>WDM-KS</b> - <a href="backend.html#backend-list">Аудіо-бекенди ▸ Який бекенд у якій системі</a>, <a href="backend.html#">Аудіо-бекенди</a>, <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="changelog.html#">Що нового ▸ 1.0-RC1 - 2026-06-19</a>, <a href="fft.html#fft-utility-calibrate">FFT аналізатор ▸ Калібрування ADC</a>, <a href="generator.html#generator-dac-calibrate">Генератор ▸ Калібрування DAC (кнопка з перехрестям)</a></li>
+      <li><b>WAVEFORMATEX</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a></li>
+      <li><b>WDM-KS</b> - <a href="backend.html#backend-list">Аудіо-бекенди ▸ Який бекенд у якій системі</a>, <a href="backend.html#">Аудіо-бекенди</a>, <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="changelog.html#">Що нового ▸ 1.0-RC1 - 2026-06-19</a>, <a href="faq.html#">FAQ ▸ Осцилограф і FFT повідомляють про часті часові розриви - на кожному бекенді</a>, <a href="fft.html#fft-utility-calibrate">FFT аналізатор ▸ Калібрування ADC</a></li>
       <li><b>Windows</b> - <a href="preferences.html#">Налаштування</a>, <a href="server.html#">Сервер Phonalyser</a></li>
       <li><b>Wizard</b> - <a href="freqresp.html#">Частотна характеристика</a></li>
     </ul>
@@ -760,7 +769,7 @@
     </ul>
     <h3>Z</h3>
     <ul>
-      <li><b>ZIP</b> - <a href="server.html#server-what">Сервер Phonalyser ▸ Що це таке і що вам потрібно</a></li>
+      <li><b>ZIP</b> - <a href="changelog.html#">Що нового ▸ Змінено</a>, <a href="server.html#server-what">Сервер Phonalyser ▸ Що це таке і що вам потрібно</a></li>
     </ul>
     <h3>І</h3>
     <ul>
@@ -909,6 +918,7 @@
       <li><b>Перекриття</b> - <a href="theory/derotation-accuracy.html#">Theory ▸ Теорія: точність де-ротації</a>, <a href="theory/fft.html#">Theory ▸ Теорія: FFT-аналізатор</a></li>
       <li><b>Переміщення чи масштабування</b> - <a href="oscilloscope.html#">Осцилограф</a></li>
       <li><b>Перехрестя</b> - <a href="index.html#">Довідка</a></li>
+      <li><b>Петлевий тест</b> - <a href="theory/audio-backend.html#">Theory ▸ Теорія: Аудіо-бекенд</a></li>
       <li><b>Плитки вкладок</b> - <a href="index.html#">Довідка</a></li>
       <li><b>По колу</b> - <a href="changelog.html#">Що нового</a></li>
       <li><b>Пов&#x27;язана</b> - <a href="preferences.html#">Налаштування</a></li>

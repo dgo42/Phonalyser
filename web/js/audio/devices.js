@@ -13,6 +13,7 @@
  * GNU Affero General Public License v3 or later.
  */
 import { QA40X_BACKEND } from '../qa40x/qa40x-rate-constraint.js';
+import { LOOPBACK_BACKEND } from '../loopback/loopback-device-ref.js';
 import { remoteBackendOf } from '../net/net-device-ref.js';
 
 /** Ground-truth sample rate of a live track: pulls one decoded audio frame and reads its real
@@ -73,17 +74,30 @@ export async function scanDevices(status = () => {}) {
   }
   const inputs = determined.length > 0 ? determined
     : audioIn.map((d) => ({ id: d.deviceId, label: d.label || d.deviceId || 'Default', nativeRate: null }));
-  return {
-    inputs,
-    outputs: devs.filter((d) => d.kind === 'audiooutput').map((d) => ({ id: d.deviceId, label: d.label || d.deviceId })),
-  };
+  const outputs = devs.filter((d) => d.kind === 'audiooutput').map((d) => ({ id: d.deviceId, label: d.label || d.deviceId }));
+  // Firefox hides audiooutput entries until the page asks through selectAudioOutput()
+  // (its speaker-selection permission; Chrome lists sinks right after the mic grant, so
+  // there the picker must never appear). Asked only when enumeration came back BARE -
+  // nothing, or the bare synthetic default - and only where the API exists: the Scan
+  // click that got us here carries the user gesture the call requires. A dismissed
+  // picker is a normal answer, not a failure.
+  if (navigator.mediaDevices.selectAudioOutput
+      && (outputs.length === 0 || (outputs.length === 1 && outputs[0].id === 'default'))) {
+    try {
+      const picked = await navigator.mediaDevices.selectAudioOutput();
+      if (picked && !outputs.some((o) => o.id === picked.deviceId)) {
+        outputs.push({ id: picked.deviceId, label: picked.label || picked.deviceId });
+      }
+    } catch (e) { status('output picker dismissed - ' + e.name); }
+  }
+  return { inputs, outputs };
 }
 
 /**
  * Enumerates the ACTIVE backend's devices - the web's AudioBackend.listInputDevices() /
  * listOutputDevices(), which switch on `active` in exactly one place. WEB_AUDIO (and any legacy
  * OS-backend name still in a saved document) keeps the getUserMedia probe above; QA40X enumerates
- * through the device manager.
+ * through the device manager, and LOOPBACK lists the one software device its manager owns.
  *
  * USER GESTURE: enumeration itself prompts for nothing, but the QA40x branch also carries the
  * WebUSB GRANT step, and navigator.usb.requestDevice()'s chooser is refused without user
@@ -99,12 +113,16 @@ export async function scanDevices(status = () => {}) {
  * @param {?import('../qa40x/qa40x-device-finder.js').Qa40xDeviceFinder} [qa40xGranter] the
  *        finder whose scan() may raise the WebUSB chooser; null = this caller has no user
  *        activation to spend, so only already-granted devices can appear
+ * @param {?Object} [netManager] the net device manager - required only on a server backend
+ * @param {?Object} [loopbackManager] the LoopbackDeviceManager - required only on the LOOPBACK
+ *        branch
  * @returns {Promise<{inputs: {id: string, label: string, nativeRate: ?number}[],
  *          outputs: {id: string, label: string}[]}>}
  */
 export async function scanDevicesForBackend(activeBackend, qa40xManager, status = () => {},
-  qa40xGranter = null, netManager = null) {
+  qa40xGranter = null, netManager = null, loopbackManager = null) {
   if (activeBackend === QA40X_BACKEND) return scanQa40xDevices(qa40xManager, status, qa40xGranter);
+  if (activeBackend === LOOPBACK_BACKEND) return scanLoopbackDevices(loopbackManager, status);
   if (netManager != null && netManager.isRemoteBackend(activeBackend)) {
     return scanNetDevices(netManager, activeBackend, status);
   }
@@ -120,7 +138,7 @@ export async function scanDevicesForBackend(activeBackend, qa40xManager, status 
 }
 
 /**
- * The NET branch: the bench's own catalogue, already parsed by the net device manager (spec
+ * The net branch: the bench's own catalogue, already parsed by the net device manager (spec
  * 4.3 inlines the formats with each device, so nothing is asked here - backend.select filled
  * it in one round trip, and ev.devices.changed keeps it fresh).
  *
@@ -208,6 +226,38 @@ async function scanQa40xDevices(manager, status, granter) {
     } catch (error) {
       status(`QA40x calibration read failed: ${error.message}`);
     }
+  }
+  const outputs = [];
+  for (const ref of await manager.listOutputDevices()) {
+    outputs.push({ id: ref.name, label: ref.displayName() });
+  }
+  return { inputs, outputs };
+}
+
+/**
+ * The LOOPBACK branch: the one software device, listed identically on both directions.
+ *
+ * It has to be a branch of its own rather than a fall-through, for the reason the net branch has
+ * one: the probe below enumerates THIS MACHINE's microphones, and listing them under a backend
+ * that has no hardware at all would offer the operator devices the first open could never use.
+ *
+ * `id` is the device NAME (no browser deviceId exists for a device the browser does not know),
+ * and `label` is the ref's own displayName(), which CONTAINS that name - so the card resolution,
+ * a case-insensitive substring match on the option text, finds the loopback's seed card.
+ *
+ * `nativeRate` is the highest rate the manager offers: the same "maximal meaningful rate" the
+ * probe reports per input, and here simply the top of the ladder.
+ */
+async function scanLoopbackDevices(manager, status) {
+  if (manager == null) {
+    // A wiring mistake, not a device state - said out loud rather than shown as an empty combo.
+    status('the loopback backend has no device manager wired');
+    return { inputs: [], outputs: [] };
+  }
+  status('listing the digital loopback device...');
+  const inputs = [];
+  for (const ref of await manager.listInputDevices()) {
+    inputs.push({ id: ref.name, label: ref.displayName(), nativeRate: highestRateHz(manager, ref) });
   }
   const outputs = [];
   for (const ref of await manager.listOutputDevices()) {

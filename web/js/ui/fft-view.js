@@ -20,6 +20,7 @@ import {
 // installRectZoom base machinery); this view supplies the log-aware freq / dB
 // pixel↔value mappings through the injected callbacks (Java FftView overrides).
 import { RectZoom } from './rect-zoom.js';
+import { uiFont } from './ui-font.js';
 // Shared per-tone lobe lift (data-derived floor + lobe extent + log-domain
 // stretch) - the SAME mechanism the .frc de-embed uses (fft-compensation.js
 // correctToneLobe). Reused here to lift the manual-fundamental lobe to the user
@@ -51,6 +52,14 @@ const EXT_LEFT_PAD = 4;                 // Java FftView.EXT_LEFT_PAD - float-win
 const SIGNAL_FLOOR_MARGIN_DB = 10.0;    // Java FftView.SIGNAL_FLOOR_MARGIN_DB
 const MAX_THD_PCT = 20.0;               // Java FftView.MAX_THD_PCT
 const IMD_MAX_ORDER = 5;                // Java ImdResult.MAX_ORDER
+// Labels for the distortion table's level unit, in Java FftView.DISTORTION_UNIT_LABELS
+// order (DBV, DBFS, DBR). Unit symbols are the same in every language, so they are
+// literals rather than i18n keys; DBR - the level minus the reference the table's
+// percentages are computed against - shows as the plain "dB".
+const DISTORTION_UNIT_LABELS = ['dBV', 'dBFS', 'dB'];
+// Floor (V_rms) for the IMD reference level, mirroring the divisor floor in
+// imd-analyzer: two muted tones must not divide by zero (Java FftView.MIN_REF_VRMS).
+const MIN_REF_VRMS = 1e-12;
 // Java FftResult.LOCAL_FLOOR_FLANK_BINS - near-range flank width for the local floor.
 const LOCAL_FLOOR_FLANK_BINS = 64;
 
@@ -1096,9 +1105,34 @@ export class FftView {
     return `Span: ${lo.toFixed(0)} .. ${hi.toFixed(0)} Hz`;
   }
 
-  /** Java FftView.fmtDb - "%7.2f dBV" or "-". */
+  /** Java FftView.fmtDb - "%7.2f dBV" or "-". Fixed-unit: the level-unit selector covers
+   *  the per-harmonic / per-product rows only; N+D and SNR are ratios against the
+   *  fundamental rather than levels, so a unit switch would not even apply to them. */
   _fmtDb(v) {
     return Number.isFinite(v) ? `${v.toFixed(2)} dBV` : '-';
+  }
+
+  /** Java FftView.levelInDistortionUnit - an absolute level, stored in dBFS, rendered in the
+   *  table's selected unit: dBV adds the analysed channel's ADC offset, dBFS is the measured
+   *  value itself, and dB subtracts {@code refDbFs} - the SAME reference the row's percentage
+   *  divides by, so the two columns always agree (dB == 20·log10(pct/100)). */
+  _levelInDistortionUnit(dbFs, refDbFs, unit, dbvOff) {
+    if (unit === 'DBFS') return dbFs;
+    if (unit === 'DBR') return dbFs - refDbFs;
+    return dbFs + dbvOff;
+  }
+
+  /** Java FftView.distortionUnitLabel - label for a distortion-table unit; the plain "dB"
+   *  for the relative one. */
+  _distortionUnitLabel(unit) {
+    if (unit === 'DBFS') return DISTORTION_UNIT_LABELS[1];
+    if (unit === 'DBR') return DISTORTION_UNIT_LABELS[2];
+    return DISTORTION_UNIT_LABELS[0];
+  }
+
+  /** The distortion table's level unit, or the dBV default when no store is wired. */
+  _distortionUnit() {
+    return this.prefs ? this.prefs.fftDistortionUnit.get() : 'DBV';
   }
 
   /** Java FftView.imdPctText - IMD-table percent cell; "---" when the figure is
@@ -1107,11 +1141,11 @@ export class FftView {
     return Number.isFinite(pct) ? `${pct.toFixed(8)} %` : '---';
   }
 
-  /** Java FftView.imdRowText - IMD-table dnL/dnH cell (dBV + percent); "---" for
-   *  a product whose frequency lies outside the measurable range at this sample
-   *  rate. */
-  _imdRowText(dbv, pct) {
-    return Number.isFinite(dbv) ? `${dbv.toFixed(2)} dBV  ${pct.toFixed(8)} %` : '     ---';
+  /** Java FftView.imdRowText - IMD-table dnL/dnH cell (level in the selected unit +
+   *  percent); "---" for a product whose frequency lies outside the measurable range at
+   *  this sample rate. */
+  _imdRowText(level, pct, unitLabel) {
+    return Number.isFinite(level) ? `${level.toFixed(2)} ${unitLabel}  ${pct.toFixed(8)} %` : '     ---';
   }
 
   /** Java FftView.noiseDb - 10·log10(noisePower) + dbvOffset; NaN when noisePower<=0. */
@@ -1160,10 +1194,12 @@ export class FftView {
     return (v >= 0 ? '+' : '') + v.toFixed(digits);
   }
 
-  /** Sets the mono font + returns its char metrics (Java textExtent("M")). */
+  /** Sets the preference-driven UI font + returns its char metrics (Java textExtent("M");
+   *  the desktop draws these readouts in uiFontNormal/uiFontBold, not a hard-coded face). */
   _monoMetrics(g, bold) {
-    g.font = (bold ? 'bold ' : '') + '12px Consolas, "Courier New", monospace';
-    return { charW: g.measureText('M').width, lineH: 14 };
+    const f = uiFont(bold);
+    g.font = f.css;
+    return { charW: g.measureText('M').width, lineH: Math.round(f.px + 2) };
   }
 
   /** Java FftView.drawCentred - text horizontally centred on centreX, top at y. */
@@ -1253,16 +1289,26 @@ export class FftView {
 
     // ── Harmonics, 2 per row. The % column is r.harmonicPct[i] VERBATIM
     // (referenced to the analyzer's fundamental - NOT recomputed here). ──────
-    const hKey = 4 * charW, hVal = 24 * charW;
+    // Unit of the absolute-level cells, and the reference the relative unit measures
+    // against: the fundamental this table already reports in its header (manual override
+    // when set), which is the very level the analyzer divides by for the percentages.
+    const tableUnit = this._distortionUnit();
+    const unitLabel = this._distortionUnitLabel(tableUnit);
+    const refDbFs = fundDbV - dbvOff;
+    // The unit sits inside the value, so the column follows the label's width - a wider
+    // "dBFS" would otherwise push the value into the right-hand key.
+    const hKey = 4 * charW, hVal = (21 + unitLabel.length) * charW;
     const hRightColX = xLeft + hKey + hVal + colGap;
     const harmCount = r.harmonicDbFs == null ? 0 : r.harmonicDbFs.length;
     for (let i = 0; i < harmCount; i += 2) {
       const l = `H${i + 2}:`;
-      const lv = `${(r.harmonicDbFs[i] + dbvOff).toFixed(2)} dBV ${r.harmonicPct[i].toFixed(8)} %`;
+      const lLevel = this._levelInDistortionUnit(r.harmonicDbFs[i], refDbFs, tableUnit, dbvOff);
+      const lv = `${lLevel.toFixed(2)} ${unitLabel} ${r.harmonicPct[i].toFixed(8)} %`;
       let rkey = '', rval = '';
       if (i + 1 < harmCount) {
         rkey = `H${i + 3}:`;
-        rval = `${(r.harmonicDbFs[i + 1] + dbvOff).toFixed(2)} dBV  ${r.harmonicPct[i + 1].toFixed(8)} %`;
+        const rLevel = this._levelInDistortionUnit(r.harmonicDbFs[i + 1], refDbFs, tableUnit, dbvOff);
+        rval = `${rLevel.toFixed(2)} ${unitLabel}  ${r.harmonicPct[i + 1].toFixed(8)} %`;
       }
       this.drawKv(g, xLeft, y, hKey, l, lv, hRightColX, hKey, rkey, rval, plain);
       y += lineH;
@@ -1313,11 +1359,27 @@ export class FftView {
     y += lineH + 2;
 
     // ── dnL / dnH sidebands, two per row. ───────────────────────────────────
-    const dKey = 5 * charW, dVal = 26 * charW;
+    // The products are stored in dBV; drop the ADC offset to get the measured dBFS the unit
+    // selector works from. The relative unit measures against |F1| + |F2|, the divisor
+    // imd-analyzer uses for every product percentage, floored like it is there so muted
+    // tones cannot divide by zero.
+    const dbvOff = p.getDbvOffsetDb(p.fftChannel.get());
+    const tableUnit = this._distortionUnit();
+    const unitLabel = this._distortionUnitLabel(tableUnit);
+    const refDbFs = 20.0 * Math.log10(Math.max(MIN_REF_VRMS, imd.f1Mag + imd.f2Mag)) - dbvOff;
+    // " -108.42 dBV  0.00045123 %" - follows the label width, as the THD table's harmonic
+    // column does.
+    const dKey = 5 * charW, dVal = (23 + unitLabel.length) * charW;
     const dRight = xLeft + dKey + dVal + colGap;
     for (let k = 2; k <= IMD_MAX_ORDER; k++) {
-      const lKey = `d${k}L:`, lVal = this._imdRowText(imd.dnLDbV[k], imd.dnLPct[k]);
-      const rKey = `d${k}H:`, rVal = this._imdRowText(imd.dnHDbV[k], imd.dnHPct[k]);
+      const lKey = `d${k}L:`;
+      const lVal = this._imdRowText(
+        this._levelInDistortionUnit(imd.dnLDbV[k] - dbvOff, refDbFs, tableUnit, dbvOff),
+        imd.dnLPct[k], unitLabel);
+      const rKey = `d${k}H:`;
+      const rVal = this._imdRowText(
+        this._levelInDistortionUnit(imd.dnHDbV[k] - dbvOff, refDbFs, tableUnit, dbvOff),
+        imd.dnHPct[k], unitLabel);
       this.drawKv(g, xLeft, y, dKey, lKey, lVal, dRight, dKey, rKey, rVal, plain);
       y += lineH;
     }
@@ -1355,10 +1417,13 @@ export class FftView {
     const m = this._monoMetrics(g, false);
     const charW = m.charW, lineH = m.lineH;   // Java textExtent("M").y + 1 -> fixed 14 here
     const p = this.prefs;
+    // The value columns follow the unit label's width (drawDistortionTable / drawImdTable),
+    // so the natural width does too - a wider "dBFS" must not clip the trailing %.
+    const unitLabel = this._distortionUnitLabel(this._distortionUnit());
     if (r.imd) {
       // Java: rows = F1/F2 + span + optional Δf1/Δf2 + 2 metric + (MAX_ORDER−1) dnL/dnH.
-      const worstVal = `${(-9999.99).toFixed(2)} dBV ${(99.99999999).toFixed(8)} %`;
-      const contentW = EXT_LEFT_PAD + 38 * charW + g.measureText(worstVal).width + 34;
+      const worstVal = `${(-9999.99).toFixed(2)} ${unitLabel} ${(99.99999999).toFixed(8)} %`;
+      const contentW = EXT_LEFT_PAD + (35 + unitLabel.length) * charW + g.measureText(worstVal).width + 34;
       const clk = this._genActive() && p && p.fftFundFromGenerator.get();
       const rows = 2 + 1 + (clk ? 2 : 0) + 2 + (IMD_MAX_ORDER - 1);
       const contentH = EXT_LEFT_PAD + rows * lineH + 8;
@@ -1366,8 +1431,8 @@ export class FftView {
     }
     // THD: measure the worst-case harmonic row (Java :2946 - measuring the whole row
     // removes the mono "M"-cell under-count that clipped the trailing %).
-    const widestRow = `H10: ${this._signed(-9999.99, 2)} dBV ${(99.99999999).toFixed(8)} %  `
-      + `H11: ${this._signed(-9999.99, 2)} dBV ${(99.99999999).toFixed(8)} %`;
+    const widestRow = `H10: ${this._signed(-9999.99, 2)} ${unitLabel} ${(99.99999999).toFixed(8)} %  `
+      + `H11: ${this._signed(-9999.99, 2)} ${unitLabel} ${(99.99999999).toFixed(8)} %`;
     const rowW = g.measureText(widestRow).width;
     const contentW = EXT_LEFT_PAD + rowW + 32;
     const maxH = Math.max(9, p ? p.fftCalcMaxHarmonic.get() : 9);

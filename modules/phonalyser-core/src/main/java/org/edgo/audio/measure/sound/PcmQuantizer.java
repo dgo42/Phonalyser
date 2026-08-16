@@ -84,7 +84,10 @@ public final class PcmQuantizer {
     public PcmQuantizer(int bitDepth, double ditherBits) {
         this.bitDepth       = bitDepth;
         this.ditherBits     = Math.max(0.0, ditherBits);
-        this.bytesPerSample = bitDepth / 8;
+        // Rounded UP: a depth that is not a whole number of bytes rides
+        // right-aligned in the next larger container (20 bits in 3 bytes,
+        // S20_3LE-style).  Exact division for 16 / 24 / 32.
+        this.bytesPerSample = (bitDepth + 7) / 8;
         this.bytesPerFrame  = bytesPerSample * CHANNELS;
     }
 

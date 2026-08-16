@@ -332,3 +332,16 @@ export function t(key, ...args) {
   if (args.length === 0) return pattern;
   return messageFormat(pattern, args);
 }
+
+/**
+ * Strips SWT mnemonic markers from a desktop bundle value: a single '&' marks
+ * the next character as the accelerator and disappears; the doubled '&&' is
+ * SWT's escape for one literal ampersand and becomes '&'. The web draws no
+ * mnemonics, so every label passes through here on its way into the chrome -
+ * which is what lets the web bundles carry the desktop values byte-for-byte.
+ * @param {string} s  a resolved bundle value.
+ * @returns {string}
+ */
+export function stripMnemonics(s) {
+  return s.replace(/&&?/g, (m) => (m === '&&' ? '&' : ''));
+}

@@ -18,8 +18,6 @@
 
 package org.edgo.audio.measure.gui.backend.qa40x;
 
-import java.util.List;
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,31 +27,29 @@ import org.edgo.audio.measure.gui.bus.ActiveRange;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.RemoteBackendRegistry;
-import org.edgo.audio.measure.net.proto.MessageType;
-import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.preferences.BackendKey;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.qa40x.Qa40xProtocol;
 
 import static org.edgo.audio.measure.enums.AudioBackendType.QA40X;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link Qa40xRangeController} on the bench it cannot reach by USB: a QA403 on a
- * Phonalyser server, whose attenuator moves over the net protocol's range
- * commands (spec 4.6) instead of over a register write.
+ * {@link Qa40xRangeController} is the LOCAL re-range path, and what is pinned
+ * here is what it does NOT do: it puts nothing on the wire.
+ *
+ * <p>An analyzer on a server is re-ranged by its settings panel's own commit
+ * (spec 4.6's range commands, sent once the staged position is known to differ
+ * from the one the bench reported in force), so a controller that also sent the
+ * event on would move the same attenuator twice.
  *
  * <p>Driven headless through the real {@link MessageBus} with the real
  * {@code RemoteBackendRegistry} - the seam behind it is a recorder
- * ({@link StubRemoteBench}) found by the ordinary service loader, so what is
- * asserted is exactly what would have gone on the wire.
+ * ({@link StubRemoteBench}) found by the ordinary service loader, so anything
+ * that DID leave this machine would be recorded here.
  *
- * <p>The local branch is deliberately not driven here: it needs an open QA40x
- * session, which needs a device.  What matters for the remote one is that the
- * committed change LEAVES the machine at all - before this, nothing in
- * production ever sent {@code qa40x.setInputRange}, and a range table for a
- * remote analyzer was decoration.
+ * <p>The local re-range itself is deliberately not driven: it needs an open
+ * QA40x session, which needs a device.
  */
 class Qa40xRangeControllerTest {
 
@@ -62,10 +58,9 @@ class Qa40xRangeControllerTest {
     private static final BackendKey REMOTE_QA40X =
             BackendKey.of("b7e0-bench-uuid", QA40X);
     private static final BackendKey LOCAL_QA40X = BackendKey.of(QA40X);
-    /** Positions the analyzer really has (doc §6), and not the ones a fresh card
-     *  starts on, so a write that never happened cannot pass for one that did. */
+    /** A position the analyzer really has (doc §6), and not the one a fresh card
+     *  starts on, so a write that DID happen cannot pass unnoticed. */
     private static final int INPUT_DBV = 42;
-    private static final int OUTPUT_DBV = -12;
     /** A row label of some other device's card - the event is generic and may
      *  describe any card at all. */
     private static final String FOREIGN_LABEL = "2 Vrms";
@@ -89,34 +84,22 @@ class Qa40xRangeControllerTest {
         bench.clear();
     }
 
+    /**
+     * The no-double-send guard: with a bench selected and a real attenuator
+     * position committed, this controller puts NOTHING on the wire.  The
+     * analyzer's settings panel sends that write on the same OK, and a second
+     * one from here would move the attenuator twice - the second time from an
+     * event that carries no bench of its own.
+     */
     @Test
-    void aCommittedInputRangeReachesTheBenchAsTheProtocolsRangeCommand() {
+    void aRemoteSelectionIsNotSentFromHere() {
         Preferences.instance().setSelectedBackend(REMOTE_QA40X);
 
         publish(true, Qa40xProtocol.rangeLabel(INPUT_DBV));
 
-        List<StubRemoteBench.Call> calls = bench.calls();
-        assertEquals(1, calls.size(), "exactly one range write");
-        StubRemoteBench.Call call = calls.get(0);
-        assertEquals(REMOTE_QA40X, call.selection(),
-                "aimed at the bench the operator is on, not at 'the QA40x'");
-        assertEquals(MessageType.QA40X_SET_INPUT_RANGE.getWire(), call.request());
-        assertEquals(INPUT_DBV, call.fields().get(NetFields.DBV),
-                "the label is resolved back to the dBV the analyzer takes");
-        assertTrue(call.locked(), "spec 4.6 requires the analyzer's lock for a write, "
-                + "and nothing else holds it while Preferences is open");
-    }
-
-    @Test
-    void aCommittedOutputRangeGoesToTheOutputCommand() {
-        Preferences.instance().setSelectedBackend(REMOTE_QA40X);
-
-        publish(false, Qa40xProtocol.rangeLabel(OUTPUT_DBV));
-
-        assertEquals(1, bench.calls().size());
-        assertEquals(MessageType.QA40X_SET_OUTPUT_RANGE.getWire(),
-                bench.calls().get(0).request());
-        assertEquals(OUTPUT_DBV, bench.calls().get(0).fields().get(NetFields.DBV));
+        assertTrue(bench.calls().isEmpty(),
+                "the range write for a bench belongs to the settings panel's commit, "
+                        + "which knows what that bench reported in force");
     }
 
     @Test

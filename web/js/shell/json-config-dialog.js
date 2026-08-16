@@ -102,7 +102,7 @@ export class JsonConfigDialog {
       : JSON.stringify(port.loadLive(), null, INDENT);
 
     this.$('#jsonConfigTitle').text(this._readOnly
-      ? t('jsonConfig.title.corrupt', t(port.titleKey))
+      ? t('web.jsonConfig.title.corrupt', t(port.titleKey))
       : t(port.titleKey));
     // The key is shown because it is what the operator would look for in the developer
     // tools, and because it is the one thing that says WHICH document this is.
@@ -143,14 +143,14 @@ export class JsonConfigDialog {
     try {
       parsed = JSON.parse(this._view.state.doc.toString());
     } catch (e) {
-      this._error(t('jsonConfig.error.parse', e && e.message ? e.message : String(e)));
+      this._error(t('web.jsonConfig.error.parse', e && e.message ? e.message : String(e)));
       return;
     }
     // A JSON document that is not an object would sail through JSON.parse ("3", "null", a
     // bare array) and then quietly clear every setting, because the readers ask for keys and
     // find none. Refused here, where there is still something to refuse it to.
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      this._error(t('jsonConfig.error.notObject'));
+      this._error(t('web.jsonConfig.error.notObject'));
       return;
     }
     try {
@@ -161,7 +161,7 @@ export class JsonConfigDialog {
       // else is unexpected, and the raw message is the most honest thing to show.
       this._error(e && e.i18nKey
         ? t(e.i18nKey)
-        : t('jsonConfig.error.apply', e && e.message ? e.message : String(e)));
+        : t('web.jsonConfig.error.apply', e && e.message ? e.message : String(e)));
       return;
     }
     if (this._modal) this._modal.hide();

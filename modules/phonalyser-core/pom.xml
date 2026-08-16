@@ -6,10 +6,16 @@
   JNA bindings.
 
   DEPENDS ON NOTHING ELSE IN THE REACTOR.  In particular it must NOT gain a
-  dependency on SWT, on any gui.** package, or on any backend-* module - those
-  three rules are what make a headless agent build possible.  The absence of an
+  dependency on SWT (or any other UI toolkit) or on any backend-* module -
+  those rules are what make a headless agent build possible.  The absence of an
   SWT dependency below is deliberate and load-bearing: if you find yourself
   adding one, the leak belongs in the caller, not here.
+
+  gui.** CLASSES may live here, and some do: the unit vocabulary a widget
+  displays in (UnitFamily, UnitConversion, UnitValue) and the translation
+  lookup (I18n) are toolkit-free, and the preference store has to resolve a
+  stored value against the unit it was entered in.  What is banned is the
+  TOOLKIT, not the package name.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -19,7 +25,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.2.0</version>
+        <version>1.2.1</version>
         <relativePath>../phonalyser-parent</relativePath>
     </parent>
 

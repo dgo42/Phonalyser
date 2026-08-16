@@ -82,7 +82,7 @@ class NetFilePlaybackTest {
     @AfterEach
     void stopTheBench() {
         for (NetConnection connection : connections) {
-            connection.close(NetCloseReason.BYE);
+            connection.connClose(NetCloseReason.BYE);
         }
         bench.shutDown(SHUTDOWN_MS);
         // shutDown() is final and stops only the WebSocket side; without this the
@@ -180,7 +180,7 @@ class NetFilePlaybackTest {
         // Deliberately not a commanded teardown - that one closes the generator
         // first and owes no error, because the operator asked for it.  Here the
         // socket is simply gone and the lane is still nominally up.
-        manager.getConnection().close(NetCloseReason.KEEPALIVE_TIMEOUT);
+        manager.getConnection().connClose(NetCloseReason.KEEPALIVE_TIMEOUT);
         manager.disconnect();
 
         assertFalse(manager.fileState().playing(),

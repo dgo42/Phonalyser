@@ -21,7 +21,7 @@
     <parent>
         <groupId>org.edgo.phonalyser</groupId>
         <artifactId>phonalyser-parent</artifactId>
-        <version>1.2.0</version>
+        <version>1.2.1</version>
         <relativePath>../phonalyser-parent</relativePath>
     </parent>
 
@@ -65,10 +65,6 @@
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-qa40x</artifactId>
         </dependency>
-        <dependency>
-            <groupId>${project.groupId}</groupId>
-            <artifactId>backend-loopback</artifactId>
-        </dependency>
         <!-- The combined HTTP+WebSocket front: Jetty 12 core, ONE port
              (versions in phonalyser-parent).  Java-WebSocket is gone from
              the server - it stays the CLIENT's transport. -->
@@ -111,7 +107,8 @@
 
              (or -Dserver.dist, which activates the same profile from a reactor
              build).  The jar lands in target/ as
-             phonalyser-server-<version>-<server.platform.id>.jar - see
+             phonalyser-server-<version>.jar - the same file whichever platform
+             profile built it - with the platform-named zip beside it; see
              server.mainJar in phonalyser-parent. -->
         <profile>
             <id>server-dist</id>
@@ -265,8 +262,10 @@
                          after the assembly, so an exe built there would miss the
                          bundle it is supposed to be in.
 
-                         Skipped on Linux and macOS (server.launch4j.skip) - only
-                         the two Windows descriptors pack this file.
+                         Built on every host and never skipped: one build emits
+                         all six bundles, so the two Windows zips - the only ones
+                         that pack a stub - always want theirs.  Launch4j
+                         cross-builds from its own per-host workdir.
 
                          No <versionInfo>: Launch4j requires the whole block once
                          it is present, including a four-part numeric
@@ -277,26 +276,27 @@
                         <artifactId>launch4j-maven-plugin</artifactId>
                         <version>${launch4j.plugin.version}</version>
                         <executions>
+                            <!-- BOTH stubs, every run: one build emits all six
+                                 bundles, so the two Windows ones are always
+                                 wanted whatever host is building.  The stub
+                                 itself is a 32-bit PE32 in BOTH cases - that is
+                                 simply how Launch4j builds launchers - so the
+                                 suffix names the JRE it hunts for and the
+                                 natives\ arch it belongs beside, not its own
+                                 bitness.  Launch4j cross-builds them from a
+                                 Linux or macOS host through its own workdir. -->
                             <execution>
-                                <id>server-launcher-exe</id>
+                                <id>server-launcher-exe-x64</id>
                                 <phase>prepare-package</phase>
                                 <goals>
                                     <goal>launch4j</goal>
                                 </goals>
                                 <configuration>
-                                    <skip>${server.launch4j.skip}</skip>
                                     <!-- console, not gui: the server's whole
                                          operator interface is its stdout banner,
                                          and -d is what silences it. -->
                                     <headerType>console</headerType>
-                                    <!-- Named per bundle target (server.exeName).
-                                         The stub itself is a 32-bit PE32 in BOTH
-                                         cases - that is simply how Launch4j
-                                         builds launchers - so the suffix names
-                                         the JRE it hunts for and the natives\
-                                         arch it belongs beside, not its own
-                                         bitness. -->
-                                    <outfile>${project.build.directory}/${server.exeName}</outfile>
+                                    <outfile>${project.build.directory}/phonalyser-server-x64.exe</outfile>
                                     <dontWrapJar>true</dontWrapJar>
                                     <jar>${server.mainJar}</jar>
                                     <!-- Resolve everything against the exe's own
@@ -307,8 +307,11 @@
                                     <errTitle>Phonalyser server</errTitle>
                                     <jre>
                                         <minVersion>17</minVersion>
-                                        <runtimeBits>${server.launch4j.runtimeBits}</runtimeBits>
-                                        <maxHeapSize>${server.launch4j.maxHeapMb}</maxHeapSize>
+                                        <!-- 64 only: the jar is arch-neutral but
+                                             the natives\ folder beside this stub
+                                             is not, so the wrong JVM would start
+                                             and fail at the first device open. -->
+                                        <runtimeBits>64</runtimeBits>
                                         <!-- The reason this launcher exists: the
                                              staged natives\ beside the exe, on
                                              all three paths the loaders consult
@@ -316,6 +319,36 @@
                                              libusb override).  The plugin's Jre
                                              element takes these as <opts>, not as
                                              bare repeated <opt>. -->
+                                        <opts>
+                                            <opt>-Djava.library.path="%EXEDIR%\natives"</opt>
+                                            <opt>-Djna.library.path="%EXEDIR%\natives"</opt>
+                                            <opt>-Dlibusb.path="%EXEDIR%\natives"</opt>
+                                        </opts>
+                                    </jre>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>server-launcher-exe-x86</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>launch4j</goal>
+                                </goals>
+                                <configuration>
+                                    <headerType>console</headerType>
+                                    <outfile>${project.build.directory}/phonalyser-server-x86.exe</outfile>
+                                    <dontWrapJar>true</dontWrapJar>
+                                    <jar>${server.mainJar}</jar>
+                                    <chdir>.</chdir>
+                                    <icon>${server.launch4j.icon}</icon>
+                                    <errTitle>Phonalyser server</errTitle>
+                                    <jre>
+                                        <minVersion>17</minVersion>
+                                        <runtimeBits>32</runtimeBits>
+                                        <!-- A 32-bit JVM cannot reserve much
+                                             beyond ~1.4 GB of contiguous address
+                                             space; the .cmd launcher caps the
+                                             same bundle the same way. -->
+                                        <maxHeapSize>1200</maxHeapSize>
                                         <opts>
                                             <opt>-Djava.library.path="%EXEDIR%\natives"</opt>
                                             <opt>-Djna.library.path="%EXEDIR%\natives"</opt>
@@ -349,7 +382,12 @@
                             <descriptors>
                                 <descriptor>${repo.root}/src/main/assembly/server-jar.xml</descriptor>
                             </descriptors>
-                            <finalName>phonalyser-server-${project.version}-${server.platform.id}</finalName>
+                            <!-- No platform in the jar's name: the jar is the
+                                 same file for every target (server-jar.xml), so
+                                 six builds produce six zips around ONE jar.  The
+                                 zip execution below overrides it with the
+                                 platform-named stem. -->
+                            <finalName>phonalyser-server-${project.version}</finalName>
                             <appendAssemblyId>false</appendAssemblyId>
                             <includeSystemScope>true</includeSystemScope>
                         </configuration>
@@ -361,36 +399,99 @@
                                     <goal>single</goal>
                                 </goals>
                             </execution>
-                            <!-- The per-platform dist bundle: the jar plus the
-                                 natives and launch/service scripts that make it
-                                 a Windows / Linux / macOS server.  Declared
-                                 AFTER the jar execution and NOT by accident -
-                                 two executions bound to the same phase run in
-                                 declaration order, and this one packs the very
+                            <!-- The dist bundles: the jar plus the natives and
+                                 launch/service scripts that make it a Windows /
+                                 Linux / macOS server.  ALL SIX from ONE build,
+                                 which is what the universal jar buys: the six
+                                 differ only in files that are already in the
+                                 checkout, so building the reactor once per
+                                 platform was six times the work for one jar.
+
+                                 Declared AFTER the jar execution and NOT by
+                                 accident - executions bound to the same phase
+                                 run in declaration order, and these pack the very
                                  file the one above writes.
 
-                                 Only the descriptor and <attach> are overridden
-                                 here; finalName and appendAssemblyId are
-                                 inherited from the plugin-level configuration,
-                                 so the zip lands beside the jar under the same
-                                 phonalyser-server-<version>-<id> stem.
+                                 finalName is overridden per zip: the plugin-level
+                                 stem carries no platform (it names the jar), and
+                                 without an override here the six would write one
+                                 file six times.  appendAssemblyId stays
+                                 inherited (off).
 
                                  attach=false is load-bearing: with
-                                 appendAssemblyId off, an ATTACHED second
-                                 assembly would take over this module's main
-                                 artifact and replace the jar the execution above
-                                 just set.  The zip is a deliverable, not the
-                                 module's artifact. -->
+                                 appendAssemblyId off, an ATTACHED assembly would
+                                 take over this module's main artifact and replace
+                                 the jar the execution above just set.  A zip is a
+                                 deliverable, not the module's artifact. -->
                             <execution>
-                                <id>make-server-dist-zip</id>
+                                <id>make-server-dist-zip-windows-x64</id>
                                 <phase>package</phase>
-                                <goals>
-                                    <goal>single</goal>
-                                </goals>
+                                <goals><goal>single</goal></goals>
                                 <configuration>
                                     <descriptors>
-                                        <descriptor>${repo.root}/src/main/assembly/server-dist-${server.platform.id}.xml</descriptor>
+                                        <descriptor>${repo.root}/src/main/assembly/server-dist-windows-x64.xml</descriptor>
                                     </descriptors>
+                                    <finalName>phonalyser-server-${project.version}-windows-x64</finalName>
+                                    <attach>false</attach>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>make-server-dist-zip-windows-x86</id>
+                                <phase>package</phase>
+                                <goals><goal>single</goal></goals>
+                                <configuration>
+                                    <descriptors>
+                                        <descriptor>${repo.root}/src/main/assembly/server-dist-windows-x86.xml</descriptor>
+                                    </descriptors>
+                                    <finalName>phonalyser-server-${project.version}-windows-x86</finalName>
+                                    <attach>false</attach>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>make-server-dist-zip-linux-x64</id>
+                                <phase>package</phase>
+                                <goals><goal>single</goal></goals>
+                                <configuration>
+                                    <descriptors>
+                                        <descriptor>${repo.root}/src/main/assembly/server-dist-linux-x64.xml</descriptor>
+                                    </descriptors>
+                                    <finalName>phonalyser-server-${project.version}-linux-x64</finalName>
+                                    <attach>false</attach>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>make-server-dist-zip-linux-aarch64</id>
+                                <phase>package</phase>
+                                <goals><goal>single</goal></goals>
+                                <configuration>
+                                    <descriptors>
+                                        <descriptor>${repo.root}/src/main/assembly/server-dist-linux-aarch64.xml</descriptor>
+                                    </descriptors>
+                                    <finalName>phonalyser-server-${project.version}-linux-aarch64</finalName>
+                                    <attach>false</attach>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>make-server-dist-zip-macos-x64</id>
+                                <phase>package</phase>
+                                <goals><goal>single</goal></goals>
+                                <configuration>
+                                    <descriptors>
+                                        <descriptor>${repo.root}/src/main/assembly/server-dist-macos-x64.xml</descriptor>
+                                    </descriptors>
+                                    <finalName>phonalyser-server-${project.version}-macos-x64</finalName>
+                                    <attach>false</attach>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>make-server-dist-zip-macos-aarch64</id>
+                                <phase>package</phase>
+                                <goals><goal>single</goal></goals>
+                                <configuration>
+                                    <descriptors>
+                                        <descriptor>${repo.root}/src/main/assembly/server-dist-macos-aarch64.xml</descriptor>
+                                    </descriptors>
+                                    <finalName>phonalyser-server-${project.version}-macos-aarch64</finalName>
                                     <attach>false</attach>
                                 </configuration>
                             </execution>

@@ -191,6 +191,15 @@ public final class FftAnalyzerWorker {
     private int     winNeeded     = -1;     // `needed` the window was built for
     private boolean winChannelLeft;         // channel the window currently holds
     private volatile boolean winValid;
+    /** Samples of the pending window / hop already gathered into
+     *  {@link #winBuf} / {@link #hopBuf}.  A span is collected across as many
+     *  ticks as it takes - it may be far longer than the capture ring - so
+     *  these count the progress through it; both are cleared together with
+     *  {@link #winValid} by {@link #invalidateWindow()}, because a rebuild must
+     *  never splice samples from either side of a re-anchor.  Worker-thread
+     *  only; volatile for the UI's next-frame progress readout. */
+    private volatile int winFill;
+    private volatile int hopFill;
     /** Set on (re)start / reset; the worker re-anchors {@link #reader} to the
      *  latest sample on its next tick so the window rebuilds from fresh data
      *  (no stale pre-reset samples leak in).  Re-anchoring on the worker thread
@@ -581,6 +590,16 @@ public final class FftAnalyzerWorker {
         lastRejectGates     = null;
     }
 
+    /** Drops the analysis window AND whatever had been gathered towards the
+     *  next one, so the next tick starts collecting from the current cursor
+     *  position: a partially filled span kept across a re-anchor would splice
+     *  samples from before and after the break into one frame. */
+    private void invalidateWindow() {
+        winValid = false;
+        winFill  = 0;
+        hopFill  = 0;
+    }
+
     /** Handles a ring overrun: the worker fell a full ring behind, so the
      *  contiguous span it was about to read had already been overwritten.  This
      *  is a COVERAGE gap, not corrupted data - the absolute sample positions are
@@ -590,7 +609,7 @@ public final class FftAnalyzerWorker {
      *  window fresh from "now"; do NOT restart averaging.  Worker-thread only
      *  (it advances the cursor). */
     private void onCaptureOverrun(SignalBufferReader rdr) {
-        winValid = false;
+        invalidateWindow();
         rdr.seekToLatest();
         kappaSkipNext      = true;   // κ measurement: re-anchor on the jumped frame, don't fold its step
         multiKappaSkipNext = true;   // multi-tone per-tone κ refine: same re-anchor
@@ -630,7 +649,7 @@ public final class FftAnalyzerWorker {
      *  gap and the cross-tick gap recovery corrects any post-glitch phase step).
      *  Worker-thread only. */
     private void onSignalDiscontinuity(SignalBufferReader reader) {
-        winValid = false;
+        invalidateWindow();
         reader.seekToLatest();
         // Reuses the drain-skip: the next tick consumes + discards this span
         // before rebuilding the window (max keeps a larger pending drain).
@@ -1341,7 +1360,7 @@ public final class FftAnalyzerWorker {
         // "now" on its next tick, so the first analysis window is built from a
         // FULL needed-sample span of FRESH samples captured AFTER this point.
         firstFrameDone        = false;
-        winValid              = false;
+        invalidateWindow();
         reAnchorPending       = true;
         completedAnalyses     = 0;
         resetStatistics();
@@ -1389,7 +1408,7 @@ public final class FftAnalyzerWorker {
             winBuf     = new double[0];
             analyzeBuf = new double[0];
             hopBuf     = new double[0];
-            winValid   = false;
+            invalidateWindow();
             winNeeded  = -1;
             imdGridIdx = null;
             analyzer.releaseScratch();
@@ -1416,7 +1435,7 @@ public final class FftAnalyzerWorker {
         paused.set(false);
         completedAnalyses     = 0;
         firstFrameDone        = false;
-        winValid              = false;
+        invalidateWindow();
         reAnchorPending       = true;
         recycleAndClearCache();         // lock-guarded - safe from any thread
         if (running) {
@@ -1494,9 +1513,12 @@ public final class FftAnalyzerWorker {
         FftOverlap overlap = prefs.getFftOverlap();
         double hop = Math.max(1, fftLength * (1.0 - overlap.fraction));
         // Building the first window needs a full `needed`; once it's valid each
-        // tick just needs one fresh hop, so the bar sweeps 0->1 per hop.
+        // tick just needs one fresh hop, so the bar sweeps 0->1 per hop.  A span
+        // is gathered across ticks, so what already sits in the analyser's own
+        // buffer counts as captured - otherwise a span longer than the ring
+        // would read 0 % for its whole (minutes-long) collection.
         double want = winValid ? hop : (winNeeded > 0 ? winNeeded : fftLength);
-        double f = avail / want;
+        double f = (avail + (winValid ? hopFill : winFill)) / want;
         return (f < 0) ? 0 : (f > 1 ? 1 : f);
     }
 
@@ -1618,8 +1640,13 @@ public final class FftAnalyzerWorker {
         double hop = fftLength * (1.0 - overlap.fraction);
         if (hop < 1) hop = 1;
         int hopSamples = (int) Math.max(1, Math.round(hop));
+        // NOT bounded by the capture ring: the analysis span is the analyser's
+        // own buffer, gathered from the ring across as many ticks as it takes.
+        // Clamping it to the ring made the largest FFT lengths impossible - a
+        // 4 M-point frame at 48 kS/s is 87 s of audio against a 22 s ring, so
+        // the span demanded was the whole ring, and waiting for it guaranteed
+        // the writer lapped the cursor (the permanent overrun at 4 M).
         int needed = (int) Math.ceil(fftLength + (averages - 1) * hop);
-        needed = Math.min(needed, rdr.getCapacity());
 
         Channel channel = prefs.getFftChannel();
         boolean wantLeft = (channel == Channel.L);
@@ -1631,7 +1658,7 @@ public final class FftAnalyzerWorker {
         if (reAnchorPending) {
             rdr.seekToLatest();
             reAnchorPending = false;
-            winValid = false;
+            invalidateWindow();
             if (drainSkipPending.getAndSet(false)) {
                 drainSkipRemaining = (long) Math.ceil(OUTPUT_DRAIN_SKIP_SEC * sampleRate);
             }
@@ -1655,7 +1682,7 @@ public final class FftAnalyzerWorker {
         // A change in window size (fftLength / overlap / averages) or channel
         // forces a rebuild from a fresh contiguous span.
         if (winNeeded != needed || winChannelLeft != wantLeft) {
-            winValid       = false;
+            invalidateWindow();     // incl. the partial fill: it is the wrong size / channel now
             winNeeded      = needed;
             winChannelLeft = wantLeft;
             if (winBuf.length != needed) winBuf = new double[needed];
@@ -1675,30 +1702,36 @@ public final class FftAnalyzerWorker {
 
         long samplesAbsStart;
         if (!winValid) {
-            // Build the first window from one complete `needed`-sample span.
-            if (avail < needed) {
-                return awaitFor((int) (needed - avail), sampleRate);
-            }
-            int got = rdr.read(needed, wantLeft ? winBuf : null, wantLeft ? null : winBuf);
-            if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
-            if (got < needed) return IDLE_TICK_MS;        // gated by avail≥needed; defensive
-            winLen      = got;
-            winAbsStart = rdr.getReadPos() - got;
+            // Build the first window by GATHERING the `needed`-sample span into
+            // winBuf over as many ticks as it takes - the span can be longer
+            // than the ring, and every tick's share is consumed as it arrives,
+            // so the cursor stays right behind the writer instead of standing
+            // still and being lapped.
+            winFill = gather(rdr, winBuf, winFill, needed, wantLeft, avail);
+            if (winFill == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
+            if (winFill < needed) return awaitFor(needed - winFill, sampleRate);
+            winLen      = needed;
+            winAbsStart = rdr.getReadPos() - winLen;
             winValid    = true;
+            winFill     = 0;
         } else {
             // Slide forward exactly one hop: pull the fresh hop, drop the oldest
             // hop, append it.  Uniform hop => uniform cross-tick de-rotation
-            // delta, gap-free across ticks (the contiguous-stream fix).
-            if (avail < hopSamples) {
-                return Math.max(20, msForSamples(hopSamples - (int) avail, sampleRate));
+            // delta, gap-free across ticks (the contiguous-stream fix).  The hop
+            // is gathered the same way as the first window: at zero overlap it
+            // is as long as the frame itself, hence longer than the ring at the
+            // large FFT lengths.
+            if (hopBuf.length != hopSamples) {
+                hopBuf  = new double[hopSamples];
+                hopFill = 0;
             }
-            if (hopBuf.length != hopSamples) hopBuf = new double[hopSamples];
-            int got = rdr.read(hopSamples, wantLeft ? hopBuf : null, wantLeft ? null : hopBuf);
-            if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
-            if (got < hopSamples) return IDLE_TICK_MS;    // gated by avail≥hop; defensive
+            hopFill = gather(rdr, hopBuf, hopFill, hopSamples, wantLeft, avail);
+            if (hopFill == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
+            if (hopFill < hopSamples) return awaitFor(hopSamples - hopFill, sampleRate);
             System.arraycopy(winBuf, hopSamples, winBuf, 0, winLen - hopSamples);
             System.arraycopy(hopBuf, 0, winBuf, winLen - hopSamples, hopSamples);
             winAbsStart += hopSamples;
+            hopFill = 0;
         }
         samplesAbsStart = winAbsStart;
 
@@ -2074,6 +2107,22 @@ public final class FftAnalyzerWorker {
     private int awaitFor(int samples, int sampleRate) {
         awaitSamplesNext = samples;
         return msForSamples(samples, sampleRate);
+    }
+
+    /** Consumes this tick's share of a span being collected into {@code dst}:
+     *  copies what the ring holds right now (at most the {@code target - have}
+     *  still missing) behind the {@code have} samples already there, and
+     *  returns the new fill count - {@code target} once the span is complete,
+     *  or {@link SignalBufferReader#OVERRUN} if the cursor was lapped.  Reading
+     *  every tick is what keeps the cursor close behind the writer while a span
+     *  longer than the ring is being assembled.  Worker-thread only (it
+     *  advances the cursor). */
+    private int gather(SignalBufferReader rdr, double[] dst, int have, int target,
+                       boolean wantLeft, long avail) {
+        int chunk = (int) Math.min(avail, target - have);
+        if (chunk <= 0) return have;
+        int got = rdr.read(chunk, wantLeft ? dst : null, wantLeft ? null : dst, have);
+        return got == SignalBufferReader.OVERRUN ? SignalBufferReader.OVERRUN : have + got;
     }
 
 

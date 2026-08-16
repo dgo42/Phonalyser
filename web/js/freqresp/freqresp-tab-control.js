@@ -21,6 +21,7 @@ import { t } from '../i18n/i18n.js';
 import { TileTabs } from '../widgets/tile-tabs.js';
 import { PresetBar } from '../widgets/preset-bar.js';
 import { NumericStepField, NumericStepModel, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
+import { unitValue } from '../widgets/unit-conversion.js';
 
 // ---- Filters / Unevenness field bounds (Java FreqRespTabControl constants) ----
 const FILTER_DB_MIN = 0.001;
@@ -647,7 +648,10 @@ export class FreqRespTabControl {
     const p = new FreqRespPreset();
     p.startHz = prefs.freqRespStartHz.get();
     p.stopHz = prefs.freqRespStopHz.get();
-    p.amplitudeVrms = prefs.freqRespAmplitudeVrms.get();
+    // The preset carries the value as entered, so recalling it under another
+    // calibration replays what was typed, not a voltage frozen out of it.
+    p.amplitude = prefs.freqRespAmplitude.get().value;
+    p.amplitudeUnit = prefs.freqRespAmplitude.get().unit;
     p.sweepPoints = prefs.freqRespSweepPoints.get();
     p.fftSize = prefs.freqRespFftSize.get();
     p.leadInSec = prefs.freqRespLeadInSec.get();
@@ -677,7 +681,7 @@ export class FreqRespTabControl {
     const prefs = this.prefs;
     prefs.freqRespStartHz.set(p.startHz);
     prefs.freqRespStopHz.set(p.stopHz);
-    prefs.freqRespAmplitudeVrms.set(p.amplitudeVrms);
+    prefs.freqRespAmplitude.set(unitValue(p.amplitude, p.amplitudeUnit));
     prefs.freqRespSweepPoints.set(p.sweepPoints);
     prefs.freqRespFftSize.set(p.fftSize);   // re-derives durationSec via the controller subscription
     prefs.freqRespLeadInSec.set(p.leadInSec);
@@ -703,7 +707,10 @@ export class FreqRespTabControl {
     // Reflect the recalled prefs into the live widgets (the NumericStepFields are owned by
     // app.js; reseed the ones this control owns + the derived label).
     const $ = this.$;
-    $('#frStart').val(p.startHz); $('#frStop').val(p.stopHz); $('#frAmp').val(p.amplitudeVrms);
+    $('#frStart').val(p.startHz); $('#frStop').val(p.stopHz);
+    // No #frAmp write here: the amplitude pref above already replayed the recalled pair through
+    // the field, which renders it with its unit suffix ("500 mV"). Writing the raw token over
+    // that would put an unlocalized string in front of the operator.
     $('#frPoints').val(p.sweepPoints); $('#frLeadIn').val(p.leadInSec);
     $('#frFft').val(String(p.fftSize)); $('#frDither').val(String(p.ditherBits));
     $('#frRiaa').prop('checked', p.showRiaa); $('#frRiaaRev').prop('checked', p.reverseRiaa);

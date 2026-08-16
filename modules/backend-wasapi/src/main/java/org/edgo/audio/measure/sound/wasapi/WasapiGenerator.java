@@ -58,6 +58,13 @@ public class WasapiGenerator implements AudioPlayback {
     private final int sampleRate;
     private final int bitDepth;
     private final int bytesPerFrame;
+    /** The DEVICE frame width - equal to {@link #bytesPerFrame} except when
+     *  the exclusive open resolved a wider container (24 valid bits carried
+     *  in 32-bit words); the encode stays at the exact selected depth and
+     *  {@link #fillNextBlock} widens per sample on the way out. */
+    private int containerBytesPerFrame;
+    /** Reusable widening stage for the container != lane case. */
+    private byte[] containerScratch;
     private final PcmQuantizer quantizer;
 
     private Pointer immDevice;
@@ -152,7 +159,14 @@ public class WasapiGenerator implements AudioPlayback {
     }
 
     private boolean initializeExclusive(long initialBufDuration) {
-        Memory wfx = buildWaveFormatExtensible(sampleRate, bitDepth, 2);
+        // The selected bit depth IS the valid bits - the exact capability;
+        // the device picks the container it wants them in (a 24-bit converter
+        // behind a 32-bit transport refuses 3-byte packed 24).  The encode
+        // stays at the exact depth; only the outgoing copy widens.
+        int containerBits = WasapiNative.resolveExclusiveContainerBits(
+                audioClient, sampleRate, bitDepth, 2);
+        containerBytesPerFrame = (containerBits / 8) * CHANNELS;
+        Memory wfx = buildWaveFormatExtensible(sampleRate, containerBits, bitDepth, 2);
         long bufDuration = initialBufDuration;
         for (int attempt = 0; attempt < 2; attempt++) {
             int hr = callHR(audioClient, VT_AC_INITIALIZE,
@@ -185,6 +199,7 @@ public class WasapiGenerator implements AudioPlayback {
     }
 
     private void initializeShared() {
+        containerBytesPerFrame = bytesPerFrame;   // shared mode: engine converts
         Memory wfx = buildWaveFormatExtensible(sampleRate, bitDepth, 2);
         long bufDuration = 200 * REF_TIME_PER_MILLISEC;
         int hr = callHR(audioClient, VT_AC_INITIALIZE,
@@ -434,8 +449,24 @@ public class WasapiGenerator implements AudioPlayback {
         }
         Pointer dst = ppBuf.getValue();
         encodeIntoScratch(gen, scratch, frames);
-        // Single Java->native copy directly into WASAPI's mapped buffer.
-        dst.write(0, scratch, 0, frames * bytesPerFrame);
+        if (containerBytesPerFrame == bytesPerFrame) {
+            // Single Java->native copy directly into WASAPI's mapped buffer.
+            dst.write(0, scratch, 0, frames * bytesPerFrame);
+        } else {
+            // 24 valid bits into 32-bit little-endian container words: the
+            // significant bytes ride on top, the padding byte below them.
+            int samples = frames * CHANNELS;
+            if (containerScratch == null || containerScratch.length < samples * 4) {
+                containerScratch = new byte[samples * 4];
+            }
+            for (int i = 0; i < samples; i++) {
+                containerScratch[4 * i]     = 0;
+                containerScratch[4 * i + 1] = scratch[3 * i];
+                containerScratch[4 * i + 2] = scratch[3 * i + 1];
+                containerScratch[4 * i + 3] = scratch[3 * i + 2];
+            }
+            dst.write(0, containerScratch, 0, frames * containerBytesPerFrame);
+        }
         callHR(renderClient, VT_RC_RELEASE_BUFFER, frames, 0);
         return frames;
     }

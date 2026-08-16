@@ -49,11 +49,11 @@ public enum NetCloseReason {
     /** The {@code hello} of spec 1 was refused, so no session ever existed. */
     HANDSHAKE_REFUSED("the server refused the session", "net.close.handshakeRefused"),
 
-    /** The server sent a binary frame this client cannot read (spec 5), so its
-     *  framing - and with it every stream on the socket - is no longer to be
-     *  trusted. */
-    PROTOCOL_ERROR("the server sent audio data this client cannot read",
-            "net.close.protocolError");
+    /** The server broke the wire contract: a binary frame this client cannot
+     *  read (spec 5), or control text on a capture's data connection, where
+     *  spec 4.7 allows nothing after the attach.  Either way its framing - and
+     *  with it every stream of the session - is no longer to be trusted. */
+    PROTOCOL_ERROR("the server broke the wire contract", "net.close.protocolError");
 
     /** The sentence written to the LOG.  English on purpose: a log line is read
      *  by whoever debugs the bench, not by the operator - what the operator sees

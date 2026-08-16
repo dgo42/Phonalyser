@@ -404,7 +404,7 @@ export class DeviceProfileStore {
       // The key travels ON the error the way DeviceFailureReason carries one: the wording
       // boundary is the dialog's, but only this line knows WHICH refusal happened.
       const refusal = new Error('the document has no audioDevices array');
-      refusal.i18nKey = 'jsonConfig.error.noAudioDevices';
+      refusal.i18nKey = 'web.jsonConfig.error.noAudioDevices';
       throw refusal;
     }
     this._devices.length = 0;

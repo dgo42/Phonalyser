@@ -121,9 +121,10 @@ public final class Qa40xRecorder extends AbstractPcmCapture
     @Override
     public void stopRecording() throws InterruptedException {
         recording.set(false);
-        if (engine != null) {
-            engine.detachCapture();               // stops the stream only if the last client detaches
-        }
+        // Through the MANAGER, not the engine this lane holds: the stream stops
+        // only if this was the last client, and the analyzer itself is released
+        // only if the manager has nothing left attached to it.
+        manager.detachCapture();
         Thread t = consumerThread;
         if (t != null) {
             t.join(1_000L);                       // drains the queue, then exits on the flag

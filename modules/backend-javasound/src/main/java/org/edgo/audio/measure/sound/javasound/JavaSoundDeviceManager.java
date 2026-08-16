@@ -61,7 +61,30 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class JavaSoundDeviceManager implements AudioDeviceManager {
 
-    /** {@link DeviceRef} backed by a {@link Mixer.Info}. */
+    /** The ALSA address of the system's default device, which names no card of
+     *  its own - the entry that follows whatever the system is set to. */
+    private static final String DEFAULT_ADDRESS = "[default]";
+    /** What that entry is called in the list, since "PCH [default]" named a
+     *  card the selection does not actually pin. */
+    private static final String SYSTEM_DEFAULT_LABEL = "System default";
+    /** The JavaSound provider's own prefix on every ALSA description; it is
+     *  followed by the card's name and then the PCM device's designation. */
+    private static final String DIRECT_AUDIO_PREFIX = "Direct Audio Device:";
+    /** The placeholder the provider stamps on a device whose maker it cannot
+     *  name.  It is not a vendor, and it read as one at the end of every
+     *  device line. */
+    private static final String UNKNOWN_VENDOR = "Unknown Vendor";
+
+    /**
+     * A listed JavaSound device - a value container over the mixer behind it.
+     *
+     * <p>{@code name} arrives FINISHED from the manager and is both what the
+     * operator reads and the device's identity: on ALSA the card's real product
+     * name with its port ({@code "CUBILUX CB5 - Line In"}), elsewhere the
+     * mixer's own name exactly as the host API states it. {@code mixerInfo} is
+     * the backing mixer - the raw host name lives there, which is what a line
+     * open and the ALSA volume pinning key on.
+     */
     public record JavaSoundDeviceRef(int index, String name, String description, String vendor,
                                      boolean isInput, boolean isOutput,
                                      Mixer.Info mixerInfo)
@@ -70,6 +93,21 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
         public AudioBackendType backend() {
             return AudioBackendType.JAVASOUND;
         }
+
+        /** The shared line, minus a vendor there is none of: the provider
+         *  stamps a placeholder on every device whose maker it cannot name
+         *  ({@link #plainVendor} drops it), and the separator in front of it
+         *  would then trail every device line with nothing after it. */
+        @Override
+        public String displayName() {
+            if (vendor != null && !vendor.isBlank()) {
+                return DeviceRef.super.displayName();
+            }
+            return description == null || description.isBlank()
+                    ? String.format("[%d] %s", index, name)
+                    : String.format("[%d] %s (%s)", index, name, description);
+        }
+
         @Override
         public String toString() {
             return displayName();
@@ -94,6 +132,12 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      */
     private final Map<String, List<AudioFormat>> inputFormatsCache  = new ConcurrentHashMap<>();
     private final Map<String, List<AudioFormat>> outputFormatsCache = new ConcurrentHashMap<>();
+
+    /** Whether this host is the one the ALSA cleanup was written for.  The
+     *  phantom filter in {@link #list} runs only here - see it for why its
+     *  evidence is ambiguous anywhere else. */
+    private final boolean linux = System.getProperty("os.name", "")
+            .toLowerCase(Locale.ROOT).contains("linux");
 
     /** The kernel's view of what each card can do (Linux only; every query
      *  answers "unknown" elsewhere, which the probe treats as "ask the mixer"). */
@@ -135,6 +179,29 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
     public List<DeviceRef> listOutputDevices() { return list(false); }
 
     /**
+     * Drops every cached probe, so the operator's scan re-asks the hardware.
+     *
+     * <p>The enumeration itself is live - {@link AudioSystem#getMixerInfo()} is
+     * read on every list - but the format probe behind each mixer is cached,
+     * and that cache is what a scan is really aimed at: a device that was held
+     * when it was first probed answers from the stale entry for ever otherwise,
+     * and a device whose formats changed with it keeps reporting the old set.
+     * The ALSA collaborators forget with it: their card-index-keyed answers
+     * (capabilities, card names, USB descriptors) survive a replug otherwise,
+     * and a card moved to another USB port re-enumerates at a NEW index while
+     * the old index may now belong to different hardware.
+     * Answers {@code true} because the next list can now differ from the last.
+     */
+    @Override
+    public boolean refreshDeviceList() {
+        inputFormatsCache.clear();
+        outputFormatsCache.clear();
+        procAsound.forget();
+        alsaPorts.forget();
+        return true;
+    }
+
+    /**
      * Every mixer that can supply a line in this direction - and, on Linux,
      * every such mixer whose SOCKET is not reported empty.
      *
@@ -146,10 +213,12 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      * reads the way the Windows one does: the ports by name, and only the ones
      * that are connected.
      *
-     * <p>The port name goes into the DESCRIPTION and nowhere else. The mixer
-     * name is the device's identity - what a card binding, a saved preference
-     * and a remote client's device ref are all keyed on - and it must stay
-     * exactly what the host API calls it.
+     * <p>The name the ref carries is FINISHED here and is the device's
+     * identity everywhere - the card binding, the saved preference, a remote
+     * client's ref.  On ALSA it is the card's real product name with its port;
+     * on every other host it is the mixer name exactly as the host API states
+     * it.  The mixer behind a name stays in {@link #mixerByName}, this
+     * manager's own lookup.
      */
     private List<DeviceRef> list(boolean input) {
         List<DeviceRef> out = new ArrayList<>();
@@ -157,8 +226,9 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
         // One enumeration, one look at the jacks: a plug pulled since the last
         // scan must show up, and re-reading it per device would not.
         alsaPorts.refresh();
+        Mixer.Info[] mixers = AudioSystem.getMixerInfo();
         int slot = 0;
-        for (Mixer.Info mi : AudioSystem.getMixerInfo()) {
+        for (Mixer.Info mi : mixers) {
             Mixer m;
             try {
                 m = AudioSystem.getMixer(mi);
@@ -166,24 +236,105 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
                 log.warn("Could not open mixer {}: {}", mi.getName(), t.getMessage());
                 continue;
             }
-            if (!m.isLineSupported(new DataLine.Info(probe, null))) continue;
-            AlsaPorts.Port port = alsaPorts.port(mi.getName(), input);
-            if (port != null && port.empty()) {
-                if (log.isInfoEnabled()) {
-                    log.info("{} has nothing plugged into its {} - not listed",
-                            mi.getName(), port.label());
-                }
+            if (!m.isLineSupported(new DataLine.Info(probe, null))) {
                 continue;
             }
-            out.add(new JavaSoundDeviceRef(
-                    slot++,
-                    mi.getName(),
-                    port == null ? distinct(mi.getDescription(), mi.getName()) : port.label(),
-                    plainVendor(mi.getVendor()),
-                    input, !input,
-                    mi));
+            JavaSoundDeviceRef ref = null;
+            if (linux) {
+                AlsaPorts.Port port = alsaPorts.port(mi.getName(), input);
+                // The slot is only consumed by a device that is actually listed.
+                String designation = port == null ? distinct(mi.getDescription(), mi.getName()) : port.label();
+                String name = deviceName(mi.getName(), designation);
+                ref = new JavaSoundDeviceRef(
+                        slot,
+                        name,
+                        // A name that already carries the port needs no echo of it.
+                        name.equals(mi.getName()) ? designation : "",
+                        plainVendor(mi.getVendor()),
+                        input, !input,
+                        mi);
+                if (port != null && port.empty()) {
+                    continue;
+                }
+                // A device that reports no formats is a phantom - a PCM with nothing
+                // behind it (an HDMI codec without a sink) that cannot open at any
+                // rate.  Dropped HERE so every consumer - the GUI combos, a server's
+                // device list, the scanner - sees the same set.  The system default
+                // stays listed: it is a role, not a PCM, and reports no formats by
+                // construction.  The probe rides the formats cache.
+                //
+                // LINUX ONLY, because that is the host whose subdevice cleanup this
+                // was written for and the only one where an empty answer means what
+                // it says.  Elsewhere the probe's silence is ambiguous: a mixer that
+                // advertises its lines with NOT_SPECIFIED rate or sample size
+                // enumerates no concrete pair, and a device that is already held
+                // refuses the read - both answer empty while being perfectly real
+                // hardware, and both were then dropped from the list.  Not probing
+                // also takes the probe's cost off enumeration, which every backend
+                // switch pays on the UI thread.
+                if (linux && !name.equals(SYSTEM_DEFAULT_LABEL)
+                        && listSupportedFormats(ref, !input).isEmpty()) {
+                    continue;
+                }
+            } else {
+                ref = new JavaSoundDeviceRef(
+                        slot,
+                        mi.getName(),
+                        mi.getName(),
+                        mi.getVendor(),
+                        input, !input,
+                        mi);
+            }
+            slot++;
+            out.add(ref);
         }
         return out;
+    }
+
+    /**
+     * The finished device name: on ALSA {@code "<card> - <port>"} built from
+     * the {@code [plughw:C,D]} address - C selects the card whose real name
+     * comes from {@code /proc/asound/cards}, D the port - because the address,
+     * the bracketed short id and the provider's {@code "Direct Audio Device:"}
+     * boilerplate carry nothing an operator can act on.  The system-default
+     * entry is named by its role; a mixer with no card name behind it - every
+     * non-ALSA host - keeps the mixer name exactly as the host API states it.
+     */
+    private String deviceName(String mixerName, String designation) {
+        return deviceName(mixerName, designation,
+                procAsound.cardName(procAsound.cardIndexOf(mixerName)));
+    }
+
+    /** The naming decision itself, separated from the cards-file lookup so the
+     *  shape is testable without a /proc behind it. */
+    String deviceName(String mixerName, String designation, String cardName) {
+        if (mixerName != null && mixerName.contains(DEFAULT_ADDRESS)) {
+            return SYSTEM_DEFAULT_LABEL;
+        }
+        if (cardName == null || cardName.isBlank()) {
+            return mixerName;
+        }
+        String port = stripDirectAudio(designation);
+        return port.isEmpty() ? cardName : cardName + " - " + port;
+    }
+
+    /**
+     * The port half of a name: the real socket name when ALSA could be asked
+     * ({@code "Line In"}), else the PCM device's designation with the
+     * provider's boilerplate taken off - {@code "Direct Audio Device: HDA
+     * Intel PCH, ALC262 Analog"} repeats the card's name in front of the only
+     * part that says which device this is, so what remains is
+     * {@code "ALC262 Analog"}.
+     */
+    private String stripDirectAudio(String designation) {
+        String text = designation == null ? "" : designation.trim();
+        if (!text.startsWith(DIRECT_AUDIO_PREFIX)) {
+            return text;
+        }
+        String rest = text.substring(DIRECT_AUDIO_PREFIX.length()).trim();
+        int comma = rest.lastIndexOf(',');
+        return comma >= 0 && comma + 1 < rest.length()
+                ? rest.substring(comma + 1).trim() : rest;
     }
 
     /**
@@ -238,14 +389,18 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      * a provider that puts its whole vendor in brackets keeps it, because an
      * empty vendor would say less than the bracketed one did.
      *
+     * <p>The one vendor that is dropped entirely is the provider's own
+     * placeholder for "I could not find out": it names no maker, and it stood
+     * at the end of every device line saying so.  A real vendor stays.
+     *
      * <p>Package-private for the same reason {@link #distinct} is.
      */
     String plainVendor(String vendor) {
         if (vendor == null) return "";
         int at = vendor.indexOf('(');
-        if (at < 0) return vendor;
-        String name = vendor.substring(0, at).trim();
-        return name.isEmpty() ? vendor : name;
+        String name = at < 0 ? vendor : vendor.substring(0, at).trim();
+        if (name.isEmpty()) return vendor;
+        return name.equalsIgnoreCase(UNKNOWN_VENDOR) ? "" : name;
     }
 
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
@@ -325,6 +480,15 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      */
     private Mixer.Info findMixer(String deviceName, DataLine.Info info) {
         if (deviceName == null || deviceName.isEmpty()) return null;
+        // The stored name is the FINISHED one this manager built, so it is
+        // found the same way it was made: derive each mixer's name and compare.
+        boolean input = TargetDataLine.class.equals(info.getLineClass());
+        for (Mixer.Info mi : AudioSystem.getMixerInfo()) {
+            AlsaPorts.Port port = alsaPorts.port(mi.getName(), input);
+            String designation = port == null ? distinct(mi.getDescription(), mi.getName()) : port.label();
+            if (!deviceName.equals(deviceName(mi.getName(), designation))) continue;
+            if (AudioSystem.getMixer(mi).isLineSupported(info)) return mi;
+        }
         for (Mixer.Info mi : AudioSystem.getMixerInfo()) {
             if (!mi.getName().contains(deviceName)) continue;
             if (AudioSystem.getMixer(mi).isLineSupported(info)) return mi;
@@ -343,7 +507,9 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
     public List<AudioFormat> listSupportedFormats(DeviceRef device, boolean output) {
         if (!(device instanceof JavaSoundDeviceRef d)) return new ArrayList<>();
         Map<String, List<AudioFormat>> cache = output ? outputFormatsCache : inputFormatsCache;
-        return cache.computeIfAbsent(d.name(), k -> probeFormats(d, output));
+        // Keyed on the RAW mixer name: it is unique per PCM device, where the
+        // finished name is not (four HDMI outputs of one card share theirs).
+        return cache.computeIfAbsent(d.mixerInfo().getName(), k -> probeFormats(d, output));
     }
 
     public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
@@ -411,6 +577,7 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      *       formats the hardware can't handle, so open-and-test is the
      *       reliable signal.</li>
      * </ul>
+     *
      */
     private List<AudioFormat> probeFormats(JavaSoundDeviceRef d, boolean output) {
         Class<? extends DataLine> cls = output ? SourceDataLine.class : TargetDataLine.class;
@@ -455,22 +622,26 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      * are neither HD-Audio nor USB it reported nothing at all, which is how a
      * bench came to deliver an empty format list.
      *
-     * <p><b>ON THE LEGACY-CARD CASE, DELIBERATELY NOTHING.</b> A card with
-     * neither layout (the Ensoniq ES1371 class) is answered
-     * {@link ProcAsound.CardCaps#known() not known}, and this method then
-     * reports the mixer's own explicit formats and otherwise an empty list. It
-     * does NOT fall back to opening candidate rates the way the Windows and
-     * macOS paths do, and that is on purpose: the ALSA device JavaSound offers
-     * is the PLUG layer ({@code plughw}), which exists precisely to CONVERT -
-     * it accepts rates the hardware cannot produce and resamples silently. An
-     * open-and-test through it would therefore answer "yes" to almost
-     * everything and publish a capability list the silicon cannot honour.
-     * Reporting nothing is the honest answer until the direct {@code hw:}
-     * device can be probed instead.
+     * <p><b>ON THE LEGACY-CARD CASE, THE DIRECT {@code hw:} DEVICE.</b> A card
+     * with neither layout (a PCI codec such as the Xonar STX or the Ensoniq
+     * ES1371) is answered {@link ProcAsound.CardCaps#known() not known}, and
+     * its truth is then read from the {@code hw:} device's own hw_params
+     * ranges ({@link ProcAsound#hwParamsCaps}).  What this path still never
+     * does is open-and-test through the PLUG layer ({@code plughw}), which
+     * exists precisely to CONVERT - it accepts rates the hardware cannot
+     * produce and resamples silently, so a probe through it would publish a
+     * capability list the silicon cannot honour.
      */
     private List<AudioFormat> probeFormatsLinux(JavaSoundDeviceRef d, Mixer m, boolean output) {
         // 1. This card's own /proc/asound entry is the source of truth when present.
-        ProcAsound.CardCaps caps = procAsound.capsForMixer(d.name());
+        // The ALSA address lives in the RAW mixer name behind the ref - the
+        // finished name deliberately carries no [plughw:C,D] to parse.
+        ProcAsound.CardCaps caps = procAsound.capsForMixer(d.mixerInfo().getName());
+        if (!caps.known()) {
+            // 1b. No USB stream file, no HDA codec file - ask the direct hw:
+            //     device for its own hw_params ranges.
+            caps = procAsound.hwParamsCaps(d.mixerInfo().getName());
+        }
         int[] hwRates  = caps.rates(output);
         int[] hwDepths = caps.depths(output);
         if (hwRates.length > 0 && hwDepths.length > 0) {
@@ -522,8 +693,10 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
                 rate, bits, 2, frameSize, rate, false);
     }
 
-    /** Mono (1-channel) variant of {@link #buildFormat}, used only to detect
-     *  whether a mono-only capture device supports a given rate/bit depth. */
+
+    /** Mono (1-channel) variant of {@link #buildFormat} - the capture candidate
+     *  a 1-channel device opens at, and the format {@link JavaSoundRecorder}
+     *  then falls back to. */
     private AudioFormat buildMonoFormat(int rate, int bits) {
         int bytesPerSample = (bits + 7) / 8;
         return new AudioFormat(

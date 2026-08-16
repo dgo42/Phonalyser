@@ -230,6 +230,17 @@ public final class AlsaPorts {
         jacks.forget();
     }
 
+    /** Drops the parsed USB descriptors as well: they are per CARD INDEX, and
+     *  a card replugged into another port comes back under a new index while
+     *  the old index may now belong to different hardware.  The operator's
+     *  explicit rescan is the gesture that re-reads them; the per-enumeration
+     *  {@link #refresh} deliberately does not, descriptors being far heavier
+     *  than a jack read. */
+    public void forget() {
+        jacks.forget();
+        descriptors.clear();
+    }
+
     /** The terminal's word plus the direction, unless the word already carries
      *  one: "Line" reads "Line In" or "Line Out", while "Analog In" and
      *  "IEC958 In" are left as ALSA spells them. */

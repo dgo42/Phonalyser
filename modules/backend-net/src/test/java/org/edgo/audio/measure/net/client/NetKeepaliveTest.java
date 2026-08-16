@@ -108,7 +108,7 @@ class NetKeepaliveTest {
 
     @AfterEach
     void disconnect() {
-        connection.close(NetCloseReason.BYE);
+        connection.connClose(NetCloseReason.BYE);
         peer.shutDown(AWAIT_MS);
     }
 
@@ -185,7 +185,7 @@ class NetKeepaliveTest {
             // The socket is left for the CALLER to close (both call sites do,
             // see NetBenchUi.connect / probe): only a REFUSED session closes here.
         } finally {
-            session.close(NetCloseReason.BYE);
+            session.connClose(NetCloseReason.BYE);
             mute.shutDown(AWAIT_MS);
         }
     }
@@ -207,7 +207,7 @@ class NetKeepaliveTest {
                     "and the socket goes with it: a session left running in a dialect "
                             + "this build cannot speak would fail later, on data");
         } finally {
-            session.close(NetCloseReason.BYE);
+            session.connClose(NetCloseReason.BYE);
             tooNew.shutDown(AWAIT_MS);
         }
     }

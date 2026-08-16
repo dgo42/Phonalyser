@@ -281,7 +281,7 @@ public final class UsagePrinter {
         log.info("    [--sweep-points <n>]      log-spaced rows in the output CSV/chart (default 200)");
         log.info("    [--lead-in <s>]           silence before the sweep (default 0.2, min 0.05)");
         log.info("    [--adc-fs-vrms <vrms>]    ADC full-scale V_rms; written to the cal CSV header");
-        log.info("                              for downstream dBV scaling (default 1.7931)");
+        log.info("                              for downstream dBV scaling (default 1.0)");
         log.info("    [--dither <bits>]         generator TPDF dither (default 0)");
         log.info("    [--output <file>]         cal CSV path (default results/freq_resp_cal_<ts>.csv)");
         log.info("    [--sweep-wav <file>]      also dump the raw capture as WAV");

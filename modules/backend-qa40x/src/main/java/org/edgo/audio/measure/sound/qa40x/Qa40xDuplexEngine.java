@@ -252,6 +252,22 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
     }
 
     /**
+     * True while either lane is still attached.
+     *
+     * <p>A read, deliberately: the transport and this session belong to the
+     * manager above, and it asks after each detach whether the analyzer is still
+     * in use before releasing it.  A stream that stopped is not the same fact as
+     * a device nobody wants any more - this engine knows only the first, and
+     * telling the manager what to do with the second would turn a one-way
+     * ownership into a cycle.
+     */
+    public boolean anyLaneAttached() {
+        synchronized (stateLock) {
+            return generatorAttached || captureAttached;
+        }
+    }
+
+    /**
      * The LAST detach: the stream stops, the analyzer is PARKED at the protected
      * ranges, and the front-panel I2S port is switched off - every one of them,
      * whatever the one before it did.

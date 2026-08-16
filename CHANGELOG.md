@@ -5,6 +5,236 @@ All notable changes to **Phonalyser** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-08-16
+
+### Added
+
+- **A digital loopback backend.** What the playback lane quantises is what
+  the capture lane delivers, with no OS device in between - a bench with a
+  known noise floor: the samples are dithered at the last bit of the
+  selected depth, so the measured floor is the arithmetic one and any
+  deviation is the code under test rather than a sound card. It needs no
+  hardware and is available on every platform.
+- **The web app gains that loopback backend too.** The browser port picks up
+  the same hardware-free bench: playback returns to capture with nothing but
+  arithmetic in between, TPDF dither on the last bit of the selected depth, and
+  a noise floor that is therefore the computed one - 0.500 LSB RMS, one bit
+  deeper moving it down by 6 dB. It is selectable beside Web Audio and the
+  QA40x, offers the full rate ladder at 16, 20, 24 or 32 bits on both
+  directions, and needs no device, no permission and no hardware at all. Where
+  the desktop gives each lane a thread, a page has none, so both lanes are
+  paced by timer callbacks against an absolute schedule.
+- **The QA40x is free the moment nothing measures with it.** The analyzer is
+  claimed while a measurement runs and handed back when the last of the
+  generator, the scope and the FFT stops - so the vendor software, a second
+  Phonalyser or another browser tab can have it without anything being
+  restarted. Reading its telemetry or its calibration page is atomic in the
+  same sense: the device is opened, read and released again, instead of the
+  panel keeping it for the life of the session. An analyzer another program
+  is holding is not offered as a local device at all, and reappears by itself
+  once it is free. Desktop and web alike.
+- **The analyzer's factory data is read once.** The calibration page - a
+  hundred and twenty-eight register round trips - and the telemetry reading
+  are kept per analyzer SERIAL NUMBER, so a panel that only displays values
+  touches no hardware, and a reopen after a release costs nothing. The device
+  scan maintains that store: an analyzer that has just appeared is read once,
+  one that has left the bus is forgotten, and a unit swapped for another of
+  the same model cannot inherit the first one's factors. The open no longer
+  resets the USB device either - the analyzer is taken as the operating system
+  initialised it.
+- **A standalone device scanner.** A small command-line tool that prints,
+  for every audio backend of the running platform, the devices with the
+  exact rates and depths they take - the same listing the app itself sees -
+  for bug reports and bench setup.
+- **An FAQ chapter in the help.** A question catalog with its own live
+  search box, covering among others the time-discontinuity warnings, busy
+  devices, volume pinning and server security; the audio-backend theory
+  chapter gains a loopback measurement section. All help languages.
+- **The distortion table's level cells have a unit selector.** The THD/IMD
+  table's per-line levels can be read in the unit of choice instead of dBV
+  alone. Desktop and web alike.
+- **Web version catch-up.** The browser port picks up this release's bench-side
+  work. An upload to a bench now says so: the same notice the desktop raises
+  while the bytes move, covering the whole prepare-and-upload phase rather than
+  the transfer alone, and coming down on every outcome - the file playing, a
+  refusal, a link that died. It is a modal carrying its own Cancel, because
+  nothing is playing yet: the page underneath is blocked for as long as the
+  bytes move, and the one way out is to cancel the transfer. A calibration the
+  bench refuses is no longer
+  silent either: the crosshair calibrate of the scope, of the FFT and of the
+  generator all report it, through the same message the card-copy path already
+  used, so a full scale that never reached the server cannot be mistaken for one
+  in force. The message bus is the desktop's own: the event announcing that a
+  server's backends appeared or vanished carries the desktop's name and value,
+  and the shared capture is acquired and released by direct call as it is there,
+  leaving on the bus the one batch notification a page still needs, having no
+  blocking threads to wake. The analyser's restarts behave as the desktop's do:
+  Reset statistics restarts the collection as well as the average, so a fresh
+  average opens with a full window instead of the previous one slid forward a
+  single hop; a capture overrun keeps the collected depth - it is a gap in
+  coverage, not damaged data - restarts only the window, and names itself in the
+  warning banner instead of re-anchoring in silence; the averages readout is read
+  live, so a start or a reset shows zero at once rather than the previous run's
+  depth until the next frame lands; and the first window of a collection is
+  analysed the moment it is full, no longer a hop later. The oscilloscope's
+  per-sample dots are placed on fractional coordinates, so at a zoom wide enough
+  to show them they sit on their samples instead of on the nearest whole pixel.
+  A range chosen for a bench analyzer now reaches the bench - the browser sent
+  only the front-panel port, so an input or output range picked for a remote
+  QA40x moved nothing. The help gains the FAQ chapter in English, German
+  and Ukrainian - adapted where the browser measures through a bench rather than
+  a local driver - alongside this release's help refresh and rebuilt search
+  indexes.
+
+### Changed
+
+- **The net protocol is v2: every capture streams on its own connection.**
+  Audio no longer shares the control WebSocket - a capture attaches its own
+  data connection, so control commands stay responsive while PCM streams at
+  full rate. Server and clients speak v2 only: a 1.2.1 client pairs with a
+  1.2.1 server.
+- **Linux audio devices carry their real names.** A device is named by its
+  card's product name and socket - "CUBILUX CB5 - Line In" - taken from the
+  kernel's own card list, instead of the chip-and-address spelling
+  ("CB5 [plughw:1,1]"). Devices that report no formats at all - phantom
+  PCMs with nothing behind them, such as an HDMI output without a sink -
+  are no longer listed: the device combos, a server's device list and the
+  scanner all show the same set. The system default entry stays, and
+  Windows/macOS names are unchanged.
+- **A QA40x range nobody has chosen is the protected one.** A card created for
+  an analyzer that has never had a range selected now comes up at +42 dBV in
+  and -12 dBV out - maximum input attenuation and the low output range, the
+  same state every teardown parks to - instead of the vendor's 0 dBV / +18 dBV
+  pair. An unconfigured analyzer therefore starts protected rather than at full
+  input sensitivity. Desktop and web alike.
+- **The browser's tips are the browser's own.** The tip that advised picking a
+  driver backend for a faster oscilloscope described something a page cannot
+  do, so the web catalogue drops it; the desktop keeps it. A tip that promises
+  what its platform lacks is worse than no tip.
+- **A closed net session names its close code.** The session-end log line of
+  both ends now carries the WebSocket close code the socket reported and how
+  many keepalive pings had gone unanswered, so an orderly server shutdown reads
+  differently from a bench that had been failing for a while.
+- **The server's jar is one file for every platform.** The headless server ships
+  as `phonalyser-server-<version>.jar`, with no architecture in its name: it
+  carries the device libraries for all of them, so the same jar runs on Windows,
+  Linux and macOS, on x86-64 and on arm64, and a bare `java -jar` opens devices
+  with nothing staged beside it. What the six downloads still do is bring their
+  platform's natives, launcher and service scripts around that one jar.
+- **Server downloads are the per-platform ZIPs alone.** Each ZIP already
+  carries the server's fat jar beside the natives, the launcher and the
+  service scripts; the separate bare jars were duplicate downloads and are no
+  longer attached to a release.
+
+### Fixed
+
+- **The oscilloscope's Utility tab stayed English in every language.** Its
+  caption was the one of the eight tab captions built from a literal rather
+  than the message catalogue, so it never translated. Desktop and web alike.
+- **A typed 0 dBFS redisplayed as "-0 dBFS".** The amplitude fields store
+  volts, and the conversion back to the sticky dBFS display could land a few
+  1e-12 dB below exact zero - the formatter then kept the minus sign of the
+  tiny negative. Display values are now rounded numerically to the shown
+  decimals before formatting, which goes through a signless integer zero, so
+  every unit's zero point renders clean. Fixed in the desktop app and the web
+  version alike.
+- **The amplitude tooltips did not mention dBFS.** The generator and
+  frequency-response amplitude tooltips now name the `dbfs` / `dbf` suffix and
+  its full-scale reference, in every UI language; the tune-notch amplitude
+  field, which had no explanatory tooltip at all, shares the generator's.
+- **Exclusive-mode devices taking 24 or 32 bits only as plain WAVEFORMATEX
+  were refused.** The JavaSound WASAPI-exclusive path applied the documented
+  legacy-format retry only to 16-bit formats, so a driver that accepts higher
+  depths for mono or stereo only in the legacy spelling was reported
+  unsupported and refused at open. The retry now runs wherever the legacy
+  structure can express the format, and the exclusive format enumeration
+  answers in a stable order, so a device's default format no longer varies
+  from run to run.
+- **The scope's calibrate button stayed off on wide input ranges.** The gate
+  demanded that the signal fill a quarter of the ADC's range whatever the
+  range's width, so on a 10 V RMS front end nothing under about 7 V
+  peak-to-peak could be calibrated from - refusing levels whose absolute
+  accuracy is beyond question. A calibrated selection now also enables at
+  0.5 V RMS regardless of how much of the range it occupies; the
+  anti-silence floor of an uncalibrated selection is unchanged. Desktop and
+  web alike.
+- **Closing the frequency-response progress window did not stop the sweep.**
+  ESC or a window-manager close only disposed the window: the sweep kept
+  playing and the pane's controls stayed locked until it ran out on its own.
+  A user close now issues the same cooperative cancel as the Cancel button,
+  and the window closes when the teardown finishes; the calibration wizard's
+  progress window, whose trial sweep has no cancel path, refuses to close
+  instead of orphaning a running sweep.
+- **Backends of other platforms were probed at startup.** Every build
+  carries all backend classes, and each backend tried to load its native
+  library wherever it found itself - a Linux machine logged failed loads of
+  the CoreAudio and Windows audio libraries it can never have. Every
+  native-library loader now checks the operating system and architecture
+  first, so a platform's log shows only its own backends.
+- **Linux capability scans covered only cards /proc/asound can describe.**
+  The format and rate probe read the USB stream descriptors, so a PCI or
+  HDA card answered with nothing. When /proc/asound has no answer, the
+  exact formats and rates are now read from the direct hardware device
+  (`aplay`/`arecord --dump-hw-params` on `hw:card,device`), never through
+  the resampling plug layer, so every card reports what its converter
+  actually takes.
+- **ALSA unity-gain pinning skipped cards whose volume controls match no
+  port name.** The pin looked a control up by the selected jack's port word
+  and gave up when the card names its controls differently - the
+  measurement then ran at whatever volume the mixer happened to hold. When
+  no name matches, every volume control of the selected card's direction is
+  now pinned to unity and restored afterwards.
+- **WASAPI-exclusive devices taking 24 valid bits in a 32-bit container
+  were not offered at 24.** The exclusive probe tested only the packed
+  spelling of each depth, so such devices scanned as 16- or 32-bit only.
+  The probe now reports the exact valid bits whichever container the driver
+  takes, and the open path resolves the container separately, repacking
+  samples at the device boundary - the depth selected is the converter's
+  true depth.
+- **"Snap frequency to nearest FFT bin" used the output clock.** With
+  unequal input and output rates the snapped tone landed off the analysis
+  bin grid - and the pane's rate label followed the wrong clock - so the
+  averaged spectrum smeared. The snap, the labels and the dual-tone bracket
+  now follow the input rate the analysis actually runs at; the waveform
+  period alignment keeps the DAC clock. Desktop and web alike.
+- **Switching between sine and dual-sine while playing rebuilt the previous
+  waveform.** The live restart replayed the record of the tone before the
+  change - entering dual-tone kept a single tone sounding, leaving it kept
+  both. The restart now rebuilds from the just-committed form.
+- **The largest FFT lengths produced no spectrum at all.** The analysis span
+  was clamped to the length of the capture buffer and then demanded in one
+  contiguous read, so a frame longer than that buffer - four million points at
+  48 kS/s is 87 seconds of audio against a 22-second buffer - could never be
+  assembled: the analyser waited for a span the buffer cannot hold, the capture
+  lapped it, and the measurement stayed in a permanent buffer-overrun re-sync
+  with nothing on screen. The analyser now gathers its frame into its own buffer
+  across successive reads, taking each tick's share as it arrives, so the
+  capture buffer only has to cover one tick and every FFT length collects
+  normally.
+- **The web generator could not start from a deployed build.** The DDS
+  worklet was addressed relative to the source tree, which resolves outside
+  the app once bundled - every production deployment answered the start
+  with "could not open the output device" while a dev-served tree worked.
+  The worklet address now resolves in both layouts.
+- **Web: generator start and stop did not restart the statistics.** The FFT
+  accumulator and the scope's running statistics averaged across the
+  silence/tone boundary. Both transitions now reset them, exactly like a
+  form change - and form edits made while the generator is off no longer
+  reset anything, because the emitted signal did not change.
+- **Web: the interface font preferences reached only plain text.** The FFT
+  statistics block and the frequency-response tables are drawn on the
+  canvas and stayed on built-in fonts whatever the preference said; they
+  now follow the normal and bold interface fonts, and the scope table's
+  columns scale with the font size instead of clipping larger fonts.
+- **Web: infinite averaging fell back to the default on reload.** The
+  forever entry of the averages selector has no JSON spelling, so it saved
+  as nothing and every reload silently restored the default; it now
+  round-trips.
+- **Web: Firefox offered no output devices.** Firefox reveals audio outputs
+  only through its speaker picker; a scan that comes back bare now raises
+  the picker - on the scan click itself - so an output can be selected at
+  all.
+
 ## [1.2.0] - 2026-08-07
 
 ### Added

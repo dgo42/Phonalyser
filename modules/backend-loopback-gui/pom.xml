@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  backend-loopback-gui - the digital loopback's UI-side wiring: the format
+  constraint that keeps the backend's input and output on ONE sample rate and ONE
+  bit depth, reacting to MessageBus events published by the preferences dialog.
+
+  It sits ABOVE both backend-loopback (whose semantics it enforces) and
+  phonalyser-gui-core (whose bus it uses).  That direction is the whole trick: the
+  loopback driver stays headless and its UI layer is an optional module on top,
+  discovered at runtime rather than compiled into the driver.
+
+  Because phonalyser-gui must NOT depend on this module (that would be a cycle),
+  the settings UI has to be found by ServiceLoader, not by a direct reference.
+
+  No server-api here, unlike the QA40x's UI module: the loopback has no net
+  protocol extension - it is a software bench on the machine it runs on.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.2.1</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>backend-loopback-gui</artifactId>
+    <name>Phonalyser :: backend :: loopback (UI)</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-loopback</artifactId>
+        </dependency>
+        <!-- The SHARED GUI infrastructure only - never phonalyser-gui itself.
+             A backend's UI must not sit on top of the whole application: that
+             would make the app a prerequisite of one of its own plug-ins, and
+             would stop phonalyser-gui ever depending on this module. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-gui-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.platform</groupId>
+            <artifactId>${swt.artifactId}</artifactId>
+        </dependency>
+    </dependencies>
+</project>

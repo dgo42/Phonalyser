@@ -29,20 +29,25 @@ export const Events = Object.freeze({
    *  range for the next open. */
   DEVICE_ACTIVE_RANGE_CHANGED: 'preferences.device.activeRange.changed',
 
-  /** Fired by the Preferences dialog while a rate combo is being edited - the user just picked a
-   *  sample rate for one direction, or a (re)populate seeded a fresh selection. Payload:
-   *  SampleRateChange - { input: boolean, sampleRateHz: number, backend: string, card: ?string }
-   *  (direction + rate + the edited backend + the resolved card). Device-agnostic: any backend or
-   *  card that constrains its two rates may subscribe and decide FROM the payload's backend or card
-   *  whether the change concerns it - the dialog edits an UNCOMMITTED working copy, so the
-   *  subscriber gates on the payload, not live Preferences. Today's subscriber is
+  /** Fired by the Preferences dialog while a rate or bit-depth combo is being edited - the user
+   *  just picked a format for one direction, or a (re)populate seeded a fresh selection. Payload:
+   *  SampleRateChange - { input: boolean, sampleRateHz: number, bitDepth: number, backend: string,
+   *  card: ?string } (direction + rate + depth + the edited backend + the resolved card).
+   *  Device-agnostic: any backend or
+   *  card that constrains its two directions may subscribe and decide FROM the payload's backend or
+   *  card whether the change concerns it - the dialog edits an UNCOMMITTED working copy, so the
+   *  subscriber gates on the payload, not live Preferences. The DEPTH is optional: 0 (Java's
+   *  SampleRateChange.NO_BIT_DEPTH) means the payload says nothing about it. Subscribers today are
    *  Qa40xRateConstraint, which enforces the QA402/QA403's single shared reg-9 clock (input rate ==
-   *  output rate) and answers, when the other direction must follow, with PREFS_SAMPLE_RATE_SET. */
+   *  output rate) and ignores the depth, and LoopbackFormatConstraint, whose backend is one digital
+   *  format in both directions and so couples rate AND depth. Either answers, when the other
+   *  direction must follow, with PREFS_SAMPLE_RATE_SET. */
   PREFS_SAMPLE_RATE_CHANGED: 'preferences.sampleRate.changed',
 
-  /** The other half of the PREFS_SAMPLE_RATE_CHANGED round-trip: fired by a rate-constraint
-   *  subscriber to tell the Preferences dialog to align the OTHER direction's rate combo. Payload:
-   *  SampleRateChange - the direction to correct, the rate to adopt, the backend, and the echoed
+  /** The other half of the PREFS_SAMPLE_RATE_CHANGED round-trip: fired by a format-constraint
+   *  subscriber to tell the Preferences dialog to align the OTHER direction's combos. Payload:
+   *  SampleRateChange - the direction to correct, the rate to adopt, the depth to adopt (0 when the
+   *  constraint leaves the width alone), the backend, and the echoed
    *  card. The dialog acts only while it is still open and the edited backend matches the payload,
    *  selecting the combo item programmatically - setting a <select>'s value fires no change event
    *  (as SWT's Combo.select fires no Selection), so the correction does not re-publish
@@ -53,13 +58,11 @@ export const Events = Object.freeze({
    *  pick their pane by ID - one subscriber per ID. */
   PANE_TITLE_CLICK_PREFIX: 'paneTitle.click.',
 
-  /** Request - opens (or refcount-increments) the shared input capture device. Responder: the
-   *  SharedCapture singleton. Response: the live SignalBuffer on success, or null on failure. */
-  CAPTURE_ACQUIRE: 'capture.acquire',
-
-  /** Notification - releases one reference on the shared capture device. The device is closed only
-   *  when the last consumer has released. */
-  CAPTURE_RELEASE: 'capture.release',
+  // capture.acquire / capture.release are GONE, as in the Java baseline: consumers call the
+  // shared capture's acquire()/release() directly and hold the reference they took.
+  // capture.batch.available below is the deliberate divergence and STAYS: Java wakes its
+  // consumers on the ring buffer's own monitor, and a browser has no blocking threads to wake -
+  // this event is the web's equivalent of that notification.
 
   /** Notification - the shared capture device just appended a fresh batch of samples to its
    *  SignalBuffer. No payload. Drives the oscilloscope's capture-driven redraw. */
@@ -136,11 +139,17 @@ export const Events = Object.freeze({
   FFT_CAPTURE_RESYNC: 'fft.capture.resync',
 
   /** Notification - the backends a connected Phonalyser server offers changed: a session opened
-   *  or ended, or the bench sent ev.devices.changed. Payload: the new entry list (possibly
-   *  empty). The Preferences backend combo rebuilds from it - WEB-ONLY in the sense that Java
-   *  calls refreshBackendCombo() directly when its server-list dialog closes; the web's session
-   *  can also open from elsewhere, so the change is announced instead of assumed. */
-  NET_BACKENDS_CHANGED: 'net.backends.changed',
+   *  or ended, or the bench sent ev.devices.changed. The Preferences backend combo rebuilds from
+   *  it. Both baselines carry this event under this name and value; the PAYLOAD differs. Here it
+   *  is the new entry list (possibly empty) and the handler branches on an empty one - a session
+   *  that is gone takes the bench's transient card with it. Java publishes no payload and its
+   *  subscriber re-reads the list from the remote-backend UI.
+   *
+   *  <p>The web also announces MORE moments than Java does: Java re-composes the combo by a
+   *  direct call when its server-list dialog closes, whereas a web session can open or end from
+   *  elsewhere (an auto-connect, a page served by a server), so every change is announced instead
+   *  of assumed. */
+  REMOTE_BACKENDS_CHANGED: 'remote.backends.changed',
 
   /** Notification - the FFT pane's loaded calibration list changed (file added/removed/replaced/
    *  cleared). No payload - subscribers read the correction store; the view re-derives the
@@ -150,6 +159,17 @@ export const Events = Object.freeze({
   /** Notification - the generator's file-player finished (user stop, EOF without loop, or error).
    *  Subscribers (the generator pane) reset the play-from LED. No payload. */
   FILE_PLAY_STOPPED: 'filePlay.stopped',
+
+  /** Notification - the generator is uploading a file to a bench. Subscribers (the generator pane)
+   *  put a "being uploaded" notice on screen. No payload.
+   *
+   *  <p>ALWAYS paired with FILE_UPLOAD_FINISHED, on the success path and on every failure path
+   *  alike: a notice that outlives its transfer is worse than none. */
+  FILE_UPLOAD_STARTED: 'fileUpload.started',
+
+  /** Notification - the upload above ended, however it ended (the bench has the file, or it was
+   *  refused, or the link died). Subscribers take the notice down. No payload. */
+  FILE_UPLOAD_FINISHED: 'fileUpload.finished',
 
   /** Notification - the user clicked the scope's Auto-Setup button. Subscribers (the scope pane)
    *  re-fit the vertical/horizontal scales to the current signal. No payload. */

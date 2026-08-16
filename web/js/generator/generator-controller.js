@@ -18,11 +18,12 @@
  */
 import { GenSignalForm, isDualTone, isPeriodic } from './dds-kernel.js';
 import { MessageBus } from '../bus/message-bus.js';
-import { Events } from '../bus/events.js';
+import { Events, GenChangeCause } from '../bus/events.js';
 import { openOutputContext, WebAudioPlaybackSink } from './web-audio-playback-sink.js';
 import { FileTooLargeError } from '../net/net-playback-sink.js';
 import { DeviceFailureReason, failureDetailText } from '../audio/device-failure-reason.js';
 import { t } from '../i18n/i18n.js';
+import { Preferences } from '../store/preferences.js';
 
 /** How often the bench's pushed file state is consulted while a remote file plays (Java
  *  GeneratorController.REMOTE_FILE_POLL_MS). */
@@ -143,7 +144,10 @@ export class GeneratorController {
     // playing when stopPlayForPrefs() recorded it, so startPlayForPrefs() restarts the same one.
     this._ddsWasRunningForPrefs = false;
     this._fileWasRunningForPrefs = false;
-    this._lastFile = null;   // {channels, sampleRate, loop} - the last USER file played, for prefs-bounce resume
+    // The last USER file played, for the prefs-bounce resume: {channels, sampleRate, loop, file,
+    // bitsPerSample} - the FORMAT travels with it because the resume is re-checked against the
+    // configuration the bounce just committed.
+    this._lastFile = null;
     // Output context opened by openSweepContext() but not yet handed a buffer - the
     // freqresp sweep opens it first to learn the granted output rate (so it can cap
     // the sweep band to the granted Nyquist), then plays into it via playSweepBuffer.
@@ -209,7 +213,11 @@ export class GeneratorController {
   async startPlayForPrefs() {
     if (this._ddsWasRunningForPrefs) { await this.startGenerator(); return; }
     if (this._fileWasRunningForPrefs && this._lastFile) {
-      await this.playFileBuffer(this._lastFile.channels, this._lastFile.sampleRate, this._lastFile.loop);
+      // The file's FORMAT travels with it, because the prefs OK that bounced this lane may have
+      // moved the output rate or depth: the resumed file is checked against the new configuration
+      // exactly as a freshly picked one is.
+      await this.playFileBuffer(this._lastFile.channels, this._lastFile.sampleRate,
+        this._lastFile.loop, this._lastFile.file, this._lastFile.bitsPerSample);
     }
   }
 
@@ -336,37 +344,54 @@ export class GeneratorController {
    *  against the sample grid cycle to cycle; SINE / SINE_COMP / DUAL_TONE take the FFT-bin
    *  snap ONLY when snap-to-bin is on (Java FftBinSnap.snapIfEnabled admits SINE_COMP since
    *  4887ecb); every other form (noise, ...) emits the raw entered value. */
-  _genEmitFreq(sampleRate = 0) {
+  _genEmitFreq(dacRateHz = 0, analysisRateHz = 0) {
     const c = this.config;
     const raw = c.toneHz;
-    // The rate the alignment / snap grid is derived from: the DAC's own rate for what this
-    // generator PLAYS (the default), or an analyzer's rate when one asks what it should EXPECT
-    // to see (GENERATOR_EMITTED_HZ - Java emitFrequency(prefs, form, sampleRate, hz), whose
-    // rate argument is the caller's for exactly the same reason).
-    const rate = sampleRate > 0 ? sampleRate : (this.outSampleRate || c.outRate);
+    // The two corrections answer to DIFFERENT clocks, which is why they take separate rates
+    // (Java emitFrequency(prefs, form, dacRateHz, analysisRateHz, raw)). A whole number of
+    // samples per period is a property of the DAC that emits them; an FFT bin is a property
+    // of the ANALYSIS, whose grid is fs_in / N on the CAPTURED signal - a tone snapped to the
+    // output clock lands between bins whenever the two rates differ, and the whole point of
+    // the snap is that it does not. Either rate may be named by a caller (an analyzer asking
+    // GENERATOR_EMITTED_HZ passes its own); omitted, they default to this lane's clocks.
+    const dacRate = dacRateHz > 0 ? dacRateHz : (this.outSampleRate || c.outRate);
+    const analysisRate = analysisRateHz > 0 ? analysisRateHz : this.analysisSampleRate();
     if (c.form === GenSignalForm.RECTANGLE || c.form === GenSignalForm.TRIANGLE) {
-      if (raw <= 0 || rate <= 0) return raw;
-      return rate / Math.max(2, Math.round(rate / raw));   // samplePeriodAlignedHz
+      if (raw <= 0 || dacRate <= 0) return raw;
+      return dacRate / Math.max(2, Math.round(dacRate / raw));   // samplePeriodAlignedHz
     }
     if ((c.form === GenSignalForm.SINE || c.form === GenSignalForm.SINE_COMP
         || isDualTone(c.form)) && c.snapToBin) {
       // Java FftBinSnap.snapIfEnabled: binHz = sampleRate / fftLength.
-      const binHz = rate / c.fftSize;
-      if (c.fftSize < 8 || rate <= 0 || binHz <= 0) return raw;
+      const binHz = analysisRate / c.fftSize;
+      if (c.fftSize < 8 || analysisRate <= 0 || binHz <= 0) return raw;
       return Math.round(raw / binHz) * binHz;
     }
     return raw;
   }
 
-  /** The second-tone frequency the DDS actually emits - Java FftBinSnap.snapIfEnabled
-   *  for DUAL_TONE: snapped to the OUTPUT-rate bin grid (outRate/fftSize) when
-   *  snap-to-bin is on and the form is dual-tone, else the raw entered value.
-   *  Keeps tone 2 on a bin centre exactly like {@link #_genEmitFreq} does tone 1. */
-  _genEmitFreq2(sampleRate = 0) {
+  /** The rate the ANALYSIS runs at - the capture side, whose bin grid the snap has to hit
+   *  (Java GeneratorLane.analysisRateHz / GeneratorController.analysisSampleRate, which read
+   *  the same input rate off the current backend configuration). config.inRate is that rate
+   *  live: the pane writes it on every rate edit and shared-capture re-pins it to what the
+   *  device actually granted. Falls back to the DAC's rate only when no capture rate is
+   *  configured at all, so a snap is never computed against 0. */
+  analysisSampleRate() {
+    const c = this.config;
+    return c.inRate > 0 ? c.inRate : (this.outSampleRate || c.outRate);
+  }
+
+  /** The second-tone frequency the DDS actually emits - Java GeneratorLane.snapDualTone:
+   *  snapped to the ANALYSIS-rate bin grid (inRate/fftSize) when snap-to-bin is on and the
+   *  form is dual-tone, else the raw entered value. Both tones therefore land on bin centres
+   *  of the SAME grid - the analysis one; tone 2 on the DAC grid while tone 1 sat on the
+   *  analysis grid would smear it across bins and manufacture the very intermodulation
+   *  products the IMD table then reports. An analyzer asking at its own rate names it. */
+  _genEmitFreq2(analysisRateHz = 0) {
     const c = this.config;
     const raw = c.tone2Hz;
     if (isDualTone(c.form) && c.snapToBin) {
-      const rate = sampleRate > 0 ? sampleRate : (this.outSampleRate || c.outRate);
+      const rate = analysisRateHz > 0 ? analysisRateHz : this.analysisSampleRate();
       const binHz = rate / c.fftSize;
       if (c.fftSize < 8 || rate <= 0 || binHz <= 0) return raw;
       return Math.round(raw / binHz) * binHz;
@@ -400,11 +425,13 @@ export class GeneratorController {
       const remote = sink.emittedHz();
       if (remote[0] > 0 || remote[1] > 0) return remote;
     }
-    if (isDualTone(c.form)) return [this._genEmitFreq(sampleRate), this._genEmitFreq2(sampleRate)];
+    // The asker's rate is the ANALYSIS rate here (Java localTonesHz), so it is the rate the
+    // snap belongs on; the DDS period alignment stays on this lane's own clock.
+    if (isDualTone(c.form)) return [this._genEmitFreq(0, sampleRate), this._genEmitFreq2(sampleRate)];
     // The noise forms have no tone at all and a sweep is a different one every sample.
     const singleTone = isPeriodic(c.form)
       && c.form !== GenSignalForm.LINEAR_SWEEP && c.form !== GenSignalForm.LOG_SWEEP;
-    return [singleTone ? this._genEmitFreq(sampleRate) : 0.0, 0.0];
+    return [singleTone ? this._genEmitFreq(0, sampleRate) : 0.0, 0.0];
   }
 
   /** Faithful port of {@link FftBinSnap#snapIfEnabled}: snaps the entered SINE / DUAL_TONE tone
@@ -479,7 +506,17 @@ export class GeneratorController {
       // PHASE 1 - open the line and learn the rate it GRANTED, then re-resolve the emit frequency
       // (esp. the RECTANGLE/TRIANGLE sample-period alignment) against that ACTUAL rate before the
       // DDS is built. This is why the sink opens and starts in two steps.
-      this.outSampleRate = await this._sink.open({ sampleRate: c.outRate, deviceId: c.outDeviceId });
+      // The dither depth is FIXED at the open, not at the start: a bench takes it in gen.open
+      // (NET-PROTOCOL.md 4.5) and the live gen.config half only ever moves it afterwards. Omitted
+      // here, a session opened at 0 stayed undithered until the operator touched the control -
+      // the stored depth reached the wire on a CHANGE and never on a start. The local sinks
+      // ignore the extra key; #remoteLane has always passed it, which is why the FILE lane was
+      // dithered while the tone was not.
+      this.outSampleRate = await this._sink.open({
+        sampleRate: c.outRate, deviceId: c.outDeviceId,
+        ditherBits: c.ditherBits != null ? c.ditherBits : 0,
+        outputChannels: c.outputChannels || 'BOTH',
+      });
       this.computeAnalysisFreqs();
       // PHASE 2 - build the DDS and put it on air. Everything the kernel needs travels in ONE
       // description, `control` carrying the parameters that are not constructor options (duty,
@@ -507,6 +544,10 @@ export class GeneratorController {
       });
       this._genOn = true;
       this._status(`generator running - out ${this.outSampleRate} Hz, tone ${this.snapped.toFixed(3)} Hz`);
+      // The emitted signal just changed from silence to the tone (Java GeneratorController.start):
+      // the FFT averaging restart hangs off this event, so a stale accumulator never blends
+      // pre-start spectra into the running tone's statistics.
+      MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
       return null;
     } catch (e) {
       // The SINK that owns the error says what it meant; this controller only turns the answer
@@ -533,11 +574,24 @@ export class GeneratorController {
     // unplugged device must never block the stop, and the lane is dropped either way.
     try { if (sink) await sink.close(); } catch (_) {}
     this._sink = null;
+    // Silence replaced the tone (Java GeneratorController.stop publishes on the same
+    // transition): the FFT accumulator resets rather than averaging tone and silence together.
+    MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
   }
 
   /** Live retune of generator parameters that don't change structure (no restart):
    *  amplitude, duty, second-tone frequency, dual-tone split. */
   retuneGenerator() {
+    // The FILE lane rides the dither change too, and BEFORE the tone guard below, because a file
+    // plays with the tone STOPPED - the guard would return first and the change would never land.
+    // Java does the same from one setter: setDitherBits pushes to the tone lane and to the open
+    // file line. Only the dither: everything else in the retune below is the DDS tone's.
+    const fileLane = this._fileLaneSink;
+    if (fileLane && fileLane.port) {
+      fileLane.port.postMessage({
+        ditherBits: this.config.ditherBits != null ? this.config.ditherBits : 0,
+      });
+    }
     if (!this._genOn || !this._sink) return;
     const c = this.config;
     this.computeAnalysisFreqs();   // re-resolve the emit frequency for the (possibly edited) tone/form
@@ -590,9 +644,42 @@ export class GeneratorController {
   // owns the AudioBuffer playback (loop toggled live like the volatile flag).
   // ---------------------------------------------------------------------------
 
+  /**
+   * The refusal for a file whose format is not the one the output is configured for, or null when
+   * the two agree - the twin of Java GeneratorController.filePlayFormatMismatch, reading the same
+   * per-backend preference block through the same singleton.
+   *
+   * A file is played at its OWN rate and depth, so the lane has to be opened at the file's format.
+   * On a backend whose two directions share one clock that drags the whole session onto the file's
+   * rate, and on any backend it silently replaces the format the operator configured. The honest
+   * answer is to refuse and say which two formats disagree, so the next move - set the output to
+   * the file's format - is one the operator can make.
+   *
+   * The four numbers travel as STRINGS, exactly as in Java: handed to the MessageFormat port as
+   * numbers a rate comes back grouped ("44,100 Hz"), which no combo in this application writes.
+   *
+   * A depth of null/undefined means the CALLER has none to declare - the bench path uploads the
+   * raw file and the far end decodes it, so the depth is not this client's to know. The rate is
+   * still checked; an unknown depth is not evidence of a mismatch and is never refused on.
+   *
+   * @param {string} fileName the picked file's name, as the message names it
+   * @param {number} fileSampleRate the file's own rate (Hz)
+   * @param {?number} fileBitDepth the file's own depth (bits), or null when the caller has none
+   * @returns {?string} the localized refusal, or null when the file may be played
+   */
+  filePlayFormatMismatch(fileName, fileSampleRate, fileBitDepth) {
+    const output = Preferences.instance().current();
+    const rate = output.outputSampleRate;
+    const bits = output.outputBitDepth;
+    const depthAgrees = fileBitDepth == null || fileBitDepth === bits;
+    if (fileSampleRate === rate && depthAgrees) return null;
+    return t('generator.error.playFile.formatMismatch', fileName,
+      String(fileSampleRate), String(fileBitDepth), String(rate), String(bits));
+  }
+
   /** Plays decoded float channels through a fresh output context routed to the DAC.
    *  Replaces any current playback. `onFileEnded` (if set) fires on natural (non-loop) end. */
-  async playFileBuffer(channels, sampleRate, loop, file) {
+  async playFileBuffer(channels, sampleRate, loop, file, bitsPerSample) {
     await this.stopFile();
     // A backend whose generator runs somewhere else has no downlink for audio (spec §7: there is
     // no client->server PCM in v1), so the FILE travels the other way - up to the bench once, and
@@ -604,8 +691,25 @@ export class GeneratorController {
     const benchLane = this._isBenchLane() ? this._sink : await this.#remoteLane(sampleRate, {});
     if (benchLane) {
       if (benchLane !== this._sink) this._fileLaneSink = benchLane;   // stopFile closes it
-      this._lastFile = { channels, sampleRate, loop: !!loop, file };
+      this._lastFile = { channels, sampleRate, loop: !!loop, file, bitsPerSample };
       await this._startRemoteFilePlayback(benchLane, file, loop);
+      return;
+    }
+    // From here down the lane is LOCAL, and a local lane is opened at the FILE's format - nothing
+    // is resampled and nothing is re-quantised. A file that is not the format the operator
+    // configured is refused rather than silently replacing that configuration, which on a backend
+    // whose two directions share one clock would drag the whole session onto the file's rate.
+    // BELOW the bench branch on purpose, exactly as Java checks in playLoop and not in
+    // remoteFilePlayLoop: a bench decodes the uploaded file itself, and its DAC's format is that
+    // server's business rather than this client's.
+    const mismatch = this.filePlayFormatMismatch(file && file.name ? file.name : '',
+      sampleRate, bitsPerSample);
+    if (mismatch != null) {
+      const out = Preferences.instance().current();
+      console.warn(`File playback refused: ${file && file.name ? file.name : 'the file'} is `
+        + `${sampleRate} Hz / ${bitsPerSample} bit, output configured for `
+        + `${out.outputSampleRate} Hz / ${out.outputBitDepth} bit`);
+      this.filePlayError = mismatch;
       return;
     }
     // A backend whose DAC is NOT a Web Audio device plays the buffer through its own lane. The
@@ -614,7 +718,8 @@ export class GeneratorController {
     // so the controller still knows nothing about which backend it is driving.
     const laneSink = await this.#bufferSink(sampleRate);
     if (laneSink) {
-      this._lastFile = { channels, sampleRate, loop: !!loop };
+      if (laneSink !== this._sink) this._fileLaneSink = laneSink;   // stopFile closes it
+      this._lastFile = { channels, sampleRate, loop: !!loop, file, bitsPerSample };
       await laneSink.playBuffer(downmixToMono(channels), {
         loop: !!loop,
         onEnded: () => { if (this.onFileEnded) this.onFileEnded(); },
@@ -641,8 +746,9 @@ export class GeneratorController {
     if (ctx.state === 'suspended') await ctx.resume();
     src.start();
     // Retain the last USER file so a prefs-bounce (startPlayForPrefs) can resume it on the new
-    // output device/rate. The sweep uses playSweepBuffer, which never sets _lastFile.
-    this._lastFile = { channels, sampleRate, loop: !!loop };
+    // output device/rate - with its FORMAT, which the resume re-checks against the new
+    // configuration. The sweep uses playSweepBuffer, which never sets _lastFile.
+    this._lastFile = { channels, sampleRate, loop: !!loop, file, bitsPerSample };
   }
 
   /** Opens the fresh output context the sweep will play into, requesting it AT
@@ -814,12 +920,21 @@ export class GeneratorController {
     this._remoteFileSeenPlaying = false;
     this.filePlayError = null;
     try {
+      // The notice covers the whole PREPARE-AND-UPLOAD phase, not the transfer alone: on a fast
+      // link the transfer is a blink, while opening an exclusive device on the bench takes
+      // seconds and pushing a large file takes more, so a notice spanning only the HTTP put
+      // appeared and vanished in front of the wait it was meant to explain.
+      MessageBus.instance().publish(Events.FILE_UPLOAD_STARTED);
       if (session.stopped) { await this._endRemoteFile(sink, session, false); return; }
       await sink.playFile(file.bytes, !!loop);
     } catch (e) {
       this._reportRemoteFileFailure(e, file);
       await this._endRemoteFile(sink, session, false);   // nothing was commanded
       return;
+    } finally {
+      // Every exit of the block above takes the notice down: a stop while preparing, a refused
+      // or failed upload, and the success that falls through to the watch below.
+      MessageBus.instance().publish(Events.FILE_UPLOAD_FINISHED);
     }
     // THE AWAIT ENDS HERE. The bench has the file, which is everything the caller needs to know
     // - Java's thread returns "in microseconds" at exactly this point, and the pane's Play
@@ -994,7 +1109,24 @@ export class GeneratorController {
       // nothing to close - just fall back to the caller's own context path.
       return null;
     }
-    await sink.open({ sampleRate, outDeviceId: this.config.outDeviceId });
+    // The CONFIGURED generator dither reaches the lane at its open, exactly as the tone's does.
+    // A file is not "already quantised" by the time it leaves: the playback path scales it by the
+    // calibration factor and the lane re-quantises the product at the DAC's depth - a rounding
+    // with no dither under it, which is what dither exists to linearise. Off stays zero on a
+    // hardware backend; the loopback keeps its own last-bit fallback, so its known floor now
+    // shows on file play too.
+    //
+    // Read from PREFERENCES, through the converting getter, and not from the shell's UI snapshot:
+    // the snapshot is only written when a pane reads the controls back or the operator commits the
+    // field, so on a fresh page it still carries the backend default 0 - and a stored dither is a
+    // value+unit pair whose bit count exists only once it is resolved against the live DAC full
+    // scale. A zero at open is not "off" on a lane with a last-bit fallback: it lands at the
+    // session depth, below anything a measurement can see, which reads as no dither at all while
+    // the live push - which does carry a resolved value - appears to work.
+    await sink.open({
+      sampleRate, outDeviceId: this.config.outDeviceId,
+      ditherBits: Preferences.instance().genDitherBits.get(),
+    });
     this._fileLaneSink = sink;
     return sink;
   }

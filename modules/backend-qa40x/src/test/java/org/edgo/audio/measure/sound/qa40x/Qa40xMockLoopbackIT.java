@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.sound.LibUsb;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xDevice;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xModel;
@@ -129,7 +130,6 @@ class Qa40xMockLoopbackIT {
 
     /** Interleaved stereo int32: 2 channels × 4 bytes. */
     private static final int FRAME_BYTES = 8;
-    private static final double SQRT2    = Math.sqrt(2.0);
 
     private final Qa40xDeviceFinder finder = new Qa40xDeviceFinder();
     private Qa40xTransport transport;
@@ -231,14 +231,14 @@ class Qa40xMockLoopbackIT {
         double expectedAmplitude = AMPLITUDE * gainLeft;
 
         // (a) Recovered left amplitude (RMS·√2) matches A·G_L within 0.5 dB.
-        double measuredAmplitude = rms(left) * SQRT2;
+        double measuredAmplitude = rms(left) * Constants.SQRT2;
         double amplitudeErrorDb = 20.0 * Math.log10(measuredAmplitude / expectedAmplitude);
         assertTrue(Math.abs(amplitudeErrorDb) <= AMPLITUDE_TOL_DB,
                 "left amplitude " + measuredAmplitude + " vs expected " + expectedAmplitude
                         + " (" + amplitudeErrorDb + " dB)");
 
         // (b) Right lane is silent - proves the DAC L/R swap / ADC no-swap wiring.
-        double rightAmplitude = rms(right) * SQRT2;
+        double rightAmplitude = rms(right) * Constants.SQRT2;
         assertTrue(rightAmplitude <= expectedAmplitude / ISOLATION_RATIO,
                 "right lane not isolated: " + rightAmplitude);
 

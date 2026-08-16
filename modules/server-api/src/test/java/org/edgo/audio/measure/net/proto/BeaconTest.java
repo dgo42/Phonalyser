@@ -59,7 +59,7 @@ class BeaconTest {
     void encodedFieldNamesAreTheSpecNames() throws JsonProcessingException {
         String json = codec.write(Beacon.of(SERVER_ID, NAME, APP, 8377));
 
-        assertEquals("{\"phonalyser\":1,\"proto\":1,\"serverId\":\"" + SERVER_ID
+        assertEquals("{\"phonalyser\":1,\"proto\":2,\"serverId\":\"" + SERVER_ID
                 + "\",\"name\":\"" + NAME + "\",\"app\":\"" + APP
                 + "\",\"port\":8377}", json,
                 "the web client reads these names verbatim");
@@ -67,7 +67,7 @@ class BeaconTest {
 
     @Test
     void specSampleDatagramParses() throws JsonProcessingException {
-        String datagram = "{ \"phonalyser\": 1, \"proto\": 1, \"serverId\": \"b7e0-uuid\","
+        String datagram = "{ \"phonalyser\": 1, \"proto\": 2, \"serverId\": \"b7e0-uuid\","
                 + " \"name\": \"Bench QA403\", \"app\": \"1.2.0\", \"port\": 8377 }";
 
         Beacon received = codec.read(datagram, Beacon.class);
@@ -121,10 +121,12 @@ class BeaconTest {
         assertEquals(500, NetProto.PING_INTERVAL_MS);
         assertEquals(4, NetProto.MAX_MISSED_PINGS);
         assertEquals(50 * 1024 * 1024, NetProto.MAX_UPLOAD_BYTES);
-        assertEquals(1, NetProto.PROTO_VERSION, "PROTO is a single integer, 1");
-        assertEquals(1, NetProto.PROTO_MIN_VERSION,
-                "v1 is also the oldest version this build serves");
+        assertEquals(2, NetProto.PROTO_VERSION, "PROTO is a single integer, 2");
+        assertEquals(NetProto.PROTO_VERSION, NetProto.PROTO_MIN_VERSION,
+                "v2 is a hard cut: the range is 2..2, so a v1 peer is refused at hello");
         assertTrue(NetProto.PROTO_MIN_VERSION <= NetProto.PROTO_VERSION,
                 "the server's own range must not be empty (spec 1)");
+        assertEquals(10_000, NetProto.PLANE_DECLARATION_TIMEOUT_MS,
+                "spec 4: a connection that has not declared its plane is closed after 10 s");
     }
 }

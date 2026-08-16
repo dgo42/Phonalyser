@@ -99,14 +99,19 @@ class JsonCodecTest {
         data.put(NetFields.SERVER_ID, "b7e0-uuid");
         data.put(NetFields.NAME, "Bench QA403");
         data.put(NetFields.APP, "1.2.0");
+        // Spec 4.1 (v2): the session's own handle, which every data connection
+        // of spec 4.7 attaches with.  It rides in the hello response and
+        // nowhere else, so this is the one place its field name is pinned.
+        data.put(NetFields.CLIENT_ID, "c0ffee-uuid");
         data.put(NetFields.CAPS, List.of(NetFields.CAP_QA40X, NetFields.CAP_GEN,
                 NetFields.CAP_FILES));
 
         String json = codec.write(new NetMessage(ID, codec.toNode(data)));
 
-        assertEquals("{\"t\":\"resp\",\"id\":42,\"ok\":true,\"data\":{\"proto\":1,"
+        assertEquals("{\"t\":\"resp\",\"id\":42,\"ok\":true,\"data\":{\"proto\":2,"
                 + "\"serverId\":\"b7e0-uuid\",\"name\":\"Bench QA403\","
-                + "\"app\":\"1.2.0\",\"caps\":[\"qa40x\",\"gen\",\"files\"]}}", json,
+                + "\"app\":\"1.2.0\",\"clientId\":\"c0ffee-uuid\","
+                + "\"caps\":[\"qa40x\",\"gen\",\"files\"]}}", json,
                 "spec 4.1 field names and cap tokens, verbatim");
     }
 

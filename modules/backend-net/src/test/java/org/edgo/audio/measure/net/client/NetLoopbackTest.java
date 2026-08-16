@@ -142,6 +142,8 @@ class NetLoopbackTest {
     private static final double TRIMMED_HZ = 1_000.5;
     private static final double AMPLITUDE_VRMS = 0.5;
     private static final double DITHER_BITS = 1.0;
+    /** A depth far from the open's, so the live push cannot pass by echo. */
+    private static final double LIVE_DITHER_BITS = 4.0;
     /** The sweep the mark test starts - any real chirp will do; what is asserted
      *  is WHERE its mark lands in the byte stream. */
     private static final double SWEEP_F0_HZ = 20.0;
@@ -181,7 +183,7 @@ class NetLoopbackTest {
     @AfterEach
     void stopTheBench() {
         for (NetConnection connection : connections) {
-            connection.close(NetCloseReason.BYE);
+            connection.connClose(NetCloseReason.BYE);
         }
         bench.shutDown(SHUTDOWN_MS);
     }
@@ -197,7 +199,7 @@ class NetLoopbackTest {
         DeviceRef device = inputs.get(0);
         assertEquals(MockBench.FIRST_INPUT, device.name());
         assertEquals(AudioBackendType.NET, device.carrier(),
-                "the ref ROUTES at the NET manager, never at the LOCAL manager of the "
+                "the ref ROUTES at the net manager, never at the LOCAL manager of the "
                         + "same name - a bench across the room is not this machine's USB");
         assertEquals(MockBench.REMOTE_BACKEND, device.backend().name(),
                 "while what it IS is the bench's TRUE backend type - the dual-level "
@@ -249,6 +251,147 @@ class NetLoopbackTest {
         assertFalse(bench.isLocked(MockBench.FIRST_INPUT, true),
                 "and the device line goes back with it: a lock left behind is a device "
                         + "no other client can ever take again");
+    }
+
+    /**
+     * Spec 4.7: the audio arrives on the capture's OWN connection, and the
+     * control connection carries none of it.
+     *
+     * <p>That is the whole point of the split, and it is measured from the
+     * bench's side because the client cannot see which socket a frame came in
+     * on: this bench sends every frame on the socket the {@code capture.attach}
+     * arrived on, so a client that never dialled one would receive nothing at
+     * all - and a client that started the stream before attaching would be
+     * refused {@code NOT_ATTACHED} first.
+     */
+    @Test
+    void theCaptureDialsItsOwnDataConnectionAndTheAudioArrivesOnIt() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        List<byte[]> delivered = new ArrayList<>();
+        CountDownLatch batches = new CountDownLatch(1);
+        NetPcmCapture capture = (NetPcmCapture) manager.openCapture(
+                manager.listInputDevices().get(0), RATE_HZ, BITS);
+        capture.setPcmBatchListener((pcm, validBytes) -> {
+            synchronized (delivered) {
+                delivered.add(Arrays.copyOf(pcm, validBytes));
+            }
+            batches.countDown();
+        });
+
+        capture.open();
+
+        assertEquals(1, bench.sessions(),
+                "spec 4: a data connection is not a session - only hello makes one");
+        capture.startRecording();
+        bench.getLastCapture().feed(batch(0));
+        awaitTrue(() -> batches.getCount() == 0,
+                "the audio did not arrive on the data connection");
+        assertArrayEquals(batch(0), delivered.get(0));
+
+        capture.close();
+        assertTrue(manager.getConnection().isOpen(),
+                "spec 4.7: closing a capture closes ITS socket and leaves the session "
+                        + "running - the control connection outlives every capture on it");
+    }
+
+    /**
+     * Spec 4.7: an attach the bench refuses is the failure of the
+     * {@code capture.open} it belongs to - not a socket error, and not a session
+     * that quietly has no audio.
+     *
+     * <p>And it must cost nothing: the capture is closed on the bench and the
+     * device lock goes back, exactly as a refused open does.
+     */
+    @Test
+    void anAttachTheBenchRefusesIsReportedAsTheCaptureOpenFailing() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        bench.setRefuseAttach(true);
+        NetPcmCapture capture = (NetPcmCapture) manager.openCapture(
+                manager.listInputDevices().get(0), RATE_HZ, BITS);
+
+        assertThrows(IllegalStateException.class, capture::open,
+                "the operator is told the capture could not be opened, not that a "
+                        + "socket could not be dialled");
+
+        awaitTrue(() -> !bench.isLocked(MockBench.FIRST_INPUT, true),
+                "an open that failed must cost nothing - the lock goes back");
+        assertTrue(manager.getConnection().isOpen(),
+                "and the SESSION survives: a refused attach is answered and its socket "
+                        + "closed by the bench, which is expected at both ends");
+    }
+
+    /**
+     * Spec 4.1's death rule: a data connection that DROPS kills the whole
+     * session, both ends.
+     *
+     * <p>The control connection is perfectly healthy here and answering pings,
+     * so nothing else would ever notice that the audio of a running measurement
+     * has stopped arriving - the client would sit in front of a frozen scope
+     * believing it was measuring.
+     */
+    @Test
+    void aDataConnectionThatDropsEndsTheWholeSession() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        NetPcmCapture capture = openFirstInput(manager);
+
+        bench.getLastCapture().dropDataConnection();
+
+        awaitTrue(() -> !manager.getConnection().isOpen(),
+                "spec 4.1: one connection dropping is the session dead");
+        awaitTrue(() -> !capture.isRecording(),
+                "and the stream stops with it, so no pane goes on drawing a "
+                        + "measurement of nothing");
+    }
+
+    /**
+     * The other half of that rule, and the one a local mark cannot decide: an
+     * ORDERLY close of a data connection ends the capture and nothing else -
+     * even when this end had not marked the socket first.
+     *
+     * <p>Spec 4.7 puts the answer on the wire rather than in local state for
+     * exactly this reason: the bench closes the socket as it handles a
+     * {@code capture.close}, and its {@code resp} travels on the OTHER
+     * connection, so the close can arrive first.  A client that required its own
+     * mark to have been set in time would end the whole session over an ordinary
+     * teardown - and the operator would lose the bench for closing a stream.
+     */
+    @Test
+    void anOrderlyCloseOfADataConnectionEndsNoSession() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        NetPcmCapture capture = openFirstInput(manager);
+
+        bench.getLastCapture().closeDataConnectionNormally();
+
+        assertTrue(manager.getConnection().isOpen(),
+                "a NORMAL close is the ordinary end of a stream, not spec 4.1's drop - "
+                        + "and no mark of ours was needed to know it");
+        capture.close();
+        assertTrue(manager.getConnection().isOpen(),
+                "and the session is still there afterwards, which is what lets the next "
+                        + "measurement reuse it");
+    }
+
+    /**
+     * Spec 4.7: the planes do not mix, so a control message arriving on a data
+     * connection is a protocol error and the session ends.
+     *
+     * <p>A client that simply HANDLED it would be back where the split started:
+     * control traffic queued behind whatever audio that socket is carrying, and
+     * a peer that has lost track of which connection it is writing to is not one
+     * to keep measuring with (the same rule a malformed frame gets).
+     */
+    @Test
+    void aControlMessageOnADataConnectionEndsTheSession() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        openFirstInput(manager);
+
+        bench.getLastCapture().pushTextOnDataConnection(
+                new NetMessage(MessageType.EV_DEVICE_ERROR)
+                        .put(NetFields.DIRECTION, NetFields.INPUT)
+                        .put(NetFields.DETAIL, DEVICE_FAILURE));
+
+        awaitTrue(() -> !manager.getConnection().isOpen(),
+                "the planes do not mix: text after the attach ends the session");
     }
 
     /**
@@ -476,7 +619,7 @@ class NetLoopbackTest {
         NetDeviceManager manager = new NetDeviceManager();
 
         manager.connect(connection, select(connection, servedBackend(connection)));
-        connection.close(NetCloseReason.BYE);
+        connection.connClose(NetCloseReason.BYE);
 
         assertEquals(2, manager.listInputDevices().size(),
                 "the bench's inputs came with the selection, so there is nothing left "
@@ -981,6 +1124,11 @@ class NetLoopbackTest {
                 "spec 4.3: the client surfaces it exactly like a local device error - "
                         + "message + stop the affected modules");
         assertEquals(NetFields.INPUT, faults.direction.get());
+        assertTrue(manager.getConnection().isOpen(),
+                "spec 4.7: the event arrived on the CONTROL connection - the same event "
+                        + "pushed down the capture's data connection is a protocol error "
+                        + "that ends the session, so a session still open is the proof it "
+                        + "took the right socket");
         awaitTrue(() -> !capture.isRecording(),
                 "and the stream really did stop: the server closed its side, so a client "
                         + "that stayed 'live' would show a frozen scope with no audio and "
@@ -1015,7 +1163,7 @@ class NetLoopbackTest {
         Faults faults = subscribe(manager);
         NetPcmCapture capture = openFirstInput(manager);
 
-        connection.close(NetCloseReason.KEEPALIVE_TIMEOUT);
+        connection.connClose(NetCloseReason.KEEPALIVE_TIMEOUT);
 
         assertFalse(capture.isRecording(),
                 "spec 4.1: \"Client: stop all modules\" - a capture whose connection died "
@@ -1164,8 +1312,8 @@ class NetLoopbackTest {
         assertEquals(RATE_HZ, lane.getRate());
         assertEquals(BITS, lane.getBits());
         assertEquals(DITHER_BITS, lane.getDitherBits(),
-                "spec 4.5 fixes the dither depth at gen.open - it is the LINE's, not a "
-                        + "live parameter");
+                "spec 4.5: gen.open fixes the INITIAL dither depth; the live half "
+                        + "travels as gen.config");
         assertEquals(OutputChannels.LEFT.name(), lane.getOutputChannels(),
                 "the lane gate travelled with the open, so the bench drives the side "
                         + "the operator selected");
@@ -1196,6 +1344,32 @@ class NetLoopbackTest {
         assertTrue(lane.isClosed(), "spec 4.5: gen.close gives the output line back");
         assertFalse(bench.isLocked(MockBench.OUTPUT, false),
                 "and the device lock goes with it");
+    }
+
+    /** The live half of the dither depth: the operator's edit crosses the wire
+     *  as {@code gen.config} and lands on the tone that is playing - it must
+     *  not wait for the next {@code gen.open}. */
+    @Test
+    void aDitherEditReachesTheToneThatIsPlaying() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        DeviceRef output = manager.listOutputDevices().get(0);
+
+        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, OutputChannels.BOTH);
+        manager.startGenerator();
+        MockBench.Generator lane = bench.getLastGenerator();
+        assertNotNull(lane, "the client opened no generator on the bench");
+        assertEquals(DITHER_BITS, lane.getDitherBits(),
+                "the open carried the initial depth");
+        assertNull(lane.getLiveDitherBits(),
+                "and no config push has touched it yet");
+
+        manager.setDitherBits(LIVE_DITHER_BITS);
+        awaitTrue(() -> lane.getLiveDitherBits() != null,
+                "the dither edit never crossed the wire");
+        assertEquals(LIVE_DITHER_BITS, lane.getLiveDitherBits(),
+                "spec 4.5: the config push carries the depth the operator set");
+
+        manager.closeGenerator();
     }
 
     /**

@@ -116,6 +116,13 @@ final class StubPlayback implements AudioPlayback {
         rightLaneScale = right;
     }
 
+    /** The dither depth as last pushed; the setter IS the
+     *  {@code AudioPlayback} one.  Like the lane scale above it lands on the
+     *  quantizer, so the rendered waveform cannot show it. */
+    @Getter
+    @Setter
+    private volatile double ditherBits;
+
     /** How many times this lane was closed - a lane handed back twice is a
      *  double release, which on a real device is a refusal or worse. */
     @Getter

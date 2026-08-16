@@ -56,8 +56,8 @@ class NetBenchRescaleTest {
     private static final String DEVICE_NAME = "QA403";
     private static final String OTHER_DEVICE = "Cosmos ADC";
     /** A selection ON the bench: a remote key, whose CARRIER is what
-     *  {@code AudioBackend.active()} answers (NET is a carrier, never a
-     *  selection's type). */
+     *  {@code AudioBackend.active()} answers ({@code AudioBackendType.NET} is a
+     *  carrier, never a selection's type). */
     private static final BackendKey BENCH =
             BackendKey.of("b7e0-bench-uuid", AudioBackendType.QA40X);
     /** And a selection on this machine, the same analyzer model. */

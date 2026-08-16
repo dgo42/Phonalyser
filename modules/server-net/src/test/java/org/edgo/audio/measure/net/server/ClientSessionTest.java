@@ -44,8 +44,10 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -79,6 +81,9 @@ class ClientSessionTest {
     private static final int CAPTURE_BITS = 24;
     /** 24-bit stereo, two frames - enough to be one batch. */
     private static final int CAPTURE_BATCH_BYTES = 12;
+    /** Shortest a handle may be and still be the random UUID of spec 4.1 - a
+     *  counter or an index would fall under it. */
+    private static final int CLIENT_ID_MIN_LENGTH = 30;
     /** The two full scales a calibration test writes, deliberately unequal so a
      *  handler that crossed the channels fails on the values. */
     private static final double FS_RMS_LEFT = 1.234;
@@ -260,13 +265,25 @@ class ClientSessionTest {
         assertEquals(0, response.getData().size());
     }
 
+    /**
+     * Spec 4.1: a ping is answered without going through the request worker,
+     * because liveness may never be reported from behind a device call.
+     *
+     * <p>Asked AFTER the handshake, which is the only state this type has: a
+     * session exists once {@code hello} has been answered, so "a ping before
+     * hello" is not a case here at all - such a connection never declared its
+     * plane and the front closes it (spec 4, pinned in the loopback run).
+     */
     @Test
-    void aPingBeforeHelloIsAnsweredToo() {
+    void aPingIsAnsweredWithoutWaitingForTheRequestWorker() {
+        greet(session, CLIENT_NAME);
+        worker.hold();
+
         session.onMessage(new NetMessage(MessageType.PING, REQUEST_ID));
 
         assertTrue(channel.responseTo(REQUEST_ID).isOk(),
-                "spec 4.1 marks only hello as MUST-be-first, and the server's own "
-                        + "pings start at the open - so the client's may too");
+                "a server that answered pings from behind its own device calls would "
+                        + "declare a healthy client dead over its own latency");
     }
 
     @Test
@@ -516,6 +533,9 @@ class ClientSessionTest {
     @Test
     void theDeviceListIsAnsweredWithEveryBackendAndItsDevices() {
         greet(session, CLIENT_NAME);
+        // The start-up priming scan ServerMain runs before the transports
+        // accept anything - devices.list answers from the last enumeration.
+        catalog.scan();
 
         session.onMessage(new NetMessage(MessageType.DEVICES_LIST, REQUEST_ID));
 
@@ -537,13 +557,17 @@ class ClientSessionTest {
     }
 
     @Test
-    void theCaptureLifecycleRunsOverTheControlChannelAndTheFramesOverTheSameSocket() {
+    void theCaptureLifecycleRunsOverTheControlChannelAndTheFramesOverTheDataOne() {
         greet(session, CLIENT_NAME);
         acquire(session, REQUEST_ID, true);
 
         session.onMessage(captureOpen(SECOND_REQUEST_ID));
         int captureId = channel.responseTo(SECOND_REQUEST_ID).getData()
                 .path(NetFields.CAPTURE_ID).asInt();
+        // Spec 4.7: the data connection is dialled between the open and the
+        // start, and the start is refused until it has attached.
+        FakeChannel data = new FakeChannel();
+        session.attachCapture(captureId, data);
         session.onMessage(new NetMessage(MessageType.CAPTURE_START, THIRD_REQUEST_ID)
                 .put(NetFields.CAPTURE_ID, captureId));
         StubCapture capture = ((StubDeviceManager) AudioBackend.instance()
@@ -551,14 +575,94 @@ class ClientSessionTest {
         capture.feed(new byte[CAPTURE_BATCH_BYTES]);
 
         assertTrue(channel.responseTo(THIRD_REQUEST_ID).isOk());
-        assertEquals(1, channel.getFrames().size(),
-                "spec 5: the audio frames go out on the SAME socket as the control messages");
-        assertEquals(captureId, channel.getFrames().get(0).streamId());
+        assertEquals(1, data.getFrames().size(),
+                "spec 4.7: the audio frames go out on the capture's DATA connection");
+        assertEquals(captureId, data.getFrames().get(0).streamId());
+        assertEquals(0, channel.getFrames().size(),
+                "and never on the control one, where a binary frame is a protocol "
+                        + "error - a ping answer must not queue behind a PCM batch");
 
         session.onMessage(new NetMessage(MessageType.CAPTURE_CLOSE, FOURTH_REQUEST_ID)
                 .put(NetFields.CAPTURE_ID, captureId));
         assertTrue(channel.responseTo(FOURTH_REQUEST_ID).isOk());
         assertTrue(capture.isClosed());
+        assertEquals(1, data.getCloseCount(),
+                "spec 4.7: capture.close ends the capture AND its data connection");
+    }
+
+    @Test
+    void startingACaptureBeforeItsDataConnectionAttachedIsRefused() {
+        greet(session, CLIENT_NAME);
+        acquire(session, REQUEST_ID, true);
+        session.onMessage(captureOpen(SECOND_REQUEST_ID));
+        int captureId = channel.responseTo(SECOND_REQUEST_ID).getData()
+                .path(NetFields.CAPTURE_ID).asInt();
+
+        session.onMessage(new NetMessage(MessageType.CAPTURE_START, THIRD_REQUEST_ID)
+                .put(NetFields.CAPTURE_ID, captureId));
+
+        assertTrue(channel.responseTo(THIRD_REQUEST_ID).getError().is(ErrorCode.NOT_ATTACHED),
+                "spec 4.4: the client is one step early, and the frames a start "
+                        + "produced would have nowhere to go");
+    }
+
+    /**
+     * Spec 4.7: {@code capture.attach} on the CONTROL connection is refused
+     * {@code BAD_REQUEST}, and the connection stays open.
+     *
+     * <p>Deliberately not {@code UNSUPPORTED}, which is the answer for a type
+     * this build never heard of (spec 1): this one it knows, the client simply
+     * sent it down the wrong socket, and "unsupported" would send that client
+     * hunting for a version mismatch that does not exist.
+     */
+    @Test
+    void anAttachOnTheControlConnectionIsABadRequestAndKeepsTheSession() {
+        greet(session, CLIENT_NAME);
+
+        session.onMessage(new NetMessage(MessageType.CAPTURE_ATTACH, REQUEST_ID)
+                .put(NetFields.CLIENT_ID, session.getClientId())
+                .put(NetFields.CAPTURE_ID, 1));
+
+        assertTrue(channel.responseTo(REQUEST_ID).getError().is(ErrorCode.BAD_REQUEST),
+                "spec 4.7: a message this build knows, merely sent where it does not "
+                        + "belong - never UNSUPPORTED");
+        assertFalse(session.isClosed(),
+                "and the control connection carries on: a client's misdirected message "
+                        + "must not cost it the bench");
+        assertEquals(0, channel.getCloseCount());
+    }
+
+    @Test
+    void anAttachOnASessionThatHasEndedIsRefused() {
+        greet(session, CLIENT_NAME);
+        acquire(session, REQUEST_ID, true);
+        session.onMessage(captureOpen(SECOND_REQUEST_ID));
+        int captureId = channel.responseTo(SECOND_REQUEST_ID).getData()
+                .path(NetFields.CAPTURE_ID).asInt();
+        session.close("the operator disconnected");
+
+        NetException refused = assertThrows(NetException.class,
+                () -> session.attachCapture(captureId, new FakeChannel()));
+
+        assertEquals(ErrorCode.BAD_REQUEST, refused.getCode(),
+                "spec 4.7: the captures of an ended session are gone, so a socket "
+                        + "bound to one would carry nothing for ever");
+    }
+
+    @Test
+    void helloAnswersASecretHandleForTheDataConnectionsToAttachWith() {
+        greet(session, CLIENT_NAME);
+
+        String handle = channel.responseTo(HELLO_ID).getData()
+                .path(NetFields.CLIENT_ID).asText();
+
+        assertEquals(session.getClientId(), handle,
+                "spec 4.1: the hello response carries the session's own handle");
+        assertTrue(handle.length() > CLIENT_ID_MIN_LENGTH,
+                "and it is a random UUID rather than a guessable number - anyone "
+                        + "holding it could attach to this client's captures");
+        assertNotEquals(handle, sessionOn(new FakeChannel(), new FakeTicker(),
+                new FakeWorker()).getClientId(), "one per session");
     }
 
     @Test

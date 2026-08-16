@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.gui.bind;
 
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -53,10 +55,13 @@ public final class Bindings {
     private Bindings() {}
 
     /** Two-way binds a {@code READ_ONLY} {@link Combo} whose items are in
-     *  {@code values} order to an enum {@link Property} (selection index =
-     *  {@link Enum#ordinal()}). */
+     *  {@code values} order to an enum {@link Property}: the selection index is
+     *  the value's position in {@code values}, so {@code values} may be a SUBSET
+     *  of the enum (a combo offering three of five constants stays in sync).
+     *  For a full {@code values()} array the position is the ordinal. */
     public static <T extends Enum<T>> void combo(Combo combo, Property<T> property, T[] values) {
-        combo.select(property.get().ordinal());
+        List<T> items = Arrays.asList(values);
+        combo.select(items.indexOf(property.get()));
         combo.addListener(SWT.Selection, e -> {
             int i = combo.getSelectionIndex();
             if (i >= 0) {
@@ -64,8 +69,10 @@ public final class Bindings {
             }
         });
         Consumer<T> onChange = v -> {
-            if (!combo.isDisposed() && combo.getSelectionIndex() != v.ordinal()) {
-                combo.select(v.ordinal());
+            // A value the combo does not offer (-1) leaves the selection alone.
+            int i = items.indexOf(v);
+            if (!combo.isDisposed() && i >= 0 && combo.getSelectionIndex() != i) {
+                combo.select(i);
             }
         };
         property.addListener(onChange);

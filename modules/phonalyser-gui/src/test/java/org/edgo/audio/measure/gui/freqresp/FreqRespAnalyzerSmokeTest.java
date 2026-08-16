@@ -19,6 +19,7 @@
 package org.edgo.audio.measure.gui.freqresp;
 
 import org.edgo.audio.measure.sound.StereoSamples;
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.sound.DeviceRef;
@@ -52,9 +53,11 @@ class FreqRespAnalyzerSmokeTest {
     private static final double DURATION_SEC   = 1.0;
     private static final double LEAD_IN_SEC    = 0.1;
     private static final double AMP_VRMS       = 0.5;
-    /** Literal calibration values (the factory defaults) - both the stub's
-     *  capture-side scaling and the analyzer's normalisation use these, so the
-     *  test is self-consistent and needs no Preferences singleton. */
+    /** Literal calibration values - FIXTURES of this test, not the shipped
+     *  defaults, which have since moved.  Both the stub's capture-side scaling and
+     *  the analyzer's normalisation use these two, so the test is self-consistent
+     *  and needs no Preferences singleton; what they are is immaterial as long as
+     *  the two sides agree. */
     private static final double DAC_FS_VRMS    = 2.79351;
     private static final double ADC_FS_VRMS    = 1.7931;
     /** A 16-bit positive rail on the normalised scale - 32767/32768, the
@@ -160,7 +163,7 @@ class FreqRespAnalyzerSmokeTest {
 
         // The stub drives the sweep at amplitudeVrms·√2 / dacFs of full scale;
         // the raw peak must report that level, not 0 and not the rail.
-        double drivePeak = AMP_VRMS * Math.sqrt(2.0) / DAC_FS_VRMS;
+        double drivePeak = AMP_VRMS * Constants.SQRT2 / DAC_FS_VRMS;
         assertEquals(drivePeak, stereo.rawPeakLin(), 1e-3,
                 "raw peak must track the captured level");
         assertFalse(stereo.clipped(), "a sweep a long way below the rail is not clipped");
@@ -260,7 +263,7 @@ class FreqRespAnalyzerSmokeTest {
             // the ADC reads back as that same fraction of full-scale.  The
             // deconvolution then divides this factor back out to recover
             // unity passband, so the test signal must include it.
-            double dacDrivePeak = AMP_VRMS * Math.sqrt(2.0) / DAC_FS_VRMS;
+            double dacDrivePeak = AMP_VRMS * Constants.SQRT2 / DAC_FS_VRMS;
             for (int i = 0; i < sweep.length; i++) {
                 if (offset + i < y.length) {
                     y[offset + i] = sweep[i] * dacDrivePeak;

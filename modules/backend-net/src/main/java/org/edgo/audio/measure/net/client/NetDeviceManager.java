@@ -203,7 +203,7 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
     /** The TRUE type of the backend this manager is routed at, or {@code null}
      *  when nothing is selected - or the server serves a backend this build
      *  has no constant for (dual-level rule: identity by true type, reachability
-     *  by the NET carrier). */
+     *  by the net carrier). */
     public AudioBackendType remoteBackendType() {
         String name = remoteBackend;
         return name == null ? null : AudioBackendType.fromNameOrNull(name);
@@ -933,6 +933,11 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
     @Override
     public void setRightLaneScale(double scale) {
         config(NetFields.RIGHT_LANE_SCALE, scale);
+    }
+
+    @Override
+    public void setDitherBits(double bits) {
+        config(NetFields.DITHER_BITS, bits);
     }
 
     @Override

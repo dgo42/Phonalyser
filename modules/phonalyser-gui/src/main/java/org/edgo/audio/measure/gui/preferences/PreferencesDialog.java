@@ -90,7 +90,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.TreeSet;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -121,6 +124,12 @@ public final class PreferencesDialog {
             96000, 176400, 192000, 352800, 384000, 705600, 768000
     };
     private static final int[] DEFAULT_BIT_DEPTHS = {16, 24, 32};
+
+    /** Factory-default ADC full-scale RMS voltage, used for new created card until the user calibrates. */
+    private static final double DEFAULT_ADC_FS_VRMS = 1.0;
+
+    /** Factory-default DAC full-scale RMS voltage, used for new created card until the user calibrates. */
+    private static final double DEFAULT_DAC_FS_AMPL = 1.0 / Constants.SQRT2;
 
     /** Lower bound (in % of Nyquist) of the FreqResp "Maximal analysed
      *  frequency" field.  The field clamps to this on every edit, both
@@ -210,6 +219,24 @@ public final class PreferencesDialog {
     /** One local-backend {@link AudioDeviceManager#setup()} in flight at a time -
      *  see {@link #setupShownBackendInBackground()}. */
     private final AtomicBoolean backendSetupRunning = new AtomicBoolean();
+    /** The one thread every device scan runs on - see {@link #refreshDevices()}.
+     *  SERIAL on purpose: an enumeration walks the driver's own device
+     *  collection and a format probe opens the device, so two of them must not
+     *  ask one manager at the same time.  Daemon, and shut down with the shell,
+     *  so a scan still out cannot hold the application open. */
+    private final ExecutorService scanner = Executors.newSingleThreadExecutor(job -> {
+        Thread worker = new Thread(job, "prefs-device-scan");
+        worker.setDaemon(true);
+        return worker;
+    });
+    /** Which scan is the current one - bumped by every {@link #refreshDevices()}
+     *  and captured by the scan it starts.  {@link #scanner} is serial, so an
+     *  operator switching through five backends would otherwise leave the fifth
+     *  one's scan queued behind four answers nobody can use any more, each of them
+     *  seconds of driver I/O; a queued scan whose generation has moved on gives up
+     *  before it enumerates anything.  Read from the scan thread, written from the
+     *  display thread - hence atomic. */
+    private final AtomicInteger scanGeneration = new AtomicInteger();
     /** The bench's card list and the device->card binding on it -
      *  what the card combo becomes for a remote selection.  Built on the working
      *  copy so the local mirror of a pick is committed by the same OK. */
@@ -224,6 +251,19 @@ public final class PreferencesDialog {
      *  it false, which is what tells {@link #restoreRemoteRouting} to put the
      *  remote bench back where the application had it. */
     private boolean okCommitted;
+    /** The working copy as the dialog OPENED on it - what the OK handler compares
+     *  against to decide what its commit must bounce (the live streams), which
+     *  moved active range it must publish, and whether the SELECTION changed at
+     *  all (the uncalibrated warning).  Re-taken when the open-time device fill
+     *  lands: that fill resolves the saved device names against what is really
+     *  enumerated, and a saved device that is gone falling back to another one is
+     *  the state the dialog opened IN, not an edit the operator made. */
+    private OpenState openState;
+    /** True until the fill of the selection the dialog opened on has landed.
+     *  Every later fill - for a backend the operator picked, or a rescan - leaves
+     *  {@link #openState} alone, or OK would compare its commit against itself
+     *  and neither bounce the streams nor warn about the new selection. */
+    private boolean openStatePending = true;
 
     @Setter
     private MainWindow mainWindow;
@@ -258,6 +298,10 @@ public final class PreferencesDialog {
         BackendKey liveBackend = Preferences.instance().getSelectedBackend();
         dialog.addDisposeListener(e -> restoreRemoteRouting(liveBackend));
         if (onClose != null) dialog.addDisposeListener(e -> onClose.run());
+        // No new scan is accepted once the dialog is gone; one still running is
+        // left to finish (it is bounded by the driver) and its fill is dropped by
+        // the disposed-widget guard in fillDevices.
+        dialog.addDisposeListener(e -> scanner.shutdown());
         dialog.setText(I18n.t("preferences.title"));
         GridLayout outer = new GridLayout(1, false);
         outer.marginWidth  = 12;
@@ -897,8 +941,10 @@ public final class PreferencesDialog {
         devices = new DeviceListState();
 
         // A backend with ONE shared sample-rate clock (QA40x: reg 9, doc §10) needs
-        // its two rate combos kept equal.  The coupling is a MessageBus round-trip:
-        // each rate combo announces its pick with PREFS_SAMPLE_RATE_CHANGED (wired
+        // its two rate combos kept equal; a backend that is one digital format in
+        // both directions (the loopback) needs the bit depth kept equal too.  The
+        // coupling is a MessageBus round-trip: each rate / depth combo announces its
+        // pick with PREFS_SAMPLE_RATE_CHANGED (wired
         // below and re-emitted at the end of refreshDevices), the owning subscriber
         // compares the pair and answers with PREFS_SAMPLE_RATE_SET, and here we align
         // the OTHER combo to it.  A programmatic Combo.select fires no SWT.Selection,
@@ -909,7 +955,12 @@ public final class PreferencesDialog {
         Consumer<SampleRateChange> rateSetListener = set -> {
             if (set == null || dialog.isDisposed()) return;
             if (!edit.getSelectedBackend().equals(set.backend())) return;
-            selectRateItem(set.input() ? inputRateCombo : outputRateCombo, set.sampleRateHz());
+            selectComboItem(set.input() ? inputRateCombo : outputRateCombo, set.sampleRateHz());
+            // Only when the answer NAMES a depth: a constraint that couples the
+            // clock alone leaves the depth combos where the operator put them.
+            if (set.bitDepth() != SampleRateChange.NO_BIT_DEPTH) {
+                selectComboItem(set.input() ? inputDepthCombo : outputDepthCombo, set.bitDepth());
+            }
         };
         rateBus.subscribe(Events.PREFS_SAMPLE_RATE_SET, rateSetListener);
         dialog.addDisposeListener(e -> rateBus.unsubscribe(Events.PREFS_SAMPLE_RATE_SET, rateSetListener));
@@ -942,12 +993,16 @@ public final class PreferencesDialog {
             if (revertLockedDevicePick(outputCombo, devices.outputs, edit.current().getOutputDeviceName())) return;
             refreshOutputRatesAndDepths(); captureUiToActive(); outputCard.onDeviceChanged();
         });
-        // Announce each rate pick on the bus so a rate-constraint subscriber can
-        // mirror it onto the other direction (see the PREFS_SAMPLE_RATE_SET
-        // subscription above).  Unguarded by backend - a backend with no such
-        // subscriber simply gets no answer back.
-        inputRateCombo.addListener (SWT.Selection, e -> publishRateChange(true,  inputRateCombo));
-        outputRateCombo.addListener(SWT.Selection, e -> publishRateChange(false, outputRateCombo));
+        // Announce each rate / depth pick on the bus so a format-constraint
+        // subscriber can mirror it onto the other direction (see the
+        // PREFS_SAMPLE_RATE_SET subscription above).  Unguarded by backend - a
+        // backend with no such subscriber simply gets no answer back.  The depth
+        // combos announce the SAME event: a backend whose two directions are one
+        // digital format has no second round-trip to make of it.
+        inputRateCombo.addListener  (SWT.Selection, e -> publishFormatChange(true));
+        outputRateCombo.addListener (SWT.Selection, e -> publishFormatChange(false));
+        inputDepthCombo.addListener (SWT.Selection, e -> publishFormatChange(true));
+        outputDepthCombo.addListener(SWT.Selection, e -> publishFormatChange(false));
 
         // --- OK / Cancel ----------------------------------------------------
         Composite buttonBar = new Composite(dialog, SWT.NONE);
@@ -964,20 +1019,12 @@ public final class PreferencesDialog {
 
         // Audio-config / font / GPU snapshot of the working copy taken when the
         // dialog opens; the OK handler recomputes each to decide what the commit
-        // must bounce (live streams) or rebuild (panes).
-        String audioBefore = audioConfigFingerprint(edit);
+        // must bounce (live streams) or rebuild (panes).  The audio half is taken
+        // here for an OK pressed while the first device scan is still out (the
+        // combos are empty then, so there is nothing to have edited) and re-taken
+        // by that scan's fill - see the openState field.
+        openState = takeOpenState();
         String fontsBefore = edit.getUiFontNormal() + "/" + edit.getUiFontBold();
-        BackendPrefs backend = edit.current();
-        ActiveRange inRangeBefore  = activeRange(edit, backend, true);
-        ActiveRange outRangeBefore = activeRange(edit, backend, false);
-        // The SELECTION as the dialog opened - backend plus the two device names,
-        // which is what the uncalibrated warning is conditional on: OK warns only
-        // when the backend and/or a device actually changed.  Snapshotted as
-        // values, not as the BackendPrefs object above, because switching
-        // backends switches which object current() returns.
-        String backendBefore   = edit.getSelectedBackend().key();
-        String inDeviceBefore  = backend.getInputDeviceName();
-        String outDeviceBefore = backend.getOutputDeviceName();
 
         boolean gpuBefore  = edit.isUseGpuAcceleration();
 
@@ -993,7 +1040,7 @@ public final class PreferencesDialog {
             // and the pane rebuild below - and restart after setActive (guarded by
             // needStartAudio near the end of this handler).
             boolean needStartAudio = false;
-            if (!audioConfigFingerprint(edit).equals(audioBefore)) {
+            if (!audioConfigFingerprint(edit).equals(openState.audioConfig())) {
                 mainWindow.beforeApplyBackendChanges();
                 needStartAudio = true;
             }
@@ -1024,8 +1071,8 @@ public final class PreferencesDialog {
             BackendPrefs bp = edit.current();
             // Working-copy active range, one per direction (null when the selected
             // device has no card profile).  Recomputed here BEFORE the commit and,
-            // for each direction that differs from the open-time snapshot
-            // (inRangeBefore / outRangeBefore), published AFTER the commit so
+            // for each direction that differs from the open-time openState,
+            // published AFTER the commit so
             // subscribers read committed state - ranges reach the device only on OK.
             ActiveRange inRangeAfter  = activeRange(edit, bp, true);
             ActiveRange outRangeAfter = activeRange(edit, bp, false);
@@ -1099,6 +1146,8 @@ public final class PreferencesDialog {
             // Backend / device / rate edits move the Nyquist-derived field
             // bounds - let the panes re-pull them from the committed prefs.
             bus.publish(Events.AUDIO_FORMAT_CHANGED);
+            ActiveRange inRangeBefore  = openState.inputRange();
+            ActiveRange outRangeBefore = openState.outputRange();
             if (inRangeBefore != null && inRangeAfter != null && !inRangeBefore.equals(inRangeAfter)) bus.publish(Events.DEVICE_ACTIVE_RANGE_CHANGED, inRangeAfter);
             if (outRangeBefore != null && outRangeAfter != null && !outRangeBefore.equals(outRangeAfter)) bus.publish(Events.DEVICE_ACTIVE_RANGE_CHANGED, outRangeAfter);
 
@@ -1109,9 +1158,9 @@ public final class PreferencesDialog {
             // has no calibration behind it - LAST, so the commit is complete and
             // the streams are already back up while the warning is on screen.
             boolean selectionChanged =
-                    !edit.getSelectedBackend().key().equals(backendBefore)
-                    || !Objects.equals(committedBp.getInputDeviceName(),  inDeviceBefore)
-                    || !Objects.equals(committedBp.getOutputDeviceName(), outDeviceBefore);
+                    !edit.getSelectedBackend().key().equals(openState.backendKey())
+                    || !Objects.equals(committedBp.getInputDeviceName(),  openState.inputDevice())
+                    || !Objects.equals(committedBp.getOutputDeviceName(), openState.outputDevice());
             if (selectionChanged) {
                 warnIfUncalibrated(committed, committedBp);
             }
@@ -1307,38 +1356,50 @@ public final class PreferencesDialog {
     // device's own capabilities.  Falls back to defaults when no device
     // is picked or the driver reports nothing.
     private void refreshInputRatesAndDepths() {
-        DeviceRef dev = pickedDevice(inputCombo, devices.inputs);
-        BackendPrefs bp = edit.current();
-        AudioBackendType carrier = edit.getSelectedBackend().carrier();
-        TreeSet<Integer> rates  = (dev != null)
-                ? ratesOf(AudioBackend.instance().listSupportedInputFormats(carrier, dev))
-                : null;
-        TreeSet<Integer> depths = (dev != null)
-                ? depthsOf(AudioBackend.instance().listSupportedInputFormats(carrier, dev))
-                : null;
-        // Every remote selection rides on AudioBackendType.NET (see the note in
-        // refreshCustomPrefsButton), so the carrier is what says whether the
-        // device is on another machine - and a bench's "no rates" must stay "no
-        // rates" rather than becoming the built-in table.
-        boolean remote = carrier == AudioBackendType.NET;
-        populateIntCombo(inputRateCombo,  fallback(rates,  DEFAULT_SAMPLE_RATES, remote), " Hz",   bp.getInputSampleRate());
-        populateIntCombo(inputDepthCombo, fallback(depths, DEFAULT_BIT_DEPTHS, remote),   " bits", bp.getInputBitDepth());
+        showInputFormats(probeInputFormats(edit.getSelectedBackend().carrier(),
+                pickedDevice(inputCombo, devices.inputs)));
     }
 
     // Mirror of {@code refreshInputRatesAndDepths} for the output side.
     private void refreshOutputRatesAndDepths() {
-        DeviceRef dev = pickedDevice(outputCombo, devices.outputs);
+        showOutputFormats(probeOutputFormats(edit.getSelectedBackend().carrier(),
+                pickedDevice(outputCombo, devices.outputs)));
+    }
+
+    /** Asks {@code dev} which input formats it supports - a fixed rate x depth
+     *  grid run against the driver, i.e. real device I/O, which is why the scan
+     *  path asks it off the display thread.  An empty list for "no device", read
+     *  by {@link #showInputFormats} exactly like a probe that found nothing. */
+    private List<AudioFormat> probeInputFormats(AudioBackendType carrier, DeviceRef dev) {
+        return dev == null ? List.of()
+                : AudioBackend.instance().listSupportedInputFormats(carrier, dev);
+    }
+
+    /** Output twin of {@link #probeInputFormats}. */
+    private List<AudioFormat> probeOutputFormats(AudioBackendType carrier, DeviceRef dev) {
+        return dev == null ? List.of()
+                : AudioBackend.instance().listSupportedOutputFormats(carrier, dev);
+    }
+
+    /** Fills the input rate + depth combos from probed {@code formats}, keeping
+     *  the working copy's values selected where they are still offered. */
+    private void showInputFormats(List<AudioFormat> formats) {
         BackendPrefs bp = edit.current();
-        AudioBackendType carrier = edit.getSelectedBackend().carrier();
-        TreeSet<Integer> rates  = (dev != null)
-                ? ratesOf(AudioBackend.instance().listSupportedOutputFormats(carrier, dev))
-                : null;
-        TreeSet<Integer> depths = (dev != null)
-                ? depthsOf(AudioBackend.instance().listSupportedOutputFormats(carrier, dev))
-                : null;
-        boolean remote = carrier == AudioBackendType.NET;
-        populateIntCombo(outputRateCombo,  fallback(rates,  DEFAULT_SAMPLE_RATES, remote), " Hz",   bp.getOutputSampleRate());
-        populateIntCombo(outputDepthCombo, fallback(depths, DEFAULT_BIT_DEPTHS, remote),   " bits", bp.getOutputBitDepth());
+        // Every remote selection rides on AudioBackendType.NET (see the note in
+        // refreshCustomPrefsButton), so the carrier is what says whether the
+        // device is on another machine - and a bench's "no rates" must stay "no
+        // rates" rather than becoming the built-in table.
+        boolean remote = edit.getSelectedBackend().carrier() == AudioBackendType.NET;
+        populateIntCombo(inputRateCombo,  fallback(ratesOf(formats),  DEFAULT_SAMPLE_RATES, remote), " Hz",   bp.getInputSampleRate());
+        populateIntCombo(inputDepthCombo, fallback(depthsOf(formats), DEFAULT_BIT_DEPTHS, remote),   " bits", bp.getInputBitDepth());
+    }
+
+    /** Output twin of {@link #showInputFormats}. */
+    private void showOutputFormats(List<AudioFormat> formats) {
+        BackendPrefs bp = edit.current();
+        boolean remote = edit.getSelectedBackend().carrier() == AudioBackendType.NET;
+        populateIntCombo(outputRateCombo,  fallback(ratesOf(formats),  DEFAULT_SAMPLE_RATES, remote), " Hz",   bp.getOutputSampleRate());
+        populateIntCombo(outputDepthCombo, fallback(depthsOf(formats), DEFAULT_BIT_DEPTHS, remote),   " bits", bp.getOutputBitDepth());
     }
 
     // Captures the current UI state into the prefs of {@code active[0]} so
@@ -1379,8 +1440,24 @@ public final class PreferencesDialog {
         // for a QA403 on a server - a backend whose settings exist and are
         // reachable (net protocol 4.6) - and would offer the net carrier's own
         // panel, which does not exist, for every other remote backend.
+        //
+        // Registering a service is not the same as HAVING a panel: a backend whose
+        // UI layer exists only to arm its bus listeners registers one all the same
+        // (start() is the seam for that), and it answers hasCustomPreferences()
+        // false - a button that opened nothing would be worse than no button.
         AudioBackendType shown = edit.getSelectedBackend().type();
-        boolean hasSettings = BackendSettingsRegistry.instance().forBackend(shown) != null;
+        BackendSettingsUi panel = BackendSettingsRegistry.instance().forBackend(shown);
+        boolean hasSettings = panel != null && panel.hasCustomPreferences();
+        // A bench report says this button reappears after a switch away and back,
+        // which no path here explains - so every decision names itself once, and
+        // one reproduction with debug on says which path really touched it.
+        if (log.isDebugEnabled()) {
+            log.debug("customPrefs button: shown backend {}, panel {}, hasCustomPreferences {} "
+                            + "-> {} (visible before: {})",
+                    shown, panel == null ? "none" : panel.getClass().getSimpleName(),
+                    panel != null && panel.hasCustomPreferences(), hasSettings ? "SHOW" : "HIDE",
+                    button.isDisposed() ? "disposed" : Boolean.toString(button.getVisible()));
+        }
         if (hasSettings) {
             button.setText(I18n.t("preferences.backend.customPrefs",
                     shown.getDisplayName()));
@@ -1392,6 +1469,19 @@ public final class PreferencesDialog {
      *  takes its grid cell away, so the row it sits in closes up instead of
      *  keeping a gap where a button would have been. */
     private void hideUnless(Control control, boolean shown) {
+        // Both halves or neither: a caller that moved visibility without the grid
+        // exclude would leave the row holding a gap, and one that moved exclude
+        // without visibility would leave a control drawn outside its cell.  The
+        // pair is logged with the CALLER so a control that reappears names the
+        // path that showed it.
+        if (log.isDebugEnabled()) {
+            StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+            log.debug("hideUnless({}) on {} - layoutData {}, called from {}",
+                    shown, control.getClass().getSimpleName(),
+                    control.getLayoutData() == null ? "none"
+                            : control.getLayoutData().getClass().getSimpleName(),
+                    stack.length > 2 ? stack[2] : "?");
+        }
         control.setVisible(shown);
         if (control.getLayoutData() instanceof GridData gd) {
             gd.exclude = !shown;
@@ -1446,6 +1536,10 @@ public final class PreferencesDialog {
         // capture() targets edit.current() (the OLD backend), then the selection
         // below makes current() the NEW one.
         captureUiToActive();
+        // A picked backend ends the open-time state whether or not the fill of
+        // the selection the dialog opened on has landed yet: from here every fill
+        // carries an EDIT, and OK has to see it (see openState).
+        openStatePending = false;
         if (!applyBackendSelection(choices.at(index))) {
             Dialogs.error(backendCombo.getShell(), I18n.t("net.servers.error.title"),
                     I18n.t("preferences.backend.remoteUnreachable"));
@@ -1509,8 +1603,10 @@ public final class PreferencesDialog {
                 // this import the fresh card is invisible now and ERASED on OK
                 // (the first-time-selection bug).
                 importDeviceAuthoredCards();
-                if (inputCard  != null) inputCard.refresh();
-                if (outputCard != null) outputCard.refresh();
+                // FORCED: the import replaced cards under the sections, which is
+                // a store change and not a selection change.
+                if (inputCard  != null) inputCard.refreshForced();
+                if (outputCard != null) outputCard.refreshForced();
             });
         }, "backend-setup");
         worker.setDaemon(true);
@@ -1707,13 +1803,131 @@ public final class PreferencesDialog {
         }
     }
 
+    /**
+     * Re-reads the shown selection's devices and fills the combos, the rate /
+     * depth lists and the card sections from what came back.
+     *
+     * <p><b>The dialog is shown FIRST and the hardware is asked after.</b>  A
+     * LOCAL enumeration plus the two format probes are seconds of real device
+     * I/O - a driver's device walk, and a rate x depth grid opened against the
+     * picked device - and running them here left the operator waiting on a window
+     * that had not painted yet, whether they were opening the dialog or only
+     * switching a backend inside it.  The scan therefore runs on {@link #scanner}
+     * and the answer lands in ONE {@link Display#asyncExec} (see
+     * {@link #fillDevices}), which is dropped when the dialog has been closed
+     * meanwhile or the selection has moved on since.
+     *
+     * <p><b>Only the last selection is really scanned.</b>  The scanner is serial,
+     * so five backends switched through in a row would queue five full scans and
+     * the one the operator is actually looking at would wait behind four
+     * throw-away answers.  Each call therefore opens a new generation
+     * ({@link #startScanGeneration()}) and a queued scan that finds its own
+     * superseded ({@link #scanSuperseded}) gives up before touching a driver.  The
+     * fill-time guard remains the second gate: a scan can also be overtaken while
+     * it is already running, and that answer must not land either.
+     *
+     * <p>A REMOTE selection stays direct: its catalogue and its per-device
+     * formats came with the {@code devices.list} the preview above just read
+     * (spec 4.3 inlines them), so there is nothing left to wait for - and the
+     * user-driven card offers that run right after a bench pick need the fill to
+     * have happened.
+     */
     private void refreshDevices() {
-        // Enumerate the chosen backend's hardware WITHOUT activating it -
-        // the type-parameterised overloads resolve the manager by the shown
+        // The chosen backend's hardware WITHOUT activating it - the
+        // type-parameterised overloads resolve the manager by the shown
         // selection's CARRIER and never touch the live active selection.
-        AudioBackendType type = edit.getSelectedBackend().carrier();
-        devices.inputs  = AudioBackend.instance().listInputDevices(type);
-        devices.outputs = AudioBackend.instance().listOutputDevices(type);
+        BackendKey shown = edit.getSelectedBackend();
+        BackendPrefs bp = edit.current();
+        String inputName  = bp.getInputDeviceName();
+        String outputName = bp.getOutputDeviceName();
+        // Bumped for a remote selection too: a bench picked after a local backend
+        // is what makes the local scan still sitting in the queue pointless.
+        int generation = startScanGeneration();
+        if (shown.remote()) {
+            fillDevices(shown, scanDevices(shown.carrier(), inputName, outputName));
+            return;
+        }
+        // Resolved HERE, on the display thread: a disposed widget no longer
+        // answers getDisplay(), and the worker must not be the one to find out.
+        Display display = backendCombo.getDisplay();
+        scanner.execute(() -> {
+            if (scanSuperseded(generation)) {
+                return;         // another selection is shown - this answer is waste
+            }
+            DeviceScan scan;
+            try {
+                scan = scanDevices(shown.carrier(), inputName, outputName);
+            } catch (RuntimeException ex) {
+                // A driver that throws leaves the combos as they are - and says
+                // so, which a swallowed worker exception would not.
+                if (log.isWarnEnabled()) {
+                    log.warn("Device scan failed for {}: {}", shown.key(), ex.toString());
+                }
+                return;
+            }
+            if (!display.isDisposed()) {
+                display.asyncExec(() -> fillDevices(shown, scan));
+            }
+        });
+    }
+
+    /** Opens a new scan generation and answers it - every {@link #refreshDevices}
+     *  call supersedes the ones before it, whether or not their scan has run
+     *  yet. */
+    int startScanGeneration() {
+        return scanGeneration.incrementAndGet();
+    }
+
+    /** Whether the scan started at {@code generation} has been overtaken by a
+     *  newer selection.  Asked by a queued scan on ENTRY, so a switched-through
+     *  backend costs a comparison instead of a driver enumeration; the fill-time
+     *  selection guard then catches the scan that was overtaken mid-flight. */
+    boolean scanSuperseded(int generation) {
+        return generation != scanGeneration.get();
+    }
+
+    /**
+     * The device I/O half of {@link #refreshDevices}: {@code carrier}'s two
+     * device lists plus the formats of the device each combo will preselect -
+     * the one carrying the saved name, else the first offered, which is
+     * {@link #populateDeviceCombo}'s own rule asked before the combo has it.
+     *
+     * <p>Touches no widget and writes no field, which is what lets it run on
+     * {@link #scanner}.
+     */
+    private DeviceScan scanDevices(AudioBackendType carrier, String inputName, String outputName) {
+        List<DeviceRef> inputs  = AudioBackend.instance().listInputDevices(carrier);
+        List<DeviceRef> outputs = AudioBackend.instance().listOutputDevices(carrier);
+        return new DeviceScan(inputs, outputs,
+                probeInputFormats(carrier, preferredOrFirst(inputs, inputName)),
+                probeOutputFormats(carrier, preferredOrFirst(outputs, outputName)));
+    }
+
+    /** The device a combo will preselect for {@code preferredName}: the one that
+     *  carries the name, else the first offered - {@link #populateDeviceCombo}'s
+     *  rule, so the scan probes the device the fill is about to show. */
+    private DeviceRef preferredOrFirst(List<DeviceRef> refs, String preferredName) {
+        DeviceRef named = refFor(refs, preferredName);
+        if (named != null) return named;
+        return refs.isEmpty() ? null : refs.get(0);
+    }
+
+    /**
+     * The UI half of {@link #refreshDevices}: everything the scan brought back,
+     * applied in one go on the display thread.
+     *
+     * <p>DROPPED when the dialog is gone - a fill into disposed widgets, or into
+     * a working copy Cancel has already discarded, must not happen - and dropped
+     * when the shown selection is no longer the one that was scanned, which would
+     * otherwise put one backend's devices under another one's name.
+     */
+    private void fillDevices(BackendKey scanned, DeviceScan scan) {
+        if (backendCombo == null || backendCombo.isDisposed()
+                || !edit.getSelectedBackend().equals(scanned)) {
+            return;
+        }
+        devices.inputs  = scan.inputs();
+        devices.outputs = scan.outputs();
         BackendPrefs bp = edit.current();
         populateDeviceCombo(inputCombo,  devices.inputs,  bp.getInputDeviceName());
         populateDeviceCombo(outputCombo, devices.outputs, bp.getOutputDeviceName());
@@ -1727,34 +1941,52 @@ public final class PreferencesDialog {
         // dead until OK ran captureUiToActive() - card and ranges appeared only
         // after Preferences OK.
         captureDeviceNamesToActive();
-        refreshInputRatesAndDepths();
-        refreshOutputRatesAndDepths();
-        // Announce the input rate after a (re)populate so a rate-constraint
-        // subscriber can mirror it onto the output combo - a backend switch (or
+        showInputFormats(scan.inputFormats());
+        showOutputFormats(scan.outputFormats());
+        // Announce the input format after a (re)populate so a format-constraint
+        // subscriber can mirror it onto the output combos - a backend switch (or
         // dialog open) lands already-coupled.  Sent UNCONDITIONALLY (total
         // decoupling): the dialog holds no device knowledge; the payload carries
         // the edited backend and a subscriber that doesn't constrain it simply
         // ignores the event.  The PREFS_SAMPLE_RATE_SET subscription in open()
         // applies any answer.
-        publishRateChange(true, inputRateCombo);
+        publishFormatChange(true);
         // Repopulate the card combo + range table for the (possibly new)
-        // backend / device - the sections are built before refreshDevices()
-        // first runs, so they are already present here.
+        // backend / device - the sections are built before the first fill can
+        // land, so they are already present here.
         if (inputCard  != null) inputCard.refresh();
         if (outputCard != null) outputCard.refresh();
+        // The selection the dialog opened on is only fully resolved now - see
+        // openState for why OK compares against THIS and not against the saved
+        // names it started from.
+        if (openStatePending) {
+            openStatePending = false;
+            openState = takeOpenState();
+        }
     }
 
-    /** Announces one direction's chosen sample rate on the bus so a rate-constraint
-     *  subscriber (today {@code Qa40xRateConstraint}) can mirror it onto the other
-     *  direction.  Device-agnostic - it carries the edited backend AND the resolved
-     *  card name so a subscriber can key off whichever it constrains; a no-op when
-     *  the combo has no selection. */
-    private void publishRateChange(boolean input, Combo rateCombo) {
+    /** Announces one direction's chosen sample rate AND bit depth on the bus so a
+     *  format-constraint subscriber ({@code Qa40xRateConstraint},
+     *  {@code LoopbackFormatConstraint}) can mirror what it constrains onto the
+     *  other direction.  Device-agnostic - it carries the edited backend AND the
+     *  resolved card name so a subscriber can key off whichever it constrains; a
+     *  no-op when the rate combo has no selection, and the depth rides as
+     *  {@code NO_BIT_DEPTH} when that combo has none. */
+    private void publishFormatChange(boolean input) {
+        Combo rateCombo = input ? inputRateCombo : outputRateCombo;
         int idx = rateCombo.getSelectionIndex();
         if (idx < 0) return;
         MessageBus.instance().publish(Events.PREFS_SAMPLE_RATE_CHANGED,
                 new SampleRateChange(input, parseLeadingInt(rateCombo.getItem(idx)),
+                        selectedComboValue(input ? inputDepthCombo : outputDepthCombo),
                         edit.getSelectedBackend(), cardNameFor(input)));
+    }
+
+    /** The leading integer of {@code combo}'s selected item, or
+     *  {@link SampleRateChange#NO_BIT_DEPTH} when nothing is selected. */
+    private int selectedComboValue(Combo combo) {
+        int idx = combo.getSelectionIndex();
+        return idx < 0 ? SampleRateChange.NO_BIT_DEPTH : parseLeadingInt(combo.getItem(idx));
     }
 
     /** The resolved card name for a direction's selected device, or {@code null}
@@ -1769,11 +2001,12 @@ public final class PreferencesDialog {
     }
 
     /** Programmatically selects {@code combo}'s item whose leading integer equals
-     *  {@code hz} (a no-op when that rate isn't offered).  {@code Combo.select}
-     *  fires no SWT.Selection, so the rate coupling that calls this never recurses. */
-    private void selectRateItem(Combo combo, int hz) {
+     *  {@code value} - a rate in hertz, or a depth in bits (a no-op when that
+     *  value isn't offered).  {@code Combo.select}
+     *  fires no SWT.Selection, so the format coupling that calls this never recurses. */
+    private void selectComboItem(Combo combo, int value) {
         for (int i = 0; i < combo.getItemCount(); i++) {
-            if (parseLeadingInt(combo.getItem(i)) == hz) {
+            if (parseLeadingInt(combo.getItem(i)) == value) {
                 combo.select(i);
                 return;
             }
@@ -1791,6 +2024,20 @@ public final class PreferencesDialog {
         audioTab.layout(true, true);
         audioScroll.setMinSize(audioTab.computeSize(SWT.DEFAULT, SWT.DEFAULT));
     }
+
+    /** One tab-level relayout per UI turn, however many range tables asked for
+     *  it: the full Audio-tab layout + min-size computeSize costs hundreds of
+     *  milliseconds, and a backend switch rebuilds BOTH directions' tables. */
+    private void scheduleAudioRelayout() {
+        if (audioRelayoutPending || audioTab == null || audioTab.isDisposed()) return;
+        audioRelayoutPending = true;
+        audioTab.getDisplay().asyncExec(() -> {
+            audioRelayoutPending = false;
+            refreshAudioScrollMinSize();
+        });
+    }
+
+    private boolean audioRelayoutPending;
 
     /** Layout for a value field (combo / numeric / colour / font row): a fixed width so every
      *  field on every tab is the same size, FILL so the control occupies it exactly, no grab.
@@ -2131,6 +2378,11 @@ public final class PreferencesDialog {
          *  passive refresh / rebuild never re-asks for the same device within
          *  this dialog session. */
         private String lastPromptedDevice;
+        /** {@link PreferencesDialog#cardRenderIdentity} of what the section is
+         *  showing, or null when it has never been rendered - or was last
+         *  rendered for a BENCH, whose card list is re-read from the wire on
+         *  every refresh. */
+        private String renderedIdentity;
 
         private CardSection(Combo cardCombo, Button editBtn, Label rangesLabel,
                             Composite rangesContainer, boolean input) {
@@ -2150,7 +2402,7 @@ public final class PreferencesDialog {
         }
 
         private DeviceEndpointConfig endpointOf(AudioDeviceProfile p) {
-            return input ? p.getInput() : p.getOutput();
+            return PreferencesDialog.this.endpointOf(p, input);
         }
 
         /** Re-derives the combo, its preselection, and the range table from the
@@ -2167,27 +2419,48 @@ public final class PreferencesDialog {
          *  pops a dialog.  A matched card is pre-selected and its ranges show, but its
          *  device name is bound onto {@code match} only when the user confirms it
          *  (selecting the combo entry -> {@link #onCardSelected} -> {@link #bindAlias});
-         *  the user sees it and can change it first. */
+         *  the user sees it and can change it first.
+         *
+         *  <p>A refresh that would reproduce what the section already shows does
+         *  nothing at all - the identity of the render is resolved first and
+         *  compared with the last one
+         *  ({@link PreferencesDialog#cardRenderIdentity}).
+         *  {@link #refreshForced()} is for the callers that changed something
+         *  that identity cannot see. */
         private AudioDeviceProfile refresh() {
             if (cardCombo.isDisposed()) return null;
             String dev = deviceName();
             BackendKey bench = edit.getSelectedBackend();
+            boolean remote = bench != null && bench.remote();
+            // What a rebuild WOULD show, resolved before a single widget is
+            // touched: when it is what the section already shows, the teardown,
+            // the row creation and the relayout below would only reproduce it -
+            // and that trio is what a backend switch spends its seconds on.  A
+            // BENCH section takes no such shortcut: its list is a cards.list round
+            // trip whose answer IS the refresh.
+            List<AudioDeviceProfile> listable = remote ? List.of() : listableCards();
+            AudioDeviceProfile pick = !remote && dev != null ? edit.resolveDeviceProfile(dev) : null;
+            String identity = remote ? null : cardRenderIdentity(input, dev, listable, pick);
+            if (identity != null && identity.equals(renderedIdentity)) {
+                return pick;
+            }
+            // Dropped for the whole rebuild, so a section interrupted half-way
+            // through one is never taken for a rendered one.
+            renderedIdentity = null;
 
             cardCombo.removeAll();
             comboProfiles.clear();
             comboNames.clear();
-            remoteCards = bench != null && bench.remote();
+            remoteCards = remote;
             if (remoteCards) {
                 return refreshBenchCards(bench, dev);
             }
-            for (AudioDeviceProfile p : edit.getAudioDeviceProfiles()) {
-                if (endpointOf(p).getRanges().isEmpty()) continue;   // no range this direction - hide
+            for (AudioDeviceProfile p : listable) {
                 cardCombo.add(p.getName());
                 comboProfiles.add(p);
                 comboNames.add(p.getName());
             }
 
-            AudioDeviceProfile pick = dev != null ? edit.resolveDeviceProfile(dev) : null;
             cardCombo.add(I18n.t("preferences.audio.card.new"));
             comboProfiles.add(null);                                  // last = New card...
             comboNames.add(null);
@@ -2196,7 +2469,29 @@ public final class PreferencesDialog {
             // device, or no device) leaves the combo empty with no range table.
             selectByProfile(pick);
             rebuildTable();
+            renderedIdentity = identity;
             return pick;
+        }
+
+        /** {@link #refresh()} with the skip disarmed, for a caller that changed
+         *  something the identity does not carry: the card store under the
+         *  section (a create, an edit, a device-authored import), or the combo
+         *  itself - a cancelled "New card..." leaves it sitting on an entry no
+         *  model value corresponds to. */
+        private AudioDeviceProfile refreshForced() {
+            renderedIdentity = null;
+            return refresh();
+        }
+
+        /** The cards the combo lists: every profile in the working copy whose
+         *  endpoint for THIS direction carries at least one range - an
+         *  output-only card never clutters the input combo and vice versa. */
+        private List<AudioDeviceProfile> listableCards() {
+            List<AudioDeviceProfile> out = new ArrayList<>();
+            for (AudioDeviceProfile p : edit.getAudioDeviceProfiles()) {
+                if (!endpointOf(p).getRanges().isEmpty()) out.add(p);
+            }
+            return out;
         }
 
         /**
@@ -2371,7 +2666,7 @@ public final class PreferencesDialog {
             CardEditorDialog dlg = new CardEditorDialog(parent, seed,
                     input ? CardEditorDialog.Capability.INPUT_ONLY
                           : CardEditorDialog.Capability.OUTPUT_ONLY,
-                    benchCardNames(), null, inputSeedFs(), outputSeedFs());
+                    benchCardNames(), null, DEFAULT_ADC_FS_VRMS, DEFAULT_DAC_FS_AMPL);
             AudioDeviceProfile card = dlg.open();
             if (card == null) return true;                 // cancelled - nothing anywhere
             BenchCards.Copied made = benchCards.createAndBind(bench, ref, card);
@@ -2460,6 +2755,10 @@ public final class PreferencesDialog {
             bindCard(dev, p.getName());
             selectedName = p.getName();
             rebuildTable();
+            // The section now shows the PICK.  The binding makes the resolve
+            // follow it, but only when there was a device to bind it to, so the
+            // next refresh re-derives instead of skipping on a stale identity.
+            renderedIdentity = null;
         }
 
         /** Records the user's card choice for a LOCAL device - the saved binding
@@ -2498,10 +2797,12 @@ public final class PreferencesDialog {
             if (dev != null) seed.getMatch().add(dev);
             CardEditorDialog dlg = new CardEditorDialog(parent, seed,
                     input ? CardEditorDialog.Capability.INPUT_ONLY : CardEditorDialog.Capability.OUTPUT_ONLY,
-                    currentCardNames(), null, inputSeedFs(), outputSeedFs());
+                    currentCardNames(), null, DEFAULT_ADC_FS_VRMS, DEFAULT_DAC_FS_AMPL);
             AudioDeviceProfile p = dlg.open();
             if (p == null) {
-                refresh();                                 // cancelled - restore the pre-dialog state
+                // Cancelled - restore the pre-dialog state.  FORCED: the model is
+                // unchanged, but the combo is sitting on "New card...".
+                refreshForced();
                 return;
             }
             edit.putAudioDeviceProfile(p);
@@ -2513,9 +2814,12 @@ public final class PreferencesDialog {
             // (a match-based resolve would also find it when its list carries the
             //  device name, but a device-less create has nothing to resolve by -
             //  pin the selection either way).
-            refresh();
+            refreshForced();
             selectByProfile(edit.findAudioDeviceProfile(name));
             rebuildTable();
+            // The pin can show a different card than the resolve inside the
+            // refresh recorded, so the next refresh must not skip on it.
+            renderedIdentity = null;
         }
 
         /** Opens the card edit dialog on the currently selected card and replaces
@@ -2531,7 +2835,7 @@ public final class PreferencesDialog {
             if (live == null) return null;
             return new CardEditorDialog(parent, live,
                     CardEditorDialog.Capability.of(live),
-                    currentCardNames(), live.getName(), inputSeedFs(), outputSeedFs());
+                    currentCardNames(), live.getName(), DEFAULT_ADC_FS_VRMS, DEFAULT_DAC_FS_AMPL);
         }
 
         private void editSelectedCard() {
@@ -2543,9 +2847,12 @@ public final class PreferencesDialog {
                 edit.removeAudioDeviceProfile(selectedName);   // rename - drop the old key
             }
             edit.putAudioDeviceProfile(p);
-            refresh();
+            refreshForced();                               // the card itself changed
             selectByProfile(edit.findAudioDeviceProfile(p.getName()));
             rebuildTable();
+            // The pin can show a different card than the resolve inside the
+            // refresh recorded, so the next refresh must not skip on it.
+            renderedIdentity = null;
         }
 
         /** The logical names of every card currently in the working copy - the
@@ -2554,17 +2861,6 @@ public final class PreferencesDialog {
             List<String> names = new ArrayList<>();
             for (AudioDeviceProfile p : edit.getAudioDeviceProfiles()) names.add(p.getName());
             return names;
-        }
-
-        /** Full-scale (V RMS) a freshly enabled input range is seeded with. */
-        private double inputSeedFs() {
-            return edit.getAdcFsVoltageRms();
-        }
-
-        /** Full-scale (V RMS) a freshly enabled output range is seeded with - the
-         *  DAC's global amplitude scalar converted to RMS (the on-disk convention). */
-        private double outputSeedFs() {
-            return edit.getDacFsVoltageAmpl() / Constants.SQRT2;
         }
 
         /** Binds card {@code p} to the current device name by APPENDING it to the
@@ -2584,29 +2880,40 @@ public final class PreferencesDialog {
         /** Rebuilds the range table from the card that carries this direction's
          *  ranges (hidden when there is none - see {@link #rangeCard()}). */
         private void rebuildTable() {
-            for (RangeRow r : rows) {
-                if (!r.composite.isDisposed()) r.composite.dispose();
-            }
-            rows.clear();
-            AudioDeviceProfile p = rangeCard();
-            boolean show = p != null;
-            // Edit only a real, selected LOCAL card: a bench's card is created and
-            // calibrated where the device is, and the pencil edits this machine's
-            // store.
-            if (!editBtn.isDisposed()) editBtn.setEnabled(show && !remoteCards);
-            rangesLabel.setVisible(show);
-            ((GridData) rangesLabel.getLayoutData()).exclude = !show;
-            rangesContainer.setVisible(show);
-            ((GridData) rangesContainer.getLayoutData()).exclude = !show;
-            if (show) {
-                DeviceEndpointConfig ep = endpointOf(p);
-                for (DeviceRange range : ep.getRanges()) {
-                    createRangeRowUi(ep, range);
+            // Every row is disposed and built again below, so the container is
+            // frozen for the whole population and painted ONCE at the end instead
+            // of once per widget destroyed and once per widget created.
+            // try/finally: a container left with its redraw off would never paint
+            // again.
+            rangesContainer.setRedraw(false);
+            try {
+                for (RangeRow r : rows) {
+                    if (!r.composite.isDisposed()) r.composite.dispose();
                 }
+                rows.clear();
+                AudioDeviceProfile p = rangeCard();
+                boolean show = p != null;
+                // Edit only a real, selected LOCAL card: a bench's card is created
+                // and calibrated where the device is, and the pencil edits this
+                // machine's store.
+                if (!editBtn.isDisposed()) editBtn.setEnabled(show && !remoteCards);
+                rangesLabel.setVisible(show);
+                ((GridData) rangesLabel.getLayoutData()).exclude = !show;
+                rangesContainer.setVisible(show);
+                ((GridData) rangesContainer.getLayoutData()).exclude = !show;
+                if (show) {
+                    DeviceEndpointConfig ep = endpointOf(p);
+                    for (DeviceRange range : ep.getRanges()) {
+                        createRangeRowUi(ep, range);
+                    }
+                }
+            } finally {
+                rangesContainer.setRedraw(true);
             }
-            // relayoutTable() re-lays the shell and refreshes the Audio tab's
-            // V-scroll min size, so the ranges label + table showing / hiding
-            // (exclude toggled) tracks the new content height.
+            // ONE layout pass for the finished table: relayoutTable() re-lays the
+            // shell and refreshes the Audio tab's V-scroll min size, so the ranges
+            // label + table showing / hiding (exclude toggled) tracks the new
+            // content height.
             relayoutTable();
         }
 
@@ -2630,29 +2937,42 @@ public final class PreferencesDialog {
          * device itself supplied.  An ordinary local card that merely shares a
          * name with one of the server's can therefore never put its own ranges,
          * and its own full scales, under a device calibrated on another machine.
+         *
+         * <p><b>For a device-calibrated card the WORKING COPY outranks the
+         * bench's {@code cards.list} parse.</b>  Both describe the same analyzer,
+         * but the {@code cards.list} answer is a detached throwaway: a range
+         * radio moving it moves nothing anyone reads, while the analyzer's
+         * settings panel commits its range deltas from the working-copy card it
+         * rendered at selection time.  Rendering that same object is what makes
+         * a radio click and the OK-time comparison see one card.
          */
         private AudioDeviceProfile rangeCard() {
             AudioDeviceProfile p;
             if (remoteCards) {
                 String dev = deviceName();
-                // The BENCH's own card first (spec 4.3 v1.1: `cards.list` carries
+                // The device-provided card FIRST - the one the QA40x settings
+                // panel rendered into the working copy from the analyzer's own
+                // factors, resolved by the DEVICE it belongs to, never by a bench
+                // card's NAME.  It outranks the bench's cards.list copy because
+                // the panel's commit compares exactly this object against the
+                // bench's in-force positions: the range radios must move the card
+                // the OK reads, or a click lands on a throwaway parse, the
+                // comparison sees no change, and no range write ever leaves the
+                // dialog.
+                p = dev == null ? null : edit.resolveDeviceProfile(dev);
+                if (p != null && endpointOf(p).isCalibrationFromDevice()) {
+                    return endpointOf(p).getRanges().isEmpty() ? null : p;
+                }
+                // Else the BENCH's own card (spec 4.3 v1.1: cards.list carries
                 // each card's content).  It is the card actually in force there,
-                // rows and active marker included, so the table shows the truth for
-                // an ordinary bench card too - and its radios have something real
-                // to move (`device.setActiveRange`).
+                // rows and active marker included, so the table shows the truth
+                // for an ordinary bench card - and its radios have something real
+                // to move (device.setActiveRange).  An ordinary LOCAL card that
+                // merely shares a bench card's name is never rendered here.
                 BackendKey bench = edit.getSelectedBackend();
                 DeviceRef ref = dev == null ? null : refFor(refs(), dev);
                 p = bench == null ? null
                         : benchCards.card(bench, benchCards.boundCard(bench, ref, dev));
-                if (p != null) {
-                    return endpointOf(p).getRanges().isEmpty() ? null : p;
-                }
-                // Else the device-provided card the QA40x settings panel rendered
-                // into the working copy from the analyzer's own factors - resolved
-                // by the DEVICE it belongs to, never by a bench card's NAME, and
-                // shown only when the device itself supplied it.
-                p = dev == null ? null : edit.resolveDeviceProfile(dev);
-                if (p != null && !endpointOf(p).isCalibrationFromDevice()) return null;
             } else {
                 p = selectedName == null ? null : edit.findAudioDeviceProfile(selectedName);
             }
@@ -2806,8 +3126,11 @@ public final class PreferencesDialog {
          *
          * <p>A {@code calibrationFromDevice} endpoint is deliberately NOT staged
          * here: a QA40x's attenuator is the DEVICE's own state and spec 4.6 owns
-         * it - that path still rides {@code DEVICE_ACTIVE_RANGE_CHANGED} into the
-         * analyzer's own range commands, and sending both would move it twice.
+         * it.  That path is committed by the analyzer's own settings panel, which
+         * compares the staged position against the one the bench reported in
+         * force and sends {@code qa40x.setInputRange} /
+         * {@code qa40x.setOutputRange} on this dialog's OK; staging it here as
+         * well would move the same attenuator twice.
          */
         private void stageBenchRange(DeviceEndpointConfig ep, String label, Channel side) {
             BackendKey bench = edit.getSelectedBackend();
@@ -2923,13 +3246,71 @@ public final class PreferencesDialog {
         }
 
         private void relayoutTable() {
+            // The rows changed - lay out the table's own container now (cheap,
+            // local), and let the EXPENSIVE tab-level pass (full Audio-tab layout
+            // + scroll min-size computeSize) run ONCE per UI turn however many
+            // sections rebuilt: a backend switch rebuilds both directions, and
+            // paying that pass per section is what a switch used to spend most
+            // of its card time on.  A shell-wide layout is not needed at all -
+            // the moved content lives entirely inside the scrolled Audio tab.
             if (!rangesContainer.isDisposed()) rangesContainer.layout(true, true);
-            // A row was added / removed -> the Audio tab's preferred height moved;
-            // re-lay the shell and refresh the tab's V-scroll min size so its
-            // on-demand scrollbar tracks the new content.
-            if (!rangesContainer.isDisposed()) rangesContainer.getShell().layout(true, true);
-            refreshAudioScrollMinSize();
+            scheduleAudioRelayout();
         }
+    }
+
+    /**
+     * Everything one direction of a card section would put on screen, as one
+     * string: the device it shows, the cards its combo would list, the one it
+     * would preselect, and that card's range rows exactly as a row renders them -
+     * the row key and the displayed label, the active marker(s), the channel mode
+     * and whether the device owns the set.
+     *
+     * <p>The full-scale volts are deliberately NOT in it: no row renders one, so
+     * a calibration write must not buy a table rebuild.
+     *
+     * <p><b>Values in, string out</b> - it reads no widget, no field and no
+     * working copy.  That is what lets {@link CardSection#refresh()} ask, BEFORE
+     * it tears anything down, whether a rebuild would only reproduce what is
+     * already on screen (the teardown + rebuild + relayout being what a backend
+     * switch spent its seconds on), and what lets the rule be proved without a
+     * display.
+     *
+     * @param input    which direction's endpoint of each card is rendered
+     * @param dev      the device name the section shows, or null when there is none
+     * @param listable the cards the combo would list, in combo order
+     * @param pick     the card the combo would preselect, or null for none
+     */
+    String cardRenderIdentity(boolean input, String dev, List<AudioDeviceProfile> listable,
+            AudioDeviceProfile pick) {
+        String picked = pick == null ? null : pick.getName();
+        StringBuilder id = new StringBuilder().append(dev);
+        for (AudioDeviceProfile p : listable) {
+            id.append('|').append(p.getName());
+            // The preselected card is the one whose ranges the table shows, and
+            // selectByProfile picks it out of this very list.
+            if (p.getName().equals(picked)) {
+                appendRangeIdentity(id, endpointOf(p, input));
+            }
+        }
+        return id.append("|=").append(picked).toString();
+    }
+
+    /** One endpoint's range table as it is rendered - see
+     *  {@link #cardRenderIdentity}. */
+    private void appendRangeIdentity(StringBuilder id, DeviceEndpointConfig ep) {
+        id.append('[').append(ep.getChannels()).append(ep.isCalibrationFromDevice())
+                .append(ep.getActiveRange()).append('/').append(ep.getActiveRangeRight());
+        for (DeviceRange range : ep.getRanges()) {
+            id.append('/').append(range.getLabel())
+                    .append('=').append(range.displayLabelOrKey());
+        }
+        id.append(']');
+    }
+
+    /** One direction's endpoint block of a card - the whole difference between
+     *  the input and the output section. */
+    private DeviceEndpointConfig endpointOf(AudioDeviceProfile p, boolean input) {
+        return input ? p.getInput() : p.getOutput();
     }
 
     /** Builds the per-card profile section inside a direction Group: a "Card"
@@ -2991,8 +3372,32 @@ public final class PreferencesDialog {
                 + bp.getOutputDeviceName() + "|" + bp.getOutputSampleRate() + "|" + bp.getOutputBitDepth() + "|" + outRangeChange;
     }
 
+    /** Reads the working copy's current audio selection into an {@link OpenState}
+     *  - see that field for when it is taken. */
+    private OpenState takeOpenState() {
+        BackendPrefs bp = edit.current();
+        // The device names as VALUES, not the BackendPrefs object: switching
+        // backends switches which object current() returns.
+        return new OpenState(audioConfigFingerprint(edit), edit.getSelectedBackend().key(),
+                bp.getInputDeviceName(), bp.getOutputDeviceName(),
+                activeRange(edit, bp, true), activeRange(edit, bp, false));
+    }
+
+    /** The audio selection the dialog opened on - see {@link #openState}. */
+    private record OpenState(String audioConfig, String backendKey, String inputDevice,
+            String outputDevice, ActiveRange inputRange, ActiveRange outputRange) {
+    }
+
     private static final class DeviceListState {
         List<DeviceRef> inputs  = List.of();
         List<DeviceRef> outputs = List.of();
+    }
+
+    /** One device scan's whole answer: what the two combos will list, and the
+     *  formats of the device each of them will preselect.  Everything the fill
+     *  needs, so the scan can be read where the device I/O belongs - off the
+     *  display thread - and the fill touches no driver at all. */
+    private record DeviceScan(List<DeviceRef> inputs, List<DeviceRef> outputs,
+            List<AudioFormat> inputFormats, List<AudioFormat> outputFormats) {
     }
 }

@@ -105,21 +105,23 @@ class BackendKeyTest {
     void aCarrierCanNeverBeWhatASelectionIs() {
         // The dual-level rule: a selection is (how it is reached; what it IS),
         // and a dual-level carrier is only ever the first.  A key whose type
-        // said NET would be the identity lie the two accessors exist to end -
-        // refused where it is built, unreadable where it is parsed.
+        // named the net carrier would be the identity lie the two accessors
+        // exist to end - refused where it is built, unreadable where it is
+        // parsed.
         assertThrows(IllegalArgumentException.class,
                 () -> BackendKey.of(AudioBackendType.NET));
         assertThrows(IllegalArgumentException.class,
                 () -> BackendKey.of(SERVER_ID, AudioBackendType.NET));
         assertNull(BackendKey.parse(AudioBackendType.NET.name()),
-                "a hand-edited 'backend: NET' line is as unreadable as an unknown name");
+                "a hand-edited backend line naming the net carrier is as unreadable "
+                        + "as an unknown name");
         assertNull(BackendKey.parse("net:" + SERVER_ID + ":NET"));
     }
 
     @Test
     void aRemoteSelectionIsNotJudgedByItsCarriersAvailability() {
-        // The trap the launch-time sanitiser fell into: NET.isAvailable() is
-        // false BY DESIGN (it owns no local hardware), so a remote bench asked
+        // The trap the launch-time sanitiser fell into: the net carrier's
+        // isAvailable() is false BY DESIGN (it owns no local hardware), so a remote bench asked
         // through its carrier answers "not available on this OS" - and gets its
         // saved server key overwritten with a local backend.  What must be asked
         // is whether the SELECTION is remote at all.

@@ -35,6 +35,9 @@ public class Constants {
      *  {@code √2 ×} the full-scale-sine RMS the generator calibrates against. */
     public final double SQRT2 = Math.sqrt(2.0);
 
+    /** √3 - a triangle's peak/RMS ratio, independent of duty. */
+    public final double SQRT3 = Math.sqrt(3.0);
+
     /** 2⁶⁴ as a double - the DDS phase-increment scale.  The double mantissa caps
      *  the useful increment resolution at 53 bits (low ~11 bits zero), which still
      *  leaves fs/2⁵³ ≈ 43 pHz frequency granularity. */

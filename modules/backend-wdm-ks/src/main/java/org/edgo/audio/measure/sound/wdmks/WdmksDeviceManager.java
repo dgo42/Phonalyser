@@ -99,10 +99,22 @@ public class WdmksDeviceManager implements AudioDeviceManager {
     /** PortAudio's enumeration is a process-lifetime snapshot, so this is one of
      *  the two backends (with CoreAudio) where a rebuild means something.  The
      *  shared library refuses while any PortAudio stream is open - an open
-     *  {@code PaStream*} would be freed under its owner. */
+     *  {@code PaStream*} would be freed under its owner.
+     *
+     *  <p>The probes go with the snapshot they were taken against: the
+     *  per-enumeration eviction in {@link #list} only drops names that VANISHED,
+     *  so a card unplugged and replugged - same name, new device index,
+     *  possibly a different negotiated format set - kept its old answer for the
+     *  process's life, and a scan could not undo it.  Only on an actual
+     *  rebuild: a refusal leaves the old truth standing. */
     @Override
     public boolean refreshDeviceList() {
-        return PortAudio.refreshDevices();
+        boolean rebuilt = PortAudio.refreshDevices();
+        if (rebuilt) {
+            inputFormatsCache.clear();
+            outputFormatsCache.clear();
+        }
+        return rebuilt;
     }
 
     private List<DeviceRef> list(boolean input) {

@@ -44,7 +44,12 @@ export const PREFERENCES_FORMAT_VERSION = 1;
 const SAVE_COALESCE_MS = 250;
 
 /** Factory-default ADC full-scale RMS voltage (Preferences.DEFAULT_ADC_FS_VRMS). */
-const DEFAULT_ADC_FS_VRMS = 1.7931;
+const DEFAULT_ADC_FS_VRMS = 1.0;
+
+/** Default DAC full-scale RMS voltage: the UNIT full scale, so an uncalibrated output reads
+ *  digital full scale as 1 V RMS and every level derived from it stays a plain fraction of
+ *  full scale until a calibration measures the real one. */
+const DEFAULT_DAC_FS_VRMS = 1.0;
 
 /** Sentinel "unset" value for the rate-dependent FreqResp defaults
  *  (stop = Nyquist, points = FS/2). A fresh install with no saved value keeps
@@ -80,14 +85,25 @@ import { FreqRespFilterTypeParams } from './freqresp-filter-type-params.js';
 import { fromNameOr as persistenceFromNameOr } from '../scope/scope-enums.js';
 import { quarantineStoreEntry } from './store-quarantine.js';
 import { remoteBackendOf } from '../net/net-device-ref.js';
+// The unit vocabulary and its conversions: a value is stored AS ENTERED and
+// resolved here at use, against the live calibration.
+import { UNIT_FAMILIES, unitValue, unitValueEquals, convert, baseToken, logToken }
+  from '../widgets/unit-conversion.js';
+
+/** Base unit token of an amplitude - the unit whose number IS the canonical V RMS. */
+const AMPLITUDE_BASE_UNIT = baseToken(UNIT_FAMILIES.AMPLITUDE);
+/** Base unit token of a dither - the unit whose number IS the bit count; Off (0)
+ *  is only ever stored in it. */
+const DITHER_BASE_UNIT = baseToken(UNIT_FAMILIES.DITHER);
 
 // --- enum value sets (the legal serialised names, mirroring the Java enums) ---
 const E = {
-  // WEB_AUDIO and QA40X are the backends a BROWSER actually has (Java's OS backends have no
-  // counterpart here). The four OS names stay legal so a value persisted by an earlier build still
+  // WEB_AUDIO, QA40X and LOOPBACK are the backends a BROWSER actually has (Java's OS backends
+  // have no counterpart here; the digital loopback needs no device at all, so it ports as it
+  // stands). The four OS names stay legal so a value persisted by an earlier build still
   // loads - enumOr() gates both `backend` and every perBackend map key, and an unknown name is
   // silently dropped, which would orphan that backend's saved device selections.
-  AudioBackendType: ['WASAPI', 'WDMKS', 'COREAUDIO', 'JAVASOUND', 'WEB_AUDIO', 'QA40X'],
+  AudioBackendType: ['WASAPI', 'WDMKS', 'COREAUDIO', 'JAVASOUND', 'WEB_AUDIO', 'QA40X', 'LOOPBACK'],
   Channel: ['L', 'R'],
   TriggerEdge: ['RISE', 'FALL'],
   TriggerType: ['EDGE', 'GLITCH'],
@@ -188,6 +204,21 @@ class Property {
 }
 
 /**
+ * A Property holding an ENTERED value (number plus unit token). Java stores one
+ * there too, as a record, and gets value equality for free; here the pair is a
+ * frozen object, so the no-op guard has to compare the two halves itself -
+ * without that, re-writing the same pair would notify and a field echoing back
+ * what it was just handed would loop.
+ * @extends {Property<{value: number, unit: string}>}
+ */
+class EnteredValueProperty extends Property {
+  set(v) {
+    if (unitValueEquals(this._value, v)) return;
+    super.set(v);
+  }
+}
+
+/**
  * Per-backend audio settings (BackendPrefs). Device slots are Web Audio device
  * IDs on the web (the desktop stored OS device names in the same fields).
  */
@@ -283,7 +314,11 @@ export class FreqRespPreset {
   constructor() {
     this.startHz = 20.0;
     this.stopHz = 20000.0;
-    this.amplitudeVrms = 0.5;
+    // Drive amplitude AS ENTERED, with amplitudeUnit naming its unit - a preset
+    // recalled under a different calibration replays what the operator saved,
+    // not a voltage frozen out of it (Java FreqRespPreset.amplitude).
+    this.amplitude = 0.5;
+    this.amplitudeUnit = AMPLITUDE_BASE_UNIT;
     this.sweepPoints = 65536;
     this.fftSize = 524288;
     this.leadInSec = 0.2;
@@ -438,11 +473,15 @@ export class Preferences {
     // defaults to the same legacy value and mirrors it until a profile / calibration
     // sets it (Preferences.adcFsVoltageRmsRight).
     this.adcFsVoltageRmsRight = this._bound(DEFAULT_ADC_FS_VRMS);
-    // In-memory PEAK amplitude; persisted as RMS (÷√2 on save, ×√2 on load).
-    this.dacFsVoltageAmpl = this._bound(2.79351);
+    // In-memory PEAK amplitude; persisted as RMS (÷√2 on save, ×√2 on load). The default is the
+    // UNIT full scale - 1 V RMS, so digital full scale reads as 1 - which holds until a device
+    // calibration or a card profile supplies the measured one. A voltage from any particular
+    // converter would be wrong for every other one, and silently wrong: it scales every V, dBV
+    // and dBFS figure the app shows.
+    this.dacFsVoltageAmpl = this._bound(DEFAULT_DAC_FS_VRMS * SQRT2);
     // RIGHT-channel DAC full-scale (PEAK amplitude) - the per-channel sibling of
     // dacFsVoltageAmpl; defaults to the same value (Preferences.dacFsVoltageAmplRight).
-    this.dacFsVoltageAmplRight = this._bound(2.79351);
+    this.dacFsVoltageAmplRight = this._bound(DEFAULT_DAC_FS_VRMS * SQRT2);
 
     this.oscSavePath = this._bound(null);
     this.oscSaveFolder = this._bound(null);
@@ -457,13 +496,19 @@ export class Preferences {
     this.genDualToneFreq1Hz = this._bound(1000.0);
     this.genDualToneFreq2Hz = this._bound(1300.0);
     this.genDualToneSplitPct = this._bound(50.0);
-    this.genAmplitudeVrms = this._bound(0.5);
-    this.genAmplitudeDbvDisplay = this._bound(false);
-    // Dither depth in bits (may be fractional); 0 = Off. Mirrors Java Preferences.genDitherBits (double).
-    this.genDitherBits = this._bound(0.0);
-    // True = the dither field displays in dBV (the user typed an explicit dBV suffix); persisted so a
-    // restart keeps the choice. Mirrors Java Preferences.genDitherDbvDisplay.
-    this.genDitherDbvDisplay = this._bound(false);
+    // Generator amplitude AS ENTERED: the number the operator typed and the unit they typed it in
+    // (v, dbv, dbfs), resolved to canonical V RMS at USE by genAmplitudeVrms below - so a unit that
+    // only means something against the calibration (dBFS) cannot be silently redefined by a
+    // backend, device or full-scale change under a value already stored. ONE entry, because a
+    // number and a unit are one value: written apart, an observer would see the new unit against
+    // the old number and drive the lane with a quantity nobody entered (Java Preferences.genAmplitude).
+    this.genAmplitude = this._boundEntered(unitValue(0.5, AMPLITUDE_BASE_UNIT));
+    // Generator dither AS ENTERED (bits or dbv); 0 bits = Off (Java Preferences.genDither).
+    this.genDither = this._boundEntered(unitValue(0.0, DITHER_BASE_UNIT));
+    // The canonical readings every consumer uses, resolved against the LIVE DAC full scale at each
+    // read and notifying whenever the entered value moves (Java's converting getters).
+    this.genAmplitudeVrms = this._amplitudeVrmsOf(this.genAmplitude);
+    this.genDitherBits = this._ditherBitsOf(this.genDither);
     // Which output lane(s) the generator drives - the encoder gate ('BOTH' by
     // default = pre-feature behaviour). Applied at the interleave seam (the DDS
     // worklet for live playback, the genSave export path), like Java's
@@ -539,6 +584,11 @@ export class Preferences {
     this.fftManualFundEnabled = this._bound(false);
     this.fftChannel = this._bound('L');
     this.fftMagUnit = this._bound('DBV');
+    // Unit the distortion table's absolute-level cells render in - independent of the
+    // magnitude axis above: 'DBV' (level + ADC offset), 'DBFS' (the measured level as
+    // stored) or 'DBR' (level minus the reference the table's percentages are computed
+    // against, shown as plain "dB").
+    this.fftDistortionUnit = this._bound('DBV');
     // Per-pane last-used screenshot size (0 = fall back to the pane's native size); mirrors
     // scopeScreenshotWidth/Height so the FFT shot remembers its OWN size independently.
     this.fftScreenshotWidth = this._bound(0);
@@ -573,8 +623,10 @@ export class Preferences {
     // Sentinel 0 = "unset": resolved to the device Nyquist (rate/2) on a fresh
     // install by _seedRateDependentFreqRespDefaults; a saved value overrides.
     this.freqRespStopHz = this._bound(FREQRESP_RATE_DEFAULT_SENTINEL);
-    this.freqRespAmplitudeVrms = this._bound(1.0);
-    this.freqRespAmplitudeDbvDisplay = this._bound(false);
+    // Sweep drive amplitude AS ENTERED - see genAmplitude for why the entered value is stored
+    // rather than the canonical voltage (Java Preferences.freqRespAmplitude).
+    this.freqRespAmplitude = this._boundEntered(unitValue(1.0, AMPLITUDE_BASE_UNIT));
+    this.freqRespAmplitudeVrms = this._amplitudeVrmsOf(this.freqRespAmplitude);
     // Sentinel 0 = "unset": resolved to the FS/2 point count (rate/2) on a fresh
     // install by _seedRateDependentFreqRespDefaults; a saved value overrides.
     this.freqRespSweepPoints = this._bound(FREQRESP_RATE_DEFAULT_SENTINEL);
@@ -590,7 +642,9 @@ export class Preferences {
     // Tune-notch wizard fields, persisted independently of the main FreqResp pane.
     this.tuneNotchStartHz = this._bound(900.0);
     this.tuneNotchStopHz = this._bound(1100.0);
-    this.tuneNotchAmplitudeVrms = this._bound(1.0);
+    // Tune-notch wizard drive amplitude AS ENTERED (Java Preferences.tuneNotchAmplitude).
+    this.tuneNotchAmplitude = this._boundEntered(unitValue(1.0, AMPLITUDE_BASE_UNIT));
+    this.tuneNotchAmplitudeVrms = this._amplitudeVrmsOf(this.tuneNotchAmplitude);
     this.tuneNotchTargetHz = this._bound(1000.0);
     // Tune-notch output-lane gate ('BOTH' by default), persisted independently of the
     // other tuneNotch* fields (Java Preferences.tuneNotchOutputChannels).
@@ -727,6 +781,62 @@ export class Preferences {
     const p = new Property(initial);
     p.addListener(() => this._requestSave());
     return p;
+  }
+
+  /**
+   * The same, for a value stored AS ENTERED - one property per field, so an
+   * edit that moves both the number and the unit is one write and one
+   * notification.
+   * @param {{value: number, unit: string}} initial
+   * @returns {EnteredValueProperty}
+   */
+  _boundEntered(initial) {
+    const p = new EnteredValueProperty(initial);
+    p.addListener(() => this._requestSave());
+    return p;
+  }
+
+  /**
+   * A read-only view resolving an entered amplitude to canonical V RMS against
+   * the LIVE DAC peak full scale - Java's converting getter, in the shape every
+   * consumer here already reads (get / addListener). A recalibration therefore
+   * moves what a dBFS entry means instead of changing what was entered.
+   * @param {EnteredValueProperty} entered
+   */
+  _amplitudeVrmsOf(entered) {
+    return this._resolvedView(entered, (v) => convert(UNIT_FAMILIES.AMPLITUDE, v.value, v.unit,
+      AMPLITUDE_BASE_UNIT, this.dacFsVoltageAmpl.get()), AMPLITUDE_BASE_UNIT);
+  }
+
+  /**
+   * The dither twin: an entered value resolved to a depth in bits (a dBV dither
+   * is a level, not a depth).
+   * @param {EnteredValueProperty} entered
+   */
+  _ditherBitsOf(entered) {
+    return this._resolvedView(entered, (v) => convert(UNIT_FAMILIES.DITHER, v.value, v.unit,
+      DITHER_BASE_UNIT, this.dacFsVoltageAmpl.get()), DITHER_BASE_UNIT);
+  }
+
+  /** One derived reading over an entered value: resolves at every read, notifies
+   *  exactly when the entered value itself does, and - like Java's retained
+   *  canonical setters - accepts a canonical write, which stores the base-unit
+   *  value (a programmatic writer states volts or bits, never a display unit). */
+  _resolvedView(entered, resolve, baseUnit) {
+    return {
+      get: () => resolve(entered.get()),
+      set: (canonical) => entered.set(unitValue(canonical, baseUnit)),
+      addListener: (fn) => entered.addListener(() => fn(resolve(entered.get()))),
+    };
+  }
+
+  /** An amplitude expressed as an entered value in the unit {@code entered} is
+   *  CURRENTLY stored in - so a clamp writes its floor without rewriting the
+   *  operator's unit choice underneath them (Java freqRespAmplitudeIn). */
+  amplitudeIn(entered, vrms) {
+    const unit = entered.get().unit;
+    return unitValue(convert(UNIT_FAMILIES.AMPLITUDE, vrms, AMPLITUDE_BASE_UNIT, unit,
+      this.dacFsVoltageAmpl.get()), unit);
   }
 
   /** Wires a calibration entry's toggles to the debounced save (trackCalibration). */
@@ -1230,10 +1340,12 @@ export class Preferences {
     root.genDualToneFreq1Hz = this.genDualToneFreq1Hz.get();
     root.genDualToneFreq2Hz = this.genDualToneFreq2Hz.get();
     root.genDualToneSplitPct = this.genDualToneSplitPct.get();
-    root.genAmplitudeVrms = this.genAmplitudeVrms.get();
-    root.genAmplitudeDbvDisplay = this.genAmplitudeDbvDisplay.get();
-    root.genDitherBits = this.genDitherBits.get();
-    root.genDitherDbvDisplay = this.genDitherDbvDisplay.get();
+    // An entered value is ONE property but TWO keys on disk, so the document
+    // stays readable: the number where it always was, the unit beside it.
+    root.genAmplitude = this.genAmplitude.get().value;
+    root.genAmplitudeUnit = this.genAmplitude.get().unit;
+    root.genDither = this.genDither.get().value;
+    root.genDitherUnit = this.genDither.get().unit;
     root.genOutputChannels = this.genOutputChannels.get();   // persisted by enum name (Java toMap)
     if (this.genDpd.get() != null) root.genDpd = this.genDpd.get();
     if (this.genDpdDual.get() != null) root.genDpdDual = this.genDpdDual.get();
@@ -1306,7 +1418,14 @@ export class Preferences {
 
     // ---- FFT pane state ----
     root.fftLength = this.fftLength.get();
-    root.fftAverages = this.fftAverages.get();
+    // The averages series ends in the forever entry, and JSON has no Infinity -
+    // JSON.stringify would silently write null, which the loader ignores, so the one
+    // series entry that never survived a reload was the forever averaging. Round-trip
+    // it as the string 'Infinity' instead.
+    {
+      const avg = this.fftAverages.get();
+      root.fftAverages = Number.isFinite(avg) ? avg : 'Infinity';
+    }
     root.fftThreads = this.fftThreads.get();
     root.fftStopAfterNEnabled = this.fftStopAfterNEnabled.get();
     root.fftStopAfterN = this.fftStopAfterN.get();
@@ -1330,6 +1449,7 @@ export class Preferences {
     root.fftManualFundEnabled = this.fftManualFundEnabled.get();
     root.fftChannel = this.fftChannel.get();
     root.fftMagUnit = this.fftMagUnit.get();
+    root.fftDistortionUnit = this.fftDistortionUnit.get();
     if (this.fftScreenshotWidth.get() > 0) root.fftScreenshotWidth = this.fftScreenshotWidth.get();
     if (this.fftScreenshotHeight.get() > 0) root.fftScreenshotHeight = this.fftScreenshotHeight.get();
     root.fftDistortionTableVisible = this.fftDistortionTableVisible.get();
@@ -1364,8 +1484,8 @@ export class Preferences {
     // ---- Frequency Response pane ----
     root.freqRespStartHz = this.freqRespStartHz.get();
     root.freqRespStopHz = this.freqRespStopHz.get();
-    root.freqRespAmplitudeVrms = this.freqRespAmplitudeVrms.get();
-    root.freqRespAmplitudeDbvDisplay = this.freqRespAmplitudeDbvDisplay.get();
+    root.freqRespAmplitude = this.freqRespAmplitude.get().value;
+    root.freqRespAmplitudeUnit = this.freqRespAmplitude.get().unit;
     root.freqRespSweepPoints = this.freqRespSweepPoints.get();
     root.freqRespDurationSec = this.freqRespDurationSec.get();
     root.freqRespFftSize = this.freqRespFftSize.get();
@@ -1374,7 +1494,8 @@ export class Preferences {
     root.freqRespOutputChannels = this.freqRespOutputChannels.get();   // persisted by enum name (Java toMap)
     root.tuneNotchStartHz = this.tuneNotchStartHz.get();
     root.tuneNotchStopHz = this.tuneNotchStopHz.get();
-    root.tuneNotchAmplitudeVrms = this.tuneNotchAmplitudeVrms.get();
+    root.tuneNotchAmplitude = this.tuneNotchAmplitude.get().value;
+    root.tuneNotchAmplitudeUnit = this.tuneNotchAmplitude.get().unit;
     root.tuneNotchTargetHz = this.tuneNotchTargetHz.get();
     root.tuneNotchOutputChannels = this.tuneNotchOutputChannels.get();   // persisted by enum name (Java toMap)
     root.freqRespLeftVisible = this.freqRespLeftVisible.get();
@@ -1462,7 +1583,8 @@ export class Preferences {
         frMap[key] = {
           startHz: p.startHz,
           stopHz: p.stopHz,
-          amplitudeVrms: p.amplitudeVrms,
+          amplitude: p.amplitude,
+          amplitudeUnit: p.amplitudeUnit,
           sweepPoints: p.sweepPoints,
           fftSize: p.fftSize,
           leadInSec: p.leadInSec,
@@ -1610,11 +1732,9 @@ export class Preferences {
     if (isNum(g('genDualToneFreq1Hz'))) this.genDualToneFreq1Hz.set(g('genDualToneFreq1Hz'));
     if (isNum(g('genDualToneFreq2Hz'))) this.genDualToneFreq2Hz.set(g('genDualToneFreq2Hz'));
     if (isNum(g('genDualToneSplitPct'))) this.genDualToneSplitPct.set(g('genDualToneSplitPct'));
-    if (isNum(g('genAmplitudeVrms'))) this.genAmplitudeVrms.set(g('genAmplitudeVrms'));
-    if (isBool(g('genAmplitudeDbvDisplay'))) this.genAmplitudeDbvDisplay.set(g('genAmplitudeDbvDisplay'));
-    // Fractional double now (Java int->double): NO trunc, so a fractional dither round-trips.
-    if (isNum(g('genDitherBits'))) this.genDitherBits.set(g('genDitherBits'));
-    if (isBool(g('genDitherDbvDisplay'))) this.genDitherDbvDisplay.set(g('genDitherDbvDisplay'));
+    // Fractional double (Java int->double): NO trunc, so a fractional dither round-trips.
+    this._readEntered(g, 'genAmplitude', this.genAmplitude);
+    this._readEntered(g, 'genDither', this.genDither);
     // Absent / invalid key keeps the current value (default BOTH) - old files stay on BOTH
     // (mirrors Java enumOr(OutputChannels.class, s, genOutputChannels.get())).
     if (isStr(g('genOutputChannels'))) this.genOutputChannels.set(enumOr('OutputChannels', g('genOutputChannels'), this.genOutputChannels.get()));
@@ -1689,7 +1809,10 @@ export class Preferences {
 
     // ---- FFT pane state ----
     if (isNum(g('fftLength'))) this.fftLength.set(trunc(g('fftLength')));
+    // Two spellings: a plain number, or 'Infinity' - the forever entry's JSON-safe
+    // form (see _toMap). A null from a pre-fix store is neither and keeps the default.
     if (isNum(g('fftAverages'))) this.fftAverages.set(g('fftAverages'));
+    else if (g('fftAverages') === 'Infinity') this.fftAverages.set(Infinity);
     if (isNum(g('fftThreads'))) this.fftThreads.set(Math.max(1, Math.min(16, trunc(g('fftThreads')))));
     if (isBool(g('fftStopAfterNEnabled'))) this.fftStopAfterNEnabled.set(g('fftStopAfterNEnabled'));
     if (isNum(g('fftStopAfterN'))) this.fftStopAfterN.set(trunc(g('fftStopAfterN')));
@@ -1718,6 +1841,7 @@ export class Preferences {
     if (isBool(g('fftManualFundEnabled'))) this.fftManualFundEnabled.set(g('fftManualFundEnabled'));
     if (isStr(g('fftChannel'))) this.fftChannel.set(enumOr('Channel', g('fftChannel'), this.fftChannel.get()));
     if (isStr(g('fftMagUnit'))) this.fftMagUnit.set(enumOr('MagnitudeUnit', g('fftMagUnit'), this.fftMagUnit.get()));
+    if (isStr(g('fftDistortionUnit'))) this.fftDistortionUnit.set(enumOr('MagnitudeUnit', g('fftDistortionUnit'), this.fftDistortionUnit.get()));
     if (isNum(g('fftScreenshotWidth'))) this.fftScreenshotWidth.set(g('fftScreenshotWidth'));
     if (isNum(g('fftScreenshotHeight'))) this.fftScreenshotHeight.set(g('fftScreenshotHeight'));
     if (isBool(g('fftDistortionTableVisible'))) this.fftDistortionTableVisible.set(g('fftDistortionTableVisible'));
@@ -1732,8 +1856,7 @@ export class Preferences {
     // ---- Frequency Response pane ----
     if (isNum(g('freqRespStartHz'))) this.freqRespStartHz.set(g('freqRespStartHz'));
     if (isNum(g('freqRespStopHz'))) this.freqRespStopHz.set(g('freqRespStopHz'));
-    if (isNum(g('freqRespAmplitudeVrms'))) this.freqRespAmplitudeVrms.set(g('freqRespAmplitudeVrms'));
-    if (isBool(g('freqRespAmplitudeDbvDisplay'))) this.freqRespAmplitudeDbvDisplay.set(g('freqRespAmplitudeDbvDisplay'));
+    this._readEntered(g, 'freqRespAmplitude', this.freqRespAmplitude);
     if (isNum(g('freqRespSweepPoints'))) this.freqRespSweepPoints.set(trunc(g('freqRespSweepPoints')));
     if (isNum(g('freqRespDurationSec'))) this.freqRespDurationSec.set(g('freqRespDurationSec'));
     if (isNum(g('freqRespFftSize'))) {
@@ -1751,7 +1874,7 @@ export class Preferences {
     if (isStr(g('freqRespOutputChannels'))) this.freqRespOutputChannels.set(enumOr('OutputChannels', g('freqRespOutputChannels'), this.freqRespOutputChannels.get()));
     if (isNum(g('tuneNotchStartHz'))) this.tuneNotchStartHz.set(g('tuneNotchStartHz'));
     if (isNum(g('tuneNotchStopHz'))) this.tuneNotchStopHz.set(g('tuneNotchStopHz'));
-    if (isNum(g('tuneNotchAmplitudeVrms'))) this.tuneNotchAmplitudeVrms.set(g('tuneNotchAmplitudeVrms'));
+    this._readEntered(g, 'tuneNotchAmplitude', this.tuneNotchAmplitude);
     if (isNum(g('tuneNotchTargetHz'))) this.tuneNotchTargetHz.set(g('tuneNotchTargetHz'));
     if (isStr(g('tuneNotchOutputChannels'))) this.tuneNotchOutputChannels.set(enumOr('OutputChannels', g('tuneNotchOutputChannels'), this.tuneNotchOutputChannels.get()));
     if (isBool(g('freqRespLeftVisible'))) this.freqRespLeftVisible.set(g('freqRespLeftVisible'));
@@ -1879,7 +2002,11 @@ export class Preferences {
         const p = new FreqRespPreset();
         if (isNum(pm.startHz)) p.startHz = pm.startHz;
         if (isNum(pm.stopHz)) p.stopHz = pm.stopHz;
-        if (isNum(pm.amplitudeVrms)) p.amplitudeVrms = pm.amplitudeVrms;
+        // A preset saved before the pair carried the canonical voltage alone,
+        // which IS the base-unit number of the same entered value.
+        if (isNum(pm.amplitudeVrms)) p.amplitude = pm.amplitudeVrms;
+        if (isNum(pm.amplitude)) p.amplitude = pm.amplitude;
+        if (isStr(pm.amplitudeUnit)) p.amplitudeUnit = pm.amplitudeUnit;
         if (isNum(pm.sweepPoints)) p.sweepPoints = trunc(pm.sweepPoints);
         if (isNum(pm.fftSize)) p.fftSize = trunc(pm.fftSize);
         if (isNum(pm.leadInSec)) p.leadInSec = pm.leadInSec;
@@ -1927,6 +2054,82 @@ export class Preferences {
         }
       }
     }
+
+    // LAST: converting a pre-pair document needs the DAC full scale of the
+    // SELECTED output device, and the selection only arrives with the
+    // perBackend block above.
+    this._seedEnteredFromPrePairKeys(g);
+  }
+
+  /**
+   * One-time conversion of a document written before the entered values existed:
+   * the canonical number plus the dbv-display flag that went with it become the
+   * value the operator would have entered. Applied only where the new keys are
+   * absent, and nothing writes the old keys again - so they disappear with the
+   * first save.
+   *
+   * The old storage could not express a full-scale-relative entry, so no
+   * conversion here ever produces one (Java seedEnteredFromPrePairKeys).
+   */
+  _seedEnteredFromPrePairKeys(g) {
+    const fsAmpl = this._prePairConversionFsAmpl();
+    this._seedEntered(g, UNIT_FAMILIES.AMPLITUDE, 'genAmplitude', 'genAmplitudeVrms',
+      'genAmplitudeDbvDisplay', this.genAmplitude, fsAmpl);
+    this._seedEntered(g, UNIT_FAMILIES.AMPLITUDE, 'freqRespAmplitude', 'freqRespAmplitudeVrms',
+      'freqRespAmplitudeDbvDisplay', this.freqRespAmplitude, fsAmpl);
+    // The tune-notch dialog never had a display flag of its own: its amplitude
+    // was stored, and is read back, in volts.
+    this._seedEntered(g, UNIT_FAMILIES.AMPLITUDE, 'tuneNotchAmplitude', 'tuneNotchAmplitudeVrms',
+      null, this.tuneNotchAmplitude, fsAmpl);
+    this._seedEntered(g, UNIT_FAMILIES.DITHER, 'genDither', 'genDitherBits',
+      'genDitherDbvDisplay', this.genDither, fsAmpl);
+  }
+
+  /**
+   * Seeds ONE entered value from the pre-pair keys of its field: legacyKey held
+   * the canonical number and flagKey (null where the field never had one)
+   * whether it was displayed logarithmically. A value already stored - either of
+   * its two keys - wins, and the old keys are then simply stale.
+   *
+   * A logarithmic dither is a LEVEL, which Off has none of, so a zero stays in
+   * the base unit whatever the old flag said.
+   */
+  _seedEntered(g, family, key, legacyKey, flagKey, entered, fsAmpl) {
+    if (g(key) !== undefined || g(key + 'Unit') !== undefined) return;
+    if (!isNum(g(legacyKey))) return;
+    const canonical = g(legacyKey);
+    const base = baseToken(family);
+    const log = logToken(family);
+    const asLog = flagKey != null && canonical > 0 && g(flagKey) === true;
+    entered.set(asLog
+      ? unitValue(convert(family, canonical, base, log, fsAmpl), log)
+      : unitValue(canonical, base));
+  }
+
+  /**
+   * DAC PEAK full scale the one-time pre-pair conversion is measured against.
+   *
+   * The desktop reads the calibration of the OUTPUT device the loaded
+   * configuration selects, because its card list lives in the same store. Here
+   * the cards are a SEPARATE document behind their own seam - this store cannot
+   * reach them, and a load that went looking would be the one place the two
+   * stores touched. What it uses instead is its own full-scale scalar, which is
+   * what the very same document seeded a few keys earlier (dacFsVoltageRms) and
+   * what drives the engine until a card profile is applied over it; an
+   * uncalibrated store keeps its default.
+   */
+  _prePairConversionFsAmpl() {
+    return this.dacFsVoltageAmpl.get();
+  }
+
+  /** Composes one entered value from its two keys, each independently optional:
+   *  a document that carries only the number keeps the unit the defaults (or an
+   *  earlier read) established. */
+  _readEntered(g, key, entered) {
+    const current = entered.get();
+    const number = isNum(g(key)) ? g(key) : current.value;
+    const unit = isStr(g(key + 'Unit')) ? g(key + 'Unit') : current.unit;
+    entered.set(unitValue(number, unit));
   }
 
   // -------------------------------------------------------------------------
