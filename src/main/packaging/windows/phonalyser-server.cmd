@@ -34,12 +34,17 @@ if not defined JAR (
   exit /b 1
 )
 
-rem A 32-bit JVM defaults to a 256 MB max heap and cannot reserve much beyond
-rem ~1.4 GB of contiguous address space on 32-bit Windows - cap the x86 build
-rem explicitly at a safe 1200m, exactly as the desktop launcher does.
-set "MEM="
-if not "!JAR:-windows-x86=!"=="!JAR!" set "MEM=-Xmx1200m"
-
 set "NATIVES=%~dp0natives"
+
+rem A 32-bit JVM defaults to a 256 MB max heap and cannot reserve much beyond
+rem ~1.4 GB of contiguous address space on 32-bit Windows - cap the x86 bundle
+rem explicitly at a safe 1200m, exactly as the desktop launcher does.  The x64
+rem bundle must NOT be capped.
+rem What says 32-bit here is the BUNDLE, not the jar: one server jar serves
+rem every platform and carries no architecture in its name.  The staged natives
+rem name theirs explicitly - csjsound_x86.dll against the x64 bundle's
+rem csjsound_amd64.dll - so this test is true in the x86 bundle alone.
+set "MEM="
+if exist "%NATIVES%\csjsound_x86.dll" set "MEM=-Xmx1200m"
 
 java "-Djava.library.path=%NATIVES%" "-Djna.library.path=%NATIVES%" "-Dlibusb.path=%NATIVES%" !MEM! -jar "!JAR!" %*

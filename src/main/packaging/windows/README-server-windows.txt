@@ -7,7 +7,9 @@ Phonalyser desktop clients.  It has no window and needs no desktop.
 
 What is in this folder
 ----------------------
-  phonalyser-server-<version>-windows*.jar  the server itself (one fat jar)
+  phonalyser-server-<version>.jar           the server itself (one fat jar,
+                                            the same file in every bundle -
+                                            it carries every platform's natives)
   phonalyser-server-x64.exe                 double-click launcher
    (or phonalyser-server-x86.exe in the 32-bit bundle)
   phonalyser-server.cmd                     the same, in a console you can read

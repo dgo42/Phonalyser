@@ -8,7 +8,9 @@ the server is a jar and two scripts, on purpose.
 
 What is in this folder
 ----------------------
-  phonalyser-server-<version>-macos*.jar   the server itself (one fat jar)
+  phonalyser-server-<version>.jar          the server itself (one fat jar, the
+                                           same file in every bundle - it
+                                           carries every platform's natives)
   phonalyser-server.sh                     run it in a terminal
   phonalyser-server-service.sh             install / activate / uninstall it
   natives/libportaudio.dylib               CoreAudio path, loaded from here
