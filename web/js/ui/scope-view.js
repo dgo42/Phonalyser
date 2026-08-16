@@ -1745,19 +1745,21 @@ export class ScopeView {
           : 5);
       if (pxPerSample > 10.0 && dotDiameter > 0) {
         const dotShift = subSampleOffset * pxPerSample;
-        const half = Math.trunc(dotDiameter / 2);
+        const r = dotDiameter / 2;
         const iStart = Math.floor(dotShift / pxPerSample);
         const iEnd = Math.ceil((width + dotShift) / pxPerSample);
         for (let i = iStart; i <= iEnd; i++) {
           const dataIdx = dispStart + i;
           if (dataIdx < 0 || dataIdx >= n) continue;
-          const sx = Math.round(i * pxPerSample - dotShift);
+          // Sub-pixel centres: the canvas takes fractional coordinates, so the dot sits
+          // exactly where the sample is. Rounded to whole pixels the dots drifted up to
+          // half a pixel off their own trace - visible as soon as the zoom spreads the
+          // samples far enough apart for the dots to be read individually, which is the
+          // only zoom at which they are drawn.
+          const sx = i * pxPerSample - dotShift;
           if (sx < 0 || sx >= width) continue;
-          const sy = Math.round(sampleToY(buf[dataIdx]));
-          // Java fillOval(sx-half, sy-half, dotDiameter, dotDiameter): an oval
-          // inscribed in that box -> centre (sx-half+dotDiameter/2, ...), radius dotDiameter/2.
-          const r = dotDiameter / 2;
-          g.beginPath(); g.arc(sx - half + r, sy - half + r, r, 0, 2 * Math.PI); g.fill();
+          const sy = sampleToY(buf[dataIdx]);
+          g.beginPath(); g.arc(sx, sy, r, 0, 2 * Math.PI); g.fill();
         }
       }
     } else {
