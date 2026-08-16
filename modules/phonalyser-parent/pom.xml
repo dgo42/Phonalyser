@@ -101,25 +101,22 @@
         <jpackage.libDir>$APPDIR</jpackage.libDir>
         <platform.id>local</platform.id>
 
-        <!-- The headless server's fat jar (server-net, profile server-dist).
-             It carries its OWN platform id, set explicitly by each of the six
-             profiles below, because platform.id is not usable for this: the two
-             macOS profiles deliberately SHARE platform.id=macos, and the three
-             primary arches answer the bare `windows` / `linux` / `macos`, which
-             names no architecture at all.  Renaming platform.id to fix that
-             would break every desktop download link and release glob, so the
-             server gets the honest per-architecture name and the desktop keeps
-             its historical one.  The dist descriptors are named after this
-             property (src/main/assembly/server-dist-<id>.xml), so a profile that
-             forgot to set it would not resolve its descriptor.
-
-             The ${platform.id} default below is only for a profile-less build
-             (platform.id=local), where there is no architecture to name. -->
+        <!-- The headless server (server-net, profile server-dist) carries NO
+             platform id at all: one build emits the one universal jar and all
+             six dist zips, each execution naming its own descriptor and its own
+             zip, so nothing here has to be switched per platform.  That also
+             sidesteps what platform.id could never express for the server - the
+             two macOS profiles deliberately SHARE platform.id=macos, and the
+             three primary arches answer the bare `windows` / `linux` / `macos`,
+             which names no architecture. -->
         <server.mainClass>org.edgo.audio.measure.net.server.ServerMain</server.mainClass>
-        <server.platform.id>${platform.id}</server.platform.id>
-        <!-- ONE ARCHITECTURE PER FAT JAR.  Both fat jars (the desktop one from
-             phonalyser-app and the server one from server-net) carry the natives
-             for their OWN architecture, complete, and none for any other.
+        <!-- ONE ARCHITECTURE PER DESKTOP FAT JAR: phonalyser-app's jar carries
+             the natives for its OWN architecture, complete, and none for any
+             other - it also carries SWT and LWJGL, which are single-arch by
+             construction, so it could not be universal anyway.  The SERVER jar
+             is the opposite and deliberately so: one file for every platform,
+             carrying every arch's natives (src/main/assembly/server-jar.xml), so
+             the properties below reach only the desktop jar now.
 
              win32-x86-64/, win32-x86/ and darwin-* follow JNA's
              Platform.RESOURCE_PREFIX convention: Native.load falls back to
@@ -148,30 +145,10 @@
              checked in and frozen - the build only copies them. -->
         <macos.nativeSrc>${project.basedir}/../../lib</macos.nativeSrc>
 
-        <!-- The Windows thin launcher (Launch4j).  It does NOT wrap the jar - it
-             sits beside it and starts a JRE with the natives\ folder on the
-             library paths, which is the whole reason it exists.
-
-             Skipped everywhere by default: only the two Windows dist descriptors
-             pick phonalyser-server.exe up, so building one on Linux or macOS
-             would burn Launch4j's cross-platform binaries to produce a file
-             nothing packs.  The two Windows profiles turn it on. -->
-        <server.launch4j.skip>true</server.launch4j.skip>
-        <!-- The launcher is named per BUNDLE TARGET, not per stub bitness:
-             Launch4j always emits a 32-bit PE32 head, in both cases, so the
-             suffix says which JRE it hunts for (runtimeBits) and therefore which
-             natives\ arch it must sit beside - pairing the x86 exe with the x64
-             folder would start a JVM that finds no DLL at all.  Never written
-             off Windows: server.launch4j.skip is true there. -->
-        <server.exeName>phonalyser-server.exe</server.exeName>
-        <!-- 64 or 32 - a 32-bit build must REFUSE a 64-bit JVM: the jar is
-             arch-neutral but the staged natives\ folder is not, so the wrong JVM
-             would start and then fail at the first device open.  The 64/32
-             default is Launch4j's "either", correct only where no arch is known. -->
-        <server.launch4j.runtimeBits>64/32</server.launch4j.runtimeBits>
-        <!-- 0 means "unset" to Launch4j; the x86 profile caps it, mirroring the
-             .cmd, because a 32-bit JVM cannot address more. -->
-        <server.launch4j.maxHeapMb>0</server.launch4j.maxHeapMb>
+        <!-- The Windows thin launcher's naming, bitness and heap cap are no
+             longer properties: one server-dist build emits BOTH stubs from two
+             Launch4j executions in server-net, each spelling its own, so there
+             is nothing left for a platform profile to switch. -->
         <!-- LAYERING EXCEPTION: this reaches out of the headless server into a
              GUI module's resources.  It is a build-time file path, not a
              dependency, and phonalyser-app does the same for its own staging -
@@ -181,7 +158,11 @@
              src/main/packaging/windows/ is a one-line change here and touches no
              plugin configuration. -->
         <server.launch4j.icon>${project.basedir}/../phonalyser-gui/src/main/resources/icons/phonalyser.ico</server.launch4j.icon>
-        <server.mainJar>phonalyser-server-${project.version}-${server.platform.id}.jar</server.mainJar>
+        <!-- No platform in the name: ONE server jar serves every platform and
+             architecture (src/main/assembly/server-jar.xml), and all six dist
+             zips pack that same file - only the natives and scripts around it
+             differ.  The zips keep the per-platform stem. -->
+        <server.mainJar>phonalyser-server-${project.version}.jar</server.mainJar>
 
         <surefire.excludedGroups>exploratory,qa40x-mock</surefire.excludedGroups>
     </properties>
@@ -612,12 +593,8 @@
                 <jpackage.type>EXE</jpackage.type>
                 <jpackage.libDir>$APPDIR/lib/windows</jpackage.libDir>
                 <platform.id>windows</platform.id>
-                <server.platform.id>windows-x64</server.platform.id>
                 <platform.nativeExcludes>win32-x86/**</platform.nativeExcludes>
                 <jna.resourcePrefix>win32-x86-64</jna.resourcePrefix>
-                <server.launch4j.skip>false</server.launch4j.skip>
-                <server.launch4j.runtimeBits>64</server.launch4j.runtimeBits>
-                <server.exeName>phonalyser-server-x64.exe</server.exeName>
                 <swt.artifactId>org.eclipse.swt.win32.win32.x86_64</swt.artifactId>
                 <lwjgl.natives>natives-windows</lwjgl.natives>
             </properties>
@@ -629,14 +606,8 @@
             <id>windows-x86</id>
             <properties>
                 <platform.id>windows-x86</platform.id>
-                <server.platform.id>windows-x86</server.platform.id>
                 <platform.nativeExcludes>win32-x86-64/**</platform.nativeExcludes>
                 <jna.resourcePrefix>win32-x86</jna.resourcePrefix>
-                <server.launch4j.skip>false</server.launch4j.skip>
-                <!-- Refuse a 64-bit JVM outright: natives\ here is 32-bit only. -->
-                <server.launch4j.runtimeBits>32</server.launch4j.runtimeBits>
-                <server.launch4j.maxHeapMb>1200</server.launch4j.maxHeapMb>
-                <server.exeName>phonalyser-server-x86.exe</server.exeName>
                 <!-- 3.108.0 (Sept 2018) is the LAST SWT published for win32 x86;
                      Eclipse dropped 32-bit afterwards, so this profile is frozen
                      legacy by construction. -->
@@ -672,7 +643,6 @@
             <properties>
                 <jpackage.type>DEB</jpackage.type>
                 <platform.id>linux</platform.id>
-                <server.platform.id>linux-x64</server.platform.id>
                 <!-- No win32 resource can ever load here, so both arches go.
                      Nothing is added: Linux uses the JDK's ALSA and the distro's
                      libusb, so the repo ships no Linux natives by design. -->
@@ -696,7 +666,6 @@
             <properties>
                 <jpackage.type>DEB</jpackage.type>
                 <platform.id>linux-aarch64</platform.id>
-                <server.platform.id>linux-aarch64</server.platform.id>
                 <platform.nativeExcludes>win32-*/**</platform.nativeExcludes>
                 <jna.resourcePrefix>linux-aarch64</jna.resourcePrefix>
                 <swt.artifactId>org.eclipse.swt.gtk.linux.aarch64</swt.artifactId>
@@ -721,7 +690,6 @@
                      JNA natives are single-arch - so they cannot share a
                      name on the release page). -->
                 <platform.id>macos-x64</platform.id>
-                <server.platform.id>macos-x64</server.platform.id>
                 <platform.nativeExcludes>win32-*/**</platform.nativeExcludes>
                 <jna.resourcePrefix>darwin-x86-64</jna.resourcePrefix>
                 <!-- Copied into the jar as /darwin-x86-64/, which is where
@@ -750,7 +718,6 @@
                      the historical published name (the Intel jar is the one
                      with the -x64 suffix). -->
                 <platform.id>macos</platform.id>
-                <server.platform.id>macos-aarch64</server.platform.id>
                 <platform.nativeExcludes>win32-*/**</platform.nativeExcludes>
                 <jna.resourcePrefix>darwin-aarch64</jna.resourcePrefix>
                 <macos.nativeSrc>${project.basedir}/../../lib/macos-arm64</macos.nativeSrc>

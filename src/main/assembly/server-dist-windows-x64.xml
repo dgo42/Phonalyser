@@ -87,7 +87,8 @@
              guaranteed path, and a build without the Launch4j plugin wired in
              should still produce a working bundle rather than fail.
 
-             The name is spelled out rather than taken from ${server.exeName}:
+             The name is spelled out, as it is in the Launch4j execution that
+             writes it:
              both Windows passes write into the SAME modules/server-net/target
              (the release workflow runs x64 then x86), so naming the exact file
              is what stops the x64 stub from riding along in the x86 zip.  It

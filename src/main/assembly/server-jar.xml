@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Headless server JAR: the standard jar-with-dependencies layout and nothing
-     else.
+     else - and ONE file for every platform and architecture, the natives it
+     carries covering all of them (see the dependencySet below).  What makes a
+     bundle a Windows or a macOS bundle is the dist zip around this jar, never
+     the jar.
 
      Deliberately NOT src/main/assembly/fat-jar.xml.  That descriptor adds two
      fileSets that read help/** and i18n/** out of ../phonalyser-gui(-core) by a
@@ -31,69 +34,47 @@
     <dependencySets>
         <!-- Mirrors the built-in jar-with-dependencies descriptor: this module's
              own classes plus core, the wire format, every local backend and the
-             third-party jars they need. -->
+             third-party jars they need.
+
+             NOTHING here is narrowed to an architecture: this is ONE jar for
+             every platform.  It keeps the app's own natives (PortAudio, libusb,
+             csjsound) for all arches under their JNA Platform.RESOURCE_PREFIX
+             folders, and jna.jar's own jnidispatch for all ~26 platforms it
+             ships, so Native.load extracts whichever set matches the JVM that
+             happens to run the jar - a bare `java -jar` opens devices on any of
+             them, with nothing on java.library.path.  The foreign arches cost
+             about five megabytes of jnidispatch plus the other platforms' device
+             libraries; being able to hand out one server jar is worth it.
+
+             The per-platform dist zips still stage their own natives beside the
+             jar, which is what the launcher's library paths point at.  The
+             DESKTOP fat jar still narrows to one arch: it also carries SWT and
+             LWJGL, which are single-arch by construction. -->
         <dependencySet>
             <outputDirectory>/</outputDirectory>
             <useProjectArtifact>true</useProjectArtifact>
             <unpack>true</unpack>
             <scope>runtime</scope>
-            <unpackOptions>
-                <excludes>
-                    <!-- The OTHER architecture's resource folder, anchored at the
-                         archive ROOT so this covers only the app's own natives
-                         (PortAudio, libusb, csjsound).  The folder for THIS
-                         build's arch stays COMPLETE - that is what makes a bare
-                         `java -jar` open devices with nothing on
-                         java.library.path.  Set per platform profile in
-                         phonalyser-parent; on Linux and macOS it drops both
-                         win32 arches, since no win32 resource can load there. -->
-                    <exclude>${platform.nativeExcludes}</exclude>
-                    <!-- jna.jar's OWN natives: it ships jnidispatch for ~26
-                         platforms, 4.9 MB of which exactly one folder is
-                         loadable here.  Dropping them BY FILE NAME is what makes
-                         this safe - com/sun/jna/win32/ is a Java PACKAGE
-                         (StdCallLibrary, W32APIOptions) sitting right beside the
-                         win32-x86-64/ platform folder, so any win32* glob would
-                         delete code the build compiles against.  These four
-                         patterns match only the native itself, in any platform
-                         folder; the one this build needs is put back by the
-                         second dependencySet below. -->
-                    <exclude>com/sun/jna/*/jnidispatch.dll</exclude>
-                    <exclude>com/sun/jna/*/libjnidispatch.so</exclude>
-                    <exclude>com/sun/jna/*/libjnidispatch.jnilib</exclude>
-                    <exclude>com/sun/jna/*/libjnidispatch.a</exclude>
-                </excludes>
-            </unpackOptions>
-        </dependencySet>
-        <!-- ...and jnidispatch for THIS platform only, put back after the sweep
-             above removed every arch.  Restricted to the one folder, so nothing
-             else in jna.jar is unpacked twice and the services handler sees
-             nothing from here. -->
-        <dependencySet>
-            <outputDirectory>/</outputDirectory>
-            <unpack>true</unpack>
-            <scope>runtime</scope>
-            <includes>
-                <include>net.java.dev.jna:jna</include>
-            </includes>
-            <unpackOptions>
-                <includes>
-                    <include>com/sun/jna/${jna.resourcePrefix}/**</include>
-                </includes>
-            </unpackOptions>
         </dependencySet>
     </dependencySets>
     <fileSets>
         <!-- macOS is the one platform whose natives are not already module
-             resources: they live in the repo's lib/macos-*.  Mapped to JNA's
-             Platform.RESOURCE_PREFIX folder so Native.load extracts them exactly
-             as it does the win32 copies - without this a bare `java -jar` on
-             macOS has no PortAudio at all, and therefore no CoreAudio devices.
-             Off every other platform macos.nativeSrc points at lib/ itself,
-             which holds no *.dylib directly, so this contributes nothing. -->
+             resources: they live in the repo's lib/macos-*.  BOTH arches are
+             mapped to their JNA Platform.RESOURCE_PREFIX folder, so Native.load
+             extracts them exactly as it does the win32 copies whichever Mac the
+             jar lands on - and both are copied whatever host builds, the jar
+             being the same file everywhere.  Without them a bare `java -jar` on
+             macOS has no PortAudio at all, and therefore no CoreAudio devices. -->
         <fileSet>
-            <directory>${macos.nativeSrc}</directory>
-            <outputDirectory>/${jna.resourcePrefix}</outputDirectory>
+            <directory>${repo.root}/lib/macos-x64</directory>
+            <outputDirectory>/darwin-x86-64</outputDirectory>
+            <includes>
+                <include>*.dylib</include>
+            </includes>
+        </fileSet>
+        <fileSet>
+            <directory>${repo.root}/lib/macos-arm64</directory>
+            <outputDirectory>/darwin-aarch64</outputDirectory>
             <includes>
                 <include>*.dylib</include>
             </includes>
