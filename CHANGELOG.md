@@ -5,7 +5,7 @@ All notable changes to **Phonalyser** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.1] - xxxx.xx.xx
+## [1.2.1] - 2026-08-16
 
 ### Added
 
@@ -68,7 +68,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server's backends appeared or vanished carries the desktop's name and value,
   and the shared capture is acquired and released by direct call as it is there,
   leaving on the bus the one batch notification a page still needs, having no
-  blocking threads to wake. The help gains the FAQ chapter in English, German
+  blocking threads to wake. The analyser's restarts behave as the desktop's do:
+  Reset statistics restarts the collection as well as the average, so a fresh
+  average opens with a full window instead of the previous one slid forward a
+  single hop; a capture overrun keeps the collected depth - it is a gap in
+  coverage, not damaged data - restarts only the window, and names itself in the
+  warning banner instead of re-anchoring in silence; the averages readout is read
+  live, so a start or a reset shows zero at once rather than the previous run's
+  depth until the next frame lands; and the first window of a collection is
+  analysed the moment it is full, no longer a hop later. The oscilloscope's
+  per-sample dots are placed on fractional coordinates, so at a zoom wide enough
+  to show them they sit on their samples instead of on the nearest whole pixel.
+  A range chosen for a bench analyzer now reaches the bench - the browser sent
+  only the front-panel port, so an input or output range picked for a remote
+  QA40x moved nothing. The help gains the FAQ chapter in English, German
   and Ukrainian - adapted where the browser measures through a bench rather than
   a local driver - alongside this release's help refresh and rebuilt search
   indexes.
@@ -98,6 +111,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   driver backend for a faster oscilloscope described something a page cannot
   do, so the web catalogue drops it; the desktop keeps it. A tip that promises
   what its platform lacks is worse than no tip.
+- **A closed net session names its close code.** The session-end log line of
+  both ends now carries the WebSocket close code the socket reported and how
+  many keepalive pings had gone unanswered, so an orderly server shutdown reads
+  differently from a bench that had been failing for a while.
 - **Server downloads are the per-platform ZIPs alone.** Each ZIP already
   carries the server's fat jar beside the natives, the launcher and the
   service scripts; the separate bare jars were duplicate downloads and are no
@@ -178,6 +195,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   waveform.** The live restart replayed the record of the tone before the
   change - entering dual-tone kept a single tone sounding, leaving it kept
   both. The restart now rebuilds from the just-committed form.
+- **The largest FFT lengths produced no spectrum at all.** The analysis span
+  was clamped to the length of the capture buffer and then demanded in one
+  contiguous read, so a frame longer than that buffer - four million points at
+  48 kS/s is 87 seconds of audio against a 22-second buffer - could never be
+  assembled: the analyser waited for a span the buffer cannot hold, the capture
+  lapped it, and the measurement stayed in a permanent buffer-overrun re-sync
+  with nothing on screen. The analyser now gathers its frame into its own buffer
+  across successive reads, taking each tick's share as it arrives, so the
+  capture buffer only has to cover one tick and every FFT length collects
+  normally.
 - **The web generator could not start from a deployed build.** The DDS
   worklet was addressed relative to the source tree, which resolves outside
   the app once bundled - every production deployment answered the start
