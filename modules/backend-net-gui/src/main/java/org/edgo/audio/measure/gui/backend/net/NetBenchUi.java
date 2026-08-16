@@ -538,7 +538,7 @@ public final class NetBenchUi implements RemoteBackendUi, NetFaultListener {
         } catch (RuntimeException e) {
             // Closed rather than dropped: a refused attempt can still leave the
             // library's reader thread behind, and the operator will try again.
-            open.close(NetCloseReason.TRANSPORT_CLOSED);
+            open.connClose(NetCloseReason.TRANSPORT_CLOSED);
             if (log.isWarnEnabled()) {
                 log.warn("net bench: connecting to {} failed: {}", server.host(),
                         e.toString());
@@ -617,7 +617,7 @@ public final class NetBenchUi implements RemoteBackendUi, NetFaultListener {
             }
             return connectFailureText(candidate, e);
         } finally {
-            open.close(NetCloseReason.BYE);
+            open.connClose(NetCloseReason.BYE);
         }
     }
 
@@ -676,7 +676,7 @@ public final class NetBenchUi implements RemoteBackendUi, NetFaultListener {
         committed = null;
         entries = List.of();
         if (open != null) {
-            open.close(NetCloseReason.BYE);
+            open.connClose(NetCloseReason.BYE);
         }
     }
 
@@ -794,7 +794,7 @@ public final class NetBenchUi implements RemoteBackendUi, NetFaultListener {
                 log.info("net bench: the reconnect to '{}' was overtaken - giving the "
                         + "session it dialled straight back", server.name());
             }
-            dialled.open().close(NetCloseReason.BYE);
+            dialled.open().connClose(NetCloseReason.BYE);
             return;
         }
         // Read here rather than before the dial: this is the selection the
