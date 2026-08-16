@@ -74,11 +74,6 @@ const PERSISTENCE_SECONDS = Object.freeze({
   MANUAL: NaN,
 });
 
-/** Combo labels, index-aligned with the mode names (PersistenceMode.LABELS). NOT i18n
- *  in the Java original - hard-coded strings. */
-export const PERSISTENCE_LABELS = Object.freeze(
-  ['Off', '0.5 s', '1 s', '2 s', '5 s', '10 s', '15 s', '20 s', '∞', 'Manual']);
-
 /** Effective persistence time, substituting {@code manualSeconds} for MANUAL:
  *  0 = off, < 0 = infinite, > 0 = finite decay time (PersistenceMode.effectiveSeconds).
  *  @param {string} mode a PersistenceMode name
