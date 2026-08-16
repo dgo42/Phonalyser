@@ -37,7 +37,8 @@ client has nothing else and one server implementation must serve both GUIs;
 JSON control because it is debuggable and both sides parse it natively; all
 binary data little-endian (QA40x native order, JS `DataView` friendly).
 
-The server ships as its own fat jar, `phonalyser-server-<version>-<platform>.jar`
+The server ships as its own fat jar, `phonalyser-server-<version>.jar` - one
+file for every platform and architecture -
 (`java -jar ...`), built from the `server-net` module - it carries no SWT and no
 GUI code at all, so no Display can be initialised even by accident.
 
