@@ -356,7 +356,19 @@ export class PreferencesDialog {
         this.engine.config.inDeviceId = inDev;
         this.engine.config.inRate = inR || this.engine.config.inRate;
       }
-      if (outputChanged) this.engine.config.outDeviceId = outDev;
+      if (outputChanged) {
+        this.engine.config.outDeviceId = outDev;
+        // The committed OUTPUT rate must flow like the input's: the generator restart
+        // in afterApplyBackendChanges reopens its sink straight from this config - the
+        // one start that does NOT pass readConfig(), which heals the config from the
+        // combos on every pane-button start. Left stale, a shared-clock backend (the
+        // QA40x's one reg-9 clock, the loopback's one session format) had its
+        // just-changed clock re-locked to the OLD rate by the playing generator's
+        // reopen: the capture then analysed at the committed rate while the device ran
+        // the old one, and every tone displayed scaled by the two rates' ratio - with
+        // the generator stopped the same change landed, which is what hid it.
+        this.engine.config.outRate = outR || this.engine.config.outRate;
+      }
 
       // The committed audio format is now in the engine config, so anything derived from it is
       // stale until it re-reads: the generator's snap brackets sit on the CAPTURE rate's bin
