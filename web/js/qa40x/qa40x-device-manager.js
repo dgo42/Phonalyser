@@ -229,6 +229,13 @@ export class Qa40xDeviceManager {
   /** The remote selection whose I2S port the operator changed, or null when nothing is pending -
    *  the port belongs to the BENCH, so it is a pending WRITE and never a preference block. */
   #pendingBench = null;
+  /** The bench whose card the last sync rendered, the card's name, and the ranges that
+   *  bench reported IN FORCE - what a range change on OK is compared against. Null until
+   *  a sync has succeeded: a bench that did not answer its ranges is told nothing. */
+  #syncedBench = null;
+  #syncedCardName = null;
+  #benchInputDbv = null;
+  #benchOutputDbv = null;
   /** That pending port state. @type {boolean} */
   #pendingI2s = false;
 
@@ -858,6 +865,14 @@ export class Qa40xDeviceManager {
     // on every backend settle / scan, so a reload re-renders it.
     // The overlay also keeps a LOCAL card of the same name intact behind it.
     store.putTransientProfile(card);
+    // What the bench has IN FORCE right now, and which card the ranges belong to.
+    // The OK below compares the staged card against these and sends only what
+    // differs: without them a range change made here would have nothing to be a
+    // change AGAINST, and the attenuator on the bench would never move.
+    this.#syncedBench = selection;
+    this.#syncedCardName = cardName;
+    this.#benchInputDbv = activeIn;
+    this.#benchOutputDbv = activeOut;
     console.info(`QA40x card sync: '${cardName}' calibrated from the bench, `
       + `in ${activeIn} dBV / out ${activeOut} dBV`);
     return card;
@@ -924,13 +939,57 @@ export class Qa40xDeviceManager {
    * this one's.
    */
   async commitCustomPreferencesEdit() {
-    const selection = this.#pendingBench;
+    const portBench = this.#pendingBench;
     this.#pendingBench = null;
-    if (selection == null || this.#bench == null) return;
-    const answer = await this.#bench.callLocked(selection, MessageType.QA40X_SETTINGS,
+    // The RANGE half runs first and independently of the port half: an OK that
+    // changed only a range must still reach the bench, and one that changed only
+    // the port must not wait on ranges. Both go through the LOCKED seam, because
+    // spec 4.6 requires the analyzer's lock for a hardware write and a settings
+    // panel holds nothing of its own.
+    await this.#commitBenchRanges();
+    if (portBench == null || this.#bench == null) return;
+    const answer = await this.#bench.callLocked(portBench, MessageType.QA40X_SETTINGS,
       { [NetFields.I2S_ENABLED]: this.#pendingI2s });
     if (answer == null) {
-      console.warn(`QA40x settings: ${selection} did not accept the I2S port change`);
+      console.warn(`QA40x settings: ${portBench} did not accept the I2S port change`);
+    }
+  }
+
+  /**
+   * Sends the range the operator chose for a bench analyzer, per direction, and only
+   * where it differs from what that bench reported in force (Java
+   * Qa40xSettingsUi.commitEdit).
+   *
+   * The comparison is against the BENCH's own positions rather than against a local
+   * card: the analyzer is another machine's, its card here is transient, and a local
+   * card of the same name says nothing about what the attenuator is doing over there.
+   * A bench whose ranges never answered has no positions to compare with, so nothing
+   * is sent - a range is not guessed at.
+   *
+   * @returns {Promise<void>}
+   */
+  async #commitBenchRanges() {
+    const bench = this.#syncedBench;
+    if (bench == null || this.#bench == null || this.#deviceStore == null) return;
+    const card = this.#deviceStore.findAudioDeviceProfile(this.#syncedCardName);
+    if (card == null) return;
+    await this.#sendRangeDelta(bench, true, card.input, this.#benchInputDbv);
+    await this.#sendRangeDelta(bench, false, card.output, this.#benchOutputDbv);
+  }
+
+  /** One direction: the staged position, sent when it is a real move away from the
+   *  bench's own. A label the analyzer has no row for, or a bench position that was
+   *  never read, sends nothing. */
+  async #sendRangeDelta(bench, input, endpoint, inForceDbv) {
+    if (endpoint == null || typeof inForceDbv !== 'number') return;
+    const staged = rangeDbv(endpoint.activeRange, input ? inputRangeDbvValues() : outputRangeDbvValues(), null);
+    if (staged == null || staged === inForceDbv) return;
+    const answer = await this.#bench.callLocked(bench,
+      input ? MessageType.QA40X_SET_INPUT_RANGE : MessageType.QA40X_SET_OUTPUT_RANGE,
+      { [NetFields.DBV]: staged });
+    if (answer == null) {
+      console.warn(`QA40x range: ${bench} did not take the `
+        + `${input ? 'input' : 'output'} range ${staged} dBV`);
     }
   }
 
