@@ -13,6 +13,32 @@
   <p>Die nachstehende Versionshistorie stammt aus der maßgeblichen
      <a href="https://github.com/dgo42/Phonalyser/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a> des Projekts.</p>
 
+  <h2><a name="v1.2.2" id="v1.2.2"></a>1.2.2 - xxxx.xx.xx</h2>
+    <h3>Hinzugefügt</h3>
+    <ul>
+      <li><b>Die Linux-Startanleitung nennt das libGLU-Paket, das das GPU-Oszilloskop braucht.</b> Viele Distributionen installieren es nicht mehr von sich aus, und ohne es bleibt das Oszilloskop stillschweigend beim CPU-Renderer - die Anleitung gibt jetzt den Installationsbefehl an.</li>
+      <li><b>Die JavaSound-Formatabfrage protokolliert je Gerät und Richtung eine Start- und eine Abschlusszeile,</b> mit Formatanzahl und verstrichener Zeit - eine Abfrage, die nie zurückkehrt, nennt ihr Gerät durch die Startzeile ohne Gegenstück.</li>
+    </ul>
+    <h3>Geändert</h3>
+    <ul>
+      <li><b>Audiogeräte werden einmal beim Start aufgezählt statt bei jedem Öffnen des Dialogs.</b> Die Einstellungen füllen ihre Auswahlen sofort aus dieser Momentaufnahme, genommen während keine Leitung der Anwendung eine Karte hält; "Geräte scannen" fragt die Treiber neu und ist jetzt auch der Weg, auf dem eine seit dem Start eingesteckte Karte erscheint.</li>
+      <li><b>Das GPU-Oszilloskop fordert das Tauschintervall null an,</b> sodass der Puffertausch bei aktivem Vsync den Oberflächen-Thread nicht mehr bis zur Bildwiederholung blockiert. Ein Treiber ohne den Einstiegspunkt behält seine eigene Taktung; Windows und Linux - die macOS-Zeichenfläche lief schon bisher ungekoppelt.</li>
+      <li><b>Ein schweres Render-Frame verdient jetzt das Dreifache seiner eigenen Kosten an Leerlauf,</b> statt sich auf eine feste Millisekunde neu zu setzen, und pendelt sich so bei etwa einem Viertel des Oberflächen-Threads ein; Frames unter einer Millisekunde behalten die bisherige Taktung.</li>
+      <li><b>Eine Wayland-Sitzung läuft jetzt immer über XWayland</b> - die X11-Umschaltung, die das GL-Oszilloskop braucht, hängt nicht mehr von der GPU-Einstellung ab.</li>
+      <li><b>Die Untergrenze des Frequenzgang-Vorlaufs sinkt von 50 ms auf 5 ms;</b> Werte dazwischen springen nicht mehr auf 50 ms zurück und lassen den Sweep nicht mehr scheitern. Die Kommandozeilenschnittstelle behält ihre 0,05 s.</li>
+    </ul>
+    <h3>Behoben</h3>
+    <ul>
+      <li><b>Linux: Eine fehlgeschlagene GPU-Prüfung halbierte den Fensterinhalt.</b> Ein fehlendes libGLU ließ den Konstruktor der Prüf-Zeichenfläche scheitern, während das Widget bereits an der Haupt-Shell hing, und das tote Kind ließ das Layout der Shell ihre Breite für den Rest des Laufs halbieren; die Prüf-Zeichenfläche sitzt jetzt auf einem Wegwerf-Wirt, den das Aufräumen immer freigibt.</li>
+      <li><b>Linux: Das Kontrollkästchen der GPU-Beschleunigung blieb in einer Wayland-Sitzung unbenutzbar,</b> wenn die Einstellung aus war, weil die X11-Umschaltung von genau dieser Einstellung abhing und das Urteil der gescheiterten Prüfung für den ganzen Prozess zwischengespeichert wird.</li>
+      <li><b>Das FFT-Spektrum blieb stehen, während das Oszilloskop zeichnete.</b> Seine Übergabe an die Anzeige fuhr auf einem eingereihten Aufruf, den das Toolkit nur bei leerer Ereigniswarteschlange ausführt und den der GL-Tauschverkehr gefüllt hält; der Rendertakt holt das Ergebnis jetzt selbst ab, was die Warteschlange auch tut.</li>
+      <li><b>Der Einstellungsdialog füllte sich nicht, während das GPU-Oszilloskop renderte</b> - dieselbe Aushungerung; die Gerätelisten kommen aus dem Startkatalog, und ein Hundert-Millisekunden-Timer leert die Formate und Kartenabschnitte des Suchlaufs.</li>
+      <li><b>Linux: Das Öffnen der Einstellungen bei belegter Karte listete keine Geräte.</b> Eine gehaltene Karte verweigert die direkte Hardware-Formatabfrage, antwortete leer und wurde als Phantom herausgefiltert; die Aufzählung läuft jetzt beim Start, während nichts eine Karte hält.</li>
+      <li><b>Das Umschalten der GPU-Beschleunigung oder der Oberflächenschrift wirkte erst nach einem Neustart:</b> Der Neuaufbau der Module lief, bevor die Werte des Dialogs übernommen waren, und las daher die alten. Er läuft jetzt nach der Übernahme; beides wirkt mit OK.</li>
+      <li><b>Kerbfilter-Abgleich: Das Amplitudenfeld bewegte die Kurve, ohne das Stimulussignal zu bewegen.</b> Das Feld schiebt den Pegel jetzt in den laufenden Generator, und die Kurve kommt bei dem Pegel gemessen zurück, der tatsächlich gespielt wird.</li>
+      <li><b>Ein Kartenbereich ohne brauchbaren Vollausschlag wird repariert statt weitergetragen:</b> Ein Wert, der nicht über null liegt, wird zur Werksvorgabe von 1,0 V Effektivwert - in der gelesenen und der geschriebenen Kartendatei und im mit einem Server ausgetauschten Kartenformular - mit einer Fehlermeldung, die Bereich und Kanal nennt.</li>
+    </ul>
+
   <h2><a name="v1.2.1" id="v1.2.1"></a>1.2.1 - 2026-08-16</h2>
     <h3>Hinzugefügt</h3>
     <ul>

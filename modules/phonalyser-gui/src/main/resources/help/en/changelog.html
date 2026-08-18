@@ -13,6 +13,32 @@
   <p>The release history below is drawn from the project's canonical
      <a href="https://github.com/dgo42/Phonalyser/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a>.</p>
 
+  <h2><a name="v1.2.2" id="v1.2.2"></a>1.2.2 - xxxx.xx.xx</h2>
+    <h3>Added</h3>
+    <ul>
+      <li><b>The Linux run guide names the libGLU package the GPU oscilloscope needs.</b> Many distributions no longer install it by default, and without it the scope silently stays on the CPU renderer - the README now gives the install command.</li>
+      <li><b>The JavaSound format probe logs a start and a finish line per device and direction,</b> with format count and elapsed time - a probe that never returns names its device by the start line without a twin.</li>
+    </ul>
+    <h3>Changed</h3>
+    <ul>
+      <li><b>Audio devices are enumerated once at start-up instead of on every dialog open.</b> Preferences fills its combos from that snapshot at once, while no stream of the application's own holds a card; Scan devices re-walks the drivers and is now also what makes a card plugged in since start-up appear.</li>
+      <li><b>The GPU scope requests swap interval zero,</b> so with vsync active the buffer swap no longer blocks the interface thread until the display refresh. A driver without the entry point keeps its own pacing; Windows and Linux - the macOS surface already ran unsynced.</li>
+      <li><b>A heavy render frame now earns three times its own cost in idle</b> instead of re-arming at a fixed millisecond, so it settles at about a quarter of the interface thread; sub-millisecond frames keep the old cadence.</li>
+      <li><b>A Wayland session always runs through XWayland now</b> - the X11 backend switch the GL scope needs no longer depends on the GPU preference.</li>
+      <li><b>The frequency-response lead-in floor drops from 50 ms to 5 ms;</b> values in between no longer snap back to 50 ms and no longer fail the sweep. The command-line interface keeps its 0.05 s floor.</li>
+    </ul>
+    <h3>Fixed</h3>
+    <ul>
+      <li><b>Linux: a failed GPU probe halved the window content.</b> A missing libGLU made the probe's canvas constructor fail with the widget already attached to the main shell, and the dead child made the shell's layout split its width in half for the rest of the run; the probe canvas now sits on a throwaway host that the cleanup always disposes.</li>
+      <li><b>Linux: the GPU-acceleration checkbox stayed unusable on a Wayland session</b> with the preference off, because the X11 switch depended on that preference and the failed probe's verdict is cached for the whole process.</li>
+      <li><b>The FFT spectrum stalled while the oscilloscope drew.</b> Its hand-off to the display rode a queued call the toolkit runs only on an empty event queue, which GL swap traffic keeps fed; the render tick now pulls the result itself, whatever the queue is doing.</li>
+      <li><b>The Preferences dialog did not fill while the GPU scope was rendering</b> - the same starvation; the device lists come from the start-up catalog and a hundred-millisecond timer drains the scan's formats and card sections.</li>
+      <li><b>Linux: opening Preferences while a card was in use listed no devices.</b> A held card refuses the direct-hardware format probe, answered empty and was filtered out as a phantom; enumeration now runs at start-up while nothing holds a card.</li>
+      <li><b>Switching GPU acceleration or the interface font took effect only after a restart:</b> the pane rebuild ran before the dialog's values were committed and so read the old ones. It now runs after the commit; both apply on OK.</li>
+      <li><b>Tune-notch: the Amplitude field moved the trace without moving the stimulus.</b> The field now pushes the level into the running generator, and the trace returns measured at the level that is actually playing.</li>
+      <li><b>A card range with no usable full scale is repaired instead of carried:</b> a value not above zero becomes the 1.0 V RMS factory default - on the card file read and written, and on the card form exchanged with a server - with an error naming the range and channel.</li>
+    </ul>
+
   <h2><a name="v1.2.1" id="v1.2.1"></a>1.2.1 - 2026-08-16</h2>
     <h3>Added</h3>
     <ul>

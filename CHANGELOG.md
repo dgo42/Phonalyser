@@ -5,6 +5,68 @@ All notable changes to **Phonalyser** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - xxxx.xx.xx
+
+### Added
+
+- **The Linux run guide names the libGLU package the GPU oscilloscope needs.**
+  Many distributions no longer install it by default, and without it the scope
+  silently stays on the CPU renderer - the README now gives the install command.
+- **The JavaSound format probe logs a start and a finish line per device and
+  direction,** with format count and elapsed time - a probe that never returns
+  names its device by the start line without a twin.
+
+### Changed
+
+- **Audio devices are enumerated once at start-up instead of on every dialog
+  open.** Preferences fills its combos from that snapshot at once, while no
+  stream of the application's own holds a card; Scan devices re-walks the
+  drivers and is now also what makes a card plugged in since start-up appear.
+- **The GPU scope requests swap interval zero,** so with vsync active the
+  buffer swap no longer blocks the interface thread until the display refresh.
+  A driver without the entry point keeps its own pacing; Windows and Linux -
+  the macOS surface already ran unsynced.
+- **A heavy render frame now earns three times its own cost in idle** instead
+  of re-arming at a fixed millisecond, so it settles at about a quarter of the
+  interface thread; sub-millisecond frames keep the old cadence.
+- **A Wayland session always runs through XWayland now** - the X11 backend
+  switch the GL scope needs no longer depends on the GPU preference.
+- **The frequency-response lead-in floor drops from 50 ms to 5 ms;** values in
+  between no longer snap back to 50 ms and no longer fail the sweep. The
+  command-line interface keeps its 0.05 s floor.
+
+### Fixed
+
+- **Linux: a failed GPU probe halved the window content.** A missing libGLU
+  made the probe's canvas constructor fail with the widget already attached to
+  the main shell, and the dead child made the shell's layout split its width in
+  half for the rest of the run; the probe canvas now sits on a throwaway host
+  that the cleanup always disposes.
+- **Linux: the GPU-acceleration checkbox stayed unusable on a Wayland
+  session** with the preference off, because the X11 switch depended on that
+  preference and the failed probe's verdict is cached for the whole process.
+- **The FFT spectrum stalled while the oscilloscope drew.** Its hand-off to
+  the display rode a queued call the toolkit runs only on an empty event
+  queue, which GL swap traffic keeps fed; the render tick now pulls the
+  result itself, whatever the queue is doing.
+- **The Preferences dialog did not fill while the GPU scope was rendering** -
+  the same starvation; the device lists come from the start-up catalog and a
+  hundred-millisecond timer drains the scan's formats and card sections.
+- **Linux: opening Preferences while a card was in use listed no devices.** A
+  held card refuses the direct-hardware format probe, answered empty and was
+  filtered out as a phantom; enumeration now runs at start-up while nothing
+  holds a card.
+- **Switching GPU acceleration or the interface font took effect only after a
+  restart:** the pane rebuild ran before the dialog's values were committed
+  and so read the old ones. It now runs after the commit; both apply on OK.
+- **Tune-notch: the Amplitude field moved the trace without moving the
+  stimulus.** The field now pushes the level into the running generator, and
+  the trace returns measured at the level that is actually playing.
+- **A card range with no usable full scale is repaired instead of carried:** a
+  value not above zero becomes the 1.0 V RMS factory default - on the card
+  file read and written, and on the card form exchanged with a server - with
+  an error naming the range and channel.
+
 ## [1.2.1] - 2026-08-16
 
 ### Added
