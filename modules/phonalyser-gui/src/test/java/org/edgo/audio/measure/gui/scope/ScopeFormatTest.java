@@ -52,6 +52,15 @@ class ScopeFormatTest {
     }
 
     @Test
+    void displaySamplesFor_isExactRealValued() {
+        // 2 us/div at 44.1 kHz: 10 divisions = 0.882 samples -> floored at 2;
+        // 20 us/div = 8.82 samples kept EXACT - no rounding to whole samples
+        // (the render scales pixel columns by the real width).
+        assertEquals(8.82, ScopeFormat.displaySamplesFor(20e-6, 44_100), 1e-12);
+        assertEquals(2.0,  ScopeFormat.displaySamplesFor(2e-6,  44_100), 1e-12);
+    }
+
+    @Test
     void formatVolts_picksRightSiPrefix() {
         assertTrue(ScopeFormat.formatVolts(1.5,     0.5).endsWith(" V"));
         assertTrue(ScopeFormat.formatVolts(0.020,   0.01).endsWith(" mV"));

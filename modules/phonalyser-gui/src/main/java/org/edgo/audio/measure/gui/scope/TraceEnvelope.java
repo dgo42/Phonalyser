@@ -153,7 +153,7 @@ public class TraceEnvelope {
      * (each at least {@code width} long); this pass fills them {@link Float#NaN} on entry and
      * writes a column's band only when {@code sinc} is set, so a blank column stays NaN.
      */
-    public void columnCrossings(float[] data, int n, int dispStart, int dispCount,
+    public void columnCrossings(float[] data, int n, int dispStart, double dispCount,
                                 int width, int height, double subSampleOffset,
                                 double centerY, double vScale, double dcOffset,
                                 boolean sinc, boolean counts, int[] diff, float[] bandTop, float[] bandBot,
@@ -167,9 +167,11 @@ public class TraceEnvelope {
             bandEntryX[x] = Float.NaN; bandEntryY[x] = Float.NaN;
             bandExitX[x] = Float.NaN; bandExitY[x] = Float.NaN;
         }
-        double pxPerSample = (double) width / dispCount;
+        // The width is real-valued (exact window); the sample walk covers the
+        // partial last sample via ceil - columns clamp to [0, width) anyway.
+        double pxPerSample = width / dispCount;
         int maxRow = height - 1;
-        int last = dispStart + dispCount;
+        int last = dispStart + (int) Math.ceil(dispCount);
         int   curCol = -1;
         int   curLo = 0;
         int   curHi = 0;

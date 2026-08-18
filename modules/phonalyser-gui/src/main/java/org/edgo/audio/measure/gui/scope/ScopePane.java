@@ -806,7 +806,7 @@ public final class ScopePane extends AbstractPane {
         if (navSlider == null || navSlider.isDisposed() || view.isDisposed()) return;
         SignalBufferReader reader = view.getReader();
         if (reader == null) return;
-        int  displaySamples = ScopeFormat.displaySamplesFor(
+        double displaySamples = ScopeFormat.displaySamplesFor(
                 Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
         long writePos = reader.getWritePos();
         long resident = Math.min(writePos, reader.getCapacity());
@@ -817,7 +817,7 @@ public final class ScopePane extends AbstractPane {
         // MIN_SCROLLBAR_THUMB so it stays grabbable on a huge buffer.
         int thumb = (resident <= 0) ? NAV_RANGE
                 : Math.max(MIN_SCROLLBAR_THUMB,
-                           Math.min(NAV_RANGE, (int) Math.round(Math.min(1.0, displaySamples / (double) resident) * NAV_RANGE)));
+                           Math.min(NAV_RANGE, (int) Math.round(Math.min(1.0, displaySamples / resident) * NAV_RANGE)));
         if (navSlider.getThumb() != thumb) navSlider.setThumb(thumb);
         int maxSel = navSlider.getMaximum() - thumb;
 

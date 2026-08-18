@@ -44,8 +44,11 @@ package org.edgo.audio.measure.gui.scope;
  */
 public final class ScopeNav {
 
-    /** Where the display window lands inside the read buffer (feeds {@code renderTraces}). */
-    public record Viewport(int dispStart, double subSampleOffset, int dispCount, double viewLeftAbs) {}
+    /** Where the display window lands inside the read buffer (feeds {@code renderTraces}).
+     *  {@code windowSamples} is the EXACT real-valued width - the renderer scales pixel
+     *  columns by it and blanks columns past the data, so no rounding enters the
+     *  geometry; only reads/arrays round (ceil) at their own boundary. */
+    public record Viewport(int dispStart, double subSampleOffset, double windowSamples, double viewLeftAbs) {}
 
     /**
      * The file/scroll view-window mapping: the read back-offsets for the main +
@@ -78,17 +81,17 @@ public final class ScopeNav {
     // =====================================================================
 
     /** Absolute (fractional) sample at the left edge of the display window. */
-    public double viewLeftAbs(double anchorAbs, double offsetFrac, int displaySamples) {
-        return anchorAbs - (double) displaySamples * offsetFrac;
+    public double viewLeftAbs(double anchorAbs, double offsetFrac, double displaySamples) {
+        return anchorAbs - displaySamples * offsetFrac;
     }
 
     /**
      * Maps the window onto a read buffer that starts at absolute sample
-     * {@code bufStartAbs}.  {@code dispCount} is always the full {@code displaySamples};
-     * the renderer blanks any column whose sample index falls outside the buffer, so the
-     * window can hang off either end without stretching.
+     * {@code bufStartAbs}.  {@code windowSamples} carries the full exact
+     * {@code displaySamples}; the renderer blanks any column whose sample index falls
+     * outside the buffer, so the window can hang off either end without stretching.
      */
-    public Viewport viewport(double anchorAbs, double offsetFrac, int displaySamples, long bufStartAbs) {
+    public Viewport viewport(double anchorAbs, double offsetFrac, double displaySamples, long bufStartAbs) {
         double viewLeft = viewLeftAbs(anchorAbs, offsetFrac, displaySamples);
         double local    = viewLeft - bufStartAbs;
         int    dispStart = (int) Math.floor(local);
@@ -101,11 +104,11 @@ public final class ScopeNav {
      * window width, and the buffer.  The main view's read ends at the window's right
      * edge; the condensed strip shows a 1&nbsp;s window centred on the same frame.
      */
-    public ViewWindow fileViewWindow(double centreFrames, int displaySamples,
+    public ViewWindow fileViewWindow(double centreFrames, double displaySamples,
                                      long writePos, long capacity, int sampleRate) {
         long oldest    = Math.max(0L, writePos - capacity);
-        long minCentre = oldest   + displaySamples / 2;
-        long maxCentre = writePos - displaySamples / 2;
+        long minCentre = oldest   + (long) Math.ceil(displaySamples / 2.0);
+        long maxCentre = writePos - (long) Math.ceil(displaySamples / 2.0);
         boolean followLatest = centreFrames < 0 || maxCentre < minCentre;
         double clampedCentre;
         double mainOffset;
@@ -120,7 +123,7 @@ public final class ScopeNav {
             double viewEndAbs = clampedCentre + displaySamples / 2.0;
             mainOffset = Math.max(0.0, writePos - viewEndAbs);
         }
-        long mainCentre = writePos - Math.round(mainOffset) - displaySamples / 2;
+        long mainCentre = writePos - Math.round(mainOffset) - (long) (displaySamples / 2.0);
         long condEnd    = mainCentre + sampleRate / 2;
         condEnd = Math.min(condEnd, writePos);
         condEnd = Math.max(condEnd, Math.min(writePos, oldest + sampleRate));
@@ -149,7 +152,7 @@ public final class ScopeNav {
      *  (timePerDiv × sampleRate, NOT derived from the int-rounded window width) so
      *  fractional steps - ⅕ div = 1.764 samples at 44.1 kHz - accumulate unrounded. */
     public double moveFileCentre(double centreAbs, double divisions, double samplesPerDiv,
-                                 int displaySamples, long oldest, long latest) {
+                                 double displaySamples, long oldest, long latest) {
         return clampFileCentre(centreAbs + divisions * samplesPerDiv, displaySamples, oldest, latest);
     }
 
@@ -160,13 +163,13 @@ public final class ScopeNav {
      * result with {@link #clampFileCentre} - once the whole file fits the width the
      * clamp centres it, so the anchor is free to move (per the spec's file limit).
      */
-    public double zoomFileCentre(double centreAbs, double mouseFrac, int dispOld, int dispNew) {
+    public double zoomFileCentre(double centreAbs, double mouseFrac, double dispOld, double dispNew) {
         return centreAbs + (mouseFrac - 0.5) * (dispOld - dispNew);
     }
 
     /** Clamps a file view centre so the whole window stays within {@code [oldest, latest]};
      *  if the window is wider than the file the centre snaps to the file's midpoint. */
-    public double clampFileCentre(double centreAbs, int displaySamples, long oldest, long latest) {
+    public double clampFileCentre(double centreAbs, double displaySamples, long oldest, long latest) {
         double minC = oldest + displaySamples / 2.0;
         double maxC = latest - displaySamples / 2.0;
         if (maxC < minC) return (oldest + latest) / 2.0;
@@ -186,13 +189,13 @@ public final class ScopeNav {
      *        mouse - the offset moves, possibly off-screen); {@code false} for the
      *        resolution control (anchor the trigger - the offset is unchanged).
      */
-    public double zoomTriggerOffset(double offsetOld, int dispOld, int dispNew,
+    public double zoomTriggerOffset(double offsetOld, double dispOld, double dispNew,
                                     double mouseFrac, boolean aroundMouse) {
-        // Use the ACTUAL displaySamples ratio (not the t/div ratio): the render rounds
-        // displaySamples to whole samples, so at fine time bases (few samples per screen)
-        // the t/div ratio diverges from the rendered ratio and the anchor would drift.
+        // The window width is EXACT (real-valued, no render rounding), so the
+        // displaySamples ratio and the t/div ratio are the same number; the width
+        // ratio is kept as the argument so every zoom path shares one authority.
         if (!aroundMouse || dispNew <= 0 || dispOld <= 0) return offsetOld;
-        return mouseFrac - (mouseFrac - offsetOld) * ((double) dispOld / dispNew);
+        return mouseFrac - (mouseFrac - offsetOld) * (dispOld / dispNew);
     }
 
     // =====================================================================

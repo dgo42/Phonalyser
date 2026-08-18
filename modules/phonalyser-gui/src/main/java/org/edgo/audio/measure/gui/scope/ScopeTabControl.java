@@ -1577,14 +1577,14 @@ public final class ScopeTabControl extends AbstractTabControl {
             return;
         }
         if (view.getReader() == null) { controller.redrawViews(); return; }
-        int sr      = view.getReader().getSampleRate();
-        int dispOld = ScopeFormat.displaySamplesFor(tDivOld, sr);
-        int dispNew = ScopeFormat.displaySamplesFor(tDivNew, sr);
+        int sr = view.getReader().getSampleRate();
+        double dispOld = ScopeFormat.displaySamplesFor(tDivOld, sr);
+        double dispNew = ScopeFormat.displaySamplesFor(tDivNew, sr);
         // Anchor on the REAL trigger offset (live + frozen both render the real,
         // virtual-capable value now): the sample under the mouse stays put while the
         // offset may carry off-screen - the handle pins to the edge, the time mark shows
-        // the real value.  Uses the actual displaySamples ratio so the anchor is exact
-        // even at fine time bases where the t/div ratio would round-divergently drift.
+        // the real value.  The window widths are exact (real-valued), so the width
+        // ratio equals the t/div ratio - one authority either way.
         double posOld = prefs.getOscTriggerPositionFrac();
         double posNew = view.getNav().zoomTriggerOffset(posOld, dispOld, dispNew, mouseFrac, true);
         prefs.setOscTriggerPositionFrac(posNew);

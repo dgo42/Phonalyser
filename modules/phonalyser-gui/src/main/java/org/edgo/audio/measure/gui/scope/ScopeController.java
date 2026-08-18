@@ -363,7 +363,7 @@ public final class ScopeController {
             fireViewStateChanged();
             return;
         }
-        int displaySamples = ScopeFormat.displaySamplesFor(
+        double displaySamples = ScopeFormat.displaySamplesFor(
                 Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
         ScopeNav.ViewWindow vw = view.getNav().fileViewWindow(
                 viewCenterFrames, displaySamples, reader.getWritePos(), reader.getCapacity(), reader.getSampleRate());
@@ -412,7 +412,7 @@ public final class ScopeController {
         SignalBufferReader reader = (view != null) ? view.getReader() : null;
         if (reader != null) {
             // Centre on the start of the loaded signal so the first frames show.
-            int displaySamples = ScopeFormat.displaySamplesFor(
+            double displaySamples = ScopeFormat.displaySamplesFor(
                     Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
             viewCenterFrames = displaySamples / 2.0;
         }
@@ -450,7 +450,7 @@ public final class ScopeController {
         if (reader == null) return false;
         double timePerDiv = Preferences.instance().getOscTimePerDiv();
         int    sr         = reader.getSampleRate();
-        int displaySamples = ScopeFormat.displaySamplesFor(timePerDiv, sr);
+        double displaySamples = ScopeFormat.displaySamplesFor(timePerDiv, sr);
         long writePos = reader.getWritePos();
         long oldest   = Math.max(0L, writePos - reader.getCapacity());
         double cur = viewCenterFrames;
@@ -472,12 +472,12 @@ public final class ScopeController {
         if (view == null) return;
         SignalBufferReader reader = view.getReader();
         if (reader == null) return;
-        int displaySamples = ScopeFormat.displaySamplesFor(
+        double displaySamples = ScopeFormat.displaySamplesFor(
                 Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
         long writePos  = reader.getWritePos();
         long oldest    = Math.max(0L, writePos - reader.getCapacity());
-        long minCenter = oldest   + displaySamples / 2;
-        long maxCenter = writePos - displaySamples / 2;
+        long minCenter = oldest   + (long) Math.ceil(displaySamples / 2.0);
+        long maxCenter = writePos - (long) Math.ceil(displaySamples / 2.0);
         if (maxCenter < minCenter) {
             viewCenterFrames = (writePos + oldest) / 2.0;   // no scroll room
         } else {
@@ -496,9 +496,9 @@ public final class ScopeController {
         if (view == null) return;
         SignalBufferReader reader = view.getReader();
         if (reader == null) return;
-        int  sr       = reader.getSampleRate();
-        int  dispOld  = ScopeFormat.displaySamplesFor(tDivOld, sr);
-        int  dispNew  = ScopeFormat.displaySamplesFor(tDivNew, sr);
+        int    sr      = reader.getSampleRate();
+        double dispOld = ScopeFormat.displaySamplesFor(tDivOld, sr);
+        double dispNew = ScopeFormat.displaySamplesFor(tDivNew, sr);
         long writePos = reader.getWritePos();
         long oldest   = Math.max(0L, writePos - reader.getCapacity());
         ScopeNav nav  = view.getNav();

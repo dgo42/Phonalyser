@@ -26,7 +26,7 @@ class ScopeNavTest {
         ScopeNav.Viewport vp = NAV.viewport(1000, 0.5, 100, 900);
         assertEquals(50, vp.dispStart());
         assertEquals(0.0, vp.subSampleOffset(), 1e-9);
-        assertEquals(100, vp.dispCount());        // never reduced - renderer blanks edges
+        assertEquals(100.0, vp.windowSamples(), 1e-9);   // never reduced - renderer blanks edges
     }
 
     @Test
@@ -37,12 +37,23 @@ class ScopeNavTest {
     }
 
     @Test
+    void viewport_fractionalWindowKeepsExactWidth() {
+        // 88.2 samples per window (e.g. 0.2 ms/div at 44.1 kHz): the width stays
+        // the exact real value end to end - no rounding enters the geometry.
+        ScopeNav.Viewport vp = NAV.viewport(1000, 0.5, 88.2, 900);
+        assertEquals(88.2, vp.windowSamples(), 1e-12);
+        assertEquals(1000 - 44.1, vp.viewLeftAbs(), 1e-9);
+        assertEquals(55, vp.dispStart());
+        assertEquals(0.9, vp.subSampleOffset(), 1e-9);
+    }
+
+    @Test
     void viewport_virtualOffset_windowHangsOffBufferLeft() {
         // offset 1.5 (virtual) pushes the window left of the buffer -> negative dispStart,
         // full count kept so the renderer blanks the missing columns (no stretch).
         ScopeNav.Viewport vp = NAV.viewport(1000, 1.5, 100, 900);
         assertEquals(-50, vp.dispStart());
-        assertEquals(100, vp.dispCount());
+        assertEquals(100.0, vp.windowSamples(), 1e-9);
     }
 
     // ---- horizontal move ----

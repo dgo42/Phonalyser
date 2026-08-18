@@ -131,14 +131,20 @@ public class ScopeFormat {
     }
 
     /**
-     * Number of samples the main view shows for a {@code timePerDiv} (in
-     * seconds) and the buffer's {@code sampleRate} (Hz).  The display
-     * spans 10 horizontal divisions, so {@code windowSeconds = 10 ·
-     * timePerDiv} -> samples = round(windowSeconds · sampleRate).
+     * EXACT width of the main view's window in samples for a {@code timePerDiv}
+     * (seconds) and the buffer's {@code sampleRate} (Hz): the display spans
+     * 10 horizontal divisions, so {@code 10 · timePerDiv · sampleRate} - a
+     * real-valued width, floored at 2.  The ONE authority for the window
+     * width: positions, zoom ratios and time marks all use this exact value;
+     * integers appear only where an array or a read forces them (the caller
+     * takes {@code Math.ceil}).  A rounded width diverged from the t/div
+     * product by up to half a sample, and the trigger offset p is measured in
+     * windows - a virtual p multiplied that gap into a visible trace-vs-axis
+     * skew at few-sample windows.
      */
-    public int displaySamplesFor(double timePerDiv, int sampleRate) {
+    public double displaySamplesFor(double timePerDiv, int sampleRate) {
         double windowSeconds = timePerDiv * 10.0;
-        return Math.max(2, (int) Math.round(windowSeconds * sampleRate));
+        return Math.max(2.0, windowSeconds * sampleRate);
     }
 
     /**

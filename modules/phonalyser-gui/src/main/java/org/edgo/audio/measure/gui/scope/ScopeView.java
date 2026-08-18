@@ -254,7 +254,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private float[] capturedRight;
     private int     capturedLen;
     private int     capturedDispStart;
-    private int     capturedDispCount;
+    /** Exact real-valued window width of the captured frame - the render
+     *  scales by it, so the held frame keeps sub-sample window geometry. */
+    private double  capturedDispCount;
     private double  capturedSubSampleOffset;
     /** Trigger position within the captured copy (captured-buffer samples, sub-sample
      *  accurate).  The trigger-less entry-frame snapshot supplies a SYNTHETIC anchor
@@ -287,7 +289,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  fields above it lets the stop-freeze derive a held anchor that re-pins
      *  EXACTLY the window that was on screen (see the freeze branch of
      *  {@link #setBuffer(SignalBufferReader, boolean)}). */
-    private int     lastLiveDisplaySamples;
+    private double  lastLiveDisplaySamples;
     /** The visible widget that receives pointer events + cursor/tooltip and whose
      *  client area sizes the pointer math - {@code this} on the CPU path, the GL
      *  canvas on the GPU path (where this view is hidden). */
@@ -1780,11 +1782,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  the offscreen view shares, so they match automatically. */
     public static final class RenderedFrame {
         final float[] left, right;
-        final int     len, dispStart, dispCount;
+        final int     len, dispStart;
+        /** Exact real-valued window width the frame was rendered with. */
+        final double  dispCount;
         final double  subSampleOffset;
         final boolean showL, showR, sincL, sincR;
         final double  leftVDiv, rightVDiv, dcL, dcR;
-        RenderedFrame(float[] left, float[] right, int len, int dispStart, int dispCount,
+        RenderedFrame(float[] left, float[] right, int len, int dispStart, double dispCount,
                       double subSampleOffset, boolean showL, boolean showR,
                       boolean sincL, boolean sincR, double leftVDiv, double rightVDiv,
                       double dcL, double dcR) {
@@ -1824,7 +1828,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  {@link #renderTraces} is about to draw into {@link #lastFrame}, so the
      *  snapshot is small yet sufficient to re-render an identical trace. */
     private void captureFrame(float[] dataLeft, float[] dataRight, int dataLen,
-                              int dispStart, double subSampleOffset, int dispCount,
+                              int dispStart, double subSampleOffset, double dispCount,
                               boolean showL, boolean showR, double leftVDiv, double rightVDiv,
                               boolean sincL, boolean sincR, double dcL, double dcR) {
         int pad = Lanczos.LANCZOS_PADDING;
@@ -1833,7 +1837,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // the array even with length 0.  When the window is fully off-buffer this yields
         // n = 0 -> an empty frame -> the renderer draws nothing (blank), per spec.
         int lo  = Math.max(0, Math.min(dataLen, dispStart - pad));
-        int hi  = Math.max(0, Math.min(dataLen, dispStart + dispCount + pad));
+        int hi  = Math.max(0, Math.min(dataLen, dispStart + (int) Math.ceil(dispCount) + pad));
         int n   = Math.max(0, hi - lo);
         // Stage into grow-only buffers - the snapshot getter materialises an
         // owning copy when (rarely) asked, so the per-paint cost is a memcpy
@@ -2362,18 +2366,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             // position (viewBackOffsetFrames back from the tip).
             int sr = reader.getSampleRate();
             double viewRightAbs = (double) reader.getWritePos() - viewBackOffsetFrames;
-            // Window width in EXACT double samples (timePerDiv × 10 div × rate) -
-            // the int-rounded displaySamplesFor would bias the left mark at rates
-            // where the window isn't a whole sample count (e.g. 88.2 @ 44.1 kHz).
+            // Window width in EXACT double samples - the same real-valued width
+            // the render draws (no integer rounding anywhere in the geometry).
             double viewLeftAbs  = viewRightAbs - windowTime * sr;
             leftTime  = viewLeftAbs  / sr;
             rightTime = viewRightAbs / sr;
         } else {
             // Live / frozen: times are relative to the trigger (t = 0).  Use the REAL
             // (virtual-capable) offset so the marks keep counting when a pan/zoom has
-            // carried the trigger off-screen - and the window the render ACTUALLY
-            // draws (integer displaySamples, see renderedWindowSeconds), or at
-            // few-sample windows the marks skew off the trace by p × the round() gap.
+            // carried the trigger off-screen; the drawn window is the exact t/div
+            // product (see renderedWindowSeconds), so marks and trace share it.
             double posReal = prefs.getOscTriggerPositionFrac();
             double drawnWindow = renderedWindowSeconds();
             leftTime  = -posReal * drawnWindow;
@@ -2620,12 +2622,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                     controller.setViewCenterFrames(-1.0);
                 }
                 prefs.setOscTimePerDiv(tDiv);
-                // Solve p against the window the render will ACTUALLY draw -
-                // integer displaySamples, read back from the stored t/div - not
-                // the continuous span: the round() gap × virtual |p| slid the
-                // trace against the axis at few-sample windows (see
-                // renderedWindowSeconds).  Left edge stays pinned, incl. at the
-                // T_PER_DIV_MIN floor.
+                // Solve p against the drawn window - the exact t/div product
+                // (see renderedWindowSeconds).  Left edge stays pinned, incl.
+                // at the T_PER_DIV_MIN floor.
                 prefs.setOscTriggerPositionFrac(-s.xMin() / renderedWindowSeconds());   // virtual-capable
             }
         }
@@ -2642,25 +2641,15 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         return fileMode || getViewBackOffsetFrames() > 0;
     }
 
-    /** The time window the trigger-anchored render ACTUALLY draws, in seconds:
-     *  {@code round(t/div · divs · fs) / fs} - the integer displaySamples the
-     *  paint derives, not the continuous t/div product.  The two differ by up
-     *  to half a sample, harmless alone, but the trigger offset p is measured
-     *  in windows, so a virtual p (deep zoom) multiplies that gap into a
-     *  screen-scale trace-vs-axis skew (bench: p = −11 on a 4-sample window
-     *  -> 15 µs).  Zoom capture/commit and the edge time marks must all express
-     *  the window THIS way.  Falls back to the continuous product when no
-     *  capture is attached or the window is under the render's 2-sample floor
-     *  (nothing is drawn there to stay aligned with). */
+    /** The time window the trigger-anchored render draws, in seconds.  The
+     *  render's window width is the EXACT real-valued
+     *  {@code t/div · divs · fs} (ScopeFormat.displaySamplesFor - no integer
+     *  rounding anywhere in the geometry), so the drawn window IS the
+     *  continuous product; zoom capture/commit and the edge time marks share
+     *  it by construction.  The render's 2-sample floor only blanks - it
+     *  never re-scales - so no special case is needed below it. */
     private double renderedWindowSeconds() {
-        double window = Preferences.instance().getOscTimePerDiv() * DIVISIONS_X;
-        SignalBufferReader r = reader;
-        if (r != null) {
-            int sr = r.getSampleRate();
-            int disp = (int) Math.round(window * sr);
-            if (disp >= 2) return disp / (double) sr;
-        }
-        return window;
+        return Preferences.instance().getOscTimePerDiv() * DIVISIONS_X;
     }
 
     /** Voltage window -> V/div + offsetFrac for one channel: {@code vDiv =
@@ -2829,7 +2818,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /** Whether the window anchored at {@code anchorAbs}/{@code offsetFrac} sits fully
      *  inside the current read buffer (with sinc padding) - a live NORMAL hold tracks
      *  the ring while it does, then falls back to the captured copy. */
-    private boolean holdFitsInBuffer(double anchorAbs, double offsetFrac, int displaySamples,
+    private boolean holdFitsInBuffer(double anchorAbs, double offsetFrac, double displaySamples,
                                      long bufStartAbs, int available) {
         double left = nav.viewLeftAbs(anchorAbs, offsetFrac, displaySamples) - bufStartAbs;
         return left >= Lanczos.LANCZOS_PADDING
@@ -2948,8 +2937,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             return;
         }
 
-        double windowSeconds = timePerDiv * DIVISIONS_X;
-        int displaySamples = (int) Math.round(windowSeconds * b.getSampleRate());
+        // The EXACT real-valued window width - the one authority
+        // (ScopeFormat.displaySamplesFor); dispCeil bounds reads and slice
+        // arithmetic, which are the only integer consumers.
+        double displaySamples = ScopeFormat.displaySamplesFor(timePerDiv, b.getSampleRate());
+        int    dispCeil       = (int) Math.ceil(displaySamples);
         if (displaySamples < 2) {
             if (singleHeld) renderHeldCapturedFrame(gc, w, h, showL, showR,
                     leftVDiv, rightVDiv, sincL, sincR, acL, acR);
@@ -2973,7 +2965,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // kernel, plus an extra lookback so the trigger search reliably
         // contains a rising edge even for low-frequency signals.
         int extraLookback = Math.min(b.getSampleRate(), ScopeMeasurementWorker.MEAS_MAX_SAMPLES);
-        int wanted = 2 * displaySamples + 2 * Lanczos.LANCZOS_PADDING + extraLookback;
+        int wanted = 2 * dispCeil + 2 * Lanczos.LANCZOS_PADDING + extraLookback;
         // When SINGLE is armed, capture both channels so toggling L/R after
         // the freeze still shows real data instead of a stale buffer.
         boolean armedSingle = (triggerMode == TriggerMode.SINGLE) && singleArmed;
@@ -2998,8 +2990,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             // the (possibly virtual) triggerPosFracReal; the window's right edge plus
             // sinc pad bounds the read end, clamped to the newest captured sample.
             frozenViewLeftAbs = (lastTriggerAbsPos + lastTriggerSubSampleOffset)
-                              - (double) displaySamples * triggerPosFracReal;
-            long viewEnd = (long) Math.floor(frozenViewLeftAbs) + displaySamples + Lanczos.LANCZOS_PADDING;
+                              - displaySamples * triggerPosFracReal;
+            long viewEnd = (long) Math.floor(frozenViewLeftAbs) + dispCeil + Lanczos.LANCZOS_PADDING;
             viewEndAbs = Math.min(latestAbs, viewEnd);
         } else {
             // Read LANCZOS_PADDING past the window's right edge (where that data
@@ -3040,10 +3032,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             if (lastLiveDispStartAbs >= 0) {
                 entryStart = (int) (lastLiveDispStartAbs - bufStartAbs);
             } else {
-                int entryPad = Math.min(Lanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
-                entryStart = available - entryPad - displaySamples;
+                int entryPad = Math.min(Lanczos.LANCZOS_PADDING, Math.max(0, available - dispCeil));
+                entryStart = available - entryPad - dispCeil;
             }
-            entryStart = Math.max(0, Math.min(entryStart, available - displaySamples));
+            entryStart = Math.max(0, Math.min(entryStart, available - dispCeil));
             double entrySub = lastLiveDispStartAbs >= 0 ? lastLiveSubSampleOffset : 0.0;
             // Anchor the trigger-less entry snapshot at the sample under the
             // (virtual-capable) trigger-position fraction, so the held frame
@@ -3077,11 +3069,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             // and then drew the trace that far left of the marks.  dispCount stays the
             // full displaySamples - the renderer blanks columns the buffer can't fill.
             ScopeNav.Viewport vp = nav.viewport(scrollViewEndAbs, 1.0, displaySamples, bufStartAbs);
-            if (vp.dispCount() < 2) return;
+            if (vp.windowSamples() < 2) return;
             double dcLn = acL ? acDcMean(true)  : 0.0;
             double dcRn = acR ? acDcMean(false) : 0.0;
             renderTraces(gc, w, h, leftBuf, rightBuf, available,
-                         vp.dispStart(), vp.subSampleOffset(), vp.dispCount(),
+                         vp.dispStart(), vp.subSampleOffset(), vp.windowSamples(),
                          showL, showR, leftVDiv, rightVDiv,
                          sincL, sincR, dcLn, dcRn, b.getSampleRate());
             return;
@@ -3204,7 +3196,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // the trace or jumps to the right edge.
         // ---------------------------------------------------------------
         int dispStart;
-        int dispCount;
+        double dispCount;
         double subSampleOffset;
         double anchorAbs;
         double offsetFrac;
@@ -3230,7 +3222,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             // sample fills to the right edge - never a blank future half.  There is no
             // trigger to scroll the offset against, so this view isn't pannable; put the
             // trigger level on the signal (AUTO === NORMAL) or stop to scroll history.
-            int rightPad = Math.min(Lanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
+            int rightPad = Math.min(Lanczos.LANCZOS_PADDING, Math.max(0, available - dispCeil));
             anchorAbs  = (double) latestAbs - rightPad;
             offsetFrac = 1.0;
             lastFrameWasNew = true;
@@ -3252,7 +3244,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         ScopeNav.Viewport vp = nav.viewport(anchorAbs, offsetFrac, displaySamples, bufStartAbs);
         dispStart       = vp.dispStart();
         subSampleOffset = vp.subSampleOffset();
-        dispCount       = vp.dispCount();
+        dispCount       = vp.windowSamples();
         // The signal follows the offset directly (both trace and trigger travel together);
         // drawTrace blanks any column the buffer can't fill, so scrolling the trigger off
         // the screen just shows the buffered signal on the other side until the true edge.
@@ -3262,7 +3254,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // SINGLE so its Start toggle pops back out.
         if (foundTrigger && !frozen
                 && ((triggerMode == TriggerMode.SINGLE && singleArmed) || triggerMode == TriggerMode.NORMAL)) {
-            int capStart = Math.max(0, Math.min(dispStart, available - displaySamples));
+            int capStart = Math.max(0, Math.min(dispStart, available - dispCeil));
             captureSingleFrame(capStart, displaySamples, available, subSampleOffset, triggerFrac);
             if (triggerMode == TriggerMode.SINGLE && singleArmed) {
                 singleArmed = false;
@@ -3310,7 +3302,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  {@link #reconstructBeatSignal} reuses one scratch buffer. */
     private void drawBeatOverlays(MeasurementPainter gc, int w, int h,
                                   float[] dataLeft, float[] dataRight,
-                                  int dispStart, double subSampleOffset, int dispCount,
+                                  int dispStart, double subSampleOffset, double dispCount,
                                   int dataLen, boolean showL, boolean showR,
                                   double leftVDiv, double rightVDiv, int sampleRate) {
         if (dispCount < 2 || w <= 0) return;
@@ -3820,7 +3812,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // runs past the captured data, drawTrace draws nothing (no shift).
         double curTDiv = Preferences.instance().getOscTimePerDiv();
         double scale   = (capturedTimePerDiv > 0 && curTDiv > 0) ? curTDiv / capturedTimePerDiv : 1.0;
-        int dispCount  = Math.max(2, (int) Math.round(capturedDispCount * scale));
+        double dispCount = Math.max(2.0, capturedDispCount * scale);
         // Position via the (virtual-capable) trigger offset, exactly like the live
         // trigger-offset model: a pan (p) scrolls the held trace; a t/div FIELD zoom
         // (p unchanged) zooms around the trigger; and ctrl+shift+wheel updates p to keep
@@ -3846,7 +3838,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 capturedLen, showL, showR, leftVDiv, rightVDiv, capturedSampleRate);
     }
 
-    private void captureSingleFrame(int dispStart, int displaySamples,
+    private void captureSingleFrame(int dispStart, double displaySamples,
                                     int available, double subSampleOffset,
                                     double triggerLocal) {
         // Capture the whole available read window (~2 screens plus the trigger-
@@ -3858,7 +3850,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         int srcEnd   = available;
         int len = srcEnd - srcStart;
         int dispStartInCapture = dispStart - srcStart;
-        if (len < 2 || dispStartInCapture < 0 || dispStartInCapture + displaySamples > len) return;
+        if (len < 2 || dispStartInCapture < 0
+                || dispStartInCapture + (int) Math.ceil(displaySamples) > len) return;
         if (capturedLeft == null || capturedLeft.length < len) {
             capturedLeft  = new float[len];
             capturedRight = new float[len];
@@ -3896,7 +3889,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      */
     private void renderTraces(MeasurementPainter gc, int w, int h,
                               float[] dataLeft, float[] dataRight, int dataLen,
-                              int dispStart, double subSampleOffset, int dispCount,
+                              int dispStart, double subSampleOffset, double dispCount,
                               boolean showL, boolean showR,
                               double leftVDiv, double rightVDiv,
                               boolean sincEnabledL, boolean sincEnabledR,
@@ -3947,13 +3940,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         if (frozenFrame == null) {
             if (!leftResidual)  lastResidualVppL = Double.NaN;
             if (!rightResidual) lastResidualVppR = Double.NaN;
+            // The residual slice is integer sample arithmetic - ceil covers the
+            // fractional window's last partial sample.
+            int dispCountCeil = (int) Math.ceil(dispCount);
             float[] resL = (showL && leftResidual && dataLeft != null)
-                    ? computeResidual(dataLeft, dataLen, dispStart, dispCount,
+                    ? computeResidual(dataLeft, dataLen, dispStart, dispCountCeil,
                             Lanczos.LANCZOS_PADDING, sampleRate, true, peakVoltsL) : null;
             int     dispL = residualDispStart;
             int     lenL  = residualSliceLen;
             float[] resR = (showR && rightResidual && dataRight != null)
-                    ? computeResidual(dataRight, dataLen, dispStart, dispCount,
+                    ? computeResidual(dataRight, dataLen, dispStart, dispCountCeil,
                             Lanczos.LANCZOS_PADDING, sampleRate, false, peakVoltsR) : null;
             int     dispR = residualDispStart;
             int     lenR  = residualSliceLen;
@@ -4041,14 +4037,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * crossing instead of the nearest raw sample.
      */
     private void drawTrace(MeasurementPainter gc, float[] data, int n,
-                                  int dispStart, double subSampleOffset, int dispCount,
+                                  int dispStart, double subSampleOffset, double dispCount,
                                   int width, int height, double centerY, double vScale,
                                   float lineWidth, Color color,
                                   boolean sincEnabled, double dcOffset, int dotDiameter) {
         if (dispCount < 2 || width <= 0) return;
         gc.setForeground(color);
-        double samplesPerPx = (double) dispCount / width;
-        double pxPerSample = (double) width / dispCount;
+        double samplesPerPx = dispCount / width;
+        double pxPerSample = width / dispCount;
         // Above one sample per pixel the displayed window rasterises as a DSO-style
         // digital-phosphor image - a width×height coverage image where each pixel's dwell
         // time is its brightness, blitted once instead of stroking every period.  This IS
@@ -4124,7 +4120,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * see {@link PhosphorRenderer#render}.
      */
     private void drawDigitalPhosphor(MeasurementPainter gc, float[] data, int n,
-                                     int dispStart, double subSampleOffset, int dispCount,
+                                     int dispStart, double subSampleOffset, double dispCount,
                                      int width, int height, double centerY, double vScale,
                                      float lineWidth, Color color, double dcOffset) {
         phosphor.render(gc, data, n, dispStart, subSampleOffset, dispCount,

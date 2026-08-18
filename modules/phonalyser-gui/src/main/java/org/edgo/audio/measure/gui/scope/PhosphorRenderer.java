@@ -176,7 +176,7 @@ public final class PhosphorRenderer {
      * byte-identical, at a fraction of the per-frame work (the dominant win at HiDPI device scale).
      */
     public void render(MeasurementPainter gc, float[] data, int n,
-                       int dispStart, double subSampleOffset, int dispCount,
+                       int dispStart, double subSampleOffset, double dispCount,
                        int widthPx, int heightPx, double centerY, double vScale,
                        double dcOffset, float lineWidth, Color color) {
         if (widthPx <= 0 || heightPx <= 0) return;
