@@ -2069,24 +2069,35 @@ public final class FftAnalyzerWorker {
             resultPool.release(coalesced);
             return;
         }
-        display.asyncExec(() -> {
-            FftResult slot = latestForUi.getAndSet(null);
-            if (slot == null) return;
-            try {
-                MessageBus.instance().publish(Events.FFT_RESULT_AVAILABLE, slot);
-            } catch (Exception e) {
-                log.error("Can't dispatch Events.FFT_RESULT_AVAILABLE", e);
-            } finally {
-                // Subscribers ran synchronously in publish() above and
-                // deep-copied what they keep - the slot is free again.
-                resultPool.release(slot);
-            }
-        });
+        display.asyncExec(this::drainPendingResult);
         // Force the SWT main loop to wake from Display.sleep() if it was
         // dozing.  asyncExec already posts a wake message but on Windows
         // the message queue can drop wakes under load - wake() is the
         // belt-and-suspenders nudge.
         display.wake();
+    }
+
+    /** Publishes a parked result to the bus NOW - UI thread only.  The
+     *  asyncExec posted by {@link #publishResult} is the wake-from-idle path,
+     *  but SWT dispatches asyncExec work only when the native event queue
+     *  drains empty - and a GL scope's swap traffic can keep that queue busy
+     *  for as long as it renders, leaving the spectrum to update once in
+     *  dozens of averages.  The render heartbeat therefore PULLS through this
+     *  method as well: it rides a timer, which is dispatched regardless of
+     *  the queue.  Idempotent between the two callers - both run on the UI
+     *  thread and both take the slot with {@code getAndSet(null)}. */
+    public void drainPendingResult() {
+        FftResult slot = latestForUi.getAndSet(null);
+        if (slot == null) return;
+        try {
+            MessageBus.instance().publish(Events.FFT_RESULT_AVAILABLE, slot);
+        } catch (Exception e) {
+            log.error("Can't dispatch Events.FFT_RESULT_AVAILABLE", e);
+        } finally {
+            // Subscribers ran synchronously in publish() above and
+            // deep-copied what they keep - the slot is free again.
+            resultPool.release(slot);
+        }
     }
 
     public void uiGotResult() {

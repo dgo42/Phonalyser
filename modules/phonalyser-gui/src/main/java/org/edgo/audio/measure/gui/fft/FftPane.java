@@ -495,6 +495,13 @@ public final class FftPane extends AbstractPane {
      *  main event loop's render tick.  Returns {@code true} while the view is live
      *  (recording) so the loop keeps the realtime cadence going. */
     public boolean renderRealtimeFrame() {
+        // Pull a parked worker result through BEFORE the paint decision: the
+        // worker's own asyncExec drain runs only when the native event queue
+        // is empty, and a GL scope's swap traffic can keep it busy for as
+        // long as it renders.  This tick rides a timer, which is dispatched
+        // regardless of that queue - so the spectrum stays fed however busy
+        // the compositor keeps SWT.
+        controller.drainPendingResult();
         return view != null && !view.isDisposed() && view.renderRealtimeFrame();
     }
 

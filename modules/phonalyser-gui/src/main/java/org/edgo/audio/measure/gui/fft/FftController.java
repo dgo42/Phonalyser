@@ -127,6 +127,13 @@ public final class FftController {
     // Recording lifecycle (delegates to the worker)
     // -------------------------------------------------------------------------
 
+    /** Publishes a worker result still parked in the hand-off slot - the
+     *  render heartbeat's pull half of the delivery, see
+     *  {@link FftAnalyzerWorker#drainPendingResult()}.  UI thread only. */
+    public void drainPendingResult() {
+        worker.drainPendingResult();
+    }
+
     /** Starts the analyser on its daemon worker thread (idempotent); the
      *  worker acquires its own shared-capture reference. */
     public void startRecording() {
