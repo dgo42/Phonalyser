@@ -578,8 +578,30 @@ public final class JavaSoundDeviceManager implements AudioDeviceManager {
      *       reliable signal.</li>
      * </ul>
      *
+     * <p>Bracketed by WARN start / finished lines with the elapsed time:
+     * probes run device by device behind enumeration, so an empty combo can
+     * mean a scan still grinding or one wedged probe - the last "started"
+     * line without its "finished" twin names the device that hangs, at a
+     * level every log configuration shows.
      */
     private List<AudioFormat> probeFormats(JavaSoundDeviceRef d, boolean output) {
+        String direction = output ? "output" : "input";
+        if (log.isWarnEnabled()) {
+            log.warn("Device format probe started: {} ({})",
+                    d.mixerInfo().getName(), direction);
+        }
+        long startNanos = System.nanoTime();
+        List<AudioFormat> result = doProbeFormats(d, output);
+        if (log.isWarnEnabled()) {
+            log.warn("Device format probe finished: {} ({}) - {} format(s) in {} ms",
+                    d.mixerInfo().getName(), direction, result.size(),
+                    (System.nanoTime() - startNanos) / 1_000_000);
+        }
+        return result;
+    }
+
+    /** The probe itself - see {@link #probeFormats}. */
+    private List<AudioFormat> doProbeFormats(JavaSoundDeviceRef d, boolean output) {
         Class<? extends DataLine> cls = output ? SourceDataLine.class : TargetDataLine.class;
         Mixer m = AudioSystem.getMixer(d.mixerInfo());
 

@@ -78,6 +78,7 @@ import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.sound.BenchCards;
 import org.edgo.audio.measure.gui.sound.CalibrationCopyOffers;
 import org.edgo.audio.measure.gui.sound.CalibrationStore;
+import org.edgo.audio.measure.gui.sound.DeviceCatalog;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -94,6 +95,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -237,6 +239,18 @@ public final class PreferencesDialog {
      *  before it enumerates anything.  Read from the scan thread, written from the
      *  display thread - hence atomic. */
     private final AtomicInteger scanGeneration = new AtomicInteger();
+    /** A scan answer parked for the dialog's timer poll.  The worker also posts
+     *  an asyncExec, which lands instantly on an idle queue - but SWT dispatches
+     *  asyncExec work only when the native event queue drains empty, and a GL
+     *  scope's swap traffic can keep it busy for as long as it renders; the
+     *  fill then never lands and the format combos sit empty behind an open
+     *  dialog.  The poll rides a timer, dispatched regardless of that queue.
+     *  Idempotent: whichever of the two runs first takes the slot. */
+    private final AtomicReference<Runnable> pendingScanFill = new AtomicReference<>();
+    /** Cadence of the parked-fill poll; armed once, lives until the dialog
+     *  is disposed. */
+    private static final int SCAN_FILL_POLL_MS = 100;
+    private boolean scanFillPollArmed;
     /** The bench's card list and the device->card binding on it -
      *  what the card combo becomes for a remote selection.  Built on the working
      *  copy so the local mirror of a pick is committed by the same OK. */
@@ -1044,12 +1058,6 @@ public final class PreferencesDialog {
                 mainWindow.beforeApplyBackendChanges();
                 needStartAudio = true;
             }
-            // The GPU toggle, like fonts, takes effect by rebuilding the panes - the
-            // scope pane chooses its surface (GL vs GC) at construction.
-            if (!fontsAfter.equals(fontsBefore) || edit.isUseGpuAcceleration() != gpuBefore) {
-                mainWindow.rebuildContent();
-            }
-
             // --- Colour holders into edit.
             edit.setOscLeftChannelColor         (leftRgbHolder[0]);
             edit.setOscRightChannelColor        (rightRgbHolder[0]);
@@ -1130,6 +1138,17 @@ public final class PreferencesDialog {
                     committedBp.getInputDeviceName(), true);
             applyCommittedProfile(committed, devices.outputs,
                     committedBp.getOutputDeviceName(), false);
+            // The GPU toggle, like fonts, takes effect by rebuilding the panes -
+            // the scope pane chooses its surface (GL vs GC) at construction.
+            // AFTER the commit above, deliberately: the rebuilt panes read the
+            // LIVE singleton, and a rebuild before it re-created them on the
+            // settings being replaced - a GPU toggle then only took effect on
+            // the NEXT rebuild, which for most operators is the next start.
+            // Before setActive and the pane-refresh events below, so the new
+            // panes are the ones that receive them.
+            if (!fontsAfter.equals(fontsBefore) || edit.isUseGpuAcceleration() != gpuBefore) {
+                mainWindow.rebuildContent();
+            }
             // Activate the chosen selection - BOTH its levels - on the live
             // AudioBackend; kept in the dialog so Preferences stays free of the
             // sound/hardware layer.  DIRECT on the OK path: the teardown of the
@@ -1778,8 +1797,17 @@ public final class PreferencesDialog {
         // rebuild the shown backend's enumeration first - for a snapshot backend
         // (PortAudio) this is the ONLY way a card plugged in since start-up can
         // appear at all.  Backends whose lists are live answer false and the
-        // re-population below simply reads the current truth.
-        AudioBackend.instance().refreshDeviceLists(edit.getSelectedBackend().carrier());
+        // re-population below simply reads the current truth.  Through the
+        // catalog when there is one: its snapshot must fall with the caches it
+        // rides, or the re-population would be served the very list the
+        // operator just distrusted.
+        DeviceCatalog catalog = mainWindow != null
+                ? mainWindow.getEngines().getDeviceCatalog() : null;
+        if (catalog != null) {
+            catalog.drop(edit.getSelectedBackend().carrier());
+        } else {
+            AudioBackend.instance().refreshDeviceLists(edit.getSelectedBackend().carrier());
+        }
         captureUiToActive();
         populateBackendCombo();
         if (!applyBackendSelection(edit.getSelectedBackend())) {
@@ -1844,19 +1872,39 @@ public final class PreferencesDialog {
         // is what makes the local scan still sitting in the queue pointless.
         int generation = startScanGeneration();
         if (shown.remote()) {
-            fillDevices(shown, scanDevices(shown.carrier(), inputName, outputName));
+            fillDevices(shown, scanDevices(null, shown.carrier(), inputName, outputName));
             return;
+        }
+        // The catalog's snapshot fills the device combos IMMEDIATELY when it
+        // already holds this backend (primed at start-up - the server-net
+        // model): the operator sees the devices the moment the dialog opens.
+        // The scan below still runs and re-fills with formats and cards; with
+        // the snapshot present it reuses those lists instead of walking the
+        // drivers again, so the completion only adds detail.
+        DeviceCatalog catalog = mainWindow != null
+                ? mainWindow.getEngines().getDeviceCatalog() : null;
+        DeviceCatalog.DeviceLists cached = catalog != null
+                ? catalog.lists(shown.carrier()) : null;
+        if (cached != null) {
+            fillDeviceCombos(shown, cached);
         }
         // Resolved HERE, on the display thread: a disposed widget no longer
         // answers getDisplay(), and the worker must not be the one to find out.
         Display display = backendCombo.getDisplay();
+        armScanFillPoll(display);
         scanner.execute(() -> {
             if (scanSuperseded(generation)) {
                 return;         // another selection is shown - this answer is waste
             }
             DeviceScan scan;
             try {
-                scan = scanDevices(shown.carrier(), inputName, outputName);
+                scan = cached != null
+                        ? new DeviceScan(cached.inputs(), cached.outputs(),
+                                probeInputFormats(shown.carrier(),
+                                        preferredOrFirst(cached.inputs(), inputName)),
+                                probeOutputFormats(shown.carrier(),
+                                        preferredOrFirst(cached.outputs(), outputName)))
+                        : scanDevices(catalog, shown.carrier(), inputName, outputName);
             } catch (RuntimeException ex) {
                 // A driver that throws leaves the combos as they are - and says
                 // so, which a swallowed worker exception would not.
@@ -1866,9 +1914,57 @@ public final class PreferencesDialog {
                 return;
             }
             if (!display.isDisposed()) {
-                display.asyncExec(() -> fillDevices(shown, scan));
+                // Parked for the timer poll AND posted async - see
+                // pendingScanFill; whichever runs first takes the slot.
+                pendingScanFill.set(() -> fillDevices(shown, scan));
+                display.asyncExec(this::drainScanFill);
             }
         });
+    }
+
+    /** Runs a parked scan answer into the widgets - UI thread only; the
+     *  asyncExec path and the timer poll share it and the slot's
+     *  {@code getAndSet(null)} keeps them idempotent. */
+    private void drainScanFill() {
+        Runnable fill = pendingScanFill.getAndSet(null);
+        if (fill != null) fill.run();
+    }
+
+    /** Arms the parked-fill poll ONCE per dialog: a self-re-arming timer that
+     *  drains {@link #pendingScanFill} every {@link #SCAN_FILL_POLL_MS} until
+     *  the dialog is disposed.  A timer, not another asyncExec, deliberately -
+     *  see pendingScanFill for the starvation it exists to bypass. */
+    private void armScanFillPoll(Display display) {
+        if (scanFillPollArmed) return;
+        scanFillPollArmed = true;
+        display.timerExec(SCAN_FILL_POLL_MS, new Runnable() {
+            @Override
+            public void run() {
+                // The combo dies with the dialog shell - the poll's chain ends
+                // with it (and with it the armed flag's dialog lifetime).
+                if (backendCombo == null || backendCombo.isDisposed()) return;
+                drainScanFill();
+                display.timerExec(SCAN_FILL_POLL_MS, this);
+            }
+        });
+    }
+
+    /** The combo half of {@link #fillDevices}, served from the catalog's
+     *  snapshot BEFORE the scan completes, so the devices are visible the
+     *  moment the dialog opens; formats, cards and the rate re-emit arrive
+     *  with the scan's own fill.  {@code devices} is set alongside the combos
+     *  so an OK pressed in between commits the names the combos show. */
+    private void fillDeviceCombos(BackendKey scanned, DeviceCatalog.DeviceLists lists) {
+        if (backendCombo == null || backendCombo.isDisposed()
+                || !edit.getSelectedBackend().equals(scanned)) {
+            return;
+        }
+        devices.inputs  = lists.inputs();
+        devices.outputs = lists.outputs();
+        BackendPrefs bp = edit.current();
+        populateDeviceCombo(inputCombo,  devices.inputs,  bp.getInputDeviceName());
+        populateDeviceCombo(outputCombo, devices.outputs, bp.getOutputDeviceName());
+        captureDeviceNamesToActive();
     }
 
     /** Opens a new scan generation and answers it - every {@link #refreshDevices}
@@ -1895,9 +1991,21 @@ public final class PreferencesDialog {
      * <p>Touches no widget and writes no field, which is what lets it run on
      * {@link #scanner}.
      */
-    private DeviceScan scanDevices(AudioBackendType carrier, String inputName, String outputName) {
-        List<DeviceRef> inputs  = AudioBackend.instance().listInputDevices(carrier);
-        List<DeviceRef> outputs = AudioBackend.instance().listOutputDevices(carrier);
+    private DeviceScan scanDevices(DeviceCatalog catalog, AudioBackendType carrier,
+                                   String inputName, String outputName) {
+        List<DeviceRef> inputs;
+        List<DeviceRef> outputs;
+        if (catalog != null && carrier != AudioBackendType.NET) {
+            // The walk just paid for becomes the snapshot the next open is
+            // served from; a remote catalogue stays a per-connection preview
+            // and never enters the catalog.
+            DeviceCatalog.DeviceLists lists = catalog.scan(carrier);
+            inputs  = lists.inputs();
+            outputs = lists.outputs();
+        } else {
+            inputs  = AudioBackend.instance().listInputDevices(carrier);
+            outputs = AudioBackend.instance().listOutputDevices(carrier);
+        }
         return new DeviceScan(inputs, outputs,
                 probeInputFormats(carrier, preferredOrFirst(inputs, inputName)),
                 probeOutputFormats(carrier, preferredOrFirst(outputs, outputName)));

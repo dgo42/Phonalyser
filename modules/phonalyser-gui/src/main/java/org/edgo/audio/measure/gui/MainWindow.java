@@ -110,6 +110,7 @@ public final class MainWindow {
     /** App-lifetime audio engines (generator / scope / FFT) - created once
      *  here and injected down into the panes, so they keep running through
      *  every {@link #rebuildContent()}; shut down on shell dispose. */
+    @Getter
     private final UIEngines engines;
     /** Rebuilt in place by {@link #rebuildContent()} (language / UI-font
      *  changes) - the shell itself survives.  Consumers (the
@@ -143,6 +144,12 @@ public final class MainWindow {
 
         this.engines = new UIEngines(display);
         shell.addDisposeListener(e -> engines.shutdown());
+        // Prime the device catalog off the UI thread - the server's boot order
+        // (enumerate first, setup sweep after) on one background thread, so
+        // the Preferences dialog opens onto filled combos instead of a driver
+        // walk.  The backend setup sweep is started by the priming thread when
+        // its enumeration is done (see DeviceCatalog.primeInBackground).
+        engines.getDeviceCatalog().primeInBackground();
 
         buildMenuBar();
 

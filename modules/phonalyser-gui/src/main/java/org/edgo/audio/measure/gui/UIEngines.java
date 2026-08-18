@@ -23,7 +23,9 @@ import org.edgo.audio.measure.gui.fft.FftAnalyzerWorker;
 import org.edgo.audio.measure.gui.fft.FftController;
 import org.edgo.audio.measure.gui.generator.GeneratorController;
 import org.edgo.audio.measure.gui.scope.ScopeController;
+import org.edgo.audio.measure.gui.sound.DeviceCatalog;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
+import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.Getter;
 
@@ -45,6 +47,10 @@ public final class UIEngines {
     @Getter private final GeneratorController generatorController;
     @Getter private final ScopeController     scopeController;
     @Getter private final FftController       fftController;
+    /** The app-lifetime device-list snapshot the Preferences dialog is served
+     *  from - primed once in the background at start-up.  Lives here with the
+     *  engines because it shares their lifetime and their consumers. */
+    @Getter private final DeviceCatalog       deviceCatalog;
 
     public UIEngines(Display display) {
         // Eager init of the SharedCapture singleton so its MessageBus
@@ -63,6 +69,7 @@ public final class UIEngines {
         generatorController = new GeneratorController();
         scopeController     = new ScopeController();
         fftController       = new FftController(new FftAnalyzerWorker(display));
+        deviceCatalog       = new DeviceCatalog(AudioBackend.instance());
     }
 
     /** Stops every engine and releases their capture / playback resources.
