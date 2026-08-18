@@ -120,10 +120,8 @@ public final class TuneNotchWizardDialog {
     private static final double PERCENT_FULL   = 100.0;
 
     // --- Field defaults / ranges ---------------------------------------------
-    private static final double FREQ_MIN_HZ       = 1.0;
-    private static final double AMP_MIN_VRMS      = 1e-4;
-    private static final int    FREQ_MAX_DECIMALS = 9;
-    private static final int    AMP_MAX_DECIMALS  = 5;
+    // Frequency / amplitude floors and decimals come from FreqRespConstants -
+    // the same clamps the FreqResp settings fields use.
     private static final int    FIELD_WIDTH_HINT  = 110;
 
     // --- Initial / pre-fit magnitude window (dBV) ----------------------------
@@ -147,12 +145,9 @@ public final class TuneNotchWizardDialog {
     /** Vertical range is set from the rolling average of this many sweeps'
      *  min/max dB, so the axis doesn't jump frame-to-frame. */
     private static final int MAG_AVG_FRAMES = 20;
-    // Plot margins - mirror FreqRespView's MARGIN_* so the target marker lands
-    // on the same log frequency axis the trace is drawn on.
-    private static final int VIEW_MARGIN_LEFT        = 68;
-    private static final int VIEW_MARGIN_TOP         = 0;
-    private static final int VIEW_MARGIN_BOTTOM      = 28;
-    private static final int VIEW_MARGIN_RIGHT_PHASE = 52;
+    // Plot margins come from FreqRespConstants - the same rectangle the
+    // embedded view draws in, so the target marker lands on the same log
+    // frequency axis as the trace.
     /** Target-frequency marker: a 3-px dashed vertical line coloured by how
      *  close the measured response AT the target sits to THIS measurement's
      *  notch floor - green means the target sits exactly in the notch.  The
@@ -339,12 +334,14 @@ public final class TuneNotchWizardDialog {
 
         addLabel(row, I18n.t("tuneNotch.startHz"));
         startField = new NumericStepField(row, UnitFamily.FREQUENCY,
-                FREQ_MIN_HZ, nyquist, FREQ_MAX_DECIMALS, FIELD_WIDTH_HINT);
+                FreqRespConstants.FREQ_MIN_HZ, nyquist,
+                FreqRespConstants.FREQ_MAX_DECIMALS, FIELD_WIDTH_HINT);
         startField.setValue(prefs.getTuneNotchStartHz());
 
         addLabel(row, I18n.t("tuneNotch.stopHz"));
         stopField = new NumericStepField(row, UnitFamily.FREQUENCY,
-                FREQ_MIN_HZ, nyquist, FREQ_MAX_DECIMALS, FIELD_WIDTH_HINT);
+                FreqRespConstants.FREQ_MIN_HZ, nyquist,
+                FreqRespConstants.FREQ_MAX_DECIMALS, FIELD_WIDTH_HINT);
         stopField.setValue(prefs.getTuneNotchStopHz());
 
         addLabel(row, I18n.t("tuneNotch.amplitude"));
@@ -353,7 +350,9 @@ public final class TuneNotchWizardDialog {
         // at the PEAK full scale would have allowed 3 dB of clipping; V, dBV and
         // dBFS now all trim to the same maximum (0 dBFS is the top).
         ampField = new NumericStepField(row, UnitFamily.AMPLITUDE,
-                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl() / Constants.SQRT2, AMP_MAX_DECIMALS,
+                FreqRespConstants.AMP_MIN_VRMS,
+                prefs.getDacFsVoltageAmpl() / Constants.SQRT2,
+                FreqRespConstants.AMP_MAX_DECIMALS,
                 prefs::getDacFsVoltageAmpl, FIELD_WIDTH_HINT);
         // Same amplitude semantics as the generator's field, so it borrows that
         // field's tooltip (unit switching, dBV, and the dbfs/dbf entry).
@@ -364,7 +363,8 @@ public final class TuneNotchWizardDialog {
 
         addLabel(row, I18n.t("tuneNotch.targetHz"));
         targetField = new NumericStepField(row, UnitFamily.FREQUENCY,
-                FREQ_MIN_HZ, nyquist, FREQ_MAX_DECIMALS, FIELD_WIDTH_HINT);
+                FreqRespConstants.FREQ_MIN_HZ, nyquist,
+                FreqRespConstants.FREQ_MAX_DECIMALS, FIELD_WIDTH_HINT);
         targetField.setValue(prefs.getTuneNotchTargetHz());
 
         // Output-lane gate: which DAC channel(s) the notch sweep drives.  Index
@@ -405,6 +405,7 @@ public final class TuneNotchWizardDialog {
             curAmpVrms = ampField.getValue();
             prefs.setTuneNotchAmplitude(ampField.enteredValue());
             resetMagStats();
+            retuneEngineAmplitude();
         });
         targetField.addSelectionListener(e -> {
             curTargetHz = targetField.getValue();
@@ -526,6 +527,18 @@ public final class TuneNotchWizardDialog {
         if (e == null) return;
         double[] b = sweepBand(curStartHz, curStopHz);
         e.setBand(b[0], b[1]);
+    }
+
+    /** Live-applies the amplitude field to the streamed sweep - no-op until
+     *  the engine is running.  Runs on the UI thread (field listener); the
+     *  engine also rewinds its settle counter, so the level the loop plays
+     *  and the level the deconvolution divides by can never disagree - a
+     *  mid-session field edit used to shift the whole displayed response by
+     *  the amplitude ratio while the stimulus kept its old level. */
+    private void retuneEngineAmplitude() {
+        NotchSweepEngine e = engine;
+        if (e == null) return;
+        e.setAmplitude(curAmpVrms);
     }
 
     /**
@@ -949,12 +962,14 @@ public final class TuneNotchWizardDialog {
         // Plot rectangle - mirrors FreqRespView's margins so the marker lands on
         // the same log frequency axis the trace is drawn on.
         Rectangle area = view.getClientArea();
-        int rightMargin = prefs.isFreqRespPhaseVisible() ? VIEW_MARGIN_RIGHT_PHASE : 0;
-        int plotW   = Math.max(1, area.width - VIEW_MARGIN_LEFT - rightMargin);
-        int plotTop = VIEW_MARGIN_TOP;
-        int plotBot = Math.max(plotTop + 1, area.height - VIEW_MARGIN_BOTTOM);
+        int rightMargin = prefs.isFreqRespPhaseVisible()
+                ? FreqRespConstants.PLOT_MARGIN_RIGHT_PHASE_PX
+                : FreqRespConstants.PLOT_MARGIN_RIGHT_NO_PHASE_PX;
+        int plotW   = Math.max(1, area.width - FreqRespConstants.PLOT_MARGIN_LEFT_PX - rightMargin);
+        int plotTop = FreqRespConstants.PLOT_MARGIN_TOP_PX;
+        int plotBot = Math.max(plotTop + 1, area.height - FreqRespConstants.PLOT_MARGIN_BOTTOM_PX);
         double frac = (Math.log(target) - Math.log(fMin)) / (Math.log(fMax) - Math.log(fMin));
-        int x = VIEW_MARGIN_LEFT + (int) Math.round(frac * plotW);
+        int x = FreqRespConstants.PLOT_MARGIN_LEFT_PX + (int) Math.round(frac * plotW);
 
         double delta = notchValid ? dbAtTarget - notchDb : Double.POSITIVE_INFINITY;
         double t = Math.max(0.0, Math.min(1.0,

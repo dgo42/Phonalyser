@@ -77,7 +77,7 @@ public final class FreqRespAnalyzer {
 
         int      sweepSamples = (int) Math.round(cfg.getDurationSec() * cfg.getSampleRate());
         int      leadInSamples = (int) Math.round(cfg.getLeadInSec() * cfg.getSampleRate());
-        int      tailSamples  = cfg.getSampleRate() / 2;
+        int      tailSamples  = (int) Math.round(FreqRespConstants.SWEEP_MIN_SEC * cfg.getSampleRate());
         long     totalGenSamples = (long) leadInSamples + sweepSamples + tailSamples;
         int      durationSec  = (int) Math.ceil(totalGenSamples / (double) cfg.getSampleRate());
 
@@ -210,8 +210,12 @@ public final class FreqRespAnalyzer {
             throw new IllegalArgumentException("startHz must be > 0 and < stopHz");
         }
         if (cfg.getSweepPoints() < 4)                throw new IllegalArgumentException("sweepPoints must be >= 4");
-        if (cfg.getDurationSec() < 0.5)              throw new IllegalArgumentException("durationSec must be >= 0.5");
-        if (cfg.getLeadInSec() < 0.05)               throw new IllegalArgumentException("leadInSec must be >= 0.05");
+        if (cfg.getDurationSec() < FreqRespConstants.SWEEP_MIN_SEC) {
+            throw new IllegalArgumentException("durationSec must be >= " + FreqRespConstants.SWEEP_MIN_SEC);
+        }
+        if (cfg.getLeadInSec() < FreqRespConstants.LEAD_IN_MIN_SEC) {
+            throw new IllegalArgumentException("leadInSec must be >= " + FreqRespConstants.LEAD_IN_MIN_SEC);
+        }
         if (cfg.getAmplitudeVrms() <= 0.0)           throw new IllegalArgumentException("amplitudeVrms must be > 0");
         if (cfg.getStereoCaptureProvider() == null)  throw new IllegalArgumentException("stereoCaptureProvider is required");
     }

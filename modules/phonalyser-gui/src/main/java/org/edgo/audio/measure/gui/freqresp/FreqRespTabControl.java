@@ -124,16 +124,10 @@ public final class FreqRespTabControl extends AbstractTabControl {
     };
     private static final double SWEEP_POINTS_MIN = 8192;
     private static final double SWEEP_POINTS_MAX = 10_000_000;
-    /** Sweep frequency floor - sub-hertz sweep limits are degenerate. */
-    private static final double FREQ_MIN_HZ      = 1.0;
-    /** Amplitude floor (Vrms) - the pre-rework field's clamp, kept. */
-    private static final double AMP_MIN_VRMS     = 1e-4;
-    /** Lead-in floor - the pre-rework field's clamp, kept. */
-    private static final double LEAD_IN_MIN_SEC  = 0.05;
+    // Frequency / amplitude / lead-in floors and the frequency / amplitude
+    // decimals come from FreqRespConstants - shared with the tune-notch
+    // wizard's fields and the analyzer's validation.
     private static final double TIME_MAX_SEC     = 1_000_000;
-    // Display precision caps per the numeric-field spec.
-    private static final int FREQ_MAX_DECIMALS = 9;
-    private static final int AMP_MAX_DECIMALS  = 5;
     private static final int TIME_MAX_DECIMALS = 3;
 
     // ---- Filters / Unevenness field bounds -------------------------------
@@ -661,7 +655,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // trim to it (0 dBFS is exactly the top).  The field holds V RMS, so
         // capping it at the PEAK full scale would have allowed 3 dB of clipping.
         NumericStepField ampField = new NumericStepField(g, UnitFamily.AMPLITUDE,
-                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl() / Constants.SQRT2, AMP_MAX_DECIMALS,
+                FreqRespConstants.AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl() / Constants.SQRT2, FreqRespConstants.AMP_MAX_DECIMALS,
                 prefs::getDacFsVoltageAmpl, 110);
         ampField.setLayoutData(comboGd());
         // Follow a DAC recalibration - the ceiling was previously read once, at
@@ -683,8 +677,8 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // operator is working in - clamping must not silently move them back to
         // volts.
         Bindings.onChange(toolbarTabs, prefs.freqRespAmplitudeProperty(), v -> {
-            if (prefs.getFreqRespAmplitudeVrms() < AMP_MIN_VRMS) {
-                prefs.setFreqRespAmplitude(prefs.freqRespAmplitudeIn(AMP_MIN_VRMS));
+            if (prefs.getFreqRespAmplitudeVrms() < FreqRespConstants.AMP_MIN_VRMS) {
+                prefs.setFreqRespAmplitude(prefs.freqRespAmplitudeIn(FreqRespConstants.AMP_MIN_VRMS));
             }
             toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
         });
@@ -740,7 +734,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
         addLabel(g, I18n.t("freqResp.settings.leadIn"));
         NumericStepField leadInField = new NumericStepField(g, UnitFamily.TIME,
-                LEAD_IN_MIN_SEC, TIME_MAX_SEC, TIME_MAX_DECIMALS, 90);
+                FreqRespConstants.LEAD_IN_MIN_SEC, TIME_MAX_SEC, TIME_MAX_DECIMALS, 90);
         leadInField.setLayoutData(comboGd());
         leadInField.setToolTipText(I18n.t("freqResp.settings.leadIn.tooltip"));
         // Two-way bind.  The ≥ 0.05 s floor clamp and the derived-duration
@@ -849,8 +843,9 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
     private NumericStepField freqField(Composite parent) {
         NumericStepField f = new NumericStepField(parent, UnitFamily.FREQUENCY,
-                FREQ_MIN_HZ, Preferences.instance().current().getInputSampleRate() / 2.0,
-                FREQ_MAX_DECIMALS, 110);
+                FreqRespConstants.FREQ_MIN_HZ,
+                Preferences.instance().current().getInputSampleRate() / 2.0,
+                FreqRespConstants.FREQ_MAX_DECIMALS, 110);
         f.setLayoutData(comboGd());
         return f;
     }

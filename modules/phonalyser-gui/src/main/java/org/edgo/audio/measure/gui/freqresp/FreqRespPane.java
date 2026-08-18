@@ -70,13 +70,10 @@ public final class FreqRespPane extends AbstractPane {
 
     private static final int SCROLL_RANGE = 1_000_000;
 
-    /** Lower bound for the log-frequency scrollbar.  The view clamps
-     *  freqRespFreqMinHz to ≥ 1 Hz so the log mapping is well-defined. */
-    private static final double FREQ_FLOOR_HZ = 1.0;
-    /** Lower bound for the magnitude axis - matches the view's wheel
-     *  zoom-out limit (MAG_BOT_MIN_DB) so the scrollbar can reach the
-     *  same outer edge the wheel allows. */
-    private static final double MAG_BOT_MIN = -300.0;
+    // The log-frequency scrollbar's lower bound and the magnitude
+    // scrollbar's outer edge come from FreqRespConstants - the same limits
+    // the view's clamps and wheel zoom-out use, so scrollbar and wheel
+    // reach the same extremes.
     /** Fixed height of the toolbar row while the tab body is expanded;
      *  released to strip-only height when the tabs are collapsed.  232
      *  (was 200): the Filters tab is the tallest and its bottom field row
@@ -448,9 +445,9 @@ public final class FreqRespPane extends AbstractPane {
 
         // Frequency scrollbar - log scale spans FREQ_FLOOR..Nyquist.
         double nyq = nyquistHz();
-        double a   = Math.log10(Math.max(FREQ_FLOOR_HZ, FREQ_FLOOR_HZ));
+        double a   = Math.log10(Math.max(FreqRespConstants.FREQ_MIN_HZ, FreqRespConstants.FREQ_MIN_HZ));
         double b   = Math.log10(Math.max(a + 1, nyq));
-        double lo  = Math.log10(Math.max(FREQ_FLOOR_HZ, prefs.getFreqRespFreqMinHz()));
+        double lo  = Math.log10(Math.max(FreqRespConstants.FREQ_MIN_HZ, prefs.getFreqRespFreqMinHz()));
         double hi  = Math.log10(Math.max(lo + 1e-9, prefs.getFreqRespFreqMaxHz()));
         double visibleF = hi - lo;
         double totalF   = b - a;
@@ -468,10 +465,10 @@ public final class FreqRespPane extends AbstractPane {
         }
 
         // Magnitude scrollbar - linear dB range capped at view.magCeilingDb() /
-        // MAG_BOT_MIN.  Thumb size shows the visible slice's share.
+        // FreqRespConstants.MAG_BOT_MIN_DB.  Thumb size shows the visible slice's share.
         double magTopMax = view.magCeilingDb();
         double visibleM = prefs.getFreqRespMagTopDb() - prefs.getFreqRespMagBotDb();
-        double totalM   = magTopMax - MAG_BOT_MIN;
+        double totalM   = magTopMax - FreqRespConstants.MAG_BOT_MIN_DB;
         if (totalM > 0 && visibleM > 0) {
             int thumb = (int) Math.max(1, Math.min(SCROLL_RANGE,
                     SCROLL_RANGE * (visibleM / totalM)));
@@ -490,11 +487,11 @@ public final class FreqRespPane extends AbstractPane {
     private void applyFreqScrollbar() {
         Preferences prefs = Preferences.instance();
         double nyq = nyquistHz();
-        double a   = Math.log10(FREQ_FLOOR_HZ);
+        double a   = Math.log10(FreqRespConstants.FREQ_MIN_HZ);
         double b   = Math.log10(Math.max(a + 1, nyq));
         double total = b - a;
-        double visible = Math.log10(Math.max(FREQ_FLOOR_HZ, prefs.getFreqRespFreqMaxHz()))
-                       - Math.log10(Math.max(FREQ_FLOOR_HZ, prefs.getFreqRespFreqMinHz()));
+        double visible = Math.log10(Math.max(FreqRespConstants.FREQ_MIN_HZ, prefs.getFreqRespFreqMaxHz()))
+                       - Math.log10(Math.max(FreqRespConstants.FREQ_MIN_HZ, prefs.getFreqRespFreqMinHz()));
         int sel   = freqScrollbar.getSelection();
         int thumb = freqScrollbar.getThumb();
         double frac = (double) sel / Math.max(1, SCROLL_RANGE - thumb);
@@ -507,7 +504,7 @@ public final class FreqRespPane extends AbstractPane {
     private void applyMagScrollbar() {
         Preferences prefs = Preferences.instance();
         double magTopMax = view.magCeilingDb();
-        double total   = magTopMax - MAG_BOT_MIN;
+        double total   = magTopMax - FreqRespConstants.MAG_BOT_MIN_DB;
         double visible = prefs.getFreqRespMagTopDb() - prefs.getFreqRespMagBotDb();
         int sel   = magScrollbar.getSelection();
         int thumb = magScrollbar.getThumb();

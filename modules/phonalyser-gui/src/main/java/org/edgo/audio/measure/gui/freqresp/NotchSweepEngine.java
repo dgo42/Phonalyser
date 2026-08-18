@@ -25,6 +25,7 @@ import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.sound.GeneratorLane;
 import org.edgo.audio.measure.gui.sound.GeneratorRun;
+import org.edgo.audio.measure.gui.sound.PlaybackLane;
 import org.edgo.audio.measure.gui.sound.PlaybackStateEnum;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
@@ -72,10 +73,12 @@ public final class NotchSweepEngine implements AutoCloseable {
     private final GeneratorLane lane = new GeneratorLane();
     /** This session's cursor over the SHARED ring; null between sessions. */
     private SignalBufferReader reader;
-    /** The ring's write position when this session started - fresh samples
-     *  since the sweep began are counted from here (the ring may have been
-     *  running for another consumer long before). */
-    private long sessionStart;
+    /** The ring's write position when this session started or the stimulus
+     *  level last changed - fresh samples are counted from here (the ring may
+     *  have been running for another consumer long before).  Volatile: the
+     *  sweep worker reads it while {@link #setAmplitude} rewinds it from the
+     *  amplitude field's listener. */
+    private volatile long sessionStart;
 
     /** The lane gate in force - the one the open ACCEPTED, so a caller that has
      *  to put its own control back where the bench really is can read it (see
@@ -197,6 +200,18 @@ public final class NotchSweepEngine implements AutoCloseable {
     public void setBand(double f0, double f1) {
         lane.setSweepFreqStart(f0);
         lane.setSweepFreqEnd(f1);
+    }
+
+    /** Live amplitude change WITHOUT restart: the new level goes straight to
+     *  the running generator.  The session sample counter rewinds so
+     *  {@link #latestPeriod} hands out nothing until one full period of
+     *  new-level samples exists - the deconvolution divides the whole window
+     *  by ONE drive level, and a window spanning the change would draw the
+     *  response offset by the level ratio. */
+    public void setAmplitude(double ampVrms) {
+        lane.setAmplitudeVrms(ampVrms);
+        SignalBufferReader r = reader;
+        if (r != null) sessionStart = r.getWritePos();
     }
 
     /**

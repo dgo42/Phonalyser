@@ -95,15 +95,8 @@ import lombok.extern.log4j.Log4j2;
 public final class FreqRespView extends AbstractFreqDomainView {
 
     // --- Plot geometry -------------------------------------------------------
-    private static final int MARGIN_LEFT     = 68;
-    // Top / right margins are 0 by design - the L/R/phase/max buttons
-    // overlay the top of the plot area, no axis ticks live on the right
-    // edge unless the phase axis is visible.  When phase IS visible, the
-    // right margin grows so the phase tick labels have somewhere to live.
-    private static final int MARGIN_TOP      = 0;
-    private static final int MARGIN_BOTTOM   = 28;
-    private static final int MARGIN_RIGHT_NO_PHASE = 0;
-    private static final int MARGIN_RIGHT_PHASE    = 52;
+    // Plot margins live in FreqRespConstants - overlays painted on top of
+    // this view (the tune-notch target marker) must use the same rectangle.
 
     /** Horizontal offset of the header-button row past the dB-axis labels.
      *  Keeps the L/R/phase/max tile clear of the numeric tick labels that
@@ -377,7 +370,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         maxBtn = headerBar.pushButton(Icon.ARROWS_FROM_CIRCLE_DARK, Icon.ARROWS_FROM_CIRCLE_LIT,
                 color(ColorRole.TEXT), I18n.t("freqResp.button.maximize.tooltip"));
         Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
-        headerBar.setBounds(MARGIN_LEFT + HEADER_BTN_INSET, BTN_TOP, hbSize.x, hbSize.y);
+        headerBar.setBounds(FreqRespConstants.PLOT_MARGIN_LEFT_PX + HEADER_BTN_INSET, BTN_TOP, hbSize.x, hbSize.y);
         headerBar.layout();
         leftBtn.addListener(SWT.Selection, e -> {
             if (leftBtn.isToggled()) {
@@ -770,11 +763,11 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  (1 Hz -> Nyquist horizontal, +20 -> −150 dB vertical) and persists
      *  to {@link Preferences}.  Called from the maximize header button. */
     public void resetToDefaultView() {
-        prefs.setFreqRespFreqMinHz(FREQ_MIN_FLOOR_HZ);
+        prefs.setFreqRespFreqMinHz(FreqRespConstants.FREQ_MIN_HZ);
         prefs.setFreqRespFreqMaxHz(nyquistHz());
         // Default +20 dB ceiling, but never below the corrected signal - a notch
         // un-notched well above 0 dB must still fit with headroom, not clip.
-        prefs.setFreqRespMagTopDb(softMagTopDb(MAG_TOP_MAX_DB, FREQ_MIN_FLOOR_HZ, nyquistHz()));
+        prefs.setFreqRespMagTopDb(softMagTopDb(MAG_TOP_MAX_DB, FreqRespConstants.FREQ_MIN_HZ, nyquistHz()));
         prefs.setFreqRespMagBotDb(MAG_DEFAULT_BOT_DB);
         if (!isolated) prefs.save();
         publishRangeChanged();
@@ -783,7 +776,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
 
     /** Auto-fits the view's frequency and magnitude windows to the
      *  visible result data.  Horizontal range goes to
-     *  {@code FREQ_MIN_FLOOR_HZ -> nyquistHz()} (i.e. the full band the
+     *  {@code FreqRespConstants.FREQ_MIN_HZ -> nyquistHz()} (i.e. the full band the
      *  user has allowed via the Max-freq-%-Nyquist pref).  Vertical
      *  range is taken from the magnitude min/max across whichever
      *  channels are shown, padded by 10 % above and below.  No-op when
@@ -828,12 +821,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
             newBot = mid - 0.5 * MIN_SPAN;
         }
         newTop = Math.min(MAG_TOP_ZOOM_MAX_DB, newTop);
-        newBot = Math.max(MAG_BOT_MIN_DB, newBot);
-        prefs.setFreqRespFreqMinHz(FREQ_MIN_FLOOR_HZ);
+        newBot = Math.max(FreqRespConstants.MAG_BOT_MIN_DB, newBot);
+        prefs.setFreqRespFreqMinHz(FreqRespConstants.FREQ_MIN_HZ);
         prefs.setFreqRespFreqMaxHz(fHi);
         // Bake the +20 dB headroom above the corrected peak into the STORED top - autosetup
         // is one of the two fit actions allowed to set it; scroll/zoom stay free above it.
-        prefs.setFreqRespMagTopDb(softMagTopDb(newTop, FREQ_MIN_FLOOR_HZ, fHi));
+        prefs.setFreqRespMagTopDb(softMagTopDb(newTop, FreqRespConstants.FREQ_MIN_HZ, fHi));
         prefs.setFreqRespMagBotDb(newBot);
         if (!isolated) prefs.save();
         publishRangeChanged();
@@ -894,7 +887,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  present, to keep the corrected peak + 20 dB reachable - so the pane's vertical
      *  scrollbar can represent a correction-lifted signal above the default. */
     public double magCeilingDb() {
-        return softMagTopDb(MAG_TOP_MAX_DB, FREQ_MIN_FLOOR_HZ, nyquistHz());
+        return softMagTopDb(MAG_TOP_MAX_DB, FreqRespConstants.FREQ_MIN_HZ, nyquistHz());
     }
 
     /** Shows / hides the header button row (L / R / phase / auto-setup / max).
@@ -921,7 +914,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // The bar's preferred width shrank to just the two channel buttons -
         // re-fit its absolute bounds so no empty band captures clicks.
         Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
-        headerBar.setBounds(MARGIN_LEFT + HEADER_BTN_INSET, BTN_TOP, hbSize.x, hbSize.y);
+        headerBar.setBounds(FreqRespConstants.PLOT_MARGIN_LEFT_PX + HEADER_BTN_INSET, BTN_TOP, hbSize.x, hbSize.y);
     }
 
     // -------------------------------------------------------------------------
@@ -937,13 +930,13 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // cache below so the trace buffer rebuilds when a colour moves).
         syncColors();
         boolean phaseVisible = prefs.isFreqRespPhaseVisible();
-        int rightMargin = phaseVisible ? MARGIN_RIGHT_PHASE : MARGIN_RIGHT_NO_PHASE;
+        int rightMargin = phaseVisible ? FreqRespConstants.PLOT_MARGIN_RIGHT_PHASE_PX : FreqRespConstants.PLOT_MARGIN_RIGHT_NO_PHASE_PX;
 
         Rectangle plot = new Rectangle(
-                MARGIN_LEFT,
-                MARGIN_TOP,
-                Math.max(1, area.width  - MARGIN_LEFT - rightMargin),
-                Math.max(1, area.height - MARGIN_TOP  - MARGIN_BOTTOM));
+                FreqRespConstants.PLOT_MARGIN_LEFT_PX,
+                FreqRespConstants.PLOT_MARGIN_TOP_PX,
+                Math.max(1, area.width  - FreqRespConstants.PLOT_MARGIN_LEFT_PX - rightMargin),
+                Math.max(1, area.height - FreqRespConstants.PLOT_MARGIN_TOP_PX  - FreqRespConstants.PLOT_MARGIN_BOTTOM_PX));
 
         double freqMin = prefs.getFreqRespFreqMinHz();
         double freqMax = prefs.getFreqRespFreqMaxHz();
@@ -1026,10 +1019,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  scrollbars. */
     @Override
     protected boolean applyZoomState(ZoomState s) {
-        double fMin = Math.max(FREQ_MIN_FLOOR_HZ, s.xMin());
+        double fMin = Math.max(FreqRespConstants.FREQ_MIN_HZ, s.xMin());
         double fMax = Math.min(nyquistHz(), s.xMax());
         double top  = Math.min(MAG_TOP_ZOOM_MAX_DB, s.yMax()[0]);
-        double bot  = Math.max(MAG_BOT_MIN_DB, s.yMin()[0]);
+        double bot  = Math.max(FreqRespConstants.MAG_BOT_MIN_DB, s.yMin()[0]);
         if (fMax <= fMin || top <= bot) return false;   // degenerate after clamping
         prefs.setFreqRespFreqMinHz(fMin);
         prefs.setFreqRespFreqMaxHz(fMax);
@@ -1055,9 +1048,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
         double span = top - prefs.getFreqRespMagBotDb();
         double newTop  = Math.min(MAG_TOP_ZOOM_MAX_DB,
                 top - (sel.y - plot.y) / (double) plot.height * span);
-        double newBot  = Math.max(MAG_BOT_MIN_DB,
+        double newBot  = Math.max(FreqRespConstants.MAG_BOT_MIN_DB,
                 top - (sel.y + sel.height - plot.y) / (double) plot.height * span);
-        double newFMin = Math.max(FREQ_MIN_FLOOR_HZ, xToFreq(sel.x, plot, fMin, fMax, true));
+        double newFMin = Math.max(FreqRespConstants.FREQ_MIN_HZ, xToFreq(sel.x, plot, fMin, fMax, true));
         double newFMax = Math.min(nyquistHz(), xToFreq(sel.x + sel.width, plot, fMin, fMax, true));
         if (newFMax <= newFMin || newTop <= newBot) return null;
         return new ZoomState(newFMin, newFMax,
@@ -1069,12 +1062,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
     protected Rectangle zoomableArea() {
         Rectangle area = getClientArea();
         if (area.width < 10 || area.height < 10) return null;
-        int rightMargin = prefs.isFreqRespPhaseVisible() ? MARGIN_RIGHT_PHASE : MARGIN_RIGHT_NO_PHASE;
+        int rightMargin = prefs.isFreqRespPhaseVisible() ? FreqRespConstants.PLOT_MARGIN_RIGHT_PHASE_PX : FreqRespConstants.PLOT_MARGIN_RIGHT_NO_PHASE_PX;
         return new Rectangle(
-                MARGIN_LEFT,
-                MARGIN_TOP,
-                Math.max(1, area.width  - MARGIN_LEFT - rightMargin),
-                Math.max(1, area.height - MARGIN_TOP  - MARGIN_BOTTOM));
+                FreqRespConstants.PLOT_MARGIN_LEFT_PX,
+                FreqRespConstants.PLOT_MARGIN_TOP_PX,
+                Math.max(1, area.width  - FreqRespConstants.PLOT_MARGIN_LEFT_PX - rightMargin),
+                Math.max(1, area.height - FreqRespConstants.PLOT_MARGIN_TOP_PX  - FreqRespConstants.PLOT_MARGIN_BOTTOM_PX));
 
     }
 
@@ -1691,7 +1684,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         double newTop = compareSmoothedMax + COMPARE_ZOOM_PAD_DB;
         double newBot = compareSmoothedMin - COMPARE_ZOOM_PAD_DB;
         newTop = Math.min(MAG_TOP_ZOOM_MAX_DB, newTop);
-        newBot = Math.max(MAG_BOT_MIN_DB, newBot);
+        newBot = Math.max(FreqRespConstants.MAG_BOT_MIN_DB, newBot);
 
         prefs.setFreqRespFreqMinHz(20.0);
         prefs.setFreqRespFreqMaxHz(25000.0);
@@ -1738,7 +1731,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (Double.isNaN(compareSmoothedMin) || Double.isNaN(compareSmoothedMax)) return;
         gc.setFont(readoutFont);
         gc.setForeground(color(ColorRole.TEXT));
-        int x     = MARGIN_LEFT + 6;
+        int x     = FreqRespConstants.PLOT_MARGIN_LEFT_PX + 6;
         int y     = BTN_TOP + BTN_H + 6;
         int lineH = gc.getFontMetrics().getHeight();
         drawOutlinedText(gc, "max: " + FreqRespFormat.formatDbReadout(compareSmoothedMax),
@@ -2131,7 +2124,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (text == null) return;
         gc.setFont(readoutFont);
         gc.setForeground(color(ColorRole.TEXT));
-        int x     = MARGIN_LEFT + 6;
+        int x     = FreqRespConstants.PLOT_MARGIN_LEFT_PX + 6;
         int lineH = gc.getFontMetrics().getHeight();
         int y     = BTN_TOP + BTN_H + 6 + (belowCompareTable ? 2 * lineH + 4 : 0);
         drawOutlinedText(gc, text, x, y);
@@ -2714,9 +2707,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
         mouseX = e.x;
         mouseY = e.y;
         Rectangle area = getClientArea();
-        int rightMargin = prefs.isFreqRespPhaseVisible() ? MARGIN_RIGHT_PHASE : MARGIN_RIGHT_NO_PHASE;
-        mouseInPlot = e.x >= MARGIN_LEFT && e.x <= area.width - rightMargin
-                  && e.y >= MARGIN_TOP   && e.y <= area.height - MARGIN_BOTTOM;
+        int rightMargin = prefs.isFreqRespPhaseVisible() ? FreqRespConstants.PLOT_MARGIN_RIGHT_PHASE_PX : FreqRespConstants.PLOT_MARGIN_RIGHT_NO_PHASE_PX;
+        mouseInPlot = e.x >= FreqRespConstants.PLOT_MARGIN_LEFT_PX && e.x <= area.width - rightMargin
+                  && e.y >= FreqRespConstants.PLOT_MARGIN_TOP_PX   && e.y <= area.height - FreqRespConstants.PLOT_MARGIN_BOTTOM_PX;
         redraw();
     }
 
@@ -2762,17 +2755,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  still snaps to {@link #MAG_TOP_MAX_DB} (+20 dB) so the default
      *  view stays familiar. */
     private static final double MAG_TOP_ZOOM_MAX_DB = 120.0;
-    private static final double MAG_BOT_MIN_DB  = -300.0;
     /** Vertical window the Maximize button snaps to.  Wider zoom-out is
      *  still available via the wheel, but +20 -> −150 dB is the useful
      *  default for the FreqResp view - covers the full dynamic range of
      *  any analog device measurement without burning vertical pixels on
      *  the noise floor below −150 dB. */
     private static final double MAG_DEFAULT_BOT_DB = -150.0;
-    /** Smallest log-axis floor for the frequency window.  Pure 0 Hz is
-     *  unrepresentable on a log axis, so we clamp to a tiny positive
-     *  value when the user zooms out fully. */
-    private static final double FREQ_MIN_FLOOR_HZ = 1.0;
 
     /** Returns the maximal analyzed frequency - the active backend's
      *  Nyquist (sampleRate/2) scaled by the user's
@@ -2801,9 +2789,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
         double newMin = cursorF / Math.pow(fMax / fMin, frac * scale);
         double newMax = cursorF * Math.pow(fMax / fMin, (1.0 - frac) * scale);
         if (newMin >= newMax) return;
-        // Clamp the outer window to [FREQ_MIN_FLOOR_HZ, Nyquist].
+        // Clamp the outer window to [FreqRespConstants.FREQ_MIN_HZ, Nyquist].
         double nyq = nyquistHz();
-        newMin = Math.max(FREQ_MIN_FLOOR_HZ, newMin);
+        newMin = Math.max(FreqRespConstants.FREQ_MIN_HZ, newMin);
         newMax = Math.min(nyq, newMax);
         if (newMin >= newMax) return;
         prefs.setFreqRespFreqMinHz(newMin);
@@ -2825,12 +2813,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
         double newTop = cursorDb + (magTop - cursorDb) * scale;
         double newBot = cursorDb + (magBot - cursorDb) * scale;
         if (newTop <= newBot) return;
-        // Clamp the outer magnitude window to [MAG_BOT_MIN_DB, MAG_TOP_ZOOM_MAX_DB].
+        // Clamp the outer magnitude window to [FreqRespConstants.MAG_BOT_MIN_DB, MAG_TOP_ZOOM_MAX_DB].
         // The zoom-mode upper limit is wider than the maximize default
         // so the user can scroll up past +20 dB to inspect signals that
         // a sub-unity calibration multiplies into very high values.
         newTop = Math.min(MAG_TOP_ZOOM_MAX_DB, newTop);
-        newBot = Math.max(MAG_BOT_MIN_DB, newBot);
+        newBot = Math.max(FreqRespConstants.MAG_BOT_MIN_DB, newBot);
         if (newTop <= newBot) return;
         prefs.setFreqRespMagTopDb(newTop);
         prefs.setFreqRespMagBotDb(newBot);
@@ -2850,8 +2838,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (newMin <= 0 || newMax <= newMin) return;
         // Pan stops at the outer limits without changing the visible span.
         double nyq = nyquistHz();
-        if (newMin < FREQ_MIN_FLOOR_HZ) {
-            double shift = FREQ_MIN_FLOOR_HZ / newMin;
+        if (newMin < FreqRespConstants.FREQ_MIN_HZ) {
+            double shift = FreqRespConstants.FREQ_MIN_HZ / newMin;
             newMin *= shift; newMax *= shift;
         }
         if (newMax > nyq) {
@@ -2876,8 +2864,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
             double shift = MAG_TOP_ZOOM_MAX_DB - newTop;
             newTop += shift; newBot += shift;
         }
-        if (newBot < MAG_BOT_MIN_DB) {
-            double shift = MAG_BOT_MIN_DB - newBot;
+        if (newBot < FreqRespConstants.MAG_BOT_MIN_DB) {
+            double shift = FreqRespConstants.MAG_BOT_MIN_DB - newBot;
             newTop += shift; newBot += shift;
         }
         prefs.setFreqRespMagTopDb(newTop);

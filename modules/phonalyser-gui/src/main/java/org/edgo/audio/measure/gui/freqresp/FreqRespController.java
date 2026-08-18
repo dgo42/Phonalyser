@@ -48,14 +48,6 @@ import org.edgo.audio.measure.preferences.Preferences;
  */
 public final class FreqRespController {
 
-    /** Lead-in floor (s) - shorter lead-ins starve the deconvolution. */
-    private static final double MIN_LEAD_IN_SEC = 0.05;
-    /** Capture tail (s) the analyzer records past lead-in + sweep. */
-    private static final double ANALYZER_TAIL_SEC = 0.5;
-    /** Sweep-duration floor (s) - a small FFT size with a long lead-in
-     *  must not produce a negative or unworkable sweep. */
-    private static final double MIN_SWEEP_SEC = 0.5;
-
     /** Engine driving the sweep + deconvolution; created lazily on the
      *  first measurement so app startup never opens audio devices. */
     private FreqRespAnalyzerWorker worker;
@@ -84,8 +76,8 @@ public final class FreqRespController {
         Preferences prefs = Preferences.instance();
         onPref(prefs.freqRespFftSizeProperty(), n -> deriveDuration());
         onPref(prefs.freqRespLeadInSecProperty(), v -> {
-            if (v < MIN_LEAD_IN_SEC) {
-                prefs.setFreqRespLeadInSec(MIN_LEAD_IN_SEC);
+            if (v < FreqRespConstants.LEAD_IN_MIN_SEC) {
+                prefs.setFreqRespLeadInSec(FreqRespConstants.LEAD_IN_MIN_SEC);
                 return;   // the re-set re-enters here with the clamped value
             }
             deriveDuration();
@@ -125,12 +117,12 @@ public final class FreqRespController {
     }
 
     /** Total expected capture time of one sweep - lead-in + sweep + the
-     *  analyzer's tail.  Sizes the pane's busy meter time axis. */
+     *  analyzer's tail (= one more lead-in).  Sizes the pane's busy meter
+     *  time axis. */
     public double expectedMeasurementSeconds() {
         Preferences prefs = Preferences.instance();
-        return prefs.getFreqRespLeadInSec()
-             + prefs.getFreqRespDurationSec()
-             + ANALYZER_TAIL_SEC;
+        return 2.0 * prefs.getFreqRespLeadInSec()
+             + prefs.getFreqRespDurationSec();
     }
 
     /** Detaches every subscription and cancels an in-flight measurement -
@@ -147,15 +139,16 @@ public final class FreqRespController {
 
     /** Derives and persists the sweep duration that pairs with the chosen
      *  FFT size, so the analyzer's {@code nextPow2(leadIn + sweep + tail)}
-     *  lands exactly on {@code fftSize} - no wasted bins.  Clamped to
-     *  {@link #MIN_SWEEP_SEC}. */
+     *  lands exactly on {@code fftSize} - no wasted bins.  The tail the
+     *  analyzer records equals the lead-in, so both subtract here.  Clamped
+     *  to {@link FreqRespConstants#SWEEP_MIN_SEC}. */
     private void deriveDuration() {
         Preferences prefs = Preferences.instance();
         int sr = Math.max(1, prefs.current().getInputSampleRate());
         long leadIn   = Math.round(prefs.getFreqRespLeadInSec() * sr);
-        long tail     = Math.round(ANALYZER_TAIL_SEC * sr);
+        long tail     = leadIn;
         long sweep    = prefs.getFreqRespFftSize() - leadIn - tail;
-        long minSweep = Math.round(MIN_SWEEP_SEC * sr);
+        long minSweep = Math.round(FreqRespConstants.SWEEP_MIN_SEC * sr);
         if (sweep < minSweep) sweep = minSweep;
         prefs.setFreqRespDurationSec(sweep / (double) sr);
     }
