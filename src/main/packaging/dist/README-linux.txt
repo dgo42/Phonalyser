@@ -18,3 +18,7 @@ Or run it directly:
 Notes
  - The JAR is Linux-specific (it bundles the Linux/GTK SWT native).  Use the
    -linux.jar on Linux only; a GTK 3 desktop is required.
+ - GPU-accelerated oscilloscope rendering needs libGLU, which many
+   distributions no longer install by default:
+       sudo apt install libglu1-mesa
+   Without it the scope stays on the CPU renderer.

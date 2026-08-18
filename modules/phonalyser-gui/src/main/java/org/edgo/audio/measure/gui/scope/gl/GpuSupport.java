@@ -123,13 +123,20 @@ public final class GpuSupport {
         // isAvailable() only calls this once the shell is shown, so the GLCanvas
         // gets a REALIZED native window - on X11 an unrealized one makes
         // glXMakeCurrent abort the whole process with an async BadDrawable.
-        GLCanvas canvas = null;
+        //
+        // The canvas is parented to a throwaway host and the FINALLY disposes the
+        // HOST: the GLCanvas constructor can fail AFTER attaching its native
+        // widget (an UnsatisfiedLinkError loading the GLX natives escapes before
+        // SWT's own dispose-on-error sites), and a half-built canvas leaked onto
+        // the main shell becomes a second FillLayout child - the window content
+        // then shrinks to half its width on the next resize.
+        Composite host = new Composite(parent, SWT.NONE);
         long vg = 0L;
         try {
             GLData data = new GLData();
             data.doubleBuffer = true;
             data.stencilSize  = 8;
-            canvas = new GLCanvas(parent, SWT.NONE, data);
+            GLCanvas canvas = new GLCanvas(host, SWT.NONE, data);
             canvas.setCurrent();
             GL.createCapabilities();
             vg = nvgCreate(NVG_ANTIALIAS | NVG_STENCIL_STROKES);
@@ -146,7 +153,7 @@ public final class GpuSupport {
             return false;
         } finally {
             if (vg != 0L) nvgDelete(vg);
-            if (canvas != null && !canvas.isDisposed()) canvas.dispose();
+            host.dispose();               // takes the canvas with it, half-built or whole
         }
     }
 
