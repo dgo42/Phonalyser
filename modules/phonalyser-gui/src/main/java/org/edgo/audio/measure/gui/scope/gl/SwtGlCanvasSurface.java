@@ -29,6 +29,7 @@ import org.edgo.audio.measure.gui.common.NvgMeasurementPainter;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GLCapabilities;
+import org.lwjgl.system.JNI;
 
 import lombok.Setter;
 
@@ -109,6 +110,26 @@ public final class SwtGlCanvasSurface implements GlScopeSurface {
         if (!glReady) {
             GLCapabilities caps = GL.createCapabilities();
             fboSupported = caps.OpenGL30;      // raw-GL30 phosphor FBOs need framebuffer objects
+            // The render loop paces itself (the main loop's heartbeat), so the
+            // driver must not pace AGAIN: with vsync on, swapBuffers blocks to
+            // the display refresh - and behind a compositor (XWayland above all)
+            // long enough that the UI thread rendering here starves its own
+            // event dispatch (frozen dialogs, an FFT pane that never paints).
+            // Swap interval 0 asks for unthrottled swaps; a driver without the
+            // extension keeps its default pacing and nothing changes.
+            try {
+                for (String name : new String[]{
+                        "wglSwapIntervalEXT", "glXSwapIntervalSGI", "glXSwapIntervalMESA"}) {
+                    long fn = GL.getFunctionProvider().getFunctionAddress(name);
+                    if (fn != 0L) {
+                        JNI.callI(0, fn);
+                        break;
+                    }
+                }
+            } catch (Throwable ignored) {
+                // No swap-control extension resolvable on this context - the
+                // driver keeps its own pacing.
+            }
             vg = nvgCreate(NVG_ANTIALIAS | NVG_STENCIL_STROKES);
             glReady = true;
         }
