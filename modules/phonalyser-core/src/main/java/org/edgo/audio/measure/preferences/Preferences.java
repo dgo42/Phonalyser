@@ -4596,7 +4596,8 @@ public final class Preferences {
         for (DeviceRange r : ep.getRanges()) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("label", r.getLabel());
-            row.put("fsVrms", Map.of("left", r.getFsLeft(), "right", r.getFsRight()));
+            row.put("fsVrms", Map.of("left",  safeRangeFs(r.getFsLeft(),  r.getLabel(), "left"),
+                                     "right", safeRangeFs(r.getFsRight(), r.getLabel(), "right")));
             if (r.isCalibrated()) row.put("calibrated", true);
             // The device-authored display text (QA40x verbose range labels) -
             // without it a bench's card shows its plain keys on every client.
@@ -4756,14 +4757,28 @@ public final class Preferences {
      *  compatibility. */
     private void writeDeviceRange(StringBuilder out, DeviceRange r) {
         out.append("        - { label: ").append(quoted(r.getLabel()))
-           .append(", fsVrms: { left: ").append(r.getFsLeft())
-           .append(", right: ").append(r.getFsRight()).append(" }");
+           .append(", fsVrms: { left: ").append(safeRangeFs(r.getFsLeft(), r.getLabel(), "left"))
+           .append(", right: ").append(safeRangeFs(r.getFsRight(), r.getLabel(), "right")).append(" }");
         // Emitted ONLY when set by a real calibration - a nominal (seed) row stays clean.
         if (r.isCalibrated()) out.append(", calibrated: true");
         // The device-authored display text (QA40x verbose labels) is DISPLAY
         // ONLY and never persisted: the analyzer regenerates it at every open,
         // and the wire form carries it to clients that cannot ask the device.
         out.append(" }\n");
+    }
+
+    /** The full-scale a range row is stored with / read back with.  A full
+     *  scale is the divisor of every level computation, so a zero, negative or
+     *  NaN value turns each reading into an infinity and renders whole plots
+     *  empty - the factory default stands in, and the substitution is reported
+     *  as an ERROR so a damaged card store is never silent.  This class is the
+     *  single owner of the invariant: every fsVrms that enters (file / wire
+     *  read) or leaves (file / wire write) passes through here. */
+    private double safeRangeFs(double v, String rangeLabel, String side) {
+        if (v > 0.0) return v;
+        log.error("Range '{}': {} full-scale is {} Vrms - using the {} Vrms default",
+                rangeLabel, side, v, DEFAULT_ADC_FS_VRMS);
+        return DEFAULT_ADC_FS_VRMS;
     }
 
     /** Deserialises one {@link DeviceRange}, or {@code null} for a garbled row
@@ -4779,11 +4794,19 @@ public final class Preferences {
         r.setLabel(label);
         Object fs = m.get("fsVrms");
         if (fs instanceof Number n) {
-            r.setFsLeft(n.doubleValue());
-            r.setFsRight(n.doubleValue());
+            double v = n.doubleValue();
+            r.setFsLeft (safeRangeFs(v, label, "left"));
+            r.setFsRight(safeRangeFs(v, label, "right"));
         } else if (fs instanceof Map<?, ?> fm) {
-            if (fm.get("left")  instanceof Number n) r.setFsLeft(n.doubleValue());
-            if (fm.get("right") instanceof Number n) r.setFsRight(n.doubleValue());
+            r.setFsLeft (safeRangeFs(fm.get("left")  instanceof Number n ? n.doubleValue() : Double.NaN,
+                    label, "left"));
+            r.setFsRight(safeRangeFs(fm.get("right") instanceof Number n ? n.doubleValue() : Double.NaN,
+                    label, "right"));
+        } else {
+            log.error("Range '{}': fsVrms is missing - using the {} Vrms default for both channels",
+                    label, DEFAULT_ADC_FS_VRMS);
+            r.setFsLeft (DEFAULT_ADC_FS_VRMS);
+            r.setFsRight(DEFAULT_ADC_FS_VRMS);
         }
         // Tolerant: absent key means an uncalibrated (nominal) row.
         if (m.get("calibrated") instanceof Boolean b) r.setCalibrated(b);
