@@ -281,14 +281,19 @@ public final class ScopeTabControl extends AbstractTabControl {
                     // display, so an instant wipe would re-accumulate old-signal
                     // frames captured before the change arrived.
                     if (cause == GenChangeCause.USER_INPUT) {
+                        // Hold/freeze rule 1+3 (see the scope navigation spec):
+                        // a STOPPED scope and a loaded file are untouched by
+                        // ANYTHING the generator does - the held display is the
+                        // measurement the operator is reading.  Only a RUNNING
+                        // scope restarts its statistics and afterglow on a real
+                        // signal change (averaging the old signal into the new
+                        // would be wrong).  Rule 2: the held trigger anchor is
+                        // NEVER dropped here - a held trace stays until a real
+                        // trigger event under the current settings replaces it.
+                        if (!controller.isCapturing()) return;
                         view.resetMeasurementHistory();
                         getDisplay().timerExec(GEN_CLEAR_DELAY_MS, () -> {
                             if (isDisposed()) return;
-                            // The signal transition itself is a discontinuity: the
-                            // glitch trigger fires on it and NORMAL would hold that
-                            // transition frame forever - drop the anchor along with
-                            // the afterglow, once the change has flushed through.
-                            view.resetTriggerHold();
                             controller.clearPersistence();
                         });
                     }
@@ -795,7 +800,9 @@ public final class ScopeTabControl extends AbstractTabControl {
         Bindings.radio(chMap, prefs.oscTriggerChannelProperty());
         Bindings.onChange(toolbarTabs, prefs.oscTriggerChannelProperty(), v -> {
             toolbarTabs.refreshTab(TAB_TRIGGER);
-            view.resetTriggerHold();   // other channel's anchor is stale - see the type listener
+            // The held trace stays (hold/freeze rule 2): a trigger-source edit
+            // never drops the anchor - the next real trigger event under the
+            // new channel replaces it naturally.
             controller.redrawViews();
         });
         // Grey the trigger-source button whose channel display is off (a hidden
@@ -818,7 +825,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         Bindings.radio(edgeMap, prefs.oscTriggerEdgeProperty());
         Bindings.onChange(toolbarTabs, prefs.oscTriggerEdgeProperty(), v -> {
             toolbarTabs.refreshTab(TAB_TRIGGER);
-            view.resetTriggerHold();   // old-edge anchor is stale - see the type listener
+            // Held trace stays (hold/freeze rule 2) - see the channel listener.
             controller.redrawViews();
         });
 
@@ -838,10 +845,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         Bindings.radio(typeMap, prefs.oscTriggerTypeProperty());
         Bindings.onChange(toolbarTabs, prefs.oscTriggerTypeProperty(), v -> {
             toolbarTabs.refreshTab(TAB_TRIGGER);
-            // Drop the held anchor (it belongs to the OLD trigger; any later
-            // interactive render would re-stamp its stale trace into the wiped
-            // afterglow) and repaint so the phosphor clears immediately.
-            view.resetTriggerHold();
+            // Held trace stays (hold/freeze rule 2) - see the channel listener.
             controller.redrawViews();
         });
 

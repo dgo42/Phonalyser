@@ -283,12 +283,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  {@code lastLiveDispStartAbs} is -1 until a live frame has been drawn. */
     private long    lastLiveDispStartAbs = -1;
     private double  lastLiveSubSampleOffset;
-    /** Absolute sample sitting at the trigger-position fraction of the last live
-     *  window - the anchor a STOPPED scope holds (step 2) when it never triggered
-     *  (free-running AUTO, {@link #lastTriggerAbsPos} = -1), so its zoom/pan still
-     *  pin to the trigger offset instead of free-running to the buffer's edge.
-     *  -1 until a live frame has been drawn. */
-    private long    lastLiveAnchorAbs = -1;
+    /** Sample count of the last live paint's display window - with the two
+     *  fields above it lets the stop-freeze derive a held anchor that re-pins
+     *  EXACTLY the window that was on screen (see the freeze branch of
+     *  {@link #setBuffer(SignalBufferReader, boolean)}). */
+    private int     lastLiveDisplaySamples;
     /** The visible widget that receives pointer events + cursor/tooltip and whose
      *  client area sizes the pointer math - {@code this} on the CPU path, the GL
      *  canvas on the GPU path (where this view is hidden). */
@@ -744,8 +743,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     private void setBuffer(SignalBufferReader reader, boolean resetMeasurements) {
-        SignalBufferReader prevReader = this.reader;   // the live reader, captured before the swap
-        boolean wasFrozen = this.frozen;
         this.reader = reader;
         measWorker.setBuffer(reader);
         syncScopeButtons();   // signal presence changed -> re-evaluate the gated buttons
@@ -774,26 +771,26 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             // Measurements stay (table + DC-compensated trace).
             this.frozen     = true;
             this.singleHeld = false;
-            // The frozen snapshot is a FRESH buffer whose writePos is just its own
-            // sample count (≈ capacity), while the kept anchors are in the LIVE
-            // buffer's absolute coordinates.  Once the live ring has wrapped (live
-            // writePos > capacity) the two diverge by (liveWritePos − snapshotLen) -
-            // without this the anchor lands far off the snapshot and the whole trace
-            // blanks.  Shift the kept live anchors into the snapshot's coordinates.
-            if (!wasFrozen && prevReader != null) {
-                long rebase = prevReader.getWritePos() - reader.getWritePos();
-                if (rebase > 0) {
-                    if (lastTriggerAbsPos    >= 0) lastTriggerAbsPos    -= rebase;
-                    if (lastLiveAnchorAbs    >= 0) lastLiveAnchorAbs    -= rebase;
-                    if (lastLiveDispStartAbs >= 0) lastLiveDispStartAbs -= rebase;
-                }
-            }
-            // A free-running AUTO trace never set a trigger anchor; fall back to the
-            // last live window's trigger-offset point so the stopped scope still has
-            // a single fixed reference for hold / zoom / pan (panFrozenHorizontal).
-            if (this.lastTriggerAbsPos < 0 && this.lastLiveAnchorAbs >= 0) {
-                this.lastTriggerAbsPos        = this.lastLiveAnchorAbs;
-                this.lastTriggerSubSampleOffset = 0.0;
+            // The frozen snapshot keeps the LIVE buffer's absolute coordinates
+            // (SignalBuffer.frozenCopy) - anchors and recorded windows stay
+            // valid against it with NO translation.  A snapshot restarting at
+            // position zero needed a rebase from two write positions read at
+            // different times, and the samples appended in between shifted
+            // every anchor - a visible jump on the first post-stop repaint.
+            // The held anchor is DERIVED FROM THE LAST PAINTED WINDOW: the point
+            // that sat at the trigger-position fraction of the frame on screen.
+            // The frozen render re-pins that anchor at the same fraction, so the
+            // re-render reproduces the displayed frame EXACTLY (hold/freeze rule
+            // 1).  For a triggered frame this coincides with the trigger; for a
+            // free-running AUTO frame (right-aligned, no trigger fraction on
+            // screen) re-pinning the trigger-search anchor shifted the whole
+            // trace at the first post-stop repaint.
+            if (this.lastLiveDispStartAbs >= 0) {
+                double p = Preferences.instance().getOscTriggerPositionFrac();
+                double held = lastLiveDispStartAbs + lastLiveSubSampleOffset
+                        + p * lastLiveDisplaySamples;
+                this.lastTriggerAbsPos          = (long) Math.floor(held);
+                this.lastTriggerSubSampleOffset = held - Math.floor(held);
             }
         }
     }
@@ -978,19 +975,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
     }
 
-    /** Drops the held trigger anchor and captured frame - called when the trigger
-     *  SOURCE changes (type / edge / channel) or the generated signal changes: the
-     *  old anchor belongs to the old trigger/signal and would keep re-rendering a
-     *  stale trace (and re-stamp it into the persistence afterglow on the next
-     *  interactive render).  NORMAL / SINGLE then stay blank until the new trigger
-     *  fires.  Also restarts the glitch-mode cap/s collection - events caught under
-     *  the old trigger/signal (e.g. the generator transition itself, which IS a
-     *  discontinuity) don't belong in the new count. */
-    public void resetTriggerHold() {
-        lastTriggerAbsPos = -1;
-        singleHeld = false;
-        glitchCountStartNanos = 0;
-    }
+    // The held trigger anchor is deliberately NEVER dropped by trigger-source
+    // or generator changes (hold/freeze rule 2 of the scope navigation spec):
+    // a held trace stays until a real trigger event under the current settings
+    // replaces the anchor.  A dedicated reset entry point existed for those
+    // listeners and is gone with them.
 
     private void onPaint(PaintEvent e) {
         Rectangle area = getClientArea();
@@ -1425,13 +1414,19 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         SignalMeasurements cur = measWorker.getLastMeasResult(measChannelIsLeft());
         if (cur == null) return null;
         MeasurementRow[] rows = cachedMeasurementRows;
+        // A frozen scope shows the table exactly as it was PAINTED at the stop
+        // (hold/freeze rule 1).  The worker posts results faster than the paint
+        // consumes them, so at stop time one newer result is usually posted but
+        // never shown - it is deliberately discarded: rebuilding from it on the
+        // next repaint (a mouse move) swapped the held readouts in front of the
+        // operator, and repainting it AT the stop swapped them at the click
+        // instead.  Only a table hidden at the stop builds fresh (rows == null).
+        if (frozen && rows != null) return rows;
         // Rebuild when the worker posts a NEW result (each of its compute passes),
         // not on a display timer - the timer's period beat against the capture
         // block arrivals, making the readout update irregularly.
         if (rows == null || cur != lastBuiltMeasResult) {
-            long now = System.nanoTime();
             long windowNanos = (long) (prefs.getOscMeasurementAverageSeconds() * 1e9);
-            long cutoff = now - windowNanos;
             MeasurementStats vppS   = new MeasurementStats();
             MeasurementStats vRmsS  = new MeasurementStats();
             MeasurementStats vMeanS = new MeasurementStats();
@@ -1440,7 +1435,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             MeasurementStats tfS    = new MeasurementStats();
             MeasurementStats fS     = new MeasurementStats();
             MeasurementStats dutyS  = new MeasurementStats();
-            measWorker.walkRecentHistory(measChannelIsLeft(), cutoff, s -> {
+            measWorker.walkRecentHistory(measChannelIsLeft(), windowNanos, s -> {
                 vppS  .add(s.getVpp());
                 vRmsS .add(s.getVrms());
                 vMeanS.add(s.getVmean());
@@ -2894,9 +2889,26 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // re-capture, which would jump the trace to a freshly grabbed window.
         boolean captureEntryFrame = false;
         if (lastTriggerMode != triggerMode) {
+            boolean fromAuto = lastTriggerMode == TriggerMode.AUTO;
             singleArmed = false;
-            if (triggerMode == TriggerMode.AUTO) singleHeld = false;
-            else if (!singleHeld)                captureEntryFrame = true;
+            if (triggerMode == TriggerMode.AUTO) {
+                singleHeld = false;
+            } else if (!frozen && !singleHeld && (fromAuto || lastTriggerAbsPos < 0)) {
+                // Entering NORMAL/SINGLE from AUTO - the screen shows a LIVE
+                // frame, and any anchor left from an earlier trigger is not
+                // what is displayed (it may not even fit the ring any more, a
+                // blank) - or with no hold at all: freeze the frame currently
+                // on screen so the trace persists until the new mode's first
+                // trigger.  A hold carried between NORMAL and SINGLE stays
+                // untouched (hold/freeze rule 2) - re-capturing on that switch
+                // re-anchored the held trace and made it visibly jump.  A
+                // FROZEN scope never captures an entry frame (hold/freeze rule
+                // 1): its held-anchor render already serves every mode, and
+                // the captured copy's own DC estimate differed from the frozen
+                // path's windowed mean - an AC-mode trace nudged vertically on
+                // every mode switch of a stopped scope.
+                captureEntryFrame = true;
+            }
             lastTriggerMode = triggerMode;
         }
 
@@ -2909,11 +2921,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // visible even after capture stops), otherwise it leaves the pane blank.
         // The trace changes only when the user arms a shot and its trigger fires
         // - it must NOT free-run like AUTO and must NOT auto-capture a fresh frame.
+        // A FROZEN scope never takes this branch (hold/freeze rule 1): it
+        // renders through the held-anchor path below for EVERY mode - with no
+        // entry capture on a frozen mode switch there is no held copy here,
+        // and this branch blanked a stopped scope the moment it was switched
+        // into SINGLE.
         boolean sincL = prefs.isOscLeftSincInterpEnabled();
         boolean sincR = prefs.isOscRightSincInterpEnabled();
         boolean acL = prefs.isOscLeftAcMode();
         boolean acR = prefs.isOscRightAcMode();
-        if (triggerMode == TriggerMode.SINGLE && !singleArmed && !captureEntryFrame) {
+        if (!frozen && triggerMode == TriggerMode.SINGLE && !singleArmed && !captureEntryFrame) {
             if (singleHeld) {
                 renderHeldCapturedFrame(gc, w, h, showL, showR,
                         leftVDiv, rightVDiv, sincL, sincR, acL, acR);
@@ -3269,11 +3286,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         if (!frozen) {
             lastLiveDispStartAbs    = bufStartAbs + dispStart;
             lastLiveSubSampleOffset = subSampleOffset;
-            // Anchor at the point ACTUALLY shown at the offset fraction - offsetFrac,
-            // not the trigger slider - so an AUTO free-run frame (offsetFrac = 1.0,
-            // right-aligned) freezes where it was displayed, not 0.7 div off.
-            lastLiveAnchorAbs       = bufStartAbs + dispStart
-                                    + Math.round(displaySamples * offsetFrac);
+            lastLiveDisplaySamples  = displaySamples;
         }
         renderTraces(gc, w, h, leftBuf, rightBuf, available,
                      dispStart, subSampleOffset, dispCount,
@@ -3859,11 +3872,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // srcStart == 0, so the read-buffer-local trigger position IS the captured-copy
         // position (the entry snapshot passes a synthetic anchor, so this is never NaN).
         capturedTriggerLocal    = triggerLocal;
-        // Cache each channel's own DC now so AC-mode held renders subtract a
+        // Cache each channel's DC now so AC-mode held renders subtract a
         // stable bias - the live worker mean keeps averaging after the freeze
-        // and would otherwise drift the frozen trace up/down.
-        capturedDcL             = ScopeFormat.windowMean(capturedLeft,  0, len);
-        capturedDcR             = ScopeFormat.windowMean(capturedRight, 0, len);
+        // and would otherwise drift the frozen trace up/down.  Cached from the
+        // SAME estimator the live render subtracts (the worker's windowed
+        // mean), so the held frame is pixel-identical to the live trace at the
+        // capture instant - the captured slice's own arithmetic mean differed
+        // slightly (different window, non-integer cycle count) and nudged
+        // AC-mode traces vertically the moment a frame was held.
+        capturedDcL             = acDcMean(true);
+        capturedDcR             = acDcMean(false);
         capturedTimePerDiv      = Preferences.instance().getOscTimePerDiv();
         capturedSampleRate      = reader != null ? reader.getSampleRate() : 0;
         heldViewStart           = capturedDispStart + capturedSubSampleOffset;

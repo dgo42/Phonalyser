@@ -129,7 +129,7 @@ public final class ScopeMeasurementWorker {
     private final Object measHistoryLock = new Object();
     private final SignalMeasurements[] measHistoryLeft  = new SignalMeasurements[MEAS_HISTORY_CAP];
     private final SignalMeasurements[] measHistoryRight = new SignalMeasurements[MEAS_HISTORY_CAP];
-    private final long[]               measHistoryTime  = new long[MEAS_HISTORY_CAP];
+    private final long[]               measHistoryPos  = new long[MEAS_HISTORY_CAP];
     private final double[]             meanHistoryLeftNorm  = new double[MEAS_HISTORY_CAP];
     private final double[]             meanHistoryRightNorm = new double[MEAS_HISTORY_CAP];
     private int measHistoryWrite;
@@ -161,6 +161,11 @@ public final class ScopeMeasurementWorker {
 
     // ─── External wiring ────────────────────────────────────────────────────
 
+    /** Attaches the capture cursor.  The history ring is stamped in BUFFER
+     *  sample positions and the freeze snapshot keeps the live buffer's
+     *  absolute coordinates
+     *  ({@link org.edgo.audio.measure.gui.sound.SignalBuffer#frozenCopy()}),
+     *  so the kept stamps stay valid across the swap with no translation. */
     public void setBuffer(SignalBufferReader r) { this.reader = r; }
 
     /** Starts / stops amplitude binning.  Off is the default and costs nothing:
@@ -310,19 +315,40 @@ public final class ScopeMeasurementWorker {
     }
 
     /**
+     * The ONE clock behind every windowed aggregation over the history ring:
+     * the BUFFER's write position.  History entries are stamped with the
+     * buffer position of their measured window (not the wall clock), and a
+     * window of {@code w} nanos is {@code w × sampleRate} samples counted
+     * back from the write position.  Live, the buffer advances with the
+     * audio, so this equals wall-clock windowing; on a stopped capture the
+     * frozen snapshot's write position never moves, so every derived value
+     * is constant (hold/freeze rule 1) - the wall clock kept running after
+     * the ring stopped and made the held statistics and DC means drift out
+     * of the window on every later repaint until they read empty.
+     */
+    private long windowCutoffLocked(long windowNanos) {
+        SignalBufferReader r = reader;
+        if (r == null) return Long.MAX_VALUE;
+        long windowSamples = (long) (windowNanos * 1e-9 * r.getSampleRate());
+        return r.getWritePos() - windowSamples;
+    }
+
+    /**
      * Walks one channel's history ring backwards from the newest entry,
-     * stopping at the first one older than {@code cutoffNanos}.  Visitor is
+     * stopping at the first one that falls outside the {@code windowNanos}
+     * window (anchored per {@link #windowCutoffLocked}).  Visitor is
      * invoked under the history lock - keep it short.  Use to aggregate
      * stats (avg / min / max / σ) over the user's selected averaging
      * window.
      */
-    public void walkRecentHistory(boolean leftChannel, long cutoffNanos,
+    public void walkRecentHistory(boolean leftChannel, long windowNanos,
                                   Consumer<SignalMeasurements> visitor) {
         SignalMeasurements[] ring = leftChannel ? measHistoryLeft : measHistoryRight;
         synchronized (measHistoryLock) {
+            long cutoff = windowCutoffLocked(windowNanos);
             for (int i = 0; i < measHistorySize; i++) {
                 int idx = (measHistoryWrite - 1 - i + MEAS_HISTORY_CAP) % MEAS_HISTORY_CAP;
-                if (measHistoryTime[idx] < cutoffNanos) break;
+                if (measHistoryPos[idx] < cutoff) break;
                 visitor.accept(ring[idx]);
             }
         }
@@ -336,13 +362,13 @@ public final class ScopeMeasurementWorker {
      * the window (the first few hundred ms after capture starts).
      */
     public double averagedChannelMean(boolean leftChannel, long windowNanos) {
-        long cutoff = System.nanoTime() - windowNanos;
         double sum = 0;
         int count = 0;
         synchronized (measHistoryLock) {
+            long cutoff = windowCutoffLocked(windowNanos);
             for (int i = 0; i < measHistorySize; i++) {
                 int idx = (measHistoryWrite - 1 - i + MEAS_HISTORY_CAP) % MEAS_HISTORY_CAP;
-                if (measHistoryTime[idx] < cutoff) break;
+                if (measHistoryPos[idx] < cutoff) break;
                 sum += leftChannel ? meanHistoryLeftNorm[idx] : meanHistoryRightNorm[idx];
                 count++;
             }
@@ -388,7 +414,7 @@ public final class ScopeMeasurementWorker {
             double[]             mr = new double[cap];
             System.arraycopy(other.measHistoryLeft,     0, hl,   0, cap);
             System.arraycopy(other.measHistoryRight,    0, hr,   0, cap);
-            System.arraycopy(other.measHistoryTime,     0, t,    0, cap);
+            System.arraycopy(other.measHistoryPos,     0, t,    0, cap);
             System.arraycopy(other.meanHistoryLeftNorm, 0, ml,   0, cap);
             System.arraycopy(other.meanHistoryRightNorm,0, mr,   0, cap);
             int w = other.measHistoryWrite;
@@ -396,7 +422,7 @@ public final class ScopeMeasurementWorker {
             synchronized (this.measHistoryLock) {
                 System.arraycopy(hl,   0, this.measHistoryLeft,     0, cap);
                 System.arraycopy(hr,   0, this.measHistoryRight,    0, cap);
-                System.arraycopy(t,    0, this.measHistoryTime,     0, cap);
+                System.arraycopy(t,    0, this.measHistoryPos,     0, cap);
                 System.arraycopy(ml,   0, this.meanHistoryLeftNorm, 0, cap);
                 System.arraycopy(mr,   0, this.meanHistoryRightNorm,0, cap);
                 this.measHistoryWrite = w;
@@ -632,11 +658,14 @@ public final class ScopeMeasurementWorker {
         SignalMeasurements resultRight = measureChannel(false, avail, sampleRate, peakVoltsR, absStart, prefs);
         double leftMean  = resultLeft.getVmean()  / peakVoltsL;
         double rightMean = resultRight.getVmean() / peakVoltsR;
-        long now = System.nanoTime();
+        // Stamped with the BUFFER position of the measured window's end, not
+        // the wall clock - the buffer is the scope's one clock (see
+        // windowCutoffLocked), so a frozen capture holds every windowed value.
+        long endPos = absStart + avail;
         synchronized (measHistoryLock) {
             measHistoryLeft [measHistoryWrite] = resultLeft;
             measHistoryRight[measHistoryWrite] = resultRight;
-            measHistoryTime [measHistoryWrite] = now;
+            measHistoryPos [measHistoryWrite] = endPos;
             meanHistoryLeftNorm [measHistoryWrite] = leftMean;
             meanHistoryRightNorm[measHistoryWrite] = rightMean;
             measHistoryWrite = (measHistoryWrite + 1) % MEAS_HISTORY_CAP;

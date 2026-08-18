@@ -87,14 +87,6 @@ public class ScopeFormat {
         return (r << 16) | (g << 8) | b;
     }
 
-    /** Mean of {@code data} over {@code [start, start+count)} - used for AC-mode DC removal. */
-    public double windowMean(float[] data, int start, int count) {
-        if (data == null || count <= 0) return 0.0;
-        double s = 0;
-        for (int i = 0; i < count; i++) s += data[start + i];
-        return s / count;
-    }
-
     /**
      * Formats a volts-per-division value as a compact label (no "V/div"
      * suffix, SI prefix u / m / none).  E.g. {@code 0.020 -> "20m"},

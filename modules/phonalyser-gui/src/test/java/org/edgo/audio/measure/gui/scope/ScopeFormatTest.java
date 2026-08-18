@@ -52,20 +52,6 @@ class ScopeFormatTest {
     }
 
     @Test
-    void windowMean_emptyOrNull_returnsZero() {
-        assertEquals(0.0, ScopeFormat.windowMean(null,           0, 10), 1e-12);
-        assertEquals(0.0, ScopeFormat.windowMean(new float[10],  0, 0),  1e-12);
-        assertEquals(0.0, ScopeFormat.windowMean(new float[10],  0, -1), 1e-12);
-    }
-
-    @Test
-    void windowMean_correctAverage() {
-        float[] data = {1f, 2f, 3f, 4f, 5f};
-        assertEquals(3.0, ScopeFormat.windowMean(data, 0, 5), 1e-12);
-        assertEquals(3.0, ScopeFormat.windowMean(data, 1, 3), 1e-12);  // {2,3,4} -> 3
-    }
-
-    @Test
     void formatVolts_picksRightSiPrefix() {
         assertTrue(ScopeFormat.formatVolts(1.5,     0.5).endsWith(" V"));
         assertTrue(ScopeFormat.formatVolts(0.020,   0.01).endsWith(" mV"));
