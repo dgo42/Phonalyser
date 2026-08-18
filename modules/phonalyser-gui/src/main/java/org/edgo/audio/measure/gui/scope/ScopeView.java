@@ -477,13 +477,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /** Self-blinking file-path banner widget (replaces the overlay-text label). */
     private BlinkBanner fileBanner;
     /**
-     * Cached measurement result.  Recomputed at most once every
-     * {@value #MEAS_COMPUTE_PERIOD_NANOS} nanoseconds so the per-paint cost
-     * is dominated by the (cheap) table layout rather than the (expensive)
-     * Goertzel scan.  Letting the trace render at 60+ FPS while measurements
-     * tick at ~10 Hz is the biggest single throughput win.
-     */
-    /**
      * Background measurement worker.  Owns the compute thread, the
      * latest {@link SignalMeasurements} snapshot, the rolling history
      * ring (for avg / min / max / σ stats), and the per-channel DC mean
