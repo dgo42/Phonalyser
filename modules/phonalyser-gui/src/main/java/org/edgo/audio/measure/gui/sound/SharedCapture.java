@@ -192,7 +192,10 @@ public final class SharedCapture {
                 log.warn("Capture granted {} Hz where the preferences ask {} Hz - "
                         + "the ring runs at the granted rate", grantedRate, sampleRate);
             }
-            SignalBuffer buf = new SignalBuffer(grantedRate, BUFFER_SECONDS);
+            // Double-backed: the ONE live ring feeds the FFT (whose averaging
+            // needs double) and the scope alike; float storage exists only on
+            // scope-private copies (SignalBuffer.frozenCopy).
+            SignalBuffer buf = new DoubleSignalBuffer(grantedRate, BUFFER_SECONDS);
 
             final int sampleBytes = bitDepth / 8;
             final int frameSize   = sampleBytes * 2;   // stereo

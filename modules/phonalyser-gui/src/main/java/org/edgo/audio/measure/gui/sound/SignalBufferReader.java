@@ -148,20 +148,16 @@ public final class SignalBufferReader {
     }
 
     /** Returns a new reader over a standalone, frozen copy of this buffer's
-     *  current contents.  No live writer touches the copy, so the snapshot
-     *  never changes - the scope uses it to keep showing the last captured
-     *  frame after Record stops while the shared device keeps writing for
-     *  other consumers.  Keeps the raw {@link SignalBuffer} encapsulated: the
-     *  caller gets back a reader, never the buffer. */
+     *  current contents - IN THE SAME ABSOLUTE COORDINATES (see
+     *  {@link SignalBuffer#frozenCopy()}), so anchors and positions held by
+     *  consumers stay valid against the copy without translation.  No live
+     *  writer touches the copy, so the snapshot never changes - the scope uses
+     *  it to keep showing the last captured frame after Record stops while the
+     *  shared device keeps writing for other consumers.  Keeps the raw
+     *  {@link SignalBuffer} encapsulated: the caller gets back a reader, never
+     *  the buffer. */
     public SignalBufferReader frozenSnapshot() {
-        int sr  = buffer.getSampleRate();
-        int cap = buffer.getCapacity();
-        SignalBuffer frozen = new SignalBuffer(sr, (double) cap / sr);
-        double[] l = new double[cap];
-        double[] r = new double[cap];
-        int n = buffer.readLatest(cap, l, r);
-        frozen.appendBatch(l, r, n);
-        return new SignalBufferReader(frozen);
+        return new SignalBufferReader(buffer.frozenCopy());
     }
 
     // ─── Contiguous cursor ──────────────────────────────────────────────────
@@ -265,7 +261,10 @@ public final class SignalBufferReader {
         private final SignalBuffer buffer;
 
         private Builder(int sampleRate, double seconds) {
-            this.buffer = new SignalBuffer(sampleRate, seconds);
+            // Float-backed: loaded signal files are a scope-only feature and
+            // the scope's whole render/measure path reads float - half the
+            // footprint of the double ring.
+            this.buffer = new FloatSignalBuffer(sampleRate, seconds);
         }
 
         /** Appends {@code count} decoded samples (same contract as

@@ -31,7 +31,7 @@ import org.junit.jupiter.api.Test;
 class SignalBufferReaderTest {
 
     private static SignalBuffer bufferOfCapacity(int capacitySamples) {
-        return new SignalBuffer(48_000, (double) capacitySamples / 48_000);
+        return new DoubleSignalBuffer(48_000, (double) capacitySamples / 48_000);
     }
 
     /** Appends {@code n} samples whose left value is the absolute index and
@@ -156,5 +156,28 @@ class SignalBufferReaderTest {
         assertEquals(50, n);
         assertEquals(0f, l[0]);
         assertEquals(49f, l[49]);
+    }
+
+    @Test
+    void frozenSnapshotKeepsAbsoluteCoordinates() {
+        SignalBuffer b = bufferOfCapacity(100);
+        SignalBufferReader rd = new SignalBufferReader(b);
+        append(b, 0, 150);                       // wrapped: resident 50..149
+        SignalBufferReader snap = rd.frozenSnapshot();
+
+        // One point of truth for positions: the copy's write position IS the
+        // source's at the moment of the copy - consumer-held anchors need no
+        // translation against the snapshot.
+        assertEquals(rd.getWritePos(), snap.getWritePos());
+
+        // An absolute-position read answers identically from ring and copy.
+        float[] live = new float[30];
+        float[] froz = new float[30];
+        assertEquals(30, rd.readEndingAt(120, 30, live, null));
+        assertEquals(30, snap.readEndingAt(120, 30, froz, null));
+        for (int i = 0; i < 30; i++) {
+            assertEquals(live[i], froz[i]);
+            assertEquals(90 + i, froz[i]);       // samples 90..119 by value
+        }
     }
 }

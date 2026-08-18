@@ -24,11 +24,19 @@ import lombok.Getter;
 
 /**
  * Fixed-capacity stereo ring buffer holding the most recent {@code N} samples
- * of left and right channel data as normalised doubles in {@code [-1, +1]}.
+ * of left and right channel data as normalised values in {@code [-1, +1]}.
  * The capture thread calls {@link #append(double, double)}; the SWT UI thread
  * calls {@link #readLatest(int, double[], double[])} during paint events.  All
  * mutating / reading methods are synchronised on this instance, which is
  * adequate for a single writer + single reader scenario.
+ *
+ * <p>The ring's positions, wrap math, lifecycle state (finish reason, sweep
+ * mark) and locking live HERE; the sample STORAGE lives in the two concrete
+ * backings - {@link DoubleSignalBuffer} (the shared live ring: the FFT needs
+ * double, and the scope reads the same ring) and {@link FloatSignalBuffer}
+ * (scope-private copies at half the memory).  Java generics cannot
+ * parameterise primitive arrays, so the split is a subclass per backing with
+ * primitive copy hooks.
  *
  * <p>Lives in {@code gui.sound} (next to its producer
  * {@link SharedCapture}) so the scope and FFT views can both depend on
@@ -37,12 +45,13 @@ import lombok.Getter;
  * {@code gui.sound.SharedCapture} produces the buffer and {@code gui.scope.OscilloscopeController}
  * consumes it.
  */
-public final class SignalBuffer {
+public abstract class SignalBuffer {
 
+    @Getter
     private final int     sampleRate;
+    /** Capacity in samples (= sampleRate × seconds, rounded up). */
+    @Getter
     private final int     capacity;
-    private final double[] left;
-    private final double[] right;
     private long          writePos;   // total samples written since construction
     /** Why this stream ended, machine-readably - the GUI localizes it at
      *  display time; whoever held the device already put its own words in the
@@ -61,18 +70,20 @@ public final class SignalBuffer {
     @Getter
     private volatile long sweepMarkPos = -1;
 
-    public SignalBuffer(int sampleRate, double seconds) {
+    protected SignalBuffer(int sampleRate, double seconds) {
         if (sampleRate <= 0 || seconds <= 0) {
             throw new IllegalArgumentException("sampleRate and seconds must be positive");
         }
         this.sampleRate = sampleRate;
         this.capacity   = (int) Math.ceil(sampleRate * seconds);
-        this.left       = new double[capacity];
-        this.right      = new double[capacity];
     }
 
-    public int getSampleRate() {
-        return sampleRate;
+    /** Exact-capacity twin used by {@link #frozenCopy()} - the copy must have
+     *  the IDENTICAL capacity so the position-to-index mapping matches the
+     *  source (the seconds-based ctor rounds through floating point). */
+    protected SignalBuffer(int sampleRate, int capacity) {
+        this.sampleRate = sampleRate;
+        this.capacity   = capacity;
     }
 
     /** Total samples ever written.  Used by the UI to detect new data. */
@@ -145,15 +156,46 @@ public final class SignalBuffer {
         notifyAll();
     }
 
-    /** Capacity in samples (= sampleRate × seconds, rounded up). */
-    public int getCapacity() {
-        return capacity;
-    }
+    // ── Backing-storage hooks - the ONLY methods that touch sample arrays ────
+
+    /** Stores one sample pair at backing index {@code idx}.  Called under the
+     *  monitor by {@link #append}. */
+    protected abstract void set(int idx, double leftValue, double rightValue);
+
+    /** Writes {@code len} sample pairs from the sources at {@code srcPos} into
+     *  the backing at {@code dstIdx} (no wrap - the caller split the request).
+     *  Called under the monitor. */
+    protected abstract void copyIn(double[] leftValues, double[] rightValues,
+                                   int srcPos, int dstIdx, int len);
+
+    /** {@link #copyIn(double[], double[], int, int, int)} from single-precision
+     *  sources (WAV load). */
+    protected abstract void copyIn(float[] leftValues, float[] rightValues,
+                                   int srcPos, int dstIdx, int len);
+
+    /** Copies {@code len} sample pairs from backing index {@code srcIdx} into
+     *  the outputs at {@code dstPos}; either output may be {@code null} to skip
+     *  that channel.  No wrap - the caller split the request.  Runs OUTSIDE the
+     *  monitor (see {@link #readLatest} for why that is safe). */
+    protected abstract void copyOut(int srcIdx, double[] outLeft, double[] outRight,
+                                    int dstPos, int len);
+
+    /** {@link #copyOut(int, double[], double[], int, int)} into single-precision
+     *  outputs (the scope's DSP stays {@code float}). */
+    protected abstract void copyOut(int srcIdx, float[] outLeft, float[] outRight,
+                                    int dstPos, int len);
+
+    /** Copies the WHOLE backing verbatim-by-index into the given float arrays
+     *  (length = {@link #getCapacity()}).  Called under the monitor by
+     *  {@link #frozenCopy()} - index-preserving, so the copy's modulo layout
+     *  matches the source's. */
+    protected abstract void narrowTo(float[] dstLeft, float[] dstRight);
+
+    // ── Writing ──────────────────────────────────────────────────────────────
 
     public synchronized void append(double leftValue, double rightValue) {
         int idx = (int) (writePos % capacity);
-        left[idx]  = leftValue;
-        right[idx] = rightValue;
+        set(idx, leftValue, rightValue);
         writePos++;
         notifyAll();   // wake consumers blocked in awaitAvailable
     }
@@ -166,22 +208,33 @@ public final class SignalBuffer {
      * at 384 kHz) - dramatically reducing lock contention with the UI
      * thread's {@link #readLatest(int, double[], double[])} during paint.
      *
-     * <p>Both writes use {@link System#arraycopy} so the synchronised hold
-     * time stays in the tens of microseconds even for 8 k-sample chunks.
+     * <p>Both writes are bulk copies so the synchronised hold time stays in
+     * the tens of microseconds even for 8 k-sample chunks.
      */
     public synchronized void appendBatch(double[] leftValues, double[] rightValues, int count) {
         if (count <= 0) return;
         int writeIdx   = (int) (writePos % capacity);
         int firstChunk = Math.min(count, capacity - writeIdx);
-        System.arraycopy(leftValues,  0, left,  writeIdx, firstChunk);
-        System.arraycopy(rightValues, 0, right, writeIdx, firstChunk);
+        copyIn(leftValues, rightValues, 0, writeIdx, firstChunk);
         int remaining = count - firstChunk;
         if (remaining > 0) {
-            System.arraycopy(leftValues,  firstChunk, left,  0, remaining);
-            System.arraycopy(rightValues, firstChunk, right, 0, remaining);
+            copyIn(leftValues, rightValues, firstChunk, 0, remaining);
         }
         writePos += count;
         notifyAll();   // wake consumers blocked in awaitAvailable
+    }
+
+    /** {@link #appendBatch(double[], double[], int)} from single-precision sources (WAV load). */
+    public synchronized void appendBatch(float[] leftValues, float[] rightValues, int count) {
+        if (count <= 0) return;
+        int writeIdx   = (int) (writePos % capacity);
+        int firstChunk = Math.min(count, capacity - writeIdx);
+        copyIn(leftValues, rightValues, 0, writeIdx, firstChunk);
+        int remaining = count - firstChunk;
+        if (remaining > 0) {
+            copyIn(leftValues, rightValues, firstChunk, 0, remaining);
+        }
+        writePos += count;
     }
 
     /**
@@ -212,6 +265,8 @@ public final class SignalBuffer {
         return writePos - fromPos;
     }
 
+    // ── Reading ──────────────────────────────────────────────────────────────
+
     /**
      * Copies up to {@code count} of the most-recently-written samples into
      * {@code outLeft} / {@code outRight} (either may be {@code null} to skip
@@ -222,22 +277,16 @@ public final class SignalBuffer {
      * <p>Implementation: the requested span either lies entirely past the
      * ring-buffer wrap (one contiguous slice) or straddles it (two slices,
      * one to the end of the backing array, one from index 0).  Both cases
-     * are handled with up to two {@link System#arraycopy} calls - a JVM
-     * intrinsic that compiles down to a fast memmove - instead of a
-     * per-sample modulo loop.  At 384 kHz this drops the synchronised hold
-     * time from several milliseconds per paint to tens of microseconds.
+     * are handled with up to two bulk copies instead of a per-sample modulo
+     * loop.  Only the write-position snapshot holds the lock - the copy
+     * itself runs OUTSIDE it: the writer can race with us but only
+     * overwrites the read region after (capacity − count) more samples have
+     * arrived, which at typical capture rates is seconds away - far longer
+     * than the few ms a bulk copy needs.  This keeps the lock-hold at a
+     * single field read (~µs), eliminating the WASAPI underruns the FFT
+     * reads were causing whenever they crossed a capture-thread tick.
      */
     public int readLatest(int count, double[] outLeft, double[] outRight) {
-        // Snapshot the write position under the lock - only this
-        // critical section blocks the audio thread's appendBatch.
-        // The arraycopy then runs OUTSIDE the lock: the writer can
-        // race with us but only overwrites the read region after
-        // (capacity − count) more samples have arrived, which at
-        // typical capture rates is seconds away - far longer than
-        // the few ms an arraycopy needs.  This drops the lock-hold
-        // from arraycopy-of-2M-doubles (~ms) to a single field read
-        // (~µs), eliminating the WASAPI underruns the FFT reads were
-        // causing whenever they crossed a capture-thread tick.
         long latest;
         synchronized (this) {
             latest = writePos;
@@ -245,15 +294,19 @@ public final class SignalBuffer {
         long start  = Math.max(0, latest - count);
         int available = (int) Math.min(count, latest - start);
         if (available <= 0) return 0;
-        int srcStart = (int) (start % capacity);
-        int firstChunk = Math.min(available, capacity - srcStart);
-        if (outLeft  != null) System.arraycopy(left,  srcStart, outLeft,  0, firstChunk);
-        if (outRight != null) System.arraycopy(right, srcStart, outRight, 0, firstChunk);
-        int remaining = available - firstChunk;
-        if (remaining > 0) {
-            if (outLeft  != null) System.arraycopy(left,  0, outLeft,  firstChunk, remaining);
-            if (outRight != null) System.arraycopy(right, 0, outRight, firstChunk, remaining);
-        }
+        copyOutWrapped(start, available, outLeft, null, outRight, null);
+        return available;
+    }
+
+    /** {@link #readLatest(int, double[], double[])} into single-precision out
+     *  buffers (the caller's DSP stays {@code float}). */
+    public int readLatest(int count, float[] outLeft, float[] outRight) {
+        long latest;
+        synchronized (this) { latest = writePos; }
+        long start  = Math.max(0, latest - count);
+        int available = (int) Math.min(count, latest - start);
+        if (available <= 0) return 0;
+        copyOutWrapped(start, available, null, outLeft, null, outRight);
         return available;
     }
 
@@ -270,28 +323,29 @@ public final class SignalBuffer {
      */
     public int readEndingAt(long absoluteEnd, int count,
                             double[] outLeft, double[] outRight) {
-        // Same decoupling as readLatest: snapshot writePos under the
-        // lock, do the arraycopy outside so the audio thread's
-        // appendBatch never waits on a multi-megabyte read.
         long currentWrite;
         synchronized (this) {
             currentWrite = writePos;
         }
         long oldest    = Math.max(0L, currentWrite - capacity);
         long endExcl   = Math.min(absoluteEnd, currentWrite);
-        long startReq  = absoluteEnd - count;
-        long start     = Math.max(startReq, oldest);
+        long start     = Math.max(absoluteEnd - count, oldest);
         int  available = (int) Math.max(0L, endExcl - start);
         if (available <= 0) return 0;
-        int srcStart   = (int) (start % capacity);
-        int firstChunk = Math.min(available, capacity - srcStart);
-        if (outLeft  != null) System.arraycopy(left,  srcStart, outLeft,  0, firstChunk);
-        if (outRight != null) System.arraycopy(right, srcStart, outRight, 0, firstChunk);
-        int remaining = available - firstChunk;
-        if (remaining > 0) {
-            if (outLeft  != null) System.arraycopy(left,  0, outLeft,  firstChunk, remaining);
-            if (outRight != null) System.arraycopy(right, 0, outRight, firstChunk, remaining);
-        }
+        copyOutWrapped(start, available, outLeft, null, outRight, null);
+        return available;
+    }
+
+    /** {@link #readEndingAt(long, int, double[], double[])} into float out buffers. */
+    public int readEndingAt(long absoluteEnd, int count, float[] outLeft, float[] outRight) {
+        long currentWrite;
+        synchronized (this) { currentWrite = writePos; }
+        long oldest    = Math.max(0L, currentWrite - capacity);
+        long endExcl   = Math.min(absoluteEnd, currentWrite);
+        long start     = Math.max(absoluteEnd - count, oldest);
+        int  available = (int) Math.max(0L, endExcl - start);
+        if (available <= 0) return 0;
+        copyOutWrapped(start, available, null, outLeft, null, outRight);
         return available;
     }
 
@@ -331,59 +385,10 @@ public final class SignalBuffer {
         if (available <= 0) return 0;
         int srcStart   = (int) (start % capacity);
         int firstChunk = Math.min(available, capacity - srcStart);
-        if (outLeft  != null) System.arraycopy(left,  srcStart, outLeft,  outOffset, firstChunk);
-        if (outRight != null) System.arraycopy(right, srcStart, outRight, outOffset, firstChunk);
+        copyOut(srcStart, outLeft, outRight, outOffset, firstChunk);
         int remaining = available - firstChunk;
         if (remaining > 0) {
-            if (outLeft  != null) System.arraycopy(left,  0, outLeft,  outOffset + firstChunk, remaining);
-            if (outRight != null) System.arraycopy(right, 0, outRight, outOffset + firstChunk, remaining);
-        }
-        return available;
-    }
-
-    // ── Single-precision views for the display / WAV paths ───────────────────
-    // The oscilloscope and WAV save/load don't need double precision, so they
-    // read / write a float view of the (double) ring instead of dragging their
-    // DSP to double.  Narrowing / widening is per-element - System.arraycopy
-    // can't convert between float and double.
-
-    /** {@link #readLatest(int, double[], double[])} into single-precision out
-     *  buffers (the caller's DSP stays {@code float}). */
-    public int readLatest(int count, float[] outLeft, float[] outRight) {
-        long latest;
-        synchronized (this) { latest = writePos; }
-        long start  = Math.max(0, latest - count);
-        int available = (int) Math.min(count, latest - start);
-        if (available <= 0) return 0;
-        int srcStart = (int) (start % capacity);
-        int firstChunk = Math.min(available, capacity - srcStart);
-        if (outLeft  != null) narrow(left,  srcStart, outLeft,  0, firstChunk);
-        if (outRight != null) narrow(right, srcStart, outRight, 0, firstChunk);
-        int remaining = available - firstChunk;
-        if (remaining > 0) {
-            if (outLeft  != null) narrow(left,  0, outLeft,  firstChunk, remaining);
-            if (outRight != null) narrow(right, 0, outRight, firstChunk, remaining);
-        }
-        return available;
-    }
-
-    /** {@link #readEndingAt(long, int, double[], double[])} into float out buffers. */
-    public int readEndingAt(long absoluteEnd, int count, float[] outLeft, float[] outRight) {
-        long currentWrite;
-        synchronized (this) { currentWrite = writePos; }
-        long oldest    = Math.max(0L, currentWrite - capacity);
-        long endExcl   = Math.min(absoluteEnd, currentWrite);
-        long start     = Math.max(absoluteEnd - count, oldest);
-        int  available = (int) Math.max(0L, endExcl - start);
-        if (available <= 0) return 0;
-        int srcStart   = (int) (start % capacity);
-        int firstChunk = Math.min(available, capacity - srcStart);
-        if (outLeft  != null) narrow(left,  srcStart, outLeft,  0, firstChunk);
-        if (outRight != null) narrow(right, srcStart, outRight, 0, firstChunk);
-        int remaining = available - firstChunk;
-        if (remaining > 0) {
-            if (outLeft  != null) narrow(left,  0, outLeft,  firstChunk, remaining);
-            if (outRight != null) narrow(right, 0, outRight, firstChunk, remaining);
+            copyOut(0, outLeft, outRight, outOffset + firstChunk, remaining);
         }
         return available;
     }
@@ -399,36 +404,62 @@ public final class SignalBuffer {
         if (available <= 0) return 0;
         int srcStart   = (int) (start % capacity);
         int firstChunk = Math.min(available, capacity - srcStart);
-        if (outLeft  != null) narrow(left,  srcStart, outLeft,  0, firstChunk);
-        if (outRight != null) narrow(right, srcStart, outRight, 0, firstChunk);
+        copyOut(srcStart, outLeft, outRight, 0, firstChunk);
         int remaining = available - firstChunk;
         if (remaining > 0) {
-            if (outLeft  != null) narrow(left,  0, outLeft,  firstChunk, remaining);
-            if (outRight != null) narrow(right, 0, outRight, firstChunk, remaining);
+            copyOut(0, outLeft, outRight, firstChunk, remaining);
         }
         return available;
     }
 
-    /** {@link #appendBatch(double[], double[], int)} from single-precision sources (WAV load). */
-    public synchronized void appendBatch(float[] leftValues, float[] rightValues, int count) {
-        if (count <= 0) return;
-        int writeIdx   = (int) (writePos % capacity);
-        int firstChunk = Math.min(count, capacity - writeIdx);
-        widen(leftValues,  0, left,  writeIdx, firstChunk);
-        widen(rightValues, 0, right, writeIdx, firstChunk);
-        int remaining = count - firstChunk;
-        if (remaining > 0) {
-            widen(leftValues,  firstChunk, left,  0, remaining);
-            widen(rightValues, firstChunk, right, 0, remaining);
+    /** Wrap-splitting copy-out shared by the latest/ending-at read paths:
+     *  exactly ONE of the double/float output pairs is in use per call.
+     *  Head-aligned to output index 0. */
+    private void copyOutWrapped(long start, int available,
+                                double[] outLeftD, float[] outLeftF,
+                                double[] outRightD, float[] outRightF) {
+        int srcStart   = (int) (start % capacity);
+        int firstChunk = Math.min(available, capacity - srcStart);
+        boolean floatOut = outLeftF != null || outRightF != null;
+        if (floatOut) {
+            copyOut(srcStart, outLeftF, outRightF, 0, firstChunk);
+        } else {
+            copyOut(srcStart, outLeftD, outRightD, 0, firstChunk);
         }
-        writePos += count;
+        int remaining = available - firstChunk;
+        if (remaining > 0) {
+            if (floatOut) {
+                copyOut(0, outLeftF, outRightF, firstChunk, remaining);
+            } else {
+                copyOut(0, outLeftD, outRightD, firstChunk, remaining);
+            }
+        }
     }
 
-    private void narrow(double[] src, int srcPos, float[] dst, int dstPos, int len) {
-        for (int i = 0; i < len; i++) dst[dstPos + i] = (float) src[srcPos + i];
-    }
-
-    private void widen(float[] src, int srcPos, double[] dst, int dstPos, int len) {
-        for (int i = 0; i < len; i++) dst[dstPos + i] = src[srcPos + i];
+    /**
+     * Atomic frozen copy: a new buffer holding this ring's current contents at
+     * THE SAME ABSOLUTE POSITIONS - identical capacity, identical modulo
+     * layout, and the write position carried over, so every anchor, history
+     * stamp and {@code readEndingAt} coordinate a consumer holds stays valid
+     * against the copy WITHOUT any translation.  There is one point of truth
+     * for positions: the buffer.  Copied under the monitor, so position and
+     * samples are one consistent snapshot; the copy never grows, so a stopped
+     * display derived from it can never change.  (A copy that restarted at
+     * position zero forced consumers to rebase their anchors by a live-minus-
+     * copy difference taken AFTER the copy - the samples appended in between
+     * shifted every anchor and visibly jumped the frozen trace.)
+     *
+     * <p>The copy is {@link FloatSignalBuffer float}-backed at half the double
+     * ring's footprint: only the scope freezes buffers, and its whole
+     * render/measure path reads float.  Precision: a float keeps 24
+     * significant magnitude bits (sign separate), so an int24 sample survives
+     * exactly; a 32-bit source is quantised at 2^-24 (≈ -144 dBFS) in the
+     * held copy - the live ring and every measurement path stay double.
+     */
+    public synchronized SignalBuffer frozenCopy() {
+        FloatSignalBuffer frozen = new FloatSignalBuffer(sampleRate, capacity);
+        narrowTo(frozen.left, frozen.right);
+        ((SignalBuffer) frozen).writePos = writePos;
+        return frozen;
     }
 }

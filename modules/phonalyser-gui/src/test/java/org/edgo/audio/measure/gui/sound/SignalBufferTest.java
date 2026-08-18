@@ -36,16 +36,16 @@ class SignalBufferTest {
     @Test
     void constructor_rejectsNonPositiveParams() {
         assertThrows(IllegalArgumentException.class,
-                () -> new SignalBuffer(0, 1.0));
+                () -> new DoubleSignalBuffer(0, 1.0));
         assertThrows(IllegalArgumentException.class,
-                () -> new SignalBuffer(48_000, 0));
+                () -> new DoubleSignalBuffer(48_000, 0));
         assertThrows(IllegalArgumentException.class,
-                () -> new SignalBuffer(-1, 1.0));
+                () -> new DoubleSignalBuffer(-1, 1.0));
     }
 
     @Test
     void getters_returnConstructorArgs() {
-        SignalBuffer b = new SignalBuffer(48_000, 0.5);
+        SignalBuffer b = new DoubleSignalBuffer(48_000, 0.5);
         assertEquals(48_000, b.getSampleRate());
         assertEquals(24_000, b.getCapacity(), "ceil(48000 * 0.5)");
         assertEquals(0L,     b.getWritePos());
@@ -53,7 +53,7 @@ class SignalBufferTest {
 
     @Test
     void append_incrementsWritePosAndStoresSample() {
-        SignalBuffer b = new SignalBuffer(48_000, 1.0);
+        SignalBuffer b = new DoubleSignalBuffer(48_000, 1.0);
         b.append(0.5f, -0.5f);
         b.append(0.25f, -0.25f);
 
@@ -71,7 +71,7 @@ class SignalBufferTest {
 
     @Test
     void appendBatch_storesContiguousChunkWithoutWrap() {
-        SignalBuffer b = new SignalBuffer(48_000, 1.0);
+        SignalBuffer b = new DoubleSignalBuffer(48_000, 1.0);
         float[] L = { 1f, 2f, 3f, 4f, 5f };
         float[] R = { -1f, -2f, -3f, -4f, -5f };
         b.appendBatch(L, R, 5);
@@ -90,7 +90,7 @@ class SignalBufferTest {
     @Test
     void appendBatch_wrapsCorrectly() {
         // Capacity 4.  Write 7 samples -> buffer holds last 4.
-        SignalBuffer b = new SignalBuffer(48_000, 4.0 / 48_000);   // ⌈4⌉ = 4
+        SignalBuffer b = new DoubleSignalBuffer(48_000, 4.0 / 48_000);   // ⌈4⌉ = 4
         assertEquals(4, b.getCapacity());
 
         float[] L = { 1f, 2f, 3f, 4f, 5f, 6f, 7f };
@@ -111,7 +111,7 @@ class SignalBufferTest {
 
     @Test
     void readLatest_returnsPartial_whenFewerSamplesAvailable() {
-        SignalBuffer b = new SignalBuffer(48_000, 1.0);
+        SignalBuffer b = new DoubleSignalBuffer(48_000, 1.0);
         b.append(1f, 1f);
         b.append(2f, 2f);
 
@@ -125,7 +125,7 @@ class SignalBufferTest {
     @Test
     void readLatest_nullChannel_skipsCopy() {
         // Passing null for outRight skips the right-channel copy.
-        SignalBuffer b = new SignalBuffer(48_000, 1.0);
+        SignalBuffer b = new DoubleSignalBuffer(48_000, 1.0);
         b.append(1f, 11f);
         b.append(2f, 22f);
 
@@ -141,7 +141,7 @@ class SignalBufferTest {
         // Capacity 4.  Write 6 samples (0..5).  The oldest still-resident
         // sample is index (6 - 4) = 2.  Asking for the last 10 ending at
         // 6 should return 4 samples: indices 2, 3, 4, 5 = values 3, 4, 5, 6.
-        SignalBuffer b = new SignalBuffer(48_000, 4.0 / 48_000);
+        SignalBuffer b = new DoubleSignalBuffer(48_000, 4.0 / 48_000);
         for (int i = 1; i <= 6; i++) b.append(i, -i);
 
         float[] outL = new float[10];
@@ -155,7 +155,7 @@ class SignalBufferTest {
 
     @Test
     void readEndingAt_zeroCount_returnsZero() {
-        SignalBuffer b = new SignalBuffer(48_000, 1.0);
+        SignalBuffer b = new DoubleSignalBuffer(48_000, 1.0);
         b.append(1f, 1f);
         assertEquals(0, b.readEndingAt(1L, 0, new float[5], null));
     }
