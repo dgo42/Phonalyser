@@ -195,37 +195,33 @@ public final class GuiMain {
             prefs.applyOutputDeviceProfile(selection.getOutputDeviceName());
         }
 
-        // Bring every backend this build offers to a known, safe, idle state -
-        // NOT just the active one.  A device can outlive the process that drove
-        // it: a QA40x moved between two machines without losing USB power arrives
-        // holding the other machine's input sensitivity, and nothing corrects it
-        // until something happens to acquire and release it.
-        // The analyzer in that case is attached while ANOTHER backend is
-        // selected, so sweeping only the active backend would walk straight past
-        // the one device that needed it.
-        //
-        // Started HERE, before the Display: it runs on its own thread and
-        // overlaps the splash and the window build, so a backend that is slow or
-        // wedged - precisely the hardware this exists for - cannot delay the
-        // application appearing.
-        AudioBackend.instance().setupInBackground();
+        // The backend bring-up (every backend to a known, safe, idle state - a
+        // QA40x moved between machines arrives holding the other machine's
+        // input sensitivity) no longer starts here: the device catalog's
+        // priming thread runs it AFTER its enumeration, mirroring the net
+        // server's boot order, so the two cannot interleave on the same
+        // managers.  See DeviceCatalog.primeInBackground, started by
+        // MainWindow's constructor.
 
         // On a Wayland session SWT's GLCanvas can't obtain a GL context (GLX is
-        // X11-only), so the GPU scope is unavailable there.  When GPU acceleration
-        // is enabled, force the GTK backend to X11 (XWayland) so the GL path works
-        // out of the box.  GTK reads GDK_BACKEND from the C environment at init and
-        // the JVM can't set its own env, so call libc setenv via JNA - BEFORE the
-        // Display (the first GTK touch) is created below.  Gated to Linux + a
-        // Wayland session + not already X11 + GPU enabled; harmless if GTK ignores
-        // it (the scope just stays on CPU, as it would have anyway).
+        // X11-only), so the GPU scope is unavailable there.  Force the GTK backend
+        // to X11 (XWayland) so the GL path works out of the box.  Deliberately NOT
+        // gated on the GPU-acceleration preference: with the backend pinned to X11
+        // the GL probe can succeed while the preference is off, so the Preferences
+        // checkbox stays available and GPU rendering can be enabled without a
+        // restart - a native-Wayland session would pin the probe to "unavailable"
+        // for the whole run.  GTK reads GDK_BACKEND from the C environment at init
+        // and the JVM can't set its own env, so call libc setenv via JNA - BEFORE
+        // the Display (the first GTK touch) is created below.  Gated to Linux + a
+        // Wayland session + not already X11; harmless if GTK ignores it (the scope
+        // just stays on CPU, as it would have anyway).
         String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         if (!osName.contains("win") && !osName.contains("mac")
                 && System.getenv("WAYLAND_DISPLAY") != null
-                && !"x11".equals(System.getenv("GDK_BACKEND"))
-                && Preferences.instance().isUseGpuAcceleration()) {
+                && !"x11".equals(System.getenv("GDK_BACKEND"))) {
             try {
                 Native.load("c", LibC.class).setenv("GDK_BACKEND", "x11", 1);
-                log.info("Wayland + GPU enabled: set GDK_BACKEND=x11 for the GL scope.");
+                log.info("Wayland session: set GDK_BACKEND=x11 for the GL scope.");
             } catch (RuntimeException e) {
                 log.warn("Could not set GDK_BACKEND=x11; GPU scope stays on CPU under Wayland: {}",
                         e.toString());
@@ -344,14 +340,31 @@ public final class GuiMain {
         // When no view is live the chain lapses and the loop blocks in sleep(), so an idle
         // app stays cool.
         final int RENDER_FRAME_MS = 1;   // pace the next frame as soon as possible (render time dominates)
+        // A rendered frame earns this many times its own cost in idle before
+        // the next one is due, capping rendering at ~1/(1+factor) of the UI
+        // thread.  One-to-one (half the thread) is not enough: a GL swap emits
+        // its own damage/present events, which refill the native queue during
+        // the gap - and SWT dispatches asyncExec work and paints only when
+        // that queue drains empty, so the FFT's publishes and the Preferences
+        // format fill still trickled behind a heavy scope.
+        final int RENDER_IDLE_FACTOR = 3;
         final Runnable[] heartbeat = new Runnable[1];
         final boolean[]  beating   = { false };
         heartbeat[0] = () -> {
             beating[0] = false;
             if (window.isDisposed()) return;
+            long renderStart = System.nanoTime();
             if (window.renderRealtimeFrame()) {
                 beating[0] = true;
-                display.timerExec(RENDER_FRAME_MS, heartbeat[0]);
+                // Pace the next frame by what THIS one cost.  The render runs
+                // on the UI thread; a heavy frame (a software-GL guest above
+                // all) re-armed at the minimum cadence starves everything the
+                // queue-empty rule gates - clicks still land (native events)
+                // while async fills and canvas paints wait.  A fast frame
+                // keeps the minimum cadence.
+                int renderMs = (int) Math.min(1_000, (System.nanoTime() - renderStart) / 1_000_000);
+                display.timerExec(Math.max(RENDER_FRAME_MS, RENDER_IDLE_FACTOR * renderMs),
+                        heartbeat[0]);
             }
         };
         // macOS GPU scope: the floating GLFW child window's input callbacks fire only
