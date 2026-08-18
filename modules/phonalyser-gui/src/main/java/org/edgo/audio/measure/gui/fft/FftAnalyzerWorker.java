@@ -1864,8 +1864,12 @@ public final class FftAnalyzerWorker {
                     window, overlap, distMin, distMax, coherent, fundRefDbFs,
                     false, expectedFundHz, slot);
         } catch (RuntimeException ex) {
+            // Pool hygiene only - the failure itself must surface: the worker
+            // loop's Throwable catch logs it, so a persistently throwing
+            // analysis is visible in a WARN-level log instead of ticking
+            // forever in silence.
             resultPool.release(slot);
-            return IDLE_TICK_MS;
+            throw ex;
         }
         // Pooled slot: clear the conditionally-written debug fields so a tick
         // that doesn't reach their assignment below can't republish a
