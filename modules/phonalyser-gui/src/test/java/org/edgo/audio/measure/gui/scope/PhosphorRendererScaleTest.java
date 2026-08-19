@@ -130,7 +130,7 @@ class PhosphorRendererScaleTest {
         @Override public void  fillRectangle(int x, int y, int width, int height) { }
         @Override public void  drawRoundRectangle(int x, int y, int w, int h, int aw, int ah) { }
         @Override public void  fillRoundRectangle(int x, int y, int w, int h, int aw, int ah) { }
-        @Override public void  fillOval(int x, int y, int width, int height) { }
+        @Override public void  fillOvalAt(double cx, double cy, int diameter) { }
         @Override public void  fillPolygon(int[] pointArray) { }
         @Override public void  drawPolygon(int[] pointArray) { }
         @Override public void  drawImage(Image image, int x, int y) { }

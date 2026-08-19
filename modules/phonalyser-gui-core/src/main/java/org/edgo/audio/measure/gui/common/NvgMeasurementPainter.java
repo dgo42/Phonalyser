@@ -227,9 +227,10 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
         fill();
     }
 
-    @Override public void fillOval(int x, int y, int w, int h) {
+    @Override public void fillOvalAt(double cx, double cy, int diameter) {
+        // NanoVG is float-native: the dot sits at the exact sub-pixel centre.
         nvgBeginPath(vg);
-        nvgEllipse(vg, x + w / 2f, y + h / 2f, w / 2f, h / 2f);
+        nvgEllipse(vg, (float) cx, (float) cy, diameter / 2f, diameter / 2f);
         fill();
     }
 

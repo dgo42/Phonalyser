@@ -88,7 +88,18 @@ public final class GcMeasurementPainter implements MeasurementPainter {
     @Override public void fillRectangle(int x, int y, int w, int h)     { gc.fillRectangle(x, y, w, h); }
     @Override public void drawRoundRectangle(int x, int y, int w, int h, int aw, int ah) { gc.drawRoundRectangle(x, y, w, h, aw, ah); }
     @Override public void fillRoundRectangle(int x, int y, int w, int h, int aw, int ah) { gc.fillRoundRectangle(x, y, w, h, aw, ah); }
-    @Override public void fillOval(int x, int y, int w, int h)          { gc.fillOval(x, y, w, h); }
+    @Override public void fillOvalAt(double cx, double cy, int diameter) {
+        // GC's own fillOval quantises to whole pixels; a float Path arc places
+        // the dot at the exact sub-pixel centre (advanced graphics).
+        Path p = new Path(gc.getDevice());
+        try {
+            float r = diameter / 2f;
+            p.addArc((float) cx - r, (float) cy - r, diameter, diameter, 0f, 360f);
+            gc.fillPath(p);
+        } finally {
+            p.dispose();
+        }
+    }
     @Override public void fillPolygon(int[] pointArray)                 { gc.fillPolygon(pointArray); }
     @Override public void drawPolygon(int[] pointArray)                 { gc.drawPolygon(pointArray); }
     @Override public void drawImage(Image image, int x, int y)          { gc.drawImage(image, x, y); }

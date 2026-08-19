@@ -93,7 +93,12 @@ public interface MeasurementPainter {
     void fillRectangle(int x, int y, int width, int height);
     void drawRoundRectangle(int x, int y, int width, int height, int arcWidth, int arcHeight);
     void fillRoundRectangle(int x, int y, int width, int height, int arcWidth, int arcHeight);
-    void fillOval(int x, int y, int width, int height);
+    /** Fills a circular dot of {@code diameter} centred at the FRACTIONAL
+     *  ({@code cx}, {@code cy}) - the one oval primitive.  A sample dot must
+     *  land on the exact sub-pixel position of its sample or it sits visibly
+     *  beside the reconstructed trace, so the centre is real-valued; integer
+     *  callers pass whole coordinates and lose nothing. */
+    void fillOvalAt(double cx, double cy, int diameter);
     void fillPolygon(int[] pointArray);
     void drawPolygon(int[] pointArray);
     void drawImage(Image image, int x, int y);

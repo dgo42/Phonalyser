@@ -4092,7 +4092,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         if (pxPerSample > 10.0) {
             gc.setBackground(color);
             double dotShift = subSampleOffset * pxPerSample;
-            int half = dotDiameter / 2;
             // Iterate over every sample index whose pixel position lands
             // inside the canvas - including ones outside the original
             // display window (the trace's sinc curve already extends past
@@ -4103,10 +4102,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             for (int i = iStart; i <= iEnd; i++) {
                 int dataIdx = dispStart + i;
                 if (dataIdx < 0 || dataIdx >= n) continue;
-                int sx = (int) Math.round(i * pxPerSample - dotShift);
+                // FRACTIONAL dot centre: the sample's exact sub-pixel position,
+                // matching the reconstructed curve - a whole-pixel round put
+                // the dot up to half a pixel beside the trace.
+                double sx = i * pxPerSample - dotShift;
                 if (sx < 0 || sx >= width) continue;
-                int sy = (int) Math.round(centerY - (data[dataIdx] - dcOffset) * vScale);
-                gc.fillOval(sx - half, sy - half, dotDiameter, dotDiameter);
+                double sy = centerY - (data[dataIdx] - dcOffset) * vScale;
+                gc.fillOvalAt(sx, sy, dotDiameter);
             }
         }
     }
