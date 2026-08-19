@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.fft;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -2710,26 +2711,8 @@ public final class FftView extends AbstractFreqDomainView {
         gc.setFont(monoFont);
         y += 2;
 
-        // ── 2-col metric rows: IMDpwr / TD+N, DFD2 / DFD3. ─────────────
-        int colGap = 2 * charW;
-        int mKeyL  = 8  * charW;       // "IMDpwr:" / "DFD2:"
-        int mValL  = 14 * charW;
-        int mKeyR  = 7  * charW;       // "TD+N:" / "DFD3:"
-        int mValR  = 14 * charW;
-        int mRight = xLeft + mKeyL + mValL + colGap;
-        drawKv(gc, xLeft, y, mKeyL,
-                "IMDpwr:", imdPctText(imd.imdPwrPct),
-                mRight, mKeyR,
-                "TD+N:",   imdPctText(imd.tdnPct));
-        y += lineH;
-        drawKv(gc, xLeft, y, mKeyL,
-                "DFD2:", imdPctText(imd.dfd2Pct),
-                mRight, mKeyR,
-                "DFD3:", imdPctText(imd.dfd3Pct));
-        y += lineH + 2;
-
-        // ── dnL / dnH rows, two per line. ──────────────────────────────
-        // The products are stored in dBV; drop the ADC offset to get the measured
+        // Level unit + reference, shared by the metric AND product rows.  The
+        // products are stored in dBV; drop the ADC offset to get the measured
         // dBFS the unit selector works from.  The relative unit measures against
         // |F1| + |F2|, the divisor ImdAnalyzer uses for every product percentage,
         // floored like it is there so muted tones cannot divide by zero.
@@ -2737,29 +2720,32 @@ public final class FftView extends AbstractFreqDomainView {
         MagnitudeUnit tableUnit = prefs.getFftDistortionUnit();
         String unitLabel = distortionUnitLabel(tableUnit);
         double refDbFs   = 20.0 * Math.log10(Math.max(MIN_REF_VRMS, imd.f1Mag + imd.f2Mag)) - dbvOff;
-        int dKey = 5  * charW;         // "d5L:"
-        // " -108.42 dBV  0.00045123 %" - follows the label width, as the THD table's
-        // harmonic column does.
-        int dVal = (23 + unitLabel.length()) * charW;
-        int dRight = xLeft + dKey + dVal + colGap;
+
+        // Metric and product rows as ONE measured column set - see
+        // drawColumnRows.  The metric rows carry the same level+percent cell
+        // as the dnL/dnH product rows.
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[]{
+                "IMDpwr:", ratioLevelPctText(imd.imdPwrPct, tableUnit, refDbFs, dbvOff, unitLabel),
+                "TD+N:",   ratioLevelPctText(imd.tdnPct, tableUnit, refDbFs, dbvOff, unitLabel)});
+        rows.add(new String[]{
+                "DFD2:", ratioLevelPctText(imd.dfd2Pct, tableUnit, refDbFs, dbvOff, unitLabel),
+                "DFD3:", ratioLevelPctText(imd.dfd3Pct, tableUnit, refDbFs, dbvOff, unitLabel)});
+        rows.add(null);   // small gap between the metric and product blocks
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
-            String lKey = String.format("d%dL:", k);
-            String lVal = imdRowText(levelInDistortionUnit(imd.dnLDbV[k] - dbvOff,
-                    refDbFs, tableUnit, dbvOff), imd.dnLPct[k], unitLabel);
-            String rKey = String.format("d%dH:", k);
-            String rVal = imdRowText(levelInDistortionUnit(imd.dnHDbV[k] - dbvOff,
-                    refDbFs, tableUnit, dbvOff), imd.dnHPct[k], unitLabel);
-            drawKv(gc, xLeft, y, dKey, lKey, lVal, dRight, dKey, rKey, rVal);
-            y += lineH;
+            rows.add(new String[]{
+                    String.format("d%dL:", k),
+                    imdRowText(levelInDistortionUnit(imd.dnLDbV[k] - dbvOff,
+                            refDbFs, tableUnit, dbvOff), imd.dnLPct[k], unitLabel),
+                    String.format("d%dH:", k),
+                    imdRowText(levelInDistortionUnit(imd.dnHDbV[k] - dbvOff,
+                            refDbFs, tableUnit, dbvOff), imd.dnHPct[k], unitLabel)});
         }
-        // Suppress unused-variable warning on mValR (kept for symmetry
-        // with the THD table's layout if we later switch to right-
-        // alignment).
-        if (mValR < 0) gc.setForeground(color(ColorRole.TEXT));
+        drawColumnRows(gc, rows, xLeft, y, lineH);
     }
 
-    /** IMD-table percent cell - "---" when the figure is {@code NaN}
-     *  (product outside the measurable range). */
+    /** Percent-only cell - "---" when the figure is {@code NaN} (a product
+     *  outside the measurable range, or a ratio without a level). */
     private String imdPctText(double pct) {
         return Double.isFinite(pct) ? String.format("%.8f %%", pct) : "---";
     }
@@ -2880,19 +2866,6 @@ public final class FftView extends AbstractFreqDomainView {
         gc.setFont(monoFont);
         y += 2;
 
-        // Two independent layouts so the metric rows (short keys and
-        // values) stay compact while the harmonic rows (wide keys are
-        // short but values are ~26 mono chars) get room for their full
-        // "%+8.2f dBV  %.8f %%" string without overlapping the right
-        // column's key.
-        int colGap = 2 * charW;
-        // Metric layout - short values like "-78.41 dBV A" or "12.8 bits".
-        int mKeyL = 7  * charW;       // "N+D:" / "SNR:" / "ENOB:"
-        int mValL = 14 * charW;       // covers "-78.41 dBV A"
-        int mKeyR = 12 * charW;       // "THD H2..9:"
-        int mValR = 14 * charW;       // covers "0.00035790 %"
-        int mRightColX = xLeft + mKeyL + mValL + colGap;
-
         // Unit of the absolute-level cells, and the reference the relative unit
         // measures against: the fundamental this table already reports in its header
         // (manual override when set), which is the very level the analyzer divides by
@@ -2901,70 +2874,73 @@ public final class FftView extends AbstractFreqDomainView {
         String unitLabel = distortionUnitLabel(tableUnit);
         double refDbFs   = fundDbV - dbvOffsetDb;
 
-        drawKv(gc, xLeft, y, mKeyL,
+        // Metric and harmonic rows as ONE measured column set - see
+        // drawColumnRows.  The identical cell format keeps the level and
+        // percent sub-columns aligned inside the value columns.
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[]{
                 "N+D:",  fmtDb(r.thdNDb)  + " A",
-                mRightColX, mKeyR,
                 String.format("THD H2..%d:", (int) thdMaxH),
-                String.format("%.8f %%", r.thdPct));
-        y += lineH;
-        drawKv(gc, xLeft, y, mKeyL,
-                "N:",    fmtDb(noiseDb(r)),
-                mRightColX, mKeyR,
-                "THD+N:",     String.format("%.8f %%", thdNPct(r)));
-        y += lineH;
-        drawKv(gc, xLeft, y, mKeyL,
+                ratioLevelPctText(r.thdPct, tableUnit, refDbFs, dbvOffsetDb, unitLabel)});
+        rows.add(new String[]{
+                "N:",    fmtUnit(levelInDistortionUnit(noiseDbFs(r), refDbFs, tableUnit, dbvOffsetDb), unitLabel),
+                "THD+N:", ratioLevelPctText(thdNPct(r), tableUnit, refDbFs, dbvOffsetDb, unitLabel)});
+        rows.add(new String[]{
                 "SNR:",  fmtDb(r.snrDb),
-                mRightColX, mKeyR,
-                "ENOB:", String.format("%.1f bits", (r.sinadDb - 1.76) / 6.02));
-        y += lineH + 2;
-
-        // ── Harmonics, 2 per row.  Independent layout: short keys
-        // ("H2:" / "H10:") but wide values to fit the ~25-char
-        // "%+8.2f dBV  %.8f %%" string.
-        int hKey = 4  * charW;         // "H10:" + ":"
-        // Covers "-109.72 dBV 0.00031899 %"; the unit sits inside the value, so the
-        // column follows the label's width - a wider "dBFS" would otherwise push the
-        // value into the right-hand key.
-        int hVal = (21 + unitLabel.length()) * charW;
-        int hRightColX = xLeft + hKey + hVal + colGap;
+                "ENOB:", String.format("%.1f bits", (r.sinadDb - 1.76) / 6.02)});
+        rows.add(null);   // small gap between the metric and harmonic blocks
         int harmCount = (r.harmonicDbFs == null) ? 0 : r.harmonicDbFs.length;
-        double dbvOff = prefs.getDbvOffsetDb(prefs.getFftChannel());   // dBV = dBFs + analyzed-channel ADC offset
         for (int i = 0; i < harmCount; i += 2) {
             String l = String.format("H%d:", i + 2);
-            String lv = String.format("%8.2f %s %.8f %%",
-                    levelInDistortionUnit(r.harmonicDbFs[i], refDbFs, tableUnit, dbvOff),
+            String lv = String.format("%8.2f %s  %.8f %%",
+                    levelInDistortionUnit(r.harmonicDbFs[i], refDbFs, tableUnit, dbvOffsetDb),
                     unitLabel, r.harmonicPct[i]);
             String rkey = "", rval = "";
             if (i + 1 < harmCount) {
                 rkey = String.format("H%d:", i + 3);
                 rval = String.format("%8.2f %s  %.8f %%",
-                        levelInDistortionUnit(r.harmonicDbFs[i + 1], refDbFs, tableUnit, dbvOff),
+                        levelInDistortionUnit(r.harmonicDbFs[i + 1], refDbFs, tableUnit, dbvOffsetDb),
                         unitLabel, r.harmonicPct[i + 1]);
             }
-            drawKv(gc, xLeft, y, hKey, l, lv, hRightColX, hKey, rkey, rval);
-            y += lineH;
+            rows.add(new String[]{ l, lv, rkey, rval });
         }
-        // Suppress unused-variable warning for the metric-row right
-        // value width (kept for symmetry / future right-alignment).
-        if (mValR < 0) gc.setForeground(color(ColorRole.TEXT));
-        return y;
+        return drawColumnRows(gc, rows, xLeft, y, lineH);
     }
 
-    /** Two key/value pairs at independent key-column widths.  The
-     *  left value is drawn at {@code x + lKeyW}, the right key at
-     *  {@code rightColX}, and the right value at
-     *  {@code rightColX + rKeyW}.  An empty right key skips the
-     *  right column. */
-    private void drawKv(GC gc, int x, int y, int lKeyW,
-                        String lKey, String lVal,
-                        int rightColX, int rKeyW,
-                        String rKey, String rVal) {
-        drawOutlinedText(gc, lKey, x, y);
-        drawOutlinedText(gc, lVal, x + lKeyW, y);
-        if (rKey != null && !rKey.isEmpty()) {
-            drawOutlinedText(gc, rKey, rightColX, y);
-            drawOutlinedText(gc, rVal, rightColX + rKeyW, y);
+    /** Draws {@code rows} as four measured columns (key, value, key, value):
+     *  each column's x offset comes from the widest cell it actually holds
+     *  plus a fixed gap (one character after a key column, three between the
+     *  table halves), so the columns sit flush regardless of how the mono
+     *  "M" cell relates to real digit / percent glyph widths.  All rows are
+     *  measured together, so every block of a table shares the same offsets.
+     *  A {@code null} row advances y by a small block gap; an empty right
+     *  key skips the right half of its row.  Returns the y below the last
+     *  row. */
+    private int drawColumnRows(GC gc, List<String[]> rows, int xLeft, int y, int lineH) {
+        int[] w = new int[4];
+        for (String[] row : rows) {
+            if (row == null) continue;
+            for (int c = 0; c < row.length; c++) {
+                if (row[c] != null && !row[c].isEmpty()) {
+                    w[c] = Math.max(w[c], gc.textExtent(row[c]).x);
+                }
+            }
         }
+        int charW = gc.textExtent("M").x;
+        int xValL = xLeft + w[0] + charW;
+        int xKeyR = xValL + w[1] + 3 * charW;
+        int xValR = xKeyR + w[2] + charW;
+        for (String[] row : rows) {
+            if (row == null) { y += 2; continue; }
+            drawOutlinedText(gc, row[0], xLeft, y);
+            drawOutlinedText(gc, row[1], xValL, y);
+            if (row[2] != null && !row[2].isEmpty()) {
+                drawOutlinedText(gc, row[2], xKeyR, y);
+                drawOutlinedText(gc, row[3], xValR, y);
+            }
+            y += lineH;
+        }
+        return y;
     }
 
     /** Formats the noise-integration band shown on the header span row.
@@ -2991,20 +2967,45 @@ public final class FftView extends AbstractFreqDomainView {
         drawOutlinedText(gc, text, centreX - ext.x / 2, y);
     }
 
-    /** Fixed-unit cell for the metric rows (N+D, N, SNR).  The level-unit selector
-     *  covers the per-harmonic / per-product rows only; N+D and SNR are ratios
-     *  against the fundamental rather than levels, so a unit switch would not even
-     *  apply to them. */
+    /** Fixed-unit cell for the ratio rows (N+D, SNR): both are dB ratios against
+     *  the fundamental, not levels, so the level-unit selector does not apply
+     *  to them. */
     private String fmtDb(double v) {
-        return Double.isFinite(v) ? String.format("%7.2f dBV", v) : "-";
+        return Double.isFinite(v) ? String.format("%8.2f dB", v) : "-";
     }
 
-    private double noiseDb(FftResult r) {
+    /** Level cell in the table's selected unit (the N row).  Same 8-wide
+     *  level field as every level+percent cell, so the decimal points align
+     *  down the whole value column. */
+    private String fmtUnit(double v, String unitLabel) {
+        return Double.isFinite(v) ? String.format("%8.2f %s", v, unitLabel) : "-";
+    }
+
+    /** The integrated noise floor in dBFS; the row converts it to the table's
+     *  selected unit like every harmonic / product level. */
+    private double noiseDbFs(FftResult r) {
         if (r.noisePower <= 0) return Double.NaN;
-        // 10·log10(noisePower) is the noise floor in dBFS; lift to dBV by the
-        // analyzed channel's ADC offset.
-        Preferences prefs = Preferences.instance();
-        return 10 * Math.log10(r.noisePower) + prefs.getDbvOffsetDb(prefs.getFftChannel());
+        return 10 * Math.log10(r.noisePower);
+    }
+
+    /** A percentage ratio as dB ({@code 20·log10(pct/100)}); NaN when the
+     *  percentage carries no level (zero / negative / NaN). */
+    private double ratioDb(double pct) {
+        return pct > 0 ? 20.0 * Math.log10(pct / 100.0) : Double.NaN;
+    }
+
+    /** Summary-ratio cell (THD H2..n, THD+N, IMDpwr, TD+N, DFD2, DFD3): the
+     *  ratio as a level in the selected unit plus the percentage - the same two
+     *  columns the harmonic / product rows carry.  The level anchors the ratio
+     *  at {@code refDbFs}, the very reference the percentage divides by, so the
+     *  dB unit reads {@code 20·log10(pct/100)} exactly.  Falls back to the bare
+     *  percentage cell when the level is not representable. */
+    private String ratioLevelPctText(double pct, MagnitudeUnit unit,
+                                     double refDbFs, double dbvOff, String unitLabel) {
+        double level = levelInDistortionUnit(refDbFs + ratioDb(pct), refDbFs, unit, dbvOff);
+        return Double.isFinite(level)
+                ? String.format("%8.2f %s  %.8f %%", level, unitLabel, pct)
+                : imdPctText(pct);
     }
 
     /** An absolute level, stored in dBFS, rendered in the table's selected unit:
@@ -3161,37 +3162,37 @@ public final class FftView extends AbstractFreqDomainView {
             int lineH = gc.textExtent("M").y + 1;
             if (tableModeIsImd) {
                 // Rows = F1/F2 + span + optional Δf1/Δf2 + 2 metric rows +
-                // (MAX_ORDER−1) dnL/dnH rows.  Width is set by a dnL/dnH row:
-                // its right-column value is drawn (dKey 5 + dVal + colGap 2 +
-                // dKey 5) from the left, and dVal follows the unit label's width
-                // per drawImdTable, so MEASURE the worst-case value - the mono
-                // "M" cell under-counts digit width and the trailing % would
-                // otherwise clip.
+                // (MAX_ORDER−1) dnL/dnH rows.  Width mirrors drawColumnRows'
+                // measured layout: widest keys + two worst-case value cells +
+                // the fixed gaps (1 char after each key, 3 between halves).
                 int charW = gc.textExtent("M").x;
                 String unitLabel = distortionUnitLabel(prefs.getFftDistortionUnit());
-                String worstVal = String.format("%8.2f %s %.8f %%", -9999.99,
+                String worstVal = String.format("%8.2f %s  %.8f %%", -9999.99,
                         unitLabel, 99.99999999);
-                int contentW = EXT_LEFT_PAD + (35 + unitLabel.length()) * charW
-                        + gc.textExtent(worstVal).x + 34;
+                int contentW = EXT_LEFT_PAD
+                        + gc.textExtent("IMDpwr:").x + charW
+                        + gc.textExtent(worstVal).x + 3 * charW
+                        + gc.textExtent("TD+N:").x + charW
+                        + gc.textExtent(worstVal).x + 16;
                 boolean clk = isGeneratorActive()
                         && prefs.isFftFundFromGenerator();
                 int rows = 2 + 1 + (clk ? 2 : 0) + 2 + (ImdResult.MAX_ORDER - 1);
                 int contentH = EXT_LEFT_PAD + rows * lineH + 8;
                 return new Point(contentW, contentH);
             }
-            // Measure the worst-case harmonic row directly - same
-            // formatting drawDistortionTable uses (key + lVal + 2-space
-            // gap + key + rVal) - and add a generous right padding.
-            // Earlier attempts using "38·charW + textExtent(value)"
-            // under-counted on systems where the mono "M" cell is a
-            // pixel narrower than the actual digit / percent glyphs;
-            // measuring the entire row text removes that gap.
+            // Width mirrors drawColumnRows' measured layout: widest keys +
+            // two worst-case value cells + the fixed gaps (1 char after each
+            // key, 3 between the halves).
+            int charW = gc.textExtent("M").x;
             String unitLabel = distortionUnitLabel(prefs.getFftDistortionUnit());
-            String widestRow = String.format(
-                    "H10: %+8.2f %s %.8f %%  H11: %+8.2f %s %.8f %%",
-                    -9999.99, unitLabel, 99.99999999, -9999.99, unitLabel, 99.99999999);
-            int rowW = gc.textExtent(widestRow).x;
-            int contentW = EXT_LEFT_PAD + rowW + 32;
+            String worstVal = String.format("%8.2f %s  %.8f %%", -9999.99,
+                    unitLabel, 99.99999999);
+            String keyRWorst = String.format("THD H2..%d:", (int) prefs.getFftThdMaxHarmonic());
+            int contentW = EXT_LEFT_PAD
+                    + gc.textExtent("H10:").x + charW
+                    + gc.textExtent(worstVal).x + 3 * charW
+                    + gc.textExtent(keyRWorst).x + charW
+                    + gc.textExtent(worstVal).x + 16;
             // Rows (no top button row in the external window):
             //   header + span + (clock?) + gap + 3 metric rows + gap + harm pairs
             // Pref value N means "compute up to HN" -> N − 1 harmonics
