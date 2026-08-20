@@ -405,14 +405,15 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         avgLbl  .setText(metric("averages", Integer.toString(fft.completedAnalyses())));
         distLbl .setText(metric(dual ? "imd"      : "thd",      fmtPct(latestDistPct)));
         bestLbl .setText(metric(dual ? "best_imd" : "best_thd", bestText()));
-        // Match the FFT pane: every dB readout carries the dBV suffix.  Absolute
-        // levels (fundamental, noise floor) get the dBFS->dBV offset; the ratio
-        // figures (THD+N / D+N / SNR / SINAD) are relabelled only, never offset.
+        // Match the FFT pane: the ratio figures (THD+N / TD+N / SNR / SINAD)
+        // read plain dB - they measure against the fundamental, so no absolute
+        // unit applies; the absolute levels (fundamental, noise floor) get the
+        // dBFS->dBV offset and read dBV.
         thdNLbl .setText(dual
-                ? metric("d_n",   imd != null ? fmtDbv(20.0 * Math.log10(imd.tdnPct / 100.0)) : "-")
-                : metric("thd_n", live != null ? fmtDbv(-live.sinadDb) : "-"));
-        snrLbl  .setText(metric("snr",      live != null ? fmtDbv(live.snrDb) : "-"));
-        sinadLbl.setText(metric("sinad",    live != null ? fmtDbv(live.sinadDb) : "-"));
+                ? metric("d_n",   imd != null ? fmtDb(20.0 * Math.log10(imd.tdnPct / 100.0)) : "-")
+                : metric("thd_n", live != null ? fmtDb(-live.sinadDb) : "-"));
+        snrLbl  .setText(metric("snr",      live != null ? fmtDb(live.snrDb) : "-"));
+        sinadLbl.setText(metric("sinad",    live != null ? fmtDb(live.sinadDb) : "-"));
         fundLbl .setText(metric("fund",     live != null ? fmtDbv(live.fundamentalDbFs + prefs.getDbvOffsetDb()) : "-"));
         floorLbl.setText(metric("floor",    live != null ? fmtDbv(live.noisePeakFloorDbFs() + prefs.getDbvOffsetDb()) : "-"));
 
@@ -780,8 +781,14 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         return Double.isFinite(v) ? String.format(Locale.US, "%.8f %%", v) : "-";
     }
 
+    /** Absolute-level cell (fundamental, noise floor). */
     private String fmtDbv(double v) {
         return Double.isFinite(v) ? String.format(Locale.US, "%.2f dBV", v) : "-";
+    }
+
+    /** Ratio cell (THD+N, TD+N, SNR, SINAD) - dB against the fundamental. */
+    private String fmtDb(double v) {
+        return Double.isFinite(v) ? String.format(Locale.US, "%.2f dB", v) : "-";
     }
 
     private String fmtHz(double v) {
