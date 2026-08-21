@@ -38,40 +38,32 @@ package org.edgo.audio.measure.dsp;
 public final class TimeDiscontinuityDetector {
 
     /**
-     * Relative (noise-referenced) term of the detection threshold: this factor ×
-     * the window's mean |prediction error|.  For a clean tone the error is
-     * noise-limited, where 8× ≈ 6.4 σ - broadband noise never fires; a splice
-     * breaks the prediction by a large fraction of the amplitude, decades above.
-     * Residual harmonics / a second tone raise the baseline (they don't fit a
-     * single-tone recurrence), and the threshold self-scales with them.  This
-     * term governs on signal-free / noise data, where the amplitude floor
-     * ({@link #EVENT_FLOOR_FRACTION}) collapses to the noise scale.
+     * Noise term of the detection threshold: this factor × the window's mean
+     * |prediction error|.  For a clean tone the error is noise-limited, where
+     * 8× ≈ 6.4 σ - broadband noise never reaches it on its own.  Residual
+     * harmonics / a second tone raise the baseline (they don't fit a
+     * single-tone recurrence), and the term self-scales with them.  Added
+     * LINEARLY to the event term below, so the threshold rides ON TOP of
+     * whatever the environment contributes - a low-level capture whose noise
+     * dominates the tone cannot fire on its own statistics.
      */
     private static final double REL_FACTOR = 8.0;
 
     /**
-     * Amplitude (event-floor) term of the detection threshold: a floor at this
-     * fraction of the span's tone amplitude {@code A = √2·RMS}, applied as
-     * {@code threshold = max(REL_FACTOR·meanAbs, EVENT_FLOOR_FRACTION·A)}.  It
-     * stops the relative term from over-firing on a high tone, where sub-sample
-     * capture-timing slips leak a residual prediction error {@code e ≈ A·2πf·δt}
-     * that grows with frequency and - referenced only to the noise floor -
-     * crosses {@code REL_FACTOR·meanAbs} above a few kHz.
-     *
-     * <p>Placement (physical spec of the 384 kHz rig): a real event is a
-     * deviation of ≥ 0.2·A within 2-4 samples (a 60-108 µs zero-pause, or a glued
-     * capture splice), so 0.05 sits 12 dB BELOW the smallest real event
-     * (0.2 / 0.05 = 4 -> 12.0 dB).  The largest legitimate non-event residual is a
-     * 50 ns slip at 20 kHz.  Its naive step {@code A·2π·20 kHz·50 ns ≈ 0.006·A} is
-     * NOT the error the detector sees: an isolated slip enters the sinusoid
-     * recurrence weighted by the coefficient {@code a = 2·cos ω ≈ 1.9} (at
-     * 20 kHz / 384 kHz), so the MEASURED worst-case residual is
-     * {@code e_worst ≈ 2·cos ω · 0.006·A ≈ 0.012·A}.  The floor therefore sits
-     * ~12 dB ABOVE the worst non-event (0.05 / 0.012 ≈ 4.2 -> 12.4 dB) - centered
-     * between the two, clearing every timing-slip spur yet still firing on every
-     * real event.
+     * Event term of the detection threshold: the fraction of the span's tone
+     * amplitude {@code A = √2·RMS} that DEFINES a discontinuity - a fast jump
+     * of at least this fraction within a few samples (a zero-pause dropout
+     * entry, a glued capture splice).  Smaller excursions are signal
+     * behaviour, not events.  The threshold is the linear sum
+     * {@code REL_FACTOR·meanAbs + EVENT_FRACTION·A}: a real event's
+     * recurrence error is ≈ the jump size itself (a dropout's recovery
+     * boundary reaches ≈ A, decades above), so it crosses the sum, while
+     * noise alone never does - its own contribution is already inside the
+     * mean term.  Sub-sample capture-timing slips are cleared with ~24 dB of
+     * margin: a 50 ns slip at 20 kHz enters the recurrence weighted by
+     * {@code a = 2·cos ω}, a measured worst case of {@code ≈ 0.012·A}.
      */
-    private static final double EVENT_FLOOR_FRACTION = 0.05;
+    private static final double EVENT_FRACTION = 0.2;
 
     /** Discontinuity bursts closer than this (seconds) belong to ONE glitch - a
      *  dropout's entry and recovery boundaries (the observed USB gaps run
@@ -126,9 +118,10 @@ public final class TimeDiscontinuityDetector {
         double meanAbs = sumAbs / (to - start);
         if (meanAbs <= 0) return -1.0;
         // √2·RMS over the span ≈ the tone amplitude A (tone-dominated data); with
-        // no dominant tone it collapses toward the noise scale and REL_FACTOR wins.
+        // no dominant tone it collapses toward the noise scale and the noise
+        // term carries the threshold alone.
         double amplitude = Math.sqrt(2.0 * sumSq / (to - start));
-        float threshold = (float) Math.max(REL_FACTOR * meanAbs, EVENT_FLOOR_FRACTION * amplitude);
+        float threshold = (float) (REL_FACTOR * meanAbs + EVENT_FRACTION * amplitude);
         // Track only the rightmost glitch: a burst either extends it (within the
         // merge window) or starts a new one that replaces it.
         int glitchStart = -1;   // first burst's first error index
@@ -169,8 +162,8 @@ public final class TimeDiscontinuityDetector {
      * worker, whose capture window stays in double precision to preserve the
      * measurement floor (converting a multi-million-sample window to float per
      * tick would cost an allocation + copy for nothing).  Same model: sinusoid-
-     * recurrence prediction error vs the amplitude-floored {@link #REL_FACTOR} ×
-     * mean |error| threshold.
+     * recurrence prediction error vs the linear threshold
+     * {@code REL_FACTOR·mean|error| + EVENT_FRACTION·amplitude}.
      */
     public boolean detect(double[] data, int n, double omega) {
         int start = 2;
@@ -196,9 +189,10 @@ public final class TimeDiscontinuityDetector {
         double meanAbs = sumAbs / (n - start);
         if (meanAbs <= 0) return false;
         // √2·RMS over the span ≈ the tone amplitude A (tone-dominated data); with
-        // no dominant tone it collapses toward the noise scale and REL_FACTOR wins.
+        // no dominant tone it collapses toward the noise scale and the noise
+        // term carries the threshold alone.
         double amplitude = Math.sqrt(2.0 * sumSq / (n - start));
-        double threshold = Math.max(REL_FACTOR * meanAbs, EVENT_FLOOR_FRACTION * amplitude);
+        double threshold = REL_FACTOR * meanAbs + EVENT_FRACTION * amplitude;
         for (int i = start; i < n; i++) {
             if (Math.abs(data[i] - a * data[i - 1] + data[i - 2]) > threshold) return true;
         }

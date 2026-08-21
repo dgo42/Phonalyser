@@ -27,7 +27,7 @@ class TimeDiscontinuityDetectorTest {
     private static final double NEAR_FS    = 0.999;               // near full-scale tone amplitude
     private static final double SLIP       = 50e-9 * 384_000.0;   // 50 ns capture-timing slip ≈ 0.0192 sample
     private static final int    SLIP_EVERY = 200;                 // one ± slip per this many samples (isolated)
-    private static final double EVENT_FRAC = 0.2;                 // minimum real-event deviation (×A)
+    private static final double EVENT_FRAC = 0.2;                 // the event-defining jump fraction (×A)
 
     private final TimeDiscontinuityDetector detector = new TimeDiscontinuityDetector();
 
@@ -70,6 +70,8 @@ class TimeDiscontinuityDetectorTest {
         // of a 20 kHz tone.  Entry step ≈ 0.2·A - far below the old Δ² curvature
         // threshold (~0.54·A at this f/fs), invisible to the scope while the
         // FFT's spectral gates flagged it.  The recurrence predictor must fire.
+        // The entry step sits AT the event boundary, so the first firing sample
+        // may land one inside the gap - the anchor is exact to within a sample.
         float[] d = noisySine(W_20K, 0.0);
         int gapStart = 3841;                     // ≈ 200 full periods + 1 sample past the crossing
         int gapEnd   = gapStart + 60;
@@ -77,8 +79,8 @@ class TimeDiscontinuityDetectorTest {
 
         double selfEst = detector.findDiscontinuity(d, 2, N, true, MERGE, Double.NaN);
         double exact   = detector.findDiscontinuity(d, 2, N, true, MERGE, W_20K);
-        assertEquals(gapStart - 1, selfEst, 1e-9, "self-estimated recurrence");
-        assertEquals(gapStart - 1, exact,   1e-9, "known-fundamental recurrence");
+        assertEquals(gapStart - 1, selfEst, 1.0, "self-estimated recurrence");
+        assertEquals(gapStart - 1, exact,   1.0, "known-fundamental recurrence");
     }
 
     @Test
@@ -123,8 +125,8 @@ class TimeDiscontinuityDetectorTest {
     void timingSlips_neverFire_atHighFrequency() {
         // Near-FS 20 kHz tone with repeated 50 ns capture-timing slips.  The slip
         // residual (measured max |e| ≈ 0.012·A) clears the noise-referenced 8×mean
-        // (≈2e-3), so a relative-only threshold over-fires - but it stays far below
-        // the amplitude floor (0.05·A ≈ 0.05), so the floored detector is silent.
+        // (≈2e-3), so a noise-only threshold would over-fire - but it stays ~24 dB
+        // below the event term (0.2·A), so the linear-sum detector is silent.
         float[] d = slippedSine(W_20K);
         assertEquals(-1.0, detector.findDiscontinuity(d, 2, N, true, MERGE, W_20K),      1e-12, "known-fundamental");
         assertEquals(-1.0, detector.findDiscontinuity(d, 2, N, true, MERGE, Double.NaN), 1e-12, "self-estimated");
@@ -134,15 +136,20 @@ class TimeDiscontinuityDetectorTest {
     }
 
     @Test
-    void realEvent_minimumDeviation_fires_overSlips() {
-        // The smallest real event: a 0.2·A deviation spanning 3 samples,
-        // riding on the same slip-laden 20 kHz tone.  Its recurrence error is ≈ 0.2·A
-        // (12 dB above the 0.05·A floor), so it fires while the slips do not.
-        float[] d = slippedSine(W_20K);
+    void eventBoundary_isLinearInAmplitude() {
+        // The threshold is the linear sum noise-term + 0.2·A: a jump clearly
+        // above the event fraction fires, one clearly below stays silent -
+        // riding on the same slip-laden 20 kHz tone either way.
+        float[] fires = slippedSine(W_20K);
         int event = 4000;
-        for (int i = event; i < event + 3; i++) d[i] += (float) (EVENT_FRAC * NEAR_FS);
-        assertTrue(detector.findDiscontinuity(d, 2, N, true, MERGE, W_20K)      >= 0, "known-fundamental");
-        assertTrue(detector.findDiscontinuity(d, 2, N, true, MERGE, Double.NaN) >= 0, "self-estimated");
+        for (int i = event; i < event + 3; i++) fires[i] += (float) (1.75 * EVENT_FRAC * NEAR_FS);
+        assertTrue(detector.findDiscontinuity(fires, 2, N, true, MERGE, W_20K)      >= 0, "known-fundamental");
+        assertTrue(detector.findDiscontinuity(fires, 2, N, true, MERGE, Double.NaN) >= 0, "self-estimated");
+
+        float[] silent = slippedSine(W_20K);
+        for (int i = event; i < event + 3; i++) silent[i] += (float) (0.6 * EVENT_FRAC * NEAR_FS);
+        assertEquals(-1.0, detector.findDiscontinuity(silent, 2, N, true, MERGE, W_20K), 1e-12,
+                "a jump below the event fraction is signal behaviour, not a glitch");
     }
 
     @Test
@@ -160,20 +167,19 @@ class TimeDiscontinuityDetectorTest {
     }
 
     @Test
-    void pureNoise_relativeTermGoverns_floorNegligible() {
-        // No tone -> amplitude floor collapses to 0.05·√2·σ ≈ 0.07·σ, ~two decades
-        // below the relative term 8·mean|e| ≈ 9·σ, so the relative term is the
-        // threshold and behaviour matches the pre-floor detector.
+    void pureNoise_noiseTermGoverns_eventTermNegligible() {
+        // No tone -> the event term collapses to 0.2·√2·σ ≈ 0.28·σ, far below
+        // the noise term 8·mean|e| ≈ 16·σ, so the noise term carries the sum
+        // and broadband noise stays silent.
         final double sigma = 1e-3;
         Random rnd = new Random(99);
         float[] d = new float[N];
         for (int i = 0; i < N; i++) d[i] = (float) (sigma * rnd.nextGaussian());
         assertEquals(-1.0, detector.findDiscontinuity(d, 2, N, true, MERGE, Double.NaN), 1e-12, "clean noise");
-        // A 2σ deviation is ~28× the floor yet ~4× below the relative threshold: it
-        // must NOT fire - proving the relative term, not the floor, governs here.
+        // A 2σ deviation stays well inside the noise term: silent.
         d[4000] += (float) (2 * sigma);
-        assertEquals(-1.0, detector.findDiscontinuity(d, 2, N, true, MERGE, Double.NaN), 1e-12, "sub-relative deviation");
-        // A full-scale spike is decades above the relative threshold - still fires.
+        assertEquals(-1.0, detector.findDiscontinuity(d, 2, N, true, MERGE, Double.NaN), 1e-12, "sub-threshold deviation");
+        // A full-scale spike is decades above the sum - still fires.
         d[4000] += 1.0f;
         assertTrue(detector.findDiscontinuity(d, 2, N, true, MERGE, Double.NaN) >= 0, "large spike");
     }
