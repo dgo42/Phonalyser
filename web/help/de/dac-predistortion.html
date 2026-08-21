@@ -11,7 +11,7 @@
 
   <h1>DAC-Vorverzerrungsassistent</h1>
   <p>Diese Seite beschreibt die Steuerelemente des Assistenten.  <em>Warum</em>
-     er so arbeitet, wie er arbeitet - das zwingend nötige Doppel-T-Kerbfilter,
+     er so arbeitet, wie er arbeitet - das zwingend nötige Kerbfilter,
      warum die Grundwelle vom Generator genommen wird, wie tiefe kohärente
      Mittelung die Oberwellen herausgräbt und wie die Korrekturschleife
      konvergiert - steht im
@@ -29,8 +29,8 @@
      <a href="generator.html#generator-corrections">kompensierten</a>
      Signalformen des Generators angewendet.</p>
 
-  <div class="note"><b>Ein passives Doppel-T-Kerbfilter ist Pflicht.</b>
-     Schalten Sie ein passives Doppel-T-Kerbfilter, abgestimmt auf die
+  <div class="note"><b>Ein passives Kerbfilter ist Pflicht.</b>
+     Schalten Sie ein passives Kerbfilter, abgestimmt auf die
      Grundwelle, zwischen den Prüfling und den ADC - sonst setzen die eigenen
      Oberwellen des ADC das Grundrauschen und die Schleife kompensiert am Ende
      den ADC, nicht den DAC.  Stimmen Sie es zuerst mit dem
@@ -67,7 +67,7 @@
     </svg>
   </div>
   <ol class="features">
-    <li><b>Ablauf.</b>  Das zwingend nötige Doppel-T-Kerbfilter und wie die
+    <li><b>Ablauf.</b>  Das zwingend nötige Kerbfilter und wie die
         geschlossene Schleife arbeitet - die Oberwellen messen, eine gleich
         große, entgegengesetzte Korrektur zurückführen, jede Runde
         wiederholen.</li>
@@ -99,7 +99,7 @@
      Mittelung, wobei die
      <a href="fft.html#fft-tab-thd">Grundwelle vom Generator</a> genommen wird und
      die FLL eingeschaltet ist; für das tiefste Grundrauschen verwenden Sie das
-     HFT248D-Fenster und lassen die Netzunterdrückung aus, und treiben einen
+     BH7-Fenster und lassen die Netzunterdrückung aus, und treiben einen
      sauberen Ton einige dB unter dem Vollausschlag mit auf einen Bin
      eingerasteter Grundwelle.</p>
 

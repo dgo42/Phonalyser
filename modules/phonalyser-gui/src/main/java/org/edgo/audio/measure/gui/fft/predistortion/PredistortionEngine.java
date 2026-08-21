@@ -221,8 +221,8 @@ public final class PredistortionEngine {
                 p.setFftFundFromGenerator(true);
                 p.setFftAlignGenerator(AlignGenerator.FLL);
                 if (log.isInfoEnabled()) {
-                    if (p.getFftWindow() != WindowType.HFT248D) {
-                        log.info("Predistortion: FFT window is {} - HFT248D is recommended for the deepest harmonic separation.",
+                    if (p.getFftWindow() != WindowType.BH7) {
+                        log.info("Predistortion: FFT window is {} - BH7 is recommended for the deepest harmonic separation.",
                                 p.getFftWindow());
                     }
                     if (p.getFftMainsSuppression() != MainsSuppression.NONE) {
