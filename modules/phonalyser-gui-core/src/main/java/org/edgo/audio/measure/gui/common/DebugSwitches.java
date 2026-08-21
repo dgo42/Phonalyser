@@ -52,7 +52,7 @@ public final class DebugSwitches {
      *  queue), 3. first repaint of the fresh result ({@code FftView}, timed via
      *  {@code startRender}/{@code gotFftResult}).  WARN so the timings show up
      *  without touching the logger config. */
-    public static final boolean SHOW_FFT_ANALYZE_TIME = Boolean.parseBoolean("false");
+    public static final boolean SHOW_FFT_ANALYZE_TIME = Boolean.parseBoolean("true");
 
     /** DEBUG hard switch: trace the generator frequency-lock chain, one WARN
      *  line per link per displayed frame - the loop inputs/outputs in
