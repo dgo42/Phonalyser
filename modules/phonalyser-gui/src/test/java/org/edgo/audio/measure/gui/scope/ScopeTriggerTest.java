@@ -140,13 +140,16 @@ class ScopeTriggerTest {
 
     @Test
     void findGlitch_droppedSamplesGap_anchorsStartOrEnd() {
-        // Dropped-samples DAC gap: output zeroed for 150 samples starting at
-        // the positive peak.  Entry and recovery bursts merge into ONE glitch;
-        // ↑ (anchorStart) lands on the last clean sample before the drop,
-        // ↓ on the first settled sample after the recovery.
+        // Dropped-samples DAC gap: output zeroed for one full period starting at
+        // the positive peak, so BOTH boundaries step by ≈ A - decisively past the
+        // 0.2·A event boundary of the linear threshold.  Entry and recovery
+        // bursts merge into ONE glitch; ↑ (anchorStart) lands on the last clean
+        // sample before the drop, ↓ on the first settled sample after the
+        // recovery.  (A recovery step under 0.2·A is a non-event by the linear
+        // law - the end anchor then follows the entry burst instead.)
         float[] d = glitchTestSine(4096, 1.0);
         int gapStart = 1968;
-        int gapEnd   = gapStart + 150;
+        int gapEnd   = gapStart + 192;
         for (int i = gapStart; i < gapEnd; i++) d[i] = 0f;
 
         double start = ScopeTrigger.findGlitch(d, 1, d.length, true,  MERGE, Double.NaN);
@@ -156,19 +159,31 @@ class ScopeTriggerTest {
     }
 
     @Test
-    void findGlitch_zeroCrossingSplice_detected() {
+    void findGlitch_zeroCrossingSplice_boundaryByFrequency() {
         // ADC-side cutoff at a rising zero crossing: the waveform splices into
         // a FALLING crossing - value stays ≈ 0 (no dV/dt step for a first-
-        // difference gate) but the slope flips, breaking the local linear
-        // prediction by ~2·A·ω/fs ≈ 60× the sine's curvature ceiling.
-        int splice = 2112;                    // multiple of 192 -> rising crossing
-        float[] d = glitchTestSine(4096, 1.0);
-        double w = 2 * Math.PI / 192.0;
-        for (int k = splice; k < d.length; k++) {
-            d[k] = (float) -Math.sin(w * (k - splice));   // descending through zero
+        // difference gate) but the slope flips, leaving a one-sample recurrence
+        // residual of ≈ 2·A·ω.  Whether that is a glitch is set by the 0.2·A
+        // event boundary: at 20 kHz / 384 kHz (19.2 samples/period) the
+        // residual is ≈ 0.65·A and fires at the exact splice sample; at 2 kHz
+        // it is ≈ 0.065·A - a sub-boundary slope flip is signal behaviour and
+        // must stay silent.
+        int splice = 2112;                    // multiple of 96 and of 192 -> rising crossing in both tones
+        double wHi = 2 * Math.PI / 19.2;
+        float[] hi = new float[4096];
+        for (int k = 0; k < hi.length; k++) {
+            hi[k] = (float) (k < splice ? Math.sin(wHi * k) : -Math.sin(wHi * (k - splice)));
         }
-        double start = ScopeTrigger.findGlitch(d, 1, d.length, true, MERGE, Double.NaN);
-        assertEquals(splice, start, 1e-9, "splice detected at the crossing");
+        double start = ScopeTrigger.findGlitch(hi, 1, hi.length, true, MERGE, Double.NaN);
+        assertEquals(splice, start, 1e-9, "high-frequency splice detected at the crossing");
+
+        double wLo = 2 * Math.PI / 192.0;
+        float[] lo = glitchTestSine(4096, 1.0);
+        for (int k = splice; k < lo.length; k++) {
+            lo[k] = (float) -Math.sin(wLo * (k - splice));   // descending through zero
+        }
+        assertEquals(-1.0, ScopeTrigger.findGlitch(lo, 1, lo.length, true, MERGE, Double.NaN), 1e-12,
+                "sub-boundary splice is signal behaviour, not a glitch");
     }
 
     @Test
