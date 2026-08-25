@@ -272,6 +272,99 @@ class SignalGeneratorTest {
                 "the single-tone compensated render changed bit-for-bit");
     }
 
+    // -------------------------------------------------------------------------
+    // Predistortion: engaging and disengaging it by a live form switch
+    // -------------------------------------------------------------------------
+
+    /**
+     * A form flip between a plain waveform and its compensated sibling must
+     * take effect on the very next sample, in both directions, with the
+     * correction tables surviving the round trip - the operator switches the
+     * combo on a RUNNING generator and expects to hear the difference without
+     * a stop and start.
+     *
+     * <p>The tone's own level must not move across the flip either: the pair
+     * shares an RMS by construction, so a level jump would mean the switch is
+     * re-scaling something it should not and the "no glitch" claim would be
+     * false.
+     */
+    @Test
+    void formSwitch_engagesAndDisengagesCompensationLive() {
+        int    sampleRate = 48_000;
+        double freqHz     = 1_000.0;
+        double vrms       = 1.0;
+        int    harmonic   = 2;
+
+        SignalGenerator gen = new SignalGenerator(
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
+        // The apply publishes the tables AND flips the form - the wizard's path.
+        gen.applyCompensation(new double[]{ CORRECTION_RATIO },
+                new int[]{ harmonic }, new double[]{ 0.0 });
+        double[] engaged = render(gen, sampleRate);
+
+        gen.setForm(GenSignalForm.SINE);
+        double[] plain = render(gen, sampleRate);
+
+        gen.setForm(GenSignalForm.SINE_COMP);
+        double[] reEngaged = render(gen, sampleRate);
+
+        double fund = componentPeak(engaged, sampleRate, freqHz);
+        assertEquals(CORRECTION_RATIO,
+                componentPeak(engaged, sampleRate, harmonic * freqHz) / fund,
+                CORRECTION_RATIO * 1e-3, "the compensated form renders the correction");
+        assertEquals(0.0, componentPeak(plain, sampleRate, harmonic * freqHz) / fund, 1e-9,
+                "the flip to the plain form must stop the correction at once");
+        assertEquals(CORRECTION_RATIO,
+                componentPeak(reEngaged, sampleRate, harmonic * freqHz) / fund,
+                CORRECTION_RATIO * 1e-3,
+                "the flip back must re-engage the held tables with no restart");
+        assertEquals(fund, componentPeak(plain, sampleRate, freqHz), fund * 1e-9,
+                "switching within the pair must not move the tone's own level");
+    }
+
+    /** The two-tone half of the same contract: both forms run the same pair of
+     *  accumulators, so the switch is a hot-swap there too - no rebuild, and
+     *  the second tone neither stops nor restarts. */
+    @Test
+    void dualToneFormSwitch_engagesAndDisengagesCompensationLive() {
+        int    sampleRate = 48_000;
+        double f1Hz       = 1_000.0;
+        double f2Hz       = 1_100.0;
+        double vrms       = 1.0;
+        double splitPct   = DUAL_SPLITS_PCT[0];
+
+        SignalGenerator gen = new SignalGenerator(
+                GenSignalForm.DUAL_TONE, f1Hz, sampleRate, vrms, DAC_FS_VRMS);
+        gen.setDualToneFrequency2(f2Hz);
+        gen.setDualToneAmplitudes(splitPct, 100.0 - splitPct);
+        gen.setAmplitudeVrms(vrms);
+        gen.applyDualToneCompensation(new double[]{ CORRECTION_RATIO },
+                new int[]{ 1 }, new int[]{ 1 }, new double[]{ 0.0 });
+        double[] engaged = render(gen, sampleRate);
+
+        gen.setForm(GenSignalForm.DUAL_TONE);
+        double[] plain = render(gen, sampleRate);
+
+        gen.setForm(GenSignalForm.DUAL_TONE_COMP);
+        double[] reEngaged = render(gen, sampleRate);
+
+        double tone1   = componentPeak(engaged, sampleRate, f1Hz);
+        double product = f1Hz + f2Hz;
+        assertEquals(CORRECTION_RATIO, componentPeak(engaged, sampleRate, product) / tone1,
+                CORRECTION_RATIO * 1e-3, "the compensated two-tone form renders the correction");
+        assertEquals(0.0, componentPeak(plain, sampleRate, product) / tone1, 1e-9,
+                "the flip to the plain two-tone form must stop the correction at once");
+        assertEquals(CORRECTION_RATIO, componentPeak(reEngaged, sampleRate, product) / tone1,
+                CORRECTION_RATIO * 1e-3,
+                "the flip back must re-engage the held products with no restart");
+        assertEquals(tone1, componentPeak(plain, sampleRate, f1Hz), tone1 * 1e-9,
+                "switching within the pair must not move tone 1's level");
+        assertEquals(componentPeak(engaged, sampleRate, f2Hz),
+                componentPeak(plain, sampleRate, f2Hz),
+                componentPeak(engaged, sampleRate, f2Hz) * 1e-9,
+                "the second tone must survive the switch untouched - no rebuild");
+    }
+
     /** Renders {@code samples} consecutive samples into a block. */
     private double[] render(SignalGenerator gen, int samples) {
         double[] block = new double[samples];

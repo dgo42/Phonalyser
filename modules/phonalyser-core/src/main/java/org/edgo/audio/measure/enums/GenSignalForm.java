@@ -53,6 +53,16 @@ public enum GenSignalForm {
         return this == DUAL_TONE || this == DUAL_TONE_COMP;
     }
 
+    /** True for the two PREDISTORTED waveforms - {@link #SINE_COMP} and
+     *  {@link #DUAL_TONE_COMP}.  Each is the compensated sibling of a plain
+     *  form that renders the same tones from the same DDS state, differing
+     *  only in that a correction table is subtracted; the pair therefore
+     *  shares an RMS and switches without a rebuild.  Drives every "does this
+     *  form need the correction tables loaded?" branch. */
+    public boolean isCompensated() {
+        return this == SINE_COMP || this == DUAL_TONE_COMP;
+    }
+
     public static GenSignalForm fromString(String s) {
         return switch (s.toLowerCase()) {
             case "sine"                                                 -> SINE;

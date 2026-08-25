@@ -587,7 +587,7 @@ public final class GeneratorLane {
      */
     private PlaybackStateEnum applySavedCompensation(GeneratorControls target, Preferences prefs,
                                           GenSignalForm form, double frequency, int sampleRate) {
-        if (form != GenSignalForm.SINE_COMP && form != GenSignalForm.DUAL_TONE_COMP) {
+        if (!form.isCompensated()) {
             return PlaybackStateEnum.STARTED;
         }
         String dpd = prefs.getGenDpd(form);
@@ -787,9 +787,17 @@ public final class GeneratorLane {
 
     /**
      * Live-applies a new waveform to the running generator.  No-op if the
-     * generator isn't running.  Switching to / from {@link GenSignalForm#SINE_COMP}
-     * or any sweep form requires a stop+start because their state machines
-     * aren't safely live-mutable; this method skips them.
+     * generator isn't running.  Only the sweeps are refused: they run their own
+     * state machine and expect their own constructor, so they need a stop+start.
+     *
+     * <p>Selecting a COMPENSATED form loads the stored corrections onto the
+     * running generator first.  It has to: the correction tables live in the
+     * {@code .dpd} the preferences name, not in the DDS, so a generator started
+     * on a plain form holds none - and {@link SignalGenerator#setForm} on its
+     * own would then render an uncorrected tone under a compensated label.  The
+     * load IS the switch (publishing the tables flips the form in the same
+     * volatile hot-swap), and it is the same bridge the start path crosses, so
+     * a live switch and a fresh start engage identically.
      */
     public void setForm(GenSignalForm form) {
         if (form == null) return;
@@ -797,11 +805,16 @@ public final class GeneratorLane {
         // DDS rebuilt is its own decision, and it makes the same one this guard
         // makes (it restarts them rather than swapping them live).
         if (remote() == null && (form == GenSignalForm.LINEAR_SWEEP
-                || form == GenSignalForm.LOG_SWEEP || form == GenSignalForm.SINE_COMP)) {
+                || form == GenSignalForm.LOG_SWEEP)) {
             return;
         }
         GeneratorControls g = live();
-        if (g != null) g.setForm(form);
+        if (g == null) return;
+        if (form.isCompensated()) {
+            applySavedCompensation(g, Preferences.instance(), form,
+                    effectiveFrequency(), outputRateHz());
+        }
+        g.setForm(form);
     }
 
     /** Live-applies a new NOMINAL frequency (Hz) to the running generator.  No-op
@@ -1029,7 +1042,7 @@ public final class GeneratorLane {
      *  operator switched away from - the second tone would never appear when
      *  entering a dual tone, and would keep sounding when leaving it. */
     public void formChanged(GenSignalForm f, GeneratorRun freshRun) {
-        boolean needsRestart = requiresRestart(lastForm) || requiresRestart(f);
+        boolean needsRestart = requiresRestart(lastForm, f);
         lastForm = f;
         if (needsRestart && isRunning()) {
             restart(freshRun);
@@ -1047,12 +1060,23 @@ public final class GeneratorLane {
         }
     }
 
-    private boolean requiresRestart(GenSignalForm f) {
-        // Both dual-tone forms stand up a dedicated second DDS accumulator, so
-        // entering OR leaving either one needs a full rebuild - a live form-swap
-        // would leave the second tone (and its frequency) running.
-        return f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP
-                || f.isDualTone();
+    /** Whether moving from {@code from} to {@code to} needs a full stop+start
+     *  instead of a live swap.  The sweeps run their own state machine and
+     *  expect their own constructor, so either side forces a rebuild.  The
+     *  two-tone forms stand up a dedicated second DDS accumulator, so ENTERING
+     *  or LEAVING that family is a rebuild too - a live swap would leave the
+     *  second tone (and its frequency) running, or never start it.
+     *
+     *  <p>Moving WITHIN a family is not a rebuild: a plain form and its
+     *  compensated sibling render the same tones from the same accumulators at
+     *  the same RMS, so the switch is exactly the volatile hot-swap the kernels
+     *  are built around. */
+    private boolean requiresRestart(GenSignalForm from, GenSignalForm to) {
+        return isSweep(from) || isSweep(to) || from.isDualTone() != to.isDualTone();
+    }
+
+    private boolean isSweep(GenSignalForm f) {
+        return f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP;
     }
 
     /** Re-applies the FFT-bin snap to the running tone(s) - fired on a
