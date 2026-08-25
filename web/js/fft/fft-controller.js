@@ -91,6 +91,10 @@ export class FftController {
     this._gen = gen;
     this.config = config;
     this._status = status || (() => {});
+    // Live preferences, for the gates Java reads live each tick (the config is a
+    // record-start snapshot; a wizard forcing a pref mid-record must take effect,
+    // as it does on the desktop - FftAnalyzerWorker:1697 reads the pref, not a copy).
+    this._prefs = prefs || null;
     this._fftOn = false;
     // Whether the analyser was recording when stopCaptureForPrefs() recorded it, so
     // startCaptureForPrefs() restarts exactly that (Java FftPane.recordWasRunningForPrefs).
@@ -834,7 +838,14 @@ export class FftController {
     // FftAnalyzerWorker requests GENERATOR_EMITTED_HZ under the same genActive + fund-from-gen
     // gate). null (or a 0 for "no such tone") withholds the hint entirely, which is what makes
     // the analyzer auto-detect an external tone instead of pinning its search to a nominal.
-    const emitted = (this._genOn && c.fftFundFromGenerator)
+    // The fund-from-generator gate reads the LIVE preference, exactly as Java does
+    // (FftAnalyzerWorker:1697 genActive && prefs.isFftFundFromGenerator()): the config is a
+    // record-start snapshot, and the predistortion wizard forces this pref on Start - through
+    // the snapshot the hint could not reach an already-running record, and without it the
+    // accumulator's global peak search once pinned the coherent reference onto the wizard's
+    // H9 test partial (the probe partials arrive stronger than the notched fundamental).
+    const fundFromGen = this._prefs ? this._prefs.fftFundFromGenerator.get() : c.fftFundFromGenerator;
+    const emitted = (this._genOn && fundFromGen)
       ? MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, c.inRate) : null;
     const hintHz = (hz) => (hz > 0 ? hz : NaN);
     this.worker.postMessage({
