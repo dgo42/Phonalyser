@@ -608,6 +608,11 @@ public class SignalGenerator implements GeneratorControls {
      * {@code a·f₁ + b·f₂}, published as one immutable {@link DualToneComp}
      * before the form flips so the audio thread never sees a partial set.
      * Empty arrays leave an uncorrected two-tone signal.
+     *
+     * <p>{@code ampRatio} is a ratio to the <b>F1 tone</b> - the same
+     * convention the single-tone call uses against the fundamental, and the
+     * one the accumulators divide by on the way out - so it is independent of
+     * the dual-tone split and of the master amplitude.
      */
     public void applyDualToneCompensation(double[] ampRatios, int[] aCoef, int[] bCoef, double[] phiInits) {
         this.dtComp = new DualToneComp(ampRatios, aCoef, bCoef, phiInits);
@@ -1158,14 +1163,24 @@ public class SignalGenerator implements GeneratorControls {
      * {@code long} arithmetic where overflow IS the 2⁶⁴ phase wrap.  This locks
      * every correction exactly to its product frequency with no drift or
      * beating, no matter how many samples have been generated.
+     *
+     * <p>Each {@code ampRatio} is a ratio to the <b>F1 TONE</b>, so it is
+     * scaled by that tone's own weight - the {@code w₁} that multiplies
+     * {@code ddsSine()} on the very first line - and not by full scale.  The
+     * single-tone kernel needs no such factor only because there the
+     * fundamental IS the whole raw waveform, at weight 1.  Scaled here rather
+     * than folded into the published table because the weights are
+     * live-swappable: a split change must move the corrections with the tone,
+     * not leave a table that was baked against the old split.
      */
     private double ddsDualToneCompensated() {
-        double s = ddsSine() * dualW1 + ddsSine2() * dualW2;
+        double w1 = dualW1;                    // single volatile read - also the ratio reference
+        double s = ddsSine() * w1 + ddsSine2() * dualW2;
         DualToneComp c = dtComp;               // single volatile read - atomic hot-swap
         if (c != null) {
             for (int i = 0; i < c.amp.length; i++) {
                 long pPhase = phaseAcc * c.a[i] + phaseAcc2 * c.b[i] + c.phaseOff64[i];
-                s -= c.amp[i] * ddsCos(pPhase);
+                s -= c.amp[i] * w1 * ddsCos(pPhase);
             }
         }
         return s;

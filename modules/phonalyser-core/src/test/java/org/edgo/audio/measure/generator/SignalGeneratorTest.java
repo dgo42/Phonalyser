@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.generator;
 
+import java.util.Arrays;
+
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.junit.jupiter.api.Test;
@@ -43,6 +45,18 @@ class SignalGeneratorTest {
 
     /** DAC full-scale RMS voltage used by every test - a literal, not Preferences. */
     private static final double DAC_FS_VRMS = 2.79351;
+    /** Dual-tone splits the correction reference is checked at.  A symmetric
+     *  split alone cannot tell "ratio to the F1 tone" from "half of full
+     *  scale", so the asymmetric ones carry the proof. */
+    private static final double[] DUAL_SPLITS_PCT = { 50.0, 40.0, 75.0 };
+    /** Commanded correction amplitude, as a ratio to the tone it corrects -
+     *  large enough to measure to a part in 1e6, far below any clipping. */
+    private static final double CORRECTION_RATIO = 0.01;
+    /** Block length of the bit-exact render pin. */
+    private static final int    RENDER_PIN_SAMPLES = 4_800;
+    /** {@code Arrays.hashCode} of that block - see
+     *  {@link #compensation_renderIsBitIdentical()}. */
+    private static final int    SINE_COMP_RENDER_HASH = 356_046_049;
 
     @Test
     void sine_matchesAnalyticForm() {
@@ -159,5 +173,127 @@ class SignalGeneratorTest {
         // vrms * √2 / dacFsVoltageRms = 1.0 * √2 / 2.79351 ≈ 0.5063.
         double expectedPeak = Constants.SQRT2 / DAC_FS_VRMS;
         assertEquals(expectedPeak, peak, expectedPeak * 1e-2);
+    }
+
+    // -------------------------------------------------------------------------
+    // Predistortion: what a commanded amplitude ratio is a ratio TO
+    // -------------------------------------------------------------------------
+
+    /**
+     * A commanded correction is a ratio to the TONE it corrects - the
+     * fundamental for a single tone, the F1 tone for two - and the DDS must
+     * deliver it at exactly that ratio.  Everything upstream states this
+     * convention and computes against it: the accumulators divide the measured
+     * product by the DAC fundamental's Vrms on the way out, a saved
+     * {@code .dpd} carries the same ratio, and the plant probe measures the
+     * chain by dividing the arrival by the arrival the ratio should have
+     * produced.  If the DDS delivers a different fraction, the plant absorbs
+     * the difference as if it were the chain's, and a run without a probe -
+     * the CLI - closes its loop at that gain.
+     *
+     * <p>The dual-tone case is the sharp one: the two tones carry the per-tone
+     * weights, so a correction subtracted at full scale is delivered
+     * {@code 1/w1} times too large - and the split is a user setting, so the
+     * error is not even a constant.  Measured by quadrature correlation on the
+     * rendered block, which is exact here: the block holds a whole number of
+     * cycles of both tones and of the product.
+     */
+    @Test
+    void dualToneCompensation_partialArrivesAtTheCommandedRatioToTone1() {
+        int    sampleRate = 48_000;
+        double f1Hz       = 1_000.0;
+        double f2Hz       = 1_100.0;
+        double vrms       = 1.0;
+
+        for (double splitPct : DUAL_SPLITS_PCT) {
+            SignalGenerator gen = new SignalGenerator(
+                    GenSignalForm.DUAL_TONE, f1Hz, sampleRate, vrms, DAC_FS_VRMS);
+            gen.setDualToneFrequency2(f2Hz);
+            gen.setDualToneAmplitudes(splitPct, 100.0 - splitPct);
+            gen.setAmplitudeVrms(vrms);
+            // One product, at f1 + f2 so it cannot be confused with either tone
+            // or with a harmonic of them.
+            gen.applyDualToneCompensation(new double[]{ CORRECTION_RATIO },
+                    new int[]{ 1 }, new int[]{ 1 }, new double[]{ 0.0 });
+
+            double[] block  = render(gen, sampleRate);
+            double   tone1  = componentPeak(block, sampleRate, f1Hz);
+            double   partial = componentPeak(block, sampleRate, f1Hz + f2Hz);
+
+            assertEquals(CORRECTION_RATIO, partial / tone1, CORRECTION_RATIO * 1e-3,
+                    "at a " + splitPct + " % split the correction must arrive at the "
+                            + "commanded ratio to the F1 TONE, not to full scale");
+        }
+    }
+
+    /** The single-tone convention the dual-tone one has to match: the
+     *  fundamental carries the whole raw amplitude, so a correction commanded
+     *  at a ratio arrives at exactly that ratio to it. */
+    @Test
+    void compensation_partialArrivesAtTheCommandedRatioToTheFundamental() {
+        int    sampleRate = 48_000;
+        double freqHz     = 1_000.0;
+        double vrms       = 1.0;
+        int    harmonic   = 2;
+
+        SignalGenerator gen = new SignalGenerator(
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
+        gen.applyCompensation(new double[]{ CORRECTION_RATIO },
+                new int[]{ harmonic }, new double[]{ 0.0 });
+
+        double[] block   = render(gen, sampleRate);
+        double   fund    = componentPeak(block, sampleRate, freqHz);
+        double   partial = componentPeak(block, sampleRate, harmonic * freqHz);
+
+        assertEquals(CORRECTION_RATIO, partial / fund, CORRECTION_RATIO * 1e-3,
+                "the single-tone correction must arrive at the commanded ratio "
+                        + "to the fundamental");
+    }
+
+    /** Bit-exact pin on the single-tone compensated kernel: its samples are
+     *  pure table + Taylor double arithmetic, so the rendered block is
+     *  reproducible to the last bit and any change to that kernel - including
+     *  one made while fixing the DUAL-tone reference - shows up here.  Update
+     *  the constant only for a deliberate, reviewed change to the single-tone
+     *  compensation. */
+    @Test
+    void compensation_renderIsBitIdentical() {
+        int    sampleRate = 48_000;
+        double freqHz     = 1_000.0;
+        double vrms       = 1.0;
+        int    harmonic   = 3;
+
+        SignalGenerator gen = new SignalGenerator(
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
+        gen.applyCompensation(new double[]{ CORRECTION_RATIO },
+                new int[]{ harmonic }, new double[]{ 0.25 });
+
+        assertEquals(SINE_COMP_RENDER_HASH, Arrays.hashCode(render(gen, RENDER_PIN_SAMPLES)),
+                "the single-tone compensated render changed bit-for-bit");
+    }
+
+    /** Renders {@code samples} consecutive samples into a block. */
+    private double[] render(SignalGenerator gen, int samples) {
+        double[] block = new double[samples];
+        for (int n = 0; n < samples; n++) {
+            block[n] = gen.nextSample();
+        }
+        return block;
+    }
+
+    /** Peak amplitude of the component at {@code freqHz} in {@code block}, by
+     *  quadrature correlation.  Exact - not an estimate - when the block holds
+     *  a whole number of cycles of every component present, which is what the
+     *  callers arrange: the other components are then orthogonal to this one
+     *  and contribute nothing to the sums. */
+    private double componentPeak(double[] block, int sampleRate, double freqHz) {
+        double re = 0.0;
+        double im = 0.0;
+        for (int n = 0; n < block.length; n++) {
+            double w = 2.0 * Math.PI * freqHz * n / sampleRate;
+            re += block[n] * Math.cos(w);
+            im += block[n] * Math.sin(w);
+        }
+        return 2.0 * Math.hypot(re, im) / block.length;
     }
 }
