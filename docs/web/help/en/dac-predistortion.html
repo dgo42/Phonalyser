@@ -11,7 +11,7 @@
 
   <h1>DAC pre-distortion wizard</h1>
   <p>This page covers the wizard's controls.  For <em>why</em> it works the way
-     it does - the mandatory twin-T notch, why the fundamental is taken from the
+     it does - the mandatory notch filter, why the fundamental is taken from the
      generator, how deep coherent averaging digs the harmonics out, and how the
      correction loop converges - see
      <a href="theory/dac-predistortion.html">Theory of operation ▸ DAC
@@ -27,8 +27,8 @@
      file and applied to the generator's
      <a href="generator.html#generator-corrections">compensated</a> waveforms.</p>
 
-  <div class="note"><b>A passive twin-T notch is mandatory.</b>  Put a passive
-     twin-T notch, tuned to the fundamental, between the device under test and
+  <div class="note"><b>A passive notch filter is mandatory.</b>  Put a passive
+     notch filter, tuned to the fundamental, between the device under test and
      the ADC - otherwise the ADC's own harmonics set the floor and the loop
      ends up compensating the ADC, not the DAC.  Tune it first with the
      <a href="tune-notch.html">tune-notch wizard</a>.  See
@@ -64,7 +64,7 @@
     </svg>
   </div>
   <ol class="features">
-    <li><b>Procedure.</b>  The mandatory twin-T notch and how the closed loop
+    <li><b>Procedure.</b>  The mandatory notch filter and how the closed loop
         works - measure the harmonics, feed back an equal-and-opposite
         correction, repeat each round.</li>
     <li><b>Status line.</b>  The live phase: aligning the tone, averaging a
@@ -91,7 +91,7 @@
      two-tone signal's intermodulation products; any other waveform is rejected.
      The wizard runs the FFT in unbounded coherent averaging with the
      <a href="fft.html#fft-tab-thd">fundamental taken from the generator</a> and
-     the FLL on; for the deepest floor use the HFT248D window and leave mains
+     the FLL on; for the deepest floor use the BH7 window and leave mains
      suppression off, and drive a clean tone a few dB below full scale with the
      fundamental snapped to a bin.</p>
 
