@@ -152,11 +152,12 @@ export class PredistortionWizard {
       // Distortion percentages: Java fmtPct is "%.8f %%" (PredistortionWizardDialog:708-710).
       [t(dual ? 'predistortion.metric.currentImd' : 'predistortion.metric.currentThd'), Number.isFinite(dist) ? dist.toFixed(8) + ' %' : '-'],
       [t(dual ? 'predistortion.metric.best_imd' : 'predistortion.metric.best_thd'), Number.isFinite(best) ? best.toFixed(8) + ' %' : '-'],
-      // Ratio figures: Java fmtDbv is "%.2f dBV" (PredistortionWizardDialog:712-714) -
-      // relabelled to dBV, never offset.
-      [t(dual ? 'predistortion.metric.d_n' : 'predistortion.metric.thd_n'), r ? r.thdNDb.toFixed(2) + ' dBV' : '-'],
-      [t('predistortion.metric.snr'), r ? r.snrDb.toFixed(2) + ' dBV' : '-'],
-      [t('predistortion.metric.sinad'), r ? r.sinadDb.toFixed(2) + ' dBV' : '-'],
+      // Ratio figures (THD+N / TD+N / SNR / SINAD): plain dB, Java fmtDb "%.2f dB". They
+      // measure against the fundamental, so no absolute unit applies and no dBV offset is
+      // added; only the two absolute levels below read dBV.
+      [t(dual ? 'predistortion.metric.d_n' : 'predistortion.metric.thd_n'), r ? r.thdNDb.toFixed(2) + ' dB' : '-'],
+      [t('predistortion.metric.snr'), r ? r.snrDb.toFixed(2) + ' dB' : '-'],
+      [t('predistortion.metric.sinad'), r ? r.sinadDb.toFixed(2) + ' dB' : '-'],
       [t('predistortion.metric.fund'), r ? (r.fundamentalDbFs + off).toFixed(2) + ' dBV' : '-'],
       // NOISE FLOOR - Java :346 fmtDbv(live.noisePeakFloorDbFs() + dbvOffset): the PEAK floor,
       // now that the live result is a real FftResult and noisePeakFloorDbFs() is callable.
