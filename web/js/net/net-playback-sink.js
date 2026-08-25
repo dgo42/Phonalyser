@@ -26,7 +26,7 @@
  */
 import { MessageType, NetFields, NetProto } from './net-proto.js';
 import { refInto, refText } from './net-device-ref.js';
-import { GenSignalForm, isDualTone, loadHarmonics, loadIntermod } from '../generator/dds-kernel.js';
+import { GenSignalForm, isCompensated, isDualTone, loadHarmonics, loadIntermod } from '../generator/dds-kernel.js';
 
 /** genId while no remote generator is open. */
 const NO_GEN = 0;
@@ -373,7 +373,7 @@ export class NetPlaybackSink {
    *  hands its target - so they are converted here, once, at the boundary. A compensated form
    *  with no table is left to the caller's own refusal (the local path refuses it too). */
   _pushCompensation(spec, control) {
-    if (spec.form !== GenSignalForm.SINE_COMP && spec.form !== GenSignalForm.DUAL_TONE_COMP) {
+    if (!isCompensated(spec.form)) {
       this._config({ [NetFields.CLEAR_COMPENSATION]: true });
       return;
     }

@@ -18,7 +18,7 @@
 import { t, stripMnemonics } from '../i18n/i18n.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
-import { GenSignalForm, isDualTone, isPeriodic, DdsKernel, quantizePcm, outputLaneGate,
+import { GenSignalForm, isCompensated, isDualTone, isPeriodic, DdsKernel, quantizePcm, outputLaneGate,
   loadHarmonics, loadIntermod, isDualToneCorrectionFile } from './dds-kernel.js';
 import * as fileStore from '../io/file-store.js';
 import { backendDisplayName } from '../audio/audio-backend-type.js';
@@ -218,7 +218,7 @@ export class GeneratorPane {
   // the display filename for the session.
   refreshCorrectionsRow() {
     const form = $('#signalForm').val();
-    const comp = form === GenSignalForm.SINE_COMP || form === GenSignalForm.DUAL_TONE_COMP;
+    const comp = isCompensated(form);
     const text = comp ? this.prefs.getGenDpd(form) : null;
     // Show the original .dpd basename - the session map first, else the persisted name pref
     // (survives a reload; the full OS path stays unavailable). Fall back to ✓ only if a .dpd is
@@ -618,7 +618,7 @@ export class GeneratorPane {
         const duty = (sfVal('duty', 50) || 50) / 100;
         kernel.setRectangleDuty(duty); kernel.setTriangleDuty(duty);
         // Compensated forms: apply the loaded .dpd so the saved file pre-distorts like the live tone.
-        if (c.form === GenSignalForm.SINE_COMP || c.form === GenSignalForm.DUAL_TONE_COMP) {
+        if (isCompensated(c.form)) {
           const dpd = prefs.getGenDpd(c.form);
           if (dpd) {
             if (isDualToneCorrectionFile(dpd)) kernel.applyDualToneCompensation(loadIntermod(dpd));

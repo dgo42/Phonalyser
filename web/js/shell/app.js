@@ -33,7 +33,7 @@ import { ServerProber, wsUrlOf } from '../net/server-prober.js';
 import { stackOverOpenModals } from '../ui/modal-stack.js';
 import { FftView } from '../ui/fft-view.js';
 import { ScopeView } from '../ui/scope-view.js';
-import { GenSignalForm, isDualTone, rawRms } from '../generator/dds-kernel.js';
+import { GenSignalForm, isCompensated, isDualTone, rawRms } from '../generator/dds-kernel.js';
 import { Preferences } from '../store/preferences.js';
 import { DeviceProfileStore } from '../store/device-profiles.js';
 import { loadDeviceCatalog } from '../store/device-catalog.js';
@@ -699,8 +699,7 @@ function readConfig() {
   c.form = $('#signalForm').val();
   c.snapToBin = $('#snap').is(':checked');   // gates the SINE/DUAL_TONE FFT-bin emit snap
   // Compensated forms carry the loaded .dpd text (per-form slot) for the worklet to apply.
-  c.dpdText = (c.form === GenSignalForm.SINE_COMP || c.form === GenSignalForm.DUAL_TONE_COMP)
-    ? (prefs.getGenDpd(c.form) || null) : null;
+  c.dpdText = isCompensated(c.form) ? (prefs.getGenDpd(c.form) || null) : null;
   c.tone2Hz = sfVal('tone2Hz', 1100);
   c.amp1Pct = sfVal('amp1Pct', 50); c.amp2Pct = sfVal('amp2Pct', 50);
   const duty = (sfVal('duty', 50) || 50) / 100;

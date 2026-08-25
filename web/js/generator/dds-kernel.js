@@ -64,6 +64,19 @@ export function isDualTone(form) {
 }
 
 /**
+ * True for the two PREDISTORTED waveforms (SINE_COMP / DUAL_TONE_COMP). Each is the
+ * compensated sibling of a plain form that renders the same tones from the same DDS
+ * state, differing only in that a correction table is subtracted; the pair therefore
+ * shares an RMS and switches without a rebuild. Drives every "does this form need the
+ * correction tables loaded?" branch.
+ * @param {string} form
+ * @returns {boolean}
+ */
+export function isCompensated(form) {
+  return form === GenSignalForm.SINE_COMP || form === GenSignalForm.DUAL_TONE_COMP;
+}
+
+/**
  * True for every waveform that has a meaningful frequency - i.e. all forms EXCEPT the
  * three noise sources (mirrors GenSignalForm.isPeriodic; the generator's Frequency field
  * is disabled, but still visible, for noise).
@@ -613,6 +626,11 @@ export class DdsKernel {
    * Hot-swaps the dual-tone intermod compensation and switches to DUAL_TONE_COMP.
    * Accepts a prebuilt set ({@link makeDualToneComp}/{@link loadIntermod}) or raw
    * (ampRatios, aCoef, bCoef, phiInits) arrays.
+   *
+   * Each ampRatio is a ratio to the F1 TONE - the same convention the
+   * single-tone call uses against the fundamental, and the one the accumulators
+   * divide by on the way out - so it is independent of the dual-tone split and
+   * of the master amplitude.
    * @param {Object|ArrayLike<number>} compOrAmp
    * @param {ArrayLike<number>} [aCoef]
    * @param {ArrayLike<number>} [bCoef]
@@ -782,13 +800,23 @@ export class DdsKernel {
     return s;
   }
 
+  /**
+   * Each `amp` is a ratio to the F1 TONE, so it is scaled by that tone's own
+   * weight - the `w1` that multiplies the first `ddsSineOf()` - and not by full
+   * scale. The single-tone kernel needs no such factor only because there the
+   * fundamental IS the whole raw waveform, at weight 1. Scaled here rather than
+   * folded into the published table because the weights are live-swappable: a
+   * split change must move the corrections with the tone, not leave a table
+   * that was baked against the old split.
+   */
   _ddsDualToneCompensated() {
-    let s = ddsSineOf(this._phaseAcc) * this._dualW1 + ddsSineOf(this._phaseAcc2) * this._dualW2;
-    const c = this._dtComp;
+    const w1 = this._dualW1;               // one read - also the ratio reference
+    let s = ddsSineOf(this._phaseAcc) * w1 + ddsSineOf(this._phaseAcc2) * this._dualW2;
+    const c = this._dtComp;                // one read - atomic hot-swap
     if (c != null) {
       for (let i = 0; i < c.amp.length; i++) {
         const pPhase = wrapTurn(this._phaseAcc * c.a[i] + this._phaseAcc2 * c.b[i] + c.phaseOffTurns[i]);
-        s -= c.amp[i] * ddsCosOf(pPhase);
+        s -= c.amp[i] * w1 * ddsCosOf(pPhase);
       }
     }
     return s;

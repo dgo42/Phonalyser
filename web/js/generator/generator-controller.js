@@ -16,7 +16,7 @@
  * engine's generator lane). Same split as the desktop, where this controller asks
  * AudioBackend.openPlayback for an AudioPlayback and never touches a device line itself.
  */
-import { GenSignalForm, isDualTone, isPeriodic } from './dds-kernel.js';
+import { GenSignalForm, isCompensated, isDualTone, isPeriodic } from './dds-kernel.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
 import { openOutputContext, WebAudioPlaybackSink } from './web-audio-playback-sink.js';
@@ -491,8 +491,7 @@ export class GeneratorController {
     // Compensated forms refuse to start without a loaded .dpd (Java tryStartOnce returns
     // generator.error.needPredistortion before opening the device) - abort BEFORE opening
     // the output context, leaving _genOn false.
-    if ((c.form === GenSignalForm.SINE_COMP || c.form === GenSignalForm.DUAL_TONE_COMP)
-        && !c.dpdText) {
+    if (isCompensated(c.form) && !c.dpdText) {
       this.lastStartError = t('generator.error.needPredistortion');
       return this.lastStartError;
     }
