@@ -135,8 +135,8 @@ const frTab = (id, file, panelId) => ({ id, file, ready: true,
  *  CALIBRATED full scale per channel. The card catalogue seeds the nominal 2.7 V; the bench's own
  *  calibration reads 2.794 V, and it is the calibrated figure the instrument measures with - so the
  *  histogram shot's voltage axis is labelled the way the analyzer really reads. */
-const COSMOS_INPUT_RANGE = '2.7V';
-const COSMOS_FS_VRMS = { left: 2.794405, right: 2.794613 };
+const COSMOS_INPUT_RANGE = '1.7V';
+const COSMOS_FS_VRMS = { left: 1.7903272241455692, right: 1.7905617280958905 };
 
 const SPECS = [
   { id: 'app',        file: 'multifunctional.png',  ready: true },
@@ -297,8 +297,253 @@ const SPECS = [
   // (a real measured notch response in the plot) that the static modal render can't
   // match - the web help uses the Java image verbatim (copied by sync-help).
   // Re-enable only if a live web capture is ever scripted.
-  { id: 'dac-predistortion', file: 'dac-predistortion-wizard.png', ready: true,
-    shot: (page) => showModal(page, 'predistModal'), after: (page) => hideModal(page, 'predistModal') },
+  // LIVE capture, like the Java help's shot: the training actually runs - real probe,
+  // real rounds, a real convergence chart and populated FFT-settings / progress blocks -
+  // on the REAL bench (E1DA Cosmos ADC in, JLsounds DAC out, the physical notch between
+  // them). A static modal render shows an empty settings block and no progress readouts,
+  // which is not what the page's callouts describe. BH7 at 87.5 % matches the wizard's
+  // own window recommendation; the tone sits on the bench notch's frequency with the
+  // manual fundamental stating the level the notch hides, exactly as a real training is
+  // set up. The bench must be idle - the desktop app and this capture cannot hold the
+  // converter pair at once.
+  // One collection, all languages: like the desktop driver, the run is NOT
+  // repeated per language - after the training window the locale is switched
+  // in place (the app's own menu handler retranslates the live UI, the wizard
+  // poll refreshes its texts) and the de/uk shots are written directly; the
+  // returned handle gives the harness the en file on the en pass.
+  { id: 'dac-predistortion', file: 'dac-predistortion-wizard.png', ready: true, langs: ['en'],
+    async shot(page) {
+      if (!headedReal) {
+        console.warn('skip: dac-predistortion needs --headed-real - headless Chrome renders no physical audio, the bench would capture only the ADC noise floor');
+        return 'skip';
+      }
+      await openPrefs(page, 'audio');
+      // Input: the Cosmos, on the range it is physically switched to (same seeding as
+      // the histogram spec, and for the same reason - the dBV labels).
+      const inBound = await page.evaluate(() => {
+        const sel = document.getElementById('inSel');
+        const opt = [...sel.options].find((o) => /Cosmos/i.test(o.textContent));
+        if (!opt) return null;
+        sel.value = opt.value;
+        sel.dispatchEvent(new Event('change'));
+        return opt.textContent.trim();
+      });
+      await page.waitForTimeout(400);
+      for (const side of [0, 1]) {
+        const ok = await page.evaluate(({ want, i }) => {
+          const rows = [...document.querySelectorAll('#inRanges .card-range-row')];
+          const row = rows.find((r) => [...r.querySelectorAll('input[type=text]')].some((x) => x.value === want));
+          const radio = row && row.querySelectorAll('input[type=radio]')[i];
+          if (!radio) return false;
+          radio.click();
+          return true;
+        }, { want: COSMOS_INPUT_RANGE, i: side });
+        if (!ok) { console.warn(`  ! input range "${COSMOS_INPUT_RANGE}" not offered - dBV labels unverified`); break; }
+        console.log(`  input range ${COSMOS_INPUT_RANGE} picked, channel side ${side}`);
+        await page.waitForTimeout(250);
+      }
+      // Output: the JLsounds DAC that feeds the notch.
+      const outBound = await page.evaluate(() => {
+        const sel = document.getElementById('outSel');
+        const opt = [...sel.options].find((o) => /JLsounds|I2SoverUSB/i.test(o.textContent));
+        if (!opt) return null;
+        sel.value = opt.value;
+        sel.dispatchEvent(new Event('change'));
+        return opt.textContent.trim();
+      });
+      await page.click('#prefsOk');
+      await page.waitForTimeout(1200);         // commit + consumer restart
+      if (!inBound) console.warn('  ! Cosmos ADC not in the input list - capturing on the default input');
+      if (!outBound) console.warn('  ! JLsounds DAC not in the output list - playing on the default output');
+      await page.evaluate((fs) => {
+        const p = window.__scopePane.prefs;
+        p.adcFsVoltageRms.set(fs.left);
+        p.adcFsVoltageRmsRight.set(fs.right);
+      }, COSMOS_FS_VRMS);
+      // 1M at 93.75 % overlap - the bench's standard deep-training configuration;
+      // a smaller FFT leaves the late rounds correcting off floor-level readings
+      // and the convergence chart wobbles instead of falling.
+      for (const [id, val] of [['fftSize', '1048576'], ['window', 'BH7'], ['overlap', 'PCT_93_75']]) {
+        await page.evaluate((a) => {
+          const sel = document.getElementById(a.id);
+          sel.value = a.val;
+          sel.dispatchEvent(new Event('change'));
+        }, { id, val });
+        await page.waitForTimeout(200);
+      }
+      // The tone on the notch, at the bench's standard level, with the manual
+      // fundamental stating that level - the notch hides the real one.
+      await page.evaluate(() => {
+        const set = (id, v) => {
+          const el = document.getElementById(id);
+          el.value = v;
+          el.dispatchEvent(new Event('input'));
+          el.dispatchEvent(new Event('change'));
+        };
+        set('toneHz', '1002.3');
+        set('ampDbfs', '1');
+        const en = document.getElementById('fftManualFundEn');
+        if (!en.checked) en.click();
+        set('fftManualFund', '1');
+      });
+      await page.waitForTimeout(300);
+      // The FFT record LED lives in the FFT pane - expand it first if collapsed.
+      const fftCollapsed = await page.$eval('#fftPane', (el) => el.classList.contains('collapsed'));
+      if (fftCollapsed) { await page.click('#fftPane .pane-header'); await page.waitForTimeout(300); }
+      // The two bench calibrations, exactly as the real profile carries them
+      // ("2 loaded"): open the Calibration panel, hand each row its .frc via
+      // the picker's hidden-input fallback, activate it, add the next row.
+      const FRCS = [
+        join(WEB, '..', 'results', 'loopback 384k log before ADC.frc'),
+        join(WEB, '..', 'results', '1kHz notch clear 384k log before ADC.frc'),
+      ];
+      await page.evaluate(() => {
+        if (!document.getElementById('fftCalPanel').classList.contains('show')) {
+          document.querySelector('#fftTabs .tab[data-panel="fftCalPanel"]').click();
+        }
+      });
+      await page.waitForTimeout(400);
+      for (let i = 0; i < FRCS.length; i++) {
+        const rowSel = `#fftCalRows .fft-cal-row:nth-child(${i + 1})`;
+        const [chooser] = await Promise.all([
+          page.waitForEvent('filechooser', { timeout: 10000 }),
+          page.click(`${rowSel} .fcal-load`),
+        ]);
+        await chooser.setFiles(FRCS[i]);
+        await page.waitForTimeout(600);        // decode + parse + cal-store put
+        await page.evaluate((sel) => {
+          const active = document.querySelector(sel + ' .fcal-active');
+          if (!active.checked) active.click();
+        }, rowSel);
+        await page.waitForTimeout(300);
+        if (i + 1 < FRCS.length) {
+          await page.evaluate((sel) => document.querySelector(sel + ' .fcal-add').click(), rowSel);
+          await page.waitForTimeout(300);
+        }
+      }
+      console.log('  calibrations loaded: ' + FRCS.length + ' .frc rows active');
+      await page.evaluate(() => {
+        if (document.getElementById('fftCalPanel').classList.contains('show')) {
+          document.querySelector('#fftTabs .tab[data-panel="fftCalPanel"]').click();
+        }
+      });
+      await page.waitForTimeout(300);
+      // The bench's analysis settings a fresh profile lacks: integrate noise
+      // over the audio band (not to 192 kHz - that alone costs ~23 dB of SNR)
+      // and the 50 dB strong-tone threshold.
+      // The Java app's exact analysis configuration (the approved desktop
+      // capture's live preferences): the notch feeds the CALIBRATED right
+      // channel - the web default 'L' analyzed the wrong input on every
+      // earlier attempt - plus the audio-band noise integration, the 50 dB
+      // strong-tone threshold and the manual fundamental at 1 V.
+      await page.evaluate(() => {
+        const p = window.__scopePane.prefs;
+        p.fftChannel.set('R');
+        p.fftDistMinEnabled.set(true);
+        p.fftDistMaxEnabled.set(true);
+        p.fftStrongToneRelDb.set(50);
+        p.fftManualFundEnabled.set(true);
+        p.fftManualFundVrms.set(1.0);
+        // BEFORE the record starts: the controller gates the generator
+        // frequency hint on the config SNAPSHOT taken at record start
+        // (fft-controller.js:837), so the wizard forcing this pref later
+        // cannot reach a running record. Without the hint the fundamental
+        // search is global and the accumulator once pinned itself onto the
+        // probe's H9 test partial (9021.6 Hz).
+        p.fftFundFromGenerator.set(true);
+        p.save();
+      });
+      await page.click('#genPlay');
+      await page.waitForTimeout(800);
+      await page.click('.fft-pane .led-btn');  // record - the wizard opener gates on it
+      await page.waitForFunction(() => !document.getElementById('predistBtn').disabled,
+        null, { timeout: 20000 });
+      // CRITICAL ORDER: let the analyzer LOCK the plain tone before the wizard
+      // ever runs. The wizard's probe plays test partials that arrive stronger
+      // than the notched fundamental; if the coherent reference has not pinned
+      // the tone yet, it latches onto a partial (measured: 9021.6 Hz = the H9
+      // partial) and every later reading sits on empty bins.
+      await page.waitForFunction(() => {
+        const r = window.__fftPane.view ? (window.__fftPane.view._last || null) : null;
+        return r && Math.abs(r.fundamentalHzRefined - 1002.3) < 1.0;
+      }, null, { timeout: 60000 });
+      await page.waitForTimeout(6000);         // two more frames on the locked tone
+      // The POPULATED wizard is taller than the standard 768 px capture window,
+      // and a modal that does not fit scrolls - the shot would clip its lower
+      // rows behind a scroll bar. Give the modal room; after() restores VIEW.
+      await page.setViewportSize({ width: VIEW.width, height: 1150 });
+      await page.click('#predistBtn');
+      await page.waitForSelector('#predistModal.show', { timeout: 5000 });
+      // The standing target is 0.000001 % and is NOT meant to be reached: the
+      // loop runs real rounds and the shot is taken mid-training, showing the
+      // rounds falling toward the dashed target line. 64 averages per round
+      // keeps the rounds short enough that several fit into the window.
+      await page.evaluate(() => {
+        const set = (id, v) => {
+          const el = document.getElementById(id);
+          el.value = v;
+          el.dispatchEvent(new Event('input'));
+          el.dispatchEvent(new Event('change'));
+        };
+        set('dpdAverages', '64');
+        set('dpdTarget', '0.000001');
+      });
+      await page.click('#dpdStart');
+      // Ground-truth dumps while the loop runs - measured levels, not theory.
+      const dumpState = async (tag) => console.log(`  ${tag}: ` + await page.evaluate(() => {
+        const r = window.__fftPane.view ? (window.__fftPane.view._last || null) : null;
+        const p = window.__scopePane.prefs;
+        const st = document.getElementById('dpdProgress').textContent.trim().slice(0, 60);
+        if (!r) return 'no result | ' + st;
+        const db = (x) => (x == null || !isFinite(x)) ? null : Math.round(x * 100) / 100;
+        return JSON.stringify({
+          status: st,
+          thdPct: r.thdPct,
+          fundHz: db(r.fundamentalHzRefined),
+          fundDbFs: r.fundamentalLinear > 0 ? db(20 * Math.log10(r.fundamentalLinear)) : null,
+          h2to4DbFs: r.harmonicDbFs ? [...r.harmonicDbFs.slice(0, 3)].map(db) : null,
+          fsL: p.adcFsVoltageRms.get(), fsR: p.adcFsVoltageRmsRight.get(),
+          amp: p.genAmplitude.get(),
+        });
+      }));
+      await page.waitForTimeout(20000);
+      await dumpState('t+20s');
+      await page.waitForTimeout(40000);
+      await dumpState('t+60s');
+      // Do not shoot on a clock, and never at a round's START: a fresh round's
+      // first averages ride a shallow floor and the live THD spikes (a 2-average
+      // reading measured 6e-5 on a converged chain). Shoot LATE in a round from
+      // round 4 on - the current figure is settled and the chart's live point
+      // sits on the falling tail.
+      await page.waitForFunction(() => {
+        const m = document.getElementById('dpdProgress').textContent
+          .match(/(\d+)[^\d]+(\d+)/);
+        if (!m) return false;
+        const round = parseInt(m[1], 10), left = parseInt(m[2], 10);
+        return round >= 4 && left <= 15;
+      }, null, { timeout: 300000 }).catch(() => {});
+      await dumpState('at shot');
+      // de/uk off the SAME collection: switch the locale in place, let the
+      // retranslate and the wizard's poll land, shoot, and return to en.
+      for (const l of ['de', 'uk']) {
+        await page.evaluate((t) => window.jQuery(`#langMenu [data-lang="${t}"]`).trigger('click'), l);
+        await page.waitForTimeout(900);
+        const modal = await page.$('#predistModal .modal-content');
+        await modal.screenshot({ path: join(WEB, 'help', l, 'img', this.file) });
+        console.log(`captured: ${l}/${this.id} -> help/${l}/img/${this.file} (in-place locale switch)`);
+      }
+      await page.evaluate(() => window.jQuery('#langMenu [data-lang="en"]').trigger('click'));
+      await page.waitForTimeout(900);
+      return page.$('#predistModal .modal-content');
+    },
+    async after(page) {
+      await page.evaluate(() => document.getElementById('dpdClose').click());
+      await page.waitForTimeout(500);
+      await page.click('.fft-pane .led-btn'); // record off again
+      await page.click('#genPlay');           // tone off again
+      await page.setViewportSize(VIEW);       // back to the standard frame
+      await page.waitForTimeout(400);
+    } },
 
   // ── Device-profile sync dialogs: the unified ADC/DAC Calibration dialog +
   //    the Card editor. #calibrationModal is ONE element reused for ADC and DAC - each
@@ -575,6 +820,12 @@ const { s, port } = await serve();
 // overlay scrollbars (crbug), so a shot that must show a classic scrollbar (the
 // scrolling Audio tab) needs a real headed window.
 const headed = argv.includes('--headed');
+// --headed-real: a visible browser with the REAL media devices - what a live
+// bench measurement needs. Headless Chrome (any shell/channel) renders no
+// physical audio at all: playback runs against a null sink, so a spec that
+// must PLAY through the bench captures nothing but the ADC's noise floor.
+// (--headed keeps its fake capture DEVICE and stays right for the UI shots.)
+const headedReal = argv.includes('--headed-real');
 // Headed also gets FAKE media devices: a headed browser without mic permission
 // enumerates devices with EMPTY labels, so the app's device combo comes up blank
 // and no card can bind. The fake devices give the whole pipeline something real
@@ -585,7 +836,7 @@ for (const channel of ['chrome', 'msedge', undefined]) {
   try {
     browser = await chromium.launch({
       ...(channel ? { channel } : {}),
-      headless: !headed,
+      headless: !(headed || headedReal),
       // Auto-grant the microphone in BOTH modes: without permission enumerateDevices returns empty
       // labels, no card binds, and a spec that has to RUN a capture has nothing to record. Only the
       // PERMISSION prompt is faked - the fake capture DEVICE is headed-only, so the histogram shot
@@ -617,6 +868,32 @@ await ctx.addInitScript(() => {
 // answers registers only; audio transfers park, which is what an idle analyzer looks like. Harmless
 // to the other specs: the backend still starts on WEB_AUDIO, this only makes QA40x selectABLE.
 await ctx.addInitScript(fakeQa40xUsbInit());
+if (headedReal) {
+  // Live-measurement runs: (a) force the file pickers onto their hidden-input
+  // fallback, which the harness CAN script (the FS Access picker cannot be),
+  // and (b) seed the web app's own device store with the bench's calibrated
+  // full-scales - a fresh profile otherwise boots on nominal values and every
+  // dBV label lies by the ratio.
+  await ctx.addInitScript(() => {
+    try { delete window.showOpenFilePicker; delete window.showSaveFilePicker; } catch { /* ignore */ }
+    try {
+      const KEY = 'phonalyser.devices';
+      if (!localStorage.getItem(KEY)) {
+        localStorage.setItem(KEY, JSON.stringify({
+          formatVersion: 1, contentVersion: 2, audioDevices: [
+            { name: 'E1DA Cosmos ADC', match: ['E1DA Cosmos ADC'], input: {
+              channels: 'INDEPENDENT', ranges: [
+                { label: '1.7V', fsVrms: { left: 1.7903272241455692, right: 1.7905617280958905 }, calibrated: true },
+                { label: '2.7V', fsVrms: { left: 2.7, right: 2.7 } }],
+              activeRange: { left: '1.7V', right: '1.7V' } } },
+            { name: 'I2SoverUSB', match: ['I2SoverUSB', 'JLsounds'], output: {
+              channels: 'LINKED', ranges: [
+                { label: 'default', fsVrms: { left: 1.9726000000000001, right: 1.9741999999999997 }, calibrated: true }],
+              activeRange: 'default' } }] }));
+      }
+    } catch { /* ignore */ }
+  });
+}
 const page = await ctx.newPage();
 // 'load' + the #scopePane wait below, NOT 'networkidle': the libflac wasm
 // loader leaves its /vendor/libflac/*.wasm response body unconsumed, so the
@@ -628,6 +905,11 @@ await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
 // Windows, which shows the classic bar. Style a webkit scrollbar (always
 // rendered) to match the Windows look; the shipped app.css is untouched.
 await page.waitForSelector('#scopePane', { timeout: 10000 }).catch(() => {});
+// The startup splash is an overlay that self-dismisses when the boot device
+// scan resolves; until then it sits over every pane and dialog, so a spec
+// captured early is a picture of the splash. Wait it out here - once per
+// boot - so no individual spec has to.
+await page.waitForSelector('#startupSplash', { state: 'hidden', timeout: 20000 }).catch(() => {});
 await page.waitForTimeout(500);   // let layout/fonts settle
 
 let done = 0, skipped = 0;
@@ -656,6 +938,8 @@ for (const lang of LANGS) {
     }, lang, { timeout: 10000 });
     await page.reload({ waitUntil: 'load' });
     await page.waitForSelector('#scopePane', { timeout: 10000 }).catch(() => {});
+    // Same splash wait as the initial load - the reload boots the app again.
+    await page.waitForSelector('#startupSplash', { state: 'hidden', timeout: 20000 }).catch(() => {});
     await page.waitForTimeout(600);   // layout/fonts settle in the new locale
   }
   // Say which locale the APP actually came up in. A silent mismatch here writes English pixels into
@@ -666,10 +950,18 @@ for (const lang of LANGS) {
   mkdirSync(imgDir, { recursive: true });
   for (const spec of todo) {
     if (!spec.ready) { if (lang === 'en') { console.log(`skip (web UI not ready): ${spec.id} -> ${spec.file}`); skipped++; } continue; }
+    // A spec with `langs` runs only on those passes - used by live-measurement
+    // specs that collect once and write every language themselves by switching
+    // the locale in place (the app retranslates live, no reload needed).
+    if (spec.langs && !spec.langs.includes(lang)) continue;
+    // A shot() may bow out with 'skip' (precondition not met - e.g. a live
+    // measurement spec running without --headed-real).
+
     const out = join(imgDir, spec.file);
     // shot() -> ElementHandle, {clip: rect} (a region no single element wraps - the
     // tab-strip + sibling panel shots), or null for the whole 1280×768 window.
     const el = spec.shot ? await spec.shot(page) : null;
+    if (el === 'skip') { skipped++; continue; }
     if (el && el.clip) await page.screenshot({ path: out, clip: el.clip });
     else if (el) await el.screenshot({ path: out });
     else await page.screenshot({ path: out });
