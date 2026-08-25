@@ -58,6 +58,30 @@
      Kerbfilter <b>zwingend</b>: ohne es kommen die Harmonischen nie aus der Flanke
      des Grundtons heraus und es kann sich keine stabile Korrektur bilden.</p>
 
+  <p>Der tiefere Grund, warum das Kerbfilter nicht entfallen kann: die
+     Korrekturschleife kann nur korrigieren, was der DAC erzeugt - sie
+     <em>misst</em> aber durch den ADC, und das ADC-Modul (Eingangsverstärker
+     und Wandler) erzeugt eigene Verzerrungen, wenn es mit einem Ton auf
+     Vollpegel angesteuert wird. Ohne das Kerbfilter mischt sich diese
+     ADC-Verzerrung in jede Messung, und die Schleife versucht, dem DAC
+     Verzerrungen abzukorrigieren, die der DAC nie erzeugt hat. Sie kann sich
+     nicht einmal auf dem eigenen Verzerrungsniveau des ADC einpendeln: mit
+     zwei Verzerrungsstufen in der Kette und nur einer Stelle zum Korrigieren
+     trägt jede Ablesung, auf die die Schleife reagiert, beide Beiträge
+     zugleich, und die Schleife jagt einem Ziel hinterher, das ihre eigenen
+     Korrekturen ständig verschieben. Gemessen an einer direkten
+     DAC -> ADC-Verbindung: die Kette liest ganz ohne Korrektur 0.000038 % THD -
+     und die beste Korrektur, die die Schleife fand, <em>hob</em> sie auf etwa
+     0.000068 %, fast das Doppelte.</p>
+  <p>Mit dem durch das Kerbfilter abgeschwächten Grundton erzeugt der ADC zwar
+     weiterhin Verzerrungen - sie skalieren aber mit dem abgeschwächten Signal
+     herunter, auf ein Niveau, das die Messung beim Ziel-THD nicht mehr
+     beeinflusst; sichtbar bleibt allein der DAC, und die Schleife kann dessen
+     Restverzerrung weit unter das drücken, was eine Direktverbindung je
+     erlaubt. (Eine direkte DAC -> ADC-Verbindung wird erst bei sehr kleinen
+     Signalpegeln brauchbar, wo der Beitrag des ADC verschwindet - um den Preis
+     des Signal-Rausch-Abstands.)</p>
+
   <p>Das Netzwerk ist das klassische symmetrische Twin-T: ein Tiefpass-T (R1-R2 mit
      C3 nach Masse) parallel zu einem Hochpass-T (C1-C2 mit R3 nach Masse), die
      sich die Verhältnisse R3 = R/2 und C3 = 2C teilen, sodass sich die beiden Pfade
@@ -417,11 +441,12 @@
   <p class="note"><b>Lies die Statusleiste.</b>  Unten links läuft die FFT mit
      <code>HFT248D</code> bei <code>87.5 %</code> Überlappung mit <code>∞×</code>
      (unbegrenzter) kohärenter Mittelung; unten in der Mitte markiert
-     <code>manF</code> den manuellen Grundton. Das sind genau die Einstellungen, die
-     der Assistent erzwingt - Fenster und Überlappung für
-     <a href="#window">Nebenkeulen-Reserve ohne Rauschkosten</a>, der manuelle
-     Grundton aus dem Driftgrund oben, unbegrenzte kohärente Mittelung, damit jede
-     Runde so tief mitteln kann, wie sie es braucht.</p>
+     <code>manF</code> den manuellen Grundton. Der manuelle Grundton und die
+     unbegrenzte kohärente Mittelung sind das, was der Assistent erzwingt - der
+     Grundton aus dem Driftgrund oben, die Mittelung, damit jede Runde so tief
+     graben kann, wie sie es braucht. Das Fenster wird vom FFT-Bereich geerbt;
+     diese Aufnahme lief mit dem breiten HFT248D, während
+     <a href="#window">BH7 die Empfehlung ist</a>.</p>
 
   <h3 id="depth">Wie viele Mittelungen braucht ein gegebener THD-Pegel?</h3>
   <p>Eine nützliche Abschätzung. Kohärente Mittelung senkt das Grundrauschen pro Bin
@@ -496,26 +521,60 @@
      geladene Korrektur durch nur das Restfehler-Delta dieses Durchlaufs
      überschreiben.</div>
 
-  <h2 id="window">Fenster und Überlappung - HFT248D bei 87.5 %</h2>
-  <p>Die Messung läuft mit dem <b>HFT248D</b>-Fenster bei <b>87.5 % Überlappung</b>,
-     der Kombination, die das Kapitel
-     <a href="derotation-accuracy.html#window">De-Rotations-Genauigkeit</a> aus
-     ersten Prinzipien herleitet. Zwei Ergebnisse von dort übertragen sich direkt
-     auf die Vorverzerrung:</p>
+  <h2 id="delay">Die Verzögerung der Messkette - gemessen vor der ersten Runde</h2>
+  <p>Die Messkette - DAC, Kerbfilter, ADC - trägt eine konstante eigene
+     Zeitverzögerung, typisch einige zehn Mikrosekunden. Für die
+     Korrekturschleife ist diese Verzögerung verkapptes Gift: sie dreht die
+     Phase jeder injizierten Korrektur, und die Drehung wächst mit der
+     Frequenz - eine Verzögerung, die bei der zweiten Harmonischen wenige Grad
+     kostet, kostet bei der neunten hundert. Eine Korrektur, die mehr als etwa
+     60° verdreht ankommt, verringert ihre Harmonische nicht mehr; sie nährt
+     sie. Das praktische Ergebnis ist eine Schleife, die nur konvergiert, wenn
+     die Verzögerung zufällig klein genug ist - und andernfalls divergiert,
+     oft heftig.</p>
+  <p>Der Assistent misst die Verzögerung deshalb, bevor er irgendetwas
+     korrigiert. Vor der ersten Runde spielt er kleine Testpartialtöne auf den
+     Harmonischenfrequenzen - im Zweiton-Modus auf den Frequenzen der
+     Intermodulationsprodukte - durch genau den Pfad, den die Korrekturen
+     nehmen werden, misst, wie jeder ankommt - Abschwächung und Phasendrehung,
+     pro Frequenz - und dreht jede spätere Korrektur entsprechend vor. Die
+     Messung dauert Sekunden, nutzt Signale weit über dem Grundrauschen und
+     wiederholt sich bei jedem Trainingsstart, spiegelt also stets die
+     Messkette, wie sie an diesem Tag ist. Damit ist Konvergenz keine
+     Glückssache mehr.</p>
+  <p>Ob dann das <em>Ziel</em>-THD erreicht wird, ist eine getrennte Frage, die
+     die Messkette entscheidet: die Mittelungen pro Runde, das Grundrauschen
+     sowie Dämpfung und Güte des Kerbfilters setzen den Boden, den die
+     Schleife erreichen kann - die Verzögerungsmessung garantiert nur, dass
+     die Schleife auf ihn zuläuft statt von ihm weg.</p>
+
+  <h2 id="window">Fenster und Überlappung</h2>
+  <p>Der Assistent empfiehlt das <b>Blackman-Harris-7</b>-Fenster (BH7). Die
+     Wahl balanciert zwei Kosten, beide hergeleitet im Kapitel
+     <a href="derotation-accuracy.html#window">De-Rotations-Genauigkeit</a>:</p>
   <ul>
-    <li><b>87.5 % ist die optimale Überlappung.</b>  Oberhalb der empfohlenen
-        Überlappung jedes Fensters erreicht jedes Fenster dasselbe Grundrauschen in
-        derselben Echtzeit; für HFT248D liegt dieser Break-even bei 87.5 %, und
-        höher zu gehen (93.75 %) bringt keinen weiteren Rauschvorteil, nur
-        Rechenaufwand. Darunter zahlt das breite Fenster einen Aufschlag.</li>
-    <li><b>Das Fenster wird wegen der Nebenkeulen-Reserve gewählt, nicht wegen des
-        Rauschens.</b>  Die −248-dB-Nebenkeulen von HFT248D halten die Leckage des
-        starken Grundtons - die Drift und Re-Sync-Glitches einen Bruchteil eines Bin
-        außerhalb der Mitte verschmieren - davon ab, einen Sockel unter die schwachen
-        Harmonischen zu setzen. Da Harmonische unter −180 dBV herausgegraben werden,
-        ist diese Reserve es, die garantiert, dass eine herausgegrabene Linie eine
-        echte DAC-Harmonische ist und keine Grundtonleckage.</li>
+    <li><b>Nebenkeulen-Reserve.</b>  Die Nebenkeulen des Fensters müssen die
+        Leckage des Rest-Grundtons - die Drift und Re-Sync-Glitches einen
+        Bruchteil eines Bin außerhalb der Mitte verschmieren - davon abhalten,
+        einen Sockel unter die schwachen Harmonischen zu setzen. Hinter dem
+        zwingenden Kerbfilter kommt der Grundton um zig dB abgeschwächt an,
+        sodass die ≈ −180-dB-Nebenkeulen von BH7 diese Reserve halten, ohne zu
+        den extremen HFT-Fenstern zu greifen.</li>
+    <li><b>Rauschbandbreite.</b>  Jedes Fenster liest die Keule einer
+        Harmonischen zusammen mit NENBW Bin-Breiten Rauschen
+        (<a href="fft.html#metrics">Tabelle im FFT-Kapitel</a>): etwa 2.6 für
+        BH7 gegen 5.7 für HFT248D. Nahe am gemittelten Grundrauschen - wo eine
+        Vorverzerrungsschleife ihre späten Runden verbringt - liest das
+        breitere Fenster dieselbe Harmonische mit rund doppelter
+        Rauschbandbreite in der Keule, sodass seine Rundenend-Werte früher
+        schwanken und für dasselbe Vertrauen etwa doppelt so viele Mittelungen
+        brauchen.</li>
   </ul>
+  <p>Die Überlappung geht über dieselbe Rechnung ein: oberhalb der empfohlenen
+     Überlappung jedes Fensters erreicht jedes Fenster dasselbe Grundrauschen
+     in derselben Echtzeit, darunter zahlt ein getapertes Fenster einen
+     Aufschlag - also die empfohlene Überlappung des verwendeten Fensters
+     fahren und die gesparte Echtzeit in tiefere Mittelungen stecken.</p>
 
   <h2 id="imd">Intermodulation messen - das Zweiton-Kerbfilter</h2>
   <p>Der Zweiton-Pfad des Assistenten verzerrt <em>Intermodulation</em> vor, und
@@ -681,7 +740,9 @@
   <ul>
     <li><b>Ein passives Twin-T-Kerbfilter ist zwingend</b> - es streift 40-80 dB
         Grundton ab, sodass der ADC die Harmonischen digitalisiert, nicht den
-        Ton.</li>
+        Ton. Ohne es korrigiert die Schleife dem DAC die Verzerrung des ADC ab
+        und landet nahe dem <em>Doppelten</em> des unkorrigierten THD - zwei
+        Verzerrungsstufen, eine Stelle zum Korrigieren.</li>
     <li><b>Die Kerbe des Kerbfilters driftet mit der Bauteiltemperatur</b>, und an
         einer Übertragungsnullstelle zerstört eine Sub-Hertz-Verschiebung die
         gemessene Tiefe und Phase des Grundtons, während sie die Harmonischen auf
@@ -691,10 +752,16 @@
         vertrauenswürdig</b>: ~100 Mittelungen bringen das Grundrauschen 10 dB unter
         eine −140-dBc-Harmonische (10⁻⁵ %), ~1000 ergeben 20 dB, und das Festnageln
         des Werts fügt obendrauf das übliche 1/√<i>n</i> hinzu.</li>
+    <li><b>Die eigene Verzögerung der Messkette wird vor der ersten Runde
+        gemessen</b> - kleine Testpartialtöne durch den Korrekturpfad liefern
+        die Abschwächung und Drehung jeder Harmonischen, und jede Korrektur
+        wird um die Inverse vorgedreht, sodass Konvergenz nie davon abhängt,
+        dass die Verzögerung der Kette zufällig klein ist.</li>
     <li><b>Die Schleife invertiert jede gemessene Harmonische</b>, de-rotiert sie um
         die Schleifenverzögerung und wendet sie heiß auf den laufenden Generator
-        exakt bei <i>h·f</i> an, konvergiert Runde um Runde - unter
-        <b>HFT248D bei 87.5 %</b> für Nebenkeulen-Reserve ohne Rauschkosten.</li>
+        exakt bei <i>h·f</i> an, konvergiert Runde um Runde - mit dem
+        <b>BH7</b>-Fenster, empfohlen für seine Balance aus Nebenkeulen-Reserve
+        und Rauschbandbreite.</li>
     <li><b>Intermodulation ist derselbe Trick, verdoppelt</b>: ein passives
         <a href="#imd">duales Twin-T bei 19.5 kHz</a> senkt das 19/20-kHz-Zweitonpaar
         um ~70 dB, sodass der ADC die Produkte auflösen kann, die Töne werden vom

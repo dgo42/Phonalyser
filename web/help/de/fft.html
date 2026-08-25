@@ -269,8 +269,13 @@
 
   <h2 id="fft-thd-table">THD-Infotabelle</h2>
   <p>Kompakter Overlay oben links auf der Zeichenfläche (oder im externen
-     Werkzeugfenster bei Auslagerung).  Alle Werte verwenden die aktuelle
-     Amplitudeneinheit.  Ausgeblendet durch die
+     Werkzeugfenster bei Auslagerung).  Pegelzellen rendern in der Einheit,
+     die die kleine tabelleneigene Einheitenauswahl vorgibt - <code>dBV</code>,
+     <code>dBFS</code> oder <code>dB</code> (relativ zum Grundton, durch den
+     die Prozentwerte teilen) - die neben den Schaltflächen der Kopfleiste
+     sitzt, solange die Tabelle sichtbar ist; Verhältniszeilen tragen diesen
+     Pegel vor dem Prozentwert, und alle Zeilen richten sich an einem
+     gemessenen Spaltenraster aus.  Ausgeblendet durch die
      <a href="#fft-distortion-toggle">Verzerrungstabellen-Umschaltung</a>.</p>
 
   <h3 id="fft-thd-header">Kopfzeile</h3>
@@ -304,7 +309,8 @@
      die A-Bewertung.</p>
 
   <h3 id="fft-thd-n">N (nur Rauschen)</h3>
-  <p>Rauschleistung mit den erkannten Harmonischen aus dem Band entfernt.</p>
+  <p>Rauschleistung mit den erkannten Harmonischen aus dem Band entfernt,
+     angezeigt als Pegel in der Einheit der Tabelle.</p>
 
   <h3 id="fft-thd-snr">SNR</h3>
   <p>Signal-Rausch-Verhältnis in dB.  Definiert gegenüber dem reinen
@@ -329,8 +335,9 @@
      kombinierten Dynamikbereich von ADC + Messkette wider.</p>
 
   <h3 id="fft-thd-harmonics">Harmonischen-Zeilen (H2 .. HN)</h3>
-  <p>Zwei Harmonische pro Zeile.  Jeder Eintrag zeigt den dBV-Pegel der
-     Harmonischen und ihren Prozentsatz des Grundtons.  Die Anzahl der Zeilen
+  <p>Zwei Harmonische pro Zeile.  Jeder Eintrag zeigt den Pegel der
+     Harmonischen - in der Einheit der Tabelle - und ihren Prozentsatz des
+     Grundtons.  Die Anzahl der Zeilen
      wird durch
      <a href="#fft-max-harmonic-calc">Maximale Harmonische berechnen</a>
      bestimmt.</p>

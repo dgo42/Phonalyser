@@ -248,9 +248,13 @@
 
   <h2 id="fft-thd-table">THD info table</h2>
   <p>Compact overlay in the top-left of the canvas (or in the
-     external tool window when extracted).  All values use the
-     current magnitude unit.  Hidden by the
-     <a href="#fft-distortion-toggle">distortion-table toggle</a>.</p>
+     external tool window when extracted).  Level cells render in the unit
+     picked by the table's own small unit combo - <code>dBV</code>,
+     <code>dBFS</code> or <code>dB</code> (relative to the fundamental the
+     percentages divide by) - which sits beside the header-bar buttons
+     whenever the table is shown; ratio rows carry that level ahead of the
+     percentage, and all rows align on one measured column grid.  Hidden by
+     the <a href="#fft-distortion-toggle">distortion-table toggle</a>.</p>
 
   <h3 id="fft-thd-header">Header row</h3>
   <p>Bold first row: fundamental frequency (4-decimal Hz), dBFS, dBV.  The dBV
@@ -281,7 +285,8 @@
      the A-weighting.</p>
 
   <h3 id="fft-thd-n">N (noise-only)</h3>
-  <p>Noise power with the detected harmonics removed from the band.</p>
+  <p>Noise power with the detected harmonics removed from the band, shown
+     as a level in the table's unit.</p>
 
   <h3 id="fft-thd-snr">SNR</h3>
   <p>Signal-to-noise ratio in dB.  Defined against the noise-only
@@ -306,8 +311,8 @@
      ADC + capture chain's combined dynamic range.</p>
 
   <h3 id="fft-thd-harmonics">Harmonic rows (H2 .. HN)</h3>
-  <p>Two harmonics per row.  Each entry shows the harmonic's dBV
-     level and its percentage of the fundamental.  Number of rows is
+  <p>Two harmonics per row.  Each entry shows the harmonic's level - in the
+     table's unit - and its percentage of the fundamental.  Number of rows is
      governed by
      <a href="#fft-max-harmonic-calc">Max harmonic to calculate</a>.</p>
 
