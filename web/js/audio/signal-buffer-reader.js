@@ -12,8 +12,6 @@
  * Each consumer holds its OWN reader over the one shared buffer.
  * GNU AGPL v3 or later.
  */
-import { SignalBuffer } from './signal-buffer.js';
-
 /** read()/available() sentinel: the cursor was overrun (its data was overwritten
  *  before it was read). Nothing copied; re-anchor and restart any accumulation. */
 export const OVERRUN = -1;
@@ -57,16 +55,15 @@ export class SignalBufferReader {
   readLatest(count, outLeft, outRight) { return this.buffer.readLatest(count, outLeft, outRight); }
   readEndingAt(absoluteEnd, count, outLeft, outRight) { return this.buffer.readEndingAt(absoluteEnd, count, outLeft, outRight); }
 
-  /** A new reader over a standalone frozen copy of the current contents - the scope
-   *  keeps showing the last captured frame after Record stops while the shared device
-   *  keeps writing for other consumers. */
+  /** A new reader over a standalone frozen copy of this buffer's current contents - IN THE
+   *  SAME ABSOLUTE COORDINATES (see {@link SignalBuffer#frozenCopy}), so anchors and
+   *  positions held by consumers stay valid against the copy without translation. No live
+   *  writer touches the copy, so the snapshot never changes - the scope keeps showing the
+   *  last captured frame after Record stops while the shared device keeps writing for other
+   *  consumers. Keeps the raw SignalBuffer encapsulated: the caller gets back a reader,
+   *  never the buffer. */
   frozenSnapshot() {
-    const sr = this.buffer.getSampleRate(), cap = this.buffer.getCapacity();
-    const frozen = new SignalBuffer(sr, cap / sr);
-    const l = new Float64Array(cap), r = new Float64Array(cap);
-    const n = this.buffer.readLatest(cap, l, r);
-    frozen.appendBatch(l, r, n);
-    return new SignalBufferReader(frozen);
+    return new SignalBufferReader(this.buffer.frozenCopy());
   }
 
   // ── contiguous consuming cursor ──

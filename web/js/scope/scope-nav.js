@@ -40,11 +40,14 @@ import {
 
 /**
  * Where the display window lands inside the read buffer (feeds renderTraces).
- * Mirrors the Java `Viewport` record.
+ * Mirrors the Java `Viewport` record. `windowSamples` is the EXACT real-valued
+ * width - the renderer scales pixel columns by it and blanks columns past the
+ * data, so no rounding enters the geometry; only reads/arrays round (ceil) at
+ * their own boundary.
  * @typedef {Object} Viewport
  * @property {number} dispStart         integer local start index in the read buffer
  * @property {number} subSampleOffset   fractional remainder [0,1)
- * @property {number} dispCount         always the full displaySamples
+ * @property {number} windowSamples     always the full (real-valued) displaySamples
  * @property {number} viewLeftAbs       absolute (fractional) sample at the left edge
  */
 
@@ -85,9 +88,9 @@ export class ScopeNav {
 
   /**
    * Maps the window onto a read buffer that starts at absolute sample `bufStartAbs`.
-   * `dispCount` is always the full `displaySamples`; the renderer blanks any column
-   * whose sample index falls outside the buffer, so the window can hang off either
-   * end without stretching.
+   * `windowSamples` carries the full exact `displaySamples`; the renderer blanks any
+   * column whose sample index falls outside the buffer, so the window can hang off
+   * either end without stretching.
    * @returns {Viewport}
    */
   viewport(anchorAbs, offsetFrac, displaySamples, bufStartAbs) {
@@ -97,7 +100,7 @@ export class ScopeNav {
     return {
       dispStart,
       subSampleOffset: local - dispStart,
-      dispCount: displaySamples,
+      windowSamples: displaySamples,
       viewLeftAbs: viewLeft,
     };
   }
@@ -111,8 +114,8 @@ export class ScopeNav {
    */
   fileViewWindow(centreFrames, displaySamples, writePos, capacity, sampleRate) {
     const oldest = Math.max(0, writePos - capacity);
-    const minCentre = oldest + Math.trunc(displaySamples / 2);
-    const maxCentre = writePos - Math.trunc(displaySamples / 2);
+    const minCentre = oldest + Math.ceil(displaySamples / 2.0);
+    const maxCentre = writePos - Math.ceil(displaySamples / 2.0);
     const followLatest = centreFrames < 0 || maxCentre < minCentre;
     let clampedCentre;
     let mainOffset;
@@ -204,9 +207,9 @@ export class ScopeNav {
    * @returns {number}
    */
   zoomTriggerOffset(offsetOld, dispOld, dispNew, mouseFrac, aroundMouse) {
-    // Use the ACTUAL displaySamples ratio (not the t/div ratio): the render rounds
-    // displaySamples to whole samples, so at fine time bases (few samples per screen)
-    // the t/div ratio diverges from the rendered ratio and the anchor would drift.
+    // The window width is EXACT (real-valued, no render rounding), so the
+    // displaySamples ratio and the t/div ratio are the same number; the width
+    // ratio is kept as the argument so every zoom path shares one authority.
     if (!aroundMouse || dispNew <= 0 || dispOld <= 0) return offsetOld;
     return mouseFrac - (mouseFrac - offsetOld) * (dispOld / dispNew);
   }

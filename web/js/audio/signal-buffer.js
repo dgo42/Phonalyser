@@ -11,11 +11,19 @@
 import { CaptureEndReason } from './capture-end-reason.js';
 
 export class SignalBuffer {
-  /** @param {number} sampleRate @param {number} seconds ring length in seconds. */
-  constructor(sampleRate, seconds) {
+  /**
+   * @param {number} sampleRate
+   * @param {number} seconds ring length in seconds
+   * @param {number} [exactCapacity] capacity in samples, taken INSTEAD of rounding `seconds`
+   *        up - {@link SignalBuffer#frozenCopy} needs the copy's capacity IDENTICAL to the
+   *        source's so the position-to-index mapping matches, and re-deriving a capacity from
+   *        seconds rounds through floating point. (Java splits this into a second, exact
+   *        constructor; JS has no constructor overloading.)
+   */
+  constructor(sampleRate, seconds, exactCapacity) {
     if (sampleRate <= 0 || seconds <= 0) throw new Error('sampleRate and seconds must be positive');
     this.sampleRate = sampleRate;
-    this.capacity = Math.ceil(sampleRate * seconds);
+    this.capacity = exactCapacity != null ? exactCapacity : Math.ceil(sampleRate * seconds);
     this.left = new Float64Array(this.capacity);
     this.right = new Float64Array(this.capacity);
     this.writePos = 0;
@@ -160,5 +168,28 @@ export class SignalBuffer {
       if (outLeft) outLeft.set(this.left.subarray(0, remaining), firstChunk);
       if (outRight) outRight.set(this.right.subarray(0, remaining), firstChunk);
     }
+  }
+
+  /**
+   * Frozen copy: a new buffer holding this ring's current contents at THE SAME ABSOLUTE
+   * POSITIONS - identical capacity, identical modulo layout, and the write position carried
+   * over, so every anchor, history stamp and readEndingAt coordinate a consumer holds stays
+   * valid against the copy WITHOUT any translation. There is one point of truth for
+   * positions: the buffer. The copy never grows, so a stopped display derived from it can
+   * never change. (A copy that restarted at position zero forced consumers to rebase their
+   * anchors by a live-minus-copy difference taken AFTER the copy - the samples appended in
+   * between shifted every anchor and visibly jumped the frozen trace.)
+   *
+   * The stream's lifecycle state (finish reason, sweep mark) is deliberately not carried
+   * over: the copy is a sample snapshot, not a second view of the live stream.
+   *
+   * @returns {SignalBuffer} the standalone snapshot
+   */
+  frozenCopy() {
+    const frozen = new SignalBuffer(this.sampleRate, this.capacity / this.sampleRate, this.capacity);
+    frozen.left.set(this.left);     // verbatim BY INDEX - the copy's modulo layout matches this ring's
+    frozen.right.set(this.right);
+    frozen.writePos = this.writePos;
+    return frozen;
   }
 }

@@ -27,7 +27,7 @@ import { mainsFilterOf } from '../dsp/mains/factory.js';
 // OscSliderId, OscTriggerMode/Edge). The wheel + on-canvas-slider handlers delegate here
 // instead of re-deriving the math inline.
 import { ScopeNav, DIVISIONS_X as NAV_DIVISIONS_X, DIVISIONS_Y as NAV_DIVISIONS_Y } from '../scope/scope-nav.js';
-import { clamp01 as navClamp01 } from '../scope/scope-format.js';
+import { clamp01 as navClamp01, displaySamplesFor } from '../scope/scope-format.js';
 import { OscSliderId, TriggerMode, TriggerEdge, TriggerType, PersistenceMode,
          effectiveSeconds as persistenceSeconds } from '../scope/scope-enums.js';
 // GPU display persistence ("digital phosphor") - faithful port of
@@ -93,7 +93,6 @@ const READOUT_THROTTLE_MS = 200;
 // short displayed-span compute; long enough that a stopped/absent worker stream (headless
 // render, node tests) times out and the injected-window fallback engages instead.
 const LIVE_MEAS_FRESH_MS = 500;
-const NS_PER_MS = 1e6;
 // Depth of the whole-period Vmean history ring (Java ScopeMeasurementWorker.MEAS_HISTORY_CAP).
 const MEAS_HISTORY_CAP = 1024;
 // Minimum averaging window for AC DC removal - never average less than this even
@@ -223,14 +222,25 @@ export class ScopeView {
     // lastMeasRight): the worker measures both channels; the TABLE + this.latest show the
     // selected one, but the residual + AC-DC + glitch paths read whichever channel they need.
     this._lastMeas = { L: null, R: null };
+    // The ONE clock behind every windowed aggregation - the measurement table's
+    // avg/min/max/sigma and the AC-mode DC means (Java ScopeMeasurementWorker
+    // .windowCutoffLocked): the capture BUFFER's write position, expressed in
+    // nanoseconds of captured audio (position / sampleRate) so the seconds-based
+    // window prefs apply unchanged. Live, the buffer advances with the audio, so
+    // this windows exactly like the wall clock; on a stopped capture nothing is fed,
+    // the clock stands still and every derived value is constant on later repaints.
+    // The wall clock kept running after the ring stopped: it aged the held statistics
+    // out of the window until they read empty, and shifted the AC compensation of the
+    // held trace on every repaint.
+    this._captureClockNs = 0;
     // Whole-period Vmean history ring (Java ScopeMeasurementWorker meanHistoryLeftNorm /
-    // meanHistoryRightNorm + measHistoryTime): every measurement tick publishes each
+    // meanHistoryRightNorm + measHistoryPos): every measurement tick publishes each
     // channel's WHOLE-PERIOD Vmean normalized by peak volts ("identical to the table
-    // readout"); _acDcMean averages this ring for the AC-coupling DC block, the residual
-    // baseline and auto-setup centring.
+    // readout"), stamped with the capture clock above; _acDcMean averages this ring for
+    // the AC-coupling DC block, the residual baseline and auto-setup centring.
     this._meanHist = {
-      L: { t: new Float64Array(MEAS_HISTORY_CAP), v: new Float64Array(MEAS_HISTORY_CAP), write: 0, size: 0 },
-      R: { t: new Float64Array(MEAS_HISTORY_CAP), v: new Float64Array(MEAS_HISTORY_CAP), write: 0, size: 0 },
+      L: { capNs: new Float64Array(MEAS_HISTORY_CAP), v: new Float64Array(MEAS_HISTORY_CAP), write: 0, size: 0 },
+      R: { capNs: new Float64Array(MEAS_HISTORY_CAP), v: new Float64Array(MEAS_HISTORY_CAP), write: 0, size: 0 },
     };
     this._lastMeanNorm = { L: NaN, R: NaN };   // Java lastLeftMeanNormalized / lastRightMeanNormalized
     // The LIVE measurement stream runs in the osc-meas Web Worker (fed off its own gapless
@@ -267,9 +277,8 @@ export class ScopeView {
     this._lastNewFrameMs = 0;
     // Glitch-mode capture-rate state (Java glitchCountStartNanos / glitchCount /
     // rateWasGlitchMode): rare events make a per-interval EMA useless, so the readout
-    // is total caught ÷ collection time. Counting restarts when glitch mode is entered,
-    // a new record begins (restartGlitchRate) or the trigger source changes
-    // (resetTriggerHold).
+    // is total caught ÷ collection time. Counting restarts when glitch mode is entered
+    // or a new record begins (restartGlitchRate).
     this._glitchCountStartMs = 0;
     this._glitchCount = 0;
     this._rateWasGlitchMode = false;
@@ -564,19 +573,12 @@ export class ScopeView {
     return this._singleArmed;
   }
 
-  /** Drops the held trigger anchor and captured frame (Java ScopeView.resetTriggerHold)
-   *  - called when the trigger SOURCE changes (type / edge / channel) or the generated
-   *  signal changes: the old anchor belongs to the old trigger/signal and would keep
-   *  re-rendering a stale trace. NORMAL / SINGLE then stay blank until the new trigger
-   *  fires. Also restarts the glitch-mode cap/s collection - events caught under the
-   *  old trigger/signal (e.g. the generator transition itself, which IS a
-   *  discontinuity) don't belong in the new count. */
-  resetTriggerHold() {
-    this._singleHeld = false;
-    this._normalFrame = null;
-    this._frame = null;
-    this._glitchCountStartMs = 0;
-  }
+  // The held trigger anchor and captured frame are deliberately NEVER dropped by
+  // trigger-source or generator changes (hold/freeze rule 2 of the scope navigation
+  // spec): a held trace stays until a real trigger event under the current settings
+  // replaces it. A dedicated reset entry point existed for those listeners and is
+  // gone with them - dropping the frame blanked a STOPPED scope, whose held frame is
+  // the measurement being read.
 
   /** Restarts the glitch-mode cap/s collection (Java rateSawFrozen: a stop/restart
    *  boundary must not fold the stopped gap into the cumulative rate). Called by the
@@ -821,7 +823,7 @@ export class ScopeView {
       const sr = (this._lastInfo && this._lastInfo.inRate) || 0;
       if (geom && this.onFileBack && sr > 0) {
         const dispOld = geom.windowSamples;
-        const dispNew = Math.round(tDivNew * DIVISIONS_X * sr);
+        const dispNew = displaySamplesFor(tDivNew, sr);
         const frames = geom.available;
         const centreOld = geom.startSample + dispOld / 2;
         const nav = this.nav();
@@ -836,16 +838,16 @@ export class ScopeView {
       }
       return;
     }
-    // Live: anchor the sample under the mouse via the engine, using the ACTUAL
-    // displaySamples ratio (not the raw t/div ratio, which round-diverges at fine time
-    // bases). UNCLAMPED so the offset may carry off-screen (the handle pins to the edge,
-    // the time mark shows the real value) - Java ScopeTabControl.stepTimePerDivAround ->
-    // ScopeNav.zoomTriggerOffset(aroundMouse=true). The t/div change only re-derives the
-    // window width; the trigger anchor is preserved, not the view centre.
+    // Live: anchor the sample under the mouse via the engine. The window widths are
+    // exact (real-valued), so the width ratio equals the t/div ratio - one authority
+    // either way. UNCLAMPED so the offset may carry off-screen (the handle pins to the
+    // edge, the time mark shows the real value) - Java ScopeTabControl.stepTimePerDivAround
+    // -> ScopeNav.zoomTriggerOffset(aroundMouse=true). The t/div change only re-derives
+    // the window width; the trigger anchor is preserved, not the view centre.
     const sr = (this._lastInfo && this._lastInfo.inRate) || 0;
     if (sr > 0) {
-      const dispOld = Math.max(2, Math.round(tDivOld * DIVISIONS_X * sr));
-      const dispNew = Math.max(2, Math.round(tDivNew * DIVISIONS_X * sr));
+      const dispOld = displaySamplesFor(tDivOld, sr);
+      const dispNew = displaySamplesFor(tDivNew, sr);
       p.oscTriggerPositionFrac.set(this.nav().zoomTriggerOffset(posOld, dispOld, dispNew, mouseFrac, true));
     } else {
       p.oscTriggerPositionFrac.set(mouseFrac - (mouseFrac - posOld) * (tDivOld / tDivNew));
@@ -1213,10 +1215,13 @@ export class ScopeView {
 
     const tDiv = p ? p.oscTimePerDiv.get() : info.period / sampleRate;
     const posFrac = p ? clamp01(p.oscTriggerPositionFrac.get()) : 0.5;
-    // Java: displaySamples = round(windowSeconds·sampleRate), bail if < 2. No
-    // max(8,...)/min(...,available−2·PADDING) clamp - windowSamples is the literal
-    // display window; the dispCount clamp against `available` happens per branch.
-    const windowSamples = Math.round(tDiv * DIVISIONS_X * sampleRate);
+    // The EXACT real-valued window width - the one authority
+    // (ScopeFormat.displaySamplesFor); windowCeil bounds reads and slice arithmetic,
+    // which are the only integer consumers. No max(8,...)/min(...,available−2·PADDING)
+    // clamp - windowSamples is the literal display window; the dispCount clamp against
+    // `available` happens per branch.
+    const windowSamples = displaySamplesFor(tDiv, sampleRate);
+    const windowCeil = Math.ceil(windowSamples);
     if (windowSamples < 2) {
       this.latest = null; this.measurementRows = null;
       if (this._rectZoom) this._rectZoom.drawOverlay(this._overlayG || g, W, H);
@@ -1320,7 +1325,7 @@ export class ScopeView {
     // Java AUTO free-run right-anchor (~3092-3099): rightPad past the newest so the sinc
     // kernel keeps context; anchorAbs = latestAbs − rightPad, offsetFrac = 1.0.
     const autoFreeRunAnchor = () => {
-      const rightPad = Math.min(LANCZOS_PADDING, Math.max(0, available - windowSamples));
+      const rightPad = Math.min(LANCZOS_PADDING, Math.max(0, available - windowCeil));
       return latestAbs - rightPad;   // offsetFrac = 1.0 places this at the right edge
     };
 
@@ -1453,15 +1458,18 @@ export class ScopeView {
       if (!rightResidual) this._lastResidualVpp.R = NaN;
       const dispStartI = Math.floor(startSample);
       const subSampleOffset = startSample - dispStartI;
+      // The residual slice is integer sample arithmetic - ceil covers the
+      // fractional window's last partial sample.
+      const dispCountCeil = Math.ceil(dispCount);
       const lDesc = descByName.L, rDesc = descByName.R;
       let resL = null, dispL = 0, lenL = 0, resR = null, dispR = 0, lenR = 0;
       if (showL && leftResidual && lDesc) {
-        resL = this._computeResidual(lDesc.procBuf, available, dispStartI, dispCount,
+        resL = this._computeResidual(lDesc.procBuf, available, dispStartI, dispCountCeil,
           LANCZOS_PADDING, sampleRate, true, lDesc.peak, info);
         dispL = this._residualDispStart; lenL = this._residualSliceLen;
       }
       if (showR && rightResidual && rDesc) {
-        resR = this._computeResidual(rDesc.procBuf, available, dispStartI, dispCount,
+        resR = this._computeResidual(rDesc.procBuf, available, dispStartI, dispCountCeil,
           LANCZOS_PADDING, sampleRate, false, rDesc.peak, info);
         dispR = this._residualDispStart; lenR = this._residualSliceLen;
       }
@@ -1679,11 +1687,14 @@ export class ScopeView {
     if (this._traceG) g = this._traceG;
     // Java drawTrace works in (dispStart, subSampleOffset, dispCount). The web
     // carries a single float startSample (= windowLeftT = dispStart+subSample);
-    // split it back exactly as Java's caller did (floor / fraction).
+    // split it back exactly as Java's caller did (floor / fraction). dispCount is
+    // the EXACT real-valued width (Java drawTrace takes a double): rounding it here
+    // drew the trace against a window half a sample away from the one the edge time
+    // marks label, which a virtual trigger offset multiplies into a visible skew.
     const width = cols;   // = canvas width (Java `width`)
     const dispStart = Math.floor(startSample);
     const subSampleOffset = startSample - dispStart;
-    const dispCount = Math.round(windowSamples);
+    const dispCount = windowSamples;
     if (dispCount < 2 || width <= 0) return;
     g.strokeStyle = hex; g.fillStyle = hex;
     // One smooth point per pixel column while at most one sample per pixel (sinc) or
@@ -1777,7 +1788,9 @@ export class ScopeView {
    *  missed. Faithful port of Java ScopeView.drawEnvelope + TraceEnvelope.
    *  Java lineAttrsBars: 1 px, CAP_FLAT, JOIN_BEVEL, antialias OFF. */
   _drawEnvelope(g, data, n, dispStart, subSampleOffset, dispCount, width, samplesPerPx, sampleToY, sinc, blankBeyondData) {
-    const dispLimit = Math.min(dispStart + dispCount, n);
+    // The window width is real-valued; the sample walk covers the partial last
+    // sample via ceil (TraceEnvelope.columnCrossings does the same).
+    const dispLimit = Math.min(dispStart + Math.ceil(dispCount), n);
     if (!this._envMin || this._envMin.length < width) {
       this._envMin = new Float32Array(width);
       this._envMax = new Float32Array(width);
@@ -2329,7 +2342,7 @@ export class ScopeView {
         if (geom && this.onFileBack && sr > 0) {
           const tDivNew = Math.max(T_PER_DIV_MIN, span / sr / DIVISIONS_X);
           p.oscTimePerDiv.set(tDivNew);   // BEFORE onFileBack - the pane's clamp reads the new t/div
-          const wsNew = Math.round(tDivNew * DIVISIONS_X * sr);
+          const wsNew = displaySamplesFor(tDivNew, sr);
           // back = 0 pins the right edge at `available` (no rightPad), matching render +
           // _fileNavState + fileMaxBack (Java file window right edge = writePos − back).
           const rightEdgeAnchorNew = Math.max(0, geom.available - wsNew);
@@ -2503,9 +2516,12 @@ export class ScopeView {
     if (!(info.measBufL || info.measBufR) || !(info.measAvailable >= 64)) return null;   // no window -> file-mode fallback
     if (this.latest && (nowMs - this._lastLiveMeasMs) < READOUT_THROTTLE_MS) return this.latest;
     this._lastLiveMeasMs = nowMs;
-    const nowNs = nowMs * NS_PER_MS;
     const mLen = info.measAvailable;
     const absStart = info.measAbsStart || 0;
+    // Advance the capture clock to the BUFFER position of this window's end (Java
+    // ScopeMeasurementWorker stamps endPos = absStart + avail), so every windowed
+    // aggregation below clocks on the ring instead of the wall clock.
+    if (sampleRate > 0) this._captureClockNs = (absStart + mLen) / sampleRate * 1e9;
     for (const d of descriptors) {
       const raw = (d.ch === 'R') ? info.measBufR : info.measBufL;
       if (!raw) continue;
@@ -2516,7 +2532,7 @@ export class ScopeView {
       };
       const m = this._measEngine.measureWindow(d.ch, raw, mLen, sampleRate, d.peak, absStart, opts);
       if (!m) continue;
-      this._pushMeanHist(d.ch, nowNs, m.vmean / d.peak);
+      this._pushMeanHist(d.ch, m.vmean / d.peak);
       this._lastMeas[d.ch] = m;
     }
     const meas = this._lastMeas[measCh];
@@ -2532,14 +2548,18 @@ export class ScopeView {
    *  channel's whole-period normalized Vmean into the mean-history ring (_pushMeanHist), and
    *  for the SELECTED channel accumulates the rolling table stats (_accumulateMeasurements)
    *  + sets this.latest. Stamps the publish wall-clock so _measureLiveWindow reuses this
-   *  result instead of recomputing on the render thread. */
+   *  result instead of recomputing on the render thread.
+   *
+   *  `r.posNs` is the capture clock the client stamps from the ring's write position;
+   *  when it is absent (a directly-driven publish with no ring behind it) the clock
+   *  simply does not advance, so nothing ages out of the windows. */
   publishMeasurement(r) {
     if (!r) return;
     const p = this.prefs;
     const nowMs = performance.now();
-    const nowNs = nowMs * NS_PER_MS;
-    if (r.resultL) { this._lastMeas.L = r.resultL; this._pushMeanHist('L', nowNs, r.leftMeanNorm); }
-    if (r.resultR) { this._lastMeas.R = r.resultR; this._pushMeanHist('R', nowNs, r.rightMeanNorm); }
+    if (Number.isFinite(r.posNs)) this._captureClockNs = r.posNs;
+    if (r.resultL) { this._lastMeas.L = r.resultL; this._pushMeanHist('L', r.leftMeanNorm); }
+    if (r.resultR) { this._lastMeas.R = r.resultR; this._pushMeanHist('R', r.rightMeanNorm); }
     const measCh = p ? p.oscMeasurementChannel.get() : 'L';
     const meas = this._lastMeas[measCh] || this._lastMeas.L || this._lastMeas.R;
     if (!meas) return;
@@ -2556,10 +2576,11 @@ export class ScopeView {
 
   /** Publishes one measurement tick's WHOLE-PERIOD Vmean (normalized) into the
    *  channel's mean-history ring (Java ScopeMeasurementWorker: meanHistory*Norm[write]
-   *  + measHistoryTime[write], write/size ring bookkeeping, lastMeanNormalized). */
-  _pushMeanHist(ch, tNs, meanNorm) {
+   *  + measHistoryPos[write], write/size ring bookkeeping, lastMeanNormalized). The
+   *  stamp is the capture clock, never the wall clock - see _captureClockNs. */
+  _pushMeanHist(ch, meanNorm) {
     const h = this._meanHist[ch];
-    h.t[h.write] = tNs;
+    h.capNs[h.write] = this._captureClockNs;
     h.v[h.write] = meanNorm;
     h.write = (h.write + 1) % MEAS_HISTORY_CAP;
     if (h.size < MEAS_HISTORY_CAP) h.size++;
@@ -2569,21 +2590,25 @@ export class ScopeView {
   /** Long-averaged normalised DC mean of one channel for the AC-coupling DC block,
    *  the residual baseline and auto-setup centring - faithful port of Java
    *  ScopeView.acDcMean -> ScopeMeasurementWorker.averagedChannelMean: the mean of
-   *  the per-tick WHOLE-PERIOD Vmeans (the ring) whose timestamps fall inside
-   *  max(AC_DC_MIN_AVG_SEC, measurement-average pref); when the history doesn't
-   *  span the window yet, the latest tick's mean ("rather than 0 so AC removal
-   *  isn't suddenly off-zero"). NaN before the first publish - the caller falls
-   *  back to a per-frame window mean (Java ScopeView via sampleMean). */
+   *  the per-tick WHOLE-PERIOD Vmeans (the ring) whose CAPTURE-CLOCK stamps fall
+   *  inside max(AC_DC_MIN_AVG_SEC, measurement-average pref); when the history
+   *  doesn't span the window yet, the latest tick's mean ("rather than 0 so AC
+   *  removal isn't suddenly off-zero"). NaN before the first publish - the caller
+   *  falls back to a per-frame window mean (Java ScopeView via sampleMean).
+   *
+   *  The cutoff is anchored on the capture clock (_captureClockNs), never on the
+   *  wall clock: a stopped ring feeds nothing, so the cutoff stops moving and the
+   *  held trace keeps its DC compensation on every later repaint. */
   _acDcMean(left) {
     const ch = left ? 'L' : 'R';
     const p = this.prefs;
     const avgSec = Math.max(AC_DC_MIN_AVG_SEC, p ? p.oscMeasurementAverageSeconds.get() : 0);
-    const cutoff = performance.now() * NS_PER_MS - avgSec * 1e9;
+    const cutoff = this._captureClockNs - avgSec * 1e9;
     const h = this._meanHist[ch];
     let sum = 0, count = 0;
     for (let i = 0; i < h.size; i++) {
       const idx = (h.write - 1 - i + MEAS_HISTORY_CAP) % MEAS_HISTORY_CAP;
-      if (h.t[idx] < cutoff) break;
+      if (h.capNs[idx] < cutoff) break;
       sum += h.v[idx];
       count++;
     }
@@ -2843,8 +2868,16 @@ export class ScopeView {
     if (!p) { this.measurementRows = null; return; }
     const tableOn = p.oscShowMeasurementTable.get();
     if (!tableOn) { this.measurementRows = null; return; }
+    // A frozen scope shows the table exactly as it was PAINTED at the stop. The
+    // measurement stream publishes faster than the paint consumes it, so at stop time
+    // one newer result is usually posted but never shown - it is deliberately
+    // discarded: folding it in swapped the held readouts in front of the operator on
+    // the next repaint. Only a table hidden at the stop builds fresh (rows == null).
+    if (this._frozen && this.measurementRows) return;
     const nowMs = performance.now();
-    const tNs = nowMs * NS_PER_MS;
+    // The rolling window clocks on the CAPTURE clock (the ring's write position),
+    // never on the wall clock, so a stopped ring keeps the held avg/min/max/sigma.
+    const tNs = this._captureClockNs;
     const s = this._measStats;
     s.vpp.push(tNs, meas.vpp);
     s.vrms.push(tNs, meas.vrms);
@@ -2854,6 +2887,8 @@ export class ScopeView {
     s.fallTime.push(tNs, meas.fallTime);
     s.frequency.push(tNs, meas.frequency);
     s.dutyCycle.push(tNs, meas.dutyCycle);
+    // The rebuild THROTTLE stays on the wall clock - it bounds repaint cost, it is
+    // not a statistics window (Java's READOUT_THROTTLE_NS is a display timer too).
     if (this.measurementRows && nowMs - this._lastMeasBuildMs < READOUT_THROTTLE_MS) return;
     const win = p.oscMeasurementAverageSeconds.get();
     this.measurementRows = [
@@ -2885,6 +2920,7 @@ export class ScopeView {
     this._meanHist.L.write = 0; this._meanHist.L.size = 0;
     this._meanHist.R.write = 0; this._meanHist.R.size = 0;
     this._lastMeanNorm = { L: NaN, R: NaN };
+    this._captureClockNs = 0;   // the stream restarts -> so does its clock
     this._lastMeasBuildMs = 0;
     this._lastLiveMeasMs = 0;
     this._lastMeasPublishMs = 0;   // force the next render to recompute / re-read a fresh publish
@@ -2906,8 +2942,8 @@ export class ScopeView {
     // Glitch mode (Java updateCaptureRate GLITCH branch): rate = caught count ÷
     // collection time. Events are seconds to minutes apart, so a per-interval EMA
     // would just decay toward 0 between catches; the cumulative rate is the honest
-    // figure. Counting restarts on glitch-mode entry, a record restart
-    // (restartGlitchRate) and a trigger-source change (resetTriggerHold).
+    // figure. Counting restarts on glitch-mode entry and a record restart
+    // (restartGlitchRate).
     const glitchMode = !!this.prefs && !this.fileMode
       && this.prefs.oscTriggerType.get() === TriggerType.GLITCH;
     if (glitchMode) {
@@ -3165,7 +3201,9 @@ export class ScopeView {
     // clamped - off-buffer edges blank (blankBeyondData below), matching Java.
     const tDivLive = p ? p.oscTimePerDiv.get() : f.tDivAtFreeze;
     const scale = (f.tDivAtFreeze > 0 && tDivLive > 0) ? tDivLive / f.tDivAtFreeze : 1;
-    const winSamples = Math.max(2, Math.round(f.windowSamples * scale));
+    // Real-valued, like the live width: the held frame keeps sub-sample window
+    // geometry so a magnified replay lines up with its own edge time marks.
+    const winSamples = Math.max(2.0, f.windowSamples * scale);
     if (p) {
       const posFrac = p.oscTriggerPositionFrac.get();
       f.heldStart = f.triggerLocal - posFrac * winSamples;

@@ -109,7 +109,7 @@ function refineExtreme(data, n, idx, step, seed, findMax) {
  * @param {Float32Array|number[]} data
  * @param {number} n
  * @param {number} dispStart
- * @param {number} dispCount
+ * @param {number} dispCount  EXACT real-valued window width (ceil'd only for the sample walk)
  * @param {number} width
  * @param {number} height
  * @param {number} subSampleOffset
@@ -141,9 +141,11 @@ export function columnCrossings(data, n, dispStart, dispCount, width, height,
     bandEntryX[x] = NaN; bandEntryY[x] = NaN;
     bandExitX[x] = NaN; bandExitY[x] = NaN;
   }
+  // The width is real-valued (exact window); the sample walk covers the
+  // partial last sample via ceil - columns clamp to [0, width) anyway.
   const pxPerSample = width / dispCount;
   const maxRow = height - 1;
-  const last = dispStart + dispCount;
+  const last = dispStart + Math.ceil(dispCount);
   let curCol = -1;
   let curLo = 0;
   let curHi = 0;

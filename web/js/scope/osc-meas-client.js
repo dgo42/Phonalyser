@@ -62,6 +62,10 @@ export class OscMeasClient {
     // from the current block, so a quietened signal is reflected within one window - and since
     // shrinking never re-ranges, that costs no counts.
     this._peakWindow = { L: 0, R: 0, startedAtMs: 0 };
+    // Capture rate of the last fed batch - the only place the ring's sample rate is
+    // known on this side, and what turns a write position into the capture clock the
+    // publishes carry (_stamp).
+    this._rate = 0;
   }
 
   /**
@@ -100,7 +104,7 @@ export class OscMeasClient {
     this._reader = reader;
     this._reader.seekToLatest();   // contiguous forward stream anchors at "now"
     this._worker = new Worker(new URL('./osc-meas-worker.js', import.meta.url), { type: 'module' });
-    this._worker.onmessage = (e) => { if (this._onResult) this._onResult(e.data); };
+    this._worker.onmessage = (e) => { if (this._onResult) this._onResult(this._stamp(e.data)); };
     this._worker.onerror = (ev) => console.error('osc-meas-worker', ev.message);
     return true;
   }
@@ -128,6 +132,24 @@ export class OscMeasClient {
 
   _resetWorker() { if (this._worker) this._worker.postMessage({ type: 'reset' }); }
 
+  /**
+   * Stamps a publish with the CAPTURE CLOCK - the ring's write position expressed in
+   * nanoseconds of captured audio (Java ScopeMeasurementWorker stamps its history ring in
+   * buffer sample positions and windows against getWritePos()). The consumer windows its
+   * statistics and DC means against this instead of the wall clock, so a stopped ring -
+   * which feeds nothing and therefore never advances the stamp - holds every windowed
+   * value constant instead of aging it out on later repaints. Left unstamped when the
+   * reader or the sample rate isn't known yet; the consumer then leaves its clock put.
+   *
+   * @param {object} r the worker publish
+   * @returns {object} the same object, with posNs added when the clock is known
+   */
+  _stamp(r) {
+    const reader = this._reader;
+    if (r && reader && this._rate > 0) r.posNs = reader.getWritePos() / this._rate * 1e9;
+    return r;
+  }
+
   /** Per capture batch: read the NEW contiguous gap of BOTH channels off the cursor and post
    *  it to the worker. OVERRUN -> re-anchor + worker stream reset (a torn window would smear the
    *  collection). Dropped when measurement is off (getParams returns null). */
@@ -152,6 +174,7 @@ export class OscMeasClient {
     // binned exactly once; a re-read window would count the overlap ~20× at this cadence and bias
     // the distribution toward whatever the overlap covered.
     this._binHistograms(bufL, bufR, n, params);
+    this._rate = params.sampleRate;
     worker.postMessage({
       type: 'feed', bufL, bufR, n,
       sampleRate: params.sampleRate,

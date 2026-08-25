@@ -26,7 +26,7 @@ import { isDualTone } from '../generator/dds-kernel.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
 import { FlatScrollbar } from '../widgets/flat-scrollbar.js';
-import { offsetMoveHalfRange } from './scope-format.js';
+import { displaySamplesFor, offsetMoveHalfRange } from './scope-format.js';
 import { DIVISIONS_Y } from './scope-nav.js';
 import { HistogramView } from './histogram-view.js';
 import { backendDisplayName } from '../audio/audio-backend-type.js';
@@ -178,13 +178,12 @@ export class ScopePane {
       this.engine.scope.resetHistograms();
       this.renderHistogram();
     };
-    // Generator start/stop IS a signal change, so the distribution restarts with it - averaging
-    // before and after together would be wrong (Java publishes GENERATOR_SIGNAL_CHANGED / USER_INPUT
-    // on a real transition for exactly this).
-    MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, () => {
-      this.engine.scope.resetHistograms();
-      this.renderHistogram();
-    });
+    // Generator start/stop IS a signal change, so the distribution restarts with it -
+    // averaging before and after together would be wrong. It restarts through the SAME
+    // gated path as the statistics (the GENERATOR_SIGNAL_CHANGED subscriber in bind() ->
+    // _clearMeasurementHistory -> onClearMeasurement above): Java resets the histograms
+    // inside clearMeasurementHistory, so a stopped scope - whose distribution is a held
+    // measurement - and a sub-mHz FLL trim leave it alone.
   }
 
   /** The current osc-meas publish parameters read from prefs + the live config/generator
@@ -743,7 +742,7 @@ export class ScopePane {
     if (!this.view.fileMode || !this.loadedScope) return;
     const frames = this.loadedScope.frames;
     const sampleRate = this.loadedScope.sampleRate;
-    const displaySamples = Math.round(this.prefs.oscTimePerDiv.get() * 10 * sampleRate);
+    const displaySamples = displaySamplesFor(this.prefs.oscTimePerDiv.get(), sampleRate);
     const maxBack = Math.max(0, frames - displaySamples);
     const maxSel = NAV_RANGE - this.scopeHScroll.getThumb();
     // Rightmost selection = follow latest (back = 0); leftmost = oldest (back = maxBack).
@@ -847,8 +846,8 @@ export class ScopePane {
   // ----- the scope SETTINGS strip (ScopeTabControl) host seam -----
   // Java ScopeController.redrawViews: repaint a FROZEN (stopped) or file-mode view -
   // the live render loop repaints every frame anyway, so nothing to do there. Required
-  // so a setting change (trigger type/edge/channel, V/div, ...) shows on an idle view;
-  // in particular a resetTriggerHold followed by this blanks the stale held trace.
+  // so a setting change (trigger type/edge/channel, V/div, ...) shows on an idle view -
+  // the held trace itself stays, and re-renders under the new settings.
   requestRedraw() {
     if (this.view.fileMode) { this.refreshScopeFileMode(); return; }
     if (!this._isScopeRec()) this.redrawScopeOnResize();
@@ -984,7 +983,7 @@ export class ScopePane {
    *  t/div (frames − the displayed window). */
   fileMaxBack() {
     if (!this.loadedScope) return 0;
-    const displaySamples = Math.round(this.prefs.oscTimePerDiv.get() * 10 * this.loadedScope.sampleRate);
+    const displaySamples = displaySamplesFor(this.prefs.oscTimePerDiv.get(), this.loadedScope.sampleRate);
     return Math.max(0, this.loadedScope.frames - displaySamples);
   }
 
@@ -994,7 +993,7 @@ export class ScopePane {
   syncHorizScrollbar() {
     if (!this.loadedScope) return;
     const { frames, sampleRate } = this.loadedScope;
-    const displaySamples = Math.round(this.prefs.oscTimePerDiv.get() * 10 * sampleRate);
+    const displaySamples = displaySamplesFor(this.prefs.oscTimePerDiv.get(), sampleRate);
     let thumb;
     if (frames <= 0) thumb = NAV_RANGE;
     else thumb = Math.max(MIN_SCROLLBAR_THUMB, Math.min(NAV_RANGE, Math.round(Math.min(1, displaySamples / frames) * NAV_RANGE)));
@@ -1044,17 +1043,22 @@ export class ScopePane {
     MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, (cause) => {
       this.syncReconstructedBeatEnabled();
       if (cause === GenChangeCause.USER_INPUT) {
+        // Hold/freeze rules 1+3: a STOPPED scope and a loaded file are untouched by
+        // ANYTHING the generator does - the held display is the measurement the
+        // operator is reading. Only a RUNNING scope restarts its statistics and
+        // afterglow on a real signal change (averaging the old signal into the new
+        // would be wrong). Rule 2: the held trigger anchor is NEVER dropped here - a
+        // held trace stays until a real trigger event under the current settings
+        // replaces it.
+        if (!this._isScopeRec()) return;
         this.view._clearMeasurementHistory();
         this.renderMeasurementTable();
-        // A real generator change also invalidates the held trigger anchor AND the
-        // persistence afterglow (it shows the OLD signal): the signal transition itself is
-        // a discontinuity - the glitch trigger fires on it and NORMAL would hold that
-        // transition frame forever, and with a rare glitch trigger the afterglow barely
-        // decays. Both are DELAYED so they land after the change has flushed through the
-        // DAC -> loopback -> ADC path (Java ScopeTabControl genChangeListener ->
-        // timerExec(GEN_CLEAR_DELAY_MS) -> resetTriggerHold + controller.clearPersistence).
+        // The afterglow shows the OLD signal, but the wipe is DELAYED so it lands
+        // after the change has flushed through the DAC -> loopback -> ADC path (Java
+        // ScopeTabControl genChangeListener -> timerExec(GEN_CLEAR_DELAY_MS) ->
+        // controller.clearPersistence); an instant wipe would re-accumulate frames
+        // captured before the change arrived.
         setTimeout(() => {
-          this.view.resetTriggerHold();
           this.view.clearPersistence();
           this.requestRedraw();
         }, GEN_CLEAR_DELAY_MS);

@@ -14,6 +14,7 @@ import { BUFFER_SECONDS } from '../audio/shared-capture.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 import { OscMeasClient } from './osc-meas-client.js';
+import { displaySamplesFor } from './scope-format.js';
 
 // Scope window sizing (faithful to Java ScopeView.drawWaveforms line ~2007):
 //   wanted = 2·displaySamples + 2·LANCZOS_PADDING + extraLookback
@@ -26,7 +27,6 @@ const LANCZOS_PADDING = 80;                // dsp/lanczos LANCZOS_A·MAX_LANCZOS
 // its OWN gapless ring reader (the measurement stream, owned by this controller's
 // OscMeasClient), integrating oscMeasurementAverageSeconds of samples off the render thread.
 const SCOPE_MEAS_MAX_SAMPLES = 8192;
-const SCOPE_DIVISIONS_X = 10;              // Java ScopeView.DIVISIONS_X
 const SCOPE_MIN_LEN = 1 << 15;            // floor for the scope window (Java leftBuf grow-only)
 // Ceiling for the scope window: feedScope runs PER CAPTURE BATCH (far more often than
 // the 60 fps Java paint), so an unbounded multi-million-sample copy per batch at a very
@@ -143,9 +143,11 @@ export class ScopeController {
   _windowLen() {
     const c = this.config;
     const rate = c.inRate > 0 ? c.inRate : 384000;
-    const displaySamples = Math.round((c.scopeTimePerDiv || 0.001) * SCOPE_DIVISIONS_X * rate);
+    // The width is real-valued (ScopeFormat.displaySamplesFor); a read length is an
+    // array size, so it is the one place that quantizes - ceil, never round.
+    const displaySamples = displaySamplesFor(c.scopeTimePerDiv || 0.001, rate);
     const extraLookback = Math.min(rate, SCOPE_MEAS_MAX_SAMPLES);
-    let wanted = 2 * displaySamples + 2 * LANCZOS_PADDING + extraLookback;
+    let wanted = 2 * Math.ceil(displaySamples) + 2 * LANCZOS_PADDING + extraLookback;
     if (wanted < SCOPE_MIN_LEN) wanted = SCOPE_MIN_LEN;
     if (wanted > SCOPE_MAX_LEN) wanted = SCOPE_MAX_LEN;
     const cap = this._capture.buffer ? this._capture.buffer.getCapacity() : Math.round(rate * BUFFER_SECONDS);

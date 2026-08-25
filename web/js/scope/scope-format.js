@@ -26,21 +26,6 @@ export function clamp01(v) {
 }
 
 /**
- * Mean of `data` over [start, start+count) - used for AC-mode DC removal
- * (ScopeFormat.windowMean). Returns 0 for an empty/absent window.
- * @param {Float32Array|Float64Array|number[]} data
- * @param {number} start
- * @param {number} count
- * @returns {number}
- */
-export function windowMean(data, start, count) {
-  if (data == null || count <= 0) return 0.0;
-  let s = 0;
-  for (let i = 0; i < count; i++) s += data[start + i];
-  return s / count;
-}
-
-/**
  * Returns the smallest target >= value, or the largest target if value exceeds
  * them all. `targets` must be sorted ascending (ScopeFormat.ceilToStep).
  * @param {number} value
@@ -53,17 +38,22 @@ export function ceilToStep(value, targets) {
 }
 
 /**
- * Number of samples the main view shows for a `timePerDiv` (seconds) and the
- * buffer's `sampleRate` (Hz). The display spans 10 horizontal divisions, so
- * windowSeconds = 10 · timePerDiv -> samples = round(windowSeconds · sampleRate),
- * floored at 2 (ScopeFormat.displaySamplesFor).
+ * EXACT width of the main view's window in samples for a `timePerDiv` (seconds)
+ * and the buffer's `sampleRate` (Hz): the display spans 10 horizontal divisions,
+ * so 10 · timePerDiv · sampleRate - a real-valued width, floored at 2. The ONE
+ * authority for the window width: positions, zoom ratios and time marks all use
+ * this exact value; integers appear only where an array or a read forces them
+ * (the caller takes Math.ceil). A rounded width diverged from the t/div product
+ * by up to half a sample, and the trigger offset p is measured in windows - a
+ * virtual p multiplied that gap into a visible trace-vs-axis skew at few-sample
+ * windows. (ScopeFormat.displaySamplesFor.)
  * @param {number} timePerDiv seconds per division
  * @param {number} sampleRate Hz
- * @returns {number}
+ * @returns {number} real-valued sample width, floored at 2
  */
 export function displaySamplesFor(timePerDiv, sampleRate) {
   const windowSeconds = timePerDiv * 10.0;
-  return Math.max(2, Math.round(windowSeconds * sampleRate));
+  return Math.max(2.0, windowSeconds * sampleRate);
 }
 
 /**

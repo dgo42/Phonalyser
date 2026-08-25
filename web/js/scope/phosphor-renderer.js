@@ -97,7 +97,7 @@ export class PhosphorRenderer {
    * @param {number} n
    * @param {number} dispStart
    * @param {number} subSampleOffset
-   * @param {number} dispCount
+   * @param {number} dispCount EXACT real-valued window width - the columns scale by it
    * @param {number} widthPx   LOGICAL plot width
    * @param {number} heightPx  LOGICAL plot height
    * @param {number} centerY

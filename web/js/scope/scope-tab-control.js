@@ -434,18 +434,16 @@ export class ScopeTabControl {
     $('#scopeLeftLpf').on('change', () => { prefs.oscLeftLpf.set($('#scopeLeftLpf').val()); host.requestRedraw(); });
     $('#scopeRightLpf').on('change', () => { prefs.oscRightLpf.set($('#scopeRightLpf').val()); host.requestRedraw(); });
 
-    // Channel / edge / type changes drop the held trigger anchor (Java onChange
-    // listeners -> view.resetTriggerHold + controller.redrawViews): the old anchor
-    // belongs to the OLD trigger source and would keep re-rendering a stale trace.
-    // NORMAL / SINGLE then stay blank until the new trigger fires.
+    // Channel / edge / type changes KEEP the held trace (hold/freeze rule 2 of the
+    // scope navigation spec): a trigger-source edit never drops the anchor - the next
+    // real trigger event under the new settings replaces it naturally. Dropping it
+    // blanked a stopped scope, whose held frame is the measurement being read.
     this.wireTrigGroup('scopeTrigCh', (v) => {
       prefs.oscTriggerChannel.set(v); host.refreshTiles();
-      view.resetTriggerHold();   // other channel's anchor is stale
       host.requestRedraw();
     });
     this.wireTrigGroup('scopeTrigEdge', (v) => {
       prefs.oscTriggerEdge.set(v); host.refreshTiles();
-      view.resetTriggerHold();   // old-edge anchor is stale
       host.requestRedraw();
     });
     // Trigger event type: E = level-crossing edge trigger, G = dV/dt glitch trigger
@@ -453,7 +451,6 @@ export class ScopeTabControl {
     // direction vs. glitch start/end anchor.
     this.wireTrigGroup('scopeTrigType', (v) => {
       prefs.oscTriggerType.set(v); host.refreshTiles();
-      view.resetTriggerHold();   // the held anchor belongs to the OLD trigger type
       host.requestRedraw();
     });
     this.wireTrigGroup('scopeTrigMode', (v) => {
@@ -465,7 +462,6 @@ export class ScopeTabControl {
       if (v === 'AUTO' && prefs.oscTriggerType.get() === 'GLITCH') {
         prefs.oscTriggerType.set('EDGE');
         this.trigGroupSet('scopeTrigType', 'EDGE');
-        view.resetTriggerHold();   // the glitch anchor is stale under the new type
       }
       host.syncGlitchTypeEnabled();
       host.syncTriggerStart(); host.refreshTiles();
