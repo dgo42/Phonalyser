@@ -311,6 +311,22 @@ export class NotchSweepEngine {
   }
 
   /**
+   * Live amplitude change WITHOUT restart (Java NotchSweepEngine.setAmplitude): the
+   * new level goes straight to the running DDS. The session sample counter rewinds
+   * so {@link latestPeriod} hands out nothing until one full period of new-level
+   * samples exists - the deconvolution divides the whole window by ONE drive level,
+   * and a window spanning the change would draw the response offset by the level
+   * ratio. No-op before start() / after close().
+   *
+   * @param {number} ampVrms new stimulus level (Vrms)
+   */
+  setAmplitude(ampVrms) {
+    if (!this._running) return;
+    this._postGen({ amplitudeVRms: ampVrms });
+    if (this._reader) this._startWritePos = this._reader.getWritePos();
+  }
+
+  /**
    * Live output-lane change WITHOUT restart: pushes the gate straight to the
    * running worklet (Java NotchSweepEngine.setOutputChannels). Only the gate is
    * pushed live - the right-lane scale was fixed at start(). Updates the shared

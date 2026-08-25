@@ -292,6 +292,7 @@ export class TuneNotchWizard {
         // The pair as entered - edit the COPY; written back to the real store on close.
         this.viewPrefs.tuneNotchAmplitude.set(this.ampField.enteredValue());
         this._resetMagStats();   // a new drive level is a new measurement - see _resetMagStats
+        this._retuneEngineAmplitude();
       });
     this.targetField = mkField('tnTarget',
       new NumericStepModel({ family: F.FREQUENCY, min: FREQ_MIN_HZ, max: nyquist, maxDecimals: FREQ_MAX_DECIMALS }),
@@ -422,6 +423,18 @@ export class TuneNotchWizard {
     if (!e) return;
     const b = sweepBand(this._curStartHz, this._curStopHz);
     e.setBand(b[0], b[1]);
+  }
+
+  /** Live-applies the amplitude field to the streamed sweep - no-op until the
+   *  engine is running (Java retuneEngineAmplitude). The engine also rewinds its
+   *  settle counter, so the level the loop plays and the level the deconvolution
+   *  divides by can never disagree - a mid-session field edit used to shift the
+   *  whole displayed response by the amplitude ratio while the stimulus kept its
+   *  old level. */
+  _retuneEngineAmplitude() {
+    const e = this._notchEngine;
+    if (!e) return;
+    e.setAmplitude(this._curAmpVrms);
   }
 
   /** Live-pushes the current output-lane gate to the running engine so a
