@@ -556,6 +556,15 @@ function initStepFields() {
   // replays the pair, so the field shows the unit it was saved in - not a voltage.
   if (fAmpFr) {
     prefs.freqRespAmplitude.addListener((v) => {
+      // A stored value below the field's lower limit is repaired up to it, in the
+      // unit the operator is working in (Java FreqRespTabControl amplitude-pref
+      // listener): the field refuses such an entry, but a preset recall or an
+      // imported document can still write one. The repaired value is at the
+      // limit, so the re-triggered listener writes nothing further.
+      if (prefs.freqRespAmplitudeVrms.get() < FR_AMP_MIN_VRMS) {
+        prefs.freqRespAmplitude.set(prefs.amplitudeIn(prefs.freqRespAmplitude, FR_AMP_MIN_VRMS));
+        return;
+      }
       if (!unitValueEquals(fAmpFr.enteredValue(), v)) fAmpFr.seedPair(v);
     });
   }
