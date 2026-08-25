@@ -19,6 +19,13 @@
 
 import { FlatScrollbar } from '../widgets/flat-scrollbar.js';
 import { interpolate } from './deconvolve.js';
+// Plot margins + the frequency / magnitude axis floors, shared with the pane's
+// scrollbars and the tune-notch wizard's overlay (Java FreqRespConstants).
+import {
+  FREQ_MIN_HZ, MAG_BOT_MIN_DB,
+  PLOT_MARGIN_LEFT_PX, PLOT_MARGIN_TOP_PX, PLOT_MARGIN_BOTTOM_PX,
+  PLOT_MARGIN_RIGHT_NO_PHASE_PX, PLOT_MARGIN_RIGHT_PHASE_PX,
+} from './freqresp-constants.js';
 import { evalDb } from '../dsp/riaa.js';
 // Ideal-filter reference overlay (Java FreqRespView filter seam) - the FilterDesign
 // magnitude curve + the FilterType/Response/UnevenMode enums the reference + unevenness
@@ -50,12 +57,7 @@ import {
 // ----- packed-int colour -> CSS hex (matches the fft-view helper) -----
 const colorHex = (c) => '#' + (c & 0xffffff).toString(16).padStart(6, '0');
 
-// ----- plot geometry (mirror FreqRespView margins) -----
-const MARGIN_LEFT = 56;
-const MARGIN_TOP = 4;
-const MARGIN_BOTTOM = 18;
-const MARGIN_RIGHT_NO_PHASE = 6;
-const MARGIN_RIGHT_PHASE = 52;
+// ----- plot geometry: the PLOT_MARGIN_* imports above -----
 // Axis tick length (Java AbstractMeasurementView.MAJOR_TICK_LEN) - used to inset the
 // left-Y unit caption from the plot's left edge, mirroring drawAxisCaptions.
 const MAJOR_TICK_LEN = 6;
@@ -77,9 +79,10 @@ const MAG_PAN_FRAC = 0.10;
 const MAG_TOP_MAX_DB = 20.0;
 const MAG_HEADROOM_DB = 20.0;
 const MAG_TOP_ZOOM_MAX_DB = 120.0;
-const MAG_BOT_MIN_DB = -300.0;
 const MAG_DEFAULT_BOT_DB = -150.0;
-const FREQ_MIN_FLOOR_HZ = 1.0;
+// The magnitude floor (MAG_BOT_MIN_DB) and the log-axis frequency floor
+// (FREQ_MIN_HZ) come from freqresp-constants - the pane's scrollbars must reach
+// the same outer edges the wheel zoom-out allows.
 
 // ----- navigation scrollbars: fixed integer range, value derived via bounds -----
 const NAV_RANGE = 1_000_000;
@@ -98,7 +101,7 @@ const FILTER_TRACE_COLOR = '#8e24aa';
 // (FreqRespView:1772) and the unevenness readout (:2167) share that anchor.
 // Java's row is BTN_TOP=4 / BTN_H=22; here it is the .lr-tools DOM overlay
 // (top:5px, 22px buttons + 1px borders = 24 high), which the canvas cannot
-// measure - hence the mirrored constants. Anchoring to plot.y (=MARGIN_TOP=4)
+// measure - hence the mirrored constants. Anchoring to plot.y (=PLOT_MARGIN_TOP_PX=4)
 // instead put the text at y=10, straight through the L/R buttons.
 const BTN_TOP = 5;
 const BTN_H = 24;
@@ -484,11 +487,11 @@ export class FreqRespView {
     if (g.setTransform) g.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const phaseVisible = prefs.freqRespPhaseVisible.get();
-    const rightMargin = phaseVisible ? MARGIN_RIGHT_PHASE : MARGIN_RIGHT_NO_PHASE;
+    const rightMargin = phaseVisible ? PLOT_MARGIN_RIGHT_PHASE_PX : PLOT_MARGIN_RIGHT_NO_PHASE_PX;
     const plot = {
-      x: MARGIN_LEFT, y: MARGIN_TOP,
-      w: Math.max(1, W - MARGIN_LEFT - rightMargin),
-      h: Math.max(1, H - MARGIN_TOP - MARGIN_BOTTOM),
+      x: PLOT_MARGIN_LEFT_PX, y: PLOT_MARGIN_TOP_PX,
+      w: Math.max(1, W - PLOT_MARGIN_LEFT_PX - rightMargin),
+      h: Math.max(1, H - PLOT_MARGIN_TOP_PX - PLOT_MARGIN_BOTTOM_PX),
     };
 
     let freqMin = prefs.freqRespFreqMinHz.get();
@@ -1712,9 +1715,9 @@ export class FreqRespView {
     this._mouseX = e.clientX - rect.left;
     this._mouseY = e.clientY - rect.top;
     const W = this.cv.clientWidth || 1200, H = this.cv.clientHeight || 440;
-    const rightMargin = this.prefs.freqRespPhaseVisible.get() ? MARGIN_RIGHT_PHASE : MARGIN_RIGHT_NO_PHASE;
-    this._mouseInPlot = this._mouseX >= MARGIN_LEFT && this._mouseX <= W - rightMargin
-      && this._mouseY >= MARGIN_TOP && this._mouseY <= H - MARGIN_BOTTOM;
+    const rightMargin = this.prefs.freqRespPhaseVisible.get() ? PLOT_MARGIN_RIGHT_PHASE_PX : PLOT_MARGIN_RIGHT_NO_PHASE_PX;
+    this._mouseInPlot = this._mouseX >= PLOT_MARGIN_LEFT_PX && this._mouseX <= W - rightMargin
+      && this._mouseY >= PLOT_MARGIN_TOP_PX && this._mouseY <= H - PLOT_MARGIN_BOTTOM_PX;
     this.render();
   }
 
@@ -1736,8 +1739,8 @@ export class FreqRespView {
   _plotRect() {
     const W = this.cv.clientWidth || 1200, H = this.cv.clientHeight || 440;
     if (W < 10 || H < 10) return null;
-    const rightMargin = this.prefs.freqRespPhaseVisible.get() ? MARGIN_RIGHT_PHASE : MARGIN_RIGHT_NO_PHASE;
-    return { x: MARGIN_LEFT, y: MARGIN_TOP, w: Math.max(1, W - MARGIN_LEFT - rightMargin), h: Math.max(1, H - MARGIN_TOP - MARGIN_BOTTOM) };
+    const rightMargin = this.prefs.freqRespPhaseVisible.get() ? PLOT_MARGIN_RIGHT_PHASE_PX : PLOT_MARGIN_RIGHT_NO_PHASE_PX;
+    return { x: PLOT_MARGIN_LEFT_PX, y: PLOT_MARGIN_TOP_PX, w: Math.max(1, W - PLOT_MARGIN_LEFT_PX - rightMargin), h: Math.max(1, H - PLOT_MARGIN_TOP_PX - PLOT_MARGIN_BOTTOM_PX) };
   }
 
   // ───────────── Rectangular zoom (base machinery in rect-zoom.js) ─────────────
@@ -1758,7 +1761,7 @@ export class FreqRespView {
    *  (Java FreqRespView.applyZoomState). */
   _applyZoomState(s) {
     const p = this.prefs;
-    const fMin = Math.max(FREQ_MIN_FLOOR_HZ, s.xMin);
+    const fMin = Math.max(FREQ_MIN_HZ, s.xMin);
     const fMax = Math.min(this._nyquistHz(), s.xMax);
     const top = Math.min(MAG_TOP_ZOOM_MAX_DB, s.yMax[0]);
     const bot = Math.max(MAG_BOT_MIN_DB, s.yMin[0]);
@@ -1789,7 +1792,7 @@ export class FreqRespView {
       top - (sel.y - plot.y) / plot.h * span);
     const newBot = Math.max(MAG_BOT_MIN_DB,
       top - (sel.y + sel.h - plot.y) / plot.h * span);
-    const newFMin = Math.max(FREQ_MIN_FLOOR_HZ,
+    const newFMin = Math.max(FREQ_MIN_HZ,
       this._xFractionToFreq((sel.x - plot.x) / plot.w, fMin, fMax));
     const newFMax = Math.min(this._nyquistHz(),
       this._xFractionToFreq((sel.x + sel.w - plot.x) / plot.w, fMin, fMax));
@@ -1809,7 +1812,7 @@ export class FreqRespView {
     let newMax = cursorF * Math.pow(fMax / fMin, (1.0 - frac) * scale);
     if (newMin >= newMax) return;
     const nyq = this._nyquistHz();
-    newMin = Math.max(FREQ_MIN_FLOOR_HZ, newMin);
+    newMin = Math.max(FREQ_MIN_HZ, newMin);
     newMax = Math.min(nyq, newMax);
     if (newMin >= newMax) return;
     prefs.freqRespFreqMinHz.set(newMin); prefs.freqRespFreqMaxHz.set(newMax); prefs.save();
@@ -1843,7 +1846,7 @@ export class FreqRespView {
     let newMax = Math.pow(10, Math.log10(fMax) + delta);
     if (newMin <= 0 || newMax <= newMin) return;
     const nyq = this._nyquistHz();
-    if (newMin < FREQ_MIN_FLOOR_HZ) { const s = FREQ_MIN_FLOOR_HZ / newMin; newMin *= s; newMax *= s; }
+    if (newMin < FREQ_MIN_HZ) { const s = FREQ_MIN_HZ / newMin; newMin *= s; newMax *= s; }
     if (newMax > nyq) { const s = nyq / newMax; newMin *= s; newMax *= s; }
     prefs.freqRespFreqMinHz.set(newMin); prefs.freqRespFreqMaxHz.set(newMax); prefs.save();
     this._publishRangeChanged(); this.render();
@@ -1864,9 +1867,9 @@ export class FreqRespView {
   /** Snaps to the default frequency / magnitude window (FreqRespView.resetToDefaultView). */
   resetToDefaultView() {
     const prefs = this.prefs;
-    prefs.freqRespFreqMinHz.set(FREQ_MIN_FLOOR_HZ);
+    prefs.freqRespFreqMinHz.set(FREQ_MIN_HZ);
     prefs.freqRespFreqMaxHz.set(this._nyquistHz());
-    prefs.freqRespMagTopDb.set(this._softMagTopDb(MAG_TOP_MAX_DB, FREQ_MIN_FLOOR_HZ, this._nyquistHz()));
+    prefs.freqRespMagTopDb.set(this._softMagTopDb(MAG_TOP_MAX_DB, FREQ_MIN_HZ, this._nyquistHz()));
     prefs.freqRespMagBotDb.set(MAG_DEFAULT_BOT_DB);
     prefs.save();
     this._publishRangeChanged(); this.render();
@@ -1901,9 +1904,9 @@ export class FreqRespView {
     }
     newTop = Math.min(MAG_TOP_ZOOM_MAX_DB, newTop);
     newBot = Math.max(MAG_BOT_MIN_DB, newBot);
-    prefs.freqRespFreqMinHz.set(FREQ_MIN_FLOOR_HZ);
+    prefs.freqRespFreqMinHz.set(FREQ_MIN_HZ);
     prefs.freqRespFreqMaxHz.set(fHi);
-    prefs.freqRespMagTopDb.set(this._softMagTopDb(newTop, FREQ_MIN_FLOOR_HZ, fHi));
+    prefs.freqRespMagTopDb.set(this._softMagTopDb(newTop, FREQ_MIN_HZ, fHi));
     prefs.freqRespMagBotDb.set(newBot);
     prefs.save();
     this._publishRangeChanged(); this.render();
@@ -1950,7 +1953,7 @@ export class FreqRespView {
 
   /** Magnitude scrollbar ceiling (dB): +20 dB default raised to the corrected peak + 20 dB. */
   magCeilingDb() {
-    return this._softMagTopDb(MAG_TOP_MAX_DB, FREQ_MIN_FLOOR_HZ, this._nyquistHz());
+    return this._softMagTopDb(MAG_TOP_MAX_DB, FREQ_MIN_HZ, this._nyquistHz());
   }
 
   // ===========================================================================
@@ -1961,11 +1964,11 @@ export class FreqRespView {
   syncScrollbars() {
     const prefs = this.prefs;
     if (this.freqScroll) {
-      // Log freq scrollbar over [FREQ_MIN_FLOOR_HZ, Nyquist]: thumb = visible decades /
+      // Log freq scrollbar over [FREQ_MIN_HZ, Nyquist]: thumb = visible decades /
       // total decades, selection = where the visible window sits.
-      const loLog = Math.log10(FREQ_MIN_FLOOR_HZ), hiLog = Math.log10(this._nyquistHz());
+      const loLog = Math.log10(FREQ_MIN_HZ), hiLog = Math.log10(this._nyquistHz());
       const totalLog = Math.max(1e-9, hiLog - loLog);
-      let fMin = prefs.freqRespFreqMinHz.get(); if (fMin <= 0) fMin = FREQ_MIN_FLOOR_HZ;
+      let fMin = prefs.freqRespFreqMinHz.get(); if (fMin <= 0) fMin = FREQ_MIN_HZ;
       const fMax = prefs.freqRespFreqMaxHz.get();
       const visLog = Math.max(0, Math.log10(fMax) - Math.log10(fMin));
       const thumb = Math.max(1, Math.min(NAV_RANGE, Math.round(visLog / totalLog * NAV_RANGE)));
@@ -1996,9 +1999,9 @@ export class FreqRespView {
 
   _onFreqScroll(sel) {
     const prefs = this.prefs;
-    const loLog = Math.log10(FREQ_MIN_FLOOR_HZ), hiLog = Math.log10(this._nyquistHz());
+    const loLog = Math.log10(FREQ_MIN_HZ), hiLog = Math.log10(this._nyquistHz());
     const totalLog = Math.max(1e-9, hiLog - loLog);
-    let fMin = prefs.freqRespFreqMinHz.get(); if (fMin <= 0) fMin = FREQ_MIN_FLOOR_HZ;
+    let fMin = prefs.freqRespFreqMinHz.get(); if (fMin <= 0) fMin = FREQ_MIN_HZ;
     const fMax = prefs.freqRespFreqMaxHz.get();
     const visLog = Math.max(0, Math.log10(fMax) - Math.log10(fMin));   // keep the span fixed (pan)
     const thumb = this.freqScroll.getThumb();

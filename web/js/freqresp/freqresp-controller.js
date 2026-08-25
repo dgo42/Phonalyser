@@ -21,6 +21,7 @@
 
 import { renderLogSweep, renderWindowedLogSweep, sweepFadeSamples } from './farina-sweep.js';
 import { computeFromLogSweep, divideInPlace, binAlignedFreqs } from './deconvolve.js';
+import { LEAD_IN_MIN_SEC, SWEEP_MIN_SEC } from './freqresp-constants.js';
 import { nextPow2 } from '../dsp/mathutil.js';
 import { FreqRespLiveMeter } from './live-meter.js';
 import { makeFreqRespResult, makeStereoResult } from './stereo-result.js';
@@ -44,13 +45,8 @@ function rawPeakOf(left, right) {
 }
 
 export class FreqRespController {
-  /** Lead-in floor (s) - shorter lead-ins starve the deconvolution. */
-  static MIN_LEAD_IN_SEC = 0.05;
-  /** Capture tail (s) the analyzer records past lead-in + sweep. */
-  static ANALYZER_TAIL_SEC = 0.5;
-  /** Sweep-duration floor (s) - a small FFT size with a long lead-in
-   *  must not produce a negative or unworkable sweep. */
-  static MIN_SWEEP_SEC = 0.5;
+  // The lead-in floor and the sweep-duration floor come from freqresp-constants -
+  // the same limits the lead-in entry field clamps to.
   /** How long a bench may take to mark its sweep start after being told to play (Java
    *  SweepCapture.MARK_TIMEOUT_MS) - a bound on a bench that stopped answering, not a deadline
    *  for the audio. */
@@ -98,8 +94,8 @@ export class FreqRespController {
 
     prefs.freqRespFftSize.addListener(() => this.deriveDuration());
     prefs.freqRespLeadInSec.addListener((v) => {
-      if (v < FreqRespController.MIN_LEAD_IN_SEC) {
-        prefs.freqRespLeadInSec.set(FreqRespController.MIN_LEAD_IN_SEC);
+      if (v < LEAD_IN_MIN_SEC) {
+        prefs.freqRespLeadInSec.set(LEAD_IN_MIN_SEC);
         return;   // the re-set re-enters here with the clamped value
       }
       this.deriveDuration();
@@ -121,11 +117,16 @@ export class FreqRespController {
     this.deriveDuration();
   }
 
-  /** Total expected capture time of one sweep - lead-in + sweep + the analyzer's tail. */
+  /** Total expected capture time of one sweep - lead-in + sweep + the analyzer's
+   *  fixed tail (SWEEP_MIN_SEC, the span the decay ring-out needs regardless of
+   *  how short the lead-in is).  Sizes the busy meter's time axis AND, in the
+   *  web, the capture window itself (Java records the tail in its own
+   *  analyzer), so the recorded window is exactly leadIn + sweep + tail = the
+   *  FFT size deriveDuration solved for - no wasted bins. */
   expectedMeasurementSeconds() {
     return this.prefs.freqRespLeadInSec.get()
          + this.prefs.freqRespDurationSec.get()
-         + FreqRespController.ANALYZER_TAIL_SEC;
+         + SWEEP_MIN_SEC;
   }
 
   /** The derived sweep duration (s), already persisted by deriveDuration. */
@@ -134,14 +135,17 @@ export class FreqRespController {
   }
 
   /** Derives and persists the sweep duration that pairs with the chosen FFT size, so the
-   *  analyzer's nextPow2(leadIn + sweep + tail) lands exactly on fftSize. Clamped to MIN_SWEEP_SEC. */
+   *  analyzer's nextPow2(leadIn + sweep + tail) lands exactly on fftSize. The tail the
+   *  analyzer records is the fixed SWEEP_MIN_SEC span - the decay ring-out needs it in
+   *  full even when the lead-in is short - so that is what subtracts here. Clamped to
+   *  SWEEP_MIN_SEC. */
   deriveDuration() {
     const prefs = this.prefs;
     const sr = Math.max(1, this.sampleRate());
     const leadIn = Math.round(prefs.freqRespLeadInSec.get() * sr);
-    const tail = Math.round(FreqRespController.ANALYZER_TAIL_SEC * sr);
+    const tail = Math.round(SWEEP_MIN_SEC * sr);
     let sweep = prefs.freqRespFftSize.get() - leadIn - tail;
-    const minSweep = Math.round(FreqRespController.MIN_SWEEP_SEC * sr);
+    const minSweep = Math.round(SWEEP_MIN_SEC * sr);
     if (sweep < minSweep) sweep = minSweep;
     prefs.freqRespDurationSec.set(sweep / sr);
   }

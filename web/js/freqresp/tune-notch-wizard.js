@@ -66,6 +66,13 @@ import {
   NotchSweepEngine, sweepBand,
   powerOfTwoSweepSamples, notchFadeSamples, SWEEP_DURATION_SEC, SWEEP_LEAD_IN_SEC,
 } from './notch-sweep-engine.js';
+// Field floors / decimals and the plot margins, shared with the FreqResp
+// settings fields and the view this dialog embeds (Java FreqRespConstants).
+import {
+  FREQ_MIN_HZ, AMP_MIN_VRMS, FREQ_MAX_DECIMALS, AMP_MAX_DECIMALS,
+  PLOT_MARGIN_LEFT_PX, PLOT_MARGIN_TOP_PX, PLOT_MARGIN_BOTTOM_PX,
+  PLOT_MARGIN_RIGHT_NO_PHASE_PX, PLOT_MARGIN_RIGHT_PHASE_PX,
+} from './freqresp-constants.js';
 
 // --- Chart geometry (TuneNotchWizardDialog constants) -------------------------
 /** Output-grid point-count ceiling handed to binAlignedFreqs (Java CHART_WIDTH_PX);
@@ -91,10 +98,8 @@ const PERCENT_FULL = 100.0;
 const DEVICE_RELEASE_TIMEOUT_MS = 2000;
 
 // --- Field defaults / ranges ---------------------------------------------------
-const FREQ_MIN_HZ = 1.0;
-const AMP_MIN_VRMS = 1e-4;
-const FREQ_MAX_DECIMALS = 9;
-const AMP_MAX_DECIMALS = 5;
+// The frequency / amplitude floors and decimals come from freqresp-constants -
+// the same clamps the FreqResp settings fields use.
 
 // --- Initial / pre-fit magnitude window (dBV) ----------------------------------
 const INITIAL_MAG_TOP_DB = 20.0;
@@ -117,14 +122,10 @@ const NOTCH_OUTLINE_PX = 1;
 /** Vertical range is set from the rolling average of this many sweeps'
  *  min/max dB, so the axis doesn't jump frame-to-frame. */
 const MAG_AVG_FRAMES = 20;
-// Plot margins - mirror the WEB FreqRespView's MARGIN_* so the target marker
-// lands on the same log frequency axis the trace is drawn on (Java mirrors its
-// own view's 68/0/28 + 52/0; the web view uses 56/4/18 + 52/6).
-const VIEW_MARGIN_LEFT = 56;
-const VIEW_MARGIN_TOP = 4;
-const VIEW_MARGIN_BOTTOM = 18;
-const VIEW_MARGIN_RIGHT_PHASE = 52;
-const VIEW_MARGIN_RIGHT_NO_PHASE = 6;
+// Plot margins come from freqresp-constants - the same rectangle the embedded
+// view draws in, so the target marker lands on the same log frequency axis as
+// the trace. Those are the WEB view's 56/4/18 + 52/6, not the desktop's
+// 68/0/28 + 52/0.
 /** Target-frequency marker: a 3-px dashed vertical line coloured by how close the drawn response
  *  AT the target sits to THIS measurement's notch floor - green means the target is exactly in
  *  the notch. The scale is RELATIVE, not absolute dB, so a notch of any depth reads green
@@ -791,12 +792,14 @@ export class TuneNotchWizard {
     const cv = this.canvas;
     const W = cv.clientWidth || CANVAS_WIDTH_PX;
     const H = cv.clientHeight || CANVAS_HEIGHT_PX;
-    const rightMargin = prefs.freqRespPhaseVisible.get() ? VIEW_MARGIN_RIGHT_PHASE : VIEW_MARGIN_RIGHT_NO_PHASE;
-    const plotW = Math.max(1, W - VIEW_MARGIN_LEFT - rightMargin);
-    const plotTop = VIEW_MARGIN_TOP;
-    const plotBot = Math.max(plotTop + 1, H - VIEW_MARGIN_BOTTOM);
+    const rightMargin = prefs.freqRespPhaseVisible.get()
+      ? PLOT_MARGIN_RIGHT_PHASE_PX
+      : PLOT_MARGIN_RIGHT_NO_PHASE_PX;
+    const plotW = Math.max(1, W - PLOT_MARGIN_LEFT_PX - rightMargin);
+    const plotTop = PLOT_MARGIN_TOP_PX;
+    const plotBot = Math.max(plotTop + 1, H - PLOT_MARGIN_BOTTOM_PX);
     const frac = (Math.log(target) - Math.log(fMin)) / (Math.log(fMax) - Math.log(fMin));
-    const x = VIEW_MARGIN_LEFT + Math.round(frac * plotW);
+    const x = PLOT_MARGIN_LEFT_PX + Math.round(frac * plotW);
 
     // Δ above THIS sweep's notch floor; no valid notch yet => full red (nothing to be near).
     const delta = this._notchValid ? dbAtTarget - this._notchDb : Infinity;
