@@ -50,6 +50,14 @@ import { pruneCals } from '../io/cal-store.js';
 import { saveFile, openFile, bytesToText, pickSaveTarget, writeToTarget } from '../io/file-picker.js';
 import { FreqRespPane } from '../freqresp/freqresp-pane.js';
 import { TuneNotchWizard } from '../freqresp/tune-notch-wizard.js';
+// Floors / decimals of the FreqResp settings fields - shared with the analyzer's
+// validation and the tune-notch wizard's identical fields (Java FreqRespConstants).
+// The amplitude floor is aliased: this module already names the GENERATOR's own,
+// much lower floor AMP_MIN_VRMS.
+import {
+  LEAD_IN_MIN_SEC, FREQ_MIN_HZ, FREQ_MAX_DECIMALS, AMP_MAX_DECIMALS,
+  AMP_MIN_VRMS as FR_AMP_MIN_VRMS,
+} from '../freqresp/freqresp-constants.js';
 import { ScreenshotDialog } from './screenshot.js';
 import { clonePaneForShot, preloadCloneIcons, paintCloneToCanvas } from './screenshot.js';
 import { PredistortionHost } from './predistortion-host.js';
@@ -486,15 +494,15 @@ function initStepFields() {
 
   // FreqResp settings fields.
   const fr = (id, model, onChange) => mk(id, model, onChange);
-  const fStart = fr('frStart', new NumericStepModel({ family: F.FREQUENCY, min: 1, max: inRate() / 2, maxDecimals: 9 }),
+  const fStart = fr('frStart', new NumericStepModel({ family: F.FREQUENCY, min: FREQ_MIN_HZ, max: inRate() / 2, maxDecimals: FREQ_MAX_DECIMALS }),
     (v) => prefs.freqRespStartHz.set(v));
   if (fStart) fStart.setValue(prefs.freqRespStartHz.get());
-  const fStop = fr('frStop', new NumericStepModel({ family: F.FREQUENCY, min: 1, max: inRate() / 2, maxDecimals: 9 }),
+  const fStop = fr('frStop', new NumericStepModel({ family: F.FREQUENCY, min: FREQ_MIN_HZ, max: inRate() / 2, maxDecimals: FREQ_MAX_DECIMALS }),
     (v) => prefs.freqRespStopHz.set(v));
   if (fStop) fStop.setValue(prefs.freqRespStopHz.get());
   // fsAmplSupplier enables dBFS entry (as on the generator). NB: unlike the generator this field
   // has no live setMax listener, so its max is frozen at construction - the supplier still reads live.
-  const fAmpFr = fr('frAmp', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: sweepAmpMaxVrms(), maxDecimals: 5,
+  const fAmpFr = fr('frAmp', new NumericStepModel({ family: F.AMPLITUDE, min: FR_AMP_MIN_VRMS, max: sweepAmpMaxVrms(), maxDecimals: AMP_MAX_DECIMALS,
     fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
     () => prefs.freqRespAmplitude.set(fAmpFr.enteredValue()));
   // Track the live DAC full-scale calibration, as the generator field does (this one previously
@@ -507,7 +515,7 @@ function initStepFields() {
     });
     fAmpFr.seedPair(prefs.freqRespAmplitude.get());
   }
-  const fLead = fr('frLeadIn', new NumericStepModel({ family: F.TIME, min: 0.05, max: 1000000, maxDecimals: 3 }),
+  const fLead = fr('frLeadIn', new NumericStepModel({ family: F.TIME, min: LEAD_IN_MIN_SEC, max: 1000000, maxDecimals: 3 }),
     (v) => prefs.freqRespLeadInSec.set(v));
   if (fLead) fLead.setValue(prefs.freqRespLeadInSec.get());
   // Sweep points (Java SWEEP_POINT_SERIES): the wheel jumps along the power-of-2

@@ -1054,8 +1054,10 @@ export class FftView {
 
   // ───────────────────────────── THD / IMD tables ─────────────────────────────
   // Faithful Canvas2D port of Java FftView.drawDistortionTable / drawImdTable /
-  // drawKv / drawCentred. The desktop draws into a GC with a mono font; here the
-  // column widths are N·charW where charW = measureText('M') of the same mono font.
+  // drawColumnRows / drawCentred. The desktop draws into a GC with a mono font; here
+  // the column offsets are measured from the widest cell each column actually holds,
+  // as drawColumnRows does, so the two halves of a table stay flush whatever the
+  // selected level unit's label costs.
   //
   // The Java FftView has a WINDOW_RESTORE toggle (externalBtn) that extracts this
   // THD/IMD table into a separate OS ToolWindow whose ContentPainter is paintDistortion
@@ -1105,11 +1107,24 @@ export class FftView {
     return `Span: ${lo.toFixed(0)} .. ${hi.toFixed(0)} Hz`;
   }
 
-  /** Java FftView.fmtDb - "%7.2f dBV" or "-". Fixed-unit: the level-unit selector covers
-   *  the per-harmonic / per-product rows only; N+D and SNR are ratios against the
-   *  fundamental rather than levels, so a unit switch would not even apply to them. */
+  /** Java "%8.2f" - two decimals, right-aligned in an 8-character field, so the
+   *  decimal points align down a value column. */
+  _fmt8(v) {
+    return v.toFixed(2).padStart(8, ' ');
+  }
+
+  /** Java FftView.fmtDb - fixed-unit cell for the ratio rows (N+D, SNR): both are dB
+   *  ratios against the fundamental, not levels, so the level-unit selector does not
+   *  apply to them. */
   _fmtDb(v) {
-    return Number.isFinite(v) ? `${v.toFixed(2)} dBV` : '-';
+    return Number.isFinite(v) ? `${this._fmt8(v)} dB` : '-';
+  }
+
+  /** Java FftView.fmtUnit - level cell in the table's selected unit (the N row). Same
+   *  8-wide level field as every level+percent cell, so the decimal points align down
+   *  the whole value column. */
+  _fmtUnit(v, unitLabel) {
+    return Number.isFinite(v) ? `${this._fmt8(v)} ${unitLabel}` : '-';
   }
 
   /** Java FftView.levelInDistortionUnit - an absolute level, stored in dBFS, rendered in the
@@ -1135,8 +1150,8 @@ export class FftView {
     return this.prefs ? this.prefs.fftDistortionUnit.get() : 'DBV';
   }
 
-  /** Java FftView.imdPctText - IMD-table percent cell; "---" when the figure is
-   *  NaN (product outside the measurable range). */
+  /** Java FftView.imdPctText - percent-only cell; "---" when the figure is NaN (a
+   *  product outside the measurable range, or a ratio without a level). */
   _imdPctText(pct) {
     return Number.isFinite(pct) ? `${pct.toFixed(8)} %` : '---';
   }
@@ -1145,14 +1160,33 @@ export class FftView {
    *  percent); "---" for a product whose frequency lies outside the measurable range at
    *  this sample rate. */
   _imdRowText(level, pct, unitLabel) {
-    return Number.isFinite(level) ? `${level.toFixed(2)} ${unitLabel}  ${pct.toFixed(8)} %` : '     ---';
+    return Number.isFinite(level) ? `${this._fmt8(level)} ${unitLabel}  ${pct.toFixed(8)} %` : '     ---';
   }
 
-  /** Java FftView.noiseDb - 10·log10(noisePower) + dbvOffset; NaN when noisePower<=0. */
-  _noiseDb(r) {
+  /** Java FftView.noiseDbFs - the integrated noise floor in dBFS; the row converts it
+   *  to the table's selected unit like every harmonic / product level. */
+  _noiseDbFs(r) {
     if (!(r.noisePower > 0)) return NaN;
-    // Analyzed channel's ADC offset (Java FftView:2877 getDbvOffsetDb(getFftChannel())).
-    return 10 * Math.log10(r.noisePower) + this.prefs.getDbvOffsetDb(this.prefs.fftChannel.get());
+    return 10 * Math.log10(r.noisePower);
+  }
+
+  /** Java FftView.ratioDb - a percentage ratio as dB (20·log10(pct/100)); NaN when the
+   *  percentage carries no level (zero / negative / NaN). */
+  _ratioDb(pct) {
+    return pct > 0 ? 20.0 * Math.log10(pct / 100.0) : NaN;
+  }
+
+  /** Java FftView.ratioLevelPctText - summary-ratio cell (THD H2..n, THD+N, IMDpwr,
+   *  TD+N, DFD2, DFD3): the ratio as a level in the selected unit plus the percentage -
+   *  the same two columns the harmonic / product rows carry. The level anchors the ratio
+   *  at refDbFs, the very reference the percentage divides by, so the dB unit reads
+   *  20·log10(pct/100) exactly. Falls back to the bare percentage cell when the level is
+   *  not representable. */
+  _ratioLevelPctText(pct, unit, refDbFs, dbvOff, unitLabel) {
+    const level = this._levelInDistortionUnit(refDbFs + this._ratioDb(pct), refDbFs, unit, dbvOff);
+    return Number.isFinite(level)
+      ? `${this._fmt8(level)} ${unitLabel}  ${pct.toFixed(8)} %`
+      : this._imdPctText(pct);
   }
 
   /** Java FftView.thdNPct - THD+N % from the N+D ratio in dB. */
@@ -1208,14 +1242,38 @@ export class FftView {
     this._outlined(g, text, centreX - w / 2, y, plain);
   }
 
-  /** Java FftView.drawKv - two key/value pairs at independent key-column widths. */
-  drawKv(g, x, y, lKeyW, lKey, lVal, rightColX, rKeyW, rKey, rVal, plain = false) {
-    this._outlined(g, lKey, x, y, plain);
-    this._outlined(g, lVal, x + lKeyW, y, plain);
-    if (rKey != null && rKey !== '') {
-      this._outlined(g, rKey, rightColX, y, plain);
-      this._outlined(g, rVal, rightColX + rKeyW, y, plain);
+  /** Java FftView.drawColumnRows - draws `rows` as four measured columns (key, value,
+   *  key, value): each column's x offset comes from the widest cell it actually holds
+   *  plus a fixed gap (one character after a key column, three between the table
+   *  halves), so the columns sit flush regardless of how the mono "M" cell relates to
+   *  real digit / percent glyph widths. All rows are measured together, so every block
+   *  of a table shares the same offsets. A null row advances y by a small block gap; an
+   *  empty right key skips the right half of its row. Returns the y below the last row. */
+  drawColumnRows(g, rows, xLeft, y, lineH, plain = false) {
+    const w = [0, 0, 0, 0];
+    for (const row of rows) {
+      if (row == null) continue;
+      for (let c = 0; c < row.length; c++) {
+        if (row[c] != null && row[c] !== '') {
+          w[c] = Math.max(w[c], g.measureText(row[c]).width);
+        }
+      }
     }
+    const charW = g.measureText('M').width;
+    const xValL = xLeft + w[0] + charW;
+    const xKeyR = xValL + w[1] + 3 * charW;
+    const xValR = xKeyR + w[2] + charW;
+    for (const row of rows) {
+      if (row == null) { y += 2; continue; }
+      this._outlined(g, row[0], xLeft, y, plain);
+      this._outlined(g, row[1], xValL, y, plain);
+      if (row[2] != null && row[2] !== '') {
+        this._outlined(g, row[2], xKeyR, y, plain);
+        this._outlined(g, row[3], xValR, y, plain);
+      }
+      y += lineH;
+    }
+    return y;
   }
 
   /** Java drawOutlinedText for a left-aligned table cell (top baseline).
@@ -1273,47 +1331,39 @@ export class FftView {
     this._monoMetrics(g, false);
     y += 2;
 
-    // ── Metric rows: N+D / THD, N / THD+N, SNR / ENOB. ──────────────────────
-    const colGap = 2 * charW;
-    const mKeyL = 7 * charW, mValL = 14 * charW, mKeyR = 12 * charW;
-    const mRightColX = xLeft + mKeyL + mValL + colGap;
-    this.drawKv(g, xLeft, y, mKeyL, 'N+D:', `${this._fmtDb(r.thdNDb)} A`,
-        mRightColX, mKeyR, `THD H2..${Math.round(thdMaxH)}:`, `${r.thdPct.toFixed(8)} %`, plain);
-    y += lineH;
-    this.drawKv(g, xLeft, y, mKeyL, 'N:', this._fmtDb(this._noiseDb(r)),
-        mRightColX, mKeyR, 'THD+N:', `${this._thdNPct(r).toFixed(8)} %`, plain);
-    y += lineH;
-    this.drawKv(g, xLeft, y, mKeyL, 'SNR:', this._fmtDb(r.snrDb),
-        mRightColX, mKeyR, 'ENOB:', `${((r.sinadDb - 1.76) / 6.02).toFixed(1)} bits`, plain);
-    y += lineH + 2;
-
-    // ── Harmonics, 2 per row. The % column is r.harmonicPct[i] VERBATIM
-    // (referenced to the analyzer's fundamental - NOT recomputed here). ──────
     // Unit of the absolute-level cells, and the reference the relative unit measures
     // against: the fundamental this table already reports in its header (manual override
     // when set), which is the very level the analyzer divides by for the percentages.
     const tableUnit = this._distortionUnit();
     const unitLabel = this._distortionUnitLabel(tableUnit);
     const refDbFs = fundDbV - dbvOff;
-    // The unit sits inside the value, so the column follows the label's width - a wider
-    // "dBFS" would otherwise push the value into the right-hand key.
-    const hKey = 4 * charW, hVal = (21 + unitLabel.length) * charW;
-    const hRightColX = xLeft + hKey + hVal + colGap;
+
+    // Metric and harmonic rows as ONE measured column set - see drawColumnRows. The
+    // identical cell format keeps the level and percent sub-columns aligned inside the
+    // value columns. The % column is r.harmonicPct[i] VERBATIM (referenced to the
+    // analyzer's fundamental - NOT recomputed here).
+    const rows = [];
+    rows.push(['N+D:', `${this._fmtDb(r.thdNDb)} A`,
+      `THD H2..${Math.round(thdMaxH)}:`,
+      this._ratioLevelPctText(r.thdPct, tableUnit, refDbFs, dbvOff, unitLabel)]);
+    rows.push(['N:', this._fmtUnit(this._levelInDistortionUnit(this._noiseDbFs(r), refDbFs, tableUnit, dbvOff), unitLabel),
+      'THD+N:', this._ratioLevelPctText(this._thdNPct(r), tableUnit, refDbFs, dbvOff, unitLabel)]);
+    rows.push(['SNR:', this._fmtDb(r.snrDb),
+      'ENOB:', `${((r.sinadDb - 1.76) / 6.02).toFixed(1)} bits`]);
+    rows.push(null);   // small gap between the metric and harmonic blocks
     const harmCount = r.harmonicDbFs == null ? 0 : r.harmonicDbFs.length;
     for (let i = 0; i < harmCount; i += 2) {
-      const l = `H${i + 2}:`;
       const lLevel = this._levelInDistortionUnit(r.harmonicDbFs[i], refDbFs, tableUnit, dbvOff);
-      const lv = `${lLevel.toFixed(2)} ${unitLabel} ${r.harmonicPct[i].toFixed(8)} %`;
+      const lv = `${this._fmt8(lLevel)} ${unitLabel}  ${r.harmonicPct[i].toFixed(8)} %`;
       let rkey = '', rval = '';
       if (i + 1 < harmCount) {
         rkey = `H${i + 3}:`;
         const rLevel = this._levelInDistortionUnit(r.harmonicDbFs[i + 1], refDbFs, tableUnit, dbvOff);
-        rval = `${rLevel.toFixed(2)} ${unitLabel}  ${r.harmonicPct[i + 1].toFixed(8)} %`;
+        rval = `${this._fmt8(rLevel)} ${unitLabel}  ${r.harmonicPct[i + 1].toFixed(8)} %`;
       }
-      this.drawKv(g, xLeft, y, hKey, l, lv, hRightColX, hKey, rkey, rval, plain);
-      y += lineH;
+      rows.push([`H${i + 2}:`, lv, rkey, rval]);
     }
-    return y;
+    return this.drawColumnRows(g, rows, xLeft, y, lineH, plain);
   }
 
   /** Java FftView.drawImdTable - dual-tone IMD measurement table.
@@ -1347,43 +1397,34 @@ export class FftView {
     this._monoMetrics(g, false);
     y += 2;
 
-    // ── IMDpwr / TD+N, DFD2 / DFD3. ─────────────────────────────────────────
-    const colGap = 2 * charW;
-    const mKeyL = 8 * charW, mValL = 14 * charW, mKeyR = 7 * charW;
-    const mRight = xLeft + mKeyL + mValL + colGap;
-    this.drawKv(g, xLeft, y, mKeyL, 'IMDpwr:', this._imdPctText(imd.imdPwrPct),
-        mRight, mKeyR, 'TD+N:', this._imdPctText(imd.tdnPct), plain);
-    y += lineH;
-    this.drawKv(g, xLeft, y, mKeyL, 'DFD2:', this._imdPctText(imd.dfd2Pct),
-        mRight, mKeyR, 'DFD3:', this._imdPctText(imd.dfd3Pct), plain);
-    y += lineH + 2;
-
-    // ── dnL / dnH sidebands, two per row. ───────────────────────────────────
-    // The products are stored in dBV; drop the ADC offset to get the measured dBFS the unit
-    // selector works from. The relative unit measures against |F1| + |F2|, the divisor
-    // imd-analyzer uses for every product percentage, floored like it is there so muted
-    // tones cannot divide by zero.
+    // Level unit + reference, shared by the metric AND product rows. The products are
+    // stored in dBV; drop the ADC offset to get the measured dBFS the unit selector works
+    // from. The relative unit measures against |F1| + |F2|, the divisor imd-analyzer uses
+    // for every product percentage, floored like it is there so muted tones cannot divide
+    // by zero.
     const dbvOff = p.getDbvOffsetDb(p.fftChannel.get());
     const tableUnit = this._distortionUnit();
     const unitLabel = this._distortionUnitLabel(tableUnit);
     const refDbFs = 20.0 * Math.log10(Math.max(MIN_REF_VRMS, imd.f1Mag + imd.f2Mag)) - dbvOff;
-    // " -108.42 dBV  0.00045123 %" - follows the label width, as the THD table's harmonic
-    // column does.
-    const dKey = 5 * charW, dVal = (23 + unitLabel.length) * charW;
-    const dRight = xLeft + dKey + dVal + colGap;
+
+    // Metric and product rows as ONE measured column set - see drawColumnRows. The metric
+    // rows carry the same level+percent cell as the dnL/dnH product rows.
+    const rows = [];
+    rows.push(['IMDpwr:', this._ratioLevelPctText(imd.imdPwrPct, tableUnit, refDbFs, dbvOff, unitLabel),
+      'TD+N:', this._ratioLevelPctText(imd.tdnPct, tableUnit, refDbFs, dbvOff, unitLabel)]);
+    rows.push(['DFD2:', this._ratioLevelPctText(imd.dfd2Pct, tableUnit, refDbFs, dbvOff, unitLabel),
+      'DFD3:', this._ratioLevelPctText(imd.dfd3Pct, tableUnit, refDbFs, dbvOff, unitLabel)]);
+    rows.push(null);   // small gap between the metric and product blocks
     for (let k = 2; k <= IMD_MAX_ORDER; k++) {
-      const lKey = `d${k}L:`;
-      const lVal = this._imdRowText(
-        this._levelInDistortionUnit(imd.dnLDbV[k] - dbvOff, refDbFs, tableUnit, dbvOff),
-        imd.dnLPct[k], unitLabel);
-      const rKey = `d${k}H:`;
-      const rVal = this._imdRowText(
-        this._levelInDistortionUnit(imd.dnHDbV[k] - dbvOff, refDbFs, tableUnit, dbvOff),
-        imd.dnHPct[k], unitLabel);
-      this.drawKv(g, xLeft, y, dKey, lKey, lVal, dRight, dKey, rKey, rVal, plain);
-      y += lineH;
+      rows.push([
+        `d${k}L:`,
+        this._imdRowText(this._levelInDistortionUnit(imd.dnLDbV[k] - dbvOff, refDbFs, tableUnit, dbvOff),
+          imd.dnLPct[k], unitLabel),
+        `d${k}H:`,
+        this._imdRowText(this._levelInDistortionUnit(imd.dnHDbV[k] - dbvOff, refDbFs, tableUnit, dbvOff),
+          imd.dnHPct[k], unitLabel)]);
     }
-    return y;
+    return this.drawColumnRows(g, rows, xLeft, y, lineH, plain);
   }
 
   /** Java FftView.paintDistortion (:2975) - the ToolWindow.ContentPainter for the
@@ -1420,21 +1461,27 @@ export class FftView {
     // The value columns follow the unit label's width (drawDistortionTable / drawImdTable),
     // so the natural width does too - a wider "dBFS" must not clip the trailing %.
     const unitLabel = this._distortionUnitLabel(this._distortionUnit());
+    // Width mirrors drawColumnRows' measured layout: widest keys + two worst-case value
+    // cells + the fixed gaps (1 char after each key, 3 between the halves).
+    const worstVal = `${this._fmt8(-9999.99)} ${unitLabel}  ${(99.99999999).toFixed(8)} %`;
     if (r.imd) {
       // Java: rows = F1/F2 + span + optional Δf1/Δf2 + 2 metric + (MAX_ORDER−1) dnL/dnH.
-      const worstVal = `${(-9999.99).toFixed(2)} ${unitLabel} ${(99.99999999).toFixed(8)} %`;
-      const contentW = EXT_LEFT_PAD + (35 + unitLabel.length) * charW + g.measureText(worstVal).width + 34;
+      const contentW = EXT_LEFT_PAD
+        + g.measureText('IMDpwr:').width + charW
+        + g.measureText(worstVal).width + 3 * charW
+        + g.measureText('TD+N:').width + charW
+        + g.measureText(worstVal).width + 16;
       const clk = this._genActive() && p && p.fftFundFromGenerator.get();
       const rows = 2 + 1 + (clk ? 2 : 0) + 2 + (IMD_MAX_ORDER - 1);
       const contentH = EXT_LEFT_PAD + rows * lineH + 8;
       return { width: Math.ceil(contentW), height: Math.ceil(contentH) };
     }
-    // THD: measure the worst-case harmonic row (Java :2946 - measuring the whole row
-    // removes the mono "M"-cell under-count that clipped the trailing %).
-    const widestRow = `H10: ${this._signed(-9999.99, 2)} ${unitLabel} ${(99.99999999).toFixed(8)} %  `
-      + `H11: ${this._signed(-9999.99, 2)} ${unitLabel} ${(99.99999999).toFixed(8)} %`;
-    const rowW = g.measureText(widestRow).width;
-    const contentW = EXT_LEFT_PAD + rowW + 32;
+    const keyRWorst = `THD H2..${Math.round(p ? p.fftThdMaxHarmonic.get() : 9)}:`;
+    const contentW = EXT_LEFT_PAD
+      + g.measureText('H10:').width + charW
+      + g.measureText(worstVal).width + 3 * charW
+      + g.measureText(keyRWorst).width + charW
+      + g.measureText(worstVal).width + 16;
     const maxH = Math.max(9, p ? p.fftCalcMaxHarmonic.get() : 9);
     const harmRows = Math.trunc(((maxH - 1) + 1) / 2);
     const clockRow = (p && p.fftFundFromGenerator.get()) ? lineH : 0;
