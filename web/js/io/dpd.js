@@ -94,11 +94,15 @@ export function writeHarmonicDpd(comp, extraHeaderLines, fundamentalHz, fundamen
     + `${sciDe(0.0, 10)};${sciDe(-1.0, 10)}`);
   for (let h = 0; h < comp.maxHarmonics; h++) {
     if (comp.accRe[h] === 0.0 && comp.accIm[h] === 0.0) continue;
+    // Same de-embed as toGeneratorCorrections, and the same plant division:
+    // ÷ G(f_h), ÷ chain H(f_h), ADC dBFS -> Vrms, ratio to the DAC fundamental.
+    // A saved file must reproduce what the generator was actually running.
+    const z = comp.correctedPhasor(h);
     const cal = calResponseAt(comp.hFreqs[h]);
-    const magDe = Math.hypot(comp.accRe[h], comp.accIm[h]) / (cal[0] > 0.0 ? cal[0] : 1.0);
+    const magDe = Math.hypot(z[0], z[1]) / (cal[0] > 0.0 ? cal[0] : 1.0);
     const vH = magDe * adcFsVoltageRms;                          // de-embedded harmonic, abs Vrms
     const amp = amplitudeVrms > 0.0 ? vH / amplitudeVrms : 0.0;
-    const phase = Math.atan2(comp.accIm[h], comp.accRe[h]) - cal[1];
+    const phase = Math.atan2(z[1], z[0]) - cal[1];
     const re = amp * Math.cos(phase), im = amp * Math.sin(phase);
     const phaseDeg = radToDeg(phase);
     const ampPct = amp * 100.0;
@@ -147,11 +151,14 @@ export function writeIntermodDpd(comp, extraHeaderLines, f1Hz, f2Hz, fundamental
   out.push('a;b;frequency_hz;amplitude_dbv;amplitude_pct;phase_deg;re;im');
   for (let g = 0; g < comp.accRe.length; g++) {
     if (comp.accRe[g] === 0.0 && comp.accIm[g] === 0.0) continue;
-    const cal = comp.coefB[g] === 0 ? [1.0, 0.0] : calResponseAt(comp.freqHz[g]);
-    const magDe = Math.hypot(comp.accRe[g], comp.accIm[g]) / (cal[0] > 0.0 ? cal[0] : 1.0);
+    // Same de-embed as toGeneratorCorrections, and the same plant division - a
+    // saved file must reproduce what the generator was actually running.
+    const z = comp.correctedPhasor(g);
+    const cal = comp.deEmbedResponse(g, comp.freqHz[g], calResponseAt);
+    const magDe = Math.hypot(z[0], z[1]) / (cal[0] > 0.0 ? cal[0] : 1.0);
     const vP = magDe * adcFsVoltageRms;
     const amp = dacFundamentalVrms > 0.0 ? vP / dacFundamentalVrms : 0.0;
-    const phase = Math.atan2(comp.accIm[g], comp.accRe[g]) - cal[1];
+    const phase = Math.atan2(z[1], z[0]) - cal[1];
     const re = amp * Math.cos(phase), im = amp * Math.sin(phase);
     const phaseDeg = radToDeg(phase);
     const ampPct = amp * 100.0;

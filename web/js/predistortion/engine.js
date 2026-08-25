@@ -58,6 +58,46 @@ const POLL_MS = 150;
 /** Settle after a live correction change before resetting statistics. */
 const APPLY_SETTLE_MS = 200;
 
+/** FFT frames each of the two probe sub-rounds averages. The probe partial arrives
+ *  tens of dB above the noise, so the measurement needs no depth - this is only
+ *  enough to average out a single disturbed frame, which keeps the once-per-training
+ *  probe short against the rounds that follow. */
+const PROBE_AVERAGES = 4;
+/** Highest harmonic the probe measures. The correction file runs to H9, and every
+ *  harmonic above it keeps the identity plant. */
+const PROBE_MAX_HARMONIC = 9;
+/** Probe partial amplitude, dB relative to the DAC fundamental - the same for a
+ *  harmonic and for an intermod product. High enough that its arrival stands far
+ *  above the noise floor and far above the DUT's own distortion (so the difference
+ *  of the two sub-rounds is the probe alone), low enough - 0.1% of the fundamental
+ *  each - that neither the DAC nor the ADC is stressed and the chain stays in the
+ *  same small-signal regime the corrections live in. The dual-tone grid carries the
+ *  most partials (the two tones' harmonics plus the low-order intermod comb, of the
+ *  order of twenty), which even added coherently stays a couple of percent of the
+ *  fundamental - so the products need no amplitude of their own. */
+const PROBE_AMPLITUDE_DB = -60.0;
+/** Phase step between consecutive probe partials. Any known phase would measure the
+ *  plant; stepping them apart means a partial delivered to the wrong DDS slot shows
+ *  up as a plant phase that does not fit the measured pattern instead of hiding
+ *  behind a common phase. */
+const PROBE_PHASE_STEP_DEG = 45.0;
+/** dB the probe's arrival must stand above the frame's noise floor before its plant
+ *  is trusted. At 20 dB a noise phasor can turn the measured arrival by at most
+ *  asin(0.1) = 5.7 degrees - an order below the per-harmonic phase error the plant
+ *  exists to remove - and a harmonic that misses it keeps the identity plant rather
+ *  than inverting noise. */
+const PROBE_CLEARANCE_DB = 20.0;
+/** Extra averages a DUAL-TONE probe sub-round may spend waiting for the analyzer to
+ *  publish its de-rotated intermod-product grid. That grid is a per-tick decision,
+ *  and a tick taken right after the statistics re-anchor the probe itself triggers -
+ *  or after a discontinuity re-sync - can carry none of it. A plant measured from
+ *  such a frame comes out HALF measured: the b=0 harmonics still read out of the
+ *  harmonic table while every mixed product silently keeps the identity plant, so
+ *  the whole a*f1 + b*f2 comb stays uncorrected with nothing marking the loss. A
+ *  handful of further averages costs nothing against the rounds that follow; if the
+ *  grid never appears the probe measures what it can, exactly as before. */
+const PROBE_GRID_EXTRA_AVG = 8;
+
 /**
  * Host the engine drives - the browser-side counterpart of the desktop's
  * GeneratorController / FftController / FftView / Preferences / clock, supplied by
@@ -107,6 +147,10 @@ export class PredistortionEngine {
     this.stopRequested = false;
     /** Ends only the CURRENT averaging round early (the loop continues). */
     this.roundStopRequested = false;
+    /** True only between the probe partials reaching the generator and their
+     *  removal. The abort path clears the generator only while this is set, so a
+     *  normal finish leaves the round's correction where the wizard expects it. */
+    this._probeActive = false;
 
     /** Live phase, polled by the wizard timer. */
     this.phase = Phase.IDLE;
@@ -180,6 +224,11 @@ export class PredistortionEngine {
         if (this.stopRequested) { reason = StopReason.USER_STOP; return; }
         // tone did not stabilise within ALIGN_TIMEOUT_MS - proceed anyway.
       }
+      // Measure what the chain does with a commanded correction BEFORE correcting
+      // anything, so every round is built through the measured plant instead of
+      // through the assumption of a perfect one - at the harmonics for a single
+      // tone, at the whole product grid for two.
+      await this._runProbe(harm, imd, maxH);
       await this.host.resetStatistics();                      // fresh baseline for round 0
 
       let round = 0;
@@ -245,6 +294,16 @@ export class PredistortionEngine {
       console.error('Predistortion tuning failed:', ex);
       if (typeof this.host.onError === 'function') this.host.onError(ex);
     } finally {
+      // A stop or a failure between applying the probe partials and removing them
+      // would otherwise leave them on the generator. Guarded because this teardown
+      // runs after the reason is already decided: a failing clear must not replace
+      // it, nor keep the run's outcome from reaching the wizard.
+      if (this._probeActive) {
+        try { await this.host.clearCompensation(); } catch (e) {
+          console.error('Predistortion: the probe partials could not be cleared', e);
+        }
+        this._probeActive = false;
+      }
       this.phase = Phase.FINISHED;
       const hasResult = this.dualTone
         ? (this.bestIntermod != null && this.bestIntermod.hasCorrections())
@@ -312,6 +371,91 @@ export class PredistortionEngine {
     const r = this.host.readResult();
     if (r == null) return NaN;
     return this.dualTone ? this._imdPct(r) : r.thdPct;
+  }
+
+  /**
+   * Measures the plant transfer once, before round 0, and installs it in the live
+   * accumulator: (1) a short BASELINE sub-round with nothing applied, (2) the same
+   * length again with known partials applied through the very generator path the
+   * corrections use - at H2..H9 for a single tone, at the whole a*f1 + b*f2 product
+   * grid for two - (3) the difference per harmonic or product, where the DUT's own
+   * distortion and the noise cancel, divided by the arrival the command should have
+   * produced. The partials are removed again before round 0, so the loop starts
+   * from the raw DAC exactly as it did before.
+   *
+   * Silently leaves the identity plant when a sub-round is cut short by a stop: an
+   * unmeasured plant must never become a guessed one.
+   *
+   * @param {?HarmonicCompensation} harm live single-tone accumulator (null for dual)
+   * @param {?IntermodCompensation} imd  live dual-tone accumulator (null for single)
+   * @param {number} maxH accumulator harmonic slots
+   */
+  async _runProbe(harm, imd, maxH) {
+    this.phase = Phase.COLLECTING;
+    await this.host.resetStatistics();
+    const baseline = await this._probeSubRound(imd);
+    if (baseline == null) return;
+
+    const ampRatio = Math.pow(10.0, PROBE_AMPLITUDE_DB / 20.0);
+    const phaseStep = PROBE_PHASE_STEP_DEG * (Math.PI / 180.0);
+    let dualCommand = null;
+    let probeAmp = null;                   // accumulator-indexed, 0 = not probed
+    let probePhi = null;
+    if (this.dualTone) {
+      // The accumulator owns the product grid, so it builds the command: the same
+      // object goes to the generator and to the measurement.
+      dualCommand = imd.probeCommand(ampRatio, phaseStep);
+      await this.host.applyDualToneCompensation(dualCommand.ampRatios, dualCommand.coefA,
+        dualCommand.coefB, dualCommand.phiInits);
+    } else {
+      const count = Math.min(maxH, PROBE_MAX_HARMONIC - 1);
+      probeAmp = new Float64Array(maxH);
+      probePhi = new Float64Array(maxH);
+      const amps = new Float64Array(count);          // generator-indexed
+      const nums = new Int32Array(count);
+      const phis = new Float64Array(count);
+      for (let h = 0; h < count; h++) {
+        probeAmp[h] = ampRatio;
+        probePhi[h] = h * phaseStep;
+        amps[h] = ampRatio;
+        nums[h] = h + 2;
+        phis[h] = probePhi[h];
+      }
+      await this.host.applyCompensation(amps, nums, phis);
+    }
+    this._probeActive = true;
+    await this._sleep(APPLY_SETTLE_MS);
+    await this.host.resetStatisticsAfterSignalChange();
+    const probed = await this._probeSubRound(imd);
+    await this.host.clearCompensation();
+    this._probeActive = false;
+    await this._sleep(APPLY_SETTLE_MS);
+    if (probed == null) return;
+
+    const left = probed.channelLeft;
+    if (this.dualTone) {
+      imd.setPlant(imd.measurePlant(baseline, probed, dualCommand,
+        f => this._calResponseAt(f, left), PROBE_CLEARANCE_DB));
+    } else {
+      harm.setPlant(harm.measurePlant(baseline, probed, probeAmp, probePhi,
+        f => this._calResponseAt(f, left), PROBE_CLEARANCE_DB));
+    }
+  }
+
+  /** One probe sub-round - a fixed, short average, sized by nothing but
+   *  PROBE_AVERAGES (no residual to grow against yet). A dual-tone sub-round
+   *  additionally keeps averaging while the frame it ends on carries no de-rotated
+   *  intermod product, so the plant is measured off the same kind of frame a
+   *  round's correction is - see PROBE_GRID_EXTRA_AVG. */
+  async _probeSubRound(imd) {
+    let r = await this._collectUntilAverages(PROBE_AVERAGES, NaN, NaN, PROBE_AVERAGES);
+    if (!this.dualTone) return r;
+    for (let extra = 1; extra <= PROBE_GRID_EXTRA_AVG
+        && r != null && !imd.carriesProducts(r); extra++) {
+      const target = PROBE_AVERAGES + extra;
+      r = await this._collectUntilAverages(target, NaN, NaN, target);
+    }
+    return r;
   }
 
   /** Blocks until the measured fundamental is stable (consecutive frames agree
