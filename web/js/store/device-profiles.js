@@ -37,6 +37,11 @@ import { DeviceChannelMode } from './device-enums.js';
 import { quarantineStoreEntry } from './store-quarantine.js';
 
 const SQRT2 = Math.sqrt(2.0);
+/** Factory-default full-scale RMS a damaged range row falls back to
+ *  (Preferences.DEFAULT_ADC_FS_VRMS). Held locally, like SQRT2 above, so this
+ *  store stays free of a static Preferences import - the live Preferences is
+ *  constructor-injected, not reached through the module. */
+const DEFAULT_ADC_FS_VRMS = 1.0;
 /** Separator of the device->card binding key for a device on a server (Java
  *  Preferences.BINDING_KEY_SEPARATOR). See {@link DeviceProfileStore#deviceBindingKey}. */
 const BINDING_KEY_SEPARATOR = '/';
@@ -1144,9 +1149,26 @@ export class DeviceProfileStore {
   /** Emits one range row - fsVrms ALWAYS the { left, right } pair; calibrated only
    *  when true (Preferences.writeDeviceRange). */
   _writeRange(r) {
-    const out = { label: r.label, fsVrms: { left: r.fsLeft, right: r.fsRight } };
+    const out = { label: r.label, fsVrms: {
+      left: this._safeRangeFs(r.fsLeft, r.label, 'left'),
+      right: this._safeRangeFs(r.fsRight, r.label, 'right'),
+    } };
     if (r.calibrated) out.calibrated = true;
     return out;
+  }
+
+  /** The full-scale a range row is stored with / read back with. A full scale is
+   *  the divisor of every level computation, so a zero, negative or NaN value turns
+   *  each reading into an infinity and renders whole plots empty - the factory
+   *  default stands in, and the substitution is reported as an ERROR so a damaged
+   *  card store is never silent. This store is the single owner of the invariant:
+   *  every fsVrms that enters or leaves the document passes through here
+   *  (Preferences.safeRangeFs). */
+  _safeRangeFs(v, rangeLabel, side) {
+    if (isNum(v) && v > 0.0) return v;
+    console.error(`Range '${rangeLabel}': ${side} full-scale is ${v} Vrms `
+      + `- using the ${DEFAULT_ADC_FS_VRMS} Vrms default`);
+    return DEFAULT_ADC_FS_VRMS;
   }
 
   /** Reads one profile, or null for a garbled entry with no usable name
@@ -1216,11 +1238,16 @@ export class DeviceProfileStore {
     r.label = m.label;
     const fs = m.fsVrms;
     if (isNum(fs)) {
-      r.fsLeft = fs;
-      r.fsRight = fs;
+      r.fsLeft = this._safeRangeFs(fs, m.label, 'left');
+      r.fsRight = this._safeRangeFs(fs, m.label, 'right');
     } else if (fs && typeof fs === 'object') {
-      if (isNum(fs.left)) r.fsLeft = fs.left;
-      if (isNum(fs.right)) r.fsRight = fs.right;
+      r.fsLeft = this._safeRangeFs(fs.left, m.label, 'left');
+      r.fsRight = this._safeRangeFs(fs.right, m.label, 'right');
+    } else {
+      console.error(`Range '${m.label}': fsVrms is missing `
+        + `- using the ${DEFAULT_ADC_FS_VRMS} Vrms default for both channels`);
+      r.fsLeft = DEFAULT_ADC_FS_VRMS;
+      r.fsRight = DEFAULT_ADC_FS_VRMS;
     }
     if (typeof m.calibrated === 'boolean') r.calibrated = m.calibrated;
     if (typeof m.displayLabel === 'string') r.displayLabel = m.displayLabel;
