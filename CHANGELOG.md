@@ -15,6 +15,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The JavaSound format probe logs a start and a finish line per device and
   direction,** with format count and elapsed time - a probe that never returns
   names its device by the start line without a twin.
+- **The pre-distortion wizard measures the bench's own transfer before it
+  corrects.** The chain from the DAC through the notch filter to the ADC delays
+  and attenuates every injected correction, and the phase cost grows with the
+  harmonic number - far enough off and a correction feeds its harmonic instead
+  of cancelling it, which is how a training could diverge on one bench and
+  converge on another. Ahead of the first round the wizard now plays small test
+  partials at the harmonic - in dual-tone mode, the intermodulation-product -
+  frequencies through the exact path the corrections take, reads each one's
+  attenuation and phase rotation, and pre-rotates every subsequent correction
+  by the inverse. The probe takes seconds, repeats at every training start, and
+  removes the bench's delay as a reason to diverge. Desktop and web alike.
+- **The theory chapters explain measurement confidence and the bench delay.**
+  The FFT chapter now states what a harmonic reading is worth at a given
+  clearance above the averaged noise floor - 2-4 dB for a rough value, 9 dB for
+  ±3 dB, 19 dB for ±1 dB, and at the floor an upper bound and nothing more -
+  and why weak harmonics appear to wander or grow during a long average. The
+  pre-distortion chapter explains the bench-delay measurement, and why the
+  loop cannot even hold the ADC's own distortion level without the notch - two
+  distortion stages, one place to correct. All help languages.
 
 ### Changed
 
@@ -33,7 +52,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   switch the GL scope needs no longer depends on the GPU preference.
 - **The frequency-response lead-in floor drops from 50 ms to 5 ms;** values in
   between no longer snap back to 50 ms and no longer fail the sweep. The
-  command-line interface keeps its 0.05 s floor.
+  command-line interface keeps its 0.05 s floor. Desktop and web alike.
+- **The pre-distortion wizard recommends the Blackman-Harris 7 window and a
+  generic passive notch.** The ultra-wide HFT248D folds about twice BH7's
+  noise bandwidth into every harmonic lobe, so near the averaged floor its
+  readings need about twice the averages for the same confidence - with the
+  fundamental already notched away, BH7's side-lobe margin is enough and the
+  round-end figures hold steadier. The introduction also asks for a passive
+  notch filter generally, not the twin-T specifically.
+- **The distortion tables align as measured columns and read every level in
+  the selected unit.** The noise line converts with the harmonics instead of
+  staying dBV, the ratio rows (THD, THD+N, IMDpwr, TD+N, DFD2/3) carry the
+  level before the percentage, N+D and SNR read plain dB, and each column is
+  as wide as the widest cell it actually holds. Desktop and web alike.
 
 ### Fixed
 
@@ -61,11 +92,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and so read the old ones. It now runs after the commit; both apply on OK.
 - **Tune-notch: the Amplitude field moved the trace without moving the
   stimulus.** The field now pushes the level into the running generator, and
-  the trace returns measured at the level that is actually playing.
+  the trace returns measured at the level that is actually playing. Desktop
+  and web alike.
 - **A card range with no usable full scale is repaired instead of carried:** a
   value not above zero becomes the 1.0 V RMS factory default - on the card
   file read and written, and on the card form exchanged with a server - with
-  an error naming the range and channel.
+  an error naming the range and channel. Desktop and web alike.
+- **Dual-tone corrections arrived at the wrong strength - exactly double at an
+  equal split.** The generator emitted the two tones at their weights but
+  subtracted the correction partials at full scale, so a commanded correction
+  ratio arrived multiplied by one over the first tone's weight. The correction
+  now scales with the tone it corrects, pinned by rendered-sample tests at
+  three splits. A dual-tone .dpd trained before the fix plays at half
+  strength - retrain it. Desktop and web alike.
+- **Switching to a compensated form while playing engaged nothing.** With the
+  generator running, choosing the compensated sine neither restarted nor
+  loaded the stored corrections - only a stop/start applied them. The live
+  switch now loads the stored .dpd exactly as a start does; a switch within a
+  compensated pair is a glitch-free hot swap, and switching the compensation
+  off keeps the tables so a toggle back is instant.
+- **A quiet capture's bursty noise could trip the time-discontinuity
+  detector.** The rejection threshold was the larger of a noise term and a
+  twentieth of the signal's amplitude, so on a low-level capture - where the
+  noise does not shrink with the signal - noise bursts crossed it. The
+  threshold is now the noise term plus a fifth of the amplitude: noise alone
+  can never reach it, while a real jump past that boundary always does.
+  Desktop and web alike.
+- **The pre-distortion wizard's ratio readouts wore dBV.** SNR, SINAD, THD+N
+  and the dual-tone D+N are ratios against the fundamental and now read plain
+  dB; only the fundamental and noise-floor levels keep dBV. Desktop and web
+  alike.
+- **The scope's trace and its edge labels could disagree at narrow windows.**
+  The trace was drawn from a whole-sample count while the labels read the
+  exact time-per-division product; the displayed window is now real-valued end
+  to end and quantised only where an array read forces it. Desktop and web
+  alike.
+- **A stopped oscilloscope changed under later events.** Hold and freeze now
+  follow the capture clock, so windowed statistics and AC-coupling means age
+  only while samples actually arrive; held measurement rows are pinned, a
+  trigger or signal edit no longer blanks a held trace, and a frozen snapshot
+  keeps its absolute sample coordinates. Desktop and web alike.
+- **The desktop scope's sample dots sit on fractional coordinates.** At a zoom
+  wide enough to show them they sit on their samples instead of on the nearest
+  whole pixel - as the browser version already did.
+- **Long tooltips wrap.** Tooltips do not wrap by themselves; every long
+  tooltip now carries explicit line breaks, in every language, desktop and
+  web.
+- **A failing FFT analysis pass names itself in the log** instead of vanishing
+  with its tick.
 
 ## [1.2.1] - 2026-08-16
 
