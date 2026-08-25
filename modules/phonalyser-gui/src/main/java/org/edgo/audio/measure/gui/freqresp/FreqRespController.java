@@ -146,7 +146,7 @@ public final class FreqRespController {
         Preferences prefs = Preferences.instance();
         int sr = Math.max(1, prefs.current().getInputSampleRate());
         long leadIn   = Math.round(prefs.getFreqRespLeadInSec() * sr);
-        long tail     = leadIn;
+        long tail     = Math.round(FreqRespConstants.SWEEP_MIN_SEC * sr);
         long sweep    = prefs.getFreqRespFftSize() - leadIn - tail;
         long minSweep = Math.round(FreqRespConstants.SWEEP_MIN_SEC * sr);
         if (sweep < minSweep) sweep = minSweep;
