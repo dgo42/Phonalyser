@@ -40,30 +40,29 @@
 
   <div class="shot">
     <img src="img/dac-predistortion-wizard.png" alt="DAC-Vorverzerrungsassistent"/>
-    <svg class="callouts" viewBox="0 0 693 920" preserveAspectRatio="none"
+    <svg class="callouts" viewBox="0 0 600 822" preserveAspectRatio="none"
          xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
       <defs><marker id="dpdca" viewBox="0 0 10 10" refX="9" refY="5"
           markerWidth="7" markerHeight="7" orient="auto">
         <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/></marker></defs>
-      <line x1="290" y1="351" x2="168" y2="351" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
-      <line x1="270" y1="380" x2="190" y2="380" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
-      <line x1="300" y1="690" x2="100" y2="690" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
-      <line x1="505" y1="857" x2="420" y2="857" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
-      <line x1="180" y1="893" x2="218" y2="893" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
-      <circle cx="673" cy="20" r="13" fill="#c33"/>
-      <text x="673" y="25" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
-      <circle cx="290" cy="351" r="13" fill="#c33"/>
-      <text x="290" y="356" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
-      <circle cx="270" cy="380" r="13" fill="#c33"/>
-      <text x="270" y="385" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
-      <circle cx="620" cy="495" r="13" fill="#c33"/>
-      <text x="620" y="500" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
-      <circle cx="300" cy="690" r="13" fill="#c33"/>
-      <text x="300" y="695" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
-      <circle cx="505" cy="857" r="13" fill="#c33"/>
-      <text x="505" y="862" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
-      <circle cx="180" cy="893" r="13" fill="#c33"/>
-      <text x="180" y="898" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
+      <line x1="384" y1="313" x2="348" y2="313" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <line x1="174" y1="336" x2="133" y2="336" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <line x1="119" y1="566" x2="80" y2="566" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <line x1="231" y1="794" x2="245" y2="794" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <circle cx="578" cy="66" r="13" fill="#c33"/>
+      <text x="578" y="71" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <circle cx="400" cy="313" r="13" fill="#c33"/>
+      <text x="400" y="318" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <circle cx="190" cy="336" r="13" fill="#c33"/>
+      <text x="190" y="341" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+      <circle cx="550" cy="425" r="13" fill="#c33"/>
+      <text x="550" y="430" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
+      <circle cx="135" cy="566" r="13" fill="#c33"/>
+      <text x="135" y="571" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
+      <circle cx="270" cy="707" r="13" fill="#c33"/>
+      <text x="270" y="712" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
+      <circle cx="215" cy="794" r="13" fill="#c33"/>
+      <text x="215" y="799" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
     </svg>
   </div>
   <ol class="features">
@@ -72,8 +71,8 @@
         große, entgegengesetzte Korrektur zurückführen, jede Runde
         wiederholen.</li>
     <li><b>Statuszeile.</b>  Die laufende Phase: den Ton ausrichten, eine Runde
-        mitteln, die Korrektur anwenden oder einschwingen - hier <em>Ziel-THD
-        erreicht</em>.</li>
+        mitteln, die Korrektur anwenden oder einschwingen - hier <em>Runde 4
+        mittelt</em>.</li>
     <li><b>FFT-Einstellungen.</b>  Größe, Abtastrate und Fenster,
         schreibgeschützt aus dem <a href="fft.html">FFT</a>-Bereich
         übernommen.</li>
@@ -102,6 +101,13 @@
      BH7-Fenster und lassen die Netzunterdrückung aus, und treiben einen
      sauberen Ton einige dB unter dem Vollausschlag mit auf einen Bin
      eingerasteter Grundwelle.</p>
+  <p>Beim Druck auf <b>Start</b> vermisst die Schleife zuerst die Messkette
+     selbst: zwei kurze Vorrunden auf kleinem Pegel schicken Testpartialtöne
+     durch genau den Pfad, den die Korrekturen nehmen, und lesen für jeden
+     Abschwächung und Phasendrehung, sodass jede spätere Korrektur zeitrichtig
+     ankommt.  Siehe
+     <a href="theory/dac-predistortion.html#delay">Theorie ▸ die Verzögerung
+     der Messkette</a>.</p>
 
   <h2 id="dpd-controls">Steuerelemente</h2>
   <table class="controls">
@@ -157,8 +163,9 @@
      ein als eine schnelle frühe - und fällt zur roten Ziellinie hin.</p>
   <p>Ein Block <b>Fortschritt</b> listet die Live-Werte auf.  Für einen Einzelton
      sind das Rundennummer, die aktuelle und die letzte Runden-THD, die bisher
-     beste THD, die laufende Mittelungszahl sowie THD+N, SNR, SINAD, Grundwelle
-     und Grundrauschen (dBV).  Bei einem Zweiton-Signal minimiert die Schleife
+     beste THD, die laufende Mittelungszahl sowie THD+N, SNR und SINAD als
+     reine dB-Verhältnisse gegen die Grundwelle, dazu die Pegel von Grundwelle
+     und Grundrauschen in dBV.  Bei einem Zweiton-Signal minimiert die Schleife
      die Intermodulation, sodass die THD-Werte durch IMD, beste IMD und D+N
      ersetzt werden.</p>
 

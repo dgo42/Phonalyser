@@ -39,30 +39,29 @@
 
   <div class="shot">
     <img src="img/dac-predistortion-wizard.png" alt="Майстер предспотворення ЦАП"/>
-    <svg class="callouts" viewBox="0 0 693 920" preserveAspectRatio="none"
+    <svg class="callouts" viewBox="0 0 600 822" preserveAspectRatio="none"
          xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
       <defs><marker id="dpdca" viewBox="0 0 10 10" refX="9" refY="5"
           markerWidth="7" markerHeight="7" orient="auto">
         <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/></marker></defs>
-      <line x1="330" y1="331" x2="210" y2="331" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
-      <line x1="255" y1="360" x2="175" y2="360" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
-      <line x1="300" y1="690" x2="90" y2="690" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
-      <line x1="505" y1="857" x2="420" y2="857" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
-      <line x1="150" y1="893" x2="182" y2="893" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
-      <circle cx="673" cy="20" r="13" fill="#c33"/>
-      <text x="673" y="25" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
-      <circle cx="330" cy="331" r="13" fill="#c33"/>
-      <text x="330" y="336" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
-      <circle cx="255" cy="360" r="13" fill="#c33"/>
-      <text x="255" y="365" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
-      <circle cx="620" cy="475" r="13" fill="#c33"/>
-      <text x="620" y="480" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
-      <circle cx="300" cy="690" r="13" fill="#c33"/>
-      <text x="300" y="695" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
-      <circle cx="505" cy="857" r="13" fill="#c33"/>
-      <text x="505" y="862" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
-      <circle cx="150" cy="893" r="13" fill="#c33"/>
-      <text x="150" y="898" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
+      <line x1="384" y1="313" x2="348" y2="313" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <line x1="199" y1="336" x2="158" y2="336" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <line x1="117" y1="566" x2="78" y2="566" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <line x1="221" y1="794" x2="234" y2="794" stroke="#c33" stroke-width="2.5" marker-end="url(#dpdca)"/>
+      <circle cx="578" cy="66" r="13" fill="#c33"/>
+      <text x="578" y="71" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <circle cx="400" cy="313" r="13" fill="#c33"/>
+      <text x="400" y="318" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <circle cx="215" cy="336" r="13" fill="#c33"/>
+      <text x="215" y="341" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+      <circle cx="550" cy="425" r="13" fill="#c33"/>
+      <text x="550" y="430" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
+      <circle cx="133" cy="566" r="13" fill="#c33"/>
+      <text x="133" y="571" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
+      <circle cx="270" cy="707" r="13" fill="#c33"/>
+      <text x="270" y="712" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
+      <circle cx="205" cy="794" r="13" fill="#c33"/>
+      <text x="205" y="799" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
     </svg>
   </div>
   <ol class="features">
@@ -70,8 +69,8 @@
         замкнений цикл - виміряти гармоніки, подати назад рівну й протилежну
         корекцію, повторювати щораунду.</li>
     <li><b>Рядок стану.</b>  Поточна фаза: вирівнювання тону, усереднення
-        раунду, застосування корекції чи усталення - тут <em>Цільовий THD
-        досягнуто</em>.</li>
+        раунду, застосування корекції чи усталення - тут <em>усереднення
+        раунду 4</em>.</li>
     <li><b>Налаштування FFT.</b>  Розмір, частота дискретизації та вікно,
         успадковані лише для читання з <a href="fft.html">FFT</a>-панелі.</li>
     <li><b>Графік збіжності.</b>  Спотворення кожного завершеного раунду на
@@ -97,6 +96,12 @@
      та увімкненим FLL; для найглибшого рівня шуму використовуйте вікно BH7 і
      лишіть придушення мережі вимкненим, і подавайте чистий тон на кілька dB
      нижче повної шкали з основною частотою, прив'язаною до біна.</p>
+  <p>Після натискання <b>Старт</b> цикл спершу вимірює сам тракт: два короткі
+     передраунди на малому рівні посилають тестові парціальні тони через той
+     самий шлях, яким ідуть корекції, і зчитують для кожного послаблення й
+     обертання фази, тож кожна наступна корекція прибуває вчасно.  Див.
+     <a href="theory/dac-predistortion.html#delay">Теорія ▸ затримка
+     тракту</a>.</p>
 
   <h2 id="dpd-controls">Елементи керування</h2>
   <table class="controls">
@@ -146,8 +151,9 @@
      цілі.</p>
   <p>Блок <b>Поступ</b> перелічує живі показники.  Для одного тону це номер
      раунду, поточний THD і THD останнього раунду, найкращий THD дотепер,
-     поточний лічильник усереднень, а також THD+N, SNR, SINAD, основна частота та
-     рівень шуму (dBV).  Для двотонального сигналу цикл мінімізує інтермодуляцію,
+     поточний лічильник усереднень, а також THD+N, SNR і SINAD як чисті
+     відношення в dB до основної частоти, з рівнями основної частоти та шуму
+     в dBV.  Для двотонального сигналу цикл мінімізує інтермодуляцію,
      тож показники THD замінюються на IMD, найкращий IMD та D+N.</p>
 
   <div class="note">Якщо останні раунди перестають покращувати THD, не досягнувши

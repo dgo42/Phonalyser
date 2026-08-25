@@ -661,8 +661,43 @@
      der Grundton, unten in der Nullstelle, ist empfindlich. Der THD-Messwert bleibt
      dann stabil, egal wie die Kerbe driftet.</p>
 
+  <h2 id="confidence">Messvertrauen nahe am Grundrauschen</h2>
+  <p>Eine Harmonischen-Ablesung ist nur so vertrauenswürdig wie ihr Abstand
+     über dem kohärenten Grundrauschen.  Daran führt kein Weg vorbei - nicht
+     mit einem anderen Fenster, nicht mit irgendeiner alternativen Auswertung:
+     die Statistik der Summe aus Harmonischer und Rauschen bindet jede Methode
+     gleichermaßen.  Als Faustregel: schon 2-4 dB über dem Grundrauschen
+     ergeben einen halbwegs vertrauenswürdigen Wert; etwa 9 dB darüber ist die
+     Harmonische auf ±3 dB bekannt, etwa 19 dB darüber auf ±1 dB.  Eine
+     Harmonische auf oder unter dem Grundrauschen erlaubt nur eine ehrliche
+     Aussage: sie ist höchstens so groß wie der Pegel des Grundrauschens.</p>
+  <p>Das erklärt zwei Effekte, die jede tiefe Messung zeigt.  Erstens scheinen
+     Harmonische nahe am Grundrauschen zu <em>wandern</em> - sie tauchen
+     innerhalb weniger Mittelungen um viele dB ab und wieder auf, und die
+     Harmonischen wechseln sich dabei ab.  Nichts im Signal bewegt sich; die
+     Ablesung ist schlicht die Vektorsumme einer kleinen Harmonischen und des
+     bereits gemittelten Rauschens auf der Frequenz dieser Harmonischen, und
+     nahe der Auslöschung werfen kleine Änderungen den dB-Wert enorm herum.
+     Zweitens scheinen manche Harmonische während langer Mittelung zu
+     <em>wachsen</em>.  In Wahrheit passiert das Gegenteil: das Grundrauschen
+     zerfällt unter ihnen, zuvor begrabene Harmonische werden messbar, und
+     einmal frei vom Grundrauschen stabilisieren sie sich auf ihrem echten
+     Pegel.  Eine THD-Anzeige kann in dieser Phase sogar leicht steigen, wenn
+     echte Harmonischen-Energie, die im Grundrauschen verborgen war, zur Summe
+     stößt - das ist die Messung, die ehrlich wird, nicht das Gerät, das
+     schlechter wird.</p>
+  <p>Die praktischen Konsequenzen: einer tiefen Messung die Zeit geben, die
+     ihr Grundrauschen braucht, um unter die Harmonischen zu zerfallen, auf
+     die es ankommt - das Grundrauschen fällt mit der Wurzel der
+     Mittelungszahl, jede weiteren 20 dB Abstand kosten also das Hundertfache
+     an Mittelungen.  Und umgekehrt: für eine Harmonische, die so schwach ist,
+     dass sie das THD nicht beeinflussen kann, wird das Warten auf ihr
+     Auftauchen aus dem Grundrauschen das Messergebnis nicht wesentlich
+     ändern.</p>
+
   <h2 id="longrun">Was all das bringt</h2>
-  <p>Jeder Mechanismus in diesem Kapitel beseitigt einen Weg, auf dem eine lange
+  <p>Tiefe kohärente Mittelung ist nur so gut wie ihr schwächstes
+     Synchronisationsglied.  Jeder Mechanismus in diesem Kapitel beseitigt einen Weg, auf dem eine lange
      komplexe Mittelung verrotten kann: Bin-Ausrichtung auf ±0,05 ppm beseitigt
      den Leck-Effekt, exakte De-Rotation pro Block beseitigt die Phasendrift, die
      der Rest verursachen würde, gepoolte Phasenreferenzen halten die Verriegelung,
@@ -671,7 +706,12 @@
      <b>sehr lange Läufe stabil - 8 bis 12 Stunden kontinuierlicher kohärenter
      Mittelung</b> - und diese Ausdauer ist die Anforderung hinter der Kennzahl:
      ein Grundrauschen, tief genug getrieben, um THD auf dem Niveau von 10⁻⁸ % mit
-     Vertrauen anzugeben, nicht als einmalige Glücks-Ablesung.</p>
+     Vertrauen anzugeben, nicht als einmalige Glücks-Ablesung.  Ebenso
+     entscheidend sind die Eigenschaften der Messkette selbst: geringe eigene
+     Verzerrung, ein niedriges Grundrauschen, hohe Dämpfung des Grundtons und
+     eine hohe Güte des Kerbfilters - und, für ein Vorverzerrungs-Training, die
+     <a href="dac-predistortion.html#delay">Messung der Kettenverzögerung</a>,
+     die das Vorverzerrungskapitel beschreibt.</p>
   <p>Dass die De-Rotation eine komplexe Mittelung so lange zusammenhalten kann,
      ohne die Harmonischen-Pegel klammheimlich zu korrumpieren, wird nicht
      angenommen - es wird im <a href="derotation-accuracy.html">Kapitel zur

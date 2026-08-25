@@ -54,6 +54,27 @@
      <b>mandatory</b>: without it the harmonics never clear the fundamental's
      skirt and no stable correction can form.</p>
 
+  <p>The deeper reason the notch cannot be skipped: the correction loop can
+     only correct what the DAC produces - but it <em>measures</em> through the
+     ADC, and the ADC module (input amplifier and converter) generates
+     distortion of its own when driven with a full-level tone. Without the
+     notch that ADC distortion is mixed into every measurement, and the loop
+     tries to correct the DAC for distortion the DAC never made. It cannot even
+     settle at the ADC's own distortion level: with two distortion stages in
+     the chain and only one place to correct, every reading the loop acts on
+     carries both contributions at once, and the loop chases a target its own
+     corrections keep moving. Measured on a direct DAC -> ADC connection: the
+     chain reads 0.000038 % THD with no correction at all - and the best
+     correction the loop could find <em>raised</em> it to about 0.000068 %,
+     nearly double.</p>
+  <p>With the fundamental attenuated by the notch, the ADC may still produce
+     distortion - but it scales down with the attenuated signal to a level that
+     no longer influences the measurement at the target THD; what remains
+     visible is the DAC alone, and the loop can push the DAC's residual well
+     below what any direct connection allows. (A direct DAC -> ADC connection
+     only becomes usable at very small signal levels, where the ADC's
+     contribution vanishes - at the cost of signal-to-noise.)</p>
+
   <p>The network is the classic balanced twin-T: a low-pass T (R1-R2 with C3 to
      ground) in parallel with a high-pass T (C1-C2 with R3 to ground), sharing the
      ratios R3 = R/2 and C3 = 2C so the two paths cancel exactly at the null.</p>
@@ -398,10 +419,11 @@
   <p class="note"><b>Read the status strip.</b>  Bottom-left the FFT runs
      <code>HFT248D</code> at <code>87.5 %</code> overlap with <code>∞×</code>
      (unbounded) coherent averaging; bottom-centre <code>manF</code> marks the
-     manual fundamental. Those are exactly the settings the wizard forces - the
-     window and overlap for <a href="#window">side-lobe margin at no noise
-     cost</a>, the manual fundamental for the drift reason above, unbounded
-     coherent averaging so each round can average as deep as it needs.</p>
+     manual fundamental. The manual fundamental and the unbounded coherent
+     averaging are what the wizard forces - the fundamental for the drift
+     reason above, the averaging so each round can dig as deep as it needs.
+     The window is inherited from the FFT pane; this capture ran the wide
+     HFT248D, while <a href="#window">BH7 is the recommendation</a>.</p>
 
   <h3 id="depth">How many averages does a given THD level need?</h3>
   <p>A useful estimate. Coherent averaging lowers the per-bin noise floor (in
@@ -471,24 +493,56 @@
      correction from scratch - otherwise the first apply would overwrite a loaded
      correction with only this run's residual delta.</div>
 
-  <h2 id="window">Window and overlap - HFT248D at 87.5 %</h2>
-  <p>The measurement runs the <b>HFT248D</b> window at <b>87.5 % overlap</b>, the
-     combination the <a href="derotation-accuracy.html#window">de-rotation
-     accuracy</a> chapter derives from first principles. Two results from there
-     carry straight over to pre-distortion:</p>
+  <h2 id="delay">The bench delay - measured before the first round</h2>
+  <p>The measurement chain - DAC, notch filter, ADC - carries a constant time
+     delay of its own, typically some tens of microseconds. For the correction
+     loop this delay is poison in disguise: it rotates the phase of every
+     injected correction, and the rotation grows with frequency - a delay that
+     costs a few degrees at the second harmonic costs a hundred at the ninth.
+     A correction that arrives more than about 60° off no longer reduces its
+     harmonic; it feeds it. The practical result is a loop that converges only
+     when the delay happens to be small enough - and diverges, often violently,
+     when it is not.</p>
+  <p>The wizard therefore measures the delay before it corrects anything.
+     Ahead of the first round it plays small test partials at the harmonic
+     frequencies - in dual-tone mode, at the intermodulation product
+     frequencies - through the same path the corrections will use, measures how
+     each one arrives - attenuation and phase rotation, per frequency - and
+     pre-rotates every subsequent correction accordingly. The measurement takes
+     seconds, uses signals far above the noise floor, and repeats at every
+     training start, so it always reflects the bench as it is that day. With
+     it in place, convergence is no longer a matter of luck.</p>
+  <p>Whether the <em>target</em> THD is then reached is a separate question,
+     decided by the bench: the averages per round, the noise floor, and the
+     notch's attenuation and Q set the floor the loop can reach - the delay
+     measurement only guarantees the loop walks toward it instead of away from
+     it.</p>
+
+  <h2 id="window">Window and overlap</h2>
+  <p>The wizard recommends the <b>Blackman-Harris 7</b> (BH7) window. The
+     choice balances two costs, both worked out in the
+     <a href="derotation-accuracy.html#window">de-rotation accuracy</a>
+     chapter:</p>
   <ul>
-    <li><b>87.5 % is the optimal overlap.</b>  Above each window's recommended
-        overlap, every window reaches the same noise floor in the same
-        wall-clock time; for HFT248D that break-even is 87.5 %, and going higher
-        (93.75 %) buys no further noise benefit, only compute. Below it the wide
-        window pays a penalty.</li>
-    <li><b>The window is chosen for side-lobe margin, not noise.</b>  HFT248D's
-        −248 dB side-lobes keep the strong fundamental's leakage - which drift and
-        re-sync glitches smear a fraction of a bin off centre - from planting a
-        pedestal under the faint harmonics. With harmonics being dug out below
-        −180 dBV, that margin is what guarantees a dug-out line is a real DAC
-        harmonic and not fundamental leakage.</li>
+    <li><b>Side-lobe margin.</b>  The window's side lobes must keep the
+        residual fundamental's leakage - which drift and re-sync glitches smear
+        a fraction of a bin off centre - from planting a pedestal under the
+        faint harmonics. Behind the mandatory notch the fundamental arrives
+        tens of dB down, so BH7's ≈ −180 dB side-lobes hold that margin without
+        resorting to the extreme HFT windows.</li>
+    <li><b>Noise bandwidth.</b>  Each window reads a harmonic's lobe together
+        with NENBW bin-widths of noise (<a href="fft.html#metrics">the FFT
+        chapter's table</a>): about 2.6 for BH7 against 5.7 for HFT248D. Near
+        the averaged floor - where a pre-distortion loop spends its late
+        rounds - the wider window reads the same harmonic with about twice the
+        noise bandwidth folded into its lobe, so its round-end figures wobble
+        sooner and need roughly twice the averages for the same confidence.</li>
   </ul>
+  <p>Overlap enters through the same accounting: above each window's
+     recommended overlap, every window reaches the same noise floor in the same
+     wall-clock time, and below it a tapered window pays a penalty - so run the
+     recommended overlap for the window in use and spend the saved wall-clock
+     time on deeper averages.</p>
 
   <h2 id="imd">Measuring intermodulation - the two-tone notch</h2>
   <p>The wizard's dual-tone path pre-distorts <em>intermodulation</em>, and that
@@ -644,7 +698,10 @@
   <h2 id="bottom">Bottom line</h2>
   <ul>
     <li><b>A passive twin-T notch is mandatory</b> - it strips 40-80 dB of
-        fundamental so the ADC digitises the harmonics, not the tone.</li>
+        fundamental so the ADC digitises the harmonics, not the tone. Without
+        it the loop corrects the DAC for the ADC's distortion and lands near
+        <em>double</em> the uncorrected THD - two distortion stages, one place
+        to correct.</li>
     <li><b>The notch null drifts with component temperature</b>, and at a
         transmission zero a sub-hertz move wrecks the fundamental's measured depth
         and phase while barely touching the harmonics on the flank - so the
@@ -654,10 +711,15 @@
         averaging</b>: ~100 averages put the floor 10 dB under a −140 dBc
         (10⁻⁵ %) harmonic, ~1000 give 20 dB, and pinning the value adds the usual
         1/√<i>n</i> on top.</li>
+    <li><b>The bench's own delay is measured before the first round</b> - small
+        test partials through the correction path give each harmonic's
+        attenuation and rotation, and every correction is pre-rotated by the
+        inverse, so convergence never depends on the chain's delay being
+        luckily small.</li>
     <li><b>The loop inverts every measured harmonic</b>, de-rotates it by the
         loop delay, and hot-applies it to the running generator at exactly
-        <i>h·f</i>, converging round on round - under <b>HFT248D at 87.5 %</b> for
-        side-lobe margin at no noise cost.</li>
+        <i>h·f</i>, converging round on round - with the <b>BH7</b> window
+        recommended for its side-lobe/noise-bandwidth balance.</li>
     <li><b>Intermodulation is the same trick, doubled</b>: a passive
         <a href="#imd">dual twin-T at 19.5 kHz</a> drops the 19/20 kHz two-tone
         pair ~70 dB so the ADC can resolve the products, the tones are read from

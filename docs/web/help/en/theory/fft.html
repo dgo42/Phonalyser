@@ -635,8 +635,38 @@
      the null, is fragile. The THD reading then holds steady no matter how the
      notch drifts.</p>
 
+  <h2 id="confidence">Measurement confidence near the noise floor</h2>
+  <p>A harmonic's reading is only as trustworthy as its clearance above the
+     coherent noise floor.  There is no way around this - not with a different
+     window, not with any alternative readout: the statistics of the
+     harmonic-plus-noise sum bind every method equally.  As a working rule:
+     already 2-4 dB above the floor gives a more or less confident value;
+     about 9 dB above it the harmonic is known to ±3 dB, about 19 dB above it
+     to ±1 dB.  A harmonic at or below the floor allows only one honest
+     statement: it is at most as large as the noise floor level.</p>
+  <p>This explains two effects every deep measurement shows.  First, harmonics
+     near the floor appear to <em>wander</em> - dipping and rising many dB
+     within a few averages - and different harmonics take turns doing it.
+     Nothing in the signal is moving; the reading is simply the vector sum of
+     a small harmonic and the already-averaged noise at that harmonic's
+     frequency, and near cancellation small changes swing the dB value
+     enormously.  Second, during long averaging some harmonics appear to
+     <em>grow</em>.  In truth the opposite happens: the floor decays beneath
+     them, previously buried harmonics become measurable, and once clear of
+     the floor they stabilise at their real level.  A THD readout can even
+     rise slightly during this phase, as real harmonic energy that was hidden
+     in the floor joins the sum - that is the measurement becoming honest, not
+     the device getting worse.</p>
+  <p>The practical consequences: give a deep measurement the time its floor
+     needs to decay below the harmonics that matter - the floor falls with the
+     square root of the average count, so each additional 20 dB of clearance
+     costs a hundredfold averages.  And conversely, for a harmonic so weak
+     that it cannot influence the THD, waiting for it to emerge from the floor
+     will not significantly affect the measurement result.</p>
+
   <h2 id="longrun">What all of this buys</h2>
-  <p>Each mechanism in this chapter removes one way a long complex average
+  <p>Deep coherent averaging is only as good as its weakest synchronisation
+     link.  Each mechanism in this chapter removes one way a long complex average
      can rot: bin alignment to ±0.05 ppm removes the leakage, exact
      per-block de-rotation removes the phase drift the residual would cause,
      pooled phase references keep the lock when the fundamental is notched
@@ -645,7 +675,12 @@
      long runs - 8 to 12 hours of continuous coherent averaging</b> - and
      that endurance is the requirement behind the headline figure: a noise
      floor driven low enough to state THD at the 10⁻⁸ % level with
-     confidence, not as a one-off lucky readout.</p>
+     confidence, not as a one-off lucky readout.  Just as decisive are the
+     bench's own properties: low intrinsic distortion, a low noise floor, high
+     attenuation of the fundamental, and a high notch-filter Q - and, for a
+     pre-distortion training, the
+     <a href="dac-predistortion.html#delay">bench-delay measurement</a> the
+     pre-distortion chapter describes.</p>
   <p>That the de-rotation can hold a complex average together for that long
      without quietly corrupting the harmonic levels is not assumed - it is
      worked out in the <a href="derotation-accuracy.html">de-rotation accuracy
