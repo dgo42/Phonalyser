@@ -73,5 +73,5 @@ public final class DebugSwitches {
      *  with thousands of rows - hence a switch rather than a permanent write.
      *  {@code false} leaves the training loop writing nothing; the probe and
      *  the correction math run either way. */
-    public static final boolean WRITE_DPD_STATS = Boolean.parseBoolean("false");
+    public static final boolean WRITE_DPD_STATS = Boolean.parseBoolean("true");
 }

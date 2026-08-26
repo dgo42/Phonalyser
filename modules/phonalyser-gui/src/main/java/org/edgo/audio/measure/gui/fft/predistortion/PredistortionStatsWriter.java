@@ -85,7 +85,9 @@ import lombok.extern.log4j.Log4j2;
  *       generator per product.</li>
  *   <li>{@code FRAME} - one per FFT frame observed while a round collects:
  *       the frame's noise floor and the harmonic levels in dBr, phases in
- *       degrees.</li>
+ *       degrees.  Its {@code hop_samples} column carries the frame spacing
+ *       that analysis actually used - under the random overlap the hop DRAWN
+ *       for that tick, so the record shows the realized hop sequence.</li>
  *   <li>{@code ROUND} - the same for the round's finalized averaged result,
  *       i.e. the values the correction was computed from.</li>
  *   <li>{@code APPLY} - the correction handed to the generator after that
@@ -179,7 +181,7 @@ public final class PredistortionStatsWriter {
      *  de-embedded against, evaluated at {@code fundamentalHz} and at its
      *  harmonics up to H9.  Written once, before the first round. */
     public void calibration(double fundamentalHz, DoubleFunction<double[]> calResponseAt) {
-        StringBuilder sb = head(TYPE_CAL, PRE_ROUND, 0, Double.NaN);
+        StringBuilder sb = head(TYPE_CAL, PRE_ROUND, 0, 0, Double.NaN);
         for (int n = 1; n <= MAX_HARMONIC; n++) {
             double   f   = n * fundamentalHz;
             double[] res = calResponseAt.apply(f);
@@ -194,7 +196,7 @@ public final class PredistortionStatsWriter {
      *  empty.  Written once, before the first round. */
     public void probe(HarmonicPhasors plant) {
         if (plant == null) return;
-        StringBuilder sb = head(TYPE_PROBE, PRE_ROUND, 0, Double.NaN);
+        StringBuilder sb = head(TYPE_PROBE, PRE_ROUND, 0, 0, Double.NaN);
         component(sb, Double.NaN, Double.NaN, Double.NaN);      // no plant for the fundamental
         double[] re = plant.re();
         double[] im = plant.im();
@@ -285,7 +287,7 @@ public final class PredistortionStatsWriter {
      *  they cannot drift apart in shape. */
     private void productRow(String type, int round, int a, int b,
                             double hz, double magDb, double phaseDeg) {
-        StringBuilder sb = head(type, round, 0, Double.NaN);
+        StringBuilder sb = head(type, round, 0, 0, Double.NaN);
         for (int c = 0; c < MAX_HARMONIC; c++) {             // the F1 / H2..H9 block stays empty
             component(sb, Double.NaN, Double.NaN, Double.NaN);
         }
@@ -318,7 +320,7 @@ public final class PredistortionStatsWriter {
      *  degrees.  Harmonics the correction does not carry stay empty. */
     public void correction(int round, GeneratorCorrections gc) {
         if (gc == null) return;
-        StringBuilder sb = head(TYPE_APPLY, round, 0, Double.NaN);
+        StringBuilder sb = head(TYPE_APPLY, round, 0, 0, Double.NaN);
         component(sb, Double.NaN, Double.NaN, Double.NaN);      // no fundamental correction
         for (int n = 2; n <= MAX_HARMONIC; n++) {
             int i = indexOf(gc.harmonicNumbers(), n);
@@ -340,7 +342,7 @@ public final class PredistortionStatsWriter {
 
     private String header() {
         StringBuilder sb = new StringBuilder(
-                "type;round;averages;noise_dbr;f1_hz;f1_mag_db;f1_phase_deg");
+                "type;round;averages;hop_samples;noise_dbr;f1_hz;f1_mag_db;f1_phase_deg");
         for (int n = 2; n <= MAX_HARMONIC; n++) {
             sb.append(";h").append(n).append("_hz")
               .append(";h").append(n).append("_mag_db")
@@ -357,11 +359,16 @@ public final class PredistortionStatsWriter {
         write(sb.toString());
     }
 
-    /** The four leading columns shared by every record kind. */
-    private StringBuilder head(String type, int round, int averages, double noiseDbr) {
+    /** The five leading columns shared by every record kind.  The hop is the
+     *  frame spacing the analysis actually used, in samples - per tick the
+     *  DRAWN hop under the random overlap; empty (0) for record kinds that
+     *  carry no spectrum. */
+    private StringBuilder head(String type, int round, int averages, int hopSamples,
+                               double noiseDbr) {
         StringBuilder sb = new StringBuilder(type);
         sb.append(SEP).append(round)
           .append(SEP).append(averages)
+          .append(SEP).append(hopSamples > 0 ? String.valueOf(hopSamples) : "")
           .append(SEP).append(value(noiseDbr));
         return sb;
     }
@@ -370,7 +377,8 @@ public final class PredistortionStatsWriter {
      *  relative to this result's own raw fundamental level. */
     private StringBuilder measurement(String type, int round, FftResult r) {
         double refDbFs = referenceDbFs(r);
-        StringBuilder sb = head(type, round, r.frameCount, r.noisePeakFloorDbFs() - refDbFs);
+        StringBuilder sb = head(type, round, r.frameCount, r.stepSamples,
+                r.noisePeakFloorDbFs() - refDbFs);
         component(sb, r.fundamentalHzRefined, refDbFs, phaseDeg(r.rawFundRe, r.rawFundIm));
         for (int h = 0; h < MAX_HARMONIC - 1; h++) {
             if (!hasHarmonic(r, h)) {
