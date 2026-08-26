@@ -2168,11 +2168,15 @@ public final class FftAnalyzerWorker {
     }
 
     /** One hop from the derived bounds: the single fixed value when they
-     *  coincide, a uniform draw over [min, max] for the random overlap. */
+     *  coincide; for the random overlap a uniform draw over the mode's
+     *  hop lattice - the range split into {@link FftOverlap#RAND_HOP_STEPS}
+     *  equal parts, the hop landing on a part boundary (the largest value
+     *  is the max hop itself; the bare min hop is not drawn). */
     private int drawHop(int minHopSamples, int maxHopSamples) {
-        return minHopSamples >= maxHopSamples
-                ? minHopSamples
-                : minHopSamples + hopRandom.nextInt(maxHopSamples - minHopSamples + 1);
+        if (minHopSamples >= maxHopSamples) return minHopSamples;
+        int quantum = Math.max(1, (maxHopSamples - minHopSamples) / FftOverlap.RAND_HOP_STEPS);
+        return Math.min(maxHopSamples,
+                minHopSamples + (1 + hopRandom.nextInt(FftOverlap.RAND_HOP_STEPS)) * quantum);
     }
 
     /** Consumes this tick's share of a span being collected into {@code dst}:

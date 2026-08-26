@@ -154,7 +154,9 @@ class FftCrossTickDriftTest {
             long base = 0;
             FftResult r;
             for (int t = 0; t < TICKS; t++) {
-                int hop = minHop + hopDraw.nextInt(maxHop - minHop + 1);
+                // The worker's lattice draw: part boundaries of the mode's range.
+                int hop = minHop + (1 + hopDraw.nextInt(FftOverlap.RAND_HOP_STEPS))
+                        * ((maxHop - minHop) / FftOverlap.RAND_HOP_STEPS);
                 System.arraycopy(sig, (int) base, win, 0, winLen);
                 analyzer.setSamplesAbsStart(base);
                 analyzer.setSpectrumOnly(true);
