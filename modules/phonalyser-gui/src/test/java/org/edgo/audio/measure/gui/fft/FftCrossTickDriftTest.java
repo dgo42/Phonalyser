@@ -22,7 +22,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.Fft;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.junit.jupiter.api.Tag;
@@ -136,8 +135,8 @@ class FftCrossTickDriftTest {
      *  hop-dependent term shows here as a fundamental or harmonic decline. */
     @Test
     void crossTickRandomHopSweep() {
-        int minHop = Fft.minHopSamples(FftOverlap.RAND, FFT_SIZE);
-        int maxHop = Fft.maxHopSamples(FftOverlap.RAND, FFT_SIZE);
+        int minHop = FftOverlap.RAND.minHopSamples(FFT_SIZE);
+        int maxHop = FftOverlap.RAND.maxHopSamples(FFT_SIZE);
         int winLen = FFT_SIZE + maxHop;                     // worker capacity: the largest hop
         int total  = (TICKS - 1) * maxHop + winLen;
         LOG.info("=== CROSS-TICK RANDOM HOP: {} ticks x 2-frame | hop in [{}..{}] | {} pt {} | {} Hz ===",
@@ -150,7 +149,6 @@ class FftCrossTickDriftTest {
             FftAnalyzer       analyzer = new FftAnalyzer();
             FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);   // headless
             double[] win     = new double[winLen];
-            int[]    offsets = new int[2];
             LOG.info(String.format("--- drift = %.3f ppm/min  (random hop) ---", driftPpmMin));
 
             long base = 0;
@@ -162,11 +160,9 @@ class FftCrossTickDriftTest {
                 analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(false);
                 analyzer.setSecondToneHintHz(Double.NaN);
-                offsets[0] = 0;
-                offsets[1] = hop;
                 r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
                         WINDOW, FftOverlap.RAND, 0.0, 0.0, true, Double.NaN,
-                        false, Double.NaN, new FftResult(), offsets);
+                        false, Double.NaN, new FftResult(), hop, 2);
                 worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
 
                 if ((t + 1) % READOUT_EVERY == 0) {

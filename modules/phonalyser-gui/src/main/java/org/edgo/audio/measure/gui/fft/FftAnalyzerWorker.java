@@ -40,7 +40,6 @@ import org.edgo.audio.measure.dsp.MainsFilters;
 import org.edgo.audio.measure.dsp.MainsTimeFilter;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.Fft;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftAnalyzer.FrameFftCache;
 import org.edgo.audio.measure.fft.FftResult;
@@ -229,10 +228,6 @@ public final class FftAnalyzerWorker {
      *  the de-rotation is exact for any hop; the draw only decides WHICH
      *  spacings occur. */
     private final Random hopRandom = new Random();
-    /** Per-tick frame geometry handed to the analyser: frame starts relative
-     *  to the analysis buffer.  Rebuilt each tick (one or two entries), kept
-     *  as a field so the tick loop stays allocation-free. */
-    private int[] frameOffsets = new int[0];
 
     /** Mains-hum comb, lazily built for the current sample rate.  Used only
      *  when {@code fftMainsSuppression == IIR_COMB}: it only TRACKS the mains
@@ -1669,8 +1664,8 @@ public final class FftAnalyzerWorker {
         // hop, so neither resizes while a drawn hop's gather is in flight (a
         // mid-gather resize would discard the partial fill and tear the
         // contiguous stream).
-        int minHopSamples = Fft.minHopSamples(overlap, fftLength);
-        int maxHopSamples = Fft.maxHopSamples(overlap, fftLength);
+        int minHopSamples = overlap.minHopSamples(fftLength);
+        int maxHopSamples = overlap.maxHopSamples(fftLength);
         // NOT bounded by the capture ring: the analysis span is the analyser's
         // own buffer, gathered from the ring across as many ticks as it takes.
         // Clamping it to the ring made the largest FFT lengths impossible - a
@@ -1903,17 +1898,14 @@ public final class FftAnalyzerWorker {
         FftResult slot = resultPool.acquire();
         FftResult r;
         try {
-            // Explicit per-frame geometry: one frame, or a pair spaced by the
-            // drawn pending hop (so the second frame is exactly the next
-            // tick's first and hits the raw-frame cache).  The window may be
-            // sized for the LARGEST hop, so inferring frames from the buffer
-            // length would over-count under the random mode.
-            if (frameOffsets.length != averages) frameOffsets = new int[averages];
-            frameOffsets[0] = 0;
-            if (averages > 1) frameOffsets[1] = pendingHopSamples;
+            // Explicit geometry: the frame spacing is the drawn pending hop
+            // (so the second frame is exactly the next tick's first and hits
+            // the raw-frame cache) and the frame count is stated - the window
+            // may be sized for the LARGEST hop, so inferring frames from the
+            // buffer length would over-count under the random mode.
             r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH,
                     window, overlap, distMin, distMax, coherent, fundRefDbFs,
-                    false, expectedFundHz, slot, frameOffsets);
+                    false, expectedFundHz, slot, pendingHopSamples, averages);
         } catch (RuntimeException ex) {
             // Pool hygiene only - the failure itself must surface: the worker
             // loop's Throwable catch logs it, so a persistently throwing

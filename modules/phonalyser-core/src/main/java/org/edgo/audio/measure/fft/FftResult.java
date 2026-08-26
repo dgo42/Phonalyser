@@ -60,9 +60,10 @@ public class FftResult {
     public FftOverlap overlap;
     /** The frame spacing (samples) the analysis actually used.  Under the
      *  random overlap this is the tick's drawn hop - the enum carries no
-     *  single fraction - and it drives every geometry-derived statistic
-     *  (skirt look-ahead).  0 for a spectrum whose spacing is unknown
-     *  (a loaded file). */
+     *  single fraction.  Provenance first (saved into spectrum files); the
+     *  skirt look-ahead falls back to it only when {@link #overlap} is
+     *  unknown.  0 for a spectrum whose spacing is unknown (a loaded
+     *  file without geometry headers). */
     public int stepSamples;
 
     // Single-sided spectrum, bins 0 ... fftSize/2.  Arrays are reused
