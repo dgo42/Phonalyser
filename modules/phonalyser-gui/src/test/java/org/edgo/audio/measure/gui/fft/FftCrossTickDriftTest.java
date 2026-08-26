@@ -22,6 +22,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.Fft;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.junit.jupiter.api.Tag;
@@ -125,6 +126,64 @@ class FftCrossTickDriftTest {
             }
         }
         FftAnalyzerWorker.FORK_NONTONE_DRIFT = true;   // restore default
+    }
+
+    // ── Random overlap: variable hop through the same worker path ──────────
+    /** The fixed-hop sweep's geometry with each tick's hop drawn uniformly
+     *  from the random mode's own overlap range.  The de-rotation and the
+     *  accumulator PLL ride absolute sample positions, so the readouts must
+     *  hold the same levels as the fixed-hop sweep at the same depth - any
+     *  hop-dependent term shows here as a fundamental or harmonic decline. */
+    @Test
+    void crossTickRandomHopSweep() {
+        int minHop = Fft.minHopSamples(FftOverlap.RAND, FFT_SIZE);
+        int maxHop = Fft.maxHopSamples(FftOverlap.RAND, FFT_SIZE);
+        int winLen = FFT_SIZE + maxHop;                     // worker capacity: the largest hop
+        int total  = (TICKS - 1) * maxHop + winLen;
+        LOG.info("=== CROSS-TICK RANDOM HOP: {} ticks x 2-frame | hop in [{}..{}] | {} pt {} | {} Hz ===",
+                TICKS, minHop, maxHop, FFT_SIZE, WINDOW, FUND_HZ);
+
+        for (double driftPpmMin : DRIFT_PPM_PER_MIN) {
+            double driftPerSample = driftPpmMin * 1e-6 / 60.0 / SAMPLE_RATE;
+            double[] sig = synthesizeContinuous(SEED, total, driftPerSample);
+            Random hopDraw = new Random(SEED);              // reproducible hop sequence
+            FftAnalyzer       analyzer = new FftAnalyzer();
+            FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);   // headless
+            double[] win     = new double[winLen];
+            int[]    offsets = new int[2];
+            LOG.info(String.format("--- drift = %.3f ppm/min  (random hop) ---", driftPpmMin));
+
+            long base = 0;
+            FftResult r;
+            for (int t = 0; t < TICKS; t++) {
+                int hop = minHop + hopDraw.nextInt(maxHop - minHop + 1);
+                System.arraycopy(sig, (int) base, win, 0, winLen);
+                analyzer.setSamplesAbsStart(base);
+                analyzer.setSpectrumOnly(true);
+                analyzer.setMultiTone(false);
+                analyzer.setSecondToneHintHz(Double.NaN);
+                offsets[0] = 0;
+                offsets[1] = hop;
+                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
+                        WINDOW, FftOverlap.RAND, 0.0, 0.0, true, Double.NaN,
+                        false, Double.NaN, new FftResult(), offsets);
+                worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+
+                if ((t + 1) % READOUT_EVERY == 0) {
+                    worker.overlayAccumulatorOnto(r);
+                    analyzer.recomputeStats(r);
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < HARMONIC_COUNT; i++) {
+                        double h = (r.harmonicDbFs != null && i < r.harmonicDbFs.length)
+                                ? r.harmonicDbFs[i] : Double.NaN;
+                        sb.append(String.format(" H%d=%.2f", i + 2, h));
+                    }
+                    LOG.info(String.format("  tick %4d  frames=%6d  fund=%.2f |%s",
+                            t + 1, worker.getAccumulatedFrames(), r.fundamentalDbFs, sb));
+                }
+                base += hop;
+            }
+        }
     }
 
     // ── True dual-tone (IMD) under drift ───────────────────────────────────
