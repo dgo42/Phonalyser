@@ -329,10 +329,12 @@ public class FftAnalyzer {
      * long coherent average the harmonics de-cohere (∝ sinc(π·h·δk·M·step/N)) and
      * read low - the slow harmonic decline seen on long captures.  Here κ is
      * measured from the SLOPE of the fundamental's phase at {@code refIntBin} over
-     * every clean-segment frame: a {@code (bestLen-1)·step} baseline instead of one
-     * hop, shrinking δk by ~that factor.  The phase RESIDUAL relative to the coarse
-     * κ stays within ±π over the segment (no unwrapping), and the sample-offsets are
-     * centred so the regression stays well-conditioned.  Returns the refined κ.
+     * every clean-segment frame: a whole-segment baseline instead of one hop,
+     * shrinking δk by ~that factor.  The regression rides each frame's ACTUAL
+     * sample position ({@code frameOffsets}), so a per-frame varying hop needs no
+     * special handling.  The phase RESIDUAL relative to the coarse κ stays within
+     * ±π over the segment (no unwrapping), and the sample-offsets are centred so
+     * the regression stays well-conditioned.  Returns the refined κ.
      *
      * <p>Only the fundamental BIN is needed per frame, so a single-bin Goertzel
      * (O(N) per frame, ~6% of a full FFT) replaces the FFT - no extra spectra.  The
@@ -342,7 +344,7 @@ public class FftAnalyzer {
      * near ±π cannot wrap mid-segment and corrupt the slope.
      */
     private double refineKappaOverSegment(double[] samples, double[] window, int fftSize,
-                                          int step, int bestStart, int bestLen,
+                                          int[] frameOffsets, int bestStart, int bestLen,
                                           int refIntBin, double kCoarse) {
         final double w     = 2.0 * Math.PI * refIntBin / fftSize;
         final double cw    = Math.cos(w);
@@ -351,7 +353,7 @@ public class FftAnalyzer {
         double[] resid  = new double[bestLen];
         double   sumCos = 0.0, sumSin = 0.0;
         for (int f = bestStart; f < bestStart + bestLen; f++) {
-            int base = f * step;
+            int base = frameOffsets[f];
             double sp = 0.0, sp2 = 0.0;                         // Goertzel state at refIntBin
             for (int n = 0; n < fftSize; n++) {
                 double s = samples[base + n] * window[n] + coeff * sp - sp2;
@@ -366,11 +368,17 @@ public class FftAnalyzer {
             sumSin += Math.sin(r);
         }
         double meanAngle = Math.atan2(sumSin, sumCos);          // circular mean -> wrap-safe centre
-        double meanBase  = ((double) bestStart + (bestStart + bestLen - 1)) * 0.5 * step;
+        // The no-intercept slope fit needs db centred on the TRUE mean of the
+        // segment's frame positions - under a varying hop that is not the
+        // first/last midpoint.  Exact long sum; for uniform spacing this is
+        // the midpoint to the bit.
+        long baseSum = 0;
+        for (int f = bestStart; f < bestStart + bestLen; f++) baseSum += frameOffsets[f];
+        double meanBase = (double) baseSum / bestLen;
         double sDbR = 0.0, sDb2 = 0.0;
         for (int f = bestStart; f < bestStart + bestLen; f++) {
             double rc = Math.IEEEremainder(resid[f - bestStart] - meanAngle, 2.0 * Math.PI);
-            double db = (double) f * step - meanBase;
+            double db = (double) frameOffsets[f] - meanBase;
             sDbR += db * rc;
             sDb2 += db * db;
         }
@@ -474,8 +482,8 @@ public class FftAnalyzer {
      * <p>Allocates a fresh {@link FftResult} per call - preferred for one-shot
      * CLI / test callers.  The live FFT view goes through
      * {@link #analyze(double[], int, int, int, WindowType, FftOverlap,
-     * double, double, boolean, double, boolean, double, FftResult)} to write
-     * into a pre-allocated pool slot and avoid per-tick array churn.
+     * double, double, boolean, double, boolean, double, FftResult, int[])}
+     * to write into a pre-allocated pool slot and avoid per-tick array churn.
      */
     public FftResult analyze(double[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
@@ -483,9 +491,20 @@ public class FftAnalyzer {
                                  double snrFreqMin, double snrFreqMax,
                                  boolean coherentAveraging, double fundRefDbFs,
                                  boolean logSummary, double expectedFundHz) {
+        // The one place the fixed overlap's spacing is derived: everything
+        // below runs on the stated per-frame geometry.  A random overlap has
+        // no fixed spacing (hopSamples throws) - its per-frame drawn hops
+        // enter through the offsets array directly.
+        int step = overlap.hopSamples(fftSize);
+        int frameCount = samples.length >= fftSize
+                ? (samples.length - fftSize) / step + 1
+                : 0;
+        int[] frameOffsets = new int[Math.max(0, frameCount)];
+        for (int f = 0; f < frameOffsets.length; f++) frameOffsets[f] = f * step;
         return analyze(samples, sampleRate, fftSize, harmonicCount,
                 windowType, overlap, snrFreqMin, snrFreqMax, coherentAveraging,
-                fundRefDbFs, logSummary, expectedFundHz, new FftResult());
+                fundRefDbFs, logSummary, expectedFundHz, new FftResult(),
+                frameOffsets);
     }
 
     /** A contiguous half-open [lo, hi) bin range to process. */
@@ -508,13 +527,23 @@ public class FftAnalyzer {
     }
 
     /**
-     * Pool-friendly variant: writes the analysis into the supplied
-     * {@code outResult} slot instead of allocating a fresh Result.
-     * The slot's bin / harmonic arrays are resized as needed
-     * ({@link FftResult#ensureArrays}) and then used directly as the
-     * analysis output buffers - no per-tick allocation for the four
-     * fftSize/2+1-long spectrum arrays.  Returns {@code outResult} for
-     * convenience.
+     * The one full analysis method - every overload above funnels into it.
+     * The caller states the frame geometry as {@code frameOffsets}: entry
+     * {@code f} is frame {@code f}'s start relative to {@code samples[0]},
+     * strictly increasing, first entry 0, count = array length - so an
+     * over-sized buffer is never mis-read as extra frames, and the spacing
+     * is free to VARY per frame.  Fixed overlaps build the uniform array
+     * once in the convenience overload; the analyser worker passes the
+     * positions its buffered frames were actually cut at (each spacing a
+     * previously drawn random hop), so all but the newest frame hit the
+     * raw-frame cache regardless of the overlap mode.
+     *
+     * <p>Writes the analysis into the supplied {@code outResult} slot instead
+     * of allocating a fresh result: the slot's bin / harmonic arrays are
+     * resized as needed ({@link FftResult#ensureArrays}) and then used
+     * directly as the analysis output buffers - no per-tick allocation for
+     * the four fftSize/2+1-long spectrum arrays.  Returns {@code outResult}
+     * for convenience.
      */
     @SuppressWarnings("unused")
     public FftResult analyze(double[] samples, int sampleRate,
@@ -523,20 +552,45 @@ public class FftAnalyzer {
                                  double snrFreqMin, double snrFreqMax,
                                  boolean coherentAveraging, double fundRefDbFs,
                                  boolean logSummary, double expectedFundHz,
-                                 FftResult outResult) {
+                                 FftResult outResult, int[] frameOffsets) {
         if (Integer.bitCount(fftSize) != 1) {
             throw new IllegalArgumentException("fftSize must be a power of 2, got: " + fftSize);
         }
-
-        int step = Math.max(1, (int) Math.round(fftSize * (1.0 - overlap.fraction)));
-        int frameCount = samples.length >= fftSize
-                ? (samples.length - fftSize) / step + 1
-                : 0;
-        if (frameCount == 0) {
+        if (frameOffsets == null || frameOffsets.length == 0) {
+            throw new IllegalArgumentException(
+                    "Frame offsets must contain at least one entry - the caller states the geometry");
+        }
+        if (samples.length < fftSize) {
             throw new IllegalArgumentException(
                     "Signal too short for fftSize=" + fftSize +
                     ": need at least " + fftSize + " samples, got " + samples.length);
         }
+        int frameCount = frameOffsets.length;
+        if (frameOffsets[0] != 0) {
+            throw new IllegalArgumentException(
+                    "First frame must start the buffer, got offset " + frameOffsets[0]);
+        }
+        for (int f = 1; f < frameCount; f++) {
+            if (frameOffsets[f] <= frameOffsets[f - 1]) {
+                throw new IllegalArgumentException(
+                        "Frame offsets must be strictly increasing, got "
+                        + frameOffsets[f - 1] + " then " + frameOffsets[f]
+                        + " at frame " + f);
+            }
+        }
+        if ((long) frameOffsets[frameCount - 1] + fftSize > samples.length) {
+            throw new IllegalArgumentException(
+                    "Stated geometry exceeds the buffer: last frame at "
+                    + frameOffsets[frameCount - 1] + " + fftSize " + fftSize
+                    + " needs " + ((long) frameOffsets[frameCount - 1] + fftSize)
+                    + " samples, got " + samples.length);
+        }
+        // Effective spacing for everything that needs ONE number for the
+        // geometry (skirt look-ahead, provenance stamp): the mean spacing,
+        // which is the fixed step exactly when the offsets are uniform.
+        int step = frameCount > 1
+                ? (int) Math.round(frameOffsets[frameCount - 1] / (double) (frameCount - 1))
+                : 0;
 
         double freqRes = (double) sampleRate / fftSize;
         log.info("FFT: size={}, frames={}, overlap={}, window={}, averaging={}, freq-res={} Hz, harmonics={}",
@@ -782,11 +836,27 @@ public class FftAnalyzer {
                 double evPk   = ev[2] / 1e9;
                 double tStart = evS / (double) sampleRate;
                 int    width  = evE - evS + 1;
-                // Frames whose [base .. base+fftSize-1] window touches [evS .. evE]:
-                //   base + fftSize - 1 >= evS  AND  base <= evE
-                //   -> base in [evE - fftSize + 1 .. evS] / step
-                int fLo = Math.max(0, (int) Math.ceil((evE - (long) fftSize + 1) / (double) step));
-                int fHi = Math.min(frameCount - 1, evS / step);
+                // Frames whose [base .. base+fftSize-1] window SPANS the whole
+                // event [evS .. evE]:
+                //   base <= evS  AND  base + fftSize - 1 >= evE
+                //   -> base in [evE - fftSize + 1 .. evS].
+                // The offsets are strictly increasing (validated above), so the
+                // qualifying frames are one contiguous index range and both ends
+                // come from a binary search instead of a per-event sweep of every
+                // frame: fLo is the first offset at or above the low bound, fHi
+                // the last offset at or below evS.  binarySearch returns the exact
+                // index on a hit and -(insertion point)-1 on a miss, which is the
+                // first offset ABOVE the key - hence fLo takes it as-is and fHi
+                // steps one back.  The low bound can go negative while every
+                // offset is at or above zero, so clamping that key to zero selects
+                // the same first frame.
+                long loBound = (long) evE - fftSize + 1;
+                int  loKey   = loBound < 0 ? 0 : (int) loBound;
+                int  loHit   = Arrays.binarySearch(frameOffsets, 0, frameCount, loKey);
+                int  fLo     = loHit >= 0 ? loHit : -(loHit + 1);
+                int  hiHit   = Arrays.binarySearch(frameOffsets, 0, frameCount, evS);
+                int  fHi     = hiHit >= 0 ? hiHit : -(hiHit + 1) - 1;
+                if (fHi < fLo) { fLo = 0; fHi = -1; }   // no frame spans this event
                 int dirty = 0;
                 for (int f = fLo; f <= fHi; f++) {
                     if (frameClean[f]) {
@@ -830,7 +900,7 @@ public class FftAnalyzer {
             // log line below stays meaningful when some frames are rejected.
             for (int f = 0; f < frameCount; f++) {
                 if (!frameClean[f]) continue;
-                int base = f * step;
+                int base = frameOffsets[f];
                 int from = Math.max(1, base);
                 int to   = Math.min(samples.length - 2, base + fftSize - 1);
                 for (int n = from; n <= to; n++) {
@@ -881,9 +951,9 @@ public class FftAnalyzer {
         // Glitchy frames at the start of the recording would otherwise poison
         // the phase-difference estimate, leaving a linear residual phase drift
         // across the (clean) segment that smears the fundamental over many bins.
-        // We use the first frame of the segment + one frame `step` later when
+        // We use the segment's first frame + its immediate successor when
         // available, otherwise fall back to parabolic interpolation.
-        int    segBaseSample = bestStart * step;
+        int    segBaseSample = frameOffsets[bestStart];
         double[] s0Re;
         double[] s0Im;
         if (segBaseSample == 0) {
@@ -907,7 +977,9 @@ public class FftAnalyzer {
                 Math.min(halfSize, intFundBin + 2));
         double kFractional;
         if (bestLen >= 2) {
-            int    estStep = step > 0 ? step : fftSize;
+            // The pair's ACTUAL spacing: the segment's first frame to its
+            // successor - under a varying hop this is that one drawn hop.
+            int    estStep = frameOffsets[bestStart + 1] - segBaseSample;
             scratchS1Re = scratchOrAlloc(scratchS1Re, fftSize);
             scratchS1Im = scratchOrAlloc(scratchS1Im, fftSize);
             double[] s1Re = scratchS1Re;
@@ -970,7 +1042,9 @@ public class FftAnalyzer {
                         Math.max(1, k0b - 2), Math.min(halfSize, k0b + 2));
                 double kf2;
                 if (bestLen >= 2) {
-                    int    estStep = step > 0 ? step : fftSize;
+                    // scratchS1 was computed one frame after segBaseSample -
+                    // the phase pair must state that SAME spacing.
+                    int    estStep = frameOffsets[bestStart + 1] - frameOffsets[bestStart];
                     double p0   = Math.atan2(s0Im[ri2], s0Re[ri2]);
                     double p1   = Math.atan2(scratchS1Im[ri2], scratchS1Re[ri2]);
                     double exp2 = 2.0 * Math.PI * ri2 * estStep / (double) fftSize;
@@ -987,10 +1061,10 @@ public class FftAnalyzer {
         // The coarse κ above is a one-hop phase difference; its residual error is
         // applied as a de-rotation ramp across the whole segment, so on long
         // averages the harmonics de-cohere and read low.  Refine κ by regressing
-        // the fundamental phase over EVERY clean frame - a (bestLen-1)·step
+        // the fundamental phase over EVERY clean frame - a whole-segment
         // baseline vs one hop.  See refineKappaOverSegment.
-        if (coherentAveraging && bestLen >= 4 && step > 0) {
-            double kRefined = refineKappaOverSegment(samples, window, fftSize, step,
+        if (coherentAveraging && bestLen >= 4) {
+            double kRefined = refineKappaOverSegment(samples, window, fftSize, frameOffsets,
                     bestStart, bestLen, refIntBin, kFractional);
             if (Math.abs(kRefined - kFractional) < 0.5) {       // sanity: reject a wild fit
                 if (log.isInfoEnabled()) {
@@ -1025,7 +1099,7 @@ public class FftAnalyzer {
                 int    h2   = Math.max(1, (int) Math.round(kappa2 / kFractional));
                 double saRe = 0.0, saIm = 0.0, sbRe = 0.0, sbIm = 0.0;
                 for (int f = bestStart; f < bestStart + bestLen; f++) {
-                    long base = (long) f * step;
+                    long base = frameOffsets[f];
                     cachedFrameFft(samples, (int) base, fftSize, window, frameRe, frameIm);
                     double re = frameRe[k2], im = frameIm[k2];
                     double phiA = -2.0 * Math.PI * base * kFractional * h2 / (double) fftSize;  // h·Φ(F1)
@@ -1105,9 +1179,10 @@ public class FftAnalyzer {
         // phase; the ramp matches that only AT the exact harmonic bins and
         // over-rotates the skirt by ∝ (bin-offset × frame), which the
         // sub-frame sum turns into a Dirichlet array factor -> a comb at
-        // sampleRate/(frames·step) riding on the leakage skirt.  Constant
-        // phase per lobe aligns the whole lobe, so the comb vanishes (this is
-        // what the multi-tone path already does, hence its clean result).
+        // sampleRate over the frame span riding on the leakage skirt.
+        // Constant phase per lobe aligns the whole lobe, so the comb vanishes
+        // (this is what the multi-tone path already does, hence its clean
+        // result).
         final int hMax = coherentAveraging
                 ? Math.max(1, (fftSize / 2) / intFundBinRounded) : 0;
         if (coherentAveraging) {
@@ -1116,14 +1191,15 @@ public class FftAnalyzer {
         }
         int acceptedFrames = 0;
         for (int f = bestStart; f < bestStart + bestLen; f++) {
-            int base = f * step;
+            int base = frameOffsets[f];
             cachedFrameFft(samples, base, fftSize, window, frameRe, frameIm);
             if (coherentAveraging) {
-                // Φ = −2π·k_f·f·step/N - the fundamental's inter-frame phase
-                // advance; harmonic lobe h gets h·Φ.  Cache exp(j·h·Φ) for
-                // h = −hMax..hMax via an incremental phasor (negative h is the
-                // conjugate: the real-spectrum image of harmonic h).
-                final double phi = -2.0 * Math.PI * (double) ((long) f * step) * kFractional
+                // Φ = −2π·k_f·base/N - the fundamental's phase advance at this
+                // frame's ACTUAL sample position; harmonic lobe h gets h·Φ.
+                // Cache exp(j·h·Φ) for h = −hMax..hMax via an incremental
+                // phasor (negative h is the conjugate: the real-spectrum
+                // image of harmonic h).
+                final double phi = -2.0 * Math.PI * (double) base * kFractional
                                    / (double) fftSize;
                 final double e1c = Math.cos(phi), e1s = Math.sin(phi);
                 final double[] hc = scratchHcos, hs = scratchHsin;
@@ -1137,7 +1213,7 @@ public class FftAnalyzer {
                 // IMD-grid de-rotation: each product lobe rides a·Φ(F1)+b·Φ(F2)
                 // (F2 itself is the (0,1) product); every other bin stays single-ref.
                 final double phi2 = (imdIdxF != null)
-                        ? -2.0 * Math.PI * (double) ((long) f * step) * f2Kappa / (double) fftSize : 0.0;
+                        ? -2.0 * Math.PI * (double) base * f2Kappa / (double) fftSize : 0.0;
                 final double[] pcos = new double[nProdF];
                 final double[] psin = new double[nProdF];
                 for (int p = 0; p < nProdF; p++) {
@@ -1205,9 +1281,9 @@ public class FftAnalyzer {
                 if (devAbs > PHASE_COHERENCE_THRESHOLD_RAD) {
                     // Re-FFT the rejected frame and subtract its corrected spectrum
                     int f    = bestStart + i;
-                    int base = f * step;
+                    int base = frameOffsets[f];
                     cachedFrameFft(samples, base, fftSize, window, frameRe, frameIm);
-                    double baseAngle  = -2.0 * Math.PI * (long) f * step * kFractional
+                    double baseAngle  = -2.0 * Math.PI * (double) base * kFractional
                                         / ((double) fftSize * intFundBinRounded);
                     double cosBase = Math.cos(baseAngle);
                     double sinBase = Math.sin(baseAngle);
@@ -1384,6 +1460,7 @@ public class FftAnalyzer {
             outResult.freqResolution             = freqRes;
             outResult.windowType                 = windowType;
             outResult.overlap                    = overlap;
+            outResult.stepSamples                = step;
             // The display path re-derives all stats via recomputeStats() on THIS
             // result - it needs the window's NENBW stamped or its noise-integral
             // correction silently no-ops (that exact miss shipped the first
@@ -1451,7 +1528,7 @@ public class FftAnalyzer {
 
         NoiseFloor nf = computeNoiseFloorAndExtendSignalMask(
                 amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS,
-                skirtLookAheadBins(overlap));
+                skirtLookAheadBins(fftSize, Fft.minHopSamples(overlap, fftSize)));
         double medianNoisePow = nf.medianNoisePow;
         int    dynWidthBins   = nf.dynWidthBins;
         if (dynWidthBins > EXCL_BINS) {
@@ -1555,6 +1632,7 @@ public class FftAnalyzer {
         outResult.freqResolution             = freqRes;
         outResult.windowType                 = windowType;
         outResult.overlap                    = overlap;
+        outResult.stepSamples                = step;
         outResult.fundamentalBin             = fundBin;
         outResult.fundamentalHz              = fundHz;
         outResult.fundamentalHzRefined       = fundHzRefined;
@@ -1701,7 +1779,8 @@ public class FftAnalyzer {
         // original analyze() pass; we only need the median noise power.
         double medianNoisePow = computeNoiseFloorAndExtendSignalMask(
                 amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS,
-                skirtLookAheadBins(r.overlap))
+                skirtLookAheadBins(r.fftSize, r.overlap != null
+                        ? Fft.minHopSamples(r.overlap, r.fftSize) : r.stepSamples))
                 .medianNoisePow;
 
         // --- SNR (signal RMS² / total unweighted noise power) ---------------
@@ -2144,10 +2223,19 @@ public class FftAnalyzer {
      *  frames share any given sample, so the averaged floor wobbles with that
      *  correlation length - a single sub-floor dip inside the skirt is then
      *  noise texture, not the skirt's end.  +2 bins guards the 0%-overlap
-     *  case as well.  0% -> 3, 50% -> 4, 75% -> 6, 87.5% -> 10, 93.75% -> 18. */
-    private int skirtLookAheadBins(FftOverlap ovl) {
-        double denom = 1.0 - (ovl != null ? ovl.fraction : 0.0);
-        int framesSharing = denom > 0 ? (int) Math.round(1.0 / denom) : 16;
+     *  case as well.  0% -> 3, 50% -> 4, 75% -> 6, 87.5% -> 10, 93.75% -> 18,
+     *  random -> its densest spacing (12 for an 80-90 % range).  Callers pass
+     *  the mode's SMALLEST possible spacing, not the drawn or mean one: the
+     *  walk must bridge the coarsest floor texture the mode can produce, and
+     *  random hopping is not credited with decorrelating it. */
+    private int skirtLookAheadBins(int fftSize, int stepSamples) {
+        // Frames sharing samples = fftSize / step.  For the fixed modes this
+        // equals the old round(1/(1-overlap)) exactly.  An unknown spacing (a
+        // loaded spectrum file without geometry headers) degrades to the
+        // 0%-overlap value.
+        int framesSharing = stepSamples > 0
+                ? Math.max(1, (int) Math.round((double) fftSize / stepSamples))
+                : 1;
         return framesSharing + 2;
     }
 

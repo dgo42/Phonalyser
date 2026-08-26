@@ -58,6 +58,12 @@ public class FftResult {
     public WindowType windowType;
     /** FftOverlap used. */
     public FftOverlap overlap;
+    /** The frame spacing (samples) the analysis actually used.  Under the
+     *  random overlap this is the tick's drawn hop - the enum carries no
+     *  single fraction - and it drives every geometry-derived statistic
+     *  (skirt look-ahead).  0 for a spectrum whose spacing is unknown
+     *  (a loaded file). */
+    public int stepSamples;
 
     // Single-sided spectrum, bins 0 ... fftSize/2.  Arrays are reused
     // across analysis ticks via the pool; {@link #ensureArrays} grows
@@ -314,6 +320,7 @@ public class FftResult {
         c.fftSize                    = src.fftSize;
         c.sampleRate                 = src.sampleRate;
         c.frameCount                 = src.frameCount;
+        c.stepSamples                = src.stepSamples;
         c.freqResolution             = src.freqResolution;
         c.binBwSqrt                  = src.binBwSqrt;
         c.windowType                 = src.windowType;
