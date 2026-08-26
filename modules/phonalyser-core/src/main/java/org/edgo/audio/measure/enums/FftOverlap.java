@@ -26,12 +26,21 @@ public enum FftOverlap {
     PCT_75(0.75,  "75%"),
     PCT_87_5(0.875,  "87.5%"),
     PCT_93_75(0.9375, "93.75%"),
-    /** Random per-hop overlap: every hop is drawn uniformly from the percent
-     *  range the FFT constants class defines.  Carries no single fraction, so
-     *  every consumer resolves the effective spacing through the drawn hop,
-     *  or through the FFT utility's min/max hop helpers where one bounding
+    /** Random per-hop overlap: every hop is drawn uniformly from the range
+     *  {@link #RAND_MIN_OVERLAP_PCT} .. {@link #RAND_MAX_OVERLAP_PCT}, which
+     *  this mode owns as part of its identity rather than reading from any
+     *  setting.  Carries no single fraction, so every consumer resolves the
+     *  effective spacing through the drawn hop, or through
+     *  {@link #minHopSamples}/{@link #maxHopSamples} where one bounding
      *  number is needed. */
     RAND(Double.NaN, "Random");
+
+    /** The random mode's draw range, in overlap percent.  A wider overlap
+     *  leaves less fresh signal per hop, so the MAXIMUM percent yields the
+     *  SMALLEST hop.  The label deliberately carries no numbers - these can
+     *  change. */
+    public static final double RAND_MIN_OVERLAP_PCT = 80.0;
+    public static final double RAND_MAX_OVERLAP_PCT = 93.75;
 
     public final double fraction;
     public final String label;
@@ -56,6 +65,28 @@ public enum FftOverlap {
                     "Random overlap carries no fixed frame spacing - the hop is drawn per tick");
         }
         return Math.max(1, (int) Math.round(fftSize * (1.0 - fraction)));
+    }
+
+    /** Smallest spacing this mode can produce at {@code fftSize}: the fixed
+     *  hop, or the random range's densest spacing (its MAXIMUM overlap
+     *  percent).  The noise-skirt walk sizes its look-ahead from this - the
+     *  averaged floor's texture is assumed as coarse as the densest spacing
+     *  can make it, because random hopping is not credited with
+     *  decorrelating it. */
+    public int minHopSamples(int fftSize) {
+        return isRandom()
+                ? Math.max(1, (int) Math.round(fftSize * (1.0 - RAND_MAX_OVERLAP_PCT / 100.0)))
+                : hopSamples(fftSize);
+    }
+
+    /** Largest spacing this mode can produce at {@code fftSize}: the fixed
+     *  hop, or the random range's sparsest spacing (its MINIMUM overlap
+     *  percent).  Sizes every buffer that must hold a hop of any drawn
+     *  size without reallocating mid-gather. */
+    public int maxHopSamples(int fftSize) {
+        return isRandom()
+                ? Math.max(1, (int) Math.round(fftSize * (1.0 - RAND_MIN_OVERLAP_PCT / 100.0)))
+                : hopSamples(fftSize);
     }
 
     public static FftOverlap fromString(String s) {

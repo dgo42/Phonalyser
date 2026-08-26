@@ -27,8 +27,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.edgo.audio.measure.enums.FftOverlap;
-
 import lombok.experimental.UtilityClass;
 
 /**
@@ -69,29 +67,6 @@ public final class Fft {
     /** Shared daemon pool; null (=> always serial) on ≤2-core machines. */
     private static final ExecutorService POOL =
             THREADS < 2 ? null : Executors.newFixedThreadPool(THREADS, daemonFactory());
-
-    /** Smallest frame spacing {@code overlap} can produce at {@code fftSize}:
-     *  the fixed hop, or the random range's densest spacing (its MAXIMUM
-     *  overlap percent, {@link FftConstants#RAND_MAX_OVERLAP_PCT}).  The
-     *  noise-skirt walk sizes its look-ahead from this - the averaged floor's
-     *  texture is assumed as coarse as the densest spacing can make it,
-     *  because random hopping is not credited with decorrelating it. */
-    public static int minHopSamples(FftOverlap overlap, int fftSize) {
-        return overlap.isRandom()
-                ? Math.max(1, (int) Math.round(fftSize * (1.0 - FftConstants.RAND_MAX_OVERLAP_PCT / 100.0)))
-                : overlap.hopSamples(fftSize);
-    }
-
-    /** Largest frame spacing {@code overlap} can produce at {@code fftSize}:
-     *  the fixed hop, or the random range's sparsest spacing (its MINIMUM
-     *  overlap percent, {@link FftConstants#RAND_MIN_OVERLAP_PCT}).  Sizes
-     *  every buffer that must hold a hop of any drawn size without
-     *  reallocating mid-gather. */
-    public static int maxHopSamples(FftOverlap overlap, int fftSize) {
-        return overlap.isRandom()
-                ? Math.max(1, (int) Math.round(fftSize * (1.0 - FftConstants.RAND_MIN_OVERLAP_PCT / 100.0)))
-                : overlap.hopSamples(fftSize);
-    }
 
     private static ThreadFactory daemonFactory() {
         AtomicInteger n = new AtomicInteger();

@@ -39,8 +39,8 @@ import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.common.FileVersions;
+import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
-import org.edgo.audio.measure.fft.FftConstants;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -697,8 +697,8 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
                 : "";
         String size    = humanFftSize(r.fftSize);
         String overlap = r.overlap.isRandom()
-                ? "Rand_" + pctToken(FftConstants.RAND_MIN_OVERLAP_PCT)
-                        + "_" + pctToken(FftConstants.RAND_MAX_OVERLAP_PCT)
+                ? "Rand_" + pctToken(FftOverlap.RAND_MIN_OVERLAP_PCT)
+                        + "_" + pctToken(FftOverlap.RAND_MAX_OVERLAP_PCT)
                 : r.overlap.label.replace("%", "").replace('.', '_');
         String window  = r.windowType.name();
         double distPpm = engine.getBestThdPct() * 1_000_000.0;   // % -> ppm % (THD single-tone / IMD dual-tone)
