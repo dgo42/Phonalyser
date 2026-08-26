@@ -45,7 +45,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PredistortionStatsWriterTest {
 
     private static final String HEADER =
-            "type;round;averages;noise_dbr;f1_hz;f1_mag_db;f1_phase_deg"
+            "type;round;averages;hop_samples;noise_dbr;f1_hz;f1_mag_db;f1_phase_deg"
             + ";h2_hz;h2_mag_db;h2_phase_deg;h3_hz;h3_mag_db;h3_phase_deg"
             + ";h4_hz;h4_mag_db;h4_phase_deg;h5_hz;h5_mag_db;h5_phase_deg"
             + ";h6_hz;h6_mag_db;h6_phase_deg;h7_hz;h7_mag_db;h7_phase_deg"
@@ -71,7 +71,7 @@ class PredistortionStatsWriterTest {
         writer.calibration(1000.0, f -> new double[]{ 0.5, Math.PI / 4.0 });
         writer.close();
 
-        StringBuilder expected = new StringBuilder("CAL;-1;0;");
+        StringBuilder expected = new StringBuilder("CAL;-1;0;;");
         for (int n = 1; n <= 9; n++) {
             expected.append(';').append(n * 1000).append(",000000;-6,0206;45,0000");
         }
@@ -93,7 +93,7 @@ class PredistortionStatsWriterTest {
         // is written, so an aborted run keeps its tail.
         List<String> live = recordLines();
         assertEquals(2, live.size());
-        assertEquals("FRAME;0;7;-80,0000"
+        assertEquals("FRAME;0;7;4096;-80,0000"
                 + ";1000,000000;-20,0000;0,0000"
                 + ";2000,000000;-70,0000;0,0000"
                 + ";3000,000000;-90,0000;90,0000"
@@ -106,7 +106,7 @@ class PredistortionStatsWriterTest {
         writer.close();
         List<String> lines = recordLines();
         assertEquals(3, lines.size());
-        assertTrue(lines.get(2).startsWith("FRAME;1;7;-80,0000;"), lines.get(2));
+        assertTrue(lines.get(2).startsWith("FRAME;1;7;4096;-80,0000;"), lines.get(2));
     }
 
     @Test
@@ -117,7 +117,7 @@ class PredistortionStatsWriterTest {
 
         List<String> lines = recordLines();
         assertEquals(2, lines.size());
-        assertEquals("ROUND;3;7;-80,0000"
+        assertEquals("ROUND;3;7;4096;-80,0000"
                 + ";1000,000000;-20,0000;0,0000"
                 + ";2000,000000;-70,0000;0,0000"
                 + ";3000,000000;-90,0000;90,0000"
@@ -147,7 +147,7 @@ class PredistortionStatsWriterTest {
 
         List<String> lines = recordLines();
         assertEquals(2, lines.size());
-        assertEquals("PROBE;-1;0;"
+        assertEquals("PROBE;-1;0;;"
                 + NONE                                   // no plant for the fundamental
                 + ";2000,000000;0,0000;12,5000"          // H2
                 + ";3000,000000;-6,0206;25,0000"         // H3
@@ -171,9 +171,9 @@ class PredistortionStatsWriterTest {
 
         List<String> lines = recordLines();
         assertEquals(3, lines.size());
-        assertEquals("PRODUCT;-1;0;" + NONE.repeat(9)
+        assertEquals("PRODUCT;-1;0;;" + NONE.repeat(9)
                 + ";2;0;2000,000000;0,0000;25,0000", lines.get(1));
-        assertEquals("PRODUCT;-1;0;" + NONE.repeat(9)
+        assertEquals("PRODUCT;-1;0;;" + NONE.repeat(9)
                 + ";1;1;2100,000000;-6,0206;50,0000", lines.get(2));
     }
 
@@ -234,9 +234,9 @@ class PredistortionStatsWriterTest {
         assertEquals(HEADER, lines.get(0));
         for (String line : lines) {
             assertFalse(line.startsWith("PROD"), line);
-            // Every row still spans the same 36 columns as before the dual
+            // Every row still spans the same 37 columns as before the dual
             // records existed.
-            assertEquals(35L, line.chars().filter(c -> c == ';').count(), line);
+            assertEquals(36L, line.chars().filter(c -> c == ';').count(), line);
         }
     }
 
@@ -269,7 +269,7 @@ class PredistortionStatsWriterTest {
 
         List<String> lines = recordLines();
         assertEquals(2, lines.size());
-        assertEquals("APPLY;2;0;"
+        assertEquals("APPLY;2;0;;"
                 + NONE                                   // no fundamental correction
                 + ";;-40,0000;180,0000"                  // H2
                 + NONE + NONE                            // H3, H4 - not corrected
@@ -289,6 +289,7 @@ class PredistortionStatsWriterTest {
         FftResult r = new FftResult();
         r.freqResolution = 100.0;
         r.frameCount     = 7;
+        r.stepSamples    = 4_096;
         r.samplesAbsStart = 12_345L;
         r.amplitudeDbFs  = new double[40];
         Arrays.fill(r.amplitudeDbFs, -100.0);
@@ -311,7 +312,7 @@ class PredistortionStatsWriterTest {
      *  trailing columns. */
     private String productRow(String type, int round, int a, int b,
                               String hz, String magDb, String phaseDeg) {
-        return type + ";" + round + ";0;" + NONE.repeat(9)
+        return type + ";" + round + ";0;;" + NONE.repeat(9)
                 + ";" + a + ";" + b + ";" + hz + ";" + magDb + ";" + phaseDeg;
     }
 
