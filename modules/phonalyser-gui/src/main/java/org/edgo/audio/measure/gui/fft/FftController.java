@@ -30,6 +30,7 @@ import java.util.Locale;
 
 import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.enums.AlignGenerator;
+import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
@@ -424,6 +425,8 @@ public final class FftController {
         double tone1Hz = Double.NaN;
         double tone2Hz = Double.NaN;
         double binBwHz = Double.NaN;
+        FftOverlap overlap = null;
+        int stepSamples = 0;
         try {
             for (String line : Files.readAllLines(Paths.get(path), StandardCharsets.UTF_8)) {
                 String s = line.trim();
@@ -436,6 +439,19 @@ public final class FftController {
                 if (s.startsWith("# tone1_hz=")) { tone1Hz = parseHeaderHz(s); continue; }
                 if (s.startsWith("# tone2_hz=")) { tone2Hz = parseHeaderHz(s); continue; }
                 if (s.startsWith("# bin_bw_hz=")) { binBwHz = parseHeaderHz(s); continue; }
+                if (s.startsWith("# overlap=")) {
+                    // Known enum names only; anything else (old files write
+                    // nothing, null results wrote "n/a") stays null.
+                    try {
+                        overlap = FftOverlap.valueOf(s.substring(s.indexOf('=') + 1).trim());
+                    } catch (IllegalArgumentException ignored) { }
+                    continue;
+                }
+                if (s.startsWith("# step_samples=")) {
+                    double v = parseHeaderHz(s);
+                    if (v > 0) stepSamples = (int) Math.round(v);
+                    continue;
+                }
                 char c0 = s.charAt(0);
                 if (c0 != '-' && c0 != '+' && c0 != '.' && !Character.isDigit(c0)) continue; // header / comment
                 String[] p = s.split("[;,]");
@@ -464,6 +480,11 @@ public final class FftController {
         r.binBwSqrt        = Math.sqrt((binBwHz > 0) ? binBwHz : freqRes);
         r.fftSize          = 2 * (n - 1);
         r.sampleRate       = (int) Math.round(freqRes * r.fftSize);
+        // Restored capture geometry: files without the headers (or with an
+        // unknown overlap token) keep null / 0, and the skirt walk degrades
+        // to its no-overlap look-ahead exactly as before these headers.
+        r.overlap          = overlap;
+        r.stepSamples      = stepSamples;
         r.harmonicCount    = harmCount;
         // The file stores dBV; dBFS is the result's base scale, so subtract the
         // global ADC offset once on load (the writer adds it back on save, so a
@@ -569,6 +590,14 @@ public final class FftController {
             pw.printf("# fft_size=%d%n", r.fftSize);
             pw.printf("# sample_rate_hz=%d%n", r.sampleRate);
             pw.printf("# window=%s%n", r.windowType != null ? r.windowType.name() : "n/a");
+            // Overlap as the stable enum NAME (the loader restores it; unknown
+            // tokens stay null) plus the actual frame spacing - under the
+            // random overlap the enum alone carries no geometry, and the
+            // spacing is what the reloaded skirt walk keys on.
+            pw.printf("# overlap=%s%n", r.overlap != null ? r.overlap.name() : "n/a");
+            if (r.stepSamples > 0) {
+                pw.printf("# step_samples=%d%n", r.stepSamples);
+            }
             pw.printf("# averaging=%s%n", r.coherentAveraging ? "coherent" : "incoherent");
             pw.printf("# averages=%d%n", r.frameCount);
             if (r.snrFreqMin > 0 || r.snrFreqMax > 0) {

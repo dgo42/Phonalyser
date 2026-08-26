@@ -40,6 +40,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.fft.FftConstants;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -683,7 +684,10 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
      *  (THD in ppm: 0.83); dual tone carries both tone frequencies, e.g.
      *  {@code predistortion-IMD-19005_0661-20000_0611-2M-87_5-HFT248D-5_05.dpd}
      *  (IMD in ppm: 5.05).  Decimal points become underscores so the name stays
-     *  path-friendly. */
+     *  path-friendly.  The random mode's token spells out its draw range from
+     *  the enum's own bounds rather than its label, so the name still records
+     *  the geometry that produced the measurement and follows those bounds if
+     *  they change: {@code Rand_80_90}. */
     private String defaultDpdFileName(FftResult r) {
         boolean dual   = engine.isDualTone();
         String kind    = dual ? "IMD" : "THD";
@@ -692,12 +696,24 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
                 ? "-" + String.format(Locale.US, "%.4f", r.fundamental2HzRefined).replace('.', '_')
                 : "";
         String size    = humanFftSize(r.fftSize);
-        String overlap = r.overlap.label.replace("%", "").replace('.', '_');
+        String overlap = r.overlap.isRandom()
+                ? "Rand_" + pctToken(FftConstants.RAND_MIN_OVERLAP_PCT)
+                        + "_" + pctToken(FftConstants.RAND_MAX_OVERLAP_PCT)
+                : r.overlap.label.replace("%", "").replace('.', '_');
         String window  = r.windowType.name();
         double distPpm = engine.getBestThdPct() * 1_000_000.0;   // % -> ppm % (THD single-tone / IMD dual-tone)
         String dist    = String.format(Locale.US, "%.2f", distPpm).replace('.', '_');
         return "predistortion-" + kind + "-" + freq + freq2 + "-" + size + "-" + overlap
                 + "-" + window + "-" + dist + ".dpd";
+    }
+
+    /** An overlap percent as a filename token: the plain integer when the
+     *  value is whole (80 -> 80), otherwise two decimals with the point as
+     *  an underscore (93.75 -> 93_75). */
+    private String pctToken(double pct) {
+        return pct == Math.rint(pct)
+                ? String.valueOf((int) pct)
+                : String.format(Locale.US, "%.2f", pct).replace('.', '_');
     }
 
     /** Compact power-of-two FFT length: 2097152 -> "2M", 524288 -> "512k". */
