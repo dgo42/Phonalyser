@@ -22,6 +22,7 @@ import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -39,6 +40,7 @@ import org.edgo.audio.measure.dsp.MainsFilters;
 import org.edgo.audio.measure.dsp.MainsTimeFilter;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.Fft;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftAnalyzer.FrameFftCache;
 import org.edgo.audio.measure.fft.FftResult;
@@ -207,9 +209,30 @@ public final class FftAnalyzerWorker {
     private volatile boolean reAnchorPending = true;
     /** Reusable per-tick scratch: {@code analyzeBuf} is the analysis copy (the
      *  comb / FFT window mutate it in place, so it must not be {@link #winBuf}),
-     *  {@code hopBuf} stages the fresh hop pulled from the reader each tick. */
+     *  {@code hopBuf} stages the fresh hop pulled from the reader each tick.
+     *  {@code hopBuf} is sized to the LARGEST possible hop of the current
+     *  configuration and only its first {@link #pendingHopSamples} entries are
+     *  in use - a random-mode hop change must never resize it mid-gather,
+     *  because that would discard the partial fill and tear the contiguous
+     *  stream the de-rotation depends on. */
     private double[] analyzeBuf = new double[0];
     private double[] hopBuf     = new double[0];
+    /** The hop the window slides by next - drawn per tick in the random
+     *  overlap mode, constant otherwise.  FROZEN while its gather is in
+     *  flight: it is redrawn only after the slide it sizes has completed.
+     *  It is also the spacing between the analysis buffer's two frames, so
+     *  the second frame of one tick is exactly the first frame of the next
+     *  and the raw-frame cache keeps hitting.  Volatile for the UI's
+     *  next-frame progress readout. */
+    private volatile int pendingHopSamples;
+    /** Draws the random-mode hops.  Seeding is irrelevant to the measurement -
+     *  the de-rotation is exact for any hop; the draw only decides WHICH
+     *  spacings occur. */
+    private final Random hopRandom = new Random();
+    /** Per-tick frame geometry handed to the analyser: frame starts relative
+     *  to the analysis buffer.  Rebuilt each tick (one or two entries), kept
+     *  as a field so the tick loop stays allocation-free. */
+    private int[] frameOffsets = new int[0];
 
     /** Mains-hum comb, lazily built for the current sample rate.  Used only
      *  when {@code fftMainsSuppression == IIR_COMB}: it only TRACKS the mains
@@ -1510,8 +1533,11 @@ public final class FftAnalyzerWorker {
         // Overrun is reported as a NEGATIVE progress so the UI can tell it
         // apart from 0 (= simply no fresh samples captured yet).
         if (avail == SignalBufferReader.OVERRUN) return -1.0;
-        FftOverlap overlap = prefs.getFftOverlap();
-        double hop = Math.max(1, fftLength * (1.0 - overlap.fraction));
+        // The hop actually being gathered - the worker's drawn pending hop, not
+        // a recomputation from preferences (under the random overlap the two
+        // differ every tick, and even for fixed modes the preference can change
+        // ahead of the worker's next tick).
+        double hop = Math.max(1, pendingHopSamples);
         // Building the first window needs a full `needed`; once it's valid each
         // tick just needs one fresh hop, so the bar sweeps 0->1 per hop.  A span
         // is gathered across ticks, so what already sits in the analyser's own
@@ -1637,16 +1663,21 @@ public final class FftAnalyzerWorker {
 
         FftOverlap overlap = prefs.getFftOverlap();
 
-        double hop = fftLength * (1.0 - overlap.fraction);
-        if (hop < 1) hop = 1;
-        int hopSamples = (int) Math.max(1, Math.round(hop));
+        // Hop bounds from the mode itself: a fixed overlap has one hop (both
+        // bounds coincide), the random mode spans its percent range.  The
+        // window and the hop buffer are sized ONCE for the LARGEST possible
+        // hop, so neither resizes while a drawn hop's gather is in flight (a
+        // mid-gather resize would discard the partial fill and tear the
+        // contiguous stream).
+        int minHopSamples = Fft.minHopSamples(overlap, fftLength);
+        int maxHopSamples = Fft.maxHopSamples(overlap, fftLength);
         // NOT bounded by the capture ring: the analysis span is the analyser's
         // own buffer, gathered from the ring across as many ticks as it takes.
         // Clamping it to the ring made the largest FFT lengths impossible - a
         // 4 M-point frame at 48 kS/s is 87 s of audio against a 22 s ring, so
         // the span demanded was the whole ring, and waiting for it guaranteed
         // the writer lapped the cursor (the permanent overrun at 4 M).
-        int needed = (int) Math.ceil(fftLength + (averages - 1) * hop);
+        int needed = fftLength + (averages - 1) * maxHopSamples;
 
         Channel channel = prefs.getFftChannel();
         boolean wantLeft = (channel == Channel.L);
@@ -1714,24 +1745,36 @@ public final class FftAnalyzerWorker {
             winAbsStart = rdr.getReadPos() - winLen;
             winValid    = true;
             winFill     = 0;
+            // First draw: the spacing this tick's frame pair is analysed at,
+            // and the amount the next slide consumes.
+            pendingHopSamples = drawHop(minHopSamples, maxHopSamples);
         } else {
             // Slide forward exactly one hop: pull the fresh hop, drop the oldest
-            // hop, append it.  Uniform hop => uniform cross-tick de-rotation
-            // delta, gap-free across ticks (the contiguous-stream fix).  The hop
-            // is gathered the same way as the first window: at zero overlap it
-            // is as long as the frame itself, hence longer than the ring at the
-            // large FFT lengths.
-            if (hopBuf.length != hopSamples) {
-                hopBuf  = new double[hopSamples];
+            // hop, append it.  The de-rotation rides each tick's ABSOLUTE
+            // sample position, so a per-tick VARIABLE hop stays exact - the
+            // stream just has to remain gap-free, which is why the pending hop
+            // is frozen until its gather completes.  The hop is gathered the
+            // same way as the first window: at zero overlap it is as long as
+            // the frame itself, hence longer than the ring at the large FFT
+            // lengths.
+            int slideHop = pendingHopSamples;
+            if (hopBuf.length != maxHopSamples) {
+                // Capacity follows the CONFIGURATION (size / mode / range), never
+                // the drawn hop - reallocation cannot strike mid-gather.
+                hopBuf  = new double[maxHopSamples];
                 hopFill = 0;
             }
-            hopFill = gather(rdr, hopBuf, hopFill, hopSamples, wantLeft, avail);
+            hopFill = gather(rdr, hopBuf, hopFill, slideHop, wantLeft, avail);
             if (hopFill == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
-            if (hopFill < hopSamples) return awaitFor(hopSamples - hopFill, sampleRate);
-            System.arraycopy(winBuf, hopSamples, winBuf, 0, winLen - hopSamples);
-            System.arraycopy(hopBuf, 0, winBuf, winLen - hopSamples, hopSamples);
-            winAbsStart += hopSamples;
+            if (hopFill < slideHop) return awaitFor(slideHop - hopFill, sampleRate);
+            System.arraycopy(winBuf, slideHop, winBuf, 0, winLen - slideHop);
+            System.arraycopy(hopBuf, 0, winBuf, winLen - slideHop, slideHop);
+            winAbsStart += slideHop;
             hopFill = 0;
+            // The slide is complete - draw the NEXT hop.  It is the spacing
+            // this tick's analysis states for its frame pair, so the second
+            // frame lands exactly where the next tick's first frame will.
+            pendingHopSamples = drawHop(minHopSamples, maxHopSamples);
         }
         samplesAbsStart = winAbsStart;
 
@@ -1860,9 +1903,17 @@ public final class FftAnalyzerWorker {
         FftResult slot = resultPool.acquire();
         FftResult r;
         try {
+            // Explicit per-frame geometry: one frame, or a pair spaced by the
+            // drawn pending hop (so the second frame is exactly the next
+            // tick's first and hits the raw-frame cache).  The window may be
+            // sized for the LARGEST hop, so inferring frames from the buffer
+            // length would over-count under the random mode.
+            if (frameOffsets.length != averages) frameOffsets = new int[averages];
+            frameOffsets[0] = 0;
+            if (averages > 1) frameOffsets[1] = pendingHopSamples;
             r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH,
                     window, overlap, distMin, distMax, coherent, fundRefDbFs,
-                    false, expectedFundHz, slot);
+                    false, expectedFundHz, slot, frameOffsets);
         } catch (RuntimeException ex) {
             // Pool hygiene only - the failure itself must surface: the worker
             // loop's Throwable catch logs it, so a persistently throwing
@@ -1999,7 +2050,7 @@ public final class FftAnalyzerWorker {
                 || (sinceShow >= DISPLAY_MIN_NANOS && backlog <= 2L * needed);
         if (!showNow) {
             resultPool.release(r);                         // accumulated; defer the rebuild
-            return awaitFor(hopSamples, sampleRate);
+            return awaitFor(pendingHopSamples, sampleRate);
         }
         lastShowNanos = System.nanoTime();
 
@@ -2044,7 +2095,7 @@ public final class FftAnalyzerWorker {
             return IDLE_TICK_MS;
         }
         publishResult(r);
-        return awaitFor(hopSamples, sampleRate);
+        return awaitFor(pendingHopSamples, sampleRate);
     }
 
     /** Deep-copies {@code newSlot} on the worker thread and publishes
@@ -2122,6 +2173,14 @@ public final class FftAnalyzerWorker {
     private int awaitFor(int samples, int sampleRate) {
         awaitSamplesNext = samples;
         return msForSamples(samples, sampleRate);
+    }
+
+    /** One hop from the derived bounds: the single fixed value when they
+     *  coincide, a uniform draw over [min, max] for the random overlap. */
+    private int drawHop(int minHopSamples, int maxHopSamples) {
+        return minHopSamples >= maxHopSamples
+                ? minHopSamples
+                : minHopSamples + hopRandom.nextInt(maxHopSamples - minHopSamples + 1);
     }
 
     /** Consumes this tick's share of a span being collected into {@code dst}:
