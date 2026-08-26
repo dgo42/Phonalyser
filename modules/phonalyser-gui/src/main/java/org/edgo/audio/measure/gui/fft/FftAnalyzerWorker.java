@@ -532,17 +532,15 @@ public final class FftAnalyzerWorker {
     private double[] toneDroppedSamples = new double[0];
     /** Half-width (bins) of the lobe a tone's constant phase covers. */
     private static final int    TONE_LOBE_HALF_BINS = 16;
-    /** Two peaks closer than this (bins) are merged into one tone. */
+    /** Half-width (bins) of the search window around each expected harmonic
+     *  position - covers the sub-bin drift of h·κ for every harmonic order
+     *  without reaching a neighbouring order at realistic fundamentals. */
     private static final int    MIN_TONE_SEP_BINS   = 48;
-    /** Cap on independent tone references. */
-    private static final int    MAX_TONES           = 8;
-    /** A peak at an integer multiple (h≥2) of the strongest tone that is at
-     *  least this far BELOW it is a harmonic (distortion), not an independent
-     *  tone - drop it from the tone list so a single tone + harmonics stays on
-     *  the single-reference (phase-slope-refined) path instead of the per-tone
-     *  multi-tone path.  Far below => it can't be a real IMD partner (which is
-     *  comparable in level) and the single-ref time-shift already aligns it. */
-    private static final double HARMONIC_REJECT_BELOW_DB = 40.0;
+    /** Highest harmonic order the fork may adopt (H2..this). */
+    private static final int    FORK_HARMONIC_MAX   = 9;
+    /** Cap on independent tone references: the fundamental, H2..H9, and the
+     *  dual-tone second fundamental. */
+    private static final int    MAX_TONES           = 10;
     /** Ignore peaks below this frequency when detecting tones - a residual DC
      *  offset leaks through the window main lobe into the first bins and would
      *  be taken as a spurious second tone.  Well under any real tone. */
@@ -999,9 +997,15 @@ public final class FftAnalyzerWorker {
         int[]    lo  = new int[nT];
         int[]    hi  = new int[nT];
         double[] angT = new double[nT];   // each tone's tracked de-rotation phase (for the IMD grid)
-        // The strong tones share ONE clock: each tone's per-tone loop correction
-        // measures the same relative drift δ ≈ correction/delta.  Pool them
-        // (strength-weighted) below and de-rotate the NON-tone bins by delta·(1+δ).
+        // Single-tone: the fundamental and its strong harmonics are one
+        // waveform on one clock, so each tone's loop correction measures the
+        // SAME relative drift δ ≈ correction/delta - pool them
+        // (strength-weighted) below and de-rotate the NON-tone bins by
+        // delta·(1+δ).  Dual-tone: the two fundamentals run independent
+        // FLLs and the hardware can steer each separately, so their drift
+        // observations are different commanded quantities - NOTHING pools.
+        boolean dualPair = !Double.isNaN(r.fundamental2HzRefined)
+                && r.fundamental2HzRefined > 0.0;
         double dsum = 0.0, wsum = 0.0;
         // Per-tone κ refine (mirrors the single-reference one-shot refine): while
         // unrefined, leave the PLL OFF and measure each tone's de-rotated phase slope
@@ -1073,7 +1077,8 @@ public final class FftAnalyzerWorker {
             cIm[t] = sr;
             lo[t] = Math.max(0,     k0 - TONE_LOBE_HALF_BINS);
             hi[t] = Math.min(N - 1, k0 + TONE_LOBE_HALF_BINS);
-            if (FORK_NONTONE_DRIFT && accumRe != null && accumFrames > 0 && Math.abs(delta) > 1.0) {
+            if (FORK_NONTONE_DRIFT && !dualPair
+                    && accumRe != null && accumFrames > 0 && Math.abs(delta) > 1.0) {
                 double w = Math.hypot(accumRe[k0], accumIm[k0]);   // strength weight
                 dsum += w * toneDroppedSamples[t] / delta;
                 wsum += w;
@@ -1088,7 +1093,10 @@ public final class FftAnalyzerWorker {
         // ramp that drifts (slow when aligned, wild at a raw ppm offset).
         int[] prodIdx = null;
         double[] prodCos = null, prodSin = null;
-        if (nT == 2 && accumToneKappa[0] > 0.0 && accumToneKappa[1] > 0.0) {
+        // The pair grid exists only for a REAL dual-tone pair - a single tone
+        // with one strong harmonic also counts two locks, but its second lock
+        // is a harmonic, not a second fundamental.
+        if (dualPair && nT == 2 && accumToneKappa[0] > 0.0 && accumToneKappa[1] > 0.0) {
             final int ORDER = 9;
             int[] pa = new int[(2 * ORDER + 1) * (2 * ORDER + 1)];
             int[] pb = new int[pa.length];
@@ -1183,13 +1191,23 @@ public final class FftAnalyzerWorker {
         }
     }
 
-    /** Finds the fractional bins of the "strong" tones in {@code r}'s
-     *  spectrum - local maxima within {@link #STRONG_TONE_REL_DB} dB of the
-     *  strongest peak, merged within {@link #MIN_TONE_SEP_BINS} and refined
-     *  to sub-bin by parabolic interpolation, sorted ascending.  Detection
-     *  from the spectrum (not commanded frequencies) is deliberate: the
-     *  generator may be external, so the FFT is the only thing that knows
-     *  what was actually received. */
+    /** Fractional bins of the tones the accumulator may phase-lock - a
+     *  CLOSED set built on one invariant: the fundamental and its harmonics
+     *  are COHERENT with each other (one generator, one DUT process, one
+     *  clock), so only they may share phase tracking.  Single-tone: the
+     *  analyser's own refined fundamental plus those of its harmonics
+     *  H2..H9 standing within the multi-tone detect threshold of it.
+     *  Dual-tone: EXACTLY the two fundamentals - they are not coherent to
+     *  each other (each gets its own lock), while every harmonic of either
+     *  tone and every intermod product is coherent to the PAIR and rides
+     *  the product grid's derived rotation instead of a lock of its own.
+     *  No other frequency is ever observed as a
+     *  tone, however strong it reads: an environmental line (mains above
+     *  all) rides an unrelated oscillator - it is not coherent with the
+     *  measurement and cannot be - so adopting one smears a truncated skirt
+     *  around it and poisons the pooled clock-drift average every lock
+     *  feeds.  Refined to sub-bin by parabolic interpolation, sorted
+     *  ascending. */
     private double[] detectStrongTones(FftResult r) {
         double[] db = r.amplitudeDbFs;
         if (db == null) return new double[0];
@@ -1202,66 +1220,76 @@ public final class FftAnalyzerWorker {
         // analyzer's fundamental search uses.
         double freqRes = (double) r.sampleRate / r.fftSize;
         int    minBin  = Math.max(2, (int) Math.ceil(DC_REJECT_HZ / freqRes));
-        // A peak counts as a separate TONE only if it is within
-        // fftStrongToneRelDb of the STRONGEST peak.  A clean tone's harmonics
-        // sit far below it (often >100 dB) so they're excluded and the signal
-        // stays on the single-reference phase-lock path; genuine dual-tone / IMD
-        // partners are comparable in level and survive.
-        double strongest = -Double.MAX_VALUE;
-        for (int k = minBin; k < halfSize; k++) {
-            if (db[k] > db[k - 1] && db[k] >= db[k + 1] && db[k] > strongest) strongest = db[k];
+        // The tone set is CLOSED: the fundamental, those of its harmonics
+        // H2..H9 that stand within fftStrongToneRelDb of it ("strong"
+        // harmonics - through a notch rig the un-notched harmonics are
+        // comparable to the notched fundamental and earn their own phase
+        // lock), and the dual-tone second fundamental when one is
+        // established.  NO free spectral peaks: every adopted tone's lock
+        // feeds the pooled clock-drift average, so the pool must hold only
+        // components locked to the measurement clock - a strong
+        // environmental line (mains standing tall against a notched
+        // fundamental) must never be adopted, however loud it reads.
+        // No spectrum sweep: the fundamental is the analyser's own, located
+        // with the generator hint and refined - the only bins this method
+        // ever reads are the eight harmonic windows and the dual-tone
+        // partners.  A sweep could also be HIJACKED: on a notch rig the
+        // strongest peak is not necessarily the measurement fundamental.
+        if (Double.isNaN(r.fundamentalHzRefined) || r.fundamentalHzRefined <= 0.0) {
+            return new double[0];
         }
+        int fundBin = (int) Math.round(r.fundamentalHzRefined / freqRes);
+        if (fundBin < minBin || fundBin >= halfSize) return new double[0];
+        double strongest = db[fundBin];
         double thresh = strongest - Preferences.instance().getFftStrongToneRelDb();
-        // Keep the strongest MAX_TONES local maxima above the threshold, merging
-        // peaks closer than MIN_TONE_SEP_BINS (one tone's lobe).  Selecting by
-        // strength (not scan order) keeps the real tones even when 1/f or the
-        // HF-rise noise also clears the threshold.
         int[]    bins = new int[MAX_TONES];
         double[] lvls = new double[MAX_TONES];
         int count = 0;
-        for (int k = minBin; k < halfSize; k++) {
-            if (db[k] < thresh) continue;
-            if (!(db[k] > db[k - 1] && db[k] >= db[k + 1])) continue;   // local max
-            double lvl = db[k];
-            int near = -1;
-            for (int t = 0; t < count; t++) {
-                if (Math.abs(k - bins[t]) < MIN_TONE_SEP_BINS) { near = t; break; }
-            }
-            if (near >= 0) {
-                if (lvl > lvls[near]) { bins[near] = k; lvls[near] = lvl; }
-            } else if (count < MAX_TONES) {
-                bins[count] = k; lvls[count] = lvl; count++;
-            } else {
-                int weakest = 0;
-                for (int t = 1; t < count; t++) if (lvls[t] < lvls[weakest]) weakest = t;
-                if (lvl > lvls[weakest]) { bins[weakest] = k; lvls[weakest] = lvl; }
+        bins[count] = fundBin; lvls[count] = strongest; count++;
+        // Dual-tone locks ONLY the two fundamentals: every harmonic of either
+        // tone and every intermod product is coherent to the PAIR and rides
+        // the derived a·ang1 + b·ang2 rotation of the product grid - locking
+        // a harmonic independently would put it on a frozen per-tone κ
+        // instead.  The harmonic adoption below is single-tone machinery.
+        boolean dual = !Double.isNaN(r.fundamental2HzRefined)
+                && r.fundamental2HzRefined > 0.0;
+        if (!dual) {
+            // Strong harmonics: the peak inside a window around each expected
+            // position h·fundBin.  The window covers the sub-bin drift of
+            // h·κ; at low fundamentals it shrinks so neighbouring orders
+            // stay apart.
+            int win = Math.min(MIN_TONE_SEP_BINS, Math.max(2, fundBin / 2));
+            for (int h = 2; h <= FORK_HARMONIC_MAX; h++) {
+                long centre = (long) h * fundBin;
+                if (centre + 1 >= halfSize) break;
+                int lo2 = Math.max(minBin, (int) centre - win);
+                int hi2 = Math.min(halfSize - 1, (int) centre + win);
+                int    best    = -1;
+                double bestLvl = -Double.MAX_VALUE;
+                for (int k = lo2; k <= hi2; k++) {
+                    if (db[k] > db[k - 1] && db[k] >= db[k + 1] && db[k] > bestLvl) {
+                        bestLvl = db[k];
+                        best    = k;
+                    }
+                }
+                if (best >= 0 && bestLvl >= thresh && count < MAX_TONES) {
+                    bins[count] = best; lvls[count] = bestLvl; count++;
+                }
             }
         }
-        // Harmonic rejection: a single tone's harmonics (2f, 3f, ...) clear the
-        // floor and would otherwise be taken as independent tones, forcing the
-        // per-tone multi-tone path (frozen parabolic κ, NO phase-slope refine -
-        // the long-run drift).  A harmonic sits at an integer multiple h≥2 of the
-        // strongest tone AND well below it (distortion); the single-reference
-        // time-shift already aligns it via h×, so drop it - leaving a single tone
-        // + harmonics on the refined single-ref path.  Genuine inharmonic IMD
-        // partners aren't integer multiples and aren't far below, so they survive.
-        if (count >= 2) {
-            int fund = 0;
-            for (int i = 1; i < count; i++) if (lvls[i] > lvls[fund]) fund = i;
-            double f0bin = bins[fund];
-            int kept = 0;
-            for (int i = 0; i < count; i++) {
-                boolean harmonic = false;
-                if (i != fund && f0bin > 0.0) {
-                    double ratio = bins[i] / f0bin;
-                    long   h     = Math.round(ratio);
-                    harmonic = h >= 2
-                            && Math.abs(ratio - h) * f0bin < MIN_TONE_SEP_BINS
-                            && lvls[i] < lvls[fund] - HARMONIC_REJECT_BELOW_DB;
+        // Dual-tone: the analyser's own SECOND fundamental is the
+        // measurement's partner, not a free peak - adopt it when present and
+        // not already inside a harmonic window.
+        if (!Double.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0
+                && count < MAX_TONES) {
+            int k2 = (int) Math.round(r.fundamental2HzRefined / freqRes);
+            if (k2 >= minBin && k2 < halfSize) {
+                boolean covered = false;
+                for (int t = 0; t < count; t++) {
+                    if (Math.abs(k2 - bins[t]) < MIN_TONE_SEP_BINS) { covered = true; break; }
                 }
-                if (!harmonic) { bins[kept] = bins[i]; lvls[kept] = lvls[i]; kept++; }
+                if (!covered) { bins[count] = k2; lvls[count] = db[k2]; count++; }
             }
-            count = kept;
         }
         // Sort the kept tones by bin ascending (needed by the region walk).
         for (int i = 1; i < count; i++) {
