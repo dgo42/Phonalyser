@@ -319,7 +319,7 @@ public class FftChartExporter {
 
         BufferedImage chartImage = chart.createBufferedImage(width, height);
 
-        double enob = (r.sinadDb - 1.76) / 6.02;
+        double enob = (r.enobSinadDb - 1.76) / 6.02;
 
         double fundamentalDbV = (Double.isFinite(r.fundamentalTrueDbFs)
                 ? r.fundamentalTrueDbFs

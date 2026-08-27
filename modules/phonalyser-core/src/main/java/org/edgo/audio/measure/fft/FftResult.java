@@ -161,8 +161,14 @@ public class FftResult {
     public double thdDb;
     public double thdNDb;
     public double snrDb;
-    /** Unweighted SINAD: 10·log10(refLin² / (noisePower + Σ harmonic power)) - basis for ENOB. */
+    /** A-weighted in-band SINAD: 10·log10(refLin² / (awNoisePower + A-weighted
+     *  harmonic power)) - the basis of the A-suffixed THD+N / N+D readouts. */
     public double sinadDb;
+    /** ENOB basis (IEEE 1241 convention): UNWEIGHTED noise over the FULL
+     *  capture band (the distortion HP/LP do not apply) plus all found
+     *  harmonics, with the signal referred to FULL SCALE - so
+     *  (enobSinadDb − 1.76)/6.02 compares against converter datasheets. */
+    public double enobSinadDb;
     /** Lower bound of the frequency range used for SNR (Hz); 0 = no limit. */
     public double snrFreqMin;
     /** Upper bound of the frequency range used for SNR (Hz); 0 = no limit. */
@@ -359,6 +365,7 @@ public class FftResult {
         c.thdNDb                     = src.thdNDb;
         c.snrDb                      = src.snrDb;
         c.sinadDb                    = src.sinadDb;
+        c.enobSinadDb                = src.enobSinadDb;
         c.snrFreqMin                 = src.snrFreqMin;
         c.snrFreqMax                 = src.snrFreqMax;
         c.coherentAveraging          = src.coherentAveraging;

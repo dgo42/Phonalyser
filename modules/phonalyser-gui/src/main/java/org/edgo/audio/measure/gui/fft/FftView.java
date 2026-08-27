@@ -2887,7 +2887,7 @@ public final class FftView extends AbstractFreqDomainView {
                 "THD+N:", ratioLevelPctText(thdNPct(r), tableUnit, refDbFs, dbvOffsetDb, unitLabel)});
         rows.add(new String[]{
                 "SNR:",  fmtDb(r.snrDb),
-                "ENOB:", String.format("%.1f bits", (r.sinadDb - 1.76) / 6.02)});
+                "ENOB:", String.format("%.1f bits", (r.enobSinadDb - 1.76) / 6.02)});
         rows.add(null);   // small gap between the metric and harmonic blocks
         int harmCount = (r.harmonicDbFs == null) ? 0 : r.harmonicDbFs.length;
         for (int i = 0; i < harmCount; i += 2) {
