@@ -73,5 +73,16 @@ public final class DebugSwitches {
      *  with thousands of rows - hence a switch rather than a permanent write.
      *  {@code false} leaves the training loop writing nothing; the probe and
      *  the correction math run either way. */
-    public static final boolean WRITE_DPD_STATS = Boolean.parseBoolean("true");
+    public static final boolean WRITE_DPD_STATS = Boolean.parseBoolean("false");
+
+    /** DEBUG hard switch: write a per-tick record of the coherent FFT
+     *  accumulator - one {@code fft-ticks-<timestamp>.csv} per accumulator
+     *  run in the application's log directory: every tick's de-rotation
+     *  inputs (absolute window position, intra-call step, elapsed-sample
+     *  delta, phase-lock correction, refined kappa, ramp slope theta) plus
+     *  the complex spectrum around the fundamental bin, fresh and
+     *  accumulated.  A measurement record for offline lobe analysis, not a
+     *  log - a long run writes thousands of rows, hence a switch.
+     *  {@code false} writes nothing. */
+    public static final boolean WRITE_FFT_TICK_STATS = Boolean.parseBoolean("false");
 }
