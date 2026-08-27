@@ -29,6 +29,9 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Random;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 /**
  * Cross-tick harmonic-stability harness under a DRIFTING DAC↔ADC clock.
  *
@@ -41,13 +44,12 @@ import java.util.Random;
  * is bypassed; the accumulator + PLL are the production code.
  *
  * <p>The capture is a continuous tone+harmonics whose frequency <b>chirps</b> at a
- * configurable rate (the DAC↔ADC relative drift).  The worker pins κ from tick 0 and
- * de-rotates each tick's harmonics by {@code h·Φ(pinned κ)}; the PLL tracks the
- * FUNDAMENTAL phase, so a frequency RAMP leaves a type-1 steady-state lag that scales
- * ×h onto the harmonics - the suspected mechanism behind the live "harmonics slowly
- * decline over long averages".  This harness reproduces it deterministically: harmonic
- * level vs averaging depth, swept over drift rate.  ({@code 10 ppb/min = 0.01 ppm/min}
- * is the real NZ2520SDA rig; higher rates exaggerate the effect to see the breakdown.)
+ * configurable rate (the DAC↔ADC relative drift).  The worker de-rotates each tick by
+ * the whole-spectrum time-shift ramp (phase proportional to bin index, anchored on the
+ * refined κ); the PLL tracks the FUNDAMENTAL phase and its sample-domain correction
+ * reaches every harmonic ×h through the ramp - so under a common-clock drift the
+ * whole coherent set must hold flat over depth.  ({@code 10 ppb/min = 0.01 ppm/min}
+ * is the real NZ2520SDA rig; higher rates exaggerate any residual to see a breakdown.)
  */
 @Tag("exploratory")   // slow diagnostic harness - excluded from the normal build (see pom surefire)
 class FftCrossTickDriftTest {
@@ -87,44 +89,57 @@ class FftCrossTickDriftTest {
             double[] sig = synthesizeContinuous(SEED, total, driftPerSample);
             double ppbOverRun = driftPpmMin * 1000.0 * (total / (double) SAMPLE_RATE) / 60.0;
 
-            for (boolean fork : new boolean[]{false, true}) {
-                FftAnalyzerWorker.FORK_NONTONE_DRIFT = fork;   // A/B the joint-δ fork
-                FftAnalyzer       analyzer = new FftAnalyzer();
-                FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);      // headless
-                double[] win = new double[winLen];
+            FftAnalyzer       analyzer = new FftAnalyzer();
+            FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);      // headless
+            double[] win = new double[winLen];
 
-                LOG.info(String.format("--- drift = %.3f ppm/min  (%.1f ppb over %.1f s)  fork=%s ---",
-                        driftPpmMin, ppbOverRun, total / (double) SAMPLE_RATE, fork ? "ON " : "OFF"));
+            LOG.info(String.format("--- drift = %.3f ppm/min  (%.1f ppb over %.1f s) ---",
+                    driftPpmMin, ppbOverRun, total / (double) SAMPLE_RATE));
 
-                long base = 0;
-                FftResult r;
-                for (int t = 0; t < TICKS; t++) {
-                    System.arraycopy(sig, (int) base, win, 0, winLen);
-                    analyzer.setSamplesAbsStart(base);
-                    analyzer.setSpectrumOnly(true);
-                    analyzer.setMultiTone(false);
-                    analyzer.setSecondToneHintHz(Double.NaN);
-                    r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
-                            WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
-                    worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+            // Final readout vs the SYNTHESIZED levels: the whole-spectrum ramp
+            // propagates the fundamental loop's clock correction ×h, so at full
+            // depth every coherent component must read its true level at every
+            // common-clock drift rate.  (An early-vs-late comparison would be
+            // biased low at the start for harmonics near the per-bin floor.)
+            long base = 0;
+            FftResult r;
+            for (int t = 0; t < TICKS; t++) {
+                System.arraycopy(sig, (int) base, win, 0, winLen);
+                analyzer.setSamplesAbsStart(base);
+                analyzer.setSpectrumOnly(true);
+                analyzer.setMultiTone(false);
+                analyzer.setSecondToneHintHz(Double.NaN);
+                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
+                        WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
+                worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
 
-                    if ((t + 1) % READOUT_EVERY == 0) {
-                        worker.overlayAccumulatorOnto(r);
-                        analyzer.recomputeStats(r);
-                        StringBuilder sb = new StringBuilder();
-                        for (int i = 0; i < HARMONIC_COUNT; i++) {
-                            double h = (r.harmonicDbFs != null && i < r.harmonicDbFs.length)
-                                    ? r.harmonicDbFs[i] : Double.NaN;
-                            sb.append(String.format(" H%d=%.2f", i + 2, h));
-                        }
-                        LOG.info(String.format("  tick %4d  frames=%6d  fund=%.2f |%s",
-                                t + 1, worker.getAccumulatedFrames(), r.fundamentalDbFs, sb));
+                if ((t + 1) % READOUT_EVERY == 0) {
+                    worker.overlayAccumulatorOnto(r);
+                    analyzer.recomputeStats(r);
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < HARMONIC_COUNT; i++) {
+                        double h = (r.harmonicDbFs != null && i < r.harmonicDbFs.length)
+                                ? r.harmonicDbFs[i] : Double.NaN;
+                        sb.append(String.format(" H%d=%.2f", i + 2, h));
                     }
-                    base += hop;
+                    LOG.info(String.format("  tick %4d  frames=%6d  fund=%.2f |%s",
+                            t + 1, worker.getAccumulatedFrames(), r.fundamentalDbFs, sb));
+                    if (t + 1 == TICKS) {
+                        assertEquals(FUND_DBFS, r.fundamentalDbFs, 1.0,
+                                "fundamental off its set level at " + driftPpmMin + " ppm/min");
+                        // 3 dB: the weakest harmonics sit ~12 dB above the
+                        // deep-averaged floor, where residual noise perturbs a
+                        // reading by up to ~2.2 dB; a rotation defect sinks
+                        // harmonics by tens of dB and still trips this.
+                        for (int i = 0; i < HARMONIC_COUNT; i++) {
+                            assertEquals(HARMONIC_DBFS[i], r.harmonicDbFs[i], 3.0,
+                                    "H" + (i + 2) + " off its set level at " + driftPpmMin + " ppm/min");
+                        }
+                    }
                 }
+                base += hop;
             }
         }
-        FftAnalyzerWorker.FORK_NONTONE_DRIFT = true;   // restore default
     }
 
     // ── Random overlap: variable hop through the same worker path ──────────
@@ -185,11 +200,10 @@ class FftCrossTickDriftTest {
     }
 
     // ── True dual-tone (IMD) under drift ───────────────────────────────────
-    /** Two EQUAL tones F1,F2 (both strong -> the multi-tone path locks both) plus
-     *  their 2nd/3rd-order IMD products at non-tone bins.  Under drift the products
-     *  are the bins that sink with the fork OFF; with it ON the pooled δ from the two
-     *  equal teeth should hold them - the equal-Fisher regime where the fork is
-     *  strongest (the original argument).  Product levels are read straight from the
+    /** Two EQUAL tones F1,F2 plus their 2nd/3rd-order IMD products at known bins,
+     *  all on one synthetic clock.  Under the whole-spectrum ramp every on-bin
+     *  component - pair and products alike - must hold flat over depth at every
+     *  common-clock drift rate.  Product levels are read straight from the
      *  accumulated spectrum (they aren't harmonics of one fundamental). */
     @Test
     void crossTickImdDriftSweep() {
@@ -214,48 +228,63 @@ class FftCrossTickDriftTest {
             double driftPerSample = driftPpmMin * 1e-6 / 60.0 / SAMPLE_RATE;
             double[] sig = synthesizeTones(SEED, total, driftPerSample, freqs, dbfs);
 
-            for (boolean fork : new boolean[]{false, true}) {
-                FftAnalyzerWorker.FORK_NONTONE_DRIFT = fork;
-                FftAnalyzer       analyzer = new FftAnalyzer();
-                FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
-                double[] win = new double[winLen];
-                LOG.info(String.format("--- drift = %.3f ppm/min  fork=%s ---", driftPpmMin, fork ? "ON " : "OFF"));
+            FftAnalyzer       analyzer = new FftAnalyzer();
+            FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+            double[] win = new double[winLen];
+            LOG.info(String.format("--- drift = %.3f ppm/min ---", driftPpmMin));
 
-                long base = 0;
-                FftResult r;
-                for (int t = 0; t < TICKS; t++) {
-                    System.arraycopy(sig, (int) base, win, 0, winLen);
-                    analyzer.setSamplesAbsStart(base);
-                    analyzer.setSpectrumOnly(true);
-                    analyzer.setMultiTone(true);
-                    analyzer.setSecondToneHintHz(freqs[1]);
-                    r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
-                            WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
-                    worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+            // Mid-run vs final: the pair and every on-bin product ride the one
+            // ramp and the shared clock, so they must hold flat over depth.
+            double[] early = new double[bins.length];
+            long base = 0;
+            FftResult r;
+            for (int t = 0; t < TICKS; t++) {
+                System.arraycopy(sig, (int) base, win, 0, winLen);
+                analyzer.setSamplesAbsStart(base);
+                analyzer.setSpectrumOnly(true);
+                analyzer.setMultiTone(true);
+                analyzer.setSecondToneHintHz(freqs[1]);
+                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
+                        WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
+                worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
 
-                    if ((t + 1) % READOUT_EVERY == 0 && (t + 1) % (READOUT_EVERY * 5) == 0) {
-                        worker.overlayAccumulatorOnto(r);
-                        StringBuilder sb = new StringBuilder();
-                        for (int i = pFrom; i < bins.length; i++) {
-                            double lv = (r.amplitudeDbFs != null && bins[i] < r.amplitudeDbFs.length)
-                                    ? r.amplitudeDbFs[bins[i]] : Double.NaN;
-                            sb.append(String.format("  %s=%.1f", lbl[i], lv));
-                        }
-                        LOG.info(String.format("  tick %4d  frames=%6d |%s",
-                                t + 1, worker.getAccumulatedFrames(), sb));
+                if ((t + 1) % (READOUT_EVERY * 5) == 0) {
+                    worker.overlayAccumulatorOnto(r);
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < bins.length; i++) {
+                        double lv = (r.amplitudeDbFs != null && bins[i] < r.amplitudeDbFs.length)
+                                ? r.amplitudeDbFs[bins[i]] : Double.NaN;
+                        if (t + 1 == READOUT_EVERY * 5) early[i] = lv;
+                        if (i >= pFrom) sb.append(String.format("  %s=%.1f", lbl[i], lv));
                     }
-                    base += hop;
+                    LOG.info(String.format("  tick %4d  frames=%6d |%s",
+                            t + 1, worker.getAccumulatedFrames(), sb));
+                    if (t + 1 == TICKS) {
+                        // The pair pools nothing by design, so under a strongly
+                        // exaggerated common-clock drift the difference products
+                        // compound the fundamental loop's lag with the pinned
+                        // second-tone residual (sum products cancel the pair) -
+                        // a few dB at 1000x the real rig's drift, a millionth of
+                        // that in phase at the rig's own.  The wide tolerance at
+                        // the exaggerated rate still catches the historical
+                        // half-turn cancellation class (tens of dB).
+                        double tol = driftPpmMin > 1.0 ? 10.0 : 2.0;
+                        for (int i = 0; i < bins.length; i++) {
+                            assertEquals(early[i], r.amplitudeDbFs[bins[i]], tol,
+                                    lbl[i] + " drifted at " + driftPpmMin + " ppm/min");
+                        }
+                    }
                 }
+                base += hop;
             }
         }
-        FftAnalyzerWorker.FORK_NONTONE_DRIFT = true;
     }
 
     /** Reproduces the live F2-sink: two EQUAL tones with F2/F1 ≈ 1.05 so the per-tick
      *  single-tone analyze (seeded fundamental = F1, "get fundamental from generator")
      *  snaps F2 to {@code h = round(F2/F1) = 1} and de-rotates it as F1.  F2/F1 = 1.7 in
-     *  the other test rounds to an integer-cycle error and stays clean - this one must
-     *  bite.  Reads F1 & F2 levels vs averaging depth, fork A/B. */
+     *  the other test rounds to an integer-cycle error and stays clean - this one
+     *  used to bite.  Reads F1 & F2 levels vs averaging depth. */
     @Test
     void crossTickDualToneSinkRepro() {
         int hop    = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - OVERLAP.fraction)));
@@ -272,39 +301,42 @@ class FftCrossTickDriftTest {
         for (double driftPpmMin : new double[]{0.0, 1.0}) {
             double driftPerSample = driftPpmMin * 1e-6 / 60.0 / SAMPLE_RATE;
             double[] sig = synthesizeTones(SEED, total, driftPerSample, freqs, dbfs);
-            for (boolean fork : new boolean[]{false, true}) {
-                FftAnalyzerWorker.FORK_NONTONE_DRIFT = fork;
-                FftAnalyzer       analyzer = new FftAnalyzer();
-                FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
-                double[] win = new double[winLen];
-                LOG.info(String.format("--- drift = %.3f ppm/min  fork=%s ---", driftPpmMin, fork ? "ON " : "OFF"));
-                long base = 0;
-                FftResult r;
-                for (int t = 0; t < TICKS; t++) {
-                    System.arraycopy(sig, (int) base, win, 0, winLen);
-                    analyzer.setSamplesAbsStart(base);
-                    analyzer.setSpectrumOnly(true);
-                    analyzer.setMultiTone(true);
-                    analyzer.setSecondToneHintHz(freqs[1]);
-                    r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
-                            WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, freqs[0]);  // seed fund = F1
-                    if (t == 0) {   // SINGLE-capture levels - before any cross-tick accumulation
-                        LOG.info(String.format("    single capture (1 avg):  F1=%.2f  F2=%.2f  (F2-F1=%.2f dB)",
-                                r.amplitudeDbFs[f1Bin], r.amplitudeDbFs[f2Bin],
-                                r.amplitudeDbFs[f2Bin] - r.amplitudeDbFs[f1Bin]));
-                    }
-                    worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
-                    if ((t + 1) % (READOUT_EVERY * 2) == 0) {
-                        worker.overlayAccumulatorOnto(r);
-                        double f1 = r.amplitudeDbFs[f1Bin], f2 = r.amplitudeDbFs[f2Bin];
-                        LOG.info(String.format("  tick %4d  frames=%6d |  F1=%.2f  F2=%.2f  (F2-F1=%.2f dB)",
-                                t + 1, worker.getAccumulatedFrames(), f1, f2, f2 - f1));
-                    }
-                    base += hop;
+            FftAnalyzer       analyzer = new FftAnalyzer();
+            FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+            double[] win = new double[winLen];
+            LOG.info(String.format("--- drift = %.3f ppm/min ---", driftPpmMin));
+            long base = 0;
+            FftResult r;
+            for (int t = 0; t < TICKS; t++) {
+                System.arraycopy(sig, (int) base, win, 0, winLen);
+                analyzer.setSamplesAbsStart(base);
+                analyzer.setSpectrumOnly(true);
+                analyzer.setMultiTone(true);
+                analyzer.setSecondToneHintHz(freqs[1]);
+                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
+                        WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, freqs[0]);  // seed fund = F1
+                if (t == 0) {   // SINGLE-capture levels - before any cross-tick accumulation
+                    LOG.info(String.format("    single capture (1 avg):  F1=%.2f  F2=%.2f  (F2-F1=%.2f dB)",
+                            r.amplitudeDbFs[f1Bin], r.amplitudeDbFs[f2Bin],
+                            r.amplitudeDbFs[f2Bin] - r.amplitudeDbFs[f1Bin]));
                 }
+                worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+                if ((t + 1) % (READOUT_EVERY * 2) == 0) {
+                    worker.overlayAccumulatorOnto(r);
+                    double f1 = r.amplitudeDbFs[f1Bin], f2 = r.amplitudeDbFs[f2Bin];
+                    LOG.info(String.format("  tick %4d  frames=%6d |  F1=%.2f  F2=%.2f  (F2-F1=%.2f dB)",
+                            t + 1, worker.getAccumulatedFrames(), f1, f2, f2 - f1));
+                    if (t + 1 == TICKS) {
+                        // Equal close-spaced tones must both survive the deep
+                        // average - the historical defect cancelled F2 here.
+                        assertTrue(Math.abs(f2 - f1) <= 2.0,
+                                "F2-F1 = " + String.format("%.2f", f2 - f1)
+                                + " dB at drift " + driftPpmMin + " ppm/min");
+                    }
+                }
+                base += hop;
             }
         }
-        FftAnalyzerWorker.FORK_NONTONE_DRIFT = true;
     }
 
     /** Reproduces the EXACT live case: 19 & 20 kHz at 2 M FFT.  The bug is
@@ -381,10 +413,9 @@ class FftCrossTickDriftTest {
      *  synthesized as tones at a·F1+b·F2 (each inherits the same relative wobble).
      *  Accumulated over many ticks; reads the COHERENT level's drift (tick 50 -> last),
      *  which is the de-coherence the wobble induces as the type-1 PLL lags the moving
-     *  frequency.  A/B on {@link FftAnalyzerWorker#MULTI_KAPPA_REFINE}: the one-shot
-     *  refine pins the tick-0 κ but cannot FOLLOW a moving frequency, so it does NOT
-     *  fix the wobble - motivating the per-tick Δf feedforward.  wobble=0 is the
-     *  constant-offset baseline (the PLL holds it; both A/B flat). */
+     *  frequency.  The one-shot κ refine pins the tick-0 κ but cannot FOLLOW a moving
+     *  frequency, so a residual wobble stays visible here.  wobble=0 is the
+     *  constant-offset baseline (the PLL holds it flat). */
     @Test
     void crossTickImdWobbleLock() {
         int hop    = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - OVERLAP.fraction)));
@@ -408,41 +439,85 @@ class FftCrossTickDriftTest {
 
         for (double wobblePpm : new double[]{0.0, 0.05, 0.5}) {
             double[] sig = synthesizeWobble(SEED, total, wobblePpm * 1e-6, tau, freqs, dbfs);
-            for (boolean refine : new boolean[]{false, true}) {
-                FftAnalyzerWorker.MULTI_KAPPA_REFINE = refine;
-                FftAnalyzer       analyzer = new FftAnalyzer();
-                FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
-                double[] win = new double[winLen];
-                double[] early = new double[freqs.length], late = new double[freqs.length];
-                long base = 0;
-                for (int t = 0; t < ticks; t++) {
-                    System.arraycopy(sig, (int) base, win, 0, winLen);
-                    analyzer.setSamplesAbsStart(base);
-                    analyzer.setSpectrumOnly(true);
-                    analyzer.setMultiTone(true);
-                    analyzer.setSecondToneHintHz(f2);
-                    FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
-                            WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
-                    worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
-                    if (t == 50 || t == ticks - 1) {
-                        worker.overlayAccumulatorOnto(r);
-                        double[] dst = (t == 50) ? early : late;
-                        for (int i = 0; i < freqs.length; i++) {
-                            dst[i] = (r.amplitudeDbFs != null && bins[i] < r.amplitudeDbFs.length)
-                                    ? r.amplitudeDbFs[bins[i]] : Double.NaN;
-                        }
+            FftAnalyzer       analyzer = new FftAnalyzer();
+            FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+            double[] win = new double[winLen];
+            double[] early = new double[freqs.length], late = new double[freqs.length];
+            long base = 0;
+            for (int t = 0; t < ticks; t++) {
+                System.arraycopy(sig, (int) base, win, 0, winLen);
+                analyzer.setSamplesAbsStart(base);
+                analyzer.setSpectrumOnly(true);
+                analyzer.setMultiTone(true);
+                analyzer.setSecondToneHintHz(f2);
+                FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
+                        WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
+                worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+                if (t == 50 || t == ticks - 1) {
+                    worker.overlayAccumulatorOnto(r);
+                    double[] dst = (t == 50) ? early : late;
+                    for (int i = 0; i < freqs.length; i++) {
+                        dst[i] = (r.amplitudeDbFs != null && bins[i] < r.amplitudeDbFs.length)
+                                ? r.amplitudeDbFs[bins[i]] : Double.NaN;
                     }
-                    base += hop;
                 }
-                LOG.info(String.format("--- wobble = %.2f ppm  refine = %s  (tick 50 -> %d) ---",
-                        wobblePpm, refine ? "ON " : "OFF", ticks));
-                for (int i = 0; i < freqs.length; i++) {
-                    LOG.info(String.format("  %-7s %8.2f -> %8.2f dBFS   (drift %+.2f)",
-                            lbl[i], early[i], late[i], late[i] - early[i]));
-                }
+                base += hop;
+            }
+            LOG.info(String.format("--- wobble = %.2f ppm  (tick 50 -> %d) ---", wobblePpm, ticks));
+            for (int i = 0; i < freqs.length; i++) {
+                LOG.info(String.format("  %-7s %8.2f -> %8.2f dBFS   (drift %+.2f)",
+                        lbl[i], early[i], late[i], late[i] - early[i]));
             }
         }
-        FftAnalyzerWorker.MULTI_KAPPA_REFINE = true;
+    }
+
+    /** An off-bin, unlocked line (a mains stand-in) among on-bin content: the
+     *  whole-spectrum ramp rotates its bins by the BIN frequency, not the line's
+     *  own, so its tick phasors never align and the line must average DOWN while
+     *  the on-bin fundamental holds.  This is the seam-free replacement for the
+     *  region schemes whose boundaries printed a pedestal around such a line. */
+    @Test
+    void crossTickOffBinLineDecays() {
+        int hop    = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - OVERLAP.fraction)));
+        int winLen = FFT_SIZE + hop;
+        int ticks  = 400;
+        int total  = (ticks - 1) * hop + winLen;
+        double binHz = (double) SAMPLE_RATE / FFT_SIZE;
+        int    fundBin = 1000, lineBin = 500;
+        double[] freqs = { fundBin * binHz, (lineBin + 0.41) * binHz };   // line off-bin by 0.41
+        double[] dbfs  = { -30.0, -60.0 };
+        double[] sig = synthesizeTones(SEED, total, 0.0, freqs, dbfs);
+
+        FftAnalyzer       analyzer = new FftAnalyzer();
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+        double[] win = new double[winLen];
+        double fund0 = Double.NaN, line0 = Double.NaN, fundLate = Double.NaN, lineLate = Double.NaN;
+        long base = 0;
+        for (int t = 0; t < ticks; t++) {
+            System.arraycopy(sig, (int) base, win, 0, winLen);
+            analyzer.setSamplesAbsStart(base);
+            analyzer.setSpectrumOnly(true);
+            analyzer.setMultiTone(false);
+            analyzer.setSecondToneHintHz(Double.NaN);
+            FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
+                    WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
+            if (t == 0) {   // single-capture reference, before any accumulation
+                fund0 = r.amplitudeDbFs[fundBin];
+                line0 = Math.max(r.amplitudeDbFs[lineBin], r.amplitudeDbFs[lineBin + 1]);
+            }
+            worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+            if (t == ticks - 1) {
+                worker.overlayAccumulatorOnto(r);
+                fundLate = r.amplitudeDbFs[fundBin];
+                lineLate = Math.max(r.amplitudeDbFs[lineBin], r.amplitudeDbFs[lineBin + 1]);
+            }
+            base += hop;
+        }
+        LOG.info(String.format("=== OFF-BIN LINE DECAY: fund %.2f -> %.2f dBFS, line %.2f -> %.2f dBFS over %d ticks ===",
+                fund0, fundLate, line0, lineLate, ticks));
+        assertEquals(fund0, fundLate, 1.0, "on-bin fundamental must hold through the deep average");
+        assertTrue(lineLate <= line0 - 10.0,
+                "off-bin line must average down; was " + String.format("%.2f -> %.2f", line0, lineLate));
     }
 
     /** Continuous sum of arbitrary tones {@code freqHz[i]} at {@code dbfs[i]}, all

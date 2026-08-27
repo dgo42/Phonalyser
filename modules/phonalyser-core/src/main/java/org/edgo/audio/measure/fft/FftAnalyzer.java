@@ -152,12 +152,8 @@ public class FftAnalyzer {
     private double[] scratchF0Re, scratchF0Im;
     private double[] scratchSumRe, scratchSumIm;
     private double[] scratchFrameRe, scratchFrameIm;
-    private int[]    scratchImdIdx;   // per-bin IMD-product assignment (dual-tone de-rotation)
     private double[] scratchS0Re, scratchS0Im;
     private double[] scratchS1Re, scratchS1Im;
-    /** Per-harmonic de-rotation phasor cache (cos/sin of {@code h·Φ}), sized
-     *  {@code 2·hMax+1} and rebuilt per frame - see Pass 2. */
-    private double[] scratchHcos, scratchHsin;
     /** Half-size scratch for amplitudes - used only inside one
      *  {@code analyze} call by the harmonic-detection and noise-floor
      *  paths; never returned. */
@@ -289,12 +285,10 @@ public class FftAnalyzer {
         scratchFrameRe = scratchFrameIm = null;
         scratchS0Re    = scratchS0Im    = null;
         scratchS1Re    = scratchS1Im    = null;
-        scratchHcos    = scratchHsin    = null;
         scratchAmplLinear = null;
         scratchSignalMask = null;
         scratchNoiseCand  = null;
         scratchNoiseGlob  = null;
-        scratchImdIdx     = null;
         cachedWindow      = null;
         cachedWindowSize  = 0;
         cachedWindowType  = null;
@@ -961,23 +955,25 @@ public class FftAnalyzer {
         // The hint is the COMMANDED second-tone frequency - set only when
         // fund-from-generator is on AND the generator is internal.  When it's
         // absent (external generator, or that option off) but the signal IS
-        // dual-tone, DETECT the second tone from the CLEAN single frame instead
-        // (where it is still at full level - the cancellation only happens in the
-        // 2-frame average): the strongest local-max peak clear of F1's lobe and
-        // within 40 dB of it.  Without this the F2 de-rotation fix below can't
-        // engage and F2 cancels.
-        final int SECOND_TONE_GUARD_BINS = 100;
+        // dual-tone, DETECT the second tone from the CLEAN single frame: the
+        // pair is simply THE TWO STRONGEST TONES, so F2 is the strongest local
+        // maximum left once the fundamental's own peak is excluded.  The
+        // exclusion is only the 2 bins either side of it - those ARE the same
+        // peak, not a partner.  No minimum separation and no minimum level:
+        // a bass pair sits 8 bins apart at 41 and 89 Hz with 8k points at
+        // 48 kHz (5.86 Hz per bin), and a partner may be tens of dB down after
+        // the device under test attenuates it.  The lower edge is a fixed
+        // 10 Hz guard keeping the leakage of a residual DC offset through the
+        // window main lobe out of the contest.
         double effHint = secondToneHintHz;
         if (Double.isNaN(effHint) && multiTone && intFundBin > 0) {
-            double fundAmp2 = s0Re[intFundBin] * s0Re[intFundBin] + s0Im[intFundBin] * s0Im[intFundBin];
-            double thresh2  = fundAmp2 * 1e-4;                 // ≥ −40 dB of F1 -> a real tone, not noise
             int    loB      = Math.max(3, (int) Math.ceil(10.0 / freqRes));
             double bestAmp2 = 0.0;
             int    bestK    = -1;
             for (int k = loB; k < halfSize; k++) {
-                if (Math.abs(k - intFundBin) <= SECOND_TONE_GUARD_BINS) continue;   // skip F1's lobe
+                if (Math.abs(k - intFundBin) <= 2) continue;   // F1's own peak, not a partner
                 double a2 = s0Re[k] * s0Re[k] + s0Im[k] * s0Im[k];
-                if (a2 > bestAmp2 && a2 >= thresh2
+                if (a2 > bestAmp2
                         && a2 >= s0Re[k - 1] * s0Re[k - 1] + s0Im[k - 1] * s0Im[k - 1]
                         && a2 >  s0Re[k + 1] * s0Re[k + 1] + s0Im[k + 1] * s0Im[k + 1]) {
                     bestAmp2 = a2;
@@ -1028,90 +1024,43 @@ public class FftAnalyzer {
             }
         }
 
-        // --- Dual-tone: choose F2's lobe de-rotation (individual κ vs single-ref) -
-        // The single-reference per-lobe de-rotation below snaps every bin to a
-        // harmonic of F1, so a SECOND tone F2 (not a harmonic) gets de-rotated by
-        // h·Φ(F1), h=round(κ_F2/κ_F1).  For certain spacings that rotates F2's frames
-        // ~180° apart and CANCELS it (the dual-tone IMD bug).  Try BOTH de-rotations
-        // over the segment and keep whichever leaves F2's spike STRONGER - the wrong
-        // one cancels it, so the strongest spike self-selects (a genuine harmonic
-        // comes out equal either way, so this never hurts the single-tone path).
-        final int F2_LOBE_HALF = 24;            // bins around F2's peak that ride its own phase
-        boolean f2Individual = false;
-        int     k2     = -1;
-        double  kappa2 = 0.0;
-        if (coherentAveraging && bestLen >= 2 && !Double.isNaN(outResult.fundamental2HzRefined)
-                && outResult.fundamental2HzRefined > 0.0 && kFractional > 0.0) {
-            kappa2 = outResult.fundamental2HzRefined / freqRes;
-            k2     = (int) Math.round(kappa2);
-            if (k2 >= 1 && k2 <= halfSize) {
-                int    h2   = Math.max(1, (int) Math.round(kappa2 / kFractional));
-                double saRe = 0.0, saIm = 0.0, sbRe = 0.0, sbIm = 0.0;
-                for (int f = bestStart; f < bestStart + bestLen; f++) {
-                    long base = (long) f * step;
-                    cachedFrameFft(samples, (int) base, fftSize, window, frameRe, frameIm);
-                    double re = frameRe[k2], im = frameIm[k2];
-                    double phiA = -2.0 * Math.PI * base * kFractional * h2 / (double) fftSize;  // h·Φ(F1)
-                    double phiB = -2.0 * Math.PI * base * kappa2          / (double) fftSize;    // Φ(κ_F2)
-                    double ca = Math.cos(phiA), sa = Math.sin(phiA);
-                    double cb = Math.cos(phiB), sb = Math.sin(phiB);
-                    saRe += re * ca - im * sa; saIm += re * sa + im * ca;
-                    sbRe += re * cb - im * sb; sbIm += re * sb + im * cb;
-                }
-                f2Individual = Math.hypot(sbRe, sbIm) > Math.hypot(saRe, saIm);
-            }
-        }
-        // Build the IMD-product grid: when F2 is a real second tone, every
-        // a·κ_F1 + b·κ_F2 (b≠0, |a|+|b| ≤ order) landing in band is de-rotated by
-        // a·Φ(F1) + b·Φ(F2) over its lobe - F2 itself is the (0,1) product.  This
-        // de-rotates the whole 2-tone IMD comb at its TRUE frequencies instead of
-        // snapping each product to the nearest F1-harmonic (which cancels the ones
-        // at a half-integer residual).  b=0 (F1 + its harmonics) stays single-ref.
-        final double f2Kappa = kappa2;
-        int   nProd = 0;
-        int[] prodA = null, prodB = null, imdIdx = null;
-        // Default to "no products published"; the de-rotation branch below
-        // overwrites these with the grid it builds (recycled result slots
-        // must not leak a previous dual-tone tick's grid into a single tone).
+        // --- Dual-tone: publish the intermodulation-product grid -------------
+        // Every product a·κ_F1 + b·κ_F2 (b≠0, |a|+|b| ≤ order) that lands in
+        // band is listed with its bin, so the predistortion engine can read
+        // each product's phasor straight from re/im[bin].  The list doubles
+        // as the product part of pass 2's coherent family below: each entry
+        // becomes a de-rotation region of its own, rotated by a·Φ1 + b·Φ2.
+        // Default to "no products published": recycled result slots must not
+        // leak a previous dual-tone tick's grid into a single-tone tick.
         outResult.imdProductA   = NO_IMD_PRODUCTS;
         outResult.imdProductB   = NO_IMD_PRODUCTS;
         outResult.imdProductBin = NO_IMD_PRODUCTS;
-        if (f2Individual) {
-            final int ORDER = Math.max(5, harmonicCount + 1);
-            int[] ta = new int[(2 * ORDER + 1) * (2 * ORDER + 1)];
-            int[] tb = new int[ta.length];
-            int[] tk = new int[ta.length];
-            int cap = 0;
-            for (int a = -ORDER; a <= ORDER; a++) {
-                for (int b = -ORDER; b <= ORDER; b++) {
-                    if (b == 0 || Math.abs(a) + Math.abs(b) > ORDER) continue;
-                    double kp = a * kFractional + b * kappa2;
-                    if (kp < 1.0 || kp > halfSize) continue;
-                    tk[cap] = (int) Math.round(kp);
-                    ta[cap] = a;
-                    tb[cap] = b;
-                    cap++;
+        if (coherentAveraging && bestLen >= 2 && !Double.isNaN(outResult.fundamental2HzRefined)
+                && outResult.fundamental2HzRefined > 0.0 && kFractional > 0.0) {
+            double kappa2 = outResult.fundamental2HzRefined / freqRes;
+            int    k2     = (int) Math.round(kappa2);
+            if (k2 >= 1 && k2 <= halfSize) {          // the second tone is present, in band
+                final int ORDER = Math.max(5, harmonicCount + 1);
+                int[] ta = new int[(2 * ORDER + 1) * (2 * ORDER + 1)];
+                int[] tb = new int[ta.length];
+                int[] tk = new int[ta.length];
+                int cap = 0;
+                for (int a = -ORDER; a <= ORDER; a++) {
+                    for (int b = -ORDER; b <= ORDER; b++) {
+                        if (b == 0 || Math.abs(a) + Math.abs(b) > ORDER) continue;
+                        double kp = a * kFractional + b * kappa2;
+                        if (kp < 1.0 || kp > halfSize) continue;
+                        tk[cap] = (int) Math.round(kp);
+                        ta[cap] = a;
+                        tb[cap] = b;
+                        cap++;
+                    }
                 }
-            }
-            prodA = Arrays.copyOf(ta, cap);
-            prodB = Arrays.copyOf(tb, cap);
-            nProd = cap;
-            // Publish the de-rotated product grid so the predistortion engine
-            // can read each product's phase-stable phasor from re/im[bin].
-            outResult.imdProductA   = prodA;
-            outResult.imdProductB   = prodB;
-            outResult.imdProductBin = Arrays.copyOf(tk, cap);
-            if (scratchImdIdx == null || scratchImdIdx.length < fftSize) scratchImdIdx = new int[fftSize];
-            imdIdx = scratchImdIdx;
-            Arrays.fill(imdIdx, 0, fftSize, -1);
-            for (int p = 0; p < cap; p++) {
-                int lo2 = Math.max(1,        tk[p] - F2_LOBE_HALF);
-                int hi2 = Math.min(halfSize, tk[p] + F2_LOBE_HALF);
-                for (int k = lo2; k <= hi2; k++) imdIdx[k] = p;
+                outResult.imdProductA   = Arrays.copyOf(ta, cap);
+                outResult.imdProductB   = Arrays.copyOf(tb, cap);
+                outResult.imdProductBin = Arrays.copyOf(tk, cap);
             }
         }
-        final int   nProdF = nProd;
-        final int[] prodAF = prodA, prodBF = prodB, imdIdxF = imdIdx;
 
         // --- Pass 2: accumulate frames in the longest clean segment ----------
         // Also store per-frame corrected fundamental complex value so we can
@@ -1120,81 +1069,203 @@ public class FftAnalyzer {
         int    intFundBinRounded = Math.max(1, (int) Math.round(kFractional));
         double[] fundCorrRe = coherentAveraging ? new double[bestLen] : null;
         double[] fundCorrIm = coherentAveraging ? new double[bestLen] : null;
-        // Per-lobe constant-phase de-rotation.  Each bin is snapped to its
-        // nearest harmonic h = round(signed-freq-bin / k₀) and de-rotated by
-        // that lobe's CONSTANT phase h·Φ - NOT a per-bin frequency ramp
-        // k·baseAngle.  For a stationary windowed tone every bin of a lobe
-        // (its leakage skirt included) advances frame-to-frame by the SAME
-        // phase; the ramp matches that only AT the exact harmonic bins and
-        // over-rotates the skirt by ∝ (bin-offset × frame), which the
-        // sub-frame sum turns into a Dirichlet array factor -> a comb at
-        // sampleRate over the frame span riding on the leakage skirt.
-        // Constant phase per lobe aligns the whole lobe, so the comb vanishes
-        // (this is what the multi-tone path already does, hence its clean
-        // result).
-        final int hMax = coherentAveraging
-                ? Math.max(1, (fftSize / 2) / intFundBinRounded) : 0;
-        if (coherentAveraging) {
-            scratchHcos = scratchOrAlloc(scratchHcos, 2 * hMax + 1);
-            scratchHsin = scratchOrAlloc(scratchHsin, 2 * hMax + 1);
+        // Coherent family for the region-constant de-rotation (the same
+        // construction as the cross-tick accumulator's - see the pass-2
+        // comment below): member positions and (a, b) coefficients built once
+        // per call, phasors re-derived per frame from that frame's Φ1/Φ2.
+        // Members: the harmonic ladder h·κ (h = 0 covers DC and the deep bass
+        // side) merged position-sorted with the published product grid.
+        final double f2Kappa = (outResult.imdProductBin.length > 0)
+                ? outResult.fundamental2HzRefined / freqRes : Double.NaN;
+        int     famCount = 0;
+        int[]   fA  = null;
+        int[]   fB  = null;
+        double[] fP = null;
+        if (coherentAveraging && kFractional > 0.0) {
+            int hMaxT = (int) Math.min(halfSize, halfSize / kFractional);
+            int[] pa = outResult.imdProductA;
+            int[] pb = outResult.imdProductB;
+            int   nGrid = (f2Kappa > 0.0) ? pa.length : 0;
+            int[]    spA = new int[nGrid];
+            int[]    spB = new int[nGrid];
+            double[] spP = new double[nGrid];
+            int nP = 0;
+            for (int p = 0; p < nGrid; p++) {
+                double posP = pa[p] * kFractional + pb[p] * f2Kappa;
+                if (posP < 1.0 || posP > halfSize - 1) continue;
+                spA[nP] = pa[p];
+                spB[nP] = pb[p];
+                spP[nP] = posP;
+                nP++;
+            }
+            for (int i = 1; i < nP; i++) {                  // position sort, tiny n
+                int ia = spA[i];
+                int ib = spB[i];
+                double ip = spP[i];
+                int j = i - 1;
+                while (j >= 0 && spP[j] > ip) {
+                    spA[j + 1] = spA[j];
+                    spB[j + 1] = spB[j];
+                    spP[j + 1] = spP[j];
+                    j--;
+                }
+                spA[j + 1] = ia;
+                spB[j + 1] = ib;
+                spP[j + 1] = ip;
+            }
+            fA = new int[hMaxT + 1 + nP];
+            fB = new int[fA.length];
+            fP = new double[fA.length];
+            int pi = 0;
+            for (int h = 0; h <= hMaxT; h++) {
+                double hp = h * kFractional;
+                while (pi < nP && spP[pi] <= hp) {
+                    fA[famCount] = spA[pi];
+                    fB[famCount] = spB[pi];
+                    fP[famCount] = spP[pi];
+                    famCount++;
+                    pi++;
+                }
+                fA[famCount] = h;
+                fB[famCount] = 0;
+                fP[famCount] = hp;
+                famCount++;
+            }
+            while (pi < nP) {
+                fA[famCount] = spA[pi];
+                fB[famCount] = spB[pi];
+                fP[famCount] = spP[pi];
+                famCount++;
+                pi++;
+            }
         }
+        final int      nFam   = famCount;
+        final int[]    famA   = fA;
+        final int[]    famB   = fB;
+        final double[] famPos = fP;
+        final double[] famC   = (nFam > 0) ? new double[nFam] : null;
+        final double[] famS   = (nFam > 0) ? new double[nFam] : null;
+        // Region-constant de-rotation.  A windowed tone's lobe - the peak and
+        // its off-centre bins together - advances by ONE common phase per
+        // frame step (the tone's own frequency times the step), so a per-bin
+        // ramp mis-rotates every off-centre lobe bin and the overlapped frame
+        // sum carves the lobe into a comb; a constant phasor per lobe keeps
+        // it intact under every window.  The regions tile the spectrum at the
+        // MIDPOINTS between the coherent family's members (the same
+        // half-spacing rule the SNR noise separation is built on), each
+        // member rotated by its derived phase a·Φ1 + b·Φ2 - so no edge is
+        // ever measured and no environmental line can earn a region of its
+        // own.  The upper half of the full-length transform carries the
+        // NEGATIVE frequencies: a bin there belongs to the member at |kf| and
+        // rotates by the CONJUGATE phasor.
+        // RECT exception: on-bin content occupies single bins (no lobe to hold
+        // together) while the 1/Δf skirt crosses every region midpoint, which
+        // is where a piecewise rotation prints - so RECT keeps the per-bin
+        // time-shift ramp with the SIGNED bin index; tapered windows take the
+        // region-constant family.
+        final boolean rectWin   = windowType == WindowType.RECT;
+        final double  rampScale = (kFractional > 0.0 && intFundBinRounded > 0)
+                ? kFractional / intFundBinRounded
+                : 1.0;
         int acceptedFrames = 0;
         for (int f = bestStart; f < bestStart + bestLen; f++) {
             int base = f * step;
             cachedFrameFft(samples, base, fftSize, window, frameRe, frameIm);
-            if (coherentAveraging) {
-                // Φ = −2π·k_f·base/N - the fundamental's phase advance at this
-                // frame's sample position; harmonic lobe h gets h·Φ.  Cache
-                // exp(j·h·Φ) for h = −hMax..hMax via an incremental phasor
-                // (negative h is the conjugate: the real-spectrum image of
-                // harmonic h).
-                final double phi = -2.0 * Math.PI * (double) base * kFractional
-                                   / (double) fftSize;
-                final double e1c = Math.cos(phi), e1s = Math.sin(phi);
-                final double[] hc = scratchHcos, hs = scratchHsin;
-                hc[hMax] = 1.0; hs[hMax] = 0.0;
-                for (int h = 1; h <= hMax; h++) {
-                    hc[hMax + h] = hc[hMax + h - 1] * e1c - hs[hMax + h - 1] * e1s;
-                    hs[hMax + h] = hc[hMax + h - 1] * e1s + hs[hMax + h - 1] * e1c;
-                    hc[hMax - h] =  hc[hMax + h];          // exp(−j·h·Φ) = conjugate
-                    hs[hMax - h] = -hs[hMax + h];
-                }
-                // IMD-grid de-rotation: each product lobe rides a·Φ(F1)+b·Φ(F2)
-                // (F2 itself is the (0,1) product); every other bin stays single-ref.
-                final double phi2 = (imdIdxF != null)
-                        ? -2.0 * Math.PI * (double) base * f2Kappa / (double) fftSize : 0.0;
-                final double[] pcos = new double[nProdF];
-                final double[] psin = new double[nProdF];
-                for (int p = 0; p < nProdF; p++) {
-                    double ph = prodAF[p] * phi + prodBF[p] * phi2;     // a·Φ(F1) + b·Φ(F2)
-                    pcos[p] = Math.cos(ph);
-                    psin[p] = Math.sin(ph);
-                }
-                final int[]   imd  = imdIdxF;
+            if (coherentAveraging && rectWin) {
+                final double thetaF = -2.0 * Math.PI * (double) base * rampScale
+                                      / (double) fftSize;
+                final double stepRe = Math.cos(thetaF);
+                final double stepIm = Math.sin(thetaF);
                 final int frameIdx = f - bestStart;
                 final int ifb      = intFundBin;
-                final int k0       = intFundBinRounded;
-                final int half     = fftSize / 2;
-                final int hm       = hMax;
-                parallelChunks(fftSize, (lo, hi) -> {
-                    for (int k = lo; k < hi; k++) {
-                        double cr, ci;
-                        int p = (imd != null) ? imd[k] : -1;
-                        if (p >= 0) {
-                            cr = pcos[p]; ci = psin[p];                 // IMD product: a·Φ1+b·Φ2
-                        } else {
-                            int kf = (k <= half) ? k : k - fftSize;     // signed frequency bin
-                            int h  = Math.round(kf / (float) k0);        // nearest harmonic lobe
-                            if (h >  hm) h =  hm; else if (h < -hm) h = -hm;
-                            cr = hc[h + hm]; ci = hs[h + hm];
+                parallelChunks(fftSize, (kLo, kHi) -> {
+                    int seg = kLo;
+                    while (seg < kHi) {
+                        int segEnd = (seg <= halfSize) ? Math.min(kHi, halfSize + 1) : kHi;
+                        int    kfSeed = (seg <= halfSize) ? seg : seg - fftSize;
+                        double ang    = Math.IEEEremainder(thetaF * kfSeed, 2.0 * Math.PI);
+                        double phRe   = Math.cos(ang);
+                        double phIm   = Math.sin(ang);
+                        for (int k = seg; k < segEnd; k++) {
+                            double cRe = frameRe[k] * phRe - frameIm[k] * phIm;
+                            double cIm = frameRe[k] * phIm + frameIm[k] * phRe;
+                            sumRe[k] += cRe;
+                            sumIm[k] += cIm;
+                            if (k == ifb) {
+                                fundCorrRe[frameIdx] = cRe;
+                                fundCorrIm[frameIdx] = cIm;
+                            }
+                            double nextRe = phRe * stepRe - phIm * stepIm;
+                            phIm = phRe * stepIm + phIm * stepRe;
+                            phRe = nextRe;
                         }
-                        double cRe = frameRe[k] * cr - frameIm[k] * ci;
-                        double cIm = frameRe[k] * ci + frameIm[k] * cr;
-                        sumRe[k] += cRe;
-                        sumIm[k] += cIm;
+                        seg = segEnd;
+                    }
+                });
+            } else if (coherentAveraging && nFam > 0) {
+                final double phi1 = -2.0 * Math.PI
+                        * Math.IEEEremainder((double) base * kFractional, fftSize) / fftSize;
+                final double phi2 = (f2Kappa > 0.0)
+                        ? -2.0 * Math.PI
+                            * Math.IEEEremainder((double) base * f2Kappa, fftSize) / fftSize
+                        : 0.0;
+                for (int i = 0; i < nFam; i++) {
+                    double ang = Math.IEEEremainder(famA[i] * phi1 + famB[i] * phi2,
+                            2.0 * Math.PI);
+                    famC[i] = Math.cos(ang);
+                    famS[i] = Math.sin(ang);
+                }
+                final int frameIdx = f - bestStart;
+                final int ifb      = intFundBin;
+                parallelChunks(fftSize, (kLo, kHi) -> {
+                    // Lower half: |kf| = k ascends, the member cursor advances
+                    // upward.  Upper half: |kf| = fftSize - k DESCENDS as k
+                    // ascends, so its cursor walks downward.  A chunk spanning
+                    // the boundary handles each side with its own cursor.
+                    int seg = kLo;
+                    while (seg < kHi) {
+                        boolean lower = seg <= halfSize;
+                        int segEnd = lower ? Math.min(kHi, halfSize + 1) : kHi;
+                        if (lower) {
+                            int c = 0;
+                            while (c < nFam - 1 && seg > 0.5 * (famPos[c] + famPos[c + 1])) c++;
+                            for (int k = seg; k < segEnd; k++) {
+                                while (c < nFam - 1 && k > 0.5 * (famPos[c] + famPos[c + 1])) c++;
+                                double cRe = frameRe[k] * famC[c] - frameIm[k] * famS[c];
+                                double cIm = frameRe[k] * famS[c] + frameIm[k] * famC[c];
+                                sumRe[k] += cRe;
+                                sumIm[k] += cIm;
+                                if (k == ifb) {
+                                    fundCorrRe[frameIdx] = cRe;
+                                    fundCorrIm[frameIdx] = cIm;
+                                }
+                            }
+                        } else {
+                            int c = nFam - 1;
+                            while (c > 0 && fftSize - seg <= 0.5 * (famPos[c - 1] + famPos[c])) c--;
+                            for (int k = seg; k < segEnd; k++) {
+                                while (c > 0 && fftSize - k <= 0.5 * (famPos[c - 1] + famPos[c])) c--;
+                                double cRe =  frameRe[k] * famC[c] + frameIm[k] * famS[c];
+                                double cIm = -frameRe[k] * famS[c] + frameIm[k] * famC[c];
+                                sumRe[k] += cRe;
+                                sumIm[k] += cIm;
+                            }
+                        }
+                        seg = segEnd;
+                    }
+                });
+            } else if (coherentAveraging) {
+                // No pinned fundamental: nothing coherent to align - add the
+                // frame straight (the capture below still records the bin).
+                final int frameIdx = f - bestStart;
+                final int ifb      = intFundBin;
+                parallelChunks(fftSize, (kLo, kHi) -> {
+                    for (int k = kLo; k < kHi; k++) {
+                        sumRe[k] += frameRe[k];
+                        sumIm[k] += frameIm[k];
                         if (k == ifb) {
-                            fundCorrRe[frameIdx] = cRe;
-                            fundCorrIm[frameIdx] = cIm;
+                            fundCorrRe[frameIdx] = frameRe[k];
+                            fundCorrIm[frameIdx] = frameIm[k];
                         }
                     }
                 });
@@ -1228,21 +1299,64 @@ public class FftAnalyzer {
                 double devAbs = Math.abs(dev);
                 if (devAbs > Math.toRadians(maxDeviationDeg)) maxDeviationDeg = Math.toDegrees(devAbs);
                 if (devAbs > PHASE_COHERENCE_THRESHOLD_RAD) {
-                    // Re-FFT the rejected frame and subtract its corrected spectrum
+                    // Re-FFT the rejected frame and subtract its corrected
+                    // spectrum.  This is the exact inverse of the pass-2 add
+                    // above, so it runs the SAME region-constant family
+                    // rotation - the member phasors re-derived for THIS
+                    // frame's offset, the upper (negative-frequency) half
+                    // subtracting with the conjugate.  Serial; only an
+                    // outlier frame reaches this loop.
                     int f    = bestStart + i;
                     int base = f * step;
                     cachedFrameFft(samples, base, fftSize, window, frameRe, frameIm);
-                    double baseAngle  = -2.0 * Math.PI * (double) base * kFractional
-                                        / ((double) fftSize * intFundBinRounded);
-                    double cosBase = Math.cos(baseAngle);
-                    double sinBase = Math.sin(baseAngle);
-                    double corrRe = 1.0, corrIm = 0.0;
-                    for (int k = 0; k < fftSize; k++) {
-                        sumRe[k] -= frameRe[k] * corrRe - frameIm[k] * corrIm;
-                        sumIm[k] -= frameRe[k] * corrIm + frameIm[k] * corrRe;
-                        double nextCorrRe = corrRe * cosBase - corrIm * sinBase;
-                        corrIm            = corrRe * sinBase + corrIm * cosBase;
-                        corrRe            = nextCorrRe;
+                    if (rectWin) {
+                        // RECT: the same signed-index ramp as the add path,
+                        // serial - seeded at bin 0 and at the half boundary.
+                        double thetaR  = -2.0 * Math.PI * (double) base * rampScale
+                                         / (double) fftSize;
+                        double cosBase = Math.cos(thetaR);
+                        double sinBase = Math.sin(thetaR);
+                        int seg = 0;
+                        while (seg < fftSize) {
+                            int segEnd = (seg <= halfSize) ? halfSize + 1 : fftSize;
+                            int    kfSeed = (seg <= halfSize) ? seg : seg - fftSize;
+                            double ang    = Math.IEEEremainder(thetaR * kfSeed, 2.0 * Math.PI);
+                            double corrRe = Math.cos(ang);
+                            double corrIm = Math.sin(ang);
+                            for (int k = seg; k < segEnd; k++) {
+                                sumRe[k] -= frameRe[k] * corrRe - frameIm[k] * corrIm;
+                                sumIm[k] -= frameRe[k] * corrIm + frameIm[k] * corrRe;
+                                double nextCorrRe = corrRe * cosBase - corrIm * sinBase;
+                                corrIm            = corrRe * sinBase + corrIm * cosBase;
+                                corrRe            = nextCorrRe;
+                            }
+                            seg = segEnd;
+                        }
+                    } else {
+                        double phi1R = -2.0 * Math.PI
+                                * Math.IEEEremainder((double) base * kFractional, fftSize) / fftSize;
+                        double phi2R = (f2Kappa > 0.0)
+                                ? -2.0 * Math.PI
+                                    * Math.IEEEremainder((double) base * f2Kappa, fftSize) / fftSize
+                                : 0.0;
+                        for (int n = 0; n < nFam; n++) {
+                            double ang = Math.IEEEremainder(famA[n] * phi1R + famB[n] * phi2R,
+                                    2.0 * Math.PI);
+                            famC[n] = Math.cos(ang);
+                            famS[n] = Math.sin(ang);
+                        }
+                        int c = 0;
+                        for (int k = 0; k <= halfSize; k++) {
+                            while (c < nFam - 1 && k > 0.5 * (famPos[c] + famPos[c + 1])) c++;
+                            sumRe[k] -= frameRe[k] * famC[c] - frameIm[k] * famS[c];
+                            sumIm[k] -= frameRe[k] * famS[c] + frameIm[k] * famC[c];
+                        }
+                        c = nFam - 1;
+                        for (int k = halfSize + 1; k < fftSize; k++) {
+                            while (c > 0 && fftSize - k <= 0.5 * (famPos[c - 1] + famPos[c])) c--;
+                            sumRe[k] -=  frameRe[k] * famC[c] + frameIm[k] * famS[c];
+                            sumIm[k] -= -frameRe[k] * famS[c] + frameIm[k] * famC[c];
+                        }
                     }
                     phaseRejected++;
                     acceptedFrames--;
@@ -1493,14 +1607,19 @@ public class FftAnalyzer {
         double[] awTable    = aWeightTable(halfSize, freqRes);
         double noisePower   = 0.0;
         double awNoisePower = 0.0;   // same sum through the A-weighting curve
+        double fullNoisePower = 0.0; // FULL capture band (ENOB basis - no HP/LP)
         int bandBins    = 0;
         int countedBins = 0;
+        int fullCounted = 0;
         for (int k = 1; k <= halfSize; k++) {
             double freq = k * freqRes;
-            if (freq >= snrLo && freq <= snrHi) {
-                bandBins++;
-                if (!isSignalBin[k]) {
-                    double p = amplLinear[k] * amplLinear[k];
+            boolean inBand = freq >= snrLo && freq <= snrHi;
+            if (inBand) bandBins++;
+            if (!isSignalBin[k]) {
+                double p = amplLinear[k] * amplLinear[k];
+                fullNoisePower += p;
+                fullCounted++;
+                if (inBand) {
                     noisePower   += p;
                     awNoisePower += p * awTable[k];
                     countedBins++;
@@ -1518,6 +1637,9 @@ public class FftAnalyzer {
             noisePower   *= rescale;
             awNoisePower *= rescale;
         }
+        if (fullCounted > 0) {
+            fullNoisePower *= (double) halfSize / fullCounted;
+        }
         // A windowed periodogram bin holds NENBW bin-widths of broadband power
         // (Hann: 1.5), so summing noise bins as-is overstates the band's noise
         // power by exactly that factor - divide it back out.  Coherent lines
@@ -1527,8 +1649,9 @@ public class FftAnalyzer {
         // 10·log10(NENBW) pessimistic (1.76 dB for Hann) - found against a
         // 23-bit-TPDF-dither hardware simulator where QA40x's software matched
         // the constructed theory value and we sat exactly one ENBW low.
-        noisePower   /= nenbw;
-        awNoisePower /= nenbw;
+        noisePower     /= nenbw;
+        awNoisePower   /= nenbw;
+        fullNoisePower /= nenbw;
         double snrDb;
         if (noisePower <= 0) {
             log.warn("SNR: no non-signal bins remain in measurement range");
@@ -1538,15 +1661,29 @@ public class FftAnalyzer {
         }
 
         // SINAD: signal RMS² / (noise + distortion) - denominator includes both
-        // the integrated noise sum AND the in-band harmonic power, so ENOB
-        // = (SINAD − 1.76)/6.02 reflects every non-fundamental contribution.
-        // The denominator is A-WEIGHTED (IEC 61672): SINAD, ENOB, THD+N and
-        // the N+D readout all carry the "A" suffix, so the figure reflects
-        // audibility; SNR and N stay unweighted (A-weighting is worth ~5.3 dB
-        // on an HF-rising Cosmos floor).
+        // the integrated noise sum AND the in-band harmonic power.
+        // The denominator is A-WEIGHTED (IEC 61672): SINAD, THD+N and the N+D
+        // readout all carry the "A" suffix, so the figure reflects audibility;
+        // SNR and N stay unweighted (A-weighting is worth ~5.3 dB on an
+        // HF-rising Cosmos floor).
         double sinadDenom = awNoisePower + awHarmPowerSum;
         double sinadDb    = sinadDenom > 0
                 ? 10.0 * Math.log10((refLin * refLin) / sinadDenom)
+                : 300.0;
+        // ENOB basis (IEEE 1241 convention, datasheet-comparable): UNWEIGHTED
+        // noise over the FULL capture band - the distortion HP/LP govern only
+        // the audio-band figures - plus every found harmonic's power, with the
+        // signal referred to FULL SCALE (the -fundDbFs term).  A converter's
+        // quantization noise is white over the whole Nyquist band, so a
+        // band-limited or A-weighted denominator overstates ENOB by bits.
+        double enobHarmPow = 0.0;
+        for (int h = 0; h < harmonicCount; h++) {
+            int b = (hBins != null && h < hBins.length) ? hBins[h] : 0;
+            if (b > 0 && b <= halfSize) enobHarmPow += amplLinear[b] * amplLinear[b];
+        }
+        double enobDenom   = fullNoisePower + enobHarmPow;
+        double enobSinadDb = enobDenom > 0
+                ? 10.0 * Math.log10((refLin * refLin) / enobDenom) - fundDbFs
                 : 300.0;
         // Average noise floor: median of clean bins converted to dBFS
         double avgNoiseFloorDbFs = medianNoisePow > 0
@@ -1593,6 +1730,7 @@ public class FftAnalyzer {
         outResult.thdNDb                     = thdNDb;
         outResult.snrDb                      = snrDb;
         outResult.sinadDb                    = sinadDb;
+        outResult.enobSinadDb                = enobSinadDb;
         outResult.snrFreqMin                 = snrFreqMin;
         outResult.snrFreqMax                 = snrFreqMax;
         outResult.coherentAveraging          = coherentAveraging;
@@ -1736,14 +1874,19 @@ public class FftAnalyzer {
         double[] awTable    = aWeightTable(halfSize, freqRes);
         double noisePower   = 0.0;
         double awNoisePower = 0.0;   // same sum through the A-weighting curve
+        double fullNoisePower = 0.0; // FULL capture band (ENOB basis - no HP/LP)
         int bandBins    = 0;
         int countedBins = 0;
+        int fullCounted = 0;
         for (int k = 1; k <= halfSize; k++) {
             double freq = k * freqRes;
-            if (freq >= snrLo && freq <= snrHi) {
-                bandBins++;
-                if (!isSignalBin[k]) {
-                    double p = amplLinear[k] * amplLinear[k];
+            boolean inBand = freq >= snrLo && freq <= snrHi;
+            if (inBand) bandBins++;
+            if (!isSignalBin[k]) {
+                double p = amplLinear[k] * amplLinear[k];
+                fullNoisePower += p;
+                fullCounted++;
+                if (inBand) {
                     noisePower   += p;
                     awNoisePower += p * awTable[k];
                     countedBins++;
@@ -1757,13 +1900,17 @@ public class FftAnalyzer {
             noisePower   *= rescale;
             awNoisePower *= rescale;
         }
+        if (fullCounted > 0) {
+            fullNoisePower *= (double) halfSize / fullCounted;
+        }
         // Same NENBW correction as analyze() - see the comment there.  The
         // factor is read from the RESULT (stamped at analysis time), not the
         // current window cache: a recompute must match the spectrum it is
         // recomputing from, whatever window is selected by now.
         if (r.windowNenbwBins > 0) {
-            noisePower   /= r.windowNenbwBins;
-            awNoisePower /= r.windowNenbwBins;
+            noisePower     /= r.windowNenbwBins;
+            awNoisePower   /= r.windowNenbwBins;
+            fullNoisePower /= r.windowNenbwBins;
         }
         r.noisePower        = noisePower;
         r.snrDb             = noisePower <= 0
@@ -1775,6 +1922,16 @@ public class FftAnalyzer {
         double sinadDenom = awNoisePower + awHarmPowerSum;
         r.sinadDb = sinadDenom > 0
                 ? 10.0 * Math.log10((refLin * refLin) / sinadDenom)
+                : 300.0;
+        // ENOB basis - unweighted, full band, full-scale-referred; see analyze().
+        double enobHarmPow = 0.0;
+        for (int h = 0; h < r.harmonicCount; h++) {
+            int b = (r.harmonicBins != null && h < r.harmonicBins.length) ? r.harmonicBins[h] : 0;
+            if (b > 0 && b <= halfSize) enobHarmPow += amplLinear[b] * amplLinear[b];
+        }
+        double enobDenom = fullNoisePower + enobHarmPow;
+        r.enobSinadDb = enobDenom > 0
+                ? 10.0 * Math.log10((refLin * refLin) / enobDenom) - fundDbFs
                 : 300.0;
         r.avgNoiseFloorDbFs = medianNoisePow > 0
                 ? 20.0 * Math.log10(Math.sqrt(medianNoisePow))
