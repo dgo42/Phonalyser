@@ -111,7 +111,7 @@ public final class UsagePrinter {
         log.info("                              voltage) as a PNG before weighting");
         log.info("    Outputs: DNL chart, INL chart, weighted-code-map CSV");
         log.info("");
-        log.info("  FFT analysis of a captured WAV (THD, THD+N A-weighted, SNR, ENOB, harmonics):");
+        log.info("  FFT analysis of a captured WAV (THD, THD+N, N+D A-weighted, SNR, ENOB, harmonics):");
         log.info("    --fft-analyze <wav_file>  WAV recorded at the rate to be analysed");
         log.info("    --fft-size <n>            FFT length, power of 2 (e.g. 65536 .. 2097152)");
         log.info("    --width <px> --height <px>  chart size");

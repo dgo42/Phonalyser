@@ -2879,7 +2879,7 @@ public final class FftView extends AbstractFreqDomainView {
         // percent sub-columns aligned inside the value columns.
         List<String[]> rows = new ArrayList<>();
         rows.add(new String[]{
-                "N+D:",  fmtDb(r.thdNDb)  + " A",
+                "N+D:",  fmtDb(r.awThdNDb)  + " A",
                 String.format("THD H2..%d:", (int) thdMaxH),
                 ratioLevelPctText(r.thdPct, tableUnit, refDbFs, dbvOffsetDb, unitLabel)});
         rows.add(new String[]{

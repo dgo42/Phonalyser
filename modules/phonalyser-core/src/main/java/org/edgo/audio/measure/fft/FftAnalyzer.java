@@ -1544,6 +1544,8 @@ public class FftAnalyzer {
             outResult.thdNDb                     = 300.0;
             outResult.snrDb                      = 300.0;
             outResult.sinadDb                    = 300.0;
+            outResult.awThdNDb                   = 300.0;
+            outResult.enobSinadDb                = 300.0;
             outResult.noisePower                 = 0.0;
             outResult.awNoisePower               = 0.0;
             outResult.avgNoiseFloorDbFs          = fundDbFs - 300.0;
@@ -1607,19 +1609,14 @@ public class FftAnalyzer {
         double[] awTable    = aWeightTable(halfSize, freqRes);
         double noisePower   = 0.0;
         double awNoisePower = 0.0;   // same sum through the A-weighting curve
-        double fullNoisePower = 0.0; // FULL capture band (ENOB basis - no HP/LP)
         int bandBins    = 0;
         int countedBins = 0;
-        int fullCounted = 0;
         for (int k = 1; k <= halfSize; k++) {
             double freq = k * freqRes;
-            boolean inBand = freq >= snrLo && freq <= snrHi;
-            if (inBand) bandBins++;
-            if (!isSignalBin[k]) {
-                double p = amplLinear[k] * amplLinear[k];
-                fullNoisePower += p;
-                fullCounted++;
-                if (inBand) {
+            if (freq >= snrLo && freq <= snrHi) {
+                bandBins++;
+                if (!isSignalBin[k]) {
+                    double p = amplLinear[k] * amplLinear[k];
                     noisePower   += p;
                     awNoisePower += p * awTable[k];
                     countedBins++;
@@ -1637,9 +1634,6 @@ public class FftAnalyzer {
             noisePower   *= rescale;
             awNoisePower *= rescale;
         }
-        if (fullCounted > 0) {
-            fullNoisePower *= (double) halfSize / fullCounted;
-        }
         // A windowed periodogram bin holds NENBW bin-widths of broadband power
         // (Hann: 1.5), so summing noise bins as-is overstates the band's noise
         // power by exactly that factor - divide it back out.  Coherent lines
@@ -1649,9 +1643,8 @@ public class FftAnalyzer {
         // 10·log10(NENBW) pessimistic (1.76 dB for Hann) - found against a
         // 23-bit-TPDF-dither hardware simulator where QA40x's software matched
         // the constructed theory value and we sat exactly one ENBW low.
-        noisePower     /= nenbw;
-        awNoisePower   /= nenbw;
-        fullNoisePower /= nenbw;
+        noisePower   /= nenbw;
+        awNoisePower /= nenbw;
         double snrDb;
         if (noisePower <= 0) {
             log.warn("SNR: no non-signal bins remain in measurement range");
@@ -1660,30 +1653,32 @@ public class FftAnalyzer {
             snrDb = 10.0 * Math.log10((refLin * refLin) / noisePower);
         }
 
-        // SINAD: signal RMS² / (noise + distortion) - denominator includes both
-        // the integrated noise sum AND the in-band harmonic power.
-        // The denominator is A-WEIGHTED (IEC 61672): SINAD, THD+N and the N+D
-        // readout all carry the "A" suffix, so the figure reflects audibility;
-        // SNR and N stay unweighted (A-weighting is worth ~5.3 dB on an
-        // HF-rising Cosmos floor).
-        double sinadDenom = awNoisePower + awHarmPowerSum;
+        // SINAD: signal RMS² / (noise + distortion) - the integrated
+        // measurement-band noise plus the in-band harmonic power, UNWEIGHTED
+        // (the MT-003 definition; THD+N below is its reciprocal and ENOB
+        // derives from it - none of them carries a weighting curve).
+        double sinadDenom = noisePower + harmPowerSum;
         double sinadDb    = sinadDenom > 0
                 ? 10.0 * Math.log10((refLin * refLin) / sinadDenom)
                 : 300.0;
-        // ENOB basis (IEEE 1241 convention, datasheet-comparable): UNWEIGHTED
-        // noise over the FULL capture band - the distortion HP/LP govern only
-        // the audio-band figures - plus every found harmonic's power, with the
-        // signal referred to FULL SCALE (the -fundDbFs term).  A converter's
-        // quantization noise is white over the whole Nyquist band, so a
-        // band-limited or A-weighted denominator overstates ENOB by bits.
-        double enobHarmPow = 0.0;
-        for (int h = 0; h < harmonicCount; h++) {
-            int b = (hBins != null && h < hBins.length) ? hBins[h] : 0;
-            if (b > 0 && b <= halfSize) enobHarmPow += amplLinear[b] * amplLinear[b];
-        }
-        double enobDenom   = fullNoisePower + enobHarmPow;
-        double enobSinadDb = enobDenom > 0
-                ? 10.0 * Math.log10((refLin * refLin) / enobDenom) - fundDbFs
+        // A-weighted noise+distortion for the N+D readout ONLY - the one
+        // audibility figure (IEC 61672 supplies the curve; the weighting is
+        // this readout's own choice, worth ~5.3 dB on an HF-rising Cosmos
+        // floor).  Negative dB relative to the signal.
+        double awDenom  = awNoisePower + awHarmPowerSum;
+        double awThdNDb = awDenom > 0 && refLin > 0
+                ? 10.0 * Math.log10(awDenom / (refLin * refLin))
+                : 300.0;
+        // ENOB basis: the SAME unweighted in-band denominator referred to
+        // FULL SCALE - where the signal level cancels exactly, because the
+        // denominator is already full-scale-relative power.  No fundamental
+        // term appears, so neither the notched bin level nor the
+        // manual-fundamental reference can skew the figure under any
+        // de-embedding combination.  Not the full Nyquist band: an
+        // oversampled sigma-delta parks its shaped noise above the audio
+        // band by design, and a full-band integral reads that as bits lost.
+        double enobSinadDb = sinadDenom > 0
+                ? -10.0 * Math.log10(sinadDenom)
                 : 300.0;
         // Average noise floor: median of clean bins converted to dBFS
         double avgNoiseFloorDbFs = medianNoisePow > 0
@@ -1691,14 +1686,15 @@ public class FftAnalyzer {
                 : fundDbFs - 300.0;
 
         // THD+N is the reciprocal of SINAD: (noise + distortion) / signal,
-        // expressed in dB -> −sinadDb.  Same band, same numerator definition.
+        // expressed in dB -> −sinadDb.  Same band, same numerator definition,
+        // unweighted like SINAD.
         double thdNDb = -sinadDb;
 
         if (logSummary) {
             log.info("THD   : {}%  ({} dB)",
                     String.format(Locale.US, "%.8f", thdPct),
                     String.format(Locale.US, "%.2f", thdDb));
-            log.info("THD+N (A-weighted): {} dB", String.format(Locale.US, "%.2f", thdNDb));
+            log.info("THD+N : {} dB", String.format(Locale.US, "%.2f", thdNDb));
             if (snrFreqMin > 0.0 || snrFreqMax > 0.0) {
                 log.info("SNR   : {} dB  (range: {}-{} Hz)",
                         String.format(Locale.US, "%.2f", snrDb),
@@ -1730,6 +1726,7 @@ public class FftAnalyzer {
         outResult.thdNDb                     = thdNDb;
         outResult.snrDb                      = snrDb;
         outResult.sinadDb                    = sinadDb;
+        outResult.awThdNDb                   = awThdNDb;
         outResult.enobSinadDb                = enobSinadDb;
         outResult.snrFreqMin                 = snrFreqMin;
         outResult.snrFreqMax                 = snrFreqMax;
@@ -1874,19 +1871,14 @@ public class FftAnalyzer {
         double[] awTable    = aWeightTable(halfSize, freqRes);
         double noisePower   = 0.0;
         double awNoisePower = 0.0;   // same sum through the A-weighting curve
-        double fullNoisePower = 0.0; // FULL capture band (ENOB basis - no HP/LP)
         int bandBins    = 0;
         int countedBins = 0;
-        int fullCounted = 0;
         for (int k = 1; k <= halfSize; k++) {
             double freq = k * freqRes;
-            boolean inBand = freq >= snrLo && freq <= snrHi;
-            if (inBand) bandBins++;
-            if (!isSignalBin[k]) {
-                double p = amplLinear[k] * amplLinear[k];
-                fullNoisePower += p;
-                fullCounted++;
-                if (inBand) {
+            if (freq >= snrLo && freq <= snrHi) {
+                bandBins++;
+                if (!isSignalBin[k]) {
+                    double p = amplLinear[k] * amplLinear[k];
                     noisePower   += p;
                     awNoisePower += p * awTable[k];
                     countedBins++;
@@ -1900,38 +1892,33 @@ public class FftAnalyzer {
             noisePower   *= rescale;
             awNoisePower *= rescale;
         }
-        if (fullCounted > 0) {
-            fullNoisePower *= (double) halfSize / fullCounted;
-        }
         // Same NENBW correction as analyze() - see the comment there.  The
         // factor is read from the RESULT (stamped at analysis time), not the
         // current window cache: a recompute must match the spectrum it is
         // recomputing from, whatever window is selected by now.
         if (r.windowNenbwBins > 0) {
-            noisePower     /= r.windowNenbwBins;
-            awNoisePower   /= r.windowNenbwBins;
-            fullNoisePower /= r.windowNenbwBins;
+            noisePower   /= r.windowNenbwBins;
+            awNoisePower /= r.windowNenbwBins;
         }
         r.noisePower        = noisePower;
         r.snrDb             = noisePower <= 0
                 ? 300.0
                 : 10.0 * Math.log10((refLin * refLin) / noisePower);
-        // SINAD denominator = A-WEIGHTED noise + in-band harmonic power (the
-        // basis for ENOB / THD+N / the N+D readout, all "A"-suffixed) - see
-        // the comment in analyze().  SNR above stays unweighted.
-        double sinadDenom = awNoisePower + awHarmPowerSum;
+        // SINAD, UNWEIGHTED (MT-003) - see analyze(); the A-curve exists only
+        // in the N+D figure below.
+        double sinadDenom = noisePower + harmPowerSum;
         r.sinadDb = sinadDenom > 0
                 ? 10.0 * Math.log10((refLin * refLin) / sinadDenom)
                 : 300.0;
-        // ENOB basis - unweighted, full band, full-scale-referred; see analyze().
-        double enobHarmPow = 0.0;
-        for (int h = 0; h < r.harmonicCount; h++) {
-            int b = (r.harmonicBins != null && h < r.harmonicBins.length) ? r.harmonicBins[h] : 0;
-            if (b > 0 && b <= halfSize) enobHarmPow += amplLinear[b] * amplLinear[b];
-        }
-        double enobDenom = fullNoisePower + enobHarmPow;
-        r.enobSinadDb = enobDenom > 0
-                ? 10.0 * Math.log10((refLin * refLin) / enobDenom) - fundDbFs
+        double awDenom = awNoisePower + awHarmPowerSum;
+        r.awThdNDb = awDenom > 0 && refLin > 0
+                ? 10.0 * Math.log10(awDenom / (refLin * refLin))
+                : 300.0;
+        // ENOB basis - the same unweighted in-band denominator referred to
+        // FULL SCALE, where the signal level cancels exactly; see analyze().
+        // No fundamental term, so no de-embedding combination can skew it.
+        r.enobSinadDb = sinadDenom > 0
+                ? -10.0 * Math.log10(sinadDenom)
                 : 300.0;
         r.avgNoiseFloorDbFs = medianNoisePow > 0
                 ? 20.0 * Math.log10(Math.sqrt(medianNoisePow))

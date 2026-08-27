@@ -46,8 +46,8 @@ import lombok.extern.log4j.Log4j2;
  *
  * <p>Loads the WAV (channel 1), optionally linearises each ADC code through a
  * {@code --load-weighted} INL map and/or subtracts known harmonics via
- * {@code --sub-harmonics}, then runs a single FFT pass to produce THD, THD+N
- * (A-weighted), SNR, ENOB, and the per-harmonic table.  Two optional
+ * {@code --sub-harmonics}, then runs a single FFT pass to produce THD, THD+N,
+ * SNR, ENOB, and the per-harmonic table.  Two optional
  * post-correction passes mutate the result in place: {@code --adc-comp}
  * subtracts the ADC's predicted distortion contribution at each harmonic bin;
  * {@code --cal} divides every FFT bin by the frequancy response's H(f) to

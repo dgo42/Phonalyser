@@ -161,13 +161,18 @@ public class FftResult {
     public double thdDb;
     public double thdNDb;
     public double snrDb;
-    /** A-weighted in-band SINAD: 10·log10(refLin² / (awNoisePower + A-weighted
-     *  harmonic power)) - the basis of the A-suffixed THD+N / N+D readouts. */
+    /** UNWEIGHTED in-band SINAD (MT-003): 10·log10(refLin² / (noisePower +
+     *  in-band harmonic power)).  {@link #thdNDb} is its reciprocal. */
     public double sinadDb;
-    /** ENOB basis (IEEE 1241 convention): UNWEIGHTED noise over the FULL
-     *  capture band (the distortion HP/LP do not apply) plus all found
-     *  harmonics, with the signal referred to FULL SCALE - so
-     *  (enobSinadDb − 1.76)/6.02 compares against converter datasheets. */
+    /** The A-WEIGHTED noise+distortion level relative to the signal (negative
+     *  dB) - the N+D audibility readout, the ONLY weighted figure. */
+    public double awThdNDb;
+    /** ENOB basis: the unweighted in-band SINAD denominator referred to FULL
+     *  SCALE (the signal level cancels, so no fundamental term exists and no
+     *  de-embedding combination can skew it) -
+     *  (enobSinadDb − 1.76)/6.02 compares against converter datasheets.  Not
+     *  the full Nyquist band: an oversampled sigma-delta parks its shaped
+     *  noise above the audio band by design. */
     public double enobSinadDb;
     /** Lower bound of the frequency range used for SNR (Hz); 0 = no limit. */
     public double snrFreqMin;
@@ -365,6 +370,7 @@ public class FftResult {
         c.thdNDb                     = src.thdNDb;
         c.snrDb                      = src.snrDb;
         c.sinadDb                    = src.sinadDb;
+        c.awThdNDb                   = src.awThdNDb;
         c.enobSinadDb                = src.enobSinadDb;
         c.snrFreqMin                 = src.snrFreqMin;
         c.snrFreqMax                 = src.snrFreqMax;
