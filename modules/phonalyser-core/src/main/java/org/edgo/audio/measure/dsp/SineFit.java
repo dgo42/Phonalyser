@@ -175,9 +175,9 @@ public final class SineFit {
      * dst[dstFrom+i] = src[srcFrom+i] − (a·sin(omega·(kOffset+i)) + b·cos(omega·(kOffset+i)))
      * </pre>
      * DC is left in the trace on purpose (the AC toggle handles DC).  Uses a
-     * double-precision sin/cos rotation recurrence seeded at {@code omega·kOffset}
-     * - one {@link Math#sin}/{@link Math#cos} pair, then rotate per sample, no
-     * allocation.
+     * per-sample evaluation through the shared {@link SineKernel} (the DDS
+     * generator's table-plus-Taylor math) - the phase comes from one multiply
+     * per sample, so there is no cumulative drift; no allocation.
      *
      * @param src     source buffer
      * @param srcFrom source start index
@@ -188,16 +188,16 @@ public final class SineFit {
      */
     public void subtractSineInto(float[] src, int srcFrom, int count,
                                  double kOffset, float[] dst, int dstFrom) {
-        double startAngle = omega * kOffset;
-        double curSin = Math.sin(startAngle);
-        double curCos = Math.cos(startAngle);
-        double cosOmega = Math.cos(omega), sinOmega = Math.sin(omega);
+        // Per-sample table-plus-Taylor evaluation through the shared
+        // SineKernel (the DDS generator's own math): the phase comes from ONE
+        // multiply per sample, so - unlike the previous rotation recurrence,
+        // whose error grew with the span - the synthesized reference carries
+        // no cumulative drift over arbitrarily long slices.
+        double tps = omega / (2.0 * Math.PI);        // turns per sample
         for (int i = 0; i < count; i++) {
-            double sine = a * curSin + b * curCos;
+            double turns = tps * (kOffset + i);
+            double sine  = a * SineKernel.sinTurns(turns) + b * SineKernel.cosTurns(turns);
             dst[dstFrom + i] = (float) (src[srcFrom + i] - sine);
-            double nextSin = curSin * cosOmega + curCos * sinOmega;
-            curCos = curCos * cosOmega - curSin * sinOmega;
-            curSin = nextSin;
         }
     }
 
@@ -213,8 +213,8 @@ public final class SineFit {
      * between {@code c} and the windowed mean of {@code a·sin+b·cos}, so a caller
      * that wants a stable baseline removes the whole model (the residual is then
      * exactly orthogonal to the constant regressor over the fit window) and adds
-     * back a stable DC of its own. Same double-precision sin/cos rotation
-     * recurrence and no allocation as {@link #subtractSineInto}.
+     * back a stable DC of its own. Same drift-free shared-kernel evaluation and
+     * no allocation as {@link #subtractSineInto}.
      *
      * @param src     source buffer
      * @param srcFrom source start index
@@ -226,16 +226,12 @@ public final class SineFit {
      */
     public void subtractFullInto(float[] src, int srcFrom, int count,
                                  double kOffset, double dcAdd, float[] dst, int dstFrom) {
-        double startAngle = omega * kOffset;
-        double curSin = Math.sin(startAngle);
-        double curCos = Math.cos(startAngle);
-        double cosOmega = Math.cos(omega), sinOmega = Math.sin(omega);
+        // Same drift-free shared-kernel evaluation as subtractSineInto.
+        double tps = omega / (2.0 * Math.PI);        // turns per sample
         for (int i = 0; i < count; i++) {
-            double model = a * curSin + b * curCos + c;
+            double turns = tps * (kOffset + i);
+            double model = a * SineKernel.sinTurns(turns) + b * SineKernel.cosTurns(turns) + c;
             dst[dstFrom + i] = (float) (src[srcFrom + i] - model + dcAdd);
-            double nextSin = curSin * cosOmega + curCos * sinOmega;
-            curCos = curCos * cosOmega - curSin * sinOmega;
-            curSin = nextSin;
         }
     }
 }

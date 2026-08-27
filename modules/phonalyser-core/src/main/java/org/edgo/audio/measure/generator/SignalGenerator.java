@@ -26,6 +26,7 @@ import java.util.SplittableRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.edgo.audio.measure.common.Constants;
+import org.edgo.audio.measure.dsp.SineKernel;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
@@ -58,21 +59,12 @@ public class SignalGenerator implements GeneratorControls {
 
 
     // -------------------------------------------------------------------------
-    // DDS sine lookup table (full wave, 4096 entries)
+    // DDS sine evaluation
     // -------------------------------------------------------------------------
 
-    private static final int      TABLE_BITS = 12;
-    private static final int      TABLE_SIZE = 1 << TABLE_BITS;   // 4096
-    private static final double[] SINE_TABLE = new double[TABLE_SIZE];
-    private static final double[] COS_TABLE  = new double[TABLE_SIZE];
-
-    static {
-        for (int i = 0; i < TABLE_SIZE; i++) {
-            double angle = 2.0 * Math.PI * i / TABLE_SIZE;
-            SINE_TABLE[i] = Math.sin(angle);
-            COS_TABLE[i]  = Math.cos(angle);
-        }
-    }
+    // The full-wave lookup table and the switchable Taylor correction live in
+    // the shared {@link SineKernel}, so the oscilloscope residual's fitted
+    // reference and the generator's waveforms are computed by the SAME math.
 
     // DDS phase-accumulator scale constants (TWO_POW_64 / TWO_PI_OVER_2_64 /
     // ONE_OVER_2_53) and SQRT2 are centralised in common.Constants.
@@ -935,73 +927,21 @@ public class SignalGenerator implements GeneratorControls {
     // DDS waveform kernels
     // -------------------------------------------------------------------------
 
-    // Taylor correction for the fractional phase Δθ (≤ 2π/4096 ≈ 1.5e-3 rad),
-    // combined with the table-read coarse angle via the angle-addition
-    // identities.  Shared by all three DDS sine/cos kernels so the order is a
-    // single switch here instead of three copies.
-    //
-    // ORDER SWITCH - uncomment exactly ONE order in EACH helper, keeping the
-    // two helpers at the same order.  At the current TABLE_BITS the 5th order
-    // already truncates at ~2e-20 (≈ −390 dBc); 7th and 9th are headroom (and
-    // for shrinking the lookup table).
-
-    /** cos(Δθ) Taylor series; {@code dx2 = Δθ²}. */
-    private double taylorCos(double dx2) {
-        // 5th order - cos to Δθ⁴:
-        return 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0));
-        // 7th order - cos to Δθ⁶:
-        // return 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0 + dx2 * (-1.0 / 720.0)));
-        // 9th order - cos to Δθ⁸:
-        //return 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0 + dx2 * (-1.0 / 720.0 + dx2 * (1.0 / 40320.0))));
-    }
-
-    /** sin(Δθ) Taylor series; {@code dx = Δθ}, {@code dx2 = Δθ²}. */
-    private double taylorSin(double dx, double dx2) {
-        // 5th order - sin to Δθ⁵:
-        return dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0)));
-        // 7th order - sin to Δθ⁷:
-        // return dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0 + dx2 * (-1.0 / 5040.0))));
-        // 9th order - sin to Δθ⁹:
-        // return dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0 + dx2 * (-1.0 / 5040.0 + dx2 * (1.0 / 362880.0)))));
-    }
-
     /**
-     * DDS sine with switchable Taylor-series correction (Horner-evaluated;
-     * 9th order active - see {@link #taylorCos}/{@link #taylorSin}).
-     *
-     * Phase accumulator -> top {@link #TABLE_BITS} bits select the lookup table
-     * entry (coarse angle θ₀), the remaining bits carry the fractional phase
-     * error Δθ (in radians, ≤ 2π/4096 ≈ 1.5e-3).
-     *   sin(θ₀ + Δθ) = sin(θ₀)·cos(Δθ) + cos(θ₀)·sin(Δθ)
+     * DDS sine - the shared table-plus-Taylor kernel evaluated on this
+     * oscillator's 64-bit phase accumulator (see {@link SineKernel} for the
+     * table split and the switchable 5th/7th/9th-order correction).
      */
     private double ddsSine() {
-        int    idx  = (int) (phaseAcc >>> (64 - TABLE_BITS));   // 0 .. 4095
-        long   frac = phaseAcc & ((1L << (64 - TABLE_BITS)) - 1);
-        double dx   = frac * Constants.TWO_PI_OVER_2_64;                  // fractional radians
-        double dx2  = dx * dx;
-        double cosDx = taylorCos(dx2);
-        double sinDx = taylorSin(dx, dx2);
-        double sinT = SINE_TABLE[idx];
-        double cosT = COS_TABLE[idx];
-        return sinT * cosDx + cosT * sinDx;
+        return SineKernel.sinAtPhaseAcc(phaseAcc);
     }
 
     /** Second DDS sine reader - identical math to {@link #ddsSine}, but
      *  reads {@link #phaseAcc2} instead of {@link #phaseAcc} so the
      *  dual-tone waveform can run two independent oscillators in lock-
-     *  step with a single sample tick.  Kept as a separate method
-     *  rather than parameterising {@code ddsSine} so the JIT can still
-     *  inline the per-tone read without an extra parameter copy. */
+     *  step with a single sample tick. */
     private double ddsSine2() {
-        int    idx  = (int) (phaseAcc2 >>> (64 - TABLE_BITS));
-        long   frac = phaseAcc2 & ((1L << (64 - TABLE_BITS)) - 1);
-        double dx   = frac * Constants.TWO_PI_OVER_2_64;
-        double dx2  = dx * dx;
-        double cosDx = taylorCos(dx2);
-        double sinDx = taylorSin(dx, dx2);
-        double sinT = SINE_TABLE[idx];
-        double cosT = COS_TABLE[idx];
-        return sinT * cosDx + cosT * sinDx;
+        return SineKernel.sinAtPhaseAcc(phaseAcc2);
     }
 
     /**
@@ -1187,17 +1127,11 @@ public class SignalGenerator implements GeneratorControls {
     }
 
     /** Table + Taylor cosine of an arbitrary 64-bit DDS phase accumulator -
-     *  the {@link #ddsSine()} kernel's angle-addition with the cosine
-     *  identity, same error budget.  Used by the harmonic-compensation
-     *  kernel so no {@code Math.cos} runs on the per-sample path. */
+     *  the shared kernel's cosine identity, same error budget.  Used by the
+     *  harmonic-compensation kernel so no {@code Math.cos} runs on the
+     *  per-sample path. */
     private double ddsCos(long acc) {
-        int    idx  = (int) (acc >>> (64 - TABLE_BITS));
-        long   frac = acc & ((1L << (64 - TABLE_BITS)) - 1);
-        double dx   = frac * Constants.TWO_PI_OVER_2_64;
-        double dx2  = dx * dx;
-        double cosDx = taylorCos(dx2);
-        double sinDx = taylorSin(dx, dx2);
-        return COS_TABLE[idx] * cosDx - SINE_TABLE[idx] * sinDx;
+        return SineKernel.cosAtPhaseAcc(acc);
     }
 
     // -------------------------------------------------------------------------
