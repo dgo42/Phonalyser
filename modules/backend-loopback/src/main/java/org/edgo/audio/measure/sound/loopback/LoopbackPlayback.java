@@ -77,7 +77,7 @@ public final class LoopbackPlayback implements AudioPlayback,
     /** A configured depth wins; zero (dither off) means the last-bit default -
      *  see the quantiser field. */
     private double effectiveDither(double bits) {
-        return bits > 0 ? bits : bitDepth;
+        return bits > 0 ? bits : -1.0 /*bitDepth*/;
     }
 
     @Override

@@ -236,7 +236,7 @@ public final class LoopbackDuplexEngine {
         // The floor is the DEPTH's own - TPDF on the last bit of the selected
         // depth - and it is produced here, on the playback side, because that is
         // the only side dither exists on.
-        PcmQuantizer quantizer = new PcmQuantizer(bits, bits);
+        PcmQuantizer quantizer = new PcmQuantizer(bits, -1.0/*bits*/);
         SignalGenerator zero = new SignalGenerator(GenSignalForm.SINE, SILENCE_TONE_HZ, hz, 0.0, 1.0);
         this.silence = (destination, frames) -> quantizer.encode(zero, destination, frames);
     }
