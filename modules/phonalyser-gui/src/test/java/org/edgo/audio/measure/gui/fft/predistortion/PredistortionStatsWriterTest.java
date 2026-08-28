@@ -27,7 +27,6 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import org.edgo.audio.measure.dsp.HarmonicCompensation.GeneratorCorrections;
-import org.edgo.audio.measure.dsp.HarmonicCompensation.HarmonicPhasors;
 import org.edgo.audio.measure.dsp.IntermodCompensation;
 import org.edgo.audio.measure.dsp.IntermodCompensation.ProductPhasors;
 import org.edgo.audio.measure.fft.FftResult;
@@ -62,25 +61,6 @@ class PredistortionStatsWriterTest {
      *  inject a temporary directory into a private field. */
     @TempDir
     Path logsDir;
-
-    @Test
-    void headerAndCalibrationRecord() throws IOException {
-        PredistortionStatsWriter writer = new PredistortionStatsWriter(logsDir);
-        // A flat chain: half the amplitude (-6.0206 dB) and +45 degrees
-        // everywhere, so only the frequency column varies across H1..H9.
-        writer.calibration(1000.0, f -> new double[]{ 0.5, Math.PI / 4.0 });
-        writer.close();
-
-        StringBuilder expected = new StringBuilder("CAL;-1;0;;");
-        for (int n = 1; n <= 9; n++) {
-            expected.append(';').append(n * 1000).append(",000000;-6,0206;45,0000");
-        }
-        expected.append(NO_PRODUCT);
-        List<String> lines = recordLines();
-        assertEquals(2, lines.size());
-        assertEquals(HEADER, lines.get(0));
-        assertEquals(expected.toString(), lines.get(1));
-    }
 
     @Test
     void frameRecordIsFlushedAndWrittenOncePerAnalysis() throws IOException {
@@ -124,57 +104,6 @@ class PredistortionStatsWriterTest {
                 + NONE.repeat(6)
                 + NO_PRODUCT,
                 lines.get(1));
-    }
-
-    @Test
-    void probeRecordCarriesTheMeasuredPlant() throws IOException {
-        PredistortionStatsWriter writer = new PredistortionStatsWriter(logsDir);
-        double[] re = new double[8];
-        double[] im = new double[8];
-        double[] hz = new double[8];
-        Arrays.fill(re, Double.NaN);
-        Arrays.fill(im, Double.NaN);
-        // H2: unit magnitude turned by +12.5 degrees.  H3: half the commanded
-        // amplitude arrives, turned by +25 degrees.  The rest kept identity.
-        re[0] = Math.cos(Math.toRadians(12.5));
-        im[0] = Math.sin(Math.toRadians(12.5));
-        hz[0] = 2000.0;
-        re[1] = 0.5 * Math.cos(Math.toRadians(25.0));
-        im[1] = 0.5 * Math.sin(Math.toRadians(25.0));
-        hz[1] = 3000.0;
-        writer.probe(new HarmonicPhasors(re, im, hz));
-        writer.close();
-
-        List<String> lines = recordLines();
-        assertEquals(2, lines.size());
-        assertEquals("PROBE;-1;0;;"
-                + NONE                                   // no plant for the fundamental
-                + ";2000,000000;0,0000;12,5000"          // H2
-                + ";3000,000000;-6,0206;25,0000"         // H3
-                + NONE.repeat(6)                         // H4..H9 kept the identity
-                + NO_PRODUCT,
-                lines.get(1));
-    }
-
-    @Test
-    void productProbeWritesOneRowPerMeasuredProduct() throws IOException {
-        PredistortionStatsWriter writer = new PredistortionStatsWriter(logsDir);
-        // Three grid slots: (2,0) measured, (1,1) measured, (-1,1) refused by
-        // the clearance guard and therefore not written at all.
-        int[] a = { 2, 1, -1 };
-        int[] b = { 0, 1, 1 };
-        double[] re = { Math.cos(Math.toRadians(25.0)), 0.5 * Math.cos(Math.toRadians(50.0)), Double.NaN };
-        double[] im = { Math.sin(Math.toRadians(25.0)), 0.5 * Math.sin(Math.toRadians(50.0)), Double.NaN };
-        double[] hz = { 2000.0, 2100.0, 100.0 };
-        writer.productProbe(new ProductPhasors(a, b, re, im, hz));
-        writer.close();
-
-        List<String> lines = recordLines();
-        assertEquals(3, lines.size());
-        assertEquals("PRODUCT;-1;0;;" + NONE.repeat(9)
-                + ";2;0;2000,000000;0,0000;25,0000", lines.get(1));
-        assertEquals("PRODUCT;-1;0;;" + NONE.repeat(9)
-                + ";1;1;2100,000000;-6,0206;50,0000", lines.get(2));
     }
 
     @Test
@@ -222,7 +151,6 @@ class PredistortionStatsWriterTest {
     @Test
     void singleToneRecordsAreUnchangedAndCarryNoProductRow() throws IOException {
         PredistortionStatsWriter writer = new PredistortionStatsWriter(logsDir);
-        writer.calibration(1000.0, f -> new double[]{ 0.5, Math.PI / 4.0 });
         writer.frame(0, syntheticResult());
         writer.round(0, syntheticResult());
         writer.correction(0, new GeneratorCorrections(
@@ -230,7 +158,7 @@ class PredistortionStatsWriterTest {
         writer.close();
 
         List<String> lines = recordLines();
-        assertEquals(5, lines.size());
+        assertEquals(4, lines.size());
         assertEquals(HEADER, lines.get(0));
         for (String line : lines) {
             assertFalse(line.startsWith("PROD"), line);
@@ -243,14 +171,10 @@ class PredistortionStatsWriterTest {
     @Test
     void disabledWriterCreatesNoFile() throws IOException {
         PredistortionStatsWriter writer = new PredistortionStatsWriter();
-        writer.calibration(1000.0, f -> new double[]{ 0.5, 0.0 });
         writer.frame(0, syntheticResult());
         writer.round(0, syntheticResult());
         writer.correction(0, new GeneratorCorrections(
                 new double[]{ 0.01 }, new int[]{ 2 }, new double[]{ 0.0 }));
-        writer.probe(new HarmonicPhasors(new double[8], new double[8], new double[8]));
-        writer.productProbe(new ProductPhasors(new int[2], new int[2],
-                new double[2], new double[2], new double[2]));
         writer.close();
 
         try (Stream<Path> files = Files.list(logsDir)) {

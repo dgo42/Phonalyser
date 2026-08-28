@@ -26,9 +26,7 @@ import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.HarmonicCompensation;
 import org.edgo.audio.measure.dsp.HarmonicCompensation.GeneratorCorrections;
-import org.edgo.audio.measure.dsp.HarmonicCompensation.HarmonicPhasors;
 import org.edgo.audio.measure.dsp.IntermodCompensation;
-import org.edgo.audio.measure.dsp.IntermodCompensation.ProductPhasors;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
@@ -123,52 +121,6 @@ public final class PredistortionEngine {
      *  the first window doesn't straddle the old signal. */
     private static final long   APPLY_SETTLE_MS   = 200;
 
-    /** FFT frames each of the two probe sub-rounds averages.  The probe partial
-     *  arrives tens of dB above the noise, so the measurement needs no depth -
-     *  this is only enough to average out a single disturbed frame, which keeps
-     *  the once-per-training probe short against the rounds that follow. */
-    private static final int    PROBE_AVERAGES    = 4;
-    /** Highest harmonic the probe measures.  The correction file and the
-     *  diagnostic record both run to H9, and every harmonic above it keeps the
-     *  identity plant. */
-    private static final int    PROBE_MAX_HARMONIC = 9;
-    /** Probe partial amplitude, dB relative to the DAC fundamental - the same
-     *  for a harmonic and for an intermod product.  High enough that its
-     *  arrival stands far above the noise floor and far above the DUT's own
-     *  distortion (so the difference of the two sub-rounds is the probe alone),
-     *  low enough - 0.1% of the fundamental each - that neither the DAC nor the
-     *  ADC is stressed and the chain stays in the same small-signal regime the
-     *  corrections live in.  The dual-tone grid carries the most partials (the
-     *  two tones' harmonics plus the low-order intermod comb, of the order of
-     *  twenty), which even added coherently stays a couple of percent of the
-     *  fundamental - so the products need no amplitude of their own. */
-    private static final double PROBE_AMPLITUDE_DB = -60.0;
-    /** Phase step between consecutive probe partials.  Any known phase would
-     *  measure the plant; stepping them apart means a partial delivered to the
-     *  wrong DDS slot shows up as a plant phase that does not fit the measured
-     *  pattern instead of hiding behind a common phase. */
-    private static final double PROBE_PHASE_STEP_DEG = 45.0;
-    /** dB the probe's arrival must stand above the frame's noise floor before
-     *  its plant is trusted.  At 20 dB a noise phasor can turn the measured
-     *  arrival by at most asin(0.1) = 5.7 degrees - an order below the
-     *  per-harmonic phase error the plant exists to remove - and a harmonic
-     *  that misses it keeps the identity plant rather than inverting noise. */
-    private static final double PROBE_CLEARANCE_DB = 20.0;
-    /** Extra averages a DUAL-TONE probe sub-round may spend waiting for the
-     *  analyzer to publish its de-rotated intermod-product grid.  That grid is
-     *  a per-tick decision, and a tick taken right after the statistics
-     *  re-anchor the probe itself triggers - or after a discontinuity re-sync -
-     *  can carry none of it.  A plant measured from such a frame comes out HALF
-     *  measured: the b=0 harmonics still read out of the harmonic table while
-     *  every mixed product silently keeps the identity plant, so the whole
-     *  {@code a*f1 + b*f2} comb stays uncorrected with nothing marking the
-     *  loss.  A handful of further averages costs nothing against the rounds
-     *  that follow; if the grid never appears the probe measures what it can,
-     *  exactly as before. */
-    private static final int    PROBE_GRID_EXTRA_AVG = 8;
-    /** Round label of the records that precede round 0 in the diagnostic file. */
-    private static final int    PRE_ROUND         = -1;
-
     private final Display             display;
     private final GeneratorController gen;
     private final FftController       fft;
@@ -188,11 +140,6 @@ public final class PredistortionEngine {
      *  instance while {@link DebugSwitches#WRITE_DPD_STATS} is off.  It never
      *  throws: a file error disables the record and the loop runs on. */
     private PredistortionStatsWriter stats;
-    /** True only between the probe partials reaching the generator and their
-     *  removal.  The abort path clears the generator only while this is set, so
-     *  a normal finish leaves the round's correction where the wizard expects
-     *  it. */
-    private boolean probeActive;
 
     /** Live phase, polled by the wizard timer. */
     @Getter private volatile Phase phase = Phase.IDLE;
@@ -256,10 +203,21 @@ public final class PredistortionEngine {
     private void runLoop(int baseAverages, double targetThdPct) {
         StopReason reason = StopReason.USER_STOP;
         // Switch off: a disabled record, which no-ops every call site - the
-        // probe and the correction math are unaffected either way.
+        // correction math is unaffected either way.
         stats = DebugSwitches.WRITE_DPD_STATS
                 ? new PredistortionStatsWriter(AppPaths.instance().getLogsDir())
                 : new PredistortionStatsWriter();
+        // A fresh run starts from a CLEAN state machine - a re-started wizard
+        // must behave exactly like the first start: no best round, no round
+        // counter, no leftover round-stop flag from wherever the last run
+        // was cut.
+        currentRound         = 0;
+        collectTargetAvg     = 0;
+        roundStopRequested   = false;
+        bestApplied          = null;
+        bestIntermod         = null;
+        bestResult           = null;
+        bestThdPct           = Double.MAX_VALUE;
         try {
             int maxH = Math.max(1, Preferences.instance().getFftCalcMaxHarmonic());
             dualTone = Preferences.instance().getGenSignalForm().isDualTone();
@@ -313,12 +271,6 @@ public final class PredistortionEngine {
                 if (stopRequested) { reason = StopReason.USER_STOP; return; }
                 log.warn("Predistortion: tone did not stabilise within {} ms - proceeding", ALIGN_TIMEOUT_MS);
             }
-            writeStatsCalibration(imd, target);
-            // Measure what the chain does with a commanded correction BEFORE
-            // correcting anything, so every round is built through the measured
-            // plant instead of through the assumption of a perfect one - at the
-            // harmonics for a single tone, at the whole product grid for two.
-            runProbe(harm, imd, maxH);
             ui(fft::resetStatistics);                          // fresh baseline for round 0
 
             int round = 0;
@@ -396,12 +348,6 @@ public final class PredistortionEngine {
             log.error("Predistortion engine failed", ex);
             reason = StopReason.ERROR;
         } finally {
-            // A stop or a failure between applying the probe partials and
-            // removing them would otherwise leave them on the generator.
-            if (probeActive) {
-                ui(gen::clearCompensation);
-                probeActive = false;
-            }
             stats.close();
             phase = Phase.FINISHED;
             final StopReason fr = reason;
@@ -501,8 +447,7 @@ public final class PredistortionEngine {
      *  re-evaluated against the LIVE residual on every collected average, so a
      *  round that keeps improving keeps averaging.  {@link FftController#completedAnalyses()}
      *  was re-zeroed by the reset that precedes every round.  {@code statsRound}
-     *  labels the collected frames in the diagnostic record - the round number,
-     *  or {@link #PRE_ROUND} for the probe sub-rounds that precede round 0. */
+     *  labels the collected frames in the diagnostic record. */
     private FftResult collectUntilAverages(int statsRound, int baseAverages, double baselineDistPct,
                                            double prevDistPct, int maxAverages) {
         collectTargetAvg   = sizeAverages(baseAverages, baselineDistPct, prevDistPct, maxAverages);
@@ -539,114 +484,6 @@ public final class PredistortionEngine {
     private double distortionPct(FftResult r) {
         if (r == null) return Double.NaN;
         return dualTone ? imdPct(r) : r.thdPct;
-    }
-
-    /**
-     * Measures the plant transfer once, before round 0, and installs it in the
-     * live accumulator: (1) a short BASELINE sub-round with nothing applied,
-     * (2) the same length again with known partials applied through the very
-     * generator path the corrections use - at H2..H9 for a single tone, at the
-     * whole {@code a*f1 + b*f2} product grid for two - (3) the difference per
-     * harmonic or product, where the DUT's own distortion and the noise cancel,
-     * divided by the arrival the command should have produced.  The partials
-     * are removed again before round 0, so the loop starts from the raw DAC
-     * exactly as it did before.
-     *
-     * <p>Silently leaves the identity plant when a sub-round is cut short by a
-     * stop: an unmeasured plant must never become a guessed one.
-     */
-    private void runProbe(HarmonicCompensation harm, IntermodCompensation imd, int maxH) {
-        phase = Phase.COLLECTING;
-        ui(fft::resetStatistics);
-        FftResult baseline = probeSubRound(imd);
-        if (baseline == null) return;
-
-        double ampRatio  = Math.pow(10.0, PROBE_AMPLITUDE_DB / 20.0);
-        double phaseStep = Math.toRadians(PROBE_PHASE_STEP_DEG);
-        IntermodCompensation.GeneratorCorrections dualCommand = null;
-        double[] probeAmp = null;                   // accumulator-indexed, 0 = not probed
-        double[] probePhi = null;
-        if (dualTone) {
-            // The accumulator owns the product grid, so it builds the command:
-            // the same object goes to the generator and to the measurement.
-            dualCommand = imd.probeCommand(ampRatio, phaseStep);
-            final IntermodCompensation.GeneratorCorrections cmd = dualCommand;
-            ui(() -> gen.applyDualToneCompensation(cmd.ampRatios(), cmd.coefA(),
-                    cmd.coefB(), cmd.phiInits()));
-        } else {
-            int count = Math.min(maxH, PROBE_MAX_HARMONIC - 1);
-            probeAmp = new double[maxH];
-            probePhi = new double[maxH];
-            double[] amps = new double[count];      // generator-indexed
-            int[]    nums = new int[count];
-            double[] phis = new double[count];
-            for (int h = 0; h < count; h++) {
-                probeAmp[h] = ampRatio;
-                probePhi[h] = h * phaseStep;
-                amps[h]     = ampRatio;
-                nums[h]     = h + 2;
-                phis[h]     = probePhi[h];
-            }
-            ui(() -> gen.applyCompensation(amps, nums, phis));
-        }
-        probeActive = true;
-        sleep(APPLY_SETTLE_MS);
-        ui(fft::resetStatisticsAfterSignalChange);
-        FftResult probed = probeSubRound(imd);
-        ui(gen::clearCompensation);
-        probeActive = false;
-        sleep(APPLY_SETTLE_MS);
-        if (probed == null) return;
-
-        final boolean left = probed.channelLeft;
-        if (dualTone) {
-            ProductPhasors plant = imd.measurePlant(baseline, probed, dualCommand,
-                    f -> calResponseAt(f, left), PROBE_CLEARANCE_DB);
-            imd.setPlant(plant);
-            stats.productProbe(plant);
-        } else {
-            HarmonicPhasors plant = harm.measurePlant(baseline, probed, probeAmp, probePhi,
-                    f -> calResponseAt(f, left), PROBE_CLEARANCE_DB);
-            harm.setPlant(plant);
-            stats.probe(plant);
-        }
-    }
-
-    /** One probe sub-round - a fixed, short average, sized by nothing but
-     *  {@link #PROBE_AVERAGES} (no residual to grow against yet).  A dual-tone
-     *  sub-round additionally keeps averaging while the frame it ends on
-     *  carries no de-rotated intermod product, so the plant is measured off the
-     *  same kind of frame a round's correction is - see
-     *  {@link #PROBE_GRID_EXTRA_AVG}. */
-    private FftResult probeSubRound(IntermodCompensation imd) {
-        FftResult r = collectUntilAverages(PRE_ROUND, PROBE_AVERAGES,
-                Double.NaN, Double.NaN, PROBE_AVERAGES);
-        if (!dualTone) return r;
-        for (int extra = 1; extra <= PROBE_GRID_EXTRA_AVG
-                && r != null && !imd.carriesProducts(r); extra++) {
-            int target = PROBE_AVERAGES + extra;
-            r = collectUntilAverages(PRE_ROUND, target, Double.NaN, Double.NaN, target);
-        }
-        return r;
-    }
-
-    /** Writes the diagnostic record's {@code .frc} response, before the first
-     *  round.  The analysed channel and the measured fundamental come from the
-     *  aligned result; the generator's emit frequency stands in for the
-     *  fundamental until a result exists. */
-    private void writeStatsCalibration(IntermodCompensation imd, double fundamentalHz) {
-        FftResult r    = readResult();
-        boolean   left = (r == null) || r.channelLeft;
-        double    f1   = (r != null && r.fundamentalHzRefined > 0)
-                ? r.fundamentalHzRefined : fundamentalHz;
-        stats.calibration(f1, f -> calResponseAt(f, left));
-        // A two-tone run is corrected on the product grid, whose frequencies
-        // the harmonic record cannot state - so the response at each of them,
-        // and at the second tone, is recorded too.
-        if (dualTone && r != null && r.fundamental2HzRefined > 0) {
-            double f2 = r.fundamental2HzRefined;
-            stats.productCalibration(imd, imd.grid(f1, f2), f2, f -> calResponseAt(f, left));
-        }
     }
 
     /** Reads {@link FftView#getLastResult()} on the UI thread and returns a

@@ -26,10 +26,8 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
-import java.util.function.DoubleFunction;
 
 import org.edgo.audio.measure.dsp.HarmonicCompensation.GeneratorCorrections;
-import org.edgo.audio.measure.dsp.HarmonicCompensation.HarmonicPhasors;
 import org.edgo.audio.measure.dsp.IntermodCompensation;
 import org.edgo.audio.measure.dsp.IntermodCompensation.ProductPhasors;
 import org.edgo.audio.measure.fft.FftResult;
@@ -58,25 +56,11 @@ import lombok.extern.log4j.Log4j2;
  * carrying the same {@code hz;mag_db;phase_deg} triple for the fundamental and
  * H2..H9, and five trailing columns
  * ({@code prod_a;prod_b;prod_hz;prod_mag_db;prod_phase_deg}) that only the
- * dual-tone product probe fills - a two-tone product grid is keyed by its
+ * dual-tone product records fill - a two-tone product grid is keyed by its
  * {@code (a, b)} coefficients and does not fit a block keyed to F1 and H2..H9.
  * Every row carries every column the header names; the unused ones are empty:
  *
  * <ul>
- *   <li>{@code CAL} - once, before the first round: the loaded {@code .frc}
- *       chain response at the fundamental and at H2..H9.  Magnitude is
- *       {@code 20*log10(|H(f)|)} (negative = the chain attenuates), phase is
- *       its rotation in degrees.</li>
- *   <li>{@code PROBE} - once, before the first round: the plant transfer the
- *       probe measured per harmonic, magnitude in dB and phase in degrees.
- *       0 dB / 0 degrees is a chain that answers a command exactly; the phase
- *       is what an excess transport delay shows up as.  Empty for a harmonic
- *       that kept the identity plant.</li>
- *   <li>{@code PRODUCT} - the dual-tone counterpart: one row per intermod
- *       product the probe measured, in the five trailing columns.  Products
- *       that kept the identity plant are not written at all.</li>
- *   <li>{@code PRODCAL} - once: the response each product is de-embedded
- *       against, plus a {@code (0,1)} row for the second tone.</li>
  *   <li>{@code PRODROUND} - per dual-tone round: each product's measured
  *       residual (dBr against that round's raw F1 level, RAW phase), plus a
  *       {@code (0,1)} row carrying the second tone's own frequency, level and
@@ -120,17 +104,10 @@ public final class PredistortionStatsWriter {
 
     /** Highest harmonic the file carries a column triple for. */
     private static final int MAX_HARMONIC = 9;
-    /** Round column of the records that precede round 0 - the chain response
-     *  and the measured plant. */
-    private static final int PRE_ROUND    = -1;
 
     private static final String FILE_PREFIX = "dpd-stats-";
     private static final String FILE_SUFFIX = ".csv";
     private static final String SEP         = ";";
-    private static final String TYPE_CAL       = "CAL";
-    private static final String TYPE_PROBE     = "PROBE";
-    private static final String TYPE_PRODUCT   = "PRODUCT";
-    private static final String TYPE_PRODCAL   = "PRODCAL";
     private static final String TYPE_PRODROUND = "PRODROUND";
     private static final String TYPE_PRODAPPLY = "PRODAPPLY";
     private static final String TYPE_FRAME  = "FRAME";
@@ -176,75 +153,6 @@ public final class PredistortionStatsWriter {
     // -------------------------------------------------------------------------
     // Records
     // -------------------------------------------------------------------------
-
-    /** Writes the {@code .frc} response record - the chain the measurement is
-     *  de-embedded against, evaluated at {@code fundamentalHz} and at its
-     *  harmonics up to H9.  Written once, before the first round. */
-    public void calibration(double fundamentalHz, DoubleFunction<double[]> calResponseAt) {
-        StringBuilder sb = head(TYPE_CAL, PRE_ROUND, 0, 0, Double.NaN);
-        for (int n = 1; n <= MAX_HARMONIC; n++) {
-            double   f   = n * fundamentalHz;
-            double[] res = calResponseAt.apply(f);
-            component(sb, f, magDb(res[0]), Math.toDegrees(res[1]));
-        }
-        writeRecord(sb);
-    }
-
-    /** Writes the measured plant transfer per harmonic - magnitude in dB and
-     *  phase in degrees of what the chain answered to a known commanded
-     *  partial.  Harmonics the probe could not trust (identity plant) stay
-     *  empty.  Written once, before the first round. */
-    public void probe(HarmonicPhasors plant) {
-        if (plant == null) return;
-        StringBuilder sb = head(TYPE_PROBE, PRE_ROUND, 0, 0, Double.NaN);
-        component(sb, Double.NaN, Double.NaN, Double.NaN);      // no plant for the fundamental
-        double[] re = plant.re();
-        double[] im = plant.im();
-        for (int h = 0; h < MAX_HARMONIC - 1; h++) {
-            if (h >= re.length || !Double.isFinite(re[h]) || !Double.isFinite(im[h])) {
-                component(sb, Double.NaN, Double.NaN, Double.NaN);
-                continue;
-            }
-            component(sb, plant.hz()[h], magDb(Math.hypot(re[h], im[h])), phaseDeg(re[h], im[h]));
-        }
-        writeRecord(sb);
-    }
-
-    /** Writes the measured plant transfer of the dual-tone PRODUCT grid - one
-     *  row per product, keyed by its {@code (a, b)} coefficients and its
-     *  frequency in the five trailing columns, since the fixed component block
-     *  is keyed to F1 and H2..H9 and a product grid does not fit it.  Products
-     *  that kept the identity plant are not written.  Once, before the first
-     *  round. */
-    public void productProbe(ProductPhasors plant) {
-        if (plant == null) return;
-        double[] re = plant.re();
-        double[] im = plant.im();
-        for (int g = 0; g < re.length; g++) {
-            if (!Double.isFinite(re[g]) || !Double.isFinite(im[g])) continue;
-            productRow(TYPE_PRODUCT, PRE_ROUND, plant.coefA()[g], plant.coefB()[g],
-                    plant.hz()[g], magDb(Math.hypot(re[g], im[g])), phaseDeg(re[g], im[g]));
-        }
-    }
-
-    /** Writes the chain response at every product of the dual-tone grid - the
-     *  response the correction is DE-EMBEDDED AGAINST, taken from the
-     *  accumulator itself so the record cannot state a different convention
-     *  than the correction uses (a b=0 harmonic is unity there, the display
-     *  having de-embedded it already).  The trailing {@code (0,1)} row carries
-     *  the second tone's own response, which the dual de-rotation needs.
-     *  Once, before the first round. */
-    public void productCalibration(IntermodCompensation imd, ProductPhasors grid,
-                                   double f2Hz, DoubleFunction<double[]> calResponseAt) {
-        if (imd == null || grid == null) return;
-        for (int g = 0; g < grid.hz().length; g++) {
-            double[] cal = imd.deEmbedResponse(g, grid.hz()[g], calResponseAt);
-            productRow(TYPE_PRODCAL, PRE_ROUND, grid.coefA()[g], grid.coefB()[g],
-                    grid.hz()[g], magDb(cal[0]), Math.toDegrees(cal[1]));
-        }
-        double[] tone2 = calResponseAt.apply(f2Hz);
-        productRow(TYPE_PRODCAL, PRE_ROUND, 0, 1, f2Hz, magDb(tone2[0]), Math.toDegrees(tone2[1]));
-    }
 
     /** Writes a dual-tone round's measured products - one row per grid product,
      *  its magnitude in dBr against this round's raw F1 level and its RAW
