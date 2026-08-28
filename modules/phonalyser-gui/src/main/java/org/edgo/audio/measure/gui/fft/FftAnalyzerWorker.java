@@ -440,6 +440,24 @@ public final class FftAnalyzerWorker {
      *  and the FFT rejection agree on what counts as a damaged block. */
     private static final boolean USE_TIME_DISCONTINUITY = true;
     private final TimeDiscontinuityDetector timeDetector = new TimeDiscontinuityDetector();
+    /** Ticks BEFORE a detected discontinuity whose contribution is REMOVED
+     *  from the accumulator when a gate fires.  The preceding tick's window
+     *  shares nearly all samples with the detecting one, so the event usually
+     *  sits at its window-taper EDGE - attenuated below the gate thresholds
+     *  but still poisoning the average.  The last this-many accepted ticks
+     *  are kept subtractable in {@link #prevTickRe}; the rejected tick itself
+     *  never enters the accumulator, so the total loss per event is this
+     *  constant plus the detecting tick. */
+    private static final int DISCONTINUITY_DROP_TICKS = 1;
+    /** Ring of the last {@link #DISCONTINUITY_DROP_TICKS} accepted ticks'
+     *  contributions EXACTLY as added (rotation and weight applied), so a
+     *  gate firing can subtract them back out.  Coherent: re/im; incoherent:
+     *  power.  Sized like the accumulator at restart. */
+    private double[][] prevTickRe, prevTickIm, prevTickPow;
+    private int[]      prevTickWeight;
+    /** Slots of the ring currently valid (cleared by a subtraction, a restart
+     *  and a reset), and the next slot to write. */
+    private int prevTickCount, prevTickPos;
     /** Debug overlay: the last gate-REJECTED block's pre-average spectrum (dBFs),
      *  held so {@code FftView} can show what tripped a gate (rejected blocks never
      *  otherwise reach the display). */
@@ -502,6 +520,10 @@ public final class FftAnalyzerWorker {
      *  the κ-residual ramp.  Raise it if the fundamental still drifts; lower it if
      *  the harmonics get noisy. */
     private static final double PHASE_TRACK_GAIN = 0.10;
+    /** A fork line whose accumulated-vs-fresh phase difference sits within this
+     *  of the ±π wrap is dropped for the tick - folded to the wrong side it
+     *  would pull the pooled offset instead of refining it. */
+    private static final double FORK_WRAP_GUARD_RAD = Math.PI / 2.0;
     /** Config the accumulator was built for; mismatch => reset. */
     private int     accumFftSize;
     private boolean accumCoherent;
@@ -559,6 +581,7 @@ public final class FftAnalyzerWorker {
         spectralDetector.reset();   // the median reference restarts with the average
         lastRejectBlockDbFs = null;
         lastRejectGates     = null;
+        prevTickCount = 0;
         tickStats.close();          // the diagnostic record ends with the run it describes
     }
 
@@ -710,6 +733,12 @@ public final class FftAnalyzerWorker {
             accumRe  = coherent ? new double[N] : null;
             accumIm  = coherent ? new double[N] : null;
             accumPow = coherent ? null          : new double[N];
+            prevTickRe     = coherent ? new double[DISCONTINUITY_DROP_TICKS][N] : null;
+            prevTickIm     = coherent ? new double[DISCONTINUITY_DROP_TICKS][N] : null;
+            prevTickPow    = coherent ? null : new double[DISCONTINUITY_DROP_TICKS][N];
+            prevTickWeight = new int[DISCONTINUITY_DROP_TICKS];
+            prevTickCount  = 0;
+            prevTickPos    = 0;
             accumFrames = 0;
             accumFftSize = fftSize;
             accumCoherent = coherent;
@@ -769,8 +798,27 @@ public final class FftAnalyzerWorker {
             } else if (accumPow != null) {
                 for (int k = 0; k < N; k++) accumPow[k] *= scale;
             }
+            // The subtractable ring holds contributions AS ADDED - once the
+            // sum is scaled, they must scale with it or a later subtraction
+            // over-removes.
+            for (int s = 0; s < prevTickCount; s++) {
+                int slot = Math.floorMod(prevTickPos - 1 - s, DISCONTINUITY_DROP_TICKS);
+                if (coherent && prevTickRe != null) {
+                    double[] pr = prevTickRe[slot], pi = prevTickIm[slot];
+                    for (int k = 0; k < N; k++) { pr[k] *= scale; pi[k] *= scale; }
+                } else if (prevTickPow != null) {
+                    double[] pp = prevTickPow[slot];
+                    for (int k = 0; k < N; k++) pp[k] *= scale;
+                }
+            }
             accumFrames = keep;
         }
+        // Claim this tick's slot in the subtractable ring; the add loops below
+        // fill it with the contribution exactly as accumulated.
+        final int prevSlot = prevTickPos;
+        prevTickPos = (prevTickPos + 1) % DISCONTINUITY_DROP_TICKS;
+        if (prevTickCount < DISCONTINUITY_DROP_TICKS) prevTickCount++;
+        prevTickWeight[prevSlot] = weight;
         if (coherent) {
             // One-shot κ refine from the de-rotated fundamental's phase slope.
             // The single-frame peak pins κ to only ~0.01-0.03 bin; dφ/dΔ over
@@ -781,7 +829,8 @@ public final class FftAnalyzerWorker {
             // from here; the few pre-refine frames carry a negligible offset.
             if (accumIntFundBinRounded > 0) {
                 int    k0   = Math.min(accumIntFundBinRounded, halfSize);
-                double krot = -2.0 * Math.PI * delta * accumKFractional / fftSize;
+                double krot = -2.0 * Math.PI
+                        * Math.IEEEremainder(delta * accumKFractional, fftSize) / fftSize;
                 double cr   = Math.cos(krot), sr = Math.sin(krot);
                 double obsPhase = Math.atan2(r.re[k0] * sr + r.im[k0] * cr,
                                              r.re[k0] * cr - r.im[k0] * sr);
@@ -809,7 +858,8 @@ public final class FftAnalyzerWorker {
                         kappaLastPhase  = obsPhase;
                         kappaLastDelta  = delta;
                         if (++kappaMeasFrames >= KAPPA_MEAS_FRAMES && kappaCleanSpan > 0.0) {
-                            double dKappa = kappaCumPhase * fftSize / (2.0 * Math.PI * kappaCleanSpan);
+                            double dKappa = kappaCumPhase * fftSize
+                                    / (2.0 * Math.PI * kappaCleanSpan);
                             accumKFractional += dKappa;
                             kappaRefined = true;
                             gapRecoverPending = false;
@@ -821,35 +871,40 @@ public final class FftAnalyzerWorker {
                         }
                     }
                 } else if (accumKFractional != 0.0) {
-                    // Continuous phase-tracking loop (a PLL on the cross-tick
-                    // fundamental).  Instead of trusting a frozen pinned κ - whose
-                    // residual error ramps the de-rotated phase and slowly
+                    // Continuous phase-tracking loop on the cross-tick spectrum.
+                    // Instead of trusting a frozen pinned κ - whose residual
+                    // error ramps the de-rotated phase and slowly
                     // vector-cancels the fundamental - measure the running
                     // mis-alignment against the DEEP ACCUMULATED phase (the
-                    // √N-averaged true reference; the accumulator rotates bin k0 by
-                    // the same krot as obsPhase, so the two compare directly) and
-                    // fold a FRACTION of it back into the de-rotation every tick.
-                    // PHASE_TRACK_GAIN < 1 is the loop filter: it averages out the
-                    // per-tick phase noise that would otherwise random-walk if
-                    // folded whole.  This holds the fundamental flat with no
-                    // pinned-κ drift, and a glitch is just a large residual the
-                    // loop tracks out - replacing the fragile 8-frame gap-
-                    // correction.  On a re-sync the delta jumped, so do a one-shot
-                    // FULL realign of THIS frame too (gain 1) and let the loop
-                    // clean up any single-frame residual afterwards.
+                    // √N-averaged true reference; the accumulator rotates bin k0
+                    // by the same krot as obsPhase, so the two compare directly)
+                    // and fold a FRACTION of it back into the de-rotation every
+                    // tick.  PHASE_TRACK_GAIN < 1 is the loop filter: it
+                    // averages out the per-tick phase noise that would otherwise
+                    // random-walk if folded whole.  The steady estimate is the
+                    // FORK - pooled from every strong family line, not the
+                    // fundamental alone (see forkPooledOffset) - so behind a
+                    // notch the reference noise falls with the combined power of
+                    // the harmonics instead of being set by the weakest line.
+                    // On a re-sync the delta jumped, so do a one-shot FULL
+                    // realign of THIS frame from the fundamental alone (a big
+                    // offset wraps the higher lines' phases, so pooling is not
+                    // valid there) and let the loop clean up afterwards.
                     double accumPhase = Math.atan2(accumIm[k0], accumRe[k0]);
                     double residual   = Math.IEEEremainder(obsPhase - accumPhase, 2.0 * Math.PI);
-                    double gain       = gapRecoverPending ? 1.0 : PHASE_TRACK_GAIN;
-                    double corr       = gain * residual * fftSize
+                    double fundOffset = residual * fftSize
                                       / (2.0 * Math.PI * accumKFractional);
-                    accumDroppedSamples += corr;
                     if (gapRecoverPending) {
-                        delta += corr;                 // realign THIS frame after the jump
+                        accumDroppedSamples += fundOffset;
+                        delta += fundOffset;           // realign THIS frame after the jump
                         gapRecoverPending = false;
                         if (log.isInfoEnabled()) {
-                            log.info("FFT re-sync realigned: {} sample one-shot (Δφ={} rad vs accumulated ref); phase-lock loop continues",
-                                    Math.round(corr), String.format("%.4f", residual));
+                            log.info("FFT re-sync realigned: {} sample one-shot (Δφ={} rad vs accumulated ref); phase tracking continues",
+                                    Math.round(fundOffset), String.format("%.4f", residual));
                         }
+                    } else {
+                        accumDroppedSamples += PHASE_TRACK_GAIN
+                                * forkPooledOffset(r, halfSize, delta, k0, fundOffset);
                     }
                 }
             }
@@ -887,6 +942,7 @@ public final class FftAnalyzerWorker {
                         * Math.IEEEremainder(delta * scale, fftSize) / fftSize;
                 final double stepRe = Math.cos(theta);
                 final double stepIm = Math.sin(theta);
+                final double[] pvR = prevTickRe[prevSlot], pvI = prevTickIm[prevSlot];
                 parallelChunks(N, (kLo, kHi) -> {
                     double ang  = Math.IEEEremainder(theta * kLo, 2.0 * Math.PI);
                     double phRe = Math.cos(ang);
@@ -894,8 +950,12 @@ public final class FftAnalyzerWorker {
                     for (int k = kLo; k < kHi; k++) {
                         double rRe = r.re[k] * weight;
                         double rIm = r.im[k] * weight;
-                        accumRe[k] += rRe * phRe - rIm * phIm;
-                        accumIm[k] += rRe * phIm + rIm * phRe;
+                        double cRe = rRe * phRe - rIm * phIm;
+                        double cIm = rRe * phIm + rIm * phRe;
+                        accumRe[k] += cRe;
+                        accumIm[k] += cIm;
+                        pvR[k] = cRe;
+                        pvI[k] = cIm;
                         double nextRe = phRe * stepRe - phIm * stepIm;
                         phIm = phRe * stepIm + phIm * stepRe;
                         phRe = nextRe;
@@ -912,13 +972,18 @@ public final class FftAnalyzerWorker {
                             * Math.IEEEremainder(delta * accumKappa2, fftSize) / fftSize
                         : 0.0;
                 final int nFam = buildFamily(r, halfSize, phi1, phi2);
+                final double[] pvR = prevTickRe[prevSlot], pvI = prevTickIm[prevSlot];
                 if (nFam <= 0) {
                     // No pinned fundamental: nothing coherent needs aligning -
                     // add straight; noise and unlocked lines decay on their own.
                     parallelChunks(N, (kLo, kHi) -> {
                         for (int k = kLo; k < kHi; k++) {
-                            accumRe[k] += r.re[k] * weight;
-                            accumIm[k] += r.im[k] * weight;
+                            double cRe = r.re[k] * weight;
+                            double cIm = r.im[k] * weight;
+                            accumRe[k] += cRe;
+                            accumIm[k] += cIm;
+                            pvR[k] = cRe;
+                            pvI[k] = cIm;
                         }
                     });
                 } else {
@@ -930,8 +995,12 @@ public final class FftAnalyzerWorker {
                             while (c < nFam - 1 && k > 0.5 * (pos[c] + pos[c + 1])) c++;
                             double rRe = r.re[k] * weight;
                             double rIm = r.im[k] * weight;
-                            accumRe[k] += rRe * pc[c] - rIm * ps[c];
-                            accumIm[k] += rRe * ps[c] + rIm * pc[c];
+                            double cRe = rRe * pc[c] - rIm * ps[c];
+                            double cIm = rRe * ps[c] + rIm * pc[c];
+                            accumRe[k] += cRe;
+                            accumIm[k] += cIm;
+                            pvR[k] = cRe;
+                            pvI[k] = cIm;
                         }
                     });
                 }
@@ -946,13 +1015,125 @@ public final class FftAnalyzerWorker {
             // mag->amplitude conv in overlayAccumulatorOnto (shared with the
             // coherent path) applies ONCE, not twice (the double conversion
             // buried the whole spectrum ~120 dB).
+            double[] pvP = prevTickPow[prevSlot];
             for (int k = 0; k < N; k++) {
                 double mag = r.re[k];
-                accumPow[k] += mag * mag * weight;
+                double cP  = mag * mag * weight;
+                accumPow[k] += cP;
+                pvP[k] = cP;
             }
         }
         accumFrames += weight;
         return true;
+    }
+
+    /** Removes the subtractable ring's held contributions - the last accepted
+     *  tick(s) - from the accumulator.  The retroactive half of discontinuity
+     *  rejection: the window(s) BEFORE the detecting one shared nearly all of
+     *  its samples, with the event attenuated at their taper edge below the
+     *  gate thresholds, so their contribution is poisoned although no gate
+     *  fired on them. */
+    private void subtractPreviousTicks() {
+        if (prevTickCount <= 0 || !accumHasData) return;
+        int removedFrames = 0;
+        for (int s = 0; s < prevTickCount; s++) {
+            int slot = Math.floorMod(prevTickPos - 1 - s, DISCONTINUITY_DROP_TICKS);
+            if (accumCoherent && accumRe != null && prevTickRe != null) {
+                final double[] pr = prevTickRe[slot], pi = prevTickIm[slot];
+                parallelChunks(accumRe.length, (lo, hi) -> {
+                    for (int k = lo; k < hi; k++) {
+                        accumRe[k] -= pr[k];
+                        accumIm[k] -= pi[k];
+                    }
+                });
+            } else if (!accumCoherent && accumPow != null && prevTickPow != null) {
+                double[] pp = prevTickPow[slot];
+                for (int k = 0; k < accumPow.length; k++) accumPow[k] -= pp[k];
+            }
+            removedFrames += prevTickWeight[slot];
+        }
+        accumFrames = Math.max(0, accumFrames - removedFrames);
+        if (log.isInfoEnabled()) {
+            log.info("Discontinuity: the previous {} tick(s) ({} frames) removed from the "
+                    + "accumulator - the event sat at their window edge, under the gates",
+                    prevTickCount, removedFrames);
+        }
+        prevTickCount = 0;
+    }
+
+    /** The FORK: the per-tick tracking correction (in samples) pooled from
+     *  every strong line of the coherent family instead of the fundamental
+     *  alone.  A common sample offset rotates each line proportionally to its
+     *  frequency, so each line's accumulated-vs-fresh phase difference divided
+     *  by its fractional bin is an independent estimate of the SAME offset;
+     *  the estimates are averaged with weights {@code (fractional bin x
+     *  magnitude)^2} - variance-optimal, since a line's phase noise is
+     *  floor/|X| and its offset sensitivity grows with frequency.  Admission:
+     *  a line joins when its fresh level is within the multi-tone threshold
+     *  (Preferences, {@code fftStrongToneRelDb}) below the fundamental's -
+     *  smaller threshold pools fewer lines - and the dual pair's F2 (the
+     *  {@code (0,1)} grid product) always joins; a line within
+     *  {@link #FORK_WRAP_GUARD_RAD} of the ±π wrap is dropped for the tick.
+     *  Behind a notch the fundamental is the WEAKEST line, and the pooled
+     *  reference noise falls with the combined power of the harmonics - the
+     *  theory chapter's fork.  With nothing else admitted, returns the
+     *  fundamental's own estimate unchanged. */
+    private double forkPooledOffset(FftResult r, int halfSize, double delta, int k0,
+                                    double fundOffset) {
+        double kappa = accumKFractional;
+        double fundPow = r.re[k0] * r.re[k0] + r.im[k0] * r.im[k0];
+        double relDb   = Preferences.instance().getFftStrongToneRelDb();
+        double minPow  = fundPow * Math.pow(10.0, -relDb / 10.0);
+        double sumW    = kappa * kappa * fundPow;
+        double sumWOff = sumW * fundOffset;
+        // The harmonic ladder h·κ, h = 2 and up.
+        for (int h = 2; h * kappa < halfSize - 1.0; h++) {
+            double[] est = forkLineOffset(r, halfSize, delta, h * kappa, minPow, false);
+            if (est != null) {
+                sumW    += est[0];
+                sumWOff += est[0] * est[1];
+            }
+        }
+        // The published product grid a·κ1 + b·κ2 when a dual pair is pinned;
+        // F2 - the (0,1) entry - is a fundamental and joins unconditionally.
+        int[] pa = r.imdProductA;
+        int[] pb = r.imdProductB;
+        if (accumKappa2 > 0.0 && pa != null && pb != null) {
+            for (int p = 0; p < pa.length; p++) {
+                double kappaP = pa[p] * kappa + pb[p] * accumKappa2;
+                if (kappaP < 1.0 || kappaP > halfSize - 1.0) continue;
+                boolean exempt = pa[p] == 0 && pb[p] == 1;
+                double[] est = forkLineOffset(r, halfSize, delta, kappaP, minPow, exempt);
+                if (est != null) {
+                    sumW    += est[0];
+                    sumWOff += est[0] * est[1];
+                }
+            }
+        }
+        return sumWOff / sumW;
+    }
+
+    /** One fork line's {@code [weight, offset-estimate]} - or {@code null}
+     *  when the line is below the admission level (unless {@code exempt}),
+     *  out of range, or too close to the phase wrap this tick.  The fresh
+     *  phasor is de-rotated by the line's own family angle, exactly as the
+     *  accumulator rotated its bin, so the two phases compare directly. */
+    private double[] forkLineOffset(FftResult r, int halfSize, double delta,
+                                    double kappaL, double minPow, boolean exempt) {
+        int k = (int) Math.round(kappaL);
+        if (k <= 1 || k > halfSize) return null;
+        double pow = r.re[k] * r.re[k] + r.im[k] * r.im[k];
+        if (!exempt && pow < minPow) return null;
+        double ang = -2.0 * Math.PI
+                * Math.IEEEremainder(delta * kappaL, accumFftSize) / accumFftSize;
+        double c   = Math.cos(ang), s = Math.sin(ang);
+        double obs = Math.atan2(r.re[k] * s + r.im[k] * c,
+                                r.re[k] * c - r.im[k] * s);
+        double accumPhase = Math.atan2(accumIm[k], accumRe[k]);
+        double res = Math.IEEEremainder(obs - accumPhase, 2.0 * Math.PI);
+        if (Math.abs(res) > FORK_WRAP_GUARD_RAD) return null;
+        return new double[]{ kappaL * kappaL * pow,
+                             res * accumFftSize / (2.0 * Math.PI * kappaL) };
     }
 
     /** Fills {@link #famPos}/{@link #famCos}/{@link #famSin} with the coherent
@@ -1725,6 +1906,7 @@ public final class FftAnalyzerWorker {
                 if (log.isInfoEnabled()) {
                     log.info("Time-domain discontinuity in the tick window - re-sync");
                 }
+                subtractPreviousTicks();
                 onSignalDiscontinuity(rdr);
                 resultPool.release(r);
                 return IDLE_TICK_MS;
@@ -1740,6 +1922,7 @@ public final class FftAnalyzerWorker {
                     lastRejectBlockDbFs = dbgBlock;
                     lastRejectGates     = spectralDetector.gates();
                 }
+                subtractPreviousTicks();
                 onSignalDiscontinuity(rdr);
                 resultPool.release(r);
                 return IDLE_TICK_MS;
