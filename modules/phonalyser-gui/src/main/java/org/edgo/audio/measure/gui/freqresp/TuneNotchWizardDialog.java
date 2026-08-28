@@ -48,6 +48,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -925,6 +926,12 @@ public final class TuneNotchWizardDialog {
                 notchHz, I18n.t("unit.hz"), notchDb, I18n.t("unit.db"));
         GC gc = e.gc;
         gc.setTextAntialias(SWT.ON);
+        // The preference measurement font (the scope/FFT tables' font) - set
+        // EXPLICITLY: a paint listener inherits whatever font the previous
+        // painter left on the GC, which made this readout change face
+        // whenever the crosshair was up.  Before textExtent, which depends
+        // on the font.
+        gc.setFont(Fonts.instance().normal(e.display));
         int textX = ((Control) e.widget).getSize().x
                 - gc.textExtent(s).x - NOTCH_TEXT_RIGHT_PAD_PX;
         Display display = e.display;
