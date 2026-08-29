@@ -64,22 +64,22 @@ public final class SineKernel {
      *  fractional angles of the table split (|Δθ| ≤ {@link #STEP_RAD}). */
     public static double taylorCos(double dx2) {
         // 5th order - cos to Δθ⁴:
-        // return 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0));
+        return 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0));
         // 7th order - cos to Δθ⁶:
         // return 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0 + dx2 * (-1.0 / 720.0)));
         // 9th order - cos to Δθ⁸:
-        return 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0 + dx2 * (-1.0 / 720.0 + dx2 * (1.0 / 40320.0))));
+        // return 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0 + dx2 * (-1.0 / 720.0 + dx2 * (1.0 / 40320.0))));
     }
 
     /** sin(Δθ) Taylor series; {@code dx = Δθ}, {@code dx2 = Δθ²}.  Valid for
      *  the small fractional angles of the table split. */
     public static double taylorSin(double dx, double dx2) {
         // 5th order - sin to Δθ⁵:
-        // return dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0)));
+        return dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0)));
         // 7th order - sin to Δθ⁷:
         // return dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0 + dx2 * (-1.0 / 5040.0))));
         // 9th order - sin to Δθ⁹:
-        return dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0 + dx2 * (-1.0 / 5040.0 + dx2 * (1.0 / 362880.0)))));
+        // return dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0 + dx2 * (-1.0 / 5040.0 + dx2 * (1.0 / 362880.0)))));
     }
 
     /**
