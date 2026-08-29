@@ -89,10 +89,18 @@ export class PredistortionHost {
     return FftResult.adopt(r).deepCopy();
   }
 
-  /** Combined intermod % of a dual-tone result. */
-  imdPct(r) {
+  /** The dual-tone intermod analysis of `r` - the ONE analyzeImd call site, so the
+   *  engine's convergence metric and the wizard's readouts can never disagree
+   *  about a frame. null when the result carries no measurable pair.
+   *  @returns {?import('../fft/imd-analyzer.js').ImdResult} */
+  imdResult(r) {
     const c = this.engine.config;
-    const imd = analyzeImd(r, c.toneHz, c.tone2Hz, this.prefs.dbvOffsetDb);
+    return analyzeImd(r, c.toneHz, c.tone2Hz, this.prefs.dbvOffsetDb);
+  }
+
+  /** Combined intermod % of a dual-tone result - the engine's convergence metric. */
+  imdPct(r) {
+    const imd = this.imdResult(r);
     return imd ? imd.imdPwrPct : NaN;
   }
 

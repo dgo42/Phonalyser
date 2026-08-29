@@ -15,11 +15,11 @@ import { t } from '../i18n/i18n.js';
 import { PredistortionEngine, Phase, StopReason } from '../predistortion/engine.js';
 import { GenSignalForm, isDualTone } from '../generator/dds-kernel.js';
 import { writeHarmonicDpd, writeIntermodDpd } from '../io/dpd.js';
+import {
+  OVERLAP_LABEL, isRandom, RAND_MIN_OVERLAP_PCT, RAND_MAX_OVERLAP_PCT,
+} from '../fft/fft-overlap.js';
 
 const DPD_TYPE = [{ description: 'DAC predistortion', accept: 'text/plain', extensions: ['.dpd'] }];
-
-// FftOverlap enum token -> display label (mirrors enums/FftOverlap .label).
-const OVERLAP_LABEL = { PCT_0: '0%', PCT_50: '50%', PCT_75: '75%', PCT_87_5: '87.5%', PCT_93_75: '93.75%' };
 
 export class PredistortionWizard {
   /**
@@ -136,7 +136,10 @@ export class PredistortionWizard {
 
   _updateMetrics() {
     const r = this.getResult(), dual = this.state.dual, off = this.prefs.dbvOffsetDb;
-    const dist = !r ? NaN : (dual ? this.host.imdPct(r) : r.thdPct);
+    // ONE intermod analysis per refresh, as Java takes one ImdResult per refresh:
+    // the current-IMD figure and the D+N row below both read off it.
+    const imd = (dual && r) ? this.host.imdResult(r) : null;
+    const dist = !r ? NaN : (dual ? (imd ? imd.imdPwrPct : NaN) : r.thdPct);
     // bestThdPct starts at Number.MAX_VALUE (Java Double.MAX_VALUE "no best yet" sentinel), which
     // IS finite - so the isFinite guard alone showed 1.79e+308. Guard on < MAX_VALUE too.
     const best = this.pdEngine && Number.isFinite(this.pdEngine.bestThdPct)
@@ -144,6 +147,10 @@ export class PredistortionWizard {
     // Java PredistortionWizardDialog:346 fmtDbv(live.noisePeakFloorDbFs() + dbvOffset) - the PEAK
     // floor, computed once (noisePeakFloorDbFs() sorts internally).
     const floor = r ? r.noisePeakFloorDbFs() + off : NaN;
+    // The most recent COMPLETED round's distortion (Java latestDistPct, stashed in
+    // onRound): the committed history's tail, NaN until the first round finishes.
+    const hist = this.history.dist;
+    const latest = hist.length > 0 ? hist[hist.length - 1] : NaN;
     const rows = [
       // ROUND - Java :325 running ? Integer.toString(engine.getCurrentRound() + 1) : "-".
       [t('predistortion.metric.round'), this.running && this.pdEngine ? this.pdEngine.currentRound + 1 : '-'],
@@ -152,11 +159,25 @@ export class PredistortionWizard {
       // Distortion percentages: Java fmtPct is "%.8f %%" (PredistortionWizardDialog:708-710).
       [t(dual ? 'predistortion.metric.currentImd' : 'predistortion.metric.currentThd'), Number.isFinite(dist) ? dist.toFixed(8) + ' %' : '-'],
       [t(dual ? 'predistortion.metric.best_imd' : 'predistortion.metric.best_thd'), Number.isFinite(best) ? best.toFixed(8) + ' %' : '-'],
+      // LAST COMPLETED ROUND's distortion (Java latestDistPct, distLbl :407) - the
+      // figure beside the LIVE one, so the operator sees what the round actually
+      // committed rather than only what the current averaging reads. The committed
+      // history's tail is that value; '-' until the first round finishes.
+      [t(dual ? 'predistortion.metric.imd' : 'predistortion.metric.thd'),
+        Number.isFinite(latest) ? latest.toFixed(8) + ' %' : '-'],
       // Ratio figures (THD+N / TD+N / SNR / SINAD): plain dB, Java fmtDb "%.2f dB". They
       // measure against the fundamental, so no absolute unit applies and no dBV offset is
       // added; only the two absolute levels below read dBV.
-      [t(dual ? 'predistortion.metric.d_n' : 'predistortion.metric.thd_n'), r ? r.thdNDb.toFixed(2) + ' dB' : '-'],
+      // In DUAL tone the loop minimises INTERMOD, so the D+N row is the intermod
+      // total-distortion-plus-noise percentage as dB - NOT the single-tone THD+N,
+      // which measures a harmonic ladder this signal does not have.
+      // Row ORDER follows Java's two-column grid (buildProgressGroup): round |
+      // averages, current | best, last | SNR, D+N | SINAD, fundamental | floor.
       [t('predistortion.metric.snr'), r ? r.snrDb.toFixed(2) + ' dB' : '-'],
+      [t(dual ? 'predistortion.metric.d_n' : 'predistortion.metric.thd_n'),
+        dual
+          ? (imd ? (20.0 * Math.log10(imd.tdnPct / 100.0)).toFixed(2) + ' dB' : '-')
+          : (r ? r.thdNDb.toFixed(2) + ' dB' : '-')],
       [t('predistortion.metric.sinad'), r ? r.sinadDb.toFixed(2) + ' dB' : '-'],
       [t('predistortion.metric.fund'), r ? (r.fundamentalDbFs + off).toFixed(2) + ' dBV' : '-'],
       // NOISE FLOOR - Java :346 fmtDbv(live.noisePeakFloorDbFs() + dbvOffset): the PEAK floor,
@@ -325,18 +346,30 @@ export class PredistortionWizard {
 
   /** Suggested .dpd name encoding the measurement conditions (Java defaultDpdFileName):
    *  predistortion-<THD|IMD>-<freq>[-<freq2>]-<fftSize>-<overlap>-<window>-<distPpm>.dpd.
-   *  Decimal points become underscores so the name stays path-friendly. */
+   *  Decimal points become underscores so the name stays path-friendly. The random
+   *  mode's token spells out its draw range from the enum's own bounds rather than
+   *  its label, so the name still records the geometry that produced the
+   *  measurement and follows those bounds if they change: Rand_90_63_93_75. */
   _defaultDpdFileName(r, dual) {
     const kind = dual ? 'IMD' : 'THD';
     const freq = r.fundamentalHzRefined.toFixed(4).replace('.', '_');
     const freq2 = dual ? '-' + r.fundamental2HzRefined.toFixed(4).replace('.', '_') : '';
     const size = this._humanFftSize(r.fftSize);
-    const overlapLabel = OVERLAP_LABEL[r.overlap] || OVERLAP_LABEL[this.prefs.fftOverlap.get()] || '';
-    const overlap = overlapLabel.replace('%', '').replace('.', '_');
+    const overlapToken = r.overlap != null ? r.overlap : this.prefs.fftOverlap.get();
+    const overlap = isRandom(overlapToken)
+      ? 'Rand_' + this._pctToken(RAND_MIN_OVERLAP_PCT) + '_' + this._pctToken(RAND_MAX_OVERLAP_PCT)
+      : (OVERLAP_LABEL[overlapToken] || '').replace('%', '').replace('.', '_');
     const window = r.windowType != null ? r.windowType : this.prefs.fftWindow.get();
     const distPpm = this.pdEngine.bestThdPct * 1_000_000.0;   // % -> ppm % (THD single / IMD dual)
     const dist = distPpm.toFixed(2).replace('.', '_');
     return `predistortion-${kind}-${freq}${freq2}-${size}-${overlap}-${window}-${dist}.dpd`;
+  }
+
+  /** An overlap percent as a filename token: the plain integer when the value is
+   *  whole (80 -> 80), otherwise two decimals with the point as an underscore
+   *  (93.75 -> 93_75). */
+  _pctToken(pct) {
+    return pct === Math.round(pct) ? String(pct) : pct.toFixed(2).replace('.', '_');
   }
 
   /** Compact power-of-two FFT length: 2097152 -> "2M", 524288 -> "512k". */
