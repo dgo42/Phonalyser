@@ -93,10 +93,14 @@
      the FLL on; for the deepest floor use the BH7 window and leave mains
      suppression off, and drive a clean tone a few dB below full scale with the
      fundamental snapped to a bin.</p>
-  <p>When you press <b>Start</b>, the loop first measures the bench itself:
-     two brief low-level pre-rounds send small test partials through the very
-     path the corrections take and read each one's attenuation and phase
-     rotation, so every later correction arrives correctly timed.  See
+  <p>When you press <b>Start</b>, any correction already loaded on the generator
+     is cleared, so the first round reads the converter raw.  The bench between
+     the DAC and the ADC is accounted for by the
+     <a href="fft.html#fft-tab-calibration">frequency-response calibration</a>
+     loaded in the FFT pane: its measured phase <em>is</em> that chain's delay,
+     held as a precise rotation at each individual frequency, and every measured
+     harmonic is de-embedded through it - magnitude and phase together - before
+     it becomes a correction.  Nothing measures the delay separately.  See
      <a href="theory/dac-predistortion.html#delay">Theory ▸ the bench
      delay</a>.</p>
 
@@ -131,8 +135,14 @@
             <b>compensated</b> form (compensated sine / dual tone) with no
             restart, then closes the wizard.</td></tr>
     <tr><td>Close</td>
-        <td>Stop the loop, revert the generator to the plain tone (unless you
-            applied a file) and reset the FFT statistics.</td></tr>
+        <td>Costs nothing if the wizard never ran: a window closed without a
+            Start leaves the generator alone and leaves the FFT statistics
+            standing, so a deep average collected before you opened it survives.
+            After a run the loop stops and the FFT statistics are reset either
+            way; what differs is the generator's compensation - Apply leaves the
+            file it just loaded in force, while closing without Apply re-applies
+            the correction file that was configured before the window opened, or
+            reverts to the plain tone if none was.</td></tr>
   </table>
 
   <h2 id="dpd-readouts">What you see</h2>
@@ -147,7 +157,9 @@
      occupies more of the trace than a quick early one - falling toward the red
      target line.</p>
   <p>A <b>progress</b> block lists the live figures.  For a single tone these
-     are the round number, the live and last-round THD, the best THD so far, the
+     are the round number, the live THD, the <b>Last THD</b> row - the distortion
+     of the last <em>completed</em> round, standing beside the live figure and
+     showing a dash until the first round finishes - the best THD so far, the
      running average count, and THD+N, SNR and SINAD as plain dB ratios against
      the fundamental, with the fundamental and noise-floor levels in dBV.  For
      a dual-tone signal the loop minimises intermodulation, so the THD figures

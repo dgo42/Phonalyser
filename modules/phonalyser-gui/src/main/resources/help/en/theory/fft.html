@@ -482,24 +482,30 @@
   </table>
   <p><b>SINAD</b> puts <em>both</em> noise and distortion in the
      denominator, and <b>ENOB</b> - the effective number of bits - follows
-     from it by the converter's ideal-quantization
-     law<sup id="cite-4"><a href="#ref-enob">[4]</a></sup>:</p>
+     from that same denominator referred to full scale, by the converter's
+     ideal-quantization law<sup id="cite-4"><a href="#ref-enob">[4]</a></sup>:</p>
   <div class="eq">SINAD = 10·log₁₀ ( <i>A</i><sub>1</sub>² / (Σ<sub>noise</sub> + Σ<sub>dist</sub>) )<span class="no">(7)</span></div>
-  <div class="eq">ENOB = (SINAD − 1.76) / 6.02<span class="no">(8)</span></div>
-  <p>THD+N is simply the reciprocal ratio to SINAD (the same band, the same
-     numerator), and <b>N+D</b> is that same denominator read against the
-     fundamental - the total non-fundamental residual, shown in dB with an
-     <b>A</b> suffix (THD+N is the identical figure as a percentage).  Both
-     terms of the denominator - the integrated noise <em>and</em> the harmonic
-     distortion - are multiplied, bin by bin, by the IEC 61672 A-weighting
-     curve<sup id="cite-5"><a href="#ref-aw">[5]</a></sup> before they are
-     summed: the curve is near unity around 1&nbsp;kHz and rolls off the deep
-     bass and the extreme treble where the ear is far less sensitive, so N+D,
-     THD+N, SINAD and ENOB reflect audibility rather than raw wideband energy -
-     which is also why a converter with a rising treble noise floor scores
-     several decibels better weighted than flat.  <b>SNR</b> (5) and the
-     <b>N</b> readout are deliberately left <em>unweighted</em>; they state the
-     raw wideband noise and so carry no A.</p>
+  <div class="eq">ENOB = (SINAD<sub>FS</sub> − 1.76) / 6.02,&nbsp;&nbsp;
+     SINAD<sub>FS</sub> = −10·log₁₀ ( Σ<sub>noise</sub> + Σ<sub>dist</sub> )<span class="no">(8)</span></div>
+  <p>The sums in (8) are taken against full scale rather than against the tone,
+     so the signal level cancels: no fundamental term enters ENOB at all, and
+     neither a notch nor a manually defined fundamental can move it - a dithered
+     <i>N</i>-bit channel reads its datasheet figure.  THD+N is simply the
+     reciprocal ratio to SINAD - the same band, the same denominator, shown as a
+     percentage where SINAD is shown in dB.  All three are the
+     converter-datasheet definitions and are read <em>unweighted</em>, as are
+     <b>SNR</b> (5) and the <b>N</b> readout: they state raw energy in the band
+     and so carry no A.</p>
+  <p><b>N+D</b> is the one readout that asks an audibility question instead, and
+     the only place the weighting appears.  Both terms of its denominator - the
+     integrated noise <em>and</em> the harmonic distortion - are multiplied, bin
+     by bin, by the IEC 61672 A-weighting
+     curve<sup id="cite-5"><a href="#ref-aw">[5]</a></sup> before they are summed
+     and read against the fundamental: the curve is near unity around
+     1&nbsp;kHz and rolls off the deep bass and the extreme treble where the ear
+     is far less sensitive, which is also why a converter with a rising treble
+     noise floor scores several decibels better weighted than flat.  That
+     weighting is what the <b>A</b> in the readout's suffix marks.</p>
 
   <p>The phrase "their leakage zones" hides the detail that decides whether these
      figures are honest: the band excluded around the fundamental is not a fixed
@@ -678,9 +684,9 @@
      confidence, not as a one-off lucky readout.  Just as decisive are the
      bench's own properties: low intrinsic distortion, a low noise floor, high
      attenuation of the fundamental, and a high notch-filter Q - and, for a
-     pre-distortion training, the
-     <a href="dac-predistortion.html#delay">bench-delay measurement</a> the
-     pre-distortion chapter describes.</p>
+     pre-distortion training, a loaded frequency-response calibration, whose
+     measured phase is <a href="dac-predistortion.html#delay">the bench delay
+     itself</a> as the pre-distortion chapter explains.</p>
   <p>That the de-rotation can hold a complex average together for that long
      without quietly corrupting the harmonic levels is not assumed - it is
      worked out in the <a href="derotation-accuracy.html">de-rotation accuracy

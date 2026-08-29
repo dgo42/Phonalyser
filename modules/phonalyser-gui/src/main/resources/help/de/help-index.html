@@ -92,7 +92,7 @@
       <li><a href="server.html#server-discovery">Die Suche und die Firewall</a> <span class="small">(Der Phonalyser-Server)</span> - <span class="small">Clients finden einen Server über UDP-Multicast an 239.255.83.77, Port 8377/udp - dieselbe Zahl, auf der der Server lauscht, denn...</span></li>
       <li><a href="theory/audio-backend.html#paths">Die Treiberpfade</a> <span class="small">(Theory ▸ Theorie: Audio-Backend)</span> - <span class="small">Soundhardware ist über verschiedene Treiberinterfaces erreichbar. Phonalyser implementiert drei Allzweckpfade - jeder...</span></li>
       <li><a href="theory/fft.html#metrics">Die Verzerrungs- und Rausch-Metriken</a> <span class="small">(Theory ▸ Theorie: FFT-Analysator)</span> - <span class="small">Aus dem gemittelten Spektrum, mit dem Grundtonpegel A 1 und den Harmonischen-Pegeln A h : THD = √( Σ h ≥2 A h ² ) / A 1 (4) SNR...</span></li>
-      <li><a href="theory/dac-predistortion.html#delay">Die Verzögerung der Messkette - gemessen vor der ersten Runde</a> <span class="small">(Theory ▸ Theorie: DAC-Vorverzerrung)</span> - <span class="small">Die Messkette - DAC, Kerbfilter, ADC - trägt eine konstante eigene Zeitverzögerung, typisch einige zehn Mikrosekunden. Für die...</span></li>
+      <li><a href="theory/dac-predistortion.html#delay">Die Verzögerung der Messkette - schon in der Kalibrierung enthalten</a> <span class="small">(Theory ▸ Theorie: DAC-Vorverzerrung)</span> - <span class="small">Die Messkette - DAC, Kerbfilter, ADC - trägt eine konstante eigene Zeitverzögerung, typisch einige zehn Mikrosekunden. Für die...</span></li>
       <li><a href="theory/generator.html#kernels">Die Wellenformen</a> <span class="small">(Theory ▸ Theorie: Signalgenerator)</span></li>
       <li><a href="freqresp.html#freqresp-filter-overlay">Die Überlagerungskurve</a> <span class="small">(Frequenzgang)</span> - <span class="small">Wenn Anzeigen eingeschaltet und die Auslegung gültig ist, wird der ideale Amplitudengang als violette gestrichelte Kurve in...</span></li>
       <li><a href="freqresp.html#freqresp-tab-utility">Dienstprogramm</a> <span class="small">(Frequenzgang)</span> - <span class="small">Schaltfläche Funktion Screenshot Frequenzgang-Darstellung speichern oder kopieren. DAC-Vollaussteuerung kalibrieren...</span></li>
@@ -116,7 +116,7 @@
       <li><a href="theory/derotation-accuracy.html#reference">Einrasten auf die laufende Mittelung - ohne Selbstvergiftung</a> <span class="small">(Theory ▸ Theorie: De-Rotations-Genauigkeit)</span> - <span class="small">Wie die Grundton-De-Rotation tatsächlich gebildet wird: Ein absolutes Modell, am ersten Block verankert. Jeder Block wird um...</span></li>
       <li><a href="freqresp.html#freqresp-tab-settings">Einstellungen</a> <span class="small">(Frequenzgang)</span> - <span class="small">Steuerelement Hinweise Startfrequenz, Hz Untere Grenze des Sweeps. ≥ 1 Hz. Stoppfrequenz, Hz Obere Grenze des Sweeps, bis zur...</span></li>
       <li><a href="freqresp.html#freqresp-tabs">Einstellungsreiter</a> <span class="small">(Frequenzgang)</span> - <span class="small">Die Einstellungsleiste enthält neun Reiter, in dieser Reihenfolge: Einstellungen , RIAA &amp; IEC , Filter , Unebenheit ,...</span></li>
-      <li><a href="fft.html#fft-thd-enob">ENOB</a> <span class="small">(FFT-Analyser)</span> - <span class="small">Effektive Bit-Anzahl = (SINAD − 1,76) / 6,02. Spiegelt den kombinierten Dynamikbereich von ADC + Messkette...</span></li>
+      <li><a href="fft.html#fft-thd-enob">ENOB</a> <span class="small">(FFT-Analyser)</span> - <span class="small">Effektive Bit-Anzahl. Dieselbe unbewertete Rausch-plus-Verzerrungsleistung, durch die SINAD teilt, jedoch auf den Vollausschlag...</span></li>
       <li><a href="oscilloscope.html#scope-caps">Erfassungsraten-Anzeige (cap/s)</a> <span class="small">(Oszilloskop)</span> - <span class="small">Blassgraue Zahl oben rechts im Signalbereich. Mit dem Flanken -Trigger zeigt sie, wie viele neue Frames pro Sekunde die Ansicht...</span></li>
       <li><a href="preferences.html#prefs-lookfeel">Erscheinungsbild</a> <span class="small">(Einstellungen)</span> - <span class="small">Einstellung Hinweise Ausrichtung der Haupt-Registerkarten: Oben (konventionelle Reiterleiste) oder Links (vertikale Seitenleiste...</span></li>
       <li><a href="server.html#server-noauth">Es gibt keine Authentifizierung, und das mit Absicht</a> <span class="small">(Der Phonalyser-Server)</span> - <span class="small">Ein Phonalyser-Server fragt nicht nach einem Kennwort, und nichts auf der Leitung ist verschlüsselt. Das ist eine Entscheidung,...</span></li>
@@ -329,7 +329,7 @@
       <li><a href="fft.html#fft-thd-clock">Taktdifferenz-Zeile (ΔF / Δosc)</a> <span class="small">(FFT-Analyser)</span> - <span class="small">ΔF: +0.001 Hz (+0.97 ppm) Δosc: +23.79 Hz @ 24.576 MHz . Zeigt die Abweichung des gemessenen Grundtons vom Sollwert des...</span></li>
       <li><a href="generator.html#generator-duty">Tastverhältnis</a> <span class="small">(Generator)</span> - <span class="small">Nur aktiv für Rectangle (Einschaltzeit-Anteil) und Triangle (Anstiegszeit-Anteil), jeweils als Prozentsatz. Jede Wellenform merkt</span></li>
       <li><a href="fft.html#fft-thd-thd">THD H2..N</a> <span class="small">(FFT-Analyser)</span> - <span class="small">Gesamtoberwellenverzerrung als Prozentsatz des Grundtons, summiert über Harmonische 2 bis N (wobei N = Maximale Harmonische für...</span></li>
-      <li><a href="fft.html#fft-thd-thdpn">THD+N</a> <span class="small">(FFT-Analyser)</span> - <span class="small">Gesamtoberwellenverzerrung + Rauschen. Gleicher Zähler wie N+D, normiert auf den...</span></li>
+      <li><a href="fft.html#fft-thd-thdpn">THD+N</a> <span class="small">(FFT-Analyser)</span> - <span class="small">Gesamtoberwellenverzerrung + Rauschen, normiert auf den Grundton: die schlichte, unbewertete Rausch-plus-Verzerrungsleistung des...</span></li>
       <li><a href="fft.html#fft-thd-table">THD-Infotabelle</a> <span class="small">(FFT-Analyser)</span> - <span class="small">Kompakter Overlay oben links auf der Zeichenfläche (oder im externen Werkzeugfenster bei Auslagerung). Pegelzellen rendern in der</span></li>
       <li><a href="oscilloscope.html#scope-tabs">Toolbar-Tabs</a> <span class="small">(Oszilloskop)</span> - <span class="small">Die Einstellungs-Tab-Leiste am unteren Rand des Bereichs enthält kanalspezifische, Trigger- und Dienstprogramm-Einstellungen. Die</span></li>
       <li><a href="oscilloscope.html#scope-tile-trigger-edge">Trigger-Flanken-Kachel</a> <span class="small">(Oszilloskop)</span> - <span class="small">↑ für steigende, ↓ für fallende Flanke. Beim Glitch-Typ: Anker am Anfang (↑) oder Ende (↓) des...</span></li>
@@ -416,8 +416,8 @@
     <h3>Ü</h3>
     <ul>
       <li><a href="server.html#server-measuring">Über ihn messen</a> <span class="small">(Der Phonalyser-Server)</span> - <span class="small">Läuft ein Server, sind es auf der Client-Seite drei Schritte, und alle stehen in Einstellungen ▸ Audio: Den Messplatz finden....</span></li>
-      <li><a href="fft.html#fft-overlap">Überlappung</a> <span class="small">(FFT-Analyser)</span> - <span class="small">0 %, 50 %, 75 %, 87,5 %, 93,75 %. Aufeinanderfolgende Analysefenster teilen diesen Bruchteil ihrer Samples. Überlappung bewirkt...</span></li>
-      <li><a href="fft.html#fft-tile-overlap">Überlappung-Kachel</a> <span class="small">(FFT-Analyser)</span> - <span class="small">Prozentsatz ( 87.5%...</span></li>
+      <li><a href="fft.html#fft-overlap">Überlappung</a> <span class="small">(FFT-Analyser)</span> - <span class="small">0 %, 50 %, 75 %, 87,5 %, 93,75 %, Random . Aufeinanderfolgende Analysefenster teilen diesen Bruchteil ihrer Samples. Überlappung...</span></li>
+      <li><a href="fft.html#fft-tile-overlap">Überlappung-Kachel</a> <span class="small">(FFT-Analyser)</span> - <span class="small">Prozentsatz ( 87.5% ) oder Random , wenn der Sprung pro Analyseschritt gezogen...</span></li>
       <li><a href="theory/derotation-accuracy.html#overlap">Überlappung: die effektive Anzahl der Mittelungen</a> <span class="small">(Theory ▸ Theorie: De-Rotations-Genauigkeit)</span> - <span class="small">Das 1/√ n -Gesetz setzt unabhängige Blöcke voraus. Überlappende Blöcke teilen sich Samples, sodass ihr Bin-Rauschen korreliert...</span></li>
       <li><a href="theory/ring-buffer.html#overrun">Überlauffehler: wenn ein Verbraucher zurückfällt</a> <span class="small">(Theory ▸ Theorie: Ringpuffer &amp; Verbraucher)</span> - <span class="small">Ein Verbraucher mit Lesezeiger kann in Rückstand geraten - etwa bei einem sehr großen FFT oder einem stark ausgelasteten Rechner.</span></li>
     </ul>
@@ -471,7 +471,7 @@
       <li><b>Aufnahme-Resynchronisation</b> - <a href="theory/ring-buffer.html#overrun">Theory ▸ Theorie: Ringpuffer &amp; Verbraucher ▸ Überlauffehler: wenn ein Verbraucher zurückfällt</a>, <a href="theory/ring-buffer.html#">Theory ▸ Theorie: Ringpuffer &amp; Verbraucher</a></li>
       <li><b>Aufnahmesitzung</b> - <a href="theory/ring-buffer.html#">Theory ▸ Theorie: Ringpuffer &amp; Verbraucher</a></li>
       <li><b>Ausgang</b> - <a href="preferences.html#">Einstellungen</a></li>
-      <li><b>Ausgangs</b> - <a href="preferences.html#">Einstellungen</a></li>
+      <li><b>Ausgangs</b> - <a href="freqresp.html#">Frequenzgang</a>, <a href="preferences.html#">Einstellungen</a></li>
       <li><b>Ausgangs-Bittiefe</b> - <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="generator.html#generator-dither">Generator ▸ Dither</a>, <a href="preferences.html#prefs-audio">Einstellungen ▸ Audio</a>, <a href="preferences.html#">Einstellungen</a></li>
       <li><b>Ausgangskanal</b> - <a href="tips.html#">Tipps</a></li>
       <li><b>Ausgangskanal-Auswahl</b> - <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="changelog.html#">Was ist neu ▸ Behoben</a></li>
@@ -544,7 +544,7 @@
     </ul>
     <h3>D</h3>
     <ul>
-      <li><b>DAC</b> - <a href="bench.html#">Messplatz &amp; Verkabelung ▸ Messplatz &amp; Verkabelung</a>, <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ Veraltet</a>, <a href="credits.html#credits-hardware">Mitwirkende ▸ Messhardware</a>, <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent ▸ DAC-Vorverzerrungsassistent</a></li>
+      <li><b>DAC</b> - <a href="bench.html#">Messplatz &amp; Verkabelung ▸ Messplatz &amp; Verkabelung</a>, <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="changelog.html#">Was ist neu ▸ Veraltet</a>, <a href="credits.html#credits-hardware">Mitwirkende ▸ Messhardware</a>, <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent ▸ DAC-Vorverzerrungsassistent</a></li>
       <li><b>DAC kalibrieren</b> - <a href="theory/generator.html#">Theory ▸ Theorie: Signalgenerator</a></li>
       <li><b>DAC-Vorverzerrung</b> - <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent ▸ DAC-Vorverzerrungsassistent</a>, <a href="howto.html#">Das kürzeste HOW-TO der Welt ▸ 4 · Vorverzerren, dann messen</a>, <a href="theory/index.html#">Theory ▸ Funktionsprinzip ▸ Kapitel</a>, <a href="theory/index.html#">Theory ▸ Funktionsprinzip</a>, <a href="theory/tune-notch.html#">Theory ▸ Theorie: Kerbfilter-Abgleich ▸ Kerbfilter-Abgleich</a></li>
       <li><b>DAC-Vorverzerrungs</b> - <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="howto.html#">Das kürzeste HOW-TO der Welt ▸ 4 · Vorverzerren, dann messen</a>, <a href="theory/dac-predistortion.html#purpose">Theory ▸ Theorie: DAC-Vorverzerrung ▸ Die Frage, die diese Seite beantwortet</a></li>
@@ -613,7 +613,7 @@
       <li><b>Eingabe</b> - <a href="preferences.html#">Einstellungen</a></li>
       <li><b>Eingang</b> - <a href="preferences.html#">Einstellungen</a></li>
       <li><b>Eingang übersteuert</b> - <a href="freqresp.html#">Frequenzgang</a></li>
-      <li><b>Eingangs</b> - <a href="preferences.html#">Einstellungen</a></li>
+      <li><b>Eingangs</b> - <a href="freqresp.html#">Frequenzgang</a>, <a href="preferences.html#">Einstellungen</a>, <a href="tune-notch.html#">Kerbfilter-Abgleichassistent</a></li>
       <li><b>Einstellungen</b> - <a href="freqresp.html#">Frequenzgang</a>, <a href="index.html#">Hilfe</a></li>
       <li><b>Einstellungs-Tab</b> - <a href="index.html#">Hilfe ▸ Aufbau</a>, <a href="oscilloscope.html#scope-tabs">Oszilloskop ▸ Toolbar-Tabs</a>, <a href="oscilloscope.html#scope-residual">Oszilloskop ▸ Residuum</a></li>
       <li><b>Einstellungs-Tabs</b> - <a href="fft.html#">FFT-Analyser ▸ FFT-Analyser</a>, <a href="oscilloscope.html#">Oszilloskop ▸ Oszilloskop</a>, <a href="oscilloscope.html#scope-channel-pick">Oszilloskop ▸ L / R Kanalauswahl</a>, <a href="oscilloscope.html#scope-utility-screenshot">Oszilloskop ▸ Screenshot</a></li>
@@ -625,7 +625,7 @@
       <li><b>EMF</b> - <a href="bench.html#refs">Messplatz &amp; Verkabelung ▸ Quellen</a></li>
       <li><b>EMK</b> - <a href="bench.html#">Messplatz &amp; Verkabelung ▸ Wie viel Rauschen bleibt?</a></li>
       <li><b>Ende</b> - <a href="oscilloscope.html#">Oszilloskop</a>, <a href="theory/oscilloscope.html#">Theory ▸ Theorie: Oszilloskop</a></li>
-      <li><b>ENOB</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ 1.0-RC1 - 2026-06-19</a>, <a href="fft.html#">FFT-Analyser ▸ FFT-Analyser</a>, <a href="index.html#">Hilfe ▸ Module</a>, <a href="theory/fft.html#purpose">Theory ▸ Theorie: FFT-Analysator ▸ Wozu er dient</a>, <a href="theory/fft.html#metrics">Theory ▸ Theorie: FFT-Analysator ▸ Die Verzerrungs- und Rausch-Metriken</a></li>
+      <li><b>ENOB</b> - <a href="changelog.html#">Was ist neu ▸ Geändert</a>, <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ 1.0-RC1 - 2026-06-19</a>, <a href="fft.html#">FFT-Analyser ▸ FFT-Analyser</a>, <a href="index.html#">Hilfe ▸ Module</a>, <a href="theory/fft.html#purpose">Theory ▸ Theorie: FFT-Analysator ▸ Wozu er dient</a></li>
       <li><b>Entfernen</b> - <a href="preferences.html#">Einstellungen</a></li>
       <li><b>EQ</b> - <a href="credits.html#credits-inspiration">Mitwirkende ▸ Inspiration</a>, <a href="theory/index.html#">Theory ▸ Funktionsprinzip ▸ Funktionsprinzip</a></li>
       <li><b>ERROR</b> - <a href="preferences.html#prefs-audio-devices-file">Einstellungen ▸ Die Datei devices.yaml - Bearbeiten von Hand</a></li>
@@ -656,6 +656,7 @@
       <li><b>FFT-Fensters</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="fft.html#fft-fill-percent">FFT-Analyser ▸ Füllprozentsatz</a>, <a href="generator.html#">Generator ▸ Predistortion-Datei (.dpd)</a>, <a href="theory/generator.html#dualtone">Theory ▸ Theorie: Signalgenerator ▸ Dualton</a>, <a href="tips.html#">Tipps ▸ Tipps</a></li>
       <li><b>FFT-Grundrauschen</b> - <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="tips.html#">Tipps ▸ Tipps</a></li>
       <li><b>FFT-Leitfaden</b> - <a href="theory/fft.html#purpose">Theory ▸ Theorie: FFT-Analysator ▸ Wozu er dient</a></li>
+      <li><b>FFT-Marker</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a></li>
       <li><b>FFT-Mittelung</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a></li>
       <li><b>FFT-Spektrum</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a></li>
       <li><b>FFT-Statistik</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="dac-predistortion.html#dpd-controls">DAC-Vorverzerrungsassistent ▸ Steuerelemente</a>, <a href="howto.html#">Das kürzeste HOW-TO der Welt ▸ 4 · Vorverzerren, dann messen</a></li>
@@ -674,10 +675,10 @@
       <li><b>Frequenz</b> - <a href="freqresp.html#">Frequenzgang</a></li>
       <li><b>Frequenzgang</b> - <a href="index.html#">Hilfe</a>, <a href="theory/index.html#">Theory ▸ Funktionsprinzip</a></li>
       <li><b>Frequenzgang-Entbetten</b> - <a href="theory/fft.html#plot">Theory ▸ Theorie: FFT-Analysator ▸ Kalibrierung und Korrekturen zur Plot-Zeit</a>, <a href="theory/fft.html#">Theory ▸ Theorie: FFT-Analysator</a></li>
-      <li><b>Frequenzgang-Sweep</b> - <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="preferences.html#prefs-audio">Einstellungen ▸ Audio</a>, <a href="preferences.html#prefs-audio-server-measuring">Einstellungen ▸ Was sonst über die Leitung geht</a>, <a href="theory/audio-backend.html#network">Theory ▸ Theorie: Audio-Backend ▸ Ein Messplatz im Netz</a>, <a href="theory/freq-resp.html#cal">Theory ▸ Theorie: Frequenzgang ▸ Kalibrierung: Messung des Messsystems</a>, <a href="theory/freq-resp.html#who">Theory ▸ Theorie: Frequenzgang ▸ Einbindung in das System</a></li>
+      <li><b>Frequenzgang-Sweep</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="preferences.html#prefs-audio">Einstellungen ▸ Audio</a>, <a href="preferences.html#prefs-audio-server-measuring">Einstellungen ▸ Was sonst über die Leitung geht</a>, <a href="theory/audio-backend.html#network">Theory ▸ Theorie: Audio-Backend ▸ Ein Messplatz im Netz</a>, <a href="theory/freq-resp.html#cal">Theory ▸ Theorie: Frequenzgang ▸ Kalibrierung: Messung des Messsystems</a></li>
       <li><b>Frequenzgang-Vorlaufs</b> - <a href="changelog.html#">Was ist neu ▸ Geändert</a></li>
       <li><b>Frequenzregelkreis-Integration</b> - <a href="theory/generator.html#lifecycle">Theory ▸ Theorie: Signalgenerator ▸ Verhalten im laufenden Betrieb</a></li>
-      <li><b>FS</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="freqresp.html#freqresp-tab-settings">Frequenzgang ▸ Einstellungen</a>, <a href="oscilloscope.html#scope-move-v">Oszilloskop ▸ Vertikal verschieben</a>, <a href="oscilloscope.html#scope-zoom-v">Oszilloskop ▸ Vertikal zoomen</a>, <a href="theory/freq-resp.html#deconv">Theory ▸ Theorie: Frequenzgang ▸ Aufbereitung der Rohdivision</a>, <a href="theory/generator.html#dither-dbv">Theory ▸ Theorie: Signalgenerator ▸ Dither über das erzeugte Grundrauschen einstellen</a></li>
+      <li><b>FS</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="freqresp.html#freqresp-tab-settings">Frequenzgang ▸ Einstellungen</a>, <a href="oscilloscope.html#scope-move-v">Oszilloskop ▸ Vertikal verschieben</a>, <a href="oscilloscope.html#scope-zoom-v">Oszilloskop ▸ Vertikal zoomen</a>, <a href="theory/fft.html#metrics">Theory ▸ Theorie: FFT-Analysator ▸ Die Verzerrungs- und Rausch-Metriken</a>, <a href="theory/freq-resp.html#deconv">Theory ▸ Theorie: Frequenzgang ▸ Aufbereitung der Rohdivision</a></li>
       <li><b>FS-Bereich</b> - <a href="oscilloscope.html#scope-zoom-v">Oszilloskop ▸ Vertikal zoomen</a></li>
       <li><b>FS/2</b> - <a href="freqresp.html#">Frequenzgang</a>, <a href="theory/freq-resp.html#">Theory ▸ Theorie: Frequenzgang</a></li>
       <li><b>FT</b> - <a href="fft.html#fft-tile-window">FFT-Analyser ▸ Fensterfunktion-Kachel</a></li>
@@ -767,7 +768,7 @@
       <li><b>IO</b> - <a href="theory/audio-backend.html#errors-macos">Theory ▸ Theorie: Audio-Backend ▸ Das Gerät, das wortlos geht (macOS)</a></li>
       <li><b>ISBN</b> - <a href="bench.html#refs">Messplatz &amp; Verkabelung ▸ Quellen</a></li>
       <li><b>ISO</b> - <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="preferences.html#prefs-audio">Einstellungen ▸ Audio</a></li>
-      <li><b>IST</b> - <a href="theory/fft.html#cal">Theory ▸ Theorie: FFT-Analysator ▸ Frequenzgang-Kompensation: die roten und blauen Punkte</a></li>
+      <li><b>IST</b> - <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="theory/fft.html#cal">Theory ▸ Theorie: FFT-Analysator ▸ Frequenzgang-Kompensation: die roten und blauen Punkte</a></li>
     </ul>
     <h3>J</h3>
     <ul>
@@ -822,6 +823,7 @@
       <li><b>Leckage-Entzerrung</b> - <a href="theory/oscilloscope.html#freq">Theory ▸ Theorie: Oszilloskop ▸ Frequenz - Nulldurchgänge, dann Goertzel-Verfeinerung</a></li>
       <li><b>LED</b> - <a href="generator.html#">Generator ▸ Generator</a>, <a href="generator.html#generator-onair">Generator ▸ ON AIR-Anzeige</a>, <a href="generator.html#generator-play-file">Generator ▸ Datei abspielen / Stopp</a>, <a href="howto.html#">Das kürzeste HOW-TO der Welt ▸ 🚀 Das kürzeste HOW-TO der Welt - eine THD-Messung im Bereich von Teilen pro Milliarde</a>, <a href="oscilloscope.html#scope-tile-led">Oszilloskop ▸ Kanal-aktiviert-LED</a></li>
       <li><b>Lesezeiger</b> - <a href="theory/ring-buffer.html#">Theory ▸ Theorie: Ringpuffer &amp; Verbraucher</a></li>
+      <li><b>Letzte THD</b> - <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent</a></li>
       <li><b>LIEST</b> - <a href="theory/audio-backend.html#qa40x-sharing">Theory ▸ Theorie: Audio-Backend ▸ Wer den Analysator hält, und wie lange</a></li>
       <li><b>Linearer Sweep</b> - <a href="theory/generator.html#">Theory ▸ Theorie: Signalgenerator</a></li>
       <li><b>LINKED</b> - <a href="preferences.html#prefs-audio-devices-file">Einstellungen ▸ Die Datei devices.yaml - Bearbeiten von Hand</a>, <a href="preferences.html#">Einstellungen</a></li>
@@ -896,8 +898,8 @@
       <li><b>Normal</b> - <a href="oscilloscope.html#">Oszilloskop</a></li>
       <li><b>NP0</b> - <a href="theory/dac-predistortion.html#tempco">Theory ▸ Theorie: DAC-Vorverzerrung ▸ Wie stark driftet jede Widerstandsklasse?</a>, <a href="theory/dac-predistortion.html#imd">Theory ▸ Theorie: DAC-Vorverzerrung ▸ Intermodulation messen - das Zweiton-Kerbfilter</a></li>
       <li><b>Numerische Felder</b> - <a href="index.html#">Hilfe</a></li>
-      <li><b>Nyquist</b> - <a href="changelog.html#">Was ist neu ▸ Geändert</a>, <a href="external/fft-analysis.html#">Further reading ▸ Weiterführende Literatur: FFT-Analyse Grundlagen ▸ Der grundlegende Kompromiss: Auflösung vs. Zeit</a>, <a href="fft.html#fft-maximize">FFT-Analyser ▸ Maximieren</a>, <a href="freqresp.html#freqresp-buttons">Frequenzgang ▸ Kopfbereich-Schaltflächen</a>, <a href="freqresp.html#freqresp-panzoom">Frequenzgang ▸ Schwenken &amp; Zoomen</a>, <a href="freqresp.html#freqresp-crosshair">Frequenzgang ▸ Fadenkreuz-Anzeige</a></li>
-      <li><b>Nyquist-Frequenz</b> - <a href="freqresp.html#freqresp-tab-settings">Frequenzgang ▸ Einstellungen</a>, <a href="freqresp.html#freqresp-uneven-readout">Frequenzgang ▸ Die Ebenheitsanzeige</a>, <a href="freqresp.html#freqresp-tab-loadfrom">Frequenzgang ▸ Laden von...</a>, <a href="oscilloscope.html#scope-lpf">Oszilloskop ▸ LPF</a>, <a href="tune-notch.html#">Kerbfilter-Abgleichassistent ▸ Kerbfilter-Abgleichassistent</a></li>
+      <li><b>Nyquist</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ Geändert</a>, <a href="external/fft-analysis.html#">Further reading ▸ Weiterführende Literatur: FFT-Analyse Grundlagen ▸ Der grundlegende Kompromiss: Auflösung vs. Zeit</a>, <a href="fft.html#fft-maximize">FFT-Analyser ▸ Maximieren</a>, <a href="freqresp.html#freqresp-buttons">Frequenzgang ▸ Kopfbereich-Schaltflächen</a>, <a href="freqresp.html#freqresp-panzoom">Frequenzgang ▸ Schwenken &amp; Zoomen</a></li>
+      <li><b>Nyquist-Frequenz</b> - <a href="freqresp.html#freqresp-tab-settings">Frequenzgang ▸ Einstellungen</a>, <a href="freqresp.html#freqresp-uneven-readout">Frequenzgang ▸ Die Ebenheitsanzeige</a>, <a href="freqresp.html#freqresp-tab-loadfrom">Frequenzgang ▸ Laden von...</a>, <a href="oscilloscope.html#scope-lpf">Oszilloskop ▸ LPF</a></li>
     </ul>
     <h3>O</h3>
     <ul>
@@ -953,6 +955,7 @@
       <li><b>R3</b> - <a href="theory/dac-predistortion.html#notch">Theory ▸ Theorie: DAC-Vorverzerrung ▸ Warum ein passives Twin-T-Kerbfilter davor - und warum es zwingend ist</a>, <a href="theory/dac-predistortion.html#imd">Theory ▸ Theorie: DAC-Vorverzerrung ▸ Intermodulation messen - das Zweiton-Kerbfilter</a></li>
       <li><b>Rad</b> - <a href="fft.html#">FFT-Analyser</a>, <a href="freqresp.html#">Frequenzgang</a>, <a href="oscilloscope.html#">Oszilloskop</a>, <a href="tips.html#">Tipps</a></li>
       <li><b>Radio-Hobby</b> - <a href="credits.html#credits-thanks">Mitwirkende ▸ Mit Dank an</a>, <a href="credits.html#">Mitwirkende</a></li>
+      <li><b>Random</b> - <a href="fft.html#">FFT-Analyser</a></li>
       <li><b>RC</b> - <a href="theory/dac-predistortion.html#drift">Theory ▸ Theorie: DAC-Vorverzerrung ▸ Das Kerbfilter driftet - der Grundton muss daher manuell definiert werden</a>, <a href="theory/dac-predistortion.html#tempco">Theory ▸ Theorie: DAC-Vorverzerrung ▸ Wie stark driftet jede Widerstandsklasse?</a>, <a href="theory/dac-predistortion.html#">Theory ▸ Theorie: DAC-Vorverzerrung</a>, <a href="theory/tune-notch.html#">Theory ▸ Theorie: Kerbfilter-Abgleich ▸ Kerbfilter-Abgleich</a></li>
       <li><b>Re-Sync</b> - <a href="theory/dac-predistortion.html#window">Theory ▸ Theorie: DAC-Vorverzerrung ▸ Fenster und Überlappung</a>, <a href="theory/derotation-accuracy.html#reference">Theory ▸ Theorie: De-Rotations-Genauigkeit ▸ Einrasten auf die laufende Mittelung - ohne Selbstvergiftung</a>, <a href="theory/derotation-accuracy.html#">Theory ▸ Theorie: De-Rotations-Genauigkeit ▸ Vergiftet das Einrasten auf eine verrauschte Mittelung sie?</a>, <a href="theory/derotation-accuracy.html#window">Theory ▸ Theorie: De-Rotations-Genauigkeit ▸ Welche Fensterfunktion - und warum sie nicht nach dem Rauschen gewählt wird</a></li>
       <li><b>README</b> - <a href="changelog.html#">Was ist neu ▸ Geändert</a>, <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a></li>
@@ -974,6 +977,7 @@
       <li><b>RMS</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ Geändert</a>, <a href="external/fft-analysis.html#">Further reading ▸ Weiterführende Literatur: FFT-Analyse Grundlagen ▸ Mittelung und Überlappung</a>, <a href="freqresp.html#freqresp-tab-settings">Frequenzgang ▸ Einstellungen</a>, <a href="freqresp.html#freqresp-tab-utility">Frequenzgang ▸ Dienstprogramm</a>, <a href="freqresp.html#freqresp-measure">Frequenzgang ▸ Messung durchführen</a></li>
       <li><b>Rosa</b> - <a href="theory/generator.html#">Theory ▸ Theorie: Signalgenerator</a></li>
       <li><b>Rote Punkte</b> - <a href="theory/fft.html#">Theory ▸ Theorie: FFT-Analysator</a></li>
+      <li><b>Runde 4 mittelt</b> - <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent</a></li>
       <li><b>Rückkopplungs-Kammfilter</b> - <a href="theory/oscilloscope.html#">Theory ▸ Theorie: Oszilloskop</a></li>
     </ul>
     <h3>S</h3>
@@ -1006,11 +1010,12 @@
       <li><b>Signalmasse</b> - <a href="bench.html#">Messplatz &amp; Verkabelung</a></li>
       <li><b>Signalmasse-</b> - <a href="bench.html#">Messplatz &amp; Verkabelung</a></li>
       <li><b>SIGTERM</b> - <a href="server.html#server-service-linux">Der Phonalyser-Server ▸ Linux - eine systemd-Unit</a></li>
-      <li><b>SINAD</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ 1.0-RC1 - 2026-06-19</a>, <a href="credits.html#credits-hardware">Mitwirkende ▸ Messhardware</a>, <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent ▸ DAC-Vorverzerrungsassistent</a>, <a href="dac-predistortion.html#dpd-readouts">DAC-Vorverzerrungsassistent ▸ Was Sie sehen</a>, <a href="fft.html#fft-thd-enob">FFT-Analyser ▸ ENOB</a></li>
+      <li><b>SINAD</b> - <a href="changelog.html#">Was ist neu ▸ Geändert</a>, <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ 1.0-RC1 - 2026-06-19</a>, <a href="credits.html#credits-hardware">Mitwirkende ▸ Messhardware</a>, <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent ▸ DAC-Vorverzerrungsassistent</a>, <a href="dac-predistortion.html#dpd-readouts">DAC-Vorverzerrungsassistent ▸ Was Sie sehen</a></li>
       <li><b>Sinc-Interpolation</b> - <a href="oscilloscope.html#scope-tile-interp">Oszilloskop ▸ Interpolations-Kachel</a>, <a href="tips.html#">Tipps ▸ Tipps</a></li>
       <li><b>Single</b> - <a href="oscilloscope.html#">Oszilloskop</a></li>
       <li><b>Sinus</b> - <a href="changelog.html#">Was ist neu</a>, <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent</a>, <a href="tips.html#">Tipps</a></li>
       <li><b>Sinus starten</b> - <a href="howto.html#">Das kürzeste HOW-TO der Welt</a></li>
+      <li><b>Sinus-Fit</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a></li>
       <li><b>Sinus-Sweep</b> - <a href="theory/freq-resp.html#how">Theory ▸ Theorie: Frequenzgang ▸ Funktionsprinzip: Sweep abspielen, Eingang herausrechnen</a></li>
       <li><b>Sitzung 0</b> - <a href="server.html#">Der Phonalyser-Server</a></li>
       <li><b>SMPTE</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a></li>
@@ -1025,7 +1030,7 @@
       <li><b>Sperrpegels</b> - <a href="theory/dac-predistortion.html#">Theory ▸ Theorie: DAC-Vorverzerrung</a></li>
       <li><b>Spike-Tiefpass</b> - <a href="theory/oscilloscope.html#conditioning">Theory ▸ Theorie: Oszilloskop ▸ Aufbereitung</a></li>
       <li><b>Spitzen</b> - <a href="changelog.html#">Was ist neu</a>, <a href="theory/generator.html#">Theory ▸ Theorie: Signalgenerator</a></li>
-      <li><b>Sprung</b> - <a href="theory/generator.html#">Theory ▸ Theorie: Signalgenerator</a></li>
+      <li><b>Sprung</b> - <a href="fft.html#">FFT-Analyser</a>, <a href="theory/generator.html#">Theory ▸ Theorie: Signalgenerator</a></li>
       <li><b>Starker Grundton</b> - <a href="theory/fft.html#">Theory ▸ Theorie: FFT-Analysator</a></li>
       <li><b>Start</b> - <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent</a>, <a href="howto.html#">Das kürzeste HOW-TO der Welt</a></li>
       <li><b>Startfrequenz</b> - <a href="freqresp.html#">Frequenzgang</a></li>
@@ -1038,6 +1043,7 @@
       <li><b>Strg+Shift+Rad</b> - <a href="fft.html#">FFT-Analyser</a></li>
       <li><b>Strg+Z</b> - <a href="fft.html#">FFT-Analyser</a></li>
       <li><b>Sweep abgelehnt</b> - <a href="preferences.html#">Einstellungen</a></li>
+      <li><b>Sweep-Amplitude</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a></li>
       <li><b>Sync subtract</b> - <a href="oscilloscope.html#">Oszilloskop</a></li>
     </ul>
     <h3>T</h3>
@@ -1094,13 +1100,14 @@
       <li><b>Vermutung</b> - <a href="preferences.html#">Einstellungen</a></li>
       <li><b>Vertikal-Offset</b> - <a href="oscilloscope.html#">Oszilloskop ▸ Oszilloskop</a>, <a href="oscilloscope.html#scope-offset-sliders">Oszilloskop ▸ Kanal-Offset-Marker</a></li>
       <li><b>Violett</b> - <a href="freqresp.html#">Frequenzgang</a></li>
+      <li><b>Vollausschlag</b> - <a href="fft.html#">FFT-Analyser</a></li>
       <li><b>Vollausschlag-Kalibrierung</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="changelog.html#">Was ist neu ▸ Veraltet</a>, <a href="preferences.html#prefs-audio-card">Einstellungen ▸ Karte - Kalibrierungsprofile pro Karte</a></li>
       <li><b>Vollausschlag-Markierungen</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a></li>
       <li><b>Vollaussteuerungs-Kalibrierung</b> - <a href="tips.html#">Tipps ▸ Tipps</a></li>
       <li><b>Vorausschau-Fenster</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="theory/fft.html#metrics">Theory ▸ Theorie: FFT-Analysator ▸ Die Verzerrungs- und Rausch-Metriken</a>, <a href="theory/fft.html#">Theory ▸ Theorie: FFT-Analysator</a></li>
       <li><b>Vorverzerrung</b> - <a href="theory/dac-predistortion.html#">Theory ▸ Theorie: DAC-Vorverzerrung</a></li>
-      <li><b>Vorverzerrungs-Assistent</b> - <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="changelog.html#">Was ist neu ▸ Geändert</a></li>
-      <li><b>Vorverzerrungs-Assistenten</b> - <a href="changelog.html#">Was ist neu ▸ Behoben</a></li>
+      <li><b>Vorverzerrungs-Assistent</b> - <a href="changelog.html#">Was ist neu ▸ Geändert</a></li>
+      <li><b>Vorverzerrungs-Assistenten</b> - <a href="changelog.html#">Was ist neu ▸ Geändert</a>, <a href="changelog.html#">Was ist neu ▸ Behoben</a></li>
       <li><b>Voss</b> - <a href="generator.html#generator-form">Generator ▸ Signalform</a>, <a href="theory/algorithms.html#synth">Theory ▸ Theorie: Algorithmen-Referenz ▸ Signalsynthese &amp; Quantisierung</a>, <a href="theory/generator.html#">Theory ▸ Theorie: Signalgenerator ▸ Rauschen</a>, <a href="theory/generator.html#refs">Theory ▸ Theorie: Signalgenerator ▸ Literatur</a></li>
       <li><b>Voss-McCartney</b> - <a href="generator.html#generator-form">Generator ▸ Signalform</a>, <a href="theory/algorithms.html#synth">Theory ▸ Theorie: Algorithmen-Referenz ▸ Signalsynthese &amp; Quantisierung</a>, <a href="theory/generator.html#">Theory ▸ Theorie: Signalgenerator ▸ Rauschen</a>, <a href="theory/generator.html#refs">Theory ▸ Theorie: Signalgenerator ▸ Literatur</a></li>
     </ul>
@@ -1150,7 +1157,6 @@
       <li><b>Zeitangabe</b> - <a href="oscilloscope.html#">Oszilloskop</a></li>
       <li><b>Ziel</b> - <a href="theory/dac-predistortion.html#">Theory ▸ Theorie: DAC-Vorverzerrung</a>, <a href="theory/generator.html#">Theory ▸ Theorie: Signalgenerator</a></li>
       <li><b>Ziel-THD</b> - <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent ▸ DAC-Vorverzerrungsassistent</a>, <a href="dac-predistortion.html#dpd-controls">DAC-Vorverzerrungsassistent ▸ Steuerelemente</a>, <a href="howto.html#">Das kürzeste HOW-TO der Welt ▸ 4 · Vorverzerren, dann messen</a>, <a href="theory/dac-predistortion.html#notch">Theory ▸ Theorie: DAC-Vorverzerrung ▸ Warum ein passives Twin-T-Kerbfilter davor - und warum es zwingend ist</a>, <a href="theory/dac-predistortion.html#loop">Theory ▸ Theorie: DAC-Vorverzerrung ▸ Wie die Korrektur gebildet und angewendet wird</a></li>
-      <li><b>Ziel-THD erreicht</b> - <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent</a></li>
       <li><b>Zielmarkierung</b> - <a href="tune-notch.html#">Kerbfilter-Abgleichassistent</a></li>
       <li><b>ZIP</b> - <a href="changelog.html#">Was ist neu ▸ Geändert</a>, <a href="server.html#server-what">Der Phonalyser-Server ▸ Was er ist und was Sie brauchen</a></li>
       <li><b>Zoom-Engine</b> - <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a></li>

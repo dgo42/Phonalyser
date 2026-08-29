@@ -54,7 +54,8 @@
             <code>1.5k</code> means 1500&nbsp;Hz; plain digits are read as
             Hz.</td></tr>
     <tr><td>Stop frequency, Hz</td>
-        <td>High edge of the displayed band, up to Nyquist.</td></tr>
+        <td>High edge of the displayed band, up to the lower of the two
+            converters' Nyquist frequencies (see the note below).</td></tr>
     <tr><td>Amplitude (RMS)</td>
         <td>Drive level of the tuning sweep, in volts RMS; accepts
             µV / mV / V / dBV / dBFS, the last against converter full scale
@@ -71,6 +72,13 @@
   </table>
   <p>All four values are remembered between sessions.  Editing the start /
      stop fields re-scales the frequency axis immediately.</p>
+  <div class="note"><b>Input and output need not share a format.</b>  Each
+     converter is opened in the format configured for it, so a card set to
+     different input and output sample rates or bit depths runs the loop
+     normally.  The analysis stays on the <em>input</em> rate, the band fields
+     cap at half the <em>lower</em> of the two rates, and a rate pair that
+     cannot carry one whole loop period is refused outright, with both settings
+     named.</div>
   <p><b>What you see.</b>  The plot is rebuilt roughly <b>ten times a second</b>
      from a short looping sweep (about a quarter of a second per pass) - each turn
      of a trimmer shows up within a fraction of a second.  <b>Both input channels

@@ -155,21 +155,21 @@
      nothing to plug in - it is available on every system.</p>
   <p>Its purpose is a bench whose noise floor is <em>known</em>. Every sample
      that crosses is quantised by the same quantiser the real playback paths
-     use, with TPDF dither applied immediately before the rounding step - by
-     default at the last bit of the selected depth; a dither the generator
-     configures takes precedence, and the lane is never undithered, because a
-     loop with no noise at all would hand the FFT the artifacts of bare
-     rounding. With nothing configured the floor is therefore the arithmetic one
-     rather than a property of some converter: the delivered samples of digital
-     silence measure <b>0.500&nbsp;LSB RMS</b>, and choosing a deeper word moves
-     that floor down by exactly the 6&nbsp;dB per bit the arithmetic says it
-     should. Anything a measurement then shows above that floor belongs to the
-     code under test, because nothing else is in the path.</p>
+     use, with TPDF dither applied immediately before the rounding step - and
+     the dither is exactly the one configured at the generator, no more. The
+     backend adds none of its own: with the generator's dither off, the loop
+     delivers bare rounding and nothing else, so what a measurement shows is the
+     arithmetic and never a hidden noise source. With the dither set at the last
+     bit of the selected depth, the delivered samples of digital silence measure
+     <b>0.500&nbsp;LSB RMS</b>, and each deeper word moves that floor down by
+     exactly the 6&nbsp;dB per bit the arithmetic says it should. Anything a measurement
+     then shows above that floor belongs to the code under test, because nothing
+     else is in the path.</p>
   <ul>
-    <li><b>Silence is dithered too.</b>  With no generator running the capture
-        lane keeps delivering, and what it delivers is dithered silence rather
-        than digital zeros - the floor is present whether or not a signal
-        is.</li>
+    <li><b>Silence keeps flowing.</b>  With no generator running the capture
+        lane keeps delivering rather than stopping - but it delivers plain
+        digital silence, undithered, because the lane adds no dither of its
+        own.</li>
     <li><b>Delivery is paced by the wall clock.</b>  Blocks arrive at the
         selected sample rate, as they would from a device. The analysers above
         assume a real-time stream: a loopback that ran as fast as the processor

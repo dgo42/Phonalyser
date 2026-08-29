@@ -100,11 +100,14 @@
      BH7-Fenster und lassen die Netzunterdrückung aus, und treiben einen
      sauberen Ton einige dB unter dem Vollausschlag mit auf einen Bin
      eingerasteter Grundwelle.</p>
-  <p>Beim Druck auf <b>Start</b> vermisst die Schleife zuerst die Messkette
-     selbst: zwei kurze Vorrunden auf kleinem Pegel schicken Testpartialtöne
-     durch genau den Pfad, den die Korrekturen nehmen, und lesen für jeden
-     Abschwächung und Phasendrehung, sodass jede spätere Korrektur zeitrichtig
-     ankommt.  Siehe
+  <p>Beim Druck auf <b>Start</b> wird jede bereits auf dem Generator geladene
+     Korrektur gelöscht, sodass die erste Runde den Wandler roh liest.  Die
+     Messkette zwischen DAC und ADC wird über die im FFT-Modul geladene
+     <a href="fft.html#fft-tab-calibration">Frequenzgang-Kalibrierung</a>
+     verrechnet: Deren gemessene Phase <em>ist</em> die Verzögerung dieser Kette,
+     gehalten als genaue Drehung bei jeder einzelnen Frequenz, und jede gemessene
+     Harmonische wird durch sie entbettet - Betrag und Phase zugleich -, bevor
+     sie zur Korrektur wird.  Nichts misst die Verzögerung gesondert.  Siehe
      <a href="theory/dac-predistortion.html#delay">Theorie ▸ die Verzögerung
      der Messkette</a>.</p>
 
@@ -144,9 +147,16 @@
             (kompensierter Sinus / Zweiton) um und schließt dann den
             Assistenten.</td></tr>
     <tr><td>Schließen</td>
-        <td>Die Schleife stoppen, den Generator auf den einfachen Ton
-            zurücksetzen (sofern Sie keine Datei angewendet haben) und die
-            FFT-Statistik zurücksetzen.</td></tr>
+        <td>Kostet nichts, solange der Assistent nie gelaufen ist: Ein ohne
+            Start geschlossenes Fenster lässt den Generator in Ruhe und die
+            FFT-Statistik stehen, sodass eine vor dem Öffnen gesammelte tiefe
+            Mittelung überlebt.  Nach einem Lauf stoppt die Schleife, und die
+            FFT-Statistik wird in beiden Fällen zurückgesetzt; verschieden ist
+            nur die Kompensation des Generators - Anwenden lässt die eben
+            geladene Datei in Kraft, während ein Schließen ohne Anwenden die vor
+            dem Öffnen des Fensters konfigurierte Korrekturdatei wieder anwendet
+            oder zum einfachen Ton zurückkehrt, wenn keine konfiguriert
+            war.</td></tr>
   </table>
 
   <h2 id="dpd-readouts">Was Sie sehen</h2>
@@ -161,7 +171,9 @@
      gemittelt hat - eine lange, tiefe späte Runde nimmt also mehr von der Kurve
      ein als eine schnelle frühe - und fällt zur roten Ziellinie hin.</p>
   <p>Ein Block <b>Fortschritt</b> listet die Live-Werte auf.  Für einen Einzelton
-     sind das Rundennummer, die aktuelle und die letzte Runden-THD, die bisher
+     sind das Rundennummer, die aktuelle THD, die Zeile <b>Letzte THD</b> - die
+     Verzerrung der zuletzt <em>abgeschlossenen</em> Runde, neben dem Live-Wert
+     stehend und bis zum Ende der ersten Runde als Strich gezeigt -, die bisher
      beste THD, die laufende Mittelungszahl sowie THD+N, SNR und SINAD als
      reine dB-Verhältnisse gegen die Grundwelle, dazu die Pegel von Grundwelle
      und Grundrauschen in dBV.  Bei einem Zweiton-Signal minimiert die Schleife

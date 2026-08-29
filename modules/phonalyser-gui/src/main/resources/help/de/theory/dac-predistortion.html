@@ -494,16 +494,20 @@
         späte Runden weit tiefer laufen als frühe.</li>
     <li><b>Invertieren und akkumulieren.</b>  Jede gemessene Harmonische (nicht nur
         die starken) wird in einen Korrektur-Zeiger verwandelt: ihre Amplitude
-        relativ zum Grundton und ihre um die Schleifenverzögerung aus Gl. (3)
-        de-rotierte Phase, sodass die Korrektur am ADC exakt in Gegenphase zu der
-        Harmonischen ankommt, die sie auslöscht. Diese werden über die Runden hinweg
-        zu einer laufenden Korrektur aufsummiert.</li>
+        relativ zum Grundton, wobei Betrag und Phase beide
+        <a href="#delay">über die geladene Frequenzgang-Kalibrierung</a> bei genau
+        dieser Frequenz entbettet werden, sodass der Zeiger die eigene Verzerrung
+        des Wandlers beschreibt und nicht die Antwort der Messkette darauf. Diese
+        werden über die Runden hinweg zu einer laufenden Korrektur aufsummiert.</li>
     <li><b>Heißanwenden</b> der akkumulierten Korrektur auf den <em>laufenden</em>
         Generator - kein Neustart, kein Glitch. Der Generator baut jeden Korrekturton
         durch ganzzahlige Multiplikation seines Haupt-Phasenakkumulators
         (<a href="generator.html#compensated">dort Gl. 10</a>), sodass jede Korrektur
         exakt bei <i>h·f</i> sitzt und nie gegen die reale Harmonische schwebt, der
-        sie entgegensteht, egal wie lange sie läuft.</li>
+        sie entgegensteht, egal wie lange sie läuft; er dreht jede Startphase um
+        den Anteil dieser Harmonischen an der Schleifenverzögerung aus Gl. (3) vor,
+        sodass die Korrektur am ADC in Gegenphase zu der Harmonischen ankommt, die
+        sie auslöscht.</li>
     <li><b>Einschwingen, zurücksetzen, wiederholen.</b>  Die nächste Runde misst den
         kleineren Restfehler und korrigiert erneut, konvergiert Runde um Runde, bis
         man stoppt oder ein Ziel-THD erreicht ist.</li>
@@ -521,7 +525,7 @@
      geladene Korrektur durch nur das Restfehler-Delta dieses Durchlaufs
      überschreiben.</div>
 
-  <h2 id="delay">Die Verzögerung der Messkette - gemessen vor der ersten Runde</h2>
+  <h2 id="delay">Die Verzögerung der Messkette - schon in der Kalibrierung enthalten</h2>
   <p>Die Messkette - DAC, Kerbfilter, ADC - trägt eine konstante eigene
      Zeitverzögerung, typisch einige zehn Mikrosekunden. Für die
      Korrekturschleife ist diese Verzögerung verkapptes Gift: sie dreht die
@@ -529,24 +533,25 @@
      Frequenz - eine Verzögerung, die bei der zweiten Harmonischen wenige Grad
      kostet, kostet bei der neunten hundert. Eine Korrektur, die mehr als etwa
      60° verdreht ankommt, verringert ihre Harmonische nicht mehr; sie nährt
-     sie. Das praktische Ergebnis ist eine Schleife, die nur konvergiert, wenn
-     die Verzögerung zufällig klein genug ist - und andernfalls divergiert,
-     oft heftig.</p>
-  <p>Der Assistent misst die Verzögerung deshalb, bevor er irgendetwas
-     korrigiert. Vor der ersten Runde spielt er kleine Testpartialtöne auf den
-     Harmonischenfrequenzen - im Zweiton-Modus auf den Frequenzen der
-     Intermodulationsprodukte - durch genau den Pfad, den die Korrekturen
-     nehmen werden, misst, wie jeder ankommt - Abschwächung und Phasendrehung,
-     pro Frequenz - und dreht jede spätere Korrektur entsprechend vor. Die
-     Messung dauert Sekunden, nutzt Signale weit über dem Grundrauschen und
-     wiederholt sich bei jedem Trainingsstart, spiegelt also stets die
-     Messkette, wie sie an diesem Tag ist. Damit ist Konvergenz keine
-     Glückssache mehr.</p>
+     sie.</p>
+  <p>Nichts misst diese Verzögerung gesondert, denn die
+     <a href="freq-resp.html">Frequenzgang-Kalibrierung</a> der Messkette trägt
+     sie bereits. Eine Kalibrierdatei ist eine komplexe Antwort pro Frequenz: zu
+     jeder Frequenz hält sie einen Betrag <em>und</em> eine Phase, und diese
+     gemessene Phase <em>ist</em> die Verzögerung - geschrieben als sehr genaue
+     Drehung bei jeder einzelnen Frequenz statt als eine einzige Mikrosekundenzahl,
+     womit sie auch alles erfasst, was die Kette tut und was eine einzelne
+     Verzögerungszahl nicht ausdrücken kann, etwa den Phasenverlauf des
+     Kerbfilters selbst. Die Schleife teilt jeden gemessenen Zeiger - den
+     Grundton, jede Harmonische, im Zweiton-Modus jedes Intermodulationsprodukt -
+     durch diese Antwort, interpoliert bei der genauen Frequenz des Zeigers, und
+     entbettet so Betrag und Phase zugleich; invertiert wird damit die eigene
+     Verzerrung des Wandlers und nicht die Antwort der Messkette darauf. Die
+     gespeicherte Korrekturdatei wird durch dieselbe Entbettung geschrieben.</p>
   <p>Ob dann das <em>Ziel</em>-THD erreicht wird, ist eine getrennte Frage, die
      die Messkette entscheidet: die Mittelungen pro Runde, das Grundrauschen
      sowie Dämpfung und Güte des Kerbfilters setzen den Boden, den die
-     Schleife erreichen kann - die Verzögerungsmessung garantiert nur, dass
-     die Schleife auf ihn zuläuft statt von ihm weg.</p>
+     Schleife erreichen kann.</p>
 
   <h2 id="window">Fenster und Überlappung</h2>
   <p>Der Assistent empfiehlt das <b>Blackman-Harris-7</b>-Fenster (BH7). Die
@@ -752,13 +757,13 @@
         vertrauenswürdig</b>: ~100 Mittelungen bringen das Grundrauschen 10 dB unter
         eine −140-dBc-Harmonische (10⁻⁵ %), ~1000 ergeben 20 dB, und das Festnageln
         des Werts fügt obendrauf das übliche 1/√<i>n</i> hinzu.</li>
-    <li><b>Die eigene Verzögerung der Messkette wird vor der ersten Runde
-        gemessen</b> - kleine Testpartialtöne durch den Korrekturpfad liefern
-        die Abschwächung und Drehung jeder Harmonischen, und jede Korrektur
-        wird um die Inverse vorgedreht, sodass Konvergenz nie davon abhängt,
-        dass die Verzögerung der Kette zufällig klein ist.</li>
-    <li><b>Die Schleife invertiert jede gemessene Harmonische</b>, de-rotiert sie um
-        die Schleifenverzögerung und wendet sie heiß auf den laufenden Generator
+    <li><b>Die eigene Verzögerung der Messkette braucht keine eigene Messung</b> -
+        die geladene Frequenzgang-Kalibrierung trägt sie bereits, denn die
+        gemessene Phase <em>ist</em> die Verzögerung als sehr genaue Drehung pro
+        Frequenz, und jeder Zeiger wird durch diese Antwort geteilt, bevor er zur
+        Korrektur wird.</li>
+    <li><b>Die Schleife invertiert jede gemessene Harmonische</b>, entbettet sie
+        über diese Kalibrierung und wendet sie heiß auf den laufenden Generator
         exakt bei <i>h·f</i> an, konvergiert Runde um Runde - mit dem
         <b>BH7</b>-Fenster, empfohlen für seine Balance aus Nebenkeulen-Reserve
         und Rauschbandbreite.</li>

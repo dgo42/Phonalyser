@@ -303,12 +303,18 @@
      <a href="#fft-max-harmonic-thd">Max harmonic for THD</a>).</p>
 
   <h3 id="fft-thd-thdpn">THD+N</h3>
-  <p>Total harmonic distortion + noise.  Same numerator as N+D,
-     normalised to the fundamental.</p>
+  <p>Total harmonic distortion + noise, normalised to the fundamental: the
+     plain, <em>unweighted</em> noise-plus-distortion power of the band, which
+     makes it the exact reciprocal of SINAD.  Unlike N+D above it carries no
+     A-weighting.</p>
 
   <h3 id="fft-thd-enob">ENOB</h3>
-  <p>Effective number of bits = (SINAD − 1.76) / 6.02.  Reflects the
-     ADC + capture chain's combined dynamic range.</p>
+  <p>Effective number of bits.  The same unweighted noise-plus-distortion power
+     SINAD divides by, but referred to <em>full scale</em> instead of to the
+     signal, read through the ideal-converter law (x − 1.76) / 6.02 - so a
+     dithered N-bit channel reads its datasheet figure.  Because the signal
+     level cancels out, neither a notch nor a manually defined fundamental moves
+     the reading.  Reflects the ADC + capture chain's combined dynamic range.</p>
 
   <h3 id="fft-thd-harmonics">Harmonic rows (H2 .. HN)</h3>
   <p>Two harmonics per row.  Each entry shows the harmonic's level - in the
@@ -381,13 +387,24 @@
      suppression.</p>
 
   <h4 id="fft-overlap">Overlap</h4>
-  <p>0 %, 50 %, 75 %, 87.5 %, 93.75 %.  Successive analysis windows share that
-     fraction of their samples.  Overlap does two things: it raises the update
-     rate (more spectra per second), and - with a tapering window - it makes
-     effective use of <em>all</em> the captured input power, since the samples a
-     window attenuates near its edges are weighted fully by the next,
-     overlapped window.  Higher overlap costs more CPU; 87.5 % is a common
-     sweet spot.  See <a href="theory/fft.html">Theory ▸ FFT analyser</a>.</p>
+  <p>0 %, 50 %, 75 %, 87.5 %, 93.75 %, <code>Random</code>.  Successive analysis
+     windows share that fraction of their samples.  Overlap does two things: it
+     raises the update rate (more spectra per second), and - with a tapering
+     window - it makes effective use of <em>all</em> the captured input power,
+     since the samples a window attenuates near its edges are weighted fully by
+     the next, overlapped window.  Higher overlap costs more CPU; 87.5 % is a
+     common sweet spot.  See
+     <a href="theory/fft.html">Theory ▸ FFT analyser</a>.</p>
+  <p><b><code>Random</code></b> carries no fixed fraction.  The <b>hop</b> - the
+     number of fresh samples between one analysis window and the next - is drawn
+     afresh for every analysis step from the range <b>90.625 % to 93.75 %</b>
+     overlap, on a lattice of <b>16</b> equal steps, so the spacings actually
+     used take at most sixteen distinct values.  A constant hop imprints its own
+     periodic structure on a deeply averaged noise floor; drawing the hop leaves
+     no such structure to average, while the analysis rate stays as high as the
+     fixed settings at that end of the range.  A saved spectrum records the
+     overlap mode and, where the mode has one, the frame spacing; a file written
+     before those entries existed loads exactly as it did.</p>
 
   <h4 id="fft-averages">Averages</h4>
   <p>Step selector - Off, 1, 2, 4, 8, 16, 32, 64, 128, ∞ (forever).  Number of
@@ -629,7 +646,8 @@
      <code>DC200</code>, <code>DC250</code>, <code>DC300</code>.</p>
 
   <h3 id="fft-tile-overlap">Overlap tile</h3>
-  <p>Percentage (<code>87.5%</code>).</p>
+  <p>Percentage (<code>87.5%</code>), or <code>Random</code> when the hop is
+     drawn per analysis step.</p>
 
   <h3 id="fft-tile-averages">Averages tile</h3>
   <p>Number with × suffix (<code>32×</code>) or <code>∞</code> in
