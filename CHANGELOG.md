@@ -15,25 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The JavaSound format probe logs a start and a finish line per device and
   direction,** with format count and elapsed time - a probe that never returns
   names its device by the start line without a twin.
-- **The pre-distortion wizard measures the bench's own transfer before it
-  corrects.** The chain from the DAC through the notch filter to the ADC delays
-  and attenuates every injected correction, and the phase cost grows with the
-  harmonic number - far enough off and a correction feeds its harmonic instead
-  of cancelling it, which is how a training could diverge on one bench and
-  converge on another. Ahead of the first round the wizard now plays small test
-  partials at the harmonic - in dual-tone mode, the intermodulation-product -
-  frequencies through the exact path the corrections take, reads each one's
-  attenuation and phase rotation, and pre-rotates every subsequent correction
-  by the inverse. The probe takes seconds, repeats at every training start, and
-  removes the bench's delay as a reason to diverge. Desktop and web alike.
+- **A randomized FFT overlap.** The overlap selector gains Random: every hop
+  from one analysis window to the next is drawn afresh from a high-overlap
+  range on a 16-step lattice, so the periodic structure a constant hop
+  imprints on the averaged noise floor averages out while the analysis rate
+  stays high. Saved spectra record the overlap mode and the frame spacing,
+  and old files load unchanged. Desktop and web alike.
 - **The theory chapters explain measurement confidence and the bench delay.**
   The FFT chapter now states what a harmonic reading is worth at a given
-  clearance above the averaged noise floor - 2-4 dB for a rough value, 9 dB for
-  ±3 dB, 19 dB for ±1 dB, and at the floor an upper bound and nothing more -
-  and why weak harmonics appear to wander or grow during a long average. The
-  pre-distortion chapter explains the bench-delay measurement, and why the
-  loop cannot even hold the ADC's own distortion level without the notch - two
-  distortion stages, one place to correct. All help languages.
+  clearance above the averaged noise floor - 2-4 dB for a rough value, 9 dB
+  for ±3 dB, 19 dB for ±1 dB, and at the floor an upper bound and nothing
+  more - and why weak harmonics appear to wander or grow during a long
+  average. The pre-distortion chapter explains how the bench's
+  frequency-response calibration already carries the bench delay - the
+  measured phase IS the delay, as a very precise per-frequency rotation, so
+  nothing measures it separately - and why the loop cannot even hold the
+  ADC's own distortion level without the notch: two distortion stages, one
+  place to correct. All help languages.
 
 ### Changed
 
@@ -65,6 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   staying dBV, the ratio rows (THD, THD+N, IMDpwr, TD+N, DFD2/3) carry the
   level before the percentage, N+D and SNR read plain dB, and each column is
   as wide as the widest cell it actually holds. Desktop and web alike.
+- **Coherent averaging is optimized for better performance.** Desktop and web
+  alike.
+- **SINAD, THD+N and ENOB read unweighted.** The converter-datasheet
+  definitions: SINAD and THD+N divide by the plain in-band
+  noise-plus-distortion power, and ENOB derives from that same figure referred
+  to full scale - a dithered N-bit channel reads its datasheet number. The
+  A-weighted residual stays available as the N+D readout. Desktop and web
+  alike.
+- **The pre-distortion wizard's metric grid shows the last completed round's
+  distortion** beside the live figure - a dash until the first round
+  finishes. Desktop and web alike.
 
 ### Fixed
 
@@ -140,6 +149,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   web.
 - **A failing FFT analysis pass names itself in the log** instead of vanishing
   with its tick.
+- **Tune-notch could not start when the two converters are configured
+  differently.** The wizard opened the DAC in the ADC's format, so a card set
+  to unequal input and output rates or depths refused the output line. Each
+  converter now opens in its own configured format; the analysis stays on the
+  input rate, the band edges cap at the lower of the two Nyquist frequencies,
+  and a rate pair that cannot carry the loop is refused with both settings
+  named.
+- **A frequency-response sweep could not start with unequal input and output
+  formats** - the same repair as the tune-notch wizard: the sweep plays on
+  the output rate and depth, the record and everything derived from it stay
+  on the input rate, and the saved result carries the input rate. A sweep
+  band reaching above the lower of the two Nyquist frequencies is refused
+  rather than measured folded, and band edges stored above that ceiling are
+  brought down to it.
+- **Closing the pre-distortion wizard costs nothing unless it ran.** A window
+  closed without a run leaves the generator and the FFT statistics untouched -
+  merely opening the dialog used to wipe a deep average. After a run without
+  Apply, the correction file configured before the window opened is re-applied
+  instead of leaving the generator uncompensated.
+- **A glitch caught one tick late no longer stays in the average.** The
+  contribution of the analysis window preceding a detected signal
+  discontinuity is taken back out of the accumulator retroactively.
+- **The oscilloscope's sine-fit residual no longer drifts over long slices.**
+  The fit synthesizes its reference through the generator's own sine kernel,
+  removing the cumulative drift the previous per-sample recurrence built up
+  across multi-second windows. Desktop and web alike.
+- **FFT markers sit exactly on the trace.** Marker dots, their captions and
+  every trace stroke on fractional coordinates, and a filled marker is
+  compensated onto the stroked curve's raster - a constant half-pixel offset
+  every dot carried against its trace is gone.
+- **The digital loopback adds no dither of its own.** Its silence lane no
+  longer dithers at the container depth, so a loopback measurement carries
+  exactly the dither configured at the generator.
+- **The frequency-response busy meter spans the real capture** - the old time
+  axis counted the lead-in twice, so with a short lead-in the bar sat at
+  100 % for the last half second.
+- **Web: no overlap setting behaved as selected.** Analysis windows the page
+  fell behind on were dropped silently, and a dropped window shifts the next
+  by whole hops - so every overlap setting behaved like the randomized one.
+  The feed now waits for the analyser, a worker failure raises a banner
+  instead of a silent stall, and the browser's averaged noise floor matches
+  the desktop's at every overlap.
+- **Web: a stored sweep amplitude below the field's lower limit is repaired
+  up to it** in the operator's unit, as the desktop does - the field refuses
+  such an entry, but a preset recall or an imported settings document could
+  still write one.
+- **Web: the fundamental-from-generator setting is read live.** It was frozen
+  into the record's start-time snapshot, so a wizard started mid-record could
+  not inject its frequency hint.
 
 ## [1.2.1] - 2026-08-16
 
