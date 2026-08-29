@@ -331,7 +331,12 @@ public final class TuneNotchWizardDialog {
         gl.horizontalSpacing = 8; gl.verticalSpacing = 6;
         row.setLayout(gl);
 
-        double nyquist = prefs.current().getInputSampleRate() / 2.0;
+        // The band has to be BOTH emittable and observable, so the ceiling is
+        // the lower of the two configured Nyquist limits - above the DAC's the
+        // chirp is not what leaves the card, above the ADC's it is not what
+        // comes back.
+        double nyquist = Math.min(prefs.current().getInputSampleRate(),
+                prefs.current().getOutputSampleRate()) / 2.0;
 
         addLabel(row, I18n.t("tuneNotch.startHz"));
         startField = new NumericStepField(row, UnitFamily.FREQUENCY,
@@ -641,8 +646,14 @@ public final class TuneNotchWizardDialog {
             ampField.setMax(prefs.getDacFsVoltageAmpl() / Constants.SQRT2);
             ampField.seedPair(prefs.getTuneNotchAmplitude());
         });
-        int sampleRate = prefs.current().getInputSampleRate();
-        int bitDepth   = prefs.current().getInputBitDepth();
+        // Each converter runs the format IT is configured with: the playback
+        // lane opens on the output rate and word length, the capture and
+        // everything derived from the captured window on the input rate.  A
+        // DAC opened in the ADC's format is refused outright by any card whose
+        // two sides are set differently.
+        int captureRate  = prefs.current().getInputSampleRate();
+        int playbackRate = prefs.current().getOutputSampleRate();
+        int playbackBits = prefs.current().getOutputBitDepth();
         // Read the DAC/ADC voltage references + dither resolution once: they
         // don't change for the lifetime of the session.
         double dacFsVrms = prefs.getDacFsVoltageAmpl();
@@ -651,7 +662,7 @@ public final class TuneNotchWizardDialog {
         double adcFsVrmsRight = prefs.getAdcFsVoltageRms(Channel.R);
         int    ditherBits = prefs.getFreqRespDitherBits();
 
-        engine = new NotchSweepEngine(sampleRate, bitDepth, ditherBits);
+        engine = new NotchSweepEngine(captureRate, playbackRate, playbackBits, ditherBits);
         // Single daemon worker so deconv(n) overlaps the continuous capture.
         deconvExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "tune-notch-deconv");
@@ -659,19 +670,22 @@ public final class TuneNotchWizardDialog {
             return t;
         });
 
-        // The loop period MUST be a power of two: computeFromLogSweep sizes its
+        // The loop period MUST be a power of two IN CAPTURE SAMPLES - that is
+        // the stream the window is grabbed from and the transform is run on;
+        // the engine converts the same duration to the DAC's own sample count.
+        // computeFromLogSweep sizes its
         // FFT to nextPow2(period), so a power-of-two period makes that FFT
         // exactly ONE period - a CIRCULAR transform, not a zero-padded linear
         // one.  Only then is a window grabbed at an arbitrary loop phase just a
         // circular shift that leaves |H(f)| unchanged; a linear FFT of an
         // unaligned window wraps the period and corrupts every bin into a spike.
-        int rawSamples   = (int) Math.round(SWEEP_DURATION_SEC * sampleRate);
+        int rawSamples   = (int) Math.round(SWEEP_DURATION_SEC * captureRate);
         int loPow2       = Integer.highestOneBit(Math.max(2, rawSamples));
         int sweepSamples = (rawSamples - loPow2 < (loPow2 << 1) - rawSamples) ? loPow2 : loPow2 << 1;
-        int fadeSamples  = (int) Math.round(FADE_SEC * sampleRate);
+        int fadeSamples  = (int) Math.round(FADE_SEC * captureRate);
         // One loop period of the captured stream, in ms - the grab cadence and
         // the percentage's denominator.
-        long loopPeriodMs = Math.round(sweepSamples / (double) sampleRate * 1000.0);
+        long loopPeriodMs = Math.round(sweepSamples / (double) captureRate * 1000.0);
         // Match the output grid to the deconvolution's FFT bin spacing for ONE
         // captured period: a grid finer than the real resolution makes the
         // bin->grid interpolation facet into the kink + comb (which then jitters
@@ -717,7 +731,7 @@ public final class TuneNotchWizardDialog {
                 // Hand the deconvolution to the worker and immediately loop back;
                 // it overlaps the continuous capture.
                 deconvExecutor.submit(() -> deconvolveAndPublish(
-                        window, sweepRef, fadeSamples, freqs, sampleRate,
+                        window, sweepRef, fadeSamples, freqs, captureRate,
                         startHz, stopHz, ampVrms, adcFsVrmsLeft, adcFsVrmsRight, ditherBits, grabMs));
 
                 // Spread the percentage across the loop period (progress toward
@@ -775,7 +789,7 @@ public final class TuneNotchWizardDialog {
      *  phase-invariant so its alignment to the sweep-cycle start doesn't
      *  matter. */
     private void deconvolveAndPublish(StereoSamples window, double[] sweepRef, int fade,
-                                      double[] freqs, int sampleRate,
+                                      double[] freqs, int captureRate,
                                       double startHz, double stopHz,
                                       double ampVrms, double adcFsVrmsLeft, double adcFsVrmsRight,
                                       int ditherBits, long grabMs) {
@@ -783,9 +797,9 @@ public final class TuneNotchWizardDialog {
         try {
             long decStart = System.nanoTime();
             FreqRespCalibration calL = FreqRespCalHelper.computeFromLogSweep(
-                    window.left(),  sweepRef, 0, sampleRate, freqs, ampVrms, adcFsVrmsLeft,  fade, "L", false);
+                    window.left(),  sweepRef, 0, captureRate, freqs, ampVrms, adcFsVrmsLeft,  fade, "L", false);
             FreqRespCalibration calR = FreqRespCalHelper.computeFromLogSweep(
-                    window.right(), sweepRef, 0, sampleRate, freqs, ampVrms, adcFsVrmsRight, fade, "R", false);
+                    window.right(), sweepRef, 0, captureRate, freqs, ampVrms, adcFsVrmsRight, fade, "R", false);
             long decMs = (System.nanoTime() - decStart) / 1_000_000L;
             if (log.isInfoEnabled()) {
                 log.info("TuneNotch update: grab {} ms, deconv {} ms", grabMs, decMs);
@@ -795,10 +809,10 @@ public final class TuneNotchWizardDialog {
                     SWEEP_DURATION_SEC, SWEEP_LEAD_IN_SEC, ampVrms, ditherBits);
             FreqRespResult left = new FreqRespResult(
                     Channel.L,
-                    sampleRate, calL.freqs, calL.magLin, calL.phaseRad, params, null, false);
+                    captureRate, calL.freqs, calL.magLin, calL.phaseRad, params, null, false);
             FreqRespResult right = new FreqRespResult(
                     Channel.R,
-                    sampleRate, calR.freqs, calR.magLin, calR.phaseRad, params, null, false);
+                    captureRate, calR.freqs, calR.magLin, calR.phaseRad, params, null, false);
             if (!running) return;
             GuiUtil.marshal(dialog, () -> onSweepResult(left, right));
         } catch (Exception ex) {

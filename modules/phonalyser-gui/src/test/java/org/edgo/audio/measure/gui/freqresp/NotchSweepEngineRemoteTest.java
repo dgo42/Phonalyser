@@ -59,6 +59,14 @@ class NotchSweepEngineRemoteTest {
 
     private static final int RATE_HZ = 8_000;
     private static final int BITS = 16;
+    /** The DAC configured on ITS own clock, twice the ADC's - the pair a card
+     *  whose two sides are set independently really presents. */
+    private static final int PLAYBACK_RATE_HZ = 16_000;
+    /** And its own word length, deliberately unlike the capture's. */
+    private static final int PLAYBACK_BITS = 32;
+    /** A rate pair whose ratio does NOT divide one loop period into whole
+     *  output samples: 4096 periods at 8 kHz is 22579.2 samples at 44.1 kHz. */
+    private static final int INDIVISIBLE_PLAYBACK_RATE_HZ = 44_100;
     private static final int DITHER_BITS = 0;
     /** 16-bit stereo. */
     private static final int FRAME_BYTES = 4;
@@ -142,7 +150,7 @@ class NotchSweepEngineRemoteTest {
      */
     @Test
     void theLoopIsCommandedOnTheBenchAndTheRingFillsFromTheWire() throws Exception {
-        engine = new NotchSweepEngine(RATE_HZ, BITS, DITHER_BITS);
+        engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
 
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH, RIGHT_LANE_SCALE);
@@ -186,11 +194,72 @@ class NotchSweepEngineRemoteTest {
         assertTrue(capture.isClosed(), "and the input line goes back with it");
     }
 
+    /**
+     * The two converters run the formats they are each CONFIGURED with: the DAC
+     * is opened on the output rate and word length, while the captured window,
+     * the deconvolution and its reference all stay on the ADC's clock.
+     *
+     * <p>The loop is therefore ONE DURATION counted twice - the period is the
+     * power of two in capture samples, and the DAC is told the same stretch of
+     * time in its own, faster samples.  Opening the DAC in the ADC's format
+     * instead is refused outright by any card whose two sides are set
+     * differently, which is what this covers.
+     */
+    @Test
+    void eachConverterIsOpenedInItsOwnConfiguredFormat() throws Exception {
+        engine = new NotchSweepEngine(RATE_HZ, PLAYBACK_RATE_HZ, PLAYBACK_BITS, DITHER_BITS);
+
+        engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
+                OutputChannels.BOTH, RIGHT_LANE_SCALE);
+
+        assertEquals(PLAYBACK_RATE_HZ, bench.firstArg("openGenerator"),
+                "the DAC is opened on the OUTPUT rate - the ADC's is none of its business");
+        assertEquals(PLAYBACK_BITS, openedArg(1),
+                "and on the output word length");
+        assertEquals(SWEEP_SAMPLES * PLAYBACK_RATE_HZ / RATE_HZ,
+                bench.firstArg("setSweepDurationSamples"),
+                "one loop period is one DURATION: the same stretch of time is more "
+                        + "samples on the faster clock");
+        assertEquals(SWEEP_SAMPLES, engine.sweepRef().length,
+                "while the reference stays as long as the window it is divided into - "
+                        + "a longer one would zero-pad the capture inside the transform "
+                        + "and the deconvolution would stop being circular");
+    }
+
+    /**
+     * A rate pair whose ratio leaves one loop period a fractional number of
+     * output samples is refused, both settings named.
+     *
+     * <p>Rounding it instead would emit a loop of a slightly different duration
+     * from the window the deconvolution treats as exactly one period, and the
+     * two would walk apart cycle by cycle - a trace that looks plausible and
+     * drifts, which is worse than no trace.  The refusal costs nothing: it
+     * happens before the ring or the lane is acquired.
+     */
+    @Test
+    void aRatePairThatDoesNotDivideTheLoopPeriodRefusesTheSession() {
+        try (NotchSweepEngine refused = new NotchSweepEngine(RATE_HZ,
+                INDIVISIBLE_PLAYBACK_RATE_HZ, PLAYBACK_BITS, DITHER_BITS)) {
+            IllegalStateException failed = assertThrows(IllegalStateException.class,
+                    () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
+                            FADE_SAMPLES, OutputChannels.BOTH, RIGHT_LANE_SCALE));
+
+            assertTrue(failed.getMessage().contains(String.valueOf(RATE_HZ))
+                            && failed.getMessage().contains(
+                                    String.valueOf(INDIVISIBLE_PLAYBACK_RATE_HZ)),
+                    "the refusal names both configured rates - " + failed.getMessage());
+        }
+
+        assertFalse(bench.names().contains("openGenerator"),
+                "and it took nothing from the bench: no lane was ever asked for");
+        assertNull(bench.getLastCapture(), "and no input line either");
+    }
+
     /** A live band change reaches the bench too, or it would go on emitting the
      *  old band while the wizard deconvolved against the new reference. */
     @Test
     void aBandChangeReachesTheBenchAndTheReference() throws Exception {
-        engine = new NotchSweepEngine(RATE_HZ, BITS, DITHER_BITS);
+        engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH, RIGHT_LANE_SCALE);
         bench.reset();
@@ -213,7 +282,7 @@ class NotchSweepEngineRemoteTest {
      */
     @Test
     void aLaneGateChangeReopensTheBenchesLaneAndKeepsTheRingRunning() throws Exception {
-        engine = new NotchSweepEngine(RATE_HZ, BITS, DITHER_BITS);
+        engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH, RIGHT_LANE_SCALE);
         BenchGeneratorStub.BenchCapture capture = bench.getLastCapture();
@@ -256,7 +325,7 @@ class NotchSweepEngineRemoteTest {
      */
     @Test
     void aRefusedReopenSaysSoAndLeavesTheGateThatIsStillInForce() throws Exception {
-        engine = new NotchSweepEngine(RATE_HZ, BITS, DITHER_BITS);
+        engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH, RIGHT_LANE_SCALE);
         bench.reset();
@@ -291,7 +360,7 @@ class NotchSweepEngineRemoteTest {
     @Test
     void aBenchThatGrantsAnotherRateRefusesTheSessionAndGivesTheLaneBack() {
         bench.setGrantedRate(RATE_HZ * 2);
-        try (NotchSweepEngine refused = new NotchSweepEngine(RATE_HZ, BITS, DITHER_BITS)) {
+        try (NotchSweepEngine refused = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS)) {
                 IllegalStateException failed = assertThrows(IllegalStateException.class,
                         () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
                                 FADE_SAMPLES, OutputChannels.BOTH, RIGHT_LANE_SCALE));
@@ -314,7 +383,7 @@ class NotchSweepEngineRemoteTest {
     @Test
     void anInputStreamAtAnotherRateRefusesTheSessionAndGivesBothBack() {
         bench.setGrantedCaptureRate(RATE_HZ * 2);
-        try (NotchSweepEngine refused = new NotchSweepEngine(RATE_HZ, BITS, DITHER_BITS)) {
+        try (NotchSweepEngine refused = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS)) {
                 IllegalStateException failed = assertThrows(IllegalStateException.class,
                         () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
                                 FADE_SAMPLES, OutputChannels.BOTH, RIGHT_LANE_SCALE));
@@ -333,9 +402,16 @@ class NotchSweepEngineRemoteTest {
     /** The lane gate the bench's line was last OPENED with - argument 3 of
      *  {@code openGenerator}, which is where spec 4.5 puts it. */
     private OutputChannels openedGate() {
+        return (OutputChannels) openedArg(3);
+    }
+
+    /** Argument {@code index} of the bench's {@code openGenerator} - the line's
+     *  format is fixed there, so this is where the rate, the word length and
+     *  the gate are read back from. */
+    private Object openedArg(int index) {
         for (BenchGeneratorStub.Command command : bench.commands()) {
             if ("openGenerator".equals(command.name())) {
-                return (OutputChannels) command.args().get(3);
+                return command.args().get(index);
             }
         }
         return null;
