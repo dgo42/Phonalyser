@@ -186,12 +186,12 @@
   <p>Sein Zweck ist ein Messplatz mit <em>bekanntem</em> Grundrauschen.  Jedes
      übergehende Sample wird von demselben Quantisierer quantisiert, den auch
      die echten Wiedergabepfade verwenden, mit TPDF-Dither unmittelbar vor dem
-     Runden - standardmäßig auf dem letzten Bit der gewählten Bittiefe; ein im
-     Generator eingestellter Dither hat Vorrang, und die Spur läuft nie
-     ungedithert, denn ganz ohne Rauschen zeigte die FFT die Artefakte des
-     nackten Rundens.  Ohne eigene Einstellung ist das Grundrauschen damit das
-     rechnerische und keine Eigenschaft irgendeines Wandlers: Die
-     gelieferten Samples digitaler Stille messen <b>0,500&nbsp;LSB
+     Runden - und zwar genau mit dem am Generator eingestellten Dither, mehr
+     nicht.  Das Backend fügt keinen eigenen hinzu: Ist der Dither des Generators
+     aus, liefert die Schleife nacktes Runden und sonst nichts, sodass eine
+     Messung die Rechnung zeigt und nie eine verborgene Rauschquelle.  Steht der
+     Dither auf dem letzten Bit der gewählten Bittiefe, messen die
+     gelieferten Samples digitaler Stille <b>0,500&nbsp;LSB
      Effektivwert</b>, was für ein Wort von <i>N</i>&nbsp;Bit das
      Breitbandrauschen auf</p>
   <div class="eq">3,01 - 6,02&nbsp;<i>N</i> dBFS<span class="no">(2)</span></div>
@@ -200,9 +200,10 @@
      eine Messung dann darüber zeigt, gehört dem geprüften Code - denn sonst ist
      nichts im Pfad.</p>
   <ul>
-    <li><b>Auch Stille ist gedithert.</b>  Läuft kein Generator, liefert die
-        Aufnahmespur weiter, und zwar geditherte Stille statt digitaler Nullen -
-        das Grundrauschen ist da, ob ein Signal anliegt oder nicht.</li>
+    <li><b>Stille fließt weiter.</b>  Läuft kein Generator, liefert die
+        Aufnahmespur weiter, statt anzuhalten - was sie liefert, ist aber
+        schlichte digitale Stille, ungedithert, denn die Spur fügt keinen
+        eigenen Dither hinzu.</li>
     <li><b>Die Lieferung folgt der Uhr, nicht dem Prozessor.</b>  Blöcke treffen
         mit der gewählten Abtastrate ein wie von einem Gerät - fünfzig pro
         Sekunde, getaktet gegen einen absoluten Zeitplan statt gegen eine

@@ -327,12 +327,19 @@
      <a href="#fft-max-harmonic-thd">Maximale Harmonische für THD</a>).</p>
 
   <h3 id="fft-thd-thdpn">THD+N</h3>
-  <p>Gesamtoberwellenverzerrung + Rauschen.  Gleicher Zähler wie N+D,
-     normiert auf den Grundton.</p>
+  <p>Gesamtoberwellenverzerrung + Rauschen, normiert auf den Grundton: die
+     schlichte, <em>unbewertete</em> Rausch-plus-Verzerrungsleistung des Bandes,
+     womit der Wert der exakte Kehrwert von SINAD ist.  Anders als N+D oben
+     trägt er keine A-Bewertung.</p>
 
   <h3 id="fft-thd-enob">ENOB</h3>
-  <p>Effektive Bit-Anzahl = (SINAD − 1,76) / 6,02.  Spiegelt den
-     kombinierten Dynamikbereich von ADC + Messkette wider.</p>
+  <p>Effektive Bit-Anzahl.  Dieselbe unbewertete Rausch-plus-Verzerrungsleistung,
+     durch die SINAD teilt, jedoch auf den <em>Vollausschlag</em> bezogen statt
+     auf das Signal, gelesen über das Ideal-Wandler-Gesetz (x − 1,76) / 6,02 -
+     ein geditherter N-Bit-Kanal liest damit seine Datenblattzahl.  Da sich der
+     Signalpegel herauskürzt, verschiebt weder ein Kerbfilter noch ein manuell
+     definierter Grundton den Wert.  Spiegelt den kombinierten Dynamikbereich
+     von ADC + Messkette wider.</p>
 
   <h3 id="fft-thd-harmonics">Harmonischen-Zeilen (H2 .. HN)</h3>
   <p>Zwei Harmonische pro Zeile.  Jeder Eintrag zeigt den Pegel der
@@ -411,15 +418,27 @@
      (DC250 / DC300) für sehr tiefe Nebenkeulensuppression.</p>
 
   <h4 id="fft-overlap">Überlappung</h4>
-  <p>0 %, 50 %, 75 %, 87,5 %, 93,75 %.  Aufeinanderfolgende Analysefenster
-     teilen diesen Bruchteil ihrer Samples.  Überlappung bewirkt zweierlei:
-     Sie erhöht die Aktualisierungsrate (mehr Spektren pro Sekunde) und -
-     mit einer abklingenden Fensterfunktion - nutzt <em>alle</em> erfasste
+  <p>0 %, 50 %, 75 %, 87,5 %, 93,75 %, <code>Random</code>.  Aufeinanderfolgende
+     Analysefenster teilen diesen Bruchteil ihrer Samples.  Überlappung bewirkt
+     zweierlei: Sie erhöht die Aktualisierungsrate (mehr Spektren pro Sekunde)
+     und - mit einer abklingenden Fensterfunktion - nutzt <em>alle</em> erfasste
      Eingangsleistung effektiv, da die Samples, die eine Fensterfunktion an
      ihren Rändern dämpft, vom nächsten, überlappenden Fenster voll gewichtet
      werden.  Höhere Überlappung kostet mehr CPU; 87,5 % ist ein üblicher
      guter Kompromiss.  Siehe <a href="theory/fft.html">Funktionsprinzip ▸
      FFT-Analyser</a>.</p>
+  <p><b><code>Random</code></b> trägt keinen festen Bruchteil.  Der <b>Sprung</b>
+     - die Anzahl frischer Samples zwischen einem Analysefenster und dem
+     nächsten - wird für jeden Analyseschritt neu aus dem Bereich <b>90,625 %
+     bis 93,75 %</b> Überlappung gezogen, auf einem Raster aus <b>16</b> gleichen
+     Stufen, sodass die tatsächlich verwendeten Abstände höchstens sechzehn
+     verschiedene Werte annehmen.  Ein konstanter Sprung prägt einem tief
+     gemittelten Grundrauschen seine eigene periodische Struktur auf; wird der
+     Sprung gezogen, bleibt keine solche Struktur übrig, während die Analyserate
+     so hoch bleibt wie bei den festen Einstellungen an diesem Ende des
+     Bereichs.  Ein gespeichertes Spektrum hält den Überlappungsmodus fest und,
+     wo der Modus einen hat, den Frameabstand; eine Datei, die vor diesen
+     Einträgen geschrieben wurde, lädt genau wie bisher.</p>
 
   <h4 id="fft-averages">Mittelungen</h4>
   <p>Schritt-Wahlschalter - Off, 1, 2, 4, 8, 16, 32, 64, 128, ∞ (dauerhaft).
@@ -673,7 +692,8 @@
      <code>DC200</code>, <code>DC250</code>, <code>DC300</code>.</p>
 
   <h3 id="fft-tile-overlap">Überlappung-Kachel</h3>
-  <p>Prozentsatz (<code>87.5%</code>).</p>
+  <p>Prozentsatz (<code>87.5%</code>) oder <code>Random</code>, wenn der Sprung
+     pro Analyseschritt gezogen wird.</p>
 
   <h3 id="fft-tile-averages">Mittelungen-Kachel</h3>
   <p>Zahl mit ×-Suffix (<code>32×</code>) oder <code>∞</code> im
