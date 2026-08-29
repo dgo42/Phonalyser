@@ -21,19 +21,34 @@
 // (re/im for coherent, |X|² for incoherent) into the running sum and OVERLAY the
 // cumulative average back onto a result for display, exactly as the desktop does.
 //
-// PORTED (single-reference, the core that makes a stable tone average correctly):
-//   - COHERENT per-lobe constant-phase de-rotation: each bin k snapped to its
-//     nearest harmonic h = round(k/k0) and rotated by that lobe's CONSTANT phase
-//     h·Φ, Φ = −2π·delta·accumKFractional/fftSize (NOT a per-bin ramp), where
+// PORTED (the core that makes a stable tone average correctly):
+//   - COHERENT REGION-CONSTANT de-rotation: a windowed tone's lobe - the peak and
+//     its off-centre bins together - advances by ONE common phase per tick, so a
+//     per-bin ramp mis-rotates every off-centre lobe bin and an overlapped deep
+//     average carves the lobe into a comb. Each member of the COHERENT FAMILY -
+//     the harmonic ladder h·κ (h = 0 included, identity phasor) merged
+//     position-sorted with the published intermodulation grid a·κ1 + b·κ2 when a
+//     dual pair is pinned - carries ONE derived phasor a·Φ1 + b·Φ2, and the
+//     regions tile the half spectrum at the MIDPOINTS between neighbouring
+//     members. The family is KNOWLEDGE, not a spectral property: no edge is ever
+//     measured, so no environmental line can earn a region of its own.
+//     Φ1 = −2π·IEEEremainder(delta·accumKFractional, fftSize)/fftSize, where
 //     delta = samplesAbsStart − accumRefSampleStart. accumRefSampleStart +
-//     accumKFractional + accumIntFundBinRounded are PINNED on the first tick.
+//     accumKFractional + accumIntFundBinRounded + accumKappa2 are PINNED on the
+//     first tick.
+//   - RECT exception: with the frequency lock on-bin a rectangular window's tone
+//     occupies a SINGLE bin - there is no multi-bin lobe to hold together - while
+//     its 1/Δf leakage skirt spans the whole spectrum and would cross every region
+//     midpoint, which is exactly where a piecewise rotation prints. So RECT keeps
+//     the per-bin time-shift ramp, its phasor seeded once and advanced by a
+//     recurrence.
 //   - INCOHERENT power sum: Σ |X[k]|² weighted by frameCount (the analyzer stores
 //     RAW magnitude in r.re for incoherent, so we sum mag·mag - no double convert).
 //   - targetN scaling: finite avgTarget -> exponential ring window; ∞ -> cumulative.
 //   - overlay: rebuild amplitudeDbFs/phaseDeg/re/im off the running average.
 //
 // PORTED (the long-run refinements - full parity with the desktop now):
-//   - One-shot κ PHASE-SLOPE REFINE (single-reference): the single-frame parabolic
+//   - One-shot κ PHASE-SLOPE REFINE: the single-frame parabolic
 //     peak pins κ to only ~0.01-0.03 bin; over a long coherent run that residual
 //     ramps the de-rotated fundamental phase (2π·Δκ·delta/fftSize) and vector-
 //     cancels the magnitude (harmonics h× faster). dφ/dΔ over KAPPA_MEAS_FRAMES
@@ -41,16 +56,29 @@
 //   - Continuous PHASE-LOCK LOOP (PLL): once κ is refined, the de-rotated phase is
 //     measured against the DEEP accumulated phase and a fraction (PHASE_TRACK_GAIN)
 //     of the residual is folded into accumDroppedSamples each tick, killing the
-//     residual κ ramp and absorbing disturbances; a re-sync does a one-shot full
-//     realign (gain 1).
-//   - MULTI-TONE path: detectStrongTones() finds the strong tones from the spectrum
-//     itself; accumulateMultiTone() de-rotates each tone's lobe by its OWN frequency
-//     (constant phase), runs a per-tone PLL + per-tone κ refine, builds the dual-tone
-//     IMD-product grid (a·κ1+b·κ2) and pools the strong tones' clock drift onto the
-//     non-tone bins (FORK_NONTONE_DRIFT) - true dual-tone IMD, no grid-lock.
-//   - Re-anchor on a re-sync (overrun / discontinuity): onResync() sets the κ /
-//     multi-κ skip flags + gapRecoverPending so the jumped frame re-anchors instead
-//     of poisoning the slope measurement.
+//     residual κ ramp and absorbing disturbances.
+//   - The FORK: that steady per-tick estimate is POOLED over the COHERENT FAMILY
+//     ONLY - the pinned fundamental(s), the harmonic ladder h*kappa and the published
+//     product grid a*kappa1 + b*kappa2 - never a spectral peak. Membership is
+//     knowledge, not level: the threshold only FILTERS family members, and no line
+//     outside the family can enter however strong it stands. A common sample offset rotates
+//     each line proportionally to its frequency, so each line's residual divided by
+//     its own fractional bin estimates the SAME offset; the estimates are averaged
+//     with (fractional bin x magnitude)² weights - variance-optimal, since a line's
+//     phase noise is floor/|X| while its offset sensitivity grows with frequency.
+//     Behind a notch the fundamental is the WEAKEST line, so the pooled reference
+//     noise falls with the combined power of the harmonics. A re-sync's one-shot
+//     FULL realign stays on the fundamental alone: a large offset wraps the higher
+//     lines, where pooling is not valid.
+//   - The SUBTRACTABLE RING: the last DISCONTINUITY_DROP_TICKS accepted ticks are
+//     held exactly as they entered (rotation and weight applied, and scaled along
+//     with any bounded-window scale-down), for the coherent AND the incoherent path
+//     alike, so a discontinuity gate can subtract them back out - the window before
+//     the detecting one shares nearly all its samples, with the event sitting at its
+//     taper edge below the thresholds.
+//   - Re-anchor on a re-sync (overrun / discontinuity): onResync() sets the κ skip
+//     flag + gapRecoverPending so the jumped frame re-anchors instead of poisoning
+//     the slope measurement.
 //   - The SpectralDiscontinuityDetector gate (USE_SPECTRAL_DISCONTINUITY): the
 //     accumulator OWNS the detector (as the desktop worker does) and resets it in
 //     reset(); the controller calls reject() per tick before the fold.
@@ -61,6 +89,7 @@
 // (the cross-tick fold is already off the main thread on the FFT worker / pool).
 
 import { SpectralDiscontinuityDetector } from '../dsp/spectral-discontinuity-detector.js';
+import { ieeeRemainder } from '../dsp/mathutil.js';
 
 /** Frames of de-rotated-fundamental phase observed before the one-shot κ refine -
  *  ~24 give κ to ~1e-4 bin at high SNR, before the drift becomes visible. */
@@ -69,44 +98,30 @@ const KAPPA_MEAS_FRAMES = 24;
  *  folded into the de-rotation each tick. Low enough to average out per-tick phase
  *  noise, high enough to track the κ-residual ramp (Java PHASE_TRACK_GAIN). */
 const PHASE_TRACK_GAIN = 0.10;
-/** A per-tone cross-tick phase residual larger than this is a phase DISCONTINUITY
- *  (DDS jump / reconnect) - realigned in one shot (gain 1) rather than tracked
- *  (Java PHASE_JUMP_RAD = 60°). */
-const PHASE_JUMP_RAD = 60.0 * Math.PI / 180.0;
-/** Half-width (bins) of the lobe a tone's constant phase covers. */
-const TONE_LOBE_HALF_BINS = 16;
-/** Two peaks closer than this (bins) are merged into one tone. */
-const MIN_TONE_SEP_BINS = 48;
-/** Cap on independent tone references. */
-const MAX_TONES = 8;
-/** A peak at an integer multiple (h≥2) of the strongest tone at least this far
- *  BELOW it is a harmonic (distortion), not an independent tone - dropped so a
- *  single tone + harmonics stays on the single-reference refined path. */
-const HARMONIC_REJECT_BELOW_DB = 40.0;
-/** Ignore peaks below this frequency when detecting tones (residual DC leakage). */
-const DC_REJECT_HZ = 10.0;
-/** Default dB below the strongest peak a local maximum must clear to count as a
- *  separate TONE.  The desktop reads this LIVE from Preferences#getFftStrongToneRelDb
- *  (default 100.0); the web mirrors that via setStrongToneRelDb(), seeded here. */
+/** Default dB below the fundamental a family line must clear to be admitted to the
+ *  pooled tracking estimate.  The desktop reads this LIVE from
+ *  Preferences#getFftStrongToneRelDb (default 100.0); the web mirrors that via
+ *  setStrongToneRelDb(), seeded here. */
 const STRONG_TONE_REL_DB_DEFAULT = 100.0;
 /** Spectral-discontinuity gate toggle (Java USE_SPECTRAL_DISCONTINUITY). */
 const USE_SPECTRAL_DISCONTINUITY = true;
-/** "Rotate the fork": pool the strong tones' shared clock-drift estimate onto the
- *  non-tone bins so weak harmonics / IMD products don't sink under drift (Java
- *  FORK_NONTONE_DRIFT - production state on). */
-const FORK_NONTONE_DRIFT = true;
-/** Per-tone κ refine (multi-tone path) - Java MULTI_KAPPA_REFINE (production on). */
-const MULTI_KAPPA_REFINE = true;
+/** A fork line whose accumulated-vs-fresh phase difference sits within this of the
+ *  ±π wrap is dropped for the tick - folded to the wrong side it would pull the
+ *  pooled offset instead of refining it (Java FORK_WRAP_GUARD_RAD). */
+const FORK_WRAP_GUARD_RAD = Math.PI / 2.0;
+/** Ticks BEFORE a detected discontinuity whose contribution is REMOVED from the
+ *  accumulator when a gate fires. The preceding tick's window shares nearly all
+ *  its samples with the detecting one, so the event usually sits at its
+ *  window-taper EDGE - attenuated below the gate thresholds but still poisoning
+ *  the average. The last this-many accepted ticks are kept subtractable; the
+ *  rejected tick itself never enters the accumulator, so the total loss per event
+ *  is this constant plus the detecting tick (Java DISCONTINUITY_DROP_TICKS). */
+const DISCONTINUITY_DROP_TICKS = 1;
 
-/** Java Math.IEEEremainder(x, y): the remainder nearest to zero (round-half-even).
- *  Used by the κ phase-slope unwrap exactly as the desktop does. */
-function ieeeRemainder(x, y) {
-  const q = x / y;
-  if (Math.abs(q - Math.trunc(q)) === 0.5) {
-    const n = 2 * Math.round(q / 2);   // tie -> nearest even
-    return x - y * n;
-  }
-  return x - y * Math.round(q);
+/** Java Math.floorMod for the ring's backward slot walk: JS % keeps the
+ *  dividend's sign, so a negative index would address outside the ring. */
+function floorMod(x, m) {
+  return ((x % m) + m) % m;
 }
 
 export class FftAccumulator {
@@ -117,6 +132,21 @@ export class FftAccumulator {
     this._accumIm = null;
     /** @type {?Float64Array} incoherent running power sum (|X|²·weight). */
     this._accumPow = null;
+    /** Ring of the last DISCONTINUITY_DROP_TICKS accepted ticks' contributions
+     *  EXACTLY as added (rotation and weight applied), so a gate firing can
+     *  subtract them back out. Coherent: re/im; incoherent: power. Sized like the
+     *  accumulator at restart, so BOTH paths are subtractable, as the desktop's are.
+     *  @type {?Array<Float64Array>} */
+    this._prevTickRe = null;
+    /** @type {?Array<Float64Array>} */ this._prevTickIm = null;
+    /** @type {?Array<Float64Array>} */ this._prevTickPow = null;
+    /** Frame weight held in each ring slot - what a subtraction gives back to the
+     *  depth counter. @type {?Int32Array} */
+    this._prevTickWeight = null;
+    /** Slots of the ring currently valid (cleared by a subtraction, a restart and a
+     *  reset), and the next slot to write. */
+    this._prevTickCount = 0;
+    this._prevTickPos = 0;
     /** Total frame count accumulated since the last reset (the "N average(s)" depth). */
     this._accumFrames = 0;
     /** True once at least one tick has contributed. */
@@ -127,12 +157,18 @@ export class FftAccumulator {
     this._accumKFractional = 0;
     /** Pinned round(kFractional) - the stable integer lobe pitch. */
     this._accumIntFundBinRounded = 0;
+    /** The second fundamental's pinned fractional bin (dual pair), pinned at the
+     *  accumulator restart like accumKFractional; NaN when the run is single-tone. */
+    this._accumKappa2 = NaN;
     /** Config the accumulator was built for; a mismatch restarts it. */
     this._accumFftSize = 0;
     this._accumCoherent = false;
-    /** Per-harmonic de-rotation phasor scratch (cos/sin of h·Φ), rebuilt per tick. */
-    this._hcos = null;
-    this._hsin = null;
+    /** Coherent-family scratch: member positions (fractional bins, ascending) and
+     *  each member's constant de-rotation phasor for the current tick. Rebuilt per
+     *  tick by _buildFamily; grown on demand (Java famPos / famCos / famSin). */
+    this._famPos = new Float64Array(0);
+    this._famCos = new Float64Array(0);
+    this._famSin = new Float64Array(0);
 
     // ─── κ phase-slope refine (single-reference) ──────────────────────────────
     /** True once the one-shot κ refine has folded Δκ into accumKFractional. */
@@ -156,40 +192,20 @@ export class FftAccumulator {
     /** A re-sync fired; do a one-shot full realign on the next clean frame. */
     this._gapRecoverPending = false;
 
-    // ─── multi-tone path ──────────────────────────────────────────────────────
-    /** Fractional bins of the strong tones detected at restart (sorted ascending).
-     *  length ≤ 1 => single-reference rotation; length ≥ 2 => per-tone de-rotation. */
-    this._accumToneKappa = new Float64Array(0);
-    /** Per-tone cumulative de-rotation correction (the multi-tone analogue of
-     *  accumDroppedSamples) - one entry per accumToneKappa tone. */
-    this._toneDroppedSamples = new Float64Array(0);
-    /** Per-bin IMD-product assignment (cross-tick dual-tone de-rotation), reused. */
-    this._imdGridIdx = null;
-    // Per-tone κ refine (mirrors the single-reference one-shot refine).
-    this._multiKappaRefined = false;
-    this._multiKappaMeasFrames = 0;
-    this._multiKappaLastDelta = 0;
-    this._multiKappaCleanSpan = 0;
-    this._multiKappaSkipNext = false;
-    /** @type {?Float64Array} Σ clean per-frame phase steps, per tone. */
-    this._multiKappaCumPhase = null;
-    /** @type {?Float64Array} de-rotated phase at the reference, per tone. */
-    this._multiKappaLastPhase = null;
-
     // ─── spectral-discontinuity gate (the accumulator OWNS the detector, as the
     //     desktop worker does; reset() restarts it with the average) ────────────
     this._spectralDetector = new SpectralDiscontinuityDetector();
 
-    /** dB below the strongest peak a local maximum must clear to count as a
-     *  separate TONE (Java Preferences#getFftStrongToneRelDb, read live). The
-     *  controller pushes the live pref value via setStrongToneRelDb(). */
+    /** dB below the fundamental a family line must clear to be admitted to the
+     *  pooled tracking estimate (Java Preferences#getFftStrongToneRelDb, read
+     *  live). The controller pushes the live pref value via setStrongToneRelDb(). */
     this._strongToneRelDb = STRONG_TONE_REL_DB_DEFAULT;
   }
 
-  /** Sets the multi-tone detection threshold in dB below the strongest peak
-   *  (Java Preferences#getFftStrongToneRelDb, read live by detectStrongTones).
-   *  The controller calls this at setup and on the pref-change listener so a
-   *  change takes effect on the next accumulator restart, as the desktop does. */
+  /** Sets the line-admission threshold in dB below the fundamental (Java
+   *  Preferences#getFftStrongToneRelDb, read live). The controller calls this at
+   *  setup and on the pref-change listener so a change takes effect on the next
+   *  tick, as the desktop does. */
   setStrongToneRelDb(db) {
     this._strongToneRelDb = db;
   }
@@ -202,9 +218,6 @@ export class FftAccumulator {
   /** Pinned coherent κ (fractional fundamental bin) for the plot-time "before"
    *  dots; 0 before the first contribution. */
   get accumKFractional() { return this._accumKFractional; }
-  /** Number of independent strong tones the cross-tick path is de-rotating: ≥2
-   *  means the multi-tone (per-tone) path is engaged (Java accumToneKappa.length). */
-  get toneCount() { return this._accumToneKappa.length; }
 
   /** Drops the running accumulator (Java resetAccumulator). Arrays are dropped,
    *  not cleared in place, so a stale in-flight tick can't resurrect them. */
@@ -214,8 +227,7 @@ export class FftAccumulator {
     this._accumPow = null;
     this._accumFrames = 0;
     this._accumHasData = false;
-    this._accumToneKappa = new Float64Array(0);
-    this._toneDroppedSamples = new Float64Array(0);
+    this._prevTickCount = 0;
     // The running-median discontinuity rejector restarts with the average (its
     // median reference must be re-learned from the fresh run).
     this._spectralDetector.reset();
@@ -224,11 +236,10 @@ export class FftAccumulator {
   /** Re-anchor after a re-sync (ring overrun / signal discontinuity): the absolute
    *  delta jumps, so the next clean frame must re-anchor the κ slope (not fold its
    *  jumped step) and the PLL does a one-shot full realign. Mirrors the desktop
-   *  onCaptureOverrun / onSignalDiscontinuity (kappaSkipNext / multiKappaSkipNext /
-   *  gapRecoverPending). Called by the controller when it re-anchors the cursor. */
+   *  onCaptureOverrun / onSignalDiscontinuity (kappaSkipNext / gapRecoverPending).
+   *  Called by the controller when it re-anchors the cursor. */
   onResync() {
     this._kappaSkipNext = true;        // κ measurement: re-anchor on the jumped frame
-    this._multiKappaSkipNext = true;   // multi-tone per-tone κ refine: same re-anchor
     this._gapRecoverPending = true;    // one-shot full realign on the next clean frame
   }
 
@@ -279,28 +290,30 @@ export class FftAccumulator {
       this._accumRe = coherent ? new Float64Array(N) : null;
       this._accumIm = coherent ? new Float64Array(N) : null;
       this._accumPow = coherent ? null : new Float64Array(N);
+      // The subtractable ring is sized like the accumulator, for BOTH paths.
+      this._prevTickRe = coherent
+        ? Array.from({ length: DISCONTINUITY_DROP_TICKS }, () => new Float64Array(N)) : null;
+      this._prevTickIm = coherent
+        ? Array.from({ length: DISCONTINUITY_DROP_TICKS }, () => new Float64Array(N)) : null;
+      this._prevTickPow = coherent
+        ? null : Array.from({ length: DISCONTINUITY_DROP_TICKS }, () => new Float64Array(N));
+      this._prevTickWeight = new Int32Array(DISCONTINUITY_DROP_TICKS);
+      this._prevTickCount = 0;
+      this._prevTickPos = 0;
       this._accumFrames = 0;
       this._accumFftSize = fftSize;
       this._accumCoherent = coherent;
       this._accumRefSampleStart = samplesAbsStart;
       this._accumKFractional = kFrac;
       this._accumIntFundBinRounded = intFundBin;
-      // Choose the cross-tick path from the SPECTRAL peak count (detectStrongTones),
-      // NOT the THD/IMD display mode: a single-tone setup with strong harmonics or
-      // residual mains can still land on the multi-tone path (each tone phase-locked,
-      // no shared κ phase-slope refine), while a clean single tone + harmonics stays
-      // single-reference. The tones are found from the spectrum, so it works for
-      // unknown / external multi-tone signals.
-      this._accumToneKappa = coherent ? this._detectStrongTones(r) : new Float64Array(0);
-      this._toneDroppedSamples = new Float64Array(this._accumToneKappa.length);
+      // The dual pair's second fundamental, pinned like the first. NaN keeps the
+      // family a pure harmonic ladder; a positive value adds the published
+      // intermodulation grid a·κ1 + b·κ2 (F2 itself is its (0,1) entry).
+      this._accumKappa2 = (coherent && r.fundamental2HzRefined > 0.0 && r.freqResolution > 0.0)
+        ? r.fundamental2HzRefined / r.freqResolution
+        : NaN;
       this._kappaRefined = false;
       this._kappaMeasFrames = 0;
-      this._multiKappaRefined = false;
-      this._multiKappaMeasFrames = 0;
-      this._multiKappaCleanSpan = 0;
-      this._multiKappaSkipNext = false;
-      this._multiKappaCumPhase = null;
-      this._multiKappaLastPhase = null;
       this._accumDroppedSamples = 0;
       this._gapRecoverPending = false;
       this._accumHasData = true;
@@ -328,118 +341,180 @@ export class FftAccumulator {
         const aPow = this._accumPow;
         for (let k = 0; k < N; k++) aPow[k] *= scale;
       }
+      // The subtractable ring holds contributions AS ADDED - once the sum is
+      // scaled, they must scale with it or a later subtraction over-removes.
+      for (let s = 0; s < this._prevTickCount; s++) {
+        const slot = floorMod(this._prevTickPos - 1 - s, DISCONTINUITY_DROP_TICKS);
+        if (coherent && this._prevTickRe != null) {
+          const pr = this._prevTickRe[slot], pim = this._prevTickIm[slot];
+          for (let k = 0; k < N; k++) { pr[k] *= scale; pim[k] *= scale; }
+        } else if (this._prevTickPow != null) {
+          const pp = this._prevTickPow[slot];
+          for (let k = 0; k < N; k++) pp[k] *= scale;
+        }
+      }
       this._accumFrames = keep;
     }
 
+    // Claim this tick's slot in the subtractable ring; the add loops below fill it
+    // with the contribution exactly as accumulated.
+    const prevSlot = this._prevTickPos;
+    this._prevTickPos = (this._prevTickPos + 1) % DISCONTINUITY_DROP_TICKS;
+    if (this._prevTickCount < DISCONTINUITY_DROP_TICKS) this._prevTickCount++;
+    this._prevTickWeight[prevSlot] = weight;
+
     if (coherent) {
-      if (this._accumToneKappa.length >= 2) {
-        // Multi-tone: de-rotate each detected tone's lobe by its OWN frequency
-        // (constant phase), so every fundamental keeps its true position - no single
-        // reference, hence no grid-lock.
-        this._accumulateMultiTone(r, N, weight, delta);
-      } else {
-        // One-shot κ refine from the de-rotated fundamental's phase slope, then a
-        // continuous phase-lock loop. The single-frame parabolic peak pins κ to only
-        // ~0.01-0.03 bin; dφ/dΔ over the first KAPPA_MEAS_FRAMES frames IS
-        // 2π·Δκ/fftSize, pinning the EXACT frequency ~100× tighter and killing the
-        // long-run phase ramp (which would vector-cancel the magnitude, harmonics h×
-        // faster). Refined before accumulating so the corrected κ is used from here.
-        if (this._accumIntFundBinRounded > 0) {
-          const k0 = Math.min(this._accumIntFundBinRounded, halfSize);
-          const krot = -2.0 * Math.PI * delta * this._accumKFractional / fftSize;
-          const cr = Math.cos(krot), sr = Math.sin(krot);
-          const obsPhase = Math.atan2(r.re[k0] * sr + r.im[k0] * cr,
-                                      r.re[k0] * cr - r.im[k0] * sr);
-          if (!this._kappaRefined) {
-            // One-shot κ refine from the de-rotated fundamental's phase slope over
-            // KAPPA_MEAS_FRAMES CLEAN frames (2π·Δκ/fftSize per unit delta).
-            if (this._kappaMeasFrames === 0 || this._kappaSkipNext) {
-              // Anchor, or re-anchor after a re-sync (delta jumped): adopt this frame
-              // as the reference but DON'T fold its step in - a burst of re-syncs
-              // can't poison or starve the measurement.
-              if (this._kappaMeasFrames === 0) {
-                this._kappaCumPhase = 0.0;
-                this._kappaCleanSpan = 0.0;
-                this._kappaMeasFrames = 1;
-              }
-              this._kappaLastPhase = obsPhase;
-              this._kappaLastDelta = delta;
-              this._kappaSkipNext = false;
-            } else {
-              this._kappaCumPhase += ieeeRemainder(obsPhase - this._kappaLastPhase, 2.0 * Math.PI);
-              this._kappaCleanSpan += delta - this._kappaLastDelta;
-              this._kappaLastPhase = obsPhase;
-              this._kappaLastDelta = delta;
-              if (++this._kappaMeasFrames >= KAPPA_MEAS_FRAMES && this._kappaCleanSpan > 0.0) {
-                const dKappa = this._kappaCumPhase * fftSize / (2.0 * Math.PI * this._kappaCleanSpan);
-                this._accumKFractional += dKappa;
-                this._kappaRefined = true;
-                this._gapRecoverPending = false;
-              }
+      // One-shot κ refine from the de-rotated fundamental's phase slope, then a
+      // continuous phase-lock loop. The single-frame parabolic peak pins κ to only
+      // ~0.01-0.03 bin; dφ/dΔ over the first KAPPA_MEAS_FRAMES frames IS
+      // 2π·Δκ/fftSize, pinning the EXACT frequency ~100× tighter and killing the
+      // long-run phase ramp (which would vector-cancel the magnitude, harmonics h×
+      // faster). Refined before accumulating so the corrected κ is used from here.
+      if (this._accumIntFundBinRounded > 0) {
+        const k0 = Math.min(this._accumIntFundBinRounded, halfSize);
+        const krot = -2.0 * Math.PI
+          * ieeeRemainder(delta * this._accumKFractional, fftSize) / fftSize;
+        const cr = Math.cos(krot), sr = Math.sin(krot);
+        const obsPhase = Math.atan2(r.re[k0] * sr + r.im[k0] * cr,
+                                    r.re[k0] * cr - r.im[k0] * sr);
+        if (!this._kappaRefined) {
+          // One-shot κ refine from the de-rotated fundamental's phase slope over
+          // KAPPA_MEAS_FRAMES CLEAN frames (2π·Δκ/fftSize per unit delta).
+          if (this._kappaMeasFrames === 0 || this._kappaSkipNext) {
+            // Anchor, or re-anchor after a re-sync (delta jumped): adopt this frame
+            // as the reference but DON'T fold its step in - a burst of re-syncs
+            // can't poison or starve the measurement.
+            if (this._kappaMeasFrames === 0) {
+              this._kappaCumPhase = 0.0;
+              this._kappaCleanSpan = 0.0;
+              this._kappaMeasFrames = 1;
             }
-          } else if (this._accumKFractional !== 0.0) {
-            // Continuous phase-tracking loop (a PLL on the cross-tick fundamental):
-            // measure the running mis-alignment against the DEEP ACCUMULATED phase
-            // (the √N-averaged true reference; the accumulator rotates bin k0 by the
-            // same krot as obsPhase, so the two compare directly) and fold a FRACTION
-            // (PHASE_TRACK_GAIN) of it back into the de-rotation every tick so it
-            // re-locks - killing the residual-κ drift and absorbing disturbances. On
-            // a re-sync, do a one-shot FULL realign of THIS frame too (gain 1).
-            const accumPhase = Math.atan2(this._accumIm[k0], this._accumRe[k0]);
-            const residual = ieeeRemainder(obsPhase - accumPhase, 2.0 * Math.PI);
-            const gain = this._gapRecoverPending ? 1.0 : PHASE_TRACK_GAIN;
-            const corr = gain * residual * fftSize / (2.0 * Math.PI * this._accumKFractional);
-            this._accumDroppedSamples += corr;
-            if (this._gapRecoverPending) {
-              delta += corr;                 // realign THIS frame after the jump
+            this._kappaLastPhase = obsPhase;
+            this._kappaLastDelta = delta;
+            this._kappaSkipNext = false;
+          } else {
+            this._kappaCumPhase += ieeeRemainder(obsPhase - this._kappaLastPhase, 2.0 * Math.PI);
+            this._kappaCleanSpan += delta - this._kappaLastDelta;
+            this._kappaLastPhase = obsPhase;
+            this._kappaLastDelta = delta;
+            if (++this._kappaMeasFrames >= KAPPA_MEAS_FRAMES && this._kappaCleanSpan > 0.0) {
+              const dKappa = this._kappaCumPhase * fftSize / (2.0 * Math.PI * this._kappaCleanSpan);
+              this._accumKFractional += dKappa;
+              this._kappaRefined = true;
               this._gapRecoverPending = false;
             }
           }
+        } else if (this._accumKFractional !== 0.0) {
+          // Continuous phase-tracking loop (a PLL on the cross-tick fundamental):
+          // measure the running mis-alignment against the DEEP ACCUMULATED phase
+          // (the √N-averaged true reference; the accumulator rotates bin k0 by the
+          // same krot as obsPhase, so the two compare directly) and fold a FRACTION
+          // (PHASE_TRACK_GAIN) of it back into the de-rotation every tick so it
+          // re-locks - killing the residual-κ drift and absorbing disturbances.
+          // The steady estimate is the FORK - pooled from every strong family line,
+          // not the fundamental alone (see _forkPooledOffset) - so behind a notch
+          // the reference noise falls with the combined power of the harmonics
+          // instead of being set by the weakest line. On a re-sync the delta
+          // jumped, so do a one-shot FULL realign of THIS frame from the
+          // fundamental ALONE (a big offset wraps the higher lines' phases, so
+          // pooling is not valid there) and let the loop clean up afterwards.
+          const accumPhase = Math.atan2(this._accumIm[k0], this._accumRe[k0]);
+          const residual = ieeeRemainder(obsPhase - accumPhase, 2.0 * Math.PI);
+          const fundOffset = residual * fftSize / (2.0 * Math.PI * this._accumKFractional);
+          if (this._gapRecoverPending) {
+            this._accumDroppedSamples += fundOffset;
+            delta += fundOffset;           // realign THIS frame after the jump
+            this._gapRecoverPending = false;
+          } else {
+            this._accumDroppedSamples += PHASE_TRACK_GAIN
+              * this._forkPooledOffset(r, halfSize, delta, k0, fundOffset);
+          }
         }
-        // Single reference: PER-LOBE constant-phase de-rotation over the HALF
-        // spectrum [0, Nyquist]. Each bin is snapped to its nearest harmonic
-        // h = round(bin / k0) and rotated by that lobe's CONSTANT phase h·Φ,
-        // Φ = −2π·delta·accumKFractional/fftSize - NOT a per-bin ramp (which would
-        // comb the leakage skirt). All bins are positive frequencies, so the
-        // harmonic index is round(k / k0) directly (no signed-bin wrap).
-        const k0x = Math.max(1, this._accumIntFundBinRounded);
-        const phiX = -2.0 * Math.PI * delta * this._accumKFractional / fftSize;
-        const hMaxX = Math.max(1, Math.trunc(halfSize / k0x));
-        if (this._hcos == null || this._hcos.length !== 2 * hMaxX + 1) {
-          this._hcos = new Float64Array(2 * hMaxX + 1);
-          this._hsin = new Float64Array(2 * hMaxX + 1);
-        }
-        const e1cx = Math.cos(phiX), e1sx = Math.sin(phiX);
-        const hcx = this._hcos, hsx = this._hsin;
-        hcx[hMaxX] = 1.0; hsx[hMaxX] = 0.0;
-        for (let h = 1; h <= hMaxX; h++) {
-          hcx[hMaxX + h] = hcx[hMaxX + h - 1] * e1cx - hsx[hMaxX + h - 1] * e1sx;
-          hsx[hMaxX + h] = hcx[hMaxX + h - 1] * e1sx + hsx[hMaxX + h - 1] * e1cx;
-          hcx[hMaxX - h] = hcx[hMaxX + h];            // exp(−j·h·Φ) = conjugate
-          hsx[hMaxX - h] = -hsx[hMaxX + h];
-        }
-        const aRe = this._accumRe, aIm = this._accumIm;
-        const rRe = r.re, rIm = r.im;
-        // Serial port of the desktop's parallelChunks de-rotation (disjoint per-bin
-        // writes -> identical result single-threaded).
+      }
+      const aRe = this._accumRe, aIm = this._accumIm;
+      const rRe = r.re, rIm = r.im;
+      // This tick's ring slot: every add path below writes its contribution here
+      // EXACTLY as it entered the accumulator, so a gate firing can subtract it.
+      const pvR = this._prevTickRe[prevSlot], pvI = this._prevTickIm[prevSlot];
+      // Serial port of the desktop's parallelChunks de-rotation: the per-bin writes
+      // are disjoint, so one pass gives bit-for-bit the same result.
+      if (r.windowType === 'RECT') {
+        // RECT keeps the per-bin time-shift ramp: on-bin content occupies single
+        // bins (no lobe to hold together) while its 1/Δf skirt spans the whole
+        // spectrum and would cross every region midpoint, which is exactly where a
+        // piecewise rotation prints. Seeded once, then advanced by the recurrence.
+        const scale = (this._accumKFractional > 0.0 && this._accumIntFundBinRounded > 0)
+          ? this._accumKFractional / this._accumIntFundBinRounded
+          : 1.0;
+        const theta = -2.0 * Math.PI * ieeeRemainder(delta * scale, fftSize) / fftSize;
+        const stepRe = Math.cos(theta), stepIm = Math.sin(theta);
+        // Java seeds the phasor per parallel chunk at IEEEremainder(theta*kLo, 2*pi);
+        // the serial walk is one chunk starting at bin 0, where that is exactly 1+0j.
+        let phRe = 1.0, phIm = 0.0;
         for (let k = 0; k < N; k++) {
-          let h = Math.round(k / k0x);                // nearest harmonic lobe (k ≥ 0)
-          if (h > hMaxX) h = hMaxX;
-          const cr2 = hcx[h + hMaxX], ci2 = hsx[h + hMaxX];
           const reW = rRe[k] * weight;
           const imW = rIm[k] * weight;
-          aRe[k] += reW * cr2 - imW * ci2;
-          aIm[k] += reW * ci2 + imW * cr2;
+          const cRe = reW * phRe - imW * phIm;
+          const cIm = reW * phIm + imW * phRe;
+          aRe[k] += cRe;
+          aIm[k] += cIm;
+          pvR[k] = cRe;
+          pvI[k] = cIm;
+          const nextRe = phRe * stepRe - phIm * stepIm;
+          phIm = phRe * stepIm + phIm * stepRe;
+          phRe = nextRe;
+        }
+      } else {
+        const phi1 = (this._accumKFractional > 0.0)
+          ? -2.0 * Math.PI * ieeeRemainder(delta * this._accumKFractional, fftSize) / fftSize
+          : 0.0;
+        const phi2 = (this._accumKappa2 > 0.0)
+          ? -2.0 * Math.PI * ieeeRemainder(delta * this._accumKappa2, fftSize) / fftSize
+          : 0.0;
+        const nFam = this._buildFamily(r, halfSize, phi1, phi2);
+        if (nFam <= 0) {
+          // No pinned fundamental: nothing coherent needs aligning - add straight;
+          // noise and unlocked lines decay on their own.
+          for (let k = 0; k < N; k++) {
+            const cRe = rRe[k] * weight;
+            const cIm = rIm[k] * weight;
+            aRe[k] += cRe;
+            aIm[k] += cIm;
+            pvR[k] = cRe;
+            pvI[k] = cIm;
+          }
+        } else {
+          // Region-constant walk: each bin takes the single phasor of the family
+          // member whose region it falls in, the regions tiled at the MIDPOINTS
+          // between neighbouring members. The accumulator's spectrum is the HALF
+          // spectrum [0, halfSize], so every bin is a positive frequency and one
+          // ascending cursor covers it - no negative-frequency conjugate branch.
+          const pos = this._famPos, pc = this._famCos, ps = this._famSin;
+          let c = 0;
+          for (let k = 0; k < N; k++) {
+            while (c < nFam - 1 && k > 0.5 * (pos[c] + pos[c + 1])) c++;
+            const reW = rRe[k] * weight;
+            const imW = rIm[k] * weight;
+            const cRe = reW * pc[c] - imW * ps[c];
+            const cIm = reW * ps[c] + imW * pc[c];
+            aRe[k] += cRe;
+            aIm[k] += cIm;
+            pvR[k] = cRe;
+            pvI[k] = cIm;
+          }
         }
       }
     } else {
       // Incoherent analyze stores the RAW FFT magnitude in r.re (im = 0). Sum its
       // POWER so the mag->amplitude conversion in overlayOnto applies ONCE.
       const aPow = this._accumPow;
+      const pvP = this._prevTickPow[prevSlot];
       const rRe = r.re;
       for (let k = 0; k < N; k++) {
         const mag = rRe[k];
-        aPow[k] += mag * mag * weight;
+        const cP = mag * mag * weight;
+        aPow[k] += cP;
+        pvP[k] = cP;
       }
     }
     this._accumFrames += weight;
@@ -447,277 +522,206 @@ export class FftAccumulator {
   }
 
   /**
-   * Multi-tone cross-tick rotation (Java FftAnalyzerWorker.accumulateMultiTone):
-   * each detected strong tone's lobe is de-rotated by a CONSTANT phase equal to that
-   * tone's own inter-tick advance, so the lobe is preserved intact and the
-   * accumulated peak stays at the tone's true (sub-bin) frequency - no grid-lock.
-   * Each tone carries its OWN phase-lock loop (toneDroppedSamples) so a frozen-κ
-   * residual can't ramp its lobe out of phase over a long average - the per-tone
-   * analogue of the single-reference loop, so IMD tone pairs hold. The dual-tone IMD
-   * grid (a·F1+b·F2) rides a·ang1+b·ang2 (the SAME tracked tone phases), and the
-   * non-tone bins get a plain time-shift drift-corrected by the strong tones' pooled
-   * clock estimate. This is the honest "measure what was sampled" path for unknown /
-   * external multi-tone signals: the tones are found from the spectrum, not assumed.
-   * Run SERIALLY here; the desktop parallelizes the bin loop (parallelChunks) - the
-   * per-bin writes are disjoint, so the math is identical.
+   * Removes the subtractable ring's held contributions - the last accepted tick(s) -
+   * from the accumulator (Java subtractPreviousTicks). The retroactive half of
+   * discontinuity rejection: the window(s) BEFORE the detecting one shared nearly
+   * all of its samples, with the event attenuated at their taper edge below the gate
+   * thresholds, so their contribution is poisoned although no gate fired on them.
+   * Called by the controller at BOTH gates, before the re-sync; never on a ring
+   * overrun, which is a coverage gap rather than damaged data.
    */
-  _accumulateMultiTone(r, N, weight, delta) {
-    const fftSize = r.fftSize;
-    const nT = this._accumToneKappa.length;
-    const aRe = this._accumRe, aIm = this._accumIm;
-    const accumFrames = this._accumFrames;
-    const cRe = new Float64Array(nT);
-    const cIm = new Float64Array(nT);
-    const lo = new Int32Array(nT);
-    const hi = new Int32Array(nT);
-    const angT = new Float64Array(nT);   // each tone's tracked de-rotation phase (for the IMD grid)
-    // The strong tones share ONE clock: each tone's per-tone loop correction measures
-    // the same relative drift δ ≈ correction/delta. Pool them (strength-weighted) and
-    // de-rotate the NON-tone bins by delta·(1+δ).
-    let dsum = 0.0, wsum = 0.0;
-    // Per-tone κ refine (mirrors the single-reference one-shot refine): while
-    // unrefined, leave the PLL OFF and measure each tone's de-rotated phase slope vs
-    // the PINNED κ; fold Δκ into accumToneKappa once after KAPPA_MEAS_FRAMES.
-    const kRefining = MULTI_KAPPA_REFINE && aRe != null && accumFrames > 0 && !this._multiKappaRefined;
-    const kAnchor = kRefining && (this._multiKappaMeasFrames === 0 || this._multiKappaSkipNext);
-    if (kRefining && this._multiKappaMeasFrames === 0) {   // first refine frame: (re)allocate per-tone phase state
-      this._multiKappaCumPhase = new Float64Array(nT);
-      this._multiKappaLastPhase = new Float64Array(nT);
-      this._multiKappaCleanSpan = 0.0;
+  subtractPreviousTicks() {
+    if (this._prevTickCount <= 0 || !this._accumHasData) return;
+    let removedFrames = 0;
+    for (let s = 0; s < this._prevTickCount; s++) {
+      const slot = floorMod(this._prevTickPos - 1 - s, DISCONTINUITY_DROP_TICKS);
+      if (this._accumCoherent && this._accumRe != null && this._prevTickRe != null) {
+        const pr = this._prevTickRe[slot], pim = this._prevTickIm[slot];
+        const aRe = this._accumRe, aIm = this._accumIm;
+        for (let k = 0; k < aRe.length; k++) { aRe[k] -= pr[k]; aIm[k] -= pim[k]; }
+      } else if (!this._accumCoherent && this._accumPow != null && this._prevTickPow != null) {
+        const pp = this._prevTickPow[slot];
+        const aPow = this._accumPow;
+        for (let k = 0; k < aPow.length; k++) aPow[k] -= pp[k];
+      }
+      removedFrames += this._prevTickWeight[slot];
     }
-    for (let t = 0; t < nT; t++) {
-      const kappa = this._accumToneKappa[t];
-      const k0 = Math.min(Math.max(0, Math.round(kappa)), N - 1);
-      // De-rotate this tone's lobe by its OWN frequency, advanced by the tone's
-      // accumulated loop correction. A frozen per-tone κ would ramp the lobe phase
-      // and vector-cancel it - the multi-tone analogue of the single-reference drift.
-      const effDelta = delta + this._toneDroppedSamples[t];
-      let ang = -2.0 * Math.PI * effDelta * kappa / fftSize;
-      let cr = Math.cos(ang), sr = Math.sin(ang);
-      // Per-tone phase-lock loop: compare this tone's de-rotated phase to the DEEP
-      // accumulated phase at its bin (rotated by the same ang so the two compare
-      // directly) and fold a fraction of the residual into the tone's correction.
-      // Skipped on the first contributing frame (no reference yet). On a re-sync
-      // (gapRecoverPending) do a one-shot FULL realign of THIS frame too.
-      if (aRe != null && accumFrames > 0 && kappa > 0.0) {
-        const obsPhase = Math.atan2(r.re[k0] * sr + r.im[k0] * cr,
-                                    r.re[k0] * cr - r.im[k0] * sr);
-        if (kRefining) {
-          // κ refine: accumulate this tone's clean phase step (pinned-κ de-rotation;
-          // the anchor / re-anchor frame only sets the reference).
-          if (kAnchor) {
-            this._multiKappaLastPhase[t] = obsPhase;
-          } else {
-            this._multiKappaCumPhase[t] += ieeeRemainder(obsPhase - this._multiKappaLastPhase[t], 2.0 * Math.PI);
-            this._multiKappaLastPhase[t] = obsPhase;
-          }
-        } else {
-          // Per-tone phase-lock loop: fold a fraction of the running mis-alignment vs
-          // the DEEP accumulated phase into the tone's correction. A residual far
-          // beyond the per-tick noise is a phase DISCONTINUITY (DDS jump / reconnect)
-          // the window gate missed - snap (gain 1). On a re-sync do a full realign too.
-          const accumPhase = Math.atan2(aIm[k0], aRe[k0]);
-          const residual = ieeeRemainder(obsPhase - accumPhase, 2.0 * Math.PI);
-          const jump = Math.abs(residual) > PHASE_JUMP_RAD;
-          const gain = (this._gapRecoverPending || jump) ? 1.0 : PHASE_TRACK_GAIN;
-          const corr = gain * residual * fftSize / (2.0 * Math.PI * kappa);
-          this._toneDroppedSamples[t] += corr;
-          if (this._gapRecoverPending || jump) {
-            ang = -2.0 * Math.PI * (effDelta + corr) * kappa / fftSize;
-            cr = Math.cos(ang);
-            sr = Math.sin(ang);
-          }
-        }
-      }
-      angT[t] = ang;
-      cRe[t] = cr;
-      cIm[t] = sr;
-      lo[t] = Math.max(0, k0 - TONE_LOBE_HALF_BINS);
-      hi[t] = Math.min(N - 1, k0 + TONE_LOBE_HALF_BINS);
-      if (FORK_NONTONE_DRIFT && aRe != null && accumFrames > 0 && Math.abs(delta) > 1.0) {
-        const w = Math.hypot(aRe[k0], aIm[k0]);   // strength weight
-        dsum += w * this._toneDroppedSamples[t] / delta;
-        wsum += w;
-      }
-    }
-    // One re-sync realign serves every tone; clear after they've all used it.
-    this._gapRecoverPending = false;
-    // IMD-product grid (true dual-tone): each product a·F1+b·F2 rides a·ang1+b·ang2 -
-    // the SAME tracked tone phases - so its EXACT sub-bin frequency (clock offset /
-    // wobble included) is de-rotated, not the integer bin-centre.
-    let prodIdx = null;
-    let prodCos = null, prodSin = null;
-    if (nT === 2 && this._accumToneKappa[0] > 0.0 && this._accumToneKappa[1] > 0.0) {
-      const ORDER = 9;
-      const pa = new Int32Array((2 * ORDER + 1) * (2 * ORDER + 1));
-      const pb = new Int32Array(pa.length);
-      const pk = new Int32Array(pa.length);
-      let cap = 0;
-      for (let a = -ORDER; a <= ORDER; a++) {
-        for (let b = -ORDER; b <= ORDER; b++) {
-          const ord = Math.abs(a) + Math.abs(b);
-          if (ord < 2 || ord > ORDER) continue;   // tones (ord 1) handled per-tone above
-          const kp = a * this._accumToneKappa[0] + b * this._accumToneKappa[1];
-          if (kp < 1.0 || kp > N - 2) continue;
-          pk[cap] = Math.round(kp);
-          pa[cap] = a;
-          pb[cap] = b;
-          cap++;
-        }
-      }
-      prodCos = new Float64Array(cap);
-      prodSin = new Float64Array(cap);
-      for (let p = 0; p < cap; p++) {
-        const ph = pa[p] * angT[0] + pb[p] * angT[1];
-        prodCos[p] = Math.cos(ph);
-        prodSin[p] = Math.sin(ph);
-      }
-      if (this._imdGridIdx == null || this._imdGridIdx.length < N) this._imdGridIdx = new Int32Array(N);
-      prodIdx = this._imdGridIdx;
-      prodIdx.fill(-1, 0, N);
-      for (let p = 0; p < cap; p++) {
-        const plo = Math.max(0, pk[p] - TONE_LOBE_HALF_BINS);
-        const phi = Math.min(N - 1, pk[p] + TONE_LOBE_HALF_BINS);
-        for (let k = plo; k <= phi; k++) prodIdx[k] = p;
-      }
-    }
-    // Non-tone, non-product bins: plain time-shift, drift-corrected by the pooled δ so
-    // the weak harmonics track the same clock as the strong teeth.
-    const deltaEff = wsum > 0.0 ? delta * (1.0 + dsum / wsum) : delta;
-    const rampSlope = -2.0 * Math.PI * deltaEff / fftSize;
-    const stepRe = Math.cos(rampSlope), stepIm = Math.sin(rampSlope);
-    // Serial port of the desktop parallelChunks fork loop: seed the fork phasor
-    // exp(j·k·rampSlope) at k=0 and a tone-lobe cursor, then walk every bin once.
-    let phRe = 1.0;   // cos(rampSlope·0)
-    let phIm = 0.0;   // sin(rampSlope·0)
-    let curT = 0;
-    for (let k = 0; k < N; k++) {
-      while (curT < nT && k > hi[curT]) curT++;
-      let rotRe, rotIm;
-      const p = (prodIdx != null) ? prodIdx[k] : -1;
-      if (curT < nT && k >= lo[curT]) { rotRe = cRe[curT]; rotIm = cIm[curT]; }   // tone lobe
-      else if (p >= 0) { rotRe = prodCos[p]; rotIm = prodSin[p]; }                // IMD product
-      else { rotRe = phRe; rotIm = phIm; }                                        // fork
-      const rRe = r.re[k] * weight;
-      const rIm = r.im[k] * weight;
-      aRe[k] += rRe * rotRe - rIm * rotIm;
-      aIm[k] += rRe * rotIm + rIm * rotRe;
-      const nextRe = phRe * stepRe - phIm * stepIm;
-      phIm = phRe * stepIm + phIm * stepRe;
-      phRe = nextRe;
-    }
-    // Per-tone κ refine: advance the shared frame count / clean span; once the window
-    // is full fold each tone's Δκ (its phase slope) into accumToneKappa, so the tones
-    // AND the IMD grid (a·κ1+b·κ2) lock from the next frame on.
-    if (kRefining) {
-      if (kAnchor) {
-        if (this._multiKappaMeasFrames === 0) this._multiKappaMeasFrames = 1;
-        this._multiKappaLastDelta = delta;
-        this._multiKappaSkipNext = false;
-      } else {
-        this._multiKappaCleanSpan += delta - this._multiKappaLastDelta;
-        this._multiKappaLastDelta = delta;
-        if (++this._multiKappaMeasFrames >= KAPPA_MEAS_FRAMES && this._multiKappaCleanSpan > 0.0) {
-          for (let t = 0; t < nT; t++) {
-            this._accumToneKappa[t] += this._multiKappaCumPhase[t] * fftSize
-              / (2.0 * Math.PI * this._multiKappaCleanSpan);
-          }
-          this._multiKappaRefined = true;
-        }
-      }
-    }
+    this._accumFrames = Math.max(0, this._accumFrames - removedFrames);
+    this._prevTickCount = 0;
   }
 
-  /** Finds the fractional bins of the "strong" tones in r's spectrum (Java
-   *  detectStrongTones) - local maxima within STRONG_TONE_REL_DB of the strongest
-   *  peak, merged within MIN_TONE_SEP_BINS, harmonics rejected, refined to sub-bin by
-   *  parabolic interpolation, sorted ascending. Detection from the spectrum (not
-   *  commanded frequencies) is deliberate: the generator may be external, so the FFT
-   *  is the only thing that knows what was actually received.
-   *  @returns {Float64Array} sub-bin tone positions (fractional bins). */
-  _detectStrongTones(r) {
-    const db = r.amplitudeDbFs;
-    if (db == null) return new Float64Array(0);
-    const halfSize = r.fftSize / 2;
-    if (halfSize < 4) return new Float64Array(0);
-    // Skip the DC/ULF zone: a residual DC offset leaks through the window main lobe
-    // into the first bins and would be taken as a spurious second tone.
-    const freqRes = r.sampleRate / r.fftSize;
-    const minBin = Math.max(2, Math.ceil(DC_REJECT_HZ / freqRes));
-    let strongest = -Number.MAX_VALUE;
-    for (let k = minBin; k < halfSize; k++) {
-      if (db[k] > db[k - 1] && db[k] >= db[k + 1] && db[k] > strongest) strongest = db[k];
-    }
-    const thresh = strongest - this._strongToneRelDb;
-    // Keep the strongest MAX_TONES local maxima above the threshold, merging peaks
-    // closer than MIN_TONE_SEP_BINS. Selecting by strength (not scan order) keeps the
-    // real tones even when 1/f or HF-rise noise also clears the threshold.
-    const bins = new Int32Array(MAX_TONES);
-    const lvls = new Float64Array(MAX_TONES);
-    let count = 0;
-    for (let k = minBin; k < halfSize; k++) {
-      if (db[k] < thresh) continue;
-      if (!(db[k] > db[k - 1] && db[k] >= db[k + 1])) continue;   // local max
-      const lvl = db[k];
-      let near = -1;
-      for (let t = 0; t < count; t++) {
-        if (Math.abs(k - bins[t]) < MIN_TONE_SEP_BINS) { near = t; break; }
-      }
-      if (near >= 0) {
-        if (lvl > lvls[near]) { bins[near] = k; lvls[near] = lvl; }
-      } else if (count < MAX_TONES) {
-        bins[count] = k; lvls[count] = lvl; count++;
-      } else {
-        let weakest = 0;
-        for (let t = 1; t < count; t++) if (lvls[t] < lvls[weakest]) weakest = t;
-        if (lvl > lvls[weakest]) { bins[weakest] = k; lvls[weakest] = lvl; }
+  /**
+   * The FORK: the per-tick tracking correction (in samples) pooled from every strong
+   * line of the coherent family instead of the fundamental alone (Java
+   * forkPooledOffset). A common sample offset rotates each line proportionally to
+   * its frequency, so each line's accumulated-vs-fresh phase difference divided by
+   * its fractional bin is an independent estimate of the SAME offset; the estimates
+   * are averaged with weights (fractional bin x magnitude)^2 - variance-optimal,
+   * since a line's phase noise is floor/|X| and its offset sensitivity grows with
+   * frequency. Admission: a line joins when its fresh level is within the
+   * multi-tone threshold (setStrongToneRelDb) below the fundamental's - a smaller
+   * threshold pools fewer lines - and the dual pair's F2 (the (0,1) grid product)
+   * always joins. Behind a notch the fundamental is the WEAKEST line, and the pooled
+   * reference noise falls with the combined power of the harmonics. With nothing
+   * else admitted, returns the fundamental's own estimate unchanged.
+   *
+   * @param {object} r the per-window result.
+   * @param {number} halfSize fftSize/2.
+   * @param {number} delta samples from the pinned reference to this tick.
+   * @param {number} k0 the fundamental's bin.
+   * @param {number} fundOffset the fundamental's own offset estimate, in samples.
+   * @returns {number} the pooled offset estimate, in samples.
+   */
+  _forkPooledOffset(r, halfSize, delta, k0, fundOffset) {
+    const kappa = this._accumKFractional;
+    const fundPow = r.re[k0] * r.re[k0] + r.im[k0] * r.im[k0];
+    const minPow = fundPow * Math.pow(10.0, -this._strongToneRelDb / 10.0);   // a POWER ratio
+    let sumW = kappa * kappa * fundPow;                     // the fundamental seeds the pool
+    let sumWOff = sumW * fundOffset;
+    // The harmonic ladder h·κ, h = 2 and up.
+    for (let h = 2; h * kappa < halfSize - 1.0; h++) {
+      const est = this._forkLineOffset(r, halfSize, delta, h * kappa, minPow, false);
+      if (est != null) {
+        sumW += est[0];
+        sumWOff += est[0] * est[1];
       }
     }
-    // Harmonic rejection: a single tone's harmonics clear the floor and would force
-    // the per-tone path (frozen parabolic κ, NO phase-slope refine - the long-run
-    // drift). A harmonic sits at an integer multiple h≥2 of the strongest tone AND
-    // well below it; the single-reference time-shift already aligns it via h×, so drop
-    // it. Genuine inharmonic IMD partners aren't integer multiples and aren't far
-    // below, so they survive.
-    if (count >= 2) {
-      let fund = 0;
-      for (let i = 1; i < count; i++) if (lvls[i] > lvls[fund]) fund = i;
-      const f0bin = bins[fund];
-      let kept = 0;
-      for (let i = 0; i < count; i++) {
-        let harmonic = false;
-        if (i !== fund && f0bin > 0.0) {
-          const ratio = bins[i] / f0bin;
-          const h = Math.round(ratio);
-          harmonic = h >= 2
-            && Math.abs(ratio - h) * f0bin < MIN_TONE_SEP_BINS
-            && lvls[i] < lvls[fund] - HARMONIC_REJECT_BELOW_DB;
+    // The published product grid a·κ1 + b·κ2 when a dual pair is pinned; F2 - the
+    // (0,1) entry - is a fundamental and joins unconditionally.
+    const pa = r.imdProductA;
+    const pb = r.imdProductB;
+    if (this._accumKappa2 > 0.0 && pa != null && pb != null) {
+      for (let p = 0; p < pa.length; p++) {
+        const kappaP = pa[p] * kappa + pb[p] * this._accumKappa2;
+        if (kappaP < 1.0 || kappaP > halfSize - 1.0) continue;
+        const exempt = pa[p] === 0 && pb[p] === 1;
+        const est = this._forkLineOffset(r, halfSize, delta, kappaP, minPow, exempt);
+        if (est != null) {
+          sumW += est[0];
+          sumWOff += est[0] * est[1];
         }
-        if (!harmonic) { bins[kept] = bins[i]; lvls[kept] = lvls[i]; kept++; }
       }
-      count = kept;
     }
-    // Sort the kept tones by bin ascending (needed by the region walk).
-    for (let i = 1; i < count; i++) {
-      const b = bins[i], l = lvls[i];
-      let j = i - 1;
-      while (j >= 0 && bins[j] > b) { bins[j + 1] = bins[j]; lvls[j + 1] = lvls[j]; j--; }
-      bins[j + 1] = b; lvls[j + 1] = l;
-    }
-    const out = new Float64Array(count);
-    for (let i = 0; i < count; i++) out[i] = this._refineBin(db, bins[i], halfSize);
-    return out;
+    return sumWOff / sumW;
   }
 
-  /** 3-point parabolic peak interpolation (on dB) around bin k (Java refineBin). */
-  _refineBin(db, k, halfSize) {
-    if (k <= 1 || k >= halfSize) return k;
-    const yl = db[k - 1], yc = db[k], yr = db[k + 1];
-    const denom = yl - 2.0 * yc + yr;
-    let d = (Math.abs(denom) < 1e-12) ? 0.0 : 0.5 * (yl - yr) / denom;
-    if (d < -0.5) d = -0.5;
-    if (d > 0.5) d = 0.5;
-    return k + d;
+  /**
+   * One fork line's [weight, offset-estimate] - or null when the line is below the
+   * admission level (unless `exempt`), out of range, or too close to the phase wrap
+   * this tick (Java forkLineOffset). The fresh phasor is de-rotated by the line's own
+   * family angle, exactly as the accumulator rotated its bin, so the two phases
+   * compare directly.
+   *
+   * @param {number} kappaL the line's fractional bin.
+   * @param {number} minPow the admission POWER floor.
+   * @param {boolean} exempt true for a line that joins regardless of level.
+   * @returns {?Array<number>} [weight, offset in samples], or null.
+   */
+  _forkLineOffset(r, halfSize, delta, kappaL, minPow, exempt) {
+    const k = Math.round(kappaL);
+    if (k <= 1 || k > halfSize) return null;
+    const pow = r.re[k] * r.re[k] + r.im[k] * r.im[k];
+    if (!exempt && pow < minPow) return null;
+    const size = this._accumFftSize;
+    const ang = -2.0 * Math.PI * ieeeRemainder(delta * kappaL, size) / size;
+    const c = Math.cos(ang), s = Math.sin(ang);
+    const obs = Math.atan2(r.re[k] * s + r.im[k] * c, r.re[k] * c - r.im[k] * s);
+    const accumPhase = Math.atan2(this._accumIm[k], this._accumRe[k]);
+    const res = ieeeRemainder(obs - accumPhase, 2.0 * Math.PI);
+    if (Math.abs(res) > FORK_WRAP_GUARD_RAD) return null;
+    return [kappaL * kappaL * pow, res * size / (2.0 * Math.PI * kappaL)];
+  }
+
+  /**
+   * Fills the family scratch (_famPos / _famCos / _famSin) with the COHERENT FAMILY
+   * sorted by position (Java FftAnalyzerWorker.buildFamily): the harmonic ladder
+   * h·κ - h = 0 IS a member, carrying the identity phasor and covering DC and the
+   * deep bass side - merged with the published intermodulation grid a·κ1 + b·κ2
+   * when a dual pair is pinned. Phasors: the ladder by incremental recurrence from
+   * Φ1, the grid members directly from a·Φ1 + b·Φ2.
+   *
+   * @param {object} r the per-window result (its imdProductA / imdProductB carry
+   *        the published product grid).
+   * @param {number} halfSize fftSize/2 - the top bin of the half spectrum.
+   * @param {number} phi1 the pinned fundamental's phase advance for this tick.
+   * @param {number} phi2 the second fundamental's; 0 when the run is single-tone.
+   * @returns {number} the member count; 0 when no fundamental is pinned (the caller
+   *          then adds without rotation).
+   */
+  _buildFamily(r, halfSize, phi1, phi2) {
+    const kappa = this._accumKFractional;
+    if (!(kappa > 0.0)) return 0;
+    // The divisor is FRACTIONAL: the ladder must stop at the last harmonic that
+    // still lands inside the half spectrum, not at a rounded multiple of it.
+    const hMax = Math.trunc(Math.min(halfSize, halfSize / kappa));
+    const pa = r.imdProductA;
+    const pb = r.imdProductB;
+    const products = this._accumKappa2 > 0.0 && pa != null && pb != null && pa.length > 0;
+    const cap = hMax + 1 + (products ? pa.length : 0);
+    if (this._famPos.length < cap) {
+      this._famPos = new Float64Array(cap);
+      this._famCos = new Float64Array(cap);
+      this._famSin = new Float64Array(cap);
+    }
+    const famPos = this._famPos, famCos = this._famCos, famSin = this._famSin;
+    // The grid members, position-sorted (a handful of entries).
+    let nP = 0;
+    let pPos = null;
+    let pAng = null;
+    if (products) {
+      pPos = new Float64Array(pa.length);
+      pAng = new Float64Array(pa.length);
+      for (let p = 0; p < pa.length; p++) {
+        const posP = pa[p] * kappa + pb[p] * this._accumKappa2;
+        if (posP < 1.0 || posP > halfSize - 1) continue;
+        pPos[nP] = posP;
+        pAng[nP] = ieeeRemainder(pa[p] * phi1 + pb[p] * phi2, 2.0 * Math.PI);
+        nP++;
+      }
+      for (let i = 1; i < nP; i++) {
+        const vp = pPos[i];
+        const va = pAng[i];
+        let j = i - 1;
+        while (j >= 0 && pPos[j] > vp) {
+          pPos[j + 1] = pPos[j];
+          pAng[j + 1] = pAng[j];
+          j--;
+        }
+        pPos[j + 1] = vp;
+        pAng[j + 1] = va;
+      }
+    }
+    // Merge the (already ascending) ladder with the sorted grid members; the ladder
+    // phasor h·Φ1 advances by an incremental complex multiply.
+    const c1 = Math.cos(phi1), s1 = Math.sin(phi1);
+    let ch = 1.0, sh = 0.0;
+    let n = 0;
+    let pi = 0;
+    for (let h = 0; h <= hMax; h++) {
+      const hp = h * kappa;
+      while (pi < nP && pPos[pi] <= hp) {
+        famPos[n] = pPos[pi];
+        famCos[n] = Math.cos(pAng[pi]);
+        famSin[n] = Math.sin(pAng[pi]);
+        n++;
+        pi++;
+      }
+      famPos[n] = hp;
+      famCos[n] = ch;
+      famSin[n] = sh;
+      n++;
+      const next = ch * c1 - sh * s1;
+      sh = ch * s1 + sh * c1;
+      ch = next;
+    }
+    while (pi < nP) {
+      famPos[n] = pPos[pi];
+      famCos[n] = Math.cos(pAng[pi]);
+      famSin[n] = Math.sin(pAng[pi]);
+      n++;
+      pi++;
+    }
+    return n;
   }
 
   /**

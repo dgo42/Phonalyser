@@ -14,6 +14,7 @@
 import { FftAnalyzer } from './fft-analyzer.js';
 import { FftResult } from './fft-result.js';
 import { FftAccumulator } from './fft-accumulator.js';
+import { minHopSamples, maxHopSamples, OVERLAP_FRACTION, RAND_HOP_STEPS } from './fft-overlap.js';
 import { isDualTone } from '../generator/dds-kernel.js';
 import { OVERRUN } from '../audio/signal-buffer-reader.js';
 import { MainsCombFilter, DEFAULT_NOTCH_BANDWIDTH_HZ } from '../dsp/mains/comb-filter.js';
@@ -72,10 +73,6 @@ const MAINS_TRACK_TICK_INTERVAL = 5;
  *  DISPLAY_MAX_NANOS = 500_000_000L (≥2 Hz even while behind). */
 const DISPLAY_MIN_MS = 40;    // ≤25 Hz refresh when keeping up
 const DISPLAY_MAX_MS = 500;   // ≥2 Hz even while behind
-/** Maps the FftOverlap enum token to its overlap fraction (for the hop math). */
-const OVERLAP_FRACTION = {
-  PCT_0: 0.0, PCT_50: 0.5, PCT_75: 0.75, PCT_87_5: 0.875, PCT_93_75: 0.9375,
-};
 
 export class FftController {
   /**
@@ -266,7 +263,7 @@ export class FftController {
   _restartWindow() {
     const reader = this._fftReader;
     if (reader) { reader.seekToLatest(); this._absNextSample = reader.getReadPos(); }
-    this.bufFilled = 0; this.bufW = 0; this._refill = this.hop;
+    this.bufFilled = 0; this.bufW = 0; this._refill = this.maxHop;
     this._winAbsStart = 0; this._dispatchedOnce = false;
   }
 
@@ -312,8 +309,12 @@ export class FftController {
     if (this._fftReader.available() === OVERRUN) return -1.0;   // overrun -> negative, distinct from "no fresh samples"
     let have, want;
     if (this._dispatchedOnce) {              // winValid: each tick needs one fresh hop
-      want = this.hop;
-      have = this.hop - this._refill;        // samples buffered toward the next hop dispatch
+      // The hop actually being gathered - the DRAWN pending hop, not a
+      // recomputation from the settings (under the random overlap the two differ
+      // every tick, and even for a fixed mode the preference can change ahead of
+      // the next tick).
+      want = Math.max(1, this.pendingHop);
+      have = want - this._refill;            // samples buffered toward the next hop dispatch
     } else {                                 // building the first window: needs a full bufLen
       want = this.bufLen;
       have = this.bufFilled;
@@ -337,9 +338,11 @@ export class FftController {
     return null;
   }
 
-  /** Pushes a live multi-tone-detect-threshold pref change into the running
-   *  accumulator (Java reads Preferences#getFftStrongToneRelDb live in
-   *  detectStrongTones). Takes effect on the next accumulator restart. */
+  /** Pushes a live fork-admission-threshold pref change into the running
+   *  accumulator: a family line joins the pooled tracking estimate when its fresh
+   *  level is within this many dB below the fundamental's (Java reads
+   *  Preferences#getFftStrongToneRelDb live inside forkPooledOffset, so the web
+   *  pushes it here on the pref-change listener). Takes effect on the next tick. */
   setStrongToneRelDb(db) { if (this._accum) this._accum.setStrongToneRelDb(db); }
 
   /** Step 5b parity harness (FOLD_IN_WORKER): assert the worker's SHADOW cross-tick fold
@@ -473,11 +476,22 @@ export class FftController {
     // targetN scaling - see _onWorkerResult - bounds the depth to it.)
     this.avgTarget = this.foreverMode ? Infinity : this.ringN;
     this._computeAnalysisFreqs();
-    const overlapFrac = OVERLAP_FRACTION[c.overlap] || 0.0;
-    this.hop = Math.max(1, Math.round(this.N * (1 - overlapFrac)));
-    this.overlapPct = overlapFrac * 100;
+    // Hop bounds from the MODE itself: a fixed overlap has one hop (both bounds
+    // coincide), the random mode spans its percent range. The window is sized
+    // ONCE for the LARGEST possible hop, so it never resizes while a drawn hop's
+    // gather is in flight (a mid-gather resize would discard the partial fill and
+    // tear the contiguous stream the de-rotation depends on).
+    this.minHop = minHopSamples(c.overlap, this.N);
+    this.maxHop = maxHopSamples(c.overlap, this.N);
+    // The hop the window slides by next - drawn per tick in the random overlap
+    // mode, constant otherwise. FROZEN while its gather is in flight: it is
+    // redrawn only after the slide it sizes has completed. It is also the spacing
+    // the analysis states for its frame pair, so the second frame of one tick is
+    // exactly the first frame of the next. 0 until the first window is built.
+    this.pendingHop = 0;
+    this.overlapPct = OVERLAP_FRACTION[c.overlap] * 100;
 
-    // Per-tick window = N + (perTickFrames−1)·hop samples - sized to ~1-2 frames
+    // Per-tick window = N + (perTickFrames−1)·maxHop samples - sized to ~1-2 frames
     // INDEPENDENT of the averaging depth (Java: needed = N + (frames−1)·hop, with
     // frames = coherent ? 2 : 1). The cross-tick running accumulator (this._accum)
     // supplies the depth, so the FIRST spectrum lands in <0.2 s at any averaging
@@ -487,12 +501,13 @@ export class FftController {
     // per tick to the cross-tick accumulator; no averaging needs only 1.
     const accumulate = this.foreverMode || this.ringN >= 2;
     const perTickFrames = accumulate ? 2 : 1;
-    this.bufLen = this.N + (perTickFrames - 1) * this.hop;
+    this.perTickFrames = perTickFrames;
+    this.bufLen = this.N + (perTickFrames - 1) * this.maxHop;
     this.buf = new Float64Array(this.bufLen);
     this.bufW = 0; this.bufFilled = 0;
     // Fresh Record session -> fresh accumulator (Java start() resetStatistics).
-    // Seed the multi-tone detect threshold live from the pref (Java reads
-    // Preferences#getFftStrongToneRelDb in detectStrongTones); a running change
+    // Seed the fork's line-admission threshold live from the pref (Java reads
+    // Preferences#getFftStrongToneRelDb inside forkPooledOffset); a running change
     // re-pushes via setStrongToneRelDb (app.js pref-change listener).
     this._accum.setStrongToneRelDb(this.config.fftStrongToneRelDb ?? 100.0);
     this._accum.reset();
@@ -503,7 +518,10 @@ export class FftController {
     this._lastRingN = -1;
     // Absolute sample position of the window currently in `buf` (for the cross-tick
     // de-rotation delta). The first dispatched window starts at 0; each later one
-    // advances exactly one hop - a uniform delta keeps the per-lobe rotation exact.
+    // advances by the hop that was just consumed - the de-rotation rides each
+    // tick's ABSOLUTE sample position, so a per-tick VARIABLE hop stays exact as
+    // long as the stream remains gap-free (which is why the pending hop is frozen
+    // until its gather completes).
     this._winAbsStart = 0;
     this._dispatchedOnce = false;
     this._drainSkipRemaining = 0;   // fresh session anchors clean - nothing to drain
@@ -528,7 +546,7 @@ export class FftController {
     this.warmup = Math.round(c.inRate * Math.max(0, c.warmupMs) / 1000);
     this._lastShowMs = 0;   // fresh session -> the first result displays immediately (Java lastShowNanos 0)
     this._fftFps = 0; this._fftCount = 0; this._fftWinT0 = 0; this._workerMs = 0;
-    this._busy = false; this._dispatchId = 0; this.dropped = 0; this._refill = this.hop;
+    this._busy = false; this._dispatchId = 0; this.dropped = 0; this._refill = this.maxHop;
 
     // Worker-pool sizing - see _poolSizeFor. The pool itself lives INSIDE
     // fft-worker.js (nested workers) - the main thread only posts one message per tick,
@@ -541,7 +559,35 @@ export class FftController {
     const workerUrl = new URL('./fft-worker.js', import.meta.url);
     this.worker = new Worker(workerUrl, { type: 'module' });
     this.worker.onmessage = (e) => this._onWorkerResult(e.data);
-    this.worker.onerror = (ev) => console.error('fft-worker', ev.message);
+    this.worker.onerror = (ev) => this._onWorkerError(ev);
+  }
+
+  /** A TOP-LEVEL worker failure - a module that will not load, an uncaught throw on
+   *  the analysis thread. It arrives here instead of as a posted result, so the tick
+   *  that was in flight will never reply. Treat it as a completed tick that produced
+   *  nothing: the same seam a posted {error} takes, which clears the in-flight flag
+   *  and resumes the feed.
+   *
+   *  Leaving it as a bare log would strand the flag set forever, and since the feed's
+   *  busy gate sits BEFORE the overrun check the consumer would then stop consuming
+   *  altogether - no window analysed, no overrun ever detected, no further word to
+   *  the operator. Java's workerLoop catches the analysis and keeps ticking; this is
+   *  that catch. The retry is self-limiting: a further dispatch needs a whole fresh
+   *  hop, so a permanently broken worker errors at the capture rate, not in a spin.
+   *
+   *  The banner is the one part with no desktop counterpart, and it covers a failure
+   *  mode the desktop cannot have. Java's catch guards ONE tick on a live in-process
+   *  thread, so the next tick normally succeeds and a log line is proportionate. This
+   *  handler also fires when the worker MODULE fails to load, and then no tick will
+   *  ever succeed: the retry keeps the pump moving but every window analyses to
+   *  nothing, leaving a frozen spectrum that still looks like a running measurement.
+   *  Publishing on the pane's existing warn channel is what separates that from a
+   *  quiet signal. Re-publishing per failed tick costs nothing - showWarnBanner just
+   *  re-sets the same text - and a lane that stays dead should keep saying so. */
+  _onWorkerError(ev) {
+    const msg = (ev && ev.message) ? ev.message : 'worker failed';
+    MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, 'web.fft.warning.workerError');
+    this._onWorkerResult({ error: 'fft-worker: ' + msg });
   }
 
   /** Kills the FFT analyzer worker (its nested pool sub-workers die with it). */
@@ -591,17 +637,21 @@ export class FftController {
     this.foreverMode = c.averages === Infinity || !Number.isFinite(c.averages);
     this.ringN = this.foreverMode ? 1 : Math.max(1, c.averages | 0);
     this.avgTarget = this.foreverMode ? Infinity : this.ringN;
-    // Hop / window geometry off the live overlap + averaging state.
-    const overlapFrac = OVERLAP_FRACTION[c.overlap] || 0.0;
-    const hop = Math.max(1, Math.round(this.N * (1 - overlapFrac)));
+    // Hop bounds / window geometry off the live overlap + averaging state.
+    const minHop = minHopSamples(c.overlap, this.N);
+    const maxHop = maxHopSamples(c.overlap, this.N);
     const accumulate = this.foreverMode || this.ringN >= 2;
-    const bufLen = this.N + ((accumulate ? 2 : 1) - 1) * hop;
-    if (hop !== this.hop || bufLen !== this.bufLen) {
-      this.hop = hop;
-      this.overlapPct = overlapFrac * 100;
+    const perTickFrames = accumulate ? 2 : 1;
+    const bufLen = this.N + (perTickFrames - 1) * maxHop;
+    this.perTickFrames = perTickFrames;
+    if (minHop !== this.minHop || maxHop !== this.maxHop || bufLen !== this.bufLen) {
+      this.minHop = minHop;
+      this.maxHop = maxHop;
+      this.pendingHop = 0;        // redrawn when the rebuilt window completes
+      this.overlapPct = OVERLAP_FRACTION[c.overlap] * 100;
       this.bufLen = bufLen;
       this.buf = new Float64Array(bufLen);
-      this.bufW = 0; this.bufFilled = 0; this._refill = hop;
+      this.bufW = 0; this.bufFilled = 0; this._refill = maxHop;
       this._winAbsStart = 0; this._dispatchedOnce = false;
       this._accumEpoch++;       // drop ONLY the in-flight old-geometry window
       this._accum.onResync();   // re-anchor κ slope + PLL; the collected DEPTH survives
@@ -637,8 +687,22 @@ export class FftController {
       MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED);
       return;
     }
+    // ANALYSIS IN FLIGHT -> consume NOTHING. Java's worker gathers and analyses on
+    // one thread, so a window that comes due is always the next one analysed and the
+    // spacing between analysed windows is exactly the hop. The web's analysis is
+    // asynchronous, so the only way to keep that invariant is to leave the cursor
+    // where it is: the backlog waits in the capture ring instead of being read and
+    // thrown away. Reading it and dropping the window would space the analysed
+    // windows by hop x (1 + drops) - an irregular multiple set by main-thread load,
+    // which randomises the overlap at EVERY setting and hides the periodic floor
+    // structure that a fixed high overlap is supposed to show. If the analysis
+    // genuinely cannot keep up the ring laps the cursor, which is Java's own outcome
+    // and is already handled below as an overrun, with its re-sync banner.
+    if (this._busy) return;
     // Live settings re-derive (overlap hop / averages targets / threads pool / align
     // transition) - the Java worker re-reads Preferences every tick; NO reset here.
+    // Between ticks, never during one: the busy gate above guarantees no analysis is
+    // in flight when the geometry is re-derived.
     this._syncLiveConfig();
     let avail = reader.available();
     if (avail === OVERRUN) { this._onOverrun(); return; }
@@ -654,7 +718,13 @@ export class FftController {
       if (got > 0) this._drainSkipRemaining -= got;
       return;
     }
-    if (!this._fftReadBuf || this._fftReadBuf.length < avail) this._fftReadBuf = new Float64Array(avail);
+    // Read only as far as the NEXT window needs (Java gathers exactly `needed` for
+    // the first window and exactly one hop for each one after, then analyses). Taking
+    // the whole backlog instead would bring several windows due inside one
+    // _accumulate pass, and only the first of them could be dispatched - the rest
+    // would have to be dropped, which is the spacing defect this bound removes.
+    const want = Math.min(avail, this._samplesToNextDispatch());
+    if (!this._fftReadBuf || this._fftReadBuf.length < want) this._fftReadBuf = new Float64Array(want);
     const tmpR = this._fftReadBuf;
     // Absolute capture position of samples[0] (= the readPos before this consuming
     // read) - the timebase the FLL transport gate compares window starts against.
@@ -662,10 +732,21 @@ export class FftController {
     // Read the SELECTED channel (Java FftAnalyzerWorker:1592
     // rdr.read(needed, wantLeft ? winBuf : null, wantLeft ? null : winBuf)):
     // L -> ch0 fills the left arg, R -> ch1 fills the right arg. Consuming forward read.
-    const n = this._wantLeft ? reader.read(avail, tmpR, null) : reader.read(avail, null, tmpR);
+    const n = this._wantLeft ? reader.read(want, tmpR, null) : reader.read(want, null, tmpR);
     if (n === OVERRUN) { this._onOverrun(); return; }
     this._absNextSample = absBase;
     this._accumulate(tmpR, n);
+  }
+
+  /** Samples still owed before the next window comes due - the read bound that keeps
+   *  at most ONE window due per feed. Before the first dispatch that is whatever the
+   *  buffer still lacks, but never less than the warmup span (warmup samples fill the
+   *  ring yet cannot dispatch); afterwards it is the countdown to the drawn hop. */
+  _samplesToNextDispatch() {
+    if (!this._dispatchedOnce) {
+      return Math.max(this.warmup + 1, this.bufLen - this.bufFilled);
+    }
+    return Math.max(1, this._refill);
   }
 
   /** Ring overrun: the writer lapped the cursor (the analyser fell a full ring
@@ -712,8 +793,22 @@ export class FftController {
     MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, 'fft.warning.discontinuity');
   }
 
+  /** One hop from the derived bounds (Java FftAnalyzerWorker.drawHop): the single
+   *  fixed value when they coincide; for the random overlap a uniform draw over
+   *  the mode's hop lattice - the range split into RAND_HOP_STEPS equal parts,
+   *  the hop landing on a part boundary (the largest value is the max hop itself;
+   *  the bare min hop is not drawn). Seeding is irrelevant to the measurement -
+   *  the de-rotation is exact for any hop; the draw only decides WHICH spacings
+   *  occur. */
+  _drawHop() {
+    const min = this.minHop, max = this.maxHop;
+    if (min >= max) return min;
+    const quantum = Math.max(1, Math.trunc((max - min) / RAND_HOP_STEPS));
+    return Math.min(max, min + (1 + Math.floor(Math.random() * RAND_HOP_STEPS)) * quantum);
+  }
+
   /** Accumulate `n` contiguous samples into the analysis ring and dispatch a
-   *  window every `hop` samples once the ring has filled. Identical buffer-and-
+   *  window every drawn hop once the ring has filled. Identical buffer-and-
    *  analyze logic the fused engine ran per chunk, now fed from the FFT cursor. */
   _accumulate(samples, n) {
     const L = this.bufLen;
@@ -727,13 +822,18 @@ export class FftController {
       // 100 % for one more hop before anything was analysed - 42 s at 4 M / 50 % /
       // 48 kS/s, and again after every restart.
       if (this.bufFilled >= L && (!this._dispatchedOnce || --this._refill <= 0)) {
-        this._refill = this.hop;
-        // Uniform-hop absolute window start (the cross-tick de-rotation delta).
-        // First dispatched window starts at 0; each later one advances one hop -
-        // a uniform delta is what keeps the accumulator's per-lobe rotation exact.
-        const absStart = this._dispatchedOnce ? (this._winAbsStart + this.hop) : 0;
+        // Absolute window start (the cross-tick de-rotation delta): the first
+        // dispatched window starts at 0; each later one advances by the hop the
+        // completed slide just consumed - the pending hop, still frozen at the
+        // value drawn after the PREVIOUS slide.
+        const absStart = this._dispatchedOnce ? (this._winAbsStart + this.pendingHop) : 0;
         this._winAbsStart = absStart;
         this._dispatchedOnce = true;
+        // The slide is complete - draw the NEXT hop. It is the spacing this
+        // tick's analysis states for its frame pair, so the second frame lands
+        // exactly where the next tick's first frame will.
+        this.pendingHop = this._drawHop();
+        this._refill = this.pendingHop;
         // Absolute capture position of this window's first sample (the FLL transport
         // timebase): samples[i] sits at _absNextSample + i, and this window ends at it.
         const absCapStart = (this._absNextSample + i) - (this.bufLen - 1);
@@ -805,11 +905,17 @@ export class FftController {
     return dbv - (c.dbvOffsetDb || 0);   // NaN propagates
   }
 
-  /** Hands the current window to the analyzer (one analysis in flight at a time;
-   *  drop the tick while busy so capture can't back up). Routes to the worker
-   *  POOL when poolSize > 1, else the classic single-worker path. */
+  /** Hands the current window to the analyzer. Routes to the worker POOL when
+   *  poolSize > 1, else the classic single-worker path.
+   *
+   *  There is NO busy check here: feedFft consumes nothing while an analysis is in
+   *  flight and reads only as far as the next window, so exactly one window can be
+   *  due per feed and it is always dispatched. A window that came due and was
+   *  discarded would space the analysed windows by a multiple of the hop, which is
+   *  the one thing the fixed overlaps must not do. The only remaining drop is the
+   *  no-worker case below - the analyser is torn down, so there is nothing to run
+   *  the tick on, which is Java's stopped-worker-thread state. */
   _dispatch(absStart, absCapStart) {
-    if (this._busy) { this.dropped++; return; }
     const L = this.bufLen, snap = new Float64Array(L);
     snap.set(this.buf.subarray(this.bufW));
     snap.set(this.buf.subarray(0, this.bufW), L - this.bufW);
@@ -851,6 +957,11 @@ export class FftController {
     this.worker.postMessage({
       id: this._dispatchId++, samples: snap, sampleRate: c.inRate, fftSize: this.N,
       harmonicCount: c.harmonicCount, windowType: c.window, overlap: c.overlap,
+      // Stated frame geometry (Java analyze's step + frameCount): the spacing is
+      // this tick's DRAWN pending hop - so the second frame is exactly the next
+      // tick's first - and the count is stated because the window is sized for
+      // the LARGEST hop, which would over-count under the random overlap.
+      step: this.pendingHop, frameCount: this.perTickFrames,
       snrFreqMin: c.snrFreqMin || 0, snrFreqMax: c.snrFreqMax || 0, coherentAveraging: this.config.coherent,
       // Generator FREQUENCY hint - gated on the generator ACTUALLY RUNNING as well as the
       // pref, exactly as Java (FftAnalyzerWorker:1697-1714: `genActive && prefs
@@ -900,8 +1011,22 @@ export class FftController {
     }, [snap.buffer]);
   }
 
+  /** Worker reply seam: clears the in-flight flag, folds the tick in, then resumes
+   *  the feed at once - Java's loop gathers the next hop the instant the analysis
+   *  returns, and waiting for the next capture batch instead would cap the analysis
+   *  rate at one window per batch event and let a backlog build for no reason. The
+   *  fold runs through _handleWorkerResult; the resume happens whichever way it
+   *  leaves (a gate firing or an epoch drop still owes the next window). */
   _onWorkerResult(r) {
     this._busy = false;
+    try {
+      this._handleWorkerResult(r);
+    } finally {
+      this.feedFft();
+    }
+  }
+
+  _handleWorkerResult(r) {
     if (!this._fftOn) return;
     if (r.error) { console.error('analyze', r.error); return; }
 
@@ -954,6 +1079,11 @@ export class FftController {
       // spectral gate below, and the block is dropped before it can fold in.
       if (USE_TIME_DISCONTINUITY && r.timeDiscontinuity) {
         console.info('Time-domain discontinuity in the tick window - re-sync');
+        // The tick BEFORE this one shared nearly all of its samples, so the event
+        // sat at its window's taper edge - under the gate thresholds, but still
+        // poisoning the average. Take it back out (Java calls this at BOTH gates,
+        // before the re-sync).
+        this._accum.subtractPreviousTicks();
         this._onSignalDiscontinuity();
         return;
       }
@@ -976,6 +1106,7 @@ export class FftController {
             + ` score ${d.lastScore != null ? d.lastScore.toFixed(2) : '?'} thr ${d.lastScoreThresh != null ? d.lastScoreThresh.toFixed(2) : '?'}`
             + ` | power ${d.lastPowerDb != null ? d.lastPowerDb.toFixed(1) : '?'} med ${d.lastPowerMed != null ? d.lastPowerMed.toFixed(1) : '?'} thr ${d.lastPowerThresh != null ? d.lastPowerThresh.toFixed(1) : '?'}`
             + ` | pedestal ${Number.isFinite(d.lastPedestalExcess) ? d.lastPedestalExcess.toFixed(1) : '-'} thr ${Number.isFinite(d.lastPedestalThresh) ? d.lastPedestalThresh.toFixed(1) : '-'}`);
+          this._accum.subtractPreviousTicks();   // the poisoned preceding tick comes back out
           this._onSignalDiscontinuity();
           return;
         }
@@ -1299,9 +1430,12 @@ export class FftController {
       ppm: this.snapped > 0 ? this.fllErrHz / this.snapped * 1e6 : 0,
       genFreq: this.genFreq, rejected: this.rejectedCount,
     };
+    // The tick rate rides the hop actually gathered (the drawn pending hop), which
+    // under the random overlap changes every tick.
+    const liveHop = Math.max(1, this.pendingHop);
     r.perf = {
-      fftFps: this._fftFps, targetFps: c.inRate / this.hop, workerMs: this._workerMs,
-      dropped: this.dropped, threads: this.poolSize, overlapPct: this.overlapPct, hopMs: this.hop / c.inRate * 1000,
+      fftFps: this._fftFps, targetFps: c.inRate / liveHop, workerMs: this._workerMs,
+      dropped: this.dropped, threads: this.poolSize, overlapPct: this.overlapPct, hopMs: liveHop / c.inRate * 1000,
     };
     r.inRate = c.inRate; r.snapped = this.snapped;
     // The IMD table is computed off the DE-EMBEDDED spectrum, so it runs in the view correction

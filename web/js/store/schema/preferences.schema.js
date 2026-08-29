@@ -12,6 +12,7 @@
  * reader would reject must not validate here, and a key this build does not know
  * must still be allowed, because the reader keeps it and writes it back untouched.
  */
+import { FFT_OVERLAP_VALUES } from '../../fft/fft-overlap.js';
 
 export const PREFERENCES_SCHEMA = {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -734,9 +735,9 @@ export const PREFERENCES_SCHEMA = {
     },
     "fftOverlap": {
       "type": "string",
-      "enum": ["PCT_0", "PCT_50", "PCT_75", "PCT_87_5", "PCT_93_75"],
+      "enum": [...FFT_OVERLAP_VALUES],
       "default": "PCT_0",
-      "description": "How much each analysis block overlaps the previous one: none, 50, 75, 87.5 or 93.75 percent. Overlapping reuses samples the window would otherwise attenuate, so averages build faster at the price of more computation per second."
+      "description": "How much each analysis block overlaps the previous one: none, 50, 75, 87.5 or 93.75 percent, or RAND. Overlapping reuses samples the window would otherwise attenuate, so averages build faster at the price of more computation per second. RAND draws a fresh spacing for every block from a narrow range around 90 to 94 percent, so no fixed hop can beat against the signal."
     },
     "fftCoherentAveraging": {
       "type": "boolean",
@@ -1323,9 +1324,9 @@ export const PREFERENCES_SCHEMA = {
           },
           "overlap": {
             "type": "string",
-            "enum": ["PCT_0", "PCT_50", "PCT_75", "PCT_87_5", "PCT_93_75"],
+            "enum": [...FFT_OVERLAP_VALUES],
             "default": "PCT_0",
-            "description": "Overlap between consecutive analysis blocks: none, 50, 75, 87.5 or 93.75 percent."
+            "description": "Overlap between consecutive analysis blocks: none, 50, 75, 87.5 or 93.75 percent, or RAND for a spacing drawn afresh per block."
           },
           "coherentAveraging": {
             "type": "boolean",

@@ -30,6 +30,8 @@
 
 import { fft } from '../dsp/fft.js';
 import { FftResult } from './fft-result.js';
+import { hopSamples, minHopSamples } from './fft-overlap.js';
+import { ieeeRemainder } from '../dsp/mathutil.js';
 
 /** Lower edge (Hz) of the no-hint fundamental search: DC ... this is ignored so
  *  window leakage from a residual DC offset can't win the global max. */
@@ -40,11 +42,6 @@ const FUND_SEARCH_MAX_NYQUIST_FRACTION = 0.7;
 /** Shared empty grid published for non-dual-tone (or non-de-rotated) ticks. */
 const NO_IMD_PRODUCTS = new Int32Array(0);
 
-/** Maps a FftOverlap enum token (or a numeric fraction) to its overlap fraction. */
-const OVERLAP_FRACTION = {
-  PCT_0: 0.0, PCT_50: 0.5, PCT_75: 0.75, PCT_87_5: 0.875, PCT_93_75: 0.9375,
-};
-
 /** IEC 61672 analog A-weighting; R_A(f)^2 with the +2.00 dB 1 kHz normalization
  *  folded in, so A(1 kHz) = 0 dB. */
 const AW_POLE1_HZ = 20.6;
@@ -54,20 +51,19 @@ const AW_POLE4_HZ = 12194.0;
 const AW_NORM_1KHZ_DB = 2.00;
 const AW_NORM_POWER = Math.pow(10.0, AW_NORM_1KHZ_DB / 10.0);
 
-/** @returns {number} overlap fraction for `overlap` (enum token or number). */
-function overlapFraction(overlap) {
-  if (typeof overlap === 'number') return overlap;
-  const f = OVERLAP_FRACTION[overlap];
-  return f === undefined ? 0.0 : f;
-}
-
 /** How many bins the skirt-end walk must look ahead before declaring the floor
- *  reached (Java skirtLookAheadBins). With overlap, 1/(1-ovl) consecutive frames
- *  share a sample, so the averaged floor wobbles across that many bins; +2 guards
- *  the 0% case. 0%->3, 50%->4, 75%->6, 87.5%->10, 93.75%->18. */
-function skirtLookAheadBins(overlap) {
-  const denom = 1.0 - overlapFraction(overlap);
-  const framesSharing = denom > 0 ? Math.round(1.0 / denom) : 16;
+ *  reached (Java skirtLookAheadBins). Frames sharing samples = fftSize / step, so
+ *  the averaged floor wobbles across that many bins; +2 guards the 0%-overlap
+ *  case. 0%->3, 50%->4, 75%->6, 87.5%->10, 93.75%->18, random -> its densest
+ *  spacing. Callers pass the mode's SMALLEST possible spacing, not the drawn or
+ *  mean one: the walk must bridge the coarsest floor texture the mode can
+ *  produce, and random hopping is not credited with decorrelating it. An unknown
+ *  spacing (a loaded spectrum file without geometry headers) degrades to the
+ *  0%-overlap value. */
+function skirtLookAheadBins(fftSize, stepSamples) {
+  const framesSharing = stepSamples > 0
+    ? Math.max(1, Math.round(fftSize / stepSamples))
+    : 1;
   return framesSharing + 2;
 }
 
@@ -159,7 +155,7 @@ export class FftAnalyzer {
    * @param {number} fftSize       FFT frame length - must be a power of 2.
    * @param {number} harmonicCount number of harmonics to evaluate (2nd ... N-th).
    * @param {string|number} windowType WindowType enum token (e.g. "BH4").
-   * @param {string|number} overlap    FftOverlap enum token (e.g. "PCT_0") or fraction.
+   * @param {string} overlap         FftOverlap enum token (e.g. "PCT_0").
    * @param {number} [snrFreqMin=0]  lower bound for SNR noise integration in Hz (0 = no limit).
    * @param {number} [snrFreqMax=0]  upper bound for SNR noise integration in Hz (0 = no limit).
    * @param {boolean} [coherentAveraging=true] true = complex (coherent) averaging; false = power.
@@ -169,12 +165,17 @@ export class FftAnalyzer {
    *        not be lost to a louder spur); NaN = legacy loudest-bin behaviour.
    * @param {FftResult} [outResult] pool slot to write into; a fresh one is
    *        allocated when omitted.
+   * @param {?number} [step=null]       stated frame spacing in samples; null derives
+   *        it from a FIXED overlap (the random mode has none and throws).
+   * @param {?number} [frameCount=null] stated number of frames; null derives it
+   *        from the buffer length at the derived spacing.
    * @returns {FftResult} the populated result (`outResult` when supplied).
    */
   analyze(samples, sampleRate, fftSize, harmonicCount,
           windowType = 'HANN', overlap = 'PCT_0',
           snrFreqMin = 0.0, snrFreqMax = 0.0, coherentAveraging = true,
-          fundRefDbFs = NaN, expectedFundHz = NaN, outResult = new FftResult()) {
+          fundRefDbFs = NaN, expectedFundHz = NaN, outResult = new FftResult(),
+          step = null, frameCount = null) {
     // Serial reference path - the single-thread coordinator: run the
     // (single-threaded) prelude, accumulate the WHOLE frame range in one
     // partial, then finalize. The parallel pool runs the same three steps with
@@ -182,7 +183,8 @@ export class FftAnalyzer {
     // accumulatePartial / mergePartials / finalize) - summation is associative,
     // so the merged total is bit-for-bit the serial accumulation.
     const sp = this.prelude(samples, sampleRate, fftSize, harmonicCount,
-      windowType, overlap, coherentAveraging, expectedFundHz, outResult);
+      windowType, overlap, coherentAveraging, expectedFundHz, outResult,
+      step, frameCount);
     const partial = this.accumulatePartial(samples, 0, sp.frameCount, sp);
     return this.finalize(partial, sp, snrFreqMin, snrFreqMax, fundRefDbFs, outResult);
   }
@@ -199,21 +201,45 @@ export class FftAnalyzer {
    * worker so each derotates with the identical kFractional / kappa2 / IMD grid
    * and the GLOBAL frame index - only then does splitting the frames stay exact.
    *
+   * This is the web's ONE geometry authority (Java's single full analyze): the
+   * caller states the frame spacing `step` and the number of frames
+   * `frameCount`, so an over-sized buffer is never mis-read as extra frames.
+   * The analyser consumer states its per-tick DRAWN hop directly - under the
+   * random overlap the buffer's two frames are spaced by the hop drawn for the
+   * next tick, so the second frame is exactly the next tick's first. Passing
+   * null for either derives BOTH from a fixed overlap, which is Java's
+   * convenience overload; the random mode has no fixed spacing and refuses.
+   *
+   * @param {?number} [step=null]       stated frame spacing in samples.
+   * @param {?number} [frameCount=null] stated number of frames.
    * @returns {object} sharedParams (see field list at the end).
    */
   prelude(samples, sampleRate, fftSize, harmonicCount,
-          windowType, overlap, coherentAveraging, expectedFundHz, outResult) {
+          windowType, overlap, coherentAveraging, expectedFundHz, outResult,
+          step = null, frameCount = null) {
     if (popcount(fftSize) !== 1) {
       throw new Error('fftSize must be a power of 2, got: ' + fftSize);
     }
 
-    const step = Math.max(1, Math.round(fftSize * (1.0 - overlapFraction(overlap))));
-    const frameCount = samples.length >= fftSize
-      ? Math.trunc((samples.length - fftSize) / step) + 1
-      : 0;
-    if (frameCount === 0) {
+    // The one place a fixed overlap's spacing is derived: everything below runs
+    // on the stated geometry.
+    if (step == null || frameCount == null) {
+      step = hopSamples(overlap, fftSize);
+      frameCount = samples.length >= fftSize
+        ? Math.trunc((samples.length - fftSize) / step) + 1
+        : 0;
+    }
+    if (!(step >= 1)) {
+      throw new Error('Frame spacing must be positive, got: ' + step);
+    }
+    if (!(frameCount > 0) || samples.length < fftSize) {
       throw new Error('Signal too short for fftSize=' + fftSize +
         ': need at least ' + fftSize + ' samples, got ' + samples.length);
+    }
+    if ((frameCount - 1) * step + fftSize > samples.length) {
+      throw new Error('Stated geometry exceeds the buffer: ' + frameCount
+        + ' frames at step ' + step + ' need ' + ((frameCount - 1) * step + fftSize)
+        + ' samples, got ' + samples.length);
     }
 
     const freqRes = sampleRate / fftSize;
@@ -246,8 +272,6 @@ export class FftAnalyzer {
     }
 
     // --- Frame range (rejection off: the clean segment is the whole range) ----
-    const frameRe = new Float64Array(fftSize);
-    const frameIm = new Float64Array(fftSize);
     const bestStart = 0;
     const bestLen = frameCount;
 
@@ -263,7 +287,7 @@ export class FftAnalyzer {
     let s1Re = null;
     let s1Im = null;
     if (bestLen >= 2) {
-      const estStep = step > 0 ? step : fftSize;
+      const estStep = step;   // the stated spacing - validated positive above
       s1Re = new Float64Array(fftSize);
       s1Im = new Float64Array(fftSize);
       this._frameFft(samples, bestStart * step + estStep, fftSize, window, s1Re, s1Im);
@@ -279,19 +303,28 @@ export class FftAnalyzer {
     intFundBin = refIntBin;
 
     // --- Second tone (dual-/multi-tone): same clean-frame sub-bin estimate ----
+    // The hint is the COMMANDED second-tone frequency - set only when
+    // fund-from-generator is on AND the generator is internal. When it is absent
+    // (external generator, or that option off) but the signal IS dual-tone, DETECT
+    // the second tone from the CLEAN single frame: the pair is simply THE TWO
+    // STRONGEST TONES, so F2 is the strongest local maximum left once the
+    // fundamental's own peak is excluded. The exclusion is only the 2 bins either
+    // side of it - those ARE the same peak, not a partner. No minimum separation
+    // and no minimum level: a bass pair sits 8 bins apart at 41 and 89 Hz with 8k
+    // points at 48 kHz (5.86 Hz per bin), and a partner may be tens of dB down
+    // after the device under test attenuates it. The lower edge is a fixed 10 Hz
+    // guard keeping a residual DC offset's window-main-lobe leakage out of the
+    // contest.
     outResult.fundamental2HzRefined = NaN;
-    const SECOND_TONE_GUARD_BINS = 100;
     let effHint = this._secondToneHintHz;
     if (Number.isNaN(effHint) && this._multiTone && intFundBin > 0) {
-      const fundAmp2 = s0Re[intFundBin] * s0Re[intFundBin] + s0Im[intFundBin] * s0Im[intFundBin];
-      const thresh2 = fundAmp2 * 1e-4;                  // ≥ −40 dB of F1 -> a real tone
       const loB = Math.max(3, Math.ceil(10.0 / freqRes));
       let bestAmp2 = 0.0;
       let bestK = -1;
       for (let k = loB; k < halfSize; k++) {
-        if (Math.abs(k - intFundBin) <= SECOND_TONE_GUARD_BINS) continue;   // skip F1's lobe
+        if (Math.abs(k - intFundBin) <= 2) continue;   // F1's own peak, not a partner
         const a2 = s0Re[k] * s0Re[k] + s0Im[k] * s0Im[k];
-        if (a2 > bestAmp2 && a2 >= thresh2
+        if (a2 > bestAmp2
             && a2 >= s0Re[k - 1] * s0Re[k - 1] + s0Im[k - 1] * s0Im[k - 1]
             && a2 > s0Re[k + 1] * s0Re[k + 1] + s0Im[k + 1] * s0Im[k + 1]) {
           bestAmp2 = a2;
@@ -306,7 +339,9 @@ export class FftAnalyzer {
         const ri2 = peakBin(s0Re, s0Im, Math.max(1, k0b - 2), Math.min(halfSize, k0b + 2));
         let kf2;
         if (bestLen >= 2) {
-          const estStep = step > 0 ? step : fftSize;
+          // s1 was computed one frame after the segment base - the phase pair
+          // must state that SAME spacing.
+          const estStep = step;
           const p0 = Math.atan2(s0Im[ri2], s0Re[ri2]);
           const p1 = Math.atan2(s1Im[ri2], s1Re[ri2]);
           const exp2 = 2.0 * Math.PI * ri2 * estStep / fftSize;
@@ -320,7 +355,7 @@ export class FftAnalyzer {
     }
 
     // --- Full-integration κ refit (long-baseline) ----------------------------
-    if (coherentAveraging && bestLen >= 4 && step > 0) {
+    if (coherentAveraging && bestLen >= 4) {
       const kRefined = this._refineKappaOverSegment(samples, window, fftSize, step,
         bestStart, bestLen, refIntBin, kFractional);
       if (Math.abs(kRefined - kFractional) < 0.5) {     // sanity: reject a wild fit
@@ -328,73 +363,113 @@ export class FftAnalyzer {
       }
     }
 
-    // --- Dual-tone: choose F2's lobe de-rotation (individual κ vs single-ref) -
-    const F2_LOBE_HALF = 24;
-    let f2Individual = false;
-    let k2 = -1;
-    let kappa2 = 0.0;
-    if (coherentAveraging && bestLen >= 2 && !Number.isNaN(outResult.fundamental2HzRefined)
-        && outResult.fundamental2HzRefined > 0.0 && kFractional > 0.0) {
-      kappa2 = outResult.fundamental2HzRefined / freqRes;
-      k2 = Math.round(kappa2);
-      if (k2 >= 1 && k2 <= halfSize) {
-        const h2 = Math.max(1, Math.round(kappa2 / kFractional));
-        let saRe = 0.0, saIm = 0.0, sbRe = 0.0, sbIm = 0.0;
-        for (let f = bestStart; f < bestStart + bestLen; f++) {
-          const base = f * step;
-          this._frameFft(samples, base, fftSize, window, frameRe, frameIm);
-          const re = frameRe[k2], im = frameIm[k2];
-          const phiA = -2.0 * Math.PI * base * kFractional * h2 / fftSize;  // h·Φ(F1)
-          const phiB = -2.0 * Math.PI * base * kappa2 / fftSize;            // Φ(κ_F2)
-          const ca = Math.cos(phiA), sa = Math.sin(phiA);
-          const cb = Math.cos(phiB), sb = Math.sin(phiB);
-          saRe += re * ca - im * sa; saIm += re * sa + im * ca;
-          sbRe += re * cb - im * sb; sbIm += re * sb + im * cb;
-        }
-        f2Individual = Math.hypot(sbRe, sbIm) > Math.hypot(saRe, saIm);
-      }
-    }
-
-    // --- Build the IMD-product grid (only when F2 rides its own κ) ------------
-    const f2Kappa = kappa2;
-    let nProd = 0;
-    let prodA = null, prodB = null, imdIdx = null;
+    // --- Dual-tone: publish the intermodulation-product grid -----------------
+    // Every product a·κ_F1 + b·κ_F2 (b≠0, |a|+|b| ≤ order) that lands in band is
+    // listed with its bin, so the predistortion engine can read each product's
+    // phasor straight from re/im[bin]. The list doubles as the product part of
+    // pass 2's coherent family below: each entry becomes a de-rotation region of
+    // its own, rotated by a·Φ1 + b·Φ2. Default to "no products published":
+    // recycled result slots must not leak a previous dual-tone tick's grid into a
+    // single-tone tick.
     outResult.imdProductA = NO_IMD_PRODUCTS;
     outResult.imdProductB = NO_IMD_PRODUCTS;
     outResult.imdProductBin = NO_IMD_PRODUCTS;
-    if (f2Individual) {
-      const ORDER = Math.max(5, harmonicCount + 1);
-      const ta = new Int32Array((2 * ORDER + 1) * (2 * ORDER + 1));
-      const tb = new Int32Array(ta.length);
-      const tk = new Int32Array(ta.length);
-      let cap = 0;
-      for (let a = -ORDER; a <= ORDER; a++) {
-        for (let b = -ORDER; b <= ORDER; b++) {
-          if (b === 0 || Math.abs(a) + Math.abs(b) > ORDER) continue;
-          const kp = a * kFractional + b * kappa2;
-          if (kp < 1.0 || kp > halfSize) continue;
-          tk[cap] = Math.round(kp);
-          ta[cap] = a;
-          tb[cap] = b;
-          cap++;
+    if (coherentAveraging && bestLen >= 2 && !Number.isNaN(outResult.fundamental2HzRefined)
+        && outResult.fundamental2HzRefined > 0.0 && kFractional > 0.0) {
+      const kappa2 = outResult.fundamental2HzRefined / freqRes;
+      const k2 = Math.round(kappa2);
+      if (k2 >= 1 && k2 <= halfSize) {         // the second tone is present, in band
+        const ORDER = Math.max(5, harmonicCount + 1);
+        const ta = new Int32Array((2 * ORDER + 1) * (2 * ORDER + 1));
+        const tb = new Int32Array(ta.length);
+        const tk = new Int32Array(ta.length);
+        let cap = 0;
+        for (let a = -ORDER; a <= ORDER; a++) {
+          for (let b = -ORDER; b <= ORDER; b++) {
+            if (b === 0 || Math.abs(a) + Math.abs(b) > ORDER) continue;
+            const kp = a * kFractional + b * kappa2;
+            if (kp < 1.0 || kp > halfSize) continue;
+            tk[cap] = Math.round(kp);
+            ta[cap] = a;
+            tb[cap] = b;
+            cap++;
+          }
         }
-      }
-      prodA = ta.slice(0, cap);
-      prodB = tb.slice(0, cap);
-      nProd = cap;
-      outResult.imdProductA = prodA;
-      outResult.imdProductB = prodB;
-      outResult.imdProductBin = tk.slice(0, cap);
-      imdIdx = new Int32Array(fftSize).fill(-1);
-      for (let p = 0; p < cap; p++) {
-        const lo2 = Math.max(1, tk[p] - F2_LOBE_HALF);
-        const hi2 = Math.min(halfSize, tk[p] + F2_LOBE_HALF);
-        for (let k = lo2; k <= hi2; k++) imdIdx[k] = p;
+        outResult.imdProductA = ta.slice(0, cap);
+        outResult.imdProductB = tb.slice(0, cap);
+        outResult.imdProductBin = tk.slice(0, cap);
       }
     }
 
     const intFundBinRounded = Math.max(1, Math.round(kFractional));
-    const hMax = coherentAveraging ? Math.max(1, Math.trunc(halfSize / intFundBinRounded)) : 0;
+    // --- The coherent family for the region-constant de-rotation -------------
+    // Members carry their (a, b) COEFFICIENTS and their position, built ONCE per
+    // call, so every frame (and every pool worker, which receives this unchanged
+    // in sharedParams) re-derives the same phasors from its own Φ1/Φ2. Members:
+    // the harmonic ladder h·κ (h = 0 covers DC and the deep bass side with the
+    // identity phasor) merged position-sorted with the published product grid.
+    const f2Kappa = (outResult.imdProductBin.length > 0)
+      ? outResult.fundamental2HzRefined / freqRes : NaN;
+    let famCount = 0;
+    let famA = null, famB = null, famPos = null;
+    if (coherentAveraging && kFractional > 0.0) {
+      // The divisor is FRACTIONAL: the ladder stops at the last harmonic that
+      // still lands inside the half spectrum.
+      const hMaxT = Math.trunc(Math.min(halfSize, halfSize / kFractional));
+      const pa = outResult.imdProductA;
+      const pb = outResult.imdProductB;
+      const nGrid = (f2Kappa > 0.0) ? pa.length : 0;
+      const spA = new Int32Array(nGrid);
+      const spB = new Int32Array(nGrid);
+      const spP = new Float64Array(nGrid);
+      let nP = 0;
+      for (let p = 0; p < nGrid; p++) {
+        const posP = pa[p] * kFractional + pb[p] * f2Kappa;
+        if (posP < 1.0 || posP > halfSize - 1) continue;
+        spA[nP] = pa[p];
+        spB[nP] = pb[p];
+        spP[nP] = posP;
+        nP++;
+      }
+      for (let i = 1; i < nP; i++) {                   // position sort, tiny n
+        const ia = spA[i], ib = spB[i], ip = spP[i];
+        let j = i - 1;
+        while (j >= 0 && spP[j] > ip) {
+          spA[j + 1] = spA[j];
+          spB[j + 1] = spB[j];
+          spP[j + 1] = spP[j];
+          j--;
+        }
+        spA[j + 1] = ia;
+        spB[j + 1] = ib;
+        spP[j + 1] = ip;
+      }
+      famA = new Int32Array(hMaxT + 1 + nP);
+      famB = new Int32Array(famA.length);
+      famPos = new Float64Array(famA.length);
+      let pi2 = 0;
+      for (let h = 0; h <= hMaxT; h++) {
+        const hp = h * kFractional;
+        while (pi2 < nP && spP[pi2] <= hp) {
+          famA[famCount] = spA[pi2];
+          famB[famCount] = spB[pi2];
+          famPos[famCount] = spP[pi2];
+          famCount++;
+          pi2++;
+        }
+        famA[famCount] = h;
+        famB[famCount] = 0;
+        famPos[famCount] = hp;
+        famCount++;
+      }
+      while (pi2 < nP) {
+        famA[famCount] = spA[pi2];
+        famB[famCount] = spB[pi2];
+        famPos[famCount] = spP[pi2];
+        famCount++;
+        pi2++;
+      }
+    }
 
     // Everything the per-frame derotation (accumulatePartial) and the finalize
     // stats path need. Plain data only - safe to structured-clone to a worker.
@@ -403,8 +478,8 @@ export class FftAnalyzer {
       sampleRate, fftSize, harmonicCount, windowType, overlap,
       coherentAveraging, expectedFundHz,
       step, frameCount, freqRes, halfSize, window, cohGain, nenbw,
-      kFractional, intFundBinRounded, hMax,
-      f2Kappa, nProd, prodA, prodB, imdIdx,
+      kFractional, intFundBinRounded,
+      f2Kappa, famCount, famA, famB, famPos,
       fundSearchMinBin, fundSearchMaxBin,
     };
   }
@@ -425,62 +500,86 @@ export class FftAnalyzer {
    *          For incoherent averaging sumRe carries the power sum and sumIm is 0.
    */
   accumulatePartial(samples, frameStart, frameEnd, sp) {
-    const { fftSize, halfSize, step, window, coherentAveraging,
-            kFractional, intFundBinRounded, hMax,
-            f2Kappa, nProd, prodA, prodB, imdIdx } = sp;
+    const { fftSize, halfSize, step, window, windowType, coherentAveraging,
+            kFractional, intFundBinRounded,
+            f2Kappa, famCount, famA, famB, famPos } = sp;
     const sumRe = new Float64Array(fftSize);   // complex Re  OR  power (incoherent)
     const sumIm = new Float64Array(fftSize);   // complex Im  OR  unused (incoherent)
     const frameRe = new Float64Array(fftSize);
     const frameIm = new Float64Array(fftSize);
-    // Per-lobe constant-phase de-rotation: each bin is snapped to its nearest
-    // harmonic h = round(signed-freq-bin / k₀) and de-rotated by that lobe's
-    // CONSTANT phase h·Φ - NOT a per-bin frequency ramp (which would comb the
-    // leakage skirt).
-    const hc = coherentAveraging ? new Float64Array(2 * hMax + 1) : null;
-    const hs = coherentAveraging ? new Float64Array(2 * hMax + 1) : null;
+    // Region-constant de-rotation. A windowed tone's lobe - the peak and its
+    // off-centre bins together - advances by ONE common phase per frame step (the
+    // tone's own frequency times the step), so a per-bin ramp mis-rotates every
+    // off-centre lobe bin and the overlapped frame sum carves the lobe into a comb;
+    // a constant phasor per lobe keeps it intact under every window. The regions
+    // tile the spectrum at the MIDPOINTS between the coherent family's members,
+    // each member rotated by its derived phase a·Φ1 + b·Φ2 - so no edge is ever
+    // measured and no environmental line can earn a region of its own. The upper
+    // half of the full-length transform carries the NEGATIVE frequencies: a bin
+    // there belongs to the member at |kf| and rotates by the CONJUGATE phasor.
+    // RECT exception: on-bin content occupies single bins (no lobe to hold
+    // together) while the 1/Δf skirt crosses every region midpoint, which is where
+    // a piecewise rotation prints - so RECT keeps the per-bin time-shift ramp with
+    // the SIGNED bin index; tapered windows take the region-constant family.
+    const nFam = coherentAveraging ? famCount : 0;
+    const famC = nFam > 0 ? new Float64Array(nFam) : null;
+    const famS = nFam > 0 ? new Float64Array(nFam) : null;
+    const rectWin = windowType === 'RECT';
+    const rampScale = (kFractional > 0.0 && intFundBinRounded > 0)
+      ? kFractional / intFundBinRounded : 1.0;
     let acceptedFrames = 0;
     for (let f = frameStart; f < frameEnd; f++) {
       const base = f * step;
       this._frameFft(samples, base, fftSize, window, frameRe, frameIm);
-      if (coherentAveraging) {
-        // Φ = −2π·k_f·f·step/N - the fundamental's inter-frame phase advance;
-        // harmonic lobe h gets h·Φ. Cache exp(j·h·Φ) for h = −hMax..hMax (negative
-        // h is the conjugate: the real-spectrum image of harmonic h).
-        const phi = -2.0 * Math.PI * (f * step) * kFractional / fftSize;
-        const e1c = Math.cos(phi), e1s = Math.sin(phi);
-        hc[hMax] = 1.0; hs[hMax] = 0.0;
-        for (let h = 1; h <= hMax; h++) {
-          hc[hMax + h] = hc[hMax + h - 1] * e1c - hs[hMax + h - 1] * e1s;
-          hs[hMax + h] = hc[hMax + h - 1] * e1s + hs[hMax + h - 1] * e1c;
-          hc[hMax - h] = hc[hMax + h];           // exp(−j·h·Φ) = conjugate
-          hs[hMax - h] = -hs[hMax + h];
-        }
-        // IMD-grid de-rotation: each product lobe rides a·Φ(F1)+b·Φ(F2).
-        const phi2 = (imdIdx != null) ? -2.0 * Math.PI * (f * step) * f2Kappa / fftSize : 0.0;
-        const pcos = new Float64Array(nProd);
-        const psin = new Float64Array(nProd);
-        for (let p = 0; p < nProd; p++) {
-          const ph = prodA[p] * phi + prodB[p] * phi2;   // a·Φ(F1) + b·Φ(F2)
-          pcos[p] = Math.cos(ph);
-          psin[p] = Math.sin(ph);
-        }
-        const k0 = intFundBinRounded;
-        const half = halfSize;
-        for (let k = 0; k < fftSize; k++) {
-          let cr, ci;
-          const p = (imdIdx != null) ? imdIdx[k] : -1;
-          if (p >= 0) {
-            cr = pcos[p]; ci = psin[p];                  // IMD product: a·Φ1+b·Φ2
-          } else {
-            const kf = (k <= half) ? k : k - fftSize;    // signed frequency bin
-            let h = Math.round(kf / k0);                 // nearest harmonic lobe
-            if (h > hMax) h = hMax; else if (h < -hMax) h = -hMax;
-            cr = hc[h + hMax]; ci = hs[h + hMax];
+      if (coherentAveraging && rectWin) {
+        const thetaF = -2.0 * Math.PI * base * rampScale / fftSize;
+        const stepRe = Math.cos(thetaF), stepIm = Math.sin(thetaF);
+        // Two segments, each seeded on its own signed bin index: [0, halfSize] and
+        // [halfSize+1, fftSize) where the signed index is k - fftSize.
+        let seg = 0;
+        while (seg < fftSize) {
+          const segEnd = (seg <= halfSize) ? halfSize + 1 : fftSize;
+          const kfSeed = (seg <= halfSize) ? seg : seg - fftSize;
+          const ang = ieeeRemainder(thetaF * kfSeed, 2.0 * Math.PI);
+          let phRe = Math.cos(ang), phIm = Math.sin(ang);
+          for (let k = seg; k < segEnd; k++) {
+            sumRe[k] += frameRe[k] * phRe - frameIm[k] * phIm;
+            sumIm[k] += frameRe[k] * phIm + frameIm[k] * phRe;
+            const nextRe = phRe * stepRe - phIm * stepIm;
+            phIm = phRe * stepIm + phIm * stepRe;
+            phRe = nextRe;
           }
-          const cRe = frameRe[k] * cr - frameIm[k] * ci;
-          const cIm = frameRe[k] * ci + frameIm[k] * cr;
-          sumRe[k] += cRe;
-          sumIm[k] += cIm;
+          seg = segEnd;
+        }
+      } else if (coherentAveraging && nFam > 0) {
+        const phi1 = -2.0 * Math.PI * ieeeRemainder(base * kFractional, fftSize) / fftSize;
+        const phi2 = (f2Kappa > 0.0)
+          ? -2.0 * Math.PI * ieeeRemainder(base * f2Kappa, fftSize) / fftSize : 0.0;
+        for (let i = 0; i < nFam; i++) {
+          const ang = ieeeRemainder(famA[i] * phi1 + famB[i] * phi2, 2.0 * Math.PI);
+          famC[i] = Math.cos(ang);
+          famS[i] = Math.sin(ang);
+        }
+        // Lower half: |kf| = k ascends, the member cursor advances upward.
+        let c = 0;
+        for (let k = 0; k <= halfSize; k++) {
+          while (c < nFam - 1 && k > 0.5 * (famPos[c] + famPos[c + 1])) c++;
+          sumRe[k] += frameRe[k] * famC[c] - frameIm[k] * famS[c];
+          sumIm[k] += frameRe[k] * famS[c] + frameIm[k] * famC[c];
+        }
+        // Upper half: |kf| = fftSize - k DESCENDS as k ascends, so its cursor walks
+        // DOWNWARD and the phasor is applied CONJUGATED.
+        c = nFam - 1;
+        for (let k = halfSize + 1; k < fftSize; k++) {
+          while (c > 0 && fftSize - k <= 0.5 * (famPos[c - 1] + famPos[c])) c--;
+          sumRe[k] += frameRe[k] * famC[c] + frameIm[k] * famS[c];
+          sumIm[k] += -frameRe[k] * famS[c] + frameIm[k] * famC[c];
+        }
+      } else if (coherentAveraging) {
+        // No pinned fundamental: nothing coherent to align - add the frame straight.
+        for (let k = 0; k < fftSize; k++) {
+          sumRe[k] += frameRe[k];
+          sumIm[k] += frameIm[k];
         }
       } else {
         for (let k = 0; k < fftSize; k++) {
@@ -531,7 +630,7 @@ export class FftAnalyzer {
    * @returns {FftResult} `outResult`, populated.
    */
   finalize(merged, sp, snrFreqMin, snrFreqMax, fundRefDbFs, outResult) {
-    const { sampleRate, fftSize, harmonicCount, windowType, overlap,
+    const { sampleRate, fftSize, harmonicCount, windowType, overlap, step,
             coherentAveraging, expectedFundHz,
             freqRes, halfSize, cohGain, nenbw, kFractional,
             fundSearchMinBin, fundSearchMaxBin } = sp;
@@ -615,6 +714,7 @@ export class FftAnalyzer {
       outResult.freqResolution = freqRes;
       outResult.windowType = windowType;
       outResult.overlap = overlap;
+      outResult.stepSamples = step;
       outResult.fundamentalBin = fundBin;
       outResult.fundamentalHz = fundHz;
       outResult.fundamentalHzRefined = fundHzRefined;
@@ -630,6 +730,8 @@ export class FftAnalyzer {
       outResult.thdNDb = 300.0;
       outResult.snrDb = 300.0;
       outResult.sinadDb = 300.0;
+      outResult.awThdNDb = 300.0;
+      outResult.enobSinadDb = 300.0;
       outResult.noisePower = 0.0;
       outResult.windowNenbwBins = nenbw;
       outResult.awNoisePower = 0.0;
@@ -665,7 +767,8 @@ export class FftAnalyzer {
 
     // --- Noise floor + dynamic mask extension --------------------------------
     const nf = this._computeNoiseFloorAndExtendSignalMask(
-      amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS, skirtLookAheadBins(overlap));
+      amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS,
+      skirtLookAheadBins(fftSize, minHopSamples(overlap, fftSize)));
     const medianNoisePow = nf.medianNoisePow;
     const dynWidthBins = nf.dynWidthBins;
 
@@ -690,13 +793,31 @@ export class FftAnalyzer {
     awNoisePower /= nenbw;
     const snrDb = noisePower <= 0 ? 300.0 : 10.0 * Math.log10((refLin * refLin) / noisePower);
 
-    // SINAD: signal RMS² / (noise + in-band harmonic power) - basis for ENOB.
-    const sinadDenom = awNoisePower + awHarmPowerSum;
+    // SINAD: signal RMS² / (noise + distortion) - the integrated measurement-band
+    // noise plus the in-band harmonic power, UNWEIGHTED (the MT-003 definition;
+    // THD+N below is its reciprocal and ENOB derives from it - none of them
+    // carries a weighting curve).
+    const sinadDenom = noisePower + harmPowerSum;
     const sinadDb = sinadDenom > 0 ? 10.0 * Math.log10((refLin * refLin) / sinadDenom) : 300.0;
+    // A-weighted noise+distortion for the N+D readout ONLY - the one audibility
+    // figure (IEC 61672 supplies the curve; the weighting is this readout's own
+    // choice). Negative dB relative to the signal.
+    const awDenom = awNoisePower + awHarmPowerSum;
+    const awThdNDb = (awDenom > 0 && refLin > 0)
+      ? 10.0 * Math.log10(awDenom / (refLin * refLin)) : 300.0;
+    // ENOB basis: the SAME unweighted in-band denominator referred to FULL SCALE -
+    // where the signal level cancels exactly, because the denominator is already
+    // full-scale-relative power. No fundamental term appears, so neither the
+    // notched bin level nor the manual-fundamental reference can skew the figure
+    // under any de-embedding combination. Not the full Nyquist band: an
+    // oversampled sigma-delta parks its shaped noise above the audio band by
+    // design, and a full-band integral reads that as bits lost.
+    const enobSinadDb = sinadDenom > 0 ? -10.0 * Math.log10(sinadDenom) : 300.0;
     const avgNoiseFloorDbFs = medianNoisePow > 0
       ? 20.0 * Math.log10(Math.sqrt(medianNoisePow))
       : fundDbFs - 300.0;
-    // THD+N is the reciprocal of SINAD: −sinadDb.
+    // THD+N is the reciprocal of SINAD: (noise + distortion) / signal in dB, so
+    // −sinadDb. Same band, same numerator definition, unweighted like SINAD.
     const thdNDb = -sinadDb;
 
     // --- Write scalars (arrays already alias outResult) ----------------------
@@ -706,6 +827,7 @@ export class FftAnalyzer {
     outResult.freqResolution = freqRes;
     outResult.windowType = windowType;
     outResult.overlap = overlap;
+    outResult.stepSamples = step;
     outResult.fundamentalBin = fundBin;
     outResult.fundamentalHz = fundHz;
     outResult.fundamentalHzRefined = fundHzRefined;
@@ -717,6 +839,8 @@ export class FftAnalyzer {
     outResult.thdNDb = thdNDb;
     outResult.snrDb = snrDb;
     outResult.sinadDb = sinadDb;
+    outResult.awThdNDb = awThdNDb;
+    outResult.enobSinadDb = enobSinadDb;
     outResult.snrFreqMin = snrFreqMin;
     outResult.snrFreqMax = snrFreqMax;
     outResult.coherentAveraging = coherentAveraging;
@@ -850,7 +974,9 @@ export class FftAnalyzer {
     const EXCL_BINS = 4;
     const isSignalBin = this._buildSignalBinMask(halfSize, fundBin, r.harmonicBins, harmonicCount, EXCL_BINS);
     const medianNoisePow = this._computeNoiseFloorAndExtendSignalMask(
-      amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS, skirtLookAheadBins(r.overlap)).medianNoisePow;
+      amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS,
+      skirtLookAheadBins(r.fftSize, r.overlap != null
+        ? minHopSamples(r.overlap, r.fftSize) : r.stepSamples)).medianNoisePow;
 
     // --- SNR -----------------------------------------------------------------
     const awTable = this._aWeightTable(halfSize, freqRes);
@@ -870,11 +996,21 @@ export class FftAnalyzer {
     if (r.windowNenbwBins > 0) { noisePower /= r.windowNenbwBins; awNoisePower /= r.windowNenbwBins; }
     r.noisePower = noisePower;
     r.snrDb = noisePower <= 0 ? 300.0 : 10.0 * Math.log10((refLin * refLin) / noisePower);
-    const sinadDenom = awNoisePower + awHarmPowerSum;
+    // SINAD, UNWEIGHTED (MT-003) - see the analyze() pass; the A-curve exists only
+    // in the N+D figure below.
+    const sinadDenom = noisePower + harmPowerSum;
     r.sinadDb = sinadDenom > 0 ? 10.0 * Math.log10((refLin * refLin) / sinadDenom) : 300.0;
+    const awDenom = awNoisePower + awHarmPowerSum;
+    r.awThdNDb = (awDenom > 0 && refLin > 0)
+      ? 10.0 * Math.log10(awDenom / (refLin * refLin)) : 300.0;
+    // ENOB basis - the same unweighted in-band denominator referred to FULL SCALE,
+    // where the signal level cancels exactly; see the analyze() pass. No
+    // fundamental term, so no de-embedding combination can skew it.
+    r.enobSinadDb = sinadDenom > 0 ? -10.0 * Math.log10(sinadDenom) : 300.0;
     r.avgNoiseFloorDbFs = medianNoisePow > 0
       ? 20.0 * Math.log10(Math.sqrt(medianNoisePow))
       : fundDbFs - 300.0;
+    // THD+N is the reciprocal of SINAD: −sinadDb in dB.
     r.awNoisePower = awNoisePower;
     r.thdNDb = -r.sinadDb;
   }
@@ -1245,18 +1381,6 @@ function selectKth(a, len, k) {
     else return a[k];
   }
   return a[k];
-}
-
-/** Java Math.IEEEremainder(x, y): the remainder nearest to zero (round-half-even). */
-function ieeeRemainder(x, y) {
-  const r = x - y * Math.round(x / y);
-  // Math.round rounds .5 up; IEEEremainder rounds half to even. Correct the tie.
-  const q = x / y;
-  if (Math.abs(q - Math.trunc(q)) === 0.5) {
-    const n = 2 * Math.round(q / 2);   // nearest even
-    return x - y * n;
-  }
-  return r;
 }
 
 /** Math.toDegrees. */

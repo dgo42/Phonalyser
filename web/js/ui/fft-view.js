@@ -1189,7 +1189,8 @@ export class FftView {
       : this._imdPctText(pct);
   }
 
-  /** Java FftView.thdNPct - THD+N % from the N+D ratio in dB. */
+  /** Java FftView.thdNPct - THD+N as a percentage from the UNWEIGHTED thdNDb ratio
+   *  (the reciprocal of SINAD); the A-weighted N+D figure is a separate field. */
   _thdNPct(r) {
     if (!Number.isFinite(r.thdNDb)) return NaN;
     return Math.pow(10, r.thdNDb / 20.0) * 100;
@@ -1343,13 +1344,16 @@ export class FftView {
     // value columns. The % column is r.harmonicPct[i] VERBATIM (referenced to the
     // analyzer's fundamental - NOT recomputed here).
     const rows = [];
-    rows.push(['N+D:', `${this._fmtDb(r.thdNDb)} A`,
+    // N+D is the ONE A-weighted figure (its own awThdNDb field, hence the A marker);
+    // THD+N and ENOB read the unweighted pair, and ENOB's basis carries no
+    // fundamental term so no de-embedding combination can skew it.
+    rows.push(['N+D:', `${this._fmtDb(r.awThdNDb)} A`,
       `THD H2..${Math.round(thdMaxH)}:`,
       this._ratioLevelPctText(r.thdPct, tableUnit, refDbFs, dbvOff, unitLabel)]);
     rows.push(['N:', this._fmtUnit(this._levelInDistortionUnit(this._noiseDbFs(r), refDbFs, tableUnit, dbvOff), unitLabel),
       'THD+N:', this._ratioLevelPctText(this._thdNPct(r), tableUnit, refDbFs, dbvOff, unitLabel)]);
     rows.push(['SNR:', this._fmtDb(r.snrDb),
-      'ENOB:', `${((r.sinadDb - 1.76) / 6.02).toFixed(1)} bits`]);
+      'ENOB:', `${((r.enobSinadDb - 1.76) / 6.02).toFixed(1)} bits`]);
     rows.push(null);   // small gap between the metric and harmonic blocks
     const harmCount = r.harmonicDbFs == null ? 0 : r.harmonicDbFs.length;
     for (let i = 0; i < harmCount; i += 2) {

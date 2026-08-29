@@ -24,6 +24,8 @@
 // floating-point (sine/cos table, Taylor correction, amplitude, noise) stays in
 // Float64Array / double, exactly as Java.
 
+import { sinTurns, cosTurns } from '../dsp/sine-kernel.js';
+
 // -------------------------------------------------------------------------
 // Constants (org.edgo.audio.measure.common.Constants)
 // -------------------------------------------------------------------------
@@ -116,11 +118,13 @@ export function formFromString(s) {
 }
 
 // -------------------------------------------------------------------------
-// DDS sine lookup table (full wave, 4096 entries)
+// DDS sine evaluation
 // -------------------------------------------------------------------------
 
-const TABLE_BITS = 12;
-const TABLE_SIZE = 1 << TABLE_BITS; // 4096
+// The full-wave lookup table and the switchable Taylor correction live in the
+// shared dsp/sine-kernel module, so the oscilloscope residual's fitted reference
+// and the generator's waveforms are computed by the SAME math.
+
 /** Radix (2^32) of the two-word 64-bit fixed-point phase accumulator. */
 const PHASE_2P32 = 4294967296;
 /** 1/2^53 - scales the top 53 bits of the accumulator to a turn in [0,1) (Constants.ONE_OVER_2_53). */
@@ -142,32 +146,7 @@ function incWords(turns) {
   if (lo >= PHASE_2P32) { lo -= PHASE_2P32; hi += 1; }   // carry the rounded lo word into hi
   return { hi: hi >>> 0, lo: lo >>> 0 };
 }
-const SINE_TABLE = new Float64Array(TABLE_SIZE);
-const COS_TABLE = new Float64Array(TABLE_SIZE);
-for (let i = 0; i < TABLE_SIZE; i++) {
-  const angle = (TWO_PI * i) / TABLE_SIZE;
-  SINE_TABLE[i] = Math.sin(angle);
-  COS_TABLE[i] = Math.cos(angle);
-}
-
-/** Radians per table cell - sub-cell turn fraction -> Taylor-correction angle. */
-const RAD_PER_CELL = TWO_PI / TABLE_SIZE;
-
 const PINK_OCTAVES = 16;
-
-// -------------------------------------------------------------------------
-// Taylor correction (5th order - matches the active branch in Java)
-// -------------------------------------------------------------------------
-
-/** cos(Δθ) Taylor series; dx2 = Δθ². */
-function taylorCos(dx2) {
-  return 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0));
-}
-
-/** sin(Δθ) Taylor series; dx = Δθ, dx2 = Δθ². */
-function taylorSin(dx, dx2) {
-  return dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0)));
-}
 
 /** Wraps a turn count to [0,1). */
 function wrapTurn(ph) {
@@ -187,31 +166,17 @@ function phaseTurn53(hi, lo) {
   return (hi * HI_TO_TOP53 + (lo >>> 11)) * ONE_OVER_2_53;
 }
 
-/** sin(θ) for a phase in turns [0,1) (table + Taylor); allocation-free.
- *  `cell & (TABLE_SIZE-1)` mirrors Java's top-12-bit index extraction
- *  (`phaseAcc >>> (64-TABLE_BITS)`, always 0..4095): when a phase whose period
- *  evenly divides the accumulator (e.g. an integer frequency) rounds up to
- *  exactly 1.0, `ph*TABLE_SIZE` is 4096 and the mask folds it back to 0 (whose
- *  Δθ is 0), avoiding an out-of-range read that would return NaN. */
+/** sin(θ) for a phase in turns (table + Taylor) through the shared kernel;
+ *  allocation-free. The oscillator hands it a turn already folded to [0,1) by
+ *  {@link phaseTurn53}, which is a no-op for the kernel's own fold. */
 function ddsSineOf(ph) {
-  const scaled = ph * TABLE_SIZE;
-  const cell = scaled | 0;
-  const idx = cell & (TABLE_SIZE - 1);
-  const dx = (scaled - cell) * RAD_PER_CELL;
-  const dx2 = dx * dx;
-  return SINE_TABLE[idx] * taylorCos(dx2) + COS_TABLE[idx] * taylorSin(dx, dx2);
+  return sinTurns(ph);
 }
 
-/** cos(θ) for a phase in turns [0,1) (table + Taylor); allocation-free.
- *  Index masked like {@link ddsSineOf} so a phase rounding to exactly 1.0 wraps
- *  to table cell 0 rather than reading past the end (NaN). */
+/** cos(θ) for a phase in turns - the shared kernel's cosine identity, same
+ *  error budget. */
 function ddsCosOf(ph) {
-  const scaled = ph * TABLE_SIZE;
-  const cell = scaled | 0;
-  const idx = cell & (TABLE_SIZE - 1);
-  const dx = (scaled - cell) * RAD_PER_CELL;
-  const dx2 = dx * dx;
-  return COS_TABLE[idx] * taylorCos(dx2) - SINE_TABLE[idx] * taylorSin(dx, dx2);
+  return cosTurns(ph);
 }
 
 /** Converts an initial phase (radians) to a turn offset in [0,1). */

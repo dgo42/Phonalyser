@@ -28,6 +28,7 @@ import { registerShotCanvasRenderer, ensureShotRenderCanvas } from '../shell/scr
 import { TileTabs } from '../widgets/tile-tabs.js';
 import { PresetBar } from '../widgets/preset-bar.js';
 import { OFF_LABEL } from '../widgets/numeric-step-field.js';
+import { OVERLAP_LABEL } from './fft-overlap.js';
 
 // Off is a distinct sentinel BELOW 1 so the averages dial reads Off ↔ 1 ↔ 2 ↔ 4 ... 128 ↔ ∞ -
 // with Off == 1 the wheel jumped 2 -> Off and 1 was unreachable. Engine behaviour is unchanged:
@@ -35,9 +36,6 @@ import { OFF_LABEL } from '../widgets/numeric-step-field.js';
 // are both "a single spectrum". Java FftTabControl.AVERAGES_OFF / AVERAGES_SERIES.
 export const FFT_AVERAGES_OFF = 0;
 export const FFT_AVERAGES_SERIES = [FFT_AVERAGES_OFF, 1, 2, 4, 8, 16, 32, 64, 128, Infinity];
-
-// FftOverlap enum token -> display %, for the FFT-settings sub-label.
-const OVERLAP_PCT = { PCT_0: '0', PCT_50: '50', PCT_75: '75', PCT_87_5: '87.5', PCT_93_75: '93.75' };
 
 export class FftTabControl {
   /**
@@ -112,13 +110,15 @@ export class FftTabControl {
     const sz = $('#fftSize option:selected').text();
     const win = $('#window').val();   // short enum token (BH4 / BH7 / HFT248D ...), not the full name
     const winName = $('#window option:selected').text();   // full window name for the tooltip
-    const ov = OVERLAP_PCT[$('#overlap').val()] || '0';
+    // The enum's own label - the random mode carries no percent, so the chip and
+    // its tooltip read it straight off the table (Java fftTabTiles reads .label).
+    const ov = OVERLAP_LABEL[$('#overlap').val()] || OVERLAP_LABEL.PCT_0;
     const avg = this.formatAverages(this.fftAveragesValue());
     const coh = $('#coherent').is(':checked');
     $('#fftTabSub').html(this.titledChips(
       [sz, t('fft.tile.length', $('#fftSize').val())],
       [win, t('fft.tile.window', winName)],
-      [ov + '%', t('fft.tile.overlap', ov + '%')],
+      [ov, t('fft.tile.overlap', ov)],
       [avg + '×', t('fft.tile.averages', avg)],
       [coh ? 'coh' : 'inc', t(coh ? 'fft.tile.coh' : 'fft.tile.inc')]));
   }

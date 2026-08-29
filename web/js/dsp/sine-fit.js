@@ -12,6 +12,21 @@
 // builds the 3×3 normal equations (accumulated via a sin/cos rotation recurrence,
 // no per-sample trig) and a partial-pivoted Gaussian elimination solves them.
 // All math is plain JS number (= Java double), so the fit is bit-identical.
+//
+// The RESIDUAL synthesis (subtractSineInto / subtractFullInto) evaluates the
+// fitted reference through the shared dsp/sine-kernel instead - the same
+// table-plus-Taylor math the DDS generator runs - taking the phase from one
+// multiply per sample. What that fixes is the SEED: a recurrence has to start
+// from sin/cos of omega times the absolute sample offset, and reducing an
+// argument that large loses precision in proportion to it - about 1e-9 rad a
+// billion samples into a capture, which is where a scope slice sits. Rotating
+// the recurrence forward over the slice adds almost nothing next to that (a
+// billion steps from a zero seed stay near 1e-15); the seed is the dominant
+// term, and a phase built as turns-per-sample times the index never forms the
+// large angle at all. The FIT itself keeps its recurrence: it runs over one
+// bounded fit window from a zero-based index, and Java leaves it there too.
+
+import { sinTurns, cosTurns } from './sine-kernel.js';
 
 /** Exact 3-parameter least-squares sine fit at a fixed frequency. */
 export class SineFit {
@@ -128,42 +143,40 @@ export class SineFit {
   /**
    * Subtracts the fitted sinusoid (excluding the DC term c) from
    * src[srcFrom .. srcFrom+count) into dst[dstFrom ..]. DC is left in the trace
-   * on purpose (the AC toggle handles DC). Uses a double-precision sin/cos
-   * rotation recurrence seeded at omega·kOffset. Pass a Float32Array dst to match
-   * Java's (float) cast on store.
+   * on purpose (the AC toggle handles DC). Uses a per-sample evaluation through
+   * the shared sine kernel (the DDS generator's table-plus-Taylor math), the
+   * phase from one multiply per sample; no allocation. Pass a Float32Array dst to
+   * match Java's (float) cast on store.
    */
   subtractSineInto(src, srcFrom, count, kOffset, dst, dstFrom) {
-    const startAngle = this._omega * kOffset;
-    let curSin = Math.sin(startAngle);
-    let curCos = Math.cos(startAngle);
-    const cosOmega = Math.cos(this._omega), sinOmega = Math.sin(this._omega);
+    // Per-sample table-plus-Taylor evaluation through the shared kernel (the DDS
+    // generator's own math). The phase is turns-per-sample times the absolute
+    // index, folded inside the kernel, so no large angle is ever formed - unlike
+    // the rotation recurrence this replaced, which had to seed itself from
+    // sin/cos of omega times kOffset and inherited that angle's argument-reduction
+    // error for the whole slice.
+    const tps = this._omega / (2.0 * Math.PI);   // turns per sample
     const a = this.a, b = this.b;
     for (let i = 0; i < count; i++) {
-      const sine = a * curSin + b * curCos;
+      const turns = tps * (kOffset + i);
+      const sine = a * sinTurns(turns) + b * cosTurns(turns);
       dst[dstFrom + i] = src[srcFrom + i] - sine;
-      const nextSin = curSin * cosOmega + curCos * sinOmega;
-      curCos = curCos * cosOmega - curSin * sinOmega;
-      curSin = nextSin;
     }
   }
 
   /**
    * Subtracts the WHOLE fitted model - sinusoid and the DC term c - from
    * src[srcFrom .. srcFrom+count), then adds back a caller-supplied replacement
-   * DC dcAdd, into dst[dstFrom ..]. Same recurrence as subtractSineInto.
+   * DC dcAdd, into dst[dstFrom ..]. Same shared-kernel evaluation and no
+   * allocation as subtractSineInto.
    */
   subtractFullInto(src, srcFrom, count, kOffset, dcAdd, dst, dstFrom) {
-    const startAngle = this._omega * kOffset;
-    let curSin = Math.sin(startAngle);
-    let curCos = Math.cos(startAngle);
-    const cosOmega = Math.cos(this._omega), sinOmega = Math.sin(this._omega);
+    const tps = this._omega / (2.0 * Math.PI);   // turns per sample
     const a = this.a, b = this.b, c = this.c;
     for (let i = 0; i < count; i++) {
-      const model = a * curSin + b * curCos + c;
+      const turns = tps * (kOffset + i);
+      const model = a * sinTurns(turns) + b * cosTurns(turns) + c;
       dst[dstFrom + i] = src[srcFrom + i] - model + dcAdd;
-      const nextSin = curSin * cosOmega + curCos * sinOmega;
-      curCos = curCos * cosOmega - curSin * sinOmega;
-      curSin = nextSin;
     }
   }
 }

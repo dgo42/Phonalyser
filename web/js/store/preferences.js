@@ -89,6 +89,7 @@ import { remoteBackendOf } from '../net/net-device-ref.js';
 // resolved here at use, against the live calibration.
 import { UNIT_FAMILIES, unitValue, unitValueEquals, convert, baseToken, logToken }
   from '../widgets/unit-conversion.js';
+import { FFT_OVERLAP_VALUES } from '../fft/fft-overlap.js';
 
 /** Base unit token of an amplitude - the unit whose number IS the canonical V RMS. */
 const AMPLITUDE_BASE_UNIT = baseToken(UNIT_FAMILIES.AMPLITUDE);
@@ -115,7 +116,10 @@ const E = {
     'DUAL_TONE', 'DUAL_TONE_COMP'],
   WindowType: ['RECT', 'HANN', 'BH4', 'BH7', 'FT', 'HFT144D', 'HFT248D',
     'KB24', 'KB38', 'DC150', 'DC200', 'DC250', 'DC300'],
-  FftOverlap: ['PCT_0', 'PCT_50', 'PCT_75', 'PCT_87_5', 'PCT_93_75'],
+  // The overlap constants come from the enum module itself - ONE definition of the
+  // token set, so a new mode is added in one place. RAND sits LAST there, as it does
+  // at the end of the Java enum, so an older stored name still loads.
+  FftOverlap: FFT_OVERLAP_VALUES,
   // DBR appended LAST on purpose: the combo binds by ordinal and presets persist the name,
   // so appending is the only position that keeps old presets loading (Java MagnitudeUnit).
   MagnitudeUnit: ['V', 'V_SQRT_HZ', 'DBV', 'DBFS', 'DBR'],

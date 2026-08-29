@@ -37,6 +37,13 @@ export class FftResult {
     this.windowType = null;
     /** Overlap token (the FftOverlap enum name, e.g. "PCT_0"). */
     this.overlap = null;
+    /** The frame spacing (samples) the analysis actually used. Under the random
+     *  overlap this is the tick's drawn hop - the enum carries no single
+     *  fraction. Provenance first (saved into spectrum files); the skirt
+     *  look-ahead falls back to it only when {@link overlap} is unknown. 0 for a
+     *  spectrum whose spacing is unknown (a loaded file without geometry
+     *  headers). */
+    this.stepSamples = 0;
 
     // Single-sided spectrum, bins 0 ... fftSize/2.
     /** @type {?Float64Array} */ this.amplitudeDbFs = null;
@@ -96,8 +103,18 @@ export class FftResult {
     this.thdDb = 0;
     this.thdNDb = 0;
     this.snrDb = 0;
-    /** Unweighted SINAD: 10·log10(refLin² / (noisePower + Σ harmonic power)). */
+    /** UNWEIGHTED in-band SINAD (MT-003): 10·log10(refLin² / (noisePower + in-band
+     *  harmonic power)). {@link thdNDb} is its reciprocal. */
     this.sinadDb = 0;
+    /** The A-WEIGHTED noise+distortion level relative to the signal (negative dB) -
+     *  the N+D audibility readout, the ONLY weighted figure. */
+    this.awThdNDb = 0;
+    /** ENOB basis: the unweighted in-band SINAD denominator referred to FULL SCALE
+     *  (the signal level cancels, so no fundamental term exists and no de-embedding
+     *  combination can skew it) - (enobSinadDb − 1.76)/6.02 compares against
+     *  converter datasheets. Not the full Nyquist band: an oversampled sigma-delta
+     *  parks its shaped noise above the audio band by design. */
+    this.enobSinadDb = 0;
     /** Lower bound of the SNR frequency range (Hz); 0 = no limit. */
     this.snrFreqMin = 0;
     /** Upper bound of the SNR frequency range (Hz); 0 = no limit. */
@@ -111,7 +128,10 @@ export class FftResult {
      *  the same noise-integral correction to THIS spectrum regardless of the
      *  window selected by then. */
     this.windowNenbwBins = 0;
-    /** IEC 61672 A-weighted sibling of noisePower - same SNR band, same zone rescale, divided by windowNenbwBins; feeds the A-suffixed N+D / THD+N / SINAD->ENOB readouts. SNR and N stay on noisePower. */
+    /** IEC 61672 A-weighted sibling of noisePower - same SNR band, same zone
+     *  rescale, divided by windowNenbwBins. Feeds the N+D audibility readout ALONE
+     *  ({@link awThdNDb}); SNR, N, SINAD, THD+N and ENOB all stay on the unweighted
+     *  noisePower. */
     this.awNoisePower = 0;
     /** Average noise floor: RMS amplitude of a single noise bin in dBFS. */
     this.avgNoiseFloorDbFs = 0;
@@ -180,6 +200,7 @@ export class FftResult {
     c.binBwSqrt = this.binBwSqrt;
     c.windowType = this.windowType;
     c.overlap = this.overlap;
+    c.stepSamples = this.stepSamples;
     c.amplitudeDbFs = this.amplitudeDbFs != null ? this.amplitudeDbFs.slice() : null;
     c.phaseDeg = this.phaseDeg != null ? this.phaseDeg.slice() : null;
     c.re = this.re != null ? this.re.slice() : null;
@@ -213,6 +234,8 @@ export class FftResult {
     c.thdNDb = this.thdNDb;
     c.snrDb = this.snrDb;
     c.sinadDb = this.sinadDb;
+    c.awThdNDb = this.awThdNDb;
+    c.enobSinadDb = this.enobSinadDb;
     c.snrFreqMin = this.snrFreqMin;
     c.snrFreqMax = this.snrFreqMax;
     c.coherentAveraging = this.coherentAveraging;

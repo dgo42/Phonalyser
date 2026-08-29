@@ -74,9 +74,16 @@ function shadowFold(d, r, timeDisc) {
   if (d.resyncAccum) shadowAccum.onResync();
   shadowAccum.setStrongToneRelDb(d.strongToneRelDb ?? 100.0);
   if (!d.accumulate) return null;
-  if (timeDisc) return null;                         // time gate: dropped, not folded
+  // Each gate drops this tick AND takes the last accepted one back out, exactly as
+  // the controller's fold does - otherwise the shadow's depth diverges at the first
+  // discontinuity and the parity check reports a false failure.
+  if (timeDisc) {                                    // time gate: dropped, not folded
+    shadowAccum.subtractPreviousTicks();
+    return null;
+  }
   if (d.spectralGate && shadowAccum.reject(r.re, r.im, r.fftSize / 2, r.freqResolution, fundamentalBins(r))) {
-    return null;                                     // spectral gate: dropped
+    shadowAccum.subtractPreviousTicks();             // spectral gate: dropped
+    return null;
   }
   if (!shadowAccum.accumulate(r, d.winAbsStart, !!r.coherentAveraging, d.targetN)) return null;
   const scratch = {
@@ -131,6 +138,7 @@ function postResult(r, id, t0, timeDisc, shadow) {
     timeDiscontinuity: !!timeDisc,
     fftSize: r.fftSize, sampleRate: r.sampleRate, frameCount: r.frameCount,
     freqResolution: r.freqResolution, windowType: r.windowType, overlap: r.overlap,
+    stepSamples: r.stepSamples,
     amplitudeDbFs: r.amplitudeDbFs.slice(), phaseDeg: r.phaseDeg.slice(),
     re: r.re.slice(), im: r.im.slice(),
     fundamentalBin: r.fundamentalBin, fundamentalHz: r.fundamentalHz,
@@ -144,6 +152,7 @@ function postResult(r, id, t0, timeDisc, shadow) {
     harmonicDbFs: r.harmonicDbFs.slice(), harmonicPct: r.harmonicPct.slice(),
     thdPct: r.thdPct, thdDb: r.thdDb, thdNDb: r.thdNDb,
     snrDb: r.snrDb, sinadDb: r.sinadDb,
+    awThdNDb: r.awThdNDb, enobSinadDb: r.enobSinadDb,
     snrFreqMin: r.snrFreqMin, snrFreqMax: r.snrFreqMax,
     coherentAveraging: r.coherentAveraging,
     noisePower: r.noisePower, windowNenbwBins: r.windowNenbwBins, avgNoiseFloorDbFs: r.avgNoiseFloorDbFs,
@@ -167,8 +176,13 @@ function postResult(r, id, t0, timeDisc, shadow) {
 function analyzePooled(d, W, t0) {
   let sp;
   try {
+    // Explicit geometry: the frame spacing is the consumer's drawn pending hop
+    // and the frame count is stated - the window may be sized for the LARGEST
+    // hop, so inferring frames from the buffer length would over-count under the
+    // random overlap.
     sp = analyzer.prelude(d.samples, d.sampleRate, d.fftSize, d.harmonicCount,
-      d.windowType, d.overlap, d.coherentAveraging, d.expectedFundHz, slot);
+      d.windowType, d.overlap, d.coherentAveraging, d.expectedFundHz, slot,
+      d.step, d.frameCount);
   } catch (err) { self.postMessage({ id: d.id, error: err.message }); return; }
 
   const frameCount = sp.frameCount;
@@ -268,7 +282,8 @@ self.onmessage = (e) => {
       d.windowType, d.overlap, d.snrFreqMin, d.snrFreqMax,
       d.coherentAveraging,
       d.fundRefDbFs === undefined ? NaN : d.fundRefDbFs,   // THD manual-fundamental anchor
-      d.expectedFundHz, slot);
+      // Stated geometry (see analyzePooled): the drawn hop and the frame count.
+      d.expectedFundHz, slot, d.step, d.frameCount);
   } catch (err) {
     self.postMessage({ id: d.id, error: err.message });
     return;

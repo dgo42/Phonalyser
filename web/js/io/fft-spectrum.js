@@ -23,6 +23,7 @@
 // floor) come in as explicit arguments rather than via a global, per IoC.
 
 import { FftResult } from '../fft/fft-result.js';
+import { FFT_OVERLAP_VALUES } from '../fft/fft-overlap.js';
 
 /** .fft format version stamped in the header (FileVersions.FFT_SPECTRUM). */
 export const FFT_FORMAT_VERSION = 1;
@@ -69,6 +70,8 @@ export function loadSpectrum(text, dbvOffsetDb, harmCount, parabolicBinInterp) {
   const rows = [];
   let modeImd = false;
   let tone1Hz = NaN, tone2Hz = NaN, binBwHz = NaN;
+  let overlap = null;
+  let stepSamples = 0;
 
   for (const raw of text.split(/\r?\n/)) {
     const s = raw.trim();
@@ -80,6 +83,18 @@ export function loadSpectrum(text, dbvOffsetDb, harmCount, parabolicBinInterp) {
     if (s.startsWith('# tone1_hz=')) { tone1Hz = parseHeaderHz(s); continue; }
     if (s.startsWith('# tone2_hz=')) { tone2Hz = parseHeaderHz(s); continue; }
     if (s.startsWith('# bin_bw_hz=')) { binBwHz = parseHeaderHz(s); continue; }
+    if (s.startsWith('# overlap=')) {
+      // Known enum names only; anything else (old files write nothing, null
+      // results wrote "n/a") stays null.
+      const token = s.substring(s.indexOf('=') + 1).trim();
+      if (FFT_OVERLAP_VALUES.includes(token)) overlap = token;
+      continue;
+    }
+    if (s.startsWith('# step_samples=')) {
+      const v = parseHeaderHz(s);
+      if (v > 0) stepSamples = Math.round(v);
+      continue;
+    }
     const c0 = s.charAt(0);
     if (c0 !== '-' && c0 !== '+' && c0 !== '.' && !(c0 >= '0' && c0 <= '9')) continue;
     const p = s.split(/[;,]/);
@@ -104,6 +119,11 @@ export function loadSpectrum(text, dbvOffsetDb, harmCount, parabolicBinInterp) {
   r.binBwSqrt = Math.sqrt(binBwHz > 0 ? binBwHz : freqRes);
   r.fftSize = 2 * (n - 1);
   r.sampleRate = Math.round(freqRes * r.fftSize);
+  // Restored capture geometry: files without the headers (or with an unknown
+  // overlap token) keep null / 0, and the skirt walk degrades to its no-overlap
+  // look-ahead exactly as before these headers.
+  r.overlap = overlap;
+  r.stepSamples = stepSamples;
   r.harmonicCount = harmCount;
 
   for (let k = 0; k < n; k++) {
@@ -175,6 +195,13 @@ export function saveSpectrum(r, meta = {}) {
   lines.push('# fft_size=' + r.fftSize);
   lines.push('# sample_rate_hz=' + r.sampleRate);
   lines.push('# window=' + (r.windowType != null ? r.windowType : 'n/a'));
+  // Overlap as the stable enum NAME (the loader restores it; unknown tokens stay
+  // null) plus the actual frame spacing - under the random overlap the enum alone
+  // carries no geometry, and the spacing is what the reloaded skirt walk keys on.
+  lines.push('# overlap=' + (r.overlap != null ? r.overlap : 'n/a'));
+  if (r.stepSamples > 0) {
+    lines.push('# step_samples=' + r.stepSamples);
+  }
   lines.push('# averaging=' + (r.coherentAveraging ? 'coherent' : 'incoherent'));
   lines.push('# averages=' + r.frameCount);
   if (r.snrFreqMin > 0 || r.snrFreqMax > 0) {

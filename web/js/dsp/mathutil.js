@@ -36,6 +36,25 @@ export function acosh(x) {
 }
 
 /**
+ * Java Math.IEEEremainder(x, y): the remainder nearest to zero, ties to even.
+ * JS has no such primitive - the % operator truncates toward zero and keeps the
+ * dividend's sign, which is a different function. The de-rotation folds every
+ * phase and every sample-delta product through this before scaling, so a long
+ * run's delta cannot lose precision in the 2π (or fftSize) wrap.
+ * @param {number} x dividend
+ * @param {number} y divisor
+ * @returns {number} x − y·n with n the integer nearest x/y (ties to even)
+ */
+export function ieeeRemainder(x, y) {
+  const q = x / y;
+  if (Math.abs(q - Math.trunc(q)) === 0.5) {
+    const n = 2 * Math.round(q / 2);   // tie -> nearest even
+    return x - y * n;
+  }
+  return x - y * Math.round(q);
+}
+
+/**
  * Parabolic interpolation on the log-power spectrum to refine a peak bin to a
  * fractional bin index. Uses the three-point formula
  * δ = 0.5·(α − γ) / (α − 2β + γ) where α, β, γ are log-power at bins
