@@ -183,7 +183,9 @@
     <tr><td>Startfrequenz, Hz</td>
         <td>Untere Grenze des Sweeps.  ≥ 1 Hz.</td></tr>
     <tr><td>Stoppfrequenz, Hz</td>
-        <td>Obere Grenze des Sweeps, bis zur Nyquist-Grenze.</td></tr>
+        <td>Obere Grenze des Sweeps, bis zur Nyquist-Grenze der niedrigeren der
+            beiden eingestellten Raten (siehe den Hinweis unter der
+            Tabelle).</td></tr>
     <tr><td>Amplitude (RMS)</td>
         <td>Ausgangspegel zum DAC in Volt RMS bezogen auf die DAC-Kalibrierung;
             der Tooltip schaltet eine dBV-Anzeige um.  Akzeptiert
@@ -217,6 +219,14 @@
      wird im Reiter <a href="preferences.html#prefs-freqresp">Einstellungen ▸
      Frequenzgang</a> festgelegt, nicht hier; sie begrenzt den Bereich, in dem die
      Sweep-Entfaltung zuverlässig ist.</div>
+  <div class="note"><b>Zwei Wandler, zwei Takte.</b>  Der Sweep wird im
+     eingestellten <em>Ausgangs</em>-Format gespielt - mit dessen eigener
+     Abtastrate und Bittiefe -, während die Aufnahme und alles daraus Abgeleitete
+     auf der <em>Eingangs</em>-Rate bleiben, die auch eine gespeicherte Messung
+     trägt.  Das nutzbare Band endet daher bei der Hälfte der <em>niedrigeren</em>
+     der beiden Raten: Eine Stoppfrequenz über dieser Obergrenze wird abgewiesen,
+     wobei beide Einstellungen genannt werden, statt gefaltet gemessen zu werden,
+     und darüber gespeicherte Bandgrenzen werden auf sie heruntergezogen.</div>
 
   <h3 id="freqresp-tab-riaa">RIAA &amp; IEC</h3>
   <p><img src="img/FreqResp - RIAA IEC.png" alt="Reiter RIAA &amp; IEC"/></p>

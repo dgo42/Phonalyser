@@ -180,7 +180,8 @@
     <tr><td>Start frequency, Hz</td>
         <td>Low end of the sweep.  ≥ 1 Hz.</td></tr>
     <tr><td>Stop frequency, Hz</td>
-        <td>High end of the sweep, up to the Nyquist fraction.</td></tr>
+        <td>High end of the sweep, up to the Nyquist fraction of the lower of
+            the two configured rates (see the note below the table).</td></tr>
     <tr><td>Amplitude (RMS)</td>
         <td>Drive level sent to the DAC, in volts RMS against the DAC
             calibration; the tooltip toggles a dBV display.  Accepts
@@ -214,6 +215,14 @@
      is set on the <a href="preferences.html#prefs-freqresp">Preferences ▸
      Frequency response</a> tab, not here; it caps the band where the sweep
      deconvolution is trustworthy.</div>
+  <div class="note"><b>Two converters, two clocks.</b>  The sweep is played in
+     the configured <em>output</em> format - its own sample rate and bit depth -
+     while the recording and everything derived from it stay on the
+     <em>input</em> rate, which is also the rate a saved measurement carries.
+     The usable band therefore ends at half the <em>lower</em> of the two rates:
+     a stop frequency above that ceiling is refused with both settings named
+     rather than measured folded, and band edges stored above it are brought
+     down to it.</div>
 
   <h3 id="freqresp-tab-riaa">RIAA &amp; IEC</h3>
   <p><img src="img/FreqResp - RIAA IEC.png" alt="RIAA &amp; IEC tab"/></p>

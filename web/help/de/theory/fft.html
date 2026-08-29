@@ -500,26 +500,34 @@
     <tr><td>Dolph-Tschebyscheff 300 dB</td><td>3,3310</td><td>5,23 dB</td></tr>
   </table>
   <p><b>SINAD</b> setzt <em>sowohl</em> Rauschen als auch Verzerrung in den
-     Nenner, und <b>ENOB</b> - die effektive Anzahl der Bits - folgt daraus
-     über das Ideal-Quantisierungsgesetz des
+     Nenner, und <b>ENOB</b> - die effektive Anzahl der Bits - folgt aus
+     demselben Nenner, bezogen auf den Vollausschlag, über das
+     Ideal-Quantisierungsgesetz des
      Wandlers<sup id="cite-4"><a href="#ref-enob">[4]</a></sup>:</p>
   <div class="eq">SINAD = 10·log₁₀ ( <i>A</i><sub>1</sub>² / (Σ<sub>noise</sub> + Σ<sub>dist</sub>) )<span class="no">(7)</span></div>
-  <div class="eq">ENOB = (SINAD − 1.76) / 6.02<span class="no">(8)</span></div>
-  <p>THD+N ist einfach das reziproke Verhältnis zu SINAD (dasselbe Band,
-     derselbe Zähler), und <b>N+D</b> ist genau dieser Nenner, bezogen auf den
-     Grundton - das gesamte Nicht-Grundton-Residuum, in dB mit dem Zusatz
-     <b>A</b> angezeigt (THD+N ist derselbe Wert als Prozentzahl).  Beide Terme
-     des Nenners - das integrierte Rauschen <em>und</em> die harmonische
-     Verzerrung - werden Bin für Bin mit der A-Bewertungskurve nach IEC
+  <div class="eq">ENOB = (SINAD<sub>FS</sub> − 1.76) / 6.02,&nbsp;&nbsp;
+     SINAD<sub>FS</sub> = −10·log₁₀ ( Σ<sub>noise</sub> + Σ<sub>dist</sub> )<span class="no">(8)</span></div>
+  <p>Die Summen in (8) werden auf den Vollausschlag bezogen statt auf den Ton,
+     sodass sich der Signalpegel herauskürzt: In ENOB geht überhaupt kein
+     Grundton-Term ein, und weder ein Kerbfilter noch ein manuell definierter
+     Grundton kann den Wert verschieben - ein geditherter <i>N</i>-Bit-Kanal
+     liest seine Datenblattzahl.  THD+N ist einfach das reziproke Verhältnis zu
+     SINAD - dasselbe Band, derselbe Nenner, als Prozentzahl angezeigt, wo SINAD
+     in dB steht.  Alle drei sind die Definitionen der Wandler-Datenblätter und
+     werden <em>unbewertet</em> gelesen, ebenso wie <b>SNR</b> (5) und der
+     Messwert <b>N</b>: Sie geben die rohe Energie im Band an und tragen daher
+     kein A.</p>
+  <p><b>N+D</b> ist der eine Messwert, der stattdessen nach der Hörbarkeit fragt,
+     und die einzige Stelle, an der die Bewertung auftritt.  Beide Terme seines
+     Nenners - das integrierte Rauschen <em>und</em> die harmonische Verzerrung -
+     werden Bin für Bin mit der A-Bewertungskurve nach IEC
      61672<sup id="cite-5"><a href="#ref-aw">[5]</a></sup> multipliziert, bevor
-     sie summiert werden: Die Kurve liegt um 1&nbsp;kHz nahe eins und fällt im
-     tiefen Bass und im äußersten Höhenbereich ab, wo das Ohr weit
-     unempfindlicher ist, sodass N+D, THD+N, SINAD und ENOB die Hörbarkeit
-     widerspiegeln statt roher Breitbandenergie - weshalb ein Wandler mit
+     sie summiert und auf den Grundton bezogen werden: Die Kurve liegt um
+     1&nbsp;kHz nahe eins und fällt im tiefen Bass und im äußersten Höhenbereich
+     ab, wo das Ohr weit unempfindlicher ist - weshalb ein Wandler mit
      ansteigendem Höhenrauschen bewertet mehrere Dezibel besser abschneidet als
-     unbewertet.  <b>SNR</b> (5) und der Messwert <b>N</b> bleiben bewusst
-     <em>unbewertet</em>; sie geben das rohe Breitbandrauschen an und tragen
-     daher kein A.</p>
+     unbewertet.  Genau diese Bewertung kennzeichnet das <b>A</b> im Zusatz des
+     Messwerts.</p>
 
   <p>Die Wendung "ihre Leck-Zonen" verbirgt das Detail, das darüber entscheidet,
      ob diese Werte ehrlich sind: Das um den Grundton ausgeschlossene Band ist
@@ -709,9 +717,10 @@
      Vertrauen anzugeben, nicht als einmalige Glücks-Ablesung.  Ebenso
      entscheidend sind die Eigenschaften der Messkette selbst: geringe eigene
      Verzerrung, ein niedriges Grundrauschen, hohe Dämpfung des Grundtons und
-     eine hohe Güte des Kerbfilters - und, für ein Vorverzerrungs-Training, die
-     <a href="dac-predistortion.html#delay">Messung der Kettenverzögerung</a>,
-     die das Vorverzerrungskapitel beschreibt.</p>
+     eine hohe Güte des Kerbfilters - und, für ein Vorverzerrungs-Training, eine
+     geladene Frequenzgang-Kalibrierung, deren gemessene Phase
+     <a href="dac-predistortion.html#delay">die Kettenverzögerung selbst</a> ist,
+     wie das Vorverzerrungskapitel erklärt.</p>
   <p>Dass die De-Rotation eine komplexe Mittelung so lange zusammenhalten kann,
      ohne die Harmonischen-Pegel klammheimlich zu korrumpieren, wird nicht
      angenommen - es wird im <a href="derotation-accuracy.html">Kapitel zur

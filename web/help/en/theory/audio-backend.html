@@ -169,12 +169,12 @@
      samples never leave the page.</p>
   <p>Its purpose is a bench whose noise floor is <em>known</em>.  Every sample
      that crosses is quantised by the same quantiser the real playback paths
-     use, with TPDF dither applied immediately before the rounding step - by
-     default at the last bit of the selected depth; a dither the generator
-     configures takes precedence, and the lane is never undithered, because a
-     loop with no noise at all would hand the FFT the artifacts of bare
-     rounding.  With nothing configured the floor is therefore the arithmetic
-     one rather than a property of some converter: the delivered samples of digital
+     use, with TPDF dither applied immediately before the rounding step - and
+     the dither is exactly the one configured at the generator, no more.  The
+     backend adds none of its own: with the generator's dither off, the loop
+     delivers bare rounding and nothing else, so what a measurement shows is the
+     arithmetic and never a hidden noise source.  With the dither set at the
+     last bit of the selected depth, the delivered samples of digital
      silence measure <b>0.500&nbsp;LSB RMS</b>, which for a word of
      <i>N</i>&nbsp;bits puts the broadband floor at</p>
   <div class="eq">3.01 - 6.02&nbsp;<i>N</i> dBFS<span class="no">(2)</span></div>
@@ -183,10 +183,10 @@
      then shows above that floor belongs to the code under test, because nothing
      else is in the path.</p>
   <ul>
-    <li><b>Silence is dithered too.</b>  With no generator running the capture
-        lane keeps delivering, and what it delivers is dithered silence rather
-        than digital zeros - the floor is present whether or not a signal
-        is.</li>
+    <li><b>Silence keeps flowing.</b>  With no generator running the capture
+        lane keeps delivering rather than stopping - but it delivers plain
+        digital silence, undithered, because the lane adds no dither of its
+        own.</li>
     <li><b>Delivery is paced by the clock, not by the processor.</b>  Blocks
         arrive at the selected sample rate as they would from a device - fifty
         a second, timed against an absolute schedule rather than one delay after
