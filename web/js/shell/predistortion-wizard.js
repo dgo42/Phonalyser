@@ -47,6 +47,10 @@ export class PredistortionWizard {
     this.pdEngine = null;        // the running PredistortionEngine
     this.running = false;        // Java `running` flag - toggles #dpdStart Start<->Stop
     this.applied = false;        // true once the .dpd has been applied to the generator
+    // Java `engaged` latch (PredistortionWizardDialog:126): true once a run has been started
+    // in this window - the point from which the generator and the analyser carry the wizard's
+    // state. A window closed before that must leave both untouched.
+    this.engaged = false;
     this.savedName = null;       // name of the just-saved .dpd; non-null => #dpdSave is in Apply mode
   }
 
@@ -382,7 +386,10 @@ export class PredistortionWizard {
   /** Wires the wizard's modal + button handlers. Call once after the modal instance is live. */
   bind() {
     $('#predistBtn').on('click', () => {
-      this.applied = false; this.savedName = null;
+      // Java builds a FRESH dialog per open (FftPane:290 new PredistortionWizardDialog(...).open()),
+      // so its `engaged` latch starts false every time; this wizard object outlives the modal, so
+      // the latch is cleared here, beside `applied`.
+      this.applied = false; this.engaged = false; this.savedName = null;
       $('#dpdSave').text(t('predistortion.button.save')).prop('disabled', true);
       // Seed both fields from Preferences so the user's last-used values survive
       // reopening the wizard AND restarting the app (Java buildSettings:234/247).
@@ -397,12 +404,33 @@ export class PredistortionWizard {
       this.modal.show();
     });
 
-    // Wizard close (Java handleCancel, wired to the X / Esc / Cancel): stop the loop, revert the
-    // live compensation unless it was applied, and reset the FFT statistics so the view restarts clean.
+    // Wizard close (Java handleCancel :782-814, wired to the X / Esc / Cancel): stop the loop,
+    // then touch ONLY what a run touched.
     $('#predistModal').on('hidden.bs.modal', () => {
       this._stopPoll();
       if (this.pdEngine) this.pdEngine.stop();
-      if (!this.applied) this.host.clearCompensation();
+      // A window that never started a run has touched neither the generator nor the analyser, so
+      // closing it must leave both exactly as they were - no revert, and above all no statistics
+      // reset, which would throw away a deep average (a cumulative coherent FFT accumulation of
+      // many thousands of frames) collected before this window opened.
+      if (!this.engaged) return;
+      // Undo what the run did to the generator, unless it was committed via Apply. A run always
+      // begins by clearing whatever compensation was live (PredistortionEngine.runLoop, so that
+      // round 0 measures the raw DAC), so "undo" is not the plain tone: it is the correction the
+      // generator was configured with BEFORE this window opened. That .dpd is still in the
+      // per-form preference - only Apply overwrites it - so re-loading it restores the previous
+      // state; with none configured the plain tone IS the previous state. Web adaptation: the
+      // preference holds the .dpd TEXT, not an OS path, so a non-blank text stands in for Java's
+      // new File(previous).isFile() existence check.
+      if (!this.applied) {
+        const previous = this.prefs.getGenDpd(this.prefs.genSignalForm.get());
+        if (previous && previous.trim() !== '') this.host.loadCorrections(previous);
+        else this.host.clearCompensation();
+      }
+      // The run left the FFT in infinite coherent averaging with a deep accumulator full of
+      // predistortion-run frames (and, when reverting, the signal just changed); clear the
+      // statistics + accumulator so the live view restarts clean instead of averaging across
+      // the change.
       this.host.resetStatistics();
     });
 
@@ -455,6 +483,9 @@ export class PredistortionWizard {
       // now), label + colour flip to stop/danger (Java onStartStop:504 setText, plus
       // the web's colour cue). Reverted in onFinished / the catch path.
       this.running = true;
+      // Latch: from here on the generator and the FFT carry this run's state, so the close path
+      // reverts and resets (Java onStartStop :570-573 running = true; engaged = true).
+      this.engaged = true;
       $('#dpdStart').text(t('predistortion.button.stop'))
         .removeClass('btn-success').addClass('btn-danger');
       // Lock the run parameters for the duration of the tune (Java onStartStop

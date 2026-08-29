@@ -73,6 +73,18 @@ export class PredistortionHost {
     this.engine.postGen({ clearCompensation: true });
   }
 
+  /** Load a stored .dpd onto the running generator - the web twin of
+   *  GeneratorLane.loadCorrectionsFromFile(path), which parses the file and applies the
+   *  tables at the effective frequency. The browser has no OS path, so the per-form
+   *  preference keeps the .dpd TEXT and the text travels: the sink's kernel parses it
+   *  (loadHarmonics / loadIntermod), which is exactly the message the generator start
+   *  sends for a compensated form (GeneratorController.startGenerator, control.dpdText +
+   *  dpdFrequency). No-op when nothing is playing - postGen drops the message. */
+  loadCorrections(dpdText) {
+    if (!dpdText) return;
+    this.engine.postGen({ dpdText, dpdFrequency: this.effectiveFrequency() });
+  }
+
   resetStatistics() { this.engine.resetAnalyses(); }
   resetStatisticsAfterSignalChange() { this.engine.resetAnalyses(); }
   completedAnalyses() { return this.engine.completedAnalyses(); }
