@@ -123,6 +123,10 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     private boolean timerArmed;
     private String  savedPath;
     private boolean applied;
+    /** True once a run has been started in this window - the point from which
+     *  the generator and the analyser carry this wizard's state.  A window
+     *  closed before that must leave both untouched. */
+    private boolean engaged;
     /** Terminal status key set by {@link #onFinished} and shown while idle. */
     private String  terminalStatusKey = "predistortion.status.idle";
 
@@ -204,11 +208,12 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     private void buildFftGroup() {
         fftGroup = new Group(content, SWT.NONE);
         fftGroup.setText(I18n.t("predistortion.group.fft"));
-        fftGroup.setLayout(new GridLayout(1, false));
+        // Two columns, as the progress group below.
+        fftGroup.setLayout(new GridLayout(2, true));
         fftGroup.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
-        fftSizeLbl   = infoLabel(fftGroup);
-        fftRateLbl   = infoLabel(fftGroup);
-        fftWindowLbl = infoLabel(fftGroup);
+        fftSizeLbl   = infoLabel(fftGroup);      // row 0, col 0
+        fftRateLbl   = infoLabel(fftGroup);      // row 0, col 1
+        fftWindowLbl = infoLabel(fftGroup);      // row 1, col 0
     }
 
     private void buildChart() {
@@ -565,6 +570,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         double targetThdPct = targetField.getValue();
 
         running = true;
+        engaged = true;
         savedPath = null;
         applied = false;
         latestDistPct = Double.NaN;
@@ -778,9 +784,27 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
             engine.stop();
             running = false;
         }
-        // Revert the running generator to the plain tone unless the user
-        // committed via Apply.
-        if (!applied) gen.clearCompensation();
+        // A dialog that never started a run has touched neither the generator
+        // nor the analyser, so closing it must leave both exactly as they were -
+        // no revert, and above all no statistics reset, which would throw away a
+        // deep average the operator collected before opening this window.
+        if (!engaged) return true;
+        // Undo what the run did to the generator, unless the user committed via
+        // Apply.  A run always begins by clearing whatever compensation was
+        // live, so "undo" is not the plain tone: it is the correction file the
+        // generator was configured with BEFORE this window opened.  That path is
+        // still in the preferences - only Apply overwrites it - so re-loading it
+        // restores the previous state; with none configured the plain tone IS
+        // the previous state.
+        if (!applied) {
+            String previous = Preferences.instance()
+                    .getGenDpd(Preferences.instance().getGenSignalForm());
+            if (previous != null && !previous.isBlank() && new File(previous).isFile()) {
+                gen.loadCorrectionsFromFile(previous);
+            } else {
+                gen.clearCompensation();
+            }
+        }
         // The run left the FFT in infinite coherent averaging with a deep
         // accumulator full of predistortion-run frames (and, when reverting,
         // the signal just changed); clear the statistics + accumulator so the
