@@ -22,6 +22,8 @@ import { TileTabs } from '../widgets/tile-tabs.js';
 import { PresetBar } from '../widgets/preset-bar.js';
 import { NumericStepField, NumericStepModel, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
 import { unitValue } from '../widgets/unit-conversion.js';
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
 
 // ---- Filters / Unevenness field bounds (Java FreqRespTabControl constants) ----
 const FILTER_DB_MIN = 0.001;
@@ -82,6 +84,12 @@ export class FreqRespTabControl {
     new TileTabs('#frTabs').bind();
     // frStart/frStop/frAmp/frPoints/frLeadIn are NumericStepFields owned by app.js
     // (they two-way bind the prefs); here we only own the dropdowns, checkboxes and action wiring.
+    // The stored band comes down to the ceiling HERE, while this pane is built - which is before
+    // app.js's initStepFields runs - so those two-way binds seed an already-legal value.
+    this.clampSweepBandToCeiling();
+    // An audio-format commit moves the ceiling under a band that was legal when it was stored
+    // (Java FreqRespTabControl's AUDIO_FORMAT_CHANGED listener).
+    MessageBus.instance().subscribe(Events.AUDIO_FORMAT_CHANGED, () => this.clampSweepBandToCeiling());
     $('#frDur').val(this.controller.durationSec());
     $('#frRiaaRev').prop('checked', this.prefs.freqRespReverseRiaa.get());
     $('#frRiaaIec').prop('checked', this.prefs.freqRespIecAmendment.get());
@@ -172,6 +180,25 @@ export class FreqRespTabControl {
     this.refreshPresetList();
     this.refreshRiaaEnable();
     this.refreshUnevenTile();
+  }
+
+  /** Brings the two stored swept-band edges down to the sweep-band ceiling - the lower of the two
+   *  configured Nyquist limits, which the controller owns (Java
+   *  FreqRespTabControl.clampSweepBandToCeiling / sweepBandCeilingHz).
+   *
+   *  <p>Setting the edge fields' maximum is not enough on its own: a field clamps what it DISPLAYS
+   *  and writes back to the preference only when the displayed value actually moved, so a stored or
+   *  preset-applied band above the ceiling stays in the preference while the field shows the
+   *  ceiling - and the measurement reads the preference, not the field. That gap would emit a chirp
+   *  sweeping past the DAC's Nyquist while dividing it by a reference that does not alias.
+   *
+   *  <p>The other frequency fields on these tabs (the post-measure filters, the unevenness range)
+   *  work on the measured curve alone, so they keep the analysis Nyquist. */
+  clampSweepBandToCeiling() {
+    const ceiling = this.controller.sweepBandCeilingHz();
+    const p = this.prefs;
+    if (p.freqRespStartHz.get() > ceiling) p.freqRespStartHz.set(ceiling);
+    if (p.freqRespStopHz.get() > ceiling) p.freqRespStopHz.set(ceiling);
   }
 
   /** Re-runs the RIAA enable cascade (Java FreqRespTabControl.refreshRiaaEnable): Show gates
@@ -681,6 +708,11 @@ export class FreqRespTabControl {
     const prefs = this.prefs;
     prefs.freqRespStartHz.set(p.startHz);
     prefs.freqRespStopHz.set(p.stopHz);
+    // A preset carries the band it was SAVED with, which may sit above the ceiling the currently
+    // configured converters allow - a stored 96 kHz stop on a card since reconfigured to a 48 kHz
+    // DAC. The edge fields would show the ceiling while the preference kept the saved number, and
+    // the measurement reads the preference.
+    this.clampSweepBandToCeiling();
     prefs.freqRespAmplitude.set(unitValue(p.amplitude, p.amplitudeUnit));
     prefs.freqRespSweepPoints.set(p.sweepPoints);
     prefs.freqRespFftSize.set(p.fftSize);   // re-derives durationSec via the controller subscription
@@ -707,7 +739,9 @@ export class FreqRespTabControl {
     // Reflect the recalled prefs into the live widgets (the NumericStepFields are owned by
     // app.js; reseed the ones this control owns + the derived label).
     const $ = this.$;
-    $('#frStart').val(p.startHz); $('#frStop').val(p.stopHz);
+    // The CLAMPED edges, not the preset's raw pair: a band the ceiling brought down must not be
+    // written back over the field display the clamp already moved.
+    $('#frStart').val(prefs.freqRespStartHz.get()); $('#frStop').val(prefs.freqRespStopHz.get());
     // No #frAmp write here: the amplitude pref above already replayed the recalled pair through
     // the field, which renders it with its unit suffix ("500 mV"). Writing the raw token over
     // that would put an unlocalized string in front of the operator.

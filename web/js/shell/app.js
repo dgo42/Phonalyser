@@ -237,7 +237,7 @@ const GEN_FREQ_MIN_HZ = 0.01;   // Java GeneratorPane.GEN_FREQ_MIN_HZ
 // The averages dial's Off sentinel + preset series live with the FFT tab control (Java
 // FftTabControl.AVERAGES_OFF / AVERAGES_SERIES), which also renders them on the tile.
 const outRate = () => parseInt($('#outRate').val(), 10) || prefs.current().outputSampleRate || 384000;
-const inRate = () => parseInt($('#inRate').val(), 10) || prefs.current().inputSampleRate || 384000;   // FR fields cap at INPUT Nyquist
+const inRate = () => parseInt($('#inRate').val(), 10) || prefs.current().inputSampleRate || 384000;
 
 // NumericStepField controllers, built in init() once i18n has resolved (the unit
 // suffixes come from t('unit.*')). Keyed by the input id.
@@ -494,10 +494,15 @@ function initStepFields() {
 
   // FreqResp settings fields.
   const fr = (id, model, onChange) => mk(id, model, onChange);
-  const fStart = fr('frStart', new NumericStepModel({ family: F.FREQUENCY, min: FREQ_MIN_HZ, max: inRate() / 2, maxDecimals: FREQ_MAX_DECIMALS }),
+  // The sweep band's ceiling is the LOWER of the two Nyquist frequencies (Java
+  // FreqRespTabControl.sweepBandCeilingHz): the sweep has to be both emittable
+  // on the output clock and observable on the input clock, and with Web Audio
+  // the two rates can differ.
+  const sweepBandCeilingHz = () => Math.min(inRate(), outRate()) / 2;
+  const fStart = fr('frStart', new NumericStepModel({ family: F.FREQUENCY, min: FREQ_MIN_HZ, max: sweepBandCeilingHz(), maxDecimals: FREQ_MAX_DECIMALS }),
     (v) => prefs.freqRespStartHz.set(v));
   if (fStart) fStart.setValue(prefs.freqRespStartHz.get());
-  const fStop = fr('frStop', new NumericStepModel({ family: F.FREQUENCY, min: FREQ_MIN_HZ, max: inRate() / 2, maxDecimals: FREQ_MAX_DECIMALS }),
+  const fStop = fr('frStop', new NumericStepModel({ family: F.FREQUENCY, min: FREQ_MIN_HZ, max: sweepBandCeilingHz(), maxDecimals: FREQ_MAX_DECIMALS }),
     (v) => prefs.freqRespStopHz.set(v));
   if (fStop) fStop.setValue(prefs.freqRespStopHz.get());
   // fsAmplSupplier enables dBFS entry (as on the generator). NB: unlike the generator this field
@@ -533,19 +538,24 @@ function initStepFields() {
     fPts.setValue(prefs.freqRespSweepPoints.get());
   }
 
-  // Audio-format edits move the Nyquist ceiling of the sweep band edges and the
-  // sample-rate/2 entry of the sweep-points series - re-pull both on an input-rate
-  // change (Java FreqRespTabControl AUDIO_FORMAT_CHANGED listener).
+  // Audio-format edits move the ceiling of the sweep band edges (the lower of
+  // the two Nyquist frequencies, so EITHER rate moves it) and the sample-rate/2
+  // entry of the sweep-points series (the input rate alone) - re-pull them on a
+  // rate change (Java FreqRespTabControl AUDIO_FORMAT_CHANGED listener).
+  const repinSweepBand = () => {
+    const ceiling = sweepBandCeilingHz();
+    if (fStart) fStart.setMax(ceiling);
+    if (fStop) fStop.setMax(ceiling);
+  };
   $('#inRate').on('input-sample-rate-change change', () => {
-    const nyquist = inRate() / 2;
-    if (fStart) fStart.setMax(nyquist);
-    if (fStop) fStop.setMax(nyquist);
+    repinSweepBand();
     if (fPts) {
       fPts.model.setSeries(sweepPointSeries());
       fPts.model.setNamedValue(nyquistPointCount(), t('freqResp.settings.points.halfScale'));
       fPts.refresh();
     }
   });
+  $('#outRate').on('change', repinSweepBand);
 
   // Two-way bind the FreqResp step fields to their prefs (Java Bindings.stepField /
   // stepFieldInt are two-way): an external write - preset recall, wizard - updates the

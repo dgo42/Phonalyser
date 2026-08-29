@@ -467,11 +467,15 @@ export class TuneNotchWizard {
     return this.viewPrefs.freqRespLeftVisible.get() ? this._latestLeft : this._latestRight;
   }
 
-  /** Input Nyquist (the frequency fields' ceiling, Java prefs.current()
-   *  .getInputSampleRate() / 2). */
+  /** The frequency fields' ceiling: the LOWER of the two configured Nyquist limits (Java
+   *  TuneNotchWizardDialog's `Math.min(getInputSampleRate(), getOutputSampleRate()) / 2`).
+   *  The band has to be BOTH emittable and observable - above the DAC's Nyquist the chirp
+   *  is not what leaves the card, above the ADC's it is not what comes back. */
   _nyquistHz() {
-    return ((this.engine.config && this.engine.config.inRate)
-      || this.prefs.current().inputSampleRate || 384000) / 2;
+    const c = this.engine.config;
+    const capture = (c && c.inRate) || this.prefs.current().inputSampleRate || 384000;
+    const playback = (c && c.outRate) || this.prefs.current().outputSampleRate || 384000;
+    return Math.min(capture, playback) / 2;
   }
 
   // ---------------------------------------------------------------------------
@@ -508,7 +512,12 @@ export class TuneNotchWizard {
 
       const engine = this.engine;
       const prefs = this.prefs;
-      const sampleRate = engine.config.inRate;
+      // Each converter runs the format IT is configured with (Java TuneNotchWizardDialog): the
+      // playback lane opens on the output rate, while the capture and everything derived from the
+      // captured window - the loop period, the seam fade, the deconvolution and its bin grid - are
+      // on the input rate. There is no bit depth on either side here (float32 throughout).
+      const captureRate = engine.config.inRate;
+      const playbackRate = engine.config.outRate || prefs.current().outputSampleRate;
       // Read the DAC/ADC voltage references once: they don't change for the
       // lifetime of the session. (Java also reads ditherBits for its DAC dither;
       // the web capture path is float - no dither, intended divergence.)
@@ -521,13 +530,15 @@ export class TuneNotchWizard {
       const adcFsVrmsLeft = prefs.getAdcFsVoltageRms('L');
       const adcFsVrmsRight = prefs.getAdcFsVoltageRms('R');
 
-      // The loop period MUST be a power of two - see powerOfTwoSweepSamples (the
-      // circular-FFT invariant that makes an arbitrary-phase grab safe).
-      const sweepSamples = powerOfTwoSweepSamples(sampleRate);
-      const fadeSamples = notchFadeSamples(sampleRate);
+      // The loop period MUST be a power of two IN CAPTURE SAMPLES - see powerOfTwoSweepSamples
+      // (the circular-FFT invariant that makes an arbitrary-phase grab safe); the engine converts
+      // the same duration to the DAC's own sample count, refusing a rate pair that leaves it
+      // fractional.
+      const sweepSamples = powerOfTwoSweepSamples(captureRate);
+      const fadeSamples = notchFadeSamples(captureRate);
       // One loop period of the captured stream, in ms - the grab cadence and the
       // percentage's denominator.
-      const loopPeriodMs = Math.round((sweepSamples / sampleRate) * 1000.0);
+      const loopPeriodMs = Math.round((sweepSamples / captureRate) * 1000.0);
 
       const notch = new NotchSweepEngine({
         capture: {
@@ -539,7 +550,8 @@ export class TuneNotchWizard {
         startGenerator: () => engine.startGenerator(),
         stopGenerator: () => engine.stopGenerator(),
         postGen: (msg) => engine.postGen(msg),
-        sampleRate,
+        captureRateHz: captureRate,
+        playbackRateHz: playbackRate,
       });
       this._notchEngine = notch;
       // Match the output grid to the deconvolution's FFT bin spacing for ONE
@@ -586,7 +598,7 @@ export class TuneNotchWizard {
         const sweepRef = notch.sweepRef();
         // Deconvolve INLINE (the web is single-threaded - Java overlaps this on
         // a one-thread executor), then idle out the rest of the loop period.
-        this._deconvolveAndPublish(win, sweepRef, fadeSamples, freqs, sampleRate,
+        this._deconvolveAndPublish(win, sweepRef, fadeSamples, freqs, captureRate,
           startHz, stopHz, ampVrms, adcFsVrmsLeft, adcFsVrmsRight);
 
         // Spread the percentage across the loop period (progress toward the
@@ -644,19 +656,21 @@ export class TuneNotchWizard {
    *  the L/R buttons let the user pick which shows (default R). The window is one
    *  steady-state period (leadIn 0); |H(f)| is phase-invariant so its alignment to the
    *  sweep-cycle start doesn't matter. Savitzky-Golay smoothing is OFF (Java's `false`
-   *  flag): the bin-aligned grid is coarse and SG rounds a deep narrow null shallow. */
-  _deconvolveAndPublish(win, sweepRef, fade, freqs, sampleRate,
+   *  flag): the bin-aligned grid is coarse and SG rounds a deep narrow null shallow.
+   *  Every number here is on the CAPTURE clock - the window, the reference beside it, the
+   *  seam fade and the rate stamped into both results. */
+  _deconvolveAndPublish(win, sweepRef, fade, freqs, captureRate,
     startHz, stopHz, ampVrms, adcFsVrmsLeft, adcFsVrmsRight) {
     if (!this._running) return;
     try {
-      const calL = computeFromLogSweep(win.left, sweepRef, 0, sampleRate, freqs, ampVrms, adcFsVrmsLeft, fade, false);
-      const calR = computeFromLogSweep(win.right, sweepRef, 0, sampleRate, freqs, ampVrms, adcFsVrmsRight, fade, false);
+      const calL = computeFromLogSweep(win.left, sweepRef, 0, captureRate, freqs, ampVrms, adcFsVrmsLeft, fade, false);
+      const calR = computeFromLogSweep(win.right, sweepRef, 0, captureRate, freqs, ampVrms, adcFsVrmsRight, fade, false);
       const sweepParams = {
         startHz, stopHz, sweepPoints: freqs.length,
         durationSec: SWEEP_DURATION_SEC, leadInSec: SWEEP_LEAD_IN_SEC, amplitudeVrms: ampVrms,
       };
-      const left = makeFreqRespResult('L', sampleRate, calL.freqs, calL.magLin, calL.phaseRad, sweepParams, null, false);
-      const right = makeFreqRespResult('R', sampleRate, calR.freqs, calR.magLin, calR.phaseRad, sweepParams, null, false);
+      const left = makeFreqRespResult('L', captureRate, calL.freqs, calL.magLin, calL.phaseRad, sweepParams, null, false);
+      const right = makeFreqRespResult('R', captureRate, calR.freqs, calR.magLin, calR.phaseRad, sweepParams, null, false);
       if (!this._running) return;
       this._onSweepResult(left, right);
     } catch (e) {

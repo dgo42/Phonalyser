@@ -346,8 +346,11 @@ export class PreferencesDialog {
       this.publishActiveRangeChanges();
 
       // Re-pin the Nyquist-derived field bounds from the committed input/output rates.
-      const inNyq = this.inRate() / 2;
-      for (const id of ['frStart', 'frStop']) if (this.stepFields[id]) this.stepFields[id].setMax(inNyq);
+      // The sweep band's ceiling is the LOWER of the two Nyquist frequencies (Java
+      // FreqRespTabControl.sweepBandCeilingHz) - the sweep has to be both
+      // emittable and observable.
+      const sweepNyq = Math.min(this.inRate(), this.outRate()) / 2;
+      for (const id of ['frStart', 'frStop']) if (this.stepFields[id]) this.stepFields[id].setMax(sweepNyq);
       const outNyq = this.outRate() / 2;
       for (const id of ['toneHz', 'tone2Hz', 'sweepStart', 'sweepStop']) if (this.stepFields[id]) this.stepFields[id].setMax(outNyq);
 

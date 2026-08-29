@@ -61,8 +61,9 @@ export class FreqRespController {
   static DECONVOLVE_TIMEOUT_MS = 60000;
 
   /**
-   * @param {import('../audio/backend.js').AudioEngine} engine the live engine
-   *   (the capture/input sample rate drives the derived duration; the sweep records off it).
+   * @param {import('../audio/backend.js').AudioEngine} engine the live engine - it carries BOTH
+   *   configured clocks: the capture/input rate the derived duration and the record are counted
+   *   in, and the playback/output rate the chirp is rendered and emitted on.
    * @param {import('../store/preferences.js').Preferences} prefs Preferences.instance()
    * @param {import('./freqresp-view.js').FreqRespView} view the passive canvas view the sweep drives
    * @param {import('../common/correction-store.js').CorrectionStore} correctionStore the loaded-.frc store
@@ -141,7 +142,7 @@ export class FreqRespController {
    *  SWEEP_MIN_SEC. */
   deriveDuration() {
     const prefs = this.prefs;
-    const sr = Math.max(1, this.sampleRate());
+    const sr = Math.max(1, this.captureRateHz());
     const leadIn = Math.round(prefs.freqRespLeadInSec.get() * sr);
     const tail = Math.round(SWEEP_MIN_SEC * sr);
     let sweep = prefs.freqRespFftSize.get() - leadIn - tail;
@@ -150,12 +151,33 @@ export class FreqRespController {
     prefs.freqRespDurationSec.set(sweep / sr);
   }
 
-  /** The capture (input) sample rate the duration is derived against - the loopback sweep is
-   *  recorded on the input, so the FFT window is in input samples (Java getInputSampleRate). */
-  sampleRate() {
+  /** The ADC's configured rate (Hz): the clock the recording arrives on, and therefore the clock
+   *  the deconvolution, its reference, its bin grid and the result's Nyquist are all counted in
+   *  (Java FreqRespAnalyzerConfig.captureRateHz, read off BackendPrefs.getInputSampleRate). The
+   *  FFT window deriveDuration solves for is in these samples too. */
+  captureRateHz() {
     return (this.engine.config && this.engine.config.inRate)
         || this.prefs.current().inputSampleRate
         || 384000;
+  }
+
+  /** The DAC's configured rate (Hz) - the format the output line is opened with and the clock the
+   *  played chirp is rendered on (Java FreqRespAnalyzerConfig.playbackRateHz, read off
+   *  BackendPrefs.getOutputSampleRate). Independent of {@link #captureRateHz}: with Web Audio the
+   *  capture rate is whatever the device runs at while the playback rate is configurable, so the
+   *  two differ exactly as on a card whose sides are set differently. */
+  playbackRateHz() {
+    return (this.engine.config && this.engine.config.outRate)
+        || this.prefs.current().outputSampleRate
+        || 384000;
+  }
+
+  /** Ceiling for the SWEPT BAND's two edges: the lower of the two configured Nyquist limits (Java
+   *  FreqRespAnalyzer.validate's bandCeilingHz, FreqRespTabControl.sweepBandCeilingHz). The band
+   *  has to be BOTH emittable and observable - above the DAC's Nyquist the chirp folds back on the
+   *  way out, above the ADC's it folds back on the way in. */
+  sweepBandCeilingHz() {
+    return Math.min(this.captureRateHz(), this.playbackRateHz()) / 2.0;
   }
 
   // ===========================================================================
@@ -229,10 +251,21 @@ export class FreqRespController {
 
     // Declared BEFORE the try so the finally can still read them if any setup below throws:
     // every FREQRESP_MEASUREMENT_STARTED must be balanced by the finally's STOPPED (Java
-    // FreqRespAnalyzerWorker's finally always publishes STOPPED). Reference + played sweep are
-    // authored later, AFTER the capture device is open at the ACTUAL granted ADC rate (NOT the
-    // nominal engine.config.inRate), so the deconvolution reads the exact reference + rate played.
-    let sweepRef, played, grantedOutRate, sampleRate, sweepSamples, leadInSamples, fade;
+    // FreqRespAnalyzerWorker's finally always publishes STOPPED).
+    //
+    // ONE sweep, TWO clocks (Java FreqRespAnalyzer.run). The chirp is a stretch of time - lead-in
+    // silence, then the sweep - and each converter counts that same time in its own configured
+    // samples: the play* counts describe what leaves the DAC, the rec* counts describe what the ADC
+    // delivered and everything read off it (the deconvolution, its reference, the bin grid, the
+    // result's Nyquist). Deriving both from the SECONDS keeps them equal in time whatever the rate
+    // pair is; the two roundings can differ by less than one sample, which the deconvolution's own
+    // delay correction absorbs. The rec* counts are taken AFTER the capture device is open, at the
+    // rate the browser ACTUALLY granted the ADC (not the nominal one that was asked for), so the
+    // deconvolution reads the exact reference + rate captured; the play* counts are on the DAC's
+    // own CONFIGURED rate, the format its line is opened with.
+    let sweepRef, played, grantedOutRate, playbackRate;
+    let captureRate, recSweepSamples, recLeadInSamples, recFade;
+    let playSweepSamples, playLeadInSamples, playFade;
     let recStarted = false, playStarted = false, sweepCtxOpened = false;
     try {
       // Publish FIRST (Java FreqRespAnalyzerWorker.start): every consumer runs its stop logic -
@@ -241,6 +274,20 @@ export class FreqRespController {
       // throw in the setup below still hits the finally that publishes STOPPED (no orphaned START).
       MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
       $('#frRunStrip, #frRun').prop('disabled', true);
+      // The band has to be BOTH emittable and observable (Java FreqRespAnalyzer.validate). Above
+      // the DAC's Nyquist the chirp folds back on the way out; above the ADC's it folds back on the
+      // way in - and either way the deconvolution reference, which is rendered from the asked band
+      // and never folds, divides a signal that did. The whole trace then comes out wrong while
+      // still looking plausible, because the impulse-response peak that sets the delay correction
+      // is computed from that same polluted division. Refused, with both configured rates named,
+      // rather than drawn - and refused BEFORE the busy modal opens, so nothing has to be torn down.
+      const bandCeilingHz = this.sweepBandCeilingHz();
+      if (f1 > bandCeilingHz) {
+        throw new Error(`stopHz ${f1} Hz is above ${bandCeilingHz} Hz, half the lower of the `
+          + `configured ${this.playbackRateHz()} Hz output and ${this.captureRateHz()} Hz input `
+          + 'rates - the sweep would alias and the measurement would be wrong everywhere, not just '
+          + 'at the top');
+      }
       this.openBusyMeter(totalSec, leadInSec, durSec, f0, f1);
       this.status(`sweeping ${f0}-${f1} Hz over ${durSec}s...`);
 
@@ -266,38 +313,53 @@ export class FreqRespController {
       // time-scales the capture against the reference (the comb-of-nulls + "runs faster" bug).
       await engine.startCaptureRecording();
       recStarted = true;
-      sampleRate    = engine.config.inRate;             // ACTUAL granted ADC rate
-      sweepSamples  = Math.round(durSec * sampleRate);
-      leadInSamples = Math.round(leadInSec * sampleRate);
-      fade          = sweepFadeSamples(sweepSamples);
+      captureRate      = engine.config.inRate;          // ACTUAL granted ADC rate
+      playbackRate     = this.playbackRateHz();         // the DAC's own configured rate
+      recSweepSamples  = Math.round(durSec * captureRate);
+      recLeadInSamples = Math.round(leadInSec * captureRate);
+      playSweepSamples  = Math.round(durSec * playbackRate);
+      playLeadInSamples = Math.round(leadInSec * playbackRate);
+      // The Tukey fade is a FRACTION of the sweep, so these two counts are the same fade in
+      // seconds on the two clocks (Java FreqRespAnalyzer's playFadeSamples / recFadeSamples).
+      recFade  = sweepFadeSamples(recSweepSamples);
+      playFade = sweepFadeSamples(playSweepSamples);
 
-      // Open the DAC context (playback needs it), requesting the same rate. NO band cap: the DAC
-      // runs on its own clock and the sweep goes to the full requested f1. playSweepBuffer tags
-      // the buffer at the authoring rate, so the browser resampler preserves the physical sweep
-      // duration if the DAC's granted rate differs.
-      grantedOutRate = await engine.openSweepContext(sampleRate, { outputChannels });
+      // Open the DAC context at the DAC's OWN configured rate: each converter opens in ITS
+      // configured format, and a card whose two sides are set differently refuses an output line
+      // opened in the ADC's format outright. NO band cap: the sweep goes to the full requested f1,
+      // which the ceiling check above has already held below both Nyquist limits. playSweepBuffer
+      // tags the buffer at the authoring rate, so the browser resampler preserves the physical
+      // sweep duration if the local context's granted rate differs from the configured one.
+      grantedOutRate = await engine.openSweepContext(playbackRate, { outputChannels });
       sweepCtxOpened = true;
       // A bench that granted ANOTHER rate is refused BEFORE anything is authored (Java
-      // SweepCapture.requireRate on the generator lane): every sample count below is computed
-      // against the asked clock, so a lane running on a different one measures the mismatch and
-      // not the device. A local context resamples the buffer instead (playSweepBuffer's rate tag),
-      // which is why the guard is the remote lane's alone.
-      if (remote && grantedOutRate !== sampleRate) {
+      // SweepCapture.requireRate on the generator lane): every playback count above is computed
+      // against the asked output clock, so a lane running on a different one measures the mismatch
+      // and not the device. A local context resamples the buffer instead (playSweepBuffer's rate
+      // tag), which is why the guard is the remote lane's alone.
+      if (remote && grantedOutRate !== playbackRate) {
         throw new Error(`the generator lane runs at ${grantedOutRate} Hz but the sweep was built `
-          + `for ${sampleRate} Hz - the measurement is refused rather than shown wrong`);
+          + `for ${playbackRate} Hz - the measurement is refused rather than shown wrong`);
       }
 
       // Reference X(t): the RAW (unwindowed) unit-amplitude Farina sweep over [f0,f1] at the
-      // CAPTURE rate. computeFromLogSweep applies the same Tukey fade to it internally.
-      sweepRef = renderLogSweep(f0, f1, sweepSamples, sampleRate);
-      // Played buffer = the EXACT signal BOTH played and deconvolved against, at the CAPTURE rate:
-      // [lead-in silence] + [windowed sweep, amplitude-scaled to the DAC peak]. A BENCH builds the
-      // identical chirp from the numbers it is sent (there is no uplink audio, spec 7), so only a
-      // local lane needs the samples themselves.
+      // CAPTURE rate and in CAPTURE samples. It divides a recording that came off the ADC, and
+      // computeFromLogSweep sizes one transform over the longer of the two - so a reference on a
+      // faster DAC clock would be a different number of samples for the same seconds, zero-pad the
+      // recording inside that transform, and shift the lead-in INDEX by leadInSec x the rate
+      // difference, an error the impulse-response delay correction absorbs into a plausible wrong
+      // trace. computeFromLogSweep applies the same Tukey fade to it internally.
+      sweepRef = renderLogSweep(f0, f1, recSweepSamples, captureRate);
+      // Played buffer: [lead-in silence] + [windowed sweep, amplitude-scaled to the DAC peak], in
+      // PLAYBACK samples at the PLAYBACK rate - it describes what leaves the DAC. A BENCH builds
+      // the identical chirp from the numbers it is sent (there is no uplink audio, spec 7), so only
+      // a local lane needs the samples themselves.
       if (!remote) {
-        const windowed = renderWindowedLogSweep(f0, f1, sweepSamples, sampleRate, fade);
-        played = new Float64Array(leadInSamples + sweepSamples);
-        for (let i = 0; i < sweepSamples; i++) played[leadInSamples + i] = windowed[i] * peakScale;
+        const windowed = renderWindowedLogSweep(f0, f1, playSweepSamples, playbackRate, playFade);
+        played = new Float64Array(playLeadInSamples + playSweepSamples);
+        for (let i = 0; i < playSweepSamples; i++) {
+          played[playLeadInSamples + i] = windowed[i] * peakScale;
+        }
       }
       // Cold-device warmup BEFORE the one-shot sweep. A freshly-opened USB ADC/DAC streams
       // silence for the first tens-hundreds of ms while it spins up; without a settle the sweep
@@ -317,10 +379,12 @@ export class FreqRespController {
       // Marks recorded after this position are THIS sweep's; a stale one from an earlier sweep on
       // the same stream is never mistaken for it (SweepCapture's armedAt, taken before the start).
       const armedAt = remote ? reader.getWritePos() : 0;
-      await engine.playSweepBuffer(played, sampleRate, { outputChannels,
-        // The bench's copy of the same chirp: SAMPLES at the asked rate, never seconds - a
-        // duration converted at the wrong clock is a sweep of the wrong length.
-        sweep: { f0, f1, sweepSamples, leadInSamples, fadeSamples: fade, amplitudeVRms } });
+      await engine.playSweepBuffer(played, playbackRate, { outputChannels,
+        // The bench's copy of the same chirp: SAMPLES at the asked OUTPUT rate, never seconds - a
+        // duration converted at the wrong clock is a sweep of the wrong length (Java
+        // StereoCaptureProvider.forSweep, whose counts are all against playbackRateHz).
+        sweep: { f0, f1, sweepSamples: playSweepSamples, leadInSamples: playLeadInSamples,
+          fadeSamples: playFade, amplitudeVRms } });
       playStarted = true;
       if (remote) {
         // Where the bench's sweep actually began, in-band (spec 5's MARKER): the local warmup
@@ -332,23 +396,26 @@ export class FreqRespController {
       // Capture wait loop, polling the cooperative cancel flag every 50 ms. Each pass also pumps
       // the live meter from the recording's freshly-arrived tail so the trace fills in AS the
       // sweep collects - the web equivalent of the desktop's per-block StereoCaptureProgress.
-      const meterBlock = Math.max(1, Math.round(sampleRate * 0.02));   // ~20 ms blocks
+      // The record is the ADC's, so every count and the meter's time axis divide by the CAPTURE
+      // rate (Java FreqRespWizardDialog's progress callback: "the busy meter's time axis is the
+      // RECORD's").
+      const meterBlock = Math.max(1, Math.round(captureRate * 0.02));   // ~20 ms blocks
       let meterCursor = 0;
       // The record is full after totalSec of audio: locally that is totalSec of wall clock, but a
       // bench's stream reaches us a transport hop later, so there the FRAMES decide (Java
       // SweepCapture.assemble collects a COUNT, not a duration). Bounded by the same mark timeout
       // so a stream that dies mid-sweep fails the measurement instead of hanging it.
-      const totalFrames = Math.round(totalSec * sampleRate);
+      const totalFrames = Math.round(totalSec * captureRate);
       const tEnd = performance.now() + totalSec * 1000;
       const tHardEnd = tEnd + (remote ? FreqRespController.MARK_TIMEOUT_MS : 0);
       while (performance.now() < tHardEnd) {
         if (this._cancelled) return null;
-        meterCursor = this.pumpMeter(meterCursor, meterBlock, sampleRate);
+        meterCursor = this.pumpMeter(meterCursor, meterBlock, captureRate);
         if (performance.now() >= tEnd && (!remote || engine.recordingLength() >= totalFrames)) break;
         await new Promise((r) => setTimeout(r, 50));
       }
       // Flush the tail blocks that landed after the last poll.
-      this.pumpMeter(meterCursor, meterBlock, sampleRate);
+      this.pumpMeter(meterCursor, meterBlock, captureRate);
       await engine.stopFile();
       playStarted = false;
       const rec = await engine.stopCaptureRecording();
@@ -362,8 +429,8 @@ export class FreqRespController {
       // Output grid sampled at the deconvolution's FFT bin centres so each bin is read with
       // fractional offset 0 - no phase-sensitive complex interpolation between bins. Built from
       // the ACTUAL capture length so binHz matches computeFromLogSweep's nextPow2(...) FFT.
-      const deconvM = nextPow2(Math.max(rec.left.length, leadInSamples + sweepSamples));
-      const binHz = sampleRate / deconvM;
+      const deconvM = nextPow2(Math.max(rec.left.length, recLeadInSamples + recSweepSamples));
+      const binHz = captureRate / deconvM;
       const freqs = binAlignedFreqs(f0, f1, binHz, this.prefs.freqRespSweepPoints.get());
       // The RAW capture peak is read HERE, before the channels are handed to the worker: the
       // deconvolution takes their buffers as transferables, so after that call this side holds
@@ -372,9 +439,14 @@ export class FreqRespController {
       // applySavGol=false on BOTH channels (Java FreqRespAnalyzer.java:151,156): the SG output
       // smoothing rounds the bottom off a deep/narrow notch null, so the main sweep leaves it OFF
       // (the Tune-notch wizard already does). The default stays true for other callers.
+      // Every number on this job is a CAPTURE-clock quantity - the recording, the reference beside
+      // it, the lead-in index into it and the fade that shapes both ends. The job keys keep
+      // computeFromLogSweep's own parameter names, as they do in Java, where only the caller's
+      // locals carry the clock.
       const { calL, calR } = await this._deconvolveBoth({
-        recLeft: rec.left, recRight: rec.right, sweepRef, leadInSamples, sampleRate, freqs,
-        amplitudeVRms, adcFsVoltageRms, fade, applySavGol: false,
+        recLeft: rec.left, recRight: rec.right, sweepRef, leadInSamples: recLeadInSamples,
+        sampleRate: captureRate, freqs, amplitudeVRms, adcFsVoltageRms, fade: recFade,
+        applySavGol: false,
       });
       // The wizard's page 2 divides out the page-1 loopback so the DUT shows alone (Java
       // FreqRespAnalyzerConfig.applyCalibration on the direct cal).
@@ -389,8 +461,10 @@ export class FreqRespController {
         startHz: f0, stopHz: f1, sweepPoints: freqs.length,
         durationSec: durSec, leadInSec, amplitudeVrms: amplitudeVRms,
       };
-      const left = makeFreqRespResult('L', sampleRate, calL.freqs, calL.magLin, calL.phaseRad, sweepParams, null, false);
-      const right = makeFreqRespResult('R', sampleRate, calR.freqs, calR.magLin, calR.phaseRad, sweepParams, null, false);
+      // The result carries the CAPTURE rate: it is the measurement's own Nyquist, the one every
+      // consumer draws and saves the trace against (Java FreqRespAnalyzer's two FreqRespResults).
+      const left = makeFreqRespResult('L', captureRate, calL.freqs, calL.magLin, calL.phaseRad, sweepParams, null, false);
+      const right = makeFreqRespResult('R', captureRate, calR.freqs, calR.magLin, calR.phaseRad, sweepParams, null, false);
       // The RAW capture peak travels with the result (Java FreqRespAnalyzer.rawPeak): after the
       // deconvolution a clipped sweep is a smooth, plausible curve - the flat tops are gone and
       // nothing downstream can tell. Measured on the samples is the only chance.

@@ -18,12 +18,21 @@
 // real-time recording wait.
 //
 // No alignment of the grabbed window to the sweep-cycle start is needed - but
-// ONLY because the wizard makes the loop period a power of two, so
-// computeFromLogSweep's nextPow2(period) FFT is exactly one period: a CIRCULAR
-// transform. A window grabbed at any loop phase is then just a circular shift,
-// which leaves the magnitude |H(f)| unchanged. (With a non-power-of-two period
-// the FFT would be zero-padded/linear, an unaligned window would wrap the
-// period across the buffer, and every bin would corrupt into a random spike.)
+// ONLY because the wizard makes the loop period a power of two AT THE CAPTURE
+// CLOCK, so computeFromLogSweep's nextPow2(period) FFT is exactly one period: a
+// CIRCULAR transform. A window grabbed at any loop phase is then just a
+// circular shift, which leaves the magnitude |H(f)| unchanged. (With a
+// non-power-of-two period the FFT would be zero-padded/linear, an unaligned
+// window would wrap the period across the buffer, and every bin would corrupt
+// into a random spike.)
+//
+// THE TWO CONVERTERS RUN THEIR OWN CONFIGURED FORMATS. The DAC is opened on the
+// output rate, the ADC delivers the input rate, and the two need not be equal -
+// so the loop is described as a DURATION and each side counts it in its own
+// samples: the period is the power of two at the capture clock, the emitted
+// loop is that same duration in output samples, and the deconvolution reference
+// is rendered at the capture clock because that is the clock the window it
+// divides came off.
 //
 // Intended web adaptations (the Java engine owns JavaSound lines + its own
 // ring + a MAX_PRIORITY generator thread; the web has neither raw lines nor
@@ -44,13 +53,14 @@
 //     Java's raw-ADC-code/halfRange conversion (bitDepth/ditherBits) does not exist here - an
 //     intended web divergence (no bit-depth selector).
 //   - sweepRef() re-renders the reference locally (renderLogSweep, the port of
-//     SignalGenerator#renderLogSweep the kernel itself uses) instead of taking
-//     the generator thread's live buffer back; on setBand() it re-renders so
-//     the reference tracks the played band exactly like Java's rebuilt buffer.
-//   - Java assumes ONE exclusive-mode clock for DAC + ADC; the web's output
-//     and capture AudioContexts are independent clocks. Like the existing
-//     runSweep path, this engine assumes matching in/out rates (sampleRate is
-//     the CAPTURE rate the deconvolution runs at).
+//     SignalGenerator#renderLogSweep the Java engine builds its own reference
+//     with) instead of taking the generator's live buffer back; on setBand() it
+//     re-renders so the reference tracks the played band exactly like Java's
+//     rebuilt buffer. It is rendered at the CAPTURE clock and with the capture
+//     count, because it divides a window that came off the ADC.
+//   - Bit depth and dither do not exist on either side here (Web Audio is
+//     float32 throughout), so Java's playbackBitDepth / ditherBits constructor
+//     arguments have no web counterpart - the rate pair is the whole format.
 
 import { GenSignalForm } from '../generator/dds-kernel.js';
 import { nextPow2 } from '../dsp/mathutil.js';
@@ -78,9 +88,12 @@ export const FADE_SEC = 0.025;
 export const SWEEP_MARGIN_SAFETY = 2.5;
 
 /**
- * The loop period in samples: the power of two NEAREST to
- * SWEEP_DURATION_SEC · sampleRate. The period MUST be a power of two:
- * computeFromLogSweep sizes its FFT to nextPow2(period), so a power-of-two
+ * The loop period in CAPTURE samples: the power of two NEAREST to
+ * SWEEP_DURATION_SEC · sampleRate. The period MUST be a power of two IN CAPTURE
+ * SAMPLES - that is the stream the window is grabbed from and the transform is
+ * run on; {@link NotchSweepEngine#playbackSamples} converts the same duration to
+ * the DAC's own sample count. computeFromLogSweep sizes its FFT to
+ * nextPow2(period), so a power-of-two
  * period makes that FFT exactly ONE period - a CIRCULAR transform, not a
  * zero-padded linear one. Only then is a window grabbed at an arbitrary loop
  * phase just a circular shift that leaves |H(f)| unchanged; a linear FFT of an
@@ -149,22 +162,28 @@ export class NotchSweepEngine {
    *   the one ref-counted ADC capture (acquired on start, released on close)
    * @param {(msg: Object) => void} deps.postGen posts a live message to the
    *   running dds-processor worklet (the caller owns the generator lifecycle)
-   * @param {number} deps.sampleRate capture sample rate (Hz) the deconvolution
-   *   runs at
+   * @param {number} deps.captureRateHz the ADC's configured rate (Hz): the
+   *   clock every captured window is counted in, the clock the deconvolution
+   *   reads its bins on, and the clock the reference is rendered at
+   * @param {number} deps.playbackRateHz the DAC's configured rate (Hz) - the
+   *   clock the emitted loop is counted in, independent of the ADC's
    */
-  constructor({ capture, config, startGenerator, stopGenerator, postGen, sampleRate }) {
+  constructor({ capture, config, startGenerator, stopGenerator, postGen,
+    captureRateHz, playbackRateHz }) {
     this._capture = capture;                 // the dedicated MEASUREMENT capture (own device line)
     this._config = config;                   // shared DDS config - snapshot/set/restore within
     this._startGenerator = startGenerator;   // () => start the DDS generator (returns error key|null)
     this._stopGenerator = stopGenerator;     // () => stop the DDS generator
     this._postGen = postGen;
-    this._sampleRate = sampleRate;
+    this._captureRateHz = captureRateHz;
+    this._playbackRateHz = playbackRateHz;
     // Session state, set up in start() and torn down in close().
     this._reader = null;         // SignalBufferReader over the measurement ring
     this._startWritePos = 0;     // ring write position at start() - the anchor
-    this._sweepSamples = 0;
-    this._fadeSamples = 0;
-    this._sweepRefBuf = null;    // cached one-period reference X(t)
+    this._sweepSamples = 0;      // one loop period in CAPTURE samples
+    this._fadeSamples = 0;       // per-side seam fade in CAPTURE samples
+    this._playSamples = 0;       // the SAME period in OUTPUT samples (setBand re-commands it)
+    this._sweepRefBuf = null;    // cached one-period reference X(t), at the CAPTURE clock
     this._savedGenConfig = null; // pre-session DDS config, restored on close()
     this._genStarted = false;
     this._running = false;
@@ -172,24 +191,54 @@ export class NotchSweepEngine {
 
   /**
    * Deconvolution FFT bin spacing (Hz) for a single captured period of
-   * {@code sweepSamples} - sampleRate / nextPow2(sweepSamples). The wizard
+   * {@code sweepSamples} CAPTURE samples - captureRateHz /
+   * nextPow2(sweepSamples), the ADC's clock because that is the stream the
+   * window is grabbed from and the transform is run on. The wizard
    * matches its output-grid density to this so the bin->grid interpolation
    * never oversamples (oversampling facets the trace into a kink + comb).
    * Reflects the actual yRec length the wizard passes to computeFromLogSweep
    * (one period, leadIn 0).
    *
-   * @param {number} sweepSamples loop period in samples
+   * @param {number} sweepSamples loop period in CAPTURE samples
    * @returns {number} bin spacing in Hz
    */
   deconvBinHz(sweepSamples) {
-    return this._sampleRate / nextPow2(sweepSamples);
+    return this._captureRateHz / nextPow2(sweepSamples);
+  }
+
+  /**
+   * One loop period in OUTPUT samples: the capture-clock period converted to
+   * the DAC's clock, so both converters run their own configured rate over the
+   * same stretch of time.
+   *
+   * <p>The conversion has to come out whole. A fractional output period would
+   * make the emitted loop a slightly different duration from the window the
+   * deconvolution treats as exactly one period, and the two would walk apart
+   * cycle by cycle until the trace is meaningless - so the rate pair is
+   * refused, with both settings named, instead of tuning against a drifting
+   * reference. Faithful port of NotchSweepEngine#playbackSamples.
+   *
+   * @param {number} captureSamples one loop period in CAPTURE samples
+   * @returns {number} the same period in OUTPUT samples
+   * @throws {Error} when the rate pair does not divide out whole
+   */
+  playbackSamples(captureSamples) {
+    const scaled = captureSamples * this._playbackRateHz;
+    if (scaled % this._captureRateHz !== 0) {
+      throw new Error(`one loop period is ${captureSamples} samples at the configured `
+        + `${this._captureRateHz} Hz input rate, which is not a whole number of samples at the `
+        + `configured ${this._playbackRateHz} Hz output rate - the looping sweep and the captured `
+        + 'period would drift apart, so the tuning session is refused rather than shown wrong');
+    }
+    return scaled / this._captureRateHz;
   }
 
   /**
    * The looping sweep's one-period reference X(t) - the buffer
-   * computeFromLogSweep deconvolves against (unwindowed; the deconvolution
-   * applies the seam fade itself via its fadeSamples parameter, exactly like
-   * the Java generator's raw buffer).
+   * computeFromLogSweep deconvolves against, as many samples as the captured
+   * window and on the same clock (unwindowed; the deconvolution applies the seam
+   * fade itself via its fadeSamples parameter, exactly like the Java generator's
+   * raw buffer). It is the model of the identical chirp whichever end emits it.
    *
    * @returns {Float64Array|null} the reference, or null before start()
    */
@@ -208,25 +257,37 @@ export class NotchSweepEngine {
    * SAME fadeSamples must be applied to the deconvolution reference), and
    * anchors the ring so only session samples are ever served.
    *
+   * <p>{@code sweepSamples} and {@code fadeSamples} are CAPTURE samples - the
+   * loop is one duration, and the DAC's own count for it is derived here.
+   *
    * @param {number} f0           sweep start (Hz) - the WIDENED band, see {@link sweepBand}
    * @param {number} f1           sweep stop (Hz)
    * @param {number} ampVrms      drive amplitude (V RMS)
    * @param {number} dacFsVrms    DAC full-scale voltage the amplitude scales against
-   * @param {number} sweepSamples loop period in samples (a power of two)
-   * @param {number} fadeSamples  per-side Hann seam-fade length in samples
+   * @param {number} sweepSamples loop period in CAPTURE samples (a power of two)
+   * @param {number} fadeSamples  per-side Hann seam-fade length in CAPTURE samples
    * @param {string} outputChannels which DAC lane(s) carry the sweep - 'BOTH' (legacy) /
    *   'LEFT' / 'RIGHT'; the un-driven lane is written as digital silence
    * @param {number} rightLaneScale right-lane full-scale scale (= fsLeft/fsRight) so a
    *   LINKED card with distinct DAC full-scales emits the same physical level on both
    *   lanes (Java NotchSweepEngine.start's setChannelScale(1.0, rightLaneScale)); the
    *   left lane is never scaled
-   * @throws {Error} when the input device cannot be opened
+   * @throws {Error} when the rate pair leaves a fractional output period, or when
+   *   the input device cannot be opened
    */
   async start(f0, f1, ampVrms, dacFsVrms, sweepSamples, fadeSamples,
     outputChannels = 'BOTH', rightLaneScale = 1.0) {
+    // Before anything is acquired: the same period on the output clock, or a
+    // refusal that costs nothing.
+    const playSamples = this.playbackSamples(sweepSamples);
+    const playFade = Math.round(fadeSamples * (this._playbackRateHz / this._captureRateHz));
+
     this._sweepSamples = sweepSamples;
     this._fadeSamples = fadeSamples;
-    this._sweepRefBuf = renderLogSweep(f0, f1, sweepSamples, this._sampleRate);
+    this._playSamples = playSamples;
+    // The window the deconvolution will divide comes off the ADC, so its
+    // reference is rendered on that clock and with its count.
+    this._sweepRefBuf = renderLogSweep(f0, f1, sweepSamples, this._captureRateHz);
 
     // Snapshot the shared DDS config, then point the generator at a SILENT looping Farina
     // sweep and start it - this engine owns the generator lifecycle (the wizard no longer
@@ -242,10 +303,13 @@ export class NotchSweepEngine {
     c.form = GenSignalForm.LOG_SWEEP;
     c.ampVrms = 0;   // start silent - the postGen below un-mutes with the real amplitude
     c.sweepStartHz = f0; c.sweepEndHz = f1;
-    c.sweepDurationSec = sweepSamples / this._sampleRate;
+    // The shared DDS config is in SECONDS and the generator controller converts it to samples at
+    // the OUTPUT rate, so the loop's one duration is what travels here - the same stretch of time
+    // the capture counts as sweepSamples. The postGen below then commands the exact output counts.
+    c.sweepDurationSec = playSamples / this._playbackRateHz;
     c.sweepLoop = true;
-    c.sweepFadeInSec = fadeSamples / this._sampleRate;
-    c.sweepFadeOutSec = fadeSamples / this._sampleRate;
+    c.sweepFadeInSec = playFade / this._playbackRateHz;
+    c.sweepFadeOutSec = playFade / this._playbackRateHz;
     // Match the RIGHT lane's physical level to the LEFT-referenced digital amplitude, then
     // gate the looping sweep to the selected DAC lane(s) - Java NotchSweepEngine.start's
     // setChannelScale(1.0, rightLaneScale) + setOutputChannels. startGenerator reads these
@@ -266,12 +330,14 @@ export class NotchSweepEngine {
     }
     this._startWritePos = this._reader.getWritePos();
 
-    // Point the now-running DDS at the looping sweep at the real amplitude.
+    // Point the now-running DDS at the looping sweep at the real amplitude. The counts are the
+    // DAC's OWN: the worklet renders on the output clock, so a capture count handed to it would
+    // emit a loop of another duration than the one the deconvolution treats as exactly one period.
     this._postGen({
       amplitudeVRms: ampVrms,
       dacFsVoltageAmpl: dacFsVrms,
-      logSweep: { f0, f1, sweepSamples, leadInSamples: 0 },
-      sweepParams: { loop: true, fadeInSamples: fadeSamples, fadeOutSamples: fadeSamples },
+      logSweep: { f0, f1, sweepSamples: playSamples, leadInSamples: 0 },
+      sweepParams: { loop: true, fadeInSamples: playFade, fadeOutSamples: playFade },
       resetSweepPosition: true,
     });
     this._postGen({ form: GenSignalForm.LOG_SWEEP });
@@ -298,16 +364,18 @@ export class NotchSweepEngine {
   /**
    * Live band change WITHOUT restart: reconfigures the looping sweep in place
    * (the kernel re-renders its buffer and rewinds to the new sweep's start,
-   * exactly like Java's rebuildLogSweepBuffer) and re-renders the local
-   * reference to match. No-op before start() / after close().
+   * exactly like Java's rebuildLogSweepBuffer) and the deconvolution reference
+   * follows on ITS OWN clock - whichever end emits, both halves hear the same
+   * band. A reference left on the old band would divide the new band's response
+   * by the wrong chirp. No-op before start() / after close().
    *
    * @param {number} f0 new sweep start (Hz, widened band)
    * @param {number} f1 new sweep stop (Hz)
    */
   setBand(f0, f1) {
     if (!this._running) return;
-    this._sweepRefBuf = renderLogSweep(f0, f1, this._sweepSamples, this._sampleRate);
-    this._postGen({ logSweep: { f0, f1, sweepSamples: this._sweepSamples, leadInSamples: 0 } });
+    this._sweepRefBuf = renderLogSweep(f0, f1, this._sweepSamples, this._captureRateHz);
+    this._postGen({ logSweep: { f0, f1, sweepSamples: this._playSamples, leadInSamples: 0 } });
   }
 
   /**
