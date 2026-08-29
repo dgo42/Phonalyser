@@ -74,6 +74,7 @@ import org.edgo.audio.measure.gui.widgets.PresetBar;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.widgets.UnitValue;
+import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FreqRespFilterTypeParams;
 import org.edgo.audio.measure.preferences.FreqRespPreset;
@@ -623,8 +624,12 @@ public final class FreqRespTabControl extends AbstractTabControl {
         Preferences prefs = Preferences.instance();
 
         // ---- Row 1: start freq + stop freq ----------------------------------
+        // The stored band comes down to the ceiling BEFORE the fields are built,
+        // so the two-way binds below seed an already-legal value.
+        clampSweepBandToCeiling();
         addLabel(g, I18n.t("freqResp.settings.start"));
         NumericStepField startField = freqField(g);
+        startField.setMax(sweepBandCeilingHz());
         startField.setToolTipText(I18n.t("freqResp.settings.start.tooltip"));
         // Two-way bind; the floor clamp (≥ 1 Hz) and the tab-tile refresh ride
         // an onChange on the same pref, so a direct text entry below the floor
@@ -637,6 +642,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
         addLabel(g, I18n.t("freqResp.settings.stop"));
         NumericStepField stopField = freqField(g);
+        stopField.setMax(sweepBandCeilingHz());
         stopField.setToolTipText(I18n.t("freqResp.settings.stop.tooltip"));
         // Cross-field clamp: stop must stay at least start + 1.  A plain
         // two-way bind would lose it, so it is re-applied on the pref via
@@ -774,9 +780,10 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // sweep-points series - re-pull both from the committed prefs.
         Consumer<Void> audioFormatListener = ignored -> {
             if (isDisposed()) return;
-            double nyquist = Preferences.instance().current().getInputSampleRate() / 2.0;
-            startField.setMax(nyquist);
-            stopField.setMax(nyquist);
+            double ceiling = sweepBandCeilingHz();
+            startField.setMax(ceiling);
+            stopField.setMax(ceiling);
+            clampSweepBandToCeiling();
             pointsField.setSeries(sweepPointSeries());
             pointsField.setNamedValue(nyquistPointCount(),
                     I18n.t("freqResp.settings.points.halfScale"));
@@ -858,6 +865,34 @@ public final class FreqRespTabControl extends AbstractTabControl {
         s[0] = nyquistPointCount();
         System.arraycopy(SWEEP_POINT_SERIES, 0, s, 1, SWEEP_POINT_SERIES.length);
         return s;
+    }
+
+    /** Ceiling for the SWEPT BAND's two edges: the lower of the two configured
+     *  Nyquist limits.  The band has to be both emittable and observable, and
+     *  the DAC and the ADC carry their own configured rates - above the DAC's
+     *  the chirp is not what leaves the card, above the ADC's it is not what
+     *  comes back.  The other frequency fields on these tabs (the post-measure
+     *  filters, the unevenness range) work on the measured curve alone, so they
+     *  keep the analysis Nyquist that {@link #freqField} gives them. */
+    private double sweepBandCeilingHz() {
+        BackendPrefs backend = Preferences.instance().current();
+        return Math.min(backend.getInputSampleRate(), backend.getOutputSampleRate()) / 2.0;
+    }
+
+    /** Brings the two stored swept-band edges down to {@link #sweepBandCeilingHz}.
+     *
+     *  <p>Setting the edge fields' maximum is not enough on its own: a field
+     *  clamps what it DISPLAYS and writes back to the preference only when the
+     *  displayed value actually moved, so a stored or preset-applied band above
+     *  the ceiling stays in the preference while the field shows the ceiling -
+     *  and the measurement reads the preference, not the field.  That gap would
+     *  emit a chirp sweeping past the DAC's Nyquist while dividing it by a
+     *  reference that does not alias. */
+    private void clampSweepBandToCeiling() {
+        double ceiling = sweepBandCeilingHz();
+        Preferences p = Preferences.instance();
+        if (p.getFreqRespStartHz() > ceiling) p.setFreqRespStartHz(ceiling);
+        if (p.getFreqRespStopHz()  > ceiling) p.setFreqRespStopHz(ceiling);
     }
 
     /** The rate-derived sweep-points entry - one point per FFT bin up to
@@ -1581,6 +1616,12 @@ public final class FreqRespTabControl extends AbstractTabControl {
         Preferences prefs = Preferences.instance();
         prefs.setFreqRespStartHz(p.getStartHz());
         prefs.setFreqRespStopHz(p.getStopHz());
+        // A preset carries the band it was SAVED with, which may sit above the
+        // ceiling the currently configured converters allow - a stored 96 kHz
+        // stop on a card since reconfigured to a 48 kHz DAC.  The edge fields
+        // would show the ceiling while the preference kept the saved number, and
+        // the measurement reads the preference.
+        clampSweepBandToCeiling();
         prefs.setFreqRespAmplitude(new UnitValue(p.getAmplitude(), p.getAmplitudeUnit()));
         prefs.setFreqRespSweepPoints(p.getSweepPoints());
         prefs.setFreqRespFftSize(p.getFftSize());

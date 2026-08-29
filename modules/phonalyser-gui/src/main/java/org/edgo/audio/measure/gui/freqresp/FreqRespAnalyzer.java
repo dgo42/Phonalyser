@@ -75,41 +75,59 @@ public final class FreqRespAnalyzer {
     public StereoFreqRespResult run(ProgressCallback progress, Cancellable cancel) throws Exception {
         validate();
 
-        int      sweepSamples = (int) Math.round(cfg.getDurationSec() * cfg.getSampleRate());
-        int      leadInSamples = (int) Math.round(cfg.getLeadInSec() * cfg.getSampleRate());
-        int      tailSamples  = (int) Math.round(FreqRespConstants.SWEEP_MIN_SEC * cfg.getSampleRate());
-        long     totalGenSamples = (long) leadInSamples + sweepSamples + tailSamples;
-        int      durationSec  = (int) Math.ceil(totalGenSamples / (double) cfg.getSampleRate());
+        // ONE sweep, TWO clocks.  The chirp is a stretch of time - lead-in
+        // silence, then the sweep - and each converter counts that same time in
+        // its own configured samples: the playback counts describe what leaves
+        // the DAC, the record counts describe what the ADC delivered and
+        // everything read off it (the deconvolution, its reference, the bin
+        // grid, the result's Nyquist).  Deriving both from the SECONDS keeps
+        // them equal in time whatever the rate pair is; the two roundings can
+        // differ by less than one sample, which the deconvolution's own delay
+        // correction absorbs.
+        int      playSweepSamples  = (int) Math.round(cfg.getDurationSec() * cfg.getPlaybackRateHz());
+        int      playLeadInSamples = (int) Math.round(cfg.getLeadInSec()   * cfg.getPlaybackRateHz());
+        int      recSweepSamples   = (int) Math.round(cfg.getDurationSec() * cfg.getCaptureRateHz());
+        int      recLeadInSamples  = (int) Math.round(cfg.getLeadInSec()   * cfg.getCaptureRateHz());
+        // The record's length is a duration, so neither clock owns it: lead-in
+        // plus sweep plus a tail that lets the last swept frequency and the
+        // room/DUT ring-out arrive before the capture stops.
+        int      durationSec  = (int) Math.ceil(cfg.getLeadInSec() + cfg.getDurationSec()
+                + FreqRespConstants.SWEEP_MIN_SEC);
 
-        log.info("FreqResp analyzer: {} Hz -> {} Hz, {} {}-spaced points, sweep {} s, lead-in {} s",
+        log.info("FreqResp analyzer: {} Hz -> {} Hz, {} {}-spaced points, sweep {} s, lead-in {} s, "
+                        + "DAC {} Hz/{} bit, ADC {} Hz",
                 String.format(Locale.US, "%.3f", cfg.getStartHz()),
                 String.format(Locale.US, "%.3f", cfg.getStopHz()),
                 cfg.getSweepPoints(),
                 USE_LOG_GRID ? "log" : "linear",
                 String.format(Locale.US, "%.3f", cfg.getDurationSec()),
-                String.format(Locale.US, "%.3f", cfg.getLeadInSec()));
+                String.format(Locale.US, "%.3f", cfg.getLeadInSec()),
+                cfg.getPlaybackRateHz(), cfg.getPlaybackBitDepth(), cfg.getCaptureRateHz());
 
         reportProgress(progress, 0.0, "Preparing sweep");
         SignalGenerator gen = new SignalGenerator(
-                cfg.getStartHz(), cfg.getStopHz(), sweepSamples, leadInSamples,
-                cfg.getSampleRate(), cfg.getAmplitudeVrms(), cfg.getDacFsVoltageRms());
+                cfg.getStartHz(), cfg.getStopHz(), playSweepSamples, playLeadInSamples,
+                cfg.getPlaybackRateHz(), cfg.getAmplitudeVrms(), cfg.getDacFsVoltageRms());
         // One-shot sweep: emit silence after the buffer ends instead of looping
         // a second cycle into the capture window (which would alias into the
         // deconvolution and pollute the response).
         //
         // Hann fade-in/fade-out on the sweep boundaries (Tukey window)
         // suppresses the 1/T spectral-leakage ripple in the deconvolved
-        // H(f).  The SAME fade length must be applied to the X reference
-        // inside computeFromLogSweep - otherwise Y and X carry mismatched
-        // boundary shapes and the leakage stays.
-        int fadeSamples = FreqRespCalHelper.sweepFadeSamples(sweepSamples);
-        gen.setSweepParams(false, fadeSamples, fadeSamples);
+        // H(f).  The SAME fade must be applied to the X reference inside
+        // computeFromLogSweep - otherwise Y and X carry mismatched boundary
+        // shapes and the leakage stays.  It is a FRACTION of the sweep, so the
+        // two counts below are the same fade in seconds on the two clocks.
+        int playFadeSamples = FreqRespCalHelper.sweepFadeSamples(playSweepSamples);
+        int recFadeSamples  = FreqRespCalHelper.sweepFadeSamples(recSweepSamples);
+        gen.setSweepParams(false, playFadeSamples, playFadeSamples);
 
         checkCancel(cancel);
         reportProgress(progress, 0.05, "Running sweep");
         StereoSamples rec = cfg.getStereoCaptureProvider().captureWithProgress(
                 gen, cfg.getOutDevice(), cfg.getInDevice(),
-                cfg.getSampleRate(), cfg.getBitDepth(), cfg.getDitherBits(),
+                cfg.getCaptureRateHz(), cfg.getPlaybackRateHz(), cfg.getPlaybackBitDepth(),
+                cfg.getDitherBits(),
                 cfg.getOutputChannels(),
                 durationSec,
                 cancel == null ? null : cancel::isCancelled,
@@ -133,8 +151,9 @@ public final class FreqRespAnalyzer {
         // / fine grid) falls back to a log grid capped at sweepPoints.
         double[] freqs;
         if (USE_LOG_GRID) {
-            int deconvM = MathUtil.nextPow2(Math.max(rec.left().length, leadInSamples + sweepSamples));
-            double binHz = cfg.getSampleRate() / (double) deconvM;
+            int deconvM = MathUtil.nextPow2(Math.max(rec.left().length,
+                    recLeadInSamples + recSweepSamples));
+            double binHz = cfg.getCaptureRateHz() / (double) deconvM;
             freqs = FreqRespCalHelper.binAlignedFreqs(
                     cfg.getStartHz(), cfg.getStopHz(), binHz, cfg.getSweepPoints());
         } else {
@@ -143,24 +162,34 @@ public final class FreqRespAnalyzer {
 
         checkCancel(cancel);
         reportProgress(progress, 0.50, "Computing transfer function (L + R parallel)");
+        // The deconvolution reference X(t): the SAME chirp, rendered on the
+        // CAPTURE clock.  It divides a recording that came off the ADC, and
+        // computeFromLogSweep sizes one transform over the longer of the two -
+        // so a reference on the DAC's faster clock would be a different number
+        // of samples for the same seconds, zero-pad the recording inside that
+        // transform, and divide the response by a chirp that sweeps at another
+        // rate.  The buffer is unit amplitude; the fade is applied inside.
+        double[] sweepRef = new SignalGenerator(
+                cfg.getStartHz(), cfg.getStopHz(), recSweepSamples, recLeadInSamples,
+                cfg.getCaptureRateHz(), cfg.getAmplitudeVrms(), cfg.getDacFsVoltageRms())
+                .getLogSweepBuffer();
         // Parallel deconv: both channels share inputs (sweepRef, leadIn,
-        // sampleRate, freqs) but compute independently, so they run on
+        // capture rate, freqs) but compute independently, so they run on
         // separate CompletableFutures.
-        double[] sweepRef = gen.getLogSweepBuffer();
         // Savitzky-Golay output smoothing is OFF for the main sweep (applySavGol
         // = false), matching the Tune-notch wizard: the bin-aligned grid already
         // gives a leakage-free trace, and SG would round the bottom off deep,
         // narrow features (e.g. a notch null read shallow).
         CompletableFuture<FreqRespCalibration> calLFut = CompletableFuture.supplyAsync(
                 () -> FreqRespCalHelper.computeFromLogSweep(
-                        rec.left(), sweepRef, leadInSamples,
-                        cfg.getSampleRate(), freqs, cfg.getAmplitudeVrms(),
-                        cfg.getAdcFsVoltageRms(), fadeSamples, "L", false));
+                        rec.left(), sweepRef, recLeadInSamples,
+                        cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
+                        cfg.getAdcFsVoltageRms(), recFadeSamples, "L", false));
         CompletableFuture<FreqRespCalibration> calRFut = CompletableFuture.supplyAsync(
                 () -> FreqRespCalHelper.computeFromLogSweep(
-                        rec.right(), sweepRef, leadInSamples,
-                        cfg.getSampleRate(), freqs, cfg.getAmplitudeVrms(),
-                        cfg.getAdcFsVoltageRms(), fadeSamples, "R", false));
+                        rec.right(), sweepRef, recLeadInSamples,
+                        cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
+                        cfg.getAdcFsVoltageRms(), recFadeSamples, "R", false));
         FreqRespCalibration calL = awaitOrFail(calLFut);
         FreqRespCalibration calR = awaitOrFail(calRFut);
 
@@ -176,12 +205,14 @@ public final class FreqRespAnalyzer {
                 cfg.getDurationSec(), cfg.getLeadInSec(),
                 cfg.getAmplitudeVrms(), cfg.getDitherBits());
 
+        // The result carries the CAPTURE rate: it is the measurement's own
+        // Nyquist, the one every consumer draws and saves the trace against.
         FreqRespResult left  = new FreqRespResult(
-                Channel.L, cfg.getSampleRate(),
+                Channel.L, cfg.getCaptureRateHz(),
                 calL.freqs, calL.magLin, calL.phaseRad,
                 params, null, false);
         FreqRespResult right = new FreqRespResult(
-                Channel.R, cfg.getSampleRate(),
+                Channel.R, cfg.getCaptureRateHz(),
                 calR.freqs, calR.magLin, calR.phaseRad,
                 params, null, false);
         return new StereoFreqRespResult(left, right, rawPeakLin);
@@ -201,13 +232,30 @@ public final class FreqRespAnalyzer {
     private void validate() {
         if (cfg.getOutDevice() == null)              throw new IllegalArgumentException("outDevice is required");
         if (cfg.getInDevice()  == null)              throw new IllegalArgumentException("inDevice is required");
-        if (cfg.getSampleRate() <= 0)                throw new IllegalArgumentException("sampleRate must be > 0");
-        if (cfg.getBitDepth() != 8 && cfg.getBitDepth() != 16
-                && cfg.getBitDepth() != 24 && cfg.getBitDepth() != 32) {
-            throw new IllegalArgumentException("bitDepth must be 8/16/24/32");
+        if (cfg.getCaptureRateHz()  <= 0)            throw new IllegalArgumentException("captureRateHz must be > 0");
+        if (cfg.getPlaybackRateHz() <= 0)            throw new IllegalArgumentException("playbackRateHz must be > 0");
+        if (cfg.getPlaybackBitDepth() != 8 && cfg.getPlaybackBitDepth() != 16
+                && cfg.getPlaybackBitDepth() != 24 && cfg.getPlaybackBitDepth() != 32) {
+            throw new IllegalArgumentException("playbackBitDepth must be 8/16/24/32");
         }
         if (cfg.getStartHz() <= 0.0 || cfg.getStopHz() <= cfg.getStartHz()) {
             throw new IllegalArgumentException("startHz must be > 0 and < stopHz");
+        }
+        // The band has to be BOTH emittable and observable.  Above the DAC's
+        // Nyquist the chirp folds back on the way out; above the ADC's it folds
+        // back on the way in - and either way the deconvolution reference, which
+        // is rendered from the asked band and never folds, divides a signal that
+        // did.  The whole trace then comes out wrong while still looking
+        // plausible, because the impulse-response peak that sets the delay
+        // correction is computed from that same polluted division.  Refused, with
+        // both configured rates named, rather than drawn.
+        double bandCeilingHz = Math.min(cfg.getCaptureRateHz(), cfg.getPlaybackRateHz()) / 2.0;
+        if (cfg.getStopHz() > bandCeilingHz) {
+            throw new IllegalArgumentException("stopHz " + cfg.getStopHz() + " Hz is above "
+                    + bandCeilingHz + " Hz, half the lower of the configured "
+                    + cfg.getPlaybackRateHz() + " Hz output and " + cfg.getCaptureRateHz()
+                    + " Hz input rates - the sweep would alias and the measurement would be "
+                    + "wrong everywhere, not just at the top");
         }
         if (cfg.getSweepPoints() < 4)                throw new IllegalArgumentException("sweepPoints must be >= 4");
         if (cfg.getDurationSec() < FreqRespConstants.SWEEP_MIN_SEC) {

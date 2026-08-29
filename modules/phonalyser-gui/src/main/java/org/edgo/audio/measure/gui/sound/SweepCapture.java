@@ -70,10 +70,23 @@ public final class SweepCapture {
      * cannot be opened or runs at another rate, the lane refuses the start,
      * the capture or the playback dies mid-sweep, or the assembly falls a
      * full ring behind.
+     *
+     * <p>The two converters carry their OWN configured formats and need not
+     * agree: {@code sweepSamples}, {@code leadInSamples} and
+     * {@code fadeSamples} are counts on the DAC's clock (the chirp is rendered
+     * and emitted there), while the record's length and the ring's rate guard
+     * are on the ADC's.  Both describe the same stretch of time.
+     *
+     * @param captureRateHz    the ADC's configured rate; the record comes out
+     *                         {@code durationSec * captureRateHz} frames long
+     * @param playbackRateHz   the DAC's configured rate, which every sweep
+     *                         count above is against
+     * @param playbackBitDepth the DAC's configured word length
      */
     public StereoSamples run(double startHz, double stopHz, int sweepSamples,
             int leadInSamples, int fadeSamples, double amplitudeVrms, double dacFsVoltage,
-            int sampleRate, int bitDepth, int ditherBits, OutputChannels channels,
+            int captureRateHz, int playbackRateHz, int playbackBitDepth, int ditherBits,
+            OutputChannels channels,
             int durationSec, BooleanSupplier cancelToken,
             StereoCaptureProgress progress) throws Exception {
         SharedCapture capture = SharedCapture.instance();
@@ -88,9 +101,9 @@ public final class SweepCapture {
             // Input side of the rate guard BEFORE anything else opens: the
             // ring carries the GRANTED rate, and refusing here leaves nothing
             // behind but the capture reference the finally releases.
-            requireRate(reader.getSampleRate(), sampleRate, "input stream");
+            requireRate(reader.getSampleRate(), captureRateHz, "input stream");
             GeneratorRun run = new GeneratorRun(GenSignalForm.LOG_SWEEP,
-                    0.0, amplitudeVrms, sampleRate, bitDepth, ditherBits,
+                    0.0, amplitudeVrms, playbackRateHz, playbackBitDepth, ditherBits,
                     dacFsVoltage, 1.0, channels,
                     true,    // sample counts on the asked clock - a mismatch refuses
                     false,   // the bench's own device card owns its calibration
@@ -101,8 +114,8 @@ public final class SweepCapture {
                 // The lane already gave a refused bench lane back; a granted-
                 // rate refusal names the number the bench answered with.
                 if (started == PlaybackStateEnum.REMOTE_REFUSED
-                        && lane.getLastGrantedRateHz() != sampleRate) {
-                    requireRate(lane.getLastGrantedRateHz(), sampleRate, "generator lane");
+                        && lane.getLastGrantedRateHz() != playbackRateHz) {
+                    requireRate(lane.getLastGrantedRateHz(), playbackRateHz, "generator lane");
                 }
                 throw new IllegalStateException("the sweep playback did not start: " + started);
             }
@@ -119,7 +132,7 @@ public final class SweepCapture {
                     // anchor instant the private-line path always used.
                     reader.seekToLatest();
                 }
-                return assemble(reader, sampleRate, durationSec, cancelToken, progress);
+                return assemble(reader, captureRateHz, durationSec, cancelToken, progress);
             } finally {
                 lane.stop();
             }
@@ -156,13 +169,13 @@ public final class SweepCapture {
         }
     }
 
-    /** Streams {@code durationSec * sampleRate} contiguous frames from the
+    /** Streams {@code durationSec * captureRateHz} contiguous frames from the
      *  cursor into a fresh {@link StereoSamples}, blocking on the ring's own
      *  wakeup between chunks. */
-    private StereoSamples assemble(SignalBufferReader reader, int sampleRate,
+    private StereoSamples assemble(SignalBufferReader reader, int captureRateHz,
             int durationSec, BooleanSupplier cancelToken,
             StereoCaptureProgress progress) throws InterruptedException {
-        int total = durationSec * sampleRate;
+        int total = durationSec * captureRateHz;
         double[] left   = new double[total];
         double[] right  = new double[total];
         double[] chunkL = new double[CHUNK_FRAMES];

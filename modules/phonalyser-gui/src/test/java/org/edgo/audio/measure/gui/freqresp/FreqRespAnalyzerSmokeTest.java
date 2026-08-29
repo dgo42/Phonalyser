@@ -22,6 +22,7 @@ import org.edgo.audio.measure.sound.StereoSamples;
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.junit.jupiter.api.Test;
 
@@ -117,13 +118,81 @@ class FreqRespAnalyzerSmokeTest {
         assertEquals(1.0, lastFraction.get(), 1e-9, "last fraction must reach 1.0");
     }
 
+    /**
+     * The same flat delay line measured with the DAC on ITS OWN, faster clock -
+     * 96 kHz out against 48 kHz in, the shape a card whose two sides are set
+     * independently really presents (the maintainer bench runs 384 kHz out /
+     * 192 kHz in).
+     *
+     * <p>Three separate things have to be right at once for this to pass, and
+     * each of them was wrong when one rate served both converters: the playback
+     * leg has to be described on the output clock, the recording and the
+     * deconvolution reference have to be counted on the input clock, and the
+     * lead-in has to be an index into the RECORD - a lead-in taken from the
+     * output clock would sit 0.1 s x (96000 - 48000) = 4800 samples off, which
+     * the impulse-response delay correction would quietly absorb into a
+     * plausible-looking trace instead of failing.  Unity magnitude across the
+     * band is what proves the reference and the recording are the same chirp.
+     */
+    @Test
+    void aFasterDacClockStillDeconvolvesFlatAndReportsTheCaptureRate() throws Exception {
+        FreqRespAnalyzerConfig cfg = baseConfig()
+                .playbackRateHz(SAMPLE_RATE * 2)
+                .playbackBitDepth(32)
+                .stereoCaptureProvider(delayLineProvider(DELAY_SAMPLES)).build();
+        StereoFreqRespResult stereo = new FreqRespAnalyzer(cfg).run(null, null);
+
+        assertEquals(SAMPLE_RATE, stereo.left().getSampleRate(),
+                "the result carries the CAPTURE rate - it is the measurement's own "
+                        + "Nyquist and what every consumer draws and saves against");
+        assertEquals(SAMPLE_RATE, stereo.right().getSampleRate());
+        int lo = (int) (SWEEP_POINTS * 0.10);
+        int hi = (int) (SWEEP_POINTS * 0.90);
+        for (int i = lo; i < hi; i++) {
+            double mL = stereo.left().getMagLin()[i];
+            double mR = stereo.right().getMagLin()[i];
+            assertTrue(mL > 0.5 && mL < 2.0,
+                    "expected unity mag L across two clocks, got " + mL
+                            + " at f=" + stereo.left().getFreqs()[i]);
+            assertTrue(mR > 0.5 && mR < 2.0,
+                    "expected unity mag R across two clocks, got " + mR
+                            + " at f=" + stereo.right().getFreqs()[i]);
+        }
+    }
+
+    /** The capture leg is handed BOTH configured formats, each one whole: the
+     *  DAC's rate and word length for the line it opens, the ADC's rate for the
+     *  record it assembles.  Pinned because the failure this whole split exists
+     *  to remove was a single argument arriving at two converters. */
+    @Test
+    void theCaptureLegReceivesEachConvertersOwnFormat() throws Exception {
+        AtomicInteger seenCaptureRate  = new AtomicInteger();
+        AtomicInteger seenPlaybackRate = new AtomicInteger();
+        AtomicInteger seenPlaybackBits = new AtomicInteger();
+        FreqRespAnalyzerConfig cfg = baseConfig()
+                .playbackRateHz(SAMPLE_RATE * 2)
+                .playbackBitDepth(32)
+                .stereoCaptureProvider((g, o, i, capRate, playRate, playBits, d, oc, dur, c) -> {
+                    seenCaptureRate.set(capRate);
+                    seenPlaybackRate.set(playRate);
+                    seenPlaybackBits.set(playBits);
+                    return new StereoSamples(new double[capRate * dur], new double[capRate * dur]);
+                })
+                .build();
+        new FreqRespAnalyzer(cfg).run(null, null);
+
+        assertEquals(SAMPLE_RATE, seenCaptureRate.get(), "the ADC's configured rate");
+        assertEquals(SAMPLE_RATE * 2, seenPlaybackRate.get(), "the DAC's configured rate");
+        assertEquals(32, seenPlaybackBits.get(), "and the DAC's configured word length");
+    }
+
     @Test
     void cancelTokenAbortsBeforeCapture() {
         AtomicInteger captureCalls = new AtomicInteger();
         FreqRespAnalyzerConfig cfg = baseConfig()
-                .stereoCaptureProvider((g, o, i, sr, bd, d, oc, dur, c) -> {
+                .stereoCaptureProvider((g, o, i, capRate, playRate, playBits, d, oc, dur, c) -> {
                     captureCalls.incrementAndGet();
-                    return new StereoSamples(new double[sr * dur], new double[sr * dur]);
+                    return new StereoSamples(new double[capRate * dur], new double[capRate * dur]);
                 })
                 .build();
         Cancellable alwaysCancelled = () -> true;
@@ -174,9 +243,9 @@ class FreqRespAnalyzerSmokeTest {
         // Rail on the RIGHT channel only, and negative - so the peak scan has to
         // cover both channels and take absolute values.
         FreqRespAnalyzerConfig cfg = baseConfig()
-                .stereoCaptureProvider((g, o, i, sr, bd, d, oc, dur, c) -> {
-                    double[] left  = new double[sr * dur];
-                    double[] right = new double[sr * dur];
+                .stereoCaptureProvider((g, o, i, capRate, playRate, playBits, d, oc, dur, c) -> {
+                    double[] left  = new double[capRate * dur];
+                    double[] right = new double[capRate * dur];
                     right[right.length / 2] = -RAIL_16_BIT;
                     return new StereoSamples(left, right);
                 })
@@ -190,9 +259,9 @@ class FreqRespAnalyzerSmokeTest {
     @Test
     void captureJustBelowTheThresholdIsNotClipped() throws Exception {
         FreqRespAnalyzerConfig cfg = baseConfig()
-                .stereoCaptureProvider((g, o, i, sr, bd, d, oc, dur, c) -> {
-                    double[] left  = new double[sr * dur];
-                    double[] right = new double[sr * dur];
+                .stereoCaptureProvider((g, o, i, capRate, playRate, playBits, d, oc, dur, c) -> {
+                    double[] left  = new double[capRate * dur];
+                    double[] right = new double[capRate * dur];
                     left[left.length / 2] = NEAR_RAIL_LIN;
                     return new StereoSamples(left, right);
                 })
@@ -224,17 +293,46 @@ class FreqRespAnalyzerSmokeTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new FreqRespAnalyzer(inverted).run(null, null));
 
-        FreqRespAnalyzerConfig badBits = baseConfig().bitDepth(20).build();
+        FreqRespAnalyzerConfig badBits = baseConfig().playbackBitDepth(20).build();
         assertThrows(IllegalArgumentException.class,
                 () -> new FreqRespAnalyzer(badBits).run(null, null));
+    }
+
+    /**
+     * A band the DAC cannot emit is refused, not measured.
+     *
+     * <p>With the two clocks independent the sweep has to fit under BOTH Nyquist
+     * limits: above the DAC's the chirp folds back on the way out, above the
+     * ADC's on the way in, and either way the deconvolution reference - rendered
+     * from the asked band, so it never folds - divides a signal that did.  The
+     * damage is not confined to the top of the band: the impulse-response peak
+     * that sets the delay correction is computed from the same polluted
+     * division, so the whole trace comes out wrong and still looks plausible.
+     * That is why this is a refusal and not a clamp.
+     */
+    @Test
+    void aBandAboveTheLowerNyquistIsRefusedRatherThanAliased() {
+        // Capture 48 kHz, DAC configured at 24 kHz -> ceiling 12 kHz, while the
+        // fixture sweeps to 20 kHz.
+        FreqRespAnalyzerConfig aliasing = baseConfig()
+                .playbackRateHz(SAMPLE_RATE / 2)
+                .stereoCaptureProvider(delayLineProvider(DELAY_SAMPLES)).build();
+
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                () -> new FreqRespAnalyzer(aliasing).run(null, null));
+
+        assertTrue(refused.getMessage().contains(String.valueOf(SAMPLE_RATE / 2))
+                        && refused.getMessage().contains(String.valueOf(SAMPLE_RATE)),
+                "the refusal names both configured rates - " + refused.getMessage());
     }
 
     private FreqRespAnalyzerConfig.FreqRespAnalyzerConfigBuilder baseConfig() {
         return FreqRespAnalyzerConfig.builder()
                 .outDevice(stubDevice("out", false, true))
                 .inDevice (stubDevice("in",  true,  false))
-                .sampleRate(SAMPLE_RATE)
-                .bitDepth(24)
+                .captureRateHz(SAMPLE_RATE)
+                .playbackRateHz(SAMPLE_RATE)
+                .playbackBitDepth(24)
                 .ditherBits(0)
                 .startHz(START_HZ)
                 .stopHz(STOP_HZ)
@@ -249,13 +347,23 @@ class FreqRespAnalyzerSmokeTest {
 
     /** Returns a StereoCaptureProvider that emits the same delay-line
      *  response on both channels.  Both deconvolutions should recover a
-     *  flat unity magnitude across the band. */
+     *  flat unity magnitude across the band.
+     *
+     *  <p>The recording is modelled ON THE CAPTURE CLOCK, which is what an ADC
+     *  really delivers: the chirp is the same stretch of time as the one the
+     *  generator was handed, re-rendered at {@code capRate}.  Taking the
+     *  playback buffer instead would make the stub agree with the analyzer only
+     *  while the two rates happen to be equal, and it is exactly the split case
+     *  these tests have to be able to fail on. */
     private StereoCaptureProvider delayLineProvider(int delaySamples) {
-        return (gen, outDev, inDev, sr, bd, dither, oc, durationSec, cancel) -> {
-            double[] sweep = gen.getLogSweepBuffer();
-            assertNotNull(sweep, "generator must expose log-sweep buffer");
-            int leadIn = (int) Math.round(LEAD_IN_SEC * sr);
-            int total  = leadIn + delaySamples + sweep.length + sr / 2;
+        return (gen, outDev, inDev, capRate, playRate, playBits, dither, oc, durationSec, cancel) -> {
+            assertNotNull(gen.getLogSweepBuffer(),
+                    "the generator handed to the capture leg must expose its played sweep");
+            double[] sweep = new SignalGenerator(START_HZ, STOP_HZ,
+                    (int) Math.round(DURATION_SEC * capRate), 0,
+                    capRate, AMP_VRMS, DAC_FS_VRMS).getLogSweepBuffer();
+            int leadIn = (int) Math.round(LEAD_IN_SEC * capRate);
+            int total  = leadIn + delaySamples + sweep.length + capRate / 2;
             double[] y  = new double[total];
             int offset = leadIn + delaySamples;
             // Capture-side scaling: the real DAC turns a unit-amplitude

@@ -26,6 +26,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -180,39 +181,11 @@ public final class FreqRespAnalyzerWorker {
                 prefs.applyDeviceProfile(in, true);
             });
 
-            int sampleRate = prefs.current().getInputSampleRate();
-            int bitDepth   = prefs.current().getInputBitDepth();
-
             if (cancelFlag.get()) return;
 
             // One stereo sweep, two parallel deconvolutions.
-            FreqRespAnalyzerConfig cfg = FreqRespAnalyzerConfig.builder()
-                    .outDevice(out)
-                    .inDevice(in)
-                    .sampleRate(sampleRate)
-                    .bitDepth(bitDepth)
-                    .ditherBits(prefs.getFreqRespDitherBits())
-                    .startHz(prefs.getFreqRespStartHz())
-                    .stopHz(prefs.getFreqRespStopHz())
-                    .sweepPoints(prefs.getFreqRespSweepPoints())
-                    .durationSec(prefs.getFreqRespDurationSec())
-                    .leadInSec(prefs.getFreqRespLeadInSec())
-                    .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
-                    .dacFsVoltageRms(prefs.getDacFsVoltageAmpl())
-                    .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
-                    .outputChannels(prefs.getFreqRespOutputChannels())
-                    .applyCalibration(prefs.isFreqRespApplyCalibration())
-                    .captureProgress(activeProgress)
-                    // The sweep leg belongs to whichever backend is active: a
-                    // bench on a Phonalyser server renders the chirp itself and
-                    // marks it in the capture stream (there is no uplink audio to
-                    // play into), every local backend plays it from here.
-                    .stereoCaptureProvider(StereoCaptureProvider.forSweep(sampleRate,
-                            prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
-                            prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
-                            prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmpl()))
-                    .build();
-            StereoFreqRespResult stereo = new FreqRespAnalyzer(cfg).run(null, cancelFlag::get);
+            StereoFreqRespResult stereo =
+                    new FreqRespAnalyzer(buildConfig(out, in)).run(null, cancelFlag::get);
             if (stereo == null) return;
 
             MessageBus.instance().publish(Events.FREQRESP_RESULT_AVAILABLE, stereo);
@@ -229,6 +202,56 @@ public final class FreqRespAnalyzerWorker {
                     MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED));
             synchronized (this) { workerThread = null; }
         }
+    }
+
+    /**
+     * The analyzer configuration for one run, taken from the preferences and
+     * the two devices the backend resolved.
+     *
+     * <p>This is the ONE place this worker reads the converters' configured
+     * formats, and it reads them SEPARATELY: the sweep is played on the output
+     * rate and word length, while the recording and everything derived from it
+     * - the deconvolution, its reference, the bin grid, the result's Nyquist -
+     * arrive on the input rate.  A DAC opened in the ADC's format is refused
+     * outright by any card whose two sides are set differently.
+     *
+     * <p>Package-private, and separated from the run for that reason: it can
+     * then be driven with a deliberately split rate pair without opening an
+     * audio device, which is the only guard against those reads quietly
+     * collapsing back onto one converter's format.
+     */
+    FreqRespAnalyzerConfig buildConfig(DeviceRef out, DeviceRef in) {
+        Preferences prefs = Preferences.instance();
+        BackendPrefs backend = prefs.current();
+        int playbackRate = backend.getOutputSampleRate();
+        return FreqRespAnalyzerConfig.builder()
+                .outDevice(out)
+                .inDevice(in)
+                .captureRateHz(backend.getInputSampleRate())
+                .playbackRateHz(playbackRate)
+                .playbackBitDepth(backend.getOutputBitDepth())
+                .ditherBits(prefs.getFreqRespDitherBits())
+                .startHz(prefs.getFreqRespStartHz())
+                .stopHz(prefs.getFreqRespStopHz())
+                .sweepPoints(prefs.getFreqRespSweepPoints())
+                .durationSec(prefs.getFreqRespDurationSec())
+                .leadInSec(prefs.getFreqRespLeadInSec())
+                .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
+                .dacFsVoltageRms(prefs.getDacFsVoltageAmpl())
+                .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
+                .outputChannels(prefs.getFreqRespOutputChannels())
+                .applyCalibration(prefs.isFreqRespApplyCalibration())
+                .captureProgress(activeProgress)
+                // The sweep leg belongs to whichever backend is active: a bench
+                // on a Phonalyser server renders the chirp itself and marks it
+                // in the capture stream (there is no uplink audio to play into),
+                // every local backend plays it from here.  Its sample counts
+                // describe what the DAC emits, so they are on the playback clock.
+                .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
+                        prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
+                        prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
+                        prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmpl()))
+                .build();
     }
 
     private void reportError(String message) {

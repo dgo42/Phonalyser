@@ -274,7 +274,12 @@ public final class FreqRespWizardDialog {
         backBtn.setEnabled(false);
         nextBtn.setEnabled(false);
 
-        int sr = Math.max(1, prefs.current().getInputSampleRate());
+        // Each converter runs the format IT is configured with - see
+        // FreqRespAnalyzerWorker.  The busy meter's time axis is the RECORD's,
+        // so it divides by the capture rate.
+        int captureRate  = Math.max(1, prefs.current().getInputSampleRate());
+        int playbackRate = Math.max(1, prefs.current().getOutputSampleRate());
+        int playbackBits = prefs.current().getOutputBitDepth();
         double totalSec = prefs.getFreqRespLeadInSec()
                         + prefs.getFreqRespDurationSec()
                         + 0.5;
@@ -283,7 +288,7 @@ public final class FreqRespWizardDialog {
         // Marshal capture-progress to the UI thread so the busy shell's
         // live meter paints level-vs-time as the sweep runs.
         StereoCaptureProgress progress = (totalSamples, rmsLin) -> {
-            double tSec = totalSamples / (double) sr;
+            double tSec = totalSamples / (double) captureRate;
             GuiUtil.marshal(dialog, () -> {
                 if (busyMeter != null && !busyMeter.isDisposed()) {
                     busyMeter.appendSample(tSec, rmsLin);
@@ -294,8 +299,9 @@ public final class FreqRespWizardDialog {
             try {
                 FreqRespAnalyzerConfig cfg = FreqRespAnalyzerConfig.builder()
                         .outDevice(out).inDevice(in)
-                        .sampleRate(prefs.current().getInputSampleRate())
-                        .bitDepth(prefs.current().getInputBitDepth())
+                        .captureRateHz(captureRate)
+                        .playbackRateHz(playbackRate)
+                        .playbackBitDepth(playbackBits)
                         .ditherBits(prefs.getFreqRespDitherBits())
                         .startHz(prefs.getFreqRespStartHz())
                         .stopHz(prefs.getFreqRespStopHz())
@@ -310,7 +316,7 @@ public final class FreqRespWizardDialog {
                         // As in FreqRespAnalyzerWorker: the sweep leg belongs to
                         // whichever backend is active, and a remote bench renders
                         // the chirp itself instead of being played into.
-                        .stereoCaptureProvider(StereoCaptureProvider.forSweep(sr,
+                        .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
                                 prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
                                 prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
                                 prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmpl()))

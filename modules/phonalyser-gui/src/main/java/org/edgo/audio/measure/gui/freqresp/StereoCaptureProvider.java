@@ -40,9 +40,15 @@ import java.util.function.BooleanSupplier;
  * shared ring through a {@code GeneratorLane}; unit tests inject a stub
  * returning synthetic {@link StereoSamples} without opening any audio
  * device.  Tests only need to implement the SAM
- * {@link #capture(SignalGenerator, DeviceRef, DeviceRef, int, int, int, OutputChannels, int, BooleanSupplier)};
+ * {@link #capture(SignalGenerator, DeviceRef, DeviceRef, int, int, int, int, OutputChannels, int, BooleanSupplier)};
  * the variant with progress falls through to the SAM by default so a
  * lambda-style stub doesn't need to know about progress at all.
+ *
+ * <p><b>Two clocks, not one.</b>  The DAC and the ADC carry their own
+ * configured formats and need not agree, so the playback format and the
+ * capture rate travel separately: the output line is opened on the DAC's
+ * rate and word length, while the recording's length and the ring guard are
+ * counted on the ADC's.
  */
 @FunctionalInterface
 public interface StereoCaptureProvider {
@@ -52,6 +58,12 @@ public interface StereoCaptureProvider {
      * channels of {@code inDevice} for {@code durationSec} seconds,
      * returning the captured samples normalised to {@code [-1, +1]}.
      *
+     * @param captureRateHz    the ADC's configured rate - what the returned
+     *                         samples are clocked at, so the record is
+     *                         {@code durationSec * captureRateHz} frames long
+     * @param playbackRateHz   the DAC's configured rate - the output line is
+     *                         opened with it and the chirp is rendered on it
+     * @param playbackBitDepth the DAC's configured word length
      * @param outputChannels which DAC lane(s) carry the sweep - {@code LEFT} /
      *                       {@code RIGHT} write digital silence to the other
      *                       lane; {@code BOTH} drives both (legacy)
@@ -59,7 +71,8 @@ public interface StereoCaptureProvider {
      *                    allow the call to return early
      */
     StereoSamples capture(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
-                          int sampleRate, int bitDepth, int ditherBits,
+                          int captureRateHz, int playbackRateHz, int playbackBitDepth,
+                          int ditherBits,
                           OutputChannels outputChannels,
                           int durationSec,
                           BooleanSupplier cancelToken) throws Exception;
@@ -72,22 +85,24 @@ public interface StereoCaptureProvider {
      * SAM keep working with no changes.
      */
     default StereoSamples captureWithProgress(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
-                                              int sampleRate, int bitDepth, int ditherBits,
+                                              int captureRateHz, int playbackRateHz,
+                                              int playbackBitDepth, int ditherBits,
                                               OutputChannels outputChannels,
                                               int durationSec,
                                               BooleanSupplier cancelToken,
                                               StereoCaptureProgress progress) throws Exception {
-        return capture(gen, outDevice, inDevice, sampleRate, bitDepth, ditherBits,
-                       outputChannels, durationSec, cancelToken);
+        return capture(gen, outDevice, inDevice, captureRateHz, playbackRateHz,
+                       playbackBitDepth, ditherBits, outputChannels, durationSec, cancelToken);
     }
 
     /** Localized pre-check for the sweep capture: refuses - with the real
      *  numbers - when the two capture lanes (plus their trim copies) cannot
-     *  fit the heap, BEFORE the generator starts.  The CLI capture leg guards
+     *  fit the heap, BEFORE the generator starts.  Sized on the CAPTURE rate,
+     *  which is what the record is allocated at.  The CLI capture leg guards
      *  the same {@link MemUtil} numbers with its English backstop; this one
      *  carries the i18n text the measurement-failed dialog shows. */
-    default void ensureCaptureFits(int sampleRate, int durationSec) {
-        long needBytes = MemUtil.stereoCaptureHeapBytes(sampleRate, durationSec);
+    default void ensureCaptureFits(int captureRateHz, int durationSec) {
+        long needBytes = MemUtil.stereoCaptureHeapBytes(captureRateHz, durationSec);
         long freeBytes = MemUtil.heapShortfall(needBytes);
         if (freeBytes >= 0) {
             throw new IllegalArgumentException(I18n.t("freqResp.capture.tooLarge",
@@ -103,43 +118,45 @@ public interface StereoCaptureProvider {
      * the analyzer passes in stays its own deconvolution reference; the lane
      * builds the identical chirp from the same numbers.
      *
-     * <p>The sweep is derived in SAMPLES here, by the same formulas
-     * {@link FreqRespAnalyzer#run} uses on the same inputs; they must stay in
+     * <p>The sweep is derived in PLAYBACK SAMPLES here, by the same formulas
+     * {@link FreqRespAnalyzer#run} uses on the same seconds; they must stay in
      * step, because whichever end renders the chirp builds it from these and
-     * the analyzer deconvolves against one built from those.
+     * the analyzer deconvolves against a reference built from the same seconds
+     * on the capture clock.
      *
-     * @param sampleRate    the rate the sweep will be asked for - every count
+     * @param playbackRateHz the DAC's configured rate - every sample count
      *                      below is against it, which is why a lane that grants
      *                      another one fails the measurement instead of running it
      * @param durationSec   the chirp's own length, excluding the lead-in
      * @param dacFsVoltage  the DAC full-scale the amplitude is scaled against
      */
-    static StereoCaptureProvider forSweep(int sampleRate, double startHz, double stopHz,   // static-ok: interface factory - no instance exists to hang it on
+    static StereoCaptureProvider forSweep(int playbackRateHz, double startHz, double stopHz,   // static-ok: interface factory - no instance exists to hang it on
             double durationSec, double leadInSec, double amplitudeVrms, double dacFsVoltage) {
-        int sweepSamples  = (int) Math.round(durationSec * sampleRate);
-        int leadInSamples = (int) Math.round(leadInSec * sampleRate);
+        int sweepSamples  = (int) Math.round(durationSec * playbackRateHz);
+        int leadInSamples = (int) Math.round(leadInSec * playbackRateHz);
         int fadeSamples   = FreqRespCalHelper.sweepFadeSamples(sweepSamples);
         return new StereoCaptureProvider() {
             @Override
             public StereoSamples capture(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
-                                         int rate, int bitDepth, int ditherBits,
+                                         int captureRate, int playRate, int playBits, int ditherBits,
                                          OutputChannels outputChannels,
                                          int captureSec,
                                          BooleanSupplier cancelToken) throws Exception {
-                return captureWithProgress(gen, outDevice, inDevice, rate, bitDepth,
-                        ditherBits, outputChannels, captureSec, cancelToken, null);
+                return captureWithProgress(gen, outDevice, inDevice, captureRate, playRate,
+                        playBits, ditherBits, outputChannels, captureSec, cancelToken, null);
             }
             @Override
             public StereoSamples captureWithProgress(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
-                                                     int rate, int bitDepth, int ditherBits,
+                                                     int captureRate, int playRate, int playBits,
+                                                     int ditherBits,
                                                      OutputChannels outputChannels,
                                                      int captureSec,
                                                      BooleanSupplier cancelToken,
                                                      StereoCaptureProgress progress) throws Exception {
-                ensureCaptureFits(rate, captureSec);
+                ensureCaptureFits(captureRate, captureSec);
                 return new SweepCapture().run(startHz, stopHz, sweepSamples,
                         leadInSamples, fadeSamples, amplitudeVrms, dacFsVoltage,
-                        rate, bitDepth, ditherBits, outputChannels,
+                        captureRate, playRate, playBits, ditherBits, outputChannels,
                         captureSec, cancelToken, progress);
             }
         };

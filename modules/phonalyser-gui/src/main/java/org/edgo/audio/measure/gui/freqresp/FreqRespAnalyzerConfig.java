@@ -43,10 +43,17 @@ public final class FreqRespAnalyzerConfig {
     /** Input (ADC) device both channels are captured from. */
     private final DeviceRef inDevice;
 
-    /** Sample rate in Hz for both playback and capture. */
-    private final int sampleRate;
-    /** Bit depth (8 / 16 / 24 / 32). */
-    private final int bitDepth;
+    /** The ADC's configured rate in Hz: the clock the recording arrives on, and
+     *  therefore the clock the deconvolution, its reference, its bin grid and
+     *  the result's Nyquist are all counted in. */
+    private final int captureRateHz;
+    /** The DAC's configured rate in Hz - the format the output line is opened
+     *  with and the clock the played chirp is rendered on.  Independent of
+     *  {@link #captureRateHz}: a card whose two sides are set differently is
+     *  measured on both of its clocks, not on one of them twice. */
+    private final int playbackRateHz;
+    /** The DAC's configured word length (8 / 16 / 24 / 32). */
+    private final int playbackBitDepth;
     /** TPDF dither bits applied to the output before quantisation; 0 disables. */
     private final int ditherBits;
 
