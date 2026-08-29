@@ -519,22 +519,6 @@ public final class GeneratorLane {
                 remote.setSweepFadeInSamples((int) Math.round(sweep.fadeInSamples() * scale));
                 remote.setSweepFadeOutSamples((int) Math.round(sweep.fadeOutSamples() * scale));
                 remote.setSweepLoop(sweep.loop());
-                // The LOCAL model of the same sweep is still built: it is the
-                // deconvolution reference a sweep consumer reads through
-                // {@link #sweepReference()} - the identical chirp the bench
-                // renders from the same numbers.  Nothing renders it here.
-                try {
-                    SignalGenerator reference = form == GenSignalForm.LINEAR_SWEEP
-                            ? new SignalGenerator(sweep.startHz(), sweep.stopHz(), run.sampleRate(),
-                                    sweep.durationSamples(), run.amplitudeVrms(), run.dacFsVoltage())
-                            : new SignalGenerator(sweep.startHz(), sweep.stopHz(),
-                                    sweep.durationSamples(), sweep.leadInSamples(), run.sampleRate(),
-                                    run.amplitudeVrms(), run.dacFsVoltage());
-                    reference.setSweepParams(sweep.loop(), sweep.fadeInSamples(), sweep.fadeOutSamples());
-                    this.generator = reference;
-                } catch (RuntimeException ex) {
-                    log.warn("Sweep reference build failed", ex);
-                }
             }
             PlaybackStateEnum compensation = applySavedCompensation(remote, prefs, form, emitHz, rate);
             if (compensation != PlaybackStateEnum.STARTED) {
@@ -692,15 +676,6 @@ public final class GeneratorLane {
         Preferences prefs = Preferences.instance();
         return emitFrequency(prefs, form, sampleRate, analysisRateHz(),
                 rawFrequency(prefs, form));
-    }
-
-    /** The running log-sweep's one-period reference X(t) - what a deconvolving
-     *  consumer (the notch tuner) divides by; {@code null} while no local
-     *  sweep generator is up.  On a remote session the caller builds its own
-     *  reference from the same numbers it put into the run. */
-    public double[] sweepReference() {
-        SignalGenerator g = generator;
-        return g == null ? null : g.getLogSweepBuffer();
     }
 
     /**
@@ -956,11 +931,11 @@ public final class GeneratorLane {
         ag.setOutputChannels(run.channels());
     }
 
-    /** Live-applies sweep start frequency (Hz).  Applied to the LOCAL
-     *  generator as well while a bench emits - it is then the deconvolution
-     *  reference ({@link #sweepReference()}), and a reference left on the old
-     *  band would divide the new band's response by the wrong chirp.  The
-     *  stored run follows, so a restart replays the band the operator is on. */
+    /** Live-applies sweep start frequency (Hz) to whichever end emits: the
+     *  local generator when the chirp is rendered here, the bench when it is
+     *  not.  The stored run follows, so a restart replays the band the operator
+     *  is on.  A deconvolving consumer keeps its own reference on the CAPTURE
+     *  clock and moves it itself - this lane's business is the emission. */
     public void setSweepFreqStart(double hz) {
         GeneratorRun run = lastRun;
         if (run != null) lastRun = run.withSweepStart(hz);
