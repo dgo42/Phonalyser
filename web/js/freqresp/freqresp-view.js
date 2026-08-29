@@ -1534,12 +1534,13 @@ export class FreqRespView {
     }
   }
 
-  /** Integer canvas x for frequency f (Java freqToX with round=true). */
+  /** Integer canvas x for frequency f - Java's sub-pixel freqToX rounded at this call, the way
+   *  its own whole-pixel consumers round at theirs (AbstractFreqDomainView.freqToX). */
   _freqToX(f, plot, freqMin, freqMax) {
     return plot.x + Math.round(this._freqToXFraction(f, freqMin, freqMax) * plot.w);
   }
 
-  /** Y for a dB value (Java dbToYf) - unclamped; clipped at the frame. */
+  /** Y for a dB value (Java dbToY) - unclamped; clipped at the frame. */
   _dbToY(d, plot, magTop, magBot) {
     return plot.y + (magTop - d) / (magTop - magBot) * plot.h;
   }

@@ -412,9 +412,14 @@ export class FftView {
       : unit === 'DBV' ? 'dBV' : unit === 'DBR' ? 'dBr' : 'dBFS';
   }
 
-  /* Java AbstractFreqDomainView.freqToX (:183) - LOG: safeMin=max(1,freqMin),
+  /* Java AbstractFreqDomainView.freqToX (:188) - LOG: safeMin=max(1,freqMin),
    * safeMax=max(freqMax, safeMin*1.0000001), t=(log10(max(1,f))-lo)/(hi-lo);
-   * LINEAR: t=(f-freqMin)/(freqMax-freqMin); both -> plot.x + round(t*plot.width). */
+   * LINEAR: t=(f-freqMin)/(freqMax-freqMin); both -> plot.x + t*plot.width.
+   * SUB-PIXEL: the exact column f falls in, unrounded. Every trace, marker and
+   * caption maps through this one method, so none of them can drift against
+   * another; the few consumers that need a whole pixel (a fillRect band edge, a
+   * column bucket key, a grid line that must sit on the pixel raster, a text
+   * origin) round at their own call, where the loss is visible. */
   _freqToX(f, plot, fMin, fMax, logFreq) {
     let t;
     if (logFreq) {
@@ -425,7 +430,7 @@ export class FftView {
     } else {
       t = (f - fMin) / (fMax - fMin);
     }
-    return plot.x + Math.round(t * plot.width);
+    return plot.x + t * plot.width;
   }
 
   /* Java AbstractFreqDomainView.magToYFraction (:273) - log units (V/V√Hz) map
@@ -441,17 +446,22 @@ export class FftView {
     return (top - v) / (top - bot);
   }
 
-  /* Java magToY (:287) - clamped to the plot. */
+  /* Java magToY (:289) - clamped to the plot, and SUB-PIXEL like _freqToX: a
+   * marker sits on its own level rather than on the nearest pixel row, and a
+   * consumer needing a whole pixel rounds at its own call. */
   _magToY(v, plot, top, bot, unit) {
     let t = this._magToYFraction(v, top, bot, unit);
     if (t < 0) t = 0; if (t > 1) t = 1;
-    return plot.y + Math.round(t * plot.height);
+    return plot.y + t * plot.height;
   }
 
-  /* Java magToYTrace (:300) - NO clamp (the GC clip cuts an over-range flank flush). */
+  /* Java magToYTrace (:307) - NO clamp (the clip cuts an over-range flank flush),
+   * and SUB-PIXEL with no integer twin: its one consumer is the column-bucket
+   * trace, whose midpoint polyline strokes between pixel rows instead of
+   * stair-stepping. A marker or a readout that needs whole pixels uses _magToY. */
   _magToYTrace(v, plot, top, bot, unit) {
     const t = this._magToYFraction(v, top, bot, unit);
-    return plot.y + Math.round(t * plot.height);
+    return plot.y + t * plot.height;
   }
 
   /* Java yToMag (:308) - inverse of magToY for the crosshair readout. */
@@ -526,7 +536,10 @@ export class FftView {
       height: Math.max(1, H - MARGIN_TOP - MARGIN_BOTTOM),
     };
     // x(f) / y(v) used by the trace / dots / crosshair downstream - Java freqToX /
-    // magToY. y() takes a value already in the DISPLAY unit (cv(dbFs)).
+    // magToY. y() takes a value already in the DISPLAY unit (cv(dbFs)). Both are
+    // SUB-PIXEL: a consumer that genuinely needs a whole pixel - a fillRect band
+    // edge, the column bucket key, a graticule line, a text origin - rounds at its
+    // own call below, where the loss is visible.
     const x = (f) => this._freqToX(f, plot, fMin, fMax, logAxis);
     const y = (v) => this._magToY(v, plot, magTop, magBot, magUnit);
 
@@ -535,13 +548,16 @@ export class FftView {
     // HP/LP THD-integration window so the excluded bands are visible.
     if (p) {
       g.fillStyle = '#dcdcdc';
+      // A filled band, not a trace: the rect edges land on whole pixels, so the
+      // fractional column is rounded HERE rather than upstream (Java FftView:1448/1455,
+      // where fillRectangle takes ints).
       if (p.fftDistMinEnabled.get()) {
         const hp = p.fftDistMinHz.get();
-        if (hp > fMin) { const xR = x(Math.min(hp, fMax)); if (xR > plot.x) g.fillRect(plot.x, plot.y, xR - plot.x, plot.height); }
+        if (hp > fMin) { const xR = Math.round(x(Math.min(hp, fMax))); if (xR > plot.x) g.fillRect(plot.x, plot.y, xR - plot.x, plot.height); }
       }
       if (p.fftDistMaxEnabled.get()) {
         const lp = p.fftDistMaxHz.get();
-        if (lp < fMax) { const xL = x(Math.max(lp, fMin)), xR = plot.x + plot.width; if (xR > xL) g.fillRect(xL, plot.y, xR - xL, plot.height); }
+        if (lp < fMax) { const xL = Math.round(x(Math.max(lp, fMin))), xR = plot.x + plot.width; if (xR > xL) g.fillRect(xL, plot.y, xR - xL, plot.height); }
       }
     }
     // ---- Grid + tick labels - faithful Java drawGrid port. ----
@@ -572,15 +588,22 @@ export class FftView {
     const yClip = (yPx) => Math.max(plot.y, Math.min(plot.y + plot.height, yPx));
     const bars = [];
     const mids = [];
-    let lastPx = -1, colMin = 300, colMax = -300, colCnt = 0;
-    const flushCol = (px) => {
+    // lastPx is the column KEY - a whole pixel, because the buckets ARE columns.
+    // lastXf is the TRUE fractional X of the bin that OPENED that column, which is
+    // what the midpoint polyline is drawn through (Java ColumnBucketPainter.xs,
+    // AbstractMeasurementView:1712-1716 + FftView:2470): a zoomed-in spectrum, where
+    // a column holds ONE bin, puts its vertex on the bin's own position instead of
+    // on the column's integer edge. Where a column holds many bins, any of their X
+    // values is inside the same pixel.
+    let lastPx = -1, lastXf = 0, colMin = 300, colMax = -300, colCnt = 0;
+    const flushCol = (px, xf) => {
       // Java: maxDb is the higher level (smaller Y, towards top); the envelope bar
       // spans the column min/max, the midpoint trace runs through the column centre.
-      // Bars mirror Java ColumnBucketPainter.drawTo:1353-1356: multi-bin columns only,
-      // Y clamped to the plot (rounding + the collapsed-bar skip happen at draw time,
-      // in DEVICE pixels - see pass 1 below).
+      // Bars mirror Java ColumnBucketPainter.drawTo:1793-1799: multi-bin columns only,
+      // at the column's INTEGER x (plot.x + x), Y clamped to the plot (rounding + the
+      // collapsed-bar skip happen at draw time, in DEVICE pixels - see pass 1 below).
       if (colCnt >= 2) bars.push([px, yClip(binYTrace(colMax)), yClip(binYTrace(colMin))]);
-      mids.push([px, binYTrace((colMin + colMax) / 2)]);
+      mids.push([xf, binYTrace((colMin + colMax) / 2)]);
     };
     // Manual-fundamental: lift the fundamental's WHOLE main lobe to the user
     // value at RENDER TIME (Java FftView.drawSpectrum :2234-2258). Visual only -
@@ -610,8 +633,12 @@ export class FftView {
     g.beginPath(); g.rect(plot.x, plot.y, plot.width, plot.height); g.clip();
     for (let k = 1; k < mag.length; k++) {
       const f = k * binW; if (f < fMin || f > fMax) continue;
-      const px = Math.round(x(f)); if (px < plot.x) continue;
-      if (px !== lastPx && lastPx >= 0) { flushCol(lastPx); colMin = 300; colMax = -300; colCnt = 0; }
+      // The bucket key rounds; the bin's own sub-pixel X is kept for the polyline.
+      const xf = x(f), px = Math.round(xf); if (px < plot.x) continue;
+      if (px !== lastPx) {
+        if (lastPx >= 0) { flushCol(lastPx, lastXf); colMin = 300; colMax = -300; colCnt = 0; }
+        lastXf = xf;                                    // FIRST bin in this column
+      }
       // Per-bin dBFS feeding the column envelope: RAW value, except inside the
       // manual-fundamental lobe, where it is stretched up to the user level
       // (Java :2299-2302). mag (= result.amplitudeDbFs) is never mutated.
@@ -624,8 +651,8 @@ export class FftView {
       if (dbK > colMax) colMax = dbK;
       colCnt++; lastPx = px;
     }
-    if (lastPx >= 0) flushCol(lastPx);
-    // Pass 1 (Java ColumnBucketPainter.drawTo:1346-1359): the vertical envelope bars are
+    if (lastPx >= 0) flushCol(lastPx, lastXf);
+    // Pass 1 (Java ColumnBucketPainter.drawTo:1787-1800): the vertical envelope bars are
     // drawn AA-OFF at integer NATIVE-pixel coords in Java - fully OPAQUE columns, the
     // solid fill of the noise band. Two canvas pitfalls both re-created the striping:
     // a 1-px STROKE centered on integer x straddles two half-intensity columns, and -
@@ -644,7 +671,7 @@ export class FftView {
         const x1 = Math.round((bx + barW / 2) * dpr);
         const y0 = Math.round(lo * dpr);
         const y1 = Math.round(hi * dpr);
-        if (y0 === y1) continue;   // Java :1356 - collapsed bar (native px) skipped
+        if (y0 === y1) continue;   // Java :1797 - collapsed bar (native px) skipped
         g.fillRect(x0, y0, Math.max(1, x1 - x0), y1 - y0);
       }
       g.setTransform(dpr, 0, 0, dpr, 0, 0);   // back to CSS-px space for pass 2
@@ -652,8 +679,9 @@ export class FftView {
       // Headless mock context (no setTransform): plain CSS-px fills, dpr is 1 there.
       for (const [bx, lo, hi] of bars) g.fillRect(bx, Math.round(lo), 1, Math.max(1, Math.round(hi) - Math.round(lo)));
     }
-    // Pass 2 (Java :1360-1384): the midpoint polyline as ONE anti-aliased sub-pixel path,
+    // Pass 2 (Java :1801-1826): the midpoint polyline as ONE anti-aliased sub-pixel path,
     // stroked OVER the opaque bars - the Java pass order, so it blends into the band.
+    // Every vertex carries its column's own fractional X (mids[i][0]) and an unrounded Y.
     g.beginPath();
     let started = false;
     for (const [mx, my] of mids) { started ? g.lineTo(mx, my) : (g.moveTo(mx, my), started = true); }
@@ -796,18 +824,24 @@ export class FftView {
         const LBL_H = 12;         // Java ext.y - 10px label height (font + descent)
         const margin = 4;         // dot-to-label vertical gap (Java)
         const gap = 2;            // label-to-label vertical gap (Java)
-        let ly1 = pos1 ? pos1.y - margin - LBL_H : 0;   // label TOP y
-        let ly2 = pos2 ? pos2.y - margin - LBL_H : 0;
+        // The stacking below works in whole TEXT ROWS, so the dot's row is rounded
+        // once here - the Java Point from dotScreenPos (FftView:2003-2004) is integer
+        // for exactly this reason. The horizontal centring further down keeps the
+        // FRACTIONAL dot column (Java's x1f / x2f, FftView:2119-2120).
+        const dy1 = pos1 ? Math.round(pos1.y) : 0;
+        const dy2 = pos2 ? Math.round(pos2.y) : 0;
+        let ly1 = pos1 ? dy1 - margin - LBL_H : 0;   // label TOP y
+        let ly2 = pos2 ? dy2 - margin - LBL_H : 0;
         if (pos1 && pos2) {
           const bot1 = ly1 + LBL_H, bot2 = ly2 + LBL_H;
           const overlap = !(bot1 + gap <= ly2 || bot2 + gap <= ly1);
           if (overlap) {
-            if (pos1.y <= pos2.y) {
+            if (dy1 <= dy2) {
               const candTop = bot1 + gap;
-              ly2 = (candTop + LBL_H + margin <= pos2.y) ? candTop : ly1 - gap - LBL_H;
+              ly2 = (candTop + LBL_H + margin <= dy2) ? candTop : ly1 - gap - LBL_H;
             } else {
               const candTop = bot2 + gap;
-              ly1 = (candTop + LBL_H + margin <= pos1.y) ? candTop : ly2 - gap - LBL_H;
+              ly1 = (candTop + LBL_H + margin <= dy1) ? candTop : ly2 - gap - LBL_H;
             }
           }
         }
@@ -964,8 +998,13 @@ export class FftView {
       yMinors = niceLinearMinors(magBot, magTop, MAG_DB_MINOR_STEP);
     }
 
-    const fx = (f) => this._freqToX(f, plot, fMin, fMax, logAxis);
-    const fy = (v) => this._magToY(v, plot, magTop, magBot, magUnit);
+    // The graticule keeps WHOLE pixels and rounds at its own call: Java's grid maps
+    // through its own valueToX / valueToY (AbstractMeasurementView:1313 / :1320), which
+    // stay integer, and here the +0.5 offsets below only produce a crisp 1-px line on an
+    // integer coordinate. Tick LABELS use the same rounded position so a label never
+    // drifts off its own line.
+    const fx = (f) => Math.round(this._freqToX(f, plot, fMin, fMax, logAxis));
+    const fy = (v) => Math.round(this._magToY(v, plot, magTop, magBot, magUnit));
 
     // ---- Grid lines. ----
     g.lineWidth = 1;
@@ -1044,12 +1083,18 @@ export class FftView {
     return f >= 1000 ? (f / 1000).toFixed(2) + ' kHz' : f.toFixed(f < 10 ? 2 : 0) + ' Hz';
   }
 
-  /** Draws a halo-outlined label centred above (cx, cy) - Java drawOutlinedText. */
+  /** Draws a halo-outlined label centred above (cx, cy) - Java drawOutlinedText.
+   *  (cx, cy) arrive on the dot's FRACTIONAL centre and are rounded ONCE here, at
+   *  the text primitive: centring on an already-rounded dot column and then halving
+   *  the text width rounds twice, which can leave the caption a whole pixel off the
+   *  dot it names (Java drawHarmonicLabel, FftView:2021-2031). The glyphs
+   *  themselves sit on the pixel grid, as the desktop's do. */
   _dotLabel(g, text, cx, cy) {
-    const yy = Math.max(11, cy);
+    const xx = Math.round(cx);
+    const yy = Math.round(Math.max(11, cy));
     g.font = '10px "Segoe UI", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'bottom';
-    g.lineJoin = 'round'; g.lineWidth = 3; g.strokeStyle = '#fff'; g.strokeText(text, cx, yy);
-    g.fillStyle = '#222'; g.fillText(text, cx, yy);
+    g.lineJoin = 'round'; g.lineWidth = 3; g.strokeStyle = '#fff'; g.strokeText(text, xx, yy);
+    g.fillStyle = '#222'; g.fillText(text, xx, yy);
   }
 
   // ───────────────────────────── THD / IMD tables ─────────────────────────────
