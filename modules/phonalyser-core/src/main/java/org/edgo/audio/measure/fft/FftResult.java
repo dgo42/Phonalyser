@@ -186,8 +186,9 @@ public class FftResult {
     /** {@link #noisePower}'s IEC 61672 A-weighted sibling: the same noise bins
      *  weighted by the A curve before summing (same SNR band, same
      *  excluded-zone rescale, already divided by {@link #windowNenbwBins}).
-     *  Feeds the A-suffixed readouts - N+D, THD+N, SINAD -> ENOB - while SNR
-     *  and N stay on the unweighted {@link #noisePower}. */
+     *  Feeds the N+D audibility readout ALONE - THD+N, SINAD and ENOB divide
+     *  by the unweighted {@link #noisePower} basis (the MT-003 definitions),
+     *  as do SNR and N. */
     public double awNoisePower;
     /** Normalized equivalent noise bandwidth of the analysis window, in bins
      *  (Hann: 1.5) - stamped at analysis time so a band-change recompute can

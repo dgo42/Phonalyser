@@ -40,13 +40,14 @@ import org.edgo.audio.measure.sound.PcmQuantizer;
  *   <li>The FIRST attach ({@link #attachGenerator} or {@link #attachCapture})
  *       starts the session; a LATER attach swaps the lane's source / sink
  *       <b>live</b>, with no restart.</li>
- *   <li>An unattached generator lane produces DITHERED SILENCE, not digital
- *       zeros: the samples go through the lane quantiser at the session depth with
- *       the default last-bit TPDF, which is what makes this backend a bench with a
- *       known noise floor (0.5 LSB RMS at the selected depth) whether or not a
- *       signal happens to be playing.  Dither exists on the PLAYBACK side only -
- *       here as everywhere - so the floor is PRODUCED, and the capture lane is a
- *       pure consumer of whatever the session rendered.</li>
+ *   <li>An unattached generator lane produces plain quantised silence - digital
+ *       zeros at the session depth, with NO dither of the lane's own.  The
+ *       backend adds nothing the operator did not configure: with the
+ *       generator's dither off the delivered floor is exactly zero, and with it
+ *       set the floor is that configured TPDF alone (at the last bit it reads
+ *       0.5 LSB RMS).  Dither exists on the PLAYBACK side only - here as
+ *       everywhere - so whatever floor exists is PRODUCED, and the capture lane
+ *       is a pure consumer of whatever the session rendered.</li>
  *   <li>The session has exactly ONE capture consumer.  A second attach with a lane
  *       already live is a wiring bug (two independent capture owners on one
  *       stream); it is refused loudly rather than silently overwriting the first
@@ -91,8 +92,8 @@ public final class LoopbackDuplexEngine {
     private static final long NANOS_PER_MILLI   = 1_000_000L;
     private static final int  CHANNELS          = 2;
     /** The silence source's nominal tone: at amplitude zero every sample is
-     *  exactly 0.0 before quantisation, so what leaves the lane is the dither
-     *  floor and nothing else - the frequency only has to exist. */
+     *  exactly 0.0 before quantisation, so what leaves the lane is digital zero
+     *  and nothing else - the frequency only has to exist. */
     private static final double SILENCE_TONE_HZ = 1000.0;
 
     /** The session format and everything sized from it.  Written only under this
@@ -101,18 +102,19 @@ public final class LoopbackDuplexEngine {
      *  publishes them). */
     @Getter
     private int sampleRateHz;
-    /** The session's quantiser resolution AND the silence lane's dither depth. */
+    /** The session's quantiser resolution. */
     @Getter
     private int bitDepth;
     private int blockFrames;
     private int frameSize;
     private byte[] block;
     /** The unattached generator lane: digital zero through the lane quantiser at
-     *  the session depth, dithered on its last bit.  Exposed because it is the
-     *  session's ONE floor: a lane that has to emit a block with no generator
-     *  behind it fills it from here rather than writing digital zeros, so nothing
-     *  this backend delivers is ever undithered.  Called only from the pacer
-     *  thread, whether by this engine or by the attached lane. */
+     *  the session depth, with NO dither - the backend adds none of its own.
+     *  Exposed because it is the session's ONE silence: a lane that has to emit
+     *  a block with no generator behind it fills it from here, so every
+     *  delivered block goes through the same quantiser whether or not a signal
+     *  plays.  Called only from the pacer thread, whether by this engine or by
+     *  the attached lane. */
     @Getter
     private SampleSource silence;
 
@@ -152,8 +154,8 @@ public final class LoopbackDuplexEngine {
         }
     }
 
-    /** Detaches the generator lane (reverts to dithered silence); ends the session
-     *  if it was the last client. */
+    /** Detaches the generator lane (reverts to plain quantised silence); ends the
+     *  session if it was the last client. */
     public synchronized void detachGenerator() {
         this.attachedSource = null;
         generatorAttached = false;
@@ -233,10 +235,10 @@ public final class LoopbackDuplexEngine {
         // right-aligned in the next larger container (20 bits in 3 bytes).
         this.frameSize    = ((bits + 7) / 8) * CHANNELS;
         this.block        = new byte[blockFrames * frameSize];
-        // The floor is the DEPTH's own - TPDF on the last bit of the selected
-        // depth - and it is produced here, on the playback side, because that is
-        // the only side dither exists on.
-        PcmQuantizer quantizer = new PcmQuantizer(bits, -1.0/*bits*/);
+        // NO dither on the silence lane (a negative depth quantises plain): the
+        // backend's floor is whatever dither the GENERATOR is configured to, and
+        // nothing else - an undithered loopback measurement really reads zeros.
+        PcmQuantizer quantizer = new PcmQuantizer(bits, -1.0 /* bits */);
         SignalGenerator zero = new SignalGenerator(GenSignalForm.SINE, SILENCE_TONE_HZ, hz, 0.0, 1.0);
         this.silence = (destination, frames) -> quantizer.encode(zero, destination, frames);
     }

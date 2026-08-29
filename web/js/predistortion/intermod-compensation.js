@@ -100,9 +100,8 @@ export class IntermodCompensation {
 
   /**
    * The distortion products of one frame as complex phasors in the accumulator's
-   * frame - the construction accumulate() adds in, and the same one the probe
-   * differences to measure the plant, so both read a frame identically. A product
-   * the analyzer did not publish this tick carries (0, 0) at frequency 0.
+   * frame - the construction accumulate() adds in. A product the analyzer did
+   * not publish this tick carries (0, 0) at frequency 0.
    *
    * @param {import('../fft/fft-result.js').FftResult} r measured FFT result
    * @param {number} f1Hz tone-1 frequency (Hz)
@@ -176,8 +175,8 @@ export class IntermodCompensation {
   /**
    * The chain response product `g` is de-embedded against on the way out: the
    * loaded .frc at its frequency, or unity for a b=0 harmonic the display already
-   * de-embedded. The single definition of that convention - the conversions and the
-   * plant measurement all read it here, so none of them can drift from the others.
+   * de-embedded. The single definition of that convention - the conversions all
+   * read it here, so none of them can drift from the others.
    *
    * @param {number} g grid slot
    * @param {number} freqHz the product's frequency

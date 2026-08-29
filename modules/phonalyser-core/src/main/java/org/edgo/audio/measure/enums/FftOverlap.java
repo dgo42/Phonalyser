@@ -39,14 +39,15 @@ public enum FftOverlap {
      *  leaves less fresh signal per hop, so the MAXIMUM percent yields the
      *  SMALLEST hop.  The label deliberately carries no numbers - these can
      *  change. */
-    public static final double RAND_MIN_OVERLAP_PCT = 90.625; // 3/32 // 87.5 // 1/8;
+    public static final double RAND_MIN_OVERLAP_PCT = 90.625;
     public static final double RAND_MAX_OVERLAP_PCT = 93.75;
 
-    /** The random draw's lattice: the hop range splits into this many equal
-     *  parts and every drawn hop lands on a part boundary, so the realized
-     *  hop sizes take at most this many distinct values (4096-sample spacing
-     *  at a 1M frame, 32 at 8k).  Discrete sizes keep hop-vs-reading
-     *  statistics cleanly groupable. */
+    /** The random draw's lattice: the hop range defined by
+     *  {@link #RAND_MIN_OVERLAP_PCT}..{@link #RAND_MAX_OVERLAP_PCT} is divided
+     *  into this many equal parts and every drawn hop lands on a part
+     *  boundary, so the realized hop sizes take at most this many distinct
+     *  values.  Discrete sizes keep hop-vs-reading statistics cleanly
+     *  groupable. */
     public static final int RAND_HOP_STEPS = 16;
 
     public final double fraction;

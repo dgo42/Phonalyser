@@ -34,12 +34,12 @@ import org.edgo.audio.measure.sound.PcmQuantizer;
  * source: it quantises the generator to the session's bit depth straight into the
  * block the engine is about to hand to the capture lane.
  *
- * <p>The lane is NEVER undithered: with no configured dither it quantises with
- * TPDF on the last bit of the selected depth - the known floor the backend exists
- * for - and a dither the generator configures overrides that default, live
- * included, exactly as it would on a hardware lane.  The engine's UNATTACHED
- * generator lane applies the same default to digital zero, so the floor is
- * continuous across a start and a stop.
+ * <p>The lane adds NO dither of its own: with the generator's dither off it
+ * quantises plain, so an undithered loopback measurement reads the arithmetic
+ * zeros it is supposed to; a dither the generator configures - at open or live -
+ * is the only noise on the lane, exactly as on a hardware lane.  The engine's
+ * UNATTACHED generator lane is the same plain quantisation of digital zero, so
+ * the behaviour is continuous across a start and a stop.
  *
  * <p><b>This lane renders nothing on the play thread.</b>  The samples are pulled
  * from {@link #nextBlock} by the engine's pacer thread, which is the session's one
@@ -56,11 +56,10 @@ public final class LoopbackPlayback implements AudioPlayback,
     private final LoopbackDeviceManager manager;
     private final int sampleRate;
     private final int bitDepth;
-    /** By DEFAULT the dither depth is the SELECTED bit depth: TPDF on the last
-     *  bit, which is what makes this backend a bench with a KNOWN noise floor.
-     *  A dither the generator configures - the openPlayback argument or the
-     *  live setDitherBits call - overrides the default; a zero (dither off)
-     *  falls back to it, so the lane is never undithered. */
+    /** The dither depth is exactly what the generator configures - the
+     *  openPlayback argument or the live setDitherBits call.  Zero (dither off)
+     *  quantises PLAIN, adding nothing, so the measured floor is the configured
+     *  dither and only that. */
     private final PcmQuantizer quantizer;
 
     private LoopbackDuplexEngine engine;
@@ -74,10 +73,10 @@ public final class LoopbackPlayback implements AudioPlayback,
         this.quantizer  = new PcmQuantizer(bitDepth, effectiveDither(ditherBits));
     }
 
-    /** A configured depth wins; zero (dither off) means the last-bit default -
-     *  see the quantiser field. */
+    /** A configured depth wins; zero (dither off) becomes the quantiser's
+     *  none value - the lane adds no dither of its own. */
     private double effectiveDither(double bits) {
-        return bits > 0 ? bits : -1.0 /*bitDepth*/;
+        return bits > 0 ? bits : -1.0;
     }
 
     @Override
