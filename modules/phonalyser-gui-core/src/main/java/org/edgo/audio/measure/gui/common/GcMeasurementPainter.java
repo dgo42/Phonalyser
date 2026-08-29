@@ -94,12 +94,23 @@ public final class GcMeasurementPainter implements MeasurementPainter {
         Path p = new Path(gc.getDevice());
         try {
             float r = diameter / 2f;
-            p.addArc((float) cx - r, (float) cy - r, diameter, diameter, 0f, 360f);
+            p.addArc((float) cx - r + FILL_TO_STROKE_OFFSET_PX,
+                     (float) cy - r + FILL_TO_STROKE_OFFSET_PX,
+                     diameter, diameter, 0f, 360f);
             gc.fillPath(p);
         } finally {
             p.dispose();
         }
     }
+
+    /** GDI+ rasterises an antialiased path FILL half a pixel up-left of an
+     *  antialiased path STROKE through the same coordinates - the two pipelines
+     *  carry different pixel-offset conventions.  Every curve a marker sits on
+     *  is stroked (traces, grid, overlays), so the filled disc is shifted by
+     *  this on both axes to land on the same raster; without it a disc reads a
+     *  constant half pixel left of and above a stroked line through the
+     *  identical coordinate, at every zoom and for every diameter. */
+    private static final float FILL_TO_STROKE_OFFSET_PX = 0.5f;
     @Override public void fillPolygon(int[] pointArray)                 { gc.fillPolygon(pointArray); }
     @Override public void drawPolygon(int[] pointArray)                 { gc.drawPolygon(pointArray); }
     @Override public void drawImage(Image image, int x, int y)          { gc.drawImage(image, x, y); }

@@ -1629,13 +1629,13 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  returns {@code NaN} to drop a sample (a gap). */
     protected final void paintPolyline(GC gc, Rectangle plot, Color color,
                                        int lineStyle, int lineWidth,
-                                       int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
+                                       int n, IntToDoubleFunction xAt, IntToDoubleFunction yAt) {
         paintPolyline(new GcMeasurementPainter(gc), plot, color, lineStyle, lineWidth, n, xAt, yAt);
     }
 
     protected final void paintPolyline(MeasurementPainter p, Rectangle plot, Color color,
                                        int lineStyle, int lineWidth,
-                                       int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
+                                       int n, IntToDoubleFunction xAt, IntToDoubleFunction yAt) {
         if (n < 2) return;
         p.setForeground(color);
         p.setLineStyle(lineStyle);
@@ -1652,13 +1652,13 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  fixed-width overlay / debug strokes. */
     protected final void paintPolyline(GC gc, Rectangle plot, Color color,
                                        int lineStyle, float lineWidth,
-                                       int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
+                                       int n, IntToDoubleFunction xAt, IntToDoubleFunction yAt) {
         paintPolyline(new GcMeasurementPainter(gc), plot, color, lineStyle, lineWidth, n, xAt, yAt);
     }
 
     protected final void paintPolyline(MeasurementPainter p, Rectangle plot, Color color,
                                        int lineStyle, float lineWidth,
-                                       int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
+                                       int n, IntToDoubleFunction xAt, IntToDoubleFunction yAt) {
         if (n < 2) return;
         p.setForeground(color);
         setTraceLineAttributes(p, lineWidth, lineStyle);
@@ -1686,13 +1686,13 @@ public abstract class AbstractMeasurementView extends Canvas {
             new LineAttributes(1.0f, SWT.CAP_ROUND, SWT.JOIN_ROUND);
 
     private void paintPolylineImpl(MeasurementPainter p, Rectangle plot,
-                                   int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
+                                   int n, IntToDoubleFunction xAt, IntToDoubleFunction yAt) {
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
         int right = plot.x + plot.width;
         for (int i = 0; i < n; i++) {
             double y = yAt.applyAsDouble(i);
             if (Double.isNaN(y)) continue;
-            int x = xAt.applyAsInt(i);
+            double x = xAt.applyAsDouble(i);
             if (x < plot.x)      painter.setLeftAnchor(x, y);
             else if (x > right)  painter.setRightAnchor(x, y);
             else                 painter.add(x, y);
@@ -1709,35 +1709,47 @@ public abstract class AbstractMeasurementView extends Canvas {
 
         private final Rectangle plot;
         private final double[] yMins, yMaxs;
+        /** The fractional X of the FIRST point that landed in each column - what the
+         *  Pass-2 polyline strokes through, so a vertex sits on its sample's true
+         *  column rather than on the column's integer left edge.  It matters wherever
+         *  a column holds one point (a zoomed-in trace, a sparse curve); where a
+         *  column holds many, any of their X values is within the same pixel. */
+        private final double[] xs;
         private final int[] cnts;
         /** Optional anchor points just outside the plot rect.  When set, the polyline
          *  extends from {@code leftAnchor*} into the first column and from the last column
          *  out to {@code rightAnchor*}; the clip in {@link #drawTo} hides the out-of-rect
          *  portion so the trace reaches the canvas edges with one extra sample's data. */
-        private int    leftAnchorX  = Integer.MIN_VALUE; private double leftAnchorY  = 0;
-        private int    rightAnchorX = Integer.MIN_VALUE; private double rightAnchorY = 0;
+        private double leftAnchorX  = Double.NaN; private double leftAnchorY  = 0;
+        private double rightAnchorX = Double.NaN; private double rightAnchorY = 0;
 
         public ColumnBucketPainter(Rectangle plot) {
             this.plot  = plot;
             int w      = Math.max(1, plot.width);
             this.yMins = new double[w];
             this.yMaxs = new double[w];
+            this.xs    = new double[w];
             this.cnts  = new int[w];
             Arrays.fill(yMins, Double.POSITIVE_INFINITY);
             Arrays.fill(yMaxs, Double.NEGATIVE_INFINITY);
+            Arrays.fill(xs,    Double.NaN);
         }
 
-        /** Records one data point - absolute canvas pixels, Y kept as a {@code double} so
-         *  the Pass-2 trace can stroke sub-pixel.  Points outside the plot rect are silently
-         *  dropped - the caller needn't pre-filter. */
-        public void add(int xAbs, double yAbs) {
-            int x = xAbs - plot.x;
+        /** Records one data point - absolute canvas pixels, BOTH coordinates
+         *  {@code double} so the Pass-2 trace strokes sub-pixel and no caller has to
+         *  round on the way in.  X still selects a whole pixel COLUMN, because the
+         *  buckets are columns; the fraction survives on Y, where a trace shows it.
+         *  Points outside the plot rect are silently dropped - the caller needn't
+         *  pre-filter. */
+        public void add(double xAbs, double yAbs) {
+            int x = (int) Math.round(xAbs) - plot.x;
             // A sample landing exactly on the right edge (x == plot.width == cnts.length)
             // maps to the last column - mirroring x == 0 on the left.  Without this the
             // rightmost in-range sample is dropped and the trace stops one sample short
             // of the right edge while the left edge is reached fine.
             if (x == cnts.length) x = cnts.length - 1;
             if (x < 0 || x >= cnts.length) return;
+            if (Double.isNaN(xs[x])) xs[x] = xAbs;
             if (yAbs < yMins[x]) yMins[x] = yAbs;
             if (yAbs > yMaxs[x]) yMaxs[x] = yAbs;
             cnts[x]++;
@@ -1745,14 +1757,16 @@ public abstract class AbstractMeasurementView extends Canvas {
 
         /** Sets the left edge anchor - a point at {@code xAbs < plot.x} the first column
          *  connects back to.  Keeps the rightmost candidate (closest to the visible range). */
-        public void setLeftAnchor(int xAbs, double yAbs) {
-            if (xAbs > leftAnchorX) { leftAnchorX = xAbs; leftAnchorY = yAbs; }
+        public void setLeftAnchor(double xAbs, double yAbs) {
+            if (Double.isNaN(leftAnchorX) || xAbs > leftAnchorX) {
+                leftAnchorX = xAbs; leftAnchorY = yAbs;
+            }
         }
 
         /** Sets the right edge anchor - a point at {@code xAbs > plot.x + plot.width} the
          *  last column connects out to.  Keeps the leftmost candidate. */
-        public void setRightAnchor(int xAbs, double yAbs) {
-            if (rightAnchorX == Integer.MIN_VALUE || xAbs < rightAnchorX) {
+        public void setRightAnchor(double xAbs, double yAbs) {
+            if (Double.isNaN(rightAnchorX) || xAbs < rightAnchorX) {
                 rightAnchorX = xAbs; rightAnchorY = yAbs;
             }
         }
@@ -1792,20 +1806,21 @@ public abstract class AbstractMeasurementView extends Canvas {
                 // smooth round joins.  Left / right anchors extend it to the edges.
                 p.setAntialias(SWT.ON);
                 p.beginPath();
-                int prevX = leftAnchorX;
+                double prevX = leftAnchorX;
                 double prevY = leftAnchorY;
                 boolean penDown = false;
                 for (int x = 0; x < cnts.length; x++) {
                     if (cnts[x] == 0) continue;
                     double midY = (yMins[x] + yMaxs[x]) / 2.0;
-                    int px = plot.x + x;
-                    if (prevX != Integer.MIN_VALUE) {
+                    // The column's own fractional X, not its integer left edge.
+                    double px = xs[x];
+                    if (!Double.isNaN(prevX)) {
                         penDown = clipSegmentToPath(p, prevX, prevY, px, midY, penDown);
                     }
                     prevX = px;
                     prevY = midY;
                 }
-                if (rightAnchorX != Integer.MIN_VALUE && prevX != Integer.MIN_VALUE) {
+                if (!Double.isNaN(rightAnchorX) && !Double.isNaN(prevX)) {
                     clipSegmentToPath(p, prevX, prevY, rightAnchorX, rightAnchorY, penDown);
                 }
                 p.strokePath();

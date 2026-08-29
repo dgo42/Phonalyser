@@ -180,18 +180,24 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
         return Math.max(freqMax, safeMin * LOG_RANGE_MIN_RATIO);
     }
 
-    protected final int freqToX(double f, Rectangle plot,
-                                double freqMin, double freqMax, boolean logFreq) {
+    /** SUB-PIXEL: the exact column {@code f} falls in, unrounded.  Every trace,
+     *  marker and caption maps through this one method, so none of them can
+     *  drift against another; the few consumers that need a whole pixel (an SWT
+     *  primitive with integer coordinates, a bucket index) round at their own
+     *  call, where it is visible. */
+    protected final double freqToX(double f, Rectangle plot,
+                                   double freqMin, double freqMax, boolean logFreq) {
+        double t;
         if (logFreq) {
             double safeMin = Math.max(1, freqMin);
             double safeMax = safeLogMax(safeMin, freqMax);
             double lo = Math.log10(safeMin);
             double hi = Math.log10(safeMax);
-            double t  = (Math.log10(Math.max(1, f)) - lo) / (hi - lo);
-            return plot.x + (int) Math.round(t * plot.width);
+            t = (Math.log10(Math.max(1, f)) - lo) / (hi - lo);
+        } else {
+            t = (f - freqMin) / (freqMax - freqMin);
         }
-        double t = (f - freqMin) / (freqMax - freqMin);
-        return plot.x + (int) Math.round(t * plot.width);
+        return plot.x + t * plot.width;
     }
 
     /** Frequency at which {@link #freqToX} first rounds PAST the pixel
@@ -245,22 +251,14 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
         return freqMin + frac * (freqMax - freqMin);
     }
 
-    /** Maps a dB value to its Y pixel inside {@code plot}.  At
+    /** Maps a dB value to its Y inside {@code plot}, SUB-PIXEL.  At
      *  {@code db == magTop} returns {@code plot.y}; at
      *  {@code db == magBot} returns {@code plot.y + plot.height}.
      *  No clamp - an over-range value runs off the plot edge and the trace painter's
-     *  GC clip cuts it flush.  Linear-dB form used by FreqResp and by FFT's dB-rel unit. */
-    protected final int dbToY(double db, Rectangle plot,
-                              double magTop, double magBot) {
-        double t = (magTop - db) / (magTop - magBot);
-        return plot.y + (int) Math.round(t * plot.height);
-    }
-
-    /** Sub-pixel ({@code double}) counterpart of {@link #dbToY} for the Lanczos-smoothed
-     *  traces - keeps the curve off the integer pixel grid so it strokes between rows.
+     *  GC clip cuts it flush.  Linear-dB form used by FreqResp and by FFT's dB-rel unit.
      *  Returns {@code NaN} for {@code NaN} input (propagates a gap to the painter). */
-    protected final double dbToYf(double db, Rectangle plot,
-                                  double magTop, double magBot) {
+    protected final double dbToY(double db, Rectangle plot,
+                                 double magTop, double magBot) {
         return plot.y + ((magTop - db) / (magTop - magBot)) * plot.height;
     }
 
@@ -283,23 +281,32 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
 
     /** Unit-aware counterpart of {@link #dbToY} for FFT's V / V√Hz / dBFS / dBV axes,
      *  via {@link #magToYFraction}.  Clamps to the plot rect; markers that must
-     *  drop when off-range test the fraction themselves before calling. */
-    protected final int magToY(double v, Rectangle plot, double top, double bot, MagnitudeUnit unit) {
+     *  drop when off-range test the fraction themselves before calling.
+     *
+     *  <p>SUB-PIXEL, like {@link #freqToX}: the value is not rounded here, so a
+     *  marker sits on its own level rather than on the nearest pixel row, and a
+     *  consumer needing a whole pixel rounds at its own call. */
+    protected final double magToY(double v, Rectangle plot, double top, double bot,
+                                  MagnitudeUnit unit) {
         double t = magToYFraction(v, top, bot, unit);
         if (t < 0) t = 0;
         if (t > 1) t = 1;
-        return plot.y + (int) Math.round(t * plot.height);
+        return plot.y + t * plot.height;
     }
 
     /** Like {@link #magToY} but for the spectrum trace: NO clamp, so an over-range peak's
      *  flank is drawn to its true (off-screen) endpoint and the painter's GC clip cuts it
      *  flush at the edge - keeping the correct slope, instead of pinning to the edge
-     *  (shifting flat-top) or to a fixed off-edge point (wrong slope).  Mirrors
-     *  {@link #dbToY}; the trace's {@code v} is always &gt; 0 so the log V/V√Hz fraction
-     *  never reaches ±∞ here. */
-    protected final int magToYTrace(double v, Rectangle plot, double top, double bot, MagnitudeUnit unit) {
-        double t = magToYFraction(v, top, bot, unit);
-        return plot.y + (int) Math.round(t * plot.height);
+     *  (shifting flat-top) or to a fixed off-edge point (wrong slope).  The trace's
+     *  {@code v} is always &gt; 0 so the log V/V√Hz fraction never reaches ±∞ here.
+     *
+     *  <p>SUB-PIXEL, with no integer twin: its one consumer is
+     *  {@code ColumnBucketPainter.add}, whose Y is a {@code double} precisely so the
+     *  midpoint polyline strokes between pixel rows instead of stair-stepping.  A
+     *  marker or a readout that needs whole pixels uses {@link #magToY}. */
+    protected final double magToYTrace(double v, Rectangle plot, double top, double bot,
+                                       MagnitudeUnit unit) {
+        return plot.y + magToYFraction(v, top, bot, unit) * plot.height;
     }
 
     /** Inverse of {@link #magToY}: the magnitude value (in the active unit) at

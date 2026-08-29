@@ -60,6 +60,7 @@ import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.gui.common.Fonts;
+import org.edgo.audio.measure.gui.common.GcMeasurementPainter;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.BlinkBanner;
@@ -1442,14 +1443,16 @@ public final class FftView extends AbstractFreqDomainView {
             double hp = prefs.getFftDistMinHz();
             if (hp > freqMin) {
                 int xL = plot.x;
-                int xR = freqToX(Math.min(hp, freqMax), plot, freqMin, freqMax, logFreq);
+                // A filled band, not a trace: fillRectangle takes whole pixels,
+                // so the fractional edge is rounded here rather than upstream.
+                int xR = (int) Math.round(freqToX(Math.min(hp, freqMax), plot, freqMin, freqMax, logFreq));
                 if (xR > xL) gc.fillRectangle(xL, plot.y, xR - xL, plot.height);
             }
         }
         if (lpOn) {
             double lp = prefs.getFftDistMaxHz();
             if (lp < freqMax) {
-                int xL = freqToX(Math.max(lp, freqMin), plot, freqMin, freqMax, logFreq);
+                int xL = (int) Math.round(freqToX(Math.max(lp, freqMin), plot, freqMin, freqMax, logFreq));
                 int xR = plot.x + plot.width;
                 if (xR > xL) gc.fillRectangle(xL, plot.y, xR - xL, plot.height);
             }
@@ -1552,20 +1555,22 @@ public final class FftView extends AbstractFreqDomainView {
                                    double magTop, double magBot, boolean logFreq) {
         if (!DebugSwitches.SHOW_MAINS_COMB_RESPONSE || !(r.mainsF0Hz > 0.0) || mainsCorrector == null
                 || !Double.isFinite(anchorDbFs)) return;
-        gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_RED));
         Preferences prefs = Preferences.instance();
-        int prevX = -1, prevY = 0;
-        for (int x = plot.x; x <= plot.x + plot.width; x++) {
-            double f = xToFreq(x, plot, freqMin, freqMax, logFreq);
-            if (!(f > 0)) continue;
-            double combDb = mainsCorrector.correctionDb(f);
-            double v = prefs.convertFromDbFs(anchorDbFs + combDb, unit, r.binBwSqrt, prefs.getFftChannel());
-            int y = magToY(v, plot, magTop, magBot, unit);
-            y = Math.max(plot.y, Math.min(plot.y + plot.height, y));
-            if (prevX >= 0) gc.drawLine(prevX, prevY, x, y);
-            prevX = x;
-            prevY = y;
-        }
+        // One column per pixel, strokes through the shared sub-pixel polyline: Y
+        // stays fractional so the comb's notches land between rows instead of
+        // stair-stepping.  A column whose frequency is not positive yields NaN,
+        // which the painter reads as a gap - the old loop's "continue".
+        paintPolyline(gc, plot, getDisplay().getSystemColor(SWT.COLOR_RED),
+                SWT.LINE_SOLID, 1, plot.width + 1,
+                i -> (double) (plot.x + i),
+                i -> {
+                    double f = xToFreq(plot.x + i, plot, freqMin, freqMax, logFreq);
+                    if (!(f > 0)) return Double.NaN;
+                    double combDb = mainsCorrector.correctionDb(f);
+                    double v = prefs.convertFromDbFs(anchorDbFs + combDb, unit,
+                            r.binBwSqrt, prefs.getFftChannel());
+                    return magToY(v, plot, magTop, magBot, unit);
+                });
     }
 
     /** DEBUG: overlays the spectral discontinuity detector's three reject gates
@@ -1604,19 +1609,22 @@ public final class FftView extends AbstractFreqDomainView {
         boolean[] line  = lineBands(g.mref);
 
         // gate 2: per-band floor reference (dark cyan) + reject boundary (cyan).
-        int prevXr = -1, prevYr = 0, prevXb = -1, prevYb = 0;
+        double prevXr = Double.NaN, prevYr = 0, prevXb = Double.NaN, prevYb = 0;
         for (int b = 0; b < nb; b++) {
-            if (line[b] || Double.isNaN(floorDisp[b])) { prevXr = prevXb = -1; continue; }
-            int x = freqToX(0.5 * (g.bandLo[b] + g.bandHi[b]) * binBw, plot, freqMin, freqMax, logFreq);
+            if (line[b] || Double.isNaN(floorDisp[b])) {
+                prevXr = prevXb = Double.NaN;
+                continue;
+            }
+            double x = freqToX(0.5 * (g.bandLo[b] + g.bandHi[b]) * binBw, plot, freqMin, freqMax, logFreq);
             double ref = floorDisp[b] + (g.mref[b] - g.floorDb);
-            int yr = gateY(ref, unit, plot, magTop, magBot);
-            int yb = gateY(ref + g.scoreThreshDb, unit, plot, magTop, magBot);
+            double yr = gateY(ref, unit, plot, magTop, magBot);
+            double yb = gateY(ref + g.scoreThreshDb, unit, plot, magTop, magBot);
             gc.setForeground(display.getSystemColor(SWT.COLOR_DARK_CYAN));
             gc.setLineWidth(3);
-            if (prevXr >= 0) gc.drawLine(prevXr, prevYr, x, yr);
+            if (!Double.isNaN(prevXr)) drawLineAt(gc, prevXr, prevYr, x, yr);
             gc.setForeground(display.getSystemColor(SWT.COLOR_CYAN));
             gc.setLineWidth(rejScore ? 2 : 1);
-            if (prevXb >= 0) gc.drawLine(prevXb, prevYb, x, yb);
+            if (!Double.isNaN(prevXb)) drawLineAt(gc, prevXb, prevYb, x, yb);
             prevXr = x; prevYr = yr; prevXb = x; prevYb = yb;
         }
 
@@ -1630,17 +1638,18 @@ public final class FftView extends AbstractFreqDomainView {
             for (int pk : g.peakBins) {
                 double cf = skirtFloorDbFs(dbfs, pk);
                 if (Double.isNaN(cf)) continue;
-                int xc = freqToX(pk * binBw, plot, freqMin, freqMax, logFreq);
-                int xL = Math.max(plot.x, xc - half), xR = Math.min(plot.x + plot.width, xc + half);
+                double xc = freqToX(pk * binBw, plot, freqMin, freqMax, logFreq);
+                double xL = Math.max(plot.x, xc - half);
+                double xR = Math.min(plot.x + plot.width, xc + half);
                 gc.setForeground(display.getSystemColor(SWT.COLOR_DARK_YELLOW));
                 gc.setLineWidth(1);
-                int yT = gateY(cf + threshExc, unit, plot, magTop, magBot);
-                gc.drawLine(xL, yT, xR, yT);
+                double yT = gateY(cf + threshExc, unit, plot, magTop, magBot);
+                drawLineAt(gc, xL, yT, xR, yT);
                 if (rej != null && !Double.isNaN(rej.pedestalExcessDb)) {
                     gc.setForeground(display.getSystemColor(SWT.COLOR_RED));
                     gc.setLineWidth(rejPed ? 2 : 1);
-                    int yA = gateY(cf + rej.pedestalExcessDb, unit, plot, magTop, magBot);
-                    gc.drawLine(xL, yA, xR, yA);
+                    double yA = gateY(cf + rej.pedestalExcessDb, unit, plot, magTop, magBot);
+                    drawLineAt(gc, xL, yA, xR, yA);
                 }
             }
         }
@@ -1652,23 +1661,23 @@ public final class FftView extends AbstractFreqDomainView {
             int xr = plot.x + plot.width;
             gc.setForeground(display.getSystemColor(SWT.COLOR_MAGENTA));
             gc.setLineWidth(rejPow ? 2 : 1);
-            int yCur = gateY(medFloor + g.powerDb - perBin - g.floorDb, unit, plot, magTop, magBot);
-            gc.drawLine(plot.x, yCur, xr, yCur);
+            double yCur = gateY(medFloor + g.powerDb - perBin - g.floorDb, unit, plot, magTop, magBot);
+            drawLineAt(gc, plot.x, yCur, xr, yCur);
             if (g.powerThreshDb > 0) {
                 gc.setLineWidth(3);
                 gc.setLineStyle(SWT.LINE_DOT);
                 double mid = medFloor + g.powerMedDb - perBin - g.floorDb;
-                int yLo = gateY(mid - g.powerThreshDb, unit, plot, magTop, magBot);
-                int yHi = gateY(mid + g.powerThreshDb, unit, plot, magTop, magBot);
-                gc.drawLine(plot.x, yLo, xr, yLo);
-                gc.drawLine(plot.x, yHi, xr, yHi);
+                double yLo = gateY(mid - g.powerThreshDb, unit, plot, magTop, magBot);
+                double yHi = gateY(mid + g.powerThreshDb, unit, plot, magTop, magBot);
+                drawLineAt(gc, plot.x, yLo, xr, yLo);
+                drawLineAt(gc, plot.x, yHi, xr, yHi);
                 gc.setLineStyle(SWT.LINE_SOLID);
             }
             if (rej != null) {   // rejected block's total power vs the band
                 gc.setForeground(display.getSystemColor(SWT.COLOR_RED));
                 gc.setLineWidth(rejPow ? 2 : 1);
-                int yRej = gateY(medFloor + rej.powerDb - perBin - rej.floorDb, unit, plot, magTop, magBot);
-                gc.drawLine(plot.x, yRej, xr, yRej);
+                double yRej = gateY(medFloor + rej.powerDb - perBin - rej.floorDb, unit, plot, magTop, magBot);
+                drawLineAt(gc, plot.x, yRej, xr, yRej);
             }
         }
 
@@ -1711,22 +1720,24 @@ public final class FftView extends AbstractFreqDomainView {
         int kLast  = Math.min(nblk - 1, (int) Math.ceil(freqMax / binBw));
         if (kLast <= kFirst) return;
         int w = plot.width;
-        int[] colY = new int[w + 1];
-        Arrays.fill(colY, Integer.MAX_VALUE);
+        // Column-min curve with a SUB-PIXEL Y per column: the bucket index is a
+        // whole column (that is what a column is), the level kept in it is not.
+        double[] colY = new double[w + 1];
+        Arrays.fill(colY, Double.POSITIVE_INFINITY);
         Preferences prefs = Preferences.instance();
         for (int k = kFirst; k <= kLast; k++) {
             double v = prefs.convertFromDbFs(plotDbFs[k], unit, prefs.getFftChannel());
-            int y = Math.max(plot.y, Math.min(plot.y + plot.height, magToY(v, plot, magTop, magBot, unit)));
-            int col = freqToX(k * binBw, plot, freqMin, freqMax, logFreq) - plot.x;
+            double y = Math.max(plot.y, Math.min(plot.y + plot.height, magToY(v, plot, magTop, magBot, unit)));
+            int col = (int) Math.round(freqToX(k * binBw, plot, freqMin, freqMax, logFreq)) - plot.x;
             if (col >= 0 && col <= w && y < colY[col]) colY[col] = y;
         }
         gc.setForeground(getDisplay().getSystemColor(swtColor));
         gc.setLineWidth(1);
-        int prevX = -1, prevY = 0;
+        double prevX = Double.NaN, prevY = 0;
         for (int col = 0; col <= w; col++) {
-            if (colY[col] == Integer.MAX_VALUE) continue;
-            int x = plot.x + col;
-            if (prevX >= 0) gc.drawLine(prevX, prevY, x, colY[col]);
+            if (colY[col] == Double.POSITIVE_INFINITY) continue;
+            double x = plot.x + col;
+            if (!Double.isNaN(prevX)) drawLineAt(gc, prevX, prevY, x, colY[col]);
             prevX = x; prevY = colY[col];
         }
     }
@@ -1905,22 +1916,35 @@ public final class FftView extends AbstractFreqDomainView {
         gc.setForeground(getDisplay().getSystemColor(swtColor));
         gc.setLineWidth(3);
         gc.setLineStyle(dashed ? SWT.LINE_DASH : SWT.LINE_SOLID);
-        int prevX = -1, prevY = 0;
+        double prevX = Double.NaN, prevY = 0;
         for (int b = 0; b < lvl.length; b++) {
-            if (line[b] || Double.isNaN(lvl[b]) || Double.isNaN(floorDisp[b])) { prevX = -1; continue; }
+            if (line[b] || Double.isNaN(lvl[b]) || Double.isNaN(floorDisp[b])) {
+                prevX = Double.NaN;
+                continue;
+            }
             double dispDbFs = floorDisp[b] + (lvl[b] - floor);
-            int y = gateY(dispDbFs, unit, plot, magTop, magBot);
-            int x = freqToX(0.5 * (g.bandLo[b] + g.bandHi[b]) * binBw, plot, freqMin, freqMax, logFreq);
-            if (prevX >= 0) gc.drawLine(prevX, prevY, x, y);
+            double y = gateY(dispDbFs, unit, plot, magTop, magBot);
+            double x = freqToX(0.5 * (g.bandLo[b] + g.bandHi[b]) * binBw, plot, freqMin, freqMax, logFreq);
+            if (!Double.isNaN(prevX)) drawLineAt(gc, prevX, prevY, x, y);
             prevX = x; prevY = y;
         }
         gc.setLineStyle(SWT.LINE_SOLID);
     }
 
-    private int gateY(double dbFs, MagnitudeUnit unit, Rectangle plot, double magTop, double magBot) {
+    /** {@code drawLine} on fractional coordinates.  The debug gate overlays map
+     *  through the same sub-pixel helpers as everything else and round only
+     *  here, at the SWT primitive, which has no fractional form - one place
+     *  instead of a rounding pair at each of the nine call sites. */
+    private void drawLineAt(GC gc, double x0, double y0, double x1, double y1) {
+        gc.drawLine((int) Math.round(x0), (int) Math.round(y0),
+                    (int) Math.round(x1), (int) Math.round(y1));
+    }
+
+    /** A gate level's Y, SUB-PIXEL and clamped to the plot. */
+    private double gateY(double dbFs, MagnitudeUnit unit, Rectangle plot, double magTop, double magBot) {
         Preferences prefs = Preferences.instance();
         double v = prefs.convertFromDbFs(dbFs, unit, prefs.getFftChannel());
-        int y = magToY(v, plot, magTop, magBot, unit);
+        double y = magToY(v, plot, magTop, magBot, unit);
         return Math.max(plot.y, Math.min(plot.y + plot.height, y));
     }
 
@@ -1973,9 +1997,11 @@ public final class FftView extends AbstractFreqDomainView {
         double v = prefs.convertFromDbFs(dbFs, unit, prefs.getFftChannel());
         double t = magToYFraction(v, magTop, magBot, unit);
         if (t < 0 || t > 1) return null;
-        int x = freqToX(hz, plot, freqMin, freqMax, logFreq);
-        int y = magToY(v, plot, magTop, magBot, unit);
-        return new Point(x, y);
+        // An SWT Point is integer, and what this feeds is the label stacking,
+        // which works in whole text rows - so the fractional position is rounded
+        // here, once, rather than upstream.
+        return new Point((int) Math.round(freqToX(hz, plot, freqMin, freqMax, logFreq)),
+                         (int) Math.round(magToY(v, plot, magTop, magBot, unit)));
     }
 
     /** Paints a small label centred horizontally on the dot's column
@@ -1992,11 +2018,17 @@ public final class FftView extends AbstractFreqDomainView {
         double v = prefs.convertFromDbFs(dbFs, unit, prefs.getFftChannel());
         double t = magToYFraction(v, magTop, magBot, unit);
         if (t < 0 || t > 1) return;
-        int x = freqToX(hz, plot, freqMin, freqMax, logFreq);
-        int y = magToY(v, plot, magTop, magBot, unit);
+        // Anchored on the dot's FRACTIONAL centre and rounded ONCE, at the end.
+        // Centring on the already-rounded dot x and then halving the text width
+        // in integer division rounded twice, which could leave the caption a
+        // whole pixel off the dot it names.  The glyphs themselves stay on the
+        // pixel grid - drawText has no fractional origin.
+        double x = freqToX(hz, plot, freqMin, freqMax, logFreq);
+        double y = magToY(v, plot, magTop, magBot, unit);
         Point ext = gc.textExtent(text);
-        int lx = Math.max(plot.x, Math.min(plot.x + plot.width - ext.x, x - ext.x / 2));
-        int ly = Math.max(plot.y, y - ext.y - 4);
+        int lx = Math.max(plot.x, Math.min(plot.x + plot.width - ext.x,
+                (int) Math.round(x - ext.x / 2.0)));
+        int ly = Math.max(plot.y, (int) Math.round(y - ext.y - 4));
         drawOutlinedText(gc, text, lx, ly);
     }
 
@@ -2079,6 +2111,13 @@ public final class FftView extends AbstractFreqDomainView {
         Point p2 = dotScreenPos(plot, imd.f2Hz, imd.f2DbFs, unit, freqMin, freqMax,
                 magTop, magBot, logFreq);
         if (p1 != null || p2 != null) {
+            // Horizontal centring runs off the FRACTIONAL dot column, rounded
+            // once at the end - as the dnL / dnH captions do through
+            // drawHarmonicLabel.  The Point above stays integer on purpose: it
+            // drives the vertical stacking below, which works in whole text
+            // rows.
+            double x1f = freqToX(imd.f1Hz, plot, freqMin, freqMax, logFreq);
+            double x2f = freqToX(imd.f2Hz, plot, freqMin, freqMax, logFreq);
             String t1 = "F1 " + formatFrequency(imd.f1Hz);
             String t2 = "F2 " + formatFrequency(imd.f2Hz);
             Point ext1 = gc.textExtent(t1);
@@ -2112,13 +2151,13 @@ public final class FftView extends AbstractFreqDomainView {
                 }
             }
             if (p1 != null) {
-                int lx = Math.max(plot.x,
-                        Math.min(plot.x + plot.width - ext1.x, p1.x - ext1.x / 2));
+                int lx = Math.max(plot.x, Math.min(plot.x + plot.width - ext1.x,
+                        (int) Math.round(x1f - ext1.x / 2.0)));
                 drawOutlinedText(gc, t1, lx, Math.max(plot.y, ly1));
             }
             if (p2 != null) {
-                int lx = Math.max(plot.x,
-                        Math.min(plot.x + plot.width - ext2.x, p2.x - ext2.x / 2));
+                int lx = Math.max(plot.x, Math.min(plot.x + plot.width - ext2.x,
+                        (int) Math.round(x2f - ext2.x / 2.0)));
                 drawOutlinedText(gc, t2, lx, Math.max(plot.y, ly2));
             }
         }
@@ -2176,11 +2215,18 @@ public final class FftView extends AbstractFreqDomainView {
         // appear as misleading markers at the chart's top / bottom.
         double t = magToYFraction(v, magTop, magBot, unit);
         if (t < 0 || t > 1) return;
-        int x = freqToX(hz, plot, freqMin, freqMax, logFreq);
-        int y = magToY(v, plot, magTop, magBot, unit);
+        // SUB-PIXEL centre, for both the red measured dots and the blue
+        // before-cal ones - every marker in this view comes through here.  The
+        // integer fillOval quantised the dot to whole pixels and, with an even
+        // diameter, seated it half a pixel up and to the left of the value it
+        // marks, because the box offset is diameter/2 in integer division.  The
+        // float-Path oval is the same primitive the scope's sample dots use;
+        // both paint paths into this view already run antialiased, which is
+        // what makes a fractional centre visible rather than re-quantised.
+        double x = freqToX(hz, plot, freqMin, freqMax, logFreq);
+        double y = magToY(v, plot, magTop, magBot, unit);
         int diameter = Math.max(2, prefs.getFftHarmonicDotDiameter());
-        int radius   = diameter / 2;
-        gc.fillOval(x - radius, y - radius, diameter, diameter);
+        new GcMeasurementPainter(gc).fillOvalAt(x, y, diameter);
     }
 
     /** Mixes every value that affects the cached image into a single
@@ -2382,7 +2428,13 @@ public final class FftView extends AbstractFreqDomainView {
         // frame) to ~4 per pixel column.  Only the manual-fundamental
         // lobe stretch stays per-bin - it spans a few thousand bins at most.
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
-        int    curX     = Integer.MIN_VALUE;          // column being accumulated
+        int    curCol   = Integer.MIN_VALUE;          // column being accumulated
+        // The TRUE fractional X of the bin that opened that column.  The column
+        // index is what the walk batches on and what the right-boundary lookup
+        // needs; this is what the trace is actually drawn through, so a zoomed-in
+        // spectrum - where a column holds ONE bin - puts its vertex on the bin's
+        // own position instead of on the column's integer edge.
+        double curX    = Double.NaN;
         double curMinDb = Double.POSITIVE_INFINITY;   // its raw-dBFS extremes
         double curMaxDb = Double.NEGATIVE_INFINITY;
         int    curBins  = 0;
@@ -2415,11 +2467,12 @@ public final class FftView extends AbstractFreqDomainView {
                 // new one (one log10) and its right boundary (one pow).
                 flushSpectrumColumn(painter, prefs, r, plot, unit, magTop, magBot,
                         curX, curMinDb, curMaxDb, curBins);
-                curX     = freqToX(f, plot, freqMin, freqMax, logFreq);
+                curX    = freqToX(f, plot, freqMin, freqMax, logFreq);
+                curCol   = (int) Math.round(curX);
                 curMinDb = binDbFs;
                 curMaxDb = binDbFs;
                 curBins  = 1;
-                fBound = columnRightBoundaryFreq(curX, plot, freqMin, freqMax, logFreq);
+                fBound = columnRightBoundaryFreq(curCol, plot, freqMin, freqMax, logFreq);
                 if (fBound <= f) fBound = Math.nextUp(f);   // degenerate viewport guard
             } else {
                 if (binDbFs < curMinDb) curMinDb = binDbFs;
@@ -2440,7 +2493,7 @@ public final class FftView extends AbstractFreqDomainView {
     private void flushSpectrumColumn(ColumnBucketPainter painter, Preferences prefs,
                                      FftResult r, Rectangle plot, MagnitudeUnit unit,
                                      double magTop, double magBot,
-                                     int xAbs, double minDb, double maxDb, int bins) {
+                                     double xAbs, double minDb, double maxDb, int bins) {
         if (bins <= 0) return;
         painter.add(xAbs, binYTrace(prefs, r, maxDb, plot, unit, magTop, magBot));
         if (bins > 1) {
@@ -2448,9 +2501,12 @@ public final class FftView extends AbstractFreqDomainView {
         }
     }
 
-    /** dBFS -> display-unit -> trace Y for one spectrum value. */
-    private int binYTrace(Preferences prefs, FftResult r, double binDbFs, Rectangle plot,
-                          MagnitudeUnit unit, double magTop, double magBot) {
+    /** dBFS -> display-unit -> trace Y for one spectrum value, SUB-PIXEL.
+     *  {@code ColumnBucketPainter} keeps its Y as a double so the midpoint
+     *  polyline strokes between pixel rows; handing it a rounded value would
+     *  stair-step the trace for nothing. */
+    private double binYTrace(Preferences prefs, FftResult r, double binDbFs, Rectangle plot,
+                             MagnitudeUnit unit, double magTop, double magBot) {
         double v = prefs.convertFromDbFs(binDbFs, unit, r.binBwSqrt, prefs.getFftChannel());
         return magToYTrace(v, plot, magTop, magBot, unit);
     }
@@ -2521,7 +2577,8 @@ public final class FftView extends AbstractFreqDomainView {
         // in ascending frequency, the conversion is monotonic in dB, so only
         // each pixel column's two dB extremes are converted and emitted.
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
-        int    curX     = Integer.MIN_VALUE;
+        int    curCol   = Integer.MIN_VALUE;   // batching key
+        double curX    = Double.NaN;          // what the trace is drawn through
         double curMinDb = Double.POSITIVE_INFINITY;
         double curMaxDb = Double.NEGATIVE_INFINITY;
         int    curPts   = 0;
@@ -2543,11 +2600,12 @@ public final class FftView extends AbstractFreqDomainView {
             if (f >= fBound) {
                 flushCalColumn(painter, prefs, plot, unit, magTop, magBot,
                         curX, curMinDb, curMaxDb, curPts);
-                curX     = freqToX(f, plot, freqMin, freqMax, logFreq);
+                curX    = freqToX(f, plot, freqMin, freqMax, logFreq);
+                curCol   = (int) Math.round(curX);
                 curMinDb = dbFs;
                 curMaxDb = dbFs;
                 curPts   = 1;
-                fBound = columnRightBoundaryFreq(curX, plot, freqMin, freqMax, logFreq);
+                fBound = columnRightBoundaryFreq(curCol, plot, freqMin, freqMax, logFreq);
                 if (fBound <= f) fBound = Math.nextUp(f);
             } else {
                 if (dbFs < curMinDb) curMinDb = dbFs;
@@ -2599,7 +2657,7 @@ public final class FftView extends AbstractFreqDomainView {
     private void flushCalColumn(ColumnBucketPainter painter, Preferences prefs,
                                 Rectangle plot, MagnitudeUnit unit,
                                 double magTop, double magBot,
-                                int xAbs, double minDb, double maxDb, int pts) {
+                                double xAbs, double minDb, double maxDb, int pts) {
         if (pts <= 0) return;
         painter.add(xAbs, magToY(prefs.convertFromDbFs(maxDb, unit, prefs.getFftChannel()), plot, magTop, magBot, unit));
         if (pts > 1) {
@@ -3416,7 +3474,10 @@ public final class FftView extends AbstractFreqDomainView {
     // =========================================================================
 
     // freqToX / xToFreq / dbToY / magToY / magToYTrace all live on the shared
-    // AbstractFreqDomainView base.
+    // AbstractFreqDomainView base, and every one of them is SUB-PIXEL: there is
+    // no integer variant to pick the wrong one of.  A consumer that needs a whole
+    // pixel - an SWT primitive with integer coordinates, a column bucket key -
+    // rounds at its own call, where the loss is visible.
 
     // =========================================================================
     // Resource lazy initialisation

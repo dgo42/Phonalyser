@@ -1331,7 +1331,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         paintPolyline(gc, plot, color(referenceColorRole()), SWT.LINE_DASH,
                 (float) prefs.getFreqRespLineWidth(), s.xs.length,
                 i -> s.xs[i],
-                i -> dbToYf(anchorDb + referenceDb(s.fs[i]), plot, magTop, magBot));
+                i -> dbToY(anchorDb + referenceDb(s.fs[i]), plot, magTop, magBot));
     }
 
     /** Parallel {@code (column, frequency)} sample arrays for the reference
@@ -1528,7 +1528,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         Color compareColor = prefs.isFreqRespShowFilter()
                 ? color(referenceColorRole()) : color(ColorRole.COMPARE_TRACE);
         paintDataTrace(gc, plot, freqMin, freqMax, compareColor, SWT.LINE_SOLID,
-                freqs, smoothed, v -> dbToYf(v, plot, magTop, magBot));
+                freqs, smoothed, v -> dbToY(v, plot, magTop, magBot));
     }
 
     /** Returns the cached W-point moving-averaged copy of
@@ -2195,9 +2195,11 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 || !Double.isFinite(unevenThresholdDb)) {
             return;
         }
-        int xLo = freqToX(unevenLoHz, plot, freqMin, freqMax, true);
-        int xHi = freqToX(unevenHiHz, plot, freqMin, freqMax, true);
-        int yTh = (int) Math.round(dbToYf(unevenThresholdDb, plot, magTop, magBot));
+        // Boundary rules, not a trace: drawLine takes whole pixels, so the
+        // fractional column is rounded here rather than upstream.
+        int xLo = (int) Math.round(freqToX(unevenLoHz, plot, freqMin, freqMax, true));
+        int xHi = (int) Math.round(freqToX(unevenHiHz, plot, freqMin, freqMax, true));
+        int yTh = (int) Math.round(dbToY(unevenThresholdDb, plot, magTop, magBot));
         // Green horizontal at the threshold, between the two boundaries.  The
         // dotted stroke + line width are set once by the caller.
         gc.setForeground(green);
@@ -2205,7 +2207,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // Second green horizontal at the walk's reference extremum (the peak, or
         // the notch minimum), same span - shows the extremum level itself.
         if (Double.isFinite(unevenExtremumDb)) {
-            int yEx = (int) Math.round(dbToYf(unevenExtremumDb, plot, magTop, magBot));
+            int yEx = (int) Math.round(dbToY(unevenExtremumDb, plot, magTop, magBot));
             gc.drawLine(xLo, yEx, xHi, yEx);
         }
         // Lila verticals at each boundary, full plot height.
@@ -2223,8 +2225,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (!Double.isFinite(unevenLoHz) || !Double.isFinite(unevenHiHz)) return;
         double startHz = unevenLoHz;
         double stopHz  = unevenHiHz;
-        int xStart = freqToX(startHz, plot, freqMin, freqMax, true);
-        int xStop  = freqToX(stopHz,  plot, freqMin, freqMax, true);
+        int xStart = (int) Math.round(freqToX(startHz, plot, freqMin, freqMax, true));
+        int xStop  = (int) Math.round(freqToX(stopHz,  plot, freqMin, freqMax, true));
         // Lila verticals at start + stop, full plot height.  The dotted stroke +
         // line width are set once by the caller.
         gc.setForeground(lila);
@@ -2235,7 +2237,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // with the Notch checkbox on) between the two boundaries.
         if (Double.isFinite(unevenExtremumDb)) {
             gc.setForeground(green);
-            int yExt = (int) Math.round(dbToYf(unevenExtremumDb, plot, magTop, magBot));
+            int yExt = (int) Math.round(dbToY(unevenExtremumDb, plot, magTop, magBot));
             gc.drawLine(xStart, yExt, xStop, yExt);
         }
         // Crossing levels where each vertical meets the DESPIKED-RAW, capped
@@ -2251,11 +2253,11 @@ public final class FreqRespView extends AbstractFreqDomainView {
         gc.setForeground(green);
         if (Math.abs(dbStart - dbStop) <= UNEVEN_LEVEL_EPS_DB) {
             // Equal levels -> one full-width green horizontal at that level.
-            int y = (int) Math.round(dbToYf(0.5 * (dbStart + dbStop), plot, magTop, magBot));
+            int y = (int) Math.round(dbToY(0.5 * (dbStart + dbStop), plot, magTop, magBot));
             gc.drawLine(plot.x, y, plot.x + plot.width, y);
         } else {
-            int yStart = (int) Math.round(dbToYf(dbStart, plot, magTop, magBot));
-            int yStop  = (int) Math.round(dbToYf(dbStop,  plot, magTop, magBot));
+            int yStart = (int) Math.round(dbToY(dbStart, plot, magTop, magBot));
+            int yStop  = (int) Math.round(dbToY(dbStop,  plot, magTop, magBot));
             gc.drawLine(xStart - UNEVEN_TICK_HALF_PX, yStart, xStart + UNEVEN_TICK_HALF_PX, yStart);
             gc.drawLine(xStop  - UNEVEN_TICK_HALF_PX, yStop,  xStop  + UNEVEN_TICK_HALF_PX, yStop);
         }
@@ -2441,7 +2443,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         double[] magLin = result.getMagLin();
         if (freqs == null || magLin == null) return;
         paintDataTrace(gc, plot, freqMin, freqMax, color, SWT.LINE_SOLID, freqs, magLin,
-                v -> dbToYf(FreqRespFormat.linToDb(Math.max(LANCZOS_MAG_FLOOR_LIN, v)), plot, magTop, magBot));
+                v -> dbToY(FreqRespFormat.linToDb(Math.max(LANCZOS_MAG_FLOOR_LIN, v)), plot, magTop, magBot));
     }
 
     private void paintPhase(GC gc, FreqRespResult result, Rectangle plot,
