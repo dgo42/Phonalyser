@@ -1026,12 +1026,38 @@ public final class GeneratorLane {
         }
     }
 
-    /** Restarts the generator when the {@code .dpd} for {@code slotForm} changes
-     *  and that form is the one currently playing - so a load / clear of the
-     *  correction file takes effect immediately. */
+    /** Takes the {@code .dpd} of {@code slotForm} onto the running generator when
+     *  that form is the one playing - so a load / clear of the correction file
+     *  takes effect immediately, and only for its own slot.
+     *
+     *  <p>LIVE, not a restart.  The correction tables are published into the DDS
+     *  atomically ({@link #loadCorrectionsFromFile}, the same bridge the
+     *  predistortion wizard's per-round apply crosses), so a new correction set
+     *  never needs the device stopped - and a stop+start here would not merely
+     *  cost the tone an audible gap, it would be destructive: {@link #restart()}
+     *  replays {@link #lastRun}, the parameters the lane was last STARTED with,
+     *  so every live amplitude and frequency edit made since that start is
+     *  silently undone by a correction file arriving.
+     *
+     *  <p>An EMPTIED slot is the exception, and ends the tone rather than
+     *  swapping anything: compensated sine IS its corrections (see {@link
+     *  #applySavedCompensation}), so with no table it would emit a plain sine
+     *  under the compensated label and a THD measured on it would be recorded as
+     *  predistorted - the same reading a start with an empty slot refuses to
+     *  produce.  The dual-tone slot is optional there and stays optional here:
+     *  its tone goes on, with the intermod corrections dropped. */
     public void dpdChanged(GenSignalForm slotForm) {
-        if (isRunning() && Preferences.instance().getGenSignalForm() == slotForm) {
-            restart();
+        Preferences prefs = Preferences.instance();
+        if (!isRunning() || prefs.getGenSignalForm() != slotForm) {
+            return;
+        }
+        String dpd = prefs.getGenDpd(slotForm);
+        if (dpd != null && !dpd.isEmpty()) {
+            loadCorrectionsFromFile(dpd);
+        } else if (slotForm == GenSignalForm.SINE_COMP) {
+            stop();
+        } else {
+            clearCompensation();
         }
     }
 

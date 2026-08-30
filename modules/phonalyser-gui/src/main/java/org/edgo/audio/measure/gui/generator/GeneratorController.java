@@ -162,9 +162,9 @@ public final class GeneratorController {
             lane.formChanged(f, buildRun());
             publishSignalChanged();
         });
-        // Loading / clearing a .dpd must take effect now: restart the running
-        // generator when the file for the ACTIVE compensated form changes (the
-        // build reads the new path).  Each slot only restarts its own form.
+        // Loading / clearing a .dpd must take effect now: the lane takes the new
+        // file onto the running generator when the changed slot is the ACTIVE
+        // compensated form.  Each slot answers only for its own form.
         onPref(prefs.genDpdProperty(),     v -> lane.dpdChanged(GenSignalForm.SINE_COMP));
         onPref(prefs.genDpdDualProperty(), v -> lane.dpdChanged(GenSignalForm.DUAL_TONE_COMP));
         // The amplitude is stored as the operator entered it - number and unit

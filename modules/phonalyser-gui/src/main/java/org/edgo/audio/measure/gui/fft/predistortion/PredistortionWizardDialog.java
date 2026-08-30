@@ -737,10 +737,21 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // and a later relaunch agree.  Persist the form + corrections path so
         // it survives a restart AND so the generator pane's Corrections field
         // shows the loaded file.
+        //
+        // The PATH is written before the FORM: switching the form live loads the
+        // corrections configured for it, so the path has to be the new one by
+        // then - written the other way round, the compensated tone comes up on
+        // whatever .dpd was configured before this session.
+        //
+        // The explicit load stays, and is not redundant: a preference write with
+        // an unchanged value notifies nobody, so re-applying to the SAME path
+        // while the generator is already on the compensated form leaves both
+        // writes silent - and the just-measured tables would never reach the
+        // tone.
         GenSignalForm form = engine.isDualTone()
                 ? GenSignalForm.DUAL_TONE_COMP : GenSignalForm.SINE_COMP;
-        prefs.setGenSignalForm(form);
         prefs.setGenDpd(form, savedPath);
+        prefs.setGenSignalForm(form);
         gen.loadCorrectionsFromFile(savedPath);
         prefs.save();
         applied = true;

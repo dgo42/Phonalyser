@@ -557,6 +557,15 @@ public final class GeneratorPane extends AbstractPane {
                 }
             }
         });
+        // A form written from ELSEWHERE - the predistortion wizard's Apply above
+        // all, which switches the generator to the compensated waveform - has to
+        // reach the widget too, or the pane goes on showing the previous form and
+        // writes it back over the new one at the operator's next touch.  The
+        // combo's setter fires the listener above, so the whole visual
+        // reconfiguration follows; that listener's own preference write is then
+        // an equal-value set, which notifies nobody and cannot loop back.
+        Bindings.onChange(group, prefs.genSignalFormProperty(),
+                formCombo::setSelectedForm);
 
         // --------------------------------------------------------- Amplitude
         addRowLabel(group, I18n.t("generator.amplitudeRms"));
@@ -1414,10 +1423,18 @@ public final class GeneratorPane extends AbstractPane {
     }
 
     /** Unloads the {@code .dpd} for the current form: empties the path field and
-     *  clears that form's preference so it no longer pre-distorts. */
+     *  clears that form's preference so it no longer pre-distorts.
+     *
+     *  <p>The write can END the tone: compensated sine is defined by its
+     *  correction table, so the lane stops rather than emit an uncorrected sine
+     *  under the compensated label (the same refusal a start with an empty slot
+     *  answers with).  Nothing else re-syncs the pane for a corrections write -
+     *  the Play LED and the ON-AIR blink would go on claiming a tone that ended
+     *  until the operator pressed Play. */
     private void clearCorrections() {
         Preferences prefs = Preferences.instance();
         prefs.setGenDpd(prefs.getGenSignalForm(), null);
+        syncPlayButtonVisuals();
         correctionsField.setText("");
         correctionsField.setToolTipText(null);
     }
