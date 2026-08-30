@@ -82,16 +82,15 @@ export class FreqRespPane {
     this.tabControl.bind();
 
     // L/R header radio (index.html .lr.l / .lr.r): selects which channel the view shows.
-    // Mutually exclusive; persists freqRespLeftVisible / RightVisible.
+    // Mutually exclusive; the view flips freqRespLeftVisible / RightVisible and re-derives
+    // its per-channel state (setActiveChannel), the pane persists them and moves the on-class.
     $('#tab-fr .lr.l').on('click', () => {
-      this.prefs.freqRespLeftVisible.set(true); this.prefs.freqRespRightVisible.set(false); this.prefs.save();
+      this.view.setActiveChannel(true); this.prefs.save();
       $('#tab-fr .lr.l').addClass('on'); $('#tab-fr .lr.r').removeClass('on');
-      this.view.render();
     });
     $('#tab-fr .lr.r').on('click', () => {
-      this.prefs.freqRespRightVisible.set(true); this.prefs.freqRespLeftVisible.set(false); this.prefs.save();
+      this.view.setActiveChannel(false); this.prefs.save();
       $('#tab-fr .lr.r').addClass('on'); $('#tab-fr .lr.l').removeClass('on');
-      this.view.render();
     });
     // Header phase / auto-setup / maximize icons (Java .lr-tools: phase toggle ->
     // freqRespPhaseVisible, auto-setup -> autoSetupMagnitudeRange, maximize -> resetToDefaultView).
@@ -122,6 +121,10 @@ export class FreqRespPane {
     // makes Compare available, a failed / aborted one leaves it off. The measurement publishes
     // STOPPED from the controller's finally on BOTH paths.
     MessageBus.instance().subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => this.tabControl.refreshRiaaEnable());
+    // RESULT_AVAILABLE -> the same cascade, now that the view HOLDS the fresh result. STOPPED
+    // comes out of the capture's finally, which runs before the sweep's result reaches the view,
+    // so on a successful sweep this is the pass that sees a measurement present.
+    MessageBus.instance().subscribe(Events.FREQRESP_RESULT_AVAILABLE, () => this.tabControl.refreshRiaaEnable());
   }
 
   /** Builds the i18n-dependent tab UI (calibration rows, preset list, RIAA enable). Called from

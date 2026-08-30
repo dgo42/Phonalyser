@@ -452,12 +452,10 @@ export class TuneNotchWizard {
    *  marker from the newly selected trace WITHOUT a fresh sweep - the web stand-in
    *  for Java's L/R radio -> view redraw -> onNotchPaint recompute. */
   _selectChannel(left) {
-    this.viewPrefs.freqRespLeftVisible.set(left);
-    this.viewPrefs.freqRespRightVisible.set(!left);
+    this.view.setActiveChannel(left);   // flips the detached visibility pair + re-derives + repaints
     this.viewPrefs.save();
     this.$('#tnLeft').toggleClass('on', left);
     this.$('#tnRight').toggleClass('on', !left);
-    if (this.view) this.view.render();
   }
 
   /** The result of the channel the chart currently shows (viewPrefs L/R) - the

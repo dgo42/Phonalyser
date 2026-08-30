@@ -194,8 +194,9 @@ export class FreqRespController {
   /** Drives a single LOG_SWEEP through the DDS, records the loopback, deconvolves, and shows the
    *  result on the view. captureAndDeconvolve publishes FREQRESP_MEASUREMENT_STARTED so every
    *  consumer stops itself, waits for the device to go idle, then runs its own playback + capture
-   *  (Java FreqRespAnalyzerWorker lifecycle). The pane re-runs refreshRiaaEnable off the STOPPED
-   *  event captureAndDeconvolve's finally publishes. */
+   *  (Java FreqRespAnalyzerWorker lifecycle). A finished sweep publishes FREQRESP_RESULT_AVAILABLE
+   *  once the view holds the result; the pane re-runs its enable cascade off that event and off the
+   *  STOPPED event captureAndDeconvolve's finally publishes (which also covers cancel and failure). */
   async runSweep() {
     if (this.running) return;
     this.view.clearResults();   // Java FREQRESP_MEASUREMENT_STARTED clears the chart
@@ -205,6 +206,13 @@ export class FreqRespController {
       this.stereo = stereo;
       this.view.setStereoResult(stereo);
       this.view.syncScrollbars();
+      // The result is on the view NOW - announce it, so every gate derived from a present
+      // measurement re-runs against a populated view (Java FreqRespAnalyzerWorker publishes
+      // RESULT_AVAILABLE before its finally queues STOPPED). Here STOPPED went out from
+      // captureAndDeconvolve's finally while the view was still cleared - the bus dispatches
+      // synchronously, so it arrives before this continuation - which leaves this the only
+      // event that can carry "a measurement exists" to the consumers.
+      MessageBus.instance().publish(Events.FREQRESP_RESULT_AVAILABLE, stereo);
       this.status(`done - ${stereo.left.freqs.length} points captured.`);
       this.warnIfClipped(stereo);
     } catch (e) {

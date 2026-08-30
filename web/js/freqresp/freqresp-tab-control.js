@@ -38,9 +38,6 @@ const UNEVEN_DB_MIN = 0.001;
 const UNEVEN_DB_MAX = 20.0;
 
 const FRC_TYPE = [{ description: 'Filter calibration', accept: 'text/plain', extensions: ['.frc'] }];
-/** The Save-to gate's drive-level floor (V RMS) - a calibration measured below this is too noisy
- *  to trust (Java FreqRespTabControl.CAL_MIN_SIGNAL_VRMS). */
-const CAL_MIN_SIGNAL_VRMS = 0.5;
 
 export class FreqRespTabControl {
   /**
@@ -213,28 +210,6 @@ export class FreqRespTabControl {
     // The Filters tab's Compare is likewise gated on a present measurement, so re-run its
     // cascade from the same pane entry point (Java refreshRiaaEnable -> refreshFilterEnable).
     this.refreshFilterEnable();
-    this.refreshSaveEnable();
-  }
-
-  /**
-   * A result worth saving AS A CALIBRATION (Java FreqRespTabControl.calibrationWorthy): it must
-   * be THIS session's own measurement - a loaded file carries someone else's chain and would be
-   * saved back as if it were measured here - and it must have been driven above
-   * CAL_MIN_SIGNAL_VRMS, because a calibration measured near the noise floor is noise.
-   *
-   * @param {?object} r a FreqRespResult
-   * @returns {boolean}
-   */
-  calibrationWorthy(r) {
-    return r != null && r.sourceFilePath == null && r.sweepParams != null
-      && r.sweepParams.amplitudeVrms > CAL_MIN_SIGNAL_VRMS;
-  }
-
-  /** Gates the Save-to button on either channel being worth saving (Java refreshSaveEnable). */
-  refreshSaveEnable() {
-    this.$('#frSaveBtn').prop('disabled',
-      !(this.calibrationWorthy(this.view.getLeftResultOrNull())
-        || this.calibrationWorthy(this.view.getRightResultOrNull())));
   }
 
   /** RIAA tab tile chips (Java freqRespTabTiles RIAA branch). */
@@ -800,9 +775,12 @@ export class FreqRespTabControl {
     const $ = this.$, prefs = this.prefs;
     $('#frSavePath').val(prefs.freqRespSavePath.get() || '');
     $('#frLoadPath').val(prefs.freqRespLoadPath.get() || '');
+    // Save-to is deliberately never gated: writing a .frc is unconditional, and the only real
+    // requirement - that a measurement exists at all - is stated by saveMeasurement itself
+    // (freqResp.saveTo.error.noResult). Whether a curve is fit to serve as a calibration is a
+    // different question, decided where a calibration is applied.
     $('#frSaveBtn').on('click', () => this.saveMeasurement());
     $('#frLoadBtn').on('click', () => this.loadMeasurement());
-    this.refreshSaveEnable();   // gated from build time, not only after the first sweep
   }
 
   /** Writes the current measurement (BOTH channels) to a .frc (Java openSaveDialog). When one

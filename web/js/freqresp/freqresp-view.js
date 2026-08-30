@@ -316,6 +316,23 @@ export class FreqRespView {
     this.render();
   }
 
+  /** Makes ONE channel the shown one (radio: the other goes invisible) and re-derives
+   *  everything that is computed FROM the active channel's curve before the repaint -
+   *  the ideal-filter overlay anchor and the unevenness readout, both caches that would
+   *  otherwise keep the previous channel's numbers until an unrelated control forced a
+   *  recompute. Mirrors the desktop's two L/R button listeners (FreqRespView.java:375-394,
+   *  prefs -> invalidateFilterAnchor -> recomputeUnevenness -> redraw); on the web the L/R
+   *  buttons are DOM elements owned by the FreqResp pane header and by the tune-notch
+   *  wizard, so the sequence lives here, where the caches live, and they call in.
+   *  Persisting the preferences stays with the caller (the wizard drives a detached copy). */
+  setActiveChannel(left) {
+    this.prefs.freqRespLeftVisible.set(left);
+    this.prefs.freqRespRightVisible.set(!left);
+    this._invalidateFilterAnchor();  // active channel switched -> re-anchor the filter overlay
+    this._recomputeUnevenness();     // active channel switched -> refresh the readout
+    this.render();
+  }
+
   hasAnyResult() { return this.leftResult != null || this.rightResult != null; }
 
   /** Read-only accessors used by the Save-to handler - the current calibrated/displayed L/R
