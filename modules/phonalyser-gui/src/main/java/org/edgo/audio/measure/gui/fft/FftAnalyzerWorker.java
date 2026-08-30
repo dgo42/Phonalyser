@@ -21,7 +21,6 @@ package org.edgo.audio.measure.gui.fft;
 import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -224,10 +223,14 @@ public final class FftAnalyzerWorker {
      *  and the raw-frame cache keeps hitting.  Volatile for the UI's
      *  next-frame progress readout. */
     private volatile int pendingHopSamples;
-    /** Draws the random-mode hops.  Seeding is irrelevant to the measurement -
-     *  the de-rotation is exact for any hop; the draw only decides WHICH
-     *  spacings occur. */
-    private final Random hopRandom = new Random();
+    /** The random mode's position on its hop lattice, 0 .. RAND_HOP_STEPS-1:
+     *  every draw takes the next step and wraps, so the spacings visit the
+     *  whole lattice in a fixed cycle (0 -> 1 -> ... -> 15 -> 0) instead of
+     *  being drawn at random.  The de-rotation is exact for any hop; the
+     *  sequence only decides WHICH spacings occur and in what order - a full
+     *  cycle guarantees every lattice value the same share of the average.
+     *  Restarts at 0 with every fresh first window. */
+    private int hopStep;
 
     /** Mains-hum comb, lazily built for the current sample rate.  Used only
      *  when {@code fftMainsSuppression == IIR_COMB}: it only TRACKS the mains
@@ -1669,9 +1672,11 @@ public final class FftAnalyzerWorker {
             winAbsStart = rdr.getReadPos() - winLen;
             winValid    = true;
             winFill     = 0;
-            // First draw: the spacing this tick's frame pair is analysed at,
+            // First hop of a fresh window: the lattice cycle starts over, and
+            // the value is the spacing this tick's frame pair is analysed at
             // and the amount the next slide consumes.
-            pendingHopSamples = drawHop(minHopSamples, maxHopSamples);
+            hopStep = 0;
+            pendingHopSamples = nextHop(minHopSamples, maxHopSamples);
         } else {
             // Slide forward exactly one hop: pull the fresh hop, drop the oldest
             // hop, append it.  The de-rotation rides each tick's ABSOLUTE
@@ -1695,10 +1700,10 @@ public final class FftAnalyzerWorker {
             System.arraycopy(hopBuf, 0, winBuf, winLen - slideHop, slideHop);
             winAbsStart += slideHop;
             hopFill = 0;
-            // The slide is complete - draw the NEXT hop.  It is the spacing
+            // The slide is complete - take the NEXT hop.  It is the spacing
             // this tick's analysis states for its frame pair, so the second
             // frame lands exactly where the next tick's first frame will.
-            pendingHopSamples = drawHop(minHopSamples, maxHopSamples);
+            pendingHopSamples = nextHop(minHopSamples, maxHopSamples);
         }
         samplesAbsStart = winAbsStart;
 
@@ -2099,15 +2104,17 @@ public final class FftAnalyzerWorker {
     }
 
     /** One hop from the derived bounds: the single fixed value when they
-     *  coincide; for the random overlap a uniform draw over the mode's
-     *  hop lattice - the range split into {@link FftOverlap#RAND_HOP_STEPS}
-     *  equal parts, the hop landing on a part boundary (the largest value
-     *  is the max hop itself; the bare min hop is not drawn). */
-    private int drawHop(int minHopSamples, int maxHopSamples) {
+     *  coincide; for the random overlap the next point of the mode's hop
+     *  lattice - the range split into {@link FftOverlap#RAND_HOP_STEPS} equal
+     *  parts, the hop landing on a part boundary (the largest value is the
+     *  max hop itself; the bare min hop is never used) - visited in a fixed
+     *  cycle through {@link #hopStep}. */
+    private int nextHop(int minHopSamples, int maxHopSamples) {
         if (minHopSamples >= maxHopSamples) return minHopSamples;
         int quantum = Math.max(1, (maxHopSamples - minHopSamples) / FftOverlap.RAND_HOP_STEPS);
-        return Math.min(maxHopSamples,
-                minHopSamples + (1 + hopRandom.nextInt(FftOverlap.RAND_HOP_STEPS)) * quantum);
+        int step = hopStep;
+        hopStep = (hopStep + 1) % FftOverlap.RAND_HOP_STEPS;
+        return Math.min(maxHopSamples, minHopSamples + (1 + step) * quantum);
     }
 
     /** Consumes this tick's share of a span being collected into {@code dst}:

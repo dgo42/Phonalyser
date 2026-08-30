@@ -108,6 +108,9 @@ export class FftController {
     // the first dispatch so the first window holds none of the old tone still draining out
     // of the DAC buffer.
     this._drainSkipRemaining = 0;
+    // The random mode's position on its hop lattice (Java hopStep): advanced by every
+    // hop, wrapping after RAND_HOP_STEPS; restarts at 0 with every fresh first window.
+    this._hopStep = 0;
     // Main-thread analyzer: ONLY for recomputeStats (the render-time .frc de-embed re-derive).
     // All analysis - including the threads>1 parallel pool - runs inside fft-worker.js, which
     // coordinates its own nested fft-pool-worker.js siblings (Java parity: FftAnalyzerWorker
@@ -793,18 +796,21 @@ export class FftController {
     MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, 'fft.warning.discontinuity');
   }
 
-  /** One hop from the derived bounds (Java FftAnalyzerWorker.drawHop): the single
-   *  fixed value when they coincide; for the random overlap a uniform draw over
-   *  the mode's hop lattice - the range split into RAND_HOP_STEPS equal parts,
-   *  the hop landing on a part boundary (the largest value is the max hop itself;
-   *  the bare min hop is not drawn). Seeding is irrelevant to the measurement -
-   *  the de-rotation is exact for any hop; the draw only decides WHICH spacings
-   *  occur. */
-  _drawHop() {
+  /** One hop from the derived bounds (Java FftAnalyzerWorker.nextHop): the single
+   *  fixed value when they coincide; for the random overlap the NEXT point of the
+   *  mode's hop lattice - the range split into RAND_HOP_STEPS equal parts, the hop
+   *  landing on a part boundary (the largest value is the max hop itself; the bare
+   *  min hop is never used) - visited in a fixed cycle through _hopStep
+   *  (0 -> 1 -> ... -> 15 -> 0). The de-rotation is exact for any hop; the
+   *  sequence only decides WHICH spacings occur and in what order - a full cycle
+   *  gives every lattice value the same share of the average. */
+  _nextHop() {
     const min = this.minHop, max = this.maxHop;
     if (min >= max) return min;
     const quantum = Math.max(1, Math.trunc((max - min) / RAND_HOP_STEPS));
-    return Math.min(max, min + (1 + Math.floor(Math.random() * RAND_HOP_STEPS)) * quantum);
+    const step = this._hopStep;
+    this._hopStep = (this._hopStep + 1) % RAND_HOP_STEPS;
+    return Math.min(max, min + (1 + step) * quantum);
   }
 
   /** Accumulate `n` contiguous samples into the analysis ring and dispatch a
@@ -828,11 +834,14 @@ export class FftController {
         // value drawn after the PREVIOUS slide.
         const absStart = this._dispatchedOnce ? (this._winAbsStart + this.pendingHop) : 0;
         this._winAbsStart = absStart;
+        // A fresh first window starts the lattice cycle over (Java: hopStep = 0
+        // at the first window build).
+        if (!this._dispatchedOnce) this._hopStep = 0;
         this._dispatchedOnce = true;
-        // The slide is complete - draw the NEXT hop. It is the spacing this
+        // The slide is complete - take the NEXT hop. It is the spacing this
         // tick's analysis states for its frame pair, so the second frame lands
         // exactly where the next tick's first frame will.
-        this.pendingHop = this._drawHop();
+        this.pendingHop = this._nextHop();
         this._refill = this.pendingHop;
         // Absolute capture position of this window's first sample (the FLL transport
         // timebase): samples[i] sits at _absNextSample + i, and this window ends at it.
