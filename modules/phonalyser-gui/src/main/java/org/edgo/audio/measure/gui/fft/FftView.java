@@ -442,6 +442,15 @@ public final class FftView extends AbstractFreqDomainView {
     private List<CorrectionStore.Entry> calOverlayKeyEntries;
     private boolean calOverlayKeyLeft;
 
+    /** Cached per-bin calibration response + its key - see
+     *  {@link #calBinCorrections}.  One entry per loaded cal row, in the same
+     *  order, {@code null} for a row that corrects only tone lobes. */
+    private double[][][] calBinCorr;
+    private List<CorrectionStore.Entry> calBinCorrKeyEntries;
+    private boolean calBinCorrKeyLeft;
+    private int calBinCorrKeyFftSize;
+    private int calBinCorrKeyRate;
+
     public FftView(Composite parent, CorrectionStore correctionStore,
                    FftController controller) {
         // Pass prefs-driven BACKGROUND + SPECTRUM through the override
@@ -927,11 +936,14 @@ public final class FftView extends AbstractFreqDomainView {
         if (!calEntries.isEmpty()) {
             boolean wantLeft = r.channelLeft;
             r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
-            for (CorrectionStore.Entry e : calEntries) {
+            double[][][] binCorr = calBinCorrections(calEntries, wantLeft, r.fftSize, r.sampleRate);
+            for (int i = 0; i < calEntries.size(); i++) {
+                CorrectionStore.Entry e = calEntries.get(i);
                 FreqRespCalibration calForChan = wantLeft
                         ? e.getCalibration().left()
                         : e.getCalibration().right();
-                FreqRespCalHelper.applyCompensationInPlace(r, calForChan, e.isWithNoise());
+                FreqRespCalHelper.applyCompensationInPlace(r, calForChan, e.isWithNoise(),
+                        binCorr[i], mainsStats);
             }
             if (accumulated) {
                 // Re-derive the BLUE "before-cal" dots on the cumulative spectrum
@@ -2649,6 +2661,43 @@ public final class FftView extends AbstractFreqDomainView {
         calOverlayKeyEntries = entries;
         calOverlayKeyLeft    = wantLeft;
         return sum;
+    }
+
+    /** Cached per-bin calibration response for the WITH-NOISE cal rows - the
+     *  H(f) each of those rows divides EVERY FFT bin by - one per entry in the
+     *  entry list's own order, {@code null} for a row that corrects only the
+     *  tone lobes (it interpolates at a handful of tone frequencies instead).
+     *  Keyed on everything the response depends on and nothing else: the entry
+     *  list content, the analysed channel, the FFT length and the capture rate.
+     *
+     *  <p>The reason is cost.  Building one interpolates the calibration at
+     *  every bin - half a million log-domain interpolations at a 2^20-point FFT
+     *  - and {@link #finalizeResult} runs on every DISPLAYED frame, so deriving
+     *  it there made a de-embedded spectrum several times slower to display than
+     *  a raw one.  Nothing it depends on can change without one of the four key
+     *  parts changing with it. */
+    private double[][][] calBinCorrections(List<CorrectionStore.Entry> entries,
+                                           boolean wantLeft, int fftSize, int sampleRate) {
+        if (calBinCorr != null && wantLeft == calBinCorrKeyLeft
+                && fftSize == calBinCorrKeyFftSize && sampleRate == calBinCorrKeyRate
+                && entries.equals(calBinCorrKeyEntries)) {
+            return calBinCorr;
+        }
+        double[][][] built = new double[entries.size()][][];
+        for (int i = 0; i < entries.size(); i++) {
+            CorrectionStore.Entry e = entries.get(i);
+            if (!e.isWithNoise()) continue;
+            FreqRespCalibration cal = wantLeft
+                    ? e.getCalibration().left()
+                    : e.getCalibration().right();
+            built[i] = FreqRespCalHelper.binCorrections(cal, fftSize, sampleRate);
+        }
+        calBinCorr           = built;
+        calBinCorrKeyEntries = entries;
+        calBinCorrKeyLeft    = wantLeft;
+        calBinCorrKeyFftSize = fftSize;
+        calBinCorrKeyRate    = sampleRate;
+        return built;
     }
 
     /** Emits one accumulated cal-overlay column - min/max dB extremes

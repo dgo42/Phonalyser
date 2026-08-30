@@ -62,6 +62,14 @@ public class FreqRespCalHelper {
      *  measures; kept as a local copy to avoid a {@code dsp -> gui} dependency. */
     private static final int MAX_IMD_ORDER = 5;
 
+    /** Row of {@link #binCorrections}' answer holding Re H(f) per bin. */
+    private static final int H_RE = 0;
+    /** Row holding Im H(f) per bin. */
+    private static final int H_IM = 1;
+    /** Row holding |H(f)|² per bin - and the skip marker: zero for a bin the
+     *  divide must leave untouched. */
+    private static final int H_MAG_SQ = 2;
+
     /** {@code .frc} header key for the capture sample rate, as written into
      *  the leading {@code #} comment block by {@link #saveCsv} and read back
      *  by {@link #readSampleRateHz} so a loaded file's Nyquist comes from the
@@ -670,13 +678,81 @@ public class FreqRespCalHelper {
     }
 
     /**
+     * The calibration response H(f) sampled at every bin of the
+     * {@code (fftSize, sampleRate)} FFT grid, in the form the whole-spectrum
+     * divide of {@link #applyCompensationInPlace} consumes: rows
+     * {@link #H_RE}, {@link #H_IM} and {@link #H_MAG_SQ}, each indexed by bin
+     * {@code k = 0 .. fftSize/2}.
+     *
+     * <p>It is a separate step because it depends on nothing that changes
+     * between displayed frames - the loaded calibration, the channel, the FFT
+     * length and the capture rate - while {@link #interpolate} costs a binary
+     * search, an allocation and about ten transcendental calls PER BIN.  Derived
+     * inside the per-frame divide that is half a million interpolations for every
+     * frame at a 2^20-point FFT, against a few dozen on the per-tone path, which
+     * is what made a de-embedded spectrum several times slower to display than a
+     * raw one.  A caller that draws frame after frame builds this once.
+     *
+     * <p>{@link #H_MAG_SQ} is zero for every bin the divide must skip - one
+     * outside the calibration's frequency range, or one whose interpolated
+     * magnitude is not positive - so the applying loop needs no second guard.
+     */
+    public double[][] binCorrections(FreqRespCalibration cal, int fftSize, int sampleRate) {
+        int half = fftSize / 2;
+        double binWidth = sampleRate / (double) fftSize;
+        double fLo = cal.freqs[0];
+        double fHi = cal.freqs[cal.freqs.length - 1];
+        double[] hRe    = new double[half + 1];
+        double[] hIm    = new double[half + 1];
+        double[] hMagSq = new double[half + 1];
+        for (int k = 1; k <= half; k++) {
+            double f = k * binWidth;
+            if (f < fLo || f > fHi) continue;
+            double[] h = interpolate(cal, f);
+            double hMag = h[0];
+            if (hMag <= 0.0) continue;
+            hRe[k]    = hMag * Math.cos(h[1]);
+            hIm[k]    = hMag * Math.sin(h[1]);
+            hMagSq[k] = hMag * hMag;
+        }
+        return new double[][] { hRe, hIm, hMagSq };
+    }
+
+    /**
      * Mutates {@code r} in place: divides every FFT bin (within the swept range)
      * by H(f) interpolated from the per-point filter calibration, then calls
      * {@link FftAnalyzer#recomputeStats} so the fundamental level, harmonic table,
      * THD, THD+N, SNR, and noise stats all reflect the corrected spectrum.
+     *
+     * <p>The one-shot form: it derives the per-bin response and the statistics
+     * engine for this single call.  A caller that runs this on frame after frame
+     * hands both in through {@link #applyCompensationInPlace(FftResult,
+     * FreqRespCalibration, boolean, double[][], FftAnalyzer)} instead, so neither
+     * is rebuilt per frame.
      */
     public void applyCompensationInPlace(FftResult r, FreqRespCalibration cal,
                                          boolean correctAllBins) {
+        applyCompensationInPlace(r, cal, correctAllBins, null, new FftAnalyzer());
+    }
+
+    /**
+     * The frame-rate form of {@link #applyCompensationInPlace(FftResult,
+     * FreqRespCalibration, boolean)}, taking the two things that must not be
+     * rebuilt for every displayed frame:
+     *
+     * <ul>
+     *   <li>{@code binCorr} - the per-bin response from
+     *       {@link #binCorrections}, or {@code null} to derive it here.  Used
+     *       only by the whole-spectrum divide; the per-tone path interpolates at
+     *       a handful of tone frequencies and needs none.</li>
+     *   <li>{@code stats} - the analyzer whose {@code recomputeStats} re-derives
+     *       every readout.  It keeps half-spectrum scratch buffers, so a fresh
+     *       one costs an 8.4 MB allocation per call at a 2^20-point FFT.</li>
+     * </ul>
+     */
+    public void applyCompensationInPlace(FftResult r, FreqRespCalibration cal,
+                                         boolean correctAllBins, double[][] binCorr,
+                                         FftAnalyzer stats) {
         int half = r.fftSize / 2;
         double binWidth = r.sampleRate / (double) r.fftSize;
         double fLo = cal.freqs[0];
@@ -697,14 +773,15 @@ public class FreqRespCalHelper {
         if (correctAllBins) {
             // "With noise": every in-range bin divided by H at its OWN
             // frequency - the whole spectrum, noise included, is corrected.
+            // H at every bin is read from the precomputed response, whose
+            // zero |H|² marks the bins the range and magnitude guards skip.
+            double[][] h = binCorr != null ? binCorr
+                    : binCorrections(cal, r.fftSize, r.sampleRate);
+            double[] hReAt = h[H_RE], hImAt = h[H_IM], hMagSqAt = h[H_MAG_SQ];
             for (int k = 1; k <= half; k++) {
-                double f = k * binWidth;
-                if (f < fLo || f > fHi) continue;
-                double[] h = interpolate(cal, f);
-                double hMag = h[0];
-                if (hMag <= 0.0) continue;
-                double hRe = hMag * Math.cos(h[1]), hIm = hMag * Math.sin(h[1]);
-                double hMagSq = hMag * hMag;
+                double hMagSq = hMagSqAt[k];
+                if (hMagSq <= 0.0) continue;
+                double hRe = hReAt[k], hIm = hImAt[k];
                 double xRe = r.re[k], xIm = r.im[k];
                 double zRe = (xRe * hRe + xIm * hIm) / hMagSq;
                 double zIm = (xIm * hRe - xRe * hIm) / hMagSq;
@@ -764,7 +841,7 @@ public class FreqRespCalHelper {
             }
         }
 
-        new FftAnalyzer().recomputeStats(r);
+        stats.recomputeStats(r);
 
         if (log.isInfoEnabled()) {
             log.info("Filter compensation applied to {} bins (out of {}, range {}-{} Hz); "
