@@ -10,69 +10,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **The Linux run guide names the libGLU package the GPU oscilloscope needs.**
-  Many distributions no longer install it by default, and without it the scope
-  silently stays on the CPU renderer - the README now gives the install command.
+  Without it the scope silently stays on the CPU renderer; the README gives
+  the install command.
 - **The JavaSound format probe logs a start and a finish line per device and
-  direction,** with format count and elapsed time - a probe that never returns
-  names its device by the start line without a twin.
-- **A varying FFT overlap.** The overlap selector gains Random: the hop from
-  one analysis window to the next steps through a 16-point lattice spanning
-  a high-overlap range in a fixed cycle - 16 spacings, each used once per
-  cycle, then again from the start - so the periodic structure a constant hop
-  imprints on the averaged noise floor averages out with every lattice value
-  weighted equally, while the analysis rate stays high. Saved spectra record
-  the overlap mode and the frame spacing, and old files load unchanged.
-  Desktop and web alike.
+  direction,** with format count and elapsed time, so a probe that never
+  returns names its device.
+- **A varying FFT overlap.** The overlap selector gains Random: the hop
+  between analysis windows cycles through a 16-point lattice in a
+  high-overlap range, so the periodic structure a constant hop leaves on a
+  deeply averaged noise floor averages out. Saved spectra record the overlap
+  mode and the frame spacing; older files load unchanged. Desktop and web
+  alike.
 - **The theory chapters explain measurement confidence and the bench delay.**
-  The FFT chapter now states what a harmonic reading is worth at a given
-  clearance above the averaged noise floor - 2-4 dB for a rough value, 9 dB
-  for ±3 dB, 19 dB for ±1 dB, and at the floor an upper bound and nothing
-  more - and why weak harmonics appear to wander or grow during a long
-  average. The pre-distortion chapter explains how the bench's
-  frequency-response calibration already carries the bench delay - the
-  measured phase IS the delay, as a very precise per-frequency rotation, so
-  nothing measures it separately - and why the loop cannot even hold the
-  ADC's own distortion level without the notch: two distortion stages, one
-  place to correct. All help languages.
+  The FFT chapter states what a harmonic reading is worth at a given
+  clearance above the averaged noise floor, and why weak harmonics wander
+  during a long average; the pre-distortion chapter, how the bench's
+  frequency-response calibration already carries the delay in its measured
+  phase, and why the loop needs the notch. All help languages.
 
 ### Changed
 
 - **Audio devices are enumerated once at start-up instead of on every dialog
-  open.** Preferences fills its combos from that snapshot at once, while no
-  stream of the application's own holds a card; Scan devices re-walks the
-  drivers and is now also what makes a card plugged in since start-up appear.
+  open.** Preferences fills its combos from that snapshot; Scan devices
+  re-walks the drivers and is what makes a card plugged in since start-up
+  appear.
 - **The GPU scope requests swap interval zero,** so with vsync active the
-  buffer swap no longer blocks the interface thread until the display refresh.
-  A driver without the entry point keeps its own pacing; Windows and Linux -
-  the macOS surface already ran unsynced.
-- **A heavy render frame now earns three times its own cost in idle** instead
-  of re-arming at a fixed millisecond, so it settles at about a quarter of the
-  interface thread; sub-millisecond frames keep the old cadence.
-- **A Wayland session always runs through XWayland now** - the X11 backend
-  switch the GL scope needs no longer depends on the GPU preference.
+  buffer swap no longer blocks the interface thread until the display
+  refresh. Windows and Linux; the macOS surface already ran unsynced.
+- **A heavy render frame earns three times its own cost in idle,** so
+  rendering settles at about a quarter of the interface thread;
+  sub-millisecond frames keep the old cadence.
+- **A Wayland session always runs through XWayland** - the X11 backend the GL
+  scope needs no longer depends on the GPU preference.
 - **The frequency-response lead-in floor drops from 50 ms to 5 ms;** values in
-  between no longer snap back to 50 ms and no longer fail the sweep. The
-  command-line interface keeps its 0.05 s floor. Desktop and web alike.
+  between no longer snap back and no longer fail the sweep. The command-line
+  interface keeps its 0.05 s floor. Desktop and web alike.
 - **The pre-distortion wizard recommends the Blackman-Harris 7 window and a
   generic passive notch.** The ultra-wide HFT248D folds about twice BH7's
   noise bandwidth into every harmonic lobe, so near the averaged floor its
-  readings need about twice the averages for the same confidence - with the
-  fundamental already notched away, BH7's side-lobe margin is enough and the
-  round-end figures hold steadier. The introduction also asks for a passive
-  notch filter generally, not the twin-T specifically.
+  readings need about twice the averages for the same confidence.
 - **The distortion tables align as measured columns and read every level in
-  the selected unit.** The noise line converts with the harmonics instead of
-  staying dBV, the ratio rows (THD, THD+N, IMDpwr, TD+N, DFD2/3) carry the
-  level before the percentage, N+D and SNR read plain dB, and each column is
-  as wide as the widest cell it actually holds. Desktop and web alike.
+  the selected unit.** The noise line converts with the harmonics, the ratio
+  rows carry the level before the percentage, and N+D and SNR read plain dB.
+  Desktop and web alike.
 - **Coherent averaging is optimized for better performance.** Desktop and web
   alike.
-- **SINAD, THD+N and ENOB read unweighted.** The converter-datasheet
-  definitions: SINAD and THD+N divide by the plain in-band
-  noise-plus-distortion power, and ENOB derives from that same figure referred
-  to full scale - a dithered N-bit channel reads its datasheet number. The
-  A-weighted residual stays available as the N+D readout. Desktop and web
-  alike.
+- **SINAD, THD+N and ENOB read unweighted** - the converter-datasheet
+  definitions, so a dithered N-bit channel reads its datasheet number; the
+  A-weighted residual stays as the N+D readout. Desktop and web alike.
 - **The pre-distortion wizard's metric grid shows the last completed round's
   distortion** beside the live figure - a dash until the first round
   finishes. Desktop and web alike.
@@ -80,126 +65,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Linux: a failed GPU probe halved the window content.** A missing libGLU
-  made the probe's canvas constructor fail with the widget already attached to
-  the main shell, and the dead child made the shell's layout split its width in
-  half for the rest of the run; the probe canvas now sits on a throwaway host
-  that the cleanup always disposes.
+  broke the probe's canvas while it hung on the main shell, and the dead
+  child split the shell's width for the rest of the run; the probe now sits
+  on a throwaway host.
 - **Linux: the GPU-acceleration checkbox stayed unusable on a Wayland
-  session** with the preference off, because the X11 switch depended on that
-  preference and the failed probe's verdict is cached for the whole process.
-- **The FFT spectrum stalled while the oscilloscope drew.** Its hand-off to
-  the display rode a queued call the toolkit runs only on an empty event
-  queue, which GL swap traffic keeps fed; the render tick now pulls the
-  result itself, whatever the queue is doing.
+  session** with the preference off - the X11 switch depended on that
+  preference, and the failed probe's verdict is cached for the whole process.
+- **The FFT spectrum stalled while the oscilloscope drew** - the render tick
+  now pulls the result itself instead of waiting on an event queue that GL
+  swap traffic keeps fed.
 - **The Preferences dialog did not fill while the GPU scope was rendering** -
-  the same starvation; the device lists come from the start-up catalog and a
-  hundred-millisecond timer drains the scan's formats and card sections.
+  the same starvation; the device lists come from the start-up catalog.
 - **Linux: opening Preferences while a card was in use listed no devices.** A
-  held card refuses the direct-hardware format probe, answered empty and was
-  filtered out as a phantom; enumeration now runs at start-up while nothing
-  holds a card.
+  held card refuses the direct-hardware format probe and was filtered out as
+  a phantom; enumeration now runs at start-up.
 - **Switching GPU acceleration or the interface font took effect only after a
-  restart:** the pane rebuild ran before the dialog's values were committed
-  and so read the old ones. It now runs after the commit; both apply on OK.
+  restart** - the pane rebuild ran before the dialog's values were committed.
+  Both apply on OK now.
 - **Tune-notch: the Amplitude field moved the trace without moving the
-  stimulus.** The field now pushes the level into the running generator, and
-  the trace returns measured at the level that is actually playing. Desktop
-  and web alike.
+  stimulus.** The field pushes the level into the running generator, so the
+  trace returns measured at the level actually playing. Desktop and web
+  alike.
 - **A card range with no usable full scale is repaired instead of carried:** a
-  value not above zero becomes the 1.0 V RMS factory default - on the card
-  file read and written, and on the card form exchanged with a server - with
-  an error naming the range and channel. Desktop and web alike.
+  value not above zero becomes the 1.0 V RMS factory default, with an error
+  naming the range and channel. Desktop and web alike.
 - **Dual-tone corrections arrived at the wrong strength - exactly double at an
-  equal split.** The generator emitted the two tones at their weights but
-  subtracted the correction partials at full scale, so a commanded correction
-  ratio arrived multiplied by one over the first tone's weight. The correction
-  now scales with the tone it corrects, pinned by rendered-sample tests at
-  three splits. A dual-tone .dpd trained before the fix plays at half
-  strength - retrain it. Desktop and web alike.
-- **Switching to a compensated form while playing engaged nothing.** With the
-  generator running, choosing the compensated sine neither restarted nor
-  loaded the stored corrections - only a stop/start applied them. The live
-  switch now loads the stored .dpd exactly as a start does; a switch within a
-  compensated pair is a glitch-free hot swap, and switching the compensation
-  off keeps the tables so a toggle back is instant.
+  equal split.** The correction now scales with the tone it corrects; a
+  dual-tone .dpd trained before the fix plays at half strength, so retrain
+  it. Desktop and web alike.
+- **Switching to a compensated form while playing engaged nothing** - only a
+  stop/start applied the stored corrections. The live switch now loads them
+  as a start does, and switching the compensation off keeps the tables so a
+  toggle back is instant.
 - **A quiet capture's bursty noise could trip the time-discontinuity
-  detector.** The rejection threshold was the larger of a noise term and a
-  twentieth of the signal's amplitude, so on a low-level capture - where the
-  noise does not shrink with the signal - noise bursts crossed it. The
-  threshold is now the noise term plus a fifth of the amplitude: noise alone
-  can never reach it, while a real jump past that boundary always does.
-  Desktop and web alike.
+  detector.** The rejection threshold no longer rests on a fraction of the
+  amplitude alone, so noise on a low-level capture cannot reach it while a
+  real jump always does. Desktop and web alike.
 - **The pre-distortion wizard's ratio readouts wore dBV.** SNR, SINAD, THD+N
-  and the dual-tone D+N are ratios against the fundamental and now read plain
-  dB; only the fundamental and noise-floor levels keep dBV. Desktop and web
-  alike.
-- **The scope's trace and its edge labels could disagree at narrow windows.**
-  The trace was drawn from a whole-sample count while the labels read the
-  exact time-per-division product; the displayed window is now real-valued end
-  to end and quantised only where an array read forces it. Desktop and web
-  alike.
-- **A stopped oscilloscope changed under later events.** Hold and freeze now
-  follow the capture clock, so windowed statistics and AC-coupling means age
-  only while samples actually arrive; held measurement rows are pinned, a
-  trigger or signal edit no longer blanks a held trace, and a frozen snapshot
-  keeps its absolute sample coordinates. Desktop and web alike.
-- **The desktop scope's sample dots sit on fractional coordinates.** At a zoom
-  wide enough to show them they sit on their samples instead of on the nearest
-  whole pixel - as the browser version already did.
-- **Long tooltips wrap.** Tooltips do not wrap by themselves; every long
-  tooltip now carries explicit line breaks, in every language, desktop and
-  web.
+  and the dual-tone D+N are ratios and now read plain dB; only the
+  fundamental and noise-floor levels keep dBV. Desktop and web alike.
+- **The scope's trace and its edge labels could disagree at narrow windows** -
+  the displayed window is real-valued end to end now, quantised only where an
+  array read forces it. Desktop and web alike.
+- **A stopped oscilloscope changed under later events.** Hold and freeze
+  follow the capture clock, so statistics and AC-coupling means age only
+  while samples arrive, and a trigger or signal edit no longer blanks a held
+  trace. Desktop and web alike.
+- **The desktop scope's sample dots sit on fractional coordinates,** as the
+  browser version already did.
+- **Long tooltips wrap** - every long tooltip carries explicit line breaks, in
+  every language, desktop and web.
 - **A failing FFT analysis pass names itself in the log** instead of vanishing
   with its tick.
 - **Tune-notch could not start when the two converters are configured
-  differently.** The wizard opened the DAC in the ADC's format, so a card set
-  to unequal input and output rates or depths refused the output line. Each
-  converter now opens in its own configured format; the analysis stays on the
-  input rate, the band edges cap at the lower of the two Nyquist frequencies,
-  and a rate pair that cannot carry the loop is refused with both settings
-  named.
+  differently.** Each converter now opens in its own configured format; the
+  analysis stays on the input rate, the band caps at the lower of the two
+  Nyquist frequencies, and a rate pair that cannot carry the loop is refused
+  with both settings named.
 - **A frequency-response sweep could not start with unequal input and output
-  formats** - the same repair as the tune-notch wizard: the sweep plays on
-  the output rate and depth, the record and everything derived from it stay
-  on the input rate, and the saved result carries the input rate. A sweep
-  band reaching above the lower of the two Nyquist frequencies is refused
-  rather than measured folded, and band edges stored above that ceiling are
-  brought down to it.
-- **Closing the pre-distortion wizard costs nothing unless it ran.** A window
-  closed without a run leaves the generator and the FFT statistics untouched -
-  merely opening the dialog used to wipe a deep average. After a run without
-  Apply, the correction file configured before the window opened is re-applied
-  instead of leaving the generator uncompensated.
-- **A glitch caught one tick late no longer stays in the average.** The
-  contribution of the analysis window preceding a detected signal
-  discontinuity is taken back out of the accumulator retroactively.
+  formats** - the same repair: the sweep plays on the output format, while
+  the record and everything derived from it stay on the input rate. A band
+  above the lower Nyquist is refused rather than measured folded, and stored
+  band edges above it are brought down.
+- **Closing the pre-distortion wizard costs nothing unless it ran.** Merely
+  opening the dialog used to wipe a deep average; after a run without Apply,
+  the correction configured before the window opened is re-applied.
+- **A glitch caught one tick late no longer stays in the average.**
 - **The oscilloscope's sine-fit residual no longer drifts over long slices.**
-  The fit synthesizes its reference through the generator's own sine kernel,
-  removing the cumulative drift the previous per-sample recurrence built up
-  across multi-second windows. Desktop and web alike.
-- **FFT markers sit exactly on the trace.** Marker dots, their captions and
-  every trace stroke on fractional coordinates, and a filled marker is
-  compensated onto the stroked curve's raster - a constant half-pixel offset
-  every dot carried against its trace is gone.
-- **The digital loopback adds no dither of its own.** Its silence lane no
-  longer dithers at the container depth, so a loopback measurement carries
-  exactly the dither configured at the generator.
+  Desktop and web alike.
+- **FFT markers sit exactly on the trace** - the constant half-pixel offset
+  every marker dot carried against its trace is gone.
+- **The digital loopback adds no dither of its own,** so a loopback
+  measurement carries exactly the dither configured at the generator.
 - **The frequency-response busy meter spans the real capture** - the old time
   axis counted the lead-in twice, so with a short lead-in the bar sat at
   100 % for the last half second.
-- **Web: no overlap setting behaved as selected.** Analysis windows the page
-  fell behind on were dropped silently, and a dropped window shifts the next
-  by whole hops - so every overlap setting behaved like the randomized one.
-  The feed now waits for the analyser, a worker failure raises a banner
-  instead of a silent stall, and the browser's averaged noise floor matches
-  the desktop's at every overlap.
+- **Web: no overlap setting behaved as selected.** Windows the page fell
+  behind on were dropped silently, which shifts the next by whole hops, so
+  every setting behaved like the randomized one; the browser's averaged noise
+  floor now matches the desktop's at every overlap.
 - **Web: a stored sweep amplitude below the field's lower limit is repaired
-  up to it** in the operator's unit, as the desktop does - the field refuses
-  such an entry, but a preset recall or an imported settings document could
-  still write one.
-- **Web: the fundamental-from-generator setting is read live.** It was frozen
-  into the record's start-time snapshot, so a wizard started mid-record could
-  not inject its frequency hint.
+  up to it,** in the operator's unit, as the desktop does.
+- **Web: the fundamental-from-generator setting is read live,** so a wizard
+  started mid-record can inject its frequency hint.
+- **Web: the frequency-response unevenness readout followed the previous
+  channel after an L/R switch.** It is recomputed on the switch now, with the
+  ideal-filter anchor - in the pane and in the tune-notch wizard.
+- **Web: a measured frequency response could not be saved.** Save-to is
+  always enabled now, refusing only when there is no measurement.
+- **Applying a pre-distortion file changed the generator's level and left the
+  form selector behind** - behind a notch, 115 uV became 20 uV. The file now
+  loads into the running generator without a restart, and the pane's form
+  selector follows the preference. Clearing the corrections of a playing
+  compensated sine stops the tone instead of playing it uncorrected.
+- **The de-embedding noise algorithm is optimized** - a de-embedded FFT frame
+  renders several times faster.
+- **Switching the mains suppression no longer restarts the FFT average.** The
+  average and its counter survive the switch; only a change of the pre-FFT
+  filter type - into, out of or between Sync subtract and LMS - regathers the
+  analysis window, which costs one window before the next displayed frame.
 
 ## [1.2.1] - 2026-08-16
 
