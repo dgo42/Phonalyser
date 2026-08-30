@@ -37,19 +37,18 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Scrollable;
-import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.MainWindow;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.scope.gl.GlScopeSurface;
-import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
+import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.scope.gl.GlScopeSurface;
 import org.edgo.audio.measure.gui.sound.CalibrationStore;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
@@ -89,16 +88,6 @@ public final class ScopePane extends AbstractPane {
      * background noise.  The gate is 0.25 of ADC full-scale p-p.
      */
     private static final double CALIBRATE_MIN_VPP_FRACTION = 0.25;
-
-    /**
-     * The absolute alternative to the fraction gate, as the Vpp of a 0.5 Vrms
-     * sine: on a wide range (a Cosmos in its 10 V position) a healthy
-     * absolute level carries calibration-grade SNR long before it fills a
-     * quarter of the range, so demanding 25 % there would refuse perfectly
-     * usable signals.  Calibrated selections only - an uncalibrated
-     * selection's volts are provisional, so an absolute test means nothing.
-     */
-    private static final double CALIBRATE_MIN_VPP_ABSOLUTE = 0.5 * 2.0 * Constants.SQRT2;
 
     /**
      * The floor under the calibrate button for an UNCALIBRATED selection: enough to
@@ -1057,10 +1046,7 @@ public final class ScopePane extends AbstractPane {
                     ? CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED
                     : CALIBRATE_MIN_VPP_FRACTION;
             boolean fractionOk = (vpp / fsVpp) >= minFraction;
-            // A calibrated selection also opens at 0.5 Vrms regardless of
-            // range occupancy - the wide-range case above.
-            boolean absoluteOk = !uncalibrated && vpp >= CALIBRATE_MIN_VPP_ABSOLUTE;
-            enable = !Double.isNaN(vpp) && fsVpp > 0.0 && (fractionOk || absoluteOk);
+            enable = !Double.isNaN(vpp) && fsVpp > 0.0 && fractionOk;
         }
         tabControl.setCalibrateEnabled(enable);
     }
@@ -1158,9 +1144,11 @@ public final class ScopePane extends AbstractPane {
 
     /** Forwards the main event loop's realtime render tick (from
      *  {@code MultifunctionalTab}) to the controller, which owns the scope +
-     *  condensed views and decides what to repaint. */
-    public boolean renderRealtimeFrame() {
-        return controller.renderRealtimeFrame();
+     *  condensed views and decides what to repaint.  {@code uiLoad} is the
+     *  measured busy fraction of the UI thread (0..1) the controller paces
+     *  itself against. */
+    public boolean renderRealtimeFrame(double uiLoad) {
+        return controller.renderRealtimeFrame(uiLoad);
     }
 
     // -------------------------------------------------------------------------

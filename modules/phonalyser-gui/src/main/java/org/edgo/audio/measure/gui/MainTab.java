@@ -192,9 +192,10 @@ public final class MainTab {
      *  FFT panes in the multifunctional tab).  Returns {@code true} while a view
      *  is live so the main event loop keeps the realtime cadence.  Views on a
      *  non-active top-level tab are hidden, so their own visibility check makes
-     *  this a no-op for them. */
-    public boolean renderRealtimeFrame() {
-        return multifunctional != null && multifunctional.renderRealtimeFrame();
+     *  this a no-op for them.  {@code uiLoad} is the measured busy fraction of
+     *  the UI thread (0..1), passed down to the view that paces itself. */
+    public boolean renderRealtimeFrame(double uiLoad) {
+        return multifunctional != null && multifunctional.renderRealtimeFrame(uiLoad);
     }
 
     /** Brings a top-level tab forward regardless of the active chrome (top

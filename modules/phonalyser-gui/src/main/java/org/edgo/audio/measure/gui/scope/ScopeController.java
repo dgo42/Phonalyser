@@ -71,6 +71,17 @@ public final class ScopeController {
      *  it at ~5 Hz keeps the main trace at full cap/s. */
     private static final int CONDENSED_DECIMATION = 10;
 
+    /** Busy fraction of the UI thread at or above which the scope skips its
+     *  realtime frame: it renders only while the thread has at least a quarter
+     *  of itself free.  The rule holds ON AVERAGE over the load window, not
+     *  inside one frame - a paint is a single synchronous call that cannot be
+     *  interrupted once it starts, so a frame begun below the ceiling always
+     *  runs to its end and may itself push the measured load above it; the next
+     *  tick is the one that sits out.  Skipping costs the scope frames only:
+     *  its trace is redrawn from the capture buffer, so a skipped tick loses
+     *  nothing but a repaint. */
+    private static final double SCOPE_LOAD_CEILING = 0.75;
+
     /** Horizontal scroll step of one wheel tick, in grid divisions (½ div). */
     private static final double HALF_DIV = 0.5;
 
@@ -514,12 +525,21 @@ public final class ScopeController {
      *  signal (file mode) - both are live / interactive; a plain stopped scope
      *  keeps its frozen frame via ordinary paint events.  The condensed strip
      *  repaints decimated.  Returns {@code true} while it should keep the realtime
-     *  cadence going. */
-    public boolean renderRealtimeFrame() {
+     *  cadence going.
+     *
+     *  <p>{@code uiLoad} is the measured busy fraction of the UI thread (0..1).
+     *  At or above {@link #SCOPE_LOAD_CEILING} this frame is SKIPPED - the
+     *  cadence continues and the scope sits the tick out, so the thread keeps
+     *  the headroom the rest of the application needs (async work and canvas
+     *  paints run only once the native event queue drains empty).  The scope is
+     *  the only paced view: the FFT renders one freshly averaged result at a
+     *  time and would lose data, not frames, if it were skipped. */
+    public boolean renderRealtimeFrame(double uiLoad) {
         if (view == null || view.isDisposed()
                 || (!capturing && !view.isFileMode())) {
             return false;
         }
+        if (uiLoad >= SCOPE_LOAD_CEILING) return true;
         if (glSurface != null) {
             Control c = glSurface.control();
             if (c.isDisposed() || !c.isVisible()) return false;

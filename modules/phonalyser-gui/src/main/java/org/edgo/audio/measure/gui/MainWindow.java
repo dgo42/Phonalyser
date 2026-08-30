@@ -249,9 +249,11 @@ public final class MainWindow {
     /** Loop-driven realtime repaint of the active tab's live views, called once
      *  per frame by the main event loop's render tick (see {@code GuiMain}).
      *  Returns {@code true} while a live view is updating so the loop maintains
-     *  the realtime cadence; {@code false} when idle so the loop can truly sleep. */
-    public boolean renderRealtimeFrame() {
-        return mainTab != null && mainTab.renderRealtimeFrame();
+     *  the realtime cadence; {@code false} when idle so the loop can truly sleep.
+     *  {@code uiLoad} is the loop's measured busy fraction of the UI thread
+     *  (0..1), handed down to the view that paces itself against it. */
+    public boolean renderRealtimeFrame(double uiLoad) {
+        return mainTab != null && mainTab.renderRealtimeFrame(uiLoad);
     }
 
     /** Closes the shell, ending the SWT event loop - how an automation

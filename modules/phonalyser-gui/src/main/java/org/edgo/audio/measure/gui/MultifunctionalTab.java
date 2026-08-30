@@ -126,10 +126,16 @@ public final class MultifunctionalTab {
 
     /** Loop-driven realtime repaint of the live scope + FFT views, called once
      *  per frame by the main event loop's render tick.  Returns {@code true}
-     *  while either view is live so the loop keeps the realtime cadence. */
-    public boolean renderRealtimeFrame() {
+     *  while either view is live so the loop keeps the realtime cadence.
+     *
+     *  <p>{@code uiLoad}, the measured busy fraction of the UI thread (0..1),
+     *  reaches the SCOPE only: it paces itself against the load and skips a
+     *  frame when the thread is saturated.  The FFT renders one freshly
+     *  averaged result at a time, so a skipped frame there would drop a
+     *  measurement rather than a repaint. */
+    public boolean renderRealtimeFrame(double uiLoad) {
         boolean active = false;
-        if (oscPane != null) active |= oscPane.renderRealtimeFrame();
+        if (oscPane != null) active |= oscPane.renderRealtimeFrame(uiLoad);
         if (fftPane != null) active |= fftPane.renderRealtimeFrame();
         return active;
     }

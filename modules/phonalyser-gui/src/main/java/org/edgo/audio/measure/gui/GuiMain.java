@@ -24,6 +24,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Locale;
+import java.util.function.DoubleBinaryOperator;
 
 import com.sun.jna.Library;
 import com.sun.jna.Native;
@@ -340,31 +341,37 @@ public final class GuiMain {
         // When no view is live the chain lapses and the loop blocks in sleep(), so an idle
         // app stays cool.
         final int RENDER_FRAME_MS = 1;   // pace the next frame as soon as possible (render time dominates)
-        // A rendered frame earns this many times its own cost in idle before
-        // the next one is due, capping rendering at ~1/(1+factor) of the UI
-        // thread.  One-to-one (half the thread) is not enough: a GL swap emits
-        // its own damage/present events, which refill the native queue during
-        // the gap - and SWT dispatches asyncExec work and paints only when
-        // that queue drains empty, so the FFT's publishes and the Preferences
-        // format fill still trickled behind a heavy scope.
-        final int RENDER_IDLE_FACTOR = 3;
+        // The heartbeat always re-arms at the minimum cadence; the pacing sits
+        // in the view instead, where it can be selective.  The scope skips a
+        // frame when the measured UI-thread load leaves the rest of the
+        // application no room (async work and canvas paints run only once the
+        // native event queue drains empty), while the FFT renders every result
+        // it is handed.
+        //
+        // The load is measured here, on the one thread that knows: everything
+        // between waking and entering the next sleep is work this thread did -
+        // event dispatch plus the heartbeat's render - and the sleep or nap
+        // itself is idle.  Both intervals are folded into an exponentially
+        // weighted fraction with a LOAD_WINDOW_NANOS time constant, so one
+        // heavy frame does not swing it and a sustained load reaches it within
+        // a few frames.
+        final double LOAD_WINDOW_NANOS = 150_000_000.0;
+        final double[] uiLoad   = { 0.0 };
+        final long[]   loadMark = { System.nanoTime() };
+        // Folds one interval into the fraction: a busy interval samples 1, an
+        // idle one 0, weighted by how much of the window that interval fills.
+        final DoubleBinaryOperator foldLoad = (dtNanos, sample) -> {
+            double weight = 1.0 - Math.exp(-Math.max(0.0, dtNanos) / LOAD_WINDOW_NANOS);
+            return uiLoad[0] + weight * (sample - uiLoad[0]);
+        };
         final Runnable[] heartbeat = new Runnable[1];
         final boolean[]  beating   = { false };
         heartbeat[0] = () -> {
             beating[0] = false;
             if (window.isDisposed()) return;
-            long renderStart = System.nanoTime();
-            if (window.renderRealtimeFrame()) {
+            if (window.renderRealtimeFrame(uiLoad[0])) {
                 beating[0] = true;
-                // Pace the next frame by what THIS one cost.  The render runs
-                // on the UI thread; a heavy frame (a software-GL guest above
-                // all) re-armed at the minimum cadence starves everything the
-                // queue-empty rule gates - clicks still land (native events)
-                // while async fills and canvas paints wait.  A fast frame
-                // keeps the minimum cadence.
-                int renderMs = (int) Math.min(1_000, (System.nanoTime() - renderStart) / 1_000_000);
-                display.timerExec(Math.max(RENDER_FRAME_MS, RENDER_IDLE_FACTOR * renderMs),
-                        heartbeat[0]);
+                display.timerExec(RENDER_FRAME_MS, heartbeat[0]);
             }
         };
         // macOS GPU scope: the floating GLFW child window's input callbacks fire only
@@ -381,10 +388,13 @@ public final class GuiMain {
             }
             if (window.isDisposed()) break;
             glfw.poll();
-            if (!beating[0] && window.renderRealtimeFrame()) {   // a view went live -> start beating
+            if (!beating[0] && window.renderRealtimeFrame(uiLoad[0])) {   // a view went live -> start beating
                 beating[0] = true;
                 display.timerExec(RENDER_FRAME_MS, heartbeat[0]);
             }
+            // Everything since the last wake was this thread working.
+            long enterSleep = System.nanoTime();
+            uiLoad[0] = foldLoad.applyAsDouble(enterSleep - loadMark[0], 1.0);
             if (glfw.isActive()) {
                 try { Thread.sleep(GLFW_IDLE_NAP_MS); } catch (InterruptedException ignored) {
                     Thread.currentThread().interrupt();
@@ -392,6 +402,10 @@ public final class GuiMain {
             } else {
                 display.sleep();
             }
+            // ... and everything spent in there was idle, however it was spent.
+            long wake = System.nanoTime();
+            uiLoad[0] = foldLoad.applyAsDouble(wake - enterSleep, 0.0);
+            loadMark[0] = wake;
         }
         display.dispose();
         // Leave every backend this build offers in a known, safe, idle state -
