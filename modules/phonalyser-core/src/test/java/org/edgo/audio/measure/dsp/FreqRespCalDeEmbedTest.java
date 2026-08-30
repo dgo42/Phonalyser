@@ -87,8 +87,7 @@ class FreqRespCalDeEmbedTest {
         new FftAnalyzer().recomputeStats(reference);
 
         FreqRespCalHelper.applyCompensationInPlace(sampled, cal, true,
-                FreqRespCalHelper.binCorrections(cal, sampled.fftSize, sampled.sampleRate),
-                new FftAnalyzer());
+                FreqRespCalHelper.binCorrections(cal, sampled.fftSize, sampled.sampleRate));
 
         assertNotEquals(uncorrectedFundamentalDbFs, sampled.amplitudeDbFs[FUNDAMENTAL_BIN],
                 "the de-embedding changed nothing, so the comparison below would hold "
