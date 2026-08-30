@@ -70,12 +70,6 @@ public class FreqRespCalHelper {
      *  divide must leave untouched. */
     private static final int H_MAG_SQ = 2;
 
-    /** {@code .frc} header key for the capture sample rate, as written into
-     *  the leading {@code #} comment block by {@link #saveCsv} and read back
-     *  by {@link #readSampleRateHz} so a loaded file's Nyquist comes from the
-     *  file itself, not from the live device. */
-    private static final String SAMPLE_RATE_HEADER_KEY = "sample_rate_hz";
-
     /** Compile-time switch for IR-domain time gating after delay
      *  correction.  When on, the deconvolved impulse response is
      *  windowed to {@link #IR_GATE_LENGTH_SEC} around the main peak
@@ -171,15 +165,8 @@ public class FreqRespCalHelper {
      * {@code H = Y / X}.  Removes the DAC↔ADC transport delay (linear-phase term
      * located via the impulse-response peak) and normalises magnitude to the DAC
      * drive level so the passband sits at ≈ 1.0.
-     */
-    public FreqRespCalibration computeFromLogSweep(
-            double[] yRec, double[] sweepRef, int leadInSamples,
-            int sampleRate, double[] freqs, double amplitudeVRms, double adcFsVoltageRms) {
-        return computeFromLogSweep(yRec, sweepRef, leadInSamples,
-                sampleRate, freqs, amplitudeVRms, adcFsVoltageRms, 0, null);
-    }
-
-    /** Overload that tags every log line with {@code channelLabel}
+     *
+     *  <p>Every log line is tagged with {@code channelLabel}
      *  (e.g. {@code "L"} / {@code "R"}) so the two parallel deconvolution
      *  threads in {@code FreqRespAnalyzer} produce unambiguous log
      *  output even when their writes interleave.  Pass {@code null} or
@@ -530,22 +517,6 @@ public class FreqRespCalHelper {
         return out;
     }
 
-    /** Mutates {@code measured} in-place: divides every magnitude by the
-     *  calibration interpolated at the same frequency.  Phase is subtracted
-     *  ({@code phase_out = phase_meas − phase_cal}) so the resulting curve
-     *  represents the device-under-test alone. */
-    public void divideInPlace(FreqRespCalibration measured, FreqRespCalibration calibration) {
-        for (int i = 0; i < measured.freqs.length; i++) {
-            double[] cal = interpolate(calibration, measured.freqs[i]);
-            double calMag = cal[0];
-            double calPhi = cal[1];
-            if (calMag > 0.0) {
-                measured.magLin[i] /= calMag;
-            }
-            measured.phaseRad[i] -= calPhi;
-        }
-    }
-
     /**
      * Writes a stereo filter calibration to disk.  Comma-separated, dot
      * decimal, one row per measured sweep point with five columns:
@@ -651,33 +622,6 @@ public class FreqRespCalHelper {
     }
 
     /**
-     * Reads the capture sample rate recorded in a {@code .frc} file's leading
-     * {@code # sample_rate_hz=} header comment (written by {@link #saveFrc}).
-     * Only the header block is scanned - the scan stops at the first
-     * non-comment line.  Returns {@code 0} when the header is absent or
-     * unparseable (legacy files), so callers can fall back.
-     */
-    public int readSampleRateHz(String path) throws IOException {
-        try (BufferedReader br = new BufferedReader(new FileReader(path))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty()) continue;
-                if (!line.startsWith("#")) break;   // header block ended
-                int eq = line.indexOf('=');
-                if (eq > 0 && SAMPLE_RATE_HEADER_KEY.equals(line.substring(1, eq).trim())) {
-                    try {
-                        return Integer.parseInt(line.substring(eq + 1).trim());
-                    } catch (NumberFormatException e) {
-                        return 0;   // garbled header - treat as absent
-                    }
-                }
-            }
-        }
-        return 0;
-    }
-
-    /**
      * The calibration response H(f) sampled at every bin of the
      * {@code (fftSize, sampleRate)} FFT grid, in the form the whole-spectrum
      * divide of {@link #applyCompensationInPlace} consumes: rows
@@ -730,9 +674,9 @@ public class FreqRespCalHelper {
      * FreqRespCalibration, boolean, double[][], FftAnalyzer)} instead, so neither
      * is rebuilt per frame.
      */
-    public void applyCompensationInPlace(FftResult r, FreqRespCalibration cal,
+    public int applyCompensationInPlace(FftResult r, FreqRespCalibration cal,
                                          boolean correctAllBins) {
-        applyCompensationInPlace(r, cal, correctAllBins, null, new FftAnalyzer());
+        return applyCompensationInPlace(r, cal, correctAllBins, null);
     }
 
     /**
@@ -750,9 +694,8 @@ public class FreqRespCalHelper {
      *       one costs an 8.4 MB allocation per call at a 2^20-point FFT.</li>
      * </ul>
      */
-    public void applyCompensationInPlace(FftResult r, FreqRespCalibration cal,
-                                         boolean correctAllBins, double[][] binCorr,
-                                         FftAnalyzer stats) {
+    public int applyCompensationInPlace(FftResult r, FreqRespCalibration cal,
+                                         boolean correctAllBins, double[][] binCorr) {
         int half = r.fftSize / 2;
         double binWidth = r.sampleRate / (double) r.fftSize;
         double fLo = cal.freqs[0];
@@ -840,9 +783,6 @@ public class FreqRespCalHelper {
                 }
             }
         }
-
-        stats.recomputeStats(r);
-
         if (log.isInfoEnabled()) {
             log.info("Filter compensation applied to {} bins (out of {}, range {}-{} Hz); "
                             + "fundamental: {} dBFS, SNR: {} dB, THD: {}%",
@@ -853,6 +793,7 @@ public class FreqRespCalHelper {
                     String.format(Locale.US, "%.2f", r.snrDb),
                     String.format(Locale.US, "%.6f", r.thdPct));
         }
+        return corrected;
     }
 
     /** Applies the cal to a tone's WHOLE main lobe with ONE value taken at the

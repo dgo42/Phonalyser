@@ -2063,8 +2063,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  user zoomed out.
      *
      *  <p>Loaded {@code .frc} results carry the rate read back from the file's
-     *  own {@code sample_rate_hz} header comment (the load path calls
-     *  {@code FreqRespCalHelper.readSampleRateHz}), so the cap normally
+     *  own {@code sample_rate_hz} header comment (read by the load path in
+     *  the settings tab), so the cap normally
      *  reflects the TRUE capture rate - a 384 kHz notch file opened on a
      *  48 kHz device analyzes over its full span.  Only a legacy headerless
      *  file still gets the live backend's rate stamped, so keep the

@@ -421,8 +421,8 @@ public final class FreqRespWizardDialog {
             StereoFreqRespCalibration direct =
                     hostView.getCorrectionStore().getDirect();
             if (direct != null) {
-                FreqRespCalHelper.divideInPlace(stereoCal.left(),  direct.left());
-                FreqRespCalHelper.divideInPlace(stereoCal.right(), direct.right());
+                divideInPlace(stereoCal.left(),  direct.left());
+                divideInPlace(stereoCal.right(), direct.right());
             }
             FreqRespSweepParams p = dutResult.left().getSweepParams();
             FreqRespCalHelper.saveFrc(stereoCal,
@@ -442,6 +442,21 @@ public final class FreqRespWizardDialog {
             Dialogs.error(dialog, I18n.t("freqResp.saveTo.dialog"),
                     I18n.t("freqResp.error.measurement.save").replace("{0}",
                             ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
+        }
+    }
+
+    /** Mutates {@code measured} in-place: divides every magnitude by the
+     *  calibration interpolated at the same frequency and subtracts its phase
+     *  ({@code phase_out = phase_meas − phase_cal}), so the curve that reaches
+     *  the file represents the device under test alone. */
+    private void divideInPlace(FreqRespCalibration measured, FreqRespCalibration calibration) {
+        for (int i = 0; i < measured.freqs.length; i++) {
+            double[] cal = FreqRespCalHelper.interpolate(calibration, measured.freqs[i]);
+            double calMag = cal[0];
+            if (calMag > 0.0) {
+                measured.magLin[i] /= calMag;
+            }
+            measured.phaseRad[i] -= cal[1];
         }
     }
 

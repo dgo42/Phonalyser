@@ -18,7 +18,10 @@
 
 package org.edgo.audio.measure.gui.freqresp;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
 import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -2255,7 +2258,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
             // sample_rate_hz header comment; only legacy headerless files
             // fall back to the live input rate (the view's data-derived cap
             // still guards those).
-            int fileSr = FreqRespCalHelper.readSampleRateHz(picked);
+            int fileSr = readSampleRateHz(picked);
             int sr = fileSr > 0 ? fileSr : prefs.current().getInputSampleRate();
             view.setLeftResult(new FreqRespResult(
                     Channel.L, sr, cL.freqs, cL.magLin, cL.phaseRad,
@@ -2279,6 +2282,33 @@ public final class FreqRespTabControl extends AbstractTabControl {
                     I18n.t("freqResp.error.measurement.load").replace("{0}",
                             ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
         }
+    }
+
+    /**
+     * Reads the capture sample rate recorded in a {@code .frc} file's leading
+     * {@code # sample_rate_hz=} header comment.  Only the header block is
+     * scanned - the scan stops at the first non-comment line.  Returns
+     * {@code 0} when the header is absent or unparseable (a legacy file), so
+     * the caller falls back to the live input rate.
+     */
+    private int readSampleRateHz(String path) throws IOException {
+        try (BufferedReader br = new BufferedReader(new FileReader(path))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                if (!line.startsWith("#")) break;   // header block ended
+                int eq = line.indexOf('=');
+                if (eq > 0 && "sample_rate_hz".equals(line.substring(1, eq).trim())) {
+                    try {
+                        return Integer.parseInt(line.substring(eq + 1).trim());
+                    } catch (NumberFormatException e) {
+                        return 0;   // garbled header - treat as absent
+                    }
+                }
+            }
+        }
+        return 0;
     }
 
     // -------------------------------------------------------------------------

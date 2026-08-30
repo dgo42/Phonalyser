@@ -951,16 +951,10 @@ public final class FftView extends AbstractFreqDomainView {
             mainsApplied = true;
         }
 
-        // 2. Measurements - averaging always needs a recompute (analyze skipped
-        //    the stats while accumulating); a single tick only needs it once mains
-        //    has changed the spectrum (analyze already produced the rest).
-        if (accumulated || mainsApplied) {
-            mainsStats.recomputeStats(r);
-        }
-
-        // 3. Frequency-response (.frc) calibration - adjusts spectrum + readouts;
+        // 2. Frequency-response (.frc) calibration - adjusts spectrum + readouts;
         //    independent of mains, never on the cal (green) line.
         List<CorrectionStore.Entry> calEntries = correctionStore.getEntries();
+        int correctedBins = 0;
         if (!calEntries.isEmpty()) {
             boolean wantLeft = r.channelLeft;
             r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
@@ -973,9 +967,10 @@ public final class FftView extends AbstractFreqDomainView {
                 FreqRespCalibration calForChan = wantLeft
                         ? e.getCalibration().left()
                         : e.getCalibration().right();
-                FreqRespCalHelper.applyCompensationInPlace(r, calForChan, e.isWithNoise(),
-                        binCorr[i], mainsStats);
+                correctedBins += FreqRespCalHelper.applyCompensationInPlace(r, calForChan, e.isWithNoise(),
+                        binCorr[i]);
             }
+
             if (accumulated) {
                 // Re-derive the BLUE "before-cal" dots on the cumulative spectrum
                 // using the PINNED coherent κ (the single-tick fundamentalHzRefined
@@ -996,6 +991,14 @@ public final class FftView extends AbstractFreqDomainView {
                 r.preCorrectionPeaks = new double[][] { preFreqs, preDbFs };
             }
         }
+        // 3. Measurements - averaging always needs a recompute (analyze skipped
+        //    the stats while accumulating); a single tick only needs it once mains
+        //    has changed the spectrum (analyze already produced the rest).
+        if (accumulated || mainsApplied || correctedBins > 0) {
+            mainsStats.recomputeStats(r);
+        }
+
+
     }
 
     /** Shows a static spectrum loaded from file instead of live data, in
