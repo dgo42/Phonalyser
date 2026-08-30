@@ -261,6 +261,22 @@ public final class FftView extends AbstractFreqDomainView {
         }
     };
 
+    /** The loaded correction rows moved (a .frc loaded, dropped, or its
+     *  with-noise flag flipped), so the per-bin response they divide by is
+     *  rebuilt here and the trace redrawn with it.  Rebuilt at once, on the
+     *  geometry of the frame on screen; with no frame yet the next one builds
+     *  it.  Held as a field so dispose unsubscribes the same instance. */
+    private final Consumer<Object> onCalibrationChanged = ignored -> {
+        if (isDisposed()) return;
+        rebuildBinCorrections();
+        redraw();
+    };
+
+    /** A committed audio-format change moves the capture rate the response is
+     *  sampled at, and the first frame at the new rate arrives from a restarted
+     *  recording - so the response is dropped here and built by that frame. */
+    private final Consumer<Object> onAudioFormatChanged = ignored -> this.binCorr = null;
+
     /** Subscription handler held as a field so the same instance is
      *  passed to both {@code subscribe} and {@code unsubscribe} - the
      *  bus removes by reference equality.  The {@code slot} payload is
@@ -442,14 +458,17 @@ public final class FftView extends AbstractFreqDomainView {
     private List<CorrectionStore.Entry> calOverlayKeyEntries;
     private boolean calOverlayKeyLeft;
 
-    /** Cached per-bin calibration response + its key - see
-     *  {@link #calBinCorrections}.  One entry per loaded cal row, in the same
-     *  order, {@code null} for a row that corrects only tone lobes. */
-    private double[][][] calBinCorr;
-    private List<CorrectionStore.Entry> calBinCorrKeyEntries;
-    private boolean calBinCorrKeyLeft;
-    private int calBinCorrKeyFftSize;
-    private int calBinCorrKeyRate;
+    /** Per-bin calibration response - the H(f) each with-noise cal row divides
+     *  every FFT bin by, one array per loaded row in the entry list's order,
+     *  {@code null} for a row that corrects only tone lobes.  Built by
+     *  {@link #buildBinCorrections} and held until something it depends on
+     *  moves: the loaded rows (the store's change event), the analysed channel
+     *  or the FFT length (both funnel through {@link #resetStatistics}) and the
+     *  capture rate (a fresh recording).  {@code null} means "build on the next
+     *  frame" - the one thing {@link #finalizeResult} has to test. */
+    private double[][][] binCorr;
+
+    private boolean leftChannel = true;
 
     public FftView(Composite parent, CorrectionStore correctionStore,
                    FftController controller) {
@@ -490,6 +509,8 @@ public final class FftView extends AbstractFreqDomainView {
         addDisposeListener(e ->
                 bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll));
         bus.subscribe(Events.FFT_ALIGN_MAG_DRIFT, onAlignMagDrift);
+        bus.subscribe(Events.FFT_CALIBRATION_CHANGED, onCalibrationChanged);
+        bus.subscribe(Events.AUDIO_FORMAT_CHANGED, onAudioFormatChanged);
         // Window-function changes reset the running statistics - the control
         // writes the pref, the view reacts to the pref, neither calls the other.
         // Every settings/THD parameter whose side-effect targets the view is
@@ -785,6 +806,8 @@ public final class FftView extends AbstractFreqDomainView {
         bus.unsubscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
         bus.unsubscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
         bus.unsubscribe(Events.FFT_ALIGN_MAG_DRIFT, onAlignMagDrift);
+        bus.unsubscribe(Events.FFT_CALIBRATION_CHANGED, onCalibrationChanged);
+        bus.unsubscribe(Events.AUDIO_FORMAT_CHANGED, onAudioFormatChanged);
         disposePalette();
         // monoFont / monoBoldFont / chanButtonFont are shared instances
         // owned by Fonts - never disposed here.
@@ -884,6 +907,11 @@ public final class FftView extends AbstractFreqDomainView {
     public void resetStatistics() {
         controller.resetStatistics();
         clearRetainedResultsAfterReset();
+        // The analysed channel and the FFT length both reach a reset before
+        // they reach a frame, and the per-bin response is sampled for both -
+        // so it is dropped here and rebuilt by the first frame after.
+        binCorr = null;
+        leftChannel = true;
     }
 
     /** View-side companion of a statistics reset: drops the retained
@@ -936,7 +964,10 @@ public final class FftView extends AbstractFreqDomainView {
         if (!calEntries.isEmpty()) {
             boolean wantLeft = r.channelLeft;
             r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
-            double[][][] binCorr = calBinCorrections(calEntries, wantLeft, r.fftSize, r.sampleRate);
+            if (binCorr == null || leftChannel != wantLeft) {
+                binCorr = buildBinCorrections(calEntries, wantLeft, r.fftSize, r.sampleRate);
+            }
+            leftChannel = wantLeft;
             for (int i = 0; i < calEntries.size(); i++) {
                 CorrectionStore.Entry e = calEntries.get(i);
                 FreqRespCalibration calForChan = wantLeft
@@ -2663,26 +2694,22 @@ public final class FftView extends AbstractFreqDomainView {
         return sum;
     }
 
-    /** Cached per-bin calibration response for the WITH-NOISE cal rows - the
-     *  H(f) each of those rows divides EVERY FFT bin by - one per entry in the
-     *  entry list's own order, {@code null} for a row that corrects only the
-     *  tone lobes (it interpolates at a handful of tone frequencies instead).
-     *  Keyed on everything the response depends on and nothing else: the entry
-     *  list content, the analysed channel, the FFT length and the capture rate.
-     *
-     *  <p>The reason is cost.  Building one interpolates the calibration at
-     *  every bin - half a million log-domain interpolations at a 2^20-point FFT
-     *  - and {@link #finalizeResult} runs on every DISPLAYED frame, so deriving
-     *  it there made a de-embedded spectrum several times slower to display than
-     *  a raw one.  Nothing it depends on can change without one of the four key
-     *  parts changing with it. */
-    private double[][][] calBinCorrections(List<CorrectionStore.Entry> entries,
-                                           boolean wantLeft, int fftSize, int sampleRate) {
-        if (calBinCorr != null && wantLeft == calBinCorrKeyLeft
-                && fftSize == calBinCorrKeyFftSize && sampleRate == calBinCorrKeyRate
-                && entries.equals(calBinCorrKeyEntries)) {
-            return calBinCorr;
-        }
+    /** Re-derives {@link #binCorr} for the frame on screen, after the loaded
+     *  correction rows moved.  With no frame yet there is no geometry to sample
+     *  at, so it is left null and the next frame builds it. */
+    private void rebuildBinCorrections() {
+        binCorr = lastResult == null ? null
+                : buildBinCorrections(correctionStore.getEntries(), lastResult.channelLeft,
+                        lastResult.fftSize, lastResult.sampleRate);
+    }
+
+    /** Interpolates the with-noise cal rows at every bin - half a million
+     *  log-domain interpolations at a 2^20-point FFT, which is why the answer
+     *  is held in {@link #binCorr} instead of being derived per displayed
+     *  frame.  A row that corrects only the tone lobes gets no array: it
+     *  interpolates at a handful of tone frequencies instead. */
+    private double[][][] buildBinCorrections(List<CorrectionStore.Entry> entries,
+                                             boolean wantLeft, int fftSize, int sampleRate) {
         double[][][] built = new double[entries.size()][][];
         for (int i = 0; i < entries.size(); i++) {
             CorrectionStore.Entry e = entries.get(i);
@@ -2692,11 +2719,6 @@ public final class FftView extends AbstractFreqDomainView {
                     : e.getCalibration().right();
             built[i] = FreqRespCalHelper.binCorrections(cal, fftSize, sampleRate);
         }
-        calBinCorr           = built;
-        calBinCorrKeyEntries = entries;
-        calBinCorrKeyLeft    = wantLeft;
-        calBinCorrKeyFftSize = fftSize;
-        calBinCorrKeyRate    = sampleRate;
         return built;
     }
 
