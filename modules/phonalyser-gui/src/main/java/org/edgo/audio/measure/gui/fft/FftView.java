@@ -93,6 +93,11 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class FftView extends AbstractFreqDomainView {
 
+    /** Bin index standing for "this frame carries no second tone" in the
+     *  calibration cascade's keys. */
+    private static final int NO_TONE_BIN = -1;
+    /** Nanoseconds per millisecond - the render-step timings are stated in ms. */
+    private static final double NANOS_PER_MS = 1_000_000.0;
     /** How long the rejection warning keeps blinking after the last hit. */
     private static final long REJECTION_WARN_NANOS = 10_000_000_000L;
     /** How long the alignment magnitude-drift hint keeps blinking. */
@@ -186,13 +191,21 @@ public final class FftView extends AbstractFreqDomainView {
     private final CorrectionStore correctionStore;
 
     /** Stage-3 instrumentation for {@link DebugSwitches#SHOW_FFT_ANALYZE_TIME}:
-     *  {@code startRender} is stamped when a fresh result arrives in
-     *  {@link #onResultReady} and {@code gotFftResult} arms the end-of-paint
-     *  log line, which disarms it again so only the FIRST repaint of each
+     *  {@code startRender} is stamped as a fresh result ARRIVES in
+     *  {@link #onResultReady}, before the post-average pipeline runs, so the
+     *  total covers the whole UI-side path from arrival to the first paint.
+     *  {@code gotFftResult} arms that line and every step line, and the
+     *  end-of-paint total disarms it again, so only the FIRST repaint of each
      *  result is timed - later repaints are pans / zooms, not result
      *  rendering. */
     private long startRender;
     private boolean gotFftResult = false;
+
+    /** Start of the render step currently being timed - re-stamped by
+     *  {@link #logRenderStep} so each step is measured from the end of the one
+     *  before it, and again when the first paint of a fresh result begins (the
+     *  wait for the render tick in between is not rendering work). */
+    private long renderStepMark;
 
     /** Set by {@link #onResultReady} when a fresh result is ready to paint;
      *  consumed by {@link #renderRealtimeFrame} on the main event loop's render
@@ -268,14 +281,15 @@ public final class FftView extends AbstractFreqDomainView {
      *  it.  Held as a field so dispose unsubscribes the same instance. */
     private final Consumer<Object> onCalibrationChanged = ignored -> {
         if (isDisposed()) return;
-        rebuildBinCorrections();
+        this.calInv = null;
+        if (this.lastResult != null) buildCalInverse(this.lastResult);
         redraw();
     };
 
     /** A committed audio-format change moves the capture rate the response is
      *  sampled at, and the first frame at the new rate arrives from a restarted
      *  recording - so the response is dropped here and built by that frame. */
-    private final Consumer<Object> onAudioFormatChanged = ignored -> this.binCorr = null;
+    private final Consumer<Object> onAudioFormatChanged = ignored -> this.calInv = null;
 
     /** Subscription handler held as a field so the same instance is
      *  passed to both {@code subscribe} and {@code unsubscribe} - the
@@ -294,12 +308,16 @@ public final class FftView extends AbstractFreqDomainView {
         // lambda - see onGenChangeForFll.
         this.controller.resultConsumed();
         if (isRunning()) {
+            // Stage-3 timing starts with the arrival: the post-average pipeline
+            // below is part of what it costs to put a fresh result on screen, and
+            // the step lines are armed by the same flag the total is.
+            startRender = System.nanoTime();
+            renderStepMark = startRender;
+            gotFftResult = true;
             // Post-average pipeline (mains -> recompute -> .frc -> dBV), run ONCE
             // here on the DISPLAYED frame (post throttle + coalescing) - before
             // the deep-copy / IMD so both see the finished spectrum + readouts.
             finalizeResult(slot);
-            startRender = System.nanoTime();
-            gotFftResult = true;
             // In-place refresh of the displayed snapshot: a deepCopy per
             // displayed frame is ~64 MB of garbage at paint rate at fftSize
             // 4 M - copyFrom reuses the existing arrays when sizes match
@@ -309,6 +327,7 @@ public final class FftView extends AbstractFreqDomainView {
             } else {
                 this.lastResult.copyFrom(slot);
             }
+            logRenderStep("3.6 result copy");
             syncDataButtons();
             // Frame / phase rejections slow the averaging - raise a sticky
             // (20 s, restarted on each fresh rejection) blinking warning with
@@ -337,6 +356,7 @@ public final class FftView extends AbstractFreqDomainView {
             Preferences prefs = Preferences.instance();
             tableModeIsImd = prefs.getGenSignalForm().isDualTone();
             lastImd = tableModeIsImd ? this.controller.analyzeImd(slot) : null;
+            if (tableModeIsImd) logRenderStep("3.7 IMD analysis");
             // Mode just flipped (THD ↔ IMD): refresh the extracted window's
             // title + size.  It's set at create time and on form-change, but
             // tableModeIsImd only updates here - one tick later - so without
@@ -458,17 +478,36 @@ public final class FftView extends AbstractFreqDomainView {
     private List<CorrectionStore.Entry> calOverlayKeyEntries;
     private boolean calOverlayKeyLeft;
 
-    /** Per-bin calibration response - the H(f) each with-noise cal row divides
-     *  every FFT bin by, one array per loaded row in the entry list's order,
-     *  {@code null} for a row that corrects only tone lobes.  Built by
-     *  {@link #buildBinCorrections} and held until something it depends on
-     *  moves: the loaded rows (the store's change event), the analysed channel
-     *  or the FFT length (both funnel through {@link #resetStatistics}) and the
-     *  capture rate (a fresh recording).  {@code null} means "build on the next
-     *  frame" - the one thing {@link #finalizeResult} has to test. */
-    private double[][][] binCorr;
+    /** The de-embedding response of every loaded cal row, cascaded into ONE
+     *  per-bin complex reciprocal ({@code {invRe, invIm}}, bin
+     *  {@code 0 .. fftSize/2}) for the analysed channel, and held until an
+     *  input moves: the loaded rows (the store's change event), the analysed
+     *  channel or the FFT length (both funnel through
+     *  {@link #resetStatistics}), the capture rate (a fresh recording), and the
+     *  frame's own tone positions and lobe extents ({@link #calInverseFits}).
+     *  {@code null} means "build on the next frame"; the correction, the blue
+     *  dots and the rejected-block overlay all read this one array. */
+    private double[][] calInv;
 
-    private boolean leftChannel = true;
+    /** The bins the tone-only rows wrote, ascending - the walk the correction
+     *  makes while no with-noise row is loaded.  {@code null} once one is: it
+     *  marks most of the spectrum, so the full walk with the per-bin skip test
+     *  is the cheaper one. */
+    private int[] calInvToneBins;
+
+    /** {@code true} while a tone-only row is loaded - only then does
+     *  {@link #calInv} depend on the frame's tones, and only then are the tone
+     *  keys below compared. */
+    private boolean calInvToneKeys;
+
+    /** The frame keys {@link #calInv} was built from: the fundamental bin, the
+     *  second fundamental's bin ({@link #NO_TONE_BIN} for a single tone) and
+     *  every tone's lobe span.  A tone-only row writes its one value into
+     *  exactly those bins, so a frame that moved any of them needs the response
+     *  built again. */
+    private int calInvFundBin;
+    private int calInvF2Bin;
+    private int[][] calInvSpans;
 
     public FftView(Composite parent, CorrectionStore correctionStore,
                    FftController controller) {
@@ -910,8 +949,7 @@ public final class FftView extends AbstractFreqDomainView {
         // The analysed channel and the FFT length both reach a reset before
         // they reach a frame, and the per-bin response is sampled for both -
         // so it is dropped here and rebuilt by the first frame after.
-        binCorr = null;
-        leftChannel = true;
+        calInv = null;
     }
 
     /** View-side companion of a statistics reset: drops the retained
@@ -949,46 +987,27 @@ public final class FftView extends AbstractFreqDomainView {
             }
             mainsCorrector.applySpectrumCorrection(r.amplitudeDbFs, null, r.freqResolution, r.mainsF0Hz);
             mainsApplied = true;
+            logRenderStep("3.1 mains rejection");
         }
 
         // 2. Frequency-response (.frc) calibration - adjusts spectrum + readouts;
         //    independent of mains, never on the cal (green) line.
-        List<CorrectionStore.Entry> calEntries = correctionStore.getEntries();
         int correctedBins = 0;
-        if (!calEntries.isEmpty()) {
-            boolean wantLeft = r.channelLeft;
+        boolean calibrated = !correctionStore.getEntries().isEmpty();
+        if (calibrated) {
             r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
-            if (binCorr == null || leftChannel != wantLeft) {
-                binCorr = buildBinCorrections(calEntries, wantLeft, r.fftSize, r.sampleRate);
+            // While a row corrects only the tones, the held response stands in
+            // the bins this frame's tones and lobes named - a frame that moved
+            // one of them needs a fresh one.
+            if (!calInverseFits(r)) {
+                buildCalInverse(r);
+                logRenderStep("3.2 .frc response build");
             }
-            leftChannel = wantLeft;
-            for (int i = 0; i < calEntries.size(); i++) {
-                CorrectionStore.Entry e = calEntries.get(i);
-                FreqRespCalibration calForChan = wantLeft
-                        ? e.getCalibration().left()
-                        : e.getCalibration().right();
-                correctedBins += FreqRespCalHelper.applyCompensationInPlace(r, calForChan, e.isWithNoise(),
-                        binCorr[i]);
-            }
-
-            if (accumulated) {
-                // Re-derive the BLUE "before-cal" dots on the cumulative spectrum
-                // using the PINNED coherent κ (the single-tick fundamentalHzRefined
-                // jitters and dances the cal-lookup point).
-                int hc = r.harmonicCount;
-                double[] preFreqs = new double[1 + hc];
-                double[] preDbFs  = new double[1 + hc];
-                double stableFundHz = r.coherentKappa * r.freqResolution;
-                preFreqs[0] = r.fundamentalHz;
-                preDbFs[0]  = r.fundamentalDbFs + sumCalDbAt(calEntries, wantLeft, stableFundHz);
-                for (int h = 0; h < hc; h++) {
-                    if (r.harmonicBins[h] > 0) {
-                        preFreqs[1 + h] = r.harmonicHz[h];
-                        double stableHarmHz = stableFundHz * (h + 2);
-                        preDbFs[1 + h] = r.harmonicDbFs[h] + sumCalDbAt(calEntries, wantLeft, stableHarmHz);
-                    }
-                }
-                r.preCorrectionPeaks = new double[][] { preFreqs, preDbFs };
+            correctedBins = FreqRespCalHelper.applyInverseInPlace(r, calInv, calInvToneBins);
+            // The bin count goes into the step's own text, so the switch is
+            // tested here as well: the message must not be built when it is off.
+            if (DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
+                logRenderStep("3.3 .frc apply (" + correctedBins + " bins)");
             }
         }
         // 3. Measurements - averaging always needs a recompute (analyze skipped
@@ -996,6 +1015,35 @@ public final class FftView extends AbstractFreqDomainView {
         //    has changed the spectrum (analyze already produced the rest).
         if (accumulated || mainsApplied || correctedBins > 0) {
             mainsStats.recomputeStats(r);
+            logRenderStep("3.4 statistics recompute");
+        }
+        // 4. The BLUE "before-cal" dots of an ACCUMULATED frame, derived here -
+        //    after step 3 - because the readouts they start from are the ones
+        //    that recompute produces: while averaging, the analysis carries no
+        //    statistics at all, so a level read before the recompute is whatever
+        //    an earlier tick left behind and lands the dot anywhere.  The
+        //    measured level is therefore the recomputed post-cal level plus the
+        //    cascade's gain at the tone's own bin - what the correction took off
+        //    that bin, added back.  The cal is looked up at the PINNED coherent
+        //    fundamental bin: the single-tick fundamentalHzRefined jitters and
+        //    dances the lookup point.  A single tick keeps the step-2 snapshot,
+        //    which is the raw spectrum's own readouts, taken before the divide.
+        if (calibrated && accumulated) {
+            int hc = r.harmonicCount;
+            double[] preFreqs = new double[1 + hc];
+            double[] preDbFs  = new double[1 + hc];
+            double stableFundHz = r.coherentKappa * r.freqResolution;
+            preFreqs[0] = r.fundamentalHz;
+            preDbFs[0]  = r.fundamentalDbFs + calGainDbAt(r, stableFundHz);
+            for (int h = 0; h < hc; h++) {
+                if (r.harmonicBins[h] > 0) {
+                    preFreqs[1 + h] = r.harmonicHz[h];
+                    double stableHarmHz = stableFundHz * (h + 2);
+                    preDbFs[1 + h] = r.harmonicDbFs[h] + calGainDbAt(r, stableHarmHz);
+                }
+            }
+            r.preCorrectionPeaks = new double[][] { preFreqs, preDbFs };
+            logRenderStep("3.5 blue dots");
         }
 
 
@@ -1334,6 +1382,10 @@ public final class FftView extends AbstractFreqDomainView {
         final double fFreqMin = freqMin;
         long fp = computeTraceFingerprint(lastResult, area, unit, fFreqMin, freqMax,
                 magTop, magBot, logFreq);
+        // The paint steps are charged from here: between the result's arrival
+        // and this paint the frame waits for the render tick, which is not
+        // rendering work.  A repaint with no fresh result logs nothing.
+        if (gotFftResult) renderStepMark = System.nanoTime();
         paintCachedStatic(gc, area, fp, bgc -> {
             bgc.setBackground(color(ColorRole.BACKGROUND));
             bgc.fillRectangle(0, 0, area.width, area.height);
@@ -1353,6 +1405,7 @@ public final class FftView extends AbstractFreqDomainView {
                      color(ColorRole.GRID), color(ColorRole.AXIS), color(ColorRole.TEXT), monoFont,
                      MAJOR_TICK_LEN, MINOR_TICK_LEN, null);
             drawDistortionBands(bgc, plot, fFreqMin, freqMax, logFreq);
+            logRenderStep("3.8 grid + bands");
             if (lastResult != null) {
                 drawSpectrum(bgc, plot, lastResult, unit, fFreqMin, freqMax, magTop, magBot, logFreq);
                 // DEBUG overlay: de-embedded calibration filter response (green line).
@@ -1360,6 +1413,7 @@ public final class FftView extends AbstractFreqDomainView {
                     drawCalOverlay(bgc, plot, lastResult, unit, fFreqMin, freqMax,
                             magTop, magBot, logFreq);
                 }
+                logRenderStep("3.9 spectrum trace");
                 // Harmonic dots are THD-mode markers - hide them when
                 // an IMD result is present (DUAL_TONE generator) so the
                 // F1/F2/dnL/dnH annotations don't compete with the
@@ -1385,6 +1439,7 @@ public final class FftView extends AbstractFreqDomainView {
                     drawDistortionTable(bgc, lastResult, unit);
                 }
             }
+            logRenderStep("3.10 dots + table");
         });
 
         // ---- Dynamic overlay (drawn live on top of the cached image)
@@ -1404,10 +1459,28 @@ public final class FftView extends AbstractFreqDomainView {
             drawCrosshair(gc, plot, lastResult, unit, freqMin, freqMax, magTop, magBot, logFreq);
         }
         drawRectZoomOverlay(gc, area.width, area.height);
+        logRenderStep("3.11 dynamic overlay");
         if (log.isWarnEnabled() && gotFftResult && DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
             log.warn("          3. FFT result rendered in {} ms", (double)(System.nanoTime() - startRender) / 1_000_000);
             gotFftResult = false;
         }
+    }
+
+    /** Logs one step of the stage-3 breakdown - the named part of putting a
+     *  fresh result on screen - and re-stamps {@link #renderStepMark}, so the
+     *  next step is measured from the end of this one and the steps add up to
+     *  the total the end of the paint logs.  Silent unless the analyse-time
+     *  switch is on and a fresh result is being rendered: a repaint that only
+     *  moves the crosshair repeats no step, and the elapsed-time formatting is
+     *  not paid when nothing reads it. */
+    private void logRenderStep(String name) {
+        if (!gotFftResult || !DebugSwitches.SHOW_FFT_ANALYZE_TIME || !log.isWarnEnabled()) {
+            return;
+        }
+        long now = System.nanoTime();
+        log.warn("          {} took {} ms", name,
+                String.format(Locale.US, "%.2f", (now - renderStepMark) / NANOS_PER_MS));
+        renderStepMark = now;
     }
 
     // -------------------------------------------------------------------------
@@ -1795,10 +1868,11 @@ public final class FftView extends AbstractFreqDomainView {
      *       on the displayed peak (NO stretch); the block's higher single-shot
      *       floor then rides above the average, exposing the near-carrier skirt
      *       that tripped the reject.</li>
-     *   <li>manual-fundamental or .frc - the displayed fundamental is itself a
+     *   <li>.frc - every bin the held calibration cascade corrected is lifted
+     *       by the same dB, so the block lands on the corrected scale.</li>
+     *   <li>manual-fundamental - the displayed fundamental is itself a
      *       stretched dome, so the block's lobe is stretched the SAME way (same
-     *       {@link ToneLobeLift#stretch}) up to the displayed peak, its skirt
-     *       lifted onto the cal-corrected scale by the cascade gain.</li>
+     *       {@link ToneLobeLift#stretch}) up to the displayed peak.</li>
      *  </ul>
      *  Returns {@code null} when no fundamental / block data is available. */
     private double[] buildRejectedBlockDbFs(FftResult r, int fundBin,
@@ -1814,29 +1888,13 @@ public final class FftView extends AbstractFreqDomainView {
         IntToDoubleFunction omag = k -> Math.pow(10.0, o[k] / 20.0);
 
         // 1. Calibrate the block EXACTLY as the displayed (blue) spectrum is, so
-        //    red lands on blue's scale and is directly comparable.  With-noise
-        //    divides every bin by |H| at its own frequency; otherwise only each
-        //    tone's data-derived lobe is stretched by 1/|H| at the tone (noise
-        //    left raw) - mirroring FreqRespCalHelper.applyCompensationInPlace.
-        for (CorrectionStore.Entry e : correctionStore.getEntries()) {
-            FreqRespCalibration c = r.channelLeft ? e.getCalibration().left()
-                                                  : e.getCalibration().right();
-            if (e.isWithNoise()) {
-                for (int k = kFirst; k <= kLast; k++) {
-                    double hMag = FreqRespCalHelper.interpolate(c, k * binBw)[0];
-                    if (hMag > 0.0) out[k] -= 20.0 * Math.log10(hMag);
-                }
-            } else {
-                stretchToneLobe(out, omag, c, fundBin, binBw, half);
-                for (int h = 0; h < r.harmonicCount; h++) {
-                    if (r.harmonicBins != null && r.harmonicBins[h] > 0) {
-                        stretchToneLobe(out, omag, c, r.harmonicBins[h], binBw, half);
-                    }
-                }
-                if (!Double.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0) {
-                    stretchToneLobe(out, omag, c,
-                            (int) Math.round(r.fundamental2HzRefined / binBw), binBw, half);
-                }
+        //    red lands on blue's scale and is directly comparable: every bin the
+        //    held cascade corrected is lifted here by the same dB the correction
+        //    took off the displayed spectrum there, and a bin no row reached is
+        //    left alone.
+        if (calInv != null) {
+            for (int k = kFirst; k <= kLast; k++) {
+                out[k] -= FreqRespCalHelper.gainDbAt(calInv, k);
             }
         }
 
@@ -1870,17 +1928,6 @@ public final class FftView extends AbstractFreqDomainView {
             for (int k = kFirst; k <= kLast; k++) out[k] += off;
         }
         return out;
-    }
-
-    /** Stretches a tone's data-derived main lobe in {@code out} by the cal's
-     *  {@code 1/|H|} at the tone frequency - the per-tone correction
-     *  {@link FreqRespCalHelper#applyCompensationInPlace} applies when the cal
-     *  excludes noise. */
-    private void stretchToneLobe(double[] out, IntToDoubleFunction mag, FreqRespCalibration c,
-                                 int toneBin, double binBw, int half) {
-        if (toneBin < 1 || toneBin > half) return;
-        double hMag = FreqRespCalHelper.interpolate(c, toneBin * binBw)[0];
-        if (hMag > 0.0) stretchLobe(out, mag, toneBin, half, 1.0 / hMag);
     }
 
     /** Stretches one tone lobe in {@code out} by a linear {@code factor} via the
@@ -2119,14 +2166,14 @@ public final class FftView extends AbstractFreqDomainView {
         // Blue "before-cal" dots first so the red post-cal dots sit on
         // top.  Only drawn when at least one calibration file is
         // loaded - same gate the THD path uses (preCorrectionPeaks
-        // null vs. non-null).
-        List<CorrectionStore.Entry> calEntries =
-                correctionStore.getEntries();
-        if (!calEntries.isEmpty()) {
-            boolean wantLeft = prefs.getFftChannel() == Channel.L;
+        // null vs. non-null).  The lift is the cascade's gain at each
+        // product's own bin, taken from the response the spectrum was
+        // corrected with, so blue stands exactly where the measurement
+        // stood before the correction.
+        if (!correctionStore.getEntries().isEmpty()) {
             gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
             for (int i = 0; i < count; i++) {
-                double preDbFs = dbFs[i] + sumCalDbAt(calEntries, wantLeft, hz[i]);
+                double preDbFs = dbFs[i] + calGainDbAt(r, hz[i]);
                 plotDotAt(gc, plot, hz[i], preDbFs,
                         unit, freqMin, freqMax, magTop, magBot, logFreq);
             }
@@ -2222,29 +2269,6 @@ public final class FftView extends AbstractFreqDomainView {
                     imd.dnHHz[k], hDbFs, unit, freqMin, freqMax,
                     magTop, magBot, logFreq);
         }
-    }
-
-    /** Returns the cumulative calibration dB lift at {@code freqHz} -
-     *  i.e. how many dB the calibration cascade adds at this freq when
-     *  going from raw to corrected.  Used to recover the pre-cal level
-     *  (BLUE dot) at a known post-cal level by adding this value back
-     *  in.  Empty cal list => 0 dB.  Instance method (per project
-     *  preference) rather than static.  Same dB-cascade math
-     *  {@code FftAnalyzerWorker.sumCalDb} uses for the THD-path blue
-     *  dots; kept local here so the IMD path doesn't reach into the
-     *  worker's private helpers. */
-    private double sumCalDbAt(List<CorrectionStore.Entry> calEntries,
-                              boolean wantLeft, double freqHz) {
-        if (!(freqHz > 0)) return 0.0;
-        double sum = 0.0;
-        for (CorrectionStore.Entry e : calEntries) {
-            FreqRespCalibration cal = wantLeft
-                    ? e.getCalibration().left()
-                    : e.getCalibration().right();
-            double m = FreqRespCalHelper.interpolate(cal, freqHz)[0];
-            sum += (m > 0.0) ? 20.0 * Math.log10(m) : -300.0;
-        }
-        return sum;
     }
 
     private void plotDotAt(GC gc, Rectangle plot, double hz, double dbFs,
@@ -2697,32 +2721,71 @@ public final class FftView extends AbstractFreqDomainView {
         return sum;
     }
 
-    /** Re-derives {@link #binCorr} for the frame on screen, after the loaded
-     *  correction rows moved.  With no frame yet there is no geometry to sample
-     *  at, so it is left null and the next frame builds it. */
-    private void rebuildBinCorrections() {
-        binCorr = lastResult == null ? null
-                : buildBinCorrections(correctionStore.getEntries(), lastResult.channelLeft,
-                        lastResult.fftSize, lastResult.sampleRate);
-    }
-
-    /** Interpolates the with-noise cal rows at every bin - half a million
-     *  log-domain interpolations at a 2^20-point FFT, which is why the answer
-     *  is held in {@link #binCorr} instead of being derived per displayed
-     *  frame.  A row that corrects only the tone lobes gets no array: it
-     *  interpolates at a handful of tone frequencies instead. */
-    private double[][][] buildBinCorrections(List<CorrectionStore.Entry> entries,
-                                             boolean wantLeft, int fftSize, int sampleRate) {
-        double[][][] built = new double[entries.size()][][];
-        for (int i = 0; i < entries.size(); i++) {
-            CorrectionStore.Entry e = entries.get(i);
-            if (!e.isWithNoise()) continue;
-            FreqRespCalibration cal = wantLeft
+    /** Samples the cascade of every loaded cal row on {@code r}'s grid, for the
+     *  channel {@code r} was analysed on, and keeps it with the inputs it was
+     *  built from.  The rows split into the two groups the cascade takes: one
+     *  divides every bin, the other only the tone lobes.  Half a million
+     *  log-domain interpolations at a 2^20-point FFT go into this, which is why
+     *  the answer is held rather than derived per displayed frame. */
+    private void buildCalInverse(FftResult r) {
+        List<FreqRespCalibration> withNoise = new ArrayList<>();
+        List<FreqRespCalibration> toneOnly  = new ArrayList<>();
+        for (CorrectionStore.Entry e : correctionStore.getEntries()) {
+            FreqRespCalibration cal = r.channelLeft
                     ? e.getCalibration().left()
                     : e.getCalibration().right();
-            built[i] = FreqRespCalHelper.binCorrections(cal, fftSize, sampleRate);
+            if (e.isWithNoise()) {
+                withNoise.add(cal);
+            } else {
+                toneOnly.add(cal);
+            }
         }
-        return built;
+        double[] tones = FreqRespCalHelper.toneFrequencies(r);
+        int[][] spans  = FreqRespCalHelper.toneLobeSpans(r, tones);
+        calInv = FreqRespCalHelper.cascadeInverse(withNoise, toneOnly, tones, spans,
+                r.fftSize, r.sampleRate);
+        // Only the tone-only rows write into the lobes, so while no with-noise
+        // row is loaded their bin list IS the whole correction.
+        calInvToneBins = withNoise.isEmpty()
+                ? FreqRespCalHelper.toneBins(spans, r.fftSize / 2) : null;
+        calInvToneKeys   = !toneOnly.isEmpty();
+        calInvFundBin    = r.fundamentalBin;
+        calInvF2Bin      = secondFundamentalBin(r);
+        calInvSpans      = spans;
+    }
+
+    /** Whether the held response still fits {@code r}: its tone positions and
+     *  lobe extents, while a tone-only row is loaded - that row's one value per
+     *  tone stands in exactly the bins those spans named.  With only with-noise
+     *  rows the response depends on no tone, so the tone keys are not compared
+     *  and no frame costs their recompute. */
+    private boolean calInverseFits(FftResult r) {
+        if (calInv == null) return false;
+        if (!calInvToneKeys) return true;
+        if (r.fundamentalBin != calInvFundBin || secondFundamentalBin(r) != calInvF2Bin) {
+            return false;
+        }
+        double[] tones = FreqRespCalHelper.toneFrequencies(r);
+        return Arrays.deepEquals(calInvSpans, FreqRespCalHelper.toneLobeSpans(r, tones));
+    }
+
+    /** The second fundamental's bin on {@code r}'s grid, or
+     *  {@link #NO_TONE_BIN} when the frame carries no second tone. */
+    private int secondFundamentalBin(FftResult r) {
+        double f2 = r.fundamental2HzRefined;
+        if (Double.isNaN(f2) || !(f2 > 0.0) || r.fftSize <= 0) return NO_TONE_BIN;
+        return (int) Math.round(f2 / (r.sampleRate / (double) r.fftSize));
+    }
+
+    /** The dB the loaded calibration cascade takes off the bin nearest
+     *  {@code hz} - what a level measured after the correction has to gain back
+     *  to read as it was measured.  0 with no response held (a static spectrum
+     *  shown after a reset is not corrected either, so its blue dot coincides
+     *  with the red one) and for a bin no row reached. */
+    private double calGainDbAt(FftResult r, double hz) {
+        if (calInv == null || !(hz > 0.0)) return 0.0;
+        double binWidth = r.sampleRate / (double) r.fftSize;
+        return FreqRespCalHelper.gainDbAt(calInv, (int) Math.round(hz / binWidth));
     }
 
     /** Emits one accumulated cal-overlay column - min/max dB extremes

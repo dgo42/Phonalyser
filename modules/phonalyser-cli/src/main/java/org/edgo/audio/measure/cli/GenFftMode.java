@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.cli;
 
+import java.util.List;
 import java.util.Locale;
 
 import org.edgo.audio.measure.adc.WeightedBuffer;
@@ -245,7 +246,18 @@ public class GenFftMode {
             double[][] pp = FreqRespCalHelper.capturePreCorrectionPeaks(result);
             preCorrFreqs = pp[0];
             preCorrDbFs  = pp[1];
-            FreqRespCalHelper.applyCompensationInPlace(result, freqRespCal, calNoise);
+            // One loaded row: it goes into the cascade alone, in the group its
+            // flag names - every bin with noise, only the tone lobes without.
+            double[] tones = FreqRespCalHelper.toneFrequencies(result);
+            int[][] spans  = FreqRespCalHelper.toneLobeSpans(result, tones);
+            List<FreqRespCalibration> withNoiseRows =
+                    calNoise ? List.of(freqRespCal) : List.of();
+            List<FreqRespCalibration> toneOnlyRows =
+                    calNoise ? List.of() : List.of(freqRespCal);
+            double[][] inv = FreqRespCalHelper.cascadeInverse(withNoiseRows, toneOnlyRows,
+                    tones, spans, result.fftSize, result.sampleRate);
+            FreqRespCalHelper.applyInverseInPlace(result, inv,
+                    calNoise ? null : FreqRespCalHelper.toneBins(spans, result.fftSize / 2));
             log.info("THD   : {}%  ({} dB)  [after frequency response de-attenuation]",
                     String.format(Locale.US, "%.8f", result.thdPct),
                     String.format(Locale.US, "%.2f", result.thdDb));

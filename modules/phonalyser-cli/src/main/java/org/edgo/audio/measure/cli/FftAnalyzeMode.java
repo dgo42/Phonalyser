@@ -19,6 +19,7 @@
 package org.edgo.audio.measure.cli;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -224,7 +225,16 @@ public class FftAnalyzeMode {
             }
             preCorrFreqs = prePeaks[0];
             preCorrDbFs  = prePeaks[1];
-            FreqRespCalHelper.applyCompensationInPlace(result, cal, calNoise);
+            // One loaded row: it goes into the cascade alone, in the group its
+            // flag names - every bin with noise, only the tone lobes without.
+            double[] tones = FreqRespCalHelper.toneFrequencies(result);
+            int[][] spans  = FreqRespCalHelper.toneLobeSpans(result, tones);
+            List<FreqRespCalibration> withNoiseRows = calNoise ? List.of(cal) : List.of();
+            List<FreqRespCalibration> toneOnlyRows  = calNoise ? List.of() : List.of(cal);
+            double[][] inv = FreqRespCalHelper.cascadeInverse(withNoiseRows, toneOnlyRows,
+                    tones, spans, result.fftSize, result.sampleRate);
+            FreqRespCalHelper.applyInverseInPlace(result, inv,
+                    calNoise ? null : FreqRespCalHelper.toneBins(spans, result.fftSize / 2));
             log.info("THD   : {}%  ({} dB)  [after frequency response de-attenuation]",
                     String.format(Locale.US, "%.8f", result.thdPct),
                     String.format(Locale.US, "%.2f", result.thdDb));

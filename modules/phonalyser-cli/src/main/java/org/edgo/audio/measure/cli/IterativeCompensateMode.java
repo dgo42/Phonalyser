@@ -228,10 +228,10 @@ public class IterativeCompensateMode {
                 : null;
 
         // Same de-embed the GUI wizard does: the correction reads the RAW
-        // measured phasors (captured by analyze before applyCompensationInPlace
+        // measured phasors (captured by analyze before applyInverseInPlace
         // de-embeds re/im) and divides each by the .frc response H(f), taking out
         // both magnitude and phase.  Outside the cal's span -> unit response,
-        // mirroring the bin-range guard in applyCompensationInPlace.  No .frc
+        // mirroring the bin-range guard the cascade applies.  No .frc
         // loaded -> unit response everywhere.
         final FreqRespCalibration calForResp = freqRespCal;
         DoubleFunction<double[]> calResponseAt = (calForResp == null) ? f -> new double[]{ 1.0, 0.0 }
@@ -290,7 +290,7 @@ public class IterativeCompensateMode {
                 double[][] pp = FreqRespCalHelper.capturePreCorrectionPeaks(result0);
                 preCorrFreqs0 = pp[0];
                 preCorrDbFs0  = pp[1];
-                FreqRespCalHelper.applyCompensationInPlace(result0, freqRespCal, calNoise);
+                deEmbedWithCal(result0, freqRespCal, calNoise);
             }
             if (result0.fundamentalDynExclusionHz > MAX_FUND_EXCLUSION_HZ) {
                 log.warn("Iteration 0 retry {}: fundamental exclusion {} Hz > {} Hz - signal interrupted, retrying",
@@ -406,7 +406,7 @@ public class IterativeCompensateMode {
                     double[][] pp = FreqRespCalHelper.capturePreCorrectionPeaks(result);
                     preCorrFreqs = pp[0];
                     preCorrDbFs  = pp[1];
-                    FreqRespCalHelper.applyCompensationInPlace(result, freqRespCal, calNoise);
+                    deEmbedWithCal(result, freqRespCal, calNoise);
                 }
                 if (result.fundamentalDynExclusionHz > MAX_FUND_EXCLUSION_HZ) {
                     log.warn("Iteration {} retry {}: fundamental exclusion {} Hz > {} Hz - signal interrupted, retrying",
@@ -544,6 +544,21 @@ public class IterativeCompensateMode {
         }
         log.info("Best: iteration {} with THD {} %",
                 bestIter, String.format(Locale.US, "%.8f", bestThd));
+    }
+
+    /** De-embeds {@code result} with the single loaded calibration: one row in
+     *  the cascade, in the group its flag names - every bin when the row
+     *  carries the noise, only the tone lobes when it does not, which is then
+     *  also the bin list the applying pass walks. */
+    private void deEmbedWithCal(FftResult result, FreqRespCalibration cal, boolean withNoise) {
+        double[] tones = FreqRespCalHelper.toneFrequencies(result);
+        int[][] spans  = FreqRespCalHelper.toneLobeSpans(result, tones);
+        List<FreqRespCalibration> withNoiseRows = withNoise ? List.of(cal) : List.of();
+        List<FreqRespCalibration> toneOnlyRows  = withNoise ? List.of() : List.of(cal);
+        double[][] inv = FreqRespCalHelper.cascadeInverse(withNoiseRows, toneOnlyRows,
+                tones, spans, result.fftSize, result.sampleRate);
+        FreqRespCalHelper.applyInverseInPlace(result, inv,
+                withNoise ? null : FreqRespCalHelper.toneBins(spans, result.fftSize / 2));
     }
 
     /** Builds a {@code SINE_COMPENSATED} generator from the accumulated

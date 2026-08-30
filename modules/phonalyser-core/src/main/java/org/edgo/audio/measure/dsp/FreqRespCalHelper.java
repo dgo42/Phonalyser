@@ -31,7 +31,6 @@ import java.util.Locale;
 import java.util.function.IntToDoubleFunction;
 
 import org.edgo.audio.measure.common.FileVersions;
-import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.MathUtil;
 import org.jtransforms.fft.DoubleFFT_1D;
@@ -51,24 +50,42 @@ public class FreqRespCalHelper {
      *  swept band intact. */
     public static final double SWEEP_FADE_FRACTION_PER_SIDE = 0.05;
 
-    /** Shared per-tone lobe lift (floor estimate + data-derived lobe extent +
-     *  power-domain proportional scale) - also used by the manual-fundamental
-     *  display so both rescale a tone the same way. */
+    /** Shared per-tone lobe geometry (robust local floor + data-derived lobe
+     *  extent) - also used by the manual-fundamental display, so both agree on
+     *  where a tone ends and the noise begins. */
     private static final ToneLobeLift LOBE = new ToneLobeLift();
 
     /** Highest intermod order whose dual-tone products get their lobes
-     *  de-embedded (correctAllBins=false).  Mirrors {@code ImdResult.MAX_ORDER}
-     *  so the corrected product set matches exactly what {@code ImdAnalyzer}
+     *  de-embedded by a tone-only row.  Mirrors {@code ImdResult.MAX_ORDER} so
+     *  the corrected product set matches exactly what {@code ImdAnalyzer}
      *  measures; kept as a local copy to avoid a {@code dsp -> gui} dependency. */
     private static final int MAX_IMD_ORDER = 5;
 
-    /** Row of {@link #binCorrections}' answer holding Re H(f) per bin. */
-    private static final int H_RE = 0;
-    /** Row holding Im H(f) per bin. */
-    private static final int H_IM = 1;
-    /** Row holding |H(f)|² per bin - and the skip marker: zero for a bin the
-     *  divide must leave untouched. */
-    private static final int H_MAG_SQ = 2;
+    /** Row of a tone's {@link #toneLobeSpans} entry holding its peak bin. */
+    private static final int SPAN_PEAK = 0;
+    /** Row holding the first bin of the tone's main lobe. */
+    private static final int SPAN_LO = 1;
+    /** Row holding the last bin of the tone's main lobe. */
+    private static final int SPAN_HI = 2;
+    /** Bin index standing for "the frame does not carry this tone", or "its
+     *  lobe could not be located" (peak outside the analysed bins). */
+    private static final int ABSENT_BIN = -1;
+
+    /** Row of {@link #cascadeInverse}' answer holding Re(1/G) per bin. */
+    private static final int INV_RE = 0;
+    /** Row holding Im(1/G) per bin. */
+    private static final int INV_IM = 1;
+
+    /** dB per decade of an AMPLITUDE ratio. */
+    private static final double AMPLITUDE_DB_FACTOR = 20.0;
+    /** dB per decade of a POWER ratio - a squared magnitude is read in this
+     *  domain, so no square root is taken to state a gain. */
+    private static final double POWER_DB_FACTOR = 10.0;
+    /** Below this linear amplitude a bin's level is clamped instead of
+     *  logarithmed, so a bin that cancelled to zero cannot read -infinity. */
+    private static final double MIN_LINEAR_AMPLITUDE = 1e-15;
+    /** The clamp value for a bin below {@link #MIN_LINEAR_AMPLITUDE}. */
+    private static final double FLOOR_DB = -300.0;
 
     /** Compile-time switch for IR-domain time gating after delay
      *  correction.  When on, the deconvolved impulse response is
@@ -622,226 +639,287 @@ public class FreqRespCalHelper {
     }
 
     /**
-     * The calibration response H(f) sampled at every bin of the
-     * {@code (fftSize, sampleRate)} FFT grid, in the form the whole-spectrum
-     * divide of {@link #applyCompensationInPlace} consumes: rows
-     * {@link #H_RE}, {@link #H_IM} and {@link #H_MAG_SQ}, each indexed by bin
-     * {@code k = 0 .. fftSize/2}.
+     * Every tone a tone-only calibration row corrects on {@code r}, in the
+     * order the shared lobe bins are claimed: the fundamental (sub-bin refined
+     * where the refinement is finite and positive, else the fundamental bin's
+     * centre), each harmonic the frame located, the second fundamental of a
+     * dual tone and its intermod products of orders 2 to
+     * {@link #MAX_IMD_ORDER}.
      *
-     * <p>It is a separate step because it depends on nothing that changes
-     * between displayed frames - the loaded calibration, the channel, the FFT
-     * length and the capture rate - while {@link #interpolate} costs a binary
-     * search, an allocation and about ten transcendental calls PER BIN.  Derived
-     * inside the per-frame divide that is half a million interpolations for every
-     * frame at a 2^20-point FFT, against a few dozen on the per-tone path, which
-     * is what made a de-embedded spectrum several times slower to display than a
-     * raw one.  A caller that draws frame after frame builds this once.
+     * <p>A position the frame does not carry keeps its SLOT and holds 0 - the
+     * list is never compacted, so a later frame's tone set and lobe spans line
+     * up with an earlier one's slot for slot and can be compared.
      *
-     * <p>{@link #H_MAG_SQ} is zero for every bin the divide must skip - one
-     * outside the calibration's frequency range, or one whose interpolated
-     * magnitude is not positive - so the applying loop needs no second guard.
+     * <p>The dual-tone products are the CCIF/DIN set the IMD analyser
+     * measures, replicated here to avoid a {@code dsp -> gui} dependency:
+     * <pre>
+     *   d2L = f2 - f1,               d2H = f2 + f1
+     *   dnL = (n-1)*f1 - (n-2)*f2,   dnH = (n-1)*f2 - (n-2)*f1   (n &gt;= 3)
+     * </pre>
      */
-    public double[][] binCorrections(FreqRespCalibration cal, int fftSize, int sampleRate) {
-        int half = fftSize / 2;
-        double binWidth = sampleRate / (double) fftSize;
-        double fLo = cal.freqs[0];
-        double fHi = cal.freqs[cal.freqs.length - 1];
-        double[] hRe    = new double[half + 1];
-        double[] hIm    = new double[half + 1];
-        double[] hMagSq = new double[half + 1];
-        for (int k = 1; k <= half; k++) {
-            double f = k * binWidth;
-            if (f < fLo || f > fHi) continue;
-            double[] h = interpolate(cal, f);
-            double hMag = h[0];
-            if (hMag <= 0.0) continue;
-            hRe[k]    = hMag * Math.cos(h[1]);
-            hIm[k]    = hMag * Math.sin(h[1]);
-            hMagSq[k] = hMag * hMag;
+    public double[] toneFrequencies(FftResult r) {
+        int harmonics = Math.max(0, r.harmonicCount);
+        double[] tones = new double[2 + harmonics + 2 * (MAX_IMD_ORDER - 1)];
+        double binWidth = r.sampleRate / (double) r.fftSize;
+        tones[0] = (Double.isFinite(r.fundamentalHzRefined) && r.fundamentalHzRefined > 0.0)
+                ? r.fundamentalHzRefined : r.fundamentalBin * binWidth;
+        for (int h = 0; h < harmonics; h++) {
+            if (r.harmonicBins != null && r.harmonicBins[h] > 0) {
+                tones[1 + h] = r.harmonicHz[h];
+            }
         }
-        return new double[][] { hRe, hIm, hMagSq };
+        double f2 = r.fundamental2HzRefined;
+        if (!Double.isNaN(f2) && f2 > 0.0) {
+            double f1 = r.fundamentalHzRefined;
+            tones[1 + harmonics] = f2;
+            int idx = 2 + harmonics;
+            for (int n = 2; n <= MAX_IMD_ORDER; n++) {
+                if (n == 2) {
+                    tones[idx++] = f2 - f1;                        // difference
+                    tones[idx++] = f2 + f1;                        // sum
+                } else {
+                    tones[idx++] = (n - 1) * f1 - (n - 2) * f2;
+                    tones[idx++] = (n - 1) * f2 - (n - 2) * f1;
+                }
+            }
+        }
+        return tones;
     }
 
     /**
-     * Mutates {@code r} in place: divides every FFT bin (within the swept range)
-     * by H(f) interpolated from the per-point filter calibration, then calls
-     * {@link FftAnalyzer#recomputeStats} so the fundamental level, harmonic table,
-     * THD, THD+N, SNR, and noise stats all reflect the corrected spectrum.
+     * The main-lobe geometry of every tone of {@link #toneFrequencies},
+     * measured on the frame's RAW bin magnitudes: a tone's energy fills the
+     * analysis window's whole main lobe, so a tone-only row's single value
+     * {@code H(f_tone)} is written across exactly these bins.
      *
-     * <p>The one-shot form: it derives the per-bin response and the statistics
-     * engine for this single call.  A caller that runs this on frame after frame
-     * hands both in through {@link #applyCompensationInPlace(FftResult,
-     * FreqRespCalibration, boolean, double[][], FftAnalyzer)} instead, so neither
-     * is rebuilt per frame.
-     */
-    public int applyCompensationInPlace(FftResult r, FreqRespCalibration cal,
-                                         boolean correctAllBins) {
-        return applyCompensationInPlace(r, cal, correctAllBins, null);
-    }
-
-    /**
-     * The frame-rate form of {@link #applyCompensationInPlace(FftResult,
-     * FreqRespCalibration, boolean)}, taking the two things that must not be
-     * rebuilt for every displayed frame:
+     * <p>All spans come from the frame as it arrives, in one pass, so no span
+     * is measured on bins an earlier tone or an earlier row has already
+     * rewritten.
      *
-     * <ul>
-     *   <li>{@code binCorr} - the per-bin response from
-     *       {@link #binCorrections}, or {@code null} to derive it here.  Used
-     *       only by the whole-spectrum divide; the per-tone path interpolates at
-     *       a handful of tone frequencies and needs none.</li>
-     *   <li>{@code stats} - the analyzer whose {@code recomputeStats} re-derives
-     *       every readout.  It keeps half-spectrum scratch buffers, so a fresh
-     *       one costs an 8.4 MB allocation per call at a 2^20-point FFT.</li>
-     * </ul>
+     * <p>The calibration's own frequency range is NOT applied here: each
+     * loaded row has its own range while this geometry is a property of the
+     * frame, shared by every row and compared frame to frame to decide whether
+     * the held response still fits.  The range filter therefore sits in
+     * {@link #cascadeInverse}, where the row is known.
+     *
+     * @return one {@code {peak, lo, hi}} per tone, in the slot order of
+     *         {@link #toneFrequencies}; all {@link #ABSENT_BIN} for a tone the
+     *         frame does not carry or whose peak falls outside
+     *         {@code 1 .. fftSize/2}
      */
-    public int applyCompensationInPlace(FftResult r, FreqRespCalibration cal,
-                                         boolean correctAllBins, double[][] binCorr) {
+    public int[][] toneLobeSpans(FftResult r, double[] tones) {
         int half = r.fftSize / 2;
         double binWidth = r.sampleRate / (double) r.fftSize;
-        double fLo = cal.freqs[0];
-        double fHi = cal.freqs[cal.freqs.length - 1];
+        IntToDoubleFunction mag = k -> Math.hypot(r.re[k], r.im[k]);
+        int[][] spans = new int[tones.length][3];
+        for (int t = 0; t < tones.length; t++) {
+            spans[t][SPAN_PEAK] = ABSENT_BIN;
+            spans[t][SPAN_LO]   = ABSENT_BIN;
+            spans[t][SPAN_HI]   = ABSENT_BIN;
+            double hz = tones[t];
+            if (!(hz > 0.0)) continue;
+            int peak = (int) Math.round(hz / binWidth);
+            if (peak < 1 || peak > half) continue;
+            double floor = LOBE.localFloor(mag, peak, half);
+            int[] edges  = LOBE.lobeBins(mag, peak, half, floor);
+            spans[t][SPAN_PEAK] = peak;
+            spans[t][SPAN_LO]   = edges[0];
+            spans[t][SPAN_HI]   = edges[1];
+        }
+        return spans;
+    }
 
-        double oldFundMag = Math.hypot(r.re[r.fundamentalBin], r.im[r.fundamentalBin]);
-        double linPerMag  = oldFundMag > 0.0 ? r.fundamentalLinear / oldFundMag : 0.0;
-
-        // Match the dot-level / THD computation: only correct the two
-        // FFT bins straddling the theoretical fundamental / harmonic
-        // fractional position (kFractional × N).  The old ±LEAKAGE_BINS
-        // (=4) expansion lifted 9 bins per harmonic by 1/H(f); at the
-        // notch frequencies in the calibration that's a huge multiplier
-        // applied to noise-only neighbours, producing wide spurious
-        // humps around each harmonic instead of a single sharp 2-bin
-        // peak that reflects the actual harmonic energy.
-        int corrected = 0;
-        if (correctAllBins) {
-            // "With noise": every in-range bin divided by H at its OWN
-            // frequency - the whole spectrum, noise included, is corrected.
-            // H at every bin is read from the precomputed response, whose
-            // zero |H|² marks the bins the range and magnitude guards skip.
-            double[][] h = binCorr != null ? binCorr
-                    : binCorrections(cal, r.fftSize, r.sampleRate);
-            double[] hReAt = h[H_RE], hImAt = h[H_IM], hMagSqAt = h[H_MAG_SQ];
+    /**
+     * The de-embedding response of every loaded calibration row, cascaded into
+     * ONE per-bin array and inverted, ready for
+     * {@link #applyInverseInPlace}.
+     *
+     * <p>The rows are filters in series, so their responses form a COMPLEX
+     * PRODUCT per bin - magnitudes multiply, phases add.  The product is
+     * commutative, which is why the two groups arrive as two lists: a
+     * with-noise row contributes {@code H(f_k)} at every bin of its swept
+     * range (the whole spectrum, noise included), a tone-only row contributes
+     * {@code H(f_tone)} across each tone's lobe span and nothing between the
+     * tones.  Within one tone-only row the first tone of the slot order owns a
+     * shared bin; a further row multiplies its own value into the same bins,
+     * which is what puts the rows in series.
+     *
+     * <p>Correcting a frame is then one complex multiply per bin whatever the
+     * number of loaded rows, so the reciprocal is formed here, once: a bin's
+     * squared magnitude is accumulated as the product of the rows' own
+     * {@code |H|^2} and the pair is inverted as {@code conj(G)/|G|^2}.  A bin
+     * no row reached, and one whose cascade cancelled to zero magnitude, keeps
+     * {@code (0, 0)} - which cannot arise from a finite response, so the pair
+     * is its own "leave this bin alone" mark.
+     *
+     * @return {@code {invRe, invIm}}, each indexed by bin {@code 0 .. fftSize/2}
+     */
+    public double[][] cascadeInverse(List<FreqRespCalibration> withNoiseRows,
+                                     List<FreqRespCalibration> toneOnlyRows,
+                                     double[] tones, int[][] toneSpans,
+                                     int fftSize, int sampleRate) {
+        int half = fftSize / 2;
+        double binWidth = sampleRate / (double) fftSize;
+        double[] gRe   = new double[half + 1];
+        double[] gIm   = new double[half + 1];
+        double[] magSq = new double[half + 1];
+        for (FreqRespCalibration cal : withNoiseRows) {
+            double fLo = cal.freqs[0];
+            double fHi = cal.freqs[cal.freqs.length - 1];
             for (int k = 1; k <= half; k++) {
-                double hMagSq = hMagSqAt[k];
-                if (hMagSq <= 0.0) continue;
-                double hRe = hReAt[k], hIm = hImAt[k];
-                double xRe = r.re[k], xIm = r.im[k];
-                double zRe = (xRe * hRe + xIm * hIm) / hMagSq;
-                double zIm = (xIm * hRe - xRe * hIm) / hMagSq;
-                r.re[k] = zRe;
-                r.im[k] = zIm;
-                double newAmpLin = Math.hypot(zRe, zIm) * linPerMag;
-                r.amplitudeDbFs[k] = newAmpLin > 1e-15 ? 20.0 * Math.log10(newAmpLin) : -300.0;
-                r.phaseDeg[k] = Math.toDegrees(Math.atan2(zIm, zRe));
-                corrected++;
+                double f = k * binWidth;
+                if (f < fLo || f > fHi) continue;
+                double[] h = interpolate(cal, f);
+                if (h[0] <= 0.0) continue;
+                multiplyIn(gRe, gIm, magSq, k, h[0], h[1]);
             }
-        } else {
-            // Per-TONE: a tone is a SINGLE frequency whose energy fills the
-            // window's whole main lobe.  Correct the WHOLE lobe (extent found
-            // from the data) by ONE cal value at the tone frequency, applied
-            // PROPORTIONALLY to the signal above the local noise floor - so the
-            // lobe lifts as a unit while its wings stay on the floor.  This
-            // replaces lifting only 1-2 bins (a narrow spike on the wider lobe)
-            // and the per-bin slope (the split + the lobe-tilt frequency shift).
+        }
+        for (FreqRespCalibration cal : toneOnlyRows) {
+            double fLo = cal.freqs[0];
+            double fHi = cal.freqs[cal.freqs.length - 1];
             boolean[] done = new boolean[half + 1];
-            double fundHz = (Double.isFinite(r.fundamentalHzRefined) && r.fundamentalHzRefined > 0.0)
-                    ? r.fundamentalHzRefined : r.fundamentalBin * binWidth;
-            corrected += correctToneLobe(r, cal, fundHz, half, binWidth, linPerMag, fLo, fHi, done);
-            for (int h = 0; h < r.harmonicCount; h++) {
-                if (r.harmonicBins[h] > 0) {
-                    corrected += correctToneLobe(r, cal, r.harmonicHz[h], half, binWidth, linPerMag, fLo, fHi, done);
-                }
-            }
-            // Second tone (dual-tone) is a fundamental, not a harmonic of F1.
-            if (!Double.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0) {
-                corrected += correctToneLobe(r, cal, r.fundamental2HzRefined, half, binWidth, linPerMag, fLo, fHi, done);
-                // Dual-tone intermod PRODUCTS are discrete tones too (like the
-                // harmonics), so correcting only their lobes leaves the noise
-                // between them un-lifted - the whole-spectrum divide stays the
-                // "with noise" mode's job.  The product-frequency set is derived
-                // exactly as gui.fft.ImdAnalyzer does (its dnL/dnH loop, orders
-                // k = 2..ImdResult.MAX_ORDER = 5); the CCIF/DIN formulas are
-                // replicated locally to avoid a dsp->gui dependency:
-                //   d2L = f2 − f1,                 d2H = f1 + f2
-                //   dnL = (n−1)·f1 − (n−2)·f2,     dnH = (n−1)·f2 − (n−2)·f1  (n ≥ 3)
-                // Each product goes through correctToneLobe, which skips
-                // non-positive, out-of-cal-range or Nyquist-exceeding tones
-                // (same guards ImdAnalyzer.readBinVrms applies).
-                double f1 = r.fundamentalHzRefined;
-                double f2 = r.fundamental2HzRefined;
-                for (int k = 2; k <= MAX_IMD_ORDER; k++) {
-                    double fL, fH;
-                    if (k == 2) {
-                        fL = f2 - f1;                        // difference
-                        fH = f2 + f1;                        // sum
-                    } else {
-                        fL = (k - 1) * f1 - (k - 2) * f2;
-                        fH = (k - 1) * f2 - (k - 2) * f1;
-                    }
-                    corrected += correctToneLobe(r, cal, fL, half, binWidth, linPerMag, fLo, fHi, done);
-                    corrected += correctToneLobe(r, cal, fH, half, binWidth, linPerMag, fLo, fHi, done);
+            for (int t = 0; t < tones.length; t++) {
+                double hz = tones[t];
+                int lo = toneSpans[t][SPAN_LO];
+                if (lo == ABSENT_BIN || !(hz > 0.0) || hz < fLo || hz > fHi) continue;
+                double[] h = interpolate(cal, hz);
+                if (h[0] <= 0.0) continue;
+                for (int k = lo; k <= toneSpans[t][SPAN_HI]; k++) {
+                    if (k < 1 || k > half || done[k]) continue;
+                    multiplyIn(gRe, gIm, magSq, k, h[0], h[1]);
+                    done[k] = true;
                 }
             }
         }
-        if (log.isInfoEnabled()) {
-            log.info("Filter compensation applied to {} bins (out of {}, range {}-{} Hz); "
-                            + "fundamental: {} dBFS, SNR: {} dB, THD: {}%",
-                    corrected, half,
-                    String.format(Locale.US, "%.3f", fLo),
-                    String.format(Locale.US, "%.3f", fHi),
-                    String.format(Locale.US, "%.2f", r.fundamentalDbFs),
-                    String.format(Locale.US, "%.2f", r.snrDb),
-                    String.format(Locale.US, "%.6f", r.thdPct));
+        for (int k = 1; k <= half; k++) {
+            double m = magSq[k];
+            if (!(m > 0.0)) {
+                gRe[k] = 0.0;
+                gIm[k] = 0.0;
+                continue;
+            }
+            double vRe =  gRe[k] / m;
+            double vIm = -gIm[k] / m;
+            gRe[k] = vRe;
+            gIm[k] = vIm;
+        }
+        return new double[][] { gRe, gIm };
+    }
+
+    /** Multiplies one row's response at one bin into the cascade.  The first
+     *  row to reach a bin writes its response unchanged, so a lone row leaves
+     *  no product rounding behind; the squared magnitude is carried as the
+     *  product of the rows' own values rather than re-derived from the
+     *  accumulated parts, which is what keeps a single row's reciprocal
+     *  identical to the one formed straight from its interpolated
+     *  magnitude. */
+    private void multiplyIn(double[] gRe, double[] gIm, double[] magSq,
+                            int k, double hMag, double phaseRad) {
+        double hRe = hMag * Math.cos(phaseRad);
+        double hIm = hMag * Math.sin(phaseRad);
+        if (magSq[k] > 0.0) {
+            double aRe = gRe[k];
+            double aIm = gIm[k];
+            gRe[k]   = aRe * hRe - aIm * hIm;
+            gIm[k]   = aRe * hIm + aIm * hRe;
+            magSq[k] = magSq[k] * (hMag * hMag);
+        } else {
+            gRe[k]   = hRe;
+            gIm[k]   = hIm;
+            magSq[k] = hMag * hMag;
+        }
+    }
+
+    /**
+     * Divides every bin the cascade reached by its response, in place, and
+     * returns how many bins were written.  Each such bin gets one complex
+     * multiply by the stored reciprocal and has its level and phase restated;
+     * every other bin keeps exactly the numbers the analyser wrote, since a
+     * recompute would move them by a rounding step.
+     *
+     * <p>{@code bins} is the marked-bin list from {@link #toneBins} when every
+     * loaded row corrects only the tones - the correction then covers a few
+     * lobes, and walking the list costs the lobes instead of the whole
+     * spectrum.  It is {@code null} once a with-noise row is active, since
+     * that row marks most of the spectrum.
+     *
+     * <p>The level scale is read off the fundamental BEFORE any bin is
+     * changed, so the whole spectrum is restated on one consistent scale.  The
+     * caller guarantees that {@code inv} was sampled on this frame's grid.
+     */
+    public int applyInverseInPlace(FftResult r, double[][] inv, int[] bins) {
+        double[] invRe = inv[INV_RE];
+        double[] invIm = inv[INV_IM];
+        double oldFundMag = Math.hypot(r.re[r.fundamentalBin], r.im[r.fundamentalBin]);
+        double linPerMag  = oldFundMag > 0.0 ? r.fundamentalLinear / oldFundMag : 0.0;
+        int corrected = 0;
+        if (bins != null) {
+            for (int bin : bins) {
+                if (correctBin(r, invRe, invIm, bin, linPerMag)) corrected++;
+            }
+        } else {
+            int half = r.fftSize / 2;
+            for (int k = 1; k <= half; k++) {
+                if (correctBin(r, invRe, invIm, k, linPerMag)) corrected++;
+            }
         }
         return corrected;
     }
 
-    /** Applies the cal to a tone's WHOLE main lobe with ONE value taken at the
-     *  tone's frequency, in the POWER domain so the lobe keeps its shape where
-     *  it stands above the noise yet tapers smoothly back onto the floor at its
-     *  wings:
-     *  <pre>  |X'| = √( (|X|² − floor²)·(1/|H|)² + floor² )  </pre>
-     *  The signal power above the floor is scaled by (1/|H|)² and the noise
-     *  floor power is kept, so every well-above-floor bin lifts by the same
-     *  1/|H| - the lobe shape is preserved (no per-bin split, no
-     *  frequency-shifting tilt, and no narrow spike from lifting the peak more
-     *  than the shoulders) - while near-floor bins stay on the floor (no noise
-     *  hump).  Phase is rotated by {@code −argH}.  Lobe extent is data-derived
-     *  ({@link #lobeEdge}). */
-    private int correctToneLobe(FftResult r, FreqRespCalibration cal, double toneHz,
-                                int half, double binWidth, double linPerMag,
-                                double fLo, double fHi, boolean[] done) {
-        if (!(toneHz > 0.0) || toneHz < fLo || toneHz > fHi) return 0;
-        int peak = (int) Math.round(toneHz / binWidth);
-        if (peak < 1 || peak > half) return 0;
-        double[] h = interpolate(cal, toneHz);
-        if (h[0] <= 0.0) return 0;
-        double invMag = 1.0 / h[0];                          // |1/H| at the tone freq
-        double cosC = Math.cos(h[1]), sinC = Math.sin(h[1]); // ·exp(−j·argH)
+    /** One bin: {@code Z = X * (1/G)}, then the level and phase the display and
+     *  the statistics read.  Returns false for an untouched bin, which the
+     *  {@code (0, 0)} reciprocal marks. */
+    private boolean correctBin(FftResult r, double[] invRe, double[] invIm,
+                               int k, double linPerMag) {
+        double vRe = invRe[k];
+        double vIm = invIm[k];
+        if (vRe == 0.0 && vIm == 0.0) return false;
+        double xRe = r.re[k];
+        double xIm = r.im[k];
+        double zRe = xRe * vRe - xIm * vIm;
+        double zIm = xRe * vIm + xIm * vRe;
+        r.re[k] = zRe;
+        r.im[k] = zIm;
+        double newAmpLin = Math.hypot(zRe, zIm) * linPerMag;
+        r.amplitudeDbFs[k] = newAmpLin > MIN_LINEAR_AMPLITUDE
+                ? AMPLITUDE_DB_FACTOR * Math.log10(newAmpLin) : FLOOR_DB;
+        r.phaseDeg[k] = Math.toDegrees(Math.atan2(zIm, zRe));
+        return true;
+    }
 
-        IntToDoubleFunction mag = k -> Math.hypot(r.re[k], r.im[k]);
-        double floor = LOBE.localFloor(mag, peak, half);
-        int[] edges  = LOBE.lobeBins(mag, peak, half, floor);
-        double peakMag = mag.applyAsDouble(peak);
+    /** The cascade's gain at one bin, {@code 20*log10|G|} - how many dB the
+     *  correction takes off that bin, so a level measured after the correction
+     *  plus this value is the level before it.  0 for a bin the cascade never
+     *  reached and for one outside the sampled grid. */
+    public double gainDbAt(double[][] inv, int bin) {
+        if (inv == null || bin < 1 || bin >= inv[INV_RE].length) return 0.0;
+        double vRe = inv[INV_RE][bin];
+        double vIm = inv[INV_IM][bin];
+        double vMagSq = vRe * vRe + vIm * vIm;
+        return vMagSq > 0.0 ? -POWER_DB_FACTOR * Math.log10(vMagSq) : 0.0;
+    }
 
+    /** The bins of every located tone lobe, ascending and without repeats -
+     *  the walk {@link #applyInverseInPlace} makes when no with-noise row is
+     *  loaded. */
+    public int[] toneBins(int[][] toneSpans, int half) {
+        boolean[] marked = new boolean[half + 1];
         int n = 0;
-        for (int k = edges[0]; k <= edges[1]; k++) {
-            if (k < 1 || k > half || done[k]) continue;
-            double xRe = r.re[k], xIm = r.im[k];
-            double m = Math.hypot(xRe, xIm);
-            double newMag = LOBE.stretch(m, floor, peakMag, invMag);
-            double scale  = m > 0.0 ? newMag / m : 0.0;
-            double zRe = (xRe * cosC + xIm * sinC) * scale;  // X·exp(−j·argH)·scale
-            double zIm = (xIm * cosC - xRe * sinC) * scale;
-            r.re[k] = zRe;
-            r.im[k] = zIm;
-            double newAmpLin = newMag * linPerMag;
-            r.amplitudeDbFs[k] = newAmpLin > 1e-15 ? 20.0 * Math.log10(newAmpLin) : -300.0;
-            r.phaseDeg[k] = Math.toDegrees(Math.atan2(zIm, zRe));
-            done[k] = true;
-            n++;
+        for (int[] span : toneSpans) {
+            if (span[SPAN_LO] == ABSENT_BIN) continue;
+            for (int k = span[SPAN_LO]; k <= span[SPAN_HI]; k++) {
+                if (k >= 1 && k <= half && !marked[k]) {
+                    marked[k] = true;
+                    n++;
+                }
+            }
         }
-        return n;
+        int[] bins = new int[n];
+        int i = 0;
+        for (int k = 1; k <= half; k++) {
+            if (marked[k]) bins[i++] = k;
+        }
+        return bins;
     }
 
     /**
@@ -890,7 +968,7 @@ public class FreqRespCalHelper {
      * response {@code H = magLin·e^{j·phaseRad}} - i.e. takes the {@code .frc}
      * out of one measured bin, de-embedding BOTH magnitude and phase
      * ({@code X/H = X·e^{−j·phaseRad}/magLin}).  Same divide
-     * {@link #applyCompensationInPlace} does per bin, exposed for the
+     * {@link #applyInverseInPlace} does per bin, exposed for the
      * DAC-predistortion correction which de-embeds the raw fundamental /
      * harmonic / intermod-product phasors one at a time.  A non-positive
      * {@code magLin} (no cal at this frequency) returns the phasor unchanged.
