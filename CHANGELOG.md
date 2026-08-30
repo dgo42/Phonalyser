@@ -15,12 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The JavaSound format probe logs a start and a finish line per device and
   direction,** with format count and elapsed time - a probe that never returns
   names its device by the start line without a twin.
-- **A randomized FFT overlap.** The overlap selector gains Random: every hop
-  from one analysis window to the next is drawn afresh from a high-overlap
-  range on a 16-step lattice, so the periodic structure a constant hop
-  imprints on the averaged noise floor averages out while the analysis rate
-  stays high. Saved spectra record the overlap mode and the frame spacing,
-  and old files load unchanged. Desktop and web alike.
+- **A varying FFT overlap.** The overlap selector gains Random: the hop from
+  one analysis window to the next steps through a 16-point lattice spanning
+  a high-overlap range in a fixed cycle - 16 spacings, each used once per
+  cycle, then again from the start - so the periodic structure a constant hop
+  imprints on the averaged noise floor averages out with every lattice value
+  weighted equally, while the analysis rate stays high. Saved spectra record
+  the overlap mode and the frame spacing, and old files load unchanged.
+  Desktop and web alike.
 - **The theory chapters explain measurement confidence and the bench delay.**
   The FFT chapter now states what a harmonic reading is worth at a given
   clearance above the averaged noise floor - 2-4 dB for a rough value, 9 dB

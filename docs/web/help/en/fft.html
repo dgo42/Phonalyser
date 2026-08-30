@@ -396,11 +396,12 @@
      common sweet spot.  See
      <a href="theory/fft.html">Theory ▸ FFT analyser</a>.</p>
   <p><b><code>Random</code></b> carries no fixed fraction.  The <b>hop</b> - the
-     number of fresh samples between one analysis window and the next - is drawn
-     afresh for every analysis step from the range <b>90.625 % to 93.75 %</b>
-     overlap, on a lattice of <b>16</b> equal steps, so the spacings actually
-     used take at most sixteen distinct values.  A constant hop imprints its own
-     periodic structure on a deeply averaged noise floor; drawing the hop leaves
+     number of fresh samples between one analysis window and the next - steps
+     through a lattice of <b>16</b> equal points spanning the range <b>90.625 %
+     to 93.75 %</b> overlap in a fixed cycle: the sixteen spacings are used one
+     after the other, then the cycle starts over, so every lattice value gets
+     the same share of a long average.  A constant hop imprints its own
+     periodic structure on a deeply averaged noise floor; cycling the hop leaves
      no such structure to average, while the analysis rate stays as high as the
      fixed settings at that end of the range.  A saved spectrum records the
      overlap mode and, where the mode has one, the frame spacing; a file written
@@ -647,8 +648,8 @@
      <code>DC200</code>, <code>DC250</code>, <code>DC300</code>.</p>
 
   <h3 id="fft-tile-overlap">Overlap tile</h3>
-  <p>Percentage (<code>87.5%</code>), or <code>Random</code> when the hop is
-     drawn per analysis step.</p>
+  <p>Percentage (<code>87.5%</code>), or <code>Random</code> when the hop cycles
+     through its lattice, one point per analysis step.</p>
 
   <h3 id="fft-tile-averages">Averages tile</h3>
   <p>Number with × suffix (<code>32×</code>) or <code>∞</code> in

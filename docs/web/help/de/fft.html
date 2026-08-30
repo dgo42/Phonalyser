@@ -429,14 +429,16 @@
      FFT-Analyser</a>.</p>
   <p><b><code>Random</code></b> trägt keinen festen Bruchteil.  Der <b>Sprung</b>
      - die Anzahl frischer Samples zwischen einem Analysefenster und dem
-     nächsten - wird für jeden Analyseschritt neu aus dem Bereich <b>90,625 %
-     bis 93,75 %</b> Überlappung gezogen, auf einem Raster aus <b>16</b> gleichen
-     Stufen, sodass die tatsächlich verwendeten Abstände höchstens sechzehn
-     verschiedene Werte annehmen.  Ein konstanter Sprung prägt einem tief
-     gemittelten Grundrauschen seine eigene periodische Struktur auf; wird der
-     Sprung gezogen, bleibt keine solche Struktur übrig, während die Analyserate
-     so hoch bleibt wie bei den festen Einstellungen an diesem Ende des
-     Bereichs.  Ein gespeichertes Spektrum hält den Überlappungsmodus fest und,
+     nächsten - durchläuft mit jedem Analyseschritt ein Raster aus <b>16</b>
+     gleichen Punkten über den Bereich <b>90,625 % bis 93,75 %</b> Überlappung
+     in einem festen Zyklus: die sechzehn Abstände werden nacheinander
+     verwendet, dann beginnt der Zyklus von vorn, sodass jeder Rasterwert
+     denselben Anteil an einer langen Mittelung erhält.  Ein konstanter Sprung
+     prägt einem tief gemittelten Grundrauschen seine eigene periodische
+     Struktur auf; wandert der Sprung durch das Raster, bleibt keine solche
+     Struktur übrig, während die Analyserate so hoch bleibt wie bei den festen
+     Einstellungen an diesem Ende des Bereichs.  Ein gespeichertes Spektrum
+     hält den Überlappungsmodus fest und,
      wo der Modus einen hat, den Frameabstand; eine Datei, die vor diesen
      Einträgen geschrieben wurde, lädt genau wie bisher.</p>
 
@@ -693,7 +695,7 @@
 
   <h3 id="fft-tile-overlap">Überlappung-Kachel</h3>
   <p>Prozentsatz (<code>87.5%</code>) oder <code>Random</code>, wenn der Sprung
-     pro Analyseschritt gezogen wird.</p>
+     sein Raster durchläuft, ein Punkt pro Analyseschritt.</p>
 
   <h3 id="fft-tile-averages">Mittelungen-Kachel</h3>
   <p>Zahl mit ×-Suffix (<code>32×</code>) oder <code>∞</code> im
