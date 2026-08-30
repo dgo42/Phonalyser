@@ -538,6 +538,13 @@ public final class FftAnalyzerWorker {
     private boolean lastAccumulate;
     private boolean lastForeverMode;
     private int     lastRingN = -1;
+    /** Mains-suppression mode the previous ANALYSED tick ran under, for spotting
+     *  a mid-run switch; {@code null} only until the first analysed tick of the
+     *  process.  Nothing clears it on stop / start, so a mode changed while
+     *  stopped is seen as a switch on the first tick of the next session - where
+     *  it is a no-op, {@link #start} having already invalidated the window and
+     *  cleared the cache.  Worker-thread only. */
+    private MainsSuppression lastMainsMode;
 
     /**
      * @param display SWT display used to marshal {@link Events#FFT_RESULT_AVAILABLE}
@@ -1716,10 +1723,9 @@ public final class FftAnalyzerWorker {
         // sampleRate makes previously cached raw FFTs stale.  Drop both
         // the cache AND the pool (pooled arrays would also be the wrong
         // size after an fftLength change).
-        // The IIR comb is a plot-time correction (doesn't touch samples), so it
-        // stays OUT of the fingerprint.  The SYNC_SUBTRACT / LMS modes filter the
-        // samples in place before the FFT, so THEIR mode IS in the fingerprint:
-        // toggling one invalidates the raw-frame cache and resets the accumulator.
+        // The mains-suppression mode is NOT one of them - a change of mode is a
+        // change of what the samples are, not of the spectrum's geometry, so it
+        // is handled on its own below and keeps the collected depth.
         MainsSuppression mainsMode = prefs.getFftMainsSuppression();
         boolean mainsSuppress   = mainsMode == MainsSuppression.IIR_COMB;          // plot-time comb
         boolean mainsTimeDomain = mainsMode == MainsSuppression.SYNC_SUBTRACT
@@ -1728,7 +1734,6 @@ public final class FftAnalyzerWorker {
         cfgFingerprint = 31 * cfgFingerprint + sampleRate;
         cfgFingerprint = 31 * cfgFingerprint + window.ordinal();
         cfgFingerprint = 31 * cfgFingerprint + (wantLeft ? 1 : 0);
-        cfgFingerprint = 31 * cfgFingerprint + (mainsTimeDomain ? mainsMode.ordinal() : 0);
         if (cfgFingerprint != frameCacheFingerprint) {
             discardCacheAndPool();
             // Same config change invalidates the cross-tick accumulator
@@ -1737,6 +1742,40 @@ public final class FftAnalyzerWorker {
             resetAccumulator();
             frameCacheFingerprint = cfgFingerprint;
         }
+        // A change of the pre-FFT filter TYPE restarts the window gather.  None
+        // and IIR comb share no pre-FFT filter (the comb is a plot-time
+        // correction), so a switch between those two changes nothing here; any
+        // transition into, out of or between Sync subtract and LMS does: the
+        // retained window is dropped and rebuilt from the reader's current
+        // position, and the frame cache and pool go with it - their entries sit
+        // at absolute positions the rebuilt window has already passed, so
+        // nothing can hit them again.
+        //
+        // What that buys is one window of coverage discarded, and no more.  It
+        // does NOT prevent a mixed frame: every tick copies the pristine retained
+        // window into analyzeBuf and filters the WHOLE copy in one
+        // processPreservingDc call, so no FFT frame can straddle the switch with
+        // or without the restart - and no filtered frame can reach the cache,
+        // which these modes null.  Nor does it train the new filter, which
+        // mainsTimeFilter rebuilds untrained on a mode change: the gather ticks
+        // return at the incomplete-window wait above, before this block runs, so
+        // the first analysed tick after the switch is the first one to train it.
+        //
+        // The accumulator is deliberately left untouched.  Pre-switch and
+        // post-switch frames go on averaging together, and the averages counter
+        // stays consistent with them because nothing resets.  The rebuild needs
+        // no phase re-anchor: it takes the first-window path, which derives
+        // winAbsStart from the reader's own position, and the de-rotation rides
+        // those absolute positions, so the discarded span costs coverage but
+        // never displaces a frame.  No operator-facing re-sync banner belongs
+        // here either - a setting was changed, nothing went wrong.
+        boolean lastTimeDomain = lastMainsMode == MainsSuppression.SYNC_SUBTRACT
+                              || lastMainsMode == MainsSuppression.LMS;
+        if (lastMainsMode != null && lastMainsMode != mainsMode && (mainsTimeDomain || lastTimeDomain)) {
+            discardCacheAndPool();
+            invalidateWindow();
+        }
+        lastMainsMode = mainsMode;
         // Memory-aware cap.  A single cached entry is 2 × fftSize × 8 B
         // (re[] + im[]), so at fftSize = 2 M each entry is 32 MB and at
         // 4 M it's 64 MB.  Capping the count alone (e.g. 2 × averages)
