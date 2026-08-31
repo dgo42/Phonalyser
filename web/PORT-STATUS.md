@@ -30,7 +30,7 @@ dsp/   fft.js window.js fll.js discontinuity.js                       (wired)
        mathutil.js lanczos.js savgol.js riaa.js tone-lobe-lift.js     (ported, wired)
        mains/frequency-tracker.js mains/comb-filter.js                (ported, wired)
        mains/sync-subtract-filter.js mains/lms-filter.js mains/factory.js  (ported, wired)
-fft/   imd-analyzer.js fft-result.js fft-analyzer.js fft-compensation.js
+fft/   imd-analyzer.js fft-result.js fft-analyzer.js
        fft-view-correction.js fft-tab-control.js                      (ported, wired)
 generator/ dds-kernel.js generator-pane.js                            (ported, wired)
 scope/ scope-trigger.js signal-measurements.js measurement-stats.js scope-tab-control.js scope-pane.js  (ported, wired)
@@ -472,10 +472,12 @@ then Apply + form switch (3). frcStore chain verified end-to-end:
   `absCapStart`-aligned `processPreservingDc`) and filter the window in place
   pre-FFT. (Java's `setFrameCache(null)` bypass has no web counterpart - the
   web port has no raw-frame FFT cache.)
-- `tone-lobe-lift.js` - wired into the `.frc` de-embed pipeline
-  (`fft/fft-compensation.js` per-tone lobe stretch, consumed by
-  `fft-view-correction.js` at render time), matching Java FreqRespCalHelper -
-  i.e. baked into the calibration correction, not a display-only toggle.
+- `tone-lobe-lift.js` - wired into the `.frc` de-embed pipeline (`dsp/frc.js`
+  `toneLobeSpans` finds each tone's main lobe, and the cascade writes one value
+  across it; consumed by `fft-view-correction.js` at render time), matching Java
+  FreqRespCalHelper - i.e. baked into the calibration correction, not a
+  display-only toggle. Its `stretch` remains the manual-fundamental display's,
+  which is not the `.frc` path.
 
 ---
 

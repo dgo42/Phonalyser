@@ -81,7 +81,7 @@ web/
 │   ├── dsp/              PURE math, DOM-free, worker-safe
 │   │   ├── fft.js  window.js  fll.js  discontinuity.js  analyzer.js     <- done
 │   │   └── (scope-trigger, signal-measurements, fft-analyzer, imd,
-│   │        farina-sweep, deconvolve, frc, fft-compensation, mains/ ...)
+│   │        farina-sweep, deconvolve, frc, mains/ ...)
 │   ├── audio/            device boundary
 │   │   ├── fft-worker.js                  worklets/{capture,generator}-processor.js  <- done
 │   │   ├── backend.js (AudioEngine)       <- done (to be split into devices/
