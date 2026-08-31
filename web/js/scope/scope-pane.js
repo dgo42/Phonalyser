@@ -12,8 +12,9 @@
  * scopeHost closures (requestRedraw / refreshTiles / refreshFields / syncTriggerStart /
  * setTriggerControlsEnabled / syncOffsetScrollbar / redrawScrollbars / syncMeasChannelButtons /
  * syncMeasButtons / recState / onFileBack / stopCaptureForFileLoad / onSignalFileLoaded) are now
- * the pane's public methods. render() is the scope branch of the MAIN rAF loop (which stays in
- * app.js for now and calls scopePane.render() each frame). Reads engine.scope.recording (the
+ * the pane's public methods. render(uiLoad) is the scope branch of the MAIN rAF loop (which
+ * lives in shell/main-tab.js and calls it each frame with the measured main-thread load, the one
+ * view paced against it). Reads engine.scope.recording (the
  * controller owns the recording flag) and reaches the SHELL state it does not own (the shared
  * `busy` re-entrancy guard, the readConfig snapshot, the latest live scope frame) through
  * injected closures. The scope V/div + t/div + hysteresis NumericStepFields are
@@ -46,6 +47,10 @@ const SCOPE_ZOOM_DECIMATION = 10;
 // of the display path. (Java also wipes the GPU phosphor afterglow here; the web
 // Canvas2D scope has no persistence - that part is skipped.)
 const GEN_CLEAR_DELAY_MS = 250;
+// Busy fraction of the main thread at or above which the scope skips its render frame (Java
+// ScopeController.SCOPE_LOAD_CEILING). The scope may fill the thread up to the ceiling and
+// yields the rest - to the FFT's per-result pipeline above all, which is never paced.
+const SCOPE_LOAD_CEILING = 0.75;
 
 export class ScopePane {
   /**
@@ -452,10 +457,20 @@ export class ScopePane {
   }
 
   // ----- the scope branch of the rAF render loop (Java MultifunctionalTab.renderRealtimeFrame
-  // scope half) - the MAIN rAF loop stays in app.js and calls this each frame. Gated on the
+  // scope half) - the MAIN rAF loop stays in main-tab.js and calls this each frame. Gated on the
   // scope's OWN record state (the FFT renders independently); when the record stops the view
   // freezes on its last frame, and an idle (never-captured) scope keeps the empty grid painted.
-  render() {
+  //
+  // `uiLoad` is the measured busy fraction of the main thread (0..1, from the rAF driver). At or
+  // above SCOPE_LOAD_CEILING this frame is SKIPPED - the scope is the only view paced against the
+  // load, and it renders only while the thread has at least a quarter of itself free. The rule
+  // holds ON AVERAGE over the load window, not inside one frame: a draw is a single synchronous
+  // call that cannot be interrupted once begun, so a frame started below the ceiling always runs
+  // to its end and may itself push the measured load above it; the next frame is the one that
+  // sits out. Skipping costs the scope frames only - its trace is redrawn from the capture ring,
+  // so a skipped frame loses nothing but a repaint (Java ScopeController.renderRealtimeFrame).
+  render(uiLoad = 0.0) {
+    if (uiLoad >= SCOPE_LOAD_CEILING) return;
     const engine = this.engine;
     const prefs = this.prefs;
     const scopeView = this.view;
