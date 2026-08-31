@@ -218,6 +218,15 @@ export class FftAccumulator {
   /** Pinned coherent κ (fractional fundamental bin) for the plot-time "before"
    *  dots; 0 before the first contribution. */
   get accumKFractional() { return this._accumKFractional; }
+  /** Whether the running average is the COMPLEX one (coherent) or the power one. */
+  get isCoherent() { return this._accumCoherent; }
+  /** The running sums, READ ONLY - what the cumulative overlay divides by the depth. Exposed so
+   *  the display preparation can be handed a COPY of them and run on another thread; the arrays
+   *  themselves stay this accumulator's, because the next tick's fold writes them while that
+   *  copy is being drawn. Null before the first contribution, and for the path not in use. */
+  get sumRe() { return this._accumRe; }
+  get sumIm() { return this._accumIm; }
+  get sumPow() { return this._accumPow; }
 
   /** Drops the running accumulator (Java resetAccumulator). Arrays are dropped,
    *  not cleared in place, so a stale in-flight tick can't resurrect them. */

@@ -32,6 +32,12 @@ export class ToneLobeLift {
     this._floorGap = Math.max(1, floorGap);
     this._floorSpan = Math.max(1, floorSpan);
     this._maxLobeBins = Math.max(1, maxLobeBins);
+    // Flank band + its working copy, held per instance: localFloor is asked once per TONE per
+    // displayed frame, and a fresh pair of 2*floorSpan-element buffers each time is garbage the
+    // main thread pays for while the spectrum is being corrected. Java allocates per call - the
+    // web keeps them because the collector runs on the same thread as the correction.
+    this._floorBuf = new Float64Array(2 * this._floorSpan);
+    this._floorWork = new Float64Array(2 * this._floorSpan);
   }
 
   /**
@@ -45,7 +51,7 @@ export class ToneLobeLift {
    * @returns {number}  noise-floor ceiling
    */
   localFloor(mag, peak, maxBin) {
-    const buf = new Float64Array(2 * this._floorSpan);
+    const buf = this._floorBuf;
     let m = 0;
     for (let k = peak - this._floorGap - this._floorSpan; k < peak - this._floorGap; k++) {
       if (k >= 1 && k <= maxBin) buf[m++] = mag(k);
@@ -54,7 +60,10 @@ export class ToneLobeLift {
       if (k >= 1 && k <= maxBin) buf[m++] = mag(k);
     }
     if (m === 0) return 0.0;
-    const c = buf.slice(0, m);
+    // The working copy is the held buffer's first m entries - subarray, not slice, so the sort
+    // runs on the same memory every call. The two sorts and the median/MAD picks are unchanged.
+    const c = this._floorWork.subarray(0, m);
+    c.set(buf.subarray(0, m));
     c.sort();
     const median = c[(m / 2) | 0];
     for (let i = 0; i < m; i++) c[i] = Math.abs(buf[i] - median);

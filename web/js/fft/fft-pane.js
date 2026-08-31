@@ -24,6 +24,7 @@ import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 import { t } from '../i18n/i18n.js';
 import { backendDisplayName } from '../audio/audio-backend-type.js';
+import { debug, formatMs, isDebug } from '../util/debug.js';
 
 // Resolution of the FlatScrollbars (Java FftPane.SCROLL_RANGE) - any large integer; slider
 // values map to fractional pan positions. dBFS magnitude floor (Java Constants.MAG_FLOOR_DBFS
@@ -295,7 +296,15 @@ export class FftPane {
     if (this._isFftRec()) {
       try {
         if (this.resultDirty && this.latestResult) {
+          // The DRAW of a displayed frame - the last stage of a tick that reaches the screen, and
+          // the only one on this thread once the analysis moved off it. One line per frame drawn,
+          // beside the worker's own per-tick line; nothing is measured while the switch is off.
+          const drawT0 = isDebug() ? performance.now() : 0;
           this.view.render(this.latestResult); this.updateTelemetry(this.latestResult);
+          if (drawT0 > 0) {
+            debug('[fft] draw ' + formatMs(performance.now() - drawT0)
+              + ' ms | averages ' + this.latestResult.framesDone);
+          }
           // NO range sync on an analysis tick - EVER. Java's FftPane runs syncFftPan (and its
           // clampRangesAndSave) ONLY on FFT_RANGE_CHANGED - published exclusively by user
           // actions: the wheel pan/zoom handlers, autoSetup, maximize and the mag-unit change

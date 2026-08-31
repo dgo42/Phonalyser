@@ -22,9 +22,10 @@ import {
 import { RectZoom } from './rect-zoom.js';
 import { uiFont } from './ui-font.js';
 // Shared per-tone lobe lift (data-derived floor + lobe extent + log-domain
-// stretch) - the SAME mechanism the .frc de-embed uses (fft-compensation.js
-// correctToneLobe). Reused here to lift the manual-fundamental lobe to the user
-// value at render time, with the manual/peak ratio as the scale instead of 1/H.
+// stretch). The .frc de-embed uses the same class for its lobe GEOMETRY (the
+// spans a tone-only row writes across, dsp/frc.js toneLobeSpans) but no longer
+// stretches; here the stretch lifts the manual-fundamental lobe to the user
+// value at render time, with the manual/peak ratio as the scale.
 import { ToneLobeLift } from '../dsp/tone-lobe-lift.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
@@ -37,7 +38,7 @@ const MAG_FLOOR_DBFS = -300;
 // and the FFT mag axis is built with AxisSpec.linearNice(...,10,5.0) for the dB units.
 const SUB_DECADE_TICK_TARGET = 12;
 // One shared lobe lift for the manual-fundamental render-time stretch (mirrors
-// fft-compensation.js's `const LOBE`, and Java FftView's static LOBE).
+// dsp/frc.js's `const LOBE`, and Java FftView's own LOBE field).
 const LOBE = new ToneLobeLift();
 const FREQ_NICE_TARGET = 10, MAG_DB_NICE_TARGET = 10, MAG_DB_MINOR_STEP = 5.0;
 
@@ -74,7 +75,8 @@ export class FftView {
     this.prefs = prefs;
     this.topDb = topDb; this.botDb = botDb;
     // Java FftView.correctionStore - the loaded .frc de-embed cascade (FftViewCorrection), injected
-    // so the IMD path can draw the blue "before-cal" dots at dbFs + sumCalDbAt (drawImdDots:1952-1962).
+    // so the IMD path can draw the blue "before-cal" dots at dbFs plus the cascade's gain at each
+    // product's bin (Java drawImdDots, which reads the same held response).
     // Null in tests that construct FftView without it (the blue IMD pass is then skipped).
     this.correction = correction;
     // Java FftView.isGeneratorActive() - true while the generator is producing a
@@ -211,8 +213,10 @@ export class FftView {
     }
     if (hi > lo) { p.fftFreqMinHz.set(lo); p.fftFreqMaxHz.set(hi); }
 
-    if (Number.isFinite(r.fundamentalDbFs) && Number.isFinite(r.avgNoiseFloorDbFs)) {
-      let peak = r.fundamentalDbFs;
+    if (Number.isFinite(this._displayedFundDbFs(r)) && Number.isFinite(r.avgNoiseFloorDbFs)) {
+      // The DISPLAYED fundamental - the manual override when set (Java autoSetup uses
+      // displayedFundDbFs): a 50 V declared fundamental must set the top above its own dot.
+      let peak = this._displayedFundDbFs(r);
       if (imd) {
         if (Number.isFinite(imd.f1DbFs)) peak = Math.max(peak, imd.f1DbFs);
         if (Number.isFinite(imd.f2DbFs)) peak = Math.max(peak, imd.f2DbFs);
@@ -236,7 +240,9 @@ export class FftView {
     const binSize = (r && r.binW > 0) ? r.binW : this._binSize;
     const lo = Math.max(binSize, 0);
     if (nyq > lo) { p.fftFreqMinHz.set(lo); p.fftFreqMaxHz.set(nyq); }
-    const fund = r ? r.fundamentalDbFs : NaN;
+    // The DISPLAYED fundamental - the manual override when set (Java maximize uses
+    // displayedFundDbFs): a declared reference above full scale must stay inside the range.
+    const fund = r ? this._displayedFundDbFs(r) : NaN;
     let top = Number.isFinite(fund) ? Math.max(20, fund + 20) : 20;
     let bot = (r && Number.isFinite(r.avgNoiseFloorDbFs)) ? r.avgNoiseFloorDbFs - 30 : -150;
     if (top !== bot) {
@@ -771,15 +777,16 @@ export class FftView {
         g.fillStyle = dotColor; g.beginPath(); g.arc(x(fHz), y(v), dotR, 0, 2 * Math.PI); g.fill();
       };
       // Blue "before-cal" dots FIRST, under the red post-cal dots, so the .frc correction gap is
-      // visible - one per IMD dot position (F1, F2, dnL[2..5], dnH[2..5]) at dbFs + sumCalDbAt,
-      // only when a calibration file is loaded (Java drawImdDots:1948-1962). Same freq/finite/mag
-      // gates as imdDot; channel pick off result.channelLeft (matching the de-embed, apply()).
+      // visible - one per IMD dot position (F1, F2, dnL[2..5], dnH[2..5]) at dbFs plus the
+      // cascade's gain at that product's own bin, only when a calibration file is loaded (Java
+      // drawImdDots). The lift comes from the SAME held response the spectrum was corrected with,
+      // so blue stands exactly where the measurement stood before the correction, and an
+      // uncorrected bin adds 0 dB. Same freq/finite/mag gates as imdDot.
       if (this.correction && this.correction.store.getEntries().length) {
-        const wantLeft = result.channelLeft;
         g.fillStyle = p ? colorHex(p.fftBeforeCalDotColor.get()) : '#000080';
         const preDot = (fHz, dbfs) => {
           if (!(fHz >= fMin && fHz <= fMax) || !Number.isFinite(dbfs)) return;
-          const preDbFs = dbfs + this.correction.sumCalDbAt(wantLeft, fHz);
+          const preDbFs = dbfs + this.correction.calGainDbAt(result, fHz);
           const v = cv(preDbFs), t = this._magToYFraction(v, magTop, magBot, magUnit);
           if (t < 0 || t > 1) return;
           g.beginPath(); g.arc(x(fHz), y(v), dotR, 0, 2 * Math.PI); g.fill();

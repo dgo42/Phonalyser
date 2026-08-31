@@ -28,6 +28,12 @@ import { PaneTitle } from '../widgets/pane-title.js';
 // of scope/fft may be collapsed at a time.
 const MIN_WIDTH_PX = 200, COLLAPSED_PANE_SIZE = 28;
 
+/** Time constant of the main-thread load meter, in ms - the window the busy fraction is folded
+ *  over (Java GuiMain's LOAD_WINDOW_NANOS). Long enough that one heavy frame does not swing it,
+ *  short enough that a sustained load reaches it within a few frames. */
+const LOAD_WINDOW_MS = 150.0;
+
+
 export class MainTab {
   /**
    * @param deps {scopePane, fftPane, prefs}
@@ -41,20 +47,65 @@ export class MainTab {
     this.scopePane = scopePane;
     this.fftPane = fftPane;
     this.prefs = prefs;
+    /** Main-thread milliseconds spent since the current frame interval began - this callback's
+     *  own body plus every duration a producer reports through {@link #reportBusy}. Divided by
+     *  the interval's wall time it IS the busy fraction the load meter folds. */
+    this._busyMs = 0.0;
+  }
+
+  /** Adds `ms` of main-thread work to the current frame interval - the seam a producer of
+   *  between-frame work uses to make itself visible to the load meter. The FFT controller
+   *  reports each fold through it (wired in app.js), because that work happens in a
+   *  worker-result handler, not in the animation frame, and the scope's pacing must see it.
+   *  Bound in the constructor's spirit: handed to the producer as a plain function, so nothing
+   *  downstream learns what a MainTab is. */
+  reportBusy(ms) {
+    if (ms > 0) this._busyMs += ms;
   }
 
   // ----- the MAIN rAF render loop -----
   // start() kicks the requestAnimationFrame driver; the per-frame body renders both panes.
   start() {
+    // MAIN-THREAD LOAD, as a TRUE BUSY FRACTION: the milliseconds this thread actually spent
+    // executing, divided by the wall time they were spent in. That is what Java's meter measures
+    // (everything between waking and entering the next sleep is busy, GuiMain's meter around
+    // display.sleep()), and it is the only form that carries the work done BETWEEN animation
+    // frames: the FFT's per-result pipeline - the .frc correction, the statistics recompute, the
+    // result copy - runs in worker-result handlers in that gap, and any meter that reads the gap
+    // as idle reports a saturated thread as free.
+    //
+    // Two contributions, summed per frame interval: this callback's own body, and every fold the
+    // FFT controller reports through the reporter handed to it in app.js (config given INTO the
+    // controller, never a reach back up into the view).
+    //
+    // The SCOPE alone is paced against it (ScopePane.render skips at the ceiling); the FFT is
+    // never paced - it renders one freshly averaged result at a time and would lose data, not
+    // frames. One meter, one consumer.
+    let uiLoad = 0.0;
+    let lastFrameStart = 0.0;
     const renderLoop = () => {
+      const frameStart = performance.now();
+      if (lastFrameStart > 0.0) {
+        const delta = frameStart - lastFrameStart;
+        if (delta > 0.0) {
+          const sample = Math.min(1.0, Math.max(0.0, this._busyMs / delta));
+          const weight = 1.0 - Math.exp(-delta / LOAD_WINDOW_MS);
+          uiLoad += weight * (sample - uiLoad);
+        }
+      }
+      this._busyMs = 0.0;
+      lastFrameStart = frameStart;
       // Gate each view on ITS OWN record state (Java MultifunctionalTab.renderRealtimeFrame
       // renders the scope while oscPane is capturing and the FFT while fftPane records,
       // independently). When a record stops, that view freezes on its last frame.
       // The scope branch (live trace + measurement + scrollbars, or the idle grid) is
       // scopePane.render() (Java ScopePane) and the FFT branch (dirty-checked spectrum + readout)
       // is fftPane.render() (Java FftPane); the MAIN rAF loop lives here and calls them.
-      if (this.scopePane) this.scopePane.render();
+      if (this.scopePane) this.scopePane.render(uiLoad);
       if (this.fftPane) this.fftPane.render();
+      // This callback's own body counts too - it is main-thread work like any other, and at a
+      // large FFT the two pane renders are the larger part of it.
+      this._busyMs += performance.now() - frameStart;
       requestAnimationFrame(renderLoop);
     };
     requestAnimationFrame(renderLoop);

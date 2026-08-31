@@ -138,6 +138,15 @@ export const Events = Object.freeze({
    *  (string) the view shows as a blinking warning. */
   FFT_CAPTURE_RESYNC: 'fft.capture.resync',
 
+  /** Notification - the FFT statistics restart from zero: the accumulator, the analyses counter
+   *  and the analysis window are re-anchored (the Reset-statistics button, a channel switch, a
+   *  window / averaging / alignment change, a re-calibration, a generated-signal change, a fresh
+   *  Record session). No payload. Subscriber: the render-time correction, which drops the held
+   *  .frc cascade - the channel it was sampled for and the tone positions it was keyed on both
+   *  move with a restart. The Java side needs no such event: there the reset IS a view method,
+   *  which drops the array itself (FftView.resetStatistics). */
+  FFT_STATISTICS_RESET: 'fft.statistics.reset',
+
   /** Notification - the backends a connected Phonalyser server offers changed: a session opened
    *  or ended, or the bench sent ev.devices.changed. The Preferences backend combo rebuilds from
    *  it. Both baselines carry this event under this name and value; the PAYLOAD differs. Here it
@@ -215,9 +224,11 @@ export const Events = Object.freeze({
    *  because the visible band itself does not change. */
   FREQRESP_COMPARE_PARAMS_CHANGED: 'freqResp.compare.params.changed',
 
-  /** A .frc calibration file was just (over)written to disk. Payload: the saved path (string). The
-   *  FFT and Frequency-Response calibration tabs each reload any loaded row referencing the same
-   *  file, so a freshly-saved calibration takes effect immediately. */
+  /** A .frc calibration file was just (over)written. Payload: { name, text } - the saved file's
+   *  name and its COMPLETE .frc text. The text travels in the event because the browser sandbox
+   *  cannot re-read a file by name: a subscriber holding a loaded row that references the same
+   *  name re-parses the carried text in place of its stale copy, so a freshly-saved calibration
+   *  takes effect immediately in the FFT and Frequency-Response calibration tabs alike. */
   CALIBRATION_FILE_SAVED: 'calibration.file.saved',
 
   /** Notification - the live audio device could not be USED: a device-open rejection, or a lane

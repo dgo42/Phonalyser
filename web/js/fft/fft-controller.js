@@ -11,9 +11,7 @@
  * per-frame COPY before emit (these move to the view layer, fft-view-correction.js, in a later step).
  * Reads + steers the generator's snapped/FLL state through delegating accessors (it does not own it).
  */
-import { FftAnalyzer } from './fft-analyzer.js';
 import { FftResult } from './fft-result.js';
-import { FftAccumulator } from './fft-accumulator.js';
 import { minHopSamples, maxHopSamples, OVERLAP_FRACTION, RAND_HOP_STEPS } from './fft-overlap.js';
 import { isDualTone } from '../generator/dds-kernel.js';
 import { OVERRUN } from '../audio/signal-buffer-reader.js';
@@ -23,7 +21,7 @@ import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
 import { FrequencyFll } from '../dsp/fll.js';
 import { refinePeak, TONE_SEARCH_BINS } from './imd-analyzer.js';
-import { debug } from '../util/debug.js';
+import { debug, isDebug } from '../util/debug.js';
 
 /** Output-pipeline drain to skip after a generator/form/frequency change, in seconds
  *  (Java OUTPUT_DRAIN_SKIP_SEC). The DAC's hardware buffer (~480 ms on the render path)
@@ -74,6 +72,26 @@ const MAINS_TRACK_TICK_INTERVAL = 5;
 const DISPLAY_MIN_MS = 40;    // ≤25 Hz refresh when keeping up
 const DISPLAY_MAX_MS = 500;   // ≥2 Hz even while behind
 
+/** How long a display frame may be outstanding before the preparation is presumed dead. The
+ *  display worker answers this thread directly, so this timer is the only thing between a worker
+ *  that stopped answering and a view that never updates again: on expiry the one-job flag is
+ *  released and the preparation moves back onto the analysis thread for the rest of the session.
+ *  Generous against the work it covers - a rebuild of a 1M-point display is tens of ms - because
+ *  it is a death test, not a pacing one. */
+const FINALIZE_WATCHDOG_MS = 5000;
+/** Display jobs that may be outstanding at once. The port preserves send order, so the cap only
+ *  bounds the in-flight payloads; two, because the analysis answer that resumes the feed races
+ *  the ~10 ms display frame on a separate channel and always wins - a cap of one then declined
+ *  every second tick over that race and halved the trace rate against the tick rate. */
+const FINALIZE_JOBS_MAX = 2;
+/** Consecutive slow-floor displays (500 ms apart each) before the feed gives up draining and
+ *  re-anchors to live. The hop-bias drain repays at most a fraction of a hop per tick - right
+ *  for the sub-second debts of a cold start or a scheduling hiccup - but a multi-second debt (a
+ *  backgrounded tab, a stretch of wedged-serial transforms) would hold the display at the floor
+ *  for minutes. Six floor shows is ~3 s of demonstrated stuck-behind, measured in wall clock
+ *  where a batch catch-up (which legitimately holds a deep backlog) never treads. */
+const FLOOR_SHOWS_REANCHOR = 6;
+
 export class FftController {
   /**
    * @param capture the SharedCapture instance.
@@ -93,6 +111,9 @@ export class FftController {
     // as it does on the desktop - FftAnalyzerWorker:1697 reads the pref, not a copy).
     this._prefs = prefs || null;
     this._fftOn = false;
+    /** Load-meter reporter, or null while nothing measures (the tests, the offscreen shell).
+     *  Set by the shell through {@link #setBusyReporter}. */
+    this._reportBusy = null;
     // Whether the analyser was recording when stopCaptureForPrefs() recorded it, so
     // startCaptureForPrefs() restarts exactly that (Java FftPane.recordWasRunningForPrefs).
     this._recordWasRunningForPrefs = false;
@@ -111,32 +132,46 @@ export class FftController {
     // The random mode's position on its hop lattice (Java hopStep): advanced by every
     // hop, wrapping after RAND_HOP_STEPS; restarts at 0 with every fresh first window.
     this._hopStep = 0;
-    // Main-thread analyzer: ONLY for recomputeStats (the render-time .frc de-embed re-derive).
-    // All analysis - including the threads>1 parallel pool - runs inside fft-worker.js, which
-    // coordinates its own nested fft-pool-worker.js siblings (Java parity: FftAnalyzerWorker
-    // .parallelChunks splits chunks ON the background analyzer thread, never the UI thread).
-    this._coordAnalyzer = new FftAnalyzer();
-    // Cross-tick running accumulator (Java FftAnalyzerWorker accumulateIntoForeverBuffer):
-    // the worker FFTs only ~1-2 fresh frames per tick; this DEEPENS the average across
-    // ticks (√N SNR boost), and the displayed spectrum + stats are finalized OFF it.
-    this._accum = new FftAccumulator();
+    // The backlog drain's state (see _nextHop): whether the upper-half bias is engaged, and its
+    // own position on the lattice's upper half - separate from _hopStep, so drain draws never
+    // consume the main cycle's equal per-value shares.
+    this._hopDraining = false;
+    this._drainStep = 0;
+    // ALL analysis - the threads>1 parallel pool, the cross-tick accumulator (Java
+    // FftAnalyzerWorker accumulateIntoForeverBuffer: the worker FFTs only ~1-2 fresh frames per
+    // tick and this DEEPENS the average across ticks for the sqrt(N) SNR gain) and the display
+    // rebuild finalized off it - runs inside fft-worker.js, which coordinates its own nested
+    // fft-pool-worker.js siblings. Java parity: FftAnalyzerWorker.parallelChunks splits chunks ON
+    // the background analyzer thread, never the UI thread; the desktop's view then finalizes on
+    // its own thread, where the web's view IS the thread the analysis competes with.
     // Epoch bumped on every accumulator reset; in-flight worker results stamped with an
     // older epoch are dropped so a window straddling the reset can't poison the average.
     this._accumEpoch = 0;
-    // Step 5b dual-fold parity harness (default OFF -> the fold runs only here on main, zero
-    // overhead). Flip via localStorage 'foldInWorker'='1' + reload: the worker then runs a
-    // SHADOW copy of the cross-tick fold and this controller logs main-vs-worker spectrum
-    // parity. Steady-state clean runs are bit-identical; a mid-run reset/glitch desyncs the
-    // two depths (an async worker can't drop the same straddling window) - reported, not failed.
-    this._foldInWorker = (() => {
-      try { return !!(globalThis.localStorage && localStorage.getItem('foldInWorker') === '1'); }
-      catch (_) { return false; }
-    })();
-    this._parityDesynced = false;
-    // One-shots -> the worker's shadow accumulator, so it resets / re-anchors at the SAME ticks
-    // this controller's own accumulator does (set at every _accum.reset() / _accum.onResync()).
+    // One-shots -> the worker's accumulator, so it resets / re-anchors at the SAME ticks the
+    // recoveries here decide on. Every recovery stays on this side: the capture cursor, the
+    // epoch and the drain skip exist only here.
     this._workerResetPending = false;
     this._workerResyncPending = false;
+    // THE PIPELINE'S JOBS IN FLIGHT, at most two. The display preparation runs beside the next
+    // analysis; the port delivers its answers in send order, so order needs no single-job rule -
+    // the cap only bounds what is outstanding to two payloads. Two, not one, because the analysis
+    // answer and the display frame race on separate channels and the answer always wins: it
+    // resumes the feed while the ~10 ms frame is still in the port, and a depth of one then
+    // declined every second tick for a race, halving the trace rate against the tick rate. A tick
+    // declined at the cap is simply folded and not displayed, which is what a declined tick
+    // already is. The count lives here because this side owns the display gate and is the one
+    // participant with a timer that always fires.
+    this._finalizeJobs = 0;
+    this._finalizeTimer = null;
+    // Latched by the watchdog: from then on the analyzer prepares the display itself.
+    this._finalizeInPlace = false;
+    // The port the display worker answers on, handed over by the analyzer on first use.
+    this._displayPort = null;
+    // The active .frc rows the de-embed cascades, as the calibration store holds them
+    // ({calibration:{left,right}, withNoise}). Kept HERE because the analysed channel is kept
+    // here: the rows go to the analyzer resolved to that channel, and a channel switch or a
+    // fresh analyzer re-sends them (Java's FftController owns the store for the same reason).
+    this._calEntries = [];
     // Previous tick's averaging mode, for the mode-transition reset (Java lastAccumulate /
     // lastForeverMode / lastRingN): flip, ring↔∞ switch, or a SMALLER ring drops the depth.
     this._lastAccumulate = false;
@@ -193,10 +228,11 @@ export class FftController {
     this.onResult = null;          // (result) => void - RAW per-window result; the view applies .frc/mains/IMD
     this.onFftAutoStopped = null;  // () => void - stop-after-N tripped
     // Last DISPLAY-rebuild timestamp (Java FftAnalyzerWorker.lastShowNanos, in ms here):
-    // the per-tick display throttle gates overlayOnto + recomputeStats + FLL + emit against
-    // it so the O(N) finalize runs ≤25 Hz (DISPLAY_MIN_MS) when caught up and ≥2 Hz
-    // (DISPLAY_MAX_MS) when behind - keeping the heavy work off the rAF render path.
+    // _showThisTick gates the display rebuild against it at dispatch, so a rebuilt frame is
+    // produced at most every DISPLAY_MIN_MS when caught up and at least every DISPLAY_MAX_MS
+    // when behind - bounding both the worker's finalize and the emit + draw it triggers here.
     this._lastShowMs = 0;
+    this._floorShows = 0;   // consecutive slow-floor displays - see FLOOR_SHOWS_REANCHOR
 
     // Generated-signal change (Java FftAnalyzerWorker invalidateOnGenChange /
     // resetStatisticsAfterSignalChange): on a USER_INPUT change arm the output-drain
@@ -249,7 +285,6 @@ export class FftController {
    *  accumulator like an overrun so the discarded span can't leak into the average. */
   _armOutputDrainSkip() {
     this._restartWindow();
-    this._accum.reset();
     this._accumEpoch++;
     this._workerResetPending = true;
     this._drainSkipRemaining = Math.ceil(OUTPUT_DRAIN_SKIP_SEC * (this.config.inRate || 0));
@@ -268,6 +303,7 @@ export class FftController {
     if (reader) { reader.seekToLatest(); this._absNextSample = reader.getReadPos(); }
     this.bufFilled = 0; this.bufW = 0; this._refill = this.maxHop;
     this._winAbsStart = 0; this._dispatchedOnce = false;
+    this._feedT0 = 0;      // no gathering under way to time (diagnostics only)
   }
 
   // ---- Generator state read + FLL-steered through delegating accessors (this._gen) ----
@@ -299,17 +335,20 @@ export class FftController {
    *  Java reads {@code avail / want} off the worker's consuming cursor because the
    *  worker pulls exactly `needed` (first) or `hop` (subsequent) per tick and SLEEPS
    *  between, so the cursor's unread backlog genuinely sweeps 0->want. The web consumer
-   *  drains the WHOLE cursor backlog into `buf` every capture batch (feedFft -> _accumulate),
-   *  so `reader.available()` is ~0 right after each batch and never sweeps - the live fill
-   *  lives in the web consumer's own buffer state instead. So mirror Java's `avail / want`
-   *  faithfully against THAT state: bufFilled / bufLen before the first dispatch
-   *  (Java winValid==false => avail / winNeeded), then (hop − _refill) / hop per hop after
-   *  (Java winValid==true => avail / hop). _dispatchedOnce is the web analog of winValid;
-   *  _refill is the samples still owed before the next dispatch. Overrun stays a negative
-   *  sentinel, distinct from 0 (no fresh samples), exactly as Java. */
+   *  instead holds a STANDING backlog of about one hop (it is worker-paced, and the drain
+   *  keeps that residue near the smallest hop), so the next window is nearly always ready
+   *  and counting the whole cursor would pin the bar at full. The sweep Java's bar shows
+   *  is progress of the CAPTURE toward the next tick's due time, and the web quantity
+   *  with that meaning is what has ARRIVED since this hop was drawn: fresh samples past
+   *  the dispatch-time cursor mark, plus what the feed has already read toward the hop,
+   *  against the drawn hop. Before the first dispatch the first window needs a full
+   *  bufLen (Java winValid==false => avail / winNeeded); _dispatchedOnce is the web
+   *  analog of winValid. Overrun stays a negative sentinel, distinct from 0 (no fresh
+   *  samples), exactly as Java. */
   nextFrameProgress() {
     if (!this._fftOn || !this._fftReader || this.bufLen == null) return 0;
-    if (this._fftReader.available() === OVERRUN) return -1.0;   // overrun -> negative, distinct from "no fresh samples"
+    const avail = this._fftReader.available();
+    if (avail === OVERRUN) return -1.0;   // overrun -> negative, distinct from "no fresh samples"
     let have, want;
     if (this._dispatchedOnce) {              // winValid: each tick needs one fresh hop
       // The hop actually being gathered - the DRAWN pending hop, not a
@@ -317,7 +356,7 @@ export class FftController {
       // every tick, and even for a fixed mode the preference can change ahead of
       // the next tick).
       want = Math.max(1, this.pendingHop);
-      have = want - this._refill;            // samples buffered toward the next hop dispatch
+      have = (want - this._refill) + Math.max(0, avail - this._availAtDispatch);
     } else {                                 // building the first window: needs a full bufLen
       want = this.bufLen;
       have = this.bufFilled;
@@ -341,36 +380,24 @@ export class FftController {
     return null;
   }
 
-  /** Pushes a live fork-admission-threshold pref change into the running
-   *  accumulator: a family line joins the pooled tracking estimate when its fresh
-   *  level is within this many dB below the fundamental's (Java reads
-   *  Preferences#getFftStrongToneRelDb live inside forkPooledOffset, so the web
-   *  pushes it here on the pref-change listener). Takes effect on the next tick. */
-  setStrongToneRelDb(db) { if (this._accum) this._accum.setStrongToneRelDb(db); }
+  /** The active .frc calibration rows, from the store's single mutation site (the calibration
+   *  rows of the FFT settings). The de-embed cascade runs in the analyzer, so the rows are handed
+   *  over resolved to the channel being analysed, and the held cascade is dropped with them. */
+  setCalibrationEntries(entries) {
+    this._calEntries = entries ? entries.slice() : [];
+    this._sendCalRows();
+  }
 
-  /** Step 5b parity harness (FOLD_IN_WORKER): assert the worker's SHADOW cross-tick fold
-   *  produced the same cumulative spectrum this controller's own fold did. Compared only when
-   *  the two depths agree - an async worker can't drop the exact window a mid-run reset drops,
-   *  so a reset/glitch transiently offsets the depths (reported once, then re-syncs on the next
-   *  clean record). A steady-state |Δ| above 1e-9 dB is a real fold-port bug. */
-  _checkFoldParity(r) {
-    const mainFrames = this._accum.accumFrames;
-    if (r.wAccumFrames !== mainFrames) {
-      if (!this._parityDesynced) {
-        this._parityDesynced = true;
-        console.warn(`[FOLD_IN_WORKER] fold depths desynced (main ${mainFrames} vs worker ${r.wAccumFrames}) - expected after a reset/glitch; restart the FFT to re-test parity`);
-      }
-      return;
-    }
-    if (this._parityDesynced) { this._parityDesynced = false; console.info('[FOLD_IN_WORKER] fold depths re-synced'); }
-    const a = r.amplitudeDbFs, w = r.wAmp;
-    let maxAbs = 0, at = -1;
-    for (let k = 0; k < a.length; k++) {
-      const dd = Math.abs(a[k] - w[k]);
-      if (dd > maxAbs) { maxAbs = dd; at = k; }
-    }
-    if (maxAbs > 1e-9) console.warn(`[FOLD_IN_WORKER] spectrum parity FAIL: max |Δ|=${maxAbs.toExponential(3)} dB at bin ${at} (depth ${mainFrames})`);
-    else if ((this._analysesTicks & 127) === 0) console.info(`[FOLD_IN_WORKER] parity OK: max |Δ|=${maxAbs.toExponential(3)} dB (depth ${mainFrames})`);
+  /** Hands the active rows to the analyzer for the channel it reads. Re-sent whenever that
+   *  channel changes and whenever a fresh analyzer is built, which starts holding nothing. */
+  _sendCalRows() {
+    if (!this.worker) return;
+    const wantLeft = this._wantLeft;
+    this.worker.postMessage({
+      calRows: this._calEntries.map((e) => ({
+        cal: wantLeft ? e.calibration.left : e.calibration.right, withNoise: !!e.withNoise,
+      })),
+    });
   }
 
   /** FFT averages accumulated since the last reset (predistortion host) - the
@@ -408,7 +435,18 @@ export class FftController {
     // RESUME the feed after a prior stop-after-N auto-stop, else the next round starves.
     this._fftPausedByStopN = false;
     this._restartWindow();
-    if (this._accum) { this._accum.reset(); this._accumEpoch++; this._workerResetPending = true; }
+    this._accumEpoch++;
+    this._workerResetPending = true;
+    // A frame being prepared belongs to the average that just ended: its carried epoch will no
+    // longer match, so it is dropped when it lands - and the flag is released now so the next
+    // tick can be displayed at once rather than waiting out a job whose answer is already void.
+    this._clearFinalizeInFlight();
+    // Every restart-from-zero funnels through here, so this is the one place that announces it.
+    // The render-time correction listens and drops its held .frc cascade: the analysed channel
+    // and the tone positions it was keyed on both move with a restart. The bus is the seam - the
+    // controller must not know the view (Java reaches the same state from the view side, where
+    // resetStatistics itself drops the array).
+    MessageBus.instance().publish(Events.FFT_STATISTICS_RESET);
   }
 
   /** Selects which ADC channel the FFT ANALYZES (Java FftView button ->
@@ -429,6 +467,7 @@ export class FftController {
     if (this.config.dbvOffsetDbRight != null) {
       this.config.dbvOffsetDb = (ch === 'R') ? this.config.dbvOffsetDbRight : this.config.dbvOffsetDbLeft;
     }
+    this._sendCalRows();                 // the other channel's curve of every loaded row
     this.resetAnalyses();                // fresh average from 0 (accumulator + counts + epoch bump)
   }
 
@@ -452,7 +491,10 @@ export class FftController {
     } else {
       this._fftOn = false;
       this._fftReader = null;
-      this._teardownFftWorkers();
+      // The analyzer is NOT torn down here: it holds the raw cross-tick average, and that
+      // average survives a stop - a calibration change made while stopped is answered from it
+      // (reemitDisplay). It is replaced when the next session sets up, which is also where a
+      // changed FFT length or capture rate would invalidate what it holds.
       await this._capture.release();
     }
     return this._fftOn;
@@ -496,7 +538,7 @@ export class FftController {
 
     // Per-tick window = N + (perTickFrames−1)·maxHop samples - sized to ~1-2 frames
     // INDEPENDENT of the averaging depth (Java: needed = N + (frames−1)·hop, with
-    // frames = coherent ? 2 : 1). The cross-tick running accumulator (this._accum)
+    // frames = coherent ? 2 : 1). The analyzer's cross-tick running accumulator
     // supplies the depth, so the FIRST spectrum lands in <0.2 s at any averaging
     // instead of after bufLen/inRate seconds (the dead-FFT bug this fixes).
     // Size by AVERAGING state, not the coherent flag (Java: averages =
@@ -508,14 +550,16 @@ export class FftController {
     this.bufLen = this.N + (perTickFrames - 1) * this.maxHop;
     this.buf = new Float64Array(this.bufLen);
     this.bufW = 0; this.bufFilled = 0;
-    // Fresh Record session -> fresh accumulator (Java start() resetStatistics).
-    // Seed the fork's line-admission threshold live from the pref (Java reads
-    // Preferences#getFftStrongToneRelDb inside forkPooledOffset); a running change
-    // re-pushes via setStrongToneRelDb (app.js pref-change listener).
-    this._accum.setStrongToneRelDb(this.config.fftStrongToneRelDb ?? 100.0);
-    this._accum.reset();
+    // Fresh Record session -> fresh accumulator (Java start() resetStatistics). The fork's
+    // line-admission threshold rides every dispatch from the live config, the way Java reads
+    // Preferences#getFftStrongToneRelDb inside forkPooledOffset.
     this._accumEpoch++;
     this._workerResetPending = true;
+    // A fresh session re-anchors the window and empties the accumulator without going through
+    // resetAnalyses, so it announces the restart itself - an FFT-length change reaches the
+    // display this way (stop, readConfig, start) and the held .frc cascade belongs to the old
+    // bin grid.
+    MessageBus.instance().publish(Events.FFT_STATISTICS_RESET);
     this._lastAccumulate = false;
     this._lastForeverMode = false;
     this._lastRingN = -1;
@@ -548,8 +592,10 @@ export class FftController {
 
     this.warmup = Math.round(c.inRate * Math.max(0, c.warmupMs) / 1000);
     this._lastShowMs = 0;   // fresh session -> the first result displays immediately (Java lastShowNanos 0)
+    this._floorShows = 0;   // a fresh session owes no floor history
     this._fftFps = 0; this._fftCount = 0; this._fftWinT0 = 0; this._workerMs = 0;
     this._busy = false; this._dispatchId = 0; this.dropped = 0; this._refill = this.maxHop;
+    this._availAtDispatch = 0;   // fill readout's zero mark - see nextFrameProgress
 
     // Worker-pool sizing - see _poolSizeFor. The pool itself lives INSIDE
     // fft-worker.js (nested workers) - the main thread only posts one message per tick,
@@ -559,10 +605,14 @@ export class FftController {
     // Seed the align-transition latch so _syncLiveConfig only resets the FLL on a real
     // OFF->ON flip (the fresh-session reset already runs in setRecording).
     this._lastFllOn = !!c.fllOn;
+    // The previous session's analyzer outlived its stop so the stopped display could be rebuilt
+    // from the average it held; a fresh session starts from an empty one, so it goes now.
+    this._teardownFftWorkers();
     const workerUrl = new URL('./fft-worker.js', import.meta.url);
     this.worker = new Worker(workerUrl, { type: 'module' });
     this.worker.onmessage = (e) => this._onWorkerResult(e.data);
     this.worker.onerror = (ev) => this._onWorkerError(ev);
+    this._sendCalRows();   // a fresh analyzer holds no rows
   }
 
   /** A TOP-LEVEL worker failure - a module that will not load, an uncaught throw on
@@ -578,18 +628,14 @@ export class FftController {
    *  that catch. The retry is self-limiting: a further dispatch needs a whole fresh
    *  hop, so a permanently broken worker errors at the capture rate, not in a spin.
    *
-   *  The banner is the one part with no desktop counterpart, and it covers a failure
-   *  mode the desktop cannot have. Java's catch guards ONE tick on a live in-process
-   *  thread, so the next tick normally succeeds and a log line is proportionate. This
-   *  handler also fires when the worker MODULE fails to load, and then no tick will
-   *  ever succeed: the retry keeps the pump moving but every window analyses to
-   *  nothing, leaving a frozen spectrum that still looks like a running measurement.
-   *  Publishing on the pane's existing warn channel is what separates that from a
-   *  quiet signal. Re-publishing per failed tick costs nothing - showWarnBanner just
-   *  re-sets the same text - and a lane that stays dead should keep saying so. */
+   *  The failure is reported on the console, as the desktop reports its own. It is said
+   *  per failed tick rather than once, because this handler also fires when the worker
+   *  MODULE fails to load: no tick then ever succeeds, the retry keeps the pump moving,
+   *  and every window analyses to nothing behind a spectrum that still looks like a
+   *  running measurement. */
   _onWorkerError(ev) {
     const msg = (ev && ev.message) ? ev.message : 'worker failed';
-    MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, 'web.fft.warning.workerError');
+    console.warn('FFT analysis worker failed - the tick in flight produced nothing: ' + msg);
     this._onWorkerResult({ error: 'fft-worker: ' + msg });
   }
 
@@ -597,6 +643,9 @@ export class FftController {
   _teardownFftWorkers() {
     try { if (this.worker) this.worker.terminate(); } catch (_) {}
     this.worker = null;
+    // The display worker dies with its parent, so nothing will answer an outstanding job.
+    this._clearFinalizeInFlight();
+    this._displayPort = null;
   }
 
   /** Effective worker-pool size for a requested thread count (Java parallelChunks:
@@ -656,12 +705,34 @@ export class FftController {
       this.buf = new Float64Array(bufLen);
       this.bufW = 0; this.bufFilled = 0; this._refill = maxHop;
       this._winAbsStart = 0; this._dispatchedOnce = false;
-      this._accumEpoch++;       // drop ONLY the in-flight old-geometry window
-      this._accum.onResync();   // re-anchor κ slope + PLL; the collected DEPTH survives
-      this._workerResyncPending = true;
+      this._accumEpoch++;              // drop ONLY the in-flight old-geometry window
+      this._workerResyncPending = true;   // re-anchor κ slope + PLL; the collected DEPTH survives
     }
     if (c.fllOn && !this._lastFllOn) { this._fll.reset(); this._fll2.reset(); }
     this._lastFllOn = !!c.fllOn;
+    // MAINS MODE, read live per batch the way the Java worker re-reads it per tick.
+    // A transition that touches one of the two TIME-DOMAIN cancellers (SYNC_SUBTRACT, LMS) -
+    // entering one, leaving one, or swapping between them - changes what the samples already
+    // gathered towards the current window contain: they were filtered under the old mode (or not
+    // at all), and the next window would mix the two. So the window is regathered from fresh
+    // samples and the canceller's persistent state is dropped with it. IIR_COMB is not a
+    // transition of this kind: it leaves the window raw and corrects the plot instead.
+    // The ACCUMULATOR is deliberately untouched - not its collected depth, not its counter: the
+    // hum is an additive component the canceller removes, not a change of what is measured, so
+    // the average goes on (Java keeps the accumulator across a mains-mode change too).
+    const mainsMode = c.mainsSuppression || 'NONE';
+    if (this._lastMainsMode == null) this._lastMainsMode = mainsMode;
+    if (mainsMode !== this._lastMainsMode) {
+      const timeDomain = (m) => m === 'SYNC_SUBTRACT' || m === 'LMS';
+      if (timeDomain(mainsMode) || timeDomain(this._lastMainsMode)) {
+        this._restartWindow();
+        this._fftTimeFilter = null;      // the canceller's adapted state belongs to the old mode
+        this._fftTimeFilterMode = null;
+        this._accumEpoch++;                 // drop ONLY the in-flight window of the old mode
+        this._workerResyncPending = true;   // re-anchor the slope + PLL; the DEPTH survives
+      }
+      this._lastMainsMode = mainsMode;
+    }
   }
 
   /** Per-batch: pull the NEW contiguous R-channel (ch1) samples from the cursor and
@@ -721,6 +792,10 @@ export class FftController {
       if (got > 0) this._drainSkipRemaining -= got;
       return;
     }
+    // Diagnostics only: where the window gathering starts, so a dispatch can state what it cost.
+    // It is the one stage of a tick that runs on this thread, and the per-stage log has no other
+    // way to see it. 0 leaves the dispatch stating nothing.
+    this._feedT0 = isDebug() ? performance.now() : 0;
     // Read only as far as the NEXT window needs (Java gathers exactly `needed` for
     // the first window and exactly one hop for each one after, then analyses). Taking
     // the whole backlog instead would bring several windows due inside one
@@ -763,9 +838,8 @@ export class FftController {
    *  in flight across the gap. */
   _onOverrun() {
     this._restartWindow();
-    this._accum.onResync();   // KEEP the collected depth; re-anchor κ slope + PLL
     this._accumEpoch++;
-    this._workerResyncPending = true;
+    this._workerResyncPending = true;   // KEEP the collected depth; re-anchor κ slope + PLL
     // Say which re-sync this was. The desktop logs it and blinks its own banner
     // (Java onCaptureOverrun -> publishCaptureBanner); the browser re-anchored in
     // silence, so an overrun and a signal discontinuity were indistinguishable on
@@ -790,9 +864,8 @@ export class FftController {
     this._restartWindow();
     this._drainSkipRemaining = Math.max(this._drainSkipRemaining,
       Math.ceil(POST_GLITCH_SKIP_SEC * (this.config.inRate || 0)));
-    this._accum.onResync();   // KEEP the collected depth; re-anchor κ slope + PLL
-    this._accumEpoch++;       // drop any in-flight window straddling the re-sync
-    this._workerResyncPending = true;
+    this._accumEpoch++;                 // drop any in-flight window straddling the re-sync
+    this._workerResyncPending = true;   // KEEP the collected depth; re-anchor κ slope + PLL
     MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, 'fft.warning.discontinuity');
   }
 
@@ -808,6 +881,27 @@ export class FftController {
     const min = this.minHop, max = this.maxHop;
     if (min >= max) return min;
     const quantum = Math.max(1, Math.trunc((max - min) / RAND_HOP_STEPS));
+    // DRAIN, with hysteresis: a capture backlog beyond one largest hop is display lag the
+    // lattice's mean hop can hold forever but never repay - a debt taken on at session start
+    // (cold first ticks) or by a transient stall. While draining, hops come from the UPPER HALF
+    // of the same lattice through their own cycle: every spacing stays a legal lattice value,
+    // truthfully stated to the de-rotation (no coverage gap, the coherent average untouched),
+    // and the spacings stay varied - a run of ONE fixed hop would turn the random mode into a
+    // regular overlap and print its periodic ripple onto the averaged noise skirt. The drain
+    // engages above a full largest hop of surplus, repays ~10 percent of every window, and
+    // releases at one smallest hop, leaving a dead band in which the plain cycle runs - so the
+    // bias exists only while a real debt is being repaid. The main cycle position does not
+    // advance on a drain draw; the equal per-value share of the lattice resumes where it paused.
+    if (this._fftReader) {
+      const backlog = this._fftReader.getWritePos() - this._fftReader.getReadPos();
+      const engaged = this._hopDraining ? backlog > min + 2 * quantum : backlog > max + quantum;
+      this._hopDraining = engaged;
+      if (engaged) {
+        const half = RAND_HOP_STEPS / 2;
+        this._drainStep = (this._drainStep + 1) % half;
+        return Math.min(max, min + (1 + half + this._drainStep) * quantum);
+      }
+    }
     const step = this._hopStep;
     this._hopStep = (this._hopStep + 1) % RAND_HOP_STEPS;
     return Math.min(max, min + (1 + step) * quantum);
@@ -843,6 +937,9 @@ export class FftController {
         // exactly where the next tick's first frame will.
         this.pendingHop = this._nextHop();
         this._refill = this.pendingHop;
+        // The fill readout's zero mark: what already waits in the cursor belongs to the standing
+        // backlog, not to this hop's progress - the bar sweeps on what ARRIVES from here on.
+        this._availAtDispatch = this._fftReader ? Math.max(0, this._fftReader.available()) : 0;
         // Absolute capture position of this window's first sample (the FLL transport
         // timebase): samples[i] sits at _absNextSample + i, and this window ends at it.
         const absCapStart = (this._absNextSample + i) - (this.bufLen - 1);
@@ -925,6 +1022,7 @@ export class FftController {
    *  no-worker case below - the analyser is torn down, so there is nothing to run
    *  the tick on, which is Java's stopped-worker-thread state. */
   _dispatch(absStart, absCapStart) {
+    const dbg = isDebug();
     const L = this.bufLen, snap = new Float64Array(L);
     snap.set(this.buf.subarray(this.bufW));
     snap.set(this.buf.subarray(0, this.bufW), L - this.bufW);
@@ -942,10 +1040,9 @@ export class FftController {
     this._busy = true;
     const c = this.config;
     const dual = isDualTone(c.form);
-    // Step 5 fold-control (main->worker): the values the cross-tick fold needs so the worker can
-    // run a lockstep SHADOW copy for the FOLD_IN_WORKER parity harness (§5b). resetAccum /
-    // resyncAccum are one-shots fired wherever this controller resets / re-anchors its OWN
-    // accumulator, so the shadow tracks it. Ignored by the worker unless foldInWorker.
+    // Fold control (main->worker): the values the cross-tick fold needs. resetAccum / resyncAccum
+    // are one-shots fired wherever a recovery here resets / re-anchors the average, so the
+    // worker's accumulator moves with the cursor this side owns.
     const forever = this.foreverMode, ringN = this.ringN;
     const resetAccum = this._workerResetPending; this._workerResetPending = false;
     const resyncAccum = this._workerResyncPending; this._workerResyncPending = false;
@@ -1011,13 +1108,100 @@ export class FftController {
       // effect mid-record without a restart. undefined (pre-readConfig) defaults to ON.
       timeGate: USE_TIME_DISCONTINUITY && (this.foreverMode || this.ringN >= 2)
         && this.config.fftDetectTimeDiscontinuity !== false,
-      // Step 5b shadow-fold control (ignored unless foldInWorker).
-      foldInWorker: this._foldInWorker,
       winAbsStart: this._tickAbsStart,
       accumulate: forever || ringN >= 2, targetN: forever ? Infinity : 2 * ringN,
       spectralGate: true, strongToneRelDb: this.config.fftStrongToneRelDb ?? 100.0,
       resetAccum, resyncAccum,
+      // Whether this tick is also to be REBUILT for display (the overlay, the .frc de-embed, the
+      // plot-time mains comb, the statistics recompute, the blue dots) - see _showThisTick.
+      // Sent with the window because the rebuild runs there; the mains fundamental the comb
+      // needs was tracked on the raw window just above.
+      finalize: this._showThisTick(), mainsF0: this._fftMainsF0,
+      // The accumulator epoch this tick belongs to. A display frame is prepared beside the NEXT
+      // analysis and answers out of band, so it carries this back and the carried value is what
+      // decides whether it still belongs to the average on screen.
+      epoch: this._accumEpoch,
+      // Set once the watchdog has given up on the display worker: prepare it on the analysis
+      // thread instead, which is what the code did before the pipeline existed.
+      finalizeInPlace: this._finalizeInPlace,
+      // The blue "before-cal" dots of the single-tone chart ride the result (preCorrectionPeaks),
+      // but a DUAL-tone chart draws them at the intermod PRODUCT frequencies, which only the IMD
+      // table - computed on this side, off the de-embedded spectrum - knows. So a dual-tone frame
+      // with rows loaded also carries the cascade's gain per bin, and the chart looks its
+      // products up in it. Nothing else needs it, and a single-tone frame never carries it.
+      wantCalGain: dual && this._calEntries.length > 0,
+      // DIAGNOSTICS, and nothing the analysis reads. The per-stage timing switch is a setting of
+      // the page: a worker can read neither the storage it is kept in nor a query string of its
+      // own, so it is stated per tick. With it, the one stage of a tick that does NOT happen in
+      // the worker - reading the capture and assembling this window, which happens here - so that
+      // the worker's line can account for a whole tick rather than the part it can see.
+      debug: dbg,
+      readMs: dbg && this._feedT0 > 0 ? performance.now() - this._feedT0 : 0,
     }, [snap.buffer]);
+  }
+
+  /** Whether the tick being dispatched is to be rebuilt for display (Java FftAnalyzerWorker
+   *  doAnalysis tail, the showNow gate). Skip the rebuild while the capture backlog is high -
+   *  catch up rather than overrun - throttle it to DISPLAY_MIN_MS when caught up, and force it
+   *  by DISPLAY_MAX_MS so the view never freezes. Java:
+   *    long backlog   = rdr.getWritePos() - rdr.getReadPos();
+   *    long sinceShow = System.nanoTime() - lastShowNanos;
+   *    boolean showNow = paused.get() || sinceShow >= DISPLAY_MAX_NANOS
+   *                    || (sinceShow >= DISPLAY_MIN_NANOS && backlog <= 2L * needed);
+   *  The desktop asks this AFTER its analysis, on the same thread that would do the rebuild.
+   *  Here the rebuild happens in the worker, so the question is asked one tick earlier, when the
+   *  window is handed over - the same backlog and elapsed-time facts, read at dispatch. A tick
+   *  the gate declines is folded and nothing more, so it costs a frame, never depth. */
+  _showThisTick() {
+    const backlog = this._fftReader ? (this._fftReader.getWritePos() - this._fftReader.getReadPos()) : 0;
+    const now = performance.now();
+    const sinceShow = now - this._lastShowMs;
+    const caughtUp = backlog <= 2 * this.bufLen;
+    // Never past the in-flight cap: the port keeps display frames in send order, so the cap only
+    // bounds the outstanding payloads, and a tick declined for it is folded exactly like one the
+    // throttle declined.
+    const showNow = this._finalizeJobs < FINALIZE_JOBS_MAX
+      && (this._fftPausedByStopN
+        || sinceShow >= DISPLAY_MAX_MS
+        || (sinceShow >= DISPLAY_MIN_MS && caughtUp));
+    if (showNow) {
+      this._lastShowMs = now;
+      // The escalation past the drain: a display that keeps showing from the slow floor is
+      // wall-clock proof of a debt the hop bias cannot repay. Count consecutive floor shows and
+      // re-anchor once at the threshold - the average survives, the coverage gap is declared on
+      // the banner, and the next window starts at live. A caught-up show resets the count.
+      if (caughtUp) {
+        this._floorShows = 0;
+      } else if (++this._floorShows >= FLOOR_SHOWS_REANCHOR) {
+        this._floorShows = 0;
+        this._onOverrun();
+      }
+      // HOW FAR BEHIND LIVE this analysis is running, in seconds of capture - the quantity that
+      // decides the gate above and the one thing about a slow FFT that cannot be seen on screen.
+      // A backlog that only grows says the analysis is not keeping up with the capture: the feed
+      // consumes exactly one hop per tick and never more, so a deficit once taken on is carried
+      // until the window is re-anchored (an overrun or a discontinuity re-sync). While it exceeds
+      // twice the window the caught-up branch cannot fire and the view falls back to the
+      // DISPLAY_MAX_MS floor, which is the visible symptom.
+      // Built only when debug logging is on: this runs on every displayed frame, and a
+      // diagnostic must cost nothing when it is not being read - nor be able to throw.
+      const rate = this.config.inRate || 0;
+      if (isDebug() && rate > 0) {
+        debug(`[fft] frame shown - behind live ${(backlog / rate).toFixed(2)} s`
+          + ` (${caughtUp ? 'caught up' : 'BEHIND, only the ' + DISPLAY_MAX_MS + ' ms floor shows frames'})`
+          + ` | tick ${sinceShow.toFixed(0)} ms, analyse ${(this._workerMs || 0).toFixed(0)} ms,`
+          + ` hop ${(Math.max(1, this.pendingHop) / rate * 1000).toFixed(0)} ms`);
+      }
+    }
+    return showNow;
+  }
+
+  /** Reports main-thread milliseconds to the load meter (the shell hands the render loop's
+   *  reporter in; nothing here knows what is on the other end). The fold below runs BETWEEN
+   *  animation frames, so without this the meter would read the busiest part of a displayed
+   *  frame as idle time and the scope's pacing would never engage. */
+  setBusyReporter(reportBusy) {
+    this._reportBusy = typeof reportBusy === 'function' ? reportBusy : null;
   }
 
   /** Worker reply seam: clears the in-flight flag, folds the tick in, then resumes
@@ -1025,19 +1209,100 @@ export class FftController {
    *  returns, and waiting for the next capture batch instead would cap the analysis
    *  rate at one window per batch event and let a backlog build for no reason. The
    *  fold runs through _handleWorkerResult; the resume happens whichever way it
-   *  leaves (a gate firing or an epoch drop still owes the next window). */
+   *  leaves (a gate firing or an epoch drop still owes the next window).
+   *
+   *  The whole seam is timed and reported: the fold, the display rebuild it may trigger
+   *  (overlay + recompute + the view's own correction and draw, all synchronous under the
+   *  emit) and the gather that follows are one uninterrupted stretch of main-thread work. */
   _onWorkerResult(r) {
+    const t0 = this._reportBusy ? performance.now() : 0;
+    // The display worker's port hand-over: the analyzer builds that worker on first use and
+    // passes the port it will answer this thread on directly, so a finished frame does not wait
+    // behind the analysis of the next window.
+    if (r && r.kind === 'displayPort') {
+      this._displayPort = r.port;
+      this._displayPort.onmessage = (ev) => this._onDisplayResult(ev.data);
+      return;
+    }
+    // The display worker could not be loaded. The frame it was asked for will never arrive, so
+    // the slot is released NOW rather than at the end of a watchdog the operator would watch as
+    // seconds of blank trace, and every later tick has its display prepared on the analysis
+    // thread. A missing file therefore costs one frame, not five seconds.
+    if (r && r.kind === 'finalizeFailed') {
+      this._clearFinalizeInFlight();
+      this._finalizeInPlace = true;
+      return;
+    }
+    // The answer to a stopped-state re-emit request folds nothing and belongs to no tick: it
+    // must not clear the in-flight flag of an analysis that is still running, and it must not
+    // resume the feed. Straight to the display.
+    if (r && r.reemit) {
+      if (r.finalizePending) { this._armFinalizeWatchdog(); return; }
+      if (!r.empty && this.onResult) this._emit(FftResult.adopt(r));
+      if (this._reportBusy) this._reportBusy(performance.now() - t0);
+      return;
+    }
     this._busy = false;
     try {
       this._handleWorkerResult(r);
     } finally {
       this.feedFft();
+      if (this._reportBusy) this._reportBusy(performance.now() - t0);
     }
+  }
+
+  /** A display frame prepared beside the next analysis. It arrives out of band, so it carries the
+   *  accumulator epoch of the tick it was built from and that CARRIED value is what is compared:
+   *  the single-slot epoch of a dispatch is only sound while exactly one analysis is in flight,
+   *  which a display job is not. A frame from before a statistics restart is dropped whole.
+   *  It never touches the depth readout - that follows the analysis answers, which arrive in tick
+   *  order, so a late frame cannot walk the count backwards. */
+  _onDisplayResult(r) {
+    this._finalizeDelivered();
+    if (!r || r.error) { if (r && r.error) console.error('display', r.error); return; }
+    if (r.epoch !== this._accumEpoch) return;
+    if (!this.onResult) return;
+    this._emit(FftResult.adopt(r));
+  }
+
+  /** Counts a job into the in-flight cap and (re)arms the watchdog that must be able to release
+   *  it. The display worker answers the main thread directly, so nothing but this timer stands
+   *  between a worker that stopped answering and a frozen display: on expiry every outstanding
+   *  job is written off AND the pipeline is latched off, so every later tick asks the analyzer to
+   *  prepare the display itself - one watchdog interval of cost, then exactly the behaviour of
+   *  the code before the split. */
+  _armFinalizeWatchdog() {
+    this._finalizeJobs = Math.min(FINALIZE_JOBS_MAX, this._finalizeJobs + 1);
+    if (this._finalizeTimer) clearTimeout(this._finalizeTimer);
+    this._finalizeTimer = setTimeout(() => {
+      this._finalizeTimer = null;
+      this._finalizeJobs = 0;
+      this._finalizeInPlace = true;
+      console.warn('FFT display preparation stopped answering - it runs on the analysis thread '
+        + 'from here on');
+    }, FINALIZE_WATCHDOG_MS);
+  }
+
+  /** Counts a delivered (or errored) frame out of the cap; the watchdog stays armed while a
+   *  job is still out and disarms with the last one. */
+  _finalizeDelivered() {
+    this._finalizeJobs = Math.max(0, this._finalizeJobs - 1);
+    if (this._finalizeJobs === 0 && this._finalizeTimer) {
+      clearTimeout(this._finalizeTimer);
+      this._finalizeTimer = null;
+    }
+  }
+
+  /** Writes every outstanding job off - a worker failure, a teardown, a statistics restart:
+   *  no reply is expected (or welcome) after any of these. */
+  _clearFinalizeInFlight() {
+    this._finalizeJobs = 0;
+    if (this._finalizeTimer) { clearTimeout(this._finalizeTimer); this._finalizeTimer = null; }
   }
 
   _handleWorkerResult(r) {
     if (!this._fftOn) return;
-    if (r.error) { console.error('analyze', r.error); return; }
+    if (r.error) { console.error('analyze', r.error); this._clearFinalizeInFlight(); return; }
 
     // Drop a window that straddles a reset / overrun (Java epoch gate): the
     // accumulator was re-anchored while this window was analyzing, so folding it
@@ -1055,12 +1320,9 @@ export class FftController {
     // fresh frames; the running accumulator supplies the depth. A finite ring is
     // bounded to 2·ringN frames (≈2 coherent frames land per tick, so the displayed
     // "N×" climbs to ringN over 2·ringN folded frames); ∞ mode is a cumulative mean.
-    const coherent = !!r.coherentAveraging;
     const forever = this.foreverMode;
     const ringN = this.ringN;
     const accumulate = forever || ringN >= 2;
-    const targetN = forever ? Infinity : 2 * ringN;
-    const perTickFrames = coherent ? 2 : 1;
 
     // Mode-transition reset (Java lastAccumulate / lastForeverMode / lastRingN):
     // only when the new bound discards collected depth - a flip, a ring↔∞ switch,
@@ -1068,8 +1330,7 @@ export class FftController {
     if (accumulate !== this._lastAccumulate
         || forever !== this._lastForeverMode
         || (!forever && ringN < this._lastRingN)) {
-      this._accum.reset();
-      this._workerResetPending = true;
+      this._workerResetPending = true;   // the fold lives in the worker; the reset rides the next tick
       this._analysesTicks = 0;   // Java discard branch zeroes completedAnalyses too
       this._analysesDone = 0;
     }
@@ -1077,50 +1338,29 @@ export class FftController {
     this._lastForeverMode = forever;
     this._lastRingN = ringN;
 
-    let accumulated = false;
+    // The FOLD ran in the worker, beside the analysis (the display rebuild with it). What
+    // comes back is its verdict: which gate fired, and the depth it reached. Every
+    // RECOVERY stays here, because it is the capture cursor, the epoch and the drain skip that
+    // have to move - none of which exist in the worker. Gate order is the desktop's: the cheap
+    // time-domain pass on the raw window, then the spectral one; each has already taken the
+    // previous tick back out of the average (its window shared nearly all these samples), and
+    // the shared recovery re-anchors the cursor, arms the post-glitch drain, re-anchors the
+    // accumulator's slope and bumps the epoch so the discarded window cannot fold in.
     if (accumulate) {
-      // Time-domain discontinuity gate FIRST (Java FftAnalyzerWorker doAnalysis: the
-      // cheap O(n) pass on the raw window runs before the spectral gate). The detector
-      // itself ran in fft-worker.js - the raw window lives there after the transfer,
-      // and the tick's own refined fundamental pins the recurrence prediction exactly,
-      // so the reject threshold rides on the noise floor at any signal frequency; NaN
-      // (no tone) self-estimates. On detect -> the same re-sync + banner as the
-      // spectral gate below, and the block is dropped before it can fold in.
-      if (USE_TIME_DISCONTINUITY && r.timeDiscontinuity) {
+      if (USE_TIME_DISCONTINUITY && r.gate === 'time') {
         console.info('Time-domain discontinuity in the tick window - re-sync');
-        // The tick BEFORE this one shared nearly all of its samples, so the event
-        // sat at its window's taper edge - under the gate thresholds, but still
-        // poisoning the average. Take it back out (Java calls this at BOTH gates,
-        // before the re-sync).
-        this._accum.subtractPreviousTicks();
         this._onSignalDiscontinuity();
         return;
       }
-      // Frequency-domain glitch / stall rejection (Java FftAnalyzerWorker): compare
-      // this tick's spectrum to the running-median reference and re-sync (re-anchor
-      // past the glitched overlap) BEFORE it can poison the cross-tick vector average.
-      // Java runs this for ANY accumulate tick (coherent OR incoherent) - not gated on
-      // the coherent flag. In the incoherent path the analyzer stores the per-window
-      // magnitude in r.re (im = 0), so the same magnitude-domain gate applies. On a
-      // reject the shared recovery (Java onSignalDiscontinuity) re-anchors the cursor
-      // to "now", arms the 5 ms post-glitch drain skip, re-anchors the accumulator's
-      // κ slope / PLL (onResync - the collected depth survives) and bumps the epoch so
-      // the discarded window can't fold in.
-      {
-        const binW = r.freqResolution;
-        const peakBins = this._fundamentalBins(r);
-        if (this._accum.reject(r.re, r.im, r.fftSize / 2, binW, peakBins)) {
-          const d = this._accum.spectralDiagnostics;
-          debug('[fft] spectral gate reject - gates ' + JSON.stringify(d.lastGates)
-            + ` score ${d.lastScore != null ? d.lastScore.toFixed(2) : '?'} thr ${d.lastScoreThresh != null ? d.lastScoreThresh.toFixed(2) : '?'}`
-            + ` | power ${d.lastPowerDb != null ? d.lastPowerDb.toFixed(1) : '?'} med ${d.lastPowerMed != null ? d.lastPowerMed.toFixed(1) : '?'} thr ${d.lastPowerThresh != null ? d.lastPowerThresh.toFixed(1) : '?'}`
-            + ` | pedestal ${Number.isFinite(d.lastPedestalExcess) ? d.lastPedestalExcess.toFixed(1) : '-'} thr ${Number.isFinite(d.lastPedestalThresh) ? d.lastPedestalThresh.toFixed(1) : '-'}`);
-          this._accum.subtractPreviousTicks();   // the poisoned preceding tick comes back out
-          this._onSignalDiscontinuity();
-          return;
-        }
+      if (r.gate === 'spectral') {
+        const d = r.gateDiag || {};
+        debug('[fft] spectral gate reject - gates ' + JSON.stringify(d.gates)
+          + ` score ${d.score != null ? d.score.toFixed(2) : '?'} thr ${d.scoreThresh != null ? d.scoreThresh.toFixed(2) : '?'}`
+          + ` | power ${d.powerDb != null ? d.powerDb.toFixed(1) : '?'} med ${d.powerMed != null ? d.powerMed.toFixed(1) : '?'} thr ${d.powerThresh != null ? d.powerThresh.toFixed(1) : '?'}`
+          + ` | pedestal ${Number.isFinite(d.pedestal) ? d.pedestal.toFixed(1) : '-'} thr ${Number.isFinite(d.pedestalThresh) ? d.pedestalThresh.toFixed(1) : '-'}`);
+        this._onSignalDiscontinuity();
+        return;
       }
-      accumulated = this._accum.accumulate(r, this._tickAbsStart, coherent, targetN);
     }
 
     // Per-tick bookkeeping runs EVERY accepted tick (Java completedAnalyses++ /
@@ -1138,16 +1378,28 @@ export class FftController {
     // ticks, as the desktop's fill readout does (completedAnalyses - 1, capped at
     // N). With no averaging (ringN = 1) there is no accumulator; show the single
     // window's own frame count (1/1).
-    const accumFrames = this._accum.accumFrames;
+    const accumFrames = r.accumFrames != null ? r.accumFrames : 0;
     if (accumulate) {
-      const depthTicks = Math.round(accumFrames / perTickFrames);
+      // The depth in ticks is taken as the analyzer states it, never re-derived here: it owns the
+      // accumulator and the tick's frames-per-tick, and deriving it a second time from fields
+      // that may or may not have travelled is how one average came to be reported as two numbers,
+      // one twice the other.
+      const depthTicks = r.accumDepthTicks != null ? r.accumDepthTicks : 0;
       this.framesDone = forever ? depthTicks : Math.min(this.avgTarget + 1, this._analysesTicks);
       // Frame depth (Java getAccumulatedFrames) - the predistortion frame-depth readout,
       // NOT the stop-after-N / completedAnalyses key (that's the per-tick count above).
       this._analysesDone = accumFrames;
     } else {
-      this.framesDone = Math.min(this.avgTarget, r.frameCount);
-      this._analysesDone += r.frameCount;
+      // No averaging (Averages Off or 1): the depth IS the tick's own frame count, and it is
+      // taken from the geometry THIS side stated for the tick rather than read back off the
+      // answer. A tick the display gate declined carries counters only - the frame count travels
+      // with a DISPLAYED result and with nothing else - so reading it there produced undefined,
+      // Math.min made that NaN, and both the averages label and the predistortion frame depth
+      // read NaN from the first declined tick onward, which at any hop shorter than the display
+      // throttle is nearly every tick.
+      const tickFrames = r.frameCount != null ? r.frameCount : this.perTickFrames;
+      this.framesDone = Math.min(this.avgTarget, tickFrames);
+      this._analysesDone += tickFrames;
     }
 
     // Stop-after-N (Java FftAnalyzerWorker): ONLY in ∞ (forever) mode, when the cap is enabled
@@ -1165,55 +1417,31 @@ export class FftController {
     if (forever && this.config.stopAfterNEnabled && !this._fftPausedByStopN
         && displayedAverages >= this.config.stopAfterN) {
       this._fftPausedByStopN = true;
+      // The tick that reaches the cap is the LAST one, and what the operator is left looking at
+      // must be the average it completed. The display gate decided about this tick before the
+      // count was known (at dispatch, see _showThisTick), so a declined one would freeze the
+      // view one average short with no further tick coming to correct it. Ask for the rebuild
+      // that was skipped - the same request a calibration change makes on a stopped FFT.
+      if (!r.finalized && !r.finalizePending) this.reemitDisplay(null);
       if (this.onFftAutoStopped) { try { this.onFftAutoStopped(); } catch (_) {} }
     }
 
-    // Per-tick DISPLAY TRIM (Java FftAnalyzerWorker doAnalysis tail, the showNow gate):
-    // the accumulator above ran THIS tick, but the O(N) display rebuild below - overlayOnto
-    // + recomputeStats + FLL + emit - does NOT need to. Skip it while the capture backlog is
-    // high (catch up rather than overrun), throttle it to DISPLAY_MIN_MS when caught up, but
-    // force it by DISPLAY_MAX_MS so the view never freezes. This is the fix for the FFT
-    // starving the scope to ~1 fps and a mid-capture cal load hanging the UI:
-    // the heavy finalize is bounded to ≤25 Hz on the main thread, leaving the rAF loop +
-    // input free between rebuilds. Java:
-    //   long backlog   = rdr.getWritePos() - rdr.getReadPos();
-    //   long sinceShow = System.nanoTime() - lastShowNanos;
-    //   boolean showNow = paused.get() || sinceShow >= DISPLAY_MAX_NANOS
-    //                   || (sinceShow >= DISPLAY_MIN_NANOS && backlog <= 2L * needed);
-    //   if (!showNow) { resultPool.release(r); return msForSamples(hopSamples, sampleRate); }
-    //   lastShowNanos = System.nanoTime();
-    const backlog = this._fftReader ? (this._fftReader.getWritePos() - this._fftReader.getReadPos()) : 0;
-    const sinceShow = performance.now() - this._lastShowMs;
-    const showNow = this._fftPausedByStopN
-      || sinceShow >= DISPLAY_MAX_MS
-      || (sinceShow >= DISPLAY_MIN_MS && backlog <= 2 * this.bufLen);
-    if (!showNow) return;   // accumulated already; defer the O(N) rebuild + FLL + emit
-    this._lastShowMs = performance.now();
+    // The display of THIS tick is being prepared beside the next analysis and will arrive on its
+    // own; there is nothing to show yet. The FLL is steered from the frame that arrives, so the
+    // steer waits with it - one tick of extra transport, on a loop whose own gate already spans
+    // a full transport round trip.
+    if (r.finalizePending) { this._armFinalizeWatchdog(); return; }
 
-    // Finalize the DISPLAYED spectrum + stats OFF the accumulator (Java
-    // overlayAccumulatorOnto + recomputeStats), not off the single window - so the
-    // shown spectrum is the deep cumulative average, with THD/SNR re-derived from it.
-    if (accumulated) {
-      this._accum.overlayOnto(r);            // r.amplitudeDbFs/re/im <- cumulative average
-      // Step 5b: compare THIS main fold's cumulative spectrum to the worker's shadow fold
-      // (both pure overlayOnto outputs, pre-recompute) - the correctness gate before flipping
-      // the fold into the worker. Only when the depths agree (a mid-run reset/glitch transiently
-      // desyncs the async worker; that is reported, not a failure).
-      if (this._foldInWorker && r.wAmp) this._checkFoldParity(r);
-      this._coordAnalyzer.recomputeStats(r); // re-derive fundamental/harmonics/THD/SNR
-      r.frameCount = this._accum.accumFrames;
-      // Pinned coherent κ for the plot-time "before" dots (NaN => single tick).
-      r.coherentKappa = this._accum.hasData ? this._accum.accumKFractional : NaN;
-    }
+    // A tick the display gate declined at dispatch (_showThisTick) was folded and nothing more:
+    // it carries no rebuilt spectrum, so there is nothing to steer the FLL from and nothing to
+    // show. The depth it added is already counted above.
+    if (!r.finalized) return;
 
     // The FFT pane + the predistortion read the EMITTED result. The worker->main transfer is a
-    // plain, lossy snapshot, so (1) re-adopt the FftResult prototype (methods rawHarmonicDbFs /
-    // deepCopy / noisePeakFloorDbFs) and (2) re-stamp the RAW (pre-.frc-de-embed) fundamental +
-    // peak phasors off the deep-averaged spectrum HERE - before fftViewCorrection.apply (run in
-    // engine.onResult AFTER _emit) de-embeds re/im in place. Mirrors Java FftAnalyzer, which
-    // captures the raw peaks after averaging and before the .frc de-embed.
+    // plain, lossy snapshot, so re-adopt the FftResult prototype (methods rawHarmonicDbFs /
+    // deepCopy / noisePeakFloorDbFs). The raw pre-de-embed phasors were stamped in the worker,
+    // before its own de-embed, and travel as plain fields.
     r = FftResult.adopt(r);
-    r.captureRawPeaks();
 
     // FLL - steer the generator so each captured tone returns to its exact target bin
     // (nulls the DAC↔ADC clock offset). Driven through the Java FrequencyFll deadbeat loop:
@@ -1225,29 +1453,45 @@ export class FftController {
     // imd.f2Hz and publishes GENERATOR_FREQ_TRIM / _2. This controller mirrors that with
     // _fll / _fll2, refining the two tones here (the CONTROLLER holds no per-tone estimate - the
     // IMD table runs in the view - so the steer refines them itself off r.amplitudeDbFs).
-    if (this.config.fllOn && this._genOn && this.genNode) {
+    if (this.fllArmed()) {
       if (isDualTone(this.config.form)) {
         this._steerDualTone(r);
       } else if (r.fundamentalHzRefined > 0) {
         this._steerSingleTone(r);
       } else if (traceFll()) {
-        console.warn(`FLL SKIP: fllOn=${!!this.config.fllOn} genOn=${this._genOn}`
-          + ` genNode=${!!this.genNode} fundRefined=${r.fundamentalHzRefined}`);
+        console.warn(`FLL SKIP: armed but no fundamental - fundRefined=${r.fundamentalHzRefined}`);
       }
     } else if (traceFll()) {
-      // Steering skipped entirely: report which precondition failed (fllOn / generator
-      // running / generator node) - the classic "inert" path.
-      console.warn(`FLL SKIP: fllOn=${!!this.config.fllOn} genOn=${this._genOn}`
-        + ` genNode=${!!this.genNode} fundRefined=${r.fundamentalHzRefined}`);
+      // Steering skipped entirely: report which precondition failed - the classic "inert" path.
+      console.warn(`FLL SKIP: ${this._fllGateState()}`);
     }
 
-    // The worker accumulator stays RAW: the render-time .frc de-embed + IIR-comb mains correction
-    // + IMD run in the VIEW (fft/fft-view-correction.js), not here. Attach the tracked mains comb +
-    // locked fundamental so the view can divide the comb response out of the displayed spectrum.
-    r._mainsComb = this._fftMains;
-    r._mainsF0 = this._fftMainsF0;
-
     this._emit(r);
+  }
+
+  /** Whether the frequency lock may steer at all - Java FftController.applyFrequencyLock's
+   *  prerequisite gate, all four conditions: the generator is snapped to the FFT bin grid (an
+   *  off-grid tone gives the loop nothing to lock to - its scalloped estimates would be chased
+   *  as drift), the fundamental comes from the generator, an align mode is selected, and the
+   *  generator is actually emitting. Inert means inert: no steer, no correction accumulated. */
+  fllArmed() {
+    const c = this.config;
+    if (!(this._prefs ? this._prefs.genSnapToFftBin.get() : c.snapToBin)) return false;
+    if (!(this._prefs ? this._prefs.fftFundFromGenerator.get() : c.fftFundFromGenerator)) return false;
+    if (!c.fllOn) return false;
+    return !!this._genOn;
+  }
+
+  /** Names the first failed frequency-lock precondition, for the trace log only. */
+  _fllGateState() {
+    if (!(this._prefs ? this._prefs.genSnapToFftBin.get() : this.config.snapToBin)) {
+      return 'snap-to-bin OFF';
+    }
+    if (!(this._prefs ? this._prefs.fftFundFromGenerator.get() : this.config.fftFundFromGenerator)) {
+      return 'fundamental not from generator';
+    }
+    if (!this.config.fllOn) return 'align mode NONE';
+    return this._genOn ? 'armed' : 'generator not emitting';
   }
 
   /** Single-tone FLL steer (Java FftController.applyFrequencyLock else-branch, :313-327):
@@ -1456,26 +1700,30 @@ export class FftController {
     this.onResult(r);
   }
 
-  /** Re-derives + re-emits the DISPLAYED result from the RAW accumulator
-   *  (which survives a stop) so a calibration Active/With-noise/load/remove change applies
-   *  to a STOPPED FFT too. Java's .frc de-embed is a plot-time transform over the raw
-   *  lastResult, so a toggle there just repaints; the web's emit-time copy needs this
-   *  re-emit through engine.onResult so the CURRENT correction cascade re-applies to raw
-   *  data. overlayOnto REPLACES the result's spectral arrays from the accumulator (its
-   *  mag->amplitude anchor at the fundamental bin survives the .frc de-embed, which scales
-   *  amplitude and re/im by the same factor). No FLL steer, no stop-after - display only.
-   *  `base` must be the pane's CURRENT result: when it isn't the controller's own last
-   *  emit (a loaded .fft file), this is a no-op. Returns whether a result was re-emitted.
-   *  Limitation: a non-averaged run leaves the accumulator empty - nothing to rebuild. */
+  /** Asks the analyzer to rebuild the DISPLAYED result from the RAW accumulator (which survives
+   *  a stop) so a calibration Active/With-noise/load/remove change applies to a STOPPED FFT too.
+   *  Java's .frc de-embed is a plot-time transform over the raw lastResult, so a toggle there
+   *  just repaints; here the raw average and the correction both live in the worker, so the
+   *  rebuild is REQUESTED and its answer arrives asynchronously through engine.onResult - which
+   *  paints it, the pane painting a result that lands while not recording. No FLL steer, no
+   *  stop-after - display only.
+   *  `base` must be the pane's CURRENT result: when it isn't the controller's own last emit (a
+   *  loaded .fft file), nothing is requested. Returns whether a rebuild was asked for; the worker
+   *  answers empty - and the display keeps what it shows - when nothing is accumulated yet.
+   *  Limitation: a non-averaged run leaves the accumulator empty, and a torn-down analyzer (the
+   *  FFT was never started this session) has nothing to ask. */
   reemitDisplay(base) {
     const r = this._lastEmitted;
-    if (!r || (base && base !== r) || !this._accum.hasData) return false;
-    this._accum.overlayOnto(r);
-    this._coordAnalyzer.recomputeStats(r);
-    r.frameCount = this._accum.accumFrames;
-    r.coherentKappa = this._accum.accumKFractional;
-    r.captureRawPeaks();
-    this._emit(r);
+    if (!r || (base && base !== r) || !this.worker) return false;
+    this.worker.postMessage({
+      reemit: true, mainsF0: this._fftMainsF0,
+      wantCalGain: isDualTone(this.config.form) && this._calEntries.length > 0,
+      epoch: this._accumEpoch,
+      finalizeInPlace: this._finalizeInPlace,
+      // Refused while a display frame is already being prepared: its answer would arrive after
+      // this one and overwrite it. The display keeps what it shows and the next request succeeds.
+      jobOutstanding: this._finalizeJobs > 0,
+    });
     return true;
   }
 

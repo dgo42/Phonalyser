@@ -401,7 +401,16 @@ export class FftTabControl {
       this.refreshStopAfterEnable();
       if (engine.running) this.host.readConfig();
     });
-    $('#fftMains').on('change', () => prefs.fftMainsSuppression.set($('#fftMains').val()));
+    // MAINS suppression: persisted, and pushed into the live config so the RUNNING analyser sees
+    // the new mode on its next batch - the same host.readConfig() the stop-after neighbour above
+    // makes, and the web's counterpart of the Java worker re-reading the preference every tick.
+    // Without it a mode change sat in the preferences until an unrelated restart. Still NO
+    // accumulator or counter reset: the controller regathers only the analysis window, and only
+    // when a time-domain canceller is entered or left (_syncLiveConfig).
+    $('#fftMains').on('change', () => {
+      prefs.fftMainsSuppression.set($('#fftMains').val());
+      if (engine.running) this.host.readConfig();
+    });
 
     // ---- RESTART-FROM-0 SEMANTICS: the FFT restarts from 0 ONLY when the FFT length, the
     // window, get-fundamental, align-generator or coherent changes; nothing else may cause a
@@ -420,6 +429,18 @@ export class FftTabControl {
     // re-snaps the generator bin (Java FFT_LENGTH_CHANGED, FftTabControl.java:360-361).
     $('#fftSize').on('change', async () => {
       this.updateTabSub();
+      // The held calibration gain is one value per bin of the OLD grid, and a new length is a new
+      // bin grid. A running FFT announces the restart from its fresh session, but a STOPPED one
+      // never restarts - so the drop happens here too, for the displayed static spectrum.
+      this.fftViewCorrection.dropHeld();
+      // Snapshot the LIVE UI into engine.config BEFORE anything is re-derived from it. The bin
+      // snap divides the analysis rate by the FFT LENGTH the config carries, and that field is
+      // refreshed only by a readConfig - which restartFft performs solely while the FFT is
+      // RECORDING. With the FFT stopped and a tone playing, the retune below therefore re-snapped
+      // against the PREVIOUS length and the emitted tone did not move, while the label - which
+      // reads this control directly - already showed the new grid. The snap-to-bin checkbox does
+      // exactly this for the same reason (GeneratorPane's #snap handler).
+      this.host.readConfig();
       await restartFft();
       // FFT length changes the bin grid (binW = inRate/fftSize); re-snap the generator so the
       // played tone still lands exactly on a bin (Java FFT_LENGTH_CHANGED consumer).
@@ -729,17 +750,20 @@ export class FftTabControl {
         }
       });
       this.updateCalTabSub();
-      // A cal change must also apply to a STOPPED FFT (Java: the .frc
-      // de-embed is a plot-time transform over the raw lastResult - a toggle there just
-      // repaints). Re-emit the display from the RAW accumulator through engine.onResult
-      // (the fresh cascade applies + pane.setResult), then paint directly - the rAF
-      // branch only paints while recording. No-op for a loaded .fft file or an
-      // accumulator-less (non-averaged) run; while running it pre-empts the next tick.
+      // The loaded rows just moved: hand the new set to the analyzer, which cascades them and
+      // drops what it held, and drop the gain sampled from the old cascade here. This is the
+      // web's counterpart of Java's FFT_CALIBRATION_CHANGED subscriber: the web store is silent,
+      // and this is its single mutation site.
+      this.engine.setFftCalibrationEntries(this.store.getEntries());
+      this.fftViewCorrection.dropHeld();
+      // A cal change must also apply to a STOPPED FFT (Java: the .frc de-embed is a plot-time
+      // transform over the raw lastResult - a toggle there just repaints). Ask the analyzer to
+      // rebuild the display from the RAW accumulator it still holds; its answer arrives through
+      // engine.onResult, and the pane paints a result that lands while not recording. No-op for a
+      // loaded .fft file or an accumulator-less (non-averaged) run; while running it pre-empts
+      // the next tick.
       const base = this.host.getResult && this.host.getResult();
-      if (base && this.engine.reemitFftDisplay && this.engine.reemitFftDisplay(base)) {
-        const r = this.host.getResult();
-        if (r) this.fftView.render(r);
-      }
+      if (base && this.engine.reemitFftDisplay) this.engine.reemitFftDisplay(base);
     };
     const appendCalRow = () => { const $row = $(calRowHtml()).appendTo('#fftCalRows'); refreshCalRemoveBtns(); return $row; };
     $('#fftCalRows')
@@ -863,16 +887,26 @@ export class FftTabControl {
     this._calRestore = chainCalStoreOp(restoreCalRows);
 
     // In-session .frc save live-reload (Java FftTabControl subscribes CALIBRATION_FILE_SAVED ->
-    // onCalibrationFileSaved): if any loaded calibration row references the just-saved file,
-    // re-apply the rows through the shared store (rebuildCalEntries) so the new curve takes effect
-    // without re-browsing. Across-reload restoration is handled by restoreCalRows() above (the
-    // .frc text is persisted in the file-store); this only refreshes from the in-memory rows.
-    MessageBus.instance().subscribe(Events.CALIBRATION_FILE_SAVED, (path) => {
+    // onCalibrationFileSaved): a loaded calibration row referencing the just-saved file re-parses
+    // the TEXT the event carries - the browser cannot re-read a file by name, so without the
+    // carried text the rebuild would re-apply the row's stale in-memory copy - then the rows go
+    // through the shared store (rebuildCalEntries) and the refreshed bytes are persisted so a
+    // page reload restores the new curve too.
+    MessageBus.instance().subscribe(Events.CALIBRATION_FILE_SAVED, async (saved) => {
+      if (!saved || !saved.name) return;
       let touched = false;
-      $('#fftCalRows .fft-cal-row').each(function () {
-        if ($(this).data('frcName') === path) touched = true;
+      const $rows = $('#fftCalRows .fft-cal-row').filter(function () {
+        return $(this).data('frcName') === saved.name;
       });
-      if (touched) rebuildCalEntries();
+      for (const rowEl of $rows.toArray()) {
+        const $row = $(rowEl);
+        try {
+          $row.data('stereo', io.loadFrc(saved.text));
+          $row.data('hash', await putCal(new TextEncoder().encode(saved.text), saved.name));
+          touched = true;
+        } catch (e) { console.warn('FFT: saved calibration re-parse failed:', e && e.message); }
+      }
+      if (touched) { rebuildCalEntries(); persistCalRows(); }
     });
 
     // Logarithmic frequency axis toggle (Java fftLogFreqAxis) - drives the FFT view.

@@ -68,7 +68,15 @@ function skirtLookAheadBins(fftSize, stepSamples) {
 }
 
 export class FftAnalyzer {
-  constructor() {
+  /**
+   * @param deps {transform} - transform: (re, im) => void, the FFT this analyser runs on every
+   *   frame. Defaults to the serial dsp/fft.js transform, which is the reference every result is
+   *   measured against; a caller that can DIVIDE a transform across threads - only the analyzer
+   *   worker can, and only in a page that allows shared memory - hands its own in here. The
+   *   analyser itself knows nothing about threads, and nothing else about it changes.
+   */
+  constructor({ transform } = {}) {
+    this._transform = transform || fft;
     // Cached window-function table - rebuilt only when (fftSize, windowType)
     // changes (analyze runs repeatedly with the same pair on the worker).
     this._cachedWindow = null;
@@ -93,6 +101,19 @@ export class FftAnalyzer {
     // Spectrum-only fast-path: skip the per-tick THD / SNR / SINAD / noise sweeps.
     this._spectrumOnly = false;
 
+    // The frame spectra the last prelude on THIS analyzer computed, with the identity they
+    // belong to - see _preludeFrameFor. The prelude transforms frames 0 and 1 to find the
+    // fundamental and its sub-bin position, and those are the very first frames the
+    // accumulation then transforms again; keeping them turns the second pass into a copy-free
+    // read. Replaced whole at every prelude, so at most two frames are held.
+    this._preludeFrames = null;
+
+    /** Where the milliseconds of the analysis running now went, or null while stage timing is
+     *  off (see startStageTiming). The stages live here, so their measurement does too: the
+     *  windowing and the per-frame transforms in _frameFft, the de-rotation in
+     *  accumulatePartial, the statistics in finalize. Off, every stage costs one null test. */
+    this.stageMs = null;
+
     // Reusable scratch (Float64Array) - re-used across calls to kill per-tick alloc.
     this._scratchAmplLinear = null;
     this._scratchSignalMask = null;
@@ -106,6 +127,23 @@ export class FftAnalyzer {
   setMultiTone(multiTone) { this._multiTone = multiTone; }
   /** Toggles the spectrum-only fast-path for the next analyze. */
   setSpectrumOnly(on) { this._spectrumOnly = on; }
+
+  /** Arms (or disarms) per-stage timing for the analysis that follows, clearing the counters.
+   *  Armed per tick by the caller, because the switch that turns diagnostics on is a setting of
+   *  the page and not of this class: the analysis runs in a worker, which has neither that
+   *  setting's storage nor a query string of its own to read it from.
+   *  @param {boolean} on */
+  startStageTiming(on) {
+    this.stageMs = on
+      ? { windowMs: 0, transformMs: [], frameMs: 0, derotateMs: 0, statsMs: 0 }
+      : null;
+  }
+
+  /** Closes the statistics stage of a timed analysis; a no-op while timing is off. finalize has
+   *  two exits - a spectrum with no usable fundamental leaves early - and both end that stage. */
+  _stageStatsDone(startedAt) {
+    if (this.stageMs) this.stageMs.statsMs += performance.now() - startedAt;
+  }
 
   /** Returns the cached window table for (N, type), rebuilding via buildWindow
    *  only when the (size, type) pair changes; caches its coherent gain too. */
@@ -132,15 +170,53 @@ export class FftAnalyzer {
     return (current != null && current.length === size) ? current : new Float64Array(size);
   }
 
+  /** The spectrum of the frame starting at sample `base`, if the prelude on THIS analyzer
+   *  already transformed exactly that frame - same signal, same spacing, same window - else
+   *  null. The prelude's two frames ARE accumulation frames 0 and 1 (it windows from sample 0
+   *  and from sample `step` with the window `sp` carries), so at the geometry that analyses two
+   *  frames per tick the accumulation needs no transform of its own at all.
+   *
+   *  The identity is checked, not assumed: a pool worker runs its own analyzer that never ran a
+   *  prelude and so finds nothing here, and a stale set from an earlier signal or geometry fails
+   *  the comparison and is transformed afresh. */
+  _preludeFrameFor(samples, base, sp) {
+    const p = this._preludeFrames;
+    if (p == null || p.samples !== samples || p.step !== sp.step
+        || p.fftSize !== sp.fftSize || p.window !== sp.window) return null;
+    const i = (base === 0) ? 0 : ((base === p.step) ? 1 : -1);
+    if (i < 0 || p.re[i] == null) return null;
+    return { re: p.re[i], im: p.im[i] };
+  }
+
+  /** How many LEADING frames of `samples` the prelude on this analyzer already transformed -
+   *  the frames an accumulation here gets for free, and therefore the frames it is pointless to
+   *  hand to another thread. 0 on an analyzer that did not run this prelude. */
+  preludeFrameCount(samples, sp) {
+    let n = 0;
+    while (this._preludeFrameFor(samples, n * sp.step, sp) != null) n++;
+    return n;
+  }
+
   /** Windows + FFTs the frame starting at local sample offset `localStart`,
    *  leaving re / im populated with the result. (No frame cache in the browser
    *  port - the desktop FrameFftCache key offset is the worker's concern.) */
   _frameFft(samples, localStart, fftSize, window, re, im) {
+    const st = this.stageMs;
+    const t0 = st ? performance.now() : 0;
     for (let n = 0; n < fftSize; n++) {
       re[n] = samples[localStart + n] * window[n];
       im[n] = 0.0;
     }
-    fft(re, im);
+    const t1 = st ? performance.now() : 0;
+    this._transform(re, im);
+    if (st) {
+      const t2 = performance.now();
+      st.windowMs += t1 - t0;
+      // One entry per transform, in the order the tick ran them - a tick's transforms are a
+      // handful, and which of them is slow is the question this log exists to answer.
+      st.transformMs.push(t2 - t1);
+      st.frameMs += t2 - t0;
+    }
   }
 
   // ==========================================================================
@@ -471,6 +547,14 @@ export class FftAnalyzer {
       }
     }
 
+    // The two transforms above ARE accumulation frames 0 and 1: frame 0 is windowed from
+    // sample 0 and frame 1 from sample `step`, with this same window - bit for bit what
+    // accumulatePartial computes for f = 0 and f = 1. Keep them so the accumulation on THIS
+    // analyzer reads them instead of transforming the same samples a second time. They stay
+    // OUT of the shared params below, which are broadcast to the pool: these are two full
+    // frame spectra, and cloning them per worker would cost more than the transform they save.
+    this._preludeFrames = { samples, step, fftSize, window, re: [f0Re, s1Re], im: [f0Im, s1Im] };
+
     // Everything the per-frame derotation (accumulatePartial) and the finalize
     // stats path need. Plain data only - safe to structured-clone to a worker.
     return {
@@ -500,13 +584,23 @@ export class FftAnalyzer {
    *          For incoherent averaging sumRe carries the power sum and sumIm is 0.
    */
   accumulatePartial(samples, frameStart, frameEnd, sp) {
+    const st = this.stageMs;
+    const t0 = st ? performance.now() : 0;
+    // What the frame transforms had cost before this call: the de-rotation is what is left of
+    // this pass once the frames it had to transform itself are taken back out (a frame the
+    // prelude already transformed costs nothing here, which is the point of holding them).
+    const frameMs0 = st ? st.frameMs : 0;
     const { fftSize, halfSize, step, window, windowType, coherentAveraging,
             kFractional, intFundBinRounded,
             f2Kappa, famCount, famA, famB, famPos } = sp;
     const sumRe = new Float64Array(fftSize);   // complex Re  OR  power (incoherent)
     const sumIm = new Float64Array(fftSize);   // complex Im  OR  unused (incoherent)
-    const frameRe = new Float64Array(fftSize);
-    const frameIm = new Float64Array(fftSize);
+    // The transform target for a frame this analyzer has not already transformed; a frame the
+    // prelude left behind is read where it lies (_preludeFrameFor). Every branch below only
+    // READS the frame pair - it writes the sums - so standing the prelude's own arrays in for
+    // this scratch pair cannot disturb them.
+    const scratchRe = new Float64Array(fftSize);
+    const scratchIm = new Float64Array(fftSize);
     // Region-constant de-rotation. A windowed tone's lobe - the peak and its
     // off-centre bins together - advances by ONE common phase per frame step (the
     // tone's own frequency times the step), so a per-bin ramp mis-rotates every
@@ -530,7 +624,10 @@ export class FftAnalyzer {
     let acceptedFrames = 0;
     for (let f = frameStart; f < frameEnd; f++) {
       const base = f * step;
-      this._frameFft(samples, base, fftSize, window, frameRe, frameIm);
+      const held = this._preludeFrameFor(samples, base, sp);
+      const frameRe = held ? held.re : scratchRe;
+      const frameIm = held ? held.im : scratchIm;
+      if (!held) this._frameFft(samples, base, fftSize, window, scratchRe, scratchIm);
       if (coherentAveraging && rectWin) {
         const thetaF = -2.0 * Math.PI * base * rampScale / fftSize;
         const stepRe = Math.cos(thetaF), stepIm = Math.sin(thetaF);
@@ -588,6 +685,7 @@ export class FftAnalyzer {
       }
       acceptedFrames++;
     }
+    if (st) st.derotateMs += (performance.now() - t0) - (st.frameMs - frameMs0);
     return { sumRe, sumIm, acceptedFrames };
   }
 
@@ -630,6 +728,7 @@ export class FftAnalyzer {
    * @returns {FftResult} `outResult`, populated.
    */
   finalize(merged, sp, snrFreqMin, snrFreqMax, fundRefDbFs, outResult) {
+    const statsT0 = this.stageMs ? performance.now() : 0;
     const { sampleRate, fftSize, harmonicCount, windowType, overlap, step,
             coherentAveraging, expectedFundHz,
             freqRes, halfSize, cohGain, nenbw, kFractional,
@@ -739,6 +838,7 @@ export class FftAnalyzer {
       outResult.fundamentalDynExclusionHz = 0.0;
       outResult.preCorrectionPeaks = null;
       outResult.captureRawPeaks();
+      this._stageStatsDone(statsT0);
       return outResult;
     }
 
@@ -852,6 +952,7 @@ export class FftAnalyzer {
     outResult.fundamentalDynExclusionHz = dynWidthBins * freqRes;
     outResult.preCorrectionPeaks = null;
     outResult.captureRawPeaks();
+    this._stageStatsDone(statsT0);
     return outResult;
   }
 

@@ -29,7 +29,8 @@
 //
 // The accumulator the worker produces is RAW: the measured .frc (loopback /
 // filter frequency response) is subtracted at RENDER time from BOTH the trace
-// AND the THD/IMD table (fft/fft-compensation.js) - it has NOTHING to do with
+// AND the THD/IMD table (the cascade in dsp/frc.js, applied by
+// fft/fft-view-correction.js) - it has NOTHING to do with
 // the generator. Default (no .frc loaded) = no correction.
 //
 // BACKEND DISPATCH - this class is also the web's sound.AudioBackend: the ACTIVE
@@ -403,6 +404,10 @@ export class AudioEngine {
   /** Re-emits the display from the RAW FFT accumulator so a calibration
    *  change re-applies the current correction cascade while STOPPED (FftController). */
   reemitFftDisplay(base) { return this._fft.reemitDisplay(base); }
+
+  /** Hands the active .frc calibration rows to the FFT analyzer, which cascades them into the
+   *  de-embed it applies to every displayed frame (FftController.setCalibrationEntries). */
+  setFftCalibrationEntries(entries) { this._fft.setCalibrationEntries(entries); }
 
   // The visible status line was removed; mirror status to the console for debugging (the hidden
   // #status aria-live element is still updated via onStatus for screen readers).
