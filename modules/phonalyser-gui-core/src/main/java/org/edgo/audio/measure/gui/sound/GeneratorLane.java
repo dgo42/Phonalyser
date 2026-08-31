@@ -319,15 +319,20 @@ public final class GeneratorLane {
             } else if (form == GenSignalForm.DUAL_TONE_COMP) {
                 // Plain two-tone generator, then load the dual-tone intermod
                 // corrections (freq-independent (a,b) products) onto it.  The
-                // second tone + amplitude split are pushed below.
-                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, dacFs);
+                // second tone + amplitude split are pushed below.  An empty slot
+                // is refused exactly as the compensated sine's is: a compensated
+                // form IS its corrections, and emitting the plain two tones under
+                // that label would have their intermodulation measured and
+                // recorded as if it were predistorted.
                 String dpd = prefs.getGenDpd(form);
+                if (dpd == null || dpd.isEmpty()) {
+                    return PlaybackStateEnum.NEED_PREDISTORTION;
+                }
                 if (compensationFileMissing(dpd)) {
                     return PlaybackStateEnum.PREDISTORTION_FILE_MISSING;
                 }
-                if (dpd != null && !dpd.isEmpty()) {
-                    gen.readDpd(dpd, frequency, sampleRate);
-                }
+                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, dacFs);
+                gen.readDpd(dpd, frequency, sampleRate);
             } else if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
                 GeneratorRun.SweepSpec sweep = run.sweep();
                 if (form == GenSignalForm.LINEAR_SWEEP) {
@@ -560,11 +565,11 @@ public final class GeneratorLane {
      * {@code target} - the remote half of what {@link #tryStartOnce} does by
      * handing the {@code .dpd} path to the generator's constructor.
      *
-     * <p>Compensated sine IS its corrections: a bench started on
-     * {@code SINE_COMP} with no table emits a plain sine, and its THD is then
-     * measured and recorded as if it were predistorted.  So the missing file is
-     * refused here exactly as the local path refuses it, rather than silently
-     * downgraded.  The dual-tone slot stays optional, as it is locally.
+     * <p>A compensated form IS its corrections: a bench started on one with no
+     * table emits the plain waveform, and its distortion is then measured and
+     * recorded as if it were predistorted.  So an empty slot is refused here
+     * exactly as the local path refuses it, rather than silently downgraded -
+     * for the dual-tone form as for the sine.
      *
      * @return {@link PlaybackStateEnum#STARTED} when there was nothing to load
      *         or it was loaded, else the machine-readable refusal
@@ -576,8 +581,7 @@ public final class GeneratorLane {
         }
         String dpd = prefs.getGenDpd(form);
         if (dpd == null || dpd.isEmpty()) {
-            return form == GenSignalForm.SINE_COMP
-                    ? PlaybackStateEnum.NEED_PREDISTORTION : PlaybackStateEnum.STARTED;
+            return PlaybackStateEnum.NEED_PREDISTORTION;
         }
         if (compensationFileMissing(dpd)) {
             return PlaybackStateEnum.PREDISTORTION_FILE_MISSING;
@@ -1040,12 +1044,12 @@ public final class GeneratorLane {
      *  silently undone by a correction file arriving.
      *
      *  <p>An EMPTIED slot is the exception, and ends the tone rather than
-     *  swapping anything: compensated sine IS its corrections (see {@link
-     *  #applySavedCompensation}), so with no table it would emit a plain sine
-     *  under the compensated label and a THD measured on it would be recorded as
-     *  predistorted - the same reading a start with an empty slot refuses to
-     *  produce.  The dual-tone slot is optional there and stays optional here:
-     *  its tone goes on, with the intermod corrections dropped. */
+     *  swapping anything: a compensated form IS its corrections (see {@link
+     *  #applySavedCompensation}), so with no table it would emit the plain
+     *  waveform under the compensated label and the distortion measured on it
+     *  would be recorded as predistorted - the same reading a start with an
+     *  empty slot refuses to produce.  Both compensated forms are ended alike:
+     *  the dual-tone slot is no more optional than the sine's. */
     public void dpdChanged(GenSignalForm slotForm) {
         Preferences prefs = Preferences.instance();
         if (!isRunning() || prefs.getGenSignalForm() != slotForm) {
@@ -1054,10 +1058,8 @@ public final class GeneratorLane {
         String dpd = prefs.getGenDpd(slotForm);
         if (dpd != null && !dpd.isEmpty()) {
             loadCorrectionsFromFile(dpd);
-        } else if (slotForm == GenSignalForm.SINE_COMP) {
-            stop();
         } else {
-            clearCompensation();
+            stop();
         }
     }
 

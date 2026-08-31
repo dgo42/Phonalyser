@@ -226,6 +226,53 @@ class GeneratorLaneLiveChangeTest {
                 "the lane was restarted rather than stopped");
     }
 
+    /**
+     * The same rule for the DUAL-TONE compensated form: its slot is no more
+     * optional than the sine's.  A compensated form IS its corrections, so a
+     * two-tone pair emitted with none under the compensated label has its
+     * INTERMODULATION measured and recorded as if it had been predistorted.
+     * Both halves of the rule are asked here: a start with an empty slot is
+     * refused (NEED_PREDISTORTION, no line opened), and a slot emptied while
+     * that form plays ends the tone rather than dropping the corrections and
+     * playing on.
+     */
+    @Test
+    @DisplayName("the dual-tone compensated form refuses an empty slot and stops when it is emptied")
+    void theDualToneCompensatedFormTreatsAnEmptySlotAsTheSineDoes() throws IOException {
+        Preferences prefs = Preferences.instance();
+        prefs.setGenDpd(GenSignalForm.DUAL_TONE_COMP, null);
+        int openedBeforeRefusal = stub.openedPlaybacks();
+
+        assertEquals(PlaybackStateEnum.NEED_PREDISTORTION, lane.start(dualCompRun()),
+                "a compensated dual tone started with an empty slot would emit the plain "
+                        + "two tones, and their intermodulation would be recorded as "
+                        + "predistorted");
+        assertEquals(openedBeforeRefusal, stub.openedPlaybacks(),
+                "the refusal still opened an output line");
+
+        prefs.setGenDpd(GenSignalForm.DUAL_TONE_COMP,
+                writeDpd("dual-loaded.dpd", SECOND_HARMONIC).toString());
+        assertEquals(PlaybackStateEnum.STARTED, lane.start(dualCompRun()));
+        prefs.setGenSignalForm(GenSignalForm.DUAL_TONE_COMP);
+        lane.setForm(GenSignalForm.DUAL_TONE_COMP);
+        int openedBefore = stub.openedPlaybacks();
+
+        prefs.setGenDpd(GenSignalForm.DUAL_TONE_COMP, null);
+        lane.dpdChanged(GenSignalForm.DUAL_TONE_COMP);
+
+        assertFalse(lane.isRunning(),
+                "the compensated dual tone kept playing with no correction table");
+        assertEquals(openedBefore, stub.openedPlaybacks(),
+                "the lane was restarted rather than stopped");
+    }
+
+    /** The run the pane's Play would derive for the compensated dual tone. */
+    private GeneratorRun dualCompRun() {
+        return new GeneratorRun(GenSignalForm.DUAL_TONE_COMP, TONE_HZ, AMPLITUDE_VRMS, RATE_HZ,
+                BIT_DEPTH, DITHER_BITS, DAC_FS_VOLTS, RIGHT_LANE_SCALE,
+                OutputChannels.BOTH, false, true, null);
+    }
+
     /** The run the pane's Play would derive: a plain sine at the test's tone. */
     private GeneratorRun sineRun() {
         return new GeneratorRun(GenSignalForm.SINE, TONE_HZ, AMPLITUDE_VRMS, RATE_HZ,
