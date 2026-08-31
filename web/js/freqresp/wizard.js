@@ -24,6 +24,8 @@
 import { divideInPlace } from './deconvolve.js';
 import { saveFrc, loadFrc } from '../io/frc.js';
 import { t } from '../i18n/i18n.js';
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
 
 const FRC_TYPE = [{ description: 'Filter calibration', accept: 'text/plain', extensions: ['.frc'] }];
 
@@ -207,6 +209,10 @@ export class FreqRespWizard {
       // the download path cannot claim the file was written (io/file-picker.js).
       this.host.status(res.viaDownload
         ? t('web.save.handedToDownload', res.name) : 'saved ' + res.name);
+      // A calibration row in the FFT or Frequency-Response tab that references this file by name
+      // re-parses the carried text, so the freshly captured curve takes effect without
+      // re-browsing (the event's contract - its subscribers do the matching).
+      MessageBus.instance().publish(Events.CALIBRATION_FILE_SAVED, { name: res.name, text });
     } catch (e) { this.host.status(t('freqResp.error.measurement.save', e.message)); }
   }
 

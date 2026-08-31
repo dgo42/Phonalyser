@@ -812,8 +812,12 @@ export class FreqRespTabControl {
         // The download path promises nothing back, so it must not be reported as saved.
         this.status(res.viaDownload
           ? t('web.save.handedToDownload', res.name) : 'saved ' + res.name);
-        // If this .frc is loaded as a calibration row, reload it so the new curve applies.
-        this.onCalibrationFileSaved(res.name);
+        // If this .frc is loaded as a calibration row, reload it so the new curve applies -
+        // here directly, and over the bus for the OTHER tab's rows (the FFT tab subscribes
+        // CALIBRATION_FILE_SAVED and matches by name; the text travels because nothing in the
+        // browser can re-read a file by name).
+        this.onCalibrationFileSaved(res.name, text);
+        MessageBus.instance().publish(Events.CALIBRATION_FILE_SAVED, { name: res.name, text });
       }
     } catch (e) { this.status(t('freqResp.error.measurement.save', e.message)); }
   }
@@ -994,11 +998,19 @@ export class FreqRespTabControl {
 
   /** Re-reads any loaded row referencing the just-saved .frc so the new curve takes effect
    *  immediately (Java onCalibrationFileSaved). The browser sandbox can't re-read by path, so
-   *  this only refreshes the store + tile from the in-memory rows. */
-  onCalibrationFileSaved(path) {
+   *  the freshly written TEXT is handed in and re-parsed over the row's stale in-memory copy -
+   *  without it the store would be rebuilt from the very rows the save just made outdated. */
+  onCalibrationFileSaved(path, text) {
     let touched = false;
     for (const r of this._calRows) {
-      if (r.entry.path === path) touched = true;
+      if (r.entry.path === path) {
+        touched = true;
+        if (text != null) {
+          try { r.calibration = loadFrc(text); } catch (e) {
+            console.warn('freqresp: saved calibration re-parse failed:', e && e.message);
+          }
+        }
+      }
     }
     if (touched) this.syncStoreFromRows();
   }
