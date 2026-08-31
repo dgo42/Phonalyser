@@ -236,6 +236,18 @@ export class GeneratorPane {
 
   bindCorrections() {
     const prefs = this.prefs;
+    // ONE hot-load path for all three ways a slot can be written - the browse button, the clear
+    // button and the predistortion wizard's Apply - by listening on the per-form .dpd
+    // PREFERENCES, exactly as Java's GeneratorController listens on genDpdProperty /
+    // genDpdDualProperty and calls lane.dpdChanged. Apply writes only preferences, so before
+    // these listeners existed it reached no running generator at all.
+    prefs.genDpd.addListener(() => this.dpdChanged(GenSignalForm.SINE_COMP));
+    prefs.genDpdDual.addListener(() => this.dpdChanged(GenSignalForm.DUAL_TONE_COMP));
+    // The FORM preference funnels too, and this is what settles the Apply ordering: Apply writes
+    // the slot FIRST (so a live reaction finds the correction in place) and the form SECOND, so
+    // the slot's own listener still sees the OLD form and returns; this one then fires with both
+    // written and loads the correction onto the running tone.
+    prefs.genSignalForm.addListener((form) => this.dpdChanged(form));
     $('#genCorrBrowse').on('change', async (ev) => {
       const file = ev.target.files && ev.target.files[0];
       if (!file) return;
@@ -246,7 +258,8 @@ export class GeneratorPane {
         fileStore.put(this.dpdKey(form), file.name, text);   // persist the compensated .dpd (name + contents)
         this.genCorrNames[form] = file.name;
         this.refreshCorrectionsRow();
-        await this.restartGenerator();   // re-applies the .dpd to a live compensated tone (no-op if stopped)
+        // No dpdChanged call here: setGenDpd above is a preference write, and the listener
+        // wired in this method carries it to the running DDS.
         $('#status').text('loaded ' + file.name);
       } catch (e) { $('#status').text('load failed: ' + e.message); }
     });
@@ -256,8 +269,48 @@ export class GeneratorPane {
       fileStore.remove(this.dpdKey(form));   // clearing removes it from storage
       delete this.genCorrNames[form];
       this.refreshCorrectionsRow();
-      await this.restartGenerator();
+      // The emptied slot reaches the generator through the same preference listener.
     });
+  }
+
+  /** Takes the .dpd of `slotForm` onto the RUNNING generator when that form is the one playing -
+   *  so a load or a clear of the correction file takes effect immediately, and only for its own
+   *  slot. Java GeneratorLane.dpdChanged; the web has no lane object, so the pane that owns the
+   *  row carries the behaviour, over the same two engine messages a compensated start and the
+   *  predistortion wizard use.
+   *
+   *  LIVE, not a restart. The correction tables are published into the running DDS, so a new
+   *  correction set never needs the device stopped - and a stop+start would not merely cost the
+   *  tone an audible gap, it would be destructive: the restart replays the parameters the
+   *  generator was last STARTED with, silently undoing every live amplitude and frequency edit
+   *  made since.
+   *
+   *  An EMPTIED slot is the exception, and ends the tone rather than swapping anything: a
+   *  compensated form IS its corrections, so with no table it would emit the plain waveform under
+   *  the compensated label and the distortion measured on it would be recorded as predistorted -
+   *  the reading a start with an empty slot refuses to produce. Both compensated forms are ended
+   *  alike: the dual-tone slot is no more optional than the sine's, since a plain two-tone pair
+   *  under that label has its INTERMODULATION recorded as predistorted. */
+  async dpdChanged(slotForm) {
+    // Only a COMPENSATED form has a slot to change - Java reaches dpdChanged from the two slot
+    // properties alone, and the web's form-preference listener would otherwise hand it any form.
+    if (!isCompensated(slotForm)) return;
+    // The guard reads the form PREFERENCE, not the combo: it is the value the writes commit to
+    // and the one Java's lane consults (prefs.getGenSignalForm() != slotForm), so a slot change
+    // and a form change land in the same order however the DOM is synced afterwards.
+    if (!this.engine.generatorOn || this.prefs.genSignalForm.get() !== slotForm) return;
+    const text = this.prefs.getGenDpd(slotForm);
+    if (text) {
+      // The same message a compensated start sends (dpdText + dpdFrequency): the sink's kernel
+      // parses the text and applies the tables at the effective frequency.
+      this.engine.postGen({ dpdText: text, dpdFrequency: this.engine.config.frequency });
+      return;
+    }
+    await this.engine.stopGenerator();
+    // The play LED and the ON-AIR indicator follow the generator, which just stopped without
+    // going through the play button (Java syncPlayButtonVisuals after the lane's own stop).
+    $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
+    this.setOnAir(false);
   }
 
   // Restore any .dpd persisted through the file-store into the live prefs slot on startup:

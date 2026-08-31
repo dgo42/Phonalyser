@@ -52,6 +52,7 @@ export class PredistortionWizard {
     // state. A window closed before that must leave both untouched.
     this.engaged = false;
     this.savedName = null;       // name of the just-saved .dpd; non-null => #dpdSave is in Apply mode
+    this.savedText = null;       // its TEXT - what Apply writes into the per-form slot
   }
 
   // ---- Wizard live UI: 100 ms polling + log convergence chart + metric panel ----
@@ -84,17 +85,19 @@ export class PredistortionWizard {
   }
 
   _updateFftInfo() {
-    // Mirror Java refresh() (PredistortionWizardDialog:307-312): size / rate / window
-    // on 3 separate lines, with the bin width via fmtHz (%.4f).  Prefer the live
-    // result's fftSize / sampleRate / freqResolution, falling back to prefs.
+    // Mirror Java refresh() (PredistortionWizardDialog:307-312) and its two-column group
+    // (buildFftGroup): SIZE and RATE share the first line, WINDOW has the second, the bin
+    // width via fmtHz (%.4f).  Prefer the live result's fftSize / sampleRate /
+    // freqResolution, falling back to prefs.
     const r = this.getResult();
     const size = (r && r.fftSize) || this.prefs.fftLength.get();
     const rate = (r && r.sampleRate) || this.engine.outSampleRate || this.engine.config.outRate || 0;
     const binHz = (r && Number.isFinite(r.freqResolution)) ? r.freqResolution : (rate && size ? rate / size : 0);
+    const cell = (text) => `<span class="dpd-cell">${$('<span>').text(text).html()}</span>`;
     $('#dpdFftInfo').html(
-      t('predistortion.fft.size', size, binHz.toFixed(4)) + '<br>'
-      + t('predistortion.fft.rate', rate) + '<br>'
-      + t('predistortion.fft.window', this.prefs.fftWindow.get()));
+      cell(t('predistortion.fft.size', size, binHz.toFixed(4)))
+      + cell(t('predistortion.fft.rate', rate))
+      + cell(t('predistortion.fft.window', this.prefs.fftWindow.get())));
   }
 
   // Live "what's going on" headline + Stop-round gating, polled every 100 ms.
@@ -389,17 +392,30 @@ export class PredistortionWizard {
       // Java builds a FRESH dialog per open (FftPane:290 new PredistortionWizardDialog(...).open()),
       // so its `engaged` latch starts false every time; this wizard object outlives the modal, so
       // the latch is cleared here, beside `applied`.
-      this.applied = false; this.engaged = false; this.savedName = null;
+      this.applied = false; this.engaged = false; this.savedName = null; this.savedText = null;
       $('#dpdSave').text(t('predistortion.button.save')).prop('disabled', true);
+      // A fresh dialog shows nothing of a previous run: no convergence trace, no Round /
+      // Current / Last / Best figures, no progress line, and the Start button in its Start
+      // role with the run parameters editable. This wizard object outlives the modal, so the
+      // DISPLAY state is reset here - the previous run's engine goes with it, since the
+      // metric panel reads its best-so-far and its round counter.
+      this.pdEngine = null;
+      this.running = false;
+      $('#dpdStart').text(t('predistortion.button.start'))
+        .removeClass('btn-danger').addClass('btn-success');
+      $('#dpdAverages, #dpdTarget').prop('disabled', false);
+      $('#dpdProgress').text('');
       // Seed both fields from Preferences so the user's last-used values survive
       // reopening the wizard AND restarting the app (Java buildSettings:234/247).
       $('#dpdAverages').val(this.prefs.predistortionAverages.get());
       $('#dpdTarget').val(this.prefs.predistortionTargetPct.get());
       // Java open() calls refresh() then armTimer() BEFORE the dialog is shown, so the FFT
       // group, convergence chart and metric panel are live from open - not blank until Start
-      // (PredistortionWizardDialog:161/165). Seed the live UI once, then arm the persistent
-      // 100 ms poll that keeps FFT info + metrics current off getResult() even while idle.
-      this._updateFftInfo(); this._drawChart(); this._updateMetrics();
+      // (PredistortionWizardDialog:161/165). Seed the live UI once - _resetLive empties the
+      // convergence history and the round state first, so what is drawn is this open's own
+      // live reading and nothing from before - then arm the persistent 100 ms poll that keeps
+      // FFT info + metrics current off getResult() even while idle.
+      this._resetLive(this.host.isDualTone());
       this._startPoll();
       this.modal.show();
     });
@@ -494,7 +510,8 @@ export class PredistortionWizard {
       $('#dpdAverages, #dpdTarget').prop('disabled', true);
       // Stop-round stays disabled until the poll sees Phase.COLLECTING (Java gate,
       // PredistortionWizardDialog:317).
-      this.savedName = null; $('#dpdSave').text(t('predistortion.button.save')).prop('disabled', true);
+      this.savedName = null; this.savedText = null;
+      $('#dpdSave').text(t('predistortion.button.save')).prop('disabled', true);
       const dual = isDualTone(this.engine.config.form);
       $('#dpdProgress').text(t('predistortion.phase.aligning'));
       this._resetLive(dual);
@@ -561,34 +578,58 @@ export class PredistortionWizard {
       if (this.savedName) {
         const applyForm = this.pdEngine.dualTone ? GenSignalForm.DUAL_TONE_COMP : GenSignalForm.SINE_COMP;
         this.applied = true;
-        this.onApply(applyForm, this.savedName);
+        // The .dpd TEXT is what Apply commits, with the file name beside it for the row's label:
+        // the web's per-form slot holds the correction itself (the browser has no OS path to
+        // re-open), so writing only the name left the slot holding a filename that no loader can
+        // parse - the saved correction was never in it.
+        this.onApply(applyForm, this.savedText, this.savedName);
         this.modal.hide();
         return;
       }
       const c = this.engine.config, r = this.pdEngine.bestResult;
       const dual = this.pdEngine.dualTone;
-      if (!r) { $('#dpdProgress').text('no correction to save.'); return; }
-      const sampleRate = this.engine.outSampleRate || c.outRate;
+      // Java's save path refuses on a null result AND on a missing correction set, before it
+      // opens the file dialog (PredistortionWizardDialog.doSave: r == null, then the dual /
+      // single best-set check).
+      if (!r || (dual ? !this.pdEngine.bestIntermod : !this.pdEngine.bestApplied)) {
+        $('#dpdProgress').text('no correction to save.');
+        return;
+      }
+      // The rate the correction was MEASURED at (Java passes r.sampleRate), not the output
+      // rate: the file states the geometry of the run it came from, and on a bench whose two
+      // converters run at different rates the two disagree.
+      const sampleRate = r.sampleRate;
       const fundamentalDbFs = r.fundamentalDbFs;
       const header = this._buildHeader(r, dual);
+      // The channel the run MEASURED on picks the calibration the saved amplitudes are
+      // de-embedded with (Java passes r.channelLeft). Hard-coding the left channel wrote every
+      // amplitude through the wrong chain's response on a right-channel bench - near a notch
+      // that is the whole notch depth in amplitude and the channel phase difference in phase.
+      const chanLeft = r.channelLeft;
+      // The per-backend output bit depth (Java prefs.current().getOutputBitDepth()); the
+      // top-level preferences carry no such field, so the header used to state "undefined".
+      const bitDepth = this.prefs.current().outputBitDepth;
       try {
         let text;
         const name = this._defaultDpdFileName(r, dual);
         if (dual) {
-          if (!this.pdEngine.bestIntermod) { $('#dpdProgress').text('no correction to save.'); return; }
-          const f1 = this.engine.snapped, f2 = c.tone2Hz;
+          // The MEASURED tones, as Java writes them (r.fundamentalHzRefined /
+          // r.fundamental2HzRefined) - the file states what the run actually saw, not what the
+          // generator was commanded to emit.
+          const f1 = r.fundamentalHzRefined, f2 = r.fundamental2HzRefined;
           text = writeIntermodDpd(this.pdEngine.bestIntermod, header, f1, f2, fundamentalDbFs,
-            sampleRate, this.prefs.outputBitDepth, this.prefs.genAmplitudeVrms.get(), this.pdEngine.calResponseFor(true),
+            sampleRate, bitDepth, this.prefs.genAmplitudeVrms.get(),
+            this.pdEngine.calResponseFor(chanLeft),
             this.prefs.adcFsVoltageRms.get(), this.pdEngine.dualToneFundamentalVrms());
         } else {
-          if (!this.pdEngine.bestApplied) { $('#dpdProgress').text('no correction to save.'); return; }
-          text = writeHarmonicDpd(this.pdEngine.bestApplied, header, this.engine.snapped, fundamentalDbFs,
-            sampleRate, this.prefs.outputBitDepth, this.prefs.genAmplitudeVrms.get(), this.pdEngine.calResponseFor(true),
-            this.prefs.adcFsVoltageRms.get());
+          text = writeHarmonicDpd(this.pdEngine.bestApplied, header, r.fundamentalHzRefined,
+            fundamentalDbFs, sampleRate, bitDepth, this.prefs.genAmplitudeVrms.get(),
+            this.pdEngine.calResponseFor(chanLeft), this.prefs.adcFsVoltageRms.get());
         }
         const res = await this.saveFile(text, name, DPD_TYPE);
         if (res.saved) {
           this.savedName = res.name;
+          this.savedText = text;   // what Apply commits into the per-form slot
           $('#dpdProgress').text(res.viaDownload
             ? t('web.save.handedToDownload', res.name) : t('predistortion.status.saved'));
           $('#dpdSave').text(t('predistortion.button.apply'));   // relabel Save -> Apply
