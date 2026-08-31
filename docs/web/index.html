@@ -599,17 +599,19 @@
                    as "∞"/"inf"; there is NO separate infinity checkbox (Java has none). -->
               <div class="numfield sm"><input id="averages" class="nf-input" type="text" data-i18n-title="fft.settings.averages.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
 
-              <!-- Stop-after-N + Mains-suppression share ONE full-width row (Java stopRow:
-                   a RowLayout carrying the stop-after checkbox + field, then the Mains
-                   label + combo). Spans all 4 grid columns so it stays left-packed. -->
-              <div class="stopafter-cell grid-span4">
+              <!-- Stop-after-N (checkbox + field) holds the row's LEFT column pair; the
+                   Mains-suppression label + combo take the RIGHT pair, so they line up with
+                   Window / Averages above and Align generator below instead of floating
+                   after the stop-after field (Java FftTabControl: the mains selector sits in
+                   the outer grid's right-hand column pair, sharing the stop-after row). -->
+              <div class="stopafter-cell grid-span2">
                 <div class="form-check form-check-sm mb-0"><input id="fftStopAfterNEn" class="form-check-input" type="checkbox" data-i18n-title="fft.settings.stopAfterN.tooltip"/><label class="form-check-label" for="fftStopAfterNEn" data-i18n="fft.settings.stopAfterN" data-i18n-title="fft.settings.stopAfterN.tooltip">Stop after N averages</label></div>
                 <div class="numfield sm"><input id="fftStopAfterN" class="nf-input" type="text" value="10" data-i18n-title="fft.settings.stopAfterN.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
-                <label class="mb-0" data-i18n="fft.settings.mainsSuppression">Mains suppression:</label>
-                <select id="fftMains" class="form-select form-select-sm" data-i18n-title="fft.settings.mainsSuppression.tooltip">
-                  <option value="NONE">None</option><option value="IIR_COMB">IIR comb</option>
-                  <option value="SYNC_SUBTRACT">Sync subtract</option><option value="LMS">LMS canceller</option></select>
               </div>
+              <label data-i18n="fft.settings.mainsSuppression">Mains suppression:</label>
+              <select id="fftMains" class="form-select form-select-sm" data-i18n-title="fft.settings.mainsSuppression.tooltip">
+                <option value="NONE">None</option><option value="IIR_COMB">IIR comb</option>
+                <option value="SYNC_SUBTRACT">Sync subtract</option><option value="LMS">LMS canceller</option></select>
 
               <!-- Get fundamental from generator (span 2) | Align generator label + combo -->
               <div class="form-check form-check-sm mb-0"><input id="fftFundFromGen" class="form-check-input" type="checkbox" data-i18n-title="fft.settings.fundFromGen.tooltip"/><label class="form-check-label" for="fftFundFromGen" data-i18n="fft.settings.fundFromGen" data-i18n-title="fft.settings.fundFromGen.tooltip">Get fundamental from generator</label></div>
@@ -1159,19 +1161,28 @@
       <!-- Layout mirrors Java PredistortionWizardDialog.createContents: statusLabel (headline) ->
            buildFftGroup -> buildChart -> buildProgressGroup -> buildSettings (Averages/Target) -> buttonBar. -->
       <pre id="dpdProgress" class="readout" data-i18n="predistortion.status.idle">Idle. Start capture (▶) on a sine or dual-tone, then Start.</pre>
-      <!-- FFT-settings group + log convergence chart + live metric panel (Java wizard, g38/g49/g50) -->
-      <div class="fw-semibold small mt-1" data-i18n="predistortion.group.fft">FFT settings</div>
-      <div class="dpd-fft small text-secondary mb-1" id="dpdFftInfo"></div>
+      <!-- FFT-settings group + log convergence chart + live metric panel (Java wizard
+           buildFftGroup / buildChart / buildProgressGroup). The FFT group is a bordered
+           group with its title, laid out in TWO columns like the progress group: FFT size
+           and Sample rate share the first line, Window has the second. -->
+      <fieldset class="dpd-group mt-1 mb-2">
+        <legend class="dpd-group-title" data-i18n="predistortion.group.fft">FFT settings</legend>
+        <div class="dpd-fft small text-secondary" id="dpdFftInfo"></div>
+      </fieldset>
       <canvas id="dpdChart" width="440" height="150" class="dpd-chart mb-2"></canvas>
       <div class="fw-semibold small" data-i18n="predistortion.group.progress">Progress</div>
       <div class="dpd-metrics mb-2" id="dpdMetrics"></div>
-      <div class="row g-2 align-items-center mb-2">
-        <label class="col-6 col-form-label col-form-label-sm" data-i18n="predistortion.averages">Averages, n</label>
-        <div class="col"><input id="dpdAverages" class="form-control form-control-sm" type="number" value="16" min="10" max="1000000" data-i18n-title="predistortion.averages.tooltip"/></div>
-      </div>
-      <div class="row g-2 align-items-center mb-2">
-        <label class="col-6 col-form-label col-form-label-sm" data-i18n="predistortion.targetThd">Target THD, %</label>
-        <div class="col"><input id="dpdTarget" class="form-control form-control-sm" type="number" value="0" step="1e-8" min="0" max="100" data-i18n-title="predistortion.targetThd.tooltip"/></div>
+      <!-- Averages and Target THD on ONE row (Java buildSettings: GridLayout(4) - label,
+           field, label, field), the target carrying its % suffix. -->
+      <div class="dpd-settings mb-2">
+        <div class="dpd-pair">
+          <label for="dpdAverages" data-i18n="predistortion.averages">Averages, n</label>
+          <input id="dpdAverages" class="form-control form-control-sm" type="number" value="16" min="10" max="1000000" data-i18n-title="predistortion.averages.tooltip"/>
+        </div>
+        <div class="dpd-pair">
+          <label for="dpdTarget" data-i18n="predistortion.targetThd">Target THD, %</label>
+          <div class="dpd-suffix"><input id="dpdTarget" class="form-control form-control-sm" type="number" value="0" step="1e-8" min="0" max="100" data-i18n-title="predistortion.targetThd.tooltip"/><span class="dpd-unit">%</span></div>
+        </div>
       </div>
     </div>
     <div class="modal-footer py-2">

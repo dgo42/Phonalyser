@@ -12,6 +12,14 @@
  * is the location of app.js, so those resolve to its siblings fft-worker.js and
  * worklets/<name>.js - which is exactly where we emit them. esbuild leaves
  * `new URL(..., import.meta.url)` untouched (intended), so no code change.
+ *
+ * A WORKER RESOLVES ITS OWN SIBLINGS THE SAME WAY, and that is why the entry list below is not
+ * only about entry points: the emitted fft-worker.js builds its transform lanes from
+ * `new URL('./fft-pool-worker.js', import.meta.url)` and its display-preparation worker from
+ * `new URL('./fft-finalize-worker.js', import.meta.url)`, resolved against ITS location. A
+ * sibling no entry emits therefore 404s at runtime - the app keeps working, because every one of
+ * these has a serial / in-place fallback, but it silently runs the slow path for the life of the
+ * session. Every worker a worker builds needs its own entry here.
  * GNU AGPL v3 or later.
  */
 import { build } from 'esbuild';
@@ -53,6 +61,7 @@ const ESM = [
   ['js/shell/update.js', 'update.js'],
   ['js/fft/fft-worker.js', 'fft-worker.js'],
   ['js/fft/fft-pool-worker.js', 'fft-pool-worker.js'],
+  ['js/fft/fft-finalize-worker.js', 'fft-finalize-worker.js'],
   ['js/scope/osc-freq-worker.js', 'osc-freq-worker.js'],
   ['js/scope/osc-meas-worker.js', 'osc-meas-worker.js'],
   ['js/freqresp/deconvolve-worker.js', 'deconvolve-worker.js'],
