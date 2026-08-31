@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.fft.predistortion;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
@@ -452,6 +453,22 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         return I18n.t("predistortion.metric." + key) + ":  " + value;
     }
 
+    /** The distortion the running FFT reads RIGHT NOW - the figure {@code curThdLbl}
+     *  carries: the intermod percentage for a dual tone, THD for a single one.
+     *  {@link Double#NaN} with no result yet, and for a dual tone whose products the
+     *  analyser could not read. */
+    private double liveDistPct() {
+        FftResult live = view.getLastResult();
+        if (live == null) {
+            return Double.NaN;
+        }
+        if (Preferences.instance().getGenSignalForm().isDualTone()) {
+            ImdResult imd = fft.analyzeImd(live);
+            return imd != null ? imd.imdPwrPct : Double.NaN;
+        }
+        return live.thdPct;
+    }
+
     // -------------------------------------------------------------------------
     // Convergence chart
     // -------------------------------------------------------------------------
@@ -467,7 +484,23 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         gc.setForeground(d.getSystemColor(SWT.COLOR_GRAY));
         gc.drawRectangle(px, py, pw, ph);
 
+        // The round IN PROGRESS is drawn as well, as a point that keeps MOVING: its x is the
+        // averaging depth collected so far and its y the distortion the running FFT reads at
+        // this moment - the same live figure curThdLbl carries - so the operator watches the
+        // current round settle instead of seeing nothing until it closes.  The committed
+        // history is untouched: the provisional point lives in these local copies only, and
+        // the round's real point replaces it when onRound commits it.
         double[] h = distHistory;
+        int[] g = avgHistory;
+        double livePct = liveDistPct();
+        int liveAvgs = fft.completedAnalyses();
+        if (running && engine != null && engine.getPhase() == Phase.COLLECTING
+                && Double.isFinite(livePct) && livePct > 0 && liveAvgs > 0) {
+            h = Arrays.copyOf(h, h.length + 1);
+            h[h.length - 1] = livePct;
+            g = Arrays.copyOf(g, g.length + 1);
+            g[g.length - 1] = liveAvgs;
+        }
         int n = h.length;
         if (n < 1) {
             gc.setForeground(d.getSystemColor(SWT.COLOR_DARK_GRAY));
@@ -512,7 +545,6 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // Per-round x fractions: each marker is spaced from the previous one in
         // proportion to that round's averaging depth, so a long (deeply-averaged)
         // round occupies a correspondingly wide slice of the x-axis.
-        int[] g = avgHistory;
         double[] cum = new double[n];
         double total = 0;
         for (int i = 1; i < n; i++) {
