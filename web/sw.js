@@ -15,6 +15,32 @@ const VERSION = '1.2.2';                    // single source of truth = package.
 const CACHE = `phonalyser-${VERSION}`;
 const CORE = ['./', './index.html', './css/app.css', './favicon.svg', './manifest.webmanifest', './devices.yaml'];
 
+// CROSS-ORIGIN ISOLATION. The FFT analyser divides one transform's butterfly stages across lane
+// workers that share the sample arrays outright, and a browser allows that sharing
+// (SharedArrayBuffer) only in a cross-origin-isolated page - which is a property of two response
+// headers on the document. A static host cannot send them, so this worker adds them to what it
+// serves; a page that never reaches the worker simply is not isolated and the analyser keeps
+// every transform on one thread.
+//
+// credentialless, not require-corp: the app's own assets are all same-origin, but the net backend
+// reaches OTHER origins - it probes candidate benches for their JSON descriptor and posts a
+// generator buffer to the one in use. require-corp would demand a header from every one of those
+// answers; credentialless asks for nothing extra of them.
+const ISOLATION_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'credentialless',
+};
+
+/** The same response, carrying the isolation headers. A fetched Response's headers are immutable,
+ *  so it is rebuilt around the same body. An opaque answer (a cross-origin no-cors fetch) has
+ *  nothing to rebuild and is passed through untouched. */
+function isolated(res) {
+  if (!res || res.type === 'opaque' || res.type === 'opaqueredirect') return res;
+  const headers = new Headers(res.headers);
+  for (const name of Object.keys(ISOLATION_HEADERS)) headers.set(name, ISOLATION_HEADERS[name]);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
 self.addEventListener('install', (e) => {
   self.skipWaiting();                       // a freshly-edited worker takes over promptly
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE)));
@@ -42,12 +68,15 @@ self.addEventListener('fetch', (e) => {
   // stale-while-revalidate served the PREVIOUS bundle for a whole extra reload -
   // which, with a version-pinned cache key, looked like "my changes never load".)
   // Falls back to the cache only when the network is unavailable (offline).
+  // The isolation headers are added on the way OUT, to the live answer and to the cached one
+  // alike - what is stored stays the server's own response, so a later deploy that sets its own
+  // headers is not overwritten by a stale copy of these.
   e.respondWith(
     fetch(req)
       .then((res) => {
         if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
-        return res;
+        return isolated(res);
       })
-      .catch(() => caches.open(CACHE).then((c) => c.match(req)))
+      .catch(() => caches.open(CACHE).then((c) => c.match(req)).then(isolated))
   );
 });

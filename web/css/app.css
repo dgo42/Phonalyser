@@ -582,7 +582,12 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .fft-pane .settings-grid .form-check label { white-space: nowrap; }
 /* Checkbox knobs span the label+control pair (Java: horizontalSpan = 2). */
 .fft-pane .settings-grid > .form-check { grid-column: span 2; }
-/* Stop-after + Mains row spans the whole 4-column grid (Java stopRow). */
+/* Stop-after (checkbox + field) occupies the LEFT label|control pair of its row; the
+   Mains label + combo follow as ordinary grid children in the RIGHT pair, so the four
+   columns stay aligned down the whole tab (Java FftTabControl). */
+.fft-pane .settings-grid .grid-span2 { grid-column: span 2; }
+/* The last row (Coherent | Log axis | Detect discontinuity | Threads) still spans all
+   four columns as one flex strip. */
 .fft-pane .settings-grid .grid-span4 { grid-column: 1 / -1; }
 .fft-pane .settings-grid .grid-span4 .form-select { width: 150px; }
 /* Averages NumericStepField (Java averagesField) - fill the 150px control column and keep the
@@ -1005,7 +1010,29 @@ option.device-locked { color: var(--muted); font-style: italic; }
    markup is no longer emitted, so those selectors are retired. */
 .dpd-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; font-size: 11px; }
 .dpd-line { font-size: 12px; white-space: nowrap; }
-.dpd-fft { font-family: Consolas, monospace; }
+/* The FFT-settings block is a bordered GROUP with its title in the border, as the Java
+   dialog's Group is, and its lines sit on TWO columns (Java buildFftGroup's
+   GridLayout(2, true)): FFT size | Sample rate on the first line, Window on the second. */
+.dpd-fft { font-family: Consolas, monospace; display: grid; grid-template-columns: 1fr 1fr;
+  gap: 0 14px; }
+.dpd-cell { white-space: nowrap; }
+.dpd-group { border: 1px solid #ccc; border-radius: 3px; padding: 4px 8px 6px; margin: 0; }
+.dpd-group-title { float: none; width: auto; padding: 0 4px; margin: 0; font-size: 12px;
+  font-weight: 600; }
+/* Averages and Target THD on ONE row - label | field | label | field (Java buildSettings'
+   GridLayout(4, false)), the target field carrying its % suffix. The row sits on the SAME
+   two-column discipline as the progress and FFT blocks above: each half takes an equal share
+   of the width, so the Target THD label starts exactly where the right-hand progress column
+   does (Averages / Best THD / SNR) instead of floating mid-row behind the first field. */
+.dpd-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px;
+  align-items: center; }
+.dpd-pair { display: grid; grid-template-columns: auto 110px; gap: 4px 8px;
+  align-items: center; justify-content: start; }
+.dpd-settings label { font-size: 12.5px; margin: 0; white-space: nowrap; }
+.dpd-settings .form-control { height: 24px; padding: 1px 6px; font-size: 12.5px; }
+.dpd-suffix { display: flex; align-items: center; gap: 4px; }
+.dpd-suffix .form-control { width: 110px; }
+.dpd-unit { font-size: 12.5px; color: var(--text-muted, #6c757d); }
 
 /* Tune-notch wizard (Java TuneNotchWizardDialog): fields grid (GridLayout(4, false) -
    row 1 start / stop, row 2 amplitude / target), the embedded live chart, and a

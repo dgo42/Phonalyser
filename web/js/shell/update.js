@@ -7,6 +7,29 @@
  */
 const POLL_MS = 5 * 60 * 1000;
 
+// The FIRST visit to a static host is not yet under the service worker, so the document arrives
+// without the isolation headers the worker adds and the page is not cross-origin isolated - the
+// FFT's divided transform then stays on one thread for the whole session. One reload puts the
+// document through the worker and the isolation holds from then on.
+//
+// This reload is allowed exactly once per tab, and only here - inside the load handler, before
+// any device is open. A reload while capture or generation is running tears down worklets,
+// workers and both AudioContexts mid-audio and can take the renderer with it, which is why the
+// update path below reloads solely on a deliberate click. The key is written BEFORE the reload,
+// so a host whose headers never take effect reloads once and then leaves the page alone rather
+// than looping.
+const COI_RELOAD_KEY = 'pf-coi-reload';
+
+function reloadOnceForIsolation() {
+  if (globalThis.crossOriginIsolated) return;                 // already isolated - nothing to do
+  if (!navigator.serviceWorker.controller) return;            // not under the worker yet
+  try {
+    if (sessionStorage.getItem(COI_RELOAD_KEY) === '1') return;
+    sessionStorage.setItem(COI_RELOAD_KEY, '1');
+  } catch (e) { return; }                                     // storage blocked -> never reload
+  location.reload();
+}
+
 function banner(onReload) {
   if (document.getElementById('pf-update-banner')) return;
   const bar = document.createElement('div');
@@ -63,6 +86,11 @@ if ('serviceWorker' in navigator && NO_SW) {
       });
       setInterval(() => reg.update().catch(() => {}), POLL_MS);
       window.addEventListener('focus', () => reg.update().catch(() => {}));
+      // Once the worker is active and controlling this page, take the one reload that puts the
+      // document through it - see reloadOnceForIsolation. Last, so a failure here cannot cost the
+      // update machinery above.
+      await navigator.serviceWorker.ready;
+      reloadOnceForIsolation();
     } catch (e) { console.warn('SW registration failed', e); }
   });
   navigator.serviceWorker.addEventListener('controllerchange', () => {

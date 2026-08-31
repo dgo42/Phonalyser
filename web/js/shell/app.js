@@ -1490,17 +1490,22 @@ let predistModal;
 // the UI, so configureForRun's coherent/∞-averaging settings survive.
 async function restartPreservingConfig() {
   if (!engine.running) return;
-  // Predistortion drives the full pipeline (generator + FFT analysis + FLL). Bounce
-  // both via the fused convenience start/stop so configureForRun's coherent/∞-averaging
-  // window takes effect; the engine's internal lifecycles are independent; the
-  // controllers own the running state so the FFT view keeps rendering.
-  await engine.stop();
+  // Predistortion drives the GENERATOR and the FFT analysis (with the FLL) - and nothing
+  // else. Bounce exactly those two so configureForRun's coherent / infinite-averaging
+  // window takes effect; the engine's lifecycles are independent, and the controllers own
+  // the running state so the FFT view keeps rendering.
+  //
+  // The SCOPE is not touched here, in either direction. The fused engine.stop() plus an
+  // unconditional engine.scope.setRecording(true) used to run through this path, so opening
+  // a predistortion run STARTED the scope on a bench where the operator had it stopped -
+  // an extra consumer on the shared capture, and a lit Record LED nobody asked for.
+  await engine.fft.setRecording(false);
+  await engine.stopGenerator();
   await engine.startGenerator();
-  await engine.scope.setRecording(true);
   await engine.fft.setRecording(true);
   $('#genPlay').addClass('playing').attr('title', t('generator.play.stop'));
   genPane.setOnAir(true);   // ...and re-arms the pane's ON-AIR tick (the lane-death consult)
-  scopePane.syncScopeLed(); fftPane.syncFftLed();
+  fftPane.syncFftLed();
 }
 
 // Takes the engine at construction -> built in init's audio-backend block (see `engine`).
@@ -1799,6 +1804,11 @@ async function init() {
   // pane-weight / collapse-state persistence (it owns NO lifecycle flags - those stay in app.js).
   step('mainTab', () => {
     mainTab = new MainTab({ scopePane, fftPane, prefs });
+    // The FFT's per-result fold runs BETWEEN animation frames, so the render loop cannot see it
+    // by itself: the controller reports each fold's duration into the loop's load meter, which
+    // is what the scope paces against. Config handed INTO the controller - it learns a function,
+    // not a view (Java's controllers never reach up either).
+    engine.fft.setBusyReporter((ms) => mainTab.reportBusy(ms));
     mainTab.start();
     mainTab.initLayout();
   });
@@ -1916,8 +1926,19 @@ async function init() {
     // generator restart stay in app.js (generator-pane concerns) and are injected.
     new PredistortionWizard(engine, prefs, predistHost, {
       modal: predistModal, getResult: () => fftPane.getResult(), saveFile,
-      onApply: (applyForm, name) => {
-        prefs.genSignalForm.set(applyForm); prefs.setGenDpd(applyForm, name); prefs.save();
+      onApply: (applyForm, text, name) => {
+        // The .dpd slot is written BEFORE the form: the form change is what a live generator
+        // reacts to, and it must find the correction already in place - the other order lets a
+        // compensated form come up for an instant with the previous (or an empty) slot.
+        // The slot takes the correction TEXT (the web has no OS path to re-open) and the NAME
+        // pref takes the file name the row displays. Both writes are preferences, so the
+        // generator pane's listeners carry them to the running DDS - the one hot-load path the
+        // browse and clear buttons use (Java GeneratorController listens on the same two
+        // properties and calls lane.dpdChanged).
+        prefs.setGenDpd(applyForm, text);
+        prefs.setGenDpdName(applyForm, name);
+        prefs.genSignalForm.set(applyForm);
+        prefs.save();
         $('#signalForm').val(applyForm); genPane.syncFormUI();
       },
     }).bind();

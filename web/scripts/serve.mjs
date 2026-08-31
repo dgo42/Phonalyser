@@ -33,6 +33,19 @@ http.createServer((req, res) => {
   res.writeHead(200, {
     'Content-Type': MIME[extname(fp).toLowerCase()] || 'application/octet-stream',
     'Cache-Control': 'no-store',   // never cache -> freshest source every reload (breakpoints hit)
+    // CROSS-ORIGIN ISOLATION, on every path this serves. The FFT's divided transform shares its
+    // sample arrays between lane workers, which a browser permits only in an isolated page. In
+    // production the service worker adds these headers; here there is deliberately NO service
+    // worker (update.js unregisters it on localhost so freshly edited source runs and breakpoints
+    // hit), so without these two lines the dev page would silently be the only place the
+    // transform stayed on one thread - dev and production would stop being the same program.
+    //
+    // They go on EVERY response, help/ included, not just the app document: the help pop-up keeps
+    // a live handle in the page (app.js refreshOpenHelp re-points it on a language switch), and
+    // an opener with COOP same-origin is severed from a pop-up that lacks it - the handle would
+    // read as closed and the help window would quietly stop following the UI language.
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Cross-Origin-Embedder-Policy': 'credentialless',
   });
   createReadStream(fp).pipe(res);
 }).listen(PORT, () => {
