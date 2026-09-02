@@ -119,6 +119,12 @@ export class FftPane {
     // ending from below, a failed preferences restart - whichever path published, this pane
     // tears the consumer down, un-lights the LED and reports the claimed reason once.
     bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED, () => this.onFftAutoStopped());
+    // A writer of the freq/mag window prefs announces it here (Java FftPane subscribes
+    // FFT_RANGE_CHANGED -> syncFftPan): the clamp to [binSize, Nyquist] x [floor, ceiling] runs
+    // and the scrollbars re-align. A recalled preset is the one such writer outside this pane -
+    // without this subscription a stored file with an equal, inverted or out-of-range magnitude
+    // pair went straight to the axis mapping and blanked the plot.
+    bus.subscribe(Events.FFT_RANGE_CHANGED, () => this.syncFftPan());
   }
 
   /** Stops any in-flight FFT recording and grays the Record LED so the user can't kick it
