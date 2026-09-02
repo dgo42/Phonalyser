@@ -226,7 +226,6 @@ export class FftController {
     this._fftTimeFilterMode = 'NONE';
     this._fftTimeFilterRate = 0;
     this.onResult = null;          // (result) => void - RAW per-window result; the view applies .frc/mains/IMD
-    this.onFftAutoStopped = null;  // () => void - stop-after-N tripped
     // Last DISPLAY-rebuild timestamp (Java FftAnalyzerWorker.lastShowNanos, in ms here):
     // _showThisTick gates the display rebuild against it at dispatch, so a rebuilt frame is
     // produced at most every DISPLAY_MIN_MS when caught up and at least every DISPLAY_MAX_MS
@@ -1434,7 +1433,10 @@ export class FftController {
       // view one average short with no further tick coming to correct it. Ask for the rebuild
       // that was skipped - the same request a calibration change makes on a stopped FFT.
       if (!r.finalized && !r.finalizePending) this.reemitDisplay(null);
-      if (this.onFftAutoStopped) { try { this.onFftAutoStopped(); } catch (_) {} }
+      // ONE seam for every analyser self-stop (Java FftAnalyzerWorker publishes
+      // FFT_RECORDING_AUTO_STOPPED for stop-after-N and capture death alike): the pane's
+      // subscriber tears the consumer down and un-lights the Record LED.
+      MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED);
     }
 
     // The display of THIS tick is being prepared beside the next analysis and will arrive on its

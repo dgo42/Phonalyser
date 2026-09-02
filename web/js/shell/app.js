@@ -836,9 +836,8 @@ function bindEngineCallbacks() {
     fftPane.setResult(r);
   };
   engine.scope.onScope = (buf, info) => { latestScope = { buf, info }; };
-  // Stop-after-N tripped (Java FFT_RECORDING_AUTO_STOPPED -> FftPane.disengageRecord):
-  // the engine paused feeding; the pane tears down the FFT consumer and un-lights the Record LED.
-  engine.fft.onFftAutoStopped = () => fftPane.onFftAutoStopped();
+  // The analyser's self-stop (stop-after-N, capture death, a failed preferences restart)
+  // travels as FFT_RECORDING_AUTO_STOPPED on the bus; the FFT pane subscribes it itself.
 }
 // The MAIN rAF render loop (renderLoop: scopePane.render() + fftPane.render() each frame, each
 // pane self-gated on its OWN record state) moved to shell/main-tab.js (Java MultifunctionalTab);

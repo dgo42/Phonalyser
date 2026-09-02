@@ -114,6 +114,11 @@ export class FftPane {
         this.syncFftLed();
       }
     });
+    // The analyser stopped on its own (Java FftPane subscribes FFT_RECORDING_AUTO_STOPPED ->
+    // disengageRecord): ONE seam for every self-stop - the stop-after-N counter, the capture
+    // ending from below, a failed preferences restart - whichever path published, this pane
+    // tears the consumer down, un-lights the LED and reports the claimed reason once.
+    bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED, () => this.onFftAutoStopped());
   }
 
   /** Stops any in-flight FFT recording and grays the Record LED so the user can't kick it

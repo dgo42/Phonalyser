@@ -182,7 +182,7 @@ export class AudioEngine {
     this._fft = new FftController(this._capture, this._gen, this.config,
       { status: (t) => this._status(t), prefs: this._prefs });
 
-    this.onStatus = null;   // (text) => void  (onResult / onFftAutoStopped delegate to this._fft)
+    this.onStatus = null;   // (text) => void  (onResult delegates to this._fft)
 
     // Loopback recording tap (freqresp sweep capture): when set, the capture handler appends raw
     // L AND R channel samples to two growing chunk lists until stopCaptureRecording() - the stereo
