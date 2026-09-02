@@ -28,6 +28,12 @@
  * @property {number} dualF2     Hz, dual-tone tone 2 as captured (NaN if not measured)
  */
 
+/** Hysteresis of the period detector's midpoint crossing, as a fraction of the half swing on
+ *  each side (±30 % of the amplitude). Wide enough to swallow a noise band a good part of the
+ *  tone's own amplitude, narrow enough that a 1 % / 99 % duty rectangle still crosses both
+ *  edges every cycle. */
+const CROSS_HYST_FRACTION = 0.3;
+
 function make(vpp, vrms, vmean, period, riseTime, fallTime, frequency, dutyCycle,
               dualF1 = NaN, dualF2 = NaN) {
   return { vpp, vrms, vmean, period, riseTime, fallTime, frequency, dutyCycle, dualF1, dualF2 };
@@ -202,16 +208,34 @@ export function compute(data, n, sampleRate, peakVolts, broadband = true) {
   // (Java stores threshold as float; clamp to Math.fround for bit-faithful
   // comparisons against the float samples.)
   const threshold = Math.fround((min + max) * 0.5);
+  // A rising crossing counts only with HYSTERESIS, like the scope trigger's: the signal must
+  // have been below the lower edge of the band and must reach its upper edge before the
+  // midpoint crossing between them is committed; a dip back below the lower edge first
+  // discards it. Without the band a weak tone crosses the bare midpoint dozens of times per
+  // period - at 384 kHz a 500 Hz tone of 170 µV climbs 1.4 µV per sample through a 40 µV
+  // noise band - so the count inflates, the coarse period collapses, the refine lands on
+  // nothing and the broad-band fallback hands over whatever line dominates.
+  const hyst = Math.fround(CROSS_HYST_FRACTION * (max - min) * 0.5);
+  const lower = Math.fround(threshold - hyst);
+  const upper = Math.fround(threshold + hyst);
   let firstCross = -1;
   let lastCross = -1;
   let crossCount = 0;
   let highCount = 0;
+  let armed = data[0] < lower;   // seen below the band since the last committed crossing
+  let pendingMid = -1;           // the midpoint crossing awaiting the upper edge
   for (let i = 1; i < n; i++) {
-    if (data[i] >= threshold) highCount++;
-    if (data[i - 1] < threshold && data[i] >= threshold) {
-      if (firstCross < 0) firstCross = i;
-      lastCross = i;
+    const v = data[i];
+    if (v >= threshold) highCount++;
+    if (v < lower) { armed = true; pendingMid = -1; continue; }
+    if (!armed) continue;
+    if (pendingMid < 0 && v >= threshold) pendingMid = i;
+    if (v >= upper) {
+      if (firstCross < 0) firstCross = pendingMid;
+      lastCross = pendingMid;
       crossCount++;
+      armed = false;
+      pendingMid = -1;
     }
   }
 
