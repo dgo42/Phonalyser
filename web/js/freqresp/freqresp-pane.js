@@ -125,6 +125,12 @@ export class FreqRespPane {
     // comes out of the capture's finally, which runs before the sweep's result reaches the view,
     // so on a successful sweep this is the pass that sees a measurement present.
     MessageBus.instance().subscribe(Events.FREQRESP_RESULT_AVAILABLE, () => this.tabControl.refreshRiaaEnable());
+    // A failed sweep reaches the operator as a modal error, not only a status-strip line (Java
+    // FreqRespPane.measurementFailedListener -> showError): the controller publishes the
+    // human-readable reason - device refused, band validation, deconvolution error - and this
+    // pane raises the shell's one alert surface with it.
+    MessageBus.instance().subscribe(Events.FREQRESP_MEASUREMENT_FAILED,
+      (msg) => { if (this.io && this.io.showAlert) this.io.showAlert(msg); });
   }
 
   /** Builds the i18n-dependent tab UI (calibration rows, preset list, RIAA enable). Called from

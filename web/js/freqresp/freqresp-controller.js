@@ -104,6 +104,11 @@ export class FreqRespController {
     // Initial sync: the persisted durationSec may no longer match the persisted fftSize / leadIn.
     // Re-derive and persist on build so the analyzer + label agree.
     this.deriveDuration();
+    // A committed audio-format change moves the input rate the duration fit depends on (Java
+    // FreqRespController subscribes AUDIO_FORMAT_CHANGED and re-derives): without this a live
+    // rate change left freqRespDurationSec sized for the OLD rate until an unrelated fftSize or
+    // lead-in edit happened to re-run the derivation.
+    MessageBus.instance().subscribe(Events.AUDIO_FORMAT_CHANGED, () => this.recompute());
   }
 
   status(txt) { this.$('#status').text(txt); }
@@ -112,8 +117,10 @@ export class FreqRespController {
   // Timing rules (Java FreqRespController)
   // ===========================================================================
 
-  /** Re-derives the duration on an audio-format (input sample rate) change. The desktop rides
-   *  AUDIO_FORMAT_CHANGED; the web has no such bus, so the rate-change site calls this directly. */
+  /** Re-derives the duration on an audio-format (input sample rate) change, driven by the
+   *  AUDIO_FORMAT_CHANGED subscription above - the same ride the desktop takes. The derived
+   *  duration exists so nextPow2(leadIn + sweep + tail) lands exactly on the chosen FFT size,
+   *  and that fit moves with the input rate. */
   recompute() {
     this.deriveDuration();
   }
