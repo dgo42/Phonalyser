@@ -95,6 +95,24 @@ export class SharedCapture {
     this._buffer = null;            // the one shared SignalBuffer ring (null when closed)
     this.inSampleRate = 0;
     this._lastStartError = '';   // last device-open failure message (for the streaming-save error)
+    // The acquire/release serializer - see _serialized(). Java makes both methods synchronized;
+    // this chain is that monitor's stand-in across the awaits inside them.
+    this._serial = Promise.resolve();
+  }
+
+  /** Runs `fn` only after every earlier acquire/release has fully finished - the stand-in for
+   *  the Java monitor that makes SharedCapture.acquire() and release() mutually exclusive
+   *  (both are synchronized there). acquire() awaits a device open that can span a
+   *  permission prompt; a second first-acquire arriving inside that window would read
+   *  refCount 0, buffer null, and open the SAME source again - a leaked MediaStream, two
+   *  AudioContexts, and two readers over rings only one of which is fed. Chained, the second
+   *  caller waits and then takes the refcount fast path, exactly as a thread blocked on the
+   *  Java monitor does. A failed body must not wedge the chain: the stored link swallows the
+   *  rejection while the caller's own promise still carries it. */
+  _serialized(fn) {
+    const run = this._serial.then(fn);
+    this._serial = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   /** Publishes AUDIO_DEVICE_ERROR (direction = input) so the shell can raise a visible alert.
@@ -177,8 +195,12 @@ export class SharedCapture {
   /** Opens the input device on the first acquire (refCount 0->1) and creates the one shared
    *  SignalBuffer; otherwise just bumps the refcount. Returns a fresh SignalBufferReader cursor
    *  over the live ring (each consumer gets its own), or null on failure. Mirrors
-   *  SharedCapture.acquire(). */
-  async acquire() {
+   *  SharedCapture.acquire(), serialization included - see _serialized(). */
+  acquire() {
+    return this._serialized(() => this._acquireNow());
+  }
+
+  async _acquireNow() {
     if (this._refCount > 0 && this._buffer != null && !this._buffer.isFinished()) {
       this._refCount++;
       return new SignalBufferReader(this._buffer);
@@ -261,8 +283,14 @@ export class SharedCapture {
   }
 
   /** Releases one capture reference; tears the capture graph down when the last reference goes
-   *  away. Mirrors SharedCapture.release(). */
-  async release() {
+   *  away. Mirrors SharedCapture.release(), serialization included - see _serialized(): a
+   *  release arriving while an acquire's open is still in flight waits for it, so the teardown
+   *  can never run under a half-built lane. */
+  release() {
+    return this._serialized(() => this._releaseNow());
+  }
+
+  async _releaseNow() {
     if (this._refCount <= 0) return;
     this._refCount--;
     if (this._refCount > 0) return;
