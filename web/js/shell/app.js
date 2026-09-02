@@ -23,7 +23,8 @@ import { NetDeviceManager } from '../net/net-device-manager.js';
 import { netManagerFacade } from '../net/net-manager-facade.js';
 import { BenchCards } from '../net/bench-cards.js';
 import { CalibrationCopyOffers } from '../net/calibration-copy-offers.js';
-import { namesNetDevice, remoteBackendOf } from '../net/net-device-ref.js';
+import { CalibrationStore } from '../net/calibration-store.js';
+import { BenchCardSource } from '../net/bench-card-source.js';
 import { NetConnection } from '../net/net-connection.js';
 import { NetPreferences, makeServerEntry } from '../net/net-preferences.js';
 import { NetServerListDialog } from '../net/net-server-list-dialog.js';
@@ -1662,119 +1663,15 @@ async function init() {
     // under the server's id. Java builds this per dialog session on the working copy; the web store
     // is live, so one instance lives here and the dialog clears its staged picks on every open.
     const benchCards = new BenchCards({ bench: benchSeam, store: deviceStore });
-    // The once-per-RUN offer register: an operator who declined the copy must not be asked again
-    // the next time they open Preferences, which is exactly when they would be looking at that
-    // device. Held for the app's lifetime, not the dialog's, and never persisted.
-    const copyOffers = new CalibrationCopyOffers();
-    // The selected backend's value while it names one of a server's backends, else null - the ONE
-    // test that decides whether the card combo shows a bench's cards or this machine's (Java
-    // BackendKey.remote()).
-    const benchValue = () => (remoteBackendOf(prefs.backend.get()) != null ? prefs.backend.get() : null);
-    // The catalogue ref behind what the device combo SHOWS. The card seam is handed the option
-    // TEXT and the commit below passes a staged device NAME, and the input combo appends a rate
-    // to its text - so the one test that knows all three spellings does the matching
-    // (namesNetDevice). It used to compare `description || name`, which matched no input device
-    // at all once the text carried anything else.
-    const benchRef = (input, device) => {
-      if (!netManager || !device) return null;
-      const refs = input ? netManager.listInputDevices() : netManager.listOutputDevices();
-      return refs.find((r) => namesNetDevice(r, device)) || null;
-    };
-    // The bench's id - the mirror's key half. The connection's own is authoritative (the server
-    // names itself in hello); the remembered entry covers the moment before it answered.
-    const benchServerId = () => {
-      if (!netManager) return null;
-      const connection = netManager.connection;
-      if (connection && connection.serverId) return connection.serverId;
-      const server = netManager.getConnectedServer();
-      return server ? server.serverId : null;
-    };
-    const cardSource = {
-      cards: async (input, device) => {
-        const value = benchValue();
-        if (value == null) return null;   // a LOCAL selection - this machine's cards, unchanged
-        const ref = benchRef(input, device);
-        const name = ref ? ref.name : device;
-        const staged = name ? benchCards.stagedCard(value, input, name) : null;
-        return {
-          names: await benchCards.list(value, input),
-          bound: staged != null ? staged : benchCards.boundCard(benchServerId(), ref, name),
-        };
-      },
-      stage: (input, device, cardName) => {
-        const value = benchValue();
-        if (value == null) return;
-        const ref = benchRef(input, device);
-        benchCards.stage(value, input, ref ? ref.name : device, cardName);
-      },
-      // Spec 4.3's `cal`: what the SERVER stores for the device, which is what a measurement on it
-      // is scaled by - null when it has none, and only then does the local card store get a say.
-      // UNDEFINED when this bench does not offer the device at all (or none is remote): there is
-      // then nothing to copy TO, which is a different answer from "it has none" and the copy
-      // offer has to tell them apart (Java tests `ref == null` and `ref.calibration() != null`
-      // separately).
-      calibration: (input, device) => {
-        const ref = benchValue() == null ? null : benchRef(input, device);
-        return ref ? ref.calibration : undefined;
-      },
-      // Asked once per run per bench + direction + device - but only a SETTLED
-      // question is remembered, so a wire glitch does not cost the operator the offer.
-      mayCopyAsk: (input, device) => {
-        const value = benchValue();
-        if (value == null) return false;
-        const ref = benchRef(input, device);
-        return copyOffers.mayAsk(value, input, ref ? ref.name : device);
-      },
-      settleCopyAsk: (input, device) => {
-        const value = benchValue();
-        if (value == null) return;
-        const ref = benchRef(input, device);
-        copyOffers.settle(value, input, ref ? ref.name : device);
-      },
-      // The YES branch: this machine's WHOLE card becomes the bench's - cards.put + the
-      // binding - with its values alone as the fallback when the bench will not take the card.
-      // Answers a BenchCards.Copied outcome, which the section turns into what it tells the
-      // operator; nothing of this is written into this machine's storage.
-      copyCalibration: async (input, device) => {
-        const value = benchValue();
-        if (value == null) return BenchCards.Copied.NOTHING;
-        const ref = benchRef(input, device);
-        return benchCards.propagateLocalCard(value, benchServerId(), ref, device, input);
-      },
-      commit: async (input) => {
-        const value = benchValue();
-        if (value == null) return [];
-        const refused = [];
-        for (const [name, cardName] of benchCards.stagedFor(value, input)) {
-          const bound = await benchCards.bind(value, benchServerId(), benchRef(input, name), cardName);
-          if (!bound) refused.push(cardName);
-        }
-        return refused;
-      },
-      clearStaged: () => benchCards.clearStaged(),
-    };
     // Where the ADC/DAC calibrate dialog's result is WRITTEN while a server's backend is selected
-    // (Java gui/sound/CalibrationStore): the device is plugged into the BENCH, so its full scale
-    // is the bench's to keep - spec 4.3 device.setCalibration, under that device's lock. The
-    // dialog asks for this seam per calibrate and writes locally whenever it answers null.
-    benchCalibration = {
-      remote: benchValue,
-      // Whether the named selection would be measured with no real calibration in this direction
-      // (Java CalibrationStore.isUncalibrated). The BENCH's own answer first - a device on a
-      // server is calibrated there, and this machine's card of the same name describes a
-      // different exemplar of that model - then this machine's card store. A bench device the
-      // catalogue does not carry at all is uncalibrated too: nothing is left to vouch for it.
-      uncalibrated: (input, device) => {
-        if (benchValue() == null) return deviceStore.isUncalibrated(device, input);
-        const ref = benchRef(input, device);
-        return ref == null || ref.calibration == null;
-      },
-      send: async (input, device, fsRmsLeft, fsRmsRight) => {
-        const value = benchValue();
-        if (value == null) return false;
-        return benchCards.calibrate(value, benchRef(input, device), fsRmsLeft, fsRmsRight);
-      },
-    };
+    // (Java gui/sound/CalibrationStore), and the one place the bench selection is resolved. The
+    // dialog asks for this seam per calibrate and writes locally whenever it answers null. The net
+    // manager is asked per call: it is built above in this same step and a session comes and goes.
+    benchCalibration = new CalibrationStore(prefs, deviceStore, benchCards, () => netManager);
+    // Where the card combo's entries come from for a REMOTE selection, and where a pick is staged /
+    // sent / read back (the local store answers for every local one). The once-per-RUN copy-offer
+    // register is held for the app's lifetime, not the dialog's, and never persisted.
+    const cardSource = new BenchCardSource(benchCalibration, benchCards, new CalibrationCopyOffers());
     // Preferences dialog (Java PreferencesDialog): staged audio/L&F/Osc/FFT/FR prefs, commit on OK.
     prefsDialog = new PreferencesDialog(engine, prefs, {
       modal: prefsModal, RATES, stepFields, inRate, outRate,
