@@ -59,7 +59,9 @@ export class FftPane {
    *   - tileChips: (...vals) => the `.tile` chip-span HTML (shared with the scope tiles).
    *   - isFftRec: () => engine.fft.recording - the controller owns the flag; the pane only reads it.
    *   - isBusy / setBusy: the shared async re-entrancy guard accessors (Record serializes with it).
-   *   - readConfig: () => snapshot the live UI into engine.config before a record start.
+   *   - readConfig: () => the FFT settings strip's readConfig - the FFT geometry into
+   *       engine.config before a record start (the strip is built after this pane, so the
+   *       shell late-binds it).
    */
   constructor(engine, prefs, { view, viewCorrection, tileChips, isFftRec, isBusy, setBusy, readConfig }) {
     this.engine = engine;

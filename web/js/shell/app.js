@@ -34,7 +34,7 @@ import { ServerProber, wsUrlOf } from '../net/server-prober.js';
 import { stackOverOpenModals } from '../ui/modal-stack.js';
 import { FftView } from '../ui/fft-view.js';
 import { ScopeView } from '../ui/scope-view.js';
-import { GenSignalForm, isCompensated } from '../generator/dds-kernel.js';
+import { GenSignalForm } from '../generator/dds-kernel.js';
 import { Preferences } from '../store/preferences.js';
 import { DeviceProfileStore } from '../store/device-profiles.js';
 import { loadDeviceCatalog } from '../store/device-catalog.js';
@@ -310,86 +310,13 @@ function bindPrefs() {
   // read-only per-channel spans in the Audio tab - there is no editable full-scale field to bind.
 }
 
-function readConfig() {
-  const c = engine.config;
-  const sfVal = (id, dflt) => genPane.fieldValue(id, dflt);
-  c.inDeviceId = $('#inSel').val(); c.inRate = parseInt($('#inRate').val(), 10);
-  c.outDeviceId = $('#outSel').val(); c.outRate = parseInt($('#outRate').val(), 10);
-  c.toneHz = sfVal('toneHz', 1000); c.ampVrms = sfVal('ampDbfs', 0.5);
-  c.form = $('#signalForm').val();
-  c.snapToBin = $('#snap').is(':checked');   // gates the SINE/DUAL_TONE FFT-bin emit snap
-  // Compensated forms carry the loaded .dpd text (per-form slot) for the worklet to apply.
-  c.dpdText = isCompensated(c.form) ? (prefs.getGenDpd(c.form) || null) : null;
-  c.tone2Hz = sfVal('tone2Hz', 1100);
-  c.amp1Pct = sfVal('amp1Pct', 50); c.amp2Pct = sfVal('amp2Pct', 50);
-  const duty = (sfVal('duty', 50) || 50) / 100;
-  c.rectDuty = duty; c.triDuty = duty;
-  c.ditherBits = sfVal('dither', 0);   // fractional bits from the DITHER NumericStepField (0 = Off)
-  // Sweep params (LINEAR_SWEEP / LOG_SWEEP) - read from the sweep fields.
-  c.sweepStartHz = sfVal('sweepStart', 20);
-  c.sweepEndHz = sfVal('sweepStop', 20000);
-  c.sweepDurationSec = Math.max(0.001, sfVal('sweepDur', 1));
-  c.sweepFadeInSec = Math.max(0, sfVal('sweepFadeIn', 0));
-  c.sweepFadeOutSec = Math.max(0, sfVal('sweepFadeOut', 0));
-  c.sweepLoop = $('#sweepLoop').is(':checked');
-  c.fftSize = parseInt($('#fftSize').val(), 10); c.window = $('#window').val();
-  c.overlap = $('#overlap').val();
-  // ∞ (forever) averaging -> a true cumulative mean (Infinity). The cross-tick
-  // accumulator in FftController grows the depth tick by tick (it no longer sizes
-  // a buffer to the whole depth), so ∞ needs no finite cap; the stop-after-N
-  // auto-stop, available only in ∞ mode, lets the user end the run. Read from the
-  // averages NumericStepField (Java averagesField - ∞ is the top of AVERAGES_SERIES).
-  const fAverages = fftTabControl ? fftTabControl.field('averages') : null;
-  c.averages = fAverages ? fAverages.getValue() : (parseInt($('#averages').val(), 10) || 4);
-  c.coherent = $('#coherent').is(':checked');
-  // JIT warm-up has NO UI field (Java hardwires it - no Settings-tab control); c.warmupMs
-  // keeps its backend default (backend.js). Only the web-only thread-pool size is read.
-  c.threads = parseInt($('#threads').val(), 10);
-  c.fllOn = $('#align').val() === 'fll';
-  // Calibration anchors from preferences (DAC full-scale scales the DDS amplitude;
-  // harmonicCount widens the THD set per fftCalcMaxHarmonic).
-  c.dacFsVoltageAmpl = prefs.dacFsVoltageAmpl.get();
-  // Output-lane routing (Java GeneratorController.pushOutputRoutingToPlayback): the lane
-  // gate + the right-lane scale (= fsLeft/fsRight). Left stays the mono amplitude reference
-  // (scale 1.0), so the DDS amplitude math is unchanged - only the interleave seam gates/scales.
-  c.outputChannels = prefs.genOutputChannels.get();
-  c.rightLaneScale = prefs.dacRightLaneScale();
-  // Java FftAnalyzerWorker:1661 - calcMaxH = max(9, getFftCalcMaxHarmonic()) - 1, i.e. the COUNT of
-  // harmonics H2..HN (the fundamental is NOT one of them). The web omitted the -1, so it filled one
-  // extra harmonic H(N+1), i.e. the max harmonic to calculate counted the fundamental. The display's
-  // label cap (fft-view calcMax = max(9,N)) is the max harmonic NUMBER and stays as-is.
-  c.harmonicCount = Math.max(9, prefs.fftCalcMaxHarmonic.get()) - 1;
-  c.thdMaxHarmonic = Math.max(2, Math.min(9, prefs.fftThdMaxHarmonic.get()));   // THD sum upper bound (H2..HN)
-  c.manualFundEnabled = prefs.fftManualFundEnabled.get();                        // fixed-reference fundamental
-  c.manualFundVrms = prefs.fftManualFundVrms.get();
-  c.fftFundFromGenerator = prefs.fftFundFromGenerator.get();   // hint analyzer with the gen freq vs auto-detect
-  c.snrFreqMin = prefs.fftDistMinEnabled.get() ? prefs.fftDistMinHz.get() : 0;   // THD band (Java distMin/distMax)
-  c.snrFreqMax = prefs.fftDistMaxEnabled.get() ? prefs.fftDistMaxHz.get() : 0;
-  // Stop-after-N auto-stop + mains suppression (Java FftAnalyzerWorker).
-  c.stopAfterNEnabled = prefs.fftStopAfterNEnabled.get();
-  c.stopAfterN = prefs.fftStopAfterN.get();
-  c.mainsSuppression = prefs.fftMainsSuppression.get();
-  // Time-domain discontinuity gate toggle (Java prefs.isFftDetectTimeDiscontinuity), read live
-  // per worker dispatch in FftController; kept in sync on toggle by the FFT settings checkbox.
-  c.fftDetectTimeDiscontinuity = prefs.fftDetectTimeDiscontinuity.get();
-  // Which ADC channel the FFT analyzes (Java FftAnalyzerWorker:1535
-  // prefs.getFftChannel(); L -> ch0, R -> ch1) - flows into FftController._wantLeft
-  // at setup and is switched live via engine.setFftChannel from the L/R buttons.
-  c.channel = prefs.fftChannel.get();
-  // Scope peak-voltage anchor + IMD dBV offset (offset-invariant ratios, but the
-  // absolute dBV columns need it). The dBV offset threads the ANALYZED channel so the
-  // manual-fundamental anchor resolves against the right ADC full-scale (Java
-  // FftAnalyzerWorker:2005 getDbvOffsetDb(getFftChannel())). Both channels' offsets are
-  // snapshotted so a live L↔R switch (FftController.setFftChannel) re-picks without a
-  // full re-read.
-  c.adcFsVoltageRms = prefs.adcFsVoltageRms.get();
-  c.dbvOffsetDbLeft = prefs.getDbvOffsetDb('L');
-  c.dbvOffsetDbRight = prefs.getDbvOffsetDb('R');
-  c.dbvOffsetDb = (c.channel === 'R') ? c.dbvOffsetDbRight : c.dbvOffsetDbLeft;
-  // Live scope time/div sizes the captured scope window (~3× the displayed span) so
-  // the trace doesn't run out before the window edge (Java ScopeView read length).
-  c.scopeTimePerDiv = prefs.oscTimePerDiv.get();
-}
+// The shared engine config has no shell-side snapshot any more (Java has none either: each
+// controller reads its own Preferences). Its parts are owned: the capture / playback devices and
+// rates by the Preferences dialog (written on scan and on OK), the generator's tone, sweep, dither
+// and output routing by the generator pane (GeneratorPane.readConfig - once at load and on its
+// own controls), the FFT geometry, averaging, THD settings and calibration anchors by the FFT
+// settings strip (FftTabControl.readConfig - on a record start and every live change), the
+// captured scope window by the scope pane (ScopePane.readConfig - on a record start).
 
 // Render an array of values as `.tile` chip spans (the Java painted tile look).
 const tileChips = (...vals) => vals.filter(v => v != null && v !== '').map(v => `<span class="tile">${v}</span>`).join('');
@@ -445,7 +372,7 @@ function bindEngineCallbacks() {
 async function restartFft() {
   if (busy || !engine.fft.recording) return;
   busy = true;
-  try { await engine.fft.setRecording(false); readConfig(); await engine.fft.setRecording(true); }
+  try { await engine.fft.setRecording(false); fftTabControl.readConfig(); await engine.fft.setRecording(true); }
   finally { fftPane.syncFftLed(); busy = false; }
 }
 
@@ -514,7 +441,7 @@ $('#fftMaximize').on('click', () => fftView.maximize());
 
 // The FFT SETTINGS STRIP (FftTabControl) holds the FFT PANE for its result state (getResult /
 // setResult / showLoadedBanner) and gets the two shell helpers it still needs by name
-// (applyPrefsToUi, readConfig); everything cross-pane travels on the bus - the FFT-length
+// (applyPrefsToUi); everything cross-pane travels on the bus - the FFT-length
 // change the generator re-snaps to (FFT_LENGTH_CHANGED), the stop before a .fft load
 // (FFT_RECORDING_STOP_REQUESTED), the Utility camera (FFT_SCREENSHOT_REQUESTED).
 
@@ -956,7 +883,7 @@ async function init() {
   // Generator pane (Java GeneratorPane): the signal-form combo + freq/amp/duty/dual-tone/
   // sweep/dither/snap/.dpd controls + Play/ON-AIR + Save-to + file player. Constructed before
   // applyPrefsToUi so its seedGeneratorControls() runs in the init seed; reaches the SHELL
-  // state (the busy guard + engine.generator.running) + readConfig + the FFT align combo through the injected
+  // state (the busy guard + engine.generator.running) + the FFT align combo through the injected
   // closures. Its step fields are built in the genStepFields step below, once i18n resolved.
   step('genPane', () => {
     genPane = new GeneratorPane(engine, prefs, {
@@ -964,7 +891,7 @@ async function init() {
       WAV_TYPE, formLabel, formIcon, outRate,
       isGenRunning: () => engine.generator.running,
       isBusy: () => busy, setBusy: (v) => { busy = v; },
-      readConfig, syncFftAlign: () => { if (fftTabControl) fftTabControl.syncAlign(); },
+      syncFftAlign: () => { if (fftTabControl) fftTabControl.syncAlign(); },
       // The shell's one alert surface - how a refused file reaches the operator (Java shows its
       // Cannot-play-file MessageBox); the same seam the tune-notch wizard and the card section use.
       showAlert,
@@ -978,6 +905,10 @@ async function init() {
   step('refreshFftLabel', () => freqRespPane.refreshFftLabel());   // localized after the bundle is loaded
   step('freqRespSeed', () => freqRespPane.seedTabs());   // builds the cal rows / preset list / RIAA enable (t() needs the bundle)
   step('genStepFields', () => genPane.buildStepFields());   // after applyI18n so unit suffixes resolve
+  // The generator's part of the engine config is current from load, before any start: the FFT's
+  // fundamental hint and the scope's beat seeds ask the generator (GENERATOR_EMITTED_HZ) what it
+  // would emit, and that answer reads the config, not the controls.
+  step('genConfig', () => genPane.readConfig());
   // Unified ADC/DAC calibration dialog (Java CalibrationDialog): built here, after applyI18n (its
   // two per-channel fields resolve their unit suffixes), so the scope / FFT strips can call
   // openAdc and its bind() can wire the generator #calibrateDac button. The current-device LABEL
@@ -1004,7 +935,7 @@ async function init() {
   // the Record LED, the measurement table + pop-out, the file-mode load/scroll, and the
   // scope branch of the rAF loop (render()). Built BEFORE the scope settings strip, which
   // holds this pane. Reaches
-  // the shell state (the busy guard + engine.scope.recording) + readConfig + the latest scope frame
+  // the shell state (the busy guard + engine.scope.recording) + the latest scope frame
   // through the injected closures; the scope V/T/hyst NumericStepFields (the settings strip's,
   // built after this pane) via getField; the ScopeView + tileChips injected too. bind() wires the
   // Record LED + measurement buttons + resize observer.
@@ -1013,7 +944,7 @@ async function init() {
       view: scopeView, getField: (id) => (scopeTabControl ? scopeTabControl.field(id) : undefined), tileChips,
       isScopeRec: () => engine.scope.recording,
       isBusy: () => busy, setBusy: (v) => { busy = v; },
-      getLatestScope: () => latestScope, readConfig,
+      getLatestScope: () => latestScope,
       syncCalibrateGate: () => { if (scopeTabControl) scopeTabControl.syncCalibrateEnabled(); },
     }).bind();
   });
@@ -1041,14 +972,15 @@ async function init() {
   // FFT PANE (Java FftPane): the spectrum-view wiring, the Record LED, the readout / THD /
   // IMD render, and the FFT branch of the rAF loop (render()). Built BEFORE the FFT settings
   // strip, which holds this pane for its result state. Reaches the shell state (the busy
-  // guard + engine.fft.recording) + readConfig through the injected closures; the FftView +
+  // guard + engine.fft.recording) + the strip's readConfig through the injected closures; the FftView +
   // the view correction + tileChips injected too. bind() wires the Record LED.
   step('fftPane', () => {
     fftPane = new FftPane(engine, prefs, {
       view: fftView, viewCorrection: fftViewCorrection, tileChips,
       isFftRec: () => engine.fft.recording,
       isBusy: () => busy, setBusy: (v) => { busy = v; },
-      readConfig,
+      // The FFT geometry is the settings strip's to snapshot; the strip is built after this pane.
+      readConfig: () => { if (fftTabControl) fftTabControl.readConfig(); },
     }).bind();
   });
   // MAIN TAB (Java MultifunctionalTab): the rAF render-frame driver + the 3-pane collapse/sash
@@ -1068,10 +1000,10 @@ async function init() {
   });
   // FFT settings strip (Java FftTabControl): its step fields + handlers + presets + save/load +
   // calibration + screenshot/ADC-calibrate. Holds the FFT PANE built above for its result state;
-  // applyPrefsToUi / readConfig are the two shell helpers it still reaches by name.
+  // applyPrefsToUi is the one shell helper it still reaches by name.
   step('fftTabControl', () => {
     fftTabControl = new FftTabControl(engine, prefs, {
-      pane: fftPane, applyPrefsToUi, readConfig,
+      pane: fftPane, applyPrefsToUi,
       fftView, fftViewCorrection, store: fftCorrectionStore,
       io: { saveFile, openFile, bytesToText, loadFrc, saveSpectrum, loadSpectrum, FFT_TYPE, FRC_TYPE },
       restartFft, showConfirm, setStatus: (m) => $('#status').text(m), tileChips,

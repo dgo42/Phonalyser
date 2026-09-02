@@ -16,7 +16,7 @@
  * lives in shell/main-tab.js and calls it each frame with the measured main-thread load, the one
  * view paced against it). Reads engine.scope.recording (the
  * controller owns the recording flag) and reaches the SHELL state it does not own (the shared
- * `busy` re-entrancy guard, the readConfig snapshot, the latest live scope frame) through
+ * `busy` re-entrancy guard, the latest live scope frame) through
  * injected closures. The scope V/div + t/div + hysteresis NumericStepFields are
  * built in app.js's initStepFields and reached here via the injected getField; the ScopeView,
  * the FlatScrollbar widget class (imported directly), and tileChips are injected too.
@@ -67,12 +67,11 @@ export class ScopePane {
    *   - isScopeRec: () => engine.scope.recording - the controller owns the flag; the pane only reads it.
    *   - isBusy / setBusy: the shared async re-entrancy guard accessors (Record serializes with it).
    *   - getLatestScope: () => the latest live scope frame {buf, info} (set by engine.onScope in app.js).
-   *   - readConfig: () => snapshot the live UI into engine.config before a record start.
    *   - syncCalibrateGate: () => re-gate the ScopeTabControl Calibrate button each live frame
    *       (the tab-control is built AFTER the pane, so app.js defers to it through this closure).
    */
   constructor(engine, prefs, { view, getField, tileChips, isScopeRec,
-    isBusy, setBusy, getLatestScope, readConfig, syncCalibrateGate }) {
+    isBusy, setBusy, getLatestScope, syncCalibrateGate }) {
     this.engine = engine;
     this.prefs = prefs;
     this.view = view;
@@ -82,7 +81,6 @@ export class ScopePane {
     this._isBusy = isBusy;
     this._setBusy = setBusy;
     this._getLatestScope = getLatestScope;
-    this._readConfig = readConfig;
     this._syncCalibrateGate = syncCalibrateGate;
 
     // ----- scope navigation scrollbars (Java ScopePane vertSlider / navSlider) -----
@@ -835,7 +833,7 @@ export class ScopePane {
       this._setBusy(true);
       const want = !this._isScopeRec();
       if (want) {
-        this._readConfig();   // pull live config (rate, calibration, tone). NO auto-setup on record - Java fires auto-setup ONLY from its manual button; auto-firing here reset the user's trigger level + channel offset on every Record.
+        this.readConfig();   // pull live config (rate, calibration, tone). NO auto-setup on record - Java fires auto-setup ONLY from its manual button; auto-firing here reset the user's trigger level + channel offset on every Record.
         // Leaving file mode: re-arm the trigger controls, clear the loaded-file banner,
         // drop the loaded signal and hide the horizontal nav scrollbar (live record has
         // no horizontal scroll-back - the trace follows the latest writePos).
@@ -876,6 +874,15 @@ export class ScopePane {
     this.refreshFields();
     this.refreshTiles();
     this.requestRedraw();
+  }
+
+  /** Snapshots the scope's live settings into the shared engine config before a record start:
+   *  the time/div that sizes the captured scope window (~3x the displayed span, so the trace
+   *  does not run out before the window edge - Java ScopeView read length). The SCOPE's part
+   *  only: the capture device and rate are the Preferences dialog's (written on scan and on
+   *  OK), the calibration anchors are read live off the prefs by the measurement. */
+  readConfig() {
+    this.engine.config.scopeTimePerDiv = this.prefs.oscTimePerDiv.get();
   }
 
   requestRedraw() {

@@ -7,7 +7,7 @@
  * Faithful port of gui/generator/GeneratorPane. Owns the generator controls + their bound
  * handlers and the live DDS Play / file-player lifecycle; reads engine.generator.running (the
  * controller owns the running flag) and reaches the SHELL state it does not own (the shared
- * `busy` re-entrancy guard, the readConfig snapshot, the FFT align combo) through injected
+ * `busy` re-entrancy guard, the FFT align combo) through injected
  * closures. The generator NumericStepFields (freq / amp / duty /
  * sweep / dual-tone) are built in app.js's initStepFields and reached here via the injected
  * getField; the io decode/save helpers + formLabel/formIcon + sfVal/outRate are injected too.
@@ -40,7 +40,7 @@ export class GeneratorPane {
    * @param engine the AudioEngine (DDS generator + file playback lane; live retune/restart).
    * @param prefs  Preferences.
    * @param deps   {io, WAV_TYPE, formLabel, formIcon, outRate,
-   *                isGenRunning, isBusy, setBusy, readConfig, syncFftAlign}
+   *                isGenRunning, isBusy, setBusy, syncFftAlign}
    *   - io: {pickSaveTarget, writeToTarget, saveScopeCapture, readWav, readAiff, decodeFlac} -
    *       the generator Save-to + file-player decode collaborators.
    *   - WAV_TYPE: the save-picker accept descriptor (shared with the scope save).
@@ -48,11 +48,10 @@ export class GeneratorPane {
    *   - outRate: () => the live output sample rate (the frequency/sweep Nyquist + emit grid).
    *   - isGenRunning: () => engine.generator.running - the controller owns the running flag; the pane only reads it.
    *   - isBusy / setBusy: the shared async re-entrancy guard accessors (start/stop serialize).
-   *   - readConfig: () => snapshot the live UI into engine.config before a (re)start.
    *   - syncFftAlign: () => re-gate the FFT align combo (snap gates it; FftTabControl).
    */
   constructor(engine, prefs, { io, WAV_TYPE, formLabel, formIcon, outRate,
-    isGenRunning, isBusy, setBusy, readConfig, syncFftAlign, showAlert }) {
+    isGenRunning, isBusy, setBusy, syncFftAlign, showAlert }) {
     this.engine = engine;
     this.prefs = prefs;
     // The pane's NumericStepFields by input id (Java GeneratorPane builds its own: frequency,
@@ -73,7 +72,6 @@ export class GeneratorPane {
     this._isGenRunning = isGenRunning;
     this._isBusy = isBusy;
     this._setBusy = setBusy;
-    this._readConfig = readConfig;
     this._syncFftAlign = syncFftAlign;
     // The .dpd display filename per compensated form (session-only; the .dpd text itself
     // lives in the per-form genDpd pref so it survives a reload).
@@ -675,6 +673,44 @@ export class GeneratorPane {
     this.retuneDualAndDuty();
   }
 
+  /** Snapshots the generator's live controls into the shared engine config - what a (re)start
+   *  and a live retune read (Java GeneratorController rebuilds from the committed prefs at
+   *  start). The GENERATOR's part only: the capture / playback devices and rates are the
+   *  Preferences dialog's (written on scan and on OK), the FFT geometry the FFT strip's, the
+   *  scope window the scope pane's. Run once at load and on every generator control the field
+   *  handlers do not push live, so the config the analysers consult through GENERATOR_EMITTED_HZ
+   *  is current before the generator ever started. */
+  readConfig() {
+    const c = this.engine.config, prefs = this.prefs;
+    c.toneHz = this.fieldValue('toneHz', 1000); c.ampVrms = this.fieldValue('ampDbfs', 0.5);
+    c.form = $('#signalForm').val();
+    c.snapToBin = $('#snap').is(':checked');   // gates the SINE/DUAL_TONE FFT-bin emit snap
+    // Compensated forms carry the loaded .dpd text (per-form slot) for the worklet to apply.
+    c.dpdText = isCompensated(c.form) ? (prefs.getGenDpd(c.form) || null) : null;
+    c.tone2Hz = this.fieldValue('tone2Hz', 1100);
+    c.amp1Pct = this.fieldValue('amp1Pct', 50); c.amp2Pct = this.fieldValue('amp2Pct', 50);
+    const duty = (this.fieldValue('duty', 50) || 50) / 100;
+    c.rectDuty = duty; c.triDuty = duty;
+    c.ditherBits = this.fieldValue('dither', 0);   // fractional bits from the DITHER NumericStepField (0 = Off)
+    // Sweep params (LINEAR_SWEEP / LOG_SWEEP) - read from the sweep fields.
+    c.sweepStartHz = this.fieldValue('sweepStart', 20);
+    c.sweepEndHz = this.fieldValue('sweepStop', 20000);
+    c.sweepDurationSec = Math.max(0.001, this.fieldValue('sweepDur', 1));
+    c.sweepFadeInSec = Math.max(0, this.fieldValue('sweepFadeIn', 0));
+    c.sweepFadeOutSec = Math.max(0, this.fieldValue('sweepFadeOut', 0));
+    c.sweepLoop = $('#sweepLoop').is(':checked');
+    // The bin grid the snap lands on: the FFT length the FFT strip keeps in its preference
+    // (Java FftBinSnap.snapIfEnabled reads prefs.getFftLength()).
+    c.fftSize = prefs.fftLength.get();
+    // Calibration anchor (the DAC full scale scales the DDS amplitude) and the output-lane
+    // routing (Java GeneratorController.pushOutputRoutingToPlayback): the lane gate + the
+    // right-lane scale (= fsLeft/fsRight). Left stays the mono amplitude reference (scale 1.0),
+    // so the DDS amplitude math is unchanged - only the interleave seam gates/scales.
+    c.dacFsVoltageAmpl = prefs.dacFsVoltageAmpl.get();
+    c.outputChannels = prefs.genOutputChannels.get();
+    c.rightLaneScale = prefs.dacRightLaneScale();
+  }
+
   /** Push duty + dual-tone split into the engine and live-retune. */
   retuneDualAndDuty() {
     const sfVal = (id, dflt) => this._sfVal(id, dflt);
@@ -693,7 +729,7 @@ export class GeneratorPane {
     if (this._isBusy() || !this._isGenRunning()) return null;
     this._setBusy(true);
     try {
-      await this.engine.stopGenerator(); this._readConfig();
+      await this.engine.stopGenerator(); this.readConfig();
       // Returns the LOCALIZED start-error reason (null on success), mirroring Java
       // controller.getLastStartError() - the form handler surfaces a failed restart.
       return await this.engine.startGenerator();
@@ -777,7 +813,10 @@ export class GeneratorPane {
     });
 
     // ----- generator prefs bindings (Java GeneratorPane) -----
-    $('#signalForm').on('change', () => prefs.genSignalForm.set($('#signalForm').val()));
+    // ...and keeps the config's form current while the generator is NOT running (the restart
+    // above re-reads only a running one): the analysers' GENERATOR_EMITTED_HZ answer reads
+    // config.form, and a form picked before the first start must not answer the previous one.
+    $('#signalForm').on('change', () => { prefs.genSignalForm.set($('#signalForm').val()); this.readConfig(); });
     // toneHz / ampDbfs / dither prefs are written by their NumericStepField onChange handlers
     // (the dither field writes its ENTERED value - number plus unit - and re-annotates #ditherLabel).
     // Output-lane gate: persist + push the routing to the running worklet (Java
@@ -798,7 +837,7 @@ export class GeneratorPane {
       // stale (they refresh only on (re)start), so _genEmitFreq snapped against a stale bin grid -
       // or, with fftSize never refreshed, failed to move the emitted tone at all (the reported bug:
       // the FFT showed the entered freq, not the snapped one).
-      this._readConfig();   // refreshes config.snapToBin + config.fftSize + outRate + toneHz from the live UI
+      this.readConfig();   // refreshes config.snapToBin + config.fftSize + toneHz from the live UI
       engine.retuneGenerator();   // re-resolve the emit frequency (snap now gates SINE/DUAL)
       this.refreshFreqLabel(); this._syncFftAlign();   // snap gates the FFT align combo (FftTabControl)
     });
@@ -818,7 +857,7 @@ export class GeneratorPane {
       if (this._isBusy()) return;
       if (!this._isGenRunning()) {
         this._setBusy(true);
-        this._readConfig();
+        this.readConfig();
         // DDS tone and file playback share the one output device - only one may drive it.
         // Java controller.start() stops the file player first; mirror that + re-sync its LED.
         await engine.stopFile(); this.setGenFileBtn(false);
