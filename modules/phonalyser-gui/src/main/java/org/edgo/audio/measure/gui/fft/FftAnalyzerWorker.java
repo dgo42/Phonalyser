@@ -517,6 +517,18 @@ public final class FftAnalyzerWorker {
      *  refine - ~24 give κ to ~1e-4 bin at high SNR, landing before the drift
      *  becomes visible (~30 frames). */
     private static final int KAPPA_MEAS_FRAMES = 24;
+    /** Largest correction the one-shot κ refine may apply, in bins.  The
+     *  refine corrects the single-frame peak's residual (~0.01-0.03 bin); a
+     *  phase slope asking for more than half a bin is not a tone's residual
+     *  but the random-walk phase of a noise peak pinned as the fundamental
+     *  (no generator, a muted DUT).  Folding it drove κ toward zero, where
+     *  the harmonic ladder h·κ < halfSize runs to millions of lines per tick
+     *  and the analyser crawled from the 24th frame on.  Such a measurement
+     *  is discarded and re-anchored instead. */
+    private static final double KAPPA_REFINE_MAX_BIN = 0.5;
+    /** Below this pinned fundamental bin there is no harmonic family to pool
+     *  or to rotate by: the fork and the region family both stand down. */
+    private static final double KAPPA_FAMILY_MIN_BIN = 1.0;
     /** Phase-tracking loop gain (fraction of the running fundamental mis-alignment
      *  folded into the de-rotation each tick).  Low enough to average out per-tick
      *  phase noise (which would random-walk if folded whole), high enough to track
@@ -870,13 +882,24 @@ public final class FftAnalyzerWorker {
                         if (++kappaMeasFrames >= KAPPA_MEAS_FRAMES && kappaCleanSpan > 0.0) {
                             double dKappa = kappaCumPhase * fftSize
                                     / (2.0 * Math.PI * kappaCleanSpan);
-                            accumKFractional += dKappa;
-                            kappaRefined = true;
-                            gapRecoverPending = false;
-                            if (log.isInfoEnabled()) {
-                                log.info("FFT κ refined from phase slope over {} clean frames: Δκ={} bin -> κ={}",
-                                        kappaMeasFrames, String.format("%.5f", dKappa),
-                                        String.format("%.5f", accumKFractional));
+                            if (Math.abs(dKappa) <= KAPPA_REFINE_MAX_BIN) {
+                                accumKFractional += dKappa;
+                                kappaRefined = true;
+                                gapRecoverPending = false;
+                                if (log.isInfoEnabled()) {
+                                    log.info("FFT κ refined from phase slope over {} clean frames: Δκ={} bin -> κ={}",
+                                            kappaMeasFrames, String.format("%.5f", dKappa),
+                                            String.format("%.5f", accumKFractional));
+                                }
+                            } else {
+                                // Not a tone's residual - discard the measurement and
+                                // start over; a later clean stretch (the generator
+                                // coming on) can still refine.
+                                kappaMeasFrames = 0;
+                                if (log.isInfoEnabled()) {
+                                    log.info("FFT κ refine discarded: Δκ={} bin exceeds {} - no tone at the pinned fundamental",
+                                            String.format("%.5f", dKappa), KAPPA_REFINE_MAX_BIN);
+                                }
                             }
                         }
                     }
@@ -1091,6 +1114,10 @@ public final class FftAnalyzerWorker {
     private double forkPooledOffset(FftResult r, int halfSize, double delta, int k0,
                                     double fundOffset) {
         double kappa = accumKFractional;
+        // The ladder below runs h while h·κ < halfSize: bounded by the family,
+        // not by the spectrum, so a sub-bin κ has no ladder to pool - the
+        // fundamental's own estimate stands.
+        if (kappa < KAPPA_FAMILY_MIN_BIN) return fundOffset;
         double fundPow = r.re[k0] * r.re[k0] + r.im[k0] * r.im[k0];
         double relDb   = Preferences.instance().getFftStrongToneRelDb();
         double minPow  = fundPow * Math.pow(10.0, -relDb / 10.0);
@@ -1155,7 +1182,9 @@ public final class FftAnalyzerWorker {
      *  pinned (the caller then adds without rotation). */
     private int buildFamily(FftResult r, int halfSize, double phi1, double phi2) {
         double kappa = accumKFractional;
-        if (kappa <= 0.0) return 0;
+        // No family below one bin: the ladder would be the whole half spectrum,
+        // member for bin.
+        if (kappa < KAPPA_FAMILY_MIN_BIN) return 0;
         int hMax = (int) Math.min(halfSize, halfSize / kappa);
         int[] pa = r.imdProductA;
         int[] pb = r.imdProductB;
