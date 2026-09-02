@@ -5,10 +5,10 @@
  * GNU Affero General Public License v3 or later.
  *
  * Faithful port of gui/scope/ScopeTabControl. Owns the scope toolbar tabs and
- * their bound controls; reaches the scope PANE (canvas / scrollbars / record /
- * render loop, which stay in app.js) only through the narrow injected `host`
- * object - mirroring Java ScopeTabControl->ScopePane.Host (requestRedraw /
- * applyViewState / stopCaptureForFileLoad / onSignalFileLoaded). The scope V/div
+ * their bound controls; holds the scope PANE (canvas / scrollbars / record /
+ * render loop) for what Java's strip reaches through its ScopeView +
+ * ScopeController pair (requestRedraw / applyViewState / the capture stop before
+ * a signal-file load / onSignalFileLoaded). The scope V/div
  * + t/div + hysteresis + save-duration NumericStepFields are built in app.js's
  * initStepFields and reached here via the injected getField; the io / format
  * helpers + the shared confirm dialog + OscPreset are injected too.
@@ -23,6 +23,8 @@ import { OscPreset } from '../store/preferences.js';
 import { saveStreamingFlac } from '../io/flac.js';
 import { TileTabs } from '../widgets/tile-tabs.js';
 import { PresetBar } from '../widgets/preset-bar.js';
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
 
 /** FLAC exports are capped at 24 bits/sample EVERYWHERE in the web port - the
  *  WASM libFLAC reference encoder rejects 32-bit (encodeFlac's guard; Java's
@@ -45,13 +47,13 @@ const CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED = 0.001;
 
 export class ScopeTabControl {
   /**
-   * @param engine the AudioEngine (record state via host; ADC-cal reads the live scope view).
+   * @param engine the AudioEngine (record state via the pane; ADC-cal reads the live scope view).
    * @param prefs  Preferences.
-   * @param deps   {host, view, getField, io, WAV_TYPE, latestScope, showConfirm, setStatus}
-   *   - host: the narrow scope-PANE seam (Java ScopeTabControl.Host) -
-   *       requestRedraw() (repaint a frozen / file-mode view: app.js refreshScopeFileMode),
-   *       refreshTiles() (toolbarTabs.refreshTab: app.js refreshScopeTiles),
-   *       refreshFields() (re-sync V/T fields after an auto-setup: app.js refreshScopeFields),
+   * @param deps   {pane, view, getField, io, WAV_TYPE, latestScope, showConfirm, setStatus}
+   *   - pane: the ScopePane - what Java's strip reaches through its ScopeView + ScopeController:
+   *       requestRedraw() (repaint a frozen / file-mode view: refreshScopeFileMode),
+   *       refreshTiles() (toolbarTabs.refreshTab: refreshScopeTiles),
+   *       refreshFields() (re-sync V/T fields after an auto-setup: refreshScopeFields),
    *       syncTriggerStart() (Start enabled only in Single mode),
    *       setTriggerControlsEnabled(on) (lock the trigger group in file mode),
    *       syncOffsetScrollbar() / redrawVScroll() (vertical nav slider),
@@ -68,11 +70,11 @@ export class ScopeTabControl {
    *   - showConfirm: (title, message) => Promise<boolean> - the shared Bootstrap confirm modal.
    *   - setStatus: (msg) => set the status line.
    */
-  constructor(engine, prefs, { host, view, getField, io, WAV_TYPE, latestScope,
+  constructor(engine, prefs, { pane, view, getField, io, WAV_TYPE, latestScope,
     showConfirm, setStatus, calibrationDialog, inputUncalibrated }) {
     this.engine = engine;
     this.prefs = prefs;
-    this.host = host;
+    this.pane = pane;
     this.view = view;
     this._getField = getField;
     this.io = io;
@@ -143,7 +145,7 @@ export class ScopeTabControl {
       prefs.oscTriggerType.set('EDGE');
     }
     this.trigGroupSet('scopeTrigType', prefs.oscTriggerType.get());
-    this.host.syncGlitchTypeEnabled();
+    this.pane.syncGlitchTypeEnabled();
     this.trigGroupSet('scopeTrigMode', prefs.oscTriggerMode.get());
     $('#scopeTrigHystEn').prop('checked', prefs.oscTriggerHysteresisEnabled.get());
     $('#scopeTrigBeat').prop('checked', prefs.oscShowReconstructedBeat.get());
@@ -159,18 +161,18 @@ export class ScopeTabControl {
     const fRV = getField('scopeRightVdiv'); if (fRV) fRV.setValue(prefs.oscRightVoltsPerDiv.get());
     const fTd = getField('scopeTdiv'); if (fTd) fTd.setValue(prefs.oscTimePerDiv.get());
     const fTH = getField('scopeTrigHyst'); if (fTH) { fTH.setValue(prefs.oscTriggerHysteresisDiv.get()); fTH.setDisabled(!prefs.oscTriggerHysteresisEnabled.get()); }
-    this.host.syncOffsetScrollbar();
+    this.pane.syncOffsetScrollbar();
     // Initial scrollbar paint once the flex layout has sized the gutter canvas
     // (clientWidth/Height are 0 until then, so a synchronous redraw would no-op).
-    requestAnimationFrame(() => { this.host.redrawScrollbars(); });
-    this.host.syncMeasChannelButtons();
-    this.host.syncMeasButtons();
+    requestAnimationFrame(() => { this.pane.redrawScrollbars(); });
+    this.pane.syncMeasChannelButtons();
+    this.pane.syncMeasButtons();
     // Initial enable-gate for the Reconstructed-beat checkbox: Java buildTriggerGroup
     // sets reconstructedBeatBtn.setEnabled(isGeneratorDualTone()) at build time, so the
     // initial state must match the current generator form (single-tone -> greyed).
-    this.host.syncReconstructedBeatEnabled();
+    this.pane.syncReconstructedBeatEnabled();
     this.syncScopeSaveEnabled();   // Save disabled until a target is chosen this session
-    this.host.refreshTiles();   // tiles mirror the seeded settings (Java toolbarTabs tiles)
+    this.pane.refreshTiles();   // tiles mirror the seeded settings (Java toolbarTabs tiles)
   }
 
   /** Suggested save name from the path field, defaulting + .wav-suffixing it so
@@ -349,7 +351,7 @@ export class ScopeTabControl {
     prefs.oscTriggerEdge.set(p.triggerEdge);
     prefs.oscTriggerType.set(p.triggerType || 'EDGE');
     prefs.oscTriggerMode.set(p.triggerMode);
-    this.host.syncTriggerStart();
+    this.pane.syncTriggerStart();
     // Fractions - overwrite the values the scale listeners would have clobbered.
     // Goes last so the preset wins (Java applyOscPreset).
     prefs.oscLeftOffsetFrac.set(p.leftOffsetFrac);
@@ -388,14 +390,14 @@ export class ScopeTabControl {
     const uncalibrated = this._inputUncalibrated();
     const minFraction = uncalibrated
       ? CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED : CALIBRATE_MIN_VPP_FRACTION;
-    const ok = this.host.recState() && m && m.vpp > 0 && fsPp > 0
+    const ok = this.pane.recState() && m && m.vpp > 0 && fsPp > 0
       && m.vpp >= minFraction * fsPp;
     $('#scopeCalibrate').prop('disabled', !ok);
   }
 
   bind() {
     const prefs = this.prefs;
-    const host = this.host;
+    const pane = this.pane;
     const view = this.view;
     const io = this.io;
     const getField = (id) => this._getField(id);
@@ -407,42 +409,42 @@ export class ScopeTabControl {
     // Scope control panels (Java ScopeTabControl) -> the osc* prefs the scope view reads.
     // Channel-enable + AC coupling are square toggle BUTTONS (Java squareToggle):
     // click flips the .active class and writes the bound pref.
-    $('#scopeLeftEnable').on('click', function () { const on = !$(this).hasClass('active'); $(this).toggleClass('active', on); prefs.oscLeftChannelEnabled.set(on); host.refreshTiles(); host.requestRedraw(); });
-    $('#scopeRightEnable').on('click', function () { const on = !$(this).hasClass('active'); $(this).toggleClass('active', on); prefs.oscRightChannelEnabled.set(on); host.refreshTiles(); host.requestRedraw(); });
-    $('#scopeLeftAc').on('click', function () { const on = !$(this).hasClass('active'); $(this).toggleClass('active', on); prefs.oscLeftAcMode.set(on); host.refreshTiles(); host.requestRedraw(); });
-    $('#scopeRightAc').on('click', function () { const on = !$(this).hasClass('active'); $(this).toggleClass('active', on); prefs.oscRightAcMode.set(on); host.refreshTiles(); host.requestRedraw(); });
-    $('#scopeLeftSinc').on('change', () => { prefs.oscLeftSincInterpEnabled.set($('#scopeLeftSinc').is(':checked')); host.refreshTiles(); host.requestRedraw(); });
-    $('#scopeRightSinc').on('change', () => { prefs.oscRightSincInterpEnabled.set($('#scopeRightSinc').is(':checked')); host.refreshTiles(); host.requestRedraw(); });
+    $('#scopeLeftEnable').on('click', function () { const on = !$(this).hasClass('active'); $(this).toggleClass('active', on); prefs.oscLeftChannelEnabled.set(on); pane.refreshTiles(); pane.requestRedraw(); });
+    $('#scopeRightEnable').on('click', function () { const on = !$(this).hasClass('active'); $(this).toggleClass('active', on); prefs.oscRightChannelEnabled.set(on); pane.refreshTiles(); pane.requestRedraw(); });
+    $('#scopeLeftAc').on('click', function () { const on = !$(this).hasClass('active'); $(this).toggleClass('active', on); prefs.oscLeftAcMode.set(on); pane.refreshTiles(); pane.requestRedraw(); });
+    $('#scopeRightAc').on('click', function () { const on = !$(this).hasClass('active'); $(this).toggleClass('active', on); prefs.oscRightAcMode.set(on); pane.refreshTiles(); pane.requestRedraw(); });
+    $('#scopeLeftSinc').on('change', () => { prefs.oscLeftSincInterpEnabled.set($('#scopeLeftSinc').is(':checked')); pane.refreshTiles(); pane.requestRedraw(); });
+    $('#scopeRightSinc').on('change', () => { prefs.oscRightSincInterpEnabled.set($('#scopeRightSinc').is(':checked')); pane.refreshTiles(); pane.requestRedraw(); });
     // Residual view (Java oscLeft/RightResidualEnabled onChange -> controller.redrawViews +
     // toolbarTabs.refreshTab): subtract the best-fit tone and draw only the residual.
-    $('#scopeLeftResidual').on('change', () => { prefs.oscLeftResidualEnabled.set($('#scopeLeftResidual').is(':checked')); host.refreshTiles(); host.requestRedraw(); });
-    $('#scopeRightResidual').on('change', () => { prefs.oscRightResidualEnabled.set($('#scopeRightResidual').is(':checked')); host.refreshTiles(); host.requestRedraw(); });
+    $('#scopeLeftResidual').on('change', () => { prefs.oscLeftResidualEnabled.set($('#scopeLeftResidual').is(':checked')); pane.refreshTiles(); pane.requestRedraw(); });
+    $('#scopeRightResidual').on('change', () => { prefs.oscRightResidualEnabled.set($('#scopeRightResidual').is(':checked')); pane.refreshTiles(); pane.requestRedraw(); });
     // Per-channel mains-suppression + LPF combos (Java oscLeft/RightMainsSuppression /
     // oscLeft/RightLpf) - the scope view applies them to the active channel's buffer
     // before the trigger search + trace.
-    $('#scopeLeftMains').on('change', () => { prefs.oscLeftMainsSuppression.set($('#scopeLeftMains').val()); host.requestRedraw(); });
-    $('#scopeRightMains').on('change', () => { prefs.oscRightMainsSuppression.set($('#scopeRightMains').val()); host.requestRedraw(); });
-    $('#scopeLeftLpf').on('change', () => { prefs.oscLeftLpf.set($('#scopeLeftLpf').val()); host.requestRedraw(); });
-    $('#scopeRightLpf').on('change', () => { prefs.oscRightLpf.set($('#scopeRightLpf').val()); host.requestRedraw(); });
+    $('#scopeLeftMains').on('change', () => { prefs.oscLeftMainsSuppression.set($('#scopeLeftMains').val()); pane.requestRedraw(); });
+    $('#scopeRightMains').on('change', () => { prefs.oscRightMainsSuppression.set($('#scopeRightMains').val()); pane.requestRedraw(); });
+    $('#scopeLeftLpf').on('change', () => { prefs.oscLeftLpf.set($('#scopeLeftLpf').val()); pane.requestRedraw(); });
+    $('#scopeRightLpf').on('change', () => { prefs.oscRightLpf.set($('#scopeRightLpf').val()); pane.requestRedraw(); });
 
     // Channel / edge / type changes KEEP the held trace (hold/freeze rule 2 of the
     // scope navigation spec): a trigger-source edit never drops the anchor - the next
     // real trigger event under the new settings replaces it naturally. Dropping it
     // blanked a stopped scope, whose held frame is the measurement being read.
     this.wireTrigGroup('scopeTrigCh', (v) => {
-      prefs.oscTriggerChannel.set(v); host.refreshTiles();
-      host.requestRedraw();
+      prefs.oscTriggerChannel.set(v); pane.refreshTiles();
+      pane.requestRedraw();
     });
     this.wireTrigGroup('scopeTrigEdge', (v) => {
-      prefs.oscTriggerEdge.set(v); host.refreshTiles();
-      host.requestRedraw();
+      prefs.oscTriggerEdge.set(v); pane.refreshTiles();
+      pane.requestRedraw();
     });
     // Trigger event type: E = level-crossing edge trigger, G = dV/dt glitch trigger
     // (dropped-sample DAC gaps). The ↑/↓ edge selection applies to both - crossing
     // direction vs. glitch start/end anchor.
     this.wireTrigGroup('scopeTrigType', (v) => {
-      prefs.oscTriggerType.set(v); host.refreshTiles();
-      host.requestRedraw();
+      prefs.oscTriggerType.set(v); pane.refreshTiles();
+      pane.requestRedraw();
     });
     this.wireTrigGroup('scopeTrigMode', (v) => {
       prefs.oscTriggerMode.set(v);
@@ -454,9 +456,9 @@ export class ScopeTabControl {
         prefs.oscTriggerType.set('EDGE');
         this.trigGroupSet('scopeTrigType', 'EDGE');
       }
-      host.syncGlitchTypeEnabled();
-      host.syncTriggerStart(); host.refreshTiles();
-      host.requestRedraw();
+      pane.syncGlitchTypeEnabled();
+      pane.syncTriggerStart(); pane.refreshTiles();
+      pane.requestRedraw();
     });
     // Trigger level (fraction of canvas height, Java oscTriggerLevelFrac) +
     // hysteresis enable/div (oscTriggerHysteresisEnabled / oscTriggerHysteresisDiv).
@@ -465,32 +467,30 @@ export class ScopeTabControl {
       prefs.oscTriggerHysteresisEnabled.set(on);
       const fTH = getField('scopeTrigHyst');
       if (fTH) fTH.setDisabled(!on);
-      host.refreshTiles();
+      pane.refreshTiles();
     });
     // Reconstructed-beat overlay (oscShowReconstructedBeat) - gated to dual-tone form.
     // Java binds oscShowReconstructedBeat with onChange->requestRedraw so the overlay toggles
     // immediately in file / frozen mode (the live render loop is idle then).
-    $('#scopeTrigBeat').on('change', () => { prefs.oscShowReconstructedBeat.set($('#scopeTrigBeat').is(':checked')); host.requestRedraw(); });
+    $('#scopeTrigBeat').on('change', () => { prefs.oscShowReconstructedBeat.set($('#scopeTrigBeat').is(':checked')); pane.requestRedraw(); });
     // SINGLE-mode Start button: arms one shot (the scope view freezes on the next
-    // trigger and pops this back out via onSingleDisarmed). Toggle to cancel.
+    // trigger and publishes SCOPE_SINGLE_DISARMED, which pops this back out - Java
+    // ScopeTabControl singleDisarmedListener). Toggle to cancel.
     $('#scopeTrigStart').on('click', function () {
       const arm = !view.isSingleArmed();
       $(this).toggleClass('active armed', arm);
       view.setSingleArmed(arm);
     });
-    view.onSingleDisarmed = () => $('#scopeTrigStart').removeClass('active armed');
+    MessageBus.instance().subscribe(Events.SCOPE_SINGLE_DISARMED,
+      () => $('#scopeTrigStart').removeClass('active armed'));
     // Canvas wheel-zoom (V/div, t/div) and pan changed osc* prefs directly - re-sync the
     // numeric fields and the tab tiles that mirror them.
-    view.onSettingsChanged = () => { host.refreshFields(); host.refreshTiles(); host.requestRedraw(); };
+    view.onSettingsChanged = () => { pane.refreshFields(); pane.refreshTiles(); pane.requestRedraw(); };
     // File-mode horizontal navigation from the canvas wheel (Shift+wheel pan, Ctrl+Shift
     // t/div zoom-around-cursor): the scope view computes a target back-offset against the
     // loaded buffer; clamp it to the valid range and re-render through the nav scrollbar
     // (Java ScopePane.stepHorizontalOffset / applyViewState).
-    view.onFileBack = (back) => host.onFileBack(back);
-
-    // Scope view header button (Java SCOPE_AUTO_SETUP) - range V/div + t/div + centre to the signal.
-    // refreshScopeFileMode() repaints in file mode (no live loop), so the fit shows on a loaded signal.
-    $('#scopeAutoSetup').on('click', () => { view.autoSetup(); host.refreshFields(); host.refreshTiles(); host.requestRedraw(); });
+    view.onFileBack = (back) => pane.onFileBack(back);
 
     // Save name: persist the typed file name (extension included -> format) into
     // oscSavePath (Java openScopeSaveBrowse -> setOscSavePath persists the full save
@@ -551,7 +551,7 @@ export class ScopeTabControl {
         //       startStreamingSave(path, sampleRate, bitDepth, requestedFrames);
         //       return;
         //   }
-        // Java `reader == null` (not recording) maps to !host.recState() here;
+        // Java `reader == null` (not recording) maps to !pane.recState() here;
         // reader.getCapacity() maps to engine.getCaptureCapacity().
         const info = this._latestScope().info;
         const sampleRate = info.inRate;
@@ -563,7 +563,7 @@ export class ScopeTabControl {
         const requestedFrames = Math.max(1,
           Math.round(this.prefs.oscSaveDurationSeconds.get() * sampleRate));
         const capacity = this.engine.getCaptureCapacity();
-        if (!this.view.fileMode && (!this.host.recState() || requestedFrames > capacity)) {
+        if (!this.view.fileMode && (!this.pane.recState() || requestedFrames > capacity)) {
           await this.startStreamingSave(target, sampleRate, bitDepth, requestedFrames);
           return;
         }
@@ -586,8 +586,9 @@ export class ScopeTabControl {
       if (!file) return;
       const f = { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) };
       // Open-signal and Record share the scope buffer: stop live capture before swapping
-      // the buffer out (Java host.stopCaptureForFileLoad), then enter file mode.
-      await host.stopCaptureForFileLoad();
+      // the buffer out (Java ScopeController.openSignalFile stops it itself), then enter
+      // file mode.
+      await pane.stopCaptureForFileLoad();
       try {
         const lower = f.name.toLowerCase();
         // Each reader hands back per-channel SIGNED integer PCM (StereoPcmIo
@@ -614,14 +615,15 @@ export class ScopeTabControl {
         if (prefs.oscTriggerType.get() === 'GLITCH') prefs.oscTriggerType.set('EDGE');
         this.trigGroupSet('scopeTrigMode', 'AUTO');
         this.trigGroupSet('scopeTrigType', prefs.oscTriggerType.get());
-        host.syncTriggerStart();
-        host.refreshTiles();
-        host.setTriggerControlsEnabled(false);
+        pane.syncTriggerStart();
+        pane.refreshTiles();
+        pane.setTriggerControlsEnabled(false);
         prefs.oscPlayFromPath.set(f.name); prefs.save();   // Java doOpenSignalBrowse persists the load path
         $('#scopeLoadedPath').val(f.name).attr('title', f.name);   // readonly last-loaded-file field
         // A signal file finished loading -> centre the view on its start, show the nav
-        // slider (file mode) and apply the view state - pane state (Java host.onSignalFileLoaded).
-        host.onSignalFileLoaded({ left, right, frames, sampleRate: dec.sampleRate, name: f.name });
+        // slider (file mode) and apply the view state - pane state (Java ScopePane after
+        // ScopeController.openSignalFile).
+        pane.onSignalFileLoaded({ left, right, frames, sampleRate: dec.sampleRate, name: f.name });
         setStatus(`loaded ${f.name} - ${frames} frames @ ${dec.sampleRate} Hz`);
       } catch (e) { setStatus(t('scope.openSignal.error') + ': ' + e.message); }
     });
@@ -639,7 +641,7 @@ export class ScopeTabControl {
       },
       confirm: (title, msg) => this._showConfirm(title, msg),
       i18nPrefix: 'scope.presets',
-      onChanged: () => this.host.refreshTiles(),   // "N saved" Presets tile follows the count
+      onChanged: () => this.pane.refreshTiles(),   // "N saved" Presets tile follows the count
     });
     this._presetBar.bind();
 

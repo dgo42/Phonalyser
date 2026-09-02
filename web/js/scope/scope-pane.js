@@ -615,6 +615,10 @@ export class ScopePane {
       this.renderMeasurementTable(); this.syncMeasButtons();
     });
     $('#scopeStatsReset').on('click', () => { scopeView._clearMeasurementHistory(); this.renderMeasurementTable(); });
+    // Auto-setup is a bus round (Java ScopeView autoSetupBtn -> SCOPE_AUTO_SETUP -> ScopePane's
+    // autoSetupListener): the header button publishes, this pane fits the scales to the signal.
+    $('#scopeAutoSetup').on('click', () => MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP));
+    MessageBus.instance().subscribe(Events.SCOPE_AUTO_SETUP, () => this.onAutoSetup());
 
     // Amplitude histogram. The L/R pick sets its channel EXPLICITLY rather than toggling: an L/R
     // pair fires on BOTH buttons - the one going on and the one going off - so a toggle lets the
@@ -864,6 +868,16 @@ export class ScopePane {
   // the live render loop repaints every frame anyway, so nothing to do there. Required
   // so a setting change (trigger type/edge/channel, V/div, ...) shows on an idle view -
   // the held trace itself stays, and re-renders under the new settings.
+  /** SCOPE_AUTO_SETUP: range V/div + t/div + centre to the current signal, then re-sync the
+   *  numeric fields and tiles that mirror them; the redraw shows the fit on a loaded signal too
+   *  (file mode has no live loop). */
+  onAutoSetup() {
+    this.view.autoSetup();
+    this.refreshFields();
+    this.refreshTiles();
+    this.requestRedraw();
+  }
+
   requestRedraw() {
     if (this.view.fileMode) { this.refreshScopeFileMode(); return; }
     if (!this._isScopeRec()) this.redrawScopeOnResize();

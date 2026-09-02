@@ -39,14 +39,17 @@ export const FFT_AVERAGES_SERIES = [FFT_AVERAGES_OFF, 1, 2, 4, 8, 16, 32, 64, 12
 
 export class FftTabControl {
   /**
-   * @param engine the AudioEngine (FFT structural changes restart the FFT consumer via host).
+   * @param engine the AudioEngine (FFT structural changes restart the FFT consumer via restartFft).
    * @param prefs  Preferences.
-   * @param deps   {host, fftView, fftViewCorrection, store, getField, io, restartFft,
-   *                showConfirm, setStatus, tileChips}
-   *   - host: the narrow FFT-PANE seam (Java FftTabControl.Host) -
+   * @param deps   {pane, applyPrefsToUi, readConfig, fftView, fftViewCorrection, store, getField,
+   *                io, restartFft, showConfirm, setStatus, tileChips}
+   *   - pane: the FftPane - its result state, as Java's strip reads the FftView's last result:
    *       getResult() (=> latestResult, the live analyzed spectrum: Save / ADC-calibrate read it),
    *       setResult(r) (a loaded .fft spectrum -> latestResult + resultDirty so the render loop paints it),
-   *       applyPrefsToUi() (a preset recall re-seeds the main FFT controls: app.js applyPrefsToUi).
+   *       showLoadedBanner(name) (the "Loaded: file" blink, Java FftView.setSourceFilePath).
+   *   - applyPrefsToUi: () => a preset recall re-seeds the main FFT controls (app.js applyPrefsToUi).
+   *   - readConfig: () => snapshot the live UI into engine.config (window / coherent retune the
+   *       live analyze call; app.js readConfig).
    *   - fftView: the FFT view (applyPrefs() re-reads colour/line/axis prefs on a preset recall).
    *   - fftViewCorrection: the render-time FFT spectral corrections (reads the shared store).
    *   - store: the shared FFT CorrectionStore (Java FftController's) - rebuildCalEntries mutates it;
@@ -59,11 +62,13 @@ export class FftTabControl {
    *   - setStatus: (msg) => set the status line.
    *   - tileChips: (...vals) => the `.tile` chip-span renderer (shared with the scope tiles, app.js).
    */
-  constructor(engine, prefs, { host, fftView, fftViewCorrection, store, getField, io,
-    restartFft, showConfirm, setStatus, tileChips, calibrationDialog }) {
+  constructor(engine, prefs, { pane, applyPrefsToUi, readConfig, fftView, fftViewCorrection, store,
+    getField, io, restartFft, showConfirm, setStatus, tileChips, calibrationDialog }) {
     this.engine = engine;
     this.prefs = prefs;
-    this.host = host;
+    this.pane = pane;
+    this._applyPrefsToUi = applyPrefsToUi;
+    this._readConfig = readConfig;
     this.fftView = fftView;
     this.fftViewCorrection = fftViewCorrection;
     this.store = store;
@@ -188,12 +193,12 @@ export class FftTabControl {
    *  seam, so it recomputes unconditionally - idempotent with the next live frame, which
    *  re-derives the same stats from the same config. */
   onThdSettingChanged() {
-    this.host.readConfig();
-    const r0 = this.host.getResult && this.host.getResult();
+    this._readConfig();
+    const r0 = this.pane.getResult();
     if (!r0 || !r0.amplitudeDbFs) return;
     const r = FftResult.adopt(r0);
     this.recomputeStaticResult(r);
-    this.host.setResult(r);
+    this.pane.setResult(r);
     this.fftView.render(r);
   }
 
@@ -322,7 +327,7 @@ export class FftTabControl {
     // magTop == magBottom (or an inverted or out-of-range pair) went straight to the mapping and
     // blanked the plot (Java FftTabControl.applyFftPreset).
     MessageBus.instance().publish(Events.FFT_RANGE_CHANGED);
-    this.host.applyPrefsToUi();                          // reflect the main FFT controls
+    this._applyPrefsToUi();                              // reflect the main FFT controls
     $('#fftMagUnit').val(p.magUnit);                     // + the controls applyPrefsToUi doesn't cover
     const setF = (id, v) => { const f = this._getField(id); if (f) f.setValue(v); };   // THD steppers
     setF('thdDistMin', p.distMinHz); setF('thdDistMax', p.distMaxHz); setF('thdCalcMaxH', p.calcMaxHarmonic);
@@ -399,7 +404,7 @@ export class FftTabControl {
     $('#fftStopAfterNEn').on('change', () => {
       prefs.fftStopAfterNEnabled.set($('#fftStopAfterNEn').is(':checked'));
       this.refreshStopAfterEnable();
-      if (engine.running) this.host.readConfig();
+      if (engine.running) this._readConfig();
     });
     // MAINS suppression: persisted, and pushed into the live config so the RUNNING analyser sees
     // the new mode on its next batch - the same host.readConfig() the stop-after neighbour above
@@ -409,7 +414,7 @@ export class FftTabControl {
     // when a time-domain canceller is entered or left (_syncLiveConfig).
     $('#fftMains').on('change', () => {
       prefs.fftMainsSuppression.set($('#fftMains').val());
-      if (engine.running) this.host.readConfig();
+      if (engine.running) this._readConfig();
     });
 
     // ---- RESTART-FROM-0 SEMANTICS: the FFT restarts from 0 ONLY when the FFT length, the
@@ -425,8 +430,10 @@ export class FftTabControl {
     //
     // FFT LENGTH resets (Java FftView.java:449 fftLengthProperty -> resetStatistics) AND is the
     // only change that needs a fresh CONSUMER: it resizes the analysis window / bin grid, so
-    // the worker + buffers must be rebuilt (restartFft resets as a side effect). It also
-    // re-snaps the generator bin (Java FFT_LENGTH_CHANGED, FftTabControl.java:360-361).
+    // the worker + buffers must be rebuilt (restartFft resets as a side effect). The new grid
+    // is then announced as FFT_LENGTH_CHANGED (Java FftTabControl.java:406-407) and the
+    // generator side decides what it means for it - the controller re-snaps a running tone,
+    // the pane redraws its bracket labels.
     $('#fftSize').on('change', async () => {
       this.updateTabSub();
       // The held calibration gain is one value per bin of the OLD grid, and a new length is a new
@@ -440,27 +447,20 @@ export class FftTabControl {
       // against the PREVIOUS length and the emitted tone did not move, while the label - which
       // reads this control directly - already showed the new grid. The snap-to-bin checkbox does
       // exactly this for the same reason (GeneratorPane's #snap handler).
-      this.host.readConfig();
+      this._readConfig();
       await restartFft();
-      // FFT length changes the bin grid (binW = inRate/fftSize); re-snap the generator so the
-      // played tone still lands exactly on a bin (Java FFT_LENGTH_CHANGED consumer).
-      if (engine.running && $('#snap').is(':checked')) engine.retuneGenerator();
-      // The bracketed snapped-freq label depends on the bin grid too, so refresh it regardless
-      // of run/snap state (Java GeneratorPane subscribes FFT_LENGTH_CHANGED and calls
-      // updateFreqLabel unconditionally) - else changing the FFT length while stopped leaves a
-      // stale "(xxx Hz)".
-      this.host.refreshFreqLabel();
+      MessageBus.instance().publish(Events.FFT_LENGTH_CHANGED);
     });
     // THREADS (web-only worker-pool size, no Java counterpart): NO reset. The worker reads the
     // pool size per dispatch message, so the running consumer just re-derives poolSize on the
     // next batch (_syncLiveConfig) - the accumulator is untouched. (This used to restartFft,
     // resetting the average - the exact opposite of the restart-from-0 rule.)
-    $('#threads').on('change', () => { this.prefs.fftThreads.set(parseInt($('#threads').val(), 10) || 1); this.updateTabSub(); if (engine.running) this.host.readConfig(); });
+    $('#threads').on('change', () => { this.prefs.fftThreads.set(parseInt($('#threads').val(), 10) || 1); this.updateTabSub(); if (engine.running) this._readConfig(); });
     // OVERLAP: NO reset - Java FftTabControl.java:377-380: "Overlap only changes the hop, not
     // the spectrum/accumulator - refresh the tab tile but DON'T reset the average; the worker
     // adapts next tick." The running consumer re-derives its hop/bufLen on the next batch
     // (_syncLiveConfig) keeping the accumulator depth (κ/PLL re-anchored via onResync).
-    $('#overlap').on('change', () => { this.updateTabSub(); if (engine.running) this.host.readConfig(); });
+    $('#overlap').on('change', () => { this.updateTabSub(); if (engine.running) this._readConfig(); });
     // WINDOW + COHERENT are passed per analyze dispatch (they retune LIVE - no consumer rebuild),
     // but BOTH reset the running statistics + accumulator (Java FftView.java:436 window ->
     // resetStatistics; :451 coherent -> resetStatistics): a window/mode change makes the already-
@@ -468,7 +468,7 @@ export class FftTabControl {
     // full consumer re-acquire - that's the lighter Java resetStatistics()).
     $('#window,#coherent').on('change', () => {
       this.updateTabSub();
-      if (engine.running) { this.host.readConfig(); engine.resetAnalyses(); }
+      if (engine.running) { this._readConfig(); engine.resetAnalyses(); }
     });
     // ALIGN generator (None / FLL): restart from 0 (engaging/releasing
     // the FLL changes what tone the accumulated frames were captured under, so the average is
@@ -489,7 +489,7 @@ export class FftTabControl {
     $('#fftFundFromGen').on('change', () => {
       prefs.fftFundFromGenerator.set($('#fftFundFromGen').is(':checked'));
       this.syncAlign();
-      if (engine.running) { this.host.readConfig(); engine.resetAnalyses(); }
+      if (engine.running) { this._readConfig(); engine.resetAnalyses(); }
     });
     // THD settings (Java FftView.java:473-479/486: distMin/distMax band, manual fundamental,
     // max harmonics -> onThdSettingChanged): POST-FFT - never a capture restart, never a
@@ -531,7 +531,7 @@ export class FftTabControl {
         prefs.fftAverages.set(v);
         this.refreshStopAfterEnable();
         this.updateTabSub();
-        if (engine.running) this.host.readConfig();
+        if (engine.running) this._readConfig();
       };
     }
     // Stop-after-N COUNT (Java stopAfterNField): NO reset - write the pref and push the live
@@ -542,7 +542,7 @@ export class FftTabControl {
     if (fStopN) {
       fStopN.onChange = (v) => {
         prefs.fftStopAfterN.set(v);
-        if (engine.running) this.host.readConfig();
+        if (engine.running) this._readConfig();
       };
     }
     // THD "Manual fundamental" VALUE (Java fftManualFundVrmsProperty -> onThdSettingChanged,
@@ -581,11 +581,11 @@ export class FftTabControl {
     this._presetBar.bind();
 
     // ----- FFT Utility tab (Java FftTabControl.buildUtilityTab): screenshot + ADC calibrate -----
-    // Screenshot: the FFT Utility camera (#fftShot) opens the SHARED composited ScreenshotDialog
-    // (offscreen pane clone + caption + size) - Java FFT_SCREENSHOT_REQUESTED -> the pane's offscreen-
-    // clone dialog. The dialog + its FFT renderShot (renderFftShot) are wired in app.js via
-    // shotDialog.addPane({openBtn:'#fftShot', ...}); there is NO direct export here any more (the old
-    // raw #spec PNG download was the wrong shortcut).
+    // Screenshot: the FFT Utility camera (#fftShot) publishes the request (Java
+    // FftTabControl.java:871 shotBtn -> FFT_SCREENSHOT_REQUESTED); the pane's screenshot spec
+    // opens the SHARED composited ScreenshotDialog on it (offscreen pane clone + caption + size).
+    // There is NO direct export here (the old raw #spec PNG download was the wrong shortcut).
+    $('#fftShot').on('click', () => MessageBus.instance().publish(Events.FFT_SCREENSHOT_REQUESTED));
     // Compressed/distorted-shot fix: the #spec bitmap bakes ALL its text in
     // (axis ticks, harmonic labels, readout/THD table), so the compositor's scaled blit of
     // the LIVE bitmap distorted it. Register the offscreen re-renderer instead: the
@@ -611,8 +611,8 @@ export class FftTabControl {
 
     // ----- FFT "Save to..." / "Load from..." -----
     $('#fftSaveBtn').on('click', async () => {
-      if (!this.host.getResult()) { $('#status').text('FFT: nothing analyzed yet - press ▶ first.'); return; }
-      const r = this.host.getResult(), c = engine.config, imd = !!r.imd;
+      if (!this.pane.getResult()) { $('#status').text('FFT: nothing analyzed yet - press ▶ first.'); return; }
+      const r = this.pane.getResult(), c = engine.config, imd = !!r.imd;
       try {
         const text = io.saveSpectrum(r, {
           imd, tone1Hz: c.toneHz, tone2Hz: c.tone2Hz, dbvOffsetDb: prefs.dbvOffsetDb,
@@ -652,15 +652,17 @@ export class FftTabControl {
         r.framesDone = r.frameCount || 0; r.avgTarget = r.frameCount || 0; r.coherent = r.coherentAveraging;
         r.fll = { on: false, locked: false, ppm: 0, genFreq: 0 };
         r.imd = loaded.modeImd ? analyzeImd(r, loaded.tone1Hz, loaded.tone2Hz, prefs.dbvOffsetDb) : null;
-        // Stop live FFT recording first (Java publishes FFT_RECORDING_STOP_REQUESTED before
-        // displayLoadedResult) so the next live frame can't clobber the loaded static spectrum.
-        await this.host.stopFftRecording();
-        this.host.setResult(r);
+        // Stop live FFT recording first (Java FftTabControl.java:1114 publishes
+        // FFT_RECORDING_STOP_REQUESTED before displayLoadedResult) so the next live frame can't
+        // clobber the loaded static spectrum: the pane's subscriber drops the recording flag
+        // before this publish returns.
+        MessageBus.instance().publish(Events.FFT_RECORDING_STOP_REQUESTED);
+        this.pane.setResult(r);
         // Reflect the chosen file in the read-only path field + persist it (Java
         // buildLoadFromTab: pathField.setText(chosen) + prefs.setFftLoadPath).
         prefs.fftLoadPath.set(f.name); prefs.save();
         $('#fftLoadPath').val(f.name).attr('title', f.name);
-        this.host.showLoadedBanner(f.name);   // "Loaded: file" blink (Java FftView.setSourceFilePath)
+        this.pane.showLoadedBanner(f.name);   // "Loaded: file" blink (Java FftView.setSourceFilePath)
         $('#status').text(`loaded ${f.name}`);
       } catch (e) { $('#status').text('FFT load failed: ' + e.message); }
     });
@@ -755,14 +757,15 @@ export class FftTabControl {
       // web's counterpart of Java's FFT_CALIBRATION_CHANGED subscriber: the web store is silent,
       // and this is its single mutation site.
       this.engine.setFftCalibrationEntries(this.store.getEntries());
-      this.fftViewCorrection.dropHeld();
+      // (The view correction drops its held cascade gain on the store's own
+      // FFT_CALIBRATION_CHANGED, published by the mutations above.)
       // A cal change must also apply to a STOPPED FFT (Java: the .frc de-embed is a plot-time
       // transform over the raw lastResult - a toggle there just repaints). Ask the analyzer to
-      // rebuild the display from the RAW accumulator it still holds; its answer arrives through
-      // engine.onResult, and the pane paints a result that lands while not recording. No-op for a
-      // loaded .fft file or an accumulator-less (non-averaged) run; while running it pre-empts
-      // the next tick.
-      const base = this.host.getResult && this.host.getResult();
+      // rebuild the display from the RAW accumulator it still holds; its answer arrives as
+      // FFT_RESULT_AVAILABLE, and the pane paints a result that lands while not recording.
+      // No-op for a loaded .fft file or an accumulator-less (non-averaged) run; while running it
+      // pre-empts the next tick.
+      const base = this.pane.getResult();
       if (base && this.engine.reemitFftDisplay) this.engine.reemitFftDisplay(base);
     };
     const appendCalRow = () => { const $row = $(calRowHtml()).appendTo('#fftCalRows'); refreshCalRemoveBtns(); return $row; };

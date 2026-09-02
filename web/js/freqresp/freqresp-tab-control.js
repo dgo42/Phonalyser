@@ -153,9 +153,10 @@ export class FreqRespTabControl {
     // by the wizard path, so the view divides the loaded .frc out at render time.
     $('#frRiaa, #frRiaaRev, #frRiaaIec').on('change', () => this.view.render());
 
-    // The compare-smoothing-window pref (changed in the Preferences dialog) refreshes the
-    // compare anchor + min/max table (Java FREQRESP_COMPARE_PARAMS_CHANGED).
-    this.prefs.freqRespCompareSmoothWindow.addListener(() => this.view.onCompareParamsChanged());
+    // The loaded cascade changed - a row loaded / cleared, the wizard applied or cancelled, the
+    // Preferences dialog committed (Java FreqRespTabControl calibrationChangedListener): the
+    // view retraces in its own subscription; this control follows with its rows + tile.
+    MessageBus.instance().subscribe(Events.FREQRESP_CALIBRATION_CHANGED, () => this.onStoreChanged());
 
     this.bindPresets();
     this.bindUtility();
@@ -1030,11 +1031,11 @@ export class FreqRespTabControl {
     this.$('#frCalTabSub').html(n <= 0 ? '' : `<span class="tile">${n === 1 ? t('calibration.tile.loaded') : t('calibration.tile.loadedN', n)}</span>`);
   }
 
-  /** Store-changed handler: retraces the view, and rebuilds the calibration-tab rows when the
-   *  change came from OUTSIDE the tab (Java FreqRespTabControl.onCalibrationChanged - skips the
-   *  rebuild for the control's own writes). */
+  /** FREQRESP_CALIBRATION_CHANGED handler: rebuilds the calibration-tab rows when the change came
+   *  from OUTSIDE the tab (Java FreqRespTabControl.onCalibrationChanged - skips the rebuild for
+   *  the control's own writes) and refreshes the tile. The view's retrace is the view's own
+   *  subscription. */
   onStoreChanged() {
-    if (this.view) this.view.onCalibrationChanged();
     if (!this._calMutationInFlight && this._calRows && this._calRows.length) {
       this.rebuildRowsFromStore();
     }

@@ -482,7 +482,7 @@ export class FftView {
     return top - t * (top - bot);
   }
 
-  /** @param result the FftResult-shaped object emitted by AudioEngine.onResult, or
+  /** @param result the FftResult-shaped object the FFT pane received as FFT_RESULT_AVAILABLE, or
    *  {@code null}/undefined to paint just the empty graticule (background, dBV
    *  y-axis, log-frequency x-axis, grid + frame). Java FftView.onPaint always paints
    *  the frame and draws the spectrum trace / dots / table only when a result exists. */

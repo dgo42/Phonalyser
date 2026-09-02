@@ -48,6 +48,8 @@ import { PhosphorRenderer, Canvas2DAlphaPainter } from '../scope/phosphor-render
 // trigger preservation (Java ScopeView zoom overrides) and forwards its own
 // pointer funnel (hookMouse = false, like Java's installRectZoom(this, false)).
 import { RectZoom } from './rect-zoom.js';
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
 
 // Grid divisions (the ½-div wheel step + the V/div ladder math now live in ScopeNav).
 const DIVISIONS_X = NAV_DIVISIONS_X;
@@ -1362,7 +1364,9 @@ export class ScopeView {
       if (this._singleArmed && foundTrigger) {
         trig = foundFrac; capture = true;
         this._singleArmed = false;
-        if (this.onSingleDisarmed) this.onSingleDisarmed();   // pop the Start toggle
+        // The shot disarmed itself (Java ScopeView publishes SCOPE_SINGLE_DISARMED); the
+        // settings strip pops its Start toggle back out on it.
+        MessageBus.instance().publish(Events.SCOPE_SINGLE_DISARMED);
         anchorAbs = bufStartAbs + trig; offsetFrac = posFracReal;   // virtual-capable
       } else if (this._singleHeld) {
         // Armed-waiting (or disarmed-held): keep the LAST captured frame + ALL its

@@ -38,11 +38,11 @@ export class FreqRespPane {
 
     this.canvas = document.getElementById('frPlot');
 
-    // Loaded-correction store (Java CorrectionStore): the .frc entries + wizard `direct`
-    // buffer the view divides out at render time. The change callback retraces the view AND
-    // rebuilds the calibration-tab rows - both handled by the tab control's onStoreChanged.
-    this.correctionStore = new CorrectionStore('FreqResp',
-      () => this.tabControl.onStoreChanged());
+    // Loaded-correction store (Java FreqRespPane: new CorrectionStore("FreqResp",
+    // Events.FREQRESP_CALIBRATION_CHANGED)): the .frc entries + wizard `direct` buffer the view
+    // divides out at render time. Every mutation publishes FREQRESP_CALIBRATION_CHANGED; the
+    // view retraces on it and the tab control rebuilds its calibration rows.
+    this.correctionStore = new CorrectionStore('FreqResp', Events.FREQRESP_CALIBRATION_CHANGED);
 
     // The interactive view owns the canvas: axes, zoom/pan, crosshair, scrollbars, render-time
     // calibration. The L/R radio + RIAA/phase toggles re-derive + repaint.

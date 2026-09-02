@@ -11,13 +11,17 @@
 // transient `direct` at draw / measurement time, so multiple files compose into a
 // single correction.
 //
-// Change notification is config, not a callback chain on the Java side (the
-// constructor takes a MessageBus event name); the web has no such bus here, so the
-// change-event is an injected callback fired after every mutation (null = silent,
-// e.g. an offscreen screenshot clone). The wizard captures a snapshot() on open and
-// calls restore() on cancel so a cancelled wizard doesn't leave half-measured state.
+// Change notification is config, not a callback chain, exactly as on the Java side:
+// the constructor takes the MessageBus event name the store publishes after every
+// mutation (FFT_CALIBRATION_CHANGED for the FFT store, FREQRESP_CALIBRATION_CHANGED
+// for the FreqResp one; null = silent, e.g. the Tune-notch wizard's private store).
+// Whoever depends on the loaded cascade subscribes that event - the store never learns
+// who. The wizard captures a snapshot() on open and calls restore() on cancel so a
+// cancelled wizard doesn't leave half-measured state.
 //
 // All access is on the single UI thread, so no internal synchronisation is needed.
+
+import { MessageBus } from '../bus/message-bus.js';
 
 /**
  * One loaded calibration plus the file path it came from. Mirrors
@@ -32,12 +36,13 @@
 
 export class CorrectionStore {
   /**
-   * @param {string} label             short identifier for log lines (e.g. "FreqResp")
-   * @param {?(()=>void)} changedEvent  callback fired after every mutation, or null for a silent store
+   * @param {string} label          short identifier for log lines (e.g. "FreqResp")
+   * @param {?string} changedEvent  the Events name published after every mutation, or null for
+   *                                a silent store
    */
   constructor(label, changedEvent = null) {
     this.label = label;
-    this._changed = changedEvent;
+    this._changedEvent = changedEvent;
     /** @type {CorrectionEntry[]} */
     this._entries = [];
     /** The wizard's page-1 loopback measurement, or null when the wizard hasn't
@@ -148,6 +153,6 @@ export class CorrectionStore {
   }
 
   _fire() {
-    if (this._changed) this._changed();
+    if (this._changedEvent) MessageBus.instance().publish(this._changedEvent);
   }
 }

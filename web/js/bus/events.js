@@ -10,8 +10,10 @@
  */
 
 export const Events = Object.freeze({
-  /** Fired by the FFT pane when the user picks a new FFT length. No payload - subscribers read the
-   *  fresh value from Preferences.instance().fftLength. */
+  /** Fired by the FFT settings strip when the user picks a new FFT length, after the analyser was
+   *  restarted on it. No payload - subscribers read the fresh value from the shared engine config
+   *  (the strip's readConfig ran first). Subscribers: the generator controller (re-snaps a running
+   *  tone onto the new bin grid) and the generator pane (its bracket labels). */
   FFT_LENGTH_CHANGED: 'fft.length.changed',
 
   /** Fired once by the Preferences dialog's OK after the working copy is committed - the audio
@@ -106,8 +108,8 @@ export const Events = Object.freeze({
   /** Notification - the fundamental magnitude(s) moved by more than the drift threshold between the
    *  first result after a generator change and the result where the frequency lock finished
    *  aligning; the running average still contains pre-alignment frames at a depressed level, so the
-   *  user should reset statistics. Payload: largest per-tone delta in dB (number). Subscriber:
-   *  FFT view (20 s blinking warning banner). */
+   *  user should reset statistics. Payload: largest per-tone delta in dB (number). Published by
+   *  the FFT controller's drift watch; subscriber: the FFT pane (20 s blinking warning banner). */
   FFT_ALIGN_MAG_DRIFT: 'fft.align.mag.drift',
 
   /** Notification - the FFT view's visible freq/magnitude pan window changed (wheel zoom, drag,
@@ -125,12 +127,15 @@ export const Events = Object.freeze({
   FFT_RECORDING_STOP_REQUESTED: 'fft.recording.stop-requested',
 
   /** Request - the FFT tab control's Utility-tab camera button was clicked. No payload.
-   *  Subscriber: the FFT pane (owns the screenshot dialog). */
+   *  Subscriber: the shared screenshot dialog, opening on the FFT pane's own screenshot spec
+   *  (the web has one dialog for every pane where each Java pane owns its own). */
   FFT_SCREENSHOT_REQUESTED: 'fft.screenshot.requested',
 
-  /** Notification - a fresh FFT analyser result is ready for display. Payload: the FftResult (may
-   *  be null when the worker just wants a repaint without new data, e.g. after resetStatistics).
-   *  Subscribers MUST handle null. */
+  /** Notification - a fresh FFT analyser result is ready for display. Payload: the FftResult,
+   *  with the display fields stamped (channel, depth readout, lock state, perf). Published by the
+   *  FFT controller for every displayed frame - in-place, prepared beside the next analysis, or a
+   *  stopped-state re-emit alike. Subscriber: the FFT pane, which applies the render-time view
+   *  correction and stores it for the render loop. */
   FFT_RESULT_AVAILABLE: 'fft.result.available',
 
   /** Notification - the FFT analyser re-synced its capture window (ring overrun, dropped-sample
@@ -160,9 +165,10 @@ export const Events = Object.freeze({
    *  of assumed. */
   REMOTE_BACKENDS_CHANGED: 'remote.backends.changed',
 
-  /** Notification - the FFT pane's loaded calibration list changed (file added/removed/replaced/
-   *  cleared). No payload - subscribers read the correction store; the view re-derives the
-   *  calibrated spectrum / harmonic dot positions on next paint. */
+  /** Notification - the FFT side's loaded calibration list changed (file added/removed/replaced/
+   *  cleared). Published by the FFT CorrectionStore on every mutation. No payload - subscribers
+   *  read the store; the render-time view correction drops the cascade gain it held so the
+   *  next frame samples the new cascade. */
   FFT_CALIBRATION_CHANGED: 'fft.calibration.changed',
 
   /** Notification - the generator's file-player finished (user stop, EOF without loop, or error).
@@ -180,12 +186,13 @@ export const Events = Object.freeze({
    *  refused, or the link died). Subscribers take the notice down. No payload. */
   FILE_UPLOAD_FINISHED: 'fileUpload.finished',
 
-  /** Notification - the user clicked the scope's Auto-Setup button. Subscribers (the scope pane)
-   *  re-fit the vertical/horizontal scales to the current signal. No payload. */
+  /** Notification - the user clicked the scope's Auto-Setup header button. Subscribers (the scope
+   *  pane) re-fit the vertical/horizontal scales to the current signal. No payload. */
   SCOPE_AUTO_SETUP: 'scope.autoSetup',
 
   /** Notification - a SINGLE-mode shot disarmed itself because the awaited trigger fired, so the
-   *  trigger Start toggle can pop back out. No payload. */
+   *  trigger Start toggle can pop back out. Published by the scope view; subscriber: the scope
+   *  settings strip (owns the Start toggle). No payload. */
   SCOPE_SINGLE_DISARMED: 'scope.single.disarmed',
 
   /** Notification - a running live scope capture was stopped programmatically (an open-signal
@@ -199,7 +206,10 @@ export const Events = Object.freeze({
   FREQRESP_RANGE_CHANGED: 'freqResp.range.changed',
 
   /** Notification - the active Frequency Response calibration changed (loaded, cleared, or replaced
-   *  by the wizard). No payload - subscribers read the correction store. */
+   *  by the wizard), or the Preferences dialog committed values the calibrated trace depends on.
+   *  Published by the FreqResp CorrectionStore on every mutation and once by the Preferences OK.
+   *  No payload - subscribers read the correction store: the FreqResp view retraces its display
+   *  copies, the FreqResp settings strip rebuilds its calibration rows. */
   FREQRESP_CALIBRATION_CHANGED: 'freqResp.calibration.changed',
 
   /** Notification - the FreqResp pane started a measurement. No payload. Other panes (FFT, scope)
@@ -219,9 +229,10 @@ export const Events = Object.freeze({
   FREQRESP_MEASUREMENT_FAILED: 'freqResp.measurement.failed',
 
   /** Notification - a parameter affecting how the compare-mode curve is derived (e.g. smoothing
-   *  window size) changed. No payload - subscribers (the FreqResp view) re-derive the smoothed
-   *  diff, refresh the anchor / min-max table, and redraw. Distinct from FREQRESP_RANGE_CHANGED
-   *  because the visible band itself does not change. */
+   *  window size) changed; published once by the Preferences dialog's OK. No payload -
+   *  subscribers (the FreqResp view) re-derive the smoothed diff, refresh the anchor / min-max
+   *  table, and redraw. Distinct from FREQRESP_RANGE_CHANGED because the visible band itself does
+   *  not change. */
   FREQRESP_COMPARE_PARAMS_CHANGED: 'freqResp.compare.params.changed',
 
   /** A .frc calibration file was just (over)written. Payload: { name, text } - the saved file's

@@ -25,7 +25,7 @@
 //        ─-> [FftAnalyzer.analyze in a Worker]  (windowed FFTs + coherent/incoherent
 //           cross-frame averaging + fundamental/harmonics/THD/SNR)
 //        ─-> FftResult ─-> FLL(steer generator off fundamentalHzRefined)
-//        ─-> render-time .frc de-embed (RAW accumulator preserved) ─-> onResult(view)
+//        ─-> FFT_RESULT_AVAILABLE ─-> render-time .frc de-embed in the pane (RAW accumulator preserved)
 //
 // The accumulator the worker produces is RAW: the measured .frc (loopback /
 // filter frequency response) is subtracted at RENDER time from BOTH the trace
@@ -182,7 +182,7 @@ export class AudioEngine {
     this._fft = new FftController(this._capture, this._gen, this.config,
       { status: (t) => this._status(t), prefs: this._prefs });
 
-    this.onStatus = null;   // (text) => void  (onResult delegates to this._fft)
+    this.onStatus = null;   // (text) => void
 
     // Loopback recording tap (freqresp sweep capture): when set, the capture handler appends raw
     // L AND R channel samples to two growing chunk lists until stopCaptureRecording() - the stereo
@@ -687,8 +687,6 @@ export class AudioEngine {
   /** Why the last file-playback attempt did not happen, localized - null when it did (Java
    *  GeneratorController.getFilePlayError). The pane's status line reads it after a play. */
   get filePlayError() { return this._gen.filePlayError; }
-  get onFileEnded() { return this._gen.onFileEnded; }
-  set onFileEnded(fn) { this._gen.onFileEnded = fn; }
 
   // -------------------------------------------------------------------------
   // CAPTURE orchestration - the device + ring + refcount live in SharedCapture

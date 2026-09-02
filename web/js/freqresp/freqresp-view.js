@@ -45,6 +45,8 @@ import { lanczosNaN, LANCZOS_A, MAX_LANCZOS_DOWNSAMPLE } from '../dsp/lanczos.js
 // pixel↔value mappings + clamps (Java FreqRespView zoom overrides).
 import { RectZoom } from '../ui/rect-zoom.js';
 import { uiFont } from '../ui/ui-font.js';
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
 // Shared axis tick generation + label formatters (Java AbstractMeasurementView) - the adaptive
 // log / sub-decade frequency ticks + the fine crosshair frequency readout.
 import {
@@ -241,6 +243,14 @@ export class FreqRespView {
     prefs.freqRespUnevenDb.addListener(() => { this._recomputeUnevenness(); this.render(); });
     prefs.freqRespUnevenStartHz.addListener(() => { this._recomputeUnevenness(); this.render(); });
     prefs.freqRespUnevenStopHz.addListener(() => { this._recomputeUnevenness(); this.render(); });
+
+    // The loaded cascade changed (the store publishes on every mutation, the Preferences dialog
+    // once on OK) - retrace the display copies (Java FreqRespView subscribes
+    // FREQRESP_CALIBRATION_CHANGED); a compare parameter (the smoothing window, committed by
+    // the Preferences dialog) - refresh the compare anchor + min/max table (Java FreqRespView
+    // subscribes FREQRESP_COMPARE_PARAMS_CHANGED).
+    MessageBus.instance().subscribe(Events.FREQRESP_CALIBRATION_CHANGED, () => this.onCalibrationChanged());
+    MessageBus.instance().subscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED, () => this.onCompareParamsChanged());
   }
 
   // ===========================================================================

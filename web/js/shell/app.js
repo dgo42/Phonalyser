@@ -141,12 +141,13 @@ const CONNECT_TIMEOUT_MS = 3000;
 // The FFT side's loaded-.frc store (Java FftController owns
 // new CorrectionStore("FFT", Events.FFT_CALIBRATION_CHANGED)). FftViewCorrection READS it, the
 // predistortion bridge reads it live, and FftTabControl mutates it from the calibration rows.
-// Silent (null change callback): the sole mutator, rebuildCalEntries, does its own single re-render
-// after a clearAll()+addEntry batch, so a per-mutation callback would only re-render redundantly.
-const fftCorrectionStore = new CorrectionStore('FFT', null);
+// Every mutation publishes FFT_CALIBRATION_CHANGED; the view correction drops its held cascade
+// gain on it (Java FftView.onCalibrationChanged).
+const fftCorrectionStore = new CorrectionStore('FFT', Events.FFT_CALIBRATION_CHANGED);
 // Render-time FFT spectral corrections (.frc de-embed + mains + IMD) - applied in the VIEW path
-// (engine.onResult below), NOT in the engine; the coherent accumulator stays raw. Both take the
-// engine at construction, so both are built in init's audio-backend block (see `engine`).
+// (the FFT pane's FFT_RESULT_AVAILABLE subscriber), NOT in the engine; the coherent accumulator
+// stays raw. Both take the engine at construction, so both are built in init's audio-backend
+// block (see `engine`).
 let fftViewCorrection;
 let fftView;
 const scopeView = new ScopeView(document.getElementById('scope'), { prefs });
@@ -683,12 +684,13 @@ function buildLanguageMenu() {
 function applyPrefsToUi() {
   // The FFT settings controls (#fftSize / #window / #overlap / #averages /
   // #coherent / #align / #fftStopAfter* / #fftMains) are seeded by FftTabControl
-  // .seedFftControls(); a preset recall re-seeds them via the host.applyPrefsToUi callback.
+  // .seedFftControls(); a preset recall re-seeds them through this function (the strip's
+  // injected applyPrefsToUi).
   if (fftTabControl) fftTabControl.seedFftControls();
 
   // The generator settings controls (#signalForm / #dither / #snap / sweep + .dpd rows)
   // are seeded by GeneratorPane.seedGeneratorControls(); a FFT-preset recall re-seeds them
-  // via the host.applyPrefsToUi callback (guarded - genPane is built after this first run).
+  // through this function too (guarded - genPane is built after this first run).
   if (genPane) genPane.seedGeneratorControls();
 
   const be = prefs.current();
@@ -818,25 +820,16 @@ const tileChips = (...vals) => vals.filter(v => v != null && v !== '').map(v => 
 // Data callbacks only STORE the latest; a single rAF loop renders at ~60 fps so the
 // realtime capture threads can never saturate the UI (mirrors the desktop render loop).
 // The scope frame (latestScope) is consumed by the scope pane's render() each frame and by the
-// scope Save (ScopeTabControl) via the injected getter; the FFT result (latestResult) now lives
-// in the FFT pane (fftPane.setResult / getResult), set from engine.onResult after the view
-// correction is applied here.
+// scope Save (ScopeTabControl) via the injected getter; the FFT result (latestResult) lives in
+// the FFT pane, which subscribes FFT_RESULT_AVAILABLE itself and applies the view correction
+// before storing it.
 let latestScope = null;
-/** Wires the three engine data callbacks - called from init's audio-backend block, since the
- *  engine is constructed there (see `engine`). The render-time FFT spectral corrections stay
- *  applied in app.js BEFORE the result is handed to the pane; the pane owns latestResult + the
- *  dirty flag (Java FftPane.controller last result). */
+/** Wires the scope frame callback - called from init's audio-backend block, since the engine
+ *  is constructed there (see `engine`). The FFT side needs no callback: the controller publishes
+ *  every displayed result as FFT_RESULT_AVAILABLE and its self-stops as
+ *  FFT_RECORDING_AUTO_STOPPED, both subscribed by the FFT pane. */
 function bindEngineCallbacks() {
-  engine.fft.onResult = (r) => {
-    // r.channelLeft is stamped in FftController._emit (Java FftAnalyzerWorker:1872
-    // stamps it in the worker off wantLeft - the channel it ACTUALLY read). The .frc
-    // de-embed + the predistortion cal pick left()/right() off it (fft-view-correction.js).
-    fftViewCorrection.apply(r);
-    fftPane.setResult(r);
-  };
   engine.scope.onScope = (buf, info) => { latestScope = { buf, info }; };
-  // The analyser's self-stop (stop-after-N, capture death, a failed preferences restart)
-  // travels as FFT_RECORDING_AUTO_STOPPED on the bus; the FFT pane subscribes it itself.
 }
 // The MAIN rAF render loop (renderLoop: scopePane.render() + fftPane.render() each frame, each
 // pane self-gated on its OWN record state) moved to shell/main-tab.js (Java MultifunctionalTab);
@@ -867,24 +860,23 @@ async function restartFft() {
 // align / THD band + harmonics, presets, save / load, calibration, screenshot + ADC
 // calibrate) lives in fft/fft-tab-control.js (Java FftTabControl); constructed in init's
 // fftTabControl step. The FFT PANE machinery (spectrum canvas / Record LED / readout +
-// THD/IMD table / render loop) lives in fft/fft-pane.js (Java FftPane); the strip's host
-// composite routes getResult / setResult to that pane (the web FFT pane has no freq/mag
-// FlatScrollbars - those Java scrollbars were never ported; the FftView navigates itself).
+// THD/IMD table / render loop) lives in fft/fft-pane.js (Java FftPane); the strip holds
+// the pane itself for its result state, as Java's strip holds the FftView.
 
 // The scope SETTINGS STRIP (tile-tabs, channel / filter / trigger controls,
 // presets, save / load, ADC calibrate) lives in scope/scope-tab-control.js
-// (Java ScopeTabControl); constructed in init's modals step. The scope PANE
-// machinery below (canvas / scrollbars / record / render loop) is the strip's
-// host - the tab-control reaches it through the narrow host object.
+// (Java ScopeTabControl); constructed in init's modals step. It holds the scope
+// PANE (canvas / scrollbars / record / render loop) the way Java's strip holds
+// the ScopeView + ScopeController pair.
 
 // The scope PANE machinery - the file-mode horizontal nav (scopeOnFileBack), the
 // SINGLE-mode Start gate (syncTriggerStart), the measurement-table header buttons +
 // pop-out window (setMeasTablePopped / makeMeasWindowDraggable), and the vertical /
 // horizontal navigation scrollbars (onVertScrollMoved / onHorizScrollMoved /
 // offsetFracBounds / syncOffsetScrollbar) - moved to scope/scope-pane.js (Java
-// ScopePane). app.js drives them through the scopePane instance (which IS the
-// ScopeTabControl.Host); the strip seeds the controls via scopeTabControl
-// .seedScopeControls() and reaches the pane through its public methods.
+// ScopePane). app.js drives them through the scopePane instance; the strip seeds the
+// controls via scopeTabControl.seedScopeControls() and reaches the pane through its
+// public methods.
 
 // ----- L/R channel toggles -----
 // Scope has NO channel-enable L/R buttons in its header (Java ScopeView): channel
@@ -917,33 +909,23 @@ $('#tab-fr .lr.l, #tab-fr .lr.r').on('click', function () {
 // generator (#genPlay) is separate. app.js reaches the FFT LED sync through
 // fftPane.syncFftLed() (restartFft / restartPreservingConfig).
 
-// The scope SETTINGS STRIP (ScopeTabControl) reaches the scope PANE through the
-// scopePane instance, which IS the Host (Java ScopePane implements ScopeTabControl.Host):
-// requestRedraw / refreshTiles / refreshFields / syncTriggerStart / setTriggerControlsEnabled
-// / syncOffsetScrollbar / redrawScrollbars / syncMeasChannelButtons / syncMeasButtons /
-// recState / onFileBack / stopCaptureForFileLoad / onSignalFileLoaded are all its public
-// methods. The construction passes `host: scopePane` (see init's scopeTabControl step).
+// The scope SETTINGS STRIP (ScopeTabControl) reaches the scope PANE through the scopePane
+// instance it is constructed with: requestRedraw / refreshTiles / refreshFields /
+// syncTriggerStart / setTriggerControlsEnabled / syncOffsetScrollbar / redrawScrollbars /
+// syncMeasChannelButtons / syncMeasButtons / recState / onFileBack / stopCaptureForFileLoad /
+// onSignalFileLoaded are all its public methods (see init's scopeTabControl step).
 
 // FFT view header buttons (Java FftView autoSetupBtn / maximizeBtn) - were dead.
 $('#fftAutoSetup').on('click', () => fftView.autoSetup());
 $('#fftMaximize').on('click', () => fftView.maximize());
 
-// The FFT SETTINGS STRIP (FftTabControl) reaches the FFT PANE + shell helpers through this
-// narrow host (mirrors Java FftTabControl.Host) - a COMPOSITE of MIXED ownership: getResult /
-// setResult route to the FFT pane (which owns latestResult); applyPrefsToUi / readConfig are
-// shell helpers; refreshFreqLabel is the generator pane. The spectrum canvas / Record LED /
-// readout / render loop live in fft/fft-pane.js (Java FftPane), reached via the fftPane instance.
-const fftHost = {
-  getResult: () => fftPane.getResult(),                 // the live analyzed spectrum (Save / ADC-calibrate read it) - owned by the FFT pane
-  setResult: (r) => fftPane.setResult(r),               // a loaded .fft spectrum -> repaint next frame (FFT pane state)
-  showLoadedBanner: (name) => fftPane.showLoadedBanner(name),   // Java FftView.setSourceFilePath - "Loaded: file" blink
-  stopFftRecording: () => fftPane.onRecordingStopRequested(),   // Java FFT_RECORDING_STOP_REQUESTED - stop live record before a .fft load clobbers it
-  applyPrefsToUi: () => applyPrefsToUi(),               // preset recall re-seeds the main FFT controls
-  refreshFreqLabel: () => genPane.refreshFreqLabel(),   // re-snap label after an FFT-length change
-  readConfig: () => readConfig(),                       // window / coherent retune the live analyze call
-};
+// The FFT SETTINGS STRIP (FftTabControl) holds the FFT PANE for its result state (getResult /
+// setResult / showLoadedBanner) and gets the two shell helpers it still needs by name
+// (applyPrefsToUi, readConfig); everything cross-pane travels on the bus - the FFT-length
+// change the generator re-snaps to (FFT_LENGTH_CHANGED), the stop before a .fft load
+// (FFT_RECORDING_STOP_REQUESTED), the Utility camera (FFT_SCREENSHOT_REQUESTED).
 
-// Scope view header button (#scopeAutoSetup) + Save-name field moved to ScopeTabControl.
+// Scope view header Save-name field moved to ScopeTabControl.
 // FFT #logAxis / #fftMagUnit selectors moved to FftTabControl.
 
 // Static HTML help (copied from the desktop app, lunr-searchable). Opens in a separate
@@ -1071,14 +1053,14 @@ const FRC_TYPE = [{ description: 'Filter calibration', accept: 'text/plain', ext
 
 // The scope "Save to..." / "Load signal..." flows moved to ScopeTabControl; the
 // pane-side load orchestration (centre the view on the loaded signal + show the
-// nav slider) is host.onSignalFileLoaded below.
+// nav slider) is scopePane.onSignalFileLoaded.
 
 // The file-mode trigger-control lock (setScopeTriggerControlsEnabled), the loaded-signal
 // view orchestration (scopeOnSignalFileLoaded), the blinking loaded-file banner
 // (setScopeFileBanner), the file-mode render + scroll-back (renderLoadedScope /
 // refreshScopeFileMode / fileMaxBack / syncHorizScrollbar) and the horizontal nav-bar
 // visibility (setScopeHScrollVisible) moved to scope/scope-pane.js (Java ScopePane); the
-// tab-control reaches them through the scopePane Host methods.
+// tab-control reaches them through the scopePane it holds.
 
 // The scope Presets (capture / apply / list / save / load / delete of the
 // OscPreset field set) moved to ScopeTabControl; app.js seeds the preset list via
@@ -1153,8 +1135,8 @@ MessageBus.instance().subscribe(Events.AUDIO_DEVICE_ERROR, (p) => {
 
 // The FFT Presets / Utility (screenshot + ADC calibrate) / Save / Load / Load-calibration
 // handlers moved to fft/fft-tab-control.js (Java FftTabControl): presets recall re-seeds the
-// main FFT controls via host.applyPrefsToUi; the loaded .fft spectrum flows back via
-// host.setResult; the .frc load mutates the shared fftCorrectionStore, read by both the
+// main FFT controls via the injected applyPrefsToUi; the loaded .fft spectrum flows back via
+// fftPane.setResult; the .frc load mutates the shared fftCorrectionStore, read by both the
 // render-time FFT de-embed (fftViewCorrection) and the predistortion engine's calResponseAt.
 
 // ============================ Frequency response ============================
@@ -1425,8 +1407,8 @@ async function init() {
   });
   // Oscilloscope PANE (Java ScopePane): the trace canvas wiring, the two nav scrollbars,
   // the Record LED, the measurement table + pop-out, the file-mode load/scroll, and the
-  // scope branch of the rAF loop (render()). Built BEFORE the scope settings strip, since
-  // the strip's host IS this pane (Java ScopePane implements ScopeTabControl.Host). Reaches
+  // scope branch of the rAF loop (render()). Built BEFORE the scope settings strip, which
+  // holds this pane. Reaches
   // the shell state (the busy guard + engine.scope.recording) + readConfig + the latest scope frame
   // through the injected closures; the scope V/T/hyst NumericStepFields (from initStepFields)
   // via getField; the ScopeView + tileChips injected too. bind() wires the Record LED +
@@ -1442,11 +1424,11 @@ async function init() {
   });
   // Oscilloscope settings strip (Java ScopeTabControl): its handlers + presets +
   // save/load + ADC-calibrate. Built after initStepFields (the scope V/T/hyst
-  // NumericStepFields it reaches via getField exist now). Reaches the scope PANE
-  // (canvas / scrollbars / record / render loop) through the scopePane Host.
+  // NumericStepFields it reaches via getField exist now). Holds the scope PANE
+  // (canvas / scrollbars / record / render loop) built above.
   step('scopeTabControl', () => {
     scopeTabControl = new ScopeTabControl(engine, prefs, {
-      host: scopePane, view: scopeView, getField: (id) => stepFields[id],
+      pane: scopePane, view: scopeView, getField: (id) => stepFields[id],
       io: { pickSaveTarget, writeToTarget, encodeFlac, saveScopeCapture, saveStreaming,
         findFullPeriodWindow, formatForName, readWav, readAiff, decodeFlac },
       WAV_TYPE, latestScope: () => latestScope, showConfirm,
@@ -1464,12 +1446,12 @@ async function init() {
   step('syncTriggerStart', () => scopePane.syncTriggerStart());
   // FFT PANE (Java FftPane): the spectrum-view wiring, the Record LED, the readout / THD /
   // IMD render, and the FFT branch of the rAF loop (render()). Built BEFORE the FFT settings
-  // strip, since the strip's host routes getResult / setResult to this pane (Java
-  // FftTabControl.Host). Reaches the shell state (the busy guard + engine.fft.recording) + readConfig through
-  // the injected closures; the FftView + tileChips injected too. bind() wires the Record LED.
+  // strip, which holds this pane for its result state. Reaches the shell state (the busy
+  // guard + engine.fft.recording) + readConfig through the injected closures; the FftView +
+  // the view correction + tileChips injected too. bind() wires the Record LED.
   step('fftPane', () => {
     fftPane = new FftPane(engine, prefs, {
-      view: fftView, tileChips,
+      view: fftView, viewCorrection: fftViewCorrection, tileChips,
       isFftRec: () => engine.fft.recording,
       isBusy: () => busy, setBusy: (v) => { busy = v; },
       readConfig,
@@ -1492,12 +1474,13 @@ async function init() {
   });
   // FFT settings strip (Java FftTabControl): its handlers + presets + save/load +
   // calibration + screenshot/ADC-calibrate. Built after initStepFields (the FFT
-  // manual-fundamental NumericStepField it reaches via getField exists now). Reaches the
-  // FFT PANE (canvas / Record LED / readout / render loop) through the narrow `host` -
-  // getResult / setResult route to the fftPane built above.
+  // manual-fundamental NumericStepField it reaches via getField exists now). Holds the FFT
+  // PANE built above for its result state; applyPrefsToUi / readConfig are the two shell
+  // helpers it still reaches by name.
   step('fftTabControl', () => {
     fftTabControl = new FftTabControl(engine, prefs, {
-      host: fftHost, fftView, fftViewCorrection, store: fftCorrectionStore, getField: (id) => stepFields[id],
+      pane: fftPane, applyPrefsToUi, readConfig,
+      fftView, fftViewCorrection, store: fftCorrectionStore, getField: (id) => stepFields[id],
       io: { saveFile, openFile, bytesToText, loadFrc, saveSpectrum, loadSpectrum, FFT_TYPE, FRC_TYPE },
       restartFft, showConfirm, setStatus: (m) => $('#status').text(m), tileChips,
       calibrationDialog: () => calibrationDialog,

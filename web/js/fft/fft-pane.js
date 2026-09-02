@@ -7,14 +7,15 @@
  *
  * Faithful port of gui/fft/FftPane. Owns the live FFT view wiring (the FftView canvas, the
  * latest analyzed spectrum + its dirty flag, the Record LED, the readout / THD / IMD render)
- * and is the source of truth the FFT SETTINGS strip (FftTabControl) reaches through the narrow
- * host object app.js builds - getResult() / setResult(r) are this pane's methods (Java
- * FftTabControl.Host). render() is the FFT branch of the MAIN rAF loop (which stays in app.js
- * and calls fftPane.render() each frame). Reads engine.fft.recording (the controller owns the
- * recording flag) and reaches the SHELL state it does not own (the shared `busy` re-entrancy
- * guard, the readConfig snapshot) through injected closures. The FftView
- * instance + tileChips are injected too; engine.onResult applies the view correction in app.js
- * before handing the result to this pane's setResult. Like the Java pane, this pane owns the
+ * and is the source of truth the FFT SETTINGS strip (FftTabControl) holds for its result
+ * state - getResult() / setResult(r) are this pane's methods. render() is the FFT branch of
+ * the MAIN rAF loop (which stays in app.js and calls fftPane.render() each frame). Reads
+ * engine.fft.recording (the controller owns the recording flag) and reaches the SHELL state
+ * it does not own (the shared `busy` re-entrancy guard, the readConfig snapshot) through
+ * injected closures. The FftView instance, the render-time view correction + tileChips are
+ * injected too; every displayed result arrives as FFT_RESULT_AVAILABLE on the bus (Java
+ * FftView subscribes it) and this pane applies the view correction before storing it. Like
+ * the Java pane, this pane owns the
  * two FlatScrollbars (#fftHScroll frequency-pan / #fftVScroll magnitude-pan) and keeps their
  * thumbs aligned to the persisted pan window (Java FftPane.syncFftPan); the FftView's own canvas
  * wheel/drag navigation still works in parallel and calls back through view.onRangeChanged.
@@ -42,22 +43,29 @@ const MAG_FLOOR_DBFS = -300;
 // far below any useful measurement: 0.01 dB still shows ±0.005 dB of ripple over the full plot
 // height. Was a bare `1`, which refused every ripple-level zoom.
 const MIN_MAG_SPAN_DB = 0.01;
+// How long the alignment-drift hint stays up (Java FftView.ALIGN_DRIFT_WARN_NANOS = 20 s): the
+// hint follows an event, not a per-result condition, so the results that keep arriving must
+// not clear it the way they clear a re-sync banner.
+const ALIGN_DRIFT_WARN_MS = 20_000;
 
 export class FftPane {
   /**
    * @param engine the AudioEngine (FFT record lifecycle; the Record LED drives engine.fft.setRecording).
    * @param prefs  Preferences (the dBV offset the harmonic readout columns need).
-   * @param deps   {view, tileChips, isFftRec, isBusy, setBusy, readConfig}
+   * @param deps   {view, viewCorrection, tileChips, isFftRec, isBusy, setBusy, readConfig}
    *   - view: the FftView (Java holds `view` as a field) - the spectrum canvas painter.
+   *   - viewCorrection: the render-time FFT spectral corrections (FftViewCorrection), applied to
+   *       every live result before it is stored (Java FftView's plot-time .frc de-embed).
    *   - tileChips: (...vals) => the `.tile` chip-span HTML (shared with the scope tiles).
    *   - isFftRec: () => engine.fft.recording - the controller owns the flag; the pane only reads it.
    *   - isBusy / setBusy: the shared async re-entrancy guard accessors (Record serializes with it).
    *   - readConfig: () => snapshot the live UI into engine.config before a record start.
    */
-  constructor(engine, prefs, { view, tileChips, isFftRec, isBusy, setBusy, readConfig }) {
+  constructor(engine, prefs, { view, viewCorrection, tileChips, isFftRec, isBusy, setBusy, readConfig }) {
     this.engine = engine;
     this.prefs = prefs;
     this.view = view;
+    this._viewCorrection = viewCorrection;
     this._tileChips = tileChips;
     this._isFftRec = isFftRec;
     this._isBusy = isBusy;
@@ -69,6 +77,8 @@ export class FftPane {
     // realtime analyze worker can never saturate the UI (mirrors the desktop render loop).
     this.latestResult = null;
     this.resultDirty = false;
+    // performance.now() until which the warning banner resists the per-result clear (0 = none).
+    this._bannerHoldUntil = 0;
     // THD/IMD float-window extracted flag (Java FftView.tableExtracted) - the in-page floating
     // panel that hosts the distortion table when popped out (Java externalBtn).
     this.tableExtracted = false;
@@ -95,16 +105,38 @@ export class FftPane {
     // FFT pan/zoom probes must read fftMagTop/Bottom + fftFreqMin/MaxHz live.
     if (typeof window !== 'undefined') window.__fftPane = this;
 
+    // Every displayed analyser result (Java FftView subscribes FFT_RESULT_AVAILABLE, published
+    // by FftAnalyzerWorker after each analysis): r.channelLeft is stamped in FftController._emit
+    // off the channel the analyser ACTUALLY read (Java FftAnalyzerWorker:1872), and the .frc
+    // de-embed + the predistortion cal pick left()/right() off it (fft-view-correction.js) -
+    // so the view correction runs here, before the result becomes the pane's.
+    const bus = MessageBus.instance();
+    bus.subscribe(Events.FFT_RESULT_AVAILABLE, (r) => {
+      if (!r) return;
+      this._viewCorrection.apply(r);
+      this.setResult(r);
+    });
     // FreqResp measurement lifecycle (Java FftPane freqRespStarted/StoppedListener):
     // the sweep needs the capture device exclusively - stop an in-flight FFT recording
     // and gray the Record LED on STARTED, re-enable it on STOPPED.
-    const bus = MessageBus.instance();
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, () => this.onFreqRespMeasurementStarted());
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => this.onFreqRespMeasurementStopped());
     // FFT re-sync / overrun warning (Java FftView.onCaptureResync -> BlinkBanner): the controller
     // publishes FFT_CAPTURE_RESYNC with an i18n message-key on a signal discontinuity or ring
     // overrun; show the self-blinking banner while recording (cleared on the next fresh result).
     bus.subscribe(Events.FFT_CAPTURE_RESYNC, (key) => this.showWarnBanner(key));
+    // The fundamental level(s) moved while the frequency lock pulled the generator onto the bin
+    // grid (Java FftView.onAlignMagDrift): the running average still carries pre-alignment
+    // frames at the old level, so hint at a statistics reset - held for ALIGN_DRIFT_WARN_MS,
+    // past the fresh results that would otherwise clear it on arrival.
+    bus.subscribe(Events.FFT_ALIGN_MAG_DRIFT, (deltaDb) => {
+      if (!Number.isFinite(deltaDb)) return;
+      this.showWarnBanner('fft.warning.alignDrift', { args: [deltaDb.toFixed(1)], holdMs: ALIGN_DRIFT_WARN_MS });
+    });
+    // The settings strip is loading a static spectrum that must not be overwritten by the next
+    // live frame (Java FftPane subscribes FFT_RECORDING_STOP_REQUESTED, published by
+    // FftTabControl before displayLoadedResult): stop the consumer + LED if recording.
+    bus.subscribe(Events.FFT_RECORDING_STOP_REQUESTED, () => this.onRecordingStopRequested());
     // The INPUT device died mid-capture - same reaction as the scope pane: the alert alone left the
     // analyser feeding on a dead line (silence in, averages of nothing out). Stop via the ENGINE
     // unconditionally - NOT through onFftAutoStopped, whose _isFftRec() gate is the shell flag and
@@ -272,7 +304,8 @@ export class FftPane {
     this.clampRanges(); prefs.save(); this.view.applyPrefs();
   }
 
-  // ----- the FFT-PANE host seam (Java FftTabControl.Host) -----
+  // ----- the result state the settings strip reads and writes (Java FftView.getLastResult /
+  // FftPane.displayLoadedResult) -----
   // getResult() => the live analyzed spectrum (Save / ADC-calibrate read it);
   // setResult(r) => a loaded .fft spectrum -> latestResult + resultDirty so the render loop paints it.
   getResult() { return this.latestResult; }
@@ -361,8 +394,10 @@ export class FftPane {
   }
 
   // Loading a static .fft must stop live recording so the loaded trace isn't overwritten by
-  // the next live frame (Java FFT_RECORDING_STOP_REQUESTED -> the pane owns the Record button
-  // and shared capture). Same teardown as the auto-stop subscriber: stop the consumer + LED.
+  // the next live frame (the FFT_RECORDING_STOP_REQUESTED subscriber - the pane owns the Record
+  // button and shared capture). Same teardown as the auto-stop subscriber: stop the consumer +
+  // LED. The recording flag drops synchronously, so a publisher that goes on to display its
+  // loaded spectrum right after the publish is already past the live path.
   async onRecordingStopRequested() {
     if (!this._isFftRec()) return;
     try { await this.engine.fft.setRecording(false); } finally { this.syncFftLed(); }
@@ -565,19 +600,25 @@ export class FftPane {
     $('#predistBtn').prop('disabled', !rec);
   }
 
-  /** Shows the blinking discontinuity / overrun warning (Java FftView.onCaptureResync): only
-   *  while recording; the message + hover tip come from the published i18n key. */
-  showWarnBanner(key) {
+  /** Shows the blinking warning banner (Java FftView.setBanner): only while recording; the
+   *  message + hover tip come from the i18n key, `args` fill the tip's placeholders. A `holdMs`
+   *  keeps the banner up for that long against the fresh results that otherwise clear it (the
+   *  re-sync / overrun banners pass none: their next fresh result IS the recovery). */
+  showWarnBanner(key, { args = [], holdMs = 0 } = {}) {
     if (!this._isFftRec() || !key) return;
     const el = document.getElementById('fftWarnBanner');
     if (!el) return;
     el.textContent = t(key);
-    el.title = t(key + '.tip');
+    el.title = t(key + '.tip', ...args);
     el.hidden = false;
+    this._bannerHoldUntil = holdMs > 0 ? performance.now() + holdMs : 0;
+    if (holdMs > 0) setTimeout(() => { this._bannerHoldUntil = 0; this.clearWarnBanner(); }, holdMs);
   }
 
-  /** Hides the discontinuity / overrun warning banner (Java clearBanner / clearBannerIfStale). */
+  /** Hides the warning banner (Java clearBannerIfStale): a held banner stays until its hold
+   *  runs out. */
   clearWarnBanner() {
+    if (this._bannerHoldUntil && performance.now() < this._bannerHoldUntil) return;
     const el = document.getElementById('fftWarnBanner');
     if (el) el.hidden = true;
   }
@@ -673,7 +714,10 @@ export class FftPane {
   shotDialogPane() {
     const native = () => livePaneSize(document.getElementById('fftPane'));
     return {
-      openBtn: '#fftShot',
+      // The camera sits in the settings strip's Utility tab, which publishes the request (Java
+      // FftTabControl -> FFT_SCREENSHOT_REQUESTED -> the pane's dialog); the shared dialog opens
+      // this pane's spec on it.
+      openEvent: Events.FFT_SCREENSHOT_REQUESTED,
       renderShot: (comment, w, h, mime) => this.renderShot(comment, w, h, mime),
       nativeSize: native,
       seedSize: () => {

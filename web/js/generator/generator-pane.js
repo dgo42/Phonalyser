@@ -96,6 +96,14 @@ export class GeneratorPane {
     // of the upload, so the notice cannot outlive the transfer it explains.
     bus.subscribe(Events.FILE_UPLOAD_STARTED, () => this.openUploadNotice());
     bus.subscribe(Events.FILE_UPLOAD_FINISHED, () => this.closeUploadNotice());
+    // The file player ended on its own - EOF without loop, or the bench ran out (Java
+    // GeneratorPane filePlayStoppedListener): reset the play-from LED.
+    bus.subscribe(Events.FILE_PLAY_STOPPED, () => this.setGenFileBtn(false));
+    // A new FFT length moves the bin grid the snap brackets are computed on (Java GeneratorPane
+    // fftLengthListener -> updateFreqLabel + updateDualToneFreqLabels, unconditionally - the
+    // controller re-snaps the running tone in its own subscription; the pane only follows with
+    // its labels). Without this, changing the length while stopped left a stale "(xxx Hz)".
+    bus.subscribe(Events.FFT_LENGTH_CHANGED, () => this.refreshFreqLabel());
   }
 
   /** FREQRESP_MEASUREMENT_STARTED handler - the controller stops both engines in its own
@@ -729,6 +737,13 @@ export class GeneratorPane {
       const file = ev.target.files && ev.target.files[0];
       if (!file) return;
       $('#genFilePath').val(file.name);
+      // The decode of a large file takes a while, and until it lands the previous pick is still
+      // the loaded signal - a Play click in that window played (or was refused for) the OLD file
+      // while the field already named the new one. Java's FilePlayController loads synchronously
+      // and has no such window; here the pick is published as an in-flight load that Play awaits.
+      this.genFileSig = null;
+      let loaded;
+      this._genFileLoad = new Promise((resolve) => { loaded = resolve; });
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
         const lower = file.name.toLowerCase();
@@ -759,7 +774,6 @@ export class GeneratorPane {
           await engine.stopGenerator();
           $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
         }
-        engine.onFileEnded = () => this.setGenFileBtn(false);
         await engine.playFileBuffer(this.genFileSig.channels, this.genFileSig.sampleRate,
           $('#genFileLoop').is(':checked'), this.genFileSig.file, this.genFileSig.bitsPerSample);
         // A refusal the controller localized (an over-size upload, a bench that said no) never

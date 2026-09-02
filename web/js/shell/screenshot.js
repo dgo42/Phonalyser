@@ -8,6 +8,8 @@
 // Mirrors gui/common/ScreenshotDialog + ScreenshotOverlay. The compositor is pane-agnostic;
 // the scope-specific glue (prep/compose/render) is injected by the caller.
 
+import { MessageBus } from '../bus/message-bus.js';
+
 // Guarded: fft-tab-control.js imports this module for the renderer registry, and the headless
 // node e2e tests import fft-tab-control - under node there is no window at module load.
 const $ = typeof window !== 'undefined' ? window.jQuery : undefined;
@@ -551,7 +553,11 @@ export class ScreenshotDialog {
   /**
    * @param {object} cfg
    * @param {object} cfg.modal the bootstrap Modal instance for #shotModal
-   * @param {string} cfg.openBtn selector for the camera button (e.g. '#scopeShot')
+   * @param {string} [cfg.openBtn] selector for the camera button (e.g. '#scopeShot') when the
+   *        pane owns its camera; a pane whose camera sits in its settings strip passes
+   *        `openEvent` instead - the bus request that strip publishes (Java FftTabControl ->
+   *        FFT_SCREENSHOT_REQUESTED -> the pane opens its dialog)
+   * @param {string} [cfg.openEvent] the Events name that opens the dialog for this pane
    * @param {(comment:string,w:number,h:number,mime:string)=>Promise<Blob>} cfg.renderShot renders the pane to a Blob
    * @param {()=>{w:number,h:number}} cfg.nativeSize on-screen pane size (aspect + fallback seed)
    * @param {()=>{w:number,h:number}} cfg.seedSize persisted last size (0 => fall back to nativeSize)
@@ -559,16 +565,15 @@ export class ScreenshotDialog {
    * @param {Function} cfg.saveFile the io saveFile fn
    * @param {(msg:string)=>void} cfg.status status-line writer
    */
-  constructor({ modal, openBtn, renderShot, nativeSize, seedSize, persistSize, saveFile, status }) {
+  constructor({ modal, openBtn, openEvent, renderShot, nativeSize, seedSize, persistSize, saveFile, status }) {
     this.modal = modal;
-    this.openBtn = openBtn;
     this.renderShot = renderShot;
     this.nativeSize = nativeSize;
     this.seedSize = seedSize;
     this.persistSize = persistSize;
     // One shared modal can serve MULTIPLE panes (addPane); keep the initial (scope) pane config
     // so its camera button re-activates it after another pane (FFT/FreqResp) was opened.
-    this._initialPane = { openBtn, renderShot, nativeSize, seedSize, persistSize };
+    this._initialPane = { openBtn, openEvent, renderShot, nativeSize, seedSize, persistSize };
     this.saveFile = saveFile;
     this.status = status;
     // Aspect-coupling guard (Java suppressUpdate[]) so writing one field's partner
@@ -586,7 +591,7 @@ export class ScreenshotDialog {
 
   /** Attaches the six dialog handlers (open / W / H / preset / save / copy). */
   bind() {
-    this._wireOpenBtn(this._initialPane);
+    this._wireOpen(this._initialPane);
 
     // Aspect-ratio coupling between the W/H fields (Java widthText/heightText Modify
     // listeners) - locks to the native canvas ratio when "Keep aspect" is on.
@@ -671,11 +676,15 @@ export class ScreenshotDialog {
     this.modal.show();
   }
 
-  _wireOpenBtn(p) {
-    $(p.openBtn).on('click', () => { this._activate(p); this._open(); });
+  /** Opens for pane `p` on its camera click, or on the bus request its settings strip
+   *  publishes - whichever the pane's spec names. */
+  _wireOpen(p) {
+    const open = () => { this._activate(p); this._open(); };
+    if (p.openBtn) $(p.openBtn).on('click', open);
+    if (p.openEvent) MessageBus.instance().subscribe(p.openEvent, open);
   }
 
-  /** Register an ADDITIONAL pane camera button on this SAME shared dialog (one dialog serves
-   *  every pane - class contract): its openBtn activates that pane's renderShot / sizes. */
-  addPane(p) { this._wireOpenBtn(p); }
+  /** Register an ADDITIONAL pane on this SAME shared dialog (one dialog serves every pane -
+   *  class contract): its openBtn / openEvent activates that pane's renderShot / sizes. */
+  addPane(p) { this._wireOpen(p); }
 }

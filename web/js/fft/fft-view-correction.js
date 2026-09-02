@@ -50,11 +50,14 @@ export class FftViewCorrection {
     // announces itself on the bus. The analysed channel and the frame's tone positions both move
     // with a restart, so what was sampled from the cascade goes with it.
     MessageBus.instance().subscribe(Events.FFT_STATISTICS_RESET, () => this.dropHeld());
+    // The loaded cascade itself changed - a row loaded, cleared, toggled (Java
+    // FftView.onCalibrationChanged): what was sampled from the old cascade goes with it.
+    MessageBus.instance().subscribe(Events.FFT_CALIBRATION_CHANGED, () => this.dropHeld());
   }
 
-  /** Drops the held calibration gain so the next dual-tone frame supplies a fresh one. Called
-   *  from the calibration rows' rebuild (the store's only mutation site) and from the
-   *  statistics-reset paths, which move the analysed channel or the FFT length under it. */
+  /** Drops the held calibration gain so the next dual-tone frame supplies a fresh one - on a
+   *  store mutation, and on the statistics-reset paths, which move the analysed channel or
+   *  the FFT length under it. */
   dropHeld() {
     this._calGainDb = null;
   }

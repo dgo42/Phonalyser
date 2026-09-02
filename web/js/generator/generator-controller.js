@@ -152,7 +152,6 @@ export class GeneratorController {
     // freqresp sweep opens it first to learn the granted output rate (so it can cap
     // the sweep band to the granted Nyquist), then plays into it via playSweepBuffer.
     this._pendingSweepCtx = null;
-    this.onFileEnded = null;   // () => void - fires on natural (non-loop) end
 
     // The FreqResp sweep needs the DAC exclusively - stop both engines (Java
     // GeneratorController wireBusListeners: freqRespStarted -> stopEngines()). The
@@ -193,6 +192,20 @@ export class GeneratorController {
     // worklet at the last published trim, and the fresh loop - which assumes generator = target
     // + correction - would overshoot by exactly that stale amount on its first correction.
     MessageBus.instance().subscribe(Events.GENERATOR_FREQ_TRIM_RESET, () => this._reapplySnap());
+    // FFT length changed (Java GeneratorController wireBusListeners: FFT_LENGTH_CHANGED ->
+    // reapplySnap when snap-to-bin is on): the bin grid moved under the running tone(s), so
+    // re-derive the emit frequencies on the new grid and slide the worklet onto them, without
+    // the user having to toggle the snap checkbox. The publisher's readConfig has already put
+    // the new length into the shared config.
+    MessageBus.instance().subscribe(Events.FFT_LENGTH_CHANGED, () => this._onFftLengthChanged());
+  }
+
+  /** The generator's own reaction to a new FFT length: re-snap a running tone onto the new
+   *  bin grid (snap-to-bin on); nothing to do otherwise. */
+  _onFftLengthChanged() {
+    if (!this.config.snapToBin) return;
+    this.computeAnalysisFreqs();
+    this._reapplySnap();
   }
 
   /** Stops BOTH output engines - the DDS tone and the file player (Java
@@ -694,7 +707,7 @@ export class GeneratorController {
   }
 
   /** Plays decoded float channels through a fresh output context routed to the DAC.
-   *  Replaces any current playback. `onFileEnded` (if set) fires on natural (non-loop) end. */
+   *  Replaces any current playback. FILE_PLAY_STOPPED is published on a natural (non-loop) end. */
   async playFileBuffer(channels, sampleRate, loop, file, bitsPerSample) {
     await this.stopFile();
     // A backend whose generator runs somewhere else has no downlink for audio (spec §7: there is
@@ -738,7 +751,7 @@ export class GeneratorController {
       this._lastFile = { channels, sampleRate, loop: !!loop, file, bitsPerSample };
       await laneSink.playBuffer(downmixToMono(channels), {
         loop: !!loop,
-        onEnded: () => { if (this.onFileEnded) this.onFileEnded(); },
+        onEnded: () => this._publishFilePlayStopped(),
       });
       return;
     }
@@ -756,7 +769,7 @@ export class GeneratorController {
       if (this._fileSrc !== src) return;   // superseded by a newer session
       this._fileSrc = null; this._fileCtx = null;
       ctx.close().catch(() => {});
-      if (this.onFileEnded) this.onFileEnded();
+      this._publishFilePlayStopped();
     };
     this._fileCtx = ctx; this._fileSrc = src;
     if (ctx.state === 'suspended') await ctx.resume();
@@ -849,7 +862,7 @@ export class GeneratorController {
       await laneSink.playBuffer(buf instanceof Float32Array ? buf : Float32Array.from(buf), {
         loop: false,
         outputChannels: opts.outputChannels || 'BOTH',
-        onEnded: () => { if (this.onFileEnded) this.onFileEnded(); },
+        onEnded: () => this._publishFilePlayStopped(),
       });
       return sampleRate;
     }
@@ -980,10 +993,18 @@ export class GeneratorController {
       try { await sink.close(); } catch (e) { /* already gone */ }
     }
     // A natural end (the bench said finished, or stopped playing after we saw it play) is the
-    // remote twin of the local source's onended - the pane's LED follows the same callback. Not
+    // remote twin of the local source's onended - the pane's LED follows the same event. Not
     // after a failed command, where the caller reports the refusal itself, and not after a Stop,
     // whose click already flipped the LED.
-    if (commanded && !session.stopped && this.onFileEnded) this.onFileEnded();
+    if (commanded && !session.stopped) this._publishFilePlayStopped();
+  }
+
+  /** Publishes FILE_PLAY_STOPPED for a file session that ended on its own - EOF without loop,
+   *  or the bench ran out (Java GeneratorController.publishFilePlayStopped): the one signal the
+   *  pane resets its play-from LED on. Each local source checks it is still the current session
+   *  before calling here, so a superseded session cannot notify for the one after it. */
+  _publishFilePlayStopped() {
+    MessageBus.instance().publish(Events.FILE_PLAY_STOPPED);
   }
 
   /** One localized sentence for anything that went wrong with a bench file - the over-size

@@ -51,6 +51,15 @@ const FLL_MAX_ERROR_BINS = 5;
  *  a generous ceiling for a REAL mistune; beyond it is a mis-measurement (a window
  *  still draining the OLD signal, a harmonic mis-lock, a glitch) that must not steer. */
 const FLL_MAX_ERROR_PPM = 500;
+/** Alignment-done threshold for the magnitude-drift watch, in ppm of the tone target (Java
+ *  FftController.ALIGN_DONE_PPM): once every locked tone measures within this of its target
+ *  the lock counts as settled and the drift comparison fires. Comfortably above the converged
+ *  loop's frequency jitter (~0.005 ppm) and below the raw clock offset (~1.5 ppm). */
+const ALIGN_DONE_PPM = 0.1;
+/** Magnitude-drift threshold in dB (Java FftController.ALIGN_DRIFT_DB): a fundamental whose
+ *  level moved by more than this between the first post-reset result and the aligned result
+ *  means the running average still carries pre-alignment frames at a depressed level. */
+const ALIGN_DRIFT_DB = 0.1;
 /** FLL trace (Java DebugSwitches.TRACE_FLL): when truthy, log every steer / gate /
  *  hold so the live loop is diagnosable - are absCapStart / writePos / measuredHz
  *  finite and advancing, does the transport gate ever open, does genFreq update.
@@ -225,7 +234,13 @@ export class FftController {
     this._fftTimeFilter = null;
     this._fftTimeFilterMode = 'NONE';
     this._fftTimeFilterRate = 0;
-    this.onResult = null;          // (result) => void - RAW per-window result; the view applies .frc/mains/IMD
+    // Magnitude-drift watch (Java FftController alignWatch*): armed by every frequency-lock
+    // reset (generator change / align-on / Record start + stop), baselined from the first steered
+    // result, resolved ONCE when the loop(s) report aligned - see _watchAlignmentMagnitudeDrift.
+    this._alignWatchArmed = false;
+    this._alignWatchBaselined = false;
+    this._alignWatchBaseF1Db = NaN;
+    this._alignWatchBaseF2Db = NaN;
     // Last DISPLAY-rebuild timestamp (Java FftAnalyzerWorker.lastShowNanos, in ms here):
     // _showThisTick gates the display rebuild against it at dispatch, so a rebuilt frame is
     // produced at most every DISPLAY_MIN_MS when caught up and at least every DISPLAY_MAX_MS
@@ -1242,7 +1257,7 @@ export class FftController {
     // resume the feed. Straight to the display.
     if (r && r.reemit) {
       if (r.finalizePending) { this._armFinalizeWatchdog(); return; }
-      if (!r.empty && this.onResult) this._emit(FftResult.adopt(r));
+      if (!r.empty) this._emit(FftResult.adopt(r));
       if (this._reportBusy) this._reportBusy(performance.now() - t0);
       return;
     }
@@ -1265,7 +1280,6 @@ export class FftController {
     this._finalizeDelivered();
     if (!r || r.error) { if (r && r.error) console.error('display', r.error); return; }
     if (r.epoch !== this._accumEpoch) return;
-    if (!this.onResult) return;
     const adopted = FftResult.adopt(r);
     this._emit(adopted);
     // The displayed frame steers the frequency lock, exactly as an in-place frame does - it
@@ -1496,9 +1510,36 @@ export class FftController {
    *  last published trim, and the fresh loop - which assumes generator = target + correction -
    *  would overshoot by exactly that stale amount on its first correction. */
   _resetFrequencyLock() {
+    // Re-arm the magnitude-drift watch: the next steered result baselines the fundamental
+    // level(s); the comparison fires once alignment settles.
+    this._alignWatchArmed = true;
+    this._alignWatchBaselined = false;
     this._fll.reset();
     this._fll2.reset();
     MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM_RESET, null);
+  }
+
+  /** Magnitude-drift watch (Java FftController.watchAlignmentMagnitudeDrift): baselines the
+   *  fundamental level(s) on the first steered result after a lock reset, then - once the
+   *  loop(s) report aligned - compares the current level(s) against that baseline ONE time. A
+   *  drift beyond ALIGN_DRIFT_DB means the running average still contains pre-alignment frames
+   *  at a depressed level, so FFT_ALIGN_MAG_DRIFT carries the largest per-tone delta (dB) to the
+   *  pane's blinking reset-statistics hint. `f2Db` is NaN in single-tone mode. */
+  _watchAlignmentMagnitudeDrift(f1Db, f2Db, aligned) {
+    if (!this._alignWatchArmed || !Number.isFinite(f1Db)) return;
+    if (!this._alignWatchBaselined) {
+      this._alignWatchBaseF1Db = f1Db;
+      this._alignWatchBaseF2Db = f2Db;
+      this._alignWatchBaselined = true;
+      return;
+    }
+    if (!aligned) return;                       // loop still pulling - keep waiting
+    this._alignWatchArmed = false;              // one-shot per re-arm
+    let delta = Math.abs(f1Db - this._alignWatchBaseF1Db);
+    if (Number.isFinite(f2Db) && Number.isFinite(this._alignWatchBaseF2Db)) {
+      delta = Math.max(delta, Math.abs(f2Db - this._alignWatchBaseF2Db));
+    }
+    if (delta > ALIGN_DRIFT_DB) MessageBus.instance().publish(Events.FFT_ALIGN_MAG_DRIFT, delta);
   }
 
   /** Whether the frequency lock may steer at all - Java FftController.applyFrequencyLock's
@@ -1569,6 +1610,10 @@ export class FftController {
       // the deadbeat loop's own transport gate provides the damping, and the loop keeps
       // correcting ongoing DAC↔ADC clock drift.
       this._updateLockLatch(Math.abs(this.fllErrHz / this.binW) < 5e-4);
+      // Java FftController.applyFrequencyLock :361-363 - aligned within ALIGN_DONE_PPM of the
+      // target; the drift watch compares the fundamental level once that holds.
+      const aligned = Math.abs(r.fundamentalHzRefined - fllTarget) <= fllTarget * ALIGN_DONE_PPM * 1e-6;
+      this._watchAlignmentMagnitudeDrift(r.fundamentalDbFs, NaN, aligned);
     } else if (traceFll()) {
       // Java log.warn("FLL t1 GATED: target=... meas=...") - the plausibility gate rejected this
       // measurement (|meas − target| beyond max(5 bins, 500 ppm)); no steer this frame.
@@ -1647,6 +1692,14 @@ export class FftController {
     const tol1 = ok1 && Math.abs((f1Hz - t1) / this.binW) < 5e-4;
     const tol2 = ok2 && Math.abs((f2Hz - t2) / this.binW) < 5e-4;
     this._updateLockLatch(tol1 && tol2);
+    // Java FftController.applyFrequencyLock :344-347 - both tones within ALIGN_DONE_PPM of
+    // their targets; the drift watch reads the per-tone levels off the refined peaks (Java
+    // reads imd.f1DbV / f2DbV - a level DIFFERENCE, so the dBFS/dBV offset cancels).
+    const aligned = t1 > 0 && t2 > 0
+      && Math.abs(f1Hz - t1) <= t1 * ALIGN_DONE_PPM * 1e-6
+      && Math.abs(f2Hz - t2) <= t2 * ALIGN_DONE_PPM * 1e-6;
+    const lvlLow = p1 ? p1.levelDbFs : NaN, lvlHigh = p2 ? p2.levelDbFs : NaN;
+    this._watchAlignmentMagnitudeDrift(t1 <= t2 ? lvlLow : lvlHigh, t1 <= t2 ? lvlHigh : lvlLow, aligned);
   }
 
   /** Runs ONE dual-tone deadbeat loop for a single tone: plausibility-gate the measurement,
@@ -1693,8 +1746,10 @@ export class FftController {
     }
   }
 
+  /** Stamps the display-side fields on a finished result and publishes it as FFT_RESULT_AVAILABLE
+   *  (Java FftAnalyzerWorker publishes the slot after each analysis; the FFT pane subscribes,
+   *  as Java's FftView does). */
   _emit(r) {
-    if (!this.onResult) return;
     const c = this.config;
     r.binW = this.binW;
     // Stamp the channel the FFT ACTUALLY analyzed (Java FftAnalyzerWorker:1872
@@ -1729,16 +1784,16 @@ export class FftController {
     // Remembered for reemitDisplay (the stopped-state cal re-apply) - and as the identity
     // guard so a LOADED .fft file in the pane is never overwritten by a stale re-emit.
     this._lastEmitted = r;
-    this.onResult(r);
+    MessageBus.instance().publish(Events.FFT_RESULT_AVAILABLE, r);
   }
 
   /** Asks the analyzer to rebuild the DISPLAYED result from the RAW accumulator (which survives
    *  a stop) so a calibration Active/With-noise/load/remove change applies to a STOPPED FFT too.
    *  Java's .frc de-embed is a plot-time transform over the raw lastResult, so a toggle there
    *  just repaints; here the raw average and the correction both live in the worker, so the
-   *  rebuild is REQUESTED and its answer arrives asynchronously through engine.onResult - which
-   *  paints it, the pane painting a result that lands while not recording. No FLL steer, no
-   *  stop-after - display only.
+   *  rebuild is REQUESTED and its answer arrives asynchronously as FFT_RESULT_AVAILABLE - the
+   *  pane painting a result that lands while not recording. No FLL steer, no stop-after -
+   *  display only.
    *  `base` must be the pane's CURRENT result: when it isn't the controller's own last emit (a
    *  loaded .fft file), nothing is requested. Returns whether a rebuild was asked for; the worker
    *  answers empty - and the display keeps what it shows - when nothing is accumulated yet.

@@ -594,10 +594,13 @@ export class PreferencesDialog {
     // exists, part 5.)
     this.applyLookAndFeel();
     if (typeof this.fftView !== 'undefined' && this.fftView && this.fftView.applyPrefs) this.fftView.applyPrefs();
-    // Fire the FreqResp range-changed event so the FreqResp host re-clamps its view to the
-    // new Nyquist ceiling and re-syncs its scrollbars (Java PreferencesDialog OK handler,
-    // PreferencesDialog.java:784: bus.publish(Events.FREQRESP_RANGE_CHANGED)).
+    // Fire the FreqResp refresh events once so the pane / view re-sync to the committed state
+    // (Java PreferencesDialog OK handler :1162-1164): range / scrollbars re-clamped to the new
+    // Nyquist ceiling, the compare anchor + smoothing table re-derived, the notch + colours +
+    // calibration re-traced.
     MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
+    MessageBus.instance().publish(Events.FREQRESP_COMPARE_PARAMS_CHANGED);
+    MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED);
   }
 
   /** Applies Look & Feel prefs LIVE (no reload): main-tab orientation (TOP strip / LEFT
