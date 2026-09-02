@@ -40,6 +40,13 @@ import lombok.Getter;
 @Getter
 final class SignalMeasurements {
 
+    /** Hysteresis of the period detector's midpoint crossing, as a fraction of
+     *  the half swing on each side (±30 % of the amplitude).  Wide enough to
+     *  swallow a noise band a good part of the tone's own amplitude, narrow
+     *  enough that a 1 % / 99 % duty rectangle still crosses both edges every
+     *  cycle. */
+    private static final float CROSS_HYST_FRACTION = 0.3f;
+
     private final double vpp;        // volts peak-to-peak
     private final double vrms;       // volts RMS (including DC offset)
     private final double vmean;      // DC offset in volts
@@ -116,16 +123,36 @@ final class SignalMeasurements {
         // of any DC bias on the input, so DC-coupled and AC-coupled inputs
         // yield the same answers.
         float threshold = (min + max) * 0.5f;
+        // A rising crossing counts only with HYSTERESIS, like the scope trigger's:
+        // the signal must have been below the lower edge of the band and must
+        // reach its upper edge before the midpoint crossing between them is
+        // committed; a dip back below the lower edge first discards it.  Without
+        // the band a weak tone crosses the bare midpoint dozens of times per
+        // period - at 384 kHz a 500 Hz tone of 170 µV climbs 1.4 µV per sample
+        // through a 40 µV noise band - so the count inflates, the coarse period
+        // collapses, the refine lands on nothing and the broad-band fallback
+        // hands over whatever line dominates.
+        float hyst  = CROSS_HYST_FRACTION * (max - min) * 0.5f;
+        float lower = threshold - hyst;
+        float upper = threshold + hyst;
         int firstCross = -1;
         int lastCross  = -1;
         int crossCount = 0;
         int highCount  = 0;
+        boolean armed  = data[0] < lower;   // seen below the band since the last committed crossing
+        int pendingMid = -1;                // the midpoint crossing awaiting the upper edge
         for (int i = 1; i < n; i++) {
-            if (data[i] >= threshold) highCount++;
-            if (data[i - 1] < threshold && data[i] >= threshold) {
-                if (firstCross < 0) firstCross = i;
-                lastCross = i;
+            float v = data[i];
+            if (v >= threshold) highCount++;
+            if (v < lower) { armed = true; pendingMid = -1; continue; }
+            if (!armed) continue;
+            if (pendingMid < 0 && v >= threshold) pendingMid = i;
+            if (v >= upper) {
+                if (firstCross < 0) firstCross = pendingMid;
+                lastCross = pendingMid;
                 crossCount++;
+                armed = false;
+                pendingMid = -1;
             }
         }
 
