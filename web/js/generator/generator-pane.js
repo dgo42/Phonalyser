@@ -19,9 +19,16 @@ import { t, stripMnemonics } from '../i18n/i18n.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
 import { GenSignalForm, isCompensated, isDualTone, isPeriodic, DdsKernel, quantizePcm, outputLaneGate,
-  loadHarmonics, loadIntermod, isDualToneCorrectionFile } from './dds-kernel.js';
+  loadHarmonics, loadIntermod, isDualToneCorrectionFile, rawRms } from './dds-kernel.js';
 import * as fileStore from '../io/file-store.js';
 import { backendDisplayName } from '../audio/audio-backend-type.js';
+import { NumericStepModel, UNIT_FAMILIES, bindStepField, stepFieldFor } from '../widgets/numeric-step-field.js';
+import { unitValueEquals } from '../widgets/unit-conversion.js';
+
+/** Generator amplitude floor, V RMS (Java AMP_MIN_VRMS). */
+const AMP_MIN_VRMS = 1e-9;
+/** Generator frequency floor, Hz (Java GeneratorPane.GEN_FREQ_MIN_HZ). */
+const GEN_FREQ_MIN_HZ = 0.01;
 
 /** The ON-AIR tick period (Java GeneratorPane.scheduleOnAirBlink's 500 ms timerExec). The
  *  desktop toggles the banner's colour here; the web's banner blinks in CSS, so what is left is
@@ -32,25 +39,29 @@ export class GeneratorPane {
   /**
    * @param engine the AudioEngine (DDS generator + file playback lane; live retune/restart).
    * @param prefs  Preferences.
-   * @param deps   {getField, io, WAV_TYPE, formLabel, formIcon, sfVal, outRate,
+   * @param deps   {io, WAV_TYPE, formLabel, formIcon, outRate,
    *                isGenRunning, isBusy, setBusy, readConfig, syncFftAlign}
-   *   - getField: (id) => the generator NumericStepField (built in app.js initStepFields).
    *   - io: {pickSaveTarget, writeToTarget, saveScopeCapture, readWav, readAiff, decodeFlac} -
    *       the generator Save-to + file-player decode collaborators.
    *   - WAV_TYPE: the save-picker accept descriptor (shared with the scope save).
    *   - formLabel / formIcon: (form) => the localized label / waveform pictogram src (combo).
-   *   - sfVal: (id, dflt) => the canonical value of a step field by id (shared with readConfig).
    *   - outRate: () => the live output sample rate (the frequency/sweep Nyquist + emit grid).
    *   - isGenRunning: () => engine.generator.running - the controller owns the running flag; the pane only reads it.
    *   - isBusy / setBusy: the shared async re-entrancy guard accessors (start/stop serialize).
    *   - readConfig: () => snapshot the live UI into engine.config before a (re)start.
    *   - syncFftAlign: () => re-gate the FFT align combo (snap gates it; FftTabControl).
    */
-  constructor(engine, prefs, { getField, io, WAV_TYPE, formLabel, formIcon, sfVal, outRate,
+  constructor(engine, prefs, { io, WAV_TYPE, formLabel, formIcon, outRate,
     isGenRunning, isBusy, setBusy, readConfig, syncFftAlign, showAlert }) {
     this.engine = engine;
     this.prefs = prefs;
-    this._getField = getField;
+    // The pane's NumericStepFields by input id (Java GeneratorPane builds its own: frequency,
+    // amplitude, dither, duty, the dual-tone split, the sweep fields, the export duration),
+    // built in buildStepFields() once the page's unit suffixes resolve.
+    this._fields = {};
+    // Re-applies the waveform-aware amplitude ceiling; set by buildStepFields, called from the
+    // dual-tone split fields' onChange (they feed the ceiling).
+    this._syncAmpMax = () => {};
     // The shell's one alert surface, with the same console fallback every other holder of it
     // keeps (preferences-dialog.js, tune-notch-wizard.js, calibration-dialog.js).
     this._showAlert = showAlert || ((title, message) => console.warn(title, message));
@@ -58,7 +69,6 @@ export class GeneratorPane {
     this.WAV_TYPE = WAV_TYPE;
     this._formLabel = formLabel;
     this._formIcon = formIcon;
-    this._sfVal = sfVal;
     this._outRate = outRate;
     this._isGenRunning = isGenRunning;
     this._isBusy = isBusy;
@@ -89,8 +99,15 @@ export class GeneratorPane {
     });
     // A committed INPUT-rate edit moves the FFT bin grid the snap brackets are computed on, so
     // they are stale until re-rendered - the same follow-up the FFT-length change already makes
-    // (Java GeneratorPane's AUDIO_FORMAT_CHANGED listener).
-    bus.subscribe(Events.AUDIO_FORMAT_CHANGED, () => this.refreshFreqLabel());
+    // - and a committed OUTPUT rate moves the Nyquist ceiling of every frequency field (Java
+    // GeneratorPane's AUDIO_FORMAT_CHANGED listener).
+    bus.subscribe(Events.AUDIO_FORMAT_CHANGED, () => {
+      const outNyq = this._outRate() / 2;
+      for (const id of ['toneHz', 'tone2Hz', 'sweepStart', 'sweepStop']) {
+        if (this._fields[id]) this._fields[id].setMax(outNyq);
+      }
+      this.refreshFreqLabel();
+    });
     // A file played on a BENCH is uploaded first, and that wait needs saying (Java GeneratorPane
     // openUploadNotice / closeUploadNotice). The controller publishes FINISHED on every outcome
     // of the upload, so the notice cannot outlive the transfer it explains.
@@ -452,6 +469,198 @@ export class GeneratorPane {
     if (!form) return;
     $('#signalFormIco').attr('src', this._formIcon(form));
     $('#signalFormLabel').text(this._formLabel(form));
+  }
+
+  /** The pane's NumericStepField with input id `id`, or undefined before buildStepFields() /
+   *  without the markup. */
+  _getField(id) { return this._fields[id]; }
+
+  /** Canonical value of the pane's step field `id`, or the input's plain number / `dflt`
+   *  before the field exists (the shell's config snapshot reads the generator through this). */
+  fieldValue(id, dflt) {
+    const f = this._fields[id];
+    if (f) return f.getValue();
+    const el = document.getElementById(id);
+    return (el && parseFloat(el.value)) || dflt;
+  }
+
+  _sfVal(id, dflt) { return this.fieldValue(id, dflt); }
+
+  /** Re-renders every field's unit suffix after a UI-language switch. */
+  refreshFields() { for (const f of Object.values(this._fields)) f.refresh(); }
+
+  /** The no-clip amplitude CEILING, in the canonical Vrms the amplitude field stores. The DDS
+   *  drives amplitude = Vrms / (fsPeak · rawRms(form)) (dds-kernel), so digital full scale - the
+   *  point where the waveform starts to clip - is exactly Vrms = fsPeak · rawRms(form). It is
+   *  therefore WAVEFORM-AWARE: a sine tops out at fsPeak/√2, a rectangle at fsPeak, a triangle at
+   *  fsPeak/√3, a dual tone at fsPeak·√((w1²+w2²)/2), and so on. It reads the LIVE DAC full-scale
+   *  calibration and the LIVE form / dual-tone split on every call - never a value snapshotted at
+   *  construction. (Capping at the raw PEAK voltage let a sine entry run √2 (+3 dB) past full
+   *  scale.) This one ceiling backs all three unit views - V, dBV and dBFS (where it is exactly
+   *  0 dBFS). */
+  ampMaxVrms() {
+    return this.prefs.getDacFsVoltageAmpl()
+      * rawRms(this.prefs.genSignalForm.get(), this.fieldValue('amp1Pct', 50) / 100, this.fieldValue('amp2Pct', 50) / 100);
+  }
+
+  /** Builds the pane's NumericStepFields from the `.numfield` DOM (Java GeneratorPane's own
+   *  field construction). Each field owns parsing / formatting / clamping / stepping; its onChange
+   *  writes the bound preference and live-retunes the engine. Called from the shell's init once
+   *  the unit suffixes resolve (after applyI18n). */
+  buildStepFields() {
+    const prefs = this.prefs;
+    const engine = this.engine;
+    const F = UNIT_FAMILIES;
+    const mk = (id, model, onChange) => {
+      const f = stepFieldFor(id, model, onChange);
+      if (f) this._fields[id] = f;
+      return f;
+    };
+    const outRate = () => this._outRate();
+
+    // Frequency: FREQUENCY family, PERCENT policy, [GEN_FREQ_MIN_HZ .. outRate/2].
+    // toneHz doubles as the single-tone Frequency AND the dual-tone Frequency 1; it writes the
+    // matching pref per form (genDualToneFreq1Hz in dual, else genFrequencyHz) - Java keeps them
+    // as distinct fields, so their defaults (1 kHz vs 19 kHz) differ.
+    const fTone = mk('toneHz', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
+      (v) => {
+        if (isDualTone($('#signalForm').val())) prefs.genDualToneFreq1Hz.set(v);
+        else prefs.genFrequencyHz.set(v);
+        engine.config.toneHz = v; engine.retuneGenerator(); this.refreshFreqLabel(); this.updateDutyLabel();
+      });
+    if (fTone) fTone.setValue(prefs.genFrequencyHz.get());
+
+    const fTone2 = mk('tone2Hz', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
+      (v) => { prefs.genDualToneFreq2Hz.set(v); engine.config.tone2Hz = v; engine.retuneGenerator(); this.refreshFreqLabel(); });
+    if (fTone2) fTone2.setValue(prefs.genDualToneFreq2Hz.get());
+
+    // Amplitude: AMPLITUDE family, PERCENT policy. What is STORED is the entered value - the
+    // displayed number and its unit - and the store resolves it to V RMS at use, so a dBFS entry
+    // still means what was typed after a recalibration. fsAmplSupplier (the live DAC PEAK full
+    // scale) enables that dBFS entry - 0 dBFS is a full-scale SINE (AES17), anchored at fsPeak/√2.
+    const fAmp = mk('ampDbfs', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: this.ampMaxVrms(), maxDecimals: 5,
+      fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
+      (v) => {
+        // The pair the operator entered - number and unit as ONE write, so nothing
+        // downstream can see the new unit against the old number.
+        prefs.genAmplitude.set(fAmp.enteredValue());
+        engine.config.ampVrms = v; engine.retuneGenerator();
+      });
+    if (fAmp) {
+      fAmp.seedPair(prefs.genAmplitude.get());
+      // Keep the no-clip ceiling live (Bindings.onChange(... ampField::setMax)): it moves with the
+      // DAC full-scale CALIBRATION and with the waveform (and its dual-tone split), so re-apply it
+      // on every input that feeds ampMaxVrms(). setMax re-clamps the current value, so switching to
+      // a form with a lower headroom (e.g. rectangle -> sine) trims an now-over-scale amplitude
+      // down to the new max.
+      this._syncAmpMax = () => fAmp.setMax(this.ampMaxVrms());
+      prefs.dacFsVoltageAmpl.addListener(this._syncAmpMax);
+      prefs.genSignalForm.addListener(this._syncAmpMax);
+    }
+
+    // Dither depth: DITHER-policy NumericStepField (whole/fractional bits OR a full-scale-aware dBV
+    // VIEW of the same value) - Java GeneratorPane ditherField. fsAmplSupplier = the DAC PEAK
+    // full-scale (Vpeak) so the dBV view tracks recalibration. The dBV is the PHYSICAL TPDF level
+    // relative to that full-scale - window-invariant, NO FFT-window term: since the analyser's NENBW
+    // correction the integrated noise metrics (N, SNR, ...) read the true level, so the entered dBV
+    // checks against them with any analysis window. maxBits = 32. The TPDF dither is applied LIVE to
+    // the generated signal in the dds worklet (Java PcmQuantizer live-apply) so it shows on the FFT
+    // floor exactly where the dBV view sets it - hence the engine push below, mirroring the
+    // amplitude field. Seed the ENTERED value BEFORE the change path re-enters (seedPair replays it
+    // through commit without firing onChange). On a committed change: persist the entered value,
+    // push the depth to the running worklet, then re-annotate the "Dither" caption.
+    const fDither = mk('dither', new NumericStepModel({ family: F.DITHER, maxBits: 32,
+      fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
+      (v) => {
+        prefs.genDither.set(fDither.enteredValue());
+        engine.config.ditherBits = v; engine.retuneGenerator();
+        this.updateDitherLabel();
+      });
+    if (fDither) {
+      fDither.seedPair(prefs.genDither.get());
+      // Render the "Dither" caption's companion-unit bracket NOW: the init seed ran before this
+      // field existed (updateDitherLabel found none), so without this the bracket stays empty
+      // until the first change.
+      this.updateDitherLabel();
+    }
+
+    // Duty / dual-tone amplitude split: PERCENT family + PERCENT policy.
+    const fDuty = mk('duty', new NumericStepModel({ family: F.PERCENT, min: 0.001, max: 99.999, maxDecimals: 3 }),
+      () => {
+        const duty = (this.fieldValue('duty', 50) || 50) / 100;
+        const form = $('#signalForm').val();
+        // Write ONLY the active form's duty pref - each form remembers its own (Java dutyField).
+        if (form === GenSignalForm.TRIANGLE) prefs.genTriangleDuty.set(duty);
+        else if (form === GenSignalForm.RECTANGLE) prefs.genRectangleDuty.set(duty);
+        engine.config.rectDuty = duty; engine.config.triDuty = duty;
+        engine.retuneGenerator();
+        this.updateDutyLabel();
+      });
+    if (fDuty) {
+      fDuty.setValue(((prefs.genSignalForm.get() === GenSignalForm.TRIANGLE
+        ? prefs.genTriangleDuty.get() : prefs.genRectangleDuty.get()) || 0.5) * 100);
+    }
+
+    const fAmp1 = mk('amp1Pct', new NumericStepModel({ family: F.PERCENT, min: 0.001, max: 99.999, maxDecimals: 3 }),
+      (v) => { this.applyDualToneAmpSplit('amp1Pct', v); this._syncAmpMax(); });
+    if (fAmp1) fAmp1.setValue(prefs.genDualToneSplitPct.get());
+    const fAmp2 = mk('amp2Pct', new NumericStepModel({ family: F.PERCENT, min: 0.001, max: 99.999, maxDecimals: 3 }),
+      (v) => { this.applyDualToneAmpSplit('amp2Pct', v); this._syncAmpMax(); });
+    if (fAmp2) fAmp2.setValue(100 - prefs.genDualToneSplitPct.get());
+
+    // Sweep fields (LINEAR_SWEEP / LOG_SWEEP) - NumericStepField like the scope's, faithful to
+    // Java sweep*Field: Start/Stop FREQUENCY [0.01 .. Nyquist] 9 dec; Duration/Fade-in/Fade-out
+    // TIME (min 0.001 / 0, 3 dec). Wheel/arrow/keyboard stepping + unit auto-ranging come free.
+    // Java GeneratorController sweep-pref bindings (4887ecb): a running Farina (LOG) sweep
+    // can't live-edit its pre-rendered buffer, so a param change does a full restart (the
+    // restart's readConfig picks the new value up) and skips the live setter + retune.
+    const sweepOnChange = (pref, cfgKey) => async (v) => {
+      pref.set(v);
+      if (await this.restartFarinaOnParamChange()) return;
+      engine.config[cfgKey] = v; engine.retuneGenerator();
+    };
+    const fSwStart = mk('sweepStart', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
+      sweepOnChange(prefs.genSweepFreqStartHz, 'sweepStartHz'));
+    if (fSwStart) fSwStart.setValue(prefs.genSweepFreqStartHz.get());
+    const fSwStop = mk('sweepStop', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
+      sweepOnChange(prefs.genSweepFreqEndHz, 'sweepEndHz'));
+    if (fSwStop) fSwStop.setValue(prefs.genSweepFreqEndHz.get());
+    const fSwDur = mk('sweepDur', new NumericStepModel({ family: F.TIME, min: 0.001, max: 1000000, maxDecimals: 3 }),
+      sweepOnChange(prefs.genSweepDurationSec, 'sweepDurationSec'));
+    if (fSwDur) fSwDur.setValue(prefs.genSweepDurationSec.get());
+    const fSwFi = mk('sweepFadeIn', new NumericStepModel({ family: F.TIME, min: 0, max: 1000000, maxDecimals: 3 }),
+      sweepOnChange(prefs.genSweepFadeInSec, 'sweepFadeInSec'));
+    if (fSwFi) fSwFi.setValue(prefs.genSweepFadeInSec.get());
+    const fSwFo = mk('sweepFadeOut', new NumericStepModel({ family: F.TIME, min: 0, max: 1000000, maxDecimals: 3 }),
+      sweepOnChange(prefs.genSweepFadeOutSec, 'sweepFadeOutSec'));
+    if (fSwFo) fSwFo.setValue(prefs.genSweepFadeOutSec.get());
+    // WAV-export duration - TIME NumericStepField (Java durationField).
+    const fGenDur = mk('genDuration', new NumericStepModel({ family: F.TIME, min: 0.001, max: 1000000, maxDecimals: 3 }),
+      (v) => prefs.genWavDurationSeconds.set(v));
+    if (fGenDur) fGenDur.setValue(prefs.genWavDurationSeconds.get());
+
+    // Two-way bind the fields to their prefs (external changes update the field).
+    bindStepField(fTone, prefs.genFrequencyHz);
+    bindStepField(fTone2, prefs.genDualToneFreq2Hz);
+    // The amplitude and the dither are bound as ENTERED values, so an external write replays the
+    // pair and the field shows the unit it was stored in - a canonical writer (a calibration, a
+    // preset) stores the base unit, which replays as volts or bits exactly as before.
+    if (fAmp) {
+      prefs.genAmplitude.addListener((v) => {
+        if (!unitValueEquals(fAmp.enteredValue(), v)) fAmp.seedPair(v);
+      });
+    }
+    if (fDither) {
+      prefs.genDither.addListener((v) => {
+        if (!unitValueEquals(fDither.enteredValue(), v)) fDither.seedPair(v);
+      });
+    }
+    bindStepField(fSwStart, prefs.genSweepFreqStartHz);
+    bindStepField(fSwStop, prefs.genSweepFreqEndHz);
+    bindStepField(fSwDur, prefs.genSweepDurationSec);
+    bindStepField(fSwFi, prefs.genSweepFadeInSec);
+    bindStepField(fSwFo, prefs.genSweepFadeOutSec);
+    bindStepField(fGenDur, prefs.genWavDurationSeconds);
   }
 
   /** Couple the two dual-tone amplitude % fields to sum to 100 % (Java

@@ -34,7 +34,7 @@ import { ServerProber, wsUrlOf } from '../net/server-prober.js';
 import { stackOverOpenModals } from '../ui/modal-stack.js';
 import { FftView } from '../ui/fft-view.js';
 import { ScopeView } from '../ui/scope-view.js';
-import { GenSignalForm, isCompensated, isDualTone, rawRms } from '../generator/dds-kernel.js';
+import { GenSignalForm, isCompensated } from '../generator/dds-kernel.js';
 import { Preferences } from '../store/preferences.js';
 import { DeviceProfileStore } from '../store/device-profiles.js';
 import { loadDeviceCatalog } from '../store/device-catalog.js';
@@ -51,14 +51,6 @@ import { pruneCals } from '../io/cal-store.js';
 import { saveFile, openFile, bytesToText, pickSaveTarget, writeToTarget } from '../io/file-picker.js';
 import { FreqRespPane } from '../freqresp/freqresp-pane.js';
 import { TuneNotchWizard } from '../freqresp/tune-notch-wizard.js';
-// Floors / decimals of the FreqResp settings fields - shared with the analyzer's
-// validation and the tune-notch wizard's identical fields (Java FreqRespConstants).
-// The amplitude floor is aliased: this module already names the GENERATOR's own,
-// much lower floor AMP_MIN_VRMS.
-import {
-  LEAD_IN_MIN_SEC, FREQ_MIN_HZ, FREQ_MAX_DECIMALS, AMP_MAX_DECIMALS,
-  AMP_MIN_VRMS as FR_AMP_MIN_VRMS,
-} from '../freqresp/freqresp-constants.js';
 import { ScreenshotDialog } from './screenshot.js';
 import { PredistortionHost } from './predistortion-host.js';
 import { PredistortionWizard } from './predistortion-wizard.js';
@@ -69,14 +61,11 @@ import { TipDialog } from './tip-dialog.js';
 import { MainTab } from './main-tab.js';
 import { ScopePane } from '../scope/scope-pane.js';
 import { ScopeTabControl } from '../scope/scope-tab-control.js';
-import { preserveCanvasMiddle } from '../scope/scope-format.js';
 import { FftPane } from '../fft/fft-pane.js';
-import { FftTabControl, FFT_AVERAGES_OFF, FFT_AVERAGES_SERIES } from '../fft/fft-tab-control.js';
+import { FftTabControl } from '../fft/fft-tab-control.js';
 import { GeneratorPane } from '../generator/generator-pane.js';
 import { PredistortionEngine } from '../predistortion/engine.js';
 import { writeHarmonicDpd, writeIntermodDpd } from '../io/dpd.js';
-import { NumericStepField, NumericStepModel, OFF_LABEL, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
-import { unitValueEquals } from '../widgets/unit-conversion.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 
@@ -157,7 +146,7 @@ let shotModal;
 let confirmModal;
 let alertModal;   // the shared one-button alert modal (device-error surface; constructed in init's modals step)
 let prefsDialog;   // the Preferences dialog (constructed in init's modals step)
-let calibrationDialog;   // the unified ADC/DAC calibration dialog (constructed after initStepFields)
+let calibrationDialog;   // the unified ADC/DAC calibration dialog (constructed in init, after applyI18n)
 let benchCalibration;   // where a calibrate WRITE goes while a server's backend is selected (init's modals step)
 /** The human LABEL of the selected input device - what the card recognition patterns match (the
  *  <select> value carries a Web Audio deviceId). The Preferences dialog owns the combo; before it
@@ -166,8 +155,8 @@ const inputDeviceLabel = () => (prefsDialog ? prefsDialog.inputDeviceLabel()
   : $('#inSel option:selected').text());
 let scopeTabControl;   // the oscilloscope settings strip (constructed in init's modals step)
 let fftTabControl;   // the FFT settings strip (constructed in init's modals step)
-let genPane;   // the generator pane (constructed in init, after initStepFields)
-let scopePane;   // the oscilloscope pane (canvas / scrollbars / record / render loop; constructed in init, after initStepFields)
+let genPane;   // the generator pane (constructed in init, before the first applyPrefsToUi)
+let scopePane;   // the oscilloscope pane (canvas / scrollbars / record / render loop; constructed in init, before the scope strip)
 let fftPane;   // the FFT pane (spectrum canvas / record / readout+IMD / render loop; constructed in init, before fftTabControl)
 let mainTab;   // the main tab (the rAF render-frame driver + the 3-pane collapse/sash layout; constructed in init, after both panes)
 
@@ -219,416 +208,17 @@ const syncDacFullScale = () => {
 prefs.dacFsVoltageAmpl.addListener(syncDacFullScale);
 prefs.dacFsVoltageAmplRight.addListener(syncDacFullScale);
 
-// ----- generator amplitude minimum (Java AMP_MIN_VRMS) + frequency minimum -----
-const AMP_MIN_VRMS = 1e-9;
-// Amplitude CEILING (no-clip), in the canonical Vrms the amplitude fields store. The DDS drives
-// amplitude = Vrms / (fsPeak · rawRms(form)) (dds-kernel), so digital full scale - the point where
-// the waveform starts to clip - is exactly Vrms = fsPeak · rawRms(form). It is therefore
-// WAVEFORM-AWARE: a sine tops out at fsPeak/√2, a rectangle at fsPeak, a triangle at fsPeak/√3, a
-// dual tone at fsPeak·√((w1²+w2²)/2), and so on. It reads the LIVE DAC full-scale calibration and
-// the LIVE form / dual-tone split on every call - never a value snapshotted at construction.
-// (Capping at the raw PEAK voltage let a sine entry run √2 (+3 dB) past full scale.) This one
-// ceiling backs all three unit views - V, dBV and dBFS (where it is exactly 0 dBFS).
-const ampMaxVrms = () => prefs.getDacFsVoltageAmpl()
-  * rawRms(prefs.genSignalForm.get(), sfVal('amp1Pct', 50) / 100, sfVal('amp2Pct', 50) / 100);
-// The frequency-response sweep and the tune-notch wizard always emit a SINE-family signal
-// (Farina sweep / sine), independent of the generator's selected form.
-const sweepAmpMaxVrms = () => prefs.getDacFsVoltageAmpl() * rawRms(GenSignalForm.LOG_SWEEP);
-const GEN_FREQ_MIN_HZ = 0.01;   // Java GeneratorPane.GEN_FREQ_MIN_HZ
-// The averages dial's Off sentinel + preset series live with the FFT tab control (Java
-// FftTabControl.AVERAGES_OFF / AVERAGES_SERIES), which also renders them on the tile.
+// The live sample rates the panes derive their Nyquist ceilings from - the Preferences dialog's
+// combos (which show the device-native input rate) with the committed prefs as the fallback.
 const outRate = () => parseInt($('#outRate').val(), 10) || prefs.current().outputSampleRate || 384000;
 const inRate = () => parseInt($('#inRate').val(), 10) || prefs.current().inputSampleRate || 384000;
 
-// NumericStepField controllers, built in init() once i18n has resolved (the unit
-// suffixes come from t('unit.*')). Keyed by the input id.
-const stepFields = {};
-/** Canonical value of a step field by input id (fallback when not yet built). */
-const sfVal = (id, dflt) => (stepFields[id] ? stepFields[id].getValue() : (parseFloat($('#' + id).val()) || dflt));
-// Set by initStepFields: re-applies the waveform-aware amplitude ceiling. Held here so the
-// dual-tone split fields (built later in the same pass) can trigger it from their onChange.
-let stepFieldsAmpMaxSync = () => {};
-
-// Two-way binding (Java Bindings.stepField): a field edit writes the pref (the field's own
-// onChange) AND an external pref change (preset load, DAC calibration, other generator code)
-// pushes back into the field. setValue is silent (no onChange - numeric-step-field.js:504), so
-// the value-guarded listener can never feed back into a loop.
-function bidiBind(field, pref) {
-  if (field) pref.addListener((v) => { if (field.getValue() !== v) field.setValue(v); });
-}
-
-/** 1-2-5 decade ladder over [min .. max] inclusive (the scope V/div and t/div
- *  step series), e.g. 1µ, 2µ, 5µ, 10µ, ... 200, 500. */
-function ladder125(min, max) {
-  const out = [];
-  const REL = 1 + 1e-9;
-  let decade = Math.pow(10, Math.floor(Math.log10(min) + 1e-9));
-  while (decade <= max * REL) {
-    for (const m of [1, 2, 5]) {
-      const v = m * decade;
-      if (v >= min / REL && v <= max * REL) out.push(v);
-    }
-    decade *= 10;
-  }
-  return out;
-}
-
-// Scope V/div + t/div 1-2-5 ladders (Java ScopeTabControl LIST policy): V/div
-// 1 nV ... 500 V, t/div 1 µs ... 1 s - the exact OscParse.VOLT_PER_DIV / TIME_PER_DIV
-// step lists (voltsPerDivTargets/timePerDivTargets). Shared by the step fields AND
-// the scope view's Ctrl-wheel zoom, so the wheel snaps to the SAME series the field
-// arrows walk. (V/div starts at 1 nV to match Java, which the model min already
-// permits - V_PER_DIV_MIN = 1e-9.)
-const SCOPE_VDIV_SERIES = ladder125(1e-9, 500);
-const SCOPE_TDIV_SERIES = ladder125(1e-6, 1);
-// The Ctrl-wheel V/div + Ctrl+Shift-wheel t/div zoom step along the same ladders.
-scopeView.vDivSeries = SCOPE_VDIV_SERIES;
-scopeView.tDivSeries = SCOPE_TDIV_SERIES;
-
-// Build the generator + FR NumericStepFields from the existing `.numfield` DOM.
-// Each field owns parsing/formatting/clamping/stepping; its onChange writes the
-// bound preference and live-retunes the engine.
-function initStepFields() {
-  const F = UNIT_FAMILIES;
-  const mk = (id, model, onChange) => {
-    const input = document.getElementById(id);
-    if (!input) return null;
-    const f = new NumericStepField(input, model, { onChange, tooltipBase: input.title || '' });
-    stepFields[id] = f;
-    return f;
-  };
-
-  // Frequency: FREQUENCY family, PERCENT policy, [GEN_FREQ_MIN_HZ .. outRate/2].
-  // toneHz doubles as the single-tone Frequency AND the dual-tone Frequency 1; it writes the
-  // matching pref per form (genDualToneFreq1Hz in dual, else genFrequencyHz) - Java keeps them
-  // as distinct fields, so their defaults (1 kHz vs 19 kHz) differ.
-  const fTone = mk('toneHz', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
-    (v) => {
-      if (isDualTone($('#signalForm').val())) prefs.genDualToneFreq1Hz.set(v);
-      else prefs.genFrequencyHz.set(v);
-      engine.config.toneHz = v; engine.retuneGenerator(); genPane.refreshFreqLabel(); genPane.updateDutyLabel();
-    });
-  fTone.setValue(prefs.genFrequencyHz.get());
-
-  const fTone2 = mk('tone2Hz', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
-    (v) => { prefs.genDualToneFreq2Hz.set(v); engine.config.tone2Hz = v; engine.retuneGenerator(); genPane.refreshFreqLabel(); });
-  fTone2.setValue(prefs.genDualToneFreq2Hz.get());
-
-  // Amplitude: AMPLITUDE family, PERCENT policy. What is STORED is the entered value - the
-  // displayed number and its unit - and the store resolves it to V RMS at use, so a dBFS entry
-  // still means what was typed after a recalibration. fsAmplSupplier (the live DAC PEAK full
-  // scale) enables that dBFS entry - 0 dBFS is a full-scale SINE (AES17), anchored at fsPeak/√2.
-  const fAmp = mk('ampDbfs', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: ampMaxVrms(), maxDecimals: 5,
-    fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
-    (v) => {
-      // The pair the operator entered - number and unit as ONE write, so nothing
-      // downstream can see the new unit against the old number.
-      prefs.genAmplitude.set(fAmp.enteredValue());
-      engine.config.ampVrms = v; engine.retuneGenerator();
-    });
-  fAmp.seedPair(prefs.genAmplitude.get());
-  // Keep the no-clip ceiling live (Bindings.onChange(... ampField::setMax)): it moves with the DAC
-  // full-scale CALIBRATION and with the waveform (and its dual-tone split), so re-apply it on every
-  // input that feeds ampMaxVrms(). setMax re-clamps the current value, so switching to a form with
-  // a lower headroom (e.g. rectangle -> sine) trims an now-over-scale amplitude down to the new max.
-  const syncAmpMax = () => fAmp.setMax(ampMaxVrms());
-  prefs.dacFsVoltageAmpl.addListener(syncAmpMax);
-  prefs.genSignalForm.addListener(syncAmpMax);
-  stepFieldsAmpMaxSync = syncAmpMax;   // the dual-tone split fields call it from their onChange
-
-  // Dither depth: DITHER-policy NumericStepField (whole/fractional bits OR a full-scale-aware dBV
-  // VIEW of the same value) - Java GeneratorPane ditherField. fsAmplSupplier = the DAC PEAK
-  // full-scale (Vpeak) so the dBV view tracks recalibration. The dBV is the PHYSICAL TPDF level
-  // relative to that full-scale - window-invariant, NO FFT-window term: since the analyser's NENBW
-  // correction the integrated noise metrics (N, SNR, ...) read the true level, so the entered dBV
-  // checks against them with any analysis window. maxBits = 32. The TPDF dither is applied LIVE to
-  // the generated signal in the dds worklet (Java PcmQuantizer live-apply) so it shows
-  // on the FFT floor exactly where the dBV view sets it - hence the engine push below, mirroring the
-  // amplitude field. Seed the ENTERED value BEFORE the change path re-enters (seedPair replays it
-  // through commit without firing onChange). On a committed change: persist the entered value,
-  // push the depth to the running worklet, then re-annotate the "Dither" caption.
-  const fDither = mk('dither', new NumericStepModel({ family: F.DITHER, maxBits: 32,
-    fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
-    (v) => {
-      prefs.genDither.set(fDither.enteredValue());
-      engine.config.ditherBits = v; engine.retuneGenerator();
-      if (genPane) genPane.updateDitherLabel();
-    });
-  if (fDither) {
-    fDither.seedPair(prefs.genDither.get());
-    // Render the "Dither" caption's companion-unit bracket NOW: initStepFields runs AFTER the first
-    // applyPrefsToUi -> seedGeneratorControls (which called updateDitherLabel while the field didn't
-    // yet exist), so without this the bracket stays empty until the first change. genPane is built
-    // before initStepFields, so it's present here.
-    if (genPane) genPane.updateDitherLabel();
-  }
-
-  // Unified calibration dialog (Java CalibrationDialog): the two per-channel measured/actual-
-  // amplitude fields (Left / Right), unit-aware AMPLITUDE step fields (V / mV / µV / dBV + short
-  // forms), like the generator amplitude. ONE dialog serves the scope ADC, FFT ADC and generator
-  // DAC flows; each row is seeded on open and read (canonical Vrms) on Calibrate.
-  mk('calLeftValue', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 1000, maxDecimals: 5 }), () => {});
-  mk('calRightValue', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 1000, maxDecimals: 5 }), () => {});
-
-  // FFT THD "Manual fundamental" reference level - unit-aware AMPLITUDE field (accepts dBV).
-  // onChange placeholder - FftTabControl.bind() rebinds it to the THD-settings commit path
-  // (pref-write + live readConfig / stopped-state recompute - NO restartFft).
-  // NO fsAmplSupplier on purpose: this is an ADC-side reference level (external levels routinely
-  // far above DAC full scale), so a dBFS figure would be meaningless - the model refuses dBFS here.
-  const fManFund = mk('fftManualFund', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 200, maxDecimals: 5 }), () => {});
-  if (fManFund) { fManFund.model.setLogDisplay(prefs.fftManualFundDbvDisplay.get()); fManFund.setValue(prefs.fftManualFundVrms.get()); }
-
-  // FFT THD distortion band + harmonic counts - the Java THD tab's four NumericStepFields
-  // (FftTabControl.buildThdTab): distMin/distMax FREQUENCY [0 .. inRate/2] 9 dec (:570/:594),
-  // maxThd 2..9 / maxCalc 9..50, step 1, 0 dec (:640/:654). onChange is a placeholder here -
-  // FftTabControl.bind() rebinds each to the THD-settings commit path (like averages/manualFund).
-  const fDistMin = mk('thdDistMin', new NumericStepModel({ family: F.FREQUENCY, min: 0, max: inRate() / 2, maxDecimals: 9 }), () => {});
-  if (fDistMin) fDistMin.setValue(prefs.fftDistMinHz.get());
-  const fDistMax = mk('thdDistMax', new NumericStepModel({ family: F.FREQUENCY, min: 0, max: inRate() / 2, maxDecimals: 9 }), () => {});
-  if (fDistMax) fDistMax.setValue(prefs.fftDistMaxHz.get());
-  const fThdMaxH = mk('thdMaxH', new NumericStepModel({ family: F.NONE, min: 2, max: 9, wheelStep: 1, arrowStep: 1, decimals: 0 }), () => {});
-  if (fThdMaxH) fThdMaxH.setValue(prefs.fftThdMaxHarmonic.get());
-  const fCalcMaxH = mk('thdCalcMaxH', new NumericStepModel({ family: F.NONE, min: 9, max: 50, wheelStep: 1, arrowStep: 1, decimals: 0 }), () => {});
-  if (fCalcMaxH) fCalcMaxH.setValue(prefs.fftCalcMaxHarmonic.get());
-
-  // FFT "Averages" - Java averagesField: NumericStepField(UnitFamily.NONE, AVERAGES_OFF=1,
-  // POSITIVE_INFINITY, AVERAGES_SERIES {2,4,8,16,32,64,128,∞}, 0 decimals, width 70). LIST policy:
-  // the wheel/arrows snap along the series; ∞ is the top entry, NOT a separate checkbox. Typing
-  // accepts any count ≥ 1 plus two named tokens: "∞" or any prefix of "Infinity" (i / in / inf ...),
-  // which max=Infinity enables, and any prefix of "Off" (o / of / off) -> 1 (numeric-step-field.js
-  // commit()).
-  // onChange placeholder - FftTabControl.bind() rebinds it to pref-write + live readConfig
-  // (an averages change must NOT restart/reset the accumulator).
-  const fAverages = mk('averages', new NumericStepModel({ family: F.NONE, min: FFT_AVERAGES_OFF,
-    max: Infinity, series: FFT_AVERAGES_SERIES, maxDecimals: 0 }), () => {});
-  // 1 renders and parses as "Off" - typed in full or as any prefix (o / of / off),
-  // the same shortcut the generator's dither field takes.
-  if (fAverages) fAverages.model.setNamedValue(FFT_AVERAGES_OFF, OFF_LABEL);
-  if (fAverages) fAverages.setValue(prefs.fftAverages.get());
-
-  // FFT "Stop after N averages" count - Java stopAfterNField: NumericStepField(UnitFamily.NONE,
-  // STOP_AFTER_MIN=2, STOP_AFTER_MAX=1_000_000, STOP_AFTER_WHEEL_STEP=100, arrowStep 1, 0 dec).
-  // FIXED policy: the wheel jumps in hundreds (the count ranges to a million), arrows step by 1.
-  // onChange placeholder - FftTabControl.bind() rebinds it to the pref-write + live readConfig.
-  const fStopAfterN = mk('fftStopAfterN', new NumericStepModel({ family: F.NONE, min: 2, max: 1000000,
-    wheelStep: 100, arrowStep: 1, decimals: 0 }), () => {});
-  if (fStopAfterN) fStopAfterN.setValue(prefs.fftStopAfterN.get());
-
-  // Duty / dual-tone amplitude split: PERCENT family + PERCENT policy.
-  const fDuty = mk('duty', new NumericStepModel({ family: F.PERCENT, min: 0.001, max: 99.999, maxDecimals: 3 }),
-    () => {
-      const duty = (sfVal('duty', 50) || 50) / 100;
-      const form = $('#signalForm').val();
-      // Write ONLY the active form's duty pref - each form remembers its own (Java dutyField).
-      if (form === GenSignalForm.TRIANGLE) prefs.genTriangleDuty.set(duty);
-      else if (form === GenSignalForm.RECTANGLE) prefs.genRectangleDuty.set(duty);
-      engine.config.rectDuty = duty; engine.config.triDuty = duty;
-      engine.retuneGenerator();
-      genPane.updateDutyLabel();
-    });
-  fDuty.setValue(((prefs.genSignalForm.get() === GenSignalForm.TRIANGLE
-    ? prefs.genTriangleDuty.get() : prefs.genRectangleDuty.get()) || 0.5) * 100);
-
-  const fAmp1 = mk('amp1Pct', new NumericStepModel({ family: F.PERCENT, min: 0.001, max: 99.999, maxDecimals: 3 }),
-    (v) => { genPane.applyDualToneAmpSplit('amp1Pct', v); stepFieldsAmpMaxSync(); });
-  fAmp1.setValue(prefs.genDualToneSplitPct.get());
-  const fAmp2 = mk('amp2Pct', new NumericStepModel({ family: F.PERCENT, min: 0.001, max: 99.999, maxDecimals: 3 }),
-    (v) => { genPane.applyDualToneAmpSplit('amp2Pct', v); stepFieldsAmpMaxSync(); });
-  fAmp2.setValue(100 - prefs.genDualToneSplitPct.get());
-
-  // Sweep fields (LINEAR_SWEEP / LOG_SWEEP) - NumericStepField like the scope's, faithful to
-  // Java sweep*Field: Start/Stop FREQUENCY [0.01 .. Nyquist] 9 dec; Duration/Fade-in/Fade-out
-  // TIME (min 0.001 / 0, 3 dec). Wheel/arrow/keyboard stepping + unit auto-ranging come free.
-  // Java GeneratorController sweep-pref bindings (4887ecb): a running Farina (LOG) sweep
-  // can't live-edit its pre-rendered buffer, so a param change does a full restart (the
-  // restart's readConfig picks the new value up) and skips the live setter + retune.
-  const sweepOnChange = (pref, cfgKey) => async (v) => {
-    pref.set(v);
-    if (await genPane.restartFarinaOnParamChange()) return;
-    engine.config[cfgKey] = v; engine.retuneGenerator();
-  };
-  const fSwStart = mk('sweepStart', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
-    sweepOnChange(prefs.genSweepFreqStartHz, 'sweepStartHz'));
-  if (fSwStart) fSwStart.setValue(prefs.genSweepFreqStartHz.get());
-  const fSwStop = mk('sweepStop', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
-    sweepOnChange(prefs.genSweepFreqEndHz, 'sweepEndHz'));
-  if (fSwStop) fSwStop.setValue(prefs.genSweepFreqEndHz.get());
-  const fSwDur = mk('sweepDur', new NumericStepModel({ family: F.TIME, min: 0.001, max: 1000000, maxDecimals: 3 }),
-    sweepOnChange(prefs.genSweepDurationSec, 'sweepDurationSec'));
-  if (fSwDur) fSwDur.setValue(prefs.genSweepDurationSec.get());
-  const fSwFi = mk('sweepFadeIn', new NumericStepModel({ family: F.TIME, min: 0, max: 1000000, maxDecimals: 3 }),
-    sweepOnChange(prefs.genSweepFadeInSec, 'sweepFadeInSec'));
-  if (fSwFi) fSwFi.setValue(prefs.genSweepFadeInSec.get());
-  const fSwFo = mk('sweepFadeOut', new NumericStepModel({ family: F.TIME, min: 0, max: 1000000, maxDecimals: 3 }),
-    sweepOnChange(prefs.genSweepFadeOutSec, 'sweepFadeOutSec'));
-  if (fSwFo) fSwFo.setValue(prefs.genSweepFadeOutSec.get());
-  // WAV-export duration - TIME NumericStepField (Java durationField).
-  const fGenDur = mk('genDuration', new NumericStepModel({ family: F.TIME, min: 0.001, max: 1000000, maxDecimals: 3 }),
-    (v) => prefs.genWavDurationSeconds.set(v));
-  if (fGenDur) fGenDur.setValue(prefs.genWavDurationSeconds.get());
-
-  // Two-way bind the generator step fields to their prefs (external changes update the field).
-  bidiBind(fTone, prefs.genFrequencyHz);
-  bidiBind(fTone2, prefs.genDualToneFreq2Hz);
-  // The amplitude and the dither are bound as ENTERED values, so an external write replays the
-  // pair and the field shows the unit it was stored in - a canonical writer (a calibration, a
-  // preset) stores the base unit, which replays as volts or bits exactly as before.
-  if (fAmp) {
-    prefs.genAmplitude.addListener((v) => {
-      if (!unitValueEquals(fAmp.enteredValue(), v)) fAmp.seedPair(v);
-    });
-  }
-  if (fDither) {
-    prefs.genDither.addListener((v) => {
-      if (!unitValueEquals(fDither.enteredValue(), v)) fDither.seedPair(v);
-    });
-  }
-  bidiBind(fSwStart, prefs.genSweepFreqStartHz);
-  bidiBind(fSwStop, prefs.genSweepFreqEndHz);
-  bidiBind(fSwDur, prefs.genSweepDurationSec);
-  bidiBind(fSwFi, prefs.genSweepFadeInSec);
-  bidiBind(fSwFo, prefs.genSweepFadeOutSec);
-  bidiBind(fGenDur, prefs.genWavDurationSeconds);
-  // FFT averages - two-way (Java Bindings.stepField): a preset recall pushes the new count
-  // (or ∞) back into the field display.
-  bidiBind(fAverages, prefs.fftAverages);
-
-  // FreqResp settings fields.
-  const fr = (id, model, onChange) => mk(id, model, onChange);
-  // The sweep band's ceiling is the LOWER of the two Nyquist frequencies (Java
-  // FreqRespTabControl.sweepBandCeilingHz): the sweep has to be both emittable
-  // on the output clock and observable on the input clock, and with Web Audio
-  // the two rates can differ.
-  const sweepBandCeilingHz = () => Math.min(inRate(), outRate()) / 2;
-  const fStart = fr('frStart', new NumericStepModel({ family: F.FREQUENCY, min: FREQ_MIN_HZ, max: sweepBandCeilingHz(), maxDecimals: FREQ_MAX_DECIMALS }),
-    (v) => prefs.freqRespStartHz.set(v));
-  if (fStart) fStart.setValue(prefs.freqRespStartHz.get());
-  const fStop = fr('frStop', new NumericStepModel({ family: F.FREQUENCY, min: FREQ_MIN_HZ, max: sweepBandCeilingHz(), maxDecimals: FREQ_MAX_DECIMALS }),
-    (v) => prefs.freqRespStopHz.set(v));
-  if (fStop) fStop.setValue(prefs.freqRespStopHz.get());
-  // fsAmplSupplier enables dBFS entry (as on the generator). NB: unlike the generator this field
-  // has no live setMax listener, so its max is frozen at construction - the supplier still reads live.
-  const fAmpFr = fr('frAmp', new NumericStepModel({ family: F.AMPLITUDE, min: FR_AMP_MIN_VRMS, max: sweepAmpMaxVrms(), maxDecimals: AMP_MAX_DECIMALS,
-    fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
-    () => prefs.freqRespAmplitude.set(fAmpFr.enteredValue()));
-  // Track the live DAC full-scale calibration, as the generator field does (this one previously
-  // froze its ceiling at construction). Replaying the stored value after the ceiling moves leaves
-  // the entered text where it stands and re-solves what a dBFS entry resolves to.
-  if (fAmpFr) {
-    prefs.dacFsVoltageAmpl.addListener(() => {
-      fAmpFr.setMax(sweepAmpMaxVrms());
-      fAmpFr.seedPair(prefs.freqRespAmplitude.get());
-    });
-    fAmpFr.seedPair(prefs.freqRespAmplitude.get());
-  }
-  const fLead = fr('frLeadIn', new NumericStepModel({ family: F.TIME, min: LEAD_IN_MIN_SEC, max: 1000000, maxDecimals: 3 }),
-    (v) => prefs.freqRespLeadInSec.set(v));
-  if (fLead) fLead.setValue(prefs.freqRespLeadInSec.get());
-  // Sweep points (Java SWEEP_POINT_SERIES): the wheel jumps along the power-of-2
-  // presets PLUS a runtime "Nyquist/2" entry (one point per FFT bin to Nyquist =
-  // inRate/2), prepended FIRST in wheel order and rendered as a named text value.
-  // Free typing covers everything between; max 10 000 000.
-  const SWEEP_POINT_SERIES = [8192, 16384, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304];
-  const nyquistPointCount = () => inRate() / 2;
-  const sweepPointSeries = () => [nyquistPointCount(), ...SWEEP_POINT_SERIES];
-  const fPts = fr('frPoints', new NumericStepModel({ family: F.NONE, min: 8192, max: 10000000,
-    series: sweepPointSeries(), maxDecimals: 0 }),
-    (v) => prefs.freqRespSweepPoints.set(Math.round(v)));
-  if (fPts) {
-    fPts.model.setNamedValue(nyquistPointCount(), t('freqResp.settings.points.halfScale'));
-    fPts.setValue(prefs.freqRespSweepPoints.get());
-  }
-
-  // Audio-format edits move the ceiling of the sweep band edges (the lower of
-  // the two Nyquist frequencies, so EITHER rate moves it) and the sample-rate/2
-  // entry of the sweep-points series (the input rate alone) - re-pull them on a
-  // rate change (Java FreqRespTabControl AUDIO_FORMAT_CHANGED listener).
-  const repinSweepBand = () => {
-    const ceiling = sweepBandCeilingHz();
-    if (fStart) fStart.setMax(ceiling);
-    if (fStop) fStop.setMax(ceiling);
-  };
-  $('#inRate').on('input-sample-rate-change change', () => {
-    repinSweepBand();
-    if (fPts) {
-      fPts.model.setSeries(sweepPointSeries());
-      fPts.model.setNamedValue(nyquistPointCount(), t('freqResp.settings.points.halfScale'));
-      fPts.refresh();
-    }
-  });
-  $('#outRate').on('change', repinSweepBand);
-
-  // Two-way bind the FreqResp step fields to their prefs (Java Bindings.stepField /
-  // stepFieldInt are two-way): an external write - preset recall, wizard - updates the
-  // field display through the same NumericStepField, like the generator fields above.
-  bidiBind(fStart, prefs.freqRespStartHz);
-  bidiBind(fStop, prefs.freqRespStopHz);
-  // The amplitude is bound as the ENTERED value: an external write (preset recall, wizard)
-  // replays the pair, so the field shows the unit it was saved in - not a voltage.
-  if (fAmpFr) {
-    prefs.freqRespAmplitude.addListener((v) => {
-      // A stored value below the field's lower limit is repaired up to it, in the
-      // unit the operator is working in (Java FreqRespTabControl amplitude-pref
-      // listener): the field refuses such an entry, but a preset recall or an
-      // imported document can still write one. The repaired value is at the
-      // limit, so the re-triggered listener writes nothing further.
-      if (prefs.freqRespAmplitudeVrms.get() < FR_AMP_MIN_VRMS) {
-        prefs.freqRespAmplitude.set(prefs.amplitudeIn(prefs.freqRespAmplitude, FR_AMP_MIN_VRMS));
-        return;
-      }
-      if (!unitValueEquals(fAmpFr.enteredValue(), v)) fAmpFr.seedPair(v);
-    });
-  }
-  bidiBind(fLead, prefs.freqRespLeadInSec);
-  bidiBind(fPts, prefs.freqRespSweepPoints);
-
-  // Scope V/div + t/div (Java ScopeTabControl, LIST policy): a strict 1-2-5 ladder.
-  // V/div 1 µV ... 500 V, t/div 1 µs ... 1 s. onChange writes the osc* pref the scope
-  // view reads next frame. Manual entry between ladder points is still allowed.
-  const vDivSeries = SCOPE_VDIV_SERIES;
-  const tDivSeries = SCOPE_TDIV_SERIES;
-  // Coupled write (Java ScopeTabControl leftScale/rightScale selection listeners):
-  // re-derive the channel's offsetFrac from the OLD V/div via preserveCanvasMiddle so
-  // the voltage at the canvas vertical centre stays fixed ("zoom around the middle"),
-  // then write the new V/div. The offset must be set BEFORE the V/div changes because
-  // preserveCanvasMiddle needs the pre-change value.
-  const fLV = mk('scopeLeftVdiv', new NumericStepModel({ family: F.VOLTS_PER_DIV, min: 1e-9, max: 500, series: vDivSeries, maxDecimals: 3 }),
-    (v) => {
-      const oldV = prefs.oscLeftVoltsPerDiv.get();
-      prefs.oscLeftOffsetFrac.set(preserveCanvasMiddle(prefs.oscLeftOffsetFrac.get(), oldV, v));
-      prefs.oscLeftVoltsPerDiv.set(v); scopePane.syncOffsetScrollbar(); scopePane.refreshScopeTiles(); scopePane.refreshScopeFileMode();
-    });
-  if (fLV) fLV.setValue(prefs.oscLeftVoltsPerDiv.get());
-  const fRV = mk('scopeRightVdiv', new NumericStepModel({ family: F.VOLTS_PER_DIV, min: 1e-9, max: 500, series: vDivSeries, maxDecimals: 3 }),
-    (v) => {
-      const oldV = prefs.oscRightVoltsPerDiv.get();
-      prefs.oscRightOffsetFrac.set(preserveCanvasMiddle(prefs.oscRightOffsetFrac.get(), oldV, v));
-      prefs.oscRightVoltsPerDiv.set(v); scopePane.syncOffsetScrollbar(); scopePane.refreshScopeTiles(); scopePane.refreshScopeFileMode();
-    });
-  if (fRV) fRV.setValue(prefs.oscRightVoltsPerDiv.get());
-  const fTd = mk('scopeTdiv', new NumericStepModel({ family: F.TIME_PER_DIV, min: 1e-6, max: 1, series: tDivSeries, maxDecimals: 3 }),
-    (v) => { prefs.oscTimePerDiv.set(v); scopePane.refreshScopeTiles(); scopePane.refreshScopeFileMode(); });
-  if (fTd) fTd.setValue(prefs.oscTimePerDiv.get());
-
-  // Trigger level (oscTriggerLevelFrac) and position (oscTriggerPositionFrac) have
-  // NO numeric field - matching Java's buildTriggerGroup, which exposes neither.
-  // Both are set by dragging their on-canvas handle (ScopeView) / wheel-pan.
-  // Trigger hysteresis: 0..5 divisions in 0.1-div steps (Java HYST_MAX_DIV / STEP).
-  const fTH = mk('scopeTrigHyst', new NumericStepModel({ family: F.DIVISIONS, min: 0, max: 5, wheelStep: 0.1, arrowStep: 0.1, decimals: 1 }),
-    (v) => { prefs.oscTriggerHysteresisDiv.set(v); scopePane.refreshScopeTiles(); });
-  if (fTH) { fTH.setValue(prefs.oscTriggerHysteresisDiv.get()); fTH.setDisabled(!prefs.oscTriggerHysteresisEnabled.get()); }
-  // Save-to duration (s), Java oscSaveDurationSeconds.
-  const fSD = mk('scopeSaveDur', new NumericStepModel({ family: F.TIME, min: 0.001, max: 1000000, maxDecimals: 3 }),
-    (v) => prefs.oscSaveDurationSeconds.set(v));
-  if (fSD) fSD.setValue(prefs.oscSaveDurationSeconds.get());
-}
-
-// The scope V/div + t/div field re-sync after auto-setup (refreshScopeFields) moved to
-// scope/scope-pane.js (Java ScopePane); app.js drives it through the scopePane instance.
-
-// The dual-tone amplitude-split coupling (applyDualToneAmpSplit) + the duty/dual-tone
-// live-retune (retuneDualAndDuty) moved to generator/generator-pane.js (Java GeneratorPane);
-// the generator step-field onChanges reach them via the genPane instance.
+// Every NumericStepField is built by the pane or settings strip that owns it (Java: each pane
+// constructs its own): the generator pane (frequency / amplitude / dither / duty / dual-tone
+// split / sweep / export duration), the FFT strip (averages, stop-after-N, the THD band and
+// harmonic counts, the manual fundamental), the scope strip (V/div, t/div, hysteresis, save
+// duration - and the 1-2-5 ladders its view's wheel zoom shares), the FreqResp strip (the sweep
+// band, amplitude, lead-in, points) and the calibration dialog (its two channel fields).
 
 // ----- i18n: replace every [data-i18n] element's text with its translation -----
 // SWT mnemonics are stripped (and '&&' unescaped to '&') so the desktop bundle
@@ -722,6 +312,7 @@ function bindPrefs() {
 
 function readConfig() {
   const c = engine.config;
+  const sfVal = (id, dflt) => genPane.fieldValue(id, dflt);
   c.inDeviceId = $('#inSel').val(); c.inRate = parseInt($('#inRate').val(), 10);
   c.outDeviceId = $('#outSel').val(); c.outRate = parseInt($('#outRate').val(), 10);
   c.toneHz = sfVal('toneHz', 1000); c.ampVrms = sfVal('ampDbfs', 0.5);
@@ -748,7 +339,8 @@ function readConfig() {
   // a buffer to the whole depth), so ∞ needs no finite cap; the stop-after-N
   // auto-stop, available only in ∞ mode, lets the user end the run. Read from the
   // averages NumericStepField (Java averagesField - ∞ is the top of AVERAGES_SERIES).
-  c.averages = stepFields.averages ? stepFields.averages.getValue() : (parseInt($('#averages').val(), 10) || 4);
+  const fAverages = fftTabControl ? fftTabControl.field('averages') : null;
+  c.averages = fAverages ? fAverages.getValue() : (parseInt($('#averages').val(), 10) || 4);
   c.coherent = $('#coherent').is(':checked');
   // JIT warm-up has NO UI field (Java hardwires it - no Settings-tab control); c.warmupMs
   // keeps its backend default (backend.js). Only the web-only thread-pool size is read.
@@ -1033,7 +625,11 @@ $('#langMenu').on('click', '[data-lang]', async (ev) => {
   // Re-resolve the dynamically-built signal-form labels (hidden select + combo).
   fill($('#signalForm'), Object.values(GenSignalForm), $('#signalForm').val(), formLabel);
   genPane.buildFormCombo();
-  for (const f of Object.values(stepFields)) f.refresh();   // re-resolve unit suffixes
+  // Re-resolve the unit suffixes of every pane's step fields.
+  genPane.refreshFields(); freqRespPane.refreshFields();
+  if (scopeTabControl) scopeTabControl.refreshFields();
+  if (fftTabControl) fftTabControl.refreshFields();
+  if (calibrationDialog) calibrationDialog.refreshFields();
   genPane.refreshFreqLabel(); if (fftTabControl) fftTabControl.refreshFftTiles(); freqRespPane.refreshFftLabel();
 });
 
@@ -1361,12 +957,11 @@ async function init() {
   // sweep/dither/snap/.dpd controls + Play/ON-AIR + Save-to + file player. Constructed before
   // applyPrefsToUi so its seedGeneratorControls() runs in the init seed; reaches the SHELL
   // state (the busy guard + engine.generator.running) + readConfig + the FFT align combo through the injected
-  // closures, and the generator step fields (built later in initStepFields) via getField.
+  // closures. Its step fields are built in the genStepFields step below, once i18n resolved.
   step('genPane', () => {
     genPane = new GeneratorPane(engine, prefs, {
-      getField: (id) => stepFields[id],
       io: { pickSaveTarget, writeToTarget, saveScopeCapture, readWav, readAiff, decodeFlac },
-      WAV_TYPE, formLabel, formIcon, sfVal, outRate,
+      WAV_TYPE, formLabel, formIcon, outRate,
       isGenRunning: () => engine.generator.running,
       isBusy: () => busy, setBusy: (v) => { busy = v; },
       readConfig, syncFftAlign: () => { if (fftTabControl) fftTabControl.syncAlign(); },
@@ -1382,15 +977,14 @@ async function init() {
   step('applyI18n', applyI18n);
   step('refreshFftLabel', () => freqRespPane.refreshFftLabel());   // localized after the bundle is loaded
   step('freqRespSeed', () => freqRespPane.seedTabs());   // builds the cal rows / preset list / RIAA enable (t() needs the bundle)
-  step('initStepFields', initStepFields);   // after applyI18n so unit suffixes resolve
-  // Unified ADC/DAC calibration dialog (Java CalibrationDialog): built after initStepFields (its
-  // two per-channel fields exist now) so the scope / FFT strips can call openAdc and its bind()
-  // can wire the generator #calibrateDac button. The current-device LABEL comes from the prefs
-  // dialog's device <select> (recognition patterns match the label, not the deviceId value).
+  step('genStepFields', () => genPane.buildStepFields());   // after applyI18n so unit suffixes resolve
+  // Unified ADC/DAC calibration dialog (Java CalibrationDialog): built here, after applyI18n (its
+  // two per-channel fields resolve their unit suffixes), so the scope / FFT strips can call
+  // openAdc and its bind() can wire the generator #calibrateDac button. The current-device LABEL
+  // comes from the prefs dialog's device <select> (recognition patterns match the label, not the
+  // deviceId value).
   step('calibrationDialog', () => {
     calibrationDialog = new CalibrationDialog(engine, prefs, deviceStore, {
-      getLeftField: () => stepFields.calLeftValue,
-      getRightField: () => stepFields.calRightValue,
       inputLabel: inputDeviceLabel,
       outputLabel: () => (prefsDialog ? prefsDialog.outputDeviceLabel() : $('#outSel option:selected').text()),
       // Null for every LOCAL selection, which is what keeps a local calibrate writing where it
@@ -1411,25 +1005,24 @@ async function init() {
   // scope branch of the rAF loop (render()). Built BEFORE the scope settings strip, which
   // holds this pane. Reaches
   // the shell state (the busy guard + engine.scope.recording) + readConfig + the latest scope frame
-  // through the injected closures; the scope V/T/hyst NumericStepFields (from initStepFields)
-  // via getField; the ScopeView + tileChips injected too. bind() wires the Record LED +
-  // measurement buttons + resize observer.
+  // through the injected closures; the scope V/T/hyst NumericStepFields (the settings strip's,
+  // built after this pane) via getField; the ScopeView + tileChips injected too. bind() wires the
+  // Record LED + measurement buttons + resize observer.
   step('scopePane', () => {
     scopePane = new ScopePane(engine, prefs, {
-      view: scopeView, getField: (id) => stepFields[id], tileChips,
+      view: scopeView, getField: (id) => (scopeTabControl ? scopeTabControl.field(id) : undefined), tileChips,
       isScopeRec: () => engine.scope.recording,
       isBusy: () => busy, setBusy: (v) => { busy = v; },
       getLatestScope: () => latestScope, readConfig,
       syncCalibrateGate: () => { if (scopeTabControl) scopeTabControl.syncCalibrateEnabled(); },
     }).bind();
   });
-  // Oscilloscope settings strip (Java ScopeTabControl): its handlers + presets +
-  // save/load + ADC-calibrate. Built after initStepFields (the scope V/T/hyst
-  // NumericStepFields it reaches via getField exist now). Holds the scope PANE
-  // (canvas / scrollbars / record / render loop) built above.
+  // Oscilloscope settings strip (Java ScopeTabControl): its step fields + handlers + presets +
+  // save/load + ADC-calibrate. Holds the scope PANE (canvas / scrollbars / record / render loop)
+  // built above.
   step('scopeTabControl', () => {
     scopeTabControl = new ScopeTabControl(engine, prefs, {
-      pane: scopePane, view: scopeView, getField: (id) => stepFields[id],
+      pane: scopePane, view: scopeView,
       io: { pickSaveTarget, writeToTarget, encodeFlac, saveScopeCapture, saveStreaming,
         findFullPeriodWindow, formatForName, readWav, readAiff, decodeFlac },
       WAV_TYPE, latestScope: () => latestScope, showConfirm,
@@ -1473,15 +1066,13 @@ async function init() {
     mainTab.start();
     mainTab.initLayout();
   });
-  // FFT settings strip (Java FftTabControl): its handlers + presets + save/load +
-  // calibration + screenshot/ADC-calibrate. Built after initStepFields (the FFT
-  // manual-fundamental NumericStepField it reaches via getField exists now). Holds the FFT
-  // PANE built above for its result state; applyPrefsToUi / readConfig are the two shell
-  // helpers it still reaches by name.
+  // FFT settings strip (Java FftTabControl): its step fields + handlers + presets + save/load +
+  // calibration + screenshot/ADC-calibrate. Holds the FFT PANE built above for its result state;
+  // applyPrefsToUi / readConfig are the two shell helpers it still reaches by name.
   step('fftTabControl', () => {
     fftTabControl = new FftTabControl(engine, prefs, {
       pane: fftPane, applyPrefsToUi, readConfig,
-      fftView, fftViewCorrection, store: fftCorrectionStore, getField: (id) => stepFields[id],
+      fftView, fftViewCorrection, store: fftCorrectionStore,
       io: { saveFile, openFile, bytesToText, loadFrc, saveSpectrum, loadSpectrum, FFT_TYPE, FRC_TYPE },
       restartFft, showConfirm, setStatus: (m) => $('#status').text(m), tileChips,
       calibrationDialog: () => calibrationDialog,
@@ -1674,7 +1265,7 @@ async function init() {
     const cardSource = new BenchCardSource(benchCalibration, benchCards, new CalibrationCopyOffers());
     // Preferences dialog (Java PreferencesDialog): staged audio/L&F/Osc/FFT/FR prefs, commit on OK.
     prefsDialog = new PreferencesDialog(engine, prefs, {
-      modal: prefsModal, RATES, stepFields, inRate, outRate,
+      modal: prefsModal, RATES, inRate, outRate,
       isBusy: () => busy, setBusy: (v) => { busy = v; }, fftView, deviceStore,
       cardEditorDialog, showConfirm, showAlert,
       // Java AudioBackend.instance().manager(type): the per-backend manager the dialog asks for the

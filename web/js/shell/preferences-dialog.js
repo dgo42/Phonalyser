@@ -91,10 +91,9 @@ export class PreferencesDialog {
   /**
    * @param engine the AudioEngine (capture reopen + generator restart on a committed device/rate).
    * @param prefs  Preferences.
-   * @param deps   {modal, RATES, stepFields, inRate, outRate, isBusy, setBusy, fftView}
+   * @param deps   {modal, RATES, inRate, outRate, isBusy, setBusy, fftView}
    *               - modal: the bootstrap Modal for #prefsModal
    *               - RATES: the full output sample-rate list (input-rate fallback when native unknown)
-   *               - stepFields: the NumericStepField map (FR/generator Nyquist ceilings re-pin)
    *               - inRate / outRate: () => the live input/output sample rate (Nyquist source)
    *               - isBusy / setBusy: the shared re-entrancy guard accessors (capture-reopen serialize)
    *               - fftView: the FFT view (applyPrefs() on OK so it re-reads its colour/line prefs)
@@ -104,12 +103,11 @@ export class PreferencesDialog {
    *               - backendManager: (backendName) => that backend's AudioDeviceManager, or null
    *                 when it has none (Java AudioBackend.instance().manager(type))
    */
-  constructor(engine, prefs, { modal, RATES, stepFields, inRate, outRate, isBusy, setBusy, fftView, deviceStore, cardEditorDialog, showConfirm, showAlert, backendManager, netBackends, cardSource, resetStatistics, servedByServer }) {
+  constructor(engine, prefs, { modal, RATES, inRate, outRate, isBusy, setBusy, fftView, deviceStore, cardEditorDialog, showConfirm, showAlert, backendManager, netBackends, cardSource, resetStatistics, servedByServer }) {
     this.engine = engine;
     this.prefs = prefs;
     this.modal = modal;
     this.RATES = RATES;
-    this.stepFields = stepFields;
     this.inRate = inRate;
     this.outRate = outRate;
     // The shell's busy guard. Defaulted, so a dialog constructed without a shell (a test, a
@@ -345,14 +343,9 @@ export class PreferencesDialog {
       // restart below, exactly where Java publishes it (PreferencesDialog.java:934-935).
       this.publishActiveRangeChanges();
 
-      // Re-pin the Nyquist-derived field bounds from the committed input/output rates.
-      // The sweep band's ceiling is the LOWER of the two Nyquist frequencies (Java
-      // FreqRespTabControl.sweepBandCeilingHz) - the sweep has to be both
-      // emittable and observable.
-      const sweepNyq = Math.min(this.inRate(), this.outRate()) / 2;
-      for (const id of ['frStart', 'frStop']) if (this.stepFields[id]) this.stepFields[id].setMax(sweepNyq);
-      const outNyq = this.outRate() / 2;
-      for (const id of ['toneHz', 'tone2Hz', 'sweepStart', 'sweepStop']) if (this.stepFields[id]) this.stepFields[id].setMax(outNyq);
+      // (The Nyquist-derived field bounds are the panes' own: the generator re-pins its
+      // frequency fields on AUDIO_FORMAT_CHANGED below, the FreqResp strip its sweep band on
+      // the rate combos.)
 
       // Flow the committed device/rate into the live engine config so each restart re-acquires there.
       if (captureChanged) {

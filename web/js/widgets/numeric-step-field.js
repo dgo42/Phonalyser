@@ -698,3 +698,20 @@ export class NumericStepField {
     if (this.downBtn) this.downBtn.disabled = d;
   }
 }
+
+/** Builds the NumericStepField over the `.numfield` input with DOM id `id`, or null when the
+ *  page has no such input (a pane whose markup is absent). The input's title is the field's
+ *  tooltip base; `onChange` may be null for a field whose handler is wired afterwards. */
+export function stepFieldFor(id, model, onChange) {
+  const input = document.getElementById(id);
+  if (!input) return null;
+  return new NumericStepField(input, model, { onChange, tooltipBase: input.title || '' });
+}
+
+/** Two-way binding (Java Bindings.stepField): a field edit writes the pref (the field's own
+ *  onChange) AND an external pref change (preset load, DAC calibration, another pane) pushes
+ *  back into the field. setValue is silent (no onChange), so the value-guarded listener can
+ *  never feed back into a loop. A null field (absent markup) binds nothing. */
+export function bindStepField(field, pref) {
+  if (field) pref.addListener((v) => { if (field.getValue() !== v) field.setValue(v); });
+}

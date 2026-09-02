@@ -141,6 +141,9 @@ export class FreqRespPane {
   /** "FFT size (D.Ds)" derived-duration label (delegated; app.js's init calls it after i18n). */
   refreshFftLabel() { this.tabControl.refreshFftLabel(); }
 
+  /** Re-renders the settings fields' unit suffixes after a UI-language switch (delegated). */
+  refreshFields() { this.tabControl.refreshFields(); }
+
   /** The set of cal-store hashes referenced by the calibration rows (app.js prune union). */
   getCalHashes() { return this.tabControl.getCalHashes(); }
 

@@ -20,8 +20,14 @@ import { FilterType, hasRipple } from '../dsp/filter-types.js';
 import { t } from '../i18n/i18n.js';
 import { TileTabs } from '../widgets/tile-tabs.js';
 import { PresetBar } from '../widgets/preset-bar.js';
-import { NumericStepField, NumericStepModel, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
-import { unitValue } from '../widgets/unit-conversion.js';
+import { NumericStepField, NumericStepModel, UNIT_FAMILIES, bindStepField, stepFieldFor } from '../widgets/numeric-step-field.js';
+import { unitValue, unitValueEquals } from '../widgets/unit-conversion.js';
+import { GenSignalForm, rawRms } from '../generator/dds-kernel.js';
+// Floors / decimals of the sweep settings fields - shared with the analyzer's validation and the
+// tune-notch wizard's identical fields (Java FreqRespConstants).
+import {
+  LEAD_IN_MIN_SEC, FREQ_MIN_HZ, FREQ_MAX_DECIMALS, AMP_MAX_DECIMALS, AMP_MIN_VRMS,
+} from './freqresp-constants.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 
@@ -57,6 +63,9 @@ export class FreqRespTabControl {
     this.controller = controller;
     this.$ = window.jQuery;
 
+    // Sweep settings step fields (band edges, amplitude, lead-in, points), keyed by dom id
+    // (built in bindSweepFields - Java FreqRespTabControl's own sweep*Field construction).
+    this._sweepFields = {};
     // Filter parameter step fields, keyed by dom id (built in bindFilters).
     this._filterFields = {};
     // Re-entrancy guard: true while loadFilterParams seeds the widgets from the per-type
@@ -79,10 +88,10 @@ export class FreqRespTabControl {
     // FreqResp tile-tabs - Settings / RIAA-IEC / Presets / Utility / Calibration / Save / Load
     // drop-down panels (Java TileTabFolder). Was a raw handler in app.js; owned here now.
     new TileTabs('#frTabs').bind();
-    // frStart/frStop/frAmp/frPoints/frLeadIn are NumericStepFields owned by app.js
-    // (they two-way bind the prefs); here we only own the dropdowns, checkboxes and action wiring.
-    // The stored band comes down to the ceiling HERE, while this pane is built - which is before
-    // app.js's initStepFields runs - so those two-way binds seed an already-legal value.
+    // frStart/frStop/frAmp/frPoints/frLeadIn are this strip's NumericStepFields, built in
+    // bindSweepFields (from seedTabs, once the unit suffixes resolve); here the dropdowns,
+    // checkboxes and action wiring. The stored band comes down to the ceiling HERE, while this
+    // pane is built - before the fields exist - so their two-way binds seed an already-legal value.
     this.clampSweepBandToCeiling();
     // An audio-format commit moves the ceiling under a band that was legal when it was stored
     // (Java FreqRespTabControl's AUDIO_FORMAT_CHANGED listener).
@@ -172,12 +181,123 @@ export class FreqRespTabControl {
    *  list, RIAA enable). Called from app.js's init AFTER the i18n bundle is loaded so t()
    *  resolves real strings. */
   seedTabs() {
+    this.bindSweepFields();
     this.bindFilters();
     this.bindUnevenness();
     this.bindCalibration();
     this.refreshPresetList();
     this.refreshRiaaEnable();
     this.refreshUnevenTile();
+  }
+
+  /** Re-renders every step field's unit suffix after a UI-language switch. */
+  refreshFields() {
+    for (const f of Object.values(this._sweepFields)) f.refresh();
+    for (const f of Object.values(this._filterFields)) f.refresh();
+    for (const f of [this._unevenDbField, this._unevenStartField, this._unevenStopField]) if (f) f.refresh();
+  }
+
+  /** Builds the Settings tab's sweep fields from the `.numfield` DOM (Java FreqRespTabControl
+   *  sweepStart/Stop/Amplitude/LeadIn/Points fields): start / stop FREQUENCY on the sweep-band
+   *  ceiling, the AMPLITUDE with dBFS entry, the lead-in TIME, and the sweep POINTS series. Each
+   *  writes its pref on a committed edit and follows the pref back (two-way, Java
+   *  Bindings.stepField), so a preset recall or the wizard shows in the field. */
+  bindSweepFields() {
+    const $ = this.$, prefs = this.prefs;
+    const F = UNIT_FAMILIES;
+    const mk = (id, model, onChange) => {
+      const f = stepFieldFor(id, model, onChange);
+      if (f) this._sweepFields[id] = f;
+      return f;
+    };
+    // The sweep band's ceiling is the LOWER of the two Nyquist frequencies (the controller's
+    // sweepBandCeilingHz): the sweep has to be both emittable on the output clock and observable
+    // on the input clock, and with Web Audio the two rates can differ.
+    const sweepBandCeilingHz = () => this.controller.sweepBandCeilingHz();
+    const inRate = () => prefs.current().inputSampleRate || 48000;
+    // The sweep always emits a SINE-family signal (Farina sweep), independent of the
+    // generator's selected form, so its no-clip ceiling is the sine's.
+    const sweepAmpMaxVrms = () => prefs.getDacFsVoltageAmpl() * rawRms(GenSignalForm.LOG_SWEEP);
+
+    const fStart = mk('frStart', new NumericStepModel({ family: F.FREQUENCY, min: FREQ_MIN_HZ, max: sweepBandCeilingHz(), maxDecimals: FREQ_MAX_DECIMALS }),
+      (v) => prefs.freqRespStartHz.set(v));
+    if (fStart) fStart.setValue(prefs.freqRespStartHz.get());
+    const fStop = mk('frStop', new NumericStepModel({ family: F.FREQUENCY, min: FREQ_MIN_HZ, max: sweepBandCeilingHz(), maxDecimals: FREQ_MAX_DECIMALS }),
+      (v) => prefs.freqRespStopHz.set(v));
+    if (fStop) fStop.setValue(prefs.freqRespStopHz.get());
+    // fsAmplSupplier enables dBFS entry (as on the generator).
+    const fAmp = mk('frAmp', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: sweepAmpMaxVrms(), maxDecimals: AMP_MAX_DECIMALS,
+      fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
+      () => prefs.freqRespAmplitude.set(fAmp.enteredValue()));
+    // Track the live DAC full-scale calibration, as the generator field does. Replaying the stored
+    // value after the ceiling moves leaves the entered text where it stands and re-solves what a
+    // dBFS entry resolves to.
+    if (fAmp) {
+      prefs.dacFsVoltageAmpl.addListener(() => {
+        fAmp.setMax(sweepAmpMaxVrms());
+        fAmp.seedPair(prefs.freqRespAmplitude.get());
+      });
+      fAmp.seedPair(prefs.freqRespAmplitude.get());
+    }
+    const fLead = mk('frLeadIn', new NumericStepModel({ family: F.TIME, min: LEAD_IN_MIN_SEC, max: 1000000, maxDecimals: 3 }),
+      (v) => prefs.freqRespLeadInSec.set(v));
+    if (fLead) fLead.setValue(prefs.freqRespLeadInSec.get());
+    // Sweep points (Java SWEEP_POINT_SERIES): the wheel jumps along the power-of-2 presets PLUS a
+    // runtime "Nyquist/2" entry (one point per FFT bin to Nyquist = inRate/2), prepended FIRST in
+    // wheel order and rendered as a named text value. Free typing covers everything between;
+    // max 10 000 000.
+    const SWEEP_POINT_SERIES = [8192, 16384, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304];
+    const nyquistPointCount = () => inRate() / 2;
+    const sweepPointSeries = () => [nyquistPointCount(), ...SWEEP_POINT_SERIES];
+    const fPts = mk('frPoints', new NumericStepModel({ family: F.NONE, min: 8192, max: 10000000,
+      series: sweepPointSeries(), maxDecimals: 0 }),
+      (v) => prefs.freqRespSweepPoints.set(Math.round(v)));
+    if (fPts) {
+      fPts.model.setNamedValue(nyquistPointCount(), t('freqResp.settings.points.halfScale'));
+      fPts.setValue(prefs.freqRespSweepPoints.get());
+    }
+
+    // Audio-format edits move the ceiling of the sweep band edges (the lower of the two Nyquist
+    // frequencies, so EITHER rate moves it) and the sample-rate/2 entry of the sweep-points
+    // series (the input rate alone) - re-pull them on a rate change (Java FreqRespTabControl
+    // AUDIO_FORMAT_CHANGED listener).
+    const repinSweepBand = () => {
+      const ceiling = sweepBandCeilingHz();
+      if (fStart) fStart.setMax(ceiling);
+      if (fStop) fStop.setMax(ceiling);
+    };
+    $('#inRate').on('input-sample-rate-change change', () => {
+      repinSweepBand();
+      if (fPts) {
+        fPts.model.setSeries(sweepPointSeries());
+        fPts.model.setNamedValue(nyquistPointCount(), t('freqResp.settings.points.halfScale'));
+        fPts.refresh();
+      }
+    });
+    $('#outRate').on('change', repinSweepBand);
+
+    // Two-way bind to the prefs (Java Bindings.stepField / stepFieldInt are two-way): an external
+    // write - preset recall, wizard - updates the field display through the same field.
+    bindStepField(fStart, prefs.freqRespStartHz);
+    bindStepField(fStop, prefs.freqRespStopHz);
+    // The amplitude is bound as the ENTERED value: an external write (preset recall, wizard)
+    // replays the pair, so the field shows the unit it was saved in - not a voltage.
+    if (fAmp) {
+      prefs.freqRespAmplitude.addListener((v) => {
+        // A stored value below the field's lower limit is repaired up to it, in the unit the
+        // operator is working in (Java FreqRespTabControl amplitude-pref listener): the field
+        // refuses such an entry, but a preset recall or an imported document can still write
+        // one. The repaired value is at the limit, so the re-triggered listener writes nothing
+        // further.
+        if (prefs.freqRespAmplitudeVrms.get() < AMP_MIN_VRMS) {
+          prefs.freqRespAmplitude.set(prefs.amplitudeIn(prefs.freqRespAmplitude, AMP_MIN_VRMS));
+          return;
+        }
+        if (!unitValueEquals(fAmp.enteredValue(), v)) fAmp.seedPair(v);
+      });
+    }
+    bindStepField(fLead, prefs.freqRespLeadInSec);
+    bindStepField(fPts, prefs.freqRespSweepPoints);
   }
 
   /** Brings the two stored swept-band edges down to the sweep-band ceiling - the lower of the two

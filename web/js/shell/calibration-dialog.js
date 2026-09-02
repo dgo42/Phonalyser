@@ -20,15 +20,20 @@
  * so the resolvable human LABEL is threaded in (inputLabel / outputLabel).
  */
 import { t } from '../i18n/i18n.js';
+import { NumericStepModel, UNIT_FAMILIES, stepFieldFor } from '../widgets/numeric-step-field.js';
+
+/** Floor of the two measured/actual-amplitude fields - the generator amplitude's own floor, so
+ *  a calibration entry accepts the same range the tone can be set to. */
+const CAL_MIN_VRMS = 1e-9;
+/** Ceiling of the two fields (V RMS) - an external reference level, well above any DAC. */
+const CAL_MAX_VRMS = 1000;
 
 export class CalibrationDialog {
   /**
    * @param engine the AudioEngine (live generator retune after a DAC calibrate).
    * @param prefs  Preferences (per-channel full-scale getters + save).
    * @param deviceStore the DeviceProfileStore (the calibrate write path).
-   * @param deps  {getLeftField, getRightField, inputLabel, outputLabel, bench, restartGenerator,
-   *               showAlert}
-   *   - getLeftField / getRightField: () => the Left / Right NumericStepField (canonical Vrms).
+   * @param deps  {inputLabel, outputLabel, bench, restartGenerator, showAlert}
    *   - inputLabel / outputLabel: () => the current in/out device LABEL (recognition patterns
    *     match the human label, not the deviceId the <select> value carries).
    *   - bench: () => the bench write seam while a SERVER's backend is selected, else null - see
@@ -40,12 +45,16 @@ export class CalibrationDialog {
    *     raises is a bench that refused the calibration write. Absent -> console.
    */
   constructor(engine, prefs, deviceStore,
-      { getLeftField, getRightField, inputLabel, outputLabel, bench, restartGenerator, showAlert }) {
+      { inputLabel, outputLabel, bench, restartGenerator, showAlert }) {
     this.engine = engine;
     this.prefs = prefs;
     this.deviceStore = deviceStore;
-    this._getLeftField = getLeftField;
-    this._getRightField = getRightField;
+    // The two per-channel measured/actual-amplitude fields (Left / Right) - unit-aware AMPLITUDE
+    // step fields (V / mV / µV / dBV + short forms), like the generator amplitude; built in
+    // bind(), once the page's unit suffixes resolve. Each row is seeded on open and read
+    // (canonical Vrms) on Calibrate.
+    this._leftField = null;
+    this._rightField = null;
     this._inputLabel = inputLabel;
     this._outputLabel = outputLabel;
     this._bench = bench;
@@ -63,14 +72,23 @@ export class CalibrationDialog {
     this._okBound = false;
   }
 
-  /** Wires the OK button once and the generator's DAC-calibrate button. */
+  /** Builds the two fields, wires the OK button once and the generator's DAC-calibrate button. */
   bind() {
+    const amplitude = () => new NumericStepModel({ family: UNIT_FAMILIES.AMPLITUDE,
+      min: CAL_MIN_VRMS, max: CAL_MAX_VRMS, maxDecimals: 5 });
+    this._leftField = stepFieldFor('calLeftValue', amplitude(), null);
+    this._rightField = stepFieldFor('calRightValue', amplitude(), null);
     if (!this._okBound) {
       $('#calOk').on('click', () => this._onOk());
       this._okBound = true;
     }
     $('#calibrateDac').on('click', () => this.openDac());
     return this;
+  }
+
+  /** Re-renders both fields' unit suffixes after a UI-language switch. */
+  refreshFields() {
+    for (const f of [this._leftField, this._rightField]) if (f) f.refresh();
   }
 
   _modal() {
@@ -102,8 +120,8 @@ export class CalibrationDialog {
     $('#calTitle').text(t(cfg.titleKey));
     $('#calPrompt').text(t(cfg.promptKey));
     $('#calError').addClass('d-none');
-    this._leftEnabled = this._seedRow(this._getLeftField(), cfg.seedLeft, cfg.tooltipKey);
-    this._rightEnabled = this._seedRow(this._getRightField(), cfg.seedRight, cfg.tooltipKey);
+    this._leftEnabled = this._seedRow(this._leftField, cfg.seedLeft, cfg.tooltipKey);
+    this._rightEnabled = this._seedRow(this._rightField, cfg.seedRight, cfg.tooltipKey);
     this._onCalibrate = cfg.onCalibrate;
     this._onCommitted = cfg.onCommitted || null;
     this._refused = null;   // a submit abandoned by Cancel must not report itself at the next OK
@@ -123,8 +141,8 @@ export class CalibrationDialog {
   async _onOk() {
     const committed = [];
     const rows = [
-      { ch: 'L', field: this._getLeftField(), enabled: this._leftEnabled },
-      { ch: 'R', field: this._getRightField(), enabled: this._rightEnabled },
+      { ch: 'L', field: this._leftField, enabled: this._leftEnabled },
+      { ch: 'R', field: this._rightField, enabled: this._rightEnabled },
     ];
     for (const r of rows) {
       if (!r.enabled || !r.field) continue;

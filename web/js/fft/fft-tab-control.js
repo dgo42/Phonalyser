@@ -27,7 +27,7 @@ import { CalibrationEntry } from '../store/preferences.js';
 import { registerShotCanvasRenderer, ensureShotRenderCanvas } from '../shell/screenshot.js';
 import { TileTabs } from '../widgets/tile-tabs.js';
 import { PresetBar } from '../widgets/preset-bar.js';
-import { OFF_LABEL } from '../widgets/numeric-step-field.js';
+import { NumericStepModel, OFF_LABEL, UNIT_FAMILIES, bindStepField, stepFieldFor } from '../widgets/numeric-step-field.js';
 import { OVERLAP_LABEL } from './fft-overlap.js';
 
 // Off is a distinct sentinel BELOW 1 so the averages dial reads Off ↔ 1 ↔ 2 ↔ 4 ... 128 ↔ ∞ -
@@ -41,7 +41,7 @@ export class FftTabControl {
   /**
    * @param engine the AudioEngine (FFT structural changes restart the FFT consumer via restartFft).
    * @param prefs  Preferences.
-   * @param deps   {pane, applyPrefsToUi, readConfig, fftView, fftViewCorrection, store, getField,
+   * @param deps   {pane, applyPrefsToUi, readConfig, fftView, fftViewCorrection, store,
    *                io, restartFft, showConfirm, setStatus, tileChips}
    *   - pane: the FftPane - its result state, as Java's strip reads the FftView's last result:
    *       getResult() (=> latestResult, the live analyzed spectrum: Save / ADC-calibrate read it),
@@ -54,7 +54,6 @@ export class FftTabControl {
    *   - fftViewCorrection: the render-time FFT spectral corrections (reads the shared store).
    *   - store: the shared FFT CorrectionStore (Java FftController's) - rebuildCalEntries mutates it;
    *       both the render-time de-embed (fftViewCorrection) and the predistortion calResponseAt read it.
-   *   - getField: (id) => the FFT NumericStepField (built in app.js initStepFields).
    *   - io: {saveFile, openFile, bytesToText, loadFrc, saveSpectrum, loadSpectrum, FFT_TYPE, FRC_TYPE} -
    *       the file save / load collaborators.
    *   - restartFft: () => Promise - re-read config + re-acquire the FFT consumer (app.js lifecycle).
@@ -63,7 +62,7 @@ export class FftTabControl {
    *   - tileChips: (...vals) => the `.tile` chip-span renderer (shared with the scope tiles, app.js).
    */
   constructor(engine, prefs, { pane, applyPrefsToUi, readConfig, fftView, fftViewCorrection, store,
-    getField, io, restartFft, showConfirm, setStatus, tileChips, calibrationDialog }) {
+    io, restartFft, showConfirm, setStatus, tileChips, calibrationDialog }) {
     this.engine = engine;
     this.prefs = prefs;
     this.pane = pane;
@@ -72,7 +71,9 @@ export class FftTabControl {
     this.fftView = fftView;
     this.fftViewCorrection = fftViewCorrection;
     this.store = store;
-    this._getField = getField;
+    // The strip's NumericStepFields by input id (Java FftTabControl builds its own: averages,
+    // stop-after-N, the THD band + harmonic counts, the manual fundamental), built in bind().
+    this._fields = {};
     this.io = io;
     this._restartFft = restartFft;
     this._showConfirm = showConfirm;
@@ -376,10 +377,75 @@ export class FftTabControl {
     return hashes;
   }
 
+  /** The strip's NumericStepField with input id `id`, or undefined before bind() / without the
+   *  markup. */
+  field(id) { return this._fields[id]; }
+
+  _getField(id) { return this._fields[id]; }
+
+  /** Re-renders every field's unit suffix after a UI-language switch. */
+  refreshFields() { for (const f of Object.values(this._fields)) f.refresh(); }
+
+  /** Builds the strip's NumericStepFields from the `.numfield` DOM (Java FftTabControl
+   *  buildThdTab / averagesField / stopAfterNField / the manual-fundamental field). Their
+   *  onChange handlers are wired in bind(), right after this. */
+  buildStepFields() {
+    const prefs = this.prefs;
+    const F = UNIT_FAMILIES;
+    const mk = (id, model) => {
+      const f = stepFieldFor(id, model, null);
+      if (f) this._fields[id] = f;
+      return f;
+    };
+    const inRate = () => prefs.current().inputSampleRate || 48000;
+
+    // FFT THD "Manual fundamental" reference level - unit-aware AMPLITUDE field (accepts dBV).
+    // NO fsAmplSupplier on purpose: this is an ADC-side reference level (external levels routinely
+    // far above DAC full scale), so a dBFS figure would be meaningless - the model refuses dBFS here.
+    const fManFund = mk('fftManualFund', new NumericStepModel({ family: F.AMPLITUDE, min: 1e-9, max: 200, maxDecimals: 5 }));
+    if (fManFund) { fManFund.model.setLogDisplay(prefs.fftManualFundDbvDisplay.get()); fManFund.setValue(prefs.fftManualFundVrms.get()); }
+
+    // FFT THD distortion band + harmonic counts - the Java THD tab's four NumericStepFields
+    // (FftTabControl.buildThdTab): distMin/distMax FREQUENCY [0 .. inRate/2] 9 dec (:570/:594),
+    // maxThd 2..9 / maxCalc 9..50, step 1, 0 dec (:640/:654).
+    const fDistMin = mk('thdDistMin', new NumericStepModel({ family: F.FREQUENCY, min: 0, max: inRate() / 2, maxDecimals: 9 }));
+    if (fDistMin) fDistMin.setValue(prefs.fftDistMinHz.get());
+    const fDistMax = mk('thdDistMax', new NumericStepModel({ family: F.FREQUENCY, min: 0, max: inRate() / 2, maxDecimals: 9 }));
+    if (fDistMax) fDistMax.setValue(prefs.fftDistMaxHz.get());
+    const fThdMaxH = mk('thdMaxH', new NumericStepModel({ family: F.NONE, min: 2, max: 9, wheelStep: 1, arrowStep: 1, decimals: 0 }));
+    if (fThdMaxH) fThdMaxH.setValue(prefs.fftThdMaxHarmonic.get());
+    const fCalcMaxH = mk('thdCalcMaxH', new NumericStepModel({ family: F.NONE, min: 9, max: 50, wheelStep: 1, arrowStep: 1, decimals: 0 }));
+    if (fCalcMaxH) fCalcMaxH.setValue(prefs.fftCalcMaxHarmonic.get());
+
+    // FFT "Averages" - Java averagesField: NumericStepField(UnitFamily.NONE, AVERAGES_OFF=1,
+    // POSITIVE_INFINITY, AVERAGES_SERIES {2,4,8,16,32,64,128,∞}, 0 decimals, width 70). LIST policy:
+    // the wheel/arrows snap along the series; ∞ is the top entry, NOT a separate checkbox. Typing
+    // accepts any count ≥ 1 plus two named tokens: "∞" or any prefix of "Infinity" (i / in / inf ...),
+    // which max=Infinity enables, and any prefix of "Off" (o / of / off) -> 1 (numeric-step-field.js
+    // commit()).
+    const fAverages = mk('averages', new NumericStepModel({ family: F.NONE, min: FFT_AVERAGES_OFF,
+      max: Infinity, series: FFT_AVERAGES_SERIES, maxDecimals: 0 }));
+    // 1 renders and parses as "Off" - typed in full or as any prefix (o / of / off),
+    // the same shortcut the generator's dither field takes.
+    if (fAverages) fAverages.model.setNamedValue(FFT_AVERAGES_OFF, OFF_LABEL);
+    if (fAverages) fAverages.setValue(prefs.fftAverages.get());
+    // Two-way (Java Bindings.stepField): a preset recall pushes the new count (or ∞) back into
+    // the field display.
+    bindStepField(fAverages, prefs.fftAverages);
+
+    // FFT "Stop after N averages" count - Java stopAfterNField: NumericStepField(UnitFamily.NONE,
+    // STOP_AFTER_MIN=2, STOP_AFTER_MAX=1_000_000, STOP_AFTER_WHEEL_STEP=100, arrowStep 1, 0 dec).
+    // FIXED policy: the wheel jumps in hundreds (the count ranges to a million), arrows step by 1.
+    const fStopAfterN = mk('fftStopAfterN', new NumericStepModel({ family: F.NONE, min: 2, max: 1000000,
+      wheelStep: 100, arrowStep: 1, decimals: 0 }));
+    if (fStopAfterN) fStopAfterN.setValue(prefs.fftStopAfterN.get());
+  }
+
   bind() {
     const prefs = this.prefs;
     const engine = this.engine;
     const io = this.io;
+    this.buildStepFields();
     const getField = (id) => this._getField(id);
     const restartFft = () => this._restartFft();
     const showConfirm = (title, message) => this._showConfirm(title, message);
@@ -388,8 +454,8 @@ export class FftTabControl {
     $('#fftSize').on('change', () => prefs.fftLength.set(parseInt($('#fftSize').val(), 10)));
     $('#window').on('change', () => prefs.fftWindow.set($('#window').val()));
     $('#overlap').on('change', () => prefs.fftOverlap.set($('#overlap').val()));
-    // #averages is a NumericStepField (Java averagesField): its own onChange (app.js initStepFields)
-    // writes prefs.fftAverages, refreshes the stop-after gate + tab tile, and restarts the FFT - so
+    // #averages is a NumericStepField (Java averagesField): its onChange below writes
+    // prefs.fftAverages, refreshes the stop-after gate + tab tile and pushes the live config - so
     // there is no plain jQuery change handler here, and no ∞ checkbox (∞ is the top of the series).
     $('#coherent').on('change', () => prefs.fftCoherentAveraging.set($('#coherent').is(':checked')));
     // Stop-after-N enable (gates the count field) and mains-suppression combo -
@@ -519,12 +585,10 @@ export class FftTabControl {
 
     // FFT "Averages": NO reset - Java FftTabControl.java:391-397: "No reset here: the worker
     // resets the average only on a ring↔∞ switch or a smaller ring (a larger ring keeps the
-    // depth)." The NumericStepField is built in app.js (initStepFields) with an onChange that
-    // restartFft()'d - a full consumer teardown that reset the accumulator on EVERY averages
-    // change. Rebind its onChange here (bind() runs after initStepFields):
-    // write the pref, refresh the stop-after gate + tab tile, push the live config - the
-    // running consumer re-derives its targets next batch (_syncLiveConfig) and _onWorkerResult
-    // applies the exact Java discard rules.
+    // depth)." A full consumer teardown here would reset the accumulator on EVERY averages
+    // change. So: write the pref, refresh the stop-after gate + tab tile, push the live config -
+    // the running consumer re-derives its targets next batch (_syncLiveConfig) and
+    // _onWorkerResult applies the exact Java discard rules.
     const fAvg = this._getField('averages');
     if (fAvg) {
       fAvg.onChange = (v) => {
@@ -536,8 +600,7 @@ export class FftTabControl {
     }
     // Stop-after-N COUNT (Java stopAfterNField): NO reset - write the pref and push the live
     // config so the running consumer sees the new N next tick (like the enable toggle above).
-    // The field model clamps to 2..1e6 (Java STOP_AFTER_MIN/MAX), so no re-clamp here. Rebind
-    // its onChange here (bind() runs after initStepFields, where it was a placeholder).
+    // The field model clamps to 2..1e6 (Java STOP_AFTER_MIN/MAX), so no re-clamp here.
     const fStopN = this._getField('fftStopAfterN');
     if (fStopN) {
       fStopN.onChange = (v) => {
@@ -546,10 +609,10 @@ export class FftTabControl {
       };
     }
     // THD "Manual fundamental" VALUE (Java fftManualFundVrmsProperty -> onThdSettingChanged,
-    // FftView.java:478): a THD setting - never a restart/reset. The app.js-built field's
-    // onChange restartFft()'d when enabled (an over-reset mid-run, and a no-op while stopped
-    // so the change never applied). Rebind to the THD-settings path: write the prefs,
-    // then onThdSettingChanged (live readConfig / stopped static recompute + repaint).
+    // FftView.java:478): a THD setting - never a restart/reset (a restart would over-reset
+    // mid-run and be a no-op while stopped, so the change never applied). The THD-settings
+    // path: write the prefs, then onThdSettingChanged (live readConfig / stopped static
+    // recompute + repaint).
     const fManFund = this._getField('fftManualFund');
     if (fManFund) {
       fManFund.onChange = (v) => {

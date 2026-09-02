@@ -23,8 +23,34 @@ import { OscPreset } from '../store/preferences.js';
 import { saveStreamingFlac } from '../io/flac.js';
 import { TileTabs } from '../widgets/tile-tabs.js';
 import { PresetBar } from '../widgets/preset-bar.js';
+import { NumericStepModel, UNIT_FAMILIES, stepFieldFor } from '../widgets/numeric-step-field.js';
+import { preserveCanvasMiddle } from './scope-format.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
+
+/** 1-2-5 decade ladder over [min .. max] inclusive (the scope V/div and t/div step series),
+ *  e.g. 1µ, 2µ, 5µ, 10µ, ... 200, 500. */
+function ladder125(min, max) {
+  const out = [];
+  const REL = 1 + 1e-9;
+  let decade = Math.pow(10, Math.floor(Math.log10(min) + 1e-9));
+  while (decade <= max * REL) {
+    for (const m of [1, 2, 5]) {
+      const v = m * decade;
+      if (v >= min / REL && v <= max * REL) out.push(v);
+    }
+    decade *= 10;
+  }
+  return out;
+}
+
+// Scope V/div + t/div 1-2-5 ladders (Java ScopeTabControl LIST policy): V/div 1 nV ... 500 V,
+// t/div 1 µs ... 1 s - the exact OscParse.VOLT_PER_DIV / TIME_PER_DIV step lists
+// (voltsPerDivTargets / timePerDivTargets). Shared by the step fields AND the scope view's
+// Ctrl-wheel zoom, so the wheel snaps to the SAME series the field arrows walk. (V/div starts
+// at 1 nV to match Java, which the model min already permits - V_PER_DIV_MIN = 1e-9.)
+const SCOPE_VDIV_SERIES = ladder125(1e-9, 500);
+const SCOPE_TDIV_SERIES = ladder125(1e-6, 1);
 
 /** FLAC exports are capped at 24 bits/sample EVERYWHERE in the web port - the
  *  WASM libFLAC reference encoder rejects 32-bit (encodeFlac's guard; Java's
@@ -49,7 +75,7 @@ export class ScopeTabControl {
   /**
    * @param engine the AudioEngine (record state via the pane; ADC-cal reads the live scope view).
    * @param prefs  Preferences.
-   * @param deps   {pane, view, getField, io, WAV_TYPE, latestScope, showConfirm, setStatus}
+   * @param deps   {pane, view, io, WAV_TYPE, latestScope, showConfirm, setStatus}
    *   - pane: the ScopePane - what Java's strip reaches through its ScopeView + ScopeController:
    *       requestRedraw() (repaint a frozen / file-mode view: refreshScopeFileMode),
    *       refreshTiles() (toolbarTabs.refreshTab: refreshScopeTiles),
@@ -61,8 +87,8 @@ export class ScopeTabControl {
    *       recState() (=> scopeRec), stopCaptureForFileLoad() (stop live capture before a load),
    *       onSignalFileLoaded(decoded) (centre the view on the loaded signal + show the nav slider).
    *   - view: the ScopeView (Java holds `view` as a field) - single-armed state, auto-setup,
-   *       latest measurement, the single-disarmed / settings-changed / file-back callbacks.
-   *   - getField: (id) => the scope NumericStepField (built in app.js initStepFields).
+   *       latest measurement, the settings-changed / file-back callbacks; its Ctrl-wheel zoom
+   *       walks the same V/div + t/div ladders this strip's fields step along.
    *   - io: {pickSaveTarget, writeToTarget, encodeFlac, saveScopeCapture, findFullPeriodWindow,
    *          formatForName, readWav, readAiff, decodeFlac} - the file save / load collaborators.
    *   - WAV_TYPE: the save-picker accept descriptor (shared with the generator save).
@@ -70,13 +96,17 @@ export class ScopeTabControl {
    *   - showConfirm: (title, message) => Promise<boolean> - the shared Bootstrap confirm modal.
    *   - setStatus: (msg) => set the status line.
    */
-  constructor(engine, prefs, { pane, view, getField, io, WAV_TYPE, latestScope,
+  constructor(engine, prefs, { pane, view, io, WAV_TYPE, latestScope,
     showConfirm, setStatus, calibrationDialog, inputUncalibrated }) {
     this.engine = engine;
     this.prefs = prefs;
     this.pane = pane;
     this.view = view;
-    this._getField = getField;
+    // The strip's NumericStepFields by input id (Java ScopeTabControl builds its own:
+    // leftScale / rightScale / timeScale / hysteresis / save duration), built in bind().
+    this._fields = {};
+    // The Ctrl-wheel V/div + Ctrl+Shift-wheel t/div zoom step along the fields' ladders.
+    if (view) { view.vDivSeries = SCOPE_VDIV_SERIES; view.tDivSeries = SCOPE_TDIV_SERIES; }
     this.io = io;
     this.WAV_TYPE = WAV_TYPE;
     this._latestScope = latestScope;
@@ -117,10 +147,69 @@ export class ScopeTabControl {
     });
   }
 
+  /** The strip's NumericStepField with input id `id`, or undefined before bind() / without the
+   *  markup - the pane re-syncs the V/div, t/div and hysteresis fields through this. */
+  field(id) { return this._fields[id]; }
+
+  _getField(id) { return this._fields[id]; }
+
+  /** Re-renders every field's unit suffix after a UI-language switch. */
+  refreshFields() { for (const f of Object.values(this._fields)) f.refresh(); }
+
+  /** Builds the strip's NumericStepFields from the `.numfield` DOM (Java ScopeTabControl's
+   *  leftScale / rightScale / timeScale / hysteresis / save-duration fields). Each field owns
+   *  parsing / formatting / clamping / stepping; its onChange writes the osc* pref the scope
+   *  view reads next frame. */
+  buildStepFields() {
+    const prefs = this.prefs;
+    const F = UNIT_FAMILIES;
+    const mk = (id, model, onChange) => {
+      const f = stepFieldFor(id, model, onChange);
+      if (f) this._fields[id] = f;
+      return f;
+    };
+    // Scope V/div + t/div (Java ScopeTabControl, LIST policy): a strict 1-2-5 ladder.
+    // V/div 1 µV ... 500 V, t/div 1 µs ... 1 s. Manual entry between ladder points is allowed.
+    // Coupled write (Java ScopeTabControl leftScale/rightScale selection listeners):
+    // re-derive the channel's offsetFrac from the OLD V/div via preserveCanvasMiddle so
+    // the voltage at the canvas vertical centre stays fixed ("zoom around the middle"),
+    // then write the new V/div. The offset must be set BEFORE the V/div changes because
+    // preserveCanvasMiddle needs the pre-change value.
+    const fLV = mk('scopeLeftVdiv', new NumericStepModel({ family: F.VOLTS_PER_DIV, min: 1e-9, max: 500, series: SCOPE_VDIV_SERIES, maxDecimals: 3 }),
+      (v) => {
+        const oldV = prefs.oscLeftVoltsPerDiv.get();
+        prefs.oscLeftOffsetFrac.set(preserveCanvasMiddle(prefs.oscLeftOffsetFrac.get(), oldV, v));
+        prefs.oscLeftVoltsPerDiv.set(v); this.pane.syncOffsetScrollbar(); this.pane.refreshScopeTiles(); this.pane.refreshScopeFileMode();
+      });
+    if (fLV) fLV.setValue(prefs.oscLeftVoltsPerDiv.get());
+    const fRV = mk('scopeRightVdiv', new NumericStepModel({ family: F.VOLTS_PER_DIV, min: 1e-9, max: 500, series: SCOPE_VDIV_SERIES, maxDecimals: 3 }),
+      (v) => {
+        const oldV = prefs.oscRightVoltsPerDiv.get();
+        prefs.oscRightOffsetFrac.set(preserveCanvasMiddle(prefs.oscRightOffsetFrac.get(), oldV, v));
+        prefs.oscRightVoltsPerDiv.set(v); this.pane.syncOffsetScrollbar(); this.pane.refreshScopeTiles(); this.pane.refreshScopeFileMode();
+      });
+    if (fRV) fRV.setValue(prefs.oscRightVoltsPerDiv.get());
+    const fTd = mk('scopeTdiv', new NumericStepModel({ family: F.TIME_PER_DIV, min: 1e-6, max: 1, series: SCOPE_TDIV_SERIES, maxDecimals: 3 }),
+      (v) => { prefs.oscTimePerDiv.set(v); this.pane.refreshScopeTiles(); this.pane.refreshScopeFileMode(); });
+    if (fTd) fTd.setValue(prefs.oscTimePerDiv.get());
+
+    // Trigger level (oscTriggerLevelFrac) and position (oscTriggerPositionFrac) have
+    // NO numeric field - matching Java's buildTriggerGroup, which exposes neither.
+    // Both are set by dragging their on-canvas handle (ScopeView) / wheel-pan.
+    // Trigger hysteresis: 0..5 divisions in 0.1-div steps (Java HYST_MAX_DIV / STEP).
+    const fTH = mk('scopeTrigHyst', new NumericStepModel({ family: F.DIVISIONS, min: 0, max: 5, wheelStep: 0.1, arrowStep: 0.1, decimals: 1 }),
+      (v) => { prefs.oscTriggerHysteresisDiv.set(v); this.pane.refreshScopeTiles(); });
+    if (fTH) { fTH.setValue(prefs.oscTriggerHysteresisDiv.get()); fTH.setDisabled(!prefs.oscTriggerHysteresisEnabled.get()); }
+    // Save-to duration (s), Java oscSaveDurationSeconds.
+    const fSD = mk('scopeSaveDur', new NumericStepModel({ family: F.TIME, min: 0.001, max: 1000000, maxDecimals: 3 }),
+      (v) => prefs.oscSaveDurationSeconds.set(v));
+    if (fSD) fSD.setValue(prefs.oscSaveDurationSeconds.get());
+  }
+
   /** Pushes every scope pref into its control widget - the init seed and the
    *  preset-load mirror-back (Java applyOscPreset re-syncs the widgets via the
-   *  two-way bindings). Step-field setValue() is guarded since the fields are
-   *  built in initStepFields. */
+   *  two-way bindings). Step-field setValue() is guarded for a page without the
+   *  markup. */
   seedScopeControls() {
     const prefs = this.prefs;
     const getField = (id) => this._getField(id);
@@ -400,6 +489,7 @@ export class ScopeTabControl {
     const pane = this.pane;
     const view = this.view;
     const io = this.io;
+    this.buildStepFields();
     const getField = (id) => this._getField(id);
     const setStatus = (m) => this._setStatus(m);
 
