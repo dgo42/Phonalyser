@@ -94,6 +94,16 @@ import { ieeeRemainder } from '../dsp/mathutil.js';
 /** Frames of de-rotated-fundamental phase observed before the one-shot κ refine -
  *  ~24 give κ to ~1e-4 bin at high SNR, before the drift becomes visible. */
 const KAPPA_MEAS_FRAMES = 24;
+/** Largest correction the one-shot κ refine may apply, in bins. The refine corrects the
+ *  single-frame peak's residual (~0.01-0.03 bin); a phase slope that asks for more than half
+ *  a bin is not a refinement of a tone but the random-walk phase of a noise peak pinned as
+ *  the fundamental (no generator, a muted DUT), and folding it moved κ toward zero - where
+ *  the harmonic ladder h·κ < halfSize runs to millions of lines per tick and the analyser
+ *  crawled at the 24th frame. Such a measurement is discarded and re-anchored instead. */
+const KAPPA_REFINE_MAX_BIN = 0.5;
+/** Below this pinned fundamental bin there is no harmonic family to pool or to rotate by:
+ *  the fork and the region family both stand down and the accumulator adds plain. */
+const KAPPA_FAMILY_MIN_BIN = 1.0;
 /** Phase-tracking-loop gain: fraction of the running fundamental mis-alignment
  *  folded into the de-rotation each tick. Low enough to average out per-tick phase
  *  noise, high enough to track the κ-residual ramp (Java PHASE_TRACK_GAIN). */
@@ -408,9 +418,15 @@ export class FftAccumulator {
             this._kappaLastDelta = delta;
             if (++this._kappaMeasFrames >= KAPPA_MEAS_FRAMES && this._kappaCleanSpan > 0.0) {
               const dKappa = this._kappaCumPhase * fftSize / (2.0 * Math.PI * this._kappaCleanSpan);
-              this._accumKFractional += dKappa;
-              this._kappaRefined = true;
-              this._gapRecoverPending = false;
+              if (Math.abs(dKappa) <= KAPPA_REFINE_MAX_BIN) {
+                this._accumKFractional += dKappa;
+                this._kappaRefined = true;
+                this._gapRecoverPending = false;
+              } else {
+                // Not a tone's residual - discard the measurement and start over; a later
+                // clean stretch (the generator coming on) can still refine.
+                this._kappaMeasFrames = 0;
+              }
             }
           }
         } else if (this._accumKFractional !== 0.0) {
@@ -583,6 +599,9 @@ export class FftAccumulator {
    */
   _forkPooledOffset(r, halfSize, delta, k0, fundOffset) {
     const kappa = this._accumKFractional;
+    // The ladder below runs h while h·κ < halfSize: bounded by the family, not by the
+    // spectrum, so a sub-bin κ has no ladder to pool - the fundamental's own estimate stands.
+    if (!(kappa >= KAPPA_FAMILY_MIN_BIN)) return fundOffset;
     const fundPow = r.re[k0] * r.re[k0] + r.im[k0] * r.im[k0];
     const minPow = fundPow * Math.pow(10.0, -this._strongToneRelDb / 10.0);   // a POWER ratio
     let sumW = kappa * kappa * fundPow;                     // the fundamental seeds the pool
@@ -659,7 +678,8 @@ export class FftAccumulator {
    */
   _buildFamily(r, halfSize, phi1, phi2) {
     const kappa = this._accumKFractional;
-    if (!(kappa > 0.0)) return 0;
+    // No family below one bin: the ladder would be the whole half spectrum, member for bin.
+    if (!(kappa >= KAPPA_FAMILY_MIN_BIN)) return 0;
     // The divisor is FRACTIONAL: the ladder must stop at the last harmonic that
     // still lands inside the half spectrum, not at a rounded multiple of it.
     const hMax = Math.trunc(Math.min(halfSize, halfSize / kappa));
