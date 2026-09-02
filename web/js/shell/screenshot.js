@@ -85,6 +85,14 @@ export function clonePaneForShot(paneEl, w, h, prep) {
   host.style.width = w + 'px';
   host.style.height = h + 'px';
   const clone = paneEl.cloneNode(true);
+  // cloneNode copies ATTRIBUTES, not live form state - a combo changed since page load
+  // would fall back to its markup-default option in the clone. Sync every clone
+  // <select>'s selection from its live twin while the two trees are still identical
+  // (before prep prunes subtrees), matching by document order.
+  const liveSels = paneEl.querySelectorAll('select');
+  clone.querySelectorAll('select').forEach((s, i) => {
+    if (liveSels[i]) s.selectedIndex = liveSels[i].selectedIndex;
+  });
   // Pane-specific edits (collapse tabs, strip chrome, swap scrollbars, ...) live in the
   // caller's prep callback - this function makes NO assumptions about the pane.
   if (prep) prep(clone);
@@ -144,6 +152,35 @@ export function shotDirectText(el) {
   return t.replace(/\s+/g, ' ').trim();
 }
 
+// Loads one URL into a decoded Image; null when it won't load.
+function shotLoadImage(url) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+// Loads one icon for the compositor. A viewBox-only SVG (no width/height attributes)
+// decodes with naturalWidth/Height 0, and canvas drawImage of an image WITHOUT an
+// intrinsic size paints nothing - such an icon is refetched and re-decoded as a data
+// URL with explicit width/height lifted from its viewBox.
+async function shotLoadIcon(src) {
+  const img = await shotLoadImage(src);
+  if (!img || img.naturalWidth > 0) return img;
+  try {
+    const txt = await (await fetch(src)).text();
+    const m = /viewBox\s*=\s*"[\d.eE+-]+[\s,]+[\d.eE+-]+[\s,]+([\d.eE+-]+)[\s,]+([\d.eE+-]+)"/.exec(txt);
+    if (!m) return img;
+    const sized = txt.replace(/<svg/i, `<svg width="${m[1]}" height="${m[2]}"`);
+    const fixed = await shotLoadImage('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(sized));
+    return fixed || img;
+  } catch (e) {
+    return img;   // unreadable source - keep the sizeless original (draws nothing)
+  }
+}
+
 /** Preloads every unique external <img> src in the clone (the .lr-tools SVG icons) into
  *  a decoded Image so paintCloneToCanvas can drawImage them synchronously. Returns a
  *  Map<src, Image> of the ones that loaded (failed loads are simply omitted). */
@@ -151,11 +188,8 @@ export async function preloadCloneIcons(clone) {
   const srcs = new Set();
   clone.querySelectorAll('img').forEach((im) => { const s = im.getAttribute('src') || ''; if (s) srcs.add(s); });
   const map = new Map();
-  await Promise.all(Array.from(srcs).map((src) => new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => { map.set(src, img); resolve(); };
-    img.onerror = () => resolve();   // skip an icon that won't load
-    img.src = src;
+  await Promise.all(Array.from(srcs).map((src) => shotLoadIcon(src).then((img) => {
+    if (img) map.set(src, img);
   })));
   return map;
 }
@@ -299,7 +333,16 @@ export function paintCloneToCanvas(clone, outW, outH, liveCanvasFor, icons) {
     if (tag === 'IMG') {
       const ico = icons.get(el.getAttribute('src') || '');
       if (ico) {
-        try { ctx.drawImage(ico, r.left, r.top, r.width, r.height); } catch (e) { /* undrawable */ }
+        // The icon glyphs are recolored purely in CSS (.lr-svg invert(1) for white-on-dark
+        // on the scope overlay, the red reset chain) - a plain drawImage would paint the
+        // raw dark glyph invisibly on the dark trace, so the img's computed filter is
+        // applied to the draw. Where ctx.filter is unsupported the glyph stays unfiltered.
+        const filt = cs.filter && cs.filter !== 'none' && 'filter' in ctx;
+        try {
+          if (filt) ctx.filter = cs.filter;
+          ctx.drawImage(ico, r.left, r.top, r.width, r.height);
+        } catch (e) { /* undrawable */ }
+        if (filt) { try { ctx.filter = 'none'; } catch (e) { /* unsupported */ } }
       }
     } else if (tag === 'CANVAS') {
       // The trace/grid - the ONLY thing that scales with the target. A canvas with a
@@ -318,10 +361,9 @@ export function paintCloneToCanvas(clone, outW, outH, liveCanvasFor, icons) {
         out.scopeRect = { left: r.left * sx, top: r.top * sy, width: r.width * sx, height: r.height * sy };
       }
     } else {
-      // Text: only an element's OWN direct text (descendant text is drawn as the walk
-      // reaches those descendants).
-      const text = shotDirectText(el);
-      if (text) {
+      // Single-line text in the element's own computed font/color/padding. Serves both
+      // branches below: an element's OWN direct text, and a combo's selected-option label.
+      const drawText = (text) => {
         const style = cs.fontStyle && cs.fontStyle !== 'normal' ? cs.fontStyle + ' ' : '';
         const weight = cs.fontWeight && cs.fontWeight !== 'normal' ? cs.fontWeight + ' ' : '';
         ctx.font = `${style}${weight}${cs.fontSize} ${cs.fontFamily}`;
@@ -339,6 +381,19 @@ export function paintCloneToCanvas(clone, outW, outH, liveCanvasFor, icons) {
         if (ls > 0 && 'letterSpacing' in ctx) { try { ctx.letterSpacing = cs.letterSpacing; } catch (e) { /* unsupported */ } }
         ctx.fillText(text, x, cy);
         if ('letterSpacing' in ctx) { try { ctx.letterSpacing = '0px'; } catch (e) { /* unsupported */ } }
+      };
+      if (tag === 'SELECT') {
+        // A combo's visible label is its SELECTED option's text - a child ELEMENT, not a
+        // direct text node, so the generic branch below would leave the box empty (options
+        // themselves have no on-screen box and never reach the walk).
+        const opt = el.selectedOptions && el.selectedOptions[0];
+        const label = opt ? shotDirectText(opt) : '';
+        if (label) drawText(label);
+      } else {
+        // Text: only an element's OWN direct text (descendant text is drawn as the walk
+        // reaches those descendants).
+        const text = shotDirectText(el);
+        if (text) drawText(text);
       }
     }
     // CSS pseudo-elements (::before / ::after) - the walk only visits real nodes, so a
@@ -400,6 +455,92 @@ export function paintCloneToCanvas(clone, outW, outH, liveCanvasFor, icons) {
 
   paint(clone);
   return out;
+}
+
+/** Caption top offset in px at native size (Java AbstractPane.DEFAULT_COMMENT_TOP_PX -
+ *  none of the panes overrides it). */
+export const DEFAULT_COMMENT_TOP_PX = 40;
+
+/** Fallback native size, used only before the live pane has a measurable CSS box
+ *  (e.g. it was never shown). */
+const FALLBACK_SHOT_W = 1200;
+const FALLBACK_SHOT_H = 360;
+
+/** The live pane's CSS box - the on-screen aspect a screenshot defaults to. */
+export function livePaneSize(paneEl) {
+  return {
+    w: (paneEl && paneEl.clientWidth) || FALLBACK_SHOT_W,
+    h: (paneEl && paneEl.clientHeight) || FALLBACK_SHOT_H,
+  };
+}
+
+/**
+ * Composes one pane's screenshot at EXACTLY outW x outH px (or the live pane's native CSS
+ * size when omitted) via the generic clone + paint pair above; `prep` is the pane's own
+ * clone surgery (collapse tabs, drop live-only chrome). The dpr dance: the output file is
+ * exactly w x h, but on a magnified screen (125% -> dpr 1.25) the chrome must be drawn at
+ * DEVICE size to match the live look - so the clone is laid out SMALLER (w/dpr), where
+ * chrome sits at its CSS px, and paintCloneToCanvas scales the whole paint up by dpr.
+ * At 100% (dpr 1) clone == canvas, no scale. Returns a Promise of the composed canvas;
+ * stampShotOverlay's watermark + caption draw on top.
+ */
+export async function composePaneShot(paneEl, outW, outH, prep) {
+  const live = livePaneSize(paneEl);
+  const w = outW > 0 ? outW : live.w;
+  const h = outH > 0 ? outH : live.h;
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.max(1, Math.round(w / dpr));
+  const ch = Math.max(1, Math.round(h / dpr));
+  const clone = clonePaneForShot(paneEl, cw, ch, prep);
+  const icons = await preloadCloneIcons(clone);
+  // Map a clone <canvas> to its matching LIVE on-screen bitmap by id.
+  const liveCanvasFor = (cloneCanvas) => document.getElementById(cloneCanvas.id);
+  return paintCloneToCanvas(clone, w, h, liveCanvasFor, icons);
+}
+
+/**
+ * The brand watermark + comment caption, drawn ONCE for every pane (Java
+ * ScreenshotOverlay.stamp). The watermark is centred on the composed canvas's scopeRect
+ * (the main trace canvas's output rect) when the paint recorded one, else on the whole
+ * image; font sized so the text width is ~1/3 of the image width, semi-transparent grey
+ * (Java alpha 77/255, faded a further 10%). The caption scales with the image against the
+ * pane's native height, sits top-right with a ~30 px margin clearing a kept vertical
+ * scrollbar, stroked for legibility on any trace. Resets the context transform first:
+ * composePaneShot leaves the paint's dpr scale on it, and the overlay must land in REAL
+ * output pixels.
+ */
+export function stampShotOverlay(out, comment, outH, nativeH, commentTopPx = DEFAULT_COMMENT_TOP_PX) {
+  const ctx = out.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const WM = 'Phonalyser.web';
+  const sr = out.scopeRect;
+  const wcx = sr ? sr.left + sr.width / 2 : out.width / 2;
+  const wcy = sr ? sr.top + sr.height / 2 : out.height / 2;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let wmPt = 200;
+  ctx.font = `700 ${wmPt}px "Segoe UI", system-ui, sans-serif`;
+  const measured = ctx.measureText(WM).width || 1;
+  wmPt = Math.max(1, Math.round(wmPt * (out.width * 0.35) / measured));
+  ctx.font = `700 ${wmPt}px "Segoe UI", system-ui, sans-serif`;
+  ctx.fillStyle = 'rgba(160,160,160,0.243)';
+  ctx.fillText(WM, wcx, wcy);
+  ctx.restore();
+  const text = (comment || '').trim();
+  if (text) {
+    const sy = outH / Math.max(1, nativeH);
+    const pt = Math.max(12, Math.round(16 * sy));
+    ctx.font = pt + 'px Consolas, monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    const x = out.width - 30, y = Math.round(commentTopPx * sy);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = '#F0F0F0';
+    ctx.fillText(text, x, y);
+  }
 }
 
 /** The screenshot dialog (Java gui/common/ScreenshotDialog). Pane-agnostic: the

@@ -25,6 +25,7 @@ import { Events } from '../bus/events.js';
 import { t } from '../i18n/i18n.js';
 import { backendDisplayName } from '../audio/audio-backend-type.js';
 import { debug, formatMs, isDebug } from '../util/debug.js';
+import { composePaneShot, livePaneSize, stampShotOverlay } from '../shell/screenshot.js';
 
 // Resolution of the FlatScrollbars (Java FftPane.SCROLL_RANGE) - any large integer; slider
 // values map to fractional pan positions. dBFS magnitude floor (Java Constants.MAG_FLOOR_DBFS
@@ -640,5 +641,51 @@ export class FftPane {
     // the scrollbar canvases (their backing store reads clientWidth/clientHeight).
     requestAnimationFrame(() => this.syncFftPan());
     return this;
+  }
+
+  // ===== screenshot (Java AbstractPane renders itself; the overlay is shared) =====
+
+  /** FFT-specific clone surgery for the screenshot composite: collapse the expanded settings
+   *  tab, drop the pane header / record LED / predistortion button (live-only chrome). #spec is
+   *  KEPT and mapped to its live bitmap by id. */
+  _shotPrep(clone) {
+    clone.querySelectorAll('.tab-panel.show').forEach((p) => p.classList.remove('show'));
+    const hdr = clone.querySelector('.pane-header'); if (hdr) hdr.remove();
+    const led = clone.querySelector('.led-btn'); if (led) led.remove();
+    const pd = clone.querySelector('#predistBtn'); if (pd) pd.remove();
+  }
+
+  /** Renders the FULL FFT pane (collapsed tabs) at w x h via the shared clone-DOM composite
+   *  (shell/screenshot.js composePaneShot), stamping the brand watermark + caption through the
+   *  one shared overlay. Returns a Promise<Blob> in `mime`. */
+  async renderShot(comment, w, h, mime) {
+    const paneEl = document.getElementById('fftPane');
+    const native = livePaneSize(paneEl);
+    const outW = w > 0 ? w : native.w, outH = h > 0 ? h : native.h;
+    const out = await composePaneShot(paneEl, outW, outH, (c) => this._shotPrep(c));
+    stampShotOverlay(out, comment, outH, native.h);
+    return new Promise((resolve) => out.toBlob(resolve, mime || 'image/png'));
+  }
+
+  /** The pane spec the shared screenshot dialog takes: camera button, render, native size, and
+   *  seed/persist over THIS pane's own size prefs (fftScreenshotWidth/Height; seeds from the
+   *  live pane size until a size was chosen once). */
+  shotDialogPane() {
+    const native = () => livePaneSize(document.getElementById('fftPane'));
+    return {
+      openBtn: '#fftShot',
+      renderShot: (comment, w, h, mime) => this.renderShot(comment, w, h, mime),
+      nativeSize: native,
+      seedSize: () => {
+        const w = this.prefs.fftScreenshotWidth.get(), h = this.prefs.fftScreenshotHeight.get();
+        return (w > 0 && h > 0) ? { w, h } : native();
+      },
+      persistSize: (w, h) => {
+        if (!(w > 0) || !(h > 0)) return;
+        this.prefs.fftScreenshotWidth.set(w);
+        this.prefs.fftScreenshotHeight.set(h);
+        this.prefs.save();
+      },
+    };
   }
 }

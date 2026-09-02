@@ -21,6 +21,7 @@ import { CorrectionStore } from '../common/correction-store.js';
 import { FreqRespWizard } from './wizard.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
+import { composePaneShot, livePaneSize, stampShotOverlay } from '../shell/screenshot.js';
 
 export class FreqRespPane {
   /**
@@ -161,5 +162,49 @@ export class FreqRespPane {
   plot() {
     this.view.render();
     this.view.syncScrollbars();
+  }
+
+  // ===== screenshot (Java AbstractPane renders itself; the overlay is shared) =====
+
+  /** FreqResp-specific clone surgery for the screenshot composite: collapse the expanded
+   *  settings tab and drop the pane header. #frPlot is KEPT and mapped to its live bitmap by
+   *  id; the frFreqScroll / frMagScroll gutter canvases stay as on screen. */
+  _shotPrep(clone) {
+    clone.querySelectorAll('.tab-panel.show').forEach((p) => p.classList.remove('show'));
+    const hdr = clone.querySelector('.pane-header'); if (hdr) hdr.remove();
+  }
+
+  /** Renders the FULL FreqResp pane (collapsed tabs) at w x h via the shared clone-DOM
+   *  composite (shell/screenshot.js composePaneShot), stamping the brand watermark + caption
+   *  through the one shared overlay. Returns a Promise<Blob> in `mime`. */
+  async renderShot(comment, w, h, mime) {
+    const paneEl = document.getElementById('freqRespPane');
+    const native = livePaneSize(paneEl);
+    const outW = w > 0 ? w : native.w, outH = h > 0 ? h : native.h;
+    const out = await composePaneShot(paneEl, outW, outH, (c) => this._shotPrep(c));
+    stampShotOverlay(out, comment, outH, native.h);
+    return new Promise((resolve) => out.toBlob(resolve, mime || 'image/png'));
+  }
+
+  /** The pane spec the shared screenshot dialog takes: camera button, render, native size, and
+   *  seed/persist over THIS pane's own size prefs (freqRespScreenshotWidth/Height; seeds from
+   *  the live pane size until a size was chosen once). */
+  shotDialogPane() {
+    const native = () => livePaneSize(document.getElementById('freqRespPane'));
+    return {
+      openBtn: '#frShot',
+      renderShot: (comment, w, h, mime) => this.renderShot(comment, w, h, mime),
+      nativeSize: native,
+      seedSize: () => {
+        const w = this.prefs.freqRespScreenshotWidth.get(), h = this.prefs.freqRespScreenshotHeight.get();
+        return (w > 0 && h > 0) ? { w, h } : native();
+      },
+      persistSize: (w, h) => {
+        if (!(w > 0) || !(h > 0)) return;
+        this.prefs.freqRespScreenshotWidth.set(w);
+        this.prefs.freqRespScreenshotHeight.set(h);
+        this.prefs.save();
+      },
+    };
   }
 }

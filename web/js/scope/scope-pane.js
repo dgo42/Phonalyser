@@ -31,6 +31,7 @@ import { displaySamplesFor, offsetMoveHalfRange } from './scope-format.js';
 import { DIVISIONS_Y } from './scope-nav.js';
 import { HistogramView } from './histogram-view.js';
 import { backendDisplayName } from '../audio/audio-backend-type.js';
+import { composePaneShot, livePaneSize, stampShotOverlay } from '../shell/screenshot.js';
 
 // ----- scope navigation scrollbars (Java ScopePane vertSlider / navSlider) -----
 // Fixed integer slider range; the offsetFrac / horizontal-pan value is derived
@@ -1084,5 +1085,51 @@ export class ScopePane {
     // made while the generator is off too.
     this.prefs.genSignalForm.addListener(() => this.syncReconstructedBeatEnabled());
     return this;
+  }
+
+  // ===== screenshot (Java AbstractPane renders itself; the overlay is shared) =====
+
+  /** Scope-specific clone surgery for the screenshot composite: collapses the expanded settings
+   *  tab, removes the pane header / popped-out measurement window / record LED. The #scope /
+   *  #scopeZoomed canvases are KEPT in place - the paint maps them to the matching LIVE canvas
+   *  by id and blits the live bitmap into their rect. The VERTICAL scrollbar stays (its live
+   *  thumb is blitted by id), and the HORIZONTAL scrollbar gutter stays reserved - the hscroll
+   *  is visibility:hidden until a file is loaded, so its SPACE is always there and the bar is
+   *  painted only in file mode. The cloned #scopeLoadedPath already carries the live text. */
+  _shotPrep(clone) {
+    clone.querySelectorAll('.tab-panel.show').forEach((p) => p.classList.remove('show'));
+    const hdr = clone.querySelector('.pane-header'); if (hdr) hdr.remove();
+    const win = clone.querySelector('#scopeMeasWindow'); if (win) win.style.display = 'none';
+    const led = clone.querySelector('.led-btn'); if (led) led.remove();
+  }
+
+  /** Renders the FULL scope pane (collapsed tabs) at w x h via the shared clone-DOM composite
+   *  (shell/screenshot.js composePaneShot), stamping the brand watermark + caption through the
+   *  one shared overlay. Returns a Promise<Blob> in `mime`. */
+  async renderShot(comment, w, h, mime) {
+    const paneEl = document.getElementById('scopePane');
+    const native = livePaneSize(paneEl);
+    const outW = w > 0 ? w : native.w, outH = h > 0 ? h : native.h;
+    const out = await composePaneShot(paneEl, outW, outH, (c) => this._shotPrep(c));
+    stampShotOverlay(out, comment, outH, native.h);
+    return new Promise((resolve) => out.toBlob(resolve, mime || 'image/png'));
+  }
+
+  /** The pane spec the shared screenshot dialog takes: camera button, render, native size, and
+   *  seed/persist over THIS pane's own size prefs (scopeScreenshotWidth/Height). */
+  shotDialogPane() {
+    const native = () => livePaneSize(document.getElementById('scopePane'));
+    return {
+      openBtn: '#scopeShot',
+      renderShot: (comment, w, h, mime) => this.renderShot(comment, w, h, mime),
+      nativeSize: native,
+      seedSize: () => ({ w: this.prefs.scopeScreenshotWidth.get(), h: this.prefs.scopeScreenshotHeight.get() }),
+      persistSize: (w, h) => {
+        if (!(w > 0) || !(h > 0)) return;
+        this.prefs.scopeScreenshotWidth.set(w);
+        this.prefs.scopeScreenshotHeight.set(h);
+        this.prefs.save();
+      },
+    };
   }
 }
