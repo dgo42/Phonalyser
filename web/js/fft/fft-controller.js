@@ -485,12 +485,16 @@ export class FftController {
       this._fftReader = reader;
       this._fftReader.seekToLatest();   // contiguous stream anchors at "now"
       this._absNextSample = this._fftReader.getReadPos();
-      this._fll.reset();                // fresh Record session -> converge alignment from zero
-      this._fll2.reset();               // ...and its dual-tone second loop
+      this._resetFrequencyLock();       // fresh Record session -> converge alignment from zero
       this._fftOn = true;
     } else {
       this._fftOn = false;
       this._fftReader = null;
+      // Record stop resets the frequency lock too (Java FftController.resetFrequencyLock is
+      // called on Record stop as well as align-ON): the generator returns to its snapped
+      // frequency the moment the measurement ends, instead of playing the last trim until the
+      // next session happens to start.
+      this._resetFrequencyLock();
       // The analyzer is NOT torn down here: it holds the raw cross-tick average, and that
       // average survives a stop - a calibration change made while stopped is answered from it
       // (reemitDisplay). It is replaced when the next session sets up, which is also where a
@@ -708,7 +712,7 @@ export class FftController {
       this._accumEpoch++;              // drop ONLY the in-flight old-geometry window
       this._workerResyncPending = true;   // re-anchor κ slope + PLL; the collected DEPTH survives
     }
-    if (c.fllOn && !this._lastFllOn) { this._fll.reset(); this._fll2.reset(); }
+    if (c.fllOn && !this._lastFllOn) this._resetFrequencyLock();
     this._lastFllOn = !!c.fllOn;
     // MAINS MODE, read live per batch the way the Java worker re-reads it per tick.
     // A transition that touches one of the two TIME-DOMAIN cancellers (SYNC_SUBTRACT, LMS) -
@@ -1032,10 +1036,6 @@ export class FftController {
     // (epoch bump) landed while it was analyzing.
     this._tickAbsStart = absStart || 0;
     this._tickEpoch = this._accumEpoch;
-    // FLL transport timebase (Java FftResult.samplesAbsStart / writePos): the window's
-    // absolute capture start, and the live capture write head at publish time.
-    this._tickAbsCapStart = absCapStart;
-    this._tickWritePos = this._fftReader ? this._fftReader.getWritePos() : 0;
     if (!this.worker) { this.dropped++; return; }
     this._busy = true;
     const c = this.config;
@@ -1109,6 +1109,11 @@ export class FftController {
       timeGate: USE_TIME_DISCONTINUITY && (this.foreverMode || this.ringN >= 2)
         && this.config.fftDetectTimeDiscontinuity !== false,
       winAbsStart: this._tickAbsStart,
+      // FLL transport timebase (Java FftResult.samplesAbsStart / writePos): the window's
+      // absolute capture start and the live write head, stamped ONTO THE RESULT by the worker so
+      // a display frame prepared beside the next analysis still carries the window it was
+      // measured from - the steer reads the frame, never a slot the next dispatch overwrites.
+      absCapStart, writePos: this._fftReader ? this._fftReader.getWritePos() : 0,
       accumulate: forever || ringN >= 2, targetN: forever ? Infinity : 2 * ringN,
       spectralGate: true, strongToneRelDb: this.config.fftStrongToneRelDb ?? 100.0,
       resetAccum, resyncAccum,
@@ -1262,7 +1267,13 @@ export class FftController {
     if (!r || r.error) { if (r && r.error) console.error('display', r.error); return; }
     if (r.epoch !== this._accumEpoch) return;
     if (!this.onResult) return;
-    this._emit(FftResult.adopt(r));
+    const adopted = FftResult.adopt(r);
+    this._emit(adopted);
+    // The displayed frame steers the frequency lock, exactly as an in-place frame does - it
+    // carries its own transport timebase (samplesAbsStart / writePos, stamped in the worker), so
+    // arriving one analysis later costs the loop nothing its transport gate does not already
+    // span. A stopped-state re-emit is display-only: stale data must not trim a live generator.
+    if (!adopted.reemit) this._steerFrom(adopted);
   }
 
   /** Counts a job into the in-flight cap and (re)arms the watchdog that must be able to release
@@ -1443,16 +1454,26 @@ export class FftController {
     // before its own de-embed, and travel as plain fields.
     r = FftResult.adopt(r);
 
-    // FLL - steer the generator so each captured tone returns to its exact target bin
-    // (nulls the DAC↔ADC clock offset). Driven through the Java FrequencyFll deadbeat loop:
-    // ONE bounded correction per fully-observed transport round trip, NOT a per-frame
-    // proportional integrator. The published generator frequency is snapped + correction.
-    // Only steers when the generator is actually running. Java FftController.applyFrequencyLock
-    // branches on the form: single-tone runs one loop off slot.fundamentalHzRefined; DUAL_TONE
-    // runs TWO independent loops (fll / fll2) off the per-tone detected frequencies imd.f1Hz /
-    // imd.f2Hz and publishes GENERATOR_FREQ_TRIM / _2. This controller mirrors that with
-    // _fll / _fll2, refining the two tones here (the CONTROLLER holds no per-tone estimate - the
-    // IMD table runs in the view - so the steer refines them itself off r.amplitudeDbFs).
+    this._emit(r);
+    // Steer AFTER the emit - the desktop's order (the view finalizes the displayed frame, then
+    // calls the controller's frequency lock), and the frame carries its own transport timebase
+    // so the same call serves a frame arriving from the display worker.
+    this._steerFrom(r);
+  }
+
+  /** FLL - steer the generator so each captured tone returns to its exact target bin
+   *  (nulls the DAC-ADC clock offset). Driven through the Java FrequencyFll deadbeat loop:
+   *  ONE bounded correction per fully-observed transport round trip, NOT a per-frame
+   *  proportional integrator. The published generator frequency is snapped + correction.
+   *  Runs once per DISPLAYED frame, whichever path prepared it - in place beside the analysis,
+   *  or in the display worker with the frame arriving out of band - exactly as the desktop
+   *  steers from its result-display pipeline. Java FftController.applyFrequencyLock branches on
+   *  the form: single-tone runs one loop off slot.fundamentalHzRefined; DUAL_TONE runs TWO
+   *  independent loops (fll / fll2) off the per-tone detected frequencies and publishes
+   *  GENERATOR_FREQ_TRIM / _2. This controller mirrors that with _fll / _fll2, refining the two
+   *  tones itself off r.amplitudeDbFs (the CONTROLLER holds no per-tone estimate - the IMD
+   *  table runs in the view). */
+  _steerFrom(r) {
     if (this.fllArmed()) {
       if (isDualTone(this.config.form)) {
         this._steerDualTone(r);
@@ -1465,8 +1486,17 @@ export class FftController {
       // Steering skipped entirely: report which precondition failed - the classic "inert" path.
       console.warn(`FLL SKIP: ${this._fllGateState()}`);
     }
+  }
 
-    this._emit(r);
+  /** Resets the frequency-lock loop(s) so alignment converges fresh from zero, AND tells the
+   *  generator to drop any residual trim (Java FftController.resetFrequencyLock, publishing
+   *  GENERATOR_FREQ_TRIM_RESET): clearing only the loop state would leave the generator at the
+   *  last published trim, and the fresh loop - which assumes generator = target + correction -
+   *  would overshoot by exactly that stale amount on its first correction. */
+  _resetFrequencyLock() {
+    this._fll.reset();
+    this._fll2.reset();
+    MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM_RESET, null);
   }
 
   /** Whether the frequency lock may steer at all - Java FftController.applyFrequencyLock's
@@ -1517,7 +1547,7 @@ export class FftController {
       // CAPTURE-rate snap (slot.sampleRate) - NOT the output-rate base.
       const gateBefore = this._fll.correctionVisibleFrom;
       this._fll.update(fllTarget, r.fundamentalHzRefined,
-        this._tickAbsCapStart, this._tickWritePos, this.config.inRate, this.N);
+        r.samplesAbsStart, r.writePos, this.config.inRate, this.N);
       this.genFreq = fllTarget + this._fll.correction;
       // Publish the trim; GeneratorController applies it to its own worklet (was a direct post).
       MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM, this.genFreq);
@@ -1526,10 +1556,10 @@ export class FftController {
         // gate so an inert loop is diagnosable (gate held forever => winStart never reaches
         // visibleFrom; corr stuck at 0 => lock-band/plausibility hold).
         const held = this._fll.correctionVisibleFrom >= 0
-          && this._tickAbsCapStart < this._fll.correctionVisibleFrom;
+          && r.samplesAbsStart < this._fll.correctionVisibleFrom;
         console.warn(`FLL t1: target=${fllTarget.toFixed(6)} meas=${r.fundamentalHzRefined.toFixed(6)}`
           + ` corr=${this._fll.correction >= 0 ? '+' : ''}${this._fll.correction.toFixed(6)}`
-          + ` pub=${this.genFreq.toFixed(6)} winStart=${this._tickAbsCapStart} writePos=${this._tickWritePos}`
+          + ` pub=${this.genFreq.toFixed(6)} winStart=${r.samplesAbsStart} writePos=${r.writePos}`
           + ` gate[${gateBefore}->${this._fll.correctionVisibleFrom}] ${held ? 'HELD' : 'open'}`);
       }
       // Status-display lock latch ONLY (Java ALIGN_DONE_PPM aligned flag): lights the "locked"
@@ -1600,8 +1630,8 @@ export class FftController {
     const f1Hz = (t1 <= t2 ? fLowHz : fHighHz);
     const f2Hz = (t1 <= t2 ? fHighHz : fLowHz);
 
-    const ok1 = this._steerOneDualLoop(this._fll, Events.GENERATOR_FREQ_TRIM, t1, f1Hz, 't1');
-    const ok2 = this._steerOneDualLoop(this._fll2, Events.GENERATOR_FREQ_TRIM_2, t2, f2Hz, 't2');
+    const ok1 = this._steerOneDualLoop(this._fll, Events.GENERATOR_FREQ_TRIM, t1, f1Hz, 't1', r);
+    const ok2 = this._steerOneDualLoop(this._fll2, Events.GENERATOR_FREQ_TRIM_2, t2, f2Hz, 't2', r);
 
     // Tone-1-based readout stays the shared display state (genFreq / fllErrHz), so the existing
     // Δosc / ppm columns keep reading tone 1; only the locked LATCH couples both loops.
@@ -1621,7 +1651,7 @@ export class FftController {
    *  update the loop, publish `target + correction` on `trimEvent`. Returns true when the
    *  measurement passed the gate and steered (so the caller can fold it into the locked latch).
    *  Mirrors one half of Java's dual branch (:275-308) including the GATED trace line. */
-  _steerOneDualLoop(fll, trimEvent, target, measuredHz, tag) {
+  _steerOneDualLoop(fll, trimEvent, target, measuredHz, tag, r) {
     if (!(target > 0) || !Number.isFinite(measuredHz)) {
       if (traceFll()) console.warn(`FLL ${tag} GATED: target=${target} meas=${measuredHz}`);
       return false;
@@ -1636,14 +1666,14 @@ export class FftController {
     }
     const gateBefore = fll.correctionVisibleFrom;
     fll.update(target, measuredHz,
-      this._tickAbsCapStart, this._tickWritePos, this.config.inRate, this.N);
+      r.samplesAbsStart, r.writePos, this.config.inRate, this.N);
     const pub = target + fll.correction;
     MessageBus.instance().publish(trimEvent, pub);
     if (traceFll()) {
-      const held = fll.correctionVisibleFrom >= 0 && this._tickAbsCapStart < fll.correctionVisibleFrom;
+      const held = fll.correctionVisibleFrom >= 0 && r.samplesAbsStart < fll.correctionVisibleFrom;
       console.warn(`FLL ${tag}: target=${target.toFixed(6)} meas=${measuredHz.toFixed(6)}`
         + ` corr=${fll.correction >= 0 ? '+' : ''}${fll.correction.toFixed(6)}`
-        + ` pub=${pub.toFixed(6)} winStart=${this._tickAbsCapStart} writePos=${this._tickWritePos}`
+        + ` pub=${pub.toFixed(6)} winStart=${r.samplesAbsStart} writePos=${r.writePos}`
         + ` gate[${gateBefore}->${fll.correctionVisibleFrom}] ${held ? 'HELD' : 'open'}`);
     }
     return true;

@@ -187,6 +187,12 @@ export class GeneratorController {
     // (nobody publishes it otherwise), so no form guard is needed here.
     MessageBus.instance().subscribe(Events.GENERATOR_FREQ_TRIM_2,
       (freqHz) => this._applyFllTrim2(freqHz));
+    // FLL trim RESET (Java GeneratorController subscribes GENERATOR_FREQ_TRIM_RESET ->
+    // lane.reapplySnap): the FFT consumer resets its lock loop(s) and the generator returns the
+    // running tone(s) to the configured snapped frequencies. A loop reset alone would leave the
+    // worklet at the last published trim, and the fresh loop - which assumes generator = target
+    // + correction - would overshoot by exactly that stale amount on its first correction.
+    MessageBus.instance().subscribe(Events.GENERATOR_FREQ_TRIM_RESET, () => this._reapplySnap());
   }
 
   /** Stops BOTH output engines - the DDS tone and the file player (Java
@@ -335,6 +341,17 @@ export class GeneratorController {
    *  (setDualToneFrequency2), like {@link #_applyFllTrim} does tone 1. No-op when not running. */
   _applyFllTrim2(freqHz) {
     if (this._genOn && this._sink) this._sink.port.postMessage({ frequency2: freqHz });
+  }
+
+  /** Returns the running tone(s) to the configured SNAPPED frequencies, dropping any residual
+   *  FLL trim (Java GeneratorLane.reapplySnap). Publishes no signal-changed event - the tone
+   *  returns to the frequency the operator configured, which emitted no event before, and a
+   *  re-broadcast could spuriously reset other subscribers. No-op when not running. */
+  _reapplySnap() {
+    if (!this._genOn || !this._sink) return;
+    this._sink.port.postMessage({ frequency: this.snapped });
+    const f2 = this._genEmitFreq2();
+    if (Number.isFinite(f2) && f2 > 0) this._sink.port.postMessage({ frequency2: f2 });
   }
 
   /** The frequency the generator actually emits for the current form - faithful port of

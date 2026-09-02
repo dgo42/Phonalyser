@@ -311,6 +311,9 @@ export function displaySnapshot(r, extra) {
     fftSize: r.fftSize, sampleRate: r.sampleRate, frameCount: r.frameCount,
     freqResolution: r.freqResolution, windowType: r.windowType, overlap: r.overlap,
     stepSamples: r.stepSamples,
+    // The FLL transport timebase - the frequency lock steers from the displayed frame, so the
+    // window it was measured from travels with it (Java FftResult.samplesAbsStart / writePos).
+    samplesAbsStart: r.samplesAbsStart, writePos: r.writePos,
     amplitudeDbFs: r.amplitudeDbFs.slice(), phaseDeg: r.phaseDeg.slice(),
     re: r.re.slice(), im: r.im.slice(),
     fundamentalBin: r.fundamentalBin, fundamentalHz: r.fundamentalHz,

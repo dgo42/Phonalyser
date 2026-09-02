@@ -249,6 +249,12 @@ function logTickStages(d, st, id, marks) {
  *  controller asked for one, then post. The finalize is skipped for a tick the display gate
  *  does not want - the fold still happens, so no depth is lost. */
 function finishAndPost(r, d, id, t0) {
+  // The FLL transport timebase rides the RESULT (Java FftResult.samplesAbsStart / writePos): a
+  // display frame is prepared beside the NEXT analysis and arrives out of band, so the steer
+  // must read the window the frame was measured from off the frame itself - a controller slot
+  // would already hold the next tick's window by then.
+  r.samplesAbsStart = d.absCapStart || 0;
+  r.writePos = d.writePos || 0;
   // Null unless this tick is being timed, and every mark below is taken only then.
   const st = analyzer.stageMs;
   const tGate = st ? performance.now() : 0;
