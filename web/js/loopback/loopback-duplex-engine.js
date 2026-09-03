@@ -49,7 +49,8 @@
 //     be actively wrong: the background-tab clamp above would false-report a healthy session as a
 //     dead device.
 
-import { DdsKernel, GenSignalForm, quantizePcm } from '../generator/dds-kernel.js';
+import { DdsKernel, quantizePcm } from '../generator/dds-kernel.js';
+import { GenSignalForm } from '../enums/gen-signal-form.js';
 
 /** Blocks per second - a 20 ms block. */
 const BLOCKS_PER_SECOND = 50;

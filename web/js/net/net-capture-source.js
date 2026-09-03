@@ -39,7 +39,7 @@ import { MessageType, NetFields, NetDirection, FrameType, MARKER_SWEEP_START } f
 import { NetCloseReason } from './net-close-reason.js';
 import { CaptureEndReason } from '../audio/capture-end-reason.js';
 import { refInto, refText } from './net-device-ref.js';
-import { DeviceFailureReason } from '../audio/device-failure-reason.js';
+import { DeviceFailureReason } from '../enums/device-failure-reason.js';
 
 /** captureId before the open and after the close. */
 const NOT_OPEN = -1;

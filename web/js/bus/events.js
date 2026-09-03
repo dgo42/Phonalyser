@@ -259,14 +259,6 @@ export const Events = Object.freeze({
   AUDIO_DEVICE_ERROR: 'audio.device.error',
 });
 
-/**
- * Payload of GENERATOR_SIGNAL_CHANGED (faithful port of enums/GenChangeCause). Lets subscribers
- * tell a user-initiated generator change from a closed-loop FLL trim: USER_INPUT means "the signal
- * really changed - drop everything; restart", while FLL_TRIM is a sub-Hz alignment tweak that MUST
- * keep any averaging / accumulated statistics alive.
- */
-export const GenChangeCause = Object.freeze({ USER_INPUT: 'USER_INPUT', FLL_TRIM: 'FLL_TRIM' });
-
 /** Pane-title IDs. Each pane passes a distinct value to its title bar; subscribers route by ID. */
 export const PaneId = Object.freeze({ GENERATOR: 1, SCOPE: 2, FFT: 3, FREQRESP: 4 });
 

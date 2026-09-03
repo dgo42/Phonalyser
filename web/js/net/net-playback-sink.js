@@ -26,7 +26,8 @@
  */
 import { MessageType, NetFields, NetProto } from './net-proto.js';
 import { refInto, refText } from './net-device-ref.js';
-import { GenSignalForm, isCompensated, isDualTone, loadHarmonics, loadIntermod } from '../generator/dds-kernel.js';
+import { GenSignalForm, isCompensated, isDualTone } from '../enums/gen-signal-form.js';
+import { loadHarmonics, loadIntermod } from '../generator/dds-kernel.js';
 
 /** genId while no remote generator is open. */
 const NO_GEN = 0;

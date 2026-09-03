@@ -9,7 +9,7 @@
  * measurement window/gap reads + the 1 s zoomed-overview read. The generator's `snapped`
  * fundamental comes in via an injected getter (it reads the generator without owning it). No DOM.
  */
-import { isDualTone } from '../generator/dds-kernel.js';
+import { isDualTone } from '../enums/gen-signal-form.js';
 import { BUFFER_SECONDS } from '../audio/shared-capture.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';

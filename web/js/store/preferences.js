@@ -82,14 +82,14 @@ function defaultUiFont(style, sizeBump) {
 }
 
 import { FreqRespFilterTypeParams } from './freqresp-filter-type-params.js';
-import { fromNameOr as persistenceFromNameOr } from '../scope/scope-enums.js';
+import { fromNameOr as persistenceFromNameOr } from '../enums/persistence-mode.js';
 import { quarantineStoreEntry } from './store-quarantine.js';
 import { remoteBackendOf } from '../net/net-device-ref.js';
 // The unit vocabulary and its conversions: a value is stored AS ENTERED and
 // resolved here at use, against the live calibration.
 import { UNIT_FAMILIES, unitValue, unitValueEquals, convert, baseToken, logToken }
   from '../widgets/unit-conversion.js';
-import { FFT_OVERLAP_VALUES } from '../fft/fft-overlap.js';
+import { FFT_OVERLAP_VALUES } from '../enums/fft-overlap.js';
 
 /** Base unit token of an amplitude - the unit whose number IS the canonical V RMS. */
 const AMPLITUDE_BASE_UNIT = baseToken(UNIT_FAMILIES.AMPLITUDE);

@@ -20,7 +20,7 @@
  * it for the chart to look products up in.
  */
 import { analyzeImd } from './imd-analyzer.js';
-import { isDualTone } from '../generator/dds-kernel.js';
+import { isDualTone } from '../enums/gen-signal-form.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 

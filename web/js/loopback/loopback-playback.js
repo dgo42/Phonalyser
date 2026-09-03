@@ -53,12 +53,12 @@
 
 import {
   DdsKernel,
-  GenSignalForm,
   isDualToneCorrectionFile,
   loadHarmonics,
   loadIntermod,
   quantizePcm,
 } from '../generator/dds-kernel.js';
+import { GenSignalForm } from '../enums/gen-signal-form.js';
 
 export class LoopbackPlayback {
 

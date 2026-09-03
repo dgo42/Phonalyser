@@ -6,7 +6,7 @@
 
 // Faithful port of org.edgo.audio.measure.dsp.FilterMath.
 
-import { FilterResponse } from './filter-types.js';
+import { FilterResponse } from '../enums/filter-response.js';
 
 /** Hard upper bound on the derived order - keeps the math well conditioned
  *  in double precision and bounds Bessel's numeric search. */

@@ -17,8 +17,10 @@
  */
 import { t, stripMnemonics } from '../i18n/i18n.js';
 import { MessageBus } from '../bus/message-bus.js';
-import { Events, GenChangeCause } from '../bus/events.js';
-import { GenSignalForm, isCompensated, isDualTone, isPeriodic, DdsKernel, quantizePcm, outputLaneGate,
+import { Events } from '../bus/events.js';
+import { GenChangeCause } from '../enums/gen-change-cause.js';
+import { GenSignalForm, isCompensated, isDualTone, isPeriodic } from '../enums/gen-signal-form.js';
+import { DdsKernel, quantizePcm, outputLaneGate,
   loadHarmonics, loadIntermod, isDualToneCorrectionFile, rawRms } from './dds-kernel.js';
 import * as fileStore from '../io/file-store.js';
 import { backendDisplayName } from '../audio/audio-backend-type.js';

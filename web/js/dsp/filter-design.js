@@ -13,7 +13,8 @@
 // per-data-point evaluation. The special-function math (Chebyshev / Bessel /
 // elliptic) and the Mode-1 order derivation live in FilterMath.
 
-import { FilterType, FilterResponse, hasRipple } from './filter-types.js';
+import { FilterType } from '../enums/filter-type.js';
+import { FilterResponse, hasRipple } from '../enums/filter-response.js';
 import {
   rippleEpsilonSq,
   deriveOrder,

@@ -46,12 +46,12 @@
 //     (spec §3.5 / §3.6): they exist in Java only to `new` those clients, and a
 //     forward import of a module that does not exist yet would break this one.
 
-import { DeviceChannelMode } from '../store/device-enums.js';
+import { DeviceChannelMode } from '../enums/device-channel-mode.js';
 import { AudioDeviceProfile, DeviceEndpointConfig, DeviceRange } from '../store/device-profiles.js';
 import { debug } from '../util/debug.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
-import { DeviceFailureReason } from '../audio/device-failure-reason.js';
+import { DeviceFailureReason } from '../enums/device-failure-reason.js';
 import { t } from '../i18n/i18n.js';
 import { remoteBackendOf } from '../net/net-device-ref.js';
 import { MessageType, NetFields } from '../net/net-proto.js';

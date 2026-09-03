@@ -23,15 +23,16 @@
  */
 import { t } from '../i18n/i18n.js';
 import { makeDraggable } from '../ui/draggable.js';
-import { isDualTone } from '../generator/dds-kernel.js';
+import { isDualTone } from '../enums/gen-signal-form.js';
+import { GenChangeCause } from '../enums/gen-change-cause.js';
 import { MessageBus } from '../bus/message-bus.js';
-import { Events, GenChangeCause } from '../bus/events.js';
+import { Events } from '../bus/events.js';
 import { FlatScrollbar } from '../widgets/flat-scrollbar.js';
 import { displaySamplesFor, offsetMoveHalfRange } from './scope-format.js';
 import { DIVISIONS_Y } from './scope-nav.js';
 import { HistogramView } from './histogram-view.js';
 import { backendDisplayName } from '../audio/audio-backend-type.js';
-import { composePaneShot, livePaneSize, stampShotOverlay } from '../shell/screenshot.js';
+import { composePaneShot, livePaneSize, stampShotOverlay } from '../ui/screenshot.js';
 
 // ----- scope navigation scrollbars (Java ScopePane vertSlider / navSlider) -----
 // Fixed integer slider range; the offsetFrac / horizontal-pan value is derived
@@ -1125,7 +1126,7 @@ export class ScopePane {
   }
 
   /** Renders the FULL scope pane (collapsed tabs) at w x h via the shared clone-DOM composite
-   *  (shell/screenshot.js composePaneShot), stamping the brand watermark + caption through the
+   *  (ui/screenshot.js composePaneShot), stamping the brand watermark + caption through the
    *  one shared overlay. Returns a Promise<Blob> in `mime`. */
   async renderShot(comment, w, h, mime) {
     const paneEl = document.getElementById('scopePane');

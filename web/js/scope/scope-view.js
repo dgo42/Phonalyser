@@ -11,14 +11,14 @@
 // on the reconstructed |F1-F2| beat envelope and measures with the time-domain
 // fields suppressed. Driven per capture chunk, independent of the FFT.
 
-import { find, findGlitch } from '../scope/scope-trigger.js';
+import { find, findGlitch } from './scope-trigger.js';
 import { TimeDiscontinuityDetector } from '../dsp/time-discontinuity.js';
 import { lanczos, LANCZOS_PADDING, MAX_LANCZOS_DOWNSAMPLE } from '../dsp/lanczos.js';
 import { compute, withoutTimes,
          reconstructBeatSignal,
          MeasurementStats, forVolts, forTime, forFreq, forPct }
-  from '../scope/signal-measurements.js';
-import { OscMeasCompute } from '../scope/osc-meas-compute.js';
+  from './signal-measurements.js';
+import { OscMeasCompute } from './osc-meas-compute.js';
 import { SineFit } from '../dsp/sine-fit.js';
 import { LowPassFilter, MedianFilter } from '../dsp/lpf.js';
 import { mainsFilterOf } from '../dsp/mains/factory.js';
@@ -26,28 +26,31 @@ import { mainsFilterOf } from '../dsp/mains/factory.js';
 // home for every horizontal/vertical move/zoom transform (Java ScopeNav / ScopeFormat /
 // OscSliderId, OscTriggerMode/Edge). The wheel + on-canvas-slider handlers delegate here
 // instead of re-deriving the math inline.
-import { ScopeNav, DIVISIONS_X as NAV_DIVISIONS_X, DIVISIONS_Y as NAV_DIVISIONS_Y } from '../scope/scope-nav.js';
-import { clamp01 as navClamp01, displaySamplesFor } from '../scope/scope-format.js';
-import { OscSliderId, TriggerMode, TriggerEdge, TriggerType, PersistenceMode,
-         effectiveSeconds as persistenceSeconds } from '../scope/scope-enums.js';
+import { ScopeNav, DIVISIONS_X as NAV_DIVISIONS_X, DIVISIONS_Y as NAV_DIVISIONS_Y } from './scope-nav.js';
+import { clamp01 as navClamp01, displaySamplesFor } from './scope-format.js';
+import { OscSliderId } from '../enums/osc-slider-id.js';
+import { TriggerMode } from '../enums/trigger-mode.js';
+import { TriggerEdge } from '../enums/trigger-edge.js';
+import { TriggerType } from '../enums/trigger-type.js';
+import { PersistenceMode, effectiveSeconds as persistenceSeconds } from '../enums/persistence-mode.js';
 // GPU display persistence ("digital phosphor") - faithful port of
 // org.edgo.audio.measure.gui.scope.gl.ScopePhosphor (engine) + the kind-decision
 // state machine PhosphorGate. The view owns one of each and, per live frame with
 // persistence active, routes the TRACE phase through the decayed WebGL accumulation
 // buffer and composites BACKDROP + phosphor + OVERLAY (Java compositeToScreen).
-import { ScopePhosphor, PhosphorGate } from '../scope/scope-phosphor.js';
+import { ScopePhosphor, PhosphorGate } from './scope-phosphor.js';
 // Dense-trace DIGITAL PHOSPHOR (DPO) renderer - faithful port of Java
 // gui.scope.PhosphorRenderer + TraceEnvelope. THE dense renderer for the MAIN scope
 // trace: Java ScopeView.drawTrace routes every > 1 sample/px window through
 // drawDigitalPhosphor, so the web does the same (the condensed ZoomedView strip keeps its
 // own per-column min/max bars - Java ZoomedView has no phosphor). Canvas2DAlphaPainter is
 // the web replacement for MeasurementPainter.drawAlphaImage + AlphaImageScratch.
-import { PhosphorRenderer, Canvas2DAlphaPainter } from '../scope/phosphor-renderer.js';
+import { PhosphorRenderer, Canvas2DAlphaPainter } from './phosphor-renderer.js';
 // Drag-select rectangular zoom + Ctrl+Z undo (Java AbstractMeasurementView's
 // installRectZoom base machinery); the scope supplies the time/volts mappings +
 // trigger preservation (Java ScopeView zoom overrides) and forwards its own
 // pointer funnel (hookMouse = false, like Java's installRectZoom(this, false)).
-import { RectZoom } from './rect-zoom.js';
+import { RectZoom } from '../ui/rect-zoom.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 

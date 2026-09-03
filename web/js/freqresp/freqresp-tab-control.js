@@ -16,13 +16,15 @@ import { saveFrc, loadFrc, readSampleRateHz } from '../io/frc.js';
 import { putCal, getCal } from '../io/cal-store.js';
 import { CalibrationEntry, FreqRespPreset } from '../store/preferences.js';
 import { FreqRespFilterTypeParams } from '../store/freqresp-filter-type-params.js';
-import { FilterType, hasRipple } from '../dsp/filter-types.js';
+import { FilterType } from '../enums/filter-type.js';
+import { hasRipple } from '../enums/filter-response.js';
 import { t } from '../i18n/i18n.js';
 import { TileTabs } from '../widgets/tile-tabs.js';
 import { PresetBar } from '../widgets/preset-bar.js';
 import { NumericStepField, NumericStepModel, UNIT_FAMILIES, bindStepField, stepFieldFor } from '../widgets/numeric-step-field.js';
 import { unitValue, unitValueEquals } from '../widgets/unit-conversion.js';
-import { GenSignalForm, rawRms } from '../generator/dds-kernel.js';
+import { GenSignalForm } from '../enums/gen-signal-form.js';
+import { rawRms } from '../generator/dds-kernel.js';
 // Floors / decimals of the sweep settings fields - shared with the analyzer's validation and the
 // tune-notch wizard's identical fields (Java FreqRespConstants).
 import {
@@ -47,7 +49,7 @@ const FRC_TYPE = [{ description: 'Filter calibration', accept: 'text/plain', ext
 
 export class FreqRespTabControl {
   /**
-   * @param {import('../audio/backend.js').AudioEngine} engine the live engine (load uses inRate)
+   * @param {import('../shell/audio-engine.js').AudioEngine} engine the live engine (load uses inRate)
    * @param {object} prefs Preferences.instance()
    * @param {import('./freqresp-view.js').FreqRespView} view the interactive canvas view
    * @param {import('../common/correction-store.js').CorrectionStore} correctionStore the loaded-.frc store

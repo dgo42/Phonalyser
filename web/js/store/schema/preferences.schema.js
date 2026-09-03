@@ -12,7 +12,7 @@
  * reader would reject must not validate here, and a key this build does not know
  * must still be allowed, because the reader keeps it and writes it back untouched.
  */
-import { FFT_OVERLAP_VALUES } from '../../fft/fft-overlap.js';
+import { FFT_OVERLAP_VALUES } from '../../enums/fft-overlap.js';
 
 export const PREFERENCES_SCHEMA = {
   "$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -12,13 +12,14 @@
  * Reads + steers the generator's snapped/FLL state through delegating accessors (it does not own it).
  */
 import { FftResult } from './fft-result.js';
-import { minHopSamples, maxHopSamples, OVERLAP_FRACTION, RAND_HOP_STEPS } from './fft-overlap.js';
-import { isDualTone } from '../generator/dds-kernel.js';
+import { minHopSamples, maxHopSamples, OVERLAP_FRACTION, RAND_HOP_STEPS } from '../enums/fft-overlap.js';
+import { isDualTone } from '../enums/gen-signal-form.js';
 import { OVERRUN } from '../audio/signal-buffer-reader.js';
 import { MainsCombFilter, DEFAULT_NOTCH_BANDWIDTH_HZ } from '../dsp/mains/comb-filter.js';
 import { mainsFilterOf } from '../dsp/mains/factory.js';
 import { MessageBus } from '../bus/message-bus.js';
-import { Events, GenChangeCause } from '../bus/events.js';
+import { Events } from '../bus/events.js';
+import { GenChangeCause } from '../enums/gen-change-cause.js';
 import { FrequencyFll } from '../dsp/fll.js';
 import { refinePeak, TONE_SEARCH_BINS } from './imd-analyzer.js';
 import { debug, isDebug } from '../util/debug.js';

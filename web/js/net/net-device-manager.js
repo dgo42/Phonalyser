@@ -29,7 +29,7 @@ import { NetCloseReason } from './net-close-reason.js';
 import { makeNetDeviceRef, sameNetDevice, refInto, refText, remoteBackendOf } from './net-device-ref.js';
 import { isPageOrigin, ServerProber } from './server-prober.js';
 import { IntervalTicker } from './ticker.js';
-import { deviceFailureReasonFromName, DeviceFailureReason } from '../audio/device-failure-reason.js';
+import { deviceFailureReasonFromName, DeviceFailureReason } from '../enums/device-failure-reason.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 import { t } from '../i18n/i18n.js';

@@ -22,8 +22,8 @@
 // Preferences-derived inputs (dbvOffsetDb, harmCount, the minimum-fundamental
 // floor) come in as explicit arguments rather than via a global, per IoC.
 
-import { FftResult } from '../fft/fft-result.js';
-import { FFT_OVERLAP_VALUES } from '../fft/fft-overlap.js';
+import { FftResult } from './fft-result.js';
+import { FFT_OVERLAP_VALUES } from '../enums/fft-overlap.js';
 
 /** .fft format version stamped in the header (FileVersions.FFT_SPECTRUM). */
 export const FFT_FORMAT_VERSION = 1;

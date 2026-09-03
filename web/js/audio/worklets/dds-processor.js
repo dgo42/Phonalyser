@@ -12,13 +12,13 @@
  */
 import {
   DdsKernel,
-  GenSignalForm,
   loadHarmonics,
   loadIntermod,
   isDualToneCorrectionFile,
   outputLaneGate,
   tpdfNoise,
 } from '../../generator/dds-kernel.js';
+import { GenSignalForm } from '../../enums/gen-signal-form.js';
 
 class DdsProcessor extends AudioWorkletProcessor {
   constructor(options) {

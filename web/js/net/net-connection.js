@@ -35,7 +35,7 @@
  */
 import { MessageType, ErrorCode, NetFields, NetProto, parseBinaryFrame } from './net-proto.js';
 import { NetCloseReason } from './net-close-reason.js';
-import { deviceFailureReasonFromName, DeviceFailureReason } from '../audio/device-failure-reason.js';
+import { deviceFailureReasonFromName, DeviceFailureReason } from '../enums/device-failure-reason.js';
 
 /** How long a request may go unanswered before the caller is told the server is not answering.
  *  Generous on purpose: an exclusive-mode device open on the far end really can take seconds,

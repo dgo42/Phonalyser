@@ -62,7 +62,7 @@
 //     float32 throughout), so Java's playbackBitDepth / ditherBits constructor
 //     arguments have no web counterpart - the rate pair is the whole format.
 
-import { GenSignalForm } from '../generator/dds-kernel.js';
+import { GenSignalForm } from '../enums/gen-signal-form.js';
 import { nextPow2 } from '../dsp/mathutil.js';
 import { renderLogSweep } from './farina-sweep.js';
 

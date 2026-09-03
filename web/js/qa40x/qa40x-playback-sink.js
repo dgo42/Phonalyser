@@ -43,13 +43,13 @@
 import { debug } from '../util/debug.js';
 import {
   DdsKernel,
-  GenSignalForm,
   isDualToneCorrectionFile,
   loadHarmonics,
   loadIntermod,
   outputLaneGate,
   tpdfNoise,
 } from '../generator/dds-kernel.js';
+import { GenSignalForm } from '../enums/gen-signal-form.js';
 import { CHANNELS } from './qa40x-duplex-engine.js';
 import { MAXINT } from './qa40x-levels.js';
 

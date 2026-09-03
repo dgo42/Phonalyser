@@ -11,7 +11,7 @@
 // the model behaviour can be tested headlessly. Java line references are cited per function.
 
 import { AudioDeviceProfile, DeviceRange } from './device-profiles.js';
-import { DeviceChannelMode } from './device-enums.js';
+import { DeviceChannelMode } from '../enums/device-channel-mode.js';
 
 /** Which endpoint blocks a card carries ranges for - the direction radios
  *  (CardEditorDialog.Capability). */

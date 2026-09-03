@@ -13,7 +13,7 @@
 // each type's edge-ordering semantics (LP stop>pass, HP stop<pass, BP SB>PB,
 // NOTCH PB>SB), pinned at a 4:1 prototype stop ratio, so a fresh type always draws.
 
-import { FilterType } from '../dsp/filter-types.js';
+import { FilterType } from '../enums/filter-type.js';
 
 /** Per-FilterType Frequency-Response filter parameter scalars. */
 export class FreqRespFilterTypeParams {

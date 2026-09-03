@@ -31,7 +31,9 @@ import { evalDb } from '../dsp/riaa.js';
 // magnitude curve + the FilterType/Response/UnevenMode enums the reference + unevenness
 // pipelines read. Faithful port of org.edgo.audio.measure.gui.freqresp.FreqRespView.
 import { FilterDesign } from '../dsp/filter-design.js';
-import { FilterType, FilterResponse, hasRipple, UnevenMode } from '../dsp/filter-types.js';
+import { FilterType } from '../enums/filter-type.js';
+import { FilterResponse, hasRipple } from '../enums/filter-response.js';
+import { UnevenMode } from '../enums/uneven-mode.js';
 import { t } from '../i18n/i18n.js';
 // Lanczos (windowed-sinc) trace reconstruction - one band-limited sample per
 // pixel column instead of joining the data points with straight segments, so a

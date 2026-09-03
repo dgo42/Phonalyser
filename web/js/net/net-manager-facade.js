@@ -18,7 +18,7 @@
  * and compares them. A drift then fails loudly in the suite instead of quietly in a browser.
  */
 
-import { DeviceFailureReason } from '../audio/device-failure-reason.js';
+import { DeviceFailureReason } from '../enums/device-failure-reason.js';
 
 /** What each member answers when there is no session yet - the "no bench" value of its own type,
  *  never an exception: every one of these is reachable from a UI path that runs before a connect

@@ -13,11 +13,11 @@
  */
 import { t } from '../i18n/i18n.js';
 import { PredistortionEngine, Phase, StopReason } from '../predistortion/engine.js';
-import { GenSignalForm, isDualTone } from '../generator/dds-kernel.js';
+import { GenSignalForm, isDualTone } from '../enums/gen-signal-form.js';
 import { writeHarmonicDpd, writeIntermodDpd } from '../io/dpd.js';
 import {
   OVERLAP_LABEL, isRandom, RAND_MIN_OVERLAP_PCT, RAND_MAX_OVERLAP_PCT,
-} from '../fft/fft-overlap.js';
+} from '../enums/fft-overlap.js';
 
 const DPD_TYPE = [{ description: 'DAC predistortion', accept: 'text/plain', extensions: ['.dpd'] }];
 

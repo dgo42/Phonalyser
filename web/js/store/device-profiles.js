@@ -33,7 +33,7 @@
 //     slots hold Web Audio device IDs, so the caller passes the human device LABEL to
 //     resolve* / apply* / store* (the label is what the recognition patterns match).
 
-import { DeviceChannelMode } from './device-enums.js';
+import { DeviceChannelMode } from '../enums/device-channel-mode.js';
 import { quarantineStoreEntry } from './store-quarantine.js';
 
 const SQRT2 = Math.sqrt(2.0);

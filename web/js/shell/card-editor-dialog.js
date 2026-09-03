@@ -11,7 +11,7 @@
  * assembled profile on OK, or null on Cancel / close (CardEditorDialog.open).
  */
 import { t } from '../i18n/i18n.js';
-import { DeviceChannelMode } from '../store/device-enums.js';
+import { DeviceChannelMode } from '../enums/device-channel-mode.js';
 import {
   Capability, seedIsMono, nameTaken, droppingCalibrated, parseMatch, assembleProfile,
 } from '../store/card-editor-logic.js';

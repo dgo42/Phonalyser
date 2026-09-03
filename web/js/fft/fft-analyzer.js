@@ -30,7 +30,7 @@
 
 import { fft } from '../dsp/fft.js';
 import { FftResult } from './fft-result.js';
-import { hopSamples, minHopSamples } from './fft-overlap.js';
+import { hopSamples, minHopSamples } from '../enums/fft-overlap.js';
 import { ieeeRemainder } from '../dsp/mathutil.js';
 
 /** Lower edge (Hz) of the no-hint fundamental search: DC ... this is ignored so

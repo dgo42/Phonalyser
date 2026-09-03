@@ -21,7 +21,7 @@
  */
 import { t } from '../i18n/i18n.js';
 import { AudioDeviceProfile, DeviceRange } from '../store/device-profiles.js';
-import { DeviceChannelMode } from '../store/device-enums.js';
+import { DeviceChannelMode } from '../enums/device-channel-mode.js';
 import { Capability, capabilityOf } from '../store/card-editor-logic.js';
 
 const SQRT2 = Math.sqrt(2.0);

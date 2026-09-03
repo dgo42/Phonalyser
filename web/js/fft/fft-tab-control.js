@@ -24,11 +24,11 @@ import { Events } from '../bus/events.js';
 import * as fileStore from '../io/file-store.js';
 import { putCal, getCal } from '../io/cal-store.js';
 import { CalibrationEntry } from '../store/preferences.js';
-import { registerShotCanvasRenderer, ensureShotRenderCanvas } from '../shell/screenshot.js';
+import { registerShotCanvasRenderer, ensureShotRenderCanvas } from '../ui/screenshot.js';
 import { TileTabs } from '../widgets/tile-tabs.js';
 import { PresetBar } from '../widgets/preset-bar.js';
 import { NumericStepModel, OFF_LABEL, UNIT_FAMILIES, bindStepField, stepFieldFor } from '../widgets/numeric-step-field.js';
-import { OVERLAP_LABEL } from './fft-overlap.js';
+import { OVERLAP_LABEL } from '../enums/fft-overlap.js';
 
 // Off is a distinct sentinel BELOW 1 so the averages dial reads Off ↔ 1 ↔ 2 ↔ 4 ... 128 ↔ ∞ -
 // with Off == 1 the wheel jumped 2 -> Off and 1 was unreachable. Engine behaviour is unchanged:
