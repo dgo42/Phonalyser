@@ -29,18 +29,17 @@
 // generator running. Like the FreqResp sweep it publishes
 // FREQRESP_MEASUREMENT_STARTED (every consumer - scope / FFT / generator / main
 // FreqResp - stops itself), waits for the shared capture + DAC to go idle
-// (waitForWorkersIdle, shared with FreqRespHost), then starts its OWN silent
+// (waitForWorkersIdle, shared with FreqRespController), then starts its OWN silent
 // LOG_SWEEP generator + acquires the shared capture and streams the looping notch
 // sweep. On close it stops the generator, releases the capture and publishes
 // FREQRESP_MEASUREMENT_STOPPED so the consumers re-enable themselves.
 //
 // Intended web adaptations of the Java dialog (all device/thread plumbing -
 // the analysis and display semantics are ported 1:1):
-//   - Java opens its own EXCLUSIVE JavaSound lines; the web's playback path is the
-//     shared dds-processor worklet, so the wizard starts the generator itself
-//     (engine.startGenerator with the config pointed at a silent LOG_SWEEP) and
-//     drives it via the NotchSweepEngine's postGen, restoring the pre-session DDS
-//     config + stopping the generator on close (mirror of FreqRespHost.captureAndDeconvolve).
+//   - Java opens its own EXCLUSIVE JavaSound lines; the web's NotchSweepEngine opens its
+//     OWN playback lane on the active backend (a silent looping LOG_SWEEP, un-muted once
+//     the capture is up) and closes it on close - the generator pane's lane is never
+//     touched.
 //   - Java's resolveDevice acquires the exclusive device; the web SharedCapture is
 //     ref-counted, acquired once by the NotchSweepEngine and released on close.
 //   - Java overlaps deconvolution with capture on a single-thread executor; the
@@ -94,7 +93,7 @@ const GRAB_RETRY_MS = 10;
 const PERCENT_FULL = 100.0;
 /** Give-up deadline for the OTHER panes' workers to release the device after the
  *  FREQRESP_MEASUREMENT_STARTED publish (Java DEVICE_RELEASE_TIMEOUT_MS; matches
- *  FreqRespHost's 2000 ms). */
+ *  FreqRespController's 2000 ms). */
 const DEVICE_RELEASE_TIMEOUT_MS = 2000;
 
 // --- Field defaults / ranges ---------------------------------------------------

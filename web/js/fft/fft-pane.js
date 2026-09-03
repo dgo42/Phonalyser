@@ -54,8 +54,9 @@ export class FftPane {
    * @param prefs  Preferences (the dBV offset the harmonic readout columns need).
    * @param deps   {view, viewCorrection, tileChips, isFftRec, isBusy, setBusy}
    *   - view: the FftView (Java holds `view` as a field) - the spectrum canvas painter.
-   *   - viewCorrection: the render-time FFT spectral corrections (FftViewCorrection), applied to
-   *       every live result before it is stored (Java FftView's plot-time .frc de-embed).
+   *   - viewCorrection: the view-side FFT corrections (FftViewCorrection: the IMD table off the
+   *       de-embedded spectrum + the cal gain the blue dots read), applied to every live result
+   *       before it is stored; the .frc de-embed itself already ran in the finalize stage.
    *   - tileChips: (...vals) => the `.tile` chip-span HTML (shared with the scope tiles).
    *   - isFftRec: () => engine.fft.recording - the controller owns the flag; the pane only reads it.
    *   - isBusy / setBusy: the shared async re-entrancy guard accessors (Record serializes with it).
@@ -105,9 +106,9 @@ export class FftPane {
 
     // Every displayed analyser result (Java FftView subscribes FFT_RESULT_AVAILABLE, published
     // by FftAnalyzerWorker after each analysis): r.channelLeft is stamped in FftController._emit
-    // off the channel the analyser ACTUALLY read (Java FftAnalyzerWorker:1872), and the .frc
-    // de-embed + the predistortion cal pick left()/right() off it (fft-view-correction.js) -
-    // so the view correction runs here, before the result becomes the pane's.
+    // off the channel the analyser ACTUALLY read (Java FftAnalyzerWorker:1872); the finalize
+    // stage's .frc de-embed and the predistortion cal pick left()/right() off it. The view-side
+    // correction (the IMD table) runs here, before the result becomes the pane's.
     const bus = MessageBus.instance();
     bus.subscribe(Events.FFT_RESULT_AVAILABLE, (r) => {
       if (!r) return;

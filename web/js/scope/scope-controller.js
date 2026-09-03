@@ -77,8 +77,9 @@ export class ScopeController {
     // ScopeController.captureEndReason). null for a user / programmatic stop, and when the FFT
     // claimed the one report first - the pane shows a dialog only for a non-null one.
     this._captureEndReason = null;
-    // Self-feed off the LIVE capture: Java consumers subscribe to CAPTURE_BATCH_AVAILABLE and read
-    // their own cursor - no central dispatcher pumps us. Feeds only while this scope is recording.
+    // Self-feed off the capture: CAPTURE_BATCH_AVAILABLE is the web's stand-in for the blocking
+    // awaitAvailable() Java's consumer sits in; this consumer reads its own cursor on it - no central
+    // dispatcher pumps us. Feeds only while this scope is recording.
     MessageBus.instance().subscribe(Events.CAPTURE_BATCH_AVAILABLE, () => {
       if (this._scopeOn) this.feedScope();
     });

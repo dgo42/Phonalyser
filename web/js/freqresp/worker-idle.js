@@ -4,7 +4,7 @@
  * GNU Affero General Public License v3 or later.
  */
 
-// Shared device-idle wait extracted from FreqRespHost (Java
+// Shared device-idle wait extracted from FreqRespController (Java
 // FreqRespAnalyzerWorker.waitForOtherWorkersStopped) so BOTH the Frequency-
 // Response sweep and the Tune-notch wizard can reuse it without duplicating the
 // poll loop. It has no state of its own - a plain module function that reads the

@@ -175,8 +175,8 @@ export class FreqRespTabControl {
     // The calibration rows + preset list + RIAA enable cascade build DOM text via t(), so they
     // run from seedTabs() in app.js's init AFTER the i18n bundle is loaded. The Filters /
     // Unevenness tabs build NumericStepFields whose unit suffixes come from t('unit.*'),
-    // so they are deferred there too (same ordering reason app.js runs initStepFields
-    // after applyI18n - building them here rendered raw "unit.*" keys + console misses).
+    // so they are deferred there too (the same ordering reason every pane builds its step
+    // fields after applyI18n - building them here rendered raw "unit.*" keys + console misses).
   }
 
   /** Builds the i18n-dependent tab UI (filter/unevenness fields, calibration rows, preset

@@ -5,10 +5,11 @@
  */
 
 // Faithful port of org.edgo.audio.measure.gui.freqresp.NotchSweepEngine, plus
-// the PURE analysis math of gui.freqresp.TuneNotchWizardDialog (power-of-two
-// loop period, 25 ms seam fades, sweep-band widening, deepest-null with
-// sub-bin parabolic refinement, target-frequency attenuation) exported as
-// stateless functions so the Tune-notch wizard UI can drive them.
+// the PURE loop geometry of gui.freqresp.TuneNotchWizardDialog (the power-of-two
+// loop period, the 25 ms seam fades, the sweep-band widening) exported as
+// stateless functions so the Tune-notch wizard UI can drive them. The
+// deepest-null and target-attenuation readouts are the wizard's own, read off
+// the drawn curve (see the note above the class).
 //
 // Self-contained CONTINUOUS play+capture for the Tune-notch wizard's live
 // sweep loop: start() configures the DDS worklet with a LOOPING Farina

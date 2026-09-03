@@ -9,8 +9,8 @@
  * controller owns the running flag) and reaches the SHELL state it does not own (the shared
  * `busy` re-entrancy guard, the FFT align combo) through injected
  * closures. The generator NumericStepFields (freq / amp / duty /
- * sweep / dual-tone) are built in app.js's initStepFields and reached here via the injected
- * getField; the io decode/save helpers + formLabel/formIcon + sfVal/outRate are injected too.
+ * sweep / dual-tone) are built by this pane's own buildStepFields; the io decode/save
+ * helpers + formLabel/formIcon + sfVal/outRate are injected.
  * Exposes syncFormUI() + restartGenerator() as public methods for the cross-pane callers (the
  * predistortion-wizard onApply, the fft init seed, the prefs dialog). Status-line writes go
  * straight to #status inline (verbatim from app.js), matching the moved handlers.
@@ -141,12 +141,12 @@ export class GeneratorPane {
   /** Push every generator pref into its control widget - the init seed + the FFT-preset
    *  recall mirror-back (app.js applyPrefsToUi delegates here). The toneHz / ampDbfs /
    *  tone2Hz / amp1Pct / amp2Pct / duty fields are owned by their NumericStepField
-   *  controllers (seeded in initStepFields); nothing to set for those here. */
+   *  controllers (seeded in buildStepFields); nothing to set for those here. */
   seedGeneratorControls() {
     const prefs = this.prefs;
     $('#signalForm').val(prefs.genSignalForm.get());
     // toneHz / ampDbfs / tone2Hz / amp1Pct / amp2Pct / duty / dither are owned by their
-    // NumericStepField controllers (seeded in initStepFields); here only the "Dither" caption's
+    // NumericStepField controllers (seeded in buildStepFields); here only the "Dither" caption's
     // bracketed companion readout is (re)rendered.
     this.updateDitherLabel();
     $('#outputChannel').val(prefs.genOutputChannels.get());

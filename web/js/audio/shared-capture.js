@@ -367,16 +367,17 @@ export class SharedCapture {
     this._buffer = null;
   }
 
-  /** Capture-thread -> main-thread hand-off: stage L/R into the shared ring, then notify the owner
-   *  so each active consumer can read off its OWN cursor (mirror SharedCapture's PCM batch listener
-   *  publishing CAPTURE_BATCH_AVAILABLE). */
+  /** Capture-thread -> main-thread hand-off: stage L/R into the shared ring (Java SharedCapture's
+   *  PCM batch listener appending to its ring), then wake the consumers so each reads off its OWN
+   *  cursor. */
   _onCaptureBatch(d) {
     const buf = this._buffer;
     if (!buf) return;
     buf.appendBatch(d.l, d.r, d.n);
     this._onBatch(d);
-    // Java SharedCapture publishes CAPTURE_BATCH_AVAILABLE; the scope + FFT consumers subscribe
-    // and read their own cursors (publishBatch).
+    // The wake-up: Java's consumers block in the ring's awaitAvailable(); a browser main thread
+    // cannot, so the scope + FFT consumers subscribe to CAPTURE_BATCH_AVAILABLE instead and read
+    // their own cursors (publishBatch).
     if (this._publishBatch) MessageBus.instance().publish(Events.CAPTURE_BATCH_AVAILABLE);
   }
 }

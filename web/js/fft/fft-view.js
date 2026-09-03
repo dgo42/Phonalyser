@@ -74,9 +74,10 @@ export class FftView {
     this.cv = canvas; this.g = canvas.getContext('2d');
     this.prefs = prefs;
     this.topDb = topDb; this.botDb = botDb;
-    // Java FftView.correctionStore - the loaded .frc de-embed cascade (FftViewCorrection), injected
-    // so the IMD path can draw the blue "before-cal" dots at dbFs plus the cascade's gain at each
-    // product's bin (Java drawImdDots, which reads the same held response).
+    // The view-side correction (FftViewCorrection), which holds the loaded .frc cascade's gain per
+    // bin as the finalize stage last sampled it - injected so the IMD path can draw the blue
+    // "before-cal" dots at dbFs plus that gain at each product's bin (Java drawImdDots, which
+    // reads the same held response off FftView.correctionStore).
     // Null in tests that construct FftView without it (the blue IMD pass is then skipped).
     this.correction = correction;
     // Java FftView.isGeneratorActive() - true while the generator is producing a

@@ -8,17 +8,17 @@
  * Faithful port of gui/scope/ScopePane. Owns the live scope view wiring (the ScopeView canvas,
  * the two navigation scrollbars, the Record LED, the measurement-table render + pop-out window,
  * the file-mode loaded-signal state) and IS the Host the scope SETTINGS strip (ScopeTabControl)
- * reaches it through - mirroring Java ScopePane implements ScopeTabControl.Host. The former
- * scopeHost closures (requestRedraw / refreshTiles / refreshFields / syncTriggerStart /
+ * reaches it through - mirroring Java ScopePane implements ScopeTabControl.Host: the Host
+ * methods (requestRedraw / refreshTiles / refreshFields / syncTriggerStart /
  * setTriggerControlsEnabled / syncOffsetScrollbar / redrawScrollbars / syncMeasChannelButtons /
- * syncMeasButtons / recState / onFileBack / stopCaptureForFileLoad / onSignalFileLoaded) are now
+ * syncMeasButtons / recState / onFileBack / stopCaptureForFileLoad / onSignalFileLoaded) are
  * the pane's public methods. render(uiLoad) is the scope branch of the MAIN rAF loop (which
  * lives in shell/main-tab.js and calls it each frame with the measured main-thread load, the one
  * view paced against it). Reads engine.scope.recording (the
  * controller owns the recording flag) and reaches the SHELL state it does not own (the shared
  * `busy` re-entrancy guard, the latest live scope frame) through
  * injected closures. The scope V/div + t/div + hysteresis NumericStepFields are
- * built in app.js's initStepFields and reached here via the injected getField; the ScopeView,
+ * built by ScopeTabControl.buildStepFields and reached here via the injected getField; the ScopeView,
  * the FlatScrollbar widget class (imported directly), and tileChips are injected too.
  */
 import { t } from '../i18n/i18n.js';
@@ -62,7 +62,7 @@ export class ScopePane {
    *                getLatestScope, syncCalibrateGate}
    *   - view: the ScopeView (Java holds `view` as a field) - the trace canvas painter,
    *       single-armed / file-mode state, latest measurement, auto-setup.
-   *   - getField: (id) => the scope NumericStepField (built in app.js initStepFields) - the
+   *   - getField: (id) => the scope NumericStepField (built by ScopeTabControl.buildStepFields) - the
    *       hysteresis field re-gate in setTriggerControlsEnabled.
    *   - tileChips: (...vals) => the `.tile` chip-span HTML (shared with the FFT tiles).
    *   - isScopeRec: () => engine.scope.recording - the controller owns the flag; the pane only reads it.

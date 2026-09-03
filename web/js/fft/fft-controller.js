@@ -7,8 +7,8 @@
  * per batch it pulls the new R-channel (ch1) samples, runs the buffer-and-analyze accumulate +
  * cross-frame coherent-averaging loop through the FFT worker / parallel pool (the faithful brain,
  * off the main thread), steers the generator via the frequency-lock loop, and honours stop-after-N.
- * The worker ACCUMULATOR stays RAW; the render-time .frc de-embed + mains comb correction run on a
- * per-frame COPY before emit (these move to the view layer, fft-view-correction.js, in a later step).
+ * The worker ACCUMULATOR stays RAW; the .frc de-embed + mains comb correction run on a per-frame
+ * COPY in the pipeline's finalize stage (fft-finalize.js) before the result is emitted.
  * Reads + steers the generator's snapped/FLL state through delegating accessors (it does not own it).
  */
 import { FftResult } from './fft-result.js';
@@ -284,9 +284,10 @@ export class FftController {
     // same threshold stays silent.
     prefs.fftStrongToneRelDb.addListener(() => this.resetAnalyses());
 
-    // Self-feed off the LIVE capture: Java consumers subscribe to CAPTURE_BATCH_AVAILABLE and read
-    // their own cursor - no central dispatcher pumps us. feedFft self-gates on pausedByStopN and a
-    // null reader; only the live capture publishes, so a measurement sweep never triggers it.
+    // Self-feed off the capture: CAPTURE_BATCH_AVAILABLE is the web's stand-in for the blocking
+    // awaitAvailable() Java's consumer sits in; this consumer reads its own cursor on it - no central
+    // dispatcher pumps us. feedFft self-gates on pausedByStopN and a null reader, and the subscriber
+    // on this consumer's own recording flag.
     MessageBus.instance().subscribe(Events.CAPTURE_BATCH_AVAILABLE, () => {
       if (this._fftOn) this.feedFft();
     });
@@ -1770,8 +1771,8 @@ export class FftController {
     const rate = this._inRate();
     r.binW = this.binW;
     // Stamp the channel the FFT ACTUALLY analyzed (Java FftAnalyzerWorker:1872
-    // r.channelLeft = wantLeft): the render-time .frc de-embed picks left()/right()
-    // off this (fft-view-correction.js) and the predistortion cal reads it.
+    // r.channelLeft = wantLeft): the finalize stage's .frc de-embed picks left()/right()
+    // off this (fft-finalize.js) and the predistortion cal reads it.
     r.channelLeft = this._wantLeft;
     // One-tick display lag (Java FftView startFillPercentTimer: shows
     // completedAnalyses − 1, min 0): the depth shown is the number of ticks
@@ -1795,8 +1796,8 @@ export class FftController {
       dropped: this.dropped, threads: this.poolSize, overlapPct: this.overlapPct, hopMs: liveHop / rate * 1000,
     };
     r.inRate = rate; r.snapped = this.snapped;
-    // The IMD table is computed off the DE-EMBEDDED spectrum, so it runs in the view correction
-    // (fft/fft-view-correction.js) alongside the .frc de-embed, not here.
+    // The IMD table is computed off the DE-EMBEDDED spectrum the finalize stage delivers, so it
+    // runs in the view correction (fft/fft-view-correction.js), not here.
 
     // Remembered for reemitDisplay (the stopped-state cal re-apply) - and as the identity
     // guard so a LOADED .fft file in the pane is never overwritten by a stale re-emit.

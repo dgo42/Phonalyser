@@ -135,10 +135,12 @@ const CONNECT_TIMEOUT_MS = 3000;
 // Every mutation publishes FFT_CALIBRATION_CHANGED; the view correction drops its held cascade
 // gain on it (Java FftView.onCalibrationChanged).
 const fftCorrectionStore = new CorrectionStore('FFT', Events.FFT_CALIBRATION_CHANGED);
-// Render-time FFT spectral corrections (.frc de-embed + mains + IMD) - applied in the VIEW path
-// (the FFT pane's FFT_RESULT_AVAILABLE subscriber), NOT in the engine; the coherent accumulator
-// stays raw. Both take the engine at construction, so both are built in init's audio-backend
-// block (see `engine`).
+// The FFT display corrections: the .frc de-embed, the plot-time mains comb and the statistics
+// recompute run in the analysis pipeline's finalize stage (fft/fft-finalize.js), which hands the
+// pane a finished spectrum; the coherent accumulator stays raw. FftViewCorrection adds the
+// view-side rest (the IMD table, the cal gain the blue dots read) in the FFT pane's
+// FFT_RESULT_AVAILABLE subscriber. Both take the engine at construction, so both are built in
+// init's audio-backend block (see `engine`).
 let fftViewCorrection;
 let fftView;
 const scopeView = new ScopeView(document.getElementById('scope'), { prefs });
@@ -406,8 +408,8 @@ async function restartFft() {
 // (L -> ch0, R -> ch1). Persist the choice AND push it to the engine so the
 // running analyzer reads the selected channel and resets its statistics +
 // accumulator (Java FftView:511/514 buttons -> setFftChannel -> fftChannelProperty
-// subscription -> resetStatistics). The .frc de-embed then picks the matching
-// channel off r.channelLeft (fft-view-correction.js), already done.
+// subscription -> resetStatistics). The finalize stage's .frc de-embed then picks the
+// matching channel off r.channelLeft (fft/fft-finalize.js), already done.
 $('.fft-pane .lr.l, .fft-pane .lr.r').on('click', function () {
   const isLeft = $(this).hasClass('l');
   $('.fft-pane .lr.l, .fft-pane .lr.r').removeClass('on'); $(this).addClass('on');

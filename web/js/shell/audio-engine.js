@@ -16,8 +16,8 @@
 //     the input AudioContext + capture-processor open on the first acquire and
 //     close on the last release; one shared SignalBuffer(inRate, 22 s) ring is fed
 //     by the capture handler. Each consumer gets its OWN SignalBufferReader cursor.
-//   - SCOPE CONSUMER - "latest window" reader: every batch, readLatest(SCOPE_LEN)
-//     of the R channel (ch1) -> onScope (mirror ScopeController, overrun-safe).
+//   - SCOPE CONSUMER - "latest window" reader: every batch, the newest scope-window
+//     samples of BOTH channels -> onScope (mirror ScopeController, overrun-safe).
 //   - FFT CONSUMER - contiguous-cursor reader: every batch, read() the new samples
 //     and feed the buffer-and-analyze accumulate+dispatch loop; OVERRUN re-anchors
 //     and resets fill (mirror FftController + the cross-tick coherent accumulator).
@@ -26,13 +26,13 @@
 //        ─-> [FftAnalyzer.analyze in a Worker]  (windowed FFTs + coherent/incoherent
 //           cross-frame averaging + fundamental/harmonics/THD/SNR)
 //        ─-> FftResult ─-> FLL(steer generator off fundamentalHzRefined)
-//        ─-> FFT_RESULT_AVAILABLE ─-> render-time .frc de-embed in the pane (RAW accumulator preserved)
+//        ─-> finalize stage (.frc de-embed + mains comb + statistics recompute; RAW accumulator preserved)
+//        ─-> FFT_RESULT_AVAILABLE ─-> the FFT pane (the IMD table on the view side)
 //
 // The accumulator the worker produces is RAW: the measured .frc (loopback /
-// filter frequency response) is subtracted at RENDER time from BOTH the trace
-// AND the THD/IMD table (the cascade in dsp/frc.js, applied by
-// fft/fft-view-correction.js) - it has NOTHING to do with
-// the generator. Default (no .frc loaded) = no correction.
+// filter frequency response) is divided out of a display copy - the trace AND
+// the THD/IMD table - by the cascade in dsp/frc.js, applied in fft/fft-finalize.js;
+// it has NOTHING to do with the generator. Default (no .frc loaded) = no correction.
 //
 // WHICH device each seam gets is the injected AudioBackend's decision (audio/backend.js, the
 // web's sound.AudioBackend): the engine asks it for a capture source per SharedCapture and for

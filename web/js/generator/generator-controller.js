@@ -944,7 +944,7 @@ export class GeneratorController {
     // (capture) rate the output device could not open at that rate and the buffer is
     // resampled to ctx.sampleRate - everything above ctx.sampleRate/2 is lost before it
     // ever reaches the DAC, so the deconvolution combs and spikes at HF. The caller
-    // (FreqRespHost) compares this against the capture rate and surfaces it.
+    // (FreqRespController) compares this against the capture rate and surfaces it.
     return ctx.sampleRate;
   }
 

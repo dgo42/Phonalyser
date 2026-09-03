@@ -7,12 +7,11 @@
  *
  * Faithful port of gui/fft/FftTabControl. Owns the FFT toolbar tabs and their bound
  * controls; reaches the FFT PANE (spectrum canvas / freq+mag scrollbars / Record LED /
- * readout+THD+IMD table / FFT render-loop branch, which stay in app.js) only through
+ * readout+THD+IMD table / FFT render-loop branch, fft-pane.js) only through
  * the narrow injected `host` object - mirroring Java FftTabControl->FftPane.Host
  * (getResult / setResult / applyPrefsToUi). The FFT NumericStepFields (manual-fundamental)
- * are built in app.js's initStepFields and reached here via the injected getField; the
- * io / fftViewCorrection / store / restartFft / tileChips collaborators + the shared
- * confirm dialog are injected too.
+ * are built by this control's own buildStepFields; the io / fftViewCorrection / store /
+ * restartFft / tileChips collaborators + the shared confirm dialog are injected.
  */
 import { t } from '../i18n/i18n.js';
 import { FftAnalyzer } from './fft-analyzer.js';

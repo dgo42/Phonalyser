@@ -15,7 +15,7 @@
  * trace uses the FFT line colour (the same signal, different lens).
  *
  * DEVIATION FROM THE DESKTOP: the web FreqResp sweep records the loopback in ONE shot
- * (FreqRespHost.runSweep) rather than streaming per-block RMS from the analyzer, so the
+ * (FreqRespController.runSweep) rather than streaming per-block RMS from the analyzer, so the
  * desktop's per-block captureProgress cadence isn't available live. The meter math here
  * is byte-for-byte the desktop's appendSample/instantaneousHz; the WIZARD drives it
  * post-hoc from the recorded buffer (a windowed RMS walk at a fixed block size), so the

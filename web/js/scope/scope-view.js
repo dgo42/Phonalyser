@@ -117,7 +117,7 @@ const SLIDER_TRI_LONG = 10;    // triangle long axis (into the grid)
 const SLIDER_GRAB_HALF = 9;    // hit-zone half-thickness perpendicular to the edge
 
 // Toolbar-field floors (Java ScopeTabControl.T_PER_DIV_MIN / V_PER_DIV_MIN; the
-// web NumericStepModels in app.js initStepFields carry the same min values) -
+// web ScopeTabControl's NumericStepModels carry the same min values) -
 // the rect zoom clamps its t/div + V/div writes to the same floors, or the
 // fields' re-sync would desync pref and display.
 const T_PER_DIV_MIN = 1e-6;

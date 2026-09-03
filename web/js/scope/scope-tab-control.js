@@ -9,9 +9,9 @@
  * render loop) for what Java's strip reaches through its ScopeView +
  * ScopeController pair (requestRedraw / applyViewState / the capture stop before
  * a signal-file load / onSignalFileLoaded). The scope V/div
- * + t/div + hysteresis + save-duration NumericStepFields are built in app.js's
- * initStepFields and reached here via the injected getField; the io / format
- * helpers + the shared confirm dialog + OscPreset are injected too.
+ * + t/div + hysteresis + save-duration NumericStepFields are built here
+ * (buildStepFields); the io / format helpers + the shared confirm dialog + OscPreset
+ * are injected.
  */
 import { t } from '../i18n/i18n.js';
 import { OscPreset } from '../store/preferences.js';
