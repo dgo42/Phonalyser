@@ -414,10 +414,6 @@ $('.fft-pane .lr.l, .fft-pane .lr.r').on('click', function () {
   prefs.fftChannel.set(isLeft ? 'L' : 'R');
   engine.fft.setFftChannel(isLeft ? 'L' : 'R');
 });
-// FreqResp L/R: the plot path consumes loadedFrc.left only; keep visual radio.
-$('#tab-fr .lr.l, #tab-fr .lr.r').on('click', function () {
-  $('#tab-fr .lr.l, #tab-fr .lr.r').removeClass('on'); $(this).addClass('on');
-});
 
 // ----- record LED (per-pane capture toggle) -----
 // Independent per-pane Record (Java: the scope and FFT panes each hold their own
