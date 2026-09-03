@@ -12,7 +12,7 @@
 // secure contexts).
 //
 // These helpers move bytes only; the format encoders/decoders live in
-// wav.js / frc.js / fft-spectrum.js / scope-capture.js.
+// wav.js / frc.js / scope-capture.js (and the FFT feature's own fft/fft-spectrum.js).
 
 /** True when the File System Access API is usable (Chromium, secure context). */
 const HAS_FS_ACCESS =

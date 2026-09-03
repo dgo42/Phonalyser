@@ -15,12 +15,12 @@ import {
   adaptiveLogLabels, logMajorTicks, logMinorTicks,
   niceLinearMajors, niceLinearMinors, isSubDecade, isDecadeValue, labelStep,
   formatFreqTick, formatFreqDecadeTick, formatFrequencyInteger,
-} from './axis-format.js';
+} from '../ui/axis-format.js';
 // Drag-select rectangular zoom + Ctrl+Z undo (Java AbstractMeasurementView's
 // installRectZoom base machinery); this view supplies the log-aware freq / dB
 // pixel↔value mappings through the injected callbacks (Java FftView overrides).
-import { RectZoom } from './rect-zoom.js';
-import { uiFont } from './ui-font.js';
+import { RectZoom } from '../ui/rect-zoom.js';
+import { uiFont } from '../ui/ui-font.js';
 // Shared per-tone lobe lift (data-derived floor + lobe extent + log-domain
 // stretch). The .frc de-embed uses the same class for its lobe GEOMETRY (the
 // spans a tone-only row writes across, dsp/frc.js toneLobeSpans) but no longer

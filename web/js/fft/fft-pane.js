@@ -26,7 +26,7 @@ import { Events } from '../bus/events.js';
 import { t } from '../i18n/i18n.js';
 import { backendDisplayName } from '../audio/audio-backend-type.js';
 import { debug, formatMs, isDebug } from '../util/debug.js';
-import { composePaneShot, livePaneSize, stampShotOverlay } from '../shell/screenshot.js';
+import { composePaneShot, livePaneSize, stampShotOverlay } from '../ui/screenshot.js';
 
 // Resolution of the FlatScrollbars (Java FftPane.SCROLL_RANGE) - any large integer; slider
 // values map to fractional pan positions. dBFS magnitude floor (Java Constants.MAG_FLOOR_DBFS
@@ -699,7 +699,7 @@ export class FftPane {
   }
 
   /** Renders the FULL FFT pane (collapsed tabs) at w x h via the shared clone-DOM composite
-   *  (shell/screenshot.js composePaneShot), stamping the brand watermark + caption through the
+   *  (ui/screenshot.js composePaneShot), stamping the brand watermark + caption through the
    *  one shared overlay. Returns a Promise<Blob> in `mime`. */
   async renderShot(comment, w, h, mime) {
     const paneEl = document.getElementById('fftPane');

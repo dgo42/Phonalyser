@@ -21,11 +21,11 @@ import { CorrectionStore } from '../common/correction-store.js';
 import { FreqRespWizard } from './wizard.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
-import { composePaneShot, livePaneSize, stampShotOverlay } from '../shell/screenshot.js';
+import { composePaneShot, livePaneSize, stampShotOverlay } from '../ui/screenshot.js';
 
 export class FreqRespPane {
   /**
-   * @param {import('../audio/backend.js').AudioEngine} engine the live engine
+   * @param {import('../shell/audio-engine.js').AudioEngine} engine the live engine
    * @param {object} prefs Preferences.instance()
    * @param {{saveFile:Function, openFile:Function, bytesToText:Function, showAlert:Function}} io
    *        file-picker glue + the shell's one alert surface (the clipping warning)
@@ -178,7 +178,7 @@ export class FreqRespPane {
   }
 
   /** Renders the FULL FreqResp pane (collapsed tabs) at w x h via the shared clone-DOM
-   *  composite (shell/screenshot.js composePaneShot), stamping the brand watermark + caption
+   *  composite (ui/screenshot.js composePaneShot), stamping the brand watermark + caption
    *  through the one shared overlay. Returns a Promise<Blob> in `mime`. */
   async renderShot(comment, w, h, mime) {
     const paneEl = document.getElementById('freqRespPane');
