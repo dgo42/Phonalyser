@@ -68,32 +68,21 @@ export class AudioEngine {
       // switch between sessions needs no push-down into the controller.
       openPlayback: (deps) => this._backend.openPlayback(deps),
     });
-    // Shared capture (gui/sound/SharedCapture): the one ref-counted ADC device + ring. Consumers
-    // (scope / FFT / loopback rec) acquire()/release() their own readers; per batch it fans out to
-    // _dispatchBatch so each consumer reads off its own cursor.
+    // Shared capture (gui/sound/SharedCapture): the ONE ref-counted ADC device + ring. Every
+    // consumer - the scope, the FFT, the FreqResp sweep's recording, the Tune-notch wizard's loop -
+    // acquire()s/release()s its own reader over it, exactly as each Java consumer acquires
+    // SharedCapture.instance() (ScopeController, FftAnalyzerWorker, SweepCapture,
+    // NotchSweepEngine). A measurement is modal: it takes the device over only once the live
+    // consumers have released it, so on a single-line device (the QA40x) nothing contends.
     this._capture = new SharedCapture({
       prefs,
       status: (t) => this._status(t),
-      // The live capture publishes CAPTURE_BATCH_AVAILABLE; ScopeController + FftController
-      // subscribe and self-feed off their own cursors (no central _dispatchBatch router).
+      // The capture publishes CAPTURE_BATCH_AVAILABLE; ScopeController + FftController subscribe
+      // and self-feed off their own cursors (no central router).
       publishBatch: true,
+      // The FreqResp loopback recording tap - fed the same batch the ring was (see _recordBatch).
+      onBatch: (d) => this._recordBatch(d),
       computeAnalysisFreqs: () => this._gen.computeAnalysisFreqs(),
-      captureSource: this._backend.openCapture(),
-    });
-    // DEDICATED MEASUREMENT capture (Java CaptureWithGenerator / NotchSweepEngine each open
-    // their OWN device line): the FreqResp sweep + Tune-notch wizard acquire/release THIS
-    // instance - a SEPARATE input device line from the scope/FFT _capture above - so a
-    // measurement never rides the live consumers' ring. Its batch fan-out is the FreqResp
-    // loopback recording tap only (the Tune-notch wizard reads this ring via its own cursor).
-    this._measCapture = new SharedCapture({
-      prefs,
-      status: (t) => this._status(t),
-      onBatch: (d) => this._dispatchMeasBatch(d),
-      computeAnalysisFreqs: () => this._gen.computeAnalysisFreqs(),
-      // Its OWN device for the active backend - a second input line, device-isolated from the
-      // live one above. On the QA40x there is only ONE line: the duplex engine refuses a second
-      // capture consumer loudly, which is right, because a measurement is modal and takes the
-      // device over only once the live consumers have released it.
       captureSource: this._backend.openCapture(),
     });
     // Scope consumer (gui/scope/ScopeController): a latest-window reader of the shared capture.
@@ -114,9 +103,9 @@ export class AudioEngine {
     // sweep deconvolves both ADC channels against the same reference (Java FreqRespAnalyzer's
     // single stereo pass: rec.left() / rec.right()).
     this._recChunks = null;
-    // The measurement ring's own cursor for that recording (Java SweepCapture holds exactly this
-    // reader) and the absolute ring position its first frame sits at - together they turn a ring
-    // position into an offset into the recording (see dropRecordingBefore).
+    // The ring's own cursor for that recording (Java SweepCapture holds exactly this reader) and
+    // the absolute ring position its first frame sits at - together they turn a ring position
+    // into an offset into the recording (see dropRecordingBefore).
     this._recReader = null;
     this._recBasePos = 0;
   }
@@ -140,10 +129,6 @@ export class AudioEngine {
    *  callbacks) rather than through a fat delegating facade (Java: panes own their controllers). */
   get generator() { return this._gen; }
   get capture() { return this._capture; }
-  /** The dedicated MEASUREMENT capture (the FreqResp sweep's and the Tune-notch wizard's own
-   *  input line) - exposed so a measurement can read the rate the device actually granted it
-   *  (inSampleRate) once its recording has opened. */
-  get measurementCapture() { return this._measCapture; }
   get scope() { return this._scope; }
   get fft() { return this._fft; }
 
@@ -151,7 +136,7 @@ export class AudioEngine {
    *  is open (any consumer holds a reference). Mirrors SharedCapture.isCapturing
    *  ORed with the generator-running state; freqresp/predistortion gate on it. */
   get running() {
-    return this._genOn || this._capture.refCount > 0 || this._measCapture.refCount > 0;
+    return this._genOn || this._capture.refCount > 0;
   }
 
   /** True when BOTH the input and output devices are genuinely free - no consumer holds the
@@ -163,7 +148,6 @@ export class AudioEngine {
    *  NotReadableError (a self-contention). Composed from the two controllers' context state. */
   get deviceIdle() {
     return this._capture.refCount === 0 && !this._capture.contextOpen
-      && this._measCapture.refCount === 0 && !this._measCapture.contextOpen
       && !this._gen.running && !this._gen.filePlaying && !this._gen.outputContextOpen;
   }
 
@@ -173,26 +157,20 @@ export class AudioEngine {
     if (this._genOn && this.genNode) this.genNode.port.postMessage(msg);
   }
 
-  /** Begins accumulating raw L AND R channel capture samples for a loopback
-   *  recording (freqresp stereo sweep). Tapped by the capture handler. If no consumer
-   *  holds the shared capture open, acquires its OWN reference for the duration of
-   *  the recording (released by stopCaptureRecording) so the loopback is captured
-   *  even when neither the scope nor the FFT is recording. */
+  /** Begins accumulating raw L AND R channel capture samples for a loopback recording (freqresp
+   *  stereo sweep), tapped per batch by _recordBatch. Takes its OWN reference on the shared
+   *  capture for the duration of the recording (released by stopCaptureRecording), so the device
+   *  opens for the sweep when neither the scope nor the FFT holds it - Java SweepCapture.run
+   *  acquires the same way. */
   async startCaptureRecording() {
     this._recChunks = { l: [], r: [] };
-    this._recOwnsCapture = false;
-    this._recReader = null;
-    // Open our OWN measurement device line (device-isolated from scope/FFT). A measurement is
-    // modal, so _measCapture.refCount is 0 here and we always acquire our own reference.
-    if (this._measCapture.refCount === 0) {
-      const reader = await this._measCapture.acquire();
-      this._recOwnsCapture = (reader != null);
-      this._recReader = reader;
-    }
+    const reader = await this._capture.acquire();
+    this._recOwnsCapture = (reader != null);
+    this._recReader = reader;
     this._rebaseRecording();
   }
 
-  /** The measurement ring's cursor for the in-flight recording - the reader Java's SweepCapture
+  /** The ring's cursor for the in-flight recording - the reader Java's SweepCapture
    *  holds: a remote sweep reads the bench's in-band sweep mark and the stream's terminal state
    *  off it (getSweepMarkPos / isFinished). null when nothing is recording, or when the device
    *  could not be opened. The samples themselves still travel through the tap; this cursor is
@@ -265,7 +243,7 @@ export class AudioEngine {
     };
     const left = concat(rec.l);
     const right = concat(rec.r);
-    if (this._recOwnsCapture) { this._recOwnsCapture = false; await this._measCapture.release(); }
+    if (this._recOwnsCapture) { this._recOwnsCapture = false; await this._capture.release(); }
     return { left, right };
   }
 
@@ -389,28 +367,8 @@ export class AudioEngine {
   // -------------------------------------------------------------------------
   // CAPTURE orchestration - the device + ring + refcount live in SharedCapture
   // (shared-capture.js, this._capture). What remains here is the engine-side
-  // consumer wiring: reopen-on-device-change + the per-batch fan-out to the
-  // loopback rec tap / scope / FFT.
+  // consumer wiring: the Preferences-dialog bracket + the loopback recording tap.
   // -------------------------------------------------------------------------
-
-  /** Forces the shared capture device to close and reopen with the CURRENT
-   *  input device / rate of the active backend's preferences, re-issuing fresh readers to every active
-   *  consumer (scope / FFT / loopback recording) so a live input-device change
-   *  takes effect immediately - no page reload, no stop/start. No-op when the
-   *  device isn't open (the NEXT acquire already opens the device the preferences name).
-   *  Mirrors the Java behaviour where reopening the SharedCapture re-attaches the
-   *  consumers' SignalBufferReaders to the fresh ring. */
-  async reopenCaptureDevice() {
-    if (this._capture.refCount === 0) return;   // closed -> next start picks up the new id
-    // Remember which consumers were attached; teardown drops the refcount to 0.
-    const scopeWas = this._scope.recording, fftWas = this._fft.recording;
-    await this._capture.teardown();
-    // Re-acquire once per previously-attached consumer so the refcount is restored.
-    // Only the LIVE scope/FFT capture is reopened here; a measurement runs on its own device
-    // line (_measCapture) and is modal, so it is never live during a device-selector change.
-    if (scopeWas) await this._scope.reattach();
-    if (fftWas) await this._fft.reattach();
-  }
 
   /** Preferences-dialog bracket, phase 1 (Java MainWindow ->
    *  MultifunctionalTab.beforeApplyBackendChanges): STOP each consumer whose direction CHANGED,
@@ -447,11 +405,10 @@ export class AudioEngine {
     if (outputChanged || backendChanged) await this._gen.startPlayForPrefs();
   }
 
-  /** Per-batch fan-out for the dedicated MEASUREMENT capture (_measCapture): the FreqResp
-   *  stereo loopback recording tap - keep BOTH ADC channels (L = ch0, R = ch1) for the
-   *  deconvolution. The Tune-notch wizard reads the measurement ring through its own cursor,
-   *  so it needs nothing here. */
-  _dispatchMeasBatch(d) {
+  /** The FreqResp stereo loopback recording tap, fed every batch the shared capture stages into
+   *  its ring (SharedCapture.onBatch): keep BOTH ADC channels (L = ch0, R = ch1) for the
+   *  deconvolution. Nothing to do while no recording is in flight. */
+  _recordBatch(d) {
     if (this._recChunks) {
       this._recChunks.l.push(Float64Array.from(d.l.subarray(0, d.n)));
       this._recChunks.r.push(Float64Array.from(d.r.subarray(0, d.n)));
@@ -475,24 +432,13 @@ export class AudioEngine {
    *  (mirror SharedCapture.release). */
   async releaseCaptureReader() { return this._capture.release(); }
 
-  /** Acquires a cursor over the DEDICATED MEASUREMENT capture ring (the Tune-notch wizard's
-   *  live sweep loop) - its OWN device line, isolated from the scope/FFT capture above.
-   *  Returns the SignalBufferReader or null; pair with {@link #releaseMeasurementReader}. */
-  async acquireMeasurementReader() { return this._measCapture.acquire(); }
-
-  /** Releases one reference on the measurement capture ({@link #acquireMeasurementReader}). */
-  async releaseMeasurementReader() { return this._measCapture.release(); }
-
-  /** The last MEASUREMENT-device open failure message (surfaced when a FreqResp / Tune-notch
-   *  capture fails to open) - the measurement capture's error, not the scope/FFT one. */
-  getMeasurementStartError() { return this._measCapture.getLastStartError(); }
-
   /** The shared ring capacity in frames (BUFFER_SECONDS · inRate) - the streaming
    *  dispatch routes a request longer than this to the forward-record path. */
   getCaptureCapacity() { return this._capture.getCapacity(); }
 
-  /** The last input-device open failure message (for the streaming-save error
-   *  surface when acquireCaptureReader returns null). */
+  /** The last input-device open failure message (for the streaming-save error surface when
+   *  acquireCaptureReader returns null, and the FreqResp / Tune-notch refusal when their
+   *  acquire returns null). */
   getLastStartError() { return this._capture.getLastStartError(); }
 
   readZoomedWindow() { return this._scope.readZoomedWindow(); }

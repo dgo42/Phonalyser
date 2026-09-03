@@ -232,8 +232,8 @@ export class TuneNotchWizard {
     this._teardownDone = true;
     /** The in-flight sweep loop, awaited on close (Java sweepThread.join). */
     this._loopPromise = null;
-    /** The continuous play+capture session; closed once on dialog close. It owns the
-     *  measurement capture line, the generator lifecycle, and the DDS-config snapshot. */
+    /** The continuous play+capture session; closed once on dialog close. It holds the
+     *  capture reference and owns the generator lifecycle and the DDS-config snapshot. */
     this._notchEngine = null;
   }
 
@@ -540,9 +540,9 @@ export class TuneNotchWizard {
 
       const notch = new NotchSweepEngine({
         capture: {
-          acquire: () => engine.acquireMeasurementReader(),
-          release: () => engine.releaseMeasurementReader(),
-          getLastStartError: () => engine.getMeasurementStartError(),
+          acquire: () => engine.acquireCaptureReader(),
+          release: () => engine.releaseCaptureReader(),
+          getLastStartError: () => engine.getLastStartError(),
         },
         // The engine's OWN playback lane comes from the active backend, opened on the
         // configured output device with the configured generator dither (Java: its own
@@ -568,9 +568,9 @@ export class TuneNotchWizard {
       if (!this._running) return;
 
       // NotchSweepEngine owns the whole session: it opens its OWN playback lane with a silent
-      // looping Farina sweep, opens its OWN measurement capture line (device-isolated from
-      // scope/FFT), then un-mutes at the real amplitude - Java's engine owns its own generator
-      // lane the same way. notch.close() closes both.
+      // looping Farina sweep, takes its reader over the shared capture (the live consumers
+      // released it above), then un-mutes at the real amplitude - Java's engine owns its own
+      // generator lane the same way. notch.close() closes both.
       const band = sweepBand(this._curStartHz, this._curStopHz);
       await notch.start(band[0], band[1], this._curAmpVrms, dacFsVrms, sweepSamples, fadeSamples,
         this._curOutputChannels, rightLaneScale);
@@ -904,7 +904,7 @@ export class TuneNotchWizard {
     if (this._teardownDone) return;
     this._teardownDone = true;
     // NotchSweepEngine owns its capture + generator lifecycle + DDS-config snapshot now;
-    // close() releases the measurement capture, stops the generator, and restores the config.
+    // close() releases its capture reference, stops the generator, and restores the config.
     const notch = this._notchEngine;
     this._notchEngine = null;
     if (notch) {

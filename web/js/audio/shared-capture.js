@@ -87,9 +87,9 @@ export class SharedCapture {
     this._status = status || (() => {});
     this._onBatch = onBatch || (() => {});
     this._computeAnalysisFreqs = computeAnalysisFreqs || (() => {});
-    // When true, publish CAPTURE_BATCH_AVAILABLE after each staged batch so consumers can
-    // self-feed off their own cursors (the LIVE scope/FFT capture). The measurement capture
-    // leaves this false so a sweep's batches never trigger the live consumers.
+    // When true, publish CAPTURE_BATCH_AVAILABLE after each staged batch so the scope + FFT
+    // consumers can self-feed off their own cursors. Off, the ring is fed silently - a capture
+    // built without those consumers (a test's) wants no bus traffic.
     this._publishBatch = !!publishBatch;
     /** @type {CaptureSource} */
     this._source = captureSource || new WebAudioCaptureSource({ status: (t) => this._status(t) });
@@ -376,7 +376,7 @@ export class SharedCapture {
     buf.appendBatch(d.l, d.r, d.n);
     this._onBatch(d);
     // Java SharedCapture publishes CAPTURE_BATCH_AVAILABLE; the scope + FFT consumers subscribe
-    // and read their own cursors. Only the live capture opts in (publishBatch).
+    // and read their own cursors (publishBatch).
     if (this._publishBatch) MessageBus.instance().publish(Events.CAPTURE_BATCH_AVAILABLE);
   }
 }

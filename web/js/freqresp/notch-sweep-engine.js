@@ -44,12 +44,12 @@
 //     control port once the capture is up; close() closes the lane. The kernel's looping
 //     logSweepNext IS the port of the Java generator's, so the seam-fade semantics are
 //     identical. The generator pane's own lane and preferences are never touched.
-//   - Capture uses an injected DEDICATED measurement capture (acquire/release) - a SEPARATE
-//     input device line from the live scope/FFT capture, so a measurement never rides the live
-//     consumers' ring (Java opens its own device line per measurement: "no device-line reuse
-//     across captures"). Its 22 s SignalBuffer ring stands in for Java's private RING_PERIODS
-//     ring; latestPeriod() maps onto readLatest() with a session-start anchor so pre-session
-//     audio can never be served. The capture worklet delivers normalised [-1, +1] floats, so
+//   - Capture is the injected shared capture (acquire/release): this engine takes its own
+//     reader over the ONE ring, as Java's NotchSweepEngine acquires SharedCapture.instance().
+//     The live consumers have released the device before the wizard starts, so the session has
+//     it to itself. The 22 s SignalBuffer ring stands in for Java's private RING_PERIODS ring;
+//     latestPeriod() maps onto readLatest() with a session-start anchor so pre-session audio
+//     can never be served. The capture worklet delivers normalised [-1, +1] floats, so
 //     Java's raw-ADC-code/halfRange conversion (bitDepth/ditherBits) does not exist here - an
 //     intended web divergence (no bit-depth selector).
 //   - sweepRef() re-renders the reference locally (renderLogSweep, the port of
@@ -160,7 +160,7 @@ export class NotchSweepEngine {
    * @param {Object} deps injected collaborators (the web stand-ins for Java's
    *   DeviceRef pair; the capture bit depth is an intended web divergence)
    * @param {import('../audio/shared-capture.js').SharedCapture} deps.capture
-   *   the dedicated MEASUREMENT capture (acquired on start, released on close)
+   *   the shared capture (this session's reader is acquired on start, released on close)
    * @param {(deps: Object) => Object} deps.openPlayback the active backend's PlaybackSink
    *   factory (AudioBackend.openPlayback) - this engine opens and closes its OWN lane on it,
    *   as Java's engine drives its own GeneratorLane
@@ -173,7 +173,7 @@ export class NotchSweepEngine {
    *   clock the emitted loop is counted in, independent of the ADC's
    */
   constructor({ capture, openPlayback, outputDeviceId, ditherBits, captureRateHz, playbackRateHz }) {
-    this._capture = capture;                 // the dedicated MEASUREMENT capture (own device line)
+    this._capture = capture;                 // the shared capture (this session's own reader over it)
     this._openPlayback = openPlayback;       // (deps) => the active backend's PlaybackSink
     this._outputDeviceId = outputDeviceId;   // the configured output device the lane opens on
     this._ditherBits = ditherBits;           // the configured generator dither, fixed at the open
@@ -181,7 +181,7 @@ export class NotchSweepEngine {
     this._playbackRateHz = playbackRateHz;
     this._sink = null;                       // this session's own playback lane, null while closed
     // Session state, set up in start() and torn down in close().
-    this._reader = null;         // SignalBufferReader over the measurement ring
+    this._reader = null;         // SignalBufferReader over the shared ring
     this._startWritePos = 0;     // ring write position at start() - the anchor
     this._sweepSamples = 0;      // one loop period in CAPTURE samples
     this._fadeSamples = 0;       // per-side seam fade in CAPTURE samples
@@ -332,7 +332,7 @@ export class NotchSweepEngine {
     }
     this._sink = sink;
 
-    // Open OUR OWN measurement capture line (device-isolated from scope/FFT).
+    // Take this session's reader over the shared capture (opening the device if nothing holds it).
     this._reader = await this._capture.acquire();
     if (!this._reader) {
       const err = this._capture.getLastStartError() || 'capture start failed';
@@ -445,7 +445,7 @@ export class NotchSweepEngine {
   }
 
   /**
-   * Ends the streaming session ONCE: releases the measurement capture reference
+   * Ends the streaming session ONCE: releases this session's capture reference
    * (closing the input device if this was the last consumer) and closes this
    * session's own playback lane (Java NotchSweepEngine.close stops its own
    * GeneratorLane). Idempotent; a stray setBand() after close is a no-op.

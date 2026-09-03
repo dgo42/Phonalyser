@@ -321,12 +321,12 @@ export class FreqRespController {
       if (this._cancelled) return null;
 
       // Open the CAPTURE device FIRST so the sweep is authored at the rate the browser ACTUALLY
-      // granted the ADC - the measurement capture reports it once open. Authoring the
+      // granted the ADC - the shared capture reports it once open. Authoring the
       // reference / played buffer / deconvolution at the NOMINAL requested rate instead
       // time-scales the capture against the reference (the comb-of-nulls + "runs faster" bug).
       await engine.startCaptureRecording();
       recStarted = true;
-      captureRate      = engine.measurementCapture.inSampleRate || this.captureRateHz();   // ACTUAL granted ADC rate
+      captureRate      = engine.capture.inSampleRate || this.captureRateHz();   // ACTUAL granted ADC rate
       playbackRate     = this.playbackRateHz();         // the DAC's own configured rate
       recSweepSamples  = Math.round(durSec * captureRate);
       recLeadInSamples = Math.round(leadInSec * captureRate);
@@ -387,7 +387,7 @@ export class FreqRespController {
       // has played into nothing.
       const reader = engine.recordingReader();
       if (remote && reader == null) {
-        throw new Error(engine.getMeasurementStartError() || t('freqResp.error.noInputDevice'));
+        throw new Error(engine.getLastStartError() || t('freqResp.error.noInputDevice'));
       }
       // Marks recorded after this position are THIS sweep's; a stale one from an earlier sweep on
       // the same stream is never mistaken for it (SweepCapture's armedAt, taken before the start).
@@ -436,7 +436,7 @@ export class FreqRespController {
       if (!rec.left || rec.left.length === 0) {
         // Device never delivered a sample (open failure / permission denied) - surface the
         // capture layer's reason; the shared finally closes the modal either way.
-        throw new Error(engine.getMeasurementStartError() || t('freqResp.error.noInputDevice'));
+        throw new Error(engine.getLastStartError() || t('freqResp.error.noInputDevice'));
       }
 
       // Output grid sampled at the deconvolution's FFT bin centres so each bin is read with

@@ -191,11 +191,6 @@ test('the capture source SharedCapture was given resolves the active backend at 
   assert.deepEqual(log, ['acquire 96000']);   // no second engine acquire
 });
 
-test('the measurement capture gets its OWN device, not the live one', () => {
-  const engine = engineOver(fakePrefs(WEB_AUDIO));
-  assert.notEqual(engine._capture._source, engine._measCapture._source);
-});
-
 test('the playback sink GeneratorController was given is the active backend\'s', () => {
   const prefs = fakePrefs(WEB_AUDIO);
   const engine = engineOver(prefs, new FakeManager([]));

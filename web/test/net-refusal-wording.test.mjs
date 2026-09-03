@@ -181,7 +181,7 @@ test('B8/B9 capture: a device somebody else holds names the CODE and the HOLDER,
   assert.match(shown, /held by Developer's laptop/, 'WHO holds it - the actionable half');
   assert.doesNotMatch(shown, /reason unknown/);
   assert.equal(capture.getLastStartError(), shown,
-    'the freqresp lane reads this field (backend.getMeasurementStartError), so the two must be '
+    'the freqresp lane reads this field (AudioEngine.getLastStartError), so the two must be '
     + 'the same sentence');
 });
 
