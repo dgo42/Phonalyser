@@ -190,6 +190,15 @@ export class FreqRespTabControl {
     this.refreshPresetList();
     this.refreshRiaaEnable();
     this.refreshUnevenTile();
+    // The Settings tile follows its four preferences (Java's TileTabFolder re-asks
+    // freqRespTabTiles on every refresh): a field edit, a preset recall, the wizard's Apply and
+    // a ceiling clamp all write the preference, so all of them show on the tile.
+    const prefs = this.prefs;
+    for (const p of [prefs.freqRespStartHz, prefs.freqRespStopHz, prefs.freqRespAmplitude,
+      prefs.freqRespSweepPoints, prefs.freqRespFftSize]) {
+      p.addListener(() => this.updateSettingsTabSub());
+    }
+    this.updateSettingsTabSub();
   }
 
   /** Re-renders every step field's unit suffix after a UI-language switch. */
@@ -197,6 +206,45 @@ export class FreqRespTabControl {
     for (const f of Object.values(this._sweepFields)) f.refresh();
     for (const f of Object.values(this._filterFields)) f.refresh();
     for (const f of [this._unevenDbField, this._unevenStartField, this._unevenStopField]) if (f) f.refresh();
+    this.updateSettingsTabSub();   // its tooltips are localized
+  }
+
+  /** Settings tab tile chips (Java freqRespTabTiles SETTINGS branch): the sweep band, the drive
+   *  amplitude, the point count and the deconvolution FFT size, each read off its preference. */
+  updateSettingsTabSub() {
+    const $ = this.$, prefs = this.prefs;
+    const lo = this._shortHz(prefs.freqRespStartHz.get());
+    const hi = this._shortHz(prefs.freqRespStopHz.get());
+    const amp = prefs.freqRespAmplitudeVrms.get();
+    const points = prefs.freqRespSweepPoints.get();
+    // The FFT size as the combo names it (Java FFT_SIZE_LABELS: 524288 -> "512k"); a size the
+    // combo does not offer falls back to the short count.
+    const fftLabel = $('#frFft option:selected').text() || this._shortCount(prefs.freqRespFftSize.get());
+    const chips = [
+      [`${lo}-${hi}`, t('freqResp.tile.range', lo, hi)],
+      [`${amp.toFixed(2)}V`, t('freqResp.tile.amplitude', `${amp.toFixed(2)} V`)],
+      [`${this._shortCount(points)} pts`, t('freqResp.tile.points', points)],
+      [fftLabel, t('freqResp.tile.fftSize', fftLabel)],
+    ];
+    $('#frTabSub').html(chips.map(([text, title]) => `<span class="tile" title="${title}">${text}</span>`).join(''));
+  }
+
+  /** Short Hz for a tile: 1600 -> "1.6k", 20000 -> "20k", 150000 -> "150k", 20 -> "20", 1.6 ->
+   *  "1.6" (Java FreqRespTabControl.formatShortHz). */
+  _shortHz(hz) {
+    if (hz >= 1000) {
+      const k = hz / 1000;
+      if (k >= 10) return `${Math.round(k)}k`;
+      return `${k.toFixed(1)}k`.replace('.0k', 'k');
+    }
+    return hz === Math.floor(hz) ? String(hz) : hz.toFixed(1);
+  }
+
+  /** Short count for a tile: 65536 -> "66k", 1048576 -> "1M" (Java formatShortCount). */
+  _shortCount(n) {
+    if (n >= 1000000) return `${Math.round(n / 1000000)}M`;
+    if (n >= 1000) return `${Math.round(n / 1000)}k`;
+    return String(n);
   }
 
   /** Builds the Settings tab's sweep fields from the `.numfield` DOM (Java FreqRespTabControl
@@ -958,7 +1006,7 @@ export class FreqRespTabControl {
       // Nyquist for a loaded file comes from the file's own sample_rate_hz header; only legacy
       // headerless files fall back to the live input rate (Java openLoadDialog change).
       const fileSr = readSampleRateHz(text);
-      const sr = fileSr > 0 ? fileSr : this.engine.config.inRate;
+      const sr = fileSr > 0 ? fileSr : this.prefs.current().inputSampleRate;
       this.view.setLeftResult(makeFreqRespResult('L', sr, cL.freqs, cL.magLin, cL.phaseRad, params, f.name, true));
       this.view.setRightResult(makeFreqRespResult('R', sr, cR.freqs, cR.magLin, cR.phaseRad, params, f.name, true));
       this.view.sourceFilePath = f.name;
