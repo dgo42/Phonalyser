@@ -347,29 +347,11 @@ export class PreferencesDialog {
       // frequency fields on AUDIO_FORMAT_CHANGED below, the FreqResp strip its sweep band on
       // the rate combos.)
 
-      // Flow the committed device/rate into the live engine config so each restart re-acquires there.
-      if (captureChanged) {
-        this.engine.config.inDeviceId = inDev;
-        this.engine.config.inRate = inR || this.engine.config.inRate;
-      }
-      if (outputChanged) {
-        this.engine.config.outDeviceId = outDev;
-        // The committed OUTPUT rate must flow like the input's: the generator restart
-        // in afterApplyBackendChanges reopens its sink straight from this config - the
-        // one start that does NOT pass readConfig(), which heals the config from the
-        // combos on every pane-button start. Left stale, a shared-clock backend (the
-        // QA40x's one reg-9 clock, the loopback's one session format) had its
-        // just-changed clock re-locked to the OLD rate by the playing generator's
-        // reopen: the capture then analysed at the committed rate while the device ran
-        // the old one, and every tone displayed scaled by the two rates' ratio - with
-        // the generator stopped the same change landed, which is what hid it.
-        this.engine.config.outRate = outR || this.engine.config.outRate;
-      }
-
-      // The committed audio format is now in the engine config, so anything derived from it is
-      // stale until it re-reads: the generator's snap brackets sit on the CAPTURE rate's bin
-      // grid. Announced here, once, at the commit - Java's AUDIO_FORMAT_CHANGED, published from
-      // the same place (PreferencesDialog OK) and for the same reason.
+      // The committed audio format is now in the preferences every engine reads at its next open,
+      // so anything derived from it is stale until it re-reads: the generator's snap brackets
+      // sit on the CAPTURE rate's bin grid. Announced here, once, at the commit - Java's
+      // AUDIO_FORMAT_CHANGED, published from the same place (PreferencesDialog OK) and for the
+      // same reason.
       if (captureChanged || outputChanged) MessageBus.instance().publish(Events.AUDIO_FORMAT_CHANGED);
 
       // Everything accumulated at the OLD settings is now inconsistent with what follows: the scope's
@@ -682,7 +664,7 @@ export class PreferencesDialog {
       if (answered) this.fillDeviceCombos(inputs, outputs);
       // Rates for the just-enumerated backend: its own format list where it has one (QA40x), else
       // the selected device's native rate. Announced on the bus, so a constrained pair is already
-      // equal before engine.config is seeded below.
+      // equal before the preference block is seeded below.
       await this.refreshRates();
       // Remember what this backend has, so a later switch BACK to it needs no enumeration. An
       // ANONYMOUS listing is not worth remembering: before the microphone permission is granted the
@@ -704,19 +686,18 @@ export class PreferencesDialog {
       // ...and the ANALYZER's own card, for the backend this scan just settled on -
       // whichever machine that analyzer is plugged into.
       this.syncQa40xCardFor(backend);
-      // Seed the live engine config from the freshly-selected devices. The pane Record
-      // paths call readConfig() before opening the device, but the FreqResp sweep and the
-      // Tune-notch wizard read engine.config DIRECTLY - so on a cold page (before any
-      // scope/gen/FFT start ran readConfig) config.inDeviceId was still '' and their
-      // getUserMedia({deviceId:{exact:''}}) threw OverconstrainedError -> the measurement
-      // couldn't start until a scope/gen start happened to populate it. Seed it here so
-      // every path has the configured device from load. Skipped while the Preferences
-      // dialog is staging (it commits its own selection on OK via applyAudioPrefs).
+      // Seed the ACTIVE backend's preference block from the freshly-selected devices: every
+      // engine opens the device that block names, and on a cold page with nothing stored the
+      // block would name no device at all - a getUserMedia({deviceId:{exact:''}}) that threw
+      // OverconstrainedError, so no measurement could start until the operator pressed OK.
+      // Seeded here, every path has the configured device from load. Skipped while the
+      // Preferences dialog is staging (it commits its own selection on OK via applyAudioPrefs).
       if (!this._staging) {
-        this.engine.config.inDeviceId = $('#inSel').val();
-        this.engine.config.outDeviceId = $('#outSel').val();
-        this.engine.config.inRate = parseInt($('#inRate').val(), 10) || this.engine.config.inRate;
-        this.engine.config.outRate = parseInt($('#outRate').val(), 10) || this.engine.config.outRate;
+        const bp = this.prefs.current();
+        bp.inputDeviceName = $('#inSel').val();
+        bp.outputDeviceName = $('#outSel').val();
+        bp.inputSampleRate = parseInt($('#inRate').val(), 10) || bp.inputSampleRate;
+        bp.outputSampleRate = parseInt($('#outRate').val(), 10) || bp.outputSampleRate;
         // Apply the resolved card's per-channel full-scale for the selected devices
         // (Java: applyInput/OutputDeviceProfile on the initial capture / generator open).
         // resolveDeviceProfile matches the human LABEL (substring), not the deviceId the

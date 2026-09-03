@@ -487,12 +487,8 @@ export class FreqRespView {
   }
 
   /** Fallback sample rate for the Nyquist ceiling / crosshair clip when no result is
-   *  loaded yet - the user's REQUESTED input-rate pref (Java nyquistHz + drawCrosshair
-   *  both read {@code prefs.current().getInputSampleRate()}). Must NOT read
-   *  {@code engine.config.inRate}: SharedCapture re-pins that to the rate Web Audio
-   *  actually negotiated (often the OS-capped 48 kHz), which would shrink the zoom-out
-   *  ceiling below the rate the user set - diverging from the desktop, which clamps to
-   *  the requested rate. */
+   *  loaded yet - the input-rate pref (Java nyquistHz + drawCrosshair both read
+   *  {@code prefs.current().getInputSampleRate()}). */
   _inputSampleRate() {
     return this.prefs.current().inputSampleRate || 48000;
   }

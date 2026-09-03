@@ -32,7 +32,7 @@ export class PredistortionHost {
    * @param {object} prefs Preferences.instance()
    * @param {{getResult:()=>?object, restart:()=>Promise<void>,
    *          correctionEntries:Array}} bridge shell-supplied accessors:
-   *        getResult -> the shell's latestResult; restart -> stop+readConfig+start;
+   *        getResult -> the shell's latestResult; restart -> stop+start on the written prefs;
    *        correctionEntries -> loaded .frc store ({calibration:{left,right}}[]).
    */
   constructor(engine, prefs, bridge) {
@@ -43,8 +43,14 @@ export class PredistortionHost {
 
   // ---- preference anchors ----
   maxHarmonics() { return Math.max(1, this.prefs.fftCalcMaxHarmonic.get()); }
-  isDualTone() { return isDualTone(this.engine.config.form); }
-  effectiveFrequency() { return this.engine.snapped || this.engine.config.toneHz; }
+  isDualTone() { return isDualTone(this.prefs.genSignalForm.get()); }
+  effectiveFrequency() { return this.engine.snapped || this._toneHz(); }
+  /** The entered tone 1 - the dual-tone pair's first tone in a dual-tone form, else the
+   *  single-tone frequency (each form reads its own preference). */
+  _toneHz() {
+    const p = this.prefs;
+    return this.isDualTone() ? p.genDualToneFreq1Hz.get() : p.genFrequencyHz.get();
+  }
   adcFsVoltageRms() { return this.prefs.adcFsVoltageRms.get(); }
   genAmplitudeVrms() { return this.prefs.genAmplitudeVrms.get(); }
   dualToneSplitPct() { return this.prefs.genDualToneSplitPct.get(); }
@@ -52,16 +58,19 @@ export class PredistortionHost {
   /** Loaded .frc store entries - the engine's calResponseAt reads these. */
   get correctionEntries() { return this.bridge.correctionEntries; }
 
-  /** Infinite coherent generator-locked averaging: coherent on, FLL on, deep
-   *  averaging window; restart the engine so the new window takes effect. */
+  /** Infinite coherent generator-locked averaging: coherent on, FLL on, deep averaging window -
+   *  written into the preferences the FFT reads, exactly as Java PredistortionEngine sets
+   *  setFftCoherentAveraging / setFftAverages(∞) / setFftAlignGenerator(FLL) on the live
+   *  Preferences (the strip's controls follow them); then restart the engine so the new window
+   *  takes effect. */
   async configureForRun() {
-    const c = this.engine.config;
-    c.coherent = true;
-    c.fllOn = true;
-    c.averages = INFINITE_AVERAGES;
+    const p = this.prefs;
+    p.fftCoherentAveraging.set(true);
+    p.fftAlignGenerator.set('FLL');
+    p.fftAverages.set(INFINITE_AVERAGES);
     // The predistortion run does its OWN per-round average counting; the FFT
     // pane's stop-after-N auto-stop must not tear the consumer down mid-round.
-    c.stopAfterNEnabled = false;
+    p.fftStopAfterNEnabled.set(false);
     await this.bridge.restart();
     this.engine.resetAnalyses();
   }
@@ -107,8 +116,7 @@ export class PredistortionHost {
    *  about a frame. null when the result carries no measurable pair.
    *  @returns {?import('../fft/imd-analyzer.js').ImdResult} */
   imdResult(r) {
-    const c = this.engine.config;
-    return analyzeImd(r, c.toneHz, c.tone2Hz, this.prefs.dbvOffsetDb);
+    return analyzeImd(r, this._toneHz(), this.prefs.genDualToneFreq2Hz.get(), this.prefs.dbvOffsetDb);
   }
 
   /** Combined intermod % of a dual-tone result - the engine's convergence metric. */

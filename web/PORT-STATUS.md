@@ -509,8 +509,8 @@ Faithful port of `Preferences` (+ `BackendPrefs`, `OscPreset`, `FftPreset`,
    / the pane controls; the Preferences modal device/rate selects map to
    `prefs.current()` `BackendPrefs`.
 3. Calibration anchors - `prefs.dbvOffsetDb` / `adcFsVoltageRms` /
-   `dacFsVoltageAmpl` flow into FftView, ScopeView, the engine config and the
-   predistortion host; changing either FS voltage resets FFT/scope.
+   `dacFsVoltageAmpl` are read live by FftView, ScopeView, the generator / scope / FFT
+   controllers and the predistortion host; changing either FS voltage resets FFT/scope.
 4. Dialog helpers `copyForDialog`/`applyFromDialog` were NOT ported (SWT-only);
    the web PreferencesDialog binds Propertys directly.
 

@@ -152,7 +152,7 @@ export class GeneratorPane {
     $('#outputChannel').val(prefs.genOutputChannels.get());
     $('#snap').prop('checked', prefs.genSnapToFftBin.get());
     $('#genFileLoop').prop('checked', prefs.genPlayFromLoop.get());   // Java playFromLoopBtn is two-way bound
-    this.seedSweepFields();   // sweep params (engine.config + loop) from prefs (numeric fields are stepfields)
+    this.seedSweepFields();   // the sweep-loop checkbox from prefs (numeric fields are stepfields)
     this.restoreDpdFromStore();     // re-seed a persisted .dpd from the file-store before showing the row
     this.refreshCorrectionsRow();   // .dpd slot enable + display for the current form
   }
@@ -175,11 +175,10 @@ export class GeneratorPane {
     // (_genEmitFreq / Java GeneratorController.analysisSampleRate). The output rate is the
     // DAC's and would put the bracket on a different grid whenever the two differ; the
     // sample-period alignment below is the one correction that stays on the DAC's clock.
-    // fftSize is read LIVE from the #fftSize select - Java FftBinSnap.snapIfEnabled reads
-    // prefs.getFftLength() (the FFT pane's CURRENT length), NOT a cached engine.config.fftSize
-    // that only refreshes on (re)start; reading the stale config showed a bracket that diverged
-    // from the just-changed FFT length. Java guard: fftSize >= 8 (FftBinSnap.snapIfEnabled).
-    const fftSize = parseInt($('#fftSize').val(), 10) || engine.config.fftSize;
+    // fftSize is the FFT length preference - Java FftBinSnap.snapIfEnabled reads
+    // prefs.getFftLength() (the FFT pane's CURRENT length), so the bracket never diverges from
+    // a just-changed FFT length. Java guard: fftSize >= 8 (FftBinSnap.snapIfEnabled).
+    const fftSize = this.prefs.fftLength.get();
     const analysisFs = engine.analysisSampleRate();
     const binW = (analysisFs > 0 && fftSize >= 8) ? analysisFs / fftSize : 0;
     // DUAL_TONE: tone-1 row is "Frequency 1", tone-2 is "Frequency 2"; each gets its
@@ -328,7 +327,7 @@ export class GeneratorPane {
     if (text) {
       // The same message a compensated start sends (dpdText + dpdFrequency): the sink's kernel
       // parses the text and applies the tables at the effective frequency.
-      this.engine.postGen({ dpdText: text, dpdFrequency: this.engine.config.frequency });
+      this.engine.postGen({ dpdText: text, dpdFrequency: this.engine.snapped });
       return;
     }
     await this.engine.stopGenerator();
@@ -397,39 +396,29 @@ export class GeneratorPane {
     this.syncFormCombo();
   }
 
-  // Seed the sweep fields from prefs into BOTH the UI and engine.config (so the next start
-  // uses the saved values), and bind their change handlers (write pref + config + live retune).
+  // Seed the sweep-loop checkbox from prefs (the five numeric sweep fields are NumericStepFields
+  // seeded in buildStepFields; the generator reads every sweep parameter live off the prefs).
   seedSweepFields() {
-    const prefs = this.prefs, engine = this.engine;
-    // The five numeric sweep fields are NumericStepFields seeded in initStepFields; here we
-    // only mirror the saved params into engine.config (for the first start) + the loop toggle.
-    engine.config.sweepStartHz = prefs.genSweepFreqStartHz.get();
-    engine.config.sweepEndHz = prefs.genSweepFreqEndHz.get();
-    engine.config.sweepDurationSec = prefs.genSweepDurationSec.get();
-    engine.config.sweepFadeInSec = prefs.genSweepFadeInSec.get();
-    engine.config.sweepFadeOutSec = prefs.genSweepFadeOutSec.get();
-    $('#sweepLoop').prop('checked', prefs.genSweepLoop.get());
-    engine.config.sweepLoop = prefs.genSweepLoop.get();
+    $('#sweepLoop').prop('checked', this.prefs.genSweepLoop.get());
   }
   bindSweepFields() {
     const prefs = this.prefs, engine = this.engine;
-    // Numeric sweep fields are NumericStepFields (their onChange writes pref+config+retune in
-    // initStepFields); only the loop toggle is bound here.
+    // Numeric sweep fields are NumericStepFields (their onChange writes the pref + retunes in
+    // buildStepFields); only the loop toggle is bound here.
     $('#sweepLoop').on('change', async () => {
-      const on = $('#sweepLoop').is(':checked');
-      prefs.genSweepLoop.set(on);
+      prefs.genSweepLoop.set($('#sweepLoop').is(':checked'));
       // Java genSweepLoopProperty binding (4887ecb): a running Farina sweep restarts
-      // instead of live-editing; the restart's readConfig picks the new loop flag up.
+      // instead of live-editing; the restart reads the new loop flag off the prefs.
       if (await this.restartFarinaOnParamChange()) return;
-      engine.config.sweepLoop = on; engine.retuneGenerator();
+      engine.retuneGenerator();
     });
   }
 
   /** Faithful port of GeneratorController.restartFarinaOnParamChange (4887ecb): a Farina
    *  (LOG) sweep can't live-edit its pre-rendered buffer without the playback dropping to
    *  silence, so a sweep-parameter change while it is running does a full restart instead -
-   *  the tone resumes with the new parameters (restartGenerator re-reads the just-committed
-   *  UI via readConfig, as Java's start() rebuilds from the committed prefs). Returns
+   *  the tone resumes with the new parameters (the restart reads the just-committed prefs,
+   *  as Java's start() rebuilds from the committed prefs). Returns
    *  {@code true} when it restarted, so the caller skips the live setter + retune. */
   async restartFarinaOnParamChange() {
     if (this._isGenRunning() && this.prefs.genSignalForm.get() === GenSignalForm.LOG_SWEEP) {
@@ -442,8 +431,8 @@ export class GeneratorPane {
   // ----- custom signal-form combo: waveform pictogram + label per item -----
   // Builds the dropdown from the hidden native #signalForm <select> (same order =
   // GenSignalForm). Selecting an item writes the hidden select's value and fires its
-  // native 'change', so every existing handler (readConfig, syncFormUI, restart,
-  // prefs binding) keeps working unchanged.
+  // native 'change', so every existing handler (syncFormUI, restart, prefs binding) keeps
+  // working unchanged.
   buildFormCombo() {
     const formIcon = this._formIcon;
     const $menu = $('#signalFormMenu').empty();
@@ -526,12 +515,12 @@ export class GeneratorPane {
       (v) => {
         if (isDualTone($('#signalForm').val())) prefs.genDualToneFreq1Hz.set(v);
         else prefs.genFrequencyHz.set(v);
-        engine.config.toneHz = v; engine.retuneGenerator(); this.refreshFreqLabel(); this.updateDutyLabel();
+        engine.retuneGenerator(); this.refreshFreqLabel(); this.updateDutyLabel();
       });
     if (fTone) fTone.setValue(prefs.genFrequencyHz.get());
 
     const fTone2 = mk('tone2Hz', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
-      (v) => { prefs.genDualToneFreq2Hz.set(v); engine.config.tone2Hz = v; engine.retuneGenerator(); this.refreshFreqLabel(); });
+      (v) => { prefs.genDualToneFreq2Hz.set(v); engine.retuneGenerator(); this.refreshFreqLabel(); });
     if (fTone2) fTone2.setValue(prefs.genDualToneFreq2Hz.get());
 
     // Amplitude: AMPLITUDE family, PERCENT policy. What is STORED is the entered value - the
@@ -544,7 +533,7 @@ export class GeneratorPane {
         // The pair the operator entered - number and unit as ONE write, so nothing
         // downstream can see the new unit against the old number.
         prefs.genAmplitude.set(fAmp.enteredValue());
-        engine.config.ampVrms = v; engine.retuneGenerator();
+        engine.retuneGenerator();
       });
     if (fAmp) {
       fAmp.seedPair(prefs.genAmplitude.get());
@@ -573,7 +562,7 @@ export class GeneratorPane {
       fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
       (v) => {
         prefs.genDither.set(fDither.enteredValue());
-        engine.config.ditherBits = v; engine.retuneGenerator();
+        engine.retuneGenerator();
         this.updateDitherLabel();
       });
     if (fDither) {
@@ -592,7 +581,6 @@ export class GeneratorPane {
         // Write ONLY the active form's duty pref - each form remembers its own (Java dutyField).
         if (form === GenSignalForm.TRIANGLE) prefs.genTriangleDuty.set(duty);
         else if (form === GenSignalForm.RECTANGLE) prefs.genRectangleDuty.set(duty);
-        engine.config.rectDuty = duty; engine.config.triDuty = duty;
         engine.retuneGenerator();
         this.updateDutyLabel();
       });
@@ -613,26 +601,26 @@ export class GeneratorPane {
     // TIME (min 0.001 / 0, 3 dec). Wheel/arrow/keyboard stepping + unit auto-ranging come free.
     // Java GeneratorController sweep-pref bindings (4887ecb): a running Farina (LOG) sweep
     // can't live-edit its pre-rendered buffer, so a param change does a full restart (the
-    // restart's readConfig picks the new value up) and skips the live setter + retune.
-    const sweepOnChange = (pref, cfgKey) => async (v) => {
+    // restart reads the new value off the prefs) and skips the live retune.
+    const sweepOnChange = (pref) => async (v) => {
       pref.set(v);
       if (await this.restartFarinaOnParamChange()) return;
-      engine.config[cfgKey] = v; engine.retuneGenerator();
+      engine.retuneGenerator();
     };
     const fSwStart = mk('sweepStart', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
-      sweepOnChange(prefs.genSweepFreqStartHz, 'sweepStartHz'));
+      sweepOnChange(prefs.genSweepFreqStartHz));
     if (fSwStart) fSwStart.setValue(prefs.genSweepFreqStartHz.get());
     const fSwStop = mk('sweepStop', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
-      sweepOnChange(prefs.genSweepFreqEndHz, 'sweepEndHz'));
+      sweepOnChange(prefs.genSweepFreqEndHz));
     if (fSwStop) fSwStop.setValue(prefs.genSweepFreqEndHz.get());
     const fSwDur = mk('sweepDur', new NumericStepModel({ family: F.TIME, min: 0.001, max: 1000000, maxDecimals: 3 }),
-      sweepOnChange(prefs.genSweepDurationSec, 'sweepDurationSec'));
+      sweepOnChange(prefs.genSweepDurationSec));
     if (fSwDur) fSwDur.setValue(prefs.genSweepDurationSec.get());
     const fSwFi = mk('sweepFadeIn', new NumericStepModel({ family: F.TIME, min: 0, max: 1000000, maxDecimals: 3 }),
-      sweepOnChange(prefs.genSweepFadeInSec, 'sweepFadeInSec'));
+      sweepOnChange(prefs.genSweepFadeInSec));
     if (fSwFi) fSwFi.setValue(prefs.genSweepFadeInSec.get());
     const fSwFo = mk('sweepFadeOut', new NumericStepModel({ family: F.TIME, min: 0, max: 1000000, maxDecimals: 3 }),
-      sweepOnChange(prefs.genSweepFadeOutSec, 'sweepFadeOutSec'));
+      sweepOnChange(prefs.genSweepFadeOutSec));
     if (fSwFo) fSwFo.setValue(prefs.genSweepFadeOutSec.get());
     // WAV-export duration - TIME NumericStepField (Java durationField).
     const fGenDur = mk('genDuration', new NumericStepModel({ family: F.TIME, min: 0.001, max: 1000000, maxDecimals: 3 }),
@@ -675,51 +663,8 @@ export class GeneratorPane {
     this.retuneDualAndDuty();
   }
 
-  /** Snapshots the generator's live controls into the shared engine config - what a (re)start
-   *  and a live retune read (Java GeneratorController rebuilds from the committed prefs at
-   *  start). The GENERATOR's part only: the capture / playback devices and rates are the
-   *  Preferences dialog's (written on scan and on OK), the FFT geometry the FFT strip's, the
-   *  scope window the scope pane's. Run once at load and on every generator control the field
-   *  handlers do not push live, so the config the analysers consult through GENERATOR_EMITTED_HZ
-   *  is current before the generator ever started. */
-  readConfig() {
-    const c = this.engine.config, prefs = this.prefs;
-    c.toneHz = this.fieldValue('toneHz', 1000); c.ampVrms = this.fieldValue('ampDbfs', 0.5);
-    c.form = $('#signalForm').val();
-    c.snapToBin = $('#snap').is(':checked');   // gates the SINE/DUAL_TONE FFT-bin emit snap
-    // Compensated forms carry the loaded .dpd text (per-form slot) for the worklet to apply.
-    c.dpdText = isCompensated(c.form) ? (prefs.getGenDpd(c.form) || null) : null;
-    c.tone2Hz = this.fieldValue('tone2Hz', 1100);
-    c.amp1Pct = this.fieldValue('amp1Pct', 50); c.amp2Pct = this.fieldValue('amp2Pct', 50);
-    const duty = (this.fieldValue('duty', 50) || 50) / 100;
-    c.rectDuty = duty; c.triDuty = duty;
-    c.ditherBits = this.fieldValue('dither', 0);   // fractional bits from the DITHER NumericStepField (0 = Off)
-    // Sweep params (LINEAR_SWEEP / LOG_SWEEP) - read from the sweep fields.
-    c.sweepStartHz = this.fieldValue('sweepStart', 20);
-    c.sweepEndHz = this.fieldValue('sweepStop', 20000);
-    c.sweepDurationSec = Math.max(0.001, this.fieldValue('sweepDur', 1));
-    c.sweepFadeInSec = Math.max(0, this.fieldValue('sweepFadeIn', 0));
-    c.sweepFadeOutSec = Math.max(0, this.fieldValue('sweepFadeOut', 0));
-    c.sweepLoop = $('#sweepLoop').is(':checked');
-    // The bin grid the snap lands on: the FFT length the FFT strip keeps in its preference
-    // (Java FftBinSnap.snapIfEnabled reads prefs.getFftLength()).
-    c.fftSize = prefs.fftLength.get();
-    // Calibration anchor (the DAC full scale scales the DDS amplitude) and the output-lane
-    // routing (Java GeneratorController.pushOutputRoutingToPlayback): the lane gate + the
-    // right-lane scale (= fsLeft/fsRight). Left stays the mono amplitude reference (scale 1.0),
-    // so the DDS amplitude math is unchanged - only the interleave seam gates/scales.
-    c.dacFsVoltageAmpl = prefs.dacFsVoltageAmpl.get();
-    c.outputChannels = prefs.genOutputChannels.get();
-    c.rightLaneScale = prefs.dacRightLaneScale();
-  }
-
-  /** Push duty + dual-tone split into the engine and live-retune. */
+  /** Live-retunes after a duty / dual-tone split edit - the prefs already hold the new values. */
   retuneDualAndDuty() {
-    const sfVal = (id, dflt) => this._sfVal(id, dflt);
-    const c = this.engine.config;
-    c.tone2Hz = sfVal('tone2Hz', 1100);
-    c.amp1Pct = sfVal('amp1Pct', 50); c.amp2Pct = sfVal('amp2Pct', 50);
-    const duty = (sfVal('duty', 50) || 50) / 100; c.rectDuty = duty; c.triDuty = duty;
     this.engine.retuneGenerator();
   }
 
@@ -731,7 +676,7 @@ export class GeneratorPane {
     if (this._isBusy() || !this._isGenRunning()) return null;
     this._setBusy(true);
     try {
-      await this.engine.stopGenerator(); this.readConfig();
+      await this.engine.stopGenerator();
       // Returns the LOCALIZED start-error reason (null on success), mirroring Java
       // controller.getLastStartError() - the form handler surfaces a failed restart.
       return await this.engine.startGenerator();
@@ -781,7 +726,7 @@ export class GeneratorPane {
     // list above and is what announces the signal change.
     // Mirrors Java GeneratorPane's Bindings.onChange for dacFsVoltageAmplProperty. Dither is NOT
     // live-applied to the worklet (accepted Web-Audio divergence, like Java's live ag.setDitherBits)
-    // - readConfig reads the field fresh at each (re)start and the Save-to export path applies it via quantizePcm.
+    // - the generator reads the dither preference at each (re)start and retune, and the Save-to export path applies it via quantizePcm.
     const reseedDither = () => {
       const f = this._getField('dither');
       if (f) f.seedPair(prefs.genDither.get());
@@ -815,10 +760,9 @@ export class GeneratorPane {
     });
 
     // ----- generator prefs bindings (Java GeneratorPane) -----
-    // ...and keeps the config's form current while the generator is NOT running (the restart
-    // above re-reads only a running one): the analysers' GENERATOR_EMITTED_HZ answer reads
-    // config.form, and a form picked before the first start must not answer the previous one.
-    $('#signalForm').on('change', () => { prefs.genSignalForm.set($('#signalForm').val()); this.readConfig(); });
+    // The form preference is what the analysers' GENERATOR_EMITTED_HZ answer reads, so a form
+    // picked before the first start already answers for itself.
+    $('#signalForm').on('change', () => prefs.genSignalForm.set($('#signalForm').val()));
     // toneHz / ampDbfs / dither prefs are written by their NumericStepField onChange handlers
     // (the dither field writes its ENTERED value - number plus unit - and re-annotates #ditherLabel).
     // Output-lane gate: persist + push the routing to the running worklet (Java
@@ -826,20 +770,12 @@ export class GeneratorPane {
     // is recomputed fresh (= fsLeft/fsRight); retuneGenerator is a no-op when nothing is playing.
     $('#outputChannel').on('change', () => {
       prefs.genOutputChannels.set($('#outputChannel').val());
-      engine.config.outputChannels = prefs.genOutputChannels.get();
-      engine.config.rightLaneScale = prefs.dacRightLaneScale();
       engine.retuneGenerator();
     });
     $('#snap').on('change', () => {
       prefs.genSnapToFftBin.set($('#snap').is(':checked'));
-      // Snapshot the LIVE UI into engine.config BEFORE retuning - Java reapplySnap() resolves
-      // effectiveFrequency() from live prefs every time: emitFrequency(prefs, form,
-      // prefs.current().getOutputSampleRate(), prefs.getGenFrequencyHz()), and FftBinSnap reads
-      // prefs.getFftLength(). Setting only config.snapToBin left config.fftSize / outRate / toneHz
-      // stale (they refresh only on (re)start), so _genEmitFreq snapped against a stale bin grid -
-      // or, with fftSize never refreshed, failed to move the emitted tone at all (the reported bug:
-      // the FFT showed the entered freq, not the snapped one).
-      this.readConfig();   // refreshes config.snapToBin + config.fftSize + toneHz from the live UI
+      // Java reapplySnap() resolves effectiveFrequency() from the live prefs every time
+      // (emitFrequency + FftBinSnap reading prefs.getFftLength()) - so does the retune.
       engine.retuneGenerator();   // re-resolve the emit frequency (snap now gates SINE/DUAL)
       this.refreshFreqLabel(); this._syncFftAlign();   // snap gates the FFT align combo (FftTabControl)
     });
@@ -859,7 +795,6 @@ export class GeneratorPane {
       if (this._isBusy()) return;
       if (!this._isGenRunning()) {
         this._setBusy(true);
-        this.readConfig();
         // DDS tone and file playback share the one output device - only one may drive it.
         // Java controller.start() stops the file player first; mirror that + re-sync its LED.
         await engine.stopFile(); this.setGenFileBtn(false);
@@ -887,12 +822,12 @@ export class GeneratorPane {
 
     // ----- Generator "Save to..." -> render via DdsKernel, dither, write STEREO WAV/AIFF/FLAC -----
     $('#genSaveBtn').on('click', async () => {
-      const c = engine.config;
+      const form = prefs.genSignalForm.get() || GenSignalForm.SINE;
       // Suggested name encodes signal form + sample rate (kHz) + output bit depth, WAV by
       // default (Java buildSuggestedSaveName: "%s_%dkHz_%dbit.wav").
       const cur = prefs.current();
       const rateKhz = Math.round((parseInt($('#outRate').val(), 10) || cur.outputSampleRate || 48000) / 1000);
-      const suggested = `${(c.form || GenSignalForm.SINE).toLowerCase()}_${rateKhz}kHz_${cur.outputBitDepth || 24}bit.wav`;
+      const suggested = `${form.toLowerCase()}_${rateKhz}kHz_${cur.outputBitDepth || 24}bit.wav`;
       // Pick the target FIRST so the chosen file's extension drives the container (Java
       // doSaveToBrowseAndWrite) - WAV / FLAC / AIFF, never the field's stale extension.
       const target = await io.pickSaveTarget($('#genSaveName').val() || suggested, this.WAV_TYPE);
@@ -908,20 +843,21 @@ export class GeneratorPane {
       // RECTANGLE and TRIANGLE export at the same sample-period-aligned frequency they play at, so a
       // looped file has no edge/corner seam and the whole-period truncation lands on N samples (Java exportSignal).
       const rawHz = sfVal('toneHz', 1000);
-      const emitHz = (c.form === GenSignalForm.RECTANGLE || c.form === GenSignalForm.TRIANGLE)
+      const emitHz = (form === GenSignalForm.RECTANGLE || form === GenSignalForm.TRIANGLE)
         ? rate / Math.max(2, Math.round(rate / rawHz)) : rawHz;
       try {
         const kernel = new DdsKernel({
-          form: c.form, frequency: emitHz, sampleRate: rate,
+          form, frequency: emitHz, sampleRate: rate,
           amplitudeVRms: sfVal('ampDbfs', 0.5), dacFsVoltageAmpl: prefs.dacFsVoltageAmpl.get(),
         });
-        if (isDualTone(c.form)) {
+        if (isDualTone(form)) {
           // Snap tone 2 to the OUTPUT-rate bin grid (rate/fftSize) when snap-to-bin is on,
           // matching _genEmitFreq2 - the saved file's second tone lands on a bin centre exactly
           // like the live emit (Java GeneratorController snaps both tones).
           const rawF2 = sfVal('tone2Hz', 1100);
-          const binF2 = rate / c.fftSize;
-          const f2 = (c.snapToBin && c.fftSize >= 8 && rate > 0 && binF2 > 0)
+          const fftSize = prefs.fftLength.get();
+          const binF2 = rate / fftSize;
+          const f2 = (prefs.genSnapToFftBin.get() && fftSize >= 8 && rate > 0 && binF2 > 0)
             ? Math.round(rawF2 / binF2) * binF2 : rawF2;
           kernel.setDualToneFrequency2(f2);
           kernel.setDualToneAmplitudes(sfVal('amp1Pct', 50), sfVal('amp2Pct', 50));
@@ -929,19 +865,19 @@ export class GeneratorPane {
         const duty = (sfVal('duty', 50) || 50) / 100;
         kernel.setRectangleDuty(duty); kernel.setTriangleDuty(duty);
         // Compensated forms: apply the loaded .dpd so the saved file pre-distorts like the live tone.
-        if (isCompensated(c.form)) {
-          const dpd = prefs.getGenDpd(c.form);
+        if (isCompensated(form)) {
+          const dpd = prefs.getGenDpd(form);
           if (dpd) {
             if (isDualToneCorrectionFile(dpd)) kernel.applyDualToneCompensation(loadIntermod(dpd));
             else kernel.applyCompensation(loadHarmonics(dpd, emitHz));
           }
         }
-        const isSweep = c.form === GenSignalForm.LINEAR_SWEEP || c.form === GenSignalForm.LOG_SWEEP;
+        const isSweep = form === GenSignalForm.LINEAR_SWEEP || form === GenSignalForm.LOG_SWEEP;
         if (isSweep) {
           const swStart = sfVal('sweepStart', 20);
           const swEnd = sfVal('sweepStop', 20000);
           const swSamples = Math.max(1, Math.round(rate * (sfVal('sweepDur', 1) || 1)));
-          if (c.form === GenSignalForm.LINEAR_SWEEP) kernel.configureLinearSweep(swStart, swEnd, swSamples);
+          if (form === GenSignalForm.LINEAR_SWEEP) kernel.configureLinearSweep(swStart, swEnd, swSamples);
           else kernel.configureLogSweep(swStart, swEnd, swSamples, 0);
           kernel.setSweepParams($('#sweepLoop').is(':checked'),
             Math.round(rate * (sfVal('sweepFadeIn', 0) || 0)),
@@ -969,7 +905,7 @@ export class GeneratorPane {
           chL[i] = wantL ? q : 0;
           chR[i] = wantR ? q * scaleR : 0;
         }
-        const truncHz = (isPeriodic(c.form) && !isSweep) ? emitHz : 0;
+        const truncHz = (isPeriodic(form) && !isSweep) ? emitHz : 0;
         const bytes = io.saveScopeCapture(chL, chR, total, name, rate, bitDepth, truncHz);
         const res = await io.writeToTarget(target, bytes, 'audio/wav');
         if (res.saved) {

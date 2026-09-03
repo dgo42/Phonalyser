@@ -470,9 +470,9 @@ export class TuneNotchWizard {
    *  The band has to be BOTH emittable and observable - above the DAC's Nyquist the chirp
    *  is not what leaves the card, above the ADC's it is not what comes back. */
   _nyquistHz() {
-    const c = this.engine.config;
-    const capture = (c && c.inRate) || this.prefs.current().inputSampleRate || 384000;
-    const playback = (c && c.outRate) || this.prefs.current().outputSampleRate || 384000;
+    const bp = this.prefs.current();
+    const capture = bp.inputSampleRate || 384000;
+    const playback = bp.outputSampleRate || 384000;
     return Math.min(capture, playback) / 2;
   }
 
@@ -514,8 +514,8 @@ export class TuneNotchWizard {
       // playback lane opens on the output rate, while the capture and everything derived from the
       // captured window - the loop period, the seam fade, the deconvolution and its bin grid - are
       // on the input rate. There is no bit depth on either side here (float32 throughout).
-      const captureRate = engine.config.inRate;
-      const playbackRate = engine.config.outRate || prefs.current().outputSampleRate;
+      const captureRate = prefs.current().inputSampleRate;
+      const playbackRate = prefs.current().outputSampleRate;
       // Read the DAC/ADC voltage references once: they don't change for the
       // lifetime of the session. (Java also reads ditherBits for its DAC dither;
       // the web capture path is float - no dither, intended divergence.)
@@ -544,10 +544,12 @@ export class TuneNotchWizard {
           release: () => engine.releaseMeasurementReader(),
           getLastStartError: () => engine.getMeasurementStartError(),
         },
-        config: engine.config,
-        startGenerator: () => engine.startGenerator(),
-        stopGenerator: () => engine.stopGenerator(),
-        postGen: (msg) => engine.postGen(msg),
+        // The engine's OWN playback lane comes from the active backend, opened on the
+        // configured output device with the configured generator dither (Java: its own
+        // GeneratorLane) - the generator pane's lane is never commandeered.
+        openPlayback: (deps) => engine.backend.openPlayback(deps),
+        outputDeviceId: prefs.current().outputDeviceName,
+        ditherBits: prefs.genDitherBits.get(),
         captureRateHz: captureRate,
         playbackRateHz: playbackRate,
       });
@@ -565,11 +567,10 @@ export class TuneNotchWizard {
       }
       if (!this._running) return;
 
-      // NotchSweepEngine owns the whole session: it snapshots the DDS config, points the
-      // generator at a silent looping Farina sweep and starts it, opens its OWN measurement
-      // capture line (device-isolated from scope/FFT), then un-mutes at the real amplitude.
-      // The wizard no longer touches engine.config or engine.startGenerator - Java's engine
-      // owns its own playback line. notch.close() stops the generator + restores the config.
+      // NotchSweepEngine owns the whole session: it opens its OWN playback lane with a silent
+      // looping Farina sweep, opens its OWN measurement capture line (device-isolated from
+      // scope/FFT), then un-mutes at the real amplitude - Java's engine owns its own generator
+      // lane the same way. notch.close() closes both.
       const band = sweepBand(this._curStartHz, this._curStopHz);
       await notch.start(band[0], band[1], this._curAmpVrms, dacFsVrms, sweepSamples, fadeSamples,
         this._curOutputChannels, rightLaneScale);

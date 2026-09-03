@@ -11,8 +11,8 @@
 
 export const Events = Object.freeze({
   /** Fired by the FFT settings strip when the user picks a new FFT length, after the analyser was
-   *  restarted on it. No payload - subscribers read the fresh value from the shared engine config
-   *  (the strip's readConfig ran first). Subscribers: the generator controller (re-snaps a running
+   *  restarted on it. No payload - subscribers read the fresh value from the FFT length
+   *  preference (written first). Subscribers: the generator controller (re-snaps a running
    *  tone onto the new bin grid) and the generator pane (its bracket labels). */
   FFT_LENGTH_CHANGED: 'fft.length.changed',
 

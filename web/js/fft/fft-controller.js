@@ -101,25 +101,26 @@ const FINALIZE_JOBS_MAX = 2;
  *  for minutes. Six floor shows is ~3 s of demonstrated stuck-behind, measured in wall clock
  *  where a batch catch-up (which legitimately holds a deep backlog) never treads. */
 const FLOOR_SHOWS_REANCHOR = 6;
+/** JIT warm-up discarded at the head of every Record session, in ms. No UI field: Java
+ *  hardwires it (FftAnalyzerWorker), and so does the web. */
+const WARMUP_MS = 500;
 
 export class FftController {
   /**
    * @param capture the SharedCapture instance.
    * @param gen     the GeneratorController (read + FLL-steered, not owned).
-   * @param config  the SHARED engine config object.
-   * @param deps    {status, prefs} - status: (text) => void; prefs: the live Preferences,
-   *                read for the settings whose change must reset this controller's own
-   *                accumulator (absent in bare test constructions - the reaction stays unwired).
+   * @param prefs   the live Preferences - every analysis setting is read from it at the moment it
+   *                is needed, the way Java FftAnalyzerWorker re-reads Preferences.instance() per
+   *                tick: the FFT length, window, overlap, averaging, threads, alignment, the THD
+   *                settings, the analysed channel, the mains mode, the calibration anchors and
+   *                the generator's form and bin snap.
+   * @param deps    {status} - status: (text) => void.
    */
-  constructor(capture, gen, config, { status, prefs } = {}) {
+  constructor(capture, gen, prefs, { status } = {}) {
     this._capture = capture;
     this._gen = gen;
-    this.config = config;
+    this._prefs = prefs;
     this._status = status || (() => {});
-    // Live preferences, for the gates Java reads live each tick (the config is a
-    // record-start snapshot; a wizard forcing a pref mid-record must take effect,
-    // as it does on the desktop - FftAnalyzerWorker:1697 reads the pref, not a copy).
-    this._prefs = prefs || null;
     this._fftOn = false;
     /** Load-meter reporter, or null while nothing measures (the tests, the offscreen shell).
      *  Set by the shell through {@link #setBusyReporter}. */
@@ -206,7 +207,7 @@ export class FftController {
     this.fllLocked = false;
     this.fllStable = 0;
     this.rejectedCount = 0;
-    // Previous batch's config.fllOn, for the align OFF->ON transition (Java
+    // Previous batch's align-on state, for the align OFF->ON transition (Java
     // FftView.java:465-466: "Selecting an active alignment mode (PID / FLL) resets its
     // loop so each session converges fresh; NONE deliberately resets nothing").
     this._lastFllOn = false;
@@ -281,10 +282,7 @@ export class FftController {
     // to resetStatistics, and the field's own tooltip promises "Changing it restarts FFT
     // averaging"). The Property notifies on a real change only, so an OK that re-writes the
     // same threshold stays silent.
-    // Guarded on the PROPERTY, not just the object: the engine tests hand in partial
-    // preference stubs (backend only), and a stub without this field simply leaves the
-    // reaction unwired, like the bare constructions do.
-    if (prefs && prefs.fftStrongToneRelDb) prefs.fftStrongToneRelDb.addListener(() => this.resetAnalyses());
+    prefs.fftStrongToneRelDb.addListener(() => this.resetAnalyses());
 
     // Self-feed off the LIVE capture: Java consumers subscribe to CAPTURE_BATCH_AVAILABLE and read
     // their own cursor - no central dispatcher pumps us. feedFft self-gates on pausedByStopN and a
@@ -302,8 +300,28 @@ export class FftController {
     this._restartWindow();
     this._accumEpoch++;
     this._workerResetPending = true;
-    this._drainSkipRemaining = Math.ceil(OUTPUT_DRAIN_SKIP_SEC * (this.config.inRate || 0));
+    this._drainSkipRemaining = Math.ceil(OUTPUT_DRAIN_SKIP_SEC * this._inRate());
   }
+
+  /** The rate this consumer's samples arrive at: the open ring's granted rate, else the active
+   *  backend's configured input rate (the analysis geometry is built before the first acquire,
+   *  and the shared capture writes the granted rate into that preference on open). */
+  _inRate() {
+    const capture = this._capture;
+    const live = capture != null && capture.refCount > 0 ? capture.inSampleRate : 0;
+    return live > 0 ? live : (this._prefs.current().inputSampleRate || 0);
+  }
+
+  /** True while the align mode is FLL (Java FftView's alignGenerator != NONE). */
+  _fllOn() { return this._prefs.fftAlignGenerator.get() === 'FLL'; }
+
+  /** The COUNT of harmonics H2..HN the analyzer computes - Java FftAnalyzerWorker:1661
+   *  calcMaxH = max(9, getFftCalcMaxHarmonic()) - 1 (the fundamental is NOT one of them). */
+  _harmonicCount() { return Math.max(9, this._prefs.fftCalcMaxHarmonic.get()) - 1; }
+
+  /** The THD band's lower / upper bound in Hz, 0 when that bound is off (Java distMin/distMax). */
+  _snrFreqMin() { const p = this._prefs; return p.fftDistMinEnabled.get() ? p.fftDistMinHz.get() : 0; }
+  _snrFreqMax() { const p = this._prefs; return p.fftDistMaxEnabled.get() ? p.fftDistMaxHz.get() : 0; }
 
   /** Restarts the analysis window: re-anchor the cursor at the live tip and drop
    *  whatever had been gathered towards the current one, so the next window is built
@@ -475,13 +493,6 @@ export class FftController {
     const wl = ch === 'L';
     if (wl === this._wantLeft) return;   // no change -> keep averaging
     this._wantLeft = wl;
-    this.config.channel = ch;            // keep the config the read/emit consult in sync
-    // Re-pick the analyzed channel's ADC dBV offset so the manual-fundamental anchor
-    // (Java FftAnalyzerWorker:2005 getDbvOffsetDb(getFftChannel())) stays per-channel-correct
-    // on a live switch (both offsets were snapshotted at readConfig).
-    if (this.config.dbvOffsetDbRight != null) {
-      this.config.dbvOffsetDb = (ch === 'R') ? this.config.dbvOffsetDbRight : this.config.dbvOffsetDbLeft;
-    }
     this._sendCalRows();                 // the other channel's curve of every loaded row
     this.resetAnalyses();                // fresh average from 0 (accumulator + counts + epoch bump)
   }
@@ -528,12 +539,13 @@ export class FftController {
    *  message either way - Java parity: FftAnalyzerWorker.parallelChunks runs on
    *  the analyzer thread, never the UI thread. */
   _setupFftAnalysis() {
-    const c = this.config;
-    this.N = c.fftSize;
+    const p = this._prefs;
+    this.N = p.fftLength.get();
     // ∞ (forever) averaging is a true cumulative mean; a finite N is a ring window.
-    // app.js passes averages = Infinity for the ∞ toggle (Java AVERAGES_SERIES ∞).
-    this.foreverMode = c.averages === Infinity || !Number.isFinite(c.averages);
-    this.ringN = this.foreverMode ? 1 : Math.max(1, c.averages | 0);
+    // The averages preference holds Infinity for the ∞ entry (Java AVERAGES_SERIES ∞).
+    const averages = p.fftAverages.get();
+    this.foreverMode = averages === Infinity || !Number.isFinite(averages);
+    this.ringN = this.foreverMode ? 1 : Math.max(1, averages | 0);
     // The on-screen "N×" depth target: ∞ -> unbounded; a ring -> its N. (The Java
     // worker caps the ring accumulator at 2·N frames since ~2 frames land per
     // coherent tick; here avgTarget is the displayed N and the accumulator's
@@ -545,15 +557,16 @@ export class FftController {
     // ONCE for the LARGEST possible hop, so it never resizes while a drawn hop's
     // gather is in flight (a mid-gather resize would discard the partial fill and
     // tear the contiguous stream the de-rotation depends on).
-    this.minHop = minHopSamples(c.overlap, this.N);
-    this.maxHop = maxHopSamples(c.overlap, this.N);
+    const overlap = p.fftOverlap.get();
+    this.minHop = minHopSamples(overlap, this.N);
+    this.maxHop = maxHopSamples(overlap, this.N);
     // The hop the window slides by next - drawn per tick in the random overlap
     // mode, constant otherwise. FROZEN while its gather is in flight: it is
     // redrawn only after the slide it sizes has completed. It is also the spacing
     // the analysis states for its frame pair, so the second frame of one tick is
     // exactly the first frame of the next. 0 until the first window is built.
     this.pendingHop = 0;
-    this.overlapPct = OVERLAP_FRACTION[c.overlap] * 100;
+    this.overlapPct = OVERLAP_FRACTION[overlap] * 100;
 
     // Per-tick window = N + (perTickFrames−1)·maxHop samples - sized to ~1-2 frames
     // INDEPENDENT of the averaging depth (Java: needed = N + (frames−1)·hop, with
@@ -570,14 +583,13 @@ export class FftController {
     this.buf = new Float64Array(this.bufLen);
     this.bufW = 0; this.bufFilled = 0;
     // Fresh Record session -> fresh accumulator (Java start() resetStatistics). The fork's
-    // line-admission threshold rides every dispatch from the live config, the way Java reads
+    // line-admission threshold rides every dispatch from the live preference, the way Java reads
     // Preferences#getFftStrongToneRelDb inside forkPooledOffset.
     this._accumEpoch++;
     this._workerResetPending = true;
     // A fresh session re-anchors the window and empties the accumulator without going through
     // resetAnalyses, so it announces the restart itself - an FFT-length change reaches the
-    // display this way (stop, readConfig, start) and the held .frc cascade belongs to the old
-    // bin grid.
+    // display this way (stop, start) and the held .frc cascade belongs to the old bin grid.
     MessageBus.instance().publish(Events.FFT_STATISTICS_RESET);
     this._lastAccumulate = false;
     this._lastForeverMode = false;
@@ -607,9 +619,9 @@ export class FftController {
     // channel = prefs.getFftChannel(); wantLeft = channel == L). L -> ch0 (left),
     // R -> ch1 (right). feedFft reads THIS channel; _emit stamps it into
     // r.channelLeft so the .frc de-embed picks the matching curve.
-    this._wantLeft = (this.config.channel === 'L');
+    this._wantLeft = (p.fftChannel.get() === 'L');
 
-    this.warmup = Math.round(c.inRate * Math.max(0, c.warmupMs) / 1000);
+    this.warmup = Math.round(this._inRate() * WARMUP_MS / 1000);
     this._lastShowMs = 0;   // fresh session -> the first result displays immediately (Java lastShowNanos 0)
     this._floorShows = 0;   // a fresh session owes no floor history
     this._fftFps = 0; this._fftCount = 0; this._fftWinT0 = 0; this._workerMs = 0;
@@ -620,10 +632,10 @@ export class FftController {
     // fft-worker.js (nested workers) - the main thread only posts one message per tick,
     // identical to the serial path, so threads>1 can't starve the UI (Java parity:
     // FftAnalyzerWorker.parallelChunks runs on the analyzer thread, never the UI thread).
-    this.poolSize = this._poolSizeFor(c.threads);
+    this.poolSize = this._poolSizeFor(p.fftThreads.get());
     // Seed the align-transition latch so _syncLiveConfig only resets the FLL on a real
     // OFF->ON flip (the fresh-session reset already runs in setRecording).
-    this._lastFllOn = !!c.fllOn;
+    this._lastFllOn = this._fllOn();
     // The previous session's analyzer outlived its stop so the stopped display could be rebuilt
     // from the average it held; a fresh session starts from an empty one, so it goes now.
     this._teardownFftWorkers();
@@ -702,15 +714,17 @@ export class FftController {
    *     FftController.java:210-219); switching OFF holds the converged correction. */
   _syncLiveConfig() {
     if (this.bufLen == null || !(this.N > 0)) return;   // no analysis geometry yet (not set up)
-    const c = this.config;
-    this.poolSize = this._poolSizeFor(c.threads);
+    const p = this._prefs;
+    this.poolSize = this._poolSizeFor(p.fftThreads.get());
     // Averaging mode/targets (mirrors the _setupFftAnalysis derivation).
-    this.foreverMode = c.averages === Infinity || !Number.isFinite(c.averages);
-    this.ringN = this.foreverMode ? 1 : Math.max(1, c.averages | 0);
+    const averages = p.fftAverages.get();
+    this.foreverMode = averages === Infinity || !Number.isFinite(averages);
+    this.ringN = this.foreverMode ? 1 : Math.max(1, averages | 0);
     this.avgTarget = this.foreverMode ? Infinity : this.ringN;
     // Hop bounds / window geometry off the live overlap + averaging state.
-    const minHop = minHopSamples(c.overlap, this.N);
-    const maxHop = maxHopSamples(c.overlap, this.N);
+    const overlap = p.fftOverlap.get();
+    const minHop = minHopSamples(overlap, this.N);
+    const maxHop = maxHopSamples(overlap, this.N);
     const accumulate = this.foreverMode || this.ringN >= 2;
     const perTickFrames = accumulate ? 2 : 1;
     const bufLen = this.N + (perTickFrames - 1) * maxHop;
@@ -719,7 +733,7 @@ export class FftController {
       this.minHop = minHop;
       this.maxHop = maxHop;
       this.pendingHop = 0;        // redrawn when the rebuilt window completes
-      this.overlapPct = OVERLAP_FRACTION[c.overlap] * 100;
+      this.overlapPct = OVERLAP_FRACTION[overlap] * 100;
       this.bufLen = bufLen;
       this.buf = new Float64Array(bufLen);
       this.bufW = 0; this.bufFilled = 0; this._refill = maxHop;
@@ -727,8 +741,9 @@ export class FftController {
       this._accumEpoch++;              // drop ONLY the in-flight old-geometry window
       this._workerResyncPending = true;   // re-anchor κ slope + PLL; the collected DEPTH survives
     }
-    if (c.fllOn && !this._lastFllOn) this._resetFrequencyLock();
-    this._lastFllOn = !!c.fllOn;
+    const fllOn = this._fllOn();
+    if (fllOn && !this._lastFllOn) this._resetFrequencyLock();
+    this._lastFllOn = fllOn;
     // MAINS MODE, read live per batch the way the Java worker re-reads it per tick.
     // A transition that touches one of the two TIME-DOMAIN cancellers (SYNC_SUBTRACT, LMS) -
     // entering one, leaving one, or swapping between them - changes what the samples already
@@ -739,7 +754,7 @@ export class FftController {
     // The ACCUMULATOR is deliberately untouched - not its collected depth, not its counter: the
     // hum is an additive component the canceller removes, not a change of what is measured, so
     // the average goes on (Java keeps the accumulator across a mains-mode change too).
-    const mainsMode = c.mainsSuppression || 'NONE';
+    const mainsMode = p.fftMainsSuppression.get() || 'NONE';
     if (this._lastMainsMode == null) this._lastMainsMode = mainsMode;
     if (mainsMode !== this._lastMainsMode) {
       const timeDomain = (m) => m === 'SYNC_SUBTRACT' || m === 'LMS';
@@ -882,7 +897,7 @@ export class FftController {
   _onSignalDiscontinuity() {
     this._restartWindow();
     this._drainSkipRemaining = Math.max(this._drainSkipRemaining,
-      Math.ceil(POST_GLITCH_SKIP_SEC * (this.config.inRate || 0)));
+      Math.ceil(POST_GLITCH_SKIP_SEC * this._inRate()));
     this._accumEpoch++;                 // drop any in-flight window straddling the re-sync
     this._workerResyncPending = true;   // KEEP the collected depth; re-anchor κ slope + PLL
     MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, 'fft.warning.discontinuity');
@@ -982,7 +997,7 @@ export class FftController {
    *  samplesAbsStart) - keeps the period-locked state phase-aligned across the
    *  overlapping hop-spaced windows. */
   _applyFftMains(snap, sampleRate, absCapStart) {
-    const mode = this.config.mainsSuppression || 'NONE';
+    const mode = this._prefs.fftMainsSuppression.get() || 'NONE';
     if (mode === 'NONE') { this._fftMainsF0 = 0; return; }
     if (mode === 'IIR_COMB') {
       if (!this._fftMains || this._fftMainsRate !== sampleRate) {
@@ -1023,11 +1038,13 @@ export class FftController {
    *  NaN (no anchor - auto-detect the fundamental) unless manual-fundamental
    *  mode is enabled. Mirrors FftAnalyzerWorker.resolveFundRefDbFs. */
   _fundRefDbFs() {
-    const c = this.config;
-    if (!c.manualFundEnabled) return NaN;
-    const v = c.manualFundVrms;
+    const p = this._prefs;
+    if (!p.fftManualFundEnabled.get()) return NaN;
+    const v = p.fftManualFundVrms.get();
     const dbv = (v > 0) ? 20.0 * Math.log10(v) : NaN;
-    return dbv - (c.dbvOffsetDb || 0);   // NaN propagates
+    // The ANALYZED channel's ADC dBV offset (Java FftAnalyzerWorker:2005
+    // getDbvOffsetDb(getFftChannel())), so the anchor resolves against the right full scale.
+    return dbv - (p.getDbvOffsetDb(p.fftChannel.get()) || 0);   // NaN propagates
   }
 
   /** Hands the current window to the analyzer. Routes to the worker POOL when
@@ -1045,7 +1062,8 @@ export class FftController {
     const L = this.bufLen, snap = new Float64Array(L);
     snap.set(this.buf.subarray(this.bufW));
     snap.set(this.buf.subarray(0, this.bufW), L - this.bufW);
-    this._applyFftMains(snap, this.config.inRate, absCapStart);   // mains suppression on the window (+ plot-time f0)
+    const rate = this._inRate();
+    this._applyFftMains(snap, rate, absCapStart);   // mains suppression on the window (+ plot-time f0)
     // Stamp this tick's absolute window start + accumulator epoch so _onWorkerResult
     // folds the result in with the right de-rotation delta and drops it if a reset
     // (epoch bump) landed while it was analyzing.
@@ -1053,8 +1071,8 @@ export class FftController {
     this._tickEpoch = this._accumEpoch;
     if (!this.worker) { this.dropped++; return; }
     this._busy = true;
-    const c = this.config;
-    const dual = isDualTone(c.form);
+    const p = this._prefs;
+    const dual = isDualTone(p.genSignalForm.get());
     // Fold control (main->worker): the values the cross-tick fold needs. resetAccum / resyncAccum
     // are one-shots fired wherever a recovery here resets / re-anchors the average, so the
     // worker's accumulator moves with the cursor this side owns.
@@ -1066,24 +1084,25 @@ export class FftController {
     // gate). null (or a 0 for "no such tone") withholds the hint entirely, which is what makes
     // the analyzer auto-detect an external tone instead of pinning its search to a nominal.
     // The fund-from-generator gate reads the LIVE preference, exactly as Java does
-    // (FftAnalyzerWorker:1697 genActive && prefs.isFftFundFromGenerator()): the config is a
-    // record-start snapshot, and the predistortion wizard forces this pref on Start - through
-    // the snapshot the hint could not reach an already-running record, and without it the
-    // accumulator's global peak search once pinned the coherent reference onto the wizard's
-    // H9 test partial (the probe partials arrive stronger than the notched fundamental).
-    const fundFromGen = this._prefs ? this._prefs.fftFundFromGenerator.get() : c.fftFundFromGenerator;
+    // (FftAnalyzerWorker:1697 genActive && prefs.isFftFundFromGenerator()): the predistortion
+    // wizard forces this pref on Start and the hint must reach an already-running record -
+    // without it the accumulator's global peak search once pinned the coherent reference onto
+    // the wizard's H9 test partial (the probe partials arrive stronger than the notched
+    // fundamental).
+    const fundFromGen = p.fftFundFromGenerator.get();
     const emitted = (this._genOn && fundFromGen)
-      ? MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, c.inRate) : null;
+      ? MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, rate) : null;
     const hintHz = (hz) => (hz > 0 ? hz : NaN);
     this.worker.postMessage({
-      id: this._dispatchId++, samples: snap, sampleRate: c.inRate, fftSize: this.N,
-      harmonicCount: c.harmonicCount, windowType: c.window, overlap: c.overlap,
+      id: this._dispatchId++, samples: snap, sampleRate: rate, fftSize: this.N,
+      harmonicCount: this._harmonicCount(), windowType: p.fftWindow.get(), overlap: p.fftOverlap.get(),
       // Stated frame geometry (Java analyze's step + frameCount): the spacing is
       // this tick's DRAWN pending hop - so the second frame is exactly the next
       // tick's first - and the count is stated because the window is sized for
       // the LARGEST hop, which would over-count under the random overlap.
       step: this.pendingHop, frameCount: this.perTickFrames,
-      snrFreqMin: c.snrFreqMin || 0, snrFreqMax: c.snrFreqMax || 0, coherentAveraging: this.config.coherent,
+      snrFreqMin: this._snrFreqMin(), snrFreqMax: this._snrFreqMax(),
+      coherentAveraging: p.fftCoherentAveraging.get(),
       // Generator FREQUENCY hint - gated on the generator ACTUALLY RUNNING as well as the
       // pref, exactly as Java (FftAnalyzerWorker:1697-1714: `genActive && prefs
       // .isFftFundFromGenerator()`, whose comment reads "genActive still gates the generator
@@ -1119,10 +1138,10 @@ export class FftController {
       // the raw window lives in the worker after this transfer, so the worker runs the
       // detector pass - but only when this tick will accumulate, exactly as Java.
       // ...and only when the user leaves the gate ON (Java FftAnalyzerWorker:1818 also requires
-      // prefs.isFftDetectTimeDiscontinuity()). Read from the live config so an unchecked box takes
-      // effect mid-record without a restart. undefined (pre-readConfig) defaults to ON.
+      // prefs.isFftDetectTimeDiscontinuity()). Read live so an unchecked box takes effect
+      // mid-record without a restart.
       timeGate: USE_TIME_DISCONTINUITY && (this.foreverMode || this.ringN >= 2)
-        && this.config.fftDetectTimeDiscontinuity !== false,
+        && p.fftDetectTimeDiscontinuity.get() !== false,
       winAbsStart: this._tickAbsStart,
       // FLL transport timebase (Java FftResult.samplesAbsStart / writePos): the window's
       // absolute capture start and the live write head, stamped ONTO THE RESULT by the worker so
@@ -1130,7 +1149,7 @@ export class FftController {
       // measured from - the steer reads the frame, never a slot the next dispatch overwrites.
       absCapStart, writePos: this._fftReader ? this._fftReader.getWritePos() : 0,
       accumulate: forever || ringN >= 2, targetN: forever ? Infinity : 2 * ringN,
-      spectralGate: true, strongToneRelDb: this.config.fftStrongToneRelDb ?? 100.0,
+      spectralGate: true, strongToneRelDb: p.fftStrongToneRelDb.get(),
       resetAccum, resyncAccum,
       // Whether this tick is also to be REBUILT for display (the overlay, the .frc de-embed, the
       // plot-time mains comb, the statistics recompute, the blue dots) - see _showThisTick.
@@ -1205,7 +1224,7 @@ export class FftController {
       // DISPLAY_MAX_MS floor, which is the visible symptom.
       // Built only when debug logging is on: this runs on every displayed frame, and a
       // diagnostic must cost nothing when it is not being read - nor be able to throw.
-      const rate = this.config.inRate || 0;
+      const rate = this._inRate();
       if (isDebug() && rate > 0) {
         debug(`[fft] frame shown - behind live ${(backlog / rate).toFixed(2)} s`
           + ` (${caughtUp ? 'caught up' : 'BEHIND, only the ' + DISPLAY_MAX_MS + ' ms floor shows frames'})`
@@ -1439,8 +1458,8 @@ export class FftController {
     // tick-equivalents (round(accumFrames / perTickFrames)) while _analysesTicks is a raw count,
     // so comparing the displayed expression is correct under both.
     const displayedAverages = Math.max(0, this.framesDone - 1);
-    if (forever && this.config.stopAfterNEnabled && !this._fftPausedByStopN
-        && displayedAverages >= this.config.stopAfterN) {
+    if (forever && this._prefs.fftStopAfterNEnabled.get() && !this._fftPausedByStopN
+        && displayedAverages >= this._prefs.fftStopAfterN.get()) {
       this._fftPausedByStopN = true;
       // The tick that reaches the cap is the LAST one, and what the operator is left looking at
       // must be the average it completed. The display gate decided about this tick before the
@@ -1492,7 +1511,7 @@ export class FftController {
    *  table runs in the view). */
   _steerFrom(r) {
     if (this.fllArmed()) {
-      if (isDualTone(this.config.form)) {
+      if (isDualTone(this._prefs.genSignalForm.get())) {
         this._steerDualTone(r);
       } else if (r.fundamentalHzRefined > 0) {
         this._steerSingleTone(r);
@@ -1549,22 +1568,19 @@ export class FftController {
    *  as drift), the fundamental comes from the generator, an align mode is selected, and the
    *  generator is actually emitting. Inert means inert: no steer, no correction accumulated. */
   fllArmed() {
-    const c = this.config;
-    if (!(this._prefs ? this._prefs.genSnapToFftBin.get() : c.snapToBin)) return false;
-    if (!(this._prefs ? this._prefs.fftFundFromGenerator.get() : c.fftFundFromGenerator)) return false;
-    if (!c.fllOn) return false;
+    const p = this._prefs;
+    if (!p.genSnapToFftBin.get()) return false;
+    if (!p.fftFundFromGenerator.get()) return false;
+    if (!this._fllOn()) return false;
     return !!this._genOn;
   }
 
   /** Names the first failed frequency-lock precondition, for the trace log only. */
   _fllGateState() {
-    if (!(this._prefs ? this._prefs.genSnapToFftBin.get() : this.config.snapToBin)) {
-      return 'snap-to-bin OFF';
-    }
-    if (!(this._prefs ? this._prefs.fftFundFromGenerator.get() : this.config.fftFundFromGenerator)) {
-      return 'fundamental not from generator';
-    }
-    if (!this.config.fllOn) return 'align mode NONE';
+    const p = this._prefs;
+    if (!p.genSnapToFftBin.get()) return 'snap-to-bin OFF';
+    if (!p.fftFundFromGenerator.get()) return 'fundamental not from generator';
+    if (!this._fllOn()) return 'align mode NONE';
     return this._genOn ? 'armed' : 'generator not emitting';
   }
 
@@ -1591,7 +1607,7 @@ export class FftController {
       // CAPTURE-rate snap (slot.sampleRate) - NOT the output-rate base.
       const gateBefore = this._fll.correctionVisibleFrom;
       this._fll.update(fllTarget, r.fundamentalHzRefined,
-        r.samplesAbsStart, r.writePos, this.config.inRate, this.N);
+        r.samplesAbsStart, r.writePos, this._inRate(), this.N);
       this.genFreq = fllTarget + this._fll.correction;
       // Publish the trim; GeneratorController applies it to its own worklet (was a direct post).
       MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM, this.genFreq);
@@ -1722,7 +1738,7 @@ export class FftController {
     }
     const gateBefore = fll.correctionVisibleFrom;
     fll.update(target, measuredHz,
-      r.samplesAbsStart, r.writePos, this.config.inRate, this.N);
+      r.samplesAbsStart, r.writePos, this._inRate(), this.N);
     const pub = target + fll.correction;
     MessageBus.instance().publish(trimEvent, pub);
     if (traceFll()) {
@@ -1751,7 +1767,7 @@ export class FftController {
    *  (Java FftAnalyzerWorker publishes the slot after each analysis; the FFT pane subscribes,
    *  as Java's FftView does). */
   _emit(r) {
-    const c = this.config;
+    const rate = this._inRate();
     r.binW = this.binW;
     // Stamp the channel the FFT ACTUALLY analyzed (Java FftAnalyzerWorker:1872
     // r.channelLeft = wantLeft): the render-time .frc de-embed picks left()/right()
@@ -1767,7 +1783,7 @@ export class FftController {
     r.avgTarget = this.foreverMode ? '∞' : this.avgTarget;
     r.coherent = r.coherentAveraging;
     r.fll = {
-      on: c.fllOn, locked: this.fllLocked, errBins: this.fllErrHz / this.binW,
+      on: this._fllOn(), locked: this.fllLocked, errBins: this.fllErrHz / this.binW,
       ppm: this.snapped > 0 ? this.fllErrHz / this.snapped * 1e6 : 0,
       genFreq: this.genFreq, rejected: this.rejectedCount,
     };
@@ -1775,10 +1791,10 @@ export class FftController {
     // under the random overlap changes every tick.
     const liveHop = Math.max(1, this.pendingHop);
     r.perf = {
-      fftFps: this._fftFps, targetFps: c.inRate / liveHop, workerMs: this._workerMs,
-      dropped: this.dropped, threads: this.poolSize, overlapPct: this.overlapPct, hopMs: liveHop / c.inRate * 1000,
+      fftFps: this._fftFps, targetFps: rate / liveHop, workerMs: this._workerMs,
+      dropped: this.dropped, threads: this.poolSize, overlapPct: this.overlapPct, hopMs: liveHop / rate * 1000,
     };
-    r.inRate = c.inRate; r.snapped = this.snapped;
+    r.inRate = rate; r.snapped = this.snapped;
     // The IMD table is computed off the DE-EMBEDDED spectrum, so it runs in the view correction
     // (fft/fft-view-correction.js) alongside the .frc de-embed, not here.
 
@@ -1805,7 +1821,7 @@ export class FftController {
     if (!r || (base && base !== r) || !this.worker) return false;
     this.worker.postMessage({
       reemit: true, mainsF0: this._fftMainsF0,
-      wantCalGain: isDualTone(this.config.form) && this._calEntries.length > 0,
+      wantCalGain: isDualTone(this._prefs.genSignalForm.get()) && this._calEntries.length > 0,
       epoch: this._accumEpoch,
       finalizeInPlace: this._finalizeInPlace,
       // Refused while a display frame is already being prepared: its answer would arrive after

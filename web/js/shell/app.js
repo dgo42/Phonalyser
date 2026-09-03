@@ -194,16 +194,14 @@ prefs.dacFsVoltageAmplRight.addListener(onCalChange);
 // A DAC full-scale move - a card RANGE switch, or a DAC re-calibration - must NOT change the
 // generated LEVEL. The amplitude the user typed is absolute volts; the DDS derives its normalised
 // amplitude as Vrms/(fsPeak·rawRms(form)), so the physical output is Vrms only while the kernel
-// knows the CURRENT full scale. engine.config.dacFsVoltageAmpl is otherwise refreshed only by
-// readConfig() (a start / a settings commit), which a range switch does not run: the worklet kept
-// the OLD full scale while the hardware moved to the new one, and the trace jumped by fsNew/fsOld
-// on every range change. Push the new scale - and the right-lane
-// ratio fsLeft/fsRight, which the same card edit moves - then retune, which is a no-op unless the
-// generator is running. The amplitude CEILING is a separate concern, handled by syncAmpMax.
+// knows the CURRENT full scale. The kernel learns it on a retune - the generator reads the full
+// scale and the right-lane ratio fsLeft/fsRight (which the same card edit moves) off the
+// preferences on every retune - so retune here, which is a no-op unless the generator is running;
+// without it the worklet kept the OLD full scale while the hardware moved to the new one, and the
+// trace jumped by fsNew/fsOld on every range change. The amplitude CEILING is a separate concern,
+// handled by syncAmpMax.
 const syncDacFullScale = () => {
   if (!engine) return;   // the card store can resolve a profile before init built the engine
-  engine.config.dacFsVoltageAmpl = prefs.getDacFsVoltageAmpl();
-  engine.config.rightLaneScale = prefs.dacRightLaneScale();
   engine.retuneGenerator();
 };
 prefs.dacFsVoltageAmpl.addListener(syncDacFullScale);
@@ -311,13 +309,12 @@ function bindPrefs() {
   // read-only per-channel spans in the Audio tab - there is no editable full-scale field to bind.
 }
 
-// The shared engine config has no shell-side snapshot any more (Java has none either: each
-// controller reads its own Preferences). Its parts are owned: the capture / playback devices and
-// rates by the Preferences dialog (written on scan and on OK), the generator's tone, sweep, dither
-// and output routing by the generator pane (GeneratorPane.readConfig - once at load and on its
-// own controls), the FFT geometry, averaging, THD settings and calibration anchors by the FFT
-// settings strip (FftTabControl.readConfig - on a record start and every live change), the
-// captured scope window by the scope pane (ScopePane.readConfig - on a record start).
+// There is no engine-side settings snapshot (Java has none either): every controller reads the
+// one Preferences store live. The panes write it - the capture / playback devices and rates
+// through the Preferences dialog (on scan and on OK), the generator's tone, sweep, dither and
+// output routing through the generator pane's controls, the FFT geometry, averaging, THD settings
+// and calibration anchors through the FFT settings strip, the scope's time/div through the scope
+// pane.
 
 // Render an array of values as `.tile` chip spans (the Java painted tile look).
 const tileChips = (...vals) => vals.filter(v => v != null && v !== '').map(v => `<span class="tile">${v}</span>`).join('');
@@ -373,7 +370,7 @@ function bindEngineCallbacks() {
 async function restartFft() {
   if (busy || !engine.fft.recording) return;
   busy = true;
-  try { await engine.fft.setRecording(false); fftTabControl.readConfig(); await engine.fft.setRecording(true); }
+  try { await engine.fft.setRecording(false); await engine.fft.setRecording(true); }
   finally { fftPane.syncFftLed(); busy = false; }
 }
 
@@ -671,8 +668,8 @@ let freqRespPane;
 // ============================ Predistortion wizard ============================
 let predistModal;
 
-// Restart preserving the (predistortion-mutated) engine.config - does NOT re-read
-// the UI, so configureForRun's coherent/∞-averaging settings survive.
+// Restart on the (predistortion-written) preferences - configureForRun's coherent / ∞-averaging
+// settings are what the FFT session then sets up on.
 async function restartPreservingConfig() {
   if (!engine.running) return;
   // Predistortion drives the GENERATOR and the FFT analysis (with the FLL) - and nothing
@@ -872,7 +869,7 @@ async function init() {
   const backend = new AudioBackend({ prefs, qa40xManager, qa40xFinder, loopbackManager,
     netManager: netManagerFacade(() => netManager), status: (text) => engine._status(text) });
   engine = new AudioEngine({ prefs, backend });
-  fftViewCorrection = new FftViewCorrection(engine.config, fftCorrectionStore);
+  fftViewCorrection = new FftViewCorrection(prefs, fftCorrectionStore);
   fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running, correction: fftViewCorrection });
   bindEngineCallbacks();
   freqRespPane = new FreqRespPane(engine, prefs, { saveFile, openFile, bytesToText, showAlert });
@@ -909,10 +906,6 @@ async function init() {
   step('refreshFftLabel', () => freqRespPane.refreshFftLabel());   // localized after the bundle is loaded
   step('freqRespSeed', () => freqRespPane.seedTabs());   // builds the cal rows / preset list / RIAA enable (t() needs the bundle)
   step('genStepFields', () => genPane.buildStepFields());   // after applyI18n so unit suffixes resolve
-  // The generator's part of the engine config is current from load, before any start: the FFT's
-  // fundamental hint and the scope's beat seeds ask the generator (GENERATOR_EMITTED_HZ) what it
-  // would emit, and that answer reads the config, not the controls.
-  step('genConfig', () => genPane.readConfig());
   // Unified ADC/DAC calibration dialog (Java CalibrationDialog): built here, after applyI18n (its
   // two per-channel fields resolve their unit suffixes), so the scope / FFT strips can call
   // openAdc and its bind() can wire the generator #calibrateDac button. The current-device LABEL
@@ -928,8 +921,8 @@ async function init() {
       bench: () => (benchCalibration && benchCalibration.remote() != null ? benchCalibration : null),
       // A DAC calibration written to a BENCH reaches the tone only at the lane's next open - the
       // server converts volts with the card it read there (see the dialog's _applyToLiveTone) - so
-      // the dialog re-opens it. The generator pane owns the restart (busy guard + readConfig) and
-      // it is a no-op while nothing is playing.
+      // the dialog re-opens it. The generator pane owns the restart (busy guard) and it is a
+      // no-op while nothing is playing.
       restartGenerator: () => genPane.restartGenerator(),
       // The shell's one alert surface - the same one the card section's refused copy uses.
       showAlert,
@@ -976,15 +969,13 @@ async function init() {
   // FFT PANE (Java FftPane): the spectrum-view wiring, the Record LED, the readout / THD /
   // IMD render, and the FFT branch of the rAF loop (render()). Built BEFORE the FFT settings
   // strip, which holds this pane for its result state. Reaches the shell state (the busy
-  // guard + engine.fft.recording) + the strip's readConfig through the injected closures; the FftView +
-  // the view correction + tileChips injected too. bind() wires the Record LED.
+  // guard + engine.fft.recording) through the injected closures; the FftView + the view
+  // correction + tileChips injected too. bind() wires the Record LED.
   step('fftPane', () => {
     fftPane = new FftPane(engine, prefs, {
       view: fftView, viewCorrection: fftViewCorrection, tileChips,
       isFftRec: () => engine.fft.recording,
       isBusy: () => busy, setBusy: (v) => { busy = v; },
-      // The FFT geometry is the settings strip's to snapshot; the strip is built after this pane.
-      readConfig: () => { if (fftTabControl) fftTabControl.readConfig(); },
     }).bind();
   });
   // MAIN TAB (Java MultifunctionalTab): the rAF render-frame driver + the 3-pane collapse/sash

@@ -183,15 +183,14 @@ export class FftTabControl {
    *  FftView.onThdSettingChanged (FftView.java:907-913): "For a displayed STATIC spectrum
    *  (not a live capture) re-apply the settings and recompute its THD / harmonics, then
    *  repaint. During live capture the worker re-reads these every tick." Never a capture
-   *  restart, never a statistics/accumulator reset. readConfig pushes the new
-   *  params into the live dispatch; the retained result is recomputed + repainted so the
-   *  change shows immediately in the STOPPED state too (the pane's rAF branch only paints
-   *  while recording, hence the direct view render - Java redraw()). Java gates the static
-   *  recompute on !controller.isRecording(); the web tab control has no recording-state
-   *  seam, so it recomputes unconditionally - idempotent with the next live frame, which
-   *  re-derives the same stats from the same config. */
+   *  restart, never a statistics/accumulator reset. The live dispatch reads the new
+   *  params off the preferences on its next tick; the retained result is recomputed +
+   *  repainted so the change shows immediately in the STOPPED state too (the pane's rAF
+   *  branch only paints while recording, hence the direct view render - Java redraw()). Java
+   *  gates the static recompute on !controller.isRecording(); the web tab control has no
+   *  recording-state seam, so it recomputes unconditionally - idempotent with the next live
+   *  frame, which re-derives the same stats from the same preferences. */
   onThdSettingChanged() {
-    this.readConfig();
     const r0 = this.pane.getResult();
     if (!r0 || !r0.amplitudeDbFs) return;
     const r = FftResult.adopt(r0);
@@ -205,15 +204,15 @@ export class FftTabControl {
    *  harmonics / THD / SNR - harmonic positions re-derived for the (possibly changed)
    *  max-harmonics count (the spectrum itself is preserved; only the harmonic arrays resize),
    *  the manual-fundamental Vrms->dBFS anchor, the HP/LP distortion band, then
-   *  FftAnalyzer.recomputeStats. Settings come from engine.config (the readConfig snapshot -
-   *  the same source the live dispatch reads). */
+   *  FftAnalyzer.recomputeStats. Settings come from the live preferences - the same source the
+   *  live dispatch reads. */
   recomputeStaticResult(r) {
-    const c = this.engine.config;
+    const p = this.prefs;
     const halfSize = r.amplitudeDbFs.length - 1;
     // Web harmonic-count convention: the COUNT of H2..HN = max(9, calcMax) − 1, matching the
     // live analyzer (Java FftAnalyzerWorker:1661 calcMaxH = max(9, N) − 1). Java's
     // recomputeStaticResult:490 predates that −1 - we keep static and live consistent.
-    const harmCount = c.harmonicCount;
+    const harmCount = Math.max(9, p.fftCalcMaxHarmonic.get()) - 1;
     r.ensureArrays(halfSize + 1, harmCount);   // keeps the spectrum; resizes harmonic arrays only if changed
     r.harmonicCount = harmCount;
     // Java :493-498 derives the harmonic grid off fundamentalHzRefined; fall back to the
@@ -225,13 +224,15 @@ export class FftTabControl {
       r.harmonicHz[h] = hz;
       r.harmonicBins[h] = (hb >= 1 && hb <= halfSize) ? hb : -1;
     }
-    // Manual-fundamental amplitude anchor, Vrms -> dBFS (Java :499-502).
-    r.fundamentalTrueDbFs = (c.manualFundEnabled && c.manualFundVrms > 0)
-      ? 20.0 * Math.log10(c.manualFundVrms) - (c.dbvOffsetDb || 0)
+    // Manual-fundamental amplitude anchor, Vrms -> dBFS (Java :499-502), against the ANALYZED
+    // channel's ADC dBV offset (Java getDbvOffsetDb(getFftChannel())).
+    const manualVrms = p.fftManualFundVrms.get();
+    r.fundamentalTrueDbFs = (p.fftManualFundEnabled.get() && manualVrms > 0)
+      ? 20.0 * Math.log10(manualVrms) - (p.getDbvOffsetDb(p.fftChannel.get()) || 0)
       : NaN;
     // High-pass / low-pass distortion band (Java :503-504).
-    r.snrFreqMin = c.snrFreqMin || 0;
-    r.snrFreqMax = c.snrFreqMax || 0;
+    r.snrFreqMin = p.fftDistMinEnabled.get() ? p.fftDistMinHz.get() : 0;
+    r.snrFreqMax = p.fftDistMaxEnabled.get() ? p.fftDistMaxHz.get() : 0;
     this.fftAnalyzer.recomputeStats(r);
   }
 
@@ -378,59 +379,6 @@ export class FftTabControl {
    *  markup. */
   field(id) { return this._fields[id]; }
 
-  /** Snapshots the FFT settings into the shared engine config - what a record start and every
-   *  live change read (Java FftAnalyzerWorker re-reads its Preferences per tick). The FFT's part
-   *  only: the analysis geometry and averaging, the THD settings, the analysed channel and the
-   *  calibration anchors the readouts scale by; the capture device and rate are the Preferences
-   *  dialog's (written on scan and on OK), the generator's tone the generator pane's. */
-  readConfig() {
-    const c = this.engine.config, prefs = this.prefs;
-    c.fftSize = parseInt($('#fftSize').val(), 10); c.window = $('#window').val();
-    c.overlap = $('#overlap').val();
-    // ∞ (forever) averaging -> a true cumulative mean (Infinity). The cross-tick accumulator in
-    // FftController grows the depth tick by tick (it no longer sizes a buffer to the whole
-    // depth), so ∞ needs no finite cap; the stop-after-N auto-stop, available only in ∞ mode,
-    // lets the user end the run. Read from the averages NumericStepField (Java averagesField -
-    // ∞ is the top of AVERAGES_SERIES).
-    const fAverages = this._fields.averages;
-    c.averages = fAverages ? fAverages.getValue() : (parseInt($('#averages').val(), 10) || 4);
-    c.coherent = $('#coherent').is(':checked');
-    // JIT warm-up has NO UI field (Java hardwires it - no Settings-tab control); c.warmupMs
-    // keeps its backend default (backend.js). Only the web-only thread-pool size is read.
-    c.threads = parseInt($('#threads').val(), 10);
-    c.fllOn = $('#align').val() === 'fll';
-    // Java FftAnalyzerWorker:1661 - calcMaxH = max(9, getFftCalcMaxHarmonic()) - 1, i.e. the COUNT
-    // of harmonics H2..HN (the fundamental is NOT one of them). The display's label cap (fft-view
-    // calcMax = max(9,N)) is the max harmonic NUMBER and stays as-is.
-    c.harmonicCount = Math.max(9, prefs.fftCalcMaxHarmonic.get()) - 1;
-    c.thdMaxHarmonic = Math.max(2, Math.min(9, prefs.fftThdMaxHarmonic.get()));   // THD sum upper bound (H2..HN)
-    c.manualFundEnabled = prefs.fftManualFundEnabled.get();                        // fixed-reference fundamental
-    c.manualFundVrms = prefs.fftManualFundVrms.get();
-    c.fftFundFromGenerator = prefs.fftFundFromGenerator.get();   // hint analyzer with the gen freq vs auto-detect
-    c.snrFreqMin = prefs.fftDistMinEnabled.get() ? prefs.fftDistMinHz.get() : 0;   // THD band (Java distMin/distMax)
-    c.snrFreqMax = prefs.fftDistMaxEnabled.get() ? prefs.fftDistMaxHz.get() : 0;
-    // Stop-after-N auto-stop + mains suppression (Java FftAnalyzerWorker).
-    c.stopAfterNEnabled = prefs.fftStopAfterNEnabled.get();
-    c.stopAfterN = prefs.fftStopAfterN.get();
-    c.mainsSuppression = prefs.fftMainsSuppression.get();
-    // Time-domain discontinuity gate toggle (Java prefs.isFftDetectTimeDiscontinuity), read live
-    // per worker dispatch in FftController; kept in sync on toggle by the FFT settings checkbox.
-    c.fftDetectTimeDiscontinuity = prefs.fftDetectTimeDiscontinuity.get();
-    // Which ADC channel the FFT analyzes (Java FftAnalyzerWorker:1535 prefs.getFftChannel();
-    // L -> ch0, R -> ch1) - flows into FftController._wantLeft at setup and is switched live via
-    // engine.setFftChannel from the L/R buttons.
-    c.channel = prefs.fftChannel.get();
-    // ADC full-scale anchor + IMD dBV offset (offset-invariant ratios, but the absolute dBV
-    // columns need it). The dBV offset threads the ANALYZED channel so the manual-fundamental
-    // anchor resolves against the right ADC full-scale (Java FftAnalyzerWorker:2005
-    // getDbvOffsetDb(getFftChannel())). Both channels' offsets are snapshotted so a live L↔R
-    // switch (FftController.setFftChannel) re-picks without a full re-read.
-    c.adcFsVoltageRms = prefs.adcFsVoltageRms.get();
-    c.dbvOffsetDbLeft = prefs.getDbvOffsetDb('L');
-    c.dbvOffsetDbRight = prefs.getDbvOffsetDb('R');
-    c.dbvOffsetDb = (c.channel === 'R') ? c.dbvOffsetDbRight : c.dbvOffsetDbLeft;
-  }
-
   _getField(id) { return this._fields[id]; }
 
   /** Re-renders every field's unit suffix after a UI-language switch. */
@@ -510,28 +458,19 @@ export class FftTabControl {
     $('#coherent').on('change', () => prefs.fftCoherentAveraging.set($('#coherent').is(':checked')));
     // Stop-after-N enable (gates the count field) and mains-suppression combo -
     // persisted to prefs (FftTabControl bindings); no engine restart / accumulator reset
-    // (Java FftView never wires these to resetStatistics). BUT the running FftController reads
-    // config.stopAfterNEnabled / config.stopAfterN every tick (fft-controller _onWorkerResult),
-    // so a live toggle MUST push into engine.config - else enabling stop-after mid-run had no
-    // effect until a restart: the ∞-target run kept going past N because config was stale.
-    // host.readConfig() refreshes the whole config snapshot from the live UI (incl. these two).
-    // The count itself is a NumericStepField (Java stopAfterNField): its model clamps to 2..1e6,
-    // the wheel jumps by 100 and arrows by 1 - its onChange is rebound below (like averages).
+    // (Java FftView never wires these to resetStatistics). The running FftController reads
+    // both preferences every tick (fft-controller _onWorkerResult / _syncLiveConfig), so a live
+    // toggle takes effect on the next batch - as the Java worker re-reads the preference per
+    // tick. The count itself is a NumericStepField (Java stopAfterNField): its model clamps to
+    // 2..1e6, the wheel jumps by 100 and arrows by 1 - its onChange is rebound below (like
+    // averages). A mains-mode change still resets NO accumulator or counter: the controller
+    // regathers only the analysis window, and only when a time-domain canceller is entered or
+    // left (_syncLiveConfig).
     $('#fftStopAfterNEn').on('change', () => {
       prefs.fftStopAfterNEnabled.set($('#fftStopAfterNEn').is(':checked'));
       this.refreshStopAfterEnable();
-      if (engine.running) this.readConfig();
     });
-    // MAINS suppression: persisted, and pushed into the live config so the RUNNING analyser sees
-    // the new mode on its next batch - the same host.readConfig() the stop-after neighbour above
-    // makes, and the web's counterpart of the Java worker re-reading the preference every tick.
-    // Without it a mode change sat in the preferences until an unrelated restart. Still NO
-    // accumulator or counter reset: the controller regathers only the analysis window, and only
-    // when a time-domain canceller is entered or left (_syncLiveConfig).
-    $('#fftMains').on('change', () => {
-      prefs.fftMainsSuppression.set($('#fftMains').val());
-      if (engine.running) this.readConfig();
-    });
+    $('#fftMains').on('change', () => prefs.fftMainsSuppression.set($('#fftMains').val()));
 
     // ---- RESTART-FROM-0 SEMANTICS: the FFT restarts from 0 ONLY when the FFT length, the
     // window, get-fundamental, align-generator or coherent changes; nothing else may cause a
@@ -556,14 +495,8 @@ export class FftTabControl {
       // bin grid. A running FFT announces the restart from its fresh session, but a STOPPED one
       // never restarts - so the drop happens here too, for the displayed static spectrum.
       this.fftViewCorrection.dropHeld();
-      // Snapshot the LIVE UI into engine.config BEFORE anything is re-derived from it. The bin
-      // snap divides the analysis rate by the FFT LENGTH the config carries, and that field is
-      // refreshed only by a readConfig - which restartFft performs solely while the FFT is
-      // RECORDING. With the FFT stopped and a tone playing, the retune below therefore re-snapped
-      // against the PREVIOUS length and the emitted tone did not move, while the label - which
-      // reads this control directly - already showed the new grid. The snap-to-bin checkbox does
-      // exactly this for the same reason (GeneratorPane's #snap handler).
-      this.readConfig();
+      // The length preference is already written (the handler above), so the restart's setup and
+      // the generator's re-snap both read the new grid.
       await restartFft();
       MessageBus.instance().publish(Events.FFT_LENGTH_CHANGED);
     });
@@ -571,20 +504,20 @@ export class FftTabControl {
     // pool size per dispatch message, so the running consumer just re-derives poolSize on the
     // next batch (_syncLiveConfig) - the accumulator is untouched. (This used to restartFft,
     // resetting the average - the exact opposite of the restart-from-0 rule.)
-    $('#threads').on('change', () => { this.prefs.fftThreads.set(parseInt($('#threads').val(), 10) || 1); this.updateTabSub(); if (engine.running) this.readConfig(); });
+    $('#threads').on('change', () => { this.prefs.fftThreads.set(parseInt($('#threads').val(), 10) || 1); this.updateTabSub(); });
     // OVERLAP: NO reset - Java FftTabControl.java:377-380: "Overlap only changes the hop, not
     // the spectrum/accumulator - refresh the tab tile but DON'T reset the average; the worker
     // adapts next tick." The running consumer re-derives its hop/bufLen on the next batch
     // (_syncLiveConfig) keeping the accumulator depth (κ/PLL re-anchored via onResync).
-    $('#overlap').on('change', () => { this.updateTabSub(); if (engine.running) this.readConfig(); });
+    $('#overlap').on('change', () => this.updateTabSub());
     // WINDOW + COHERENT are passed per analyze dispatch (they retune LIVE - no consumer rebuild),
     // but BOTH reset the running statistics + accumulator (Java FftView.java:436 window ->
     // resetStatistics; :451 coherent -> resetStatistics): a window/mode change makes the already-
-    // accumulated frames incompatible with the new ones. Push the live config + reset (NOT a
-    // full consumer re-acquire - that's the lighter Java resetStatistics()).
+    // accumulated frames incompatible with the new ones. A reset only (NOT a full consumer
+    // re-acquire - that's the lighter Java resetStatistics()).
     $('#window,#coherent').on('change', () => {
       this.updateTabSub();
-      if (engine.running) { this.readConfig(); engine.resetAnalyses(); }
+      if (engine.running) engine.resetAnalyses();
     });
     // ALIGN generator (None / FLL): restart from 0 (engaging/releasing
     // the FLL changes what tone the accumulated frames were captured under, so the average is
@@ -592,7 +525,6 @@ export class FftTabControl {
     // selected ("Selecting an active alignment mode (PID / FLL) resets its loop so each session
     // converges fresh") - the web FftController._syncLiveConfig handles that OFF->ON transition.
     $('#align').on('change', () => {
-      engine.config.fllOn = $('#align').val() === 'fll';
       prefs.fftAlignGenerator.set($('#align').val() === 'fll' ? 'FLL' : 'NONE');
       this.syncAlign();
       if (engine.running) engine.resetAnalyses();
@@ -605,12 +537,26 @@ export class FftTabControl {
     $('#fftFundFromGen').on('change', () => {
       prefs.fftFundFromGenerator.set($('#fftFundFromGen').is(':checked'));
       this.syncAlign();
-      if (engine.running) { this.readConfig(); engine.resetAnalyses(); }
+      if (engine.running) engine.resetAnalyses();
+    });
+    // The averaging-mode controls are two-way bound (Java Bindings): a preference written
+    // elsewhere - the predistortion run forcing coherent + FLL + stop-after off, a preset recall
+    // - shows on the control it belongs to. The averages field is bound through bindStepField.
+    // A prop() write fires no change event, so the handlers above never echo.
+    prefs.fftCoherentAveraging.addListener((on) => { $('#coherent').prop('checked', !!on); this.updateTabSub(); });
+    prefs.fftAlignGenerator.addListener((mode) => {
+      $('#align').val(mode === 'FLL' ? 'fll' : 'off');
+      this.syncAlign();
+      this.updateTabSub();
+    });
+    prefs.fftStopAfterNEnabled.addListener((on) => {
+      $('#fftStopAfterNEn').prop('checked', !!on);
+      this.refreshStopAfterEnable();
     });
     // THD settings (Java FftView.java:473-479/486: distMin/distMax band, manual fundamental,
     // max harmonics -> onThdSettingChanged): POST-FFT - never a capture restart, never a
-    // statistics/accumulator reset. Applied live via readConfig; with the FFT stopped the
-    // displayed static result is recomputed NOW - see onThdSettingChanged below.
+    // statistics/accumulator reset. The live dispatch reads them per tick; with the FFT stopped
+    // the displayed static result is recomputed NOW - see onThdSettingChanged below.
     // ONE commit path shared by the three enable checkboxes (jQuery change) and the four
     // NumericStepFields (their onChange is rebound below, like averages/manualFund).
     // The field models already clamp to the Java ranges (0..inRate/2, 2..9, 9..50 -
@@ -636,33 +582,27 @@ export class FftTabControl {
     // FFT "Averages": NO reset - Java FftTabControl.java:391-397: "No reset here: the worker
     // resets the average only on a ring↔∞ switch or a smaller ring (a larger ring keeps the
     // depth)." A full consumer teardown here would reset the accumulator on EVERY averages
-    // change. So: write the pref, refresh the stop-after gate + tab tile, push the live config -
-    // the running consumer re-derives its targets next batch (_syncLiveConfig) and
-    // _onWorkerResult applies the exact Java discard rules.
+    // change. So: write the pref and refresh the stop-after gate + tab tile - the running
+    // consumer re-derives its targets next batch (_syncLiveConfig) and _onWorkerResult applies
+    // the exact Java discard rules.
     const fAvg = this._getField('averages');
     if (fAvg) {
       fAvg.onChange = (v) => {
         prefs.fftAverages.set(v);
         this.refreshStopAfterEnable();
         this.updateTabSub();
-        if (engine.running) this.readConfig();
       };
     }
-    // Stop-after-N COUNT (Java stopAfterNField): NO reset - write the pref and push the live
-    // config so the running consumer sees the new N next tick (like the enable toggle above).
-    // The field model clamps to 2..1e6 (Java STOP_AFTER_MIN/MAX), so no re-clamp here.
+    // Stop-after-N COUNT (Java stopAfterNField): NO reset - write the pref; the running consumer
+    // sees the new N next tick (like the enable toggle above). The field model clamps to 2..1e6
+    // (Java STOP_AFTER_MIN/MAX), so no re-clamp here.
     const fStopN = this._getField('fftStopAfterN');
-    if (fStopN) {
-      fStopN.onChange = (v) => {
-        prefs.fftStopAfterN.set(v);
-        if (engine.running) this.readConfig();
-      };
-    }
+    if (fStopN) fStopN.onChange = (v) => prefs.fftStopAfterN.set(v);
     // THD "Manual fundamental" VALUE (Java fftManualFundVrmsProperty -> onThdSettingChanged,
     // FftView.java:478): a THD setting - never a restart/reset (a restart would over-reset
     // mid-run and be a no-op while stopped, so the change never applied). The THD-settings
-    // path: write the prefs, then onThdSettingChanged (live readConfig / stopped static
-    // recompute + repaint).
+    // path: write the prefs, then onThdSettingChanged (the live dispatch reads them per tick;
+    // stopped: static recompute + repaint).
     const fManFund = this._getField('fftManualFund');
     if (fManFund) {
       fManFund.onChange = (v) => {
@@ -725,10 +665,13 @@ export class FftTabControl {
     // ----- FFT "Save to..." / "Load from..." -----
     $('#fftSaveBtn').on('click', async () => {
       if (!this.pane.getResult()) { $('#status').text('FFT: nothing analyzed yet - press ▶ first.'); return; }
-      const r = this.pane.getResult(), c = engine.config, imd = !!r.imd;
+      const r = this.pane.getResult(), imd = !!r.imd;
       try {
+        // The entered tones: a dual-tone result carries the pair's first tone, else the
+        // single-tone frequency (each form reads its own preference).
         const text = io.saveSpectrum(r, {
-          imd, tone1Hz: c.toneHz, tone2Hz: c.tone2Hz, dbvOffsetDb: prefs.dbvOffsetDb,
+          imd, tone1Hz: imd ? prefs.genDualToneFreq1Hz.get() : prefs.genFrequencyHz.get(),
+          tone2Hz: prefs.genDualToneFreq2Hz.get(), dbvOffsetDb: prefs.dbvOffsetDb,
         });
         const res = await io.saveFile(text, imd ? 'spectrum-imd.fft' : 'spectrum.fft', io.FFT_TYPE);
         if (res.saved) {
@@ -1028,12 +971,8 @@ export class FftTabControl {
     // Logarithmic frequency axis toggle (Java fftLogFreqAxis) - drives the FFT view.
     $('#logAxis').on('change', () => { prefs.fftLogFreqAxis.set($('#logAxis').is(':checked')); this.fftView.applyPrefs(); });
     // Time-domain discontinuity gate toggle (Java detectTimeDiscCheck bound to the pref, read
-    // live by the worker): mirror into engine.config so the change takes effect mid-record.
-    $('#fftDetectTimeDisc').on('change', () => {
-      const v = $('#fftDetectTimeDisc').is(':checked');
-      prefs.fftDetectTimeDiscontinuity.set(v);
-      this.engine.config.fftDetectTimeDiscontinuity = v;
-    });
+    // live per dispatch by the controller, so the change takes effect mid-record).
+    $('#fftDetectTimeDisc').on('change', () => prefs.fftDetectTimeDiscontinuity.set($('#fftDetectTimeDisc').is(':checked')));
     // FFT magnitude-unit selector (Java magUnitCombo) - relabels the view's y-axis
     // (V / V√Hz / dBV / dBFS); the range stays canonical dBFS, so this is draw-time only.
     $('#fftMagUnit').on('change', () => { prefs.fftMagUnit.set($('#fftMagUnit').val()); this.fftView.applyPrefs(); });

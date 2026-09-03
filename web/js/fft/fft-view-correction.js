@@ -26,7 +26,9 @@ import { Events } from '../bus/events.js';
 
 export class FftViewCorrection {
   /**
-   * @param config the shared engine config (read for the IMD tone params + dual-tone form).
+   * @param prefs  the live Preferences (read for the dual-tone form and the analysed channel's
+   *   dBV offset the IMD table is placed with - Java FftController.analyzeImd reads
+   *   prefs.getDbvOffsetDb(prefs.getFftChannel())).
    * @param store  the shared FFT CorrectionStore this VIEW READS - the ordered cascade of active
    *   .frc de-embeds owned by the FFT side (Java FftView reads FftController.getCorrectionStore()).
    *   Each entry is {calibration:{left,right}, path, withNoise}, picked left/right per
@@ -34,8 +36,8 @@ export class FftViewCorrection {
    *   (every FFT bin incl. the noise floor vs the tone lobes only). The store is mutated by
    *   FftTabControl (the calibration rows); this class never writes it.
    */
-  constructor(config, store) {
-    this.config = config;
+  constructor(prefs, store) {
+    this._prefs = prefs;
     this.store = store;
     /** The cascade's gain per bin as the analyzer last sampled it, or null when no dual-tone
      *  frame has carried one. Held across frames: the analyzer sends it with every finalized
@@ -71,15 +73,15 @@ export class FftViewCorrection {
    *  2. the dual-tone IMD table, computed off the de-embedded spectrum (null in THD mode). */
   apply(r) {
     if (!r) return;
-    const c = this.config;
+    const p = this._prefs;
     if (r.calGainDb) this._calGainDb = r.calGainDb;
     // The IMD product grid is placed at what the generator is EMITTING, asked at this result's
     // rate - never at the raw entered tones, which ignore the bin snap and would put every
     // product a fraction of a bin off (Java FftController.analyzeImd). No responder -> no IMD
     // result at all, which every caller already reads as "no dual-tone result".
     const emitted = MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, r.sampleRate);
-    r.imd = (isDualTone(c.form) && emitted != null)
-      ? analyzeImd(r, emitted[0], emitted[1], c.dbvOffsetDb) : null;
+    r.imd = (isDualTone(p.genSignalForm.get()) && emitted != null)
+      ? analyzeImd(r, emitted[0], emitted[1], p.getDbvOffsetDb(p.fftChannel.get())) : null;
   }
 
   /** The dB the loaded calibration cascade takes off the bin nearest {@code hz} - what a level

@@ -40,15 +40,17 @@ const SCOPE_MAX_LEN = 1 << 23;
 export class ScopeController {
   /**
    * @param capture the SharedCapture instance.
-   * @param config  the SHARED engine config object.
+   * @param prefs   the live Preferences, read per access (Java ScopeController reads
+   *                Preferences.instance() the same way: the scope window from oscTimePerDiv, the
+   *                volts scale from the ADC full scale, the dual-tone flag from the form).
    *
    * No generator collaborator: the emitted tone pair is ASKED for over the bus
    * (GENERATOR_EMITTED_HZ) at this consumer's capture rate, exactly as Java's ScopeView asks
    * instead of re-deriving the FFT-bin snap from the same preferences.
    */
-  constructor(capture, config) {
+  constructor(capture, prefs) {
     this._capture = capture;
-    this.config = config;
+    this._prefs = prefs;
     this._scopeOn = false;
     // Whether the scope was recording when stopCaptureForPrefs() recorded it, so
     // startCaptureForPrefs() restarts exactly that (Java ScopePane.captureWasRunningForPrefs).
@@ -86,6 +88,14 @@ export class ScopeController {
   /** True while the scope is recording. */
   get recording() { return this._scopeOn; }
 
+  /** The rate this consumer's samples arrive at: the open ring's granted rate, else the active
+   *  backend's configured input rate (the ring is not open before the first acquire, and a
+   *  window length or a period is still asked for then). */
+  _rate() {
+    const live = this._capture.refCount > 0 ? this._capture.inSampleRate : 0;
+    return live > 0 ? live : (this._prefs.current().inputSampleRate || 384000);
+  }
+
   /** Why the capture ended from below, if THIS consumer claimed the one operator report
    *  (Java ScopeController.getCaptureEndReason). null otherwise - the pane stays silent. */
   captureEndReason() { return this._captureEndReason; }
@@ -96,7 +106,7 @@ export class ScopeController {
    *  pair it may compute on its own - so a missing responder answers 0, which every consumer
    *  already reads as "no such tone". */
   _emittedHz() {
-    return MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, this.config.inRate)
+    return MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, this._rate())
       || [0, 0];
   }
 
@@ -141,11 +151,10 @@ export class ScopeController {
    *  slider can sweep edge-to-edge without the trace running out. Floored at
    *  SCOPE_MIN_LEN and capped at the shared ring capacity. */
   _windowLen() {
-    const c = this.config;
-    const rate = c.inRate > 0 ? c.inRate : 384000;
+    const rate = this._rate();
     // The width is real-valued (ScopeFormat.displaySamplesFor); a read length is an
     // array size, so it is the one place that quantizes - ceil, never round.
-    const displaySamples = displaySamplesFor(c.scopeTimePerDiv || 0.001, rate);
+    const displaySamples = displaySamplesFor(this._prefs.oscTimePerDiv.get() || 0.001, rate);
     const extraLookback = Math.min(rate, SCOPE_MEAS_MAX_SAMPLES);
     let wanted = 2 * Math.ceil(displaySamples) + 2 * LANCZOS_PADDING + extraLookback;
     if (wanted < SCOPE_MIN_LEN) wanted = SCOPE_MIN_LEN;
@@ -195,15 +204,15 @@ export class ScopeController {
     this._scopeCount++; if (!this._scopeWinT0) this._scopeWinT0 = t;
     if (t - this._scopeWinT0 >= 1000) { this._scopeFps = this._scopeCount * 1000 / (t - this._scopeWinT0); this._scopeCount = 0; this._scopeWinT0 = t; }
     if (this.onScope) {
-      const c = this.config;
+      const rate = this._rate();
       const [snapped, snapped2] = this._emittedHz();
       // peakVolts maps a normalised ±1.0 sample to the ADC full-scale swing
       // (adcFsVoltageRms·√2) so the scope measurements read in volts.
       this.onScope(this.scopeBufR, {
-        scopeFps: this._scopeFps, period: c.inRate / snapped,
-        inRate: c.inRate, snapped, available, absStart,
-        peakVolts: c.adcFsVoltageRms * Math.SQRT2,
-        dualTone: isDualTone(c.form), f1Hz: snapped, f2Hz: snapped2,
+        scopeFps: this._scopeFps, period: rate / snapped,
+        inRate: rate, snapped, available, absStart,
+        peakVolts: this._prefs.adcFsVoltageRms.get() * Math.SQRT2,
+        dualTone: isDualTone(this._prefs.genSignalForm.get()), f1Hz: snapped, f2Hz: snapped2,
         bufL: this.scopeBufL, bufR: this.scopeBufR,
       });
     }
@@ -239,8 +248,7 @@ export class ScopeController {
   readZoomedWindow() {
     const reader = this._scopeReader;
     if (!reader) return null;
-    const c = this.config;
-    const rate = c.inRate > 0 ? c.inRate : 384000;
+    const rate = this._rate();
     const displaySamples = rate;                 // exactly 1 second (Java ZoomedView)
     const wanted = displaySamples + 2 * LANCZOS_PADDING;
     if (!this._zoomBufL || this._zoomBufL.length < wanted) {

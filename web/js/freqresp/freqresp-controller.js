@@ -30,6 +30,10 @@ import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 import { t } from '../i18n/i18n.js';
 
+/** Settle time with the capture + output contexts open before the one-shot sweep plays, in ms -
+ *  a cold USB device is still spinning up when its line opens. No UI field (Java hardwires it). */
+const DEVICE_WARMUP_MS = 500;
+
 /** The largest |sample| across both raw capture channels, normalised (Java
  *  FreqRespAnalyzer.rawPeak). 0 for an empty capture. */
 function rawPeakOf(left, right) {
@@ -163,9 +167,7 @@ export class FreqRespController {
    *  (Java FreqRespAnalyzerConfig.captureRateHz, read off BackendPrefs.getInputSampleRate). The
    *  FFT window deriveDuration solves for is in these samples too. */
   captureRateHz() {
-    return (this.engine.config && this.engine.config.inRate)
-        || this.prefs.current().inputSampleRate
-        || 384000;
+    return this.prefs.current().inputSampleRate || 384000;
   }
 
   /** The DAC's configured rate (Hz) - the format the output line is opened with and the clock the
@@ -174,9 +176,7 @@ export class FreqRespController {
    *  capture rate is whatever the device runs at while the playback rate is configurable, so the
    *  two differ exactly as on a card whose sides are set differently. */
   playbackRateHz() {
-    return (this.engine.config && this.engine.config.outRate)
-        || this.prefs.current().outputSampleRate
-        || 384000;
+    return this.prefs.current().outputSampleRate || 384000;
   }
 
   /** Ceiling for the SWEPT BAND's two edges: the lower of the two configured Nyquist limits (Java
@@ -308,10 +308,8 @@ export class FreqRespController {
 
       // Peak scale = target V RMS mapped to the DAC's normalised peak, the SAME conversion the DDS
       // kernel uses for a sine/sweep: amplitude = Vrms / (dacFsPeak · (1/√2)).
-      // DAC full-scale PEAK from PREFS (the calibrated source of truth) - NOT engine.config,
-      // which can still hold the backend default √2 when a sweep runs before readConfig has
-      // synced the pref, giving a +20·log10(dacFsPref/√2) dB level error (e.g. 2.79 V -> +5.9 dB).
-      // Mirrors how adcFsVoltageRms is read from prefs above, and Java (cfg.getDacFsVoltageRms()).
+      // DAC full-scale PEAK from PREFS (the calibrated source of truth), as adcFsVoltageRms is
+      // read above and as Java does (cfg.getDacFsVoltageRms()).
       const dacFsPeak = this.prefs.dacFsVoltageAmpl.get() || Math.SQRT2;
       const peakScale = amplitudeVRms / (dacFsPeak * (1.0 / Math.SQRT2));
 
@@ -323,12 +321,12 @@ export class FreqRespController {
       if (this._cancelled) return null;
 
       // Open the CAPTURE device FIRST so the sweep is authored at the rate the browser ACTUALLY
-      // granted the ADC. acquire() re-pins engine.config.inRate to that rate - authoring the
+      // granted the ADC - the measurement capture reports it once open. Authoring the
       // reference / played buffer / deconvolution at the NOMINAL requested rate instead
       // time-scales the capture against the reference (the comb-of-nulls + "runs faster" bug).
       await engine.startCaptureRecording();
       recStarted = true;
-      captureRate      = engine.config.inRate;          // ACTUAL granted ADC rate
+      captureRate      = engine.measurementCapture.inSampleRate || this.captureRateHz();   // ACTUAL granted ADC rate
       playbackRate     = this.playbackRateHz();         // the DAC's own configured rate
       recSweepSamples  = Math.round(durSec * captureRate);
       recLeadInSamples = Math.round(leadInSec * captureRate);
@@ -606,12 +604,11 @@ export class FreqRespController {
     }
   }
 
-  /** Waits config.warmupMs (default 500 ms) with the capture + output contexts open so a cold USB
-   *  device finishes spinning up before the one-shot sweep plays. Polled in 50 ms steps so a
-   *  cooperative cancel aborts the wait. */
+  /** Waits DEVICE_WARMUP_MS with the capture + output contexts open so a cold USB device finishes
+   *  spinning up before the one-shot sweep plays. Polled in 50 ms steps so a cooperative cancel
+   *  aborts the wait. */
   async _warmupDevices() {
-    const warmMs = (this.engine.config && this.engine.config.warmupMs) || 500;
-    const end = performance.now() + warmMs;
+    const end = performance.now() + DEVICE_WARMUP_MS;
     while (performance.now() < end) {
       if (this._cancelled) return;
       await new Promise((r) => setTimeout(r, 50));

@@ -6,8 +6,8 @@
  * Faithful port of gui/generator/GeneratorController. Owns the generator LIFECYCLE (tone / sweep /
  * dual-tone / compensated), the monitoring file-player lane, and the analysis frequencies
  * (`snapped`/`binW`/`fundBin`) that keep what is PLAYED, MEASURED and SHOWN consistent. Has nothing
- * to do with capture. The shared `config` object is held by reference, so a live edit on either side
- * is visible to both. The FFT-side frequency-lock loop (which OWNS the FLL state) steers the tone by
+ * to do with capture. Every setting is read live off the injected Preferences, so an edit in a pane
+ * is what the next start or retune plays. The FFT-side frequency-lock loop (which OWNS the FLL state) steers the tone by
  * publishing GENERATOR_FREQ_TRIM; this controller subscribes and applies the trim to its sink (see
  * _applyFllTrim).
  *
@@ -25,7 +25,6 @@ import { FileTooLargeError } from '../net/net-playback-sink.js';
 import { DeviceFailureReason } from '../enums/device-failure-reason.js';
 import { failureDetailText } from '../audio/device-failure-reason.js';
 import { t } from '../i18n/i18n.js';
-import { Preferences } from '../store/preferences.js';
 
 /** How often the bench's pushed file state is consulted while a remote file plays (Java
  *  GeneratorController.REMOTE_FILE_POLL_MS). */
@@ -34,12 +33,6 @@ const REMOTE_FILE_POLL_MS = 100;
 /** Bytes as whole megabytes, for the two numbers an over-size refusal names (Java megabytes). */
 function megabytes(bytes) {
   return Math.round(bytes / (1024 * 1024));
-}
-
-/** Converts a dBFS amplitude to the DDS kernel's V RMS scale. A full-scale sine has
- *  RMS = dacFsVoltageAmpl/√2, so ampDbfs dBFS -> 10^(dBFS/20)·(dacFs/√2). */
-function dbfsToVrms(dbFs, dacFsAmpl) {
-  return Math.pow(10, dbFs / 20) * (dacFsAmpl / Math.SQRT2);
 }
 
 /**
@@ -62,13 +55,6 @@ function downmixToMono(channels) {
   const scale = 1.0 / channels.length;
   for (let i = 0; i < frames; i++) mono[i] *= scale;
   return mono;
-}
-
-/** Generator amplitude in V RMS feeding the DDS kernel. The UI holds canonical Vrms
- *  (config.ampVrms); the legacy dBFS path stays as a fallback for any caller that still sets only
- *  config.ampDbfs. */
-function ampVrmsOf(c) {
-  return (c.ampVrms != null) ? c.ampVrms : dbfsToVrms(c.ampDbfs, c.dacFsVoltageAmpl);
 }
 
 /**
@@ -109,15 +95,18 @@ function ampVrmsOf(c) {
 
 export class GeneratorController {
   /**
-   * @param config the SHARED engine config object (held by reference).
+   * @param prefs the live Preferences - every generator setting is read from it at the moment it
+   *   is needed, exactly as Java GeneratorController reads Preferences.instance(): the form, the
+   *   tones, the amplitude, the dither, the duty cycles, the sweep, the bin snap, the .dpd slots,
+   *   the output routing and the active backend's output device and rate.
    * @param deps {status, openPlayback} - status: (text) => void; openPlayback: (deps) =>
    *   PlaybackSink, the backend's sink factory, handed {deviceId, ditherBits, status} (the
    *   configured output device and dither - Java's openPlayback(device, ditherBits) arguments).
    *   Called at EVERY start, exactly as Java re-resolves AudioBackend.openPlayback per start - so
    *   a backend switch between sessions needs no push-down here. Defaults to the Web Audio sink.
    */
-  constructor(config, { status, openPlayback } = {}) {
-    this.config = config;
+  constructor(prefs, { status, openPlayback } = {}) {
+    this._prefs = prefs;
     this._status = status || (() => {});
     this._openPlayback = openPlayback || ((deps) => new WebAudioPlaybackSink(deps));
     this._genOn = false;
@@ -198,15 +187,15 @@ export class GeneratorController {
     // FFT length changed (Java GeneratorController wireBusListeners: FFT_LENGTH_CHANGED ->
     // reapplySnap when snap-to-bin is on): the bin grid moved under the running tone(s), so
     // re-derive the emit frequencies on the new grid and slide the worklet onto them, without
-    // the user having to toggle the snap checkbox. The publisher's readConfig has already put
-    // the new length into the shared config.
+    // the user having to toggle the snap checkbox. The publisher has already written the new
+    // length into the preferences.
     MessageBus.instance().subscribe(Events.FFT_LENGTH_CHANGED, () => this._onFftLengthChanged());
   }
 
   /** The generator's own reaction to a new FFT length: re-snap a running tone onto the new
    *  bin grid (snap-to-bin on); nothing to do otherwise. */
   _onFftLengthChanged() {
-    if (!this.config.snapToBin) return;
+    if (!this._prefs.genSnapToFftBin.get()) return;
     this.computeAnalysisFreqs();
     this._reapplySnap();
   }
@@ -229,7 +218,7 @@ export class GeneratorController {
   }
 
   /** Phase 2: restart, on the just-committed output device/rate, whichever engine was playing - the DDS
-   *  tone (startGenerator reads the shared config, whose generator params are unchanged by a prefs OK) or
+   *  tone (startGenerator reads the preferences, whose generator params are unchanged by a prefs OK) or
    *  the retained file buffer. On a DDS restart failure startGenerator already publishes AUDIO_DEVICE_ERROR
    *  (its _reportDeviceError) so the pane resets its visuals - this method stays UI-free. */
   async startPlayForPrefs() {
@@ -378,8 +367,9 @@ export class GeneratorController {
    *  snap ONLY when snap-to-bin is on (Java FftBinSnap.snapIfEnabled admits SINE_COMP since
    *  4887ecb); every other form (noise, ...) emits the raw entered value. */
   _genEmitFreq(dacRateHz = 0, analysisRateHz = 0) {
-    const c = this.config;
-    const raw = c.toneHz;
+    const p = this._prefs;
+    const form = p.genSignalForm.get();
+    const raw = this._toneHz();
     // The two corrections answer to DIFFERENT clocks, which is why they take separate rates
     // (Java emitFrequency(prefs, form, dacRateHz, analysisRateHz, raw)). A whole number of
     // samples per period is a property of the DAC that emits them; an FFT bin is a property
@@ -387,31 +377,41 @@ export class GeneratorController {
     // output clock lands between bins whenever the two rates differ, and the whole point of
     // the snap is that it does not. Either rate may be named by a caller (an analyzer asking
     // GENERATOR_EMITTED_HZ passes its own); omitted, they default to this lane's clocks.
-    const dacRate = dacRateHz > 0 ? dacRateHz : (this.outSampleRate || c.outRate);
+    const dacRate = dacRateHz > 0 ? dacRateHz : (this.outSampleRate || p.current().outputSampleRate);
     const analysisRate = analysisRateHz > 0 ? analysisRateHz : this.analysisSampleRate();
-    if (c.form === GenSignalForm.RECTANGLE || c.form === GenSignalForm.TRIANGLE) {
+    if (form === GenSignalForm.RECTANGLE || form === GenSignalForm.TRIANGLE) {
       if (raw <= 0 || dacRate <= 0) return raw;
       return dacRate / Math.max(2, Math.round(dacRate / raw));   // samplePeriodAlignedHz
     }
-    if ((c.form === GenSignalForm.SINE || c.form === GenSignalForm.SINE_COMP
-        || isDualTone(c.form)) && c.snapToBin) {
+    if ((form === GenSignalForm.SINE || form === GenSignalForm.SINE_COMP
+        || isDualTone(form)) && p.genSnapToFftBin.get()) {
       // Java FftBinSnap.snapIfEnabled: binHz = sampleRate / fftLength.
-      const binHz = analysisRate / c.fftSize;
-      if (c.fftSize < 8 || analysisRate <= 0 || binHz <= 0) return raw;
+      const fftSize = p.fftLength.get();
+      const binHz = analysisRate / fftSize;
+      if (fftSize < 8 || analysisRate <= 0 || binHz <= 0) return raw;
       return Math.round(raw / binHz) * binHz;
     }
     return raw;
   }
 
+  /** The entered tone the current form plays: the dual-tone pair's first tone in a dual-tone
+   *  form, else the single-tone frequency. Java keeps them as two preferences and each form
+   *  reads its own (FftController.java:306 / :352); the pane's one frequency field writes
+   *  whichever the current form owns. */
+  _toneHz() {
+    const p = this._prefs;
+    return isDualTone(p.genSignalForm.get()) ? p.genDualToneFreq1Hz.get() : p.genFrequencyHz.get();
+  }
+
   /** The rate the ANALYSIS runs at - the capture side, whose bin grid the snap has to hit
    *  (Java GeneratorLane.analysisRateHz / GeneratorController.analysisSampleRate, which read
-   *  the same input rate off the current backend configuration). config.inRate is that rate
-   *  live: the pane writes it on every rate edit and shared-capture re-pins it to what the
-   *  device actually granted. Falls back to the DAC's rate only when no capture rate is
-   *  configured at all, so a snap is never computed against 0. */
+   *  the input rate off the current backend's preferences). The shared capture writes the rate
+   *  the device actually granted back into that preference, so this is the rate the ring runs
+   *  at. Falls back to the DAC's rate only when no capture rate is configured at all, so a snap
+   *  is never computed against 0. */
   analysisSampleRate() {
-    const c = this.config;
-    return c.inRate > 0 ? c.inRate : (this.outSampleRate || c.outRate);
+    const rate = this._prefs.current().inputSampleRate;
+    return rate > 0 ? rate : (this.outSampleRate || this._prefs.current().outputSampleRate);
   }
 
   /** The second-tone frequency the DDS actually emits - Java GeneratorLane.snapDualTone:
@@ -421,12 +421,13 @@ export class GeneratorController {
    *  analysis grid would smear it across bins and manufacture the very intermodulation
    *  products the IMD table then reports. An analyzer asking at its own rate names it. */
   _genEmitFreq2(analysisRateHz = 0) {
-    const c = this.config;
-    const raw = c.tone2Hz;
-    if (isDualTone(c.form) && c.snapToBin) {
+    const p = this._prefs;
+    const raw = p.genDualToneFreq2Hz.get();
+    if (isDualTone(p.genSignalForm.get()) && p.genSnapToFftBin.get()) {
       const rate = analysisRateHz > 0 ? analysisRateHz : this.analysisSampleRate();
-      const binHz = rate / c.fftSize;
-      if (c.fftSize < 8 || rate <= 0 || binHz <= 0) return raw;
+      const fftSize = p.fftLength.get();
+      const binHz = rate / fftSize;
+      if (fftSize < 8 || rate <= 0 || binHz <= 0) return raw;
       return Math.round(raw / binHz) * binHz;
     }
     return raw;
@@ -447,7 +448,7 @@ export class GeneratorController {
    * @returns {number[]} [tone1Hz, tone2Hz]
    */
   emittedHz(sampleRate) {
-    const c = this.config;
+    const form = this._prefs.genSignalForm.get();
     // A REMOTE bench's answer wins: it snapped against the rate ITS lane is clocked at and it
     // holds the FLL trims, so a client recomputing the pair from its own preferences would
     // point every hint at a frequency the hardware is not on - and reconstruct a beat that
@@ -460,10 +461,10 @@ export class GeneratorController {
     }
     // The asker's rate is the ANALYSIS rate here (Java localTonesHz), so it is the rate the
     // snap belongs on; the DDS period alignment stays on this lane's own clock.
-    if (isDualTone(c.form)) return [this._genEmitFreq(0, sampleRate), this._genEmitFreq2(sampleRate)];
+    if (isDualTone(form)) return [this._genEmitFreq(0, sampleRate), this._genEmitFreq2(sampleRate)];
     // The noise forms have no tone at all and a sweep is a different one every sample.
-    const singleTone = isPeriodic(c.form)
-      && c.form !== GenSignalForm.LINEAR_SWEEP && c.form !== GenSignalForm.LOG_SWEEP;
+    const singleTone = isPeriodic(form)
+      && form !== GenSignalForm.LINEAR_SWEEP && form !== GenSignalForm.LOG_SWEEP;
     return [singleTone ? this._genEmitFreq(0, sampleRate) : 0.0, 0.0];
   }
 
@@ -475,30 +476,33 @@ export class GeneratorController {
    *  land the captured tone on the actual FFT bin. Parameterised on `sampleRate` for that reason;
    *  {@link #_genEmitFreq} keeps using the OUTPUT rate for what the DAC actually plays. */
   snapToRate(sampleRate) {
-    const c = this.config;
-    const raw = c.toneHz;
+    const p = this._prefs;
+    const form = p.genSignalForm.get();
+    const raw = this._toneHz();
     // SINE_COMP snaps like SINE: Java FftBinSnap.snapIfEnabled admits SINE / SINE_COMP / DUAL_TONE
     // (and FftController.applyFrequencyLock:315 additionally hard-codes GenSignalForm.SINE), so the
     // FLL target and the generator emit agree on the bin-snapped frequency for a compensated sine.
-    if (c.form !== GenSignalForm.SINE && c.form !== GenSignalForm.SINE_COMP && !isDualTone(c.form)) return raw;
-    if (!c.snapToBin) return raw;
-    const binHz = sampleRate / c.fftSize;
-    if (c.fftSize < 8 || sampleRate <= 0 || binHz <= 0) return raw;
+    if (form !== GenSignalForm.SINE && form !== GenSignalForm.SINE_COMP && !isDualTone(form)) return raw;
+    if (!p.genSnapToFftBin.get()) return raw;
+    const fftSize = p.fftLength.get();
+    const binHz = sampleRate / fftSize;
+    if (fftSize < 8 || sampleRate <= 0 || binHz <= 0) return raw;
     return Math.round(raw / binHz) * binHz;
   }
 
-  /** {@link #snapToRate} for the SECOND dual-tone tone (config.tone2Hz). Mirrors Java
+  /** {@link #snapToRate} for the SECOND dual-tone tone (genDualToneFreq2Hz). Mirrors Java
    *  FftController.applyFrequencyLock:273-274, which snaps t2 with FftBinSnap.snapIfEnabled
    *  (DUAL_TONE) at slot.sampleRate. Same gates as snapToRate but only ever active for a
    *  dual-tone form (there is no tone 2 otherwise), and parameterised on the CAPTURE rate for
    *  the same two-independent-clocks reason the FLL targets the capture-rate bin, not the DAC's. */
   snapToRate2(sampleRate) {
-    const c = this.config;
-    const raw = c.tone2Hz;
-    if (!isDualTone(c.form)) return raw;
-    if (!c.snapToBin) return raw;
-    const binHz = sampleRate / c.fftSize;
-    if (c.fftSize < 8 || sampleRate <= 0 || binHz <= 0) return raw;
+    const p = this._prefs;
+    const raw = p.genDualToneFreq2Hz.get();
+    if (!isDualTone(p.genSignalForm.get())) return raw;
+    if (!p.genSnapToFftBin.get()) return raw;
+    const fftSize = p.fftLength.get();
+    const binHz = sampleRate / fftSize;
+    if (fftSize < 8 || sampleRate <= 0 || binHz <= 0) return raw;
     return Math.round(raw / binHz) * binHz;
   }
 
@@ -506,8 +510,7 @@ export class GeneratorController {
    *  `snapped` is the form-appropriate emit frequency and drives BOTH the DDS and the FFT/scope
    *  geometry, so what is played, measured and shown stay consistent. */
   computeAnalysisFreqs() {
-    const c = this.config;
-    this.binW = c.inRate / c.fftSize;
+    this.binW = this.analysisSampleRate() / this._prefs.fftLength.get();
     this.snapped = this._genEmitFreq();
     this.fundBin = Math.max(1, Math.round(this.snapped / this.binW));
   }
@@ -518,13 +521,16 @@ export class GeneratorController {
    *  a key or a driver code. Also cached in {@link #lastStartError}. */
   async startGenerator() {
     if (this._genOn) return null;
-    const c = this.config;
+    const p = this._prefs;
+    const form = p.genSignalForm.get();
+    // Compensated forms carry the loaded .dpd text (per-form slot) for the kernel to apply.
+    const dpdText = isCompensated(form) ? (p.getGenDpd(form) || null) : null;
     this.lastStartError = null;
     this._playbackEndClaimed = false;   // a fresh session invalidates the old terminal
     // Compensated forms refuse to start without a loaded .dpd (Java tryStartOnce returns
     // generator.error.needPredistortion before opening the device) - abort BEFORE opening
     // the output context, leaving _genOn false.
-    if (isCompensated(c.form) && !c.dpdText) {
+    if (isCompensated(form) && !dpdText) {
       this.lastStartError = t('generator.error.needPredistortion');
       return this.lastStartError;
     }
@@ -544,10 +550,11 @@ export class GeneratorController {
       // the stored depth reached the wire on a CHANGE and never on a start. The local sinks
       // ignore the extra key; #remoteLane has always passed it, which is why the FILE lane was
       // dithered while the tone was not.
+      const bp = p.current();
       this.outSampleRate = await this._sink.open({
-        sampleRate: c.outRate, deviceId: c.outDeviceId,
-        ditherBits: c.ditherBits != null ? c.ditherBits : 0,
-        outputChannels: c.outputChannels || 'BOTH',
+        sampleRate: bp.outputSampleRate, deviceId: bp.outputDeviceName,
+        ditherBits: p.genDitherBits.get(),
+        outputChannels: p.genOutputChannels.get() || 'BOTH',
       });
       this.computeAnalysisFreqs();
       // PHASE 2 - build the DDS and put it on air. Everything the kernel needs travels in ONE
@@ -555,23 +562,14 @@ export class GeneratorController {
       // dual-tone tone2/split, sweep config, predistortion), applied before the lane goes live -
       // Java likewise hands play() a SignalGenerator that already has them.
       await this._sink.start({
-        form: c.form, frequency: this.snapped,
-        amplitudeVRms: ampVrmsOf(c), dacFsVoltageAmpl: c.dacFsVoltageAmpl,
-        // TPDF dither depth applied LIVE by the sink (Java PcmQuantizer): added to the mono
-        // sample before the per-lane scale, so it shows on the FFT floor where the dBV view sets
-        // it. 0 = Off.
-        ditherBits: c.ditherBits != null ? c.ditherBits : 0,
-        // Output routing (Java GeneratorController.pushOutputRoutingToPlayback): the lane
-        // gate + right-lane scale (= fsLeft/fsRight). Left keeps the mono amplitude (scale 1.0).
-        outputChannels: c.outputChannels != null ? c.outputChannels : 'BOTH',
-        rightLaneScale: c.rightLaneScale != null ? c.rightLaneScale : 1.0,
+        form, frequency: this.snapped,
+        ...this._levelSpec(),
         control: {
-          rectDuty: c.rectDuty, triDuty: c.triDuty,
-          frequency2: this._genEmitFreq2(), dualAmp1Pct: c.amp1Pct, dualAmp2Pct: c.amp2Pct,
+          ...this._controlSpec(),
           ...this._sweepConfigMsg(),   // sweep forms: linear/log config + fade/loop
           // Compensated forms (SINE_COMP / DUAL_TONE_COMP): the loaded .dpd text, which the
           // kernel parses (loadHarmonics / loadIntermod) and pre-distorts the output with.
-          ...(c.dpdText ? { dpdText: c.dpdText, dpdFrequency: this.snapped } : null),
+          ...(dpdText ? { dpdText, dpdFrequency: this.snapped } : null),
         },
       });
       this._genOn = true;
@@ -620,26 +618,47 @@ export class GeneratorController {
     // file line. Only the dither: everything else in the retune below is the DDS tone's.
     const fileLane = this._fileLaneSink;
     if (fileLane && fileLane.port) {
-      fileLane.port.postMessage({
-        ditherBits: this.config.ditherBits != null ? this.config.ditherBits : 0,
-      });
+      fileLane.port.postMessage({ ditherBits: this._prefs.genDitherBits.get() });
     }
     if (!this._genOn || !this._sink) return;
-    const c = this.config;
     this.computeAnalysisFreqs();   // re-resolve the emit frequency for the (possibly edited) tone/form
     this._sink.port.postMessage({
       frequency: this.snapped,      // primary tone - was previously dropped on live freq edits
-      amplitudeVRms: ampVrmsOf(c), dacFsVoltageAmpl: c.dacFsVoltageAmpl,
-      rectDuty: c.rectDuty, triDuty: c.triDuty,
-      frequency2: this._genEmitFreq2(), dualAmp1Pct: c.amp1Pct, dualAmp2Pct: c.amp2Pct,
-      // Dither depth rides every retune (Java setDitherBits live-applies to the running playback).
-      ditherBits: c.ditherBits != null ? c.ditherBits : 0,
-      // Output routing rides every retune (Java pushOutputRoutingToPlayback): a lane-gate
-      // or DAC-full-scale edit lands on the sink's next block.
-      outputChannels: c.outputChannels != null ? c.outputChannels : 'BOTH',
-      rightLaneScale: c.rightLaneScale != null ? c.rightLaneScale : 1.0,
+      // The level, the dither and the output routing ride every retune (Java setDitherBits and
+      // pushOutputRoutingToPlayback live-apply to the running playback): an amplitude, dither,
+      // lane-gate or DAC-full-scale edit lands on the sink's next block.
+      ...this._levelSpec(),
+      ...this._controlSpec(),
     });
     this._postSweepConfig();
+  }
+
+  /** The level half of a start / retune, read live off the preferences: the amplitude in V RMS,
+   *  the DAC full scale it is normalised against, the TPDF dither depth the sink applies LIVE
+   *  (Java PcmQuantizer: added to the mono sample before the per-lane scale, so it shows on the
+   *  FFT floor where the dBV view sets it; 0 = Off) and the output routing (Java
+   *  pushOutputRoutingToPlayback): the lane gate + the right-lane scale (= fsLeft/fsRight); the
+   *  left lane keeps the mono amplitude (scale 1.0). */
+  _levelSpec() {
+    const p = this._prefs;
+    return {
+      amplitudeVRms: p.genAmplitudeVrms.get(), dacFsVoltageAmpl: p.getDacFsVoltageAmpl(),
+      ditherBits: p.genDitherBits.get(),
+      outputChannels: p.genOutputChannels.get() || 'BOTH',
+      rightLaneScale: p.dacRightLaneScale(),
+    };
+  }
+
+  /** The waveform parameters that are not constructor options of the kernel: the per-form duty
+   *  cycles and the dual-tone second tone + amplitude split (the split preference is tone 1's
+   *  share in percent; tone 2 takes the rest). */
+  _controlSpec() {
+    const p = this._prefs;
+    const split = p.genDualToneSplitPct.get();
+    return {
+      rectDuty: p.genRectangleDuty.get(), triDuty: p.genTriangleDuty.get(),
+      frequency2: this._genEmitFreq2(), dualAmp1Pct: split, dualAmp2Pct: 100 - split,
+    };
   }
 
   /** Sends the sweep configuration for the current form to the running sink. No-op for non-sweep
@@ -654,18 +673,24 @@ export class GeneratorController {
   /** The sweep control message for the current form (linear vs Farina log), plus loop + Hann
    *  fade lengths, or null for a non-sweep form. Durations -> samples at the output rate. */
   _sweepConfigMsg() {
-    const c = this.config;
-    const rate = this.outSampleRate || (this._sink && this._sink.sampleRate) || c.outRate;
-    const samples = Math.max(1, Math.round(c.sweepDurationSec * rate));
+    const p = this._prefs;
+    const form = p.genSignalForm.get();
+    const rate = this.outSampleRate || (this._sink && this._sink.sampleRate) || p.current().outputSampleRate;
+    const samples = Math.max(1, Math.round(p.genSweepDurationSec.get() * rate));
+    const f0 = p.genSweepFreqStartHz.get(), f1 = p.genSweepFreqEndHz.get();
     let msg;
-    if (c.form === GenSignalForm.LINEAR_SWEEP) {
-      msg = { linearSweep: { freqStart: c.sweepStartHz, freqEnd: c.sweepEndHz, periodSamples: samples } };
-    } else if (c.form === GenSignalForm.LOG_SWEEP) {
-      msg = { logSweep: { f0: c.sweepStartHz, f1: c.sweepEndHz, sweepSamples: samples, leadInSamples: 0 } };
+    if (form === GenSignalForm.LINEAR_SWEEP) {
+      msg = { linearSweep: { freqStart: f0, freqEnd: f1, periodSamples: samples } };
+    } else if (form === GenSignalForm.LOG_SWEEP) {
+      msg = { logSweep: { f0, f1, sweepSamples: samples, leadInSamples: 0 } };
     } else {
       return null;
     }
-    msg.sweepParams = { loop: c.sweepLoop, fadeInSamples: Math.round(c.sweepFadeInSec * rate), fadeOutSamples: Math.round(c.sweepFadeOutSec * rate) };
+    msg.sweepParams = {
+      loop: p.genSweepLoop.get(),
+      fadeInSamples: Math.round(p.genSweepFadeInSec.get() * rate),
+      fadeOutSamples: Math.round(p.genSweepFadeOutSec.get() * rate),
+    };
     return msg;
   }
 
@@ -700,7 +725,7 @@ export class GeneratorController {
    * @returns {?string} the localized refusal, or null when the file may be played
    */
   filePlayFormatMismatch(fileName, fileSampleRate, fileBitDepth) {
-    const output = Preferences.instance().current();
+    const output = this._prefs.current();
     const rate = output.outputSampleRate;
     const bits = output.outputBitDepth;
     const depthAgrees = fileBitDepth == null || fileBitDepth === bits;
@@ -737,7 +762,7 @@ export class GeneratorController {
     const mismatch = this.filePlayFormatMismatch(file && file.name ? file.name : '',
       sampleRate, bitsPerSample);
     if (mismatch != null) {
-      const out = Preferences.instance().current();
+      const out = this._prefs.current();
       console.warn(`File playback refused: ${file && file.name ? file.name : 'the file'} is `
         + `${sampleRate} Hz / ${bitsPerSample} bit, output configured for `
         + `${out.outputSampleRate} Hz / ${out.outputBitDepth} bit`);
@@ -759,8 +784,8 @@ export class GeneratorController {
       return;
     }
     const ctx = new AudioContext({ latencyHint: 'playback' });
-    if (ctx.setSinkId && this.config.outDeviceId) {
-      try { await ctx.setSinkId(this.config.outDeviceId); } catch (e) { console.warn('setSinkId', e); }
+    if (ctx.setSinkId && this._prefs.current().outputDeviceName) {
+      try { await ctx.setSinkId(this._prefs.current().outputDeviceName); } catch (e) { console.warn('setSinkId', e); }
     }
     const frames = channels[0].length;
     const buf = ctx.createBuffer(channels.length, frames, sampleRate);
@@ -822,7 +847,7 @@ export class GeneratorController {
     // here, but a just-stopped context can still be releasing the OS device - retry the
     // NotReadable/Abort contention before it surfaces as an alert (a self-contention).
     const ctx = await openOutputContext({ sampleRate: requestedRate, latencyHint: 'playback' },
-      this.config.outDeviceId, this._status);
+      this._prefs.current().outputDeviceName, this._status);
     this._pendingSweepCtx = ctx;
     return ctx.sampleRate;
   }
@@ -877,7 +902,7 @@ export class GeneratorController {
     } else {
       await this.stopFile();
       ctx = await openOutputContext({ sampleRate, latencyHint: 'playback' },
-        this.config.outDeviceId, this._status);
+        this._prefs.current().outputDeviceName, this._status);
     }
     // Tag the AudioBuffer with the rate the sweep was AUTHORED at (the capture
     // rate), NOT ctx.sampleRate. The browser may grant an output context at a
@@ -1092,8 +1117,11 @@ export class GeneratorController {
    *  and the status sink. Read per open, so a committed device or dither change lands without a
    *  push-down. */
   #playbackDeps() {
-    const c = this.config;
-    return { deviceId: c.outDeviceId, ditherBits: c.ditherBits, status: this._status };
+    return {
+      deviceId: this._prefs.current().outputDeviceName,
+      ditherBits: this._prefs.genDitherBits.get(),
+      status: this._status,
+    };
   }
 
   /**
@@ -1108,13 +1136,13 @@ export class GeneratorController {
    * @returns {Promise<?Object>} the opened bench lane, or null
    */
   async #remoteLane(sampleRate, opts) {
-    const c = this.config;
+    const p = this._prefs;
     const sink = this._openPlayback(this.#playbackDeps());
     if (typeof sink.emittedHz !== 'function') return null;
     await sink.open({
-      sampleRate, deviceId: c.outDeviceId,
-      ditherBits: c.ditherBits != null ? c.ditherBits : 0,
-      outputChannels: opts.outputChannels || c.outputChannels || 'BOTH',
+      sampleRate, deviceId: p.current().outputDeviceName,
+      ditherBits: p.genDitherBits.get(),
+      outputChannels: opts.outputChannels || p.genOutputChannels.get() || 'BOTH',
     });
     return sink;
   }
@@ -1142,7 +1170,7 @@ export class GeneratorController {
       frequency: 0,                      // a sweep has no tone frequency
       amplitudeVRms: s.amplitudeVRms,
       pushCalibration: false,
-      ditherBits: this.config.ditherBits != null ? this.config.ditherBits : 0,
+      ditherBits: this._prefs.genDitherBits.get(),
       outputChannels: opts.outputChannels || 'BOTH',
       control: {
         logSweep: { f0: s.f0, f1: s.f1, sweepSamples: s.sweepSamples, leadInSamples: s.leadInSamples },
@@ -1165,16 +1193,13 @@ export class GeneratorController {
     // hardware backend; the loopback keeps its own last-bit fallback, so its known floor now
     // shows on file play too.
     //
-    // Read from PREFERENCES, through the converting getter, and not from the shell's UI snapshot:
-    // the snapshot is only written when a pane reads the controls back or the operator commits the
-    // field, so on a fresh page it still carries the backend default 0 - and a stored dither is a
-    // value+unit pair whose bit count exists only once it is resolved against the live DAC full
-    // scale. A zero at open is not "off" on a lane with a last-bit fallback: it lands at the
-    // session depth, below anything a measurement can see, which reads as no dither at all while
-    // the live push - which does carry a resolved value - appears to work.
+    // Through the converting getter: a stored dither is a value+unit pair whose bit count exists
+    // only once it is resolved against the live DAC full scale. A zero at open is not "off" on a
+    // lane with a last-bit fallback: it lands at the session depth, below anything a measurement
+    // can see, which reads as no dither at all while the live push appears to work.
     await sink.open({
-      sampleRate, outDeviceId: this.config.outDeviceId,
-      ditherBits: Preferences.instance().genDitherBits.get(),
+      sampleRate, outDeviceId: this._prefs.current().outputDeviceName,
+      ditherBits: this._prefs.genDitherBits.get(),
     });
     this._fileLaneSink = sink;
     return sink;

@@ -68,9 +68,10 @@ export const BUFFER_SECONDS = 22.0;
 
 export class SharedCapture {
   /**
-   * @param deps {getConfig, status, onBatch, computeAnalysisFreqs, publishBatch, captureSource}
-   *   - getConfig: () => the live config object. acquire() reads inDeviceId/inRate and RE-PINS
-   *     inRate (mutating the config) to the device's actual rate when they differ.
+   * @param deps {prefs, status, onBatch, computeAnalysisFreqs, publishBatch, captureSource}
+   *   - prefs: the live Preferences. acquire() opens the input device the ACTIVE backend's block
+   *     names, at that block's input rate, and writes the rate the device actually granted back
+   *     into the block when the two differ (see _acquireNow).
    *   - status: (text) => void
    *   - onBatch: (d) => void - invoked after each captured batch is staged into the ring so the
    *     owner can drive its consumers (rec tap / scope / FFT) off their own cursors.
@@ -81,8 +82,8 @@ export class SharedCapture {
    *     keeps the Web Audio device, so the WEB_AUDIO path behaves exactly as it did before this
    *     seam existed.
    */
-  constructor({ getConfig, status, onBatch, computeAnalysisFreqs, publishBatch, captureSource } = {}) {
-    this._getConfig = getConfig;
+  constructor({ prefs, status, onBatch, computeAnalysisFreqs, publishBatch, captureSource } = {}) {
+    this._prefs = prefs;
     this._status = status || (() => {});
     this._onBatch = onBatch || (() => {});
     this._computeAnalysisFreqs = computeAnalysisFreqs || (() => {});
@@ -171,7 +172,7 @@ export class SharedCapture {
    *  the ring before any consumer has acquired it). */
   getCapacity() {
     if (this._buffer) return this._buffer.getCapacity();
-    return Math.round((this._getConfig().inRate || 384000) * BUFFER_SECONDS);
+    return Math.round((this._prefs.current().inputSampleRate || 384000) * BUFFER_SECONDS);
   }
 
   /** The last input-device open failure message. */
@@ -213,15 +214,26 @@ export class SharedCapture {
     // second copy of it (Java SharedCapture.acquire -> discardFinishedLane).
     await this._discardFinishedLane();
     this._lastStartError = '';   // this attempt owns the field (Java lastStartError = null)
-    const c = this._getConfig();
+    // The device and its format are the ACTIVE backend's preference block (Java: the same
+    // BackendPrefs read in SharedCapture.acquire). A local Web Audio device is named by its
+    // browser deviceId, a bench device by its name - the block holds whichever the dialog wrote.
+    const bp = this._prefs.current();
     this._status('opening input context + device...');
     try {
       // The device: its own open() owns the retry / rate / graph mechanics (Java
       // AudioBackend.openCapture(device, rate, depth) + AudioCapture.open()). It reports the
-      // ACTUAL rate only once open, which is why the re-pin below happens here and not earlier.
-      await this._source.open(c.inDeviceId, c.inRate);
-      const deviceRate = this._source.sampleRate || c.inRate;
-      if (deviceRate !== c.inRate) c.inRate = deviceRate;   // device gave a different rate -> re-pin the analysis to it
+      // ACTUAL rate only once open, which is why the write-back below happens here and not earlier.
+      await this._source.open(bp.inputDeviceName, bp.inputSampleRate);
+      const deviceRate = this._source.sampleRate || bp.inputSampleRate;
+      if (deviceRate !== bp.inputSampleRate) {
+        // The ring runs at the rate the stream REALLY runs at (Java SharedCapture logs the same
+        // mismatch and sizes its ring by the granted rate). Web Audio cannot be refused a rate -
+        // the device dictates it - so the preference follows the device: every reader of the
+        // input rate (the generator's snap grid, the scope window, the FFT bin width, the sweep
+        // engines) then sees the rate this ring is clocked at, from the one settings store.
+        console.warn(`Capture granted ${deviceRate} Hz where the preferences ask ${bp.inputSampleRate} Hz - the preference follows the device`);
+        bp.inputSampleRate = deviceRate;
+      }
       // ALWAYS derive binW / snapped / fundBin here: the scope consumer reads `snapped` (its period
       // + dual-tone freqs) even with NO generator and NO FFT, so computing it only on a rate-mismatch
       // left snapped=undefined -> period=NaN -> a broken scope trace whenever Scope Record was used alone.
@@ -230,7 +242,7 @@ export class SharedCapture {
       // The one shared ring (22 s) the device writes into; each consumer reads it through its own
       // cursor. Created BEFORE start(), which is what installs the batch sink - so no batch can
       // ever land in a half-built ring.
-      this._buffer = new SignalBuffer(c.inRate, BUFFER_SECONDS);
+      this._buffer = new SignalBuffer(deviceRate, BUFFER_SECONDS);
       const lane = this._buffer;                  // THIS lane and its OWN once-flag, captured in
       const laneReported = { done: false };       // the closure (Java's per-lane AtomicBoolean):
       await this._source.start((d) => this._onCaptureBatch(d),   // a later lane's flag can neither

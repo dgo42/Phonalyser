@@ -11,7 +11,7 @@
  * state - getResult() / setResult(r) are this pane's methods. render() is the FFT branch of
  * the MAIN rAF loop (which stays in app.js and calls fftPane.render() each frame). Reads
  * engine.fft.recording (the controller owns the recording flag) and reaches the SHELL state
- * it does not own (the shared `busy` re-entrancy guard, the readConfig snapshot) through
+ * it does not own (the shared `busy` re-entrancy guard) through
  * injected closures. The FftView instance, the render-time view correction + tileChips are
  * injected too; every displayed result arrives as FFT_RESULT_AVAILABLE on the bus (Java
  * FftView subscribes it) and this pane applies the view correction before storing it. Like
@@ -52,18 +52,15 @@ export class FftPane {
   /**
    * @param engine the AudioEngine (FFT record lifecycle; the Record LED drives engine.fft.setRecording).
    * @param prefs  Preferences (the dBV offset the harmonic readout columns need).
-   * @param deps   {view, viewCorrection, tileChips, isFftRec, isBusy, setBusy, readConfig}
+   * @param deps   {view, viewCorrection, tileChips, isFftRec, isBusy, setBusy}
    *   - view: the FftView (Java holds `view` as a field) - the spectrum canvas painter.
    *   - viewCorrection: the render-time FFT spectral corrections (FftViewCorrection), applied to
    *       every live result before it is stored (Java FftView's plot-time .frc de-embed).
    *   - tileChips: (...vals) => the `.tile` chip-span HTML (shared with the scope tiles).
    *   - isFftRec: () => engine.fft.recording - the controller owns the flag; the pane only reads it.
    *   - isBusy / setBusy: the shared async re-entrancy guard accessors (Record serializes with it).
-   *   - readConfig: () => the FFT settings strip's readConfig - the FFT geometry into
-   *       engine.config before a record start (the strip is built after this pane, so the
-   *       shell late-binds it).
    */
-  constructor(engine, prefs, { view, viewCorrection, tileChips, isFftRec, isBusy, setBusy, readConfig }) {
+  constructor(engine, prefs, { view, viewCorrection, tileChips, isFftRec, isBusy, setBusy }) {
     this.engine = engine;
     this.prefs = prefs;
     this.view = view;
@@ -72,7 +69,6 @@ export class FftPane {
     this._isFftRec = isFftRec;
     this._isBusy = isBusy;
     this._setBusy = setBusy;
-    this._readConfig = readConfig;
 
     // ----- the FFT render state (Java FftPane: the controller's last published result) -----
     // Data callbacks only STORE the latest; render() paints it dirty-checked at ~60 fps so the
@@ -586,7 +582,6 @@ export class FftPane {
       if (this._isBusy()) return;
       this._setBusy(true);
       const want = !this._isFftRec();
-      if (want) this._readConfig();                      // FFT geometry from the live UI
       try { await engine.fft.setRecording(want); }   // the controller reconciles _fftOn: false if the device failed to open
       finally { this.syncFftLed(); this._setBusy(false); }
     });

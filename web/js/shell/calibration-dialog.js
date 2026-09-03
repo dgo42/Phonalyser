@@ -326,8 +326,7 @@ export class CalibrationDialog {
       return;
     }
     // Rescale the live tone against the new full-scale (no restart) - the store already
-    // pushed the scalar into prefs; flow the LEFT full-scale into the engine and retune.
-    this.engine.config.dacFsVoltageAmpl = this.prefs.getDacFsVoltageAmpl();
+    // pushed the scalar into prefs, and the retune reads it there.
     this.engine.retuneGenerator();
   }
 }

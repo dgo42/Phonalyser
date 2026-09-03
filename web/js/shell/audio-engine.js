@@ -38,58 +38,30 @@
 // web's sound.AudioBackend): the engine asks it for a capture source per SharedCapture and for
 // a playback sink per generator start, and never names a backend itself.
 
-import { GenSignalForm } from '../enums/gen-signal-form.js';
 import { debug } from '../util/debug.js';
 import { SharedCapture } from '../audio/shared-capture.js';
 import { GeneratorController } from '../generator/generator-controller.js';
 import { ScopeController } from '../scope/scope-controller.js';
 import { FftController } from '../fft/fft-controller.js';
 
-const HARMONIC_COUNT = 9;                  // H2..H10 default (overridable via config.harmonicCount)
-/** DAC full-scale PEAK voltage (= FS-sine RMS × √2). Default when no preferences anchor. */
-const DAC_FS_VOLTAGE_AMPL = Math.sqrt(2.0);
-
 export class AudioEngine {
   /**
    * @param deps {prefs, backend}
-   *   - prefs: the live Preferences, handed on to the FFT consumer. Every other setting still
-   *     reaches the engine through `config`.
+   *   - prefs: the live Preferences - the ONE settings store every engine reads, live, the way
+   *     each Java controller reads Preferences.instance() (there is no engine-side copy of it).
    *   - backend: the AudioBackend (audio/backend.js) that resolves the active backend's capture
    *     source and playback sink per open, enumerates its devices and parks the one being left.
    *     Built by the shell with the managers it owns.
    */
-  constructor({ prefs = null, backend } = {}) {
+  constructor({ prefs, backend } = {}) {
     this._prefs = prefs;
     this._backend = backend;
-    this.config = {
-      inDeviceId: '', inRate: 384000,
-      outDeviceId: '', outRate: 384000,
-      toneHz: 1000, ampVrms: 0.5,   // canonical V RMS (matches the UI amplitude field + ampVrmsOf); not the legacy ampDbfs
-
-      form: GenSignalForm.SINE, tone2Hz: 1100, amp1Pct: 50, amp2Pct: 50,
-      rectDuty: 0.5, triDuty: 0.5, ditherBits: 0, snapToBin: true,
-      // Sweep params (LINEAR_SWEEP / LOG_SWEEP) - durations in seconds, freqs in Hz.
-      sweepStartHz: 20, sweepEndHz: 20000, sweepDurationSec: 1.0,
-      sweepFadeInSec: 0.01, sweepFadeOutSec: 0.01, sweepLoop: true,
-      fftSize: 65536, window: 'BH4', averages: 16, overlap: 'PCT_0', coherent: true,
-      fftFundFromGenerator: false, snrFreqMin: 0, snrFreqMax: 0,   // THD band (0 = full band)
-      stopAfterNEnabled: false, stopAfterN: 10,   // auto-stop once N averages collected (Java FftAnalyzerWorker)
-      mainsSuppression: 'NONE',   // None / IIR_COMB / SYNC_SUBTRACT / LMS (Java MainsSuppression)
-      threads: Math.max(1, (navigator.hardwareConcurrency || 4) - 2),
-      warmupMs: 500, fllOn: true,
-      channel: 'L',   // FFT-analyzed ADC channel (Java prefs.getFftChannel default L -> ch0); readConfig overrides from prefs.fftChannel
-      // Calibration anchors (Preferences supplies these; defaults until wired).
-      dacFsVoltageAmpl: DAC_FS_VOLTAGE_AMPL, harmonicCount: HARMONIC_COUNT,
-      adcFsVoltageRms: 1.0, dbvOffsetDb: 0.0,
-      // Live scope time/div (s) - sizes the captured scope window (see _scopeWindowLen).
-      scopeTimePerDiv: 0.001,
-    };
     // Three independent lifecycles (Java: generator running / scope capturing / fft recording),
     // each owned by its module; `running` (getter below) = generator-on OR the shared capture is
     // open (refCount > 0).
     // Generator (gui/generator/GeneratorController): the DDS output path + file player + the
-    // analysis freqs. Holds the SHARED config by reference; the engine delegates the public API.
-    this._gen = new GeneratorController(this.config, {
+    // analysis freqs. The engine delegates the public API.
+    this._gen = new GeneratorController(prefs, {
       status: (t) => this._status(t),
       // The DAC for the ACTIVE backend, resolved at EVERY start - exactly as Java re-resolves
       // AudioBackend.instance().openPlayback(device, rate, depth, dither) per start, so a backend
@@ -100,7 +72,7 @@ export class AudioEngine {
     // (scope / FFT / loopback rec) acquire()/release() their own readers; per batch it fans out to
     // _dispatchBatch so each consumer reads off its own cursor.
     this._capture = new SharedCapture({
-      getConfig: () => this.config,
+      prefs,
       status: (t) => this._status(t),
       // The live capture publishes CAPTURE_BATCH_AVAILABLE; ScopeController + FftController
       // subscribe and self-feed off their own cursors (no central _dispatchBatch router).
@@ -114,7 +86,7 @@ export class AudioEngine {
     // measurement never rides the live consumers' ring. Its batch fan-out is the FreqResp
     // loopback recording tap only (the Tune-notch wizard reads this ring via its own cursor).
     this._measCapture = new SharedCapture({
-      getConfig: () => this.config,
+      prefs,
       status: (t) => this._status(t),
       onBatch: (d) => this._dispatchMeasBatch(d),
       computeAnalysisFreqs: () => this._gen.computeAnalysisFreqs(),
@@ -130,11 +102,10 @@ export class AudioEngine {
     // the generator answers (Java ScopeView.dualToneEmittedHz). That is why no generator getter is
     // injected here any more - an analyzer with no generator to ask has no emitted tone to report,
     // not a pair it may re-derive from the same preferences.
-    this._scope = new ScopeController(this._capture, this.config);
+    this._scope = new ScopeController(this._capture, prefs);
     // FFT consumer (gui/fft/FftController): the worker pool + cross-frame coherent accumulator +
     // FLL steer + stop-after-N + the render-time .frc/mains de-embed. Reads/steers the generator.
-    this._fft = new FftController(this._capture, this._gen, this.config,
-      { status: (t) => this._status(t), prefs: this._prefs });
+    this._fft = new FftController(this._capture, this._gen, prefs, { status: (t) => this._status(t) });
 
     this.onStatus = null;   // (text) => void
 
@@ -169,6 +140,10 @@ export class AudioEngine {
    *  callbacks) rather than through a fat delegating facade (Java: panes own their controllers). */
   get generator() { return this._gen; }
   get capture() { return this._capture; }
+  /** The dedicated MEASUREMENT capture (the FreqResp sweep's and the Tune-notch wizard's own
+   *  input line) - exposed so a measurement can read the rate the device actually granted it
+   *  (inSampleRate) once its recording has opened. */
+  get measurementCapture() { return this._measCapture; }
   get scope() { return this._scope; }
   get fft() { return this._fft; }
 
@@ -419,10 +394,10 @@ export class AudioEngine {
   // -------------------------------------------------------------------------
 
   /** Forces the shared capture device to close and reopen with the CURRENT
-   *  config.inDeviceId / inRate, re-issuing fresh readers to every active
+   *  input device / rate of the active backend's preferences, re-issuing fresh readers to every active
    *  consumer (scope / FFT / loopback recording) so a live input-device change
    *  takes effect immediately - no page reload, no stop/start. No-op when the
-   *  device isn't open (the NEXT acquire already uses the new id via readConfig).
+   *  device isn't open (the NEXT acquire already opens the device the preferences name).
    *  Mirrors the Java behaviour where reopening the SharedCapture re-attaches the
    *  consumers' SignalBufferReaders to the fresh ring. */
   async reopenCaptureDevice() {
@@ -445,7 +420,7 @@ export class AudioEngine {
    *  release - the refcount handles it, no central teardown), and the generator bounces when
    *  outputChanged (it closes its own output context). Web Audio's input and output are SEPARATE
    *  devices, so an input-only change never disturbs the generator and vice-versa. Call BEFORE
-   *  committing the new device/rate to config; pair with afterApplyBackendChanges().
+   *  committing the new device/rate to the preferences; pair with afterApplyBackendChanges().
    *  A BACKEND change overrides the gating and bounces BOTH directions - see
    *  AudioBackend.switchPending(). */
   async beforeApplyBackendChanges(captureChanged, outputChanged) {
@@ -455,9 +430,9 @@ export class AudioEngine {
   }
 
   /** Preferences-dialog bracket, phase 2 (Java afterApplyBackendChanges): RESTART exactly what was
-   *  running, on the just-committed config. Gated per direction: the capture consumers (scope + FFT)
+   *  running, on the just-committed preferences. Gated per direction: the capture consumers (scope + FFT)
    *  that were live re-acquire their refs when captureChanged - the shared input device reopens on
-   *  the FIRST re-acquire at the committed config.inDeviceId / inRate (refcount handles it, no
+   *  the FIRST re-acquire at the committed input device / rate (refcount handles it, no
    *  central re-open) - and the generator restarts its playing engine (tone or retained file) when
    *  outputChanged, reopening its own output context. Input and output are separate devices, so
    *  each direction re-acquires only its own resource.

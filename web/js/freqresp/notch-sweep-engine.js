@@ -37,13 +37,13 @@
 // Intended web adaptations (the Java engine owns JavaSound lines + its own
 // ring + a MAX_PRIORITY generator thread; the web has neither raw lines nor
 // threads):
-//   - Playback goes through the shared dds-processor worklet, but THIS engine owns the
-//     generator lifecycle for the session (like Java, whose NotchSweepEngine owns its own
-//     playback line): start() snapshots the DDS config, points the generator at a silent
-//     looping Farina sweep and starts it (injected startGenerator), drives it via postGen(msg),
-//     then un-mutes at the real amplitude; close() stops the generator and restores the config.
-//     The kernel's looping logSweepNext IS the port of the Java generator's, so the seam-fade
-//     semantics are identical. The wizard UI no longer commandeers the DDS.
+//   - Playback is THIS engine's own lane, exactly as Java's NotchSweepEngine drives its own
+//     GeneratorLane: start() opens a PlaybackSink of the active backend (the injected
+//     openPlayback factory - the same seam GeneratorController opens its tone through), puts a
+//     SILENT looping Farina sweep on it, and un-mutes at the real amplitude through the sink's
+//     control port once the capture is up; close() closes the lane. The kernel's looping
+//     logSweepNext IS the port of the Java generator's, so the seam-fade semantics are
+//     identical. The generator pane's own lane and preferences are never touched.
 //   - Capture uses an injected DEDICATED measurement capture (acquire/release) - a SEPARATE
 //     input device line from the live scope/FFT capture, so a measurement never rides the live
 //     consumers' ring (Java opens its own device line per measurement: "no device-line reuse
@@ -65,6 +65,7 @@
 import { GenSignalForm } from '../enums/gen-signal-form.js';
 import { nextPow2 } from '../dsp/mathutil.js';
 import { renderLogSweep } from './farina-sweep.js';
+import { debug } from '../util/debug.js';
 
 // --- Sweep timing (TuneNotchWizardDialog constants) --------------------------
 /** Sweep duration (s) the power-of-two loop period is derived from.
@@ -157,26 +158,28 @@ export function sweepBand(startHz, stopHz) {
 export class NotchSweepEngine {
   /**
    * @param {Object} deps injected collaborators (the web stand-ins for Java's
-   *   DeviceRef pair; bitDepth/ditherBits are intended web divergences)
-   * @param {import('../audio/shared-capture.js').SharedCapture} deps.sharedCapture
-   *   the one ref-counted ADC capture (acquired on start, released on close)
-   * @param {(msg: Object) => void} deps.postGen posts a live message to the
-   *   running dds-processor worklet (the caller owns the generator lifecycle)
+   *   DeviceRef pair; the capture bit depth is an intended web divergence)
+   * @param {import('../audio/shared-capture.js').SharedCapture} deps.capture
+   *   the dedicated MEASUREMENT capture (acquired on start, released on close)
+   * @param {(deps: Object) => Object} deps.openPlayback the active backend's PlaybackSink
+   *   factory (AudioBackend.openPlayback) - this engine opens and closes its OWN lane on it,
+   *   as Java's engine drives its own GeneratorLane
+   * @param {?string} deps.outputDeviceId the configured output device the lane opens on
+   * @param {number} deps.ditherBits the configured generator dither, fixed at the lane's open
    * @param {number} deps.captureRateHz the ADC's configured rate (Hz): the
    *   clock every captured window is counted in, the clock the deconvolution
    *   reads its bins on, and the clock the reference is rendered at
    * @param {number} deps.playbackRateHz the DAC's configured rate (Hz) - the
    *   clock the emitted loop is counted in, independent of the ADC's
    */
-  constructor({ capture, config, startGenerator, stopGenerator, postGen,
-    captureRateHz, playbackRateHz }) {
+  constructor({ capture, openPlayback, outputDeviceId, ditherBits, captureRateHz, playbackRateHz }) {
     this._capture = capture;                 // the dedicated MEASUREMENT capture (own device line)
-    this._config = config;                   // shared DDS config - snapshot/set/restore within
-    this._startGenerator = startGenerator;   // () => start the DDS generator (returns error key|null)
-    this._stopGenerator = stopGenerator;     // () => stop the DDS generator
-    this._postGen = postGen;
+    this._openPlayback = openPlayback;       // (deps) => the active backend's PlaybackSink
+    this._outputDeviceId = outputDeviceId;   // the configured output device the lane opens on
+    this._ditherBits = ditherBits;           // the configured generator dither, fixed at the open
     this._captureRateHz = captureRateHz;
     this._playbackRateHz = playbackRateHz;
+    this._sink = null;                       // this session's own playback lane, null while closed
     // Session state, set up in start() and torn down in close().
     this._reader = null;         // SignalBufferReader over the measurement ring
     this._startWritePos = 0;     // ring write position at start() - the anchor
@@ -184,8 +187,6 @@ export class NotchSweepEngine {
     this._fadeSamples = 0;       // per-side seam fade in CAPTURE samples
     this._playSamples = 0;       // the SAME period in OUTPUT samples (setBand re-commands it)
     this._sweepRefBuf = null;    // cached one-period reference X(t), at the CAPTURE clock
-    this._savedGenConfig = null; // pre-session DDS config, restored on close()
-    this._genStarted = false;
     this._running = false;
   }
 
@@ -289,76 +290,82 @@ export class NotchSweepEngine {
     // reference is rendered on that clock and with its count.
     this._sweepRefBuf = renderLogSweep(f0, f1, sweepSamples, this._captureRateHz);
 
-    // Snapshot the shared DDS config, then point the generator at a SILENT looping Farina
-    // sweep and start it - this engine owns the generator lifecycle (the wizard no longer
-    // touches engine.config or startGenerator; Java NotchSweepEngine owns its own playback).
-    const c = this._config;
-    this._savedGenConfig = {
-      form: c.form, ampVrms: c.ampVrms,
-      sweepStartHz: c.sweepStartHz, sweepEndHz: c.sweepEndHz,
-      sweepDurationSec: c.sweepDurationSec, sweepLoop: c.sweepLoop,
-      sweepFadeInSec: c.sweepFadeInSec, sweepFadeOutSec: c.sweepFadeOutSec,
-      outputChannels: c.outputChannels, rightLaneScale: c.rightLaneScale,
+    // THIS engine's own lane on the active backend (Java: its own GeneratorLane), opened at the
+    // configured output rate and put on air with a SILENT looping Farina sweep - the un-mute
+    // below happens once the capture is up. The counts are the DAC's OWN: the kernel renders on
+    // the output clock, so a capture count handed to it would emit a loop of another duration
+    // than the one the deconvolution treats as exactly one period.
+    const sink = this._openPlayback({
+      deviceId: this._outputDeviceId, ditherBits: this._ditherBits,
+      status: (text) => debug('[tune-notch]', text),
+    });
+    const sweep = {
+      logSweep: { f0, f1, sweepSamples: playSamples, leadInSamples: 0 },
+      sweepParams: { loop: true, fadeInSamples: playFade, fadeOutSamples: playFade },
     };
-    c.form = GenSignalForm.LOG_SWEEP;
-    c.ampVrms = 0;   // start silent - the postGen below un-mutes with the real amplitude
-    c.sweepStartHz = f0; c.sweepEndHz = f1;
-    // The shared DDS config is in SECONDS and the generator controller converts it to samples at
-    // the OUTPUT rate, so the loop's one duration is what travels here - the same stretch of time
-    // the capture counts as sweepSamples. The postGen below then commands the exact output counts.
-    c.sweepDurationSec = playSamples / this._playbackRateHz;
-    c.sweepLoop = true;
-    c.sweepFadeInSec = playFade / this._playbackRateHz;
-    c.sweepFadeOutSec = playFade / this._playbackRateHz;
-    // Match the RIGHT lane's physical level to the LEFT-referenced digital amplitude, then
-    // gate the looping sweep to the selected DAC lane(s) - Java NotchSweepEngine.start's
-    // setChannelScale(1.0, rightLaneScale) + setOutputChannels. startGenerator reads these
-    // off the config into the worklet's processorOptions, so they apply from block 0; the
-    // pre-session values are restored by _restoreGenConfig on close (snapshot above).
-    c.outputChannels = outputChannels;
-    c.rightLaneScale = rightLaneScale;
-    const startErr = await this._startGenerator();
-    if (startErr) { this._restoreGenConfig(); throw new Error(startErr); }
-    this._genStarted = true;
+    try {
+      const granted = await sink.open({
+        sampleRate: this._playbackRateHz, deviceId: this._outputDeviceId,
+        ditherBits: this._ditherBits, outputChannels,
+      });
+      // The loop period was converted to output samples at the CONFIGURED rate; a lane clocked
+      // at another rate emits a loop of another duration and the trace drifts (Java
+      // requireGrantedRate on the generator lane), so the session is refused instead.
+      if (granted > 0 && granted !== this._playbackRateHz) {
+        throw new Error(`the generator lane granted ${granted} Hz where the configured output `
+          + `rate is ${this._playbackRateHz} Hz - the looping sweep and the captured period would `
+          + 'drift apart, so the tuning session is refused rather than shown wrong');
+      }
+      // Match the RIGHT lane's physical level to the LEFT-referenced digital amplitude and gate
+      // the looping sweep to the selected DAC lane(s) - Java NotchSweepEngine.start's
+      // setChannelScale(1.0, rightLaneScale) + setOutputChannels - from block 0.
+      await sink.start({
+        form: GenSignalForm.LOG_SWEEP, frequency: 0,
+        amplitudeVRms: 0,   // start silent - the post below un-mutes with the real amplitude
+        dacFsVoltageAmpl: dacFsVrms, ditherBits: this._ditherBits,
+        outputChannels, rightLaneScale,
+        control: { ...sweep },
+      });
+    } catch (e) {
+      try { await sink.close(); } catch (_) { /* the open failure is the one to report */ }
+      throw e;
+    }
+    this._sink = sink;
 
     // Open OUR OWN measurement capture line (device-isolated from scope/FFT).
     this._reader = await this._capture.acquire();
     if (!this._reader) {
       const err = this._capture.getLastStartError() || 'capture start failed';
-      await this._stopGeneratorAndRestore();
+      await this._closeSink();
       throw new Error(err);
     }
     this._startWritePos = this._reader.getWritePos();
 
-    // Point the now-running DDS at the looping sweep at the real amplitude. The counts are the
-    // DAC's OWN: the worklet renders on the output clock, so a capture count handed to it would
-    // emit a loop of another duration than the one the deconvolution treats as exactly one period.
-    this._postGen({
+    // Point the now-running DDS at the looping sweep at the real amplitude.
+    this._post({
       amplitudeVRms: ampVrms,
       dacFsVoltageAmpl: dacFsVrms,
-      logSweep: { f0, f1, sweepSamples: playSamples, leadInSamples: 0 },
-      sweepParams: { loop: true, fadeInSamples: playFade, fadeOutSamples: playFade },
+      ...sweep,
       resetSweepPosition: true,
     });
-    this._postGen({ form: GenSignalForm.LOG_SWEEP });
     this._running = true;
   }
 
-  /** Restores the pre-session DDS config snapshot (no generator action). */
-  _restoreGenConfig() {
-    if (this._savedGenConfig) {
-      Object.assign(this._config, this._savedGenConfig);
-      this._savedGenConfig = null;
-    }
+  /** A live-control message to this session's own lane (the dds-processor message protocol);
+   *  dropped while no lane is open. */
+  _post(msg) {
+    const port = this._sink != null ? this._sink.port : null;
+    if (port) port.postMessage(msg);
   }
 
-  /** Stops the generator (if started) and restores the pre-session DDS config. */
-  async _stopGeneratorAndRestore() {
-    if (this._genStarted) {
-      this._genStarted = false;
-      try { await this._stopGenerator(); } catch (_) { /* ignore */ }
+  /** Closes this session's own playback lane, if one is open. Errors are swallowed exactly as
+   *  a generator stop swallows them: a wedged or unplugged device must never block the close. */
+  async _closeSink() {
+    const sink = this._sink;
+    this._sink = null;
+    if (sink) {
+      try { await sink.close(); } catch (_) { /* ignore */ }
     }
-    this._restoreGenConfig();
   }
 
   /**
@@ -375,7 +382,7 @@ export class NotchSweepEngine {
   setBand(f0, f1) {
     if (!this._running) return;
     this._sweepRefBuf = renderLogSweep(f0, f1, this._sweepSamples, this._captureRateHz);
-    this._postGen({ logSweep: { f0, f1, sweepSamples: this._playSamples, leadInSamples: 0 } });
+    this._post({ logSweep: { f0, f1, sweepSamples: this._playSamples, leadInSamples: 0 } });
   }
 
   /**
@@ -390,23 +397,21 @@ export class NotchSweepEngine {
    */
   setAmplitude(ampVrms) {
     if (!this._running) return;
-    this._postGen({ amplitudeVRms: ampVrms });
+    this._post({ amplitudeVRms: ampVrms });
     if (this._reader) this._startWritePos = this._reader.getWritePos();
   }
 
   /**
    * Live output-lane change WITHOUT restart: pushes the gate straight to the
    * running worklet (Java NotchSweepEngine.setOutputChannels). Only the gate is
-   * pushed live - the right-lane scale was fixed at start(). Updates the shared
-   * config too so a later worklet retune keeps the same lane. No-op before
+   * pushed live - the right-lane scale was fixed at start(). No-op before
    * start() / after close().
    *
    * @param {string} outputChannels 'BOTH' | 'LEFT' | 'RIGHT'
    */
   setOutputChannels(outputChannels) {
     if (!this._running) return;
-    this._config.outputChannels = outputChannels;
-    this._postGen({ outputChannels });
+    this._post({ outputChannels });
   }
 
   /**
@@ -440,20 +445,18 @@ export class NotchSweepEngine {
   }
 
   /**
-   * Ends the streaming session ONCE: releases the shared capture reference
-   * (closing the input device if this was the last consumer). Restoring the
-   * DDS worklet to the pre-session form is the CALLER's job (it commandeered
-   * the shared generator - mirror of FreqRespHost.runSweep's restore), unlike
-   * Java where the engine owned a private playback line. Idempotent; a stray
-   * setBand() after close is a no-op.
+   * Ends the streaming session ONCE: releases the measurement capture reference
+   * (closing the input device if this was the last consumer) and closes this
+   * session's own playback lane (Java NotchSweepEngine.close stops its own
+   * GeneratorLane). Idempotent; a stray setBand() after close is a no-op.
    */
   async close() {
-    if (!this._running && !this._reader && !this._genStarted) return;
+    if (!this._running && !this._reader && !this._sink) return;
     this._running = false;
     const reader = this._reader;
     this._reader = null;
     this._sweepRefBuf = null;
     if (reader) await this._capture.release();
-    await this._stopGeneratorAndRestore();
+    await this._closeSink();
   }
 }

@@ -91,7 +91,7 @@ export class PredistortionWizard {
     // freqResolution, falling back to prefs.
     const r = this.getResult();
     const size = (r && r.fftSize) || this.prefs.fftLength.get();
-    const rate = (r && r.sampleRate) || this.engine.outSampleRate || this.engine.config.outRate || 0;
+    const rate = (r && r.sampleRate) || this.engine.outSampleRate || this.prefs.current().outputSampleRate || 0;
     const binHz = (r && Number.isFinite(r.freqResolution)) ? r.freqResolution : (rate && size ? rate / size : 0);
     const cell = (text) => `<span class="dpd-cell">${$('<span>').text(text).html()}</span>`;
     $('#dpdFftInfo').html(
@@ -489,7 +489,7 @@ export class PredistortionWizard {
       if (!this.engine.running) { $('#dpdProgress').text(t('predistortion.error.noGenerator')); return; }
       // Predistortion only supports the Sine / Dual-tone waveforms (Java validation).
       const okForm = [GenSignalForm.SINE, GenSignalForm.SINE_COMP, GenSignalForm.DUAL_TONE, GenSignalForm.DUAL_TONE_COMP]
-        .includes(this.engine.config.form);
+        .includes(this.prefs.genSignalForm.get());
       if (!okForm) { $('#dpdProgress').text(t('predistortion.error.notSupported')); return; }
       // Minimum 10 averages per round (Java MIN_AVERAGES) - too few can't build
       // a deep-enough coherent average to read the harmonics cleanly.
@@ -512,7 +512,7 @@ export class PredistortionWizard {
       // PredistortionWizardDialog:317).
       this.savedName = null; this.savedText = null;
       $('#dpdSave').text(t('predistortion.button.save')).prop('disabled', true);
-      const dual = isDualTone(this.engine.config.form);
+      const dual = isDualTone(this.prefs.genSignalForm.get());
       $('#dpdProgress').text(t('predistortion.phase.aligning'));
       this._resetLive(dual);
       // The persistent poll armed at open already renders phase + metrics + FFT info + chart;
@@ -586,7 +586,7 @@ export class PredistortionWizard {
         this.modal.hide();
         return;
       }
-      const c = this.engine.config, r = this.pdEngine.bestResult;
+      const r = this.pdEngine.bestResult;
       const dual = this.pdEngine.dualTone;
       // Java's save path refuses on a null result AND on a missing correction set, before it
       // opens the file dialog (PredistortionWizardDialog.doSave: r == null, then the dual /

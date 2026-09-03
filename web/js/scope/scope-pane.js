@@ -59,7 +59,7 @@ export class ScopePane {
    * @param engine the AudioEngine (scope record lifecycle; live measurement / zoomed-window reads).
    * @param prefs  Preferences.
    * @param deps   {view, getField, tileChips, isScopeRec, isBusy, setBusy,
-   *                getLatestScope, readConfig, syncCalibrateGate}
+   *                getLatestScope, syncCalibrateGate}
    *   - view: the ScopeView (Java holds `view` as a field) - the trace canvas painter,
    *       single-armed / file-mode state, latest measurement, auto-setup.
    *   - getField: (id) => the scope NumericStepField (built in app.js initStepFields) - the
@@ -195,19 +195,14 @@ export class ScopePane {
    *  (Java ScopeMeasurementWorker re-reads Preferences each pass). Returns null when the
    *  measurement table is off so the client skips the batch (never backlogs the cursor). */
   _measParams() {
-    const p = this.prefs, c = this.engine.config;
+    const p = this.prefs;
     if (!p || !p.oscShowMeasurementTable.get()) return null;
     // Dual flag from the LIVE pref, exactly like Java ScopeMeasurementWorker.measureChannel
-    // (dual = prefs.getGenSignalForm().isDualTone()), re-read every publish pass - NOT the
-    // engine.config snapshot, which only refreshes on a generator (re)start (readConfig).
-    // A form change to DUAL_TONE updates the pref immediately (the dropdown's prefs.set),
-    // so with the snapshot the worker measured a stale single tone (the sum-crossing f)
-    // until the generator happened to restart; the live pref closes that window.
-    // Same rule for peakVolts below: read adcFsVoltageRms from the LIVE pref (Java
-    // ScopeMeasurementWorker.java:444 re-reads prefs.getAdcFsVoltageRms() each compute pass),
-    // NOT c.adcFsVoltageRms - an ADC calibration rescales the pref mid-capture, and the
-    // config snapshot would keep the stale full-scale until the next capture restart (the
-    // "reading doesn't move after calibrate -> double-calibration" bug).
+    // (dual = prefs.getGenSignalForm().isDualTone()), re-read every publish pass: a form change
+    // to DUAL_TONE updates the pref immediately (the dropdown's prefs.set), so the worker never
+    // measures a stale single tone (the sum-crossing f). Same rule for peakVolts below: the ADC
+    // full-scale is re-read each pass (Java ScopeMeasurementWorker.java:444 re-reads
+    // prefs.getAdcFsVoltageRms()), so an ADC calibration rescales the reading mid-capture.
     const dual = isDualTone(p.genSignalForm.get());
     const per = (name) => ({
       // NO lpfMode: the display LPF / de-spike never reaches a measured value (Java has no
@@ -216,7 +211,9 @@ export class ScopePane {
       dual, f1Hz: this.engine.scope.snapped, f2Hz: this.engine.scope.snapped2,
     });
     return {
-      sampleRate: c.inRate,
+      // The rate the ring the worker reads is clocked at - the capture's granted rate while it is
+      // open, else the active backend's configured input rate.
+      sampleRate: this.engine.capture.inSampleRate || p.current().inputSampleRate,
       // Each channel scales by its OWN ADC full-scale (Java ScopeMeasurementWorker.java:448-9
       // getAdcPeakVolts(Channel.L)/(Channel.R)); LINKED cards give equal L/R peaks. Read
       // LIVE (getAdcPeakVolts reads the pref Property) so an ADC calibration rescales mid-
@@ -477,9 +474,6 @@ export class ScopePane {
     const latestScope = this._getLatestScope();
     if (this._isScopeRec()) {
       try {
-        // Keep the engine's captured scope-window length tracking the live t/div so a
-        // zoom-out re-sizes the ~3× window (Java sizes leftBuf from t/div each paint).
-        engine.config.scopeTimePerDiv = prefs.oscTimePerDiv.get();
         if (latestScope) {
           // The long-window Vrms/Vmean/Tp/f/Duty measurement now runs in the osc-meas Web
           // Worker off its OWN gapless ring reader (engine.scope, wired in the constructor)
@@ -834,7 +828,7 @@ export class ScopePane {
       this._setBusy(true);
       const want = !this._isScopeRec();
       if (want) {
-        this.readConfig();   // pull live config (rate, calibration, tone). NO auto-setup on record - Java fires auto-setup ONLY from its manual button; auto-firing here reset the user's trigger level + channel offset on every Record.
+        // NO auto-setup on record - Java fires auto-setup ONLY from its manual button; auto-firing here reset the user's trigger level + channel offset on every Record.
         // Leaving file mode: re-arm the trigger controls, clear the loaded-file banner,
         // drop the loaded signal and hide the horizontal nav scrollbar (live record has
         // no horizontal scroll-back - the trace follows the latest writePos).
@@ -875,15 +869,6 @@ export class ScopePane {
     this.refreshFields();
     this.refreshTiles();
     this.requestRedraw();
-  }
-
-  /** Snapshots the scope's live settings into the shared engine config before a record start:
-   *  the time/div that sizes the captured scope window (~3x the displayed span, so the trace
-   *  does not run out before the window edge - Java ScopeView read length). The SCOPE's part
-   *  only: the capture device and rate are the Preferences dialog's (written on scan and on
-   *  OK), the calibration anchors are read live off the prefs by the measurement. */
-  readConfig() {
-    this.engine.config.scopeTimePerDiv = this.prefs.oscTimePerDiv.get();
   }
 
   requestRedraw() {
