@@ -146,7 +146,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  */
 export class TuneNotchWizard {
   /**
-   * @param {import('../audio/backend.js').AudioEngine} engine the live engine
+   * @param {import('../shell/audio-engine.js').AudioEngine} engine the live engine
    *   (postGen playback path + the ref-counted shared capture)
    * @param {import('../store/preferences.js').Preferences} prefs Preferences.instance()
    * @param {{modal: object, showAlert: Function}} deps

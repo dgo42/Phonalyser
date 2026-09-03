@@ -18,7 +18,8 @@
 
 import { analyzeImd } from '../fft/imd-analyzer.js';
 import { FftResult } from '../fft/fft-result.js';
-import { makeCompensation, makeDualToneComp, isDualTone } from '../generator/dds-kernel.js';
+import { makeCompensation, makeDualToneComp } from '../generator/dds-kernel.js';
+import { isDualTone } from '../enums/gen-signal-form.js';
 
 /** The desktop's "infinite" coherent averaging - a true cumulative mean. The
  *  cross-tick accumulator (FftController) deepens the average tick by tick, so ∞
@@ -27,7 +28,7 @@ const INFINITE_AVERAGES = Infinity;
 
 export class PredistortionHost {
   /**
-   * @param {import('../audio/backend.js').AudioEngine} engine the live engine
+   * @param {import('./audio-engine.js').AudioEngine} engine the live engine
    * @param {object} prefs Preferences.instance()
    * @param {{getResult:()=>?object, restart:()=>Promise<void>,
    *          correctionEntries:Array}} bridge shell-supplied accessors:

@@ -8,8 +8,9 @@
 // engine and renders the scope + spectrum Canvas views. First runnable slice;
 // the remaining blueprint modules layer on around this engine.
 
-import { AudioEngine } from '../audio/backend.js';
-import { deviceErrorText } from '../audio/device-failure-reason.js';
+import { AudioBackend } from '../audio/backend.js';
+import { AudioEngine } from './audio-engine.js';
+import { deviceErrorText } from '../audio/device-failure-reason.js';   // the shell's alert body
 import { Qa40xDeviceFinder } from '../qa40x/qa40x-device-finder.js';
 import { Qa40xDeviceManager } from '../qa40x/qa40x-device-manager.js';
 import { QA40X_BACKEND } from '../qa40x/qa40x-rate-constraint.js';
@@ -32,9 +33,9 @@ import { NetServerList } from '../net/net-server-list.js';
 import { IntervalTicker } from '../net/ticker.js';
 import { ServerProber, wsUrlOf } from '../net/server-prober.js';
 import { stackOverOpenModals } from '../ui/modal-stack.js';
-import { FftView } from '../ui/fft-view.js';
-import { ScopeView } from '../ui/scope-view.js';
-import { GenSignalForm } from '../generator/dds-kernel.js';
+import { FftView } from '../fft/fft-view.js';
+import { ScopeView } from '../scope/scope-view.js';
+import { GenSignalForm } from '../enums/gen-signal-form.js';
 import { Preferences } from '../store/preferences.js';
 import { DeviceProfileStore } from '../store/device-profiles.js';
 import { loadDeviceCatalog } from '../store/device-catalog.js';
@@ -45,13 +46,13 @@ import { LOCALES } from '../i18n/locales.js';
 import { WavWriter, AiffWriter, readWav, readAiff } from '../io/wav.js';
 import { saveScopeCapture, saveStreaming, findFullPeriodWindow, formatForName } from '../io/scope-capture.js';
 import { encodeFlac, decodeFlac } from '../io/flac.js';
-import { saveSpectrum, loadSpectrum } from '../io/fft-spectrum.js';
+import { saveSpectrum, loadSpectrum } from '../fft/fft-spectrum.js';
 import { loadFrc } from '../io/frc.js';
 import { pruneCals } from '../io/cal-store.js';
 import { saveFile, openFile, bytesToText, pickSaveTarget, writeToTarget } from '../io/file-picker.js';
 import { FreqRespPane } from '../freqresp/freqresp-pane.js';
 import { TuneNotchWizard } from '../freqresp/tune-notch-wizard.js';
-import { ScreenshotDialog } from './screenshot.js';
+import { ScreenshotDialog } from '../ui/screenshot.js';
 import { PredistortionHost } from './predistortion-host.js';
 import { PredistortionWizard } from './predistortion-wizard.js';
 import { PreferencesDialog } from './preferences-dialog.js';
@@ -648,7 +649,7 @@ MessageBus.instance().subscribe(Events.AUDIO_DEVICE_ERROR, (p) => {
 });
 
 // ----- Screenshots (Java ScreenshotDialog + AbstractPane + ScreenshotOverlay) -----
-// The whole capture pipeline lives in shell/screenshot.js (the generic clone + paint
+// The whole capture pipeline lives in ui/screenshot.js (the generic clone + paint
 // compositor, the shared watermark + caption overlay, the dialog); each PANE owns its
 // prep + renderShot + dialog spec (scope-pane / fft-pane / freqresp-pane shotDialogPane),
 // as the desktop's AbstractPane renders itself. Wired below in init's modals step.
@@ -866,8 +867,11 @@ async function init() {
     inputDepthOf: () => prefs.prefsFor(LOOPBACK_BACKEND).inputBitDepth,
     outputDepthOf: () => prefs.prefsFor(LOOPBACK_BACKEND).outputBitDepth,
   });
-  engine = new AudioEngine({ prefs, qa40xManager, qa40xFinder, loopbackManager,
-    netManager: netManagerFacade(() => netManager) });
+  // The backend (Java sound.AudioBackend) is composed FIRST, with the managers the shell owns;
+  // the engine (Java gui.UIEngines) is composed over it and reports its status through it.
+  const backend = new AudioBackend({ prefs, qa40xManager, qa40xFinder, loopbackManager,
+    netManager: netManagerFacade(() => netManager), status: (text) => engine._status(text) });
+  engine = new AudioEngine({ prefs, backend });
   fftViewCorrection = new FftViewCorrection(engine.config, fftCorrectionStore);
   fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running, correction: fftViewCorrection });
   bindEngineCallbacks();

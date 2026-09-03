@@ -84,8 +84,8 @@ web/
 │   │        farina-sweep, deconvolve, frc, mains/ ...)
 │   ├── audio/            device boundary
 │   │   ├── fft-worker.js                  worklets/{capture,generator}-processor.js  <- done
-│   │   ├── backend.js (AudioEngine)       <- done (to be split into devices/
-│   │   │                                     input-context/output-context/fft-pool)
+│   │   ├── backend.js (AudioBackend)      <- done (the active backend's device dispatch;
+│   │   │                                     the engine composition is shell/audio-engine.js)
 │   ├── generator/        controller + full DDS kernel + .dpd
 │   ├── scope/            view + controls + measurement worker
 │   ├── fft/              view + controls + live analyzer worker

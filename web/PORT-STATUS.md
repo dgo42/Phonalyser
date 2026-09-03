@@ -1,7 +1,7 @@
 # PORT-STATUS - ported-module -> live-engine integration checklist
 
 Status of the Java->JS port under `web/js/`, and the wiring state of each ported
-module in the **live engine** (`web/js/audio/backend.js` + controllers) and the
+module in the **live engine** (`web/js/shell/audio-engine.js` over `web/js/audio/backend.js` + controllers) and the
 **UI** (`web/js/shell/app.js`, `web/index.html`).
 
 ## State of the port
@@ -12,7 +12,7 @@ faithful ports, not the prototype math:
 - `audio/fft-controller.js` + `audio/fft-worker.js` drive `fft/fft-analyzer.js`
   (`FftAnalyzer.analyze()` is the canonical per-window path); results flow as
   full `FftResult` payloads through `fft/fft-view-correction.js` (render-time
-  `.frc` de-embed, mains spectral correction, live IMD) into `ui/fft-view.js`.
+  `.frc` de-embed, mains spectral correction, live IMD) into `fft/fft-view.js`.
 - The output generator is the faithful `worklets/dds-processor.js` +
   `generator/dds-kernel.js`, loaded unconditionally by
   `audio/generator-controller.js`. The prototype `generator-processor.js` is no
@@ -35,16 +35,20 @@ fft/   imd-analyzer.js fft-result.js fft-analyzer.js
 generator/ dds-kernel.js generator-pane.js                            (ported, wired)
 scope/ scope-trigger.js signal-measurements.js measurement-stats.js scope-tab-control.js scope-pane.js  (ported, wired)
        osc-meas-client.js osc-meas-worker.js osc-meas-compute.js osc-freq-worker.js  (continuous meas engine, wired)
-       scope-phosphor.js scope-nav.js scope-format.js scope-enums.js               (ported, wired)
+       scope-phosphor.js scope-nav.js scope-format.js                             (ported, wired)
+enums/ one module per Java measure.enums constant that the web holds as an object: gen-signal-form.js
+       gen-change-cause.js fft-overlap.js osc-slider-id.js trigger-edge.js trigger-mode.js
+       trigger-type.js persistence-mode.js filter-type.js filter-response.js uneven-mode.js
+       device-channel-mode.js output-channels.js device-failure-reason.js       (every edge points down)
 freqresp/ farina-sweep.js deconvolve.js                               (ported, wired)
 predistortion/ harmonic-compensation.js intermod-compensation.js engine.js  (ported, wired)
-io/    wav.js frc.js fft-spectrum.js dpd.js scope-capture.js file-picker.js flac.js  (ported, wired)
+io/    wav.js frc.js dpd.js scope-capture.js file-picker.js flac.js  (ported, wired; the .fft round-trip is fft/fft-spectrum.js, next to its Java owner FftController)
 store/ preferences.js                                                 (ported, wired)
 i18n/  i18n.js locales.js   (+ web/i18n/messages*.properties ×32)     (ported, wired)
 audio/ backend.js fft-controller.js generator-controller.js scope-controller.js
        fft-worker.js worklets/{capture,dds}-processor.js              (wired)
-shell/ app.js freqresp-host.js predistortion-host.js predistortion-wizard.js
-       preferences-dialog.js  ui/fft-view.js ui/scope-view.js         (wired)
+shell/ app.js audio-engine.js freqresp-host.js predistortion-host.js predistortion-wizard.js
+       preferences-dialog.js  fft/fft-view.js scope/scope-view.js         (wired)
 ```
 
 **Testing.** `npm test` runs the node test suite **serially**
@@ -175,7 +179,7 @@ Faithful port of `ImdAnalyzer` + `ImdResult`.
    `fft-view-correction.js:66` - `r.imd = isDualTone(c.form) ? analyzeImd(r,
    c.toneHz, c.tone2Hz, c.dbvOffsetDb) : null`, invoked on every frame via
    `app.js engine.onResult -> fftViewCorrection.apply(r)`; rendered by
-   `ui/fft-view.js drawImdTable` + tone markers. Loaded `.fft` files get the
+   `fft/fft-view.js drawImdTable` + tone markers. Loaded `.fft` files get the
    same treatment in `fft-tab-control.js`.
 5. Mode switch SINGLE↔DUAL_TONE - routed through `restartGenerator()`
    (structural worklet rebuild); `Events.GENERATOR_SIGNAL_CHANGED` resets the
@@ -271,7 +275,7 @@ GPU display persistence `scope/scope-phosphor.js`.
   consts `LANCZOS_A`(16), `MAX_LANCZOS_DOWNSAMPLE`(5), `LANCZOS_PADDING`(80).
 
 ### Done log - scope DSP (all integration TODOs closed)
-1. Trigger - `ui/scope-view.js` uses `find()`/`findGlitch()` with
+1. Trigger - `scope/scope-view.js` uses `find()`/`findGlitch()` with
    `LANCZOS_PADDING`-bounded search windows, hysteresis, `minSpacing` beat
    holdoff; band-limited sinc dots via `lanczos()`.
 2. Measurements - moved OFF the render thread into the continuous measurement
@@ -301,7 +305,7 @@ GPU display persistence `scope/scope-phosphor.js`.
    worker's streaming filter state; windows carry `absStart`/`measAbsStart` so
    the phase-locked cancellers stay aligned. See §8.
 5. Display persistence - `scope/scope-phosphor.js` (Java `gl.ScopePhosphor`):
-   GPU "digital phosphor" afterglow driven by `ui/scope-view.js`. Requires
+   GPU "digital phosphor" afterglow driven by `scope/scope-view.js`. Requires
    **WebGL2 + EXT_color_buffer_float** (RGBA16F): Canvas2D's 8-bit accumulation
    has an integer decay floor that leaves a permanent ghost, so when WebGL2, the
    float-colour extension, or FBO completeness is unavailable the engine reports
@@ -406,7 +410,7 @@ then Apply + form switch (3). frcStore chain verified end-to-end:
   `class AiffWriter(sampleRate,channels,bitsPerSample)` (`writeRaw`, `finish()`);
   `createFlacWriter(...)` (validating stub - superseded by `io/flac.js`), `FLAC_MAX_SAMPLE_RATE`(655350).
 - `frc.js`: `saveFrc(stereo, meta={}) -> string`, `loadFrc(text) -> {left,right}`, `FRC_FORMAT_VERSION`(1).
-- `fft-spectrum.js`: `loadSpectrum(text, dbvOffsetDb, harmCount, parabolicBinInterp) -> {result, modeImd, tone1Hz, tone2Hz, dbvOffsetDb}`,
+- `fft/fft-spectrum.js` (the FFT feature's own, like Java FftController): `loadSpectrum(text, dbvOffsetDb, harmCount, parabolicBinInterp) -> {result, modeImd, tone1Hz, tone2Hz, dbvOffsetDb}`,
   `saveSpectrum(r, meta={}) -> string`, `FFT_FORMAT_VERSION`(1), `LOADED_FUND_MIN_HZ`(10).
 - `dpd.js`: see module 6.
 - `scope-capture.js`: `saveScopeCapture(left, right, actual, fileName, sampleRate, bitDepth, signalFrequencyHz=0) -> Uint8Array`;
@@ -457,7 +461,7 @@ then Apply + form switch (3). frcStore chain verified end-to-end:
 
 ### Done log - supporting DSP (all closed)
 - `parabolicBinInterp` - dependency of `io/fft-spectrum.loadSpectrum`, wired.
-- Mains - **scope**: `ui/scope-view.js` selects the canceller by the
+- Mains - **scope**: `scope/scope-view.js` selects the canceller by the
   per-channel `osc{Left,Right}MainsSuppression` pref (`#scopeLeftMains`/
   `#scopeRightMains` combos) in the display path (`_applyChannelFilters`,
   comb-only reset - Java ScopeView.applyMainsSuppression), the live measurement

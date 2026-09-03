@@ -18,7 +18,8 @@
 import { SignalBuffer } from './signal-buffer.js';
 import { SignalBufferReader } from './signal-buffer-reader.js';
 import { WebAudioCaptureSource } from './web-audio-capture-source.js';
-import { DeviceFailureReason, failureDetailText } from './device-failure-reason.js';
+import { DeviceFailureReason } from '../enums/device-failure-reason.js';
+import { failureDetailText } from './device-failure-reason.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 
@@ -75,10 +76,10 @@ export class SharedCapture {
    *     owner can drive its consumers (rec tap / scope / FFT) off their own cursors.
    *   - computeAnalysisFreqs: () => void - recomputes the analysis freqs once the real input rate
    *     is known (the scope reads `snapped` even with no generator and no FFT).
-   *   - captureSource: the CaptureSource this ring is fed by. TRANSITIONAL DEFAULT: the web's
-   *     AudioBackend equivalent (AudioEngine, ./backend.js) does not yet dispatch the source on
-   *     the active backend, so an un-injected SharedCapture keeps the Web Audio device and the
-   *     WEB_AUDIO path behaves exactly as it did before this seam existed.
+   *   - captureSource: the CaptureSource this ring is fed by - the AudioBackend's per-open
+   *     dispatch on the active backend (./backend.js, openCapture). An un-injected SharedCapture
+   *     keeps the Web Audio device, so the WEB_AUDIO path behaves exactly as it did before this
+   *     seam existed.
    */
   constructor({ getConfig, status, onBatch, computeAnalysisFreqs, publishBatch, captureSource } = {}) {
     this._getConfig = getConfig;

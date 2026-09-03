@@ -16,12 +16,14 @@
  * engine's generator lane). Same split as the desktop, where this controller asks
  * AudioBackend.openPlayback for an AudioPlayback and never touches a device line itself.
  */
-import { GenSignalForm, isCompensated, isDualTone, isPeriodic } from './dds-kernel.js';
+import { GenSignalForm, isCompensated, isDualTone, isPeriodic } from '../enums/gen-signal-form.js';
 import { MessageBus } from '../bus/message-bus.js';
-import { Events, GenChangeCause } from '../bus/events.js';
+import { Events } from '../bus/events.js';
+import { GenChangeCause } from '../enums/gen-change-cause.js';
 import { openOutputContext, WebAudioPlaybackSink } from './web-audio-playback-sink.js';
 import { FileTooLargeError } from '../net/net-playback-sink.js';
-import { DeviceFailureReason, failureDetailText } from '../audio/device-failure-reason.js';
+import { DeviceFailureReason } from '../enums/device-failure-reason.js';
+import { failureDetailText } from '../audio/device-failure-reason.js';
 import { t } from '../i18n/i18n.js';
 import { Preferences } from '../store/preferences.js';
 
@@ -109,9 +111,10 @@ export class GeneratorController {
   /**
    * @param config the SHARED engine config object (held by reference).
    * @param deps {status, openPlayback} - status: (text) => void; openPlayback: (deps) =>
-   *   PlaybackSink, the backend's sink factory. Called at EVERY start, exactly as Java re-resolves
-   *   AudioBackend.instance().openPlayback(device, rate, bitDepth, dither) per start - so a backend
-   *   switch between sessions needs no push-down here. Defaults to the Web Audio sink.
+   *   PlaybackSink, the backend's sink factory, handed {deviceId, ditherBits, status} (the
+   *   configured output device and dither - Java's openPlayback(device, ditherBits) arguments).
+   *   Called at EVERY start, exactly as Java re-resolves AudioBackend.openPlayback per start - so
+   *   a backend switch between sessions needs no push-down here. Defaults to the Web Audio sink.
    */
   constructor(config, { status, openPlayback } = {}) {
     this.config = config;
@@ -531,7 +534,7 @@ export class GeneratorController {
       // The backend's sink, resolved per start (Java: AudioBackend.instance().openPlayback(...)).
       // An unexpected device loss mid-play is NOT a callback: the sink records it and the pane
       // polls takePlaybackEndedFromBelow on its blink tick (Java AudioPlayback.lostFromBelow).
-      this._sink = this._openPlayback({ status: this._status });
+      this._sink = this._openPlayback(this.#playbackDeps());
       // PHASE 1 - open the line and learn the rate it GRANTED, then re-resolve the emit frequency
       // (esp. the RECTANGLE/TRIANGLE sample-period alignment) against that ACTUAL rate before the
       // DDS is built. This is why the sink opens and starts in two steps.
@@ -1084,6 +1087,15 @@ export class GeneratorController {
    * @param {number} sampleRate the rate the buffer was authored at
    * @returns {Promise<?Object>} the opened sink, or null when this backend has no lane player
    */
+  /** What every sink open is handed: the configured output device (the device NAME on a bench),
+   *  the configured dither (which opens the loopback lane, as Java's openPlayback argument does)
+   *  and the status sink. Read per open, so a committed device or dither change lands without a
+   *  push-down. */
+  #playbackDeps() {
+    const c = this.config;
+    return { deviceId: c.outDeviceId, ditherBits: c.ditherBits, status: this._status };
+  }
+
   /**
    * The active backend's sink IF its DDS runs on another machine, already OPENED at
    * {@code sampleRate} - else null, leaving the local and QA40x paths untouched. Detected by the
@@ -1097,7 +1109,7 @@ export class GeneratorController {
    */
   async #remoteLane(sampleRate, opts) {
     const c = this.config;
-    const sink = this._openPlayback({ config: c, status: this._status });
+    const sink = this._openPlayback(this.#playbackDeps());
     if (typeof sink.emittedHz !== 'function') return null;
     await sink.open({
       sampleRate, deviceId: c.outDeviceId,
@@ -1140,7 +1152,7 @@ export class GeneratorController {
   }
 
   async #bufferSink(sampleRate) {
-    const sink = this._openPlayback({ config: this.config, status: this._status });
+    const sink = this._openPlayback(this.#playbackDeps());
     if (typeof sink.playBuffer !== 'function') {
       // A Web Audio sink: nothing was opened yet (the sink opens its context lazily), so there is
       // nothing to close - just fall back to the caller's own context path.

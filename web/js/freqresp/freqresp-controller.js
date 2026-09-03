@@ -61,7 +61,7 @@ export class FreqRespController {
   static DECONVOLVE_TIMEOUT_MS = 60000;
 
   /**
-   * @param {import('../audio/backend.js').AudioEngine} engine the live engine - it carries BOTH
+   * @param {import('../shell/audio-engine.js').AudioEngine} engine the live engine - it carries BOTH
    *   configured clocks: the capture/input rate the derived duration and the record are counted
    *   in, and the playback/output rate the chirp is rendered and emitted on.
    * @param {import('../store/preferences.js').Preferences} prefs Preferences.instance()

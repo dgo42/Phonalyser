@@ -23,7 +23,7 @@ const POLL_MS = 20;
  * every consumer to stop, but their teardowns are async - a measurement must not
  * open the device until the capture refcount hits 0 and the DAC is free.
  *
- * @param {import('../audio/backend.js').AudioEngine} engine the live engine
+ * @param {import('../shell/audio-engine.js').AudioEngine} engine the live engine
  *   (engine.running = generator on OR the shared capture holds any reference)
  * @param {number} timeoutMs give-up deadline in ms
  * @param {() => boolean} [isCancelled] optional cooperative-cancel probe; polled
