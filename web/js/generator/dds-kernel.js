@@ -381,6 +381,10 @@ export class DdsKernel {
     this.sampleRate = o.sampleRate;
     /** @type {string} current waveform. */
     this.form = o.form || GenSignalForm.SINE;
+    // The output frequency in Hz, kept beside its phase increment: the rectangle and triangle
+    // kernels place their edges on the period-aligned sample grid, whose length is
+    // round(sampleRate / frequency).
+    this._frequencyHz = o.frequency != null ? o.frequency : 1000;
 
     // Phase accumulators: EXACT 64-bit fixed-point (two 32-bit words, hi:lo) advanced by integer
     // addition with no float drift - faithful to SignalGenerator's 64-bit `long` accumulator
@@ -446,6 +450,7 @@ export class DdsKernel {
 
   /** Live-updates the output frequency (Hz), phase-continuous. */
   setFrequency(frequencyHz) {
+    this._frequencyHz = frequencyHz;
     const p = incWords(this._toPhaseInc(frequencyHz));
     this._phaseIncHi = p.hi; this._phaseIncLo = p.lo;
   }
@@ -475,7 +480,8 @@ export class DdsKernel {
     this._amplitude = this._currentVrms / (v * rawRms(this.form, this._dualW1, this._dualW2));
   }
 
-  /** Live-updates the rectangle duty cycle, clamped to [0.001, 0.999]. */
+  /** Live-updates the rectangle duty cycle, clamped to [0.001, 0.999]. Emitted as whole samples
+   *  of the period - see _dutySamples. */
   setRectangleDuty(duty) {
     if (!Number.isFinite(duty)) return;
     if (duty < 0.001) duty = 0.001;
@@ -483,7 +489,8 @@ export class DdsKernel {
     this._rectDuty = duty;
   }
 
-  /** Live-updates the triangle duty (rise fraction), clamped to [0.001, 0.999]. */
+  /** Live-updates the triangle duty (rise fraction), clamped to [0.001, 0.999]. Emitted as whole
+   *  samples of the period - see _dutySamples. */
   setTriangleDuty(duty) {
     if (!Number.isFinite(duty)) return;
     if (duty < 0.001) duty = 0.001;
@@ -646,16 +653,51 @@ export class DdsKernel {
 
   // ---- waveform kernels --------------------------------------------------
 
+  // Rectangle: +1 for the first _dutySamples samples of the period, -1 for the rest. Whole
+  // samples, not the phase fraction (SignalGenerator.ddsRectangle): the rectangle runs at a
+  // period-aligned frequency (a whole number n of samples per period), so the duty the operator
+  // sees is k/n - the count the duty bracket shows. Comparing the phase fraction with the duty
+  // instead left a duty below one sample to the accumulator's rounding: whether the one sample
+  // of the period fell inside the fraction depended on which side of the full turn the residual
+  // landed, and the pulse vanished entirely.
   _ddsRectangle() {
     const frac = this._phaseAcc; // turns in [0,1)
-    return frac < this._rectDuty ? 1.0 : -1.0;
+    const n = this._periodSamples();
+    return this._sampleOfPeriod(frac, n) < this._dutySamples(this._rectDuty, n) ? 1.0 : -1.0;
   }
 
+  // Triangle: the rise takes _dutySamples samples of the period, so the corner lands ON a sample
+  // of the period-aligned grid, as the duty bracket shows (SignalGenerator.ddsTriangle).
   _ddsTriangle() {
     const frac = this._phaseAcc; // turns in [0,1)
-    const d = this._triDuty;
+    const n = this._periodSamples();
+    const d = this._dutySamples(this._triDuty, n) / n;
     if (frac < d) return (frac / d) * 2.0 - 1.0;
     return 1.0 - ((frac - d) / (1.0 - d)) * 2.0;
+  }
+
+  /** Samples per period on the period-aligned grid the rectangle and triangle edges live on -
+   *  max(2, round(fs / f)), the same count the generator pane's duty bracket divides by. */
+  _periodSamples() {
+    const f = this._frequencyHz;
+    if (!(f > 0)) return 2;
+    return Math.max(2, Math.round(this.sampleRate / f));
+  }
+
+  /** The whole samples a duty spans in a period of n: rounded, and never the whole period or
+   *  none of it - at least one sample high and one low, the clamp the duty bracket applies, so
+   *  the pulse emitted is the pulse the bracket shows. */
+  _dutySamples(duty, n) {
+    const k = Math.round(duty * n);
+    return Math.max(1, Math.min(n - 1, k));
+  }
+
+  /** The sample of the period a phase falls on. On the aligned grid every phase is a multiple of
+   *  1/n up to the accumulator's rounding, so the NEAREST multiple is the sample; a phase a hair
+   *  below the full turn is sample 0 of the next period. */
+  _sampleOfPeriod(frac, n) {
+    const i = Math.round(frac * n);
+    return i >= n ? i - n : i;
   }
 
   _pinkNoise(linear) {

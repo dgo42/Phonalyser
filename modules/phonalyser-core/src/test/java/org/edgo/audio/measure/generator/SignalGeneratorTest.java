@@ -365,6 +365,74 @@ class SignalGeneratorTest {
                 "the second tone must survive the switch untouched - no rebuild");
     }
 
+    // -------------------------------------------------------------------------
+    // Rectangle / triangle duty: whole samples of the period-aligned grid
+    // -------------------------------------------------------------------------
+
+    /** 384 kHz at 1 kHz is 384 samples per period - the grid the duty bracket
+     *  divides by. */
+    private static final int    DUTY_RATE   = 384_000;
+    private static final double DUTY_FREQ   = 1_000.0;
+    private static final int    DUTY_PERIOD = 384;
+    private static final int    DUTY_PERIODS = 10;
+
+    /**
+     * The pulse is {@code round(duty · n)} samples of the {@code n}-sample
+     * period - the count the duty bracket shows - never fewer than one and
+     * never the whole period.  A duty below one sample (0.25 % of 384 samples
+     * is 0.96 samples) once left the pulse to the phase accumulator's rounding
+     * and vanished; it is the one-sample pulse the bracket promises.
+     */
+    @Test
+    void rectangle_dutyIsWholeSamplesOfThePeriod() {
+        SignalGenerator gen = new SignalGenerator(
+                GenSignalForm.RECTANGLE, DUTY_FREQ, DUTY_RATE, 1.0, DAC_FS_VRMS);
+
+        gen.setRectangleDuty(0.0025);
+        assertEquals(1, highSamplesPerPeriod(gen),
+                "a sub-sample duty still emits the ONE high sample per period the bracket shows");
+        gen.setRectangleDuty(0.5);
+        assertEquals(DUTY_PERIOD / 2, highSamplesPerPeriod(gen),
+                "50 % of 384 samples is 192 high samples per period");
+        gen.setRectangleDuty(0.999);
+        assertEquals(DUTY_PERIOD - 1, highSamplesPerPeriod(gen),
+                "at most n - 1 high samples - the train never collapses to a DC level");
+    }
+
+    /** The triangle's corner lands ON a sample: with a one-sample rise the
+     *  second sample of every period is the exact peak. */
+    @Test
+    void triangle_cornerLandsOnASampleOfThePeriod() {
+        SignalGenerator gen = new SignalGenerator(
+                GenSignalForm.TRIANGLE, DUTY_FREQ, DUTY_RATE, 1.0, DAC_FS_VRMS);
+        gen.setTriangleDuty(0.0025);   // 0.96 samples of rise -> one sample
+        double peak = 1.0 * Constants.SQRT3 / DAC_FS_VRMS;   // rawRms(TRIANGLE) = 1/√3
+
+        double[] block = render(gen, DUTY_PERIOD * DUTY_PERIODS);
+        for (int p = 0; p < DUTY_PERIODS; p++) {
+            assertEquals(-peak, block[p * DUTY_PERIOD], peak * 1e-9,
+                    "period " + p + " starts at the trough");
+            assertEquals(peak, block[p * DUTY_PERIOD + 1], peak * 1e-9,
+                    "period " + p + ": the corner is the second sample, exactly at the peak");
+        }
+    }
+
+    /** High samples per period over {@link #DUTY_PERIODS} periods; every period
+     *  must carry the same count, or the pulse is at the mercy of rounding. */
+    private int highSamplesPerPeriod(SignalGenerator gen) {
+        double[] block = render(gen, DUTY_PERIOD * DUTY_PERIODS);
+        int first = -1;
+        for (int p = 0; p < DUTY_PERIODS; p++) {
+            int high = 0;
+            for (int i = 0; i < DUTY_PERIOD; i++) {
+                if (block[p * DUTY_PERIOD + i] > 0.0) high++;
+            }
+            if (first < 0) first = high;
+            assertEquals(first, high, "period " + p + " carries a different pulse width");
+        }
+        return first;
+    }
+
     /** Renders {@code samples} consecutive samples into a block. */
     private double[] render(SignalGenerator gen, int samples) {
         double[] block = new double[samples];

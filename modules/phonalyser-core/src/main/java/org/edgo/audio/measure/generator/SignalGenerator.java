@@ -120,11 +120,17 @@ public class SignalGenerator implements GeneratorControls {
     private volatile double     dacFsVoltageAmpl;
     /** Sample rate cached for live frequency / amplitude updates from the GUI. */
     private final    int        sampleRate;
-    /** Duty cycle for {@link GenSignalForm#RECTANGLE} as a fraction [0.01, 0.99].  Default 50 %. */
+    /** The output frequency in Hz, kept beside its phase increment: the rectangle
+     *  and triangle kernels place their edges on the period-aligned sample grid,
+     *  whose length is {@code round(sampleRate / frequencyHz)}. */
+    private volatile double     frequencyHz;
+    /** Duty cycle for {@link GenSignalForm#RECTANGLE} as a fraction [0.01, 0.99].  Default 50 %.
+     *  Emitted as whole samples of the period - see {@link #dutySamples}. */
     private volatile double     rectDuty   = 0.5;
     /** Duty cycle for {@link GenSignalForm#TRIANGLE} as a fraction [0.001, 0.999] -
      *  the rise portion of each period.  0.5 = symmetric triangle; values
-     *  near 1.0 / 0.0 produce sawtooth / inverted-sawtooth shapes. */
+     *  near 1.0 / 0.0 produce sawtooth / inverted-sawtooth shapes.  Emitted as
+     *  whole samples of the period - see {@link #dutySamples}. */
     private volatile double     triDuty    = 0.5;
 
     // -------------------------------------------------------------------------
@@ -291,6 +297,7 @@ public class SignalGenerator implements GeneratorControls {
         this.dacFsVoltageAmpl = dacFsVoltageAmpl;
         this.amplitude       = amplitudeVRms / (dacFsVoltageAmpl * rawRms(form));
         this.sampleRate  = sampleRate;
+        this.frequencyHz = frequency;
         this.phaseInc    = toPhaseInc(frequency);
         log.debug("DDS: form={} freq={}Hz rate={}Hz phaseInc={} amplitude={}V RMS",
                 form, frequency, sampleRate, phaseInc, amplitudeVRms);
@@ -575,7 +582,8 @@ public class SignalGenerator implements GeneratorControls {
      * by their own state machine.
      */
     public void setFrequency(double frequencyHz) {
-        this.phaseInc = toPhaseInc(frequencyHz);
+        this.frequencyHz = frequencyHz;
+        this.phaseInc    = toPhaseInc(frequencyHz);
     }
 
     /**
@@ -946,32 +954,71 @@ public class SignalGenerator implements GeneratorControls {
 
     /**
      * DDS rectangle / pulse train.  Output is {@code +1} for the first
-     * {@link #rectDuty} fraction of the period, {@code −1} for the rest.
+     * {@link #dutySamples} samples of the period, {@code −1} for the rest.
      * A 50 % duty cycle produces a symmetric square wave; other duty values
      * have a non-zero DC component which is the user's intent for pulse-
      * style test signals.
+     *
+     * <p>Whole samples, not the phase fraction: the rectangle runs at a
+     * period-aligned frequency (a whole number {@code n} of samples per
+     * period), so the duty the operator sees is {@code k/n} - the count the
+     * duty bracket shows.  Comparing the phase fraction with the duty instead
+     * left a duty below one sample to the accumulator's rounding: whether the
+     * one sample of the period fell inside the fraction depended on which side
+     * of the full turn the residual landed, and the pulse vanished entirely.
      */
     private double ddsRectangle() {
         double frac = (phaseAcc >>> 11) * Constants.ONE_OVER_2_53;   // [0, 1) - top 53 bits (all a double holds)
-        return frac < rectDuty ? +1.0 : -1.0;
+        int n = periodSamples();
+        return sampleOfPeriod(frac, n) < dutySamples(rectDuty, n) ? +1.0 : -1.0;
     }
 
     /**
      * DDS triangle with adjustable duty cycle.  The rising portion takes
-     * {@link #triDuty} of the period (−1 -> +1), the falling portion takes
-     * the remainder (+1 -> −1).  At {@code triDuty = 0.5} the waveform is a
-     * symmetric triangle; near {@code 1.0} it approaches a sawtooth; near
-     * {@code 0.0} it approaches an inverted sawtooth.  Piecewise-linear in
-     * the phase domain - exact by construction.
+     * {@link #dutySamples} samples of the period (−1 -> +1), the falling
+     * portion takes the remainder (+1 -> −1).  At {@code triDuty = 0.5} the
+     * waveform is a symmetric triangle; near {@code 1.0} it approaches a
+     * sawtooth; near {@code 0.0} it approaches an inverted sawtooth.
+     * Piecewise-linear in the phase domain - exact by construction, and the
+     * corner lands ON a sample of the period-aligned grid, as the duty
+     * bracket shows.
      */
     private double ddsTriangle() {
         double frac = (phaseAcc >>> 11) * Constants.ONE_OVER_2_53;   // [0, 1) - top 53 bits (all a double holds)
-        double d = triDuty;
+        int n = periodSamples();
+        double d = (double) dutySamples(triDuty, n) / n;
         if (frac < d) {
             return frac / d * 2.0 - 1.0;
         } else {
             return 1.0 - (frac - d) / (1.0 - d) * 2.0;
         }
+    }
+
+    /** Samples per period on the period-aligned grid the rectangle and
+     *  triangle edges live on - {@code max(2, round(fs / f))}, the same count
+     *  the generator pane's duty bracket divides by. */
+    private int periodSamples() {
+        double f = frequencyHz;
+        if (f <= 0.0) return 2;
+        return Math.max(2, (int) Math.round(sampleRate / f));
+    }
+
+    /** The whole samples a duty spans in a period of {@code n}: rounded, and
+     *  never the whole period or none of it - at least one sample high and one
+     *  low, the clamp the duty bracket applies, so the pulse emitted is the
+     *  pulse the bracket shows. */
+    private int dutySamples(double duty, int n) {
+        int k = (int) Math.round(duty * n);
+        return Math.max(1, Math.min(n - 1, k));
+    }
+
+    /** The sample of the period a phase falls on.  On the aligned grid every
+     *  phase is a multiple of {@code 1/n} up to the accumulator's rounding, so
+     *  the NEAREST multiple is the sample; a phase a hair below the full turn is
+     *  sample 0 of the next period. */
+    private int sampleOfPeriod(double frac, int n) {
+        int i = (int) Math.round(frac * n);
+        return i >= n ? i - n : i;
     }
 
     // -------------------------------------------------------------------------
