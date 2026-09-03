@@ -5,9 +5,8 @@
  */
 
 // Faithful port of org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine
-// (the closed-loop DAC predistortion loop) plus the
-// org.edgo.audio.measure.dsp.FreqRespCalHelper.interpolate it relies on for the
-// loaded-.frc de-embed (calResponseAt).
+// (the closed-loop DAC predistortion loop). The loaded-.frc de-embed (calResponseAt) reads
+// the calibration through dsp/frc.js interpolate, the port of FreqRespCalHelper.interpolate.
 //
 // The desktop engine is welded to SWT (Display.syncExec) and the live
 // GeneratorController / FftController / FftView. This port keeps the loop ALGORITHM
@@ -24,6 +23,7 @@
 
 import { HarmonicCompensation } from './harmonic-compensation.js';
 import { IntermodCompensation } from './intermod-compensation.js';
+import { interpolate } from '../dsp/frc.js';
 
 /** Why the loop ended - drives the wizard's end-of-run message. */
 export const StopReason = Object.freeze({
@@ -377,41 +377,4 @@ export class PredistortionEngine {
   _sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
-}
-
-/**
- * Interpolates a FreqRespCalibration's H(f) at an arbitrary frequency. Uses log-
- * frequency as the interpolation variable; magnitude in dB; phase via complex
- * unit-phasor interpolation to handle ±180° wraps at notches. Faithful port of
- * org.edgo.audio.measure.dsp.FreqRespCalHelper.interpolate.
- *
- * @param {{freqs: number[]|Float64Array, magLin: number[]|Float64Array,
- *          phaseRad: number[]|Float64Array}} cal
- * @param {number} freq
- * @returns {[number, number]} [magLin, phaseRad]
- */
-export function interpolate(cal, freq) {
-  let lo = 0, hi = cal.freqs.length - 1;
-  if (freq <= cal.freqs[lo]) return [cal.magLin[lo], cal.phaseRad[lo]];
-  if (freq >= cal.freqs[hi]) return [cal.magLin[hi], cal.phaseRad[hi]];
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >>> 1;
-    if (cal.freqs[mid] <= freq) lo = mid; else hi = mid;
-  }
-  const f0 = cal.freqs[lo], f1 = cal.freqs[hi];
-  const t = (Math.log(freq) - Math.log(f0)) / (Math.log(f1) - Math.log(f0));
-
-  const m0 = cal.magLin[lo], m1 = cal.magLin[hi];
-  const db0 = m0 > 0.0 ? 20.0 * Math.log10(m0) : -300.0;
-  const db1 = m1 > 0.0 ? 20.0 * Math.log10(m1) : -300.0;
-  const db = db0 + (db1 - db0) * t;
-  const mag = Math.pow(10.0, db / 20.0);
-
-  const re0 = Math.cos(cal.phaseRad[lo]), im0 = Math.sin(cal.phaseRad[lo]);
-  const re1 = Math.cos(cal.phaseRad[hi]), im1 = Math.sin(cal.phaseRad[hi]);
-  const reT = re0 + (re1 - re0) * t;
-  const imT = im0 + (im1 - im0) * t;
-  const phi = (reT === 0.0 && imT === 0.0) ? cal.phaseRad[lo] : Math.atan2(imT, reT);
-
-  return [mag, phi];
 }

@@ -18,7 +18,7 @@
  */
 
 import { FlatScrollbar } from '../widgets/flat-scrollbar.js';
-import { interpolate } from './deconvolve.js';
+import { interpolate } from '../dsp/frc.js';
 // Plot margins + the frequency / magnitude axis floors, shared with the pane's
 // scrollbars and the tune-notch wizard's overlay (Java FreqRespConstants).
 import {

@@ -33,6 +33,7 @@
 
 import { fft, ifft } from '../dsp/fft.js';
 import { savGolCoefficients, applySavGol } from '../dsp/savgol.js';
+import { interpolate } from '../dsp/frc.js';
 
 /** Compile-time switch mirror: Savitzky-Golay smoothing of the output arrays. */
 const USE_SAVGOL_FILTER = true;
@@ -296,43 +297,6 @@ function irPeakDelay(hRe, hIm, halfBins, M) {
     }
   }
   return delaySamples;
-}
-
-/**
- * Interpolates the calibration's H(f) at an arbitrary frequency, in
- * log-frequency: magnitude in dB, phase via complex unit-phasor interpolation
- * (handles ±180° wraps at notches). Faithful port of
- * FreqRespCalHelper#interpolate.
- *
- * @param {FreqRespCalibration} cal the calibration
- * @param {number} freq            frequency (Hz)
- * @returns {[number, number]} [magLin, phaseRad]
- */
-export function interpolate(cal, freq) {
-  let lo = 0;
-  let hi = cal.freqs.length - 1;
-  if (freq <= cal.freqs[lo]) return [cal.magLin[lo], cal.phaseRad[lo]];
-  if (freq >= cal.freqs[hi]) return [cal.magLin[hi], cal.phaseRad[hi]];
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >>> 1;
-    if (cal.freqs[mid] <= freq) lo = mid; else hi = mid;
-  }
-  const f0 = cal.freqs[lo], f1 = cal.freqs[hi];
-  const t = (Math.log(freq) - Math.log(f0)) / (Math.log(f1) - Math.log(f0));
-
-  const m0 = cal.magLin[lo], m1 = cal.magLin[hi];
-  const db0 = m0 > 0.0 ? 20.0 * Math.log10(m0) : -300.0;
-  const db1 = m1 > 0.0 ? 20.0 * Math.log10(m1) : -300.0;
-  const db = db0 + (db1 - db0) * t;
-  const mag = Math.pow(10.0, db / 20.0);
-
-  const re0 = Math.cos(cal.phaseRad[lo]), im0 = Math.sin(cal.phaseRad[lo]);
-  const re1 = Math.cos(cal.phaseRad[hi]), im1 = Math.sin(cal.phaseRad[hi]);
-  const reT = re0 + (re1 - re0) * t;
-  const imT = im0 + (im1 - im0) * t;
-  const phi = (reT === 0.0 && imT === 0.0) ? cal.phaseRad[lo] : Math.atan2(imT, reT);
-
-  return [mag, phi];
 }
 
 /**
