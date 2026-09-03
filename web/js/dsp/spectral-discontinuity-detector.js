@@ -27,10 +27,6 @@
 // from the second block on every gate is live, the thin early history covered by
 // small MAD floors and sharpening as more clean averages accumulate. Streaming,
 // single-threaded (the FFT worker / pool thread); not synchronized.
-//
-// This SUPERSEDES the partial 2-gate js/dsp/discontinuity.js (gates 2 & 3 only); the
-// full detector needs ToneLobeLift, which is now ported - gate 1 lands with it. The
-// older stub is left in place (it has no importers; not this change's to remove).
 
 import { ToneLobeLift } from './tone-lobe-lift.js';
 

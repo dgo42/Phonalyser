@@ -126,10 +126,10 @@ export class ScopePane {
     const bus = MessageBus.instance();
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, () => this.onFreqRespMeasurementStarted());
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => this.onFreqRespMeasurementStopped());
-    // The controller stopped the capture on its own - today when a device reopen fails to
-    // re-acquire (ScopeController.reattach). The pane owns the Record LED, so it has to reconcile:
-    // without this the trace froze while the LED stayed lit, i.e. the scope LOOKED like it was
-    // still running.
+    // The controller stopped the capture on its own - a Preferences-dialog restart that could not
+    // re-acquire the committed device (ScopeController.startCaptureForPrefs). The pane owns the
+    // Record LED, so it has to reconcile: without this the trace froze while the LED stayed lit,
+    // i.e. the scope LOOKED like it was still running.
     // ...and also when the capture ENDED FROM BELOW (device lost / delivery
     // stalled). When the controller CLAIMED that report, this pane owns the failed operation, so
     // this pane tells the operator ONCE, in their language (Java ScopePane's

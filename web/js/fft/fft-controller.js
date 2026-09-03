@@ -1831,15 +1831,6 @@ export class FftController {
     return true;
   }
 
-  /** Re-acquires the shared capture + re-anchors the FFT cursor after a device reopen
-   *  (mirror the Java SignalBufferReader re-attach). Returns true when the re-acquire succeeded. */
-  async reattach() {
-    const r = await this._capture.acquire();
-    this._fftReader = r;
-    if (r) r.seekToLatest(); else this._fftOn = false;
-    return r != null;
-  }
-
   /** Preferences-dialog audio-config bracket (Java FftPane.stopCaptureForPrefs /
    *  startCaptureForPrefs): the analyser OWNS whether it was recording. stopCaptureForPrefs
    *  REALLY stops - setRecording(false) tears down the worker(s) AND releases this

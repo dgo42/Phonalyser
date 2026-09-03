@@ -4,17 +4,14 @@
  * GNU Affero General Public License v3 or later.
  */
 
-// Teardown ordering for the QA40x, and the scope's re-attach guard. Both were found by a static
-// trace of every path that can open the analyzer against every path that can release it
-// (2026-07-25), and neither was reachable from the suite: one only happens on page unload, the other
-// only when a device fails to reopen.
+// Teardown ordering for the QA40x, found by a static trace of every path that can open the
+// analyzer against every path that can release it; the suite never reached it because it only
+// happens on page unload.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Qa40xDeviceManager } from '../js/qa40x/qa40x-device-manager.js';
-import { ScopeController } from '../js/scope/scope-controller.js';
-import { testPrefs } from './_test-prefs.mjs';
 import { MessageBus } from '../js/bus/message-bus.js';
 import { Events } from '../js/bus/events.js';
 
@@ -83,53 +80,6 @@ test('shutdown parks the safe ranges when no session ever ran', async () => {
   const transport = finder.last;
   await manager.shutdown();              // nothing open: must not throw
   assert.ok(transport.closed, 'still closed, and shutdown was harmless');
-});
-
-// --- the scope's re-attach guard ------------------------------------------
-
-test('a failed re-acquire really STOPS the scope, and tells the pane', async () => {
-  let measReattached = 0, measStopped = 0, released = 0, stoppedEvents = 0;
-  const capture = {
-    async acquire() { return null; },                 // the device did not come back
-    async release() { released++; },
-    get refCount() { return 0; },
-  };
-  const controller = new ScopeController(capture, testPrefs({ inputSampleRate: 48_000, oscTimePerDiv: 0.001 }));
-  controller._measClient = {
-    async reattach() { measReattached++; },
-    async stop() { measStopped++; },
-  };
-  MessageBus.instance().subscribe(Events.SCOPE_RECORDING_STOPPED, () => { stoppedEvents++; });
-
-  const ok = await controller.reattach();
-
-  assert.equal(ok, false, 'the re-attach reports failure');
-  assert.equal(measReattached, 0,
-    'it does NOT re-acquire through the client: that re-opens a device this consumer just disowned,'
-    + ' and setRecording(false) then early-returns on !_scopeOn so nothing can ever release it');
-  // Clearing the flag alone left the scope LOOKING like it was running - LED lit, worker spinning,
-  // and the app slowing down over time. The stop has to be real.
-  assert.equal(controller.recording, false, 'the scope is off');
-  assert.equal(measStopped, 1, 'the measurement worker is stopped, not left running');
-  assert.equal(released, 1, 'and the capture reference is released');
-  assert.equal(stoppedEvents, 1, 'the pane is told, so the Record LED can grey');
-});
-
-test('a successful re-acquire does re-anchor the measurement stream', async () => {
-  let measReattached = 0;
-  const reader = { getWritePos: () => 0, read: () => 0, readEndingAt: () => 0 };
-  const capture = {
-    async acquire() { return reader; },
-    async release() {},
-    get refCount() { return 1; },
-  };
-  const controller = new ScopeController(capture, testPrefs({ inputSampleRate: 48_000, oscTimePerDiv: 0.001 }));
-  controller._measClient = { async reattach() { measReattached++; }, async stop() {} };
-
-  const ok = await controller.reattach();
-
-  assert.equal(ok, true);
-  assert.equal(measReattached, 1, 'the fresh ring is re-anchored for the measurement stream too');
 });
 
 // --- the USB disconnect watch ----------------------------------------------

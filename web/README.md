@@ -79,11 +79,11 @@ web/
 ├── js/
 │   ├── shell/            app shell, tabs, render loop, event bus        (app.js exists)
 │   ├── dsp/              PURE math, DOM-free, worker-safe
-│   │   ├── fft.js  window.js  fll.js  discontinuity.js  analyzer.js     <- done
+│   │   ├── fft.js  fll.js  spectral-discontinuity-detector.js  time-discontinuity.js  <- done
 │   │   └── (scope-trigger, signal-measurements, fft-analyzer, imd,
 │   │        farina-sweep, deconvolve, frc, mains/ ...)
 │   ├── audio/            device boundary
-│   │   ├── fft-worker.js                  worklets/{capture,generator}-processor.js  <- done
+│   │   ├── shared-capture.js              worklets/{capture,dds}-processor.js  <- done
 │   │   ├── backend.js (AudioBackend)      <- done (the active backend's device dispatch;
 │   │   │                                     the engine composition is shell/audio-engine.js)
 │   ├── generator/        controller + full DDS kernel + .dpd
@@ -108,7 +108,7 @@ ADC ─getUserMedia-> capture-processor ─chunks-> ring ─every hop-> frame
     -> [FFT worker 1 ... P]  (window -> FFT -> de-rotate, in parallel)
     -> in-order drain -> reject(glitch) -> FLL(steer gen) -> coherent/power average
     -> metrics + magnitude -> FftView / readout
-generator-processor ─(FLL-steered)-> DAC
+dds-processor ─(FLL-steered)-> DAC
 ```
 
 ## Roadmap (phased milestones)

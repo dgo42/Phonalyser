@@ -15,8 +15,7 @@ faithful ports, not the prototype math:
   `.frc` de-embed, mains spectral correction, live IMD) into `fft/fft-view.js`.
 - The output generator is the faithful `worklets/dds-processor.js` +
   `generator/dds-kernel.js`, loaded unconditionally by
-  `audio/generator-controller.js`. The prototype `generator-processor.js` is no
-  longer loaded anywhere.
+  `generator/generator-controller.js`.
 - The scope runs the ported trigger (`scope/scope-trigger.js`), measurements
   (`scope/signal-measurements.js`), Lanczos rendering (`dsp/lanczos.js`) and all
   three mains cancellers (`dsp/mains/*`).
@@ -26,14 +25,14 @@ faithful ports, not the prototype math:
 Inventory under `web/js/`:
 
 ```
-dsp/   fft.js window.js fll.js discontinuity.js                       (wired)
+dsp/   fft.js fll.js spectral-discontinuity-detector.js time-discontinuity.js  (wired)
        mathutil.js lanczos.js savgol.js riaa.js tone-lobe-lift.js     (ported, wired)
        mains/frequency-tracker.js mains/comb-filter.js                (ported, wired)
        mains/sync-subtract-filter.js mains/lms-filter.js mains/factory.js  (ported, wired)
 fft/   imd-analyzer.js fft-result.js fft-analyzer.js
        fft-view-correction.js fft-tab-control.js                      (ported, wired)
 generator/ dds-kernel.js generator-pane.js                            (ported, wired)
-scope/ scope-trigger.js signal-measurements.js measurement-stats.js scope-tab-control.js scope-pane.js  (ported, wired)
+scope/ scope-trigger.js signal-measurements.js scope-tab-control.js scope-pane.js  (ported, wired)
        osc-meas-client.js osc-meas-worker.js osc-meas-compute.js osc-freq-worker.js  (continuous meas engine, wired)
        scope-phosphor.js scope-nav.js scope-format.js                             (ported, wired)
 enums/ one module per Java measure.enums constant that the web holds as an object: gen-signal-form.js
@@ -267,8 +266,8 @@ GPU display persistence `scope/scope-phosphor.js`.
 - `withFrequency(m, freq) -> m'`, `withoutTimes(m) -> m'`, `withDualTones(m, f1, f2) -> m'`,
   `withBeatPeriodMeanRms(m, data, n, sampleRate, beatHz, peakVolts) -> m'`.
 - `reconstructBeatSignal(data, available, sampleRate, f1Hz, f2Hz, scratch?) -> Float32Array`.
-- `MeasurementStats` (Welford avg/min/max/σ; also available standalone as
-  `scope/measurement-stats.js`) + formatters `fmt{Volts,Time,Freq,Pct}` / `for{Volts,Time,Freq,Pct}`.
+- `MeasurementStats` (Welford avg/min/max/σ) + formatters `fmt{Volts,Time,Freq,Pct}` /
+  `for{Volts,Time,Freq,Pct}`.
 
 ### Exports - `lanczos.js`
 - `lanczos(data,n,t,scale) -> number`, `lanczosNaN(data,n,t,scale) -> number`, `sinc(x) -> number`;

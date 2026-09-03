@@ -12,8 +12,8 @@
  * this client forwards to the view via onResult. On OVERRUN (the writer lapped the cursor) it
  * seekToLatest()es and tells the worker to reset its stream state so accumulation restarts clean.
  *
- * Lifecycle (start/stop/reattach/reset) is driven by the ScopeController so the measurement
- * stream lives exactly as long as the scope recording (and re-anchors on a device reopen).
+ * Lifecycle (start/stop/reset) is driven by the ScopeController so the measurement stream lives
+ * exactly as long as the scope recording.
  */
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
@@ -113,14 +113,6 @@ export class OscMeasClient {
   async stop() {
     if (this._worker) { try { this._worker.terminate(); } catch (_) { /* ignore */ } this._worker = null; }
     if (this._reader) { this._reader = null; await this._capture.release(); }
-  }
-
-  /** Re-acquires the forward reader after a device reopen (mirror ScopeController.reattach). */
-  async reattach() {
-    if (!this._worker) return;   // not running -> nothing to reattach
-    const r = await this._capture.acquire();
-    this._reader = r;
-    if (r) { r.seekToLatest(); this._resetWorker(); }
   }
 
   /** Drops the worker's stream state so the collection window + adaptive filters restart

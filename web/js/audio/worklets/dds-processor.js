@@ -6,8 +6,7 @@
  * frequency, amplitude, duty, dual-tone split, sweep params and harmonic /
  * intermod compensation live via the message port; the kernel preserves its
  * phase accumulator across every change so transitions stay phase-continuous -
- * exactly like the desktop generator. (Does NOT replace generator-processor.js,
- * the minimal sine used by the loopback null test.)
+ * exactly like the desktop generator.
  * GNU AGPL v3 or later.
  */
 import {

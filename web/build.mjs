@@ -68,7 +68,6 @@ const ESM = [
 ];
 const IIFE = [
   ['js/audio/worklets/capture-processor.js', 'worklets/capture-processor.js'],
-  ['js/audio/worklets/generator-processor.js', 'worklets/generator-processor.js'],
   ['js/audio/worklets/dds-processor.js', 'worklets/dds-processor.js'],
 ];
 
