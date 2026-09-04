@@ -17,7 +17,6 @@ import { QA40X_BACKEND } from '../qa40x/qa40x-rate-constraint.js';
 import { LoopbackDeviceManager } from '../loopback/loopback-device-manager.js';
 import { LOOPBACK_BACKEND } from '../loopback/loopback-device-ref.js';
 import { FftViewCorrection } from '../fft/fft-view-correction.js';
-import { CorrectionStore } from '../common/correction-store.js';
 import { CalibrationDialog } from './calibration-dialog.js';
 import { CardEditorDialog } from './card-editor-dialog.js';
 import { NetDeviceManager } from '../net/net-device-manager.js';
@@ -43,7 +42,7 @@ import { createConfigPorts } from '../store/config-port.js';
 import { JsonConfigDialog } from './json-config-dialog.js';
 import { t, initBase, setLocale, stripMnemonics } from '../i18n/i18n.js';
 import { LOCALES } from '../i18n/locales.js';
-import { WavWriter, AiffWriter, readWav, readAiff } from '../io/wav.js';
+import { readWav, readAiff } from '../io/wav.js';
 import { saveScopeCapture, saveStreaming, findFullPeriodWindow, formatForName } from '../io/scope-capture.js';
 import { encodeFlac, decodeFlac } from '../io/flac.js';
 import { saveSpectrum, loadSpectrum } from '../fft/fft-spectrum.js';
@@ -65,8 +64,6 @@ import { ScopeTabControl } from '../scope/scope-tab-control.js';
 import { FftPane } from '../fft/fft-pane.js';
 import { FftTabControl } from '../fft/fft-tab-control.js';
 import { GeneratorPane } from '../generator/generator-pane.js';
-import { PredistortionEngine } from '../predistortion/engine.js';
-import { writeHarmonicDpd, writeIntermodDpd } from '../io/dpd.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 
@@ -129,12 +126,6 @@ let servingServer = null;
  *  hello together (NetConnection.open's budget). One second is what a user reads as the app
  *  working; the request timeouts behind it are the generous ones. */
 const CONNECT_TIMEOUT_MS = 3000;
-// The FFT side's loaded-.frc store (Java FftController owns
-// new CorrectionStore("FFT", Events.FFT_CALIBRATION_CHANGED)). FftViewCorrection READS it, the
-// predistortion bridge reads it live, and FftTabControl mutates it from the calibration rows.
-// Every mutation publishes FFT_CALIBRATION_CHANGED; the view correction drops its held cascade
-// gain on it (Java FftView.onCalibrationChanged).
-const fftCorrectionStore = new CorrectionStore('FFT', Events.FFT_CALIBRATION_CHANGED);
 // The FFT display corrections: the .frc de-embed, the plot-time mains comb and the statistics
 // recompute run in the analysis pipeline's finalize stage (fft/fft-finalize.js), which hands the
 // pane a finished spectrum; the coherent accumulator stays raw. FftViewCorrection adds the
@@ -166,32 +157,6 @@ let mainTab;   // the main tab (the rAF render-frame driver + the 3-pane collaps
 // The scope navigation scrollbars (vertSlider / navSlider) + NAV_RANGE / condensed-overview
 // decimation moved to scope/scope-pane.js (Java ScopePane); app.js drives them through the
 // scopePane instance.
-
-// ADC/DAC re-calibration rescales every measured voltage (ADC) or the generated
-// loopback level (DAC), making the accumulated running statistics inconsistent -
-// clear the scope measurement history on a calibration change (Java ScopeView
-// adcFsVoltageRms / dacFsVoltageAmpl onChange -> clearMeasurementHistory). Java
-// FftView wires the SAME two prefs to resetStatistics(), so the FFT cross-tick
-// average must be restarted too - else it keeps folding pre-calibration frames at
-// the old scale into the displayed spectrum. Reset the accumulator while recording.
-// `engine` is null-checked because the calibration prefs can move before init's audio-backend
-// block has run (the device-profile store applies a card's full-scale as it resolves one).
-const onCalChange = () => {
-  scopeView._clearMeasurementHistory();
-  if (engine && engine.fft.recording) engine.resetAnalyses();
-  // The amplitude distribution goes with the running statistics: counts gathered at a different
-  // calibration describe a different measurement, and merging them would present two populations
-  // as one distribution. (A V/div or range change does NOT come through here - those relabel the
-  // axis rather than recounting, and must keep their counts.)
-  if (engine) engine.scope.resetHistograms();
-};
-prefs.adcFsVoltageRms.addListener(onCalChange);
-// The RIGHT-channel calibration siblings rescale R-channel measurements the same way
-// (Java FftView:460 resetStatistics also subscribes to adcFsVoltageRmsRightProperty /
-// dacFsVoltageAmplRightProperty).
-prefs.adcFsVoltageRmsRight.addListener(onCalChange);
-prefs.dacFsVoltageAmpl.addListener(onCalChange);
-prefs.dacFsVoltageAmplRight.addListener(onCalChange);
 
 // A DAC full-scale move - a card RANGE switch, or a DAC re-calibration - must NOT change the
 // generated LEVEL. The amplitude the user typed is absolute volts; the DDS derives its normalised
@@ -402,20 +367,8 @@ async function restartFft() {
 // Scope has NO channel-enable L/R buttons in its header (Java ScopeView): channel
 // enable lives in the Left/Right tab "Enabled" checkbox (#scopeLeftEnable /
 // #scopeRightEnable, wired above); the header L/R pair is the measurement-channel
-// picker (#scopeMeasL / #scopeMeasR), wired below.
-// FFT: mutually-exclusive radio - the analyser sees one channel at a time
-// (Java fftChannel = L|R): the switch selects which channel the FFT ANALYZES
-// (L -> ch0, R -> ch1). Persist the choice AND push it to the engine so the
-// running analyzer reads the selected channel and resets its statistics +
-// accumulator (Java FftView:511/514 buttons -> setFftChannel -> fftChannelProperty
-// subscription -> resetStatistics). The finalize stage's .frc de-embed then picks the
-// matching channel off r.channelLeft (fft/fft-finalize.js), already done.
-$('.fft-pane .lr.l, .fft-pane .lr.r').on('click', function () {
-  const isLeft = $(this).hasClass('l');
-  $('.fft-pane .lr.l, .fft-pane .lr.r').removeClass('on'); $(this).addClass('on');
-  prefs.fftChannel.set(isLeft ? 'L' : 'R');
-  engine.fft.setFftChannel(isLeft ? 'L' : 'R');
-});
+// picker (#scopeMeasL / #scopeMeasR), wired below. The FFT header's L/R radio is the FFT
+// pane's (FftPane.bindChannelRadio).
 
 // ----- record LED (per-pane capture toggle) -----
 // Independent per-pane Record (Java: the scope and FFT panes each hold their own
@@ -656,8 +609,8 @@ MessageBus.instance().subscribe(Events.AUDIO_DEVICE_ERROR, (p) => {
 // The FFT Presets / Utility (screenshot + ADC calibrate) / Save / Load / Load-calibration
 // handlers moved to fft/fft-tab-control.js (Java FftTabControl): presets recall re-seeds the
 // main FFT controls via the injected applyPrefsToUi; the loaded .fft spectrum flows back via
-// fftPane.setResult; the .frc load mutates the shared fftCorrectionStore, read by both the
-// render-time FFT de-embed (fftViewCorrection) and the predistortion engine's calResponseAt.
+// fftPane.setResult; the .frc load mutates the FFT controller's correctionStore, read by both
+// the finalize stage's de-embed and the predistortion engine's calResponseAt.
 
 // ============================ Frequency response ============================
 // Takes the engine at construction -> built in init's audio-backend block (see `engine`).
@@ -867,7 +820,7 @@ async function init() {
   const backend = new AudioBackend({ prefs, qa40xManager, qa40xFinder, loopbackManager,
     netManager: netManagerFacade(() => netManager), status: (text) => engine._status(text) });
   engine = new AudioEngine({ prefs, backend });
-  fftViewCorrection = new FftViewCorrection(prefs, fftCorrectionStore);
+  fftViewCorrection = new FftViewCorrection(prefs, engine.fft.correctionStore);
   fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running, correction: fftViewCorrection });
   bindEngineCallbacks();
   freqRespPane = new FreqRespPane(engine, prefs, { saveFile, openFile, bytesToText, showAlert });
@@ -876,7 +829,7 @@ async function init() {
     restart: restartPreservingConfig,
     // Read the FFT store LIVE - the predistortion engine reads correctionEntries on demand, so a
     // captured array snapshot would go stale as the calibration rows change.
-    get correctionEntries() { return fftCorrectionStore.getEntries(); },
+    get correctionEntries() { return engine.fft.correctionStore.getEntries(); },
   });
   step('initSelects', initSelects);
   // Generator pane (Java GeneratorPane): the signal-form combo + freq/amp/duty/dual-tone/
@@ -997,7 +950,7 @@ async function init() {
   step('fftTabControl', () => {
     fftTabControl = new FftTabControl(engine, prefs, {
       pane: fftPane, applyPrefsToUi,
-      fftView, fftViewCorrection, store: fftCorrectionStore,
+      fftView, fftViewCorrection, store: engine.fft.correctionStore,
       io: { saveFile, openFile, bytesToText, loadFrc, saveSpectrum, loadSpectrum, FFT_TYPE, FRC_TYPE },
       restartFft, showConfirm, setStatus: (m) => $('#status').text(m), tileChips,
       calibrationDialog: () => calibrationDialog,
@@ -1221,10 +1174,6 @@ async function init() {
       // Whether this page came from a Phonalyser server - the combo offers no LOCAL backend on a
       // page that has neither getUserMedia nor WebUSB to open one with.
       servedByServer: () => servingServer != null,
-      // An audio-settings change invalidates everything accumulated at the old settings, exactly as
-      // a re-calibration does - so the OK path reuses the calibration reset: clear the scope's
-      // measurement history and restart the FFT's cross-tick average.
-      resetStatistics: onCalChange,
     }).bind();
     prefsDialog.applyLookAndFeel();   // main-tab orientation + small icons + UI font from the saved prefs
   });

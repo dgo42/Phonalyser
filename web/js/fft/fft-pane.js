@@ -667,10 +667,24 @@ export class FftPane {
     }, 100);
   }
 
+  /** The L/R header radio (Java FftView leftBtn / rightBtn -> prefs.setFftChannel): the analyser
+   *  sees one channel at a time (L -> ch0, R -> ch1). Persist the choice AND push it to the
+   *  controller, so the running analyser reads the selected channel and restarts its statistics +
+   *  accumulator (Java fftChannelProperty subscription -> resetStatistics). */
+  bindChannelRadio() {
+    $('.fft-pane .lr.l, .fft-pane .lr.r').on('click', (e) => {
+      const isLeft = $(e.currentTarget).hasClass('l');
+      $('.fft-pane .lr.l, .fft-pane .lr.r').removeClass('on'); $(e.currentTarget).addClass('on');
+      this.prefs.fftChannel.set(isLeft ? 'L' : 'R');
+      this.engine.fft.setFftChannel(isLeft ? 'L' : 'R');
+    });
+  }
+
   // Wire the record LED + the fill-% timer (Java FftPane constructor wiring). The FFT
   // view header buttons (#fftAutoSetup / #fftMaximize) stay in app.js next to fftView.
   bind() {
     this.bindRecordLed();
+    this.bindChannelRadio();
     this.bindDataButtons();
     this.syncDataButtons();   // no result yet -> distortion-toggle + reset start hidden
     this.startFillTimer();
