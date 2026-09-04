@@ -103,7 +103,7 @@ export class PreferencesDialog {
    *               - backendManager: (backendName) => that backend's AudioDeviceManager, or null
    *                 when it has none (Java AudioBackend.instance().manager(type))
    */
-  constructor(engine, prefs, { modal, RATES, inRate, outRate, isBusy, setBusy, fftView, deviceStore, cardEditorDialog, showConfirm, showAlert, backendManager, netBackends, cardSource, resetStatistics, servedByServer }) {
+  constructor(engine, prefs, { modal, RATES, inRate, outRate, isBusy, setBusy, fftView, deviceStore, cardEditorDialog, showConfirm, showAlert, backendManager, netBackends, cardSource, servedByServer }) {
     this.engine = engine;
     this.prefs = prefs;
     this.modal = modal;
@@ -133,10 +133,6 @@ export class PreferencesDialog {
     // at load (spec §3 `GET /info`) and answers from that. Absent -> false, which is what every
     // context that is not a served page answers anyway.
     this.servedByServer = servedByServer || (() => false);
-    // Clears the scope's running measurement statistics and restarts the FFT's cross-tick average -
-    // the shell owns both views, so it supplies the one callback (the same one a calibration change
-    // uses). Absent -> nothing to reset (a headless / test construction).
-    this._resetStatistics = resetStatistics || (() => {});
     // The card list a REMOTE selection chooses from, and where a pick is staged / sent / read back
     // (Java's benchCards, built per dialog session on the working copy). Absent -> local cards only.
     this._cardSource = cardSource || null;
@@ -349,19 +345,13 @@ export class PreferencesDialog {
 
       // The committed audio format is now in the preferences every engine reads at its next open,
       // so anything derived from it is stale until it re-reads: the generator's snap brackets
-      // sit on the CAPTURE rate's bin grid. Announced here, once, at the commit - Java's
+      // sit on the CAPTURE rate's bin grid, and the scope's running statistics and the FFT's
+      // cross-tick average were folded at the old device, rate, range or full scale (their owners
+      // subscribe and reset - restarting the consumers alone would keep averaging the pre-change
+      // frames into the post-change display). Announced here, once, at the commit - Java's
       // AUDIO_FORMAT_CHANGED, published from the same place (PreferencesDialog OK) and for the
-      // same reason.
+      // same reason. Only for a direction that actually changed.
       if (captureChanged || outputChanged) MessageBus.instance().publish(Events.AUDIO_FORMAT_CHANGED);
-
-      // Everything accumulated at the OLD settings is now inconsistent with what follows: the scope's
-      // running measurement statistics and the FFT's cross-tick average were folded at a different
-      // device, rate, range or full scale. Restarting the consumers alone would keep averaging the
-      // pre-change frames into the post-change display, so the statistics are reset too - the same
-      // treatment a calibration change already gets (Java FftView wires both prefs to
-      // resetStatistics(); ScopeView to clearMeasurementHistory). Only for a direction that actually
-      // changed, and the restart itself is still gated on what was running.
-      if (captureChanged || outputChanged) this.resetMeasurementStatistics();
 
       await this.engine.afterApplyBackendChanges(captureChanged, outputChanged);
     } finally { this.setBusy(false); }
@@ -1135,13 +1125,6 @@ export class PreferencesDialog {
     const endPoint = input ? card.input : card.output;
     const label = endPoint == null ? null : endPoint.activeRange;
     return label == null ? null : { input, activeRangeLabel: label };
-  }
-
-  /** Drops every statistic accumulated at the PREVIOUS audio settings - the scope's running
-   *  measurement history and the FFT's cross-tick average. Called from the OK path for a direction
-   *  that changed, so a new device / rate / range never shows figures averaged across the change. */
-  resetMeasurementStatistics() {
-    this._resetStatistics();
   }
 
   /** Open-time snapshot of ONE direction's active-range selection: the card it belongs to and BOTH

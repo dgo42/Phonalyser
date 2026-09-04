@@ -78,7 +78,7 @@ function makePrefs(initial) {
         return (ch) => (ch === 'R' && vals.adcFsVoltageRmsRight != null
           ? vals.adcFsVoltageRmsRight : vals.adcFsVoltageRms) * Math.SQRT2;
       }
-      if (!(key in cache)) cache[key] = { get: () => vals[key], set: (v) => { vals[key] = v; } };
+      if (!(key in cache)) cache[key] = { get: () => vals[key], set: (v) => { vals[key] = v; }, addListener: () => {} };
       return cache[key];
     },
   };

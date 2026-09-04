@@ -83,6 +83,16 @@ export class ScopeController {
     MessageBus.instance().subscribe(Events.CAPTURE_BATCH_AVAILABLE, () => {
       if (this._scopeOn) this.feedScope();
     });
+    // The amplitude distribution goes with the running statistics on a re-calibration: counts
+    // gathered at a different full scale describe a different measurement, and merging them would
+    // present two populations as one. (A V/div or range change does NOT come through here - those
+    // relabel the axis rather than recounting, and keep their counts.)
+    for (const p of [prefs.adcFsVoltageRms, prefs.adcFsVoltageRmsRight,
+      prefs.dacFsVoltageAmpl, prefs.dacFsVoltageAmplRight]) {
+      p.addListener(() => this.resetHistograms());
+    }
+    // A committed audio-settings change (device, rate, range) recounts for the same reason.
+    MessageBus.instance().subscribe(Events.AUDIO_FORMAT_CHANGED, () => this.resetHistograms());
   }
 
   /** True while the scope is recording. */

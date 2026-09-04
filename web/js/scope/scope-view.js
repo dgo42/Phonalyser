@@ -155,6 +155,18 @@ export class ScopeView {
   constructor(canvas, { prefs = null } = {}) {
     this.cv = canvas; this.g = canvas.getContext('2d');
     this.prefs = prefs;
+    // A re-calibration rescales every measured voltage, so the running statistics gathered at the
+    // old scale are cleared (Java ScopeView binds adcFsVoltageRms / adcFsVoltageRmsRight /
+    // dacFsVoltageAmpl to clearMeasurementHistory). Null prefs = a bare test view.
+    if (prefs) {
+      for (const p of [prefs.adcFsVoltageRms, prefs.adcFsVoltageRmsRight,
+        prefs.dacFsVoltageAmpl, prefs.dacFsVoltageAmplRight]) {
+        p.addListener(() => this._clearMeasurementHistory());
+      }
+    }
+    // A committed audio-settings change (device, rate, range) invalidates the statistics the same
+    // way: restarting the capture alone would keep the pre-change frames in the running history.
+    MessageBus.instance().subscribe(Events.AUDIO_FORMAT_CHANGED, () => this._clearMeasurementHistory());
     // The pan/zoom engine - every horizontal/vertical move + zoom transform (Java
     // ScopeView.nav). Stateless apart from the grid divisions + the V/div ladder, so the
     // wheel + on-canvas-slider handlers share this one instance. The ladder arrives on

@@ -19,6 +19,7 @@ import { MainsCombFilter, DEFAULT_NOTCH_BANDWIDTH_HZ } from '../dsp/mains/comb-f
 import { mainsFilterOf } from '../dsp/mains/factory.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
+import { CorrectionStore } from '../common/correction-store.js';
 import { GenChangeCause } from '../enums/gen-change-cause.js';
 import { FrequencyFll } from '../dsp/fll.js';
 import { refinePeak, TONE_SEARCH_BINS } from './imd-analyzer.js';
@@ -122,6 +123,11 @@ export class FftController {
     this._prefs = prefs;
     this._status = status || (() => {});
     this._fftOn = false;
+    // The loaded-.frc store this analyser's display is de-embedded through (Java FftController
+    // correctionStore = new CorrectionStore("FFT", Events.FFT_CALIBRATION_CHANGED)): the FFT
+    // strip's calibration rows mutate it, the view correction and the predistortion engine read
+    // it, every mutation publishes FFT_CALIBRATION_CHANGED.
+    this._correctionStore = new CorrectionStore('FFT', Events.FFT_CALIBRATION_CHANGED);
     /** Load-meter reporter, or null while nothing measures (the tests, the offscreen shell).
      *  Set by the shell through {@link #setBusyReporter}. */
     this._reportBusy = null;
@@ -283,6 +289,19 @@ export class FftController {
     // averaging"). The Property notifies on a real change only, so an OK that re-writes the
     // same threshold stays silent.
     prefs.fftStrongToneRelDb.addListener(() => this.resetAnalyses());
+    // A re-calibration rescales every level the accumulator holds (Java FftView binds
+    // adcFsVoltageRms / adcFsVoltageRmsRight / dacFsVoltageAmpl to resetStatistics): restart the
+    // cross-tick average while recording, else it keeps folding pre-calibration frames at the old
+    // scale into the displayed spectrum.
+    const onFullScaleChange = () => { if (this._fftOn) this.resetAnalyses(); };
+    for (const p of [prefs.adcFsVoltageRms, prefs.adcFsVoltageRmsRight,
+      prefs.dacFsVoltageAmpl, prefs.dacFsVoltageAmplRight]) {
+      p.addListener(onFullScaleChange);
+    }
+    // A committed audio-settings change (device, rate, range) invalidates the average the same
+    // way: the Preferences bracket restarts the capture, but a restart alone would keep folding
+    // the frames gathered at the old settings into the post-change display.
+    MessageBus.instance().subscribe(Events.AUDIO_FORMAT_CHANGED, onFullScaleChange);
 
     // Self-feed off the capture: CAPTURE_BATCH_AVAILABLE is the web's stand-in for the blocking
     // awaitAvailable() Java's consumer sits in; this consumer reads its own cursor on it - no central
@@ -292,6 +311,9 @@ export class FftController {
       if (this._fftOn) this.feedFft();
     });
   }
+
+  /** The loaded-.frc store of this analyser (Java FftController.getCorrectionStore). */
+  get correctionStore() { return this._correctionStore; }
 
   /** Arms the one-shot output-drain skip (Java resetStatisticsAfterSignalChange ->
    *  drainSkipPending -> drainSkipRemaining): discard ~OUTPUT_DRAIN_SKIP_SEC of samples

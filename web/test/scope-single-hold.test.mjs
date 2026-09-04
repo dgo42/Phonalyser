@@ -87,6 +87,7 @@ function makePrefs(initial) {
         cache[key] = {
           get: () => vals[key],
           set: (v) => { vals[key] = v; },
+          addListener: () => {},
         };
       }
       return cache[key];

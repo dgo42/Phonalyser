@@ -50,7 +50,7 @@ function makePrefs(initial) {
   const cache = {};
   return new Proxy({}, { get(_t, key) {
     if (key === 'save') return () => {};
-    if (!(key in cache)) cache[key] = { get: () => vals[key], set: (v) => { vals[key] = v; } };
+    if (!(key in cache)) cache[key] = { get: () => vals[key], set: (v) => { vals[key] = v; }, addListener: () => {} };
     return cache[key];
   } });
 }
