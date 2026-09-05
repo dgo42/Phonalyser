@@ -35,6 +35,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
@@ -449,8 +450,13 @@ class NetLoopbackTest {
 
         NetMessage written = session.request(device.into(
                 session.newRequest(MessageType.DEVICE_SET_CALIBRATION))
-                .put(NetFields.FS_RMS_LEFT, FS_RMS_LEFT)
-                .put(NetFields.FS_RMS_RIGHT, FS_RMS_RIGHT));
+                .put(NetFields.CHANNEL, NetFields.LEFT)
+                .put(NetFields.FS_RMS, FS_RMS_LEFT));
+        assertTrue(written.isOk(), "the bench refused the write: " + written);
+        written = session.request(device.into(
+                session.newRequest(MessageType.DEVICE_SET_CALIBRATION))
+                .put(NetFields.CHANNEL, NetFields.RIGHT)
+                .put(NetFields.FS_RMS, FS_RMS_RIGHT));
 
         assertTrue(written.isOk(), "the bench refused the write: " + written);
         assertEquals(FS_RMS_LEFT, bench.storedLeft(MockBench.FIRST_INPUT, true), EPS,
@@ -473,6 +479,37 @@ class NetLoopbackTest {
                 "and devices.list answers the stored values to anyone who asks - the "
                         + "next client arrives already calibrated");
         assertEquals(FS_RMS_RIGHT, listed.path(NetFields.FS_RMS_RIGHT).asDouble(), EPS);
+    }
+
+    /**
+     * The client-side write as the calibrate dialogs make it - through the
+     * backend contract, not by building the request themselves: the channel's
+     * value reaches the bench's store under the device lock, taken for the write
+     * and given back, and nothing about the device is written on this machine.
+     */
+    @Test
+    void aCalibrationStoredThroughTheBackendReachesTheBenchUnderItsOwnLock() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        NetDeviceRef device = (NetDeviceRef) manager.listInputDevices().get(0);
+
+        assertTrue(manager.storeCalibration(device, true, Channel.L, FS_RMS_LEFT),
+                "the bench refused a write on a free device");
+
+        assertEquals(FS_RMS_LEFT, bench.storedLeft(MockBench.FIRST_INPUT, true), EPS,
+                "the value crossed the wire and reached the far end's own store");
+        assertFalse(bench.isLocked(MockBench.FIRST_INPUT, true),
+                "the lock was borrowed for the one write and given back");
+    }
+
+    /** No session, no write - and the caller is told so, since a calibration
+     *  that did not happen must not look like one that did. */
+    @Test
+    void aCalibrationWithoutASessionIsNotStoredAndSaysSo() {
+        NetDeviceManager manager = connect(CLIENT_NAME);
+        NetDeviceRef device = (NetDeviceRef) manager.listInputDevices().get(0);
+        manager.disconnect();
+
+        assertFalse(manager.storeCalibration(device, true, Channel.L, FS_RMS_LEFT));
     }
 
     /**
@@ -586,8 +623,8 @@ class NetLoopbackTest {
         NetConnection session = manager.getConnection();
         NetMessage written = manager.withDeviceLock(rebuilt, () -> session.request(
                 rebuilt.into(session.newRequest(MessageType.DEVICE_SET_CALIBRATION))
-                        .put(NetFields.FS_RMS_LEFT, FS_RMS_LEFT)
-                        .put(NetFields.FS_RMS_RIGHT, FS_RMS_RIGHT)));
+                        .put(NetFields.CHANNEL, NetFields.LEFT)
+                        .put(NetFields.FS_RMS, FS_RMS_LEFT)));
 
         assertNotNull(written, "no lock could be taken, so the write never ran");
         assertTrue(written.isOk(), "the bench refused the write: " + written);
@@ -1303,7 +1340,7 @@ class NetLoopbackTest {
         manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, OutputChannels.LEFT);
         manager.setForm(GenSignalForm.SINE);
         manager.setFrequency(TONE_HZ);
-        manager.setAmplitudeVrms(AMPLITUDE_VRMS);
+        manager.setAmplitudesVrms(AMPLITUDE_VRMS, AMPLITUDE_VRMS);
         manager.fftGrid(FFT_SIZE, true);
         manager.startGenerator();
 
@@ -1320,7 +1357,7 @@ class NetLoopbackTest {
         ObjectNodeView commanded = new ObjectNodeView(lane.getConfigAtStart());
         assertEquals(GenSignalForm.SINE.name(), commanded.text(NetFields.FORM),
                 "and the waveform reached the bench before it was told to emit");
-        assertEquals(AMPLITUDE_VRMS, commanded.number(NetFields.AMPLITUDE_VRMS), EPS,
+        assertEquals(AMPLITUDE_VRMS, commanded.number(NetFields.AMPLITUDE_VRMS_LEFT), EPS,
                 "spec 4.5: the amplitude is FINAL - the client already did the "
                         + "calibration, so what crosses the wire is volts RMS");
 
@@ -1445,7 +1482,7 @@ class NetLoopbackTest {
         manager.setSweepFadeInSamples(FADE_SAMPLES);
         manager.setSweepFadeOutSamples(FADE_SAMPLES);
         manager.setSweepLoop(false);
-        manager.setAmplitudeVrms(AMPLITUDE_VRMS);
+        manager.setAmplitudesVrms(AMPLITUDE_VRMS, AMPLITUDE_VRMS);
         manager.startGenerator();
 
         MockBench.Generator lane = bench.getLastGenerator();

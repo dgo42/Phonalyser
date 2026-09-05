@@ -29,6 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -116,6 +118,11 @@ public final class NetConnection {
      *  the far end really can take seconds, and the keepalive - not this - is
      *  what notices a dead peer. */
     private static final long REQUEST_TIMEOUT_MS = 10_000;
+    /** The server's own versions inside a {@code PROTO_MISMATCH} refusal (spec 1):
+     *  "server speaks N" from this build, "server speaks A..B" from a build that
+     *  printed ranges. */
+    private static final Pattern SERVER_SPEAKS =
+            Pattern.compile("server speaks (?:net protocol |proto )?(\\d+)(?:\\.\\.(\\d+))?");
     /** How long a UI-driven ask may hold the operator.  An operator reads ~1 s
      *  as the app working and 10 s as the app hung, so the dialog-path asks
      *  (backend/device/card lists, select, preview) bound HERE, while device
@@ -264,6 +271,12 @@ public final class NetConnection {
         if (!hello.isOk()) {
             NetError error = hello.getError();
             connClose(NetCloseReason.HANDSHAKE_REFUSED);
+            if (error != null && error.is(ErrorCode.PROTO_MISMATCH)) {
+                // The server names its own versions in the refusal (spec 1).
+                throw new ProtocolMismatchException(ErrorCode.PROTO_MISMATCH + ": the server at "
+                        + server + " refused the session: " + error.message(),
+                        server.toString(), serverVersionIn(error.message()));
+            }
             throw new IllegalStateException("the server at " + server
                     + " refused the session: " + (error == null
                             ? "no reason given" : error.code() + " - " + error.message()));
@@ -277,9 +290,10 @@ public final class NetConnection {
         int chosen = data.path(NetFields.PROTO).asInt();
         if (chosen < NetProto.PROTO_MIN_VERSION || chosen > NetProto.PROTO_VERSION) {
             connClose(NetCloseReason.HANDSHAKE_REFUSED);
-            throw new IllegalStateException(ErrorCode.PROTO_MISMATCH + ": the server at "
-                    + server + " chose proto " + chosen + ", and this client speaks "
-                    + NetProto.PROTO_MIN_VERSION + ".." + NetProto.PROTO_VERSION);
+            throw new ProtocolMismatchException(ErrorCode.PROTO_MISMATCH + ": the server at "
+                    + server + " chose net protocol " + chosen + ", and this client speaks "
+                    + NetProto.versionText(NetProto.PROTO_MIN_VERSION, NetProto.PROTO_VERSION),
+                    server.toString(), Integer.toString(chosen));
         }
         proto = chosen;
         serverId = text(data, NetFields.SERVER_ID);
@@ -1024,6 +1038,46 @@ public final class NetConnection {
         private NoAnswerException(String message) {
             super(message);
         }
+    }
+
+    /** The server answered {@code hello} but the two version ranges do not
+     *  overlap (spec 1) - with a hard-cut protocol that is an older or newer
+     *  build on the other side, which the operator has to be told as such and
+     *  not as "refused".  Typed like {@link NoAnswerException}, for the same
+     *  reason: it is the one refusal with a sentence of its own. */
+    public static final class ProtocolMismatchException extends IllegalStateException {
+        private final String server;
+        private final String serverVersion;
+
+        private ProtocolMismatchException(String message, String server, String serverVersion) {
+            super(message);
+            this.server = server;
+            this.serverVersion = serverVersion;
+        }
+
+        /** The address that was dialled. */
+        public String server() {
+            return server;
+        }
+
+        /** The net protocol version the server is at, as a plain number - what
+         *  the operator is shown beside this client's; the server's own words
+         *  when its refusal named no number. */
+        public String serverVersion() {
+            return serverVersion;
+        }
+    }
+
+    /** The server's own version inside its refusal (spec 1: "server speaks N"
+     *  from this build, "server speaks A..B" from a build that printed ranges) -
+     *  the highest number named is the version the server is at; the whole
+     *  refusal when it names none. */
+    private String serverVersionIn(String refusal) {
+        Matcher m = SERVER_SPEAKS.matcher(refusal == null ? "" : refusal);
+        if (!m.find()) {
+            return refusal == null ? "" : refusal;
+        }
+        return m.group(2) != null ? m.group(2) : m.group(1);
     }
 
     /**

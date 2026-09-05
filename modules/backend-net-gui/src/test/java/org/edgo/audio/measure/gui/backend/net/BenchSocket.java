@@ -540,14 +540,23 @@ final class BenchSocket extends WebSocketServer {
                     "the device must be acquired before its calibration can be written");
             return;
         }
-        Double left = request.optDouble(NetFields.FS_RMS_LEFT);
-        Double right = request.optDouble(NetFields.FS_RMS_RIGHT);
-        if (left == null || right == null) {
+        String scope = request.optString(NetFields.CHANNEL);
+        Double fsRms = request.optDouble(NetFields.FS_RMS);
+        if (fsRms == null
+                || !(NetFields.LEFT.equals(scope) || NetFields.RIGHT.equals(scope))) {
             fail(conn, id, ErrorCode.BAD_REQUEST,
-                    "a calibration needs both full scales");
+                    "a calibration names one channel and carries its fsRms");
             return;
         }
-        calibrations.put(lane, new Cal(left, right));
+        // What a bench's own store does with a card whose other channel was
+        // never calibrated: it takes the same value, so one write calibrates
+        // the lane instead of leaving cal null until the second channel.
+        Cal before = calibrations.get(lane);
+        if (NetFields.LEFT.equals(scope)) {
+            calibrations.put(lane, new Cal(fsRms, before == null ? fsRms : before.right()));
+        } else {
+            calibrations.put(lane, new Cal(before == null ? fsRms : before.left(), fsRms));
+        }
         // Before the response, exactly as the server orders it: the catalogue a
         // client reads afterwards already carries the new value.
         broadcastDevicesChanged(conn);

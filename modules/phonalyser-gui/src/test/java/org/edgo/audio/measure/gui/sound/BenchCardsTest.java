@@ -276,11 +276,15 @@ class BenchCardsTest {
         assertEquals(1, remote.sentOf(MessageType.CARDS_PUT.getWire()).size());
         List<RecordingRemoteBackendUi.Sent> values =
                 remote.sentOf(MessageType.DEVICE_SET_CALIBRATION.getWire());
-        assertEquals(1, values.size(), "the pre-v1.1 path is the fallback, not a "
-                + "second card under a name the operator never chose");
-        assertEquals(FS_LEFT, values.get(0).fields().get(NetFields.FS_RMS_LEFT));
-        assertEquals(FS_RIGHT, values.get(0).fields().get(NetFields.FS_RMS_RIGHT));
+        assertEquals(2, values.size(), "the pre-v1.1 path is the fallback, not a "
+                + "second card under a name the operator never chose - one write "
+                + "per channel");
+        assertEquals(NetFields.LEFT, values.get(0).fields().get(NetFields.CHANNEL));
+        assertEquals(FS_LEFT, values.get(0).fields().get(NetFields.FS_RMS));
+        assertEquals(NetFields.RIGHT, values.get(1).fields().get(NetFields.CHANNEL));
+        assertEquals(FS_RIGHT, values.get(1).fields().get(NetFields.FS_RMS));
         assertTrue(values.get(0).locked(), "spec 4.3 requires the device lock for it");
+        assertTrue(values.get(1).locked());
     }
 
     /**

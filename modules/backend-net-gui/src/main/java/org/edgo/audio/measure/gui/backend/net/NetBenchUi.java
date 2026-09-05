@@ -621,13 +621,19 @@ public final class NetBenchUi implements RemoteBackendUi, NetFaultListener {
         }
     }
 
-    /** The sentence a failed dial shows.  A dead address is the one failure with
-     *  a translation of its own - nothing answered, so there is no diagnostic
-     *  string worth quoting; every other failure keeps the server's or the
-     *  library's own words inside the translated frame (see {@link #reason}). */
+    /** The sentence a failed dial shows.  Two failures have a translation of
+     *  their own: a dead address (nothing answered, so there is no diagnostic
+     *  string worth quoting) and a protocol mismatch (an older or newer server
+     *  build, to be updated rather than retried - the server's own versions are
+     *  quoted beside this client's).  Every other failure keeps the server's or
+     *  the library's own words inside the translated frame (see {@link #reason}). */
     private String connectFailureText(NetServerEntry server, RuntimeException failure) {
         if (failure instanceof NetConnection.NoAnswerException) {
             return I18n.t("net.servers.error.noAnswer", server.host() + ":" + server.port());
+        }
+        if (failure instanceof NetConnection.ProtocolMismatchException mismatch) {
+            return I18n.t("net.error.protoMismatch", server.host(), mismatch.serverVersion(),
+                    NetProto.PROTO_VERSION);
         }
         return I18n.t("net.error.connect", server.host(), reason(failure));
     }

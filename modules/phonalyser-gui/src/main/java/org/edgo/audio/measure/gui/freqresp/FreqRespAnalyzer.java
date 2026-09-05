@@ -107,7 +107,8 @@ public final class FreqRespAnalyzer {
         reportProgress(progress, 0.0, "Preparing sweep");
         SignalGenerator gen = new SignalGenerator(
                 cfg.getStartHz(), cfg.getStopHz(), playSweepSamples, playLeadInSamples,
-                cfg.getPlaybackRateHz(), cfg.getAmplitudeVrms(), cfg.getDacFsVoltageRms());
+                cfg.getPlaybackRateHz(), cfg.getAmplitudeVrms(), cfg.getAmplitudeVrms(),
+                cfg.getDacFsVoltageRms(), cfg.getDacFsVoltageRms());
         // One-shot sweep: emit silence after the buffer ends instead of looping
         // a second cycle into the capture window (which would alias into the
         // deconvolution and pollute the response).
@@ -171,7 +172,8 @@ public final class FreqRespAnalyzer {
         // rate.  The buffer is unit amplitude; the fade is applied inside.
         double[] sweepRef = new SignalGenerator(
                 cfg.getStartHz(), cfg.getStopHz(), recSweepSamples, recLeadInSamples,
-                cfg.getCaptureRateHz(), cfg.getAmplitudeVrms(), cfg.getDacFsVoltageRms())
+                cfg.getCaptureRateHz(), cfg.getAmplitudeVrms(), cfg.getAmplitudeVrms(),
+                cfg.getDacFsVoltageRms(), cfg.getDacFsVoltageRms())
                 .getLogSweepBuffer();
         // Parallel deconv: both channels share inputs (sweepRef, leadIn,
         // capture rate, freqs) but compute independently, so they run on

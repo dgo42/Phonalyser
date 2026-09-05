@@ -26,7 +26,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.sound.sampled.AudioFormat;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.preferences.BackendKey;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -312,6 +314,46 @@ public final class AudioBackend {
 
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
         return activeManager().getDeviceByIndex(index, isOutput);
+    }
+
+    // -------------------------------------------------------------------------
+    // Calibration - where a measured full scale goes
+    // -------------------------------------------------------------------------
+
+    /**
+     * Calibrates ONE channel of the active device in {@code input}'s direction
+     * from a Calibrate dialog's two numbers: what the channel indicated and what
+     * it truly carried.  A reading scales linearly with the full scale it is
+     * computed against, so the channel's true full scale is the one in force
+     * scaled by {@code trueVrms / indicatedVrms} - for the ADC the scope's or
+     * FFT's reading against the voltage the operator measured at the input,
+     * for the DAC the commanded amplitude against the voltage measured at the
+     * output.
+     *
+     * <p>The result goes to the backend the device is on, which is what decides
+     * where the calibration lives: this machine's cards for a local device, the
+     * bench's for a device across the network (see
+     * {@link AudioDeviceManager#storeCalibration}).  Full scales are RMS volts
+     * there, the form the card and the wire hold - the DAC's full scale is kept
+     * here as a peak amplitude and is divided by {@code √2} on the way.
+     *
+     * @return whether it was stored; {@code false} also when no device is
+     *         active in that direction, or the active one is not present
+     */
+    public boolean calibrate(boolean input, Channel ch, double indicatedVrms, double trueVrms) {
+        DeviceRef device = activeDevice(input);
+        if (device == null) {
+            if (log.isWarnEnabled()) {
+                log.warn("Calibration: no {} device is active, so {} is not calibrated",
+                        input ? "input" : "output", ch);
+            }
+            return false;
+        }
+        Preferences prefs = Preferences.instance();
+        double inForce = input ? prefs.getAdcFsVoltageRms(ch)
+                               : prefs.getDacFsVoltageAmpl(ch) / Constants.SQRT2;
+        double fsRms = inForce * (trueVrms / indicatedVrms);
+        return manager(device.carrier()).storeCalibration(device, input, ch, fsRms);
     }
 
     public List<AudioFormat> listSupportedInputFormats(DeviceRef device) {

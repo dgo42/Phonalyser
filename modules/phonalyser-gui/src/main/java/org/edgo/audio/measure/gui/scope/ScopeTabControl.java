@@ -78,6 +78,7 @@ import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.preferences.OscPreset;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -1157,15 +1158,13 @@ public final class ScopeTabControl extends AbstractTabControl {
         if (isDisposed()) return;
         Shell parent = getShell();
         Preferences prefs = Preferences.instance();
-        // Where the calibration goes - this machine's cards or the bench that owns
-        // the device - and, first, whether it may be written at all.
-        final CalibrationStore calibration = new CalibrationStore(prefs);
-        if (calibration.isCalibrationFromDevice(true)) {
+        // First, whether the calibration may be written at all.
+        if (new CalibrationStore(prefs).isCalibrationFromDevice(true)) {
             // Device-provided (a QA40x, here or on a bench): show the built-in
             // full-scale read-only.
             new CalibrationDialog(parent, adcTexts(),
                     prefs.getAdcFsVoltageRms(Channel.L), prefs.getAdcFsVoltageRms(Channel.R),
-                    true, (ch, v) -> { }).open();
+                    true, actual -> { }).open();
             return;
         }
         if (view == null) {
@@ -1179,24 +1178,17 @@ public final class ScopeTabControl extends AbstractTabControl {
             return;
         }
         final double measuredVrms = currentVrms;
-        final boolean stereo = prefs.isInputBoundStereo();
         Double seedL = measCh == Channel.L ? measuredVrms : null;
         Double seedR = measCh == Channel.R ? measuredVrms : null;
-        new CalibrationDialog(parent, adcTexts(), seedL, seedR, false, (ch, actualVrms) -> {
-            double scale = actualVrms / measuredVrms;
-            boolean stored;
-            if (stereo) {
-                double newFs = prefs.getAdcFsVoltageRms(ch) * scale;
-                stored = calibration.storeAdcCalibration(ch, newFs);
-            } else {
-                // MONO / unbound: shared both-channels full-scale (auto-creates the
-                // profile on first calibrate); also sets the FS scalar and persists.
-                double newFs = prefs.getAdcFsVoltageRms() * scale;
-                stored = calibration.storeAdcCalibration(newFs);
-            }
-            // A bench that would not take it leaves this client's reference where
-            // it was (see CalibrationStore's apply-on-success): say so, or the
-            // operator walks away believing the value they typed is in force.
+        new CalibrationDialog(parent, adcTexts(), seedL, seedR, false, actual -> {
+            // The backend the device is on calibrates the measurement channel
+            // from this reading and the entered voltage: this machine's cards,
+            // or the bench the device is plugged into (AudioBackend.calibrate).
+            boolean stored = AudioBackend.instance().calibrate(true, measCh, measuredVrms,
+                    actual.get(measCh));
+            // A bench that would not take it moved nothing here - this client's
+            // reference is still the bench's: say so, or the operator walks away
+            // believing the value they typed is in force.
             if (!stored) {
                 Dialogs.error(parent, I18n.t("calibrate.title"),
                         I18n.t("preferences.audio.card.copyCalibration.failed",

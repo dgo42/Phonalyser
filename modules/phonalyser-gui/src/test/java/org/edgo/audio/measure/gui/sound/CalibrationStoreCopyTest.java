@@ -19,7 +19,6 @@
 package org.edgo.audio.measure.gui.sound;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
-import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.BackendKey;
@@ -29,9 +28,7 @@ import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -52,12 +49,6 @@ class CalibrationStoreCopyTest {
     private static final String DEVICE_NAME = "QA403";
     private static final String LOCAL_CARD = "Local QA403";
     private static final String RANGE_LABEL = "default";
-    private static final double EPS = 1e-9;
-    /** What the reference holds before a refused write, and must still hold
-     *  after it. */
-    private static final double LEGACY_FS = 3.25;
-    /** What the operator types into the Calibrate dialog. */
-    private static final double TYPED_FS = 1.75;
 
     private final BackendKey bench = BackendKey.of(SERVER_ID, AudioBackendType.QA40X);
 
@@ -91,65 +82,6 @@ class CalibrationStoreCopyTest {
                         .copyCardCalibrationToBench(bench, deviceRef()),
                 "one calibrated channel would scale one side of the bench and leave "
                         + "the other reading infinity");
-    }
-
-    // -- the calibrate buttons: apply on SUCCESS, never before ----------------
-
-    /**
-     * A write the bench does NOT take must leave this client's own reference
-     * exactly where it was.
-     *
-     * <p>The scalars used to move first, so the operator could see the reading
-     * change at once.  But a refusal - the analyzer owns its values, another
-     * client holds the device, the wire is down - then left the typed number
-     * standing as this client's dBV reference while the bench kept its own, with
-     * nothing to put it back.  A calibration that did not happen must not look
-     * like one that did.
-     */
-    @Test
-    void aRefusedRemoteWriteLeavesTheClientsOwnReferenceAlone() {
-        Preferences prefs = onABench();
-        prefs.setAdcFsVoltageRms(LEGACY_FS);
-        prefs.setAdcFsVoltageRmsRight(LEGACY_FS);
-
-        // No device of that name is enumerated on the bench, so the write cannot
-        // even be addressed - the plainest refusal there is.
-        assertFalse(new CalibrationStore(prefs).storeAdcCalibration(TYPED_FS),
-                "the caller has to know it did not land");
-
-        assertEquals(LEGACY_FS, prefs.getAdcFsVoltageRms(Channel.L), EPS,
-                "and the reference is the bench's, not what was typed here");
-        assertEquals(LEGACY_FS, prefs.getAdcFsVoltageRms(Channel.R), EPS);
-    }
-
-    @Test
-    void aRefusedRemoteDacWriteLeavesTheGeneratorsFullScaleAlone() {
-        Preferences prefs = onABench();
-        prefs.setDacFsVoltageAmpl(LEGACY_FS);
-        prefs.setDacFsVoltageAmplRight(LEGACY_FS);
-
-        assertFalse(new CalibrationStore(prefs).storeDacCalibration(Channel.R, TYPED_FS));
-
-        assertEquals(LEGACY_FS, prefs.getDacFsVoltageAmpl(Channel.R), EPS,
-                "a generator driven at a full scale the bench never accepted would "
-                        + "emit a level nobody asked for");
-        assertEquals(LEGACY_FS, prefs.getDacFsVoltageAmpl(Channel.L), EPS);
-    }
-
-    /** The LOCAL path is untouched by all of this: there is no round trip to
-     *  succeed, the store write IS the success, and the scalar moves as it always
-     *  did. */
-    @Test
-    void aLocalWriteStillMovesTheScalarAtOnce() {
-        Preferences prefs = detached();
-        prefs.setBackend(AudioBackendType.WASAPI);
-        prefs.current().setInputDeviceName(DEVICE_NAME);
-
-        assertTrue(new CalibrationStore(prefs).storeAdcCalibration(TYPED_FS));
-
-        assertEquals(TYPED_FS, prefs.getAdcFsVoltageRms(Channel.L), EPS);
-        assertNotNull(prefs.deviceCalibration(DEVICE_NAME, true),
-                "and the local calibrate flow created the card it needed");
     }
 
     // -- is the CURRENT selection calibrated at all (the calibrate-button gate) --

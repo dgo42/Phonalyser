@@ -361,7 +361,7 @@ class FreqRespAnalyzerSmokeTest {
                     "the generator handed to the capture leg must expose its played sweep");
             double[] sweep = new SignalGenerator(START_HZ, STOP_HZ,
                     (int) Math.round(DURATION_SEC * capRate), 0,
-                    capRate, AMP_VRMS, DAC_FS_VRMS).getLogSweepBuffer();
+                    capRate, AMP_VRMS, AMP_VRMS, DAC_FS_VRMS, DAC_FS_VRMS).getLogSweepBuffer();
             int leadIn = (int) Math.round(LEAD_IN_SEC * capRate);
             int total  = leadIn + delaySamples + sweep.length + capRate / 2;
             double[] y  = new double[total];

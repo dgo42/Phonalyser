@@ -327,9 +327,9 @@ public final class ClientSession {
         int chosen = Math.min(clientMax, NetProto.PROTO_VERSION);
         if (chosen < Math.max(clientMin, NetProto.PROTO_MIN_VERSION)) {
             channel.send(new NetMessage(id, new NetError(ErrorCode.PROTO_MISMATCH,
-                    "client speaks proto " + clientMin + ".." + clientMax
-                            + ", server speaks " + NetProto.PROTO_MIN_VERSION + ".."
-                            + NetProto.PROTO_VERSION)));
+                    "client speaks net protocol " + NetProto.versionText(clientMin, clientMax)
+                            + ", server speaks " + NetProto.versionText(
+                                    NetProto.PROTO_MIN_VERSION, NetProto.PROTO_VERSION))));
             close("protocol version mismatch");
             return;
         }
@@ -486,22 +486,27 @@ public final class ClientSession {
                     lock + " must be acquired before its calibration can be written");
             return;
         }
-        Double left = message.optDouble(NetFields.FS_RMS_LEFT);
-        Double right = message.optDouble(NetFields.FS_RMS_RIGHT);
-        if (left == null || right == null) {
+        String scope = message.optString(NetFields.CHANNEL);
+        Channel side = channelOf(scope);
+        Double fsRms = message.optDouble(NetFields.FS_RMS);
+        if (side == null || fsRms == null) {
             fail(id, ErrorCode.BAD_REQUEST,
-                    "device.setCalibration needs both fsRmsLeft and fsRmsRight");
+                    "device.setCalibration needs a channel ('left' or 'right') and its fsRms");
             return;
         }
-        if (!catalog.storeCalibration(lock, name, left, right)) {
+        if (!catalog.storeCalibration(lock, name, side, fsRms)) {
             fail(id, ErrorCode.BAD_REQUEST, lock + " reads its calibration from the "
                     + "device itself, so it is not a client's to write");
             return;
         }
         if (log.isInfoEnabled()) {
-            log.info("net session {}: {} calibrated at {} / {} Vrms", clientName, lock,
-                    left, right);
+            log.info("net session {}: {} calibrated at {} Vrms ({})", clientName, lock,
+                    fsRms, scope);
         }
+        // The lane that may be open on this very device is this session's (the
+        // lock is): it re-reads the card now, so the tone that is playing lands on
+        // the new full scales at once - as a local recalibration does.
+        generator.calibrationChanged(lock);
         locks.notifyDevicesChanged();
         channel.send(new NetMessage(id));
     }
@@ -596,9 +601,11 @@ public final class ClientSession {
         channel.send(new NetMessage(id));
     }
 
-    /** The {@code channel} scope of {@code device.setActiveRange} as the store's
-     *  own enum: null for {@code both} (and for an absent field), which is what a
-     *  LINKED or MONO endpoint's single marker means. */
+    /** The {@code channel} scope of {@code device.setActiveRange} and
+     *  {@code device.setCalibration} as the store's own enum: null for
+     *  {@code both} (and for an absent field), which is what a LINKED or MONO
+     *  endpoint's single range marker means - and which a calibration, written
+     *  one channel at a time, refuses. */
     private Channel channelOf(String scope) {
         if (NetFields.LEFT.equals(scope)) {
             return Channel.L;

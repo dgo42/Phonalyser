@@ -693,13 +693,13 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
             if (dual) {
                 engine.getBestIntermod().writeDpd(Path.of(picked), buildHeader(r),
                         r.fundamentalHzRefined, r.fundamental2HzRefined, r.fundamentalDbFs,
-                        r.sampleRate, bitDepth, prefs.getGenAmplitudeVrms(),
+                        r.sampleRate, bitDepth, prefs.getGenAmplitudeVrmsLeft(),
                         engine.calResponseFor(r.channelLeft), prefs.getAdcFsVoltageRms(),
                         engine.dualToneFundamentalVrms());
             } else {
                 engine.getBestApplied().writeDpd(Path.of(picked), buildHeader(r),
                         r.fundamentalHzRefined, r.fundamentalDbFs,
-                        r.sampleRate, bitDepth, prefs.getGenAmplitudeVrms(),
+                        r.sampleRate, bitDepth, prefs.getGenAmplitudeVrmsLeft(),
                         engine.calResponseFor(r.channelLeft), prefs.getAdcFsVoltageRms());
             }
             savedPath = picked;
@@ -803,7 +803,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         } else {
             h.add("# gen_frequency_hz="   + fmt(prefs.getGenFrequencyHz()));
         }
-        h.add("# gen_amplitude_vrms=" + fmt(prefs.getGenAmplitudeVrms()));
+        h.add("# gen_amplitude_vrms=" + fmt(prefs.getGenAmplitudeVrmsLeft()));
         h.add("# gen_dither_bits="    + prefs.getGenDitherBits());
         h.add("# fft_size="           + r.fftSize);
         h.add("# fft_window="         + prefs.getFftWindow());

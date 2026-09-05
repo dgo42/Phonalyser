@@ -286,8 +286,10 @@ public final class FreqRespWizardDialog {
         openBusyShell(totalSec);
         MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
         // Marshal capture-progress to the UI thread so the busy shell's
-        // live meter paints level-vs-time as the sweep runs.
-        StereoCaptureProgress progress = (totalSamples, rmsLin) -> {
+        // live meter paints level-vs-time as the sweep runs.  The meter shows
+        // the channel the view has selected (its L/R radio), read per block.
+        StereoCaptureProgress progress = (totalSamples, rmsLeft, rmsRight) -> {
+            double rmsLin = prefs.isFreqRespLeftVisible() ? rmsLeft : rmsRight;
             double tSec = totalSamples / (double) captureRate;
             GuiUtil.marshal(dialog, () -> {
                 if (busyMeter != null && !busyMeter.isDisposed()) {
@@ -309,7 +311,7 @@ public final class FreqRespWizardDialog {
                         .durationSec(prefs.getFreqRespDurationSec())
                         .leadInSec(prefs.getFreqRespLeadInSec())
                         .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
-                        .dacFsVoltageRms(prefs.getDacFsVoltageAmpl())
+                        .dacFsVoltageRms(prefs.getDacFsVoltageAmplLeft())
                         .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
                         .applyCalibration(!directLeg)  // page 2 divides out the page-1 transfer
                         .captureProgress(progress)
@@ -319,7 +321,7 @@ public final class FreqRespWizardDialog {
                         .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
                                 prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
                                 prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
-                                prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmpl()))
+                                prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmplLeft()))
                         .build();
                 StereoFreqRespResult r = new FreqRespAnalyzer(cfg).run(null, null);
                 GuiUtil.marshal(dialog, () -> onMeasurementDone(directLeg, r, null));

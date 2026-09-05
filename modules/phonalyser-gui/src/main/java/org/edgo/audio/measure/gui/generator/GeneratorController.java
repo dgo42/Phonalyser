@@ -49,6 +49,7 @@ import org.edgo.audio.measure.gui.sound.GeneratorLane;
 import org.edgo.audio.measure.gui.sound.GeneratorRun;
 import org.edgo.audio.measure.gui.sound.PlaybackStateEnum;
 import org.edgo.audio.measure.preferences.BackendPrefs;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioPlayback;
@@ -167,30 +168,18 @@ public final class GeneratorController {
         // compensated form.  Each slot answers only for its own form.
         onPref(prefs.genDpdProperty(),     v -> lane.dpdChanged(GenSignalForm.SINE_COMP));
         onPref(prefs.genDpdDualProperty(), v -> lane.dpdChanged(GenSignalForm.DUAL_TONE_COMP));
-        // The amplitude is stored as the operator entered it - number and unit
-        // as ONE value - so this fires once per edit and what reaches the lane
-        // is always the RESOLVED voltage, never the raw number.
-        onPref(prefs.genAmplitudeProperty(), v -> {
-            lane.setAmplitudeVrms(prefs.getGenAmplitudeVrms());
-            publishSignalChanged();
-        });
-        onPref(prefs.dacFsVoltageAmplProperty(), v -> {
-            // Left full-scale drives the generator's mono amplitude AND the
-            // per-lane ratio (scaleR = fsLeft/fsRight), so re-push both.
-            lane.setDacFsVoltageAmpl(v);
-            lane.pushOutputRouting();
-            // A full-scale-relative amplitude and a dither entered as a level
-            // both resolve to a different quantity under the new calibration -
-            // the stored pairs are unchanged, so nothing else would re-push
-            // them and a running lane would keep the old figures.
-            lane.setAmplitudeVrms(prefs.getGenAmplitudeVrms());
-            setDitherBits(prefs.getGenDitherBits());
-            publishSignalChanged();
-        });
-        onPref(prefs.dacFsVoltageAmplRightProperty(), v -> {
-            lane.pushOutputRouting();
-            publishSignalChanged();
-        });
+        // Each lane's amplitude is stored as the operator entered it - number and
+        // unit as ONE value - so these fire once per edit and what reaches the
+        // lane is always the RESOLVED voltage, never the raw number.  Each lane
+        // is rendered at its own level against its own full scale, so an edit
+        // of either amplitude or either full scale re-pushes both pairs (a
+        // full-scale-relative amplitude resolves to a different voltage under
+        // the new calibration, and the stored pair is unchanged - nothing else
+        // would re-push it).
+        onPref(prefs.genAmplitudeLeftProperty(), v -> pushLaneAmplitudes());
+        onPref(prefs.genAmplitudeRightProperty(), v -> pushLaneAmplitudes());
+        onPref(prefs.dacFsVoltageAmplLeftProperty(), v -> pushLaneAmplitudes());
+        onPref(prefs.dacFsVoltageAmplRightProperty(), v -> pushLaneAmplitudes());
         onPref(prefs.genOutputChannelsProperty(), v -> {
             lane.pushOutputRouting();
             publishSignalChanged();
@@ -327,7 +316,12 @@ public final class GeneratorController {
         unsubscribes.add(() -> bus.unsubscribe(eventName, listener));
     }
 
+    /** Announces a change of the generated signal - only while a tone or a
+     *  file is emitted.  With nothing emitted there is no generator signal
+     *  and nothing has changed for the analyzers: an edit of the settings is
+     *  not published at all, so the FFT and scope statistics stay. */
     private void publishSignalChanged() {
+        if (!lane.isRunning() && !filePlayRunning) return;
         MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
     }
 
@@ -389,15 +383,15 @@ public final class GeneratorController {
         }
         return new GeneratorRun(form,
                 lane.resolveEmitFrequency(form, sampleRate),
-                prefs.getGenAmplitudeVrms(),
+                prefs.getGenAmplitudeVrmsLeft(),
+                prefs.getGenAmplitudeVrmsRight(),
                 sampleRate,
                 bp.getOutputBitDepth(),
                 prefs.getGenDitherBits(),
-                prefs.getDacFsVoltageAmpl(),
-                prefs.dacRightLaneScale(),
+                prefs.getDacFsVoltageAmplLeft(),
+                prefs.getDacFsVoltageAmplRight(),
                 prefs.getGenOutputChannels(),
                 false,   // the pane's tone ADAPTS to a bench's granted rate
-                true,    // ...and pushes THIS machine's DAC calibration to it
                 sweep);
     }
 
@@ -538,8 +532,19 @@ public final class GeneratorController {
         return lane.analysisRateHz();
     }
 
-    public double maxAmplitudeVrms(GenSignalForm form) {
-        return lane.maxAmplitudeVrms(form);
+    public double maxAmplitudeVrms(GenSignalForm form, Channel ch) {
+        return lane.maxAmplitudeVrms(form, ch);
+    }
+
+    /** Re-pushes both lanes' full scales and resolved amplitudes to the running
+     *  lane, and announces the signal change.  Every edit that moves what a lane
+     *  emits - either amplitude, either full scale - ends here, so the lane
+     *  always receives the pairs, never one side at a time. */
+    private void pushLaneAmplitudes() {
+        Preferences prefs = Preferences.instance();
+        lane.setDacFsVoltageAmpls(prefs.getDacFsVoltageAmplLeft(), prefs.getDacFsVoltageAmplRight());
+        lane.setAmplitudesVrms(prefs.getGenAmplitudeVrmsLeft(), prefs.getGenAmplitudeVrmsRight());
+        publishSignalChanged();
     }
 
     public boolean canLiveSwitchForm(GenSignalForm target) {
@@ -609,10 +614,6 @@ public final class GeneratorController {
 
     public void setDualToneAmplitudes(double amp1Pct, double amp2Pct) {
         lane.setDualToneAmplitudes(amp1Pct, amp2Pct);
-    }
-
-    public void setAmplitudeVrms(double vrms) {
-        lane.setAmplitudeVrms(vrms);
     }
 
     // -------------------------------------------------------------------------
@@ -1002,14 +1003,15 @@ public final class GeneratorController {
             filePlayback = playback;      // live dither changes reach it from here on
             // The DEVICE path's half of the file convention (0 dBFS = 2 Vrms,
             // see EXPORT_FS_VOLTAGE_AMPL): the file carries the pure signal,
-            // so the LINE applies this machine's DAC calibration - the
-            // absolute full-scale mapping and the per-lane ratio; without it
-            // file play emitted uncalibrated.  A DAC whose full
+            // so the LINE applies this machine's DAC calibration - each lane's
+            // absolute full-scale mapping, against that lane's own full scale;
+            // without it file play emitted uncalibrated.  A DAC whose full
             // scale is below 2 Vrms gets k > 1 and full-scale content clips -
             // the honest cost of asking a small DAC for convention level.
             Preferences filePrefs = Preferences.instance();
-            double k = EXPORT_FS_VOLTAGE_AMPL / filePrefs.getDacFsVoltageAmpl();
-            playback.setChannelScale(k, k * filePrefs.dacRightLaneScale());
+            source.setLaneGains(
+                    EXPORT_FS_VOLTAGE_AMPL / filePrefs.getDacFsVoltageAmplLeft(),
+                    EXPORT_FS_VOLTAGE_AMPL / filePrefs.getDacFsVoltageAmplRight());
             log.info("File playback started: {} ({} Hz, {} bit{}) on {}",
                     file.getName(), source.getFileSampleRate(), source.getFileBitDepth(),
                     filePlayLoop ? ", looping" : "", device.name());
@@ -1085,7 +1087,9 @@ public final class GeneratorController {
         double frequency     = (form == GenSignalForm.RECTANGLE || form == GenSignalForm.TRIANGLE)
                 ? lane.samplePeriodAlignedHz(prefs.getGenFrequencyHz(), sampleRate)
                 : prefs.getGenFrequencyHz();
-        double amplitudeVRms = prefs.getGenAmplitudeVrms();
+        // A stereo file: each channel at its own lane's amplitude.
+        double amplitudeVrmsLeft  = prefs.getGenAmplitudeVrmsLeft();
+        double amplitudeVrmsRight = prefs.getGenAmplitudeVrmsRight();
         // One-shot sweep: exactly one sweep (its frequency ends at the stop
         // frequency).  A LOOPED sweep is periodic - period = the sweep duration -
         // so it is exported like other periodic forms: the WAV-duration length,
@@ -1106,37 +1110,40 @@ public final class GeneratorController {
                 if (dpd == null || dpd.isEmpty()) {
                     return I18n.t("generator.error.needPredistortion");
                 }
-                gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms,
-                        EXPORT_FS_VOLTAGE_AMPL, dpd);
+                gen = new SignalGenerator(frequency, sampleRate, amplitudeVrmsLeft, amplitudeVrmsRight,
+                        EXPORT_FS_VOLTAGE_AMPL, EXPORT_FS_VOLTAGE_AMPL, dpd);
             } else if (isSweep) {
                 double f0 = prefs.getGenSweepFreqStartHz();
                 double f1 = prefs.getGenSweepFreqEndHz();
                 int durationSamples = Math.max(2, (int) Math.round(sweepDurSec * sampleRate));
                 gen = (form == GenSignalForm.LINEAR_SWEEP)
                         ? new SignalGenerator(f0, f1, sampleRate, durationSamples,
-                                amplitudeVRms, EXPORT_FS_VOLTAGE_AMPL)
+                                amplitudeVrmsLeft, amplitudeVrmsRight,
+                                EXPORT_FS_VOLTAGE_AMPL, EXPORT_FS_VOLTAGE_AMPL)
                         : new SignalGenerator(f0, f1, durationSamples, 0, sampleRate,
-                                amplitudeVRms, EXPORT_FS_VOLTAGE_AMPL);
+                                amplitudeVrmsLeft, amplitudeVrmsRight,
+                                EXPORT_FS_VOLTAGE_AMPL, EXPORT_FS_VOLTAGE_AMPL);
                 int fadeIn  = Math.max(0, (int) Math.round(prefs.getGenSweepFadeInSec()  * sampleRate));
                 int fadeOut = Math.max(0, (int) Math.round(prefs.getGenSweepFadeOutSec() * sampleRate));
                 gen.setSweepParams(sweepLoops, fadeIn, fadeOut);
             } else {
-                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms,
-                        EXPORT_FS_VOLTAGE_AMPL);
+                gen = new SignalGenerator(form, frequency, sampleRate,
+                        amplitudeVrmsLeft, amplitudeVrmsRight,
+                        EXPORT_FS_VOLTAGE_AMPL, EXPORT_FS_VOLTAGE_AMPL);
             }
             gen.setRectangleDuty(prefs.getGenRectangleDuty());
             // Non-sweep periodic forms truncate to an integer-period count; noise
             // and sweeps use 0 (raw) - a sweep's length is already fixed above
             // (one sweep, or whole sweeps when looped).
             double freqForTruncation = (form.isPeriodic() && !isSweep) ? frequency : 0.0;
-            // BOTH lanes at 1.0 - the file carries the signal on the 0 dBFS =
-            // 2 Vrms convention (EXPORT_FS_VOLTAGE_AMPL) and NO device
-            // calibration: the per-lane DAC ratio belongs to the live encoder,
-            // which applies it when THIS file is played on a device.  Only the
-            // output-lane gate (a routing choice, not calibration) is kept.
+            // Both lanes on the 0 dBFS = 2 Vrms convention (EXPORT_FS_VOLTAGE_AMPL),
+            // each at its own amplitude, and NO device calibration: a lane's DAC
+            // full scale belongs to the live line, which applies it when THIS
+            // file is played on a device.  Only the output-lane gate (a routing
+            // choice, not calibration) is kept.
             long bytes = SignalFileExporter.export(gen, new File(path),
                     sampleRate, bitDepth, duration, ditherBits, freqForTruncation,
-                    1.0, 1.0, prefs.getGenOutputChannels());
+                    prefs.getGenOutputChannels());
             log.info("File saved: {} ({} bytes)", path, bytes);
             return null;
         } catch (Exception ex) {

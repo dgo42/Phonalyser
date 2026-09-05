@@ -550,8 +550,23 @@ final class MockBench extends WirePeer {
             return new NetMessage(id, new NetError(ErrorCode.NOT_LOCKED,
                     "a calibration may only be written by the client holding the device"));
         }
-        device.fsLeft = request.optDouble(NetFields.FS_RMS_LEFT);
-        device.fsRight = request.optDouble(NetFields.FS_RMS_RIGHT);
+        String scope = request.optString(NetFields.CHANNEL);
+        Double fsRms = request.optDouble(NetFields.FS_RMS);
+        if (fsRms == null
+                || !(NetFields.LEFT.equals(scope) || NetFields.RIGHT.equals(scope))) {
+            return new NetMessage(id, new NetError(ErrorCode.BAD_REQUEST,
+                    "a calibration names one channel and carries its fsRms"));
+        }
+        // What a bench's own store does with a card whose other channel was
+        // never calibrated: it takes the same value, so one write calibrates
+        // the device instead of leaving cal null until the second channel.
+        if (NetFields.LEFT.equals(scope)) {
+            device.fsLeft = fsRms;
+            if (device.fsRight <= NO_FULL_SCALE) device.fsRight = fsRms;
+        } else {
+            device.fsRight = fsRms;
+            if (device.fsLeft <= NO_FULL_SCALE) device.fsLeft = fsRms;
+        }
         broadcastDevices();
         return new NetMessage(id);
     }

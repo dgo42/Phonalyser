@@ -35,7 +35,7 @@ public class NetProto {
 
     /** Highest wire-protocol version this build speaks - the value carried by
      *  {@code hello}, the beacon and {@code /info} (spec 1). */
-    public static final int PROTO_VERSION = 2;
+    public static final int PROTO_VERSION = 3;
 
     /**
      * Lowest wire-protocol version this build still speaks.  Spec 1 negotiates
@@ -43,15 +43,24 @@ public class NetProto {
      * the highest version inside BOTH ranges.  Only a truly empty intersection
      * is {@code PROTO_MISMATCH}.
      *
-     * <p>Equal to {@link #PROTO_VERSION}, so this build's range is {@code 2..2}
-     * and a v1 peer is refused at {@code hello}.  Spec 1 calls that a hard cut
-     * and gives the reason: v2 carries the audio on a SECOND connection a v1
-     * peer never dials (spec 4.7) and refuses {@code capture.start} until that
-     * connection has attached (spec 4.4), so there is no subset of v2 a v1 peer
-     * could be served with.  The negotiation itself is untouched - it is what a
-     * v3 will be agreed through; only the range moved.
+     * <p>Equal to {@link #PROTO_VERSION}, so this build speaks version 3 only
+     * and a v2 peer is refused at {@code hello}.  Spec 1 calls that a hard cut
+     * and gives the reason: v3 commands the generator's amplitude PER DAC LANE
+     * ({@code amplitudeVrmsLeft} / {@code amplitudeVrmsRight}, each converted
+     * by the bench against its own card), and a v2 peer knows one amplitude
+     * plus a lane ratio the client computed - so there is no subset of v3 a v2
+     * peer could be served with.  The negotiation itself is untouched - it is
+     * what a v4 will be agreed through; only the range moved.
      */
     public static final int PROTO_MIN_VERSION = PROTO_VERSION;
+
+    /** A version range as the messages of spec 1 print it: one number while the
+     *  range is a single version (every hard-cut build), {@code min..max}
+     *  otherwise - so an operator reading a refusal sees "protocol 2", not a
+     *  range notation. */
+    public static String versionText(int min, int max) {
+        return min == max ? Integer.toString(max) : min + ".." + max;
+    }
 
     /** Default port, ONE for both planes: the HTTP endpoints of spec 3 and the
      *  WebSocket upgrade of spec 4 are served by the same listener. */

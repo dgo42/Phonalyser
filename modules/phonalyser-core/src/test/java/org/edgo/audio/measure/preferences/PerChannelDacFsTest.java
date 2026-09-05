@@ -162,13 +162,13 @@ class PerChannelDacFsTest {
                 row("lo", 1.0, 1.1), row("hi", 3.0, 3.3)));
         p.setBackend(AudioBackendType.WASAPI);
         p.current().setOutputDeviceName("Speakers (Dual DAC)");
-        p.setDacFsVoltageAmpl(1.0 * Constants.SQRT2);
+        p.setDacFsVoltageAmplLeft(1.0 * Constants.SQRT2);
         p.setDacFsVoltageAmplRight(3.3 * Constants.SQRT2);
 
         double newAmpl = 4.0 * Constants.SQRT2;
         p.storeDacCalibration(Channel.R, newAmpl);
 
-        assertEquals(1.0 * Constants.SQRT2, p.getDacFsVoltageAmpl(), EPS,
+        assertEquals(1.0 * Constants.SQRT2, p.getDacFsVoltageAmplLeft(), EPS,
                 "LEFT scalar untouched by a RIGHT DAC calibrate");
         assertEquals(newAmpl, p.getDacFsVoltageAmplRight(), EPS, "RIGHT scalar took the value");
 
@@ -190,13 +190,13 @@ class PerChannelDacFsTest {
                 DeviceChannelMode.LINKED, "default", null, row("default", 2.0, 2.2)));
         p.setBackend(AudioBackendType.WASAPI);
         p.current().setOutputDeviceName("Speakers (Linked DAC)");
-        p.setDacFsVoltageAmpl(2.0 * Constants.SQRT2);
+        p.setDacFsVoltageAmplLeft(2.0 * Constants.SQRT2);
         p.setDacFsVoltageAmplRight(2.2 * Constants.SQRT2);
 
         double newAmpl = 3.5 * Constants.SQRT2;
         p.storeDacCalibration(Channel.R, newAmpl);
 
-        assertEquals(2.0 * Constants.SQRT2, p.getDacFsVoltageAmpl(), EPS,
+        assertEquals(2.0 * Constants.SQRT2, p.getDacFsVoltageAmplLeft(), EPS,
                 "LEFT scalar untouched by a RIGHT calibrate on a LINKED card");
         assertEquals(newAmpl, p.getDacFsVoltageAmplRight(), EPS, "RIGHT scalar took the value");
 
@@ -219,7 +219,7 @@ class PerChannelDacFsTest {
         double newAmpl = 2.5 * Constants.SQRT2;
         p.storeDacCalibration(Channel.R, newAmpl);
 
-        assertEquals(newAmpl, p.getDacFsVoltageAmpl(), EPS, "MONO calibrate moves both scalars together");
+        assertEquals(newAmpl, p.getDacFsVoltageAmplLeft(), EPS, "MONO calibrate moves both scalars together");
         assertEquals(newAmpl, p.getDacFsVoltageAmplRight(), EPS);
 
         AudioDeviceProfile bound = p.resolveDeviceProfile("Speakers (Mono DAC)");
@@ -242,7 +242,7 @@ class PerChannelDacFsTest {
         double newAmpl = 2.79351;
         p.storeDacCalibration(newAmpl);
 
-        assertEquals(newAmpl, p.getDacFsVoltageAmpl(), EPS);
+        assertEquals(newAmpl, p.getDacFsVoltageAmplLeft(), EPS);
         assertEquals(newAmpl, p.getDacFsVoltageAmplRight(), EPS, "legacy store keeps both scalars equal");
 
         AudioDeviceProfile bound = p.resolveDeviceProfile("Speakers (Linked DAC)");
@@ -254,10 +254,10 @@ class PerChannelDacFsTest {
     @Test
     void dacFsVoltageAmpl_isChannelAware() {
         Preferences p = detached();
-        p.setDacFsVoltageAmpl(2.0);
+        p.setDacFsVoltageAmplLeft(2.0);
         p.setDacFsVoltageAmplRight(3.0);
         assertEquals(2.0, p.getDacFsVoltageAmpl(Channel.L), EPS);
         assertEquals(3.0, p.getDacFsVoltageAmpl(Channel.R), EPS);
-        assertEquals(2.0, p.getDacFsVoltageAmpl(), EPS, "channel-less getter is the LEFT / legacy value");
+        assertEquals(2.0, p.getDacFsVoltageAmplLeft(), EPS, "the left getter is the LEFT lane's value");
     }
 }

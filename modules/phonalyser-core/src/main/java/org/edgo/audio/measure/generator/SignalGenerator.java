@@ -89,17 +89,17 @@ public class SignalGenerator implements GeneratorControls {
     /** Per-tone linear amplitude weights for the dual-tone waveform.
      *  Each weight equals the user's amplitude percentage / 100.
      *  Combined-signal RMS = {@code amplitude · √((w₁² + w₂²) / 2)},
-     *  so {@link #amplitude} is re-normalised against the weights
+     *  so both lanes' levels are re-normalised against the weights
      *  inside {@link #setDualToneAmplitudes} to keep the RMS equal to
-     *  whatever Vrms was last set on {@link #setAmplitudeVrms}.  Live-
+     *  whatever Vrms was last set on {@link #setAmplitudesVrms}.  Live-
      *  swappable. */
     private volatile double dualW1 = 0.5;
     private volatile double dualW2 = 0.5;
-    /** Last Vrms value passed to {@link #setAmplitudeVrms}, cached so
-     *  the dual-tone amplitude-split path can re-derive
-     *  {@link #amplitude} when the weights change without losing the
-     *  user's chosen RMS target. */
-    private volatile double currentVrms = 0.0;
+    /** The two lanes' commanded amplitudes in V RMS, as last passed to
+     *  {@link #setAmplitudesVrms} - cached so a form or split change can
+     *  re-derive the levels without losing what the operator dialled. */
+    private volatile double currentVrmsLeft = 0.0;
+    private volatile double currentVrmsRight = 0.0;
 
     // -------------------------------------------------------------------------
     // Generator parameters
@@ -107,17 +107,23 @@ public class SignalGenerator implements GeneratorControls {
 
     /** Current waveform.  Live-swappable via {@link #setForm(GenSignalForm)}. */
     private volatile GenSignalForm form;
-    /** Linear peak amplitude [0..1].  Live-swappable via {@link #setAmplitudeVrms}. */
-    private volatile double     amplitude;
-    /** DAC full-scale PEAK amplitude voltage (= full-scale-sine RMS × √2) - the
-     *  value the amplitude scale divides by: {@code amplitude = Vrms / (this ·
-     *  rawRms)}.  Preferences persists the RMS form but hands the generator this
-     *  peak/amplitude value directly (suited for the calculation).  Injected via
-     *  the constructors and pushed by the owner on recalibration
-     *  ({@link #setDacFsVoltageAmpl}); the generator never reaches into
+    /** The two lanes' linear peak levels [0..1] of digital full scale - each
+     *  lane's own {@code Vrms / (dacFs · rawRms)}.  Every lane is independent:
+     *  the ONE waveform is rendered once per frame and scaled per lane
+     *  ({@link #nextFrame}).  Live-swappable via {@link #setAmplitudesVrms} and
+     *  {@link #setDacFsVoltageAmpls}. */
+    private volatile double     amplitudeLeft;
+    private volatile double     amplitudeRight;
+    /** The two lanes' DAC full-scale PEAK amplitude voltages (= full-scale-sine
+     *  RMS × √2) - the value each lane's level divides by.  Preferences persists
+     *  the RMS form but hands the generator this peak/amplitude value directly
+     *  (suited for the calculation).  Injected via the constructors (both lanes
+     *  alike) and pushed by the owner on recalibration
+     *  ({@link #setDacFsVoltageAmpls}); the generator never reaches into
      *  Preferences itself.  {@code volatile}: written from the UI thread, read on
      *  the audio render thread. */
-    private volatile double     dacFsVoltageAmpl;
+    private volatile double     dacFsVoltageAmplLeft;
+    private volatile double     dacFsVoltageAmplRight;
     /** Sample rate cached for live frequency / amplitude updates from the GUI. */
     private final    int        sampleRate;
     /** The output frequency in Hz, kept beside its phase increment: the rectangle
@@ -284,23 +290,30 @@ public class SignalGenerator implements GeneratorControls {
     // -------------------------------------------------------------------------
 
     /**
-     * @param form            waveform type
-     * @param frequency       output frequency in Hz (ignored for noise types)
-     * @param sampleRate      sample rate in Hz
-     * @param amplitudeVRms   desired output amplitude in V RMS
-     * @param dacFsVoltageAmpl DAC full-scale PEAK amplitude voltage (= full-scale-sine RMS × √2)
+     * Every constructor takes both lanes' amplitudes and full scales: a
+     * single-lane driver (a sweep engine, the command line, a deconvolution
+     * reference) passes its one value for both.
+     *
+     * @param form                  waveform type
+     * @param frequency             output frequency in Hz (ignored for noise types)
+     * @param sampleRate            sample rate in Hz
+     * @param amplitudeVrmsLeft     the left lane's output amplitude in V RMS
+     * @param amplitudeVrmsRight    the right lane's output amplitude in V RMS
+     * @param dacFsVoltageAmplLeft  the left lane's DAC full-scale PEAK amplitude
+     *                              voltage (= full-scale-sine RMS × √2)
+     * @param dacFsVoltageAmplRight the right lane's DAC full-scale PEAK amplitude
+     *                              voltage
      */
-    public SignalGenerator(GenSignalForm form, double frequency, int sampleRate, double amplitudeVRms,
-                           double dacFsVoltageAmpl) {
+    public SignalGenerator(GenSignalForm form, double frequency, int sampleRate,
+                           double amplitudeVrmsLeft, double amplitudeVrmsRight,
+                           double dacFsVoltageAmplLeft, double dacFsVoltageAmplRight) {
         this.form            = form;
-        this.currentVrms     = amplitudeVRms;
-        this.dacFsVoltageAmpl = dacFsVoltageAmpl;
-        this.amplitude       = amplitudeVRms / (dacFsVoltageAmpl * rawRms(form));
+        applyLanes(amplitudeVrmsLeft, amplitudeVrmsRight, dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
         this.sampleRate  = sampleRate;
         this.frequencyHz = frequency;
         this.phaseInc    = toPhaseInc(frequency);
-        log.debug("DDS: form={} freq={}Hz rate={}Hz phaseInc={} amplitude={}V RMS",
-                form, frequency, sampleRate, phaseInc, amplitudeVRms);
+        log.debug("DDS: form={} freq={}Hz rate={}Hz phaseInc={} amplitude={} / {} V RMS",
+                form, frequency, sampleRate, phaseInc, amplitudeVrmsLeft, amplitudeVrmsRight);
     }
 
     /** Converts a frequency (Hz) to a 64-bit DDS phase increment.  Exact to
@@ -319,18 +332,24 @@ public class SignalGenerator implements GeneratorControls {
      *
      * <p>If the CSV contains generator-parameter metadata (written by
      * {@link Main#exportAppliedCompensationCsv}) with a calibration amplitude
-     * different from {@code amplitudeVRms}, the per-harmonic ratios are scaled
-     * by {@code csv_amplitude / amplitudeVRms} so the absolute compensation
-     * voltage matches the calibrated value.
+     * different from the commanded one, the per-harmonic ratios are scaled by
+     * {@code csv_amplitude / amplitude} so the absolute compensation voltage
+     * matches the calibrated value.
      *
-     * @param frequency        fundamental frequency in Hz
-     * @param sampleRate       sample rate in Hz
-     * @param amplitudeVRms    desired fundamental amplitude in V RMS
-     * @param harmonicsCsvPath path to the harmonics CSV file
+     * @param frequency             fundamental frequency in Hz
+     * @param sampleRate            sample rate in Hz
+     * @param amplitudeVrmsLeft     the left lane's fundamental amplitude in V RMS
+     * @param amplitudeVrmsRight    the right lane's fundamental amplitude in V RMS
+     * @param dacFsVoltageAmplLeft  the left lane's DAC full-scale PEAK amplitude
+     * @param dacFsVoltageAmplRight the right lane's DAC full-scale PEAK amplitude
+     * @param harmonicsCsvPath      path to the harmonics CSV file
      */
-    public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
-                           double dacFsVoltageAmpl, String harmonicsCsvPath) throws IOException {
-        this(GenSignalForm.SINE_COMP, frequency, sampleRate, amplitudeVRms, dacFsVoltageAmpl);
+    public SignalGenerator(double frequency, int sampleRate,
+                           double amplitudeVrmsLeft, double amplitudeVrmsRight,
+                           double dacFsVoltageAmplLeft, double dacFsVoltageAmplRight,
+                           String harmonicsCsvPath) throws IOException {
+        this(GenSignalForm.SINE_COMP, frequency, sampleRate, amplitudeVrmsLeft, amplitudeVrmsRight,
+                dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
         new Predistortion(harmonicsCsvPath, frequency, sampleRate).applyTo(this);
     }
 
@@ -340,14 +359,20 @@ public class SignalGenerator implements GeneratorControls {
      * Requires coherent averaging ({@code result.coherentAveraging == true}); otherwise
      * phases are unknown and amplitude-only correction is applied with a warning.
      *
-     * @param frequency     fundamental frequency in Hz
-     * @param sampleRate    sample rate in Hz
-     * @param amplitudeVRms desired fundamental amplitude in V RMS
-     * @param result        FFT analysis result containing harmonic amplitudes and phases
+     * @param frequency             fundamental frequency in Hz
+     * @param sampleRate            sample rate in Hz
+     * @param amplitudeVrmsLeft     the left lane's fundamental amplitude in V RMS
+     * @param amplitudeVrmsRight    the right lane's fundamental amplitude in V RMS
+     * @param dacFsVoltageAmplLeft  the left lane's DAC full-scale PEAK amplitude
+     * @param dacFsVoltageAmplRight the right lane's DAC full-scale PEAK amplitude
+     * @param result                FFT analysis result containing harmonic amplitudes and phases
      */
-    public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
-                           double dacFsVoltageAmpl, FftResult result) {
-        this(GenSignalForm.SINE_COMP, frequency, sampleRate, amplitudeVRms, dacFsVoltageAmpl);
+    public SignalGenerator(double frequency, int sampleRate,
+                           double amplitudeVrmsLeft, double amplitudeVrmsRight,
+                           double dacFsVoltageAmplLeft, double dacFsVoltageAmplRight,
+                           FftResult result) {
+        this(GenSignalForm.SINE_COMP, frequency, sampleRate, amplitudeVrmsLeft, amplitudeVrmsRight,
+                dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
         loadHarmonicsFromResult(frequency, sampleRate, result);
     }
 
@@ -357,16 +382,22 @@ public class SignalGenerator implements GeneratorControls {
      * Used by the iterative compensation workflow where corrections are aggregated
      * across multiple iterations as complex numbers.
      *
-     * @param frequency     fundamental frequency in Hz
-     * @param sampleRate    sample rate in Hz
-     * @param amplitudeVRms desired fundamental amplitude in V RMS
-     * @param ampRatios     per-harmonic amplitude ratios (relative to fundamental)
-     * @param phiInits      per-harmonic initial phases (radians, DAC output reference)
-     * @param freqsHz       per-harmonic frequencies in Hz
+     * @param frequency             fundamental frequency in Hz
+     * @param sampleRate            sample rate in Hz
+     * @param amplitudeVrmsLeft     the left lane's fundamental amplitude in V RMS
+     * @param amplitudeVrmsRight    the right lane's fundamental amplitude in V RMS
+     * @param dacFsVoltageAmplLeft  the left lane's DAC full-scale PEAK amplitude
+     * @param dacFsVoltageAmplRight the right lane's DAC full-scale PEAK amplitude
+     * @param ampRatios             per-harmonic amplitude ratios (relative to fundamental)
+     * @param phiInits              per-harmonic initial phases (radians, DAC output reference)
+     * @param freqsHz               per-harmonic frequencies in Hz
      */
-    public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
-                           double dacFsVoltageAmpl, double[] ampRatios, double[] phiInits, double[] freqsHz) {
-        this(GenSignalForm.SINE_COMP, frequency, sampleRate, amplitudeVRms, dacFsVoltageAmpl);
+    public SignalGenerator(double frequency, int sampleRate,
+                           double amplitudeVrmsLeft, double amplitudeVrmsRight,
+                           double dacFsVoltageAmplLeft, double dacFsVoltageAmplRight,
+                           double[] ampRatios, double[] phiInits, double[] freqsHz) {
+        this(GenSignalForm.SINE_COMP, frequency, sampleRate, amplitudeVrmsLeft, amplitudeVrmsRight,
+                dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
         int n = ampRatios.length;
         int[] hNums = new int[n];
         for (int i = 0; i < n; i++) {
@@ -389,16 +420,18 @@ public class SignalGenerator implements GeneratorControls {
      *
      * @param freqStart      sweep start frequency in Hz (instantaneous frequency at sample 0)
      * @param freqEnd        sweep end   frequency in Hz (instantaneous frequency at the last sample of the period)
-     * @param sampleRate     sample rate in Hz
-     * @param periodSamples  duration of one full sweep cycle in samples
-     * @param amplitudeVRms  desired output amplitude in V RMS
+     * @param sampleRate            sample rate in Hz
+     * @param periodSamples         duration of one full sweep cycle in samples
+     * @param amplitudeVrmsLeft     the left lane's output amplitude in V RMS
+     * @param amplitudeVrmsRight    the right lane's output amplitude in V RMS
+     * @param dacFsVoltageAmplLeft  the left lane's DAC full-scale PEAK amplitude
+     * @param dacFsVoltageAmplRight the right lane's DAC full-scale PEAK amplitude
      */
-    public SignalGenerator(double freqStart, double freqEnd, int sampleRate,
-                           int periodSamples, double amplitudeVRms, double dacFsVoltageAmpl) {
+    public SignalGenerator(double freqStart, double freqEnd, int sampleRate, int periodSamples,
+                           double amplitudeVrmsLeft, double amplitudeVrmsRight,
+                           double dacFsVoltageAmplLeft, double dacFsVoltageAmplRight) {
         this.form               = GenSignalForm.LINEAR_SWEEP;
-        this.currentVrms        = amplitudeVRms;
-        this.dacFsVoltageAmpl    = dacFsVoltageAmpl;
-        this.amplitude          = amplitudeVRms / (dacFsVoltageAmpl * rawRms(GenSignalForm.LINEAR_SWEEP));
+        applyLanes(amplitudeVrmsLeft, amplitudeVrmsRight, dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
         this.phaseInc           = 0;            // unused for sweep
         this.sampleRate         = sampleRate;
         this.sweepFreqStart     = freqStart;
@@ -407,12 +440,13 @@ public class SignalGenerator implements GeneratorControls {
         this.sweepPeriodSamples = periodSamples;
         this.sweepIdx           = 0;
         this.sweepPhase         = 0.0;
-        log.info("DDS sweep: f0={}Hz f1={}Hz period={} samples ({} s) amplitude={}V RMS",
+        log.info("DDS sweep: f0={}Hz f1={}Hz period={} samples ({} s) amplitude={} / {} V RMS",
                 String.format(Locale.US, "%.4f", freqStart),
                 String.format(Locale.US, "%.4f", freqEnd),
                 periodSamples,
                 String.format(Locale.US, "%.4f", periodSamples / (double) sampleRate),
-                String.format(Locale.US, "%.6f", amplitudeVRms));
+                String.format(Locale.US, "%.6f", amplitudeVrmsLeft),
+                String.format(Locale.US, "%.6f", amplitudeVrmsRight));
     }
 
     /**
@@ -428,28 +462,31 @@ public class SignalGenerator implements GeneratorControls {
      * @param f1             sweep end   frequency in Hz (instantaneous frequency at the last sweep sample)
      * @param sweepSamples   sweep duration in samples
      * @param leadInSamples  silent samples emitted before the sweep
-     * @param sampleRate     sample rate in Hz
-     * @param amplitudeVRms  sweep amplitude in V RMS
+     * @param sampleRate            sample rate in Hz
+     * @param amplitudeVrmsLeft     the left lane's sweep amplitude in V RMS
+     * @param amplitudeVrmsRight    the right lane's sweep amplitude in V RMS
+     * @param dacFsVoltageAmplLeft  the left lane's DAC full-scale PEAK amplitude
+     * @param dacFsVoltageAmplRight the right lane's DAC full-scale PEAK amplitude
      */
-    public SignalGenerator(double f0, double f1, int sweepSamples, int leadInSamples,
-                           int sampleRate, double amplitudeVRms, double dacFsVoltageAmpl) {
+    public SignalGenerator(double f0, double f1, int sweepSamples, int leadInSamples, int sampleRate,
+                           double amplitudeVrmsLeft, double amplitudeVrmsRight,
+                           double dacFsVoltageAmplLeft, double dacFsVoltageAmplRight) {
         this.form           = GenSignalForm.LOG_SWEEP;
-        this.currentVrms    = amplitudeVRms;
-        this.dacFsVoltageAmpl = dacFsVoltageAmpl;
-        this.amplitude      = amplitudeVRms / (dacFsVoltageAmpl * rawRms(GenSignalForm.LOG_SWEEP));
+        applyLanes(amplitudeVrmsLeft, amplitudeVrmsRight, dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
         this.phaseInc       = 0;            // unused for sweep
         this.sampleRate     = sampleRate;
         this.logSweepBuffer = renderLogSweep(f0, f1, sweepSamples, sampleRate);
         this.logSweepLeadIn = leadInSamples;
         this.logSweepIdx    = 0L;
-        log.info("DDS log sweep: f0={}Hz f1={}Hz duration={} samples ({} s), lead-in {} samples ({} s), amplitude={}V RMS",
+        log.info("DDS log sweep: f0={}Hz f1={}Hz duration={} samples ({} s), lead-in {} samples ({} s), amplitude={} / {} V RMS",
                 String.format(Locale.US, "%.4f", f0),
                 String.format(Locale.US, "%.4f", f1),
                 sweepSamples,
                 String.format(Locale.US, "%.4f", sweepSamples / (double) sampleRate),
                 leadInSamples,
                 String.format(Locale.US, "%.4f", leadInSamples / (double) sampleRate),
-                String.format(Locale.US, "%.6f", amplitudeVRms));
+                String.format(Locale.US, "%.6f", amplitudeVrmsLeft),
+                String.format(Locale.US, "%.6f", amplitudeVrmsRight));
     }
 
     /**
@@ -476,7 +513,7 @@ public class SignalGenerator implements GeneratorControls {
     }
 
     /**
-     * Resets the sweep playback position so the next {@link #nextSample()}
+     * Resets the sweep playback position so the next {@link #nextFrame}
      * starts from the beginning of the lead-in (LOG_SWEEP) or the start of
      * the cycle (LINEAR_SWEEP).  Called by playback backends after any
      * pre-stream JIT warmup that consumed samples from this generator -
@@ -543,15 +580,6 @@ public class SignalGenerator implements GeneratorControls {
         return Math.max(1e-12, Math.sqrt(rms2));
     }
 
-    /** State-aware wrapper around {@link #rawRms(GenSignalForm)} -
-     *  reads the current form from the field instead of taking it as
-     *  a parameter.  Used by the dual-tone re-normalisation path
-     *  where {@link #setDualToneAmplitudes} needs to recompute
-     *  {@link #amplitude} against the new weights. */
-    private double rawRmsForCurrentState() {
-        return rawRms(form);
-    }
-
     // -------------------------------------------------------------------------
     // Public API
     // -------------------------------------------------------------------------
@@ -567,12 +595,39 @@ public class SignalGenerator implements GeneratorControls {
      */
     public void setForm(GenSignalForm newForm) {
         if (newForm == null || newForm == form) return;
-        // Re-scale amplitude so the new form keeps the same V RMS output -
-        // sine and triangle / saw / noise have different peak / RMS ratios.
-        // {@link #currentVrms} is the cached "what the user dialled" and
-        // gets re-divided against the new form's rawRms.
-        this.form      = newForm;
-        this.amplitude = currentVrms / (dacFsVoltageAmpl * rawRms(newForm));
+        // Re-scale both lanes' levels so the new form keeps the same V RMS
+        // output - sine and triangle / saw / noise have different peak / RMS
+        // ratios.  The cached Vrms is "what the user dialled" and gets
+        // re-divided against the new form's rawRms.
+        this.form = newForm;
+        recomputeLevels();
+    }
+
+    /** Stores both lanes' commanded amplitudes and full scales and derives the
+     *  two digital levels from them - the one place the four meet, so a lane's
+     *  level can never be computed from the other lane's full scale. */
+    private void applyLanes(double vrmsLeft, double vrmsRight, double fsAmplLeft,
+            double fsAmplRight) {
+        this.currentVrmsLeft       = vrmsLeft;
+        this.currentVrmsRight      = vrmsRight;
+        this.dacFsVoltageAmplLeft  = fsAmplLeft;
+        this.dacFsVoltageAmplRight = fsAmplRight;
+        recomputeLevels();
+    }
+
+    /** Re-derives both lanes' levels from the cached amplitudes and full scales
+     *  against the current form's peak / RMS ratio. */
+    private void recomputeLevels() {
+        double raw = rawRms(form);
+        this.amplitudeLeft  = currentVrmsLeft  / (dacFsVoltageAmplLeft  * raw);
+        this.amplitudeRight = currentVrmsRight / (dacFsVoltageAmplRight * raw);
+    }
+
+    /** Sets both lanes' digital levels directly - for a source whose samples
+     *  are not a waveform at a voltage but a file at a gain per lane. */
+    protected void setLevels(double left, double right) {
+        this.amplitudeLeft  = left;
+        this.amplitudeRight = right;
     }
 
     /**
@@ -653,11 +708,10 @@ public class SignalGenerator implements GeneratorControls {
      *  percentage divided by 100.  Each value is clamped to
      *  {@code [0, 100]} independently.
      *
-     *  <p>After updating the weights the internal {@code amplitude}
-     *  scale is re-normalised against the new
-     *  {@code rawRms() = √((w₁² + w₂²) / 2)} so the combined signal's
-     *  Vrms still matches whatever was last passed to
-     *  {@link #setAmplitudeVrms}.  Without the re-normalisation a
+     *  <p>After updating the weights both lanes' levels are re-normalised
+     *  against the new {@code rawRms() = √((w₁² + w₂²) / 2)} so the
+     *  combined signal's Vrms still matches whatever was last passed to
+     *  {@link #setAmplitudesVrms}.  Without the re-normalisation a
      *  50/50 split would emit a noticeably quieter signal than a 100/0
      *  single-tone case at the same Amplitude-field setting. */
     public void setDualToneAmplitudes(double amp1Pct, double amp2Pct) {
@@ -665,30 +719,30 @@ public class SignalGenerator implements GeneratorControls {
         double a2 = Math.max(0.0, Math.min(100.0, amp2Pct)) / 100.0;
         this.dualW1 = a1;
         this.dualW2 = a2;
-        // Re-derive the amplitude scale from the cached Vrms so the
-        // combined RMS stays equal to the Amplitude field's value
-        // regardless of how the user splits the two tones.
-        this.amplitude = currentVrms / (dacFsVoltageAmpl * rawRmsForCurrentState());
+        // Re-derive the levels from the cached Vrms so the combined RMS stays
+        // equal to the Amplitude field's value regardless of how the user
+        // splits the two tones.
+        recomputeLevels();
     }
 
     /**
-     * Live-updates the output amplitude (V RMS).  Takes effect on the
-     * next sample emitted; no audible click unless the change is large.
+     * Live-updates the two lanes' output amplitudes (V RMS each).  Takes effect
+     * on the next frame emitted; no audible click unless the change is large.
      */
-    public void setAmplitudeVrms(double amplitudeVRms) {
-        this.currentVrms = amplitudeVRms;
-        this.amplitude   = amplitudeVRms / (dacFsVoltageAmpl * rawRms(form));
+    @Override
+    public void setAmplitudesVrms(double leftVrms, double rightVrms) {
+        applyLanes(leftVrms, rightVrms, dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
     }
 
     /**
-     * Pushes a new DAC full-scale voltage (the user recalibrated) and recomputes
-     * the output amplitude scale from the cached requested Vrms, so a running
-     * generator tracks the new full-scale immediately without a restart.  The
-     * owner observes the calibration preference and forwards the value here.
+     * Pushes the two lanes' DAC full-scale voltages (the user recalibrated) and
+     * recomputes each lane's level from its cached requested Vrms, so a running
+     * generator tracks the new full scales immediately without a restart.  The
+     * owner observes the calibration preferences and forwards the values here.
      */
-    public void setDacFsVoltageAmpl(double v) {
-        this.dacFsVoltageAmpl = v;
-        this.amplitude = currentVrms / (v * rawRms(form));
+    @Override
+    public void setDacFsVoltageAmpls(double leftAmpl, double rightAmpl) {
+        applyLanes(currentVrmsLeft, currentVrmsRight, leftAmpl, rightAmpl);
     }
 
     /**
@@ -717,10 +771,21 @@ public class SignalGenerator implements GeneratorControls {
     }
 
     /**
-     * Returns the next sample in the range [-1.0, +1.0] scaled by amplitude.
-     * Advances the phase accumulator by one step.
+     * The next frame, one sample per lane in [-1.0, +1.0] of digital full scale:
+     * the ONE waveform sample, scaled by each lane's own level.  Advances the
+     * phase accumulator by one step.  {@code frame[0]} is the left lane,
+     * {@code frame[1]} the right; no allocation - the audio hot path.
      */
-    public double nextSample() {
+    public void nextFrame(double[] frame) {
+        double raw = nextRaw();
+        frame[0] = raw * amplitudeLeft;
+        frame[1] = raw * amplitudeRight;
+    }
+
+    /** The next sample of the waveform itself, at unit level, advancing the
+     *  phase accumulator by one step - what every lane is scaled from.  A
+     *  source that is not a waveform (a file) overrides this alone. */
+    protected double nextRaw() {
         double raw = switch (form) {
             case SINE              -> ddsSine();
             case TRIANGLE          -> ddsTriangle();
@@ -741,7 +806,7 @@ public class SignalGenerator implements GeneratorControls {
         if (form == GenSignalForm.DUAL_TONE || form == GenSignalForm.DUAL_TONE_COMP) {
             phaseAcc2 += phaseInc2;
         }
-        return raw * amplitude;
+        return raw;
     }
 
     /**

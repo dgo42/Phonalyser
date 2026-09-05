@@ -51,9 +51,11 @@ import lombok.extern.log4j.Log4j2;
  * show the remembered pick before, or without, an answer from the bench; the
  * card's VALUES never are.
  *
- * <p>Distinct from {@link CalibrationStore} on purpose: that one decides where a
- * measured VALUE goes, this one owns the CARDS - which exist, which is chosen,
- * which row of one is active.  The protocol draws the same line -
+ * <p>Distinct from {@link CalibrationStore} on purpose: that one answers what the
+ * selected device's calibration IS and copies a local card's VALUES up, this one
+ * owns the CARDS - which exist, which is chosen, which row of one is active.  A
+ * MEASURED value goes through neither: the backend the device is on stores it
+ * ({@code AudioBackend.calibrate}).  The protocol draws the same line -
  * {@code device.setCard} is accepted for a {@code calibrationFromDevice} card,
  * which {@code device.setCalibration} and {@code cards.put} are not.
  */

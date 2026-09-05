@@ -37,6 +37,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.net.proto.BinaryFrame;
@@ -84,7 +85,6 @@ class GeneratorSessionTest {
     private static final double TONE_HZ = 997.0;
     private static final double AMPLITUDE_VRMS = 0.5;
     private static final double QUIETER_VRMS = 0.25;
-    private static final double DAC_FS_VOLTAGE_AMPL = 2.0;
     private static final double SECOND_TONE_HZ = 1_497.0;
     private static final double FIRST_SPLIT_PCT = 70.0;
     private static final double SECOND_SPLIT_PCT = 30.0;
@@ -99,7 +99,6 @@ class GeneratorSessionTest {
     private static final int MEASURE_SAMPLES = RATE_HZ;
     private static final double HZ_TOLERANCE = 2.0;
     private static final double EXACT = 0.0;
-    private static final double EPS = 1e-9;
     /** How close a rendered peak counted over whole cycles comes to the analytic
      *  amplitude: a 997 Hz tone sampled at 48 kHz misses its crest by up to half
      *  a sample step. */
@@ -110,6 +109,9 @@ class GeneratorSessionTest {
     private static final String CARD_NAME = "Bench DAC";
     private static final double CARD_FS_LEFT = 4.0;
     private static final double CARD_FS_RIGHT = 5.0;
+    /** The same card after a client recalibrated it while the tone was up. */
+    private static final double RECALIBRATED_FS_LEFT = 2.0;
+    private static final double RECALIBRATED_FS_RIGHT = 2.5;
 
     private static final double SWEEP_F0_HZ = 20.0;
     private static final double SWEEP_F1_HZ = 20_000.0;
@@ -274,14 +276,15 @@ class GeneratorSessionTest {
         generator.config(FIRST_GEN_ID, config()
                 .put(NetFields.FORM, GenSignalForm.SINE.name())
                 .put(NetFields.FREQUENCY, TONE_HZ)
-                .put(NetFields.AMPLITUDE_VRMS, AMPLITUDE_VRMS));
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, AMPLITUDE_VRMS));
         generator.start(FIRST_GEN_ID);
 
         assertEquals(AMPLITUDE_VRMS * Constants.SQRT2, peakOf(playback()), AMPLITUDE_EPS,
                 "with no card the divisor is 1.0 (spec 4.5), so the normalised peak "
                         + "IS the commanded amplitude in its peak form");
-        assertEquals(1.0, playback().getRightLaneScale(), EXACT,
-                "and both lanes are alike");
+        assertEquals(AMPLITUDE_VRMS * Constants.SQRT2, peakOfRight(playback()), AMPLITUDE_EPS,
+                "and the right lane, at the same amplitude and divisor, is alike");
     }
 
     @Test
@@ -293,7 +296,8 @@ class GeneratorSessionTest {
         generator.config(FIRST_GEN_ID, config()
                 .put(NetFields.FORM, GenSignalForm.SINE.name())
                 .put(NetFields.FREQUENCY, TONE_HZ)
-                .put(NetFields.AMPLITUDE_VRMS, AMPLITUDE_VRMS));
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, AMPLITUDE_VRMS));
         generator.start(FIRST_GEN_ID);
 
         // dacFsVoltageAmpl = fsLeft × √2, and the DDS divides the commanded
@@ -302,9 +306,9 @@ class GeneratorSessionTest {
         assertEquals(AMPLITUDE_VRMS / CARD_FS_LEFT, peakOf(playback()), AMPLITUDE_EPS,
                 "spec 4.5 v1.1: the lane starts at the full scale the SERVER stores "
                         + "for its own device, not at the 1.0 placeholder");
-        assertEquals(CARD_FS_LEFT / CARD_FS_RIGHT, playback().getRightLaneScale(), EPS,
-                "and the right lane carries fsLeft/fsRight, so a card whose two DACs "
-                        + "differ emits the same physical level on both");
+        assertEquals(AMPLITUDE_VRMS / CARD_FS_RIGHT, peakOfRight(playback()), AMPLITUDE_EPS,
+                "and the right lane renders against the card's RIGHT full scale, so a "
+                        + "card whose two DACs differ emits the same physical level on both");
     }
 
     @Test
@@ -330,7 +334,8 @@ class GeneratorSessionTest {
         generator.config(FIRST_GEN_ID, config()
                 .put(NetFields.FORM, GenSignalForm.SINE.name())
                 .put(NetFields.FREQUENCY, TONE_HZ)
-                .put(NetFields.AMPLITUDE_VRMS, AMPLITUDE_VRMS));
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, AMPLITUDE_VRMS));
         generator.start(FIRST_GEN_ID);
 
         assertEquals(AMPLITUDE_VRMS * Constants.SQRT2, peakOf(playback()), AMPLITUDE_EPS,
@@ -338,34 +343,74 @@ class GeneratorSessionTest {
                         + "scale is the DIVISOR of the amplitude scale - so it is an "
                         + "uncalibrated device and the 1.0 placeholder is what it gets, "
                         + "not a division by zero rendered into the DAC");
-        assertEquals(1.0, playback().getRightLaneScale(), EXACT,
-                "and the lane ratio stays finite");
+        assertEquals(AMPLITUDE_VRMS * Constants.SQRT2, peakOfRight(playback()), AMPLITUDE_EPS,
+                "and the right lane gets the same placeholder, so its level stays finite");
     }
 
     /**
-     * A client's own full scale is IGNORED: the card of the machine the DAC is
-     * plugged into is the only converter.
-     *
-     * <p>Input and output full-scale calibration is applied ON THE SERVER.
-     * While a client could push its own number over the bench's card, the same
-     * amplitude entered on two clients came out of the same output at two
-     * different levels, and a server-side card edit changed nothing on a client
-     * that pushed.  Both belts are in place: the clients no longer send the
-     * field, and this proves the server would ignore it if one did.
+     * Each lane emits its OWN commanded amplitude against its OWN full scale of
+     * the bench's card (spec 4.5, v3): the DDS renders the one waveform at each
+     * lane's level, so a right amplitude half the left's on a card whose right
+     * full scale is 5/4 of the left's lands at exactly {@code 0.5/5} of digital
+     * full scale while the left lane sits at {@code 1/4}.
      */
     @Test
-    void aClientsOwnFullScaleIsIgnoredWhenTheBenchHasACard() {
+    void eachLaneEmitsItsOwnAmplitudeAgainstItsOwnFullScale() {
         cards.card(CARD_NAME, StubDeviceManager.OUTPUT, false, CARD_FS_LEFT, CARD_FS_RIGHT,
                 false);
 
         open();
-        configureTone();                          // still sends dacFsVoltageAmpl = 2.0
+        generator.config(FIRST_GEN_ID, config()
+                .put(NetFields.FORM, GenSignalForm.SINE.name())
+                .put(NetFields.FREQUENCY, TONE_HZ)
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, QUIETER_VRMS));
         generator.start(FIRST_GEN_ID);
 
         assertEquals(AMPLITUDE_VRMS / CARD_FS_LEFT, peakOf(playback()), AMPLITUDE_EPS,
-                "the BENCH's card converts, whatever the client sent");
-        assertEquals(CARD_FS_LEFT / CARD_FS_RIGHT, playback().getRightLaneScale(), EPS,
-                "and the lane ratio is the card's too");
+                "the left lane renders its own amplitude against the card's left full scale");
+        assertEquals(QUIETER_VRMS / CARD_FS_RIGHT, peakOfRight(playback()), AMPLITUDE_EPS,
+                "and the right lane its own amplitude against the card's right full scale");
+
+        // One side alone moves one side: the right lane up to the left's amplitude.
+        generator.config(FIRST_GEN_ID, config().put(NetFields.AMPLITUDE_VRMS_RIGHT, AMPLITUDE_VRMS));
+        assertEquals(AMPLITUDE_VRMS / CARD_FS_RIGHT, peakOfRight(playback()), AMPLITUDE_EPS,
+                "equal amplitudes on unequal full scales - the same physical level on "
+                        + "both lanes, at different digital levels");
+        assertEquals(AMPLITUDE_VRMS / CARD_FS_LEFT, peakOf(playback()), AMPLITUDE_EPS,
+                "while the left lane did not move");
+    }
+
+    /**
+     * A calibration stored while the lane is open (spec 4.3
+     * {@code device.setCalibration}, which needs this very lock) re-pins the tone
+     * that is playing at once, per lane - each lane's rendered level against its
+     * own new full scale - exactly as a local recalibration lands on a local
+     * generator, and without a restart.
+     */
+    @Test
+    void aCalibrationStoredWhileTheToneIsPlayingRepinsBothLanesAtOnce() {
+        cards.card(CARD_NAME, StubDeviceManager.OUTPUT, false, CARD_FS_LEFT, CARD_FS_RIGHT,
+                false);
+        open();
+        generator.config(FIRST_GEN_ID, config()
+                .put(NetFields.FORM, GenSignalForm.SINE.name())
+                .put(NetFields.FREQUENCY, TONE_HZ)
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, QUIETER_VRMS));
+        generator.start(FIRST_GEN_ID);
+        assertTrue(catalog.storeCalibration(output, StubDeviceManager.OUTPUT, Channel.L,
+                RECALIBRATED_FS_LEFT));
+        assertTrue(catalog.storeCalibration(output, StubDeviceManager.OUTPUT, Channel.R,
+                RECALIBRATED_FS_RIGHT));
+
+        generator.calibrationChanged(output);
+
+        assertEquals(AMPLITUDE_VRMS / RECALIBRATED_FS_LEFT, peakOf(playback()), AMPLITUDE_EPS,
+                "the playing tone's left lane is rendered against the NEW left full scale");
+        assertEquals(QUIETER_VRMS / RECALIBRATED_FS_RIGHT, peakOfRight(playback()),
+                AMPLITUDE_EPS,
+                "and its right lane against the NEW right full scale");
     }
 
     @Test
@@ -392,20 +437,19 @@ class GeneratorSessionTest {
         generator.config(FIRST_GEN_ID, config()
                 .put(NetFields.FORM, GenSignalForm.RECTANGLE.name())
                 .put(NetFields.FREQUENCY, TONE_HZ)
-                .put(NetFields.AMPLITUDE_VRMS, AMPLITUDE_VRMS)
-                .put(NetFields.DAC_FS_VOLTAGE_AMPL, DAC_FS_VOLTAGE_AMPL)
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
                 .put(NetFields.RECTANGLE_DUTY, RECTANGLE_DUTY)
                 .put(NetFields.TRIANGLE_DUTY, TRIANGLE_DUTY));
 
         // A second update naming ONE field must leave every other one alone.
-        generator.config(FIRST_GEN_ID, config().put(NetFields.AMPLITUDE_VRMS, QUIETER_VRMS));
+        generator.config(FIRST_GEN_ID, config().put(NetFields.AMPLITUDE_VRMS_LEFT, QUIETER_VRMS));
 
         JsonNode state = generator.state(FIRST_GEN_ID);
         assertEquals(GenSignalForm.RECTANGLE.name(), state.path(NetFields.FORM).asText(),
                 "spec 4.5: only present fields are applied - an absent form is not a "
                         + "request to go back to a sine");
         assertEquals(TONE_HZ, state.path(NetFields.NOMINAL_HZ).asDouble(), EXACT);
-        assertEquals(QUIETER_VRMS, state.path(NetFields.AMPLITUDE_VRMS).asDouble(), EXACT,
+        assertEquals(QUIETER_VRMS, state.path(NetFields.AMPLITUDE_VRMS_LEFT).asDouble(), EXACT,
                 "and the one field that WAS present did change");
     }
 
@@ -443,7 +487,7 @@ class GeneratorSessionTest {
         open();
         configureSweep(GenSignalForm.LOG_SWEEP);
 
-        generator.config(FIRST_GEN_ID, config().put(NetFields.AMPLITUDE_VRMS, QUIETER_VRMS));
+        generator.config(FIRST_GEN_ID, config().put(NetFields.AMPLITUDE_VRMS_LEFT, QUIETER_VRMS));
 
         JsonNode sweep = generator.state(FIRST_GEN_ID).path(NetFields.SWEEP);
         assertEquals(SWEEP_SAMPLES, sweep.path(NetFields.DURATION_SAMPLES).asInt());
@@ -457,7 +501,7 @@ class GeneratorSessionTest {
         generator.start(FIRST_GEN_ID);
         playback().render(HALF_CHIRP_SAMPLES);
 
-        generator.config(FIRST_GEN_ID, config().put(NetFields.AMPLITUDE_VRMS, QUIETER_VRMS));
+        generator.config(FIRST_GEN_ID, config().put(NetFields.AMPLITUDE_VRMS_LEFT, QUIETER_VRMS));
 
         assertEquals(MID_CHIRP_HZ, playback().measuredHz(CHIRP_WINDOW_SAMPLES),
                 CHIRP_TOLERANCE_HZ,
@@ -474,8 +518,8 @@ class GeneratorSessionTest {
         generator.config(FIRST_GEN_ID, config()
                 .put(NetFields.FORM, GenSignalForm.SINE_COMP.name())
                 .put(NetFields.FREQUENCY, TONE_HZ)
-                .put(NetFields.AMPLITUDE_VRMS, AMPLITUDE_VRMS)
-                .put(NetFields.DAC_FS_VOLTAGE_AMPL, DAC_FS_VOLTAGE_AMPL));
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, AMPLITUDE_VRMS));
         generator.start(FIRST_GEN_ID);
         double uncorrected = peakOf(playback().render(MEASURE_SAMPLES));
 
@@ -688,7 +732,8 @@ class GeneratorSessionTest {
 
         assertEquals("{\"genId\":1,\"running\":true,\"form\":\"SINE\","
                 + "\"nominalHz\":997.0,\"emitHz\":997.0,\"emit2Hz\":0.0,"
-                + "\"amplitudeVrms\":0.5,\"sweep\":{\"active\":false,\"posSamples\":0,"
+                + "\"amplitudeVrmsLeft\":0.5,\"amplitudeVrmsRight\":0.5,"
+                + "\"sweep\":{\"active\":false,\"posSamples\":0,"
                 + "\"durationSamples\":0,\"loop\":true},\"file\":{\"playing\":false,"
                 + "\"posSamples\":0,\"finished\":false,\"rate\":0,\"bits\":0}}",
                 state.toString(),
@@ -761,7 +806,7 @@ class GeneratorSessionTest {
         oneShot.put(NetFields.LOOP, false);
         generator.config(FIRST_GEN_ID, config()
                 .put(NetFields.FORM, GenSignalForm.LINEAR_SWEEP.name())
-                .put(NetFields.AMPLITUDE_VRMS, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
                 .put(NetFields.SWEEP, oneShot));
         generator.start(FIRST_GEN_ID);
 
@@ -1040,8 +1085,8 @@ class GeneratorSessionTest {
         generator.config(FIRST_GEN_ID, config()
                 .put(NetFields.FORM, GenSignalForm.SINE.name())
                 .put(NetFields.FREQUENCY, TONE_HZ)
-                .put(NetFields.AMPLITUDE_VRMS, AMPLITUDE_VRMS)
-                .put(NetFields.DAC_FS_VOLTAGE_AMPL, DAC_FS_VOLTAGE_AMPL));
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, AMPLITUDE_VRMS));
     }
 
     private void configureSweep(GenSignalForm form) {
@@ -1055,8 +1100,7 @@ class GeneratorSessionTest {
         sweep.put(NetFields.LOOP, false);
         generator.config(FIRST_GEN_ID, config()
                 .put(NetFields.FORM, form.name())
-                .put(NetFields.AMPLITUDE_VRMS, AMPLITUDE_VRMS)
-                .put(NetFields.DAC_FS_VOLTAGE_AMPL, DAC_FS_VOLTAGE_AMPL)
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
                 .put(NetFields.SWEEP, sweep));
     }
 
@@ -1093,8 +1137,7 @@ class GeneratorSessionTest {
         sweep.put(NetFields.LOOP, false);
         generator.config(FIRST_GEN_ID, config()
                 .put(NetFields.FORM, GenSignalForm.LOG_SWEEP.name())
-                .put(NetFields.AMPLITUDE_VRMS, AMPLITUDE_VRMS)
-                .put(NetFields.DAC_FS_VOLTAGE_AMPL, DAC_FS_VOLTAGE_AMPL)
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
                 .put(NetFields.SWEEP, sweep));
     }
 
@@ -1136,11 +1179,14 @@ class GeneratorSessionTest {
      *  full scale the generator was BUILT with becomes visible: nothing reads it
      *  back, and the state payload does not carry it. */
     private double peakOf(StubPlayback lane) {
-        double peak = 0.0;
-        for (double sample : lane.render(MEASURE_SAMPLES)) {
-            peak = Math.max(peak, Math.abs(sample));
-        }
-        return peak;
+        return peakOf(lane.render(MEASURE_SAMPLES));
+    }
+
+    /** The right lane's twin of {@link #peakOf(StubPlayback)}: the level the
+     *  DDS renders the RIGHT lane at - its own amplitude over its own full
+     *  scale, nothing derived from the left. */
+    private double peakOfRight(StubPlayback lane) {
+        return peakOf(lane.renderRight(MEASURE_SAMPLES));
     }
 
     private StubDeviceManager managerFor() {

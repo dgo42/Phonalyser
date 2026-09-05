@@ -34,8 +34,8 @@ import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AbstractLocalDeviceManager;
 import org.edgo.audio.measure.sound.AudioCapture;
-import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xDevice;
@@ -78,7 +78,7 @@ import lombok.extern.log4j.Log4j2;
  * which the QA402 does not have - doc §4).
  */
 @Log4j2
-public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
+public class Qa40xDeviceManager extends AbstractLocalDeviceManager implements Qa40xControl {
 
     /** Bit depth advertised to the UI and delivered by {@code Qa40xRecorder}: the
      *  wire container is 32-bit LE, but only the 24 MSBs carry signal (the low byte
@@ -195,6 +195,8 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
     /**
      * Headless test seam: enumeration against an injected (stub) finder - no
      * {@code libusb}, no device, no bus wiring, so it runs on any CI agent.
+     * The card store is the process's own: nothing driven through this seam
+     * calibrates.
      */
     Qa40xDeviceManager(Qa40xDeviceFinder finder) {
         this.finder  = finder;

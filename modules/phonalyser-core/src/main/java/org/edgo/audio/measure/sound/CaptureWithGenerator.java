@@ -239,7 +239,7 @@ public class CaptureWithGenerator {
                 if (progress != null && cnt > 0) {
                     double rmsL = Math.sqrt(sumSqL / cnt);
                     double rmsR = Math.sqrt(sumSqR / cnt);
-                    try { progress.onBlock(writePos.get(), Math.max(rmsL, rmsR)); }
+                    try { progress.onBlock(writePos.get(), rmsL, rmsR); }
                     catch (Exception ex) { log.warn("Capture progress listener threw", ex); }
                 }
             });

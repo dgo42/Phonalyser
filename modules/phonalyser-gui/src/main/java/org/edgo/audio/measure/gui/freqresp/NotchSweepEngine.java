@@ -161,7 +161,7 @@ public final class NotchSweepEngine implements AutoCloseable {
      */
     public void start(double f0, double f1, double ampVrms, double dacFsVrms,
                       int sweepSamples, int fadeSamples,
-                      OutputChannels outputChannels, double rightLaneScale) throws Exception {
+                      OutputChannels outputChannels) throws Exception {
         loopChannels = outputChannels;
         // Before anything is acquired: the same period on the output clock, or
         // a refusal that costs nothing.
@@ -186,16 +186,16 @@ public final class NotchSweepEngine implements AutoCloseable {
             // The window the deconvolution will divide comes off THIS stream,
             // so its reference is rendered on this clock and with its count.
             reference = new SignalGenerator(f0, f1, sweepSamples, 0,
-                    captureRateHz, ampVrms, dacFsVrms);
+                    captureRateHz, ampVrms, ampVrms, dacFsVrms, dacFsVrms);
 
             // Loop ON with Hann fades at each cycle boundary; the SAME fades
             // (the same duration, counted on each side's clock) shape the
             // deconvolution reference.
             GeneratorRun run = new GeneratorRun(GenSignalForm.LOG_SWEEP,
-                    0.0, ampVrms, playbackRateHz, playbackBitDepth, ditherBits,
-                    dacFsVrms, rightLaneScale, outputChannels,
+                    0.0, ampVrms, ampVrms,   // both lanes alike
+                    playbackRateHz, playbackBitDepth, ditherBits,
+                    dacFsVrms, dacFsVrms, outputChannels,
                     true,    // the loop's period is samples on the asked clock
-                    false,   // the bench's own device card owns its calibration
                     new GeneratorRun.SweepSpec(f0, f1, playSamples, 0,
                             playFade, playFade, true));
             PlaybackStateEnum started = lane.start(run);
@@ -288,7 +288,7 @@ public final class NotchSweepEngine implements AutoCloseable {
      *  by ONE drive level, and a window spanning the change would draw the
      *  response offset by the level ratio. */
     public void setAmplitude(double ampVrms) {
-        lane.setAmplitudeVrms(ampVrms);
+        lane.setAmplitudesVrms(ampVrms, ampVrms);   // both lanes alike
         SignalBufferReader r = reader;
         if (r != null) sessionStart = r.getWritePos();
     }

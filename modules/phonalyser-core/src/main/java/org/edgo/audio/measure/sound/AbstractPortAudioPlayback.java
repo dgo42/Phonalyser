@@ -233,7 +233,7 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
         // method body is then used by the callback.
         if (generator.needsJitWarmup()) {
             warmupJit(generator);
-            // Warmup consumed nextSample() calls that advance sweep playback
+            // Warmup consumed frames that advance sweep playback
             // state; reset so the real stream sees the sweep from sample 0
             // (otherwise a freq-response measurement captures a mid-sweep
             // recording while the deconv reference starts at zero).
@@ -379,11 +379,6 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
     @Override
     public void setDitherBits(double bits) {
         quantizer.setDitherBits(bits);
-    }
-
-    @Override
-    public void setChannelScale(double left, double right) {
-        quantizer.setChannelScale(left, right);
     }
 
     @Override

@@ -37,9 +37,9 @@ import javax.sound.sampled.TargetDataLine;
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
+import org.edgo.audio.measure.sound.AbstractLocalDeviceManager;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioCapture;
-import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 
@@ -59,7 +59,7 @@ import lombok.extern.log4j.Log4j2;
  * directly.
  */
 @Log4j2
-public final class JavaSoundDeviceManager implements AudioDeviceManager {
+public final class JavaSoundDeviceManager extends AbstractLocalDeviceManager {
 
     /** The ALSA address of the system's default device, which names no card of
      *  its own - the entry that follows whatever the system is set to. */

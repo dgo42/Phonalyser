@@ -581,7 +581,8 @@ public final class FftView extends AbstractFreqDomainView {
         // accumulated spectrum, so restart averaging on a calibration change.
         Bindings.onChange(this, viewPrefs.adcFsVoltageRmsProperty(),      v -> resetStatistics());
         Bindings.onChange(this, viewPrefs.adcFsVoltageRmsRightProperty(),  v -> resetStatistics());
-        Bindings.onChange(this, viewPrefs.dacFsVoltageAmplProperty(),      v -> resetStatistics());
+        Bindings.onChange(this, viewPrefs.dacFsVoltageAmplLeftProperty(),  v -> resetStatistics());
+        Bindings.onChange(this, viewPrefs.dacFsVoltageAmplRightProperty(), v -> resetStatistics());
         // Selecting an active alignment mode (PID / FLL) resets its loop so each
         // session converges fresh; NONE deliberately resets nothing (the
         // generator stays at the stabilized frequency, the converged correction

@@ -268,7 +268,8 @@ public class IterativeCompensateMode {
         double[] preCorrDbFs0  = null;
         for (int retry = 0; ; retry++) {
             double[] s0 = CaptureWithGenerator.run(
-                    new SignalGenerator(GenSignalForm.SINE, frequency, sampleRate, amplitude, prefs.getDacFsVoltageAmpl()),
+                    new SignalGenerator(GenSignalForm.SINE, frequency, sampleRate, amplitude, amplitude,
+                            prefs.getDacFsVoltageAmplLeft(), prefs.getDacFsVoltageAmplRight()),
                     outDevice, inDevice, sampleRate, bitDepth, ditherBits, duration);
             try {
                 result0 = fftAnalyzer.analyze(
@@ -382,8 +383,10 @@ public class IterativeCompensateMode {
             for (int retry = 0; ; retry++) {
                 SignalGenerator gen = accumulate
                         ? buildAccumulatedGenerator(frequency, sampleRate, amplitude,
-                                prefs.getDacFsVoltageAmpl(), comp, calResponseAt, prefs.getAdcFsVoltageRms())
-                        : new SignalGenerator(frequency, sampleRate, amplitude, prefs.getDacFsVoltageAmpl(), lastResult);
+                                prefs.getDacFsVoltageAmplLeft(), comp, calResponseAt, prefs.getAdcFsVoltageRms())
+                        : new SignalGenerator(frequency, sampleRate, amplitude, amplitude,
+                                prefs.getDacFsVoltageAmplLeft(), prefs.getDacFsVoltageAmplRight(),
+                                lastResult);
                 double[] s = CaptureWithGenerator.run(gen,
                         outDevice, inDevice, sampleRate, bitDepth, ditherBits, duration);
                 try {
@@ -573,7 +576,7 @@ public class IterativeCompensateMode {
         for (int i = 0; i < freqs.length; i++) {
             freqs[i] = gc.harmonicNumbers()[i] * frequency;
         }
-        return new SignalGenerator(frequency, sampleRate, amplitude, dacFsVoltageRms,
-                gc.ampRatios(), gc.phiInits(), freqs);
+        return new SignalGenerator(frequency, sampleRate, amplitude, amplitude,
+                dacFsVoltageRms, dacFsVoltageRms, gc.ampRatios(), gc.phiInits(), freqs);
     }
 }

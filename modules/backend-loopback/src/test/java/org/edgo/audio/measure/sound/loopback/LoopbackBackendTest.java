@@ -33,19 +33,22 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManagerProvider;
 import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
  * Behaviour of the digital loopback backend: discovery, the format ladder, that
- * what is played arrives, and that the delivered floor is the arithmetic TPDF
- * floor of the selected depth.
+ * what is played arrives, that silence is digital zeros while no dither is
+ * configured, and that a configured dither floors at its arithmetic TPDF value.
  */
 class LoopbackBackendTest {
 
@@ -65,6 +68,10 @@ class LoopbackBackendTest {
     private static final long CAPTURE_MS = 400;
     /** A captured block counts as signal when it swings this far from midpoint. */
     private static final int SIGNAL_THRESHOLD_LSB = 1000;
+    /** A measured pair, as a calibrate dialog hands it to the backend. */
+    private static final double FS_RMS_LEFT = 1.234;
+    private static final double FS_RMS_RIGHT = 2.345;
+    private static final double EPS = 1e-9;
 
     /** Collects delivered blocks, decoded to signed sample values in LSB. */
     private List<int[]> capture(AudioCapture capture, long millis, Runnable whileRecording)
@@ -143,32 +150,93 @@ class LoopbackBackendTest {
         }
     }
 
+    /**
+     * The local half of the calibration rule, shared by every backend whose
+     * devices are plugged into this machine: a measured channel goes into THIS
+     * machine's cards (the card is created when none recognises the device) and
+     * onto the live scalars the dBV axis reads, in one step - the store write IS
+     * the success, there is no bench to wait for.  One channel per write, and
+     * the second write leaves the first channel where the first write put it.
+     *
+     * <p>On the one process-wide store: the test run points {@code app.data.dir}
+     * at the module's build directory (surefire, parent POM), so the card lands
+     * in that directory's own {@code devices.yaml} and never in an installation's.
+     */
     @Test
-    @DisplayName("quantised silence carries the last-bit dither floor")
-    void silenceCarriesDitherFloor() throws Exception {
+    @DisplayName("a calibration lands in this machine's cards and on the scalars at once")
+    void aCalibrationLandsInTheLocalCardsAndOnTheScalars() {
+        Preferences prefs = Preferences.instance();
+        LoopbackDeviceManager manager = new LoopbackDeviceManager();
+        DeviceRef device = manager.listInputDevices().get(0);
+
+        assertTrue(manager.storeCalibration(device, true, Channel.L, FS_RMS_LEFT));
+        assertTrue(manager.storeCalibration(device, true, Channel.R, FS_RMS_RIGHT));
+
+        DeviceCalibration stored = prefs.deviceCalibration(device.name(), true);
+        assertNotNull(stored, "the local calibrate flow created the card it needed");
+        assertEquals(FS_RMS_LEFT, stored.fsRmsLeft(), EPS);
+        assertEquals(FS_RMS_RIGHT, stored.fsRmsRight(), EPS,
+                "the second write touched only its own channel");
+        assertEquals(FS_RMS_LEFT, prefs.getAdcFsVoltageRms(Channel.L), EPS,
+                "and the scalars moved with it");
+        assertEquals(FS_RMS_RIGHT, prefs.getAdcFsVoltageRms(Channel.R), EPS);
+    }
+
+    @Test
+    @DisplayName("silence with no dither configured is digital zeros")
+    void silenceWithNoDitherIsDigitalZeros() throws Exception {
         LoopbackDeviceManager manager = new LoopbackDeviceManager();
         DeviceRef device = manager.listInputDevices().get(0);
         List<int[]> blocks = capture(manager.openCapture(device, RATE, 24), CAPTURE_MS, null);
         assertTrue(blocks.size() > 1, "no blocks delivered");
-        double rms = rmsLsb(blocks, 1);
-        assertTrue(Math.abs(rms - EXPECTED_FLOOR_LSB) < FLOOR_TOLERANCE_LSB,
-                "delivered silence RMS should be ~" + EXPECTED_FLOOR_LSB + " LSB, was " + rms);
+        assertEquals(0.0, rmsLsb(blocks, 1),
+                "the backend adds no dither of its own, so an undithered loopback "
+                        + "measurement reads the arithmetic zeros it is supposed to");
     }
 
     @Test
-    @DisplayName("the floor is one LSB of the SELECTED depth, so it falls as depth rises")
-    void floorFollowsBitDepth() throws Exception {
+    @DisplayName("a last-bit dither floors at one LSB of the SELECTED depth, so it falls as depth rises")
+    void lastBitDitherFloorFollowsBitDepth() throws Exception {
         LoopbackDeviceManager manager = new LoopbackDeviceManager();
         DeviceRef device = manager.listInputDevices().get(0);
-        // Same LSB count at both depths, but an LSB at 24 bits is 2^8 times
-        // smaller than at 16 - so relative to full scale the floor drops.
-        double rms16 = rmsLsb(capture(manager.openCapture(device, RATE, 16), CAPTURE_MS, null), 1);
-        double rms24 = rmsLsb(capture(manager.openCapture(device, RATE, 24), CAPTURE_MS, null), 1);
+        // The generator configures a dither at the lane's own depth on each
+        // lane: the same LSB count at both depths, but an LSB at 24 bits is 2^8
+        // times smaller than at 16 - so relative to full scale the floor drops.
+        double rms16 = ditheredSilenceRmsLsb(manager, device, 16, 16.0);
+        double rms24 = ditheredSilenceRmsLsb(manager, device, 24, 24.0);
         assertTrue(Math.abs(rms16 - EXPECTED_FLOOR_LSB) < FLOOR_TOLERANCE_LSB, "16 bit: " + rms16);
         assertTrue(Math.abs(rms24 - EXPECTED_FLOOR_LSB) < FLOOR_TOLERANCE_LSB, "24 bit: " + rms24);
         double full16 = rms16 / Math.pow(2, 15);
         double full24 = rms24 / Math.pow(2, 23);
         assertTrue(full24 < full16 / 100, "floor relative to full scale must fall with depth");
+    }
+
+    /** The RMS, in LSB of {@code depth}, of the silence a playback lane opened
+     *  with {@code ditherBits} of dither delivers to the capture lane - read off
+     *  the blocks the dithered lane produced, not the capture's own zeros from
+     *  before the lane attached. */
+    private double ditheredSilenceRmsLsb(LoopbackDeviceManager manager, DeviceRef device,
+            int depth, double ditherBits) throws Exception {
+        AudioPlayback playback = manager.openPlayback(device, RATE, depth, ditherBits);
+        playback.open();
+        AtomicBoolean stop = new AtomicBoolean(false);
+        SignalGenerator silent = new SignalGenerator(GenSignalForm.SINE, 1000.0, RATE, 0.0, 0.0, 1.0, 1.0);
+        Thread player = new Thread(() -> playback.play(silent, stop, null), "test-player");
+
+        List<int[]> blocks = capture(manager.openCapture(device, RATE, depth), CAPTURE_MS,
+                player::start);
+        stop.set(true);
+        player.join(2000);
+        playback.close();
+
+        List<int[]> dithered = new ArrayList<>();
+        for (int[] block : blocks) {
+            if (rmsLsb(List.of(block), 0) > 0.0) {
+                dithered.add(block);
+            }
+        }
+        assertTrue(!dithered.isEmpty(), "no dithered block reached the capture lane at " + depth + " bit");
+        return rmsLsb(dithered, 0);
     }
 
     @Test
@@ -180,7 +248,7 @@ class LoopbackBackendTest {
         AudioPlayback playback = manager.openPlayback(device, RATE, depth, 0.0);
         playback.open();
         AtomicBoolean stop = new AtomicBoolean(false);
-        SignalGenerator gen = new SignalGenerator(GenSignalForm.SINE, 1000.0, RATE, 0.5, 1.0);
+        SignalGenerator gen = new SignalGenerator(GenSignalForm.SINE, 1000.0, RATE, 0.5, 0.5, 1.0, 1.0);
         Thread player = new Thread(() -> playback.play(gen, stop, null), "test-player");
 
         List<int[]> blocks = capture(manager.openCapture(device, RATE, depth), CAPTURE_MS, player::start);
@@ -204,18 +272,20 @@ class LoopbackBackendTest {
         // The first delivered signal block is the generator's first block, so an
         // identically seeded generator quantised here is the reference; only the
         // TPDF dither differs, which is bounded by one LSB.
-        SignalGenerator reference = new SignalGenerator(GenSignalForm.SINE, 1000.0, RATE, 0.5, 1.0);
+        SignalGenerator reference = new SignalGenerator(GenSignalForm.SINE, 1000.0, RATE, 0.5, 0.5, 1.0, 1.0);
+        double[] frame = new double[2];
         long maxVal = (1L << (depth - 1)) - 1;
         for (int i = 0; i < signal.length; i++) {
-            long expected = Math.round(reference.nextSample() * maxVal);
+            reference.nextFrame(frame);
+            long expected = Math.round(frame[0] * maxVal);
             assertTrue(Math.abs(expected - signal[i]) <= 1,
                     "sample " + i + ": expected ~" + expected + " but captured " + signal[i]);
         }
     }
 
     @Test
-    @DisplayName("a configured dither overrides the last-bit default")
-    void configuredDitherOverridesTheDefault() throws Exception {
+    @DisplayName("a configured dither above the last bit floors at its own TPDF value")
+    void configuredDitherFloorsAtItsOwnValue() throws Exception {
         LoopbackDeviceManager manager = new LoopbackDeviceManager();
         DeviceRef device = manager.listInputDevices().get(0);
         int depth = 24;
@@ -223,30 +293,13 @@ class LoopbackBackendTest {
         // A dither of b bits on a d-bit lane floors at sqrt(4^(d-b)/6 + 1/12)
         // LSB of d: the triangular noise keeps its own grid while the rounding
         // keeps the quantiser's.  The 0.500 figure is the b = d case.  Here
-        // that is ~1672 LSB - far above both the default floor and the capture
-        // lane's own silence, which is what separates the playback blocks.
+        // that is ~1672 LSB - far above the capture lane's own silence, which
+        // is what separates the playback blocks.
         double expectedFloor = Math.sqrt(Math.pow(4, depth - configuredBits) / 6 + 1.0 / 12);
         double tolerance = expectedFloor * (FLOOR_TOLERANCE_LSB / EXPECTED_FLOOR_LSB);
-        AudioPlayback playback = manager.openPlayback(device, RATE, depth, configuredBits);
-        playback.open();
-        AtomicBoolean stop = new AtomicBoolean(false);
-        SignalGenerator silent = new SignalGenerator(GenSignalForm.SINE, 1000.0, RATE, 0.0, 1.0);
-        Thread player = new Thread(() -> playback.play(silent, stop, null), "test-player");
 
-        List<int[]> blocks = capture(manager.openCapture(device, RATE, depth), CAPTURE_MS,
-                player::start);
-        stop.set(true);
-        player.join(2000);
-        playback.close();
+        double rms = ditheredSilenceRmsLsb(manager, device, depth, configuredBits);
 
-        List<int[]> dithered = new ArrayList<>();
-        for (int[] block : blocks) {
-            if (rmsLsb(List.of(block), 0) > expectedFloor / 2) {
-                dithered.add(block);
-            }
-        }
-        assertTrue(!dithered.isEmpty(), "no configured-dither block reached the capture lane");
-        double rms = rmsLsb(dithered, 0);
         assertTrue(Math.abs(rms - expectedFloor) < tolerance,
                 "a 12-bit dither on a 24-bit lane should floor at ~" + expectedFloor
                         + " LSB, was " + rms);
@@ -328,8 +381,8 @@ class LoopbackBackendTest {
     }
 
     @Test
-    @DisplayName("a lane with no generator behind it emits the session's DITHERED silence, never zeros")
-    void aGeneratorlessLaneBlockCarriesTheFloor() throws Exception {
+    @DisplayName("a lane with no generator behind it emits the session's silence: digital zeros")
+    void aGeneratorlessLaneBlockIsDigitalZeros() throws Exception {
         LoopbackDeviceManager manager = new LoopbackDeviceManager();
         DeviceRef device = manager.listInputDevices().get(0);
         int depth = 24;
@@ -341,17 +394,11 @@ class LoopbackBackendTest {
 
         playback.nextBlock(block, BLOCK_FRAMES);
 
-        int[] left = new int[BLOCK_FRAMES];
         int frameSize = ((depth + 7) / 8) * 2;
-        boolean anyNonZero = false;
         for (int f = 0; f < BLOCK_FRAMES; f++) {
-            left[f] = readLittleEndian24(block, f * frameSize);
-            if (left[f] != 0) anyNonZero = true;
+            assertEquals(0, readLittleEndian24(block, f * frameSize),
+                    "the session's silence lane adds no dither of its own, frame " + f);
         }
-        assertTrue(anyNonZero, "digital zeros would read as minus infinity, not as the known floor");
-        double rms = rmsLsb(List.of(left), 0);
-        assertTrue(Math.abs(rms - EXPECTED_FLOOR_LSB) < FLOOR_TOLERANCE_LSB,
-                "the block carries the session's last-bit floor, was " + rms);
     }
 
     /** Signed 24-bit little-endian sample - the encoding the lane writes. */
@@ -428,9 +475,11 @@ class LoopbackBackendTest {
     void consecutiveCapturesBothDeliver() throws Exception {
         LoopbackDeviceManager manager = new LoopbackDeviceManager();
         DeviceRef device = manager.listInputDevices().get(0);
-        double first = rmsLsb(capture(manager.openCapture(device, RATE, 24), CAPTURE_MS, null), 1);
-        double second = rmsLsb(capture(manager.openCapture(device, RATE, 24), CAPTURE_MS, null), 1);
-        assertTrue(Math.abs(first - EXPECTED_FLOOR_LSB) < FLOOR_TOLERANCE_LSB, "first: " + first);
-        assertTrue(Math.abs(second - EXPECTED_FLOOR_LSB) < FLOOR_TOLERANCE_LSB, "second: " + second);
+        List<int[]> first = capture(manager.openCapture(device, RATE, 24), CAPTURE_MS, null);
+        List<int[]> second = capture(manager.openCapture(device, RATE, 24), CAPTURE_MS, null);
+        assertTrue(first.size() > 1, "the first capture delivered nothing");
+        assertTrue(second.size() > 1, "the second capture delivered nothing");
+        assertEquals(0.0, rmsLsb(first, 1), "first: undithered silence is zeros");
+        assertEquals(0.0, rmsLsb(second, 1), "second: the same silence again");
     }
 }

@@ -307,10 +307,14 @@ public final class FreqRespPane extends AbstractPane {
         // Marshal each capture block's RMS to the SWT UI thread and
         // forward it to the live meter.  The callback fires on the audio
         // capture thread so we MUST asyncExec - touching the meter
-        // directly here would deadlock or crash.
-        int sr = Math.max(1, Preferences.instance().current().getInputSampleRate());
+        // directly here would deadlock or crash.  The meter shows the channel
+        // the view has selected (its L/R radio), read per block so a switch
+        // during the sweep takes effect at once.
+        Preferences prefs = Preferences.instance();
+        int sr = Math.max(1, prefs.current().getInputSampleRate());
         Shell paneShell = group.getShell();
-        StereoCaptureProgress progress = (totalSamples, rmsLin) -> {
+        StereoCaptureProgress progress = (totalSamples, rmsLeft, rmsRight) -> {
+            double rmsLin = prefs.isFreqRespLeftVisible() ? rmsLeft : rmsRight;
             double tSec = totalSamples / (double) sr;
             GuiUtil.marshal(paneShell, () -> {
                 if (busyMeter != null && !busyMeter.isDisposed()) {

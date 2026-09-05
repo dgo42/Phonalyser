@@ -121,7 +121,6 @@ class ServerLoopbackTest {
 
     private static final double TONE_HZ = 1_000.0;
     private static final double TONE_VRMS = 0.5;
-    private static final double DAC_FS_VOLTAGE_AMPL = 1.0;
     private static final double NO_DITHER_BITS = 0.0;
     /** Zero-crossing counting over a second of samples resolves about 1 Hz. */
     private static final double TONE_TOLERANCE_HZ = 2.0;
@@ -304,8 +303,8 @@ class ServerLoopbackTest {
                 .put(NetFields.GEN_ID, genId)
                 .put(NetFields.FORM, GenSignalForm.SINE.name())
                 .put(NetFields.FREQUENCY, TONE_HZ)
-                .put(NetFields.AMPLITUDE_VRMS, TONE_VRMS)
-                .put(NetFields.DAC_FS_VOLTAGE_AMPL, DAC_FS_VOLTAGE_AMPL)).isOk());
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, TONE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, TONE_VRMS)).isOk());
         assertTrue(client.request(client.newRequest(MessageType.GEN_START)
                 .put(NetFields.GEN_ID, genId)).isOk());
 

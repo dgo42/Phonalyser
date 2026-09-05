@@ -181,7 +181,8 @@ public class FreqRespMode {
         log.info("Amplitude   : {} V RMS", amp);
         log.info("Chart       : {}x{} px", chartWidth, chartHeight);
 
-        SignalGenerator gen = new SignalGenerator(fStart, fEnd, sweepSamples, leadInSamples, sampleRate, amp, prefs.getDacFsVoltageAmpl());
+        SignalGenerator gen = new SignalGenerator(fStart, fEnd, sweepSamples, leadInSamples, sampleRate,
+                amp, amp, prefs.getDacFsVoltageAmplLeft(), prefs.getDacFsVoltageAmplRight());
         // One-shot sweep for the measurement: emit silence after the buffer
         // ends instead of looping a second cycle into the capture window,
         // which would alias into the deconvolution.  Hann fade-in/fade-out

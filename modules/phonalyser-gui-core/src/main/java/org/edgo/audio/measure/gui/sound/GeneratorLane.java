@@ -30,6 +30,7 @@ import org.edgo.audio.measure.generator.GeneratorControls;
 import org.edgo.audio.measure.generator.Predistortion;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.gui.common.GuiUtil;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
@@ -137,9 +138,9 @@ public final class GeneratorLane {
                     ? PlaybackStateEnum.NO_DEVICE
                     : PlaybackStateEnum.DEVICE_UNAVAILABLE;
         }
-        // Applying the profile (DAC full scale + rightLaneScale) is the
-        // caller's step after resolution - a preference write belongs on the
-        // UI thread, whose bindings are plain UI-only listeners.
+        // Applying the profile (the two DAC full scales) is the caller's step
+        // after resolution - a preference write belongs on the UI thread,
+        // whose bindings are plain UI-only listeners.
         GuiUtil.marshal(() -> Preferences.instance().applyDeviceProfile(device, false));
 
         // The DDS may not be in this process at all - then the whole engine
@@ -149,7 +150,7 @@ public final class GeneratorLane {
             PlaybackStateEnum state = startRemote(remote, run, device);
             if (state == PlaybackStateEnum.STARTED && log.isInfoEnabled()) {
                 log.info("Generator started on a remote bench: device={}, form={}, freq={} Hz, amp={} Vrms, rate={} Hz, depth={} bit, dither={} bit",
-                        device.displayName(), run.form(), run.frequencyHz(), run.amplitudeVrms(),
+                        device.displayName(), run.form(), run.frequencyHz(), run.amplitudeVrmsLeft(),
                         run.sampleRate(), run.bitDepth(), run.ditherBits());
             }
             return lastStartState = state;
@@ -170,7 +171,7 @@ public final class GeneratorLane {
             attemptState = tryStartOnce(run, device, READY_TIMEOUT_S);
             if (attemptState == PlaybackStateEnum.STARTED) {
                 log.info("Generator started (attempt {}): device={}, form={}, freq={} Hz, amp={} Vrms, rate={} Hz, depth={} bit, dither={} bit",
-                        attempt, device.displayName(), run.form(), run.frequencyHz(), run.amplitudeVrms(),
+                        attempt, device.displayName(), run.form(), run.frequencyHz(), run.amplitudeVrmsLeft(),
                         run.sampleRate(), run.bitDepth(), run.ditherBits());
                 return lastStartState = attemptState;
             }
@@ -303,8 +304,10 @@ public final class GeneratorLane {
         final GenSignalForm form  = run.form();
         final int    sampleRate    = run.sampleRate();
         final double frequency     = run.frequencyHz();
-        final double amplitudeVRms = run.amplitudeVrms();
-        final double dacFs         = run.dacFsVoltage();
+        final double ampLeft  = run.amplitudeVrmsLeft();
+        final double ampRight = run.amplitudeVrmsRight();
+        final double fsLeft   = run.dacFsVoltageAmplLeft();
+        final double fsRight  = run.dacFsVoltageAmplRight();
         SignalGenerator gen;
         try {
             if (form == GenSignalForm.SINE_COMP) {
@@ -315,7 +318,8 @@ public final class GeneratorLane {
                 if (compensationFileMissing(dpd)) {
                     return PlaybackStateEnum.PREDISTORTION_FILE_MISSING;
                 }
-                gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, dacFs, dpd);
+                gen = new SignalGenerator(frequency, sampleRate, ampLeft, ampRight, fsLeft, fsRight,
+                        dpd);
             } else if (form == GenSignalForm.DUAL_TONE_COMP) {
                 // Plain two-tone generator, then load the dual-tone intermod
                 // corrections (freq-independent (a,b) products) onto it.  The
@@ -331,20 +335,22 @@ public final class GeneratorLane {
                 if (compensationFileMissing(dpd)) {
                     return PlaybackStateEnum.PREDISTORTION_FILE_MISSING;
                 }
-                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, dacFs);
+                gen = new SignalGenerator(form, frequency, sampleRate, ampLeft, ampRight,
+                        fsLeft, fsRight);
                 gen.readDpd(dpd, frequency, sampleRate);
             } else if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
                 GeneratorRun.SweepSpec sweep = run.sweep();
                 if (form == GenSignalForm.LINEAR_SWEEP) {
                     gen = new SignalGenerator(sweep.startHz(), sweep.stopHz(), sampleRate,
-                            sweep.durationSamples(), amplitudeVRms, dacFs);
+                            sweep.durationSamples(), ampLeft, ampRight, fsLeft, fsRight);
                 } else {
                     gen = new SignalGenerator(sweep.startHz(), sweep.stopHz(),
                             sweep.durationSamples(), sweep.leadInSamples(), sampleRate,
-                            amplitudeVRms, dacFs);
+                            ampLeft, ampRight, fsLeft, fsRight);
                 }
             } else {
-                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, dacFs);
+                gen = new SignalGenerator(form, frequency, sampleRate, ampLeft, ampRight,
+                        fsLeft, fsRight);
             }
         } catch (Exception ex) {
             log.warn("Signal source build failed", ex);
@@ -396,8 +402,8 @@ public final class GeneratorLane {
             this.generator = null;
             return PlaybackStateEnum.OPEN_FAILED;
         }
-        // Push the per-lane scale (scaleR = fsLeft/fsRight) and the output gate
-        // before the render thread starts - the quantizer reads them per block.
+        // Push the run's output gate before the render thread starts - the
+        // quantizer reads it per block.
         pushOutputRoutingTo(ag, run);
         // The playback lane owns the line from here: play thread, ready wait,
         // bounded release and the informed-from-below end state all live in it.
@@ -492,16 +498,9 @@ public final class GeneratorLane {
                 // sweep block below.
                 remote.setFrequency(emitHz);
             }
-            remote.setAmplitudeVrms(run.amplitudeVrms());
-            if (run.pushCalibration()) {
-                // The pane's tone: the operator calibrates the DAC from this
-                // GUI even when the DDS is remote, and a card whose two DAC
-                // full-scales differ emits an uncalibrated right lane without
-                // the per-lane scale.  A sweep engine's run skips both - the
-                // bench's own device card stays in force.
-                remote.setDacFsVoltageAmpl(run.dacFsVoltage());
-                remote.setRightLaneScale(run.rightLaneScale());
-            }
+            // Both lanes' amplitudes, and no calibration: the bench converts each
+            // against its own card's full scale for that lane (spec 4.5).
+            remote.setAmplitudesVrms(run.amplitudeVrmsLeft(), run.amplitudeVrmsRight());
             remote.setRectangleDuty(prefs.getGenRectangleDuty());
             remote.setTriangleDuty(prefs.getGenTriangleDuty());
             if (form.isDualTone()) {
@@ -890,48 +889,51 @@ public final class GeneratorLane {
         if (g != null) g.setDualToneAmplitudes(amp1Pct, amp2Pct);
     }
 
-    /** Live-applies a new amplitude (V RMS) to the running generator.  No-op if not running. */
-    public void setAmplitudeVrms(double vrms) {
+    /** Live-applies the two lanes' amplitudes (V RMS each) to the running
+     *  generator: the local kernel renders each lane at its own level, a bench
+     *  is told both and converts each itself.  A single-amplitude driver (a
+     *  sweep engine) passes its one value twice.  No-op if not running. */
+    public void setAmplitudesVrms(double leftVrms, double rightVrms) {
+        RemoteGenerator remote = remote();
+        if (remote != null) {
+            remote.setAmplitudesVrms(leftVrms, rightVrms);   // a no-op on the far end without a lane
+            return;
+        }
         GeneratorControls g = live();
-        if (g != null) g.setAmplitudeVrms(vrms);
+        if (g != null) g.setAmplitudesVrms(leftVrms, rightVrms);
     }
 
-    /** Recomputes the running generator's amplitude scale against the current DAC
-     *  full-scale (the cached requested Vrms is unchanged).  No-op if not running.
-     *  Driven by the DAC-calibration binding so a full-scale change takes effect live. */
-    public void setDacFsVoltageAmpl(double v) {
+    /** Recomputes the running generator's levels against the two lanes' current
+     *  DAC full scales (the cached requested amplitudes are unchanged).  No-op if
+     *  not running, and nothing for a bench, which converts against its own
+     *  card.  Driven by the DAC-calibration bindings so a full-scale change
+     *  takes effect live. */
+    public void setDacFsVoltageAmpls(double leftAmpl, double rightAmpl) {
+        if (remote() != null) return;   // spec 4.5: the wire carries no full scale
         GeneratorControls g = live();
-        if (g != null) g.setDacFsVoltageAmpl(v);
+        if (g != null) g.setDacFsVoltageAmpls(leftAmpl, rightAmpl);
     }
 
-    /** Pushes the current per-lane scale + output gate to the running playback.
-     *  No-op if nothing is playing - the values ride the quantizer's defaults
-     *  (both scales 1.0, gate BOTH) until a session opens and re-pushes them.
+    /** Pushes the output gate to the running LOCAL playback.  No-op if nothing
+     *  is playing - the gate rides the quantizer's default (BOTH) until a
+     *  session opens and re-pushes it.
      *
-     *  <p>A remote bench gets the lane scale as one command, because the lane it
-     *  belongs to is the far end's.  The output GATE is not sent: it is fixed at
+     *  <p>A remote bench is sent nothing here: its output GATE is fixed at
      *  {@code gen.open} (see {@link RemoteGenerator}), so a change to it reaches
      *  the bench at the next start. */
     public void pushOutputRouting() {
-        Preferences prefs = Preferences.instance();
-        RemoteGenerator remote = remote();
-        if (remote != null) {
-            remote.setRightLaneScale(prefs.dacRightLaneScale());
-            return;
-        }
+        if (remote() != null) return;
         AudioPlayback ag = playbackLane.getPlayback();
         if (ag == null) return;
-        ag.setChannelScale(1.0, prefs.dacRightLaneScale());
-        ag.setOutputChannels(prefs.getGenOutputChannels());
+        ag.setOutputChannels(Preferences.instance().getGenOutputChannels());
     }
 
     /** The local half of the push, against an explicit line - the pre-start
      *  path targets the just-opened line before the playback lane owns it,
-     *  with the RUN's scale and gate (the controller's run carries the prefs
-     *  values; a sweep engine's carries its own). */
+     *  with the RUN's gate (the controller's run carries the prefs value; a
+     *  sweep engine's carries its own). */
     private void pushOutputRoutingTo(AudioPlayback ag, GeneratorRun run) {
         if (ag == null) return;
-        ag.setChannelScale(1.0, run.rightLaneScale());
         ag.setOutputChannels(run.channels());
     }
 
@@ -1107,15 +1109,16 @@ public final class GeneratorLane {
     // -------------------------------------------------------------------------
 
     /** Highest output V RMS that still does NOT clip, for {@code form} at the
-     *  current DAC full scale.  The generator scales a waveform by
-     *  {@code amplitude = Vrms / (fsPeak · rawRms(form))} and clips above 1, so
-     *  digital full scale sits exactly at {@code Vrms = fsPeak · rawRms(form)} -
-     *  which is why the ceiling follows the waveform (a rectangle may go 3 dB
-     *  higher in RMS than a sine, a triangle sits between them, a dual tone
-     *  tracks its split).  The amplitude field caps itself with this, so V, dBV
-     *  and dBFS all trim to the same maximum and 0 dBFS is the top of the range. */
-    public double maxAmplitudeVrms(GenSignalForm form) {
-        return Preferences.instance().getDacFsVoltageAmpl() * rmsPerPeak(form);
+     *  current DAC full scale of lane {@code ch}.  The generator scales a
+     *  waveform by {@code amplitude = Vrms / (fsPeak · rawRms(form))} and clips
+     *  above 1, so digital full scale sits exactly at
+     *  {@code Vrms = fsPeak · rawRms(form)} - which is why the ceiling follows
+     *  the waveform (a rectangle may go 3 dB higher in RMS than a sine, a
+     *  triangle sits between them, a dual tone tracks its split).  Each lane's
+     *  amplitude field caps itself with this, so V, dBV and dBFS all trim to the
+     *  same maximum and 0 dBFS is the top of the range. */
+    public double maxAmplitudeVrms(GenSignalForm form, Channel ch) {
+        return Preferences.instance().getDacFsVoltageAmpl(ch) * rmsPerPeak(form);
     }
 
     /** RMS of the unit-amplitude waveform - the peak->RMS factor behind

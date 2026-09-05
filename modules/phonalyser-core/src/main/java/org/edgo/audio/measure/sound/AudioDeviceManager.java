@@ -22,6 +22,7 @@ import java.util.List;
 
 import javax.sound.sampled.AudioFormat;
 
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 
 /**
@@ -170,6 +171,34 @@ public interface AudioDeviceManager {
      *  {@code ditherBits} is the TPDF depth applied at quantisation
      *  ({@code 0} = off). */
     AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits);
+
+    /**
+     * Stores a measured calibration of ONE channel of {@code device} in
+     * {@code input}'s direction - that channel's full-scale RMS volts, the form
+     * a device card holds and spec 4.3's {@code device.setCalibration} carries -
+     * WHERE THE DEVICE IS CONNECTED.  A local backend writes this machine's card
+     * and applies the new full scale to the live scalars ({@link
+     * AbstractLocalDeviceManager}); the net backend sends the value to the bench
+     * the device is plugged into and writes nothing on this machine, so a bench
+     * device and a local device of the same name never share a calibration.
+     *
+     * <p>One channel per write: a channel that was not measured is not
+     * touched, and no write carries the other channel's value along - which
+     * is what lets two channels be calibrated one after the other without the
+     * second write putting a stale copy of the first back.  On a MONO card the
+     * one physical channel takes the value whichever channel names it.
+     *
+     * <p>{@code device} is a ref this backend listed in {@code input}'s
+     * direction: a duplex device is listed both ways, and which side is being
+     * calibrated is not readable off the ref alone.
+     *
+     * @return whether the value was stored - by the card store or by the bench;
+     *         {@code false}, with nothing written anywhere, when the device's
+     *         calibration is the DEVICE's own (a QA40x reads its full scales
+     *         from its EEPROM), when the bench refused it, or when there is no
+     *         session to send it on
+     */
+    boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms);
 
     /**
      * WHY an open or start on this backend failed, as something an operator can

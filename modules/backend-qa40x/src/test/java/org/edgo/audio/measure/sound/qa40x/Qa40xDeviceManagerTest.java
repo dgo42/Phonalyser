@@ -544,7 +544,7 @@ class Qa40xDeviceManagerTest {
                 new Qa40xDeviceManager.Qa40xDeviceRef(0, "QA403", Qa40xModel.QA403, QA403_IDENTITY),
                 RATE_HZ, BITS, 0);
         gen.open();
-        SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 0.1, 1.0);
+        SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 0.1, 0.1, 1.0, 1.0);
         AtomicBoolean stop = new AtomicBoolean(false);
         CountDownLatch ready = new CountDownLatch(1);
         Thread player = new Thread(() -> gen.play(sig, stop, ready), "qa40x-test-play");
@@ -630,7 +630,7 @@ class Qa40xDeviceManagerTest {
         rec.startRecording();
         Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, BITS, 0);
         gen.open();
-        SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 0.1, 1.0);
+        SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 0.1, 0.1, 1.0, 1.0);
 
         // Attaches the generator lane beside the running capture and gives it
         // straight back: the stop flag is set before the call, so play() returns
@@ -1042,7 +1042,7 @@ class Qa40xDeviceManagerTest {
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(fake, INSTANT);
         Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, BITS, 0);
         gen.open();
-        SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 0.1, 1.0);
+        SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 0.1, 0.1, 1.0, 1.0);
         AtomicBoolean stop = new AtomicBoolean();
         CountDownLatch ready = new CountDownLatch(1);
         AtomicReference<Throwable> onThePlayThread = new AtomicReference<>();
@@ -1099,7 +1099,8 @@ class Qa40xDeviceManagerTest {
         Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, BITS, 0);
         gen.open();
 
-        SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 1.0, Constants.SQRT2);
+        SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 1.0, 1.0,
+                Constants.SQRT2, Constants.SQRT2);
         AtomicBoolean alreadyStopped = new AtomicBoolean(true);
         gen.play(sig, alreadyStopped, new CountDownLatch(1));   // attaches, primes, exits immediately
 

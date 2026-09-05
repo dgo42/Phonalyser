@@ -49,8 +49,12 @@ import lombok.Getter;
  * <p><b>Fixed at open.</b>  The dither depth and the output-lane gate are
  * arguments of {@link #openGenerator}, not live setters: they belong to the
  * playback line, which the far end opens once.  A change to either reaches the
- * hardware at the next open, exactly as reopening a local line would.  The
- * per-lane scale is NOT one of them - see {@link #setRightLaneScale(double)}.
+ * hardware at the next open, exactly as reopening a local line would.  The two
+ * lanes' amplitudes are NOT among them - they are
+ * {@link GeneratorControls#setAmplitudesVrms}, live like every other setter,
+ * and the far end converts each against its own card's full scale for that lane
+ * (spec 4.5), which is why {@link GeneratorControls#setDacFsVoltageAmpls} has
+ * nothing to send.
  */
 public interface RemoteGenerator extends GeneratorControls {
 
@@ -107,27 +111,14 @@ public interface RemoteGenerator extends GeneratorControls {
     /* -------------------- what only a far-away lane needs told -------------------- */
 
     /**
-     * The RIGHT lane's output scale - {@code fsLeft/fsRight}, so a card whose two
-     * DAC full-scales differ emits the same physical level on both lanes.
-     *
-     * <p>Not part of {@link GeneratorControls} because locally it is not a
-     * generator setting at all: the amplitude is computed against the LEFT
-     * full-scale and the ratio is pushed to the playback line's quantizer, which
-     * on a remote bench is the far end's.  It is live rather than an argument of
-     * {@link #openGenerator} for the same reason the DAC full-scale itself is -
-     * recalibrating a card must take effect on the tone that is playing.
-     */
-    void setRightLaneScale(double scale);
-
-    /**
      * The TPDF dither depth in bits, live-applied to the far end's quantizer.
      *
-     * <p>Not part of {@link GeneratorControls} for the same reason as the lane
-     * scale above: locally dither is a playback-line setting, pushed to the
-     * quantizer rather than to the generator - and on a remote bench that
-     * quantizer is the far end's.  {@link #openGenerator} carries the initial
-     * depth; this is the live half, so the operator's dither edit reaches the
-     * tone that is playing instead of the next open.
+     * <p>Not part of {@link GeneratorControls}: locally dither is a
+     * playback-line setting, pushed to the quantizer rather than to the
+     * generator - and on a remote bench that quantizer is the far end's.
+     * {@link #openGenerator} carries the initial depth; this is the live half,
+     * so the operator's dither edit reaches the tone that is playing instead of
+     * the next open.
      */
     void setDitherBits(double bits);
 
@@ -135,8 +126,8 @@ public interface RemoteGenerator extends GeneratorControls {
      * The silence a sweep emits BEFORE its first chirp sample, in samples of the
      * lane's own clock.
      *
-     * <p>Not part of {@link GeneratorControls} for the same reason as the lane
-     * scale above: locally it is not a live setting at all but a constructor
+     * <p>Not part of {@link GeneratorControls} for the same reason as the dither
+     * above: locally it is not a live setting at all but a constructor
      * argument of {@link SignalGenerator}, because changing it means rebuilding
      * the sweep.  A far-away lane has no constructor to pass it to, so it travels
      * as a command - and it has to travel, because a frequency-response record is

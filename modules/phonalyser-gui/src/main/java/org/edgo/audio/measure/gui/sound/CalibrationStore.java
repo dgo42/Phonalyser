@@ -22,9 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.Channel;
-
 import org.edgo.audio.measure.gui.common.RemoteBackendRegistry;
 import org.edgo.audio.measure.gui.common.RemoteBackendUi;
 import org.edgo.audio.measure.net.proto.MessageType;
@@ -39,121 +37,30 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Where a measured full scale goes when the operator presses Calibrate: into
- * this machine's device cards, or onto the bench that owns the device.
+ * What the calibrate dialogs and the card chooser ask about the calibration of
+ * the SELECTED device, resolved the same way whether that device is on this
+ * machine or on a bench: is it the device's own, is there one at all - and the
+ * operator-confirmed copy of a local card's values onto a bench that has none.
  *
- * <p><b>Calibration lives where the device is connected.</b>  A device on this
- * machine is calibrated here, exactly as it always was -
- * {@link Preferences#storeAdcCalibration(Channel, double)} and its siblings
- * do the whole job, card creation included.  A device on a Phonalyser server is
- * the SERVER's to calibrate: the two full scales are sent as spec 4.3's
- * {@code device.setCalibration}, stored in that machine's {@code devices.yaml},
- * and broadcast back to every client - so the next client to connect finds the
- * bench already calibrated, and nothing about a foreign device is ever written
- * into this installation's store, where it could only ever be found again by a
- * name collision.
+ * <p>A MEASURED calibration does not pass through here.  It goes to the backend
+ * the device is on ({@link AudioBackend#calibrate}), which is what decides
+ * where it lives: this machine's cards for a local device, the bench's for a
+ * device across the network - and for a bench device nothing is written on this
+ * machine, not the card and not the live scalars either, because this
+ * installation may hold the same model locally with a calibration of its own.
+ * The scalars the dBV axis and the generator are computed against follow the
+ * bench's broadcast of what it stored ({@code ev.devices.changed}).
  *
- * <p>The live scalars move either way and immediately.  They are what the dBV
- * axis and the generator's amplitude are computed against, and the operator
- * pressed Calibrate to make the reading on screen correct - which must not wait
- * for a round trip, and must still hold if the bench refused the write.
- *
- * <p><b>Why the branch is a type of its own.</b>  Three panes commit a
- * calibration (the scope's and the FFT's ADC buttons, the generator's DAC one)
- * and each has its own scale arithmetic before it; only the destination is
- * shared.  Written at the call sites it would be the same decision three times,
- * and the one that was forgotten would quietly write a bench's calibration into
- * the wrong machine's file.
+ * <p>The questions live here rather than at the three call sites (the scope's
+ * and the FFT's calibrate buttons, the generator's) because each would be the
+ * same local-or-bench decision three times, and the one that was forgotten would
+ * answer a bench selection from this machine's cards.
  */
 @Log4j2
 @RequiredArgsConstructor
 public final class CalibrationStore {
 
     private final Preferences prefs;
-
-    // -------------------------------------------------------------------------
-    // ADC - the scope's and the FFT's calibrate buttons
-    // -------------------------------------------------------------------------
-
-    /** The shared both-channels ADC full scale: a MONO card, or a device with no
-     *  card at all (the local path creates one).
-     *
-     *  @return whether the calibration was stored - see {@link #applyOnSuccess} */
-    public boolean storeAdcCalibration(double fsVrms) {
-        BackendKey bench = remoteSelection();
-        if (bench == null) {
-            prefs.storeAdcCalibration(fsVrms);
-            return true;
-        }
-        if (!sendAdc(bench, fsVrms, fsVrms)) {
-            return false;
-        }
-        prefs.setAdcFsVoltageRms(fsVrms);
-        prefs.setAdcFsVoltageRmsRight(fsVrms);
-        return true;
-    }
-
-    /** One channel's ADC full scale, on a bound stereo card. */
-    public boolean storeAdcCalibration(Channel ch, double fsVrms) {
-        BackendKey bench = remoteSelection();
-        if (bench == null) {
-            prefs.storeAdcCalibration(ch, fsVrms);
-            return true;
-        }
-        // The OTHER channel travels unchanged - read before anything moves, so a
-        // refused write leaves this client exactly as the bench still has it.
-        double left  = ch == Channel.R ? prefs.getAdcFsVoltageRms(Channel.L) : fsVrms;
-        double right = ch == Channel.R ? fsVrms : prefs.getAdcFsVoltageRms(Channel.R);
-        if (!sendAdc(bench, left, right)) {
-            return false;
-        }
-        if (ch == Channel.R) {
-            prefs.setAdcFsVoltageRmsRight(fsVrms);
-        } else {
-            prefs.setAdcFsVoltageRms(fsVrms);
-        }
-        return true;
-    }
-
-    // -------------------------------------------------------------------------
-    // DAC - the generator's calibrate button
-    // -------------------------------------------------------------------------
-
-    /** The shared both-channels DAC full scale, as a PEAK amplitude - the form
-     *  the generator is driven at and the panes measure against. */
-    public boolean storeDacCalibration(double fsAmpl) {
-        BackendKey bench = remoteSelection();
-        if (bench == null) {
-            prefs.storeDacCalibration(fsAmpl);
-            return true;
-        }
-        if (!sendDac(bench, fsAmpl, fsAmpl)) {
-            return false;
-        }
-        prefs.setDacFsVoltageAmpl(fsAmpl);
-        prefs.setDacFsVoltageAmplRight(fsAmpl);
-        return true;
-    }
-
-    /** One channel's DAC full scale (peak amplitude), on a bound stereo card. */
-    public boolean storeDacCalibration(Channel ch, double fsAmpl) {
-        BackendKey bench = remoteSelection();
-        if (bench == null) {
-            prefs.storeDacCalibration(ch, fsAmpl);
-            return true;
-        }
-        double left  = ch == Channel.R ? prefs.getDacFsVoltageAmpl(Channel.L) : fsAmpl;
-        double right = ch == Channel.R ? fsAmpl : prefs.getDacFsVoltageAmpl(Channel.R);
-        if (!sendDac(bench, left, right)) {
-            return false;
-        }
-        if (ch == Channel.R) {
-            prefs.setDacFsVoltageAmplRight(fsAmpl);
-        } else {
-            prefs.setDacFsVoltageAmpl(fsAmpl);
-        }
-        return true;
-    }
 
     // -------------------------------------------------------------------------
     // Copying an existing local calibration onto a bench
@@ -174,15 +81,21 @@ public final class CalibrationStore {
      * them to every client from then on (spec 4.3 {@code cal}).  The caller asks
      * first - this is never reached without an operator's yes.
      *
-     * @return true when the bench stored the pair; false when this machine has no
-     *         calibrated card for the device, or the bench would not take it
+     * <p>Two writes, one per channel: spec 4.3's {@code device.setCalibration}
+     * carries one channel's full scale, so the card's two values go up one
+     * after the other, and the copy is reported stored only when both landed.
+     *
+     * @return true when the bench stored both channels; false when this
+     *         machine has no calibrated card for the device, or the bench would
+     *         not take it
      */
     public boolean copyCardCalibrationToBench(BackendKey bench, DeviceRef device) {
         DeviceCalibration cal = prefs.deviceCalibration(device.name(), device.isInput());
         if (cal == null) {
             return false;
         }
-        return send(bench, device, cal.fsRmsLeft(), cal.fsRmsRight());
+        return send(bench, device, Channel.L, cal.fsRmsLeft())
+                && send(bench, device, Channel.R, cal.fsRmsRight());
     }
 
     // -------------------------------------------------------------------------
@@ -194,31 +107,6 @@ public final class CalibrationStore {
     private BackendKey remoteSelection() {
         BackendKey selected = prefs.getSelectedBackend();
         return selected != null && selected.remote() ? selected : null;
-    }
-
-    /**
-     * <a id="applyOnSuccess"></a><b>Apply on SUCCESS, never before.</b>  The pair
-     * goes to the bench first and this client's live scalars move only when the
-     * bench has stored it.
-     *
-     * <p>They used to move first, on the reasoning that the reading on screen must
-     * not wait for a round trip.  But a refusal - the analyzer owns its own values,
-     * another client holds the device, the wire is down - left the typed number
-     * standing as this client's dBV reference while the bench kept its own, with
-     * nothing to put it back: the two disagreed silently until the next device
-     * open.  A calibration that did not happen must not look like one that did.
-     */
-    private boolean sendAdc(BackendKey bench, double left, double right) {
-        return send(bench, prefs.current().getInputDeviceName(), true, left, right);
-    }
-
-    /** The same for the output lane.  The wire carries RMS in both directions
-     *  (spec 4.3), and a DAC full scale is held here as a peak amplitude - so it
-     *  is divided by √2 on the way out, the exact conversion the local card write
-     *  makes before it stores the value. */
-    private boolean sendDac(BackendKey bench, double leftAmpl, double rightAmpl) {
-        return send(bench, prefs.current().getOutputDeviceName(), false,
-                leftAmpl / Constants.SQRT2, rightAmpl / Constants.SQRT2);
     }
 
     /**
@@ -270,64 +158,48 @@ public final class CalibrationStore {
     }
 
     /**
-     * Spec 4.3's {@code device.setCalibration}, sent under the device lock the
-     * bench requires for it - a write changes what every measurement on that
-     * device means, so it fails honestly while another client is measuring on it
-     * instead of moving the ground under them.
+     * Spec 4.3's {@code device.setCalibration} for the copy, sent under the
+     * device lock the bench requires for it - a write changes what every
+     * measurement on that device means, so it fails honestly while another
+     * client is measuring on it instead of moving the ground under them.
      *
      * <p>A refusal is a warning and nothing else.  The alternative would be to
      * fall back to a card of our own, which is the one thing this must never do:
      * the bench would go on serving its old calibration to every client including
      * this one, and the local card would shadow it by name from then on.
      *
-     * @return whether the bench stored the pair - the calibrate buttons ignore it
-     *         (their scalars have already moved and the warning above is the whole
-     *         report), the operator-confirmed copy reports it back to the operator
+     * @return whether the bench stored the channel's value, which the
+     *         operator-confirmed copy reports back to the operator
      */
-    private boolean send(BackendKey bench, String deviceName, boolean input,
-            double fsRmsLeft, double fsRmsRight) {
-        DeviceRef device = deviceOf(bench, deviceName, input);
-        if (device == null) {
-            if (log.isWarnEnabled()) {
-                log.warn("Calibration: '{}' is not on {}, so the bench keeps its own "
-                        + "values", deviceName, bench.key());
-            }
-            return false;
-        }
-        return send(bench, device, fsRmsLeft, fsRmsRight);
-    }
-
-    /** The same write once the device is known - the one place the request is
-     *  built, so the two callers cannot name the device differently. */
-    private boolean send(BackendKey bench, DeviceRef device, double fsRmsLeft,
-            double fsRmsRight) {
+    private boolean send(BackendKey bench, DeviceRef device, Channel ch, double fsRms) {
         RemoteBackendUi remote = RemoteBackendRegistry.instance().getUi();
         if (remote == null) {
             return false;
         }
         String deviceName = device.name();
         boolean input = device.isInput();
+        String scope = ch == Channel.L ? NetFields.LEFT : NetFields.RIGHT;
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put(NetFields.BACKEND, bench.type().name());
         fields.put(NetFields.INDEX, device.index());
         fields.put(NetFields.INPUT, input);
         fields.put(NetFields.NAME, device.name());
-        fields.put(NetFields.FS_RMS_LEFT, fsRmsLeft);
-        fields.put(NetFields.FS_RMS_RIGHT, fsRmsRight);
+        fields.put(NetFields.CHANNEL, scope);
+        fields.put(NetFields.FS_RMS, fsRms);
         // DIRECT on the caller's thread - a locked write is acquire + write +
         // release, bounded by the wire timeouts.
         Map<String, Object> answer = remote.callLocked(bench,
                 MessageType.DEVICE_SET_CALIBRATION.getWire(), fields);
         if (answer == null) {
             if (log.isWarnEnabled()) {
-                log.warn("Calibration: {} did not store {} / {} Vrms for '{}'",
-                        bench.key(), fsRmsLeft, fsRmsRight, deviceName);
+                log.warn("Calibration: {} did not store {} Vrms ({}) for '{}'",
+                        bench.key(), fsRms, scope, deviceName);
             }
             return false;
         }
         if (log.isInfoEnabled()) {
-            log.info("Calibration: {} stored {} / {} Vrms for '{}' ({})", bench.key(),
-                    fsRmsLeft, fsRmsRight, deviceName, input ? "input" : "output");
+            log.info("Calibration: {} stored {} Vrms ({}) for '{}' ({})", bench.key(),
+                    fsRms, scope, deviceName, input ? "input" : "output");
         }
         return true;
     }

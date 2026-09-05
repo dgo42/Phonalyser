@@ -24,6 +24,7 @@ import java.util.Map;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.net.proto.ErrorCode;
 import org.edgo.audio.measure.net.proto.JsonCodec;
 import org.edgo.audio.measure.net.proto.MessageType;
@@ -356,16 +357,17 @@ class DeviceCatalogTest {
         cards.card(CARD_NAME, StubDeviceManager.FIRST_INPUT, true, ADC_FS_LEFT, 0.0, false);
 
         assertTrue(devices().get(FIRST).path(NetFields.CAL).isNull(),
-                "the right lane's scale is fsLeft/fsRight - a zero there is an "
-                        + "infinite ratio, which drives that side into the clipper");
+                "a full scale is the divisor of that lane's level - a zero there is "
+                        + "an infinite level, which drives that side into the clipper");
     }
 
     @Test
     void theCalibrationOverlayIsRebuiltWithoutReEnumeratingTheHardware() {
         catalog.scan();
 
-        catalog.storeCalibration(new DeviceLock(AudioBackendType.QA40X, 0, true),
-                StubDeviceManager.FIRST_INPUT, ADC_FS_LEFT, ADC_FS_RIGHT);
+        DeviceLock first = new DeviceLock(AudioBackendType.QA40X, 0, true);
+        catalog.storeCalibration(first, StubDeviceManager.FIRST_INPUT, Channel.L, ADC_FS_LEFT);
+        catalog.storeCalibration(first, StubDeviceManager.FIRST_INPUT, Channel.R, ADC_FS_RIGHT);
 
         JsonNode cal = catalog.lastScan().get(FIRST).path(NetFields.DEVICES).get(FIRST)
                 .path(NetFields.CAL);
@@ -584,7 +586,7 @@ class DeviceCatalogTest {
                 ADC_FS_RIGHT, true);
 
         assertFalse(catalog.storeCalibration(new DeviceLock(AudioBackendType.QA40X, 0, true),
-                StubDeviceManager.FIRST_INPUT, 9.0, 9.0),
+                StubDeviceManager.FIRST_INPUT, Channel.L, 9.0),
                 "a QA40x reads its full scales out of its own EEPROM: they are not a "
                         + "client's to write (spec 4.3)");
         JsonNode cal = devices().get(FIRST).path(NetFields.CAL);

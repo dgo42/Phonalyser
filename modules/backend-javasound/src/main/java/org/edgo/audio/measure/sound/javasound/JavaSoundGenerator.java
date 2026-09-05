@@ -163,7 +163,7 @@ public class JavaSoundGenerator implements AudioPlayback {
 
         if (generator.needsJitWarmup()) {
             warmupJit(generator, buf);
-            // Warmup consumed nextSample() calls that advance sweep playback
+            // Warmup consumed frames that advance sweep playback
             // state; reset so the real stream sees the sweep from sample 0
             // (otherwise a freq-response measurement captures a mid-sweep
             // recording while the deconv reference starts at zero).
@@ -389,11 +389,6 @@ public class JavaSoundGenerator implements AudioPlayback {
     @Override
     public void setDitherBits(double bits) {
         quantizer.setDitherBits(bits);
-    }
-
-    @Override
-    public void setChannelScale(double left, double right) {
-        quantizer.setChannelScale(left, right);
     }
 
     @Override

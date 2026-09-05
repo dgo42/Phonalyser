@@ -237,7 +237,7 @@ public final class FreqRespAnalyzerWorker {
                 .durationSec(prefs.getFreqRespDurationSec())
                 .leadInSec(prefs.getFreqRespLeadInSec())
                 .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
-                .dacFsVoltageRms(prefs.getDacFsVoltageAmpl())
+                .dacFsVoltageRms(prefs.getDacFsVoltageAmplLeft())
                 .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
                 .outputChannels(prefs.getFreqRespOutputChannels())
                 .applyCalibration(prefs.isFreqRespApplyCalibration())
@@ -250,7 +250,7 @@ public final class FreqRespAnalyzerWorker {
                 .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
                         prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
                         prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
-                        prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmpl()))
+                        prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmplLeft()))
                 .build();
     }
 

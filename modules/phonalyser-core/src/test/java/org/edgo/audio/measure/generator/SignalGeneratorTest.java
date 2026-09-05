@@ -58,6 +58,16 @@ class SignalGeneratorTest {
      *  {@link #compensation_renderIsBitIdentical()}. */
     private static final int    SINE_COMP_RENDER_HASH = 356_046_049;
 
+    /** The frame every render here pulls into; both lanes are commanded alike,
+     *  so the left lane is what the assertions read. */
+    private final double[] frame = new double[2];
+
+    /** The next left-lane sample of {@code gen}, advancing it one step. */
+    private double next(SignalGenerator gen) {
+        gen.nextFrame(frame);
+        return frame[0];
+    }
+
     @Test
     void sine_matchesAnalyticForm() {
         // 1 kHz at 48 kHz, 1 V RMS -> 480 samples = 10 full cycles.
@@ -69,11 +79,11 @@ class SignalGeneratorTest {
         int    samples    = 480;
 
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.SINE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
 
         double expectedPeak = vrms * Constants.SQRT2 / DAC_FS_VRMS;
         for (int n = 0; n < samples; n++) {
-            double actual   = gen.nextSample();
+            double actual   = next(gen);
             double expected = expectedPeak
                     * Math.sin(2.0 * Math.PI * freqHz * n / sampleRate);
             assertEquals(expected, actual, 1e-5,
@@ -92,11 +102,11 @@ class SignalGeneratorTest {
         int    samples    = sampleRate;  // 1 second -> 1000 full periods
 
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.SINE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
 
         double sumSq = 0.0;
         for (int n = 0; n < samples; n++) {
-            double s = gen.nextSample();
+            double s = next(gen);
             sumSq += s * s;
         }
         double rmsNormalised = Math.sqrt(sumSq / samples);
@@ -116,11 +126,11 @@ class SignalGeneratorTest {
         int    samples    = sampleRate;
 
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.TRIANGLE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
+                GenSignalForm.TRIANGLE, freqHz, sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
 
         double sumSq = 0.0;
         for (int n = 0; n < samples; n++) {
-            double s = gen.nextSample();
+            double s = next(gen);
             sumSq += s * s;
         }
         double rmsNormalised = Math.sqrt(sumSq / samples);
@@ -141,11 +151,11 @@ class SignalGeneratorTest {
         int    samples    = sampleRate;
 
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.RECTANGLE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
+                GenSignalForm.RECTANGLE, freqHz, sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
 
         double sumSq = 0.0;
         for (int n = 0; n < samples; n++) {
-            double s = gen.nextSample();
+            double s = next(gen);
             sumSq += s * s;
         }
         double rmsNormalised = Math.sqrt(sumSq / samples);
@@ -156,15 +166,15 @@ class SignalGeneratorTest {
 
     @Test
     void sine_outputClipsWithinNormalisedRange() {
-        // nextSample() returns samples in [-1, +1] regardless of input
+        // nextFrame() returns samples in [-1, +1] regardless of input
         // amplitude - clipping the caller's responsibility.  But for a
         // reasonable amplitude (< full-scale) every sample should stay
         // within the normalised range with room to spare.
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.SINE, 1_000.0, 48_000, 1.0, DAC_FS_VRMS);
+                GenSignalForm.SINE, 1_000.0, 48_000, 1.0, 1.0, DAC_FS_VRMS, DAC_FS_VRMS);
         double peak = 0.0;
         for (int n = 0; n < 48_000; n++) {
-            double s = gen.nextSample();
+            double s = next(gen);
             assertTrue(s >= -1.0 && s <= 1.0,
                     "sample " + n + " out of normalised range: " + s);
             peak = Math.max(peak, Math.abs(s));
@@ -207,10 +217,10 @@ class SignalGeneratorTest {
 
         for (double splitPct : DUAL_SPLITS_PCT) {
             SignalGenerator gen = new SignalGenerator(
-                    GenSignalForm.DUAL_TONE, f1Hz, sampleRate, vrms, DAC_FS_VRMS);
+                    GenSignalForm.DUAL_TONE, f1Hz, sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
             gen.setDualToneFrequency2(f2Hz);
             gen.setDualToneAmplitudes(splitPct, 100.0 - splitPct);
-            gen.setAmplitudeVrms(vrms);
+            gen.setAmplitudesVrms(vrms, vrms);
             // One product, at f1 + f2 so it cannot be confused with either tone
             // or with a harmonic of them.
             gen.applyDualToneCompensation(new double[]{ CORRECTION_RATIO },
@@ -237,7 +247,7 @@ class SignalGeneratorTest {
         int    harmonic   = 2;
 
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.SINE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
         gen.applyCompensation(new double[]{ CORRECTION_RATIO },
                 new int[]{ harmonic }, new double[]{ 0.0 });
 
@@ -264,7 +274,7 @@ class SignalGeneratorTest {
         int    harmonic   = 3;
 
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.SINE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
         gen.applyCompensation(new double[]{ CORRECTION_RATIO },
                 new int[]{ harmonic }, new double[]{ 0.25 });
 
@@ -296,7 +306,7 @@ class SignalGeneratorTest {
         int    harmonic   = 2;
 
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.SINE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
         // The apply publishes the tables AND flips the form - the wizard's path.
         gen.applyCompensation(new double[]{ CORRECTION_RATIO },
                 new int[]{ harmonic }, new double[]{ 0.0 });
@@ -334,10 +344,10 @@ class SignalGeneratorTest {
         double splitPct   = DUAL_SPLITS_PCT[0];
 
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.DUAL_TONE, f1Hz, sampleRate, vrms, DAC_FS_VRMS);
+                GenSignalForm.DUAL_TONE, f1Hz, sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
         gen.setDualToneFrequency2(f2Hz);
         gen.setDualToneAmplitudes(splitPct, 100.0 - splitPct);
-        gen.setAmplitudeVrms(vrms);
+        gen.setAmplitudesVrms(vrms, vrms);
         gen.applyDualToneCompensation(new double[]{ CORRECTION_RATIO },
                 new int[]{ 1 }, new int[]{ 1 }, new double[]{ 0.0 });
         double[] engaged = render(gen, sampleRate);
@@ -386,7 +396,7 @@ class SignalGeneratorTest {
     @Test
     void rectangle_dutyIsWholeSamplesOfThePeriod() {
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.RECTANGLE, DUTY_FREQ, DUTY_RATE, 1.0, DAC_FS_VRMS);
+                GenSignalForm.RECTANGLE, DUTY_FREQ, DUTY_RATE, 1.0, 1.0, DAC_FS_VRMS, DAC_FS_VRMS);
 
         gen.setRectangleDuty(0.0025);
         assertEquals(1, highSamplesPerPeriod(gen),
@@ -404,7 +414,7 @@ class SignalGeneratorTest {
     @Test
     void triangle_cornerLandsOnASampleOfThePeriod() {
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.TRIANGLE, DUTY_FREQ, DUTY_RATE, 1.0, DAC_FS_VRMS);
+                GenSignalForm.TRIANGLE, DUTY_FREQ, DUTY_RATE, 1.0, 1.0, DAC_FS_VRMS, DAC_FS_VRMS);
         gen.setTriangleDuty(0.0025);   // 0.96 samples of rise -> one sample
         double peak = 1.0 * Constants.SQRT3 / DAC_FS_VRMS;   // rawRms(TRIANGLE) = 1/√3
 
@@ -437,7 +447,7 @@ class SignalGeneratorTest {
     private double[] render(SignalGenerator gen, int samples) {
         double[] block = new double[samples];
         for (int n = 0; n < samples; n++) {
-            block[n] = gen.nextSample();
+            block[n] = next(gen);
         }
         return block;
     }

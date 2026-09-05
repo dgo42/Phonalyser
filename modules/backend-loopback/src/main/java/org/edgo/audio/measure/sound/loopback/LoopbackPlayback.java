@@ -129,7 +129,7 @@ public final class LoopbackPlayback implements AudioPlayback,
             engine = manager.acquireEngine(sampleRate, bitDepth);
         }
         currentGenerator = generator;
-        // Warmup consumed nextSample() advances sweep state; rewind to sample 0 so a
+        // Warmup consumed frames that advance sweep state; rewind to sample 0 so a
         // freq-response sweep aligns with the deconvolution reference.
         generator.resetSweepPosition();
         attached = true;

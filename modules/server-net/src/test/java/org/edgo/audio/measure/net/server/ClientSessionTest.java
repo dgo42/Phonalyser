@@ -191,10 +191,9 @@ class ClientSessionTest {
 
         NetError error = channel.responseTo(HELLO_ID).getError();
         assertTrue(error.is(ErrorCode.PROTO_MISMATCH));
-        assertTrue(error.message().contains(future + ".." + future),
-                "the message names the client's range");
-        assertTrue(error.message().contains(
-                NetProto.PROTO_MIN_VERSION + ".." + NetProto.PROTO_VERSION),
+        assertTrue(error.message().contains("client speaks net protocol " + future),
+                "the message names the client's version - as a plain number, not a range");
+        assertTrue(error.message().contains("server speaks " + NetProto.PROTO_VERSION),
                 "and the server's");
         assertTrue(session.isClosed(), "no session is possible, so it ends here");
         assertEquals(1, channel.getCloseCount());
@@ -704,7 +703,7 @@ class ClientSessionTest {
     void calibratingADeviceThisConnectionDidNotAcquireIsNotLocked() {
         greet(session, CLIENT_NAME);
 
-        session.onMessage(setCalibration(REQUEST_ID, FS_RMS_LEFT, FS_RMS_RIGHT));
+        session.onMessage(setCalibration(REQUEST_ID, NetFields.LEFT, FS_RMS_LEFT));
 
         assertTrue(channel.responseTo(REQUEST_ID).getError().is(ErrorCode.NOT_LOCKED),
                 "spec 4.3: a calibration changes what every measurement on that "
@@ -724,14 +723,16 @@ class ClientSessionTest {
         AtomicInteger broadcasts = new AtomicInteger();
         locks.addChangeListener(broadcasts::incrementAndGet);
 
-        session.onMessage(setCalibration(SECOND_REQUEST_ID, FS_RMS_LEFT, FS_RMS_RIGHT));
+        session.onMessage(setCalibration(SECOND_REQUEST_ID, NetFields.LEFT, FS_RMS_LEFT));
 
         assertTrue(channel.responseTo(SECOND_REQUEST_ID).isOk());
         DeviceCalibration stored = catalog.calibration(
                 new DeviceLock(AudioBackendType.QA40X, DEVICE_INDEX, true), DEVICE_NAME);
         assertNotNull(stored, "the server's own card now carries it");
         assertEquals(FS_RMS_LEFT, stored.fsRmsLeft(), EPS);
-        assertEquals(FS_RMS_RIGHT, stored.fsRmsRight(), EPS);
+        assertEquals(FS_RMS_LEFT, stored.fsRmsRight(), EPS,
+                "the card was created by this write, so its never-calibrated other "
+                        + "channel takes the same value - one write calibrates the device");
         assertEquals(1, broadcasts.get(),
                 "every client's cal view refreshes without asking (spec 4.3)");
     }
@@ -885,7 +886,7 @@ class ClientSessionTest {
         acquire(session, REQUEST_ID, true);
         assertNull(catalog.boundCard(DEVICE_NAME), "the bench starts with no card");
 
-        session.onMessage(setCalibration(SECOND_REQUEST_ID, FS_RMS_LEFT, FS_RMS_RIGHT));
+        session.onMessage(setCalibration(SECOND_REQUEST_ID, NetFields.LEFT, FS_RMS_LEFT));
 
         assertTrue(channel.responseTo(SECOND_REQUEST_ID).isOk());
         assertNotNull(catalog.boundCard(DEVICE_NAME),
@@ -1002,7 +1003,7 @@ class ClientSessionTest {
                 .put(NetFields.NAME, SECOND_DEVICE_NAME));
         assertTrue(channel.responseTo(REQUEST_ID).isOk(), "the other device was taken");
 
-        session.onMessage(setCalibration(SECOND_REQUEST_ID, FS_RMS_LEFT, FS_RMS_RIGHT));
+        session.onMessage(setCalibration(SECOND_REQUEST_ID, NetFields.LEFT, FS_RMS_LEFT));
 
         assertTrue(channel.responseTo(SECOND_REQUEST_ID).getError().is(ErrorCode.NOT_LOCKED),
                 "one device's lock says nothing about what another device measures");
@@ -1011,16 +1012,30 @@ class ClientSessionTest {
     }
 
     @Test
-    void aCalibrationMissingOneChannelIsABadRequest() {
+    void aCalibrationNamingNoChannelIsABadRequest() {
         greet(session, CLIENT_NAME);
         acquire(session, REQUEST_ID, true);
 
         session.onMessage(deviceRef(MessageType.DEVICE_SET_CALIBRATION, SECOND_REQUEST_ID,
-                true).put(NetFields.FS_RMS_LEFT, FS_RMS_LEFT));
+                true).put(NetFields.FS_RMS, FS_RMS_LEFT));
 
         assertTrue(channel.responseTo(SECOND_REQUEST_ID).getError().is(ErrorCode.BAD_REQUEST),
-                "half a calibration would leave the other channel at whatever the "
-                        + "card happened to hold");
+                "a calibration is a measurement of ONE channel; a value with no "
+                        + "channel to land on is nothing the card can hold");
+        assertNull(catalog.calibration(new DeviceLock(AudioBackendType.QA40X,
+                DEVICE_INDEX, true), DEVICE_NAME), "and nothing was written");
+    }
+
+    @Test
+    void aCalibrationForBothChannelsIsABadRequest() {
+        greet(session, CLIENT_NAME);
+        acquire(session, REQUEST_ID, true);
+
+        session.onMessage(setCalibration(SECOND_REQUEST_ID, NetFields.BOTH, FS_RMS_LEFT));
+
+        assertTrue(channel.responseTo(SECOND_REQUEST_ID).getError().is(ErrorCode.BAD_REQUEST),
+                "'both' is a range marker's scope, not a channel a full scale was "
+                        + "measured on");
     }
 
     @Test
@@ -1029,7 +1044,7 @@ class ClientSessionTest {
         greet(session, CLIENT_NAME);
         acquire(session, REQUEST_ID, true);
 
-        session.onMessage(setCalibration(SECOND_REQUEST_ID, 9.0, 9.0));
+        session.onMessage(setCalibration(SECOND_REQUEST_ID, NetFields.LEFT, 9.0));
 
         assertTrue(channel.responseTo(SECOND_REQUEST_ID).getError().is(ErrorCode.BAD_REQUEST),
                 "the QA40x's full scales come from its EEPROM (spec 4.3)");
@@ -1084,8 +1099,8 @@ class ClientSessionTest {
                 .put(NetFields.INDEX, DEVICE_INDEX)
                 .put(NetFields.INPUT, true)
                 .put(NetFields.NAME, "Some other card")
-                .put(NetFields.FS_RMS_LEFT, FS_RMS_LEFT)
-                .put(NetFields.FS_RMS_RIGHT, FS_RMS_RIGHT));
+                .put(NetFields.CHANNEL, NetFields.LEFT)
+                .put(NetFields.FS_RMS, FS_RMS_LEFT));
 
         assertTrue(channel.responseTo(SECOND_REQUEST_ID).getError().is(ErrorCode.DEVICE_STALE),
                 "a calibration written onto whatever device now sits at that index "
@@ -1200,10 +1215,10 @@ class ClientSessionTest {
         return channel == null ? request : request.put(NetFields.CHANNEL, channel);
     }
 
-    private NetMessage setCalibration(int id, double fsRmsLeft, double fsRmsRight) {
+    private NetMessage setCalibration(int id, String channel, double fsRms) {
         return deviceRef(MessageType.DEVICE_SET_CALIBRATION, id, true)
-                .put(NetFields.FS_RMS_LEFT, fsRmsLeft)
-                .put(NetFields.FS_RMS_RIGHT, fsRmsRight);
+                .put(NetFields.CHANNEL, channel)
+                .put(NetFields.FS_RMS, fsRms);
     }
 
     private NetMessage deviceRef(MessageType type, int id, boolean input) {

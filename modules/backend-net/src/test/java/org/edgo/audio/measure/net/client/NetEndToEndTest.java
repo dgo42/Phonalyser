@@ -116,9 +116,9 @@ class NetEndToEndTest {
     private static final double IN_FS_RIGHT = 1.75;
     private static final double OUT_FS_LEFT = 2.0;
     private static final double OUT_FS_RIGHT = 2.5;
-    /** What the client recalibrates the bench's input to, mid-session. */
+    /** What the client recalibrates the bench's input's left channel to,
+     *  mid-session. */
     private static final double NEW_FS_LEFT = 0.316;
-    private static final double NEW_FS_RIGHT = 0.318;
 
     private static final double TONE_HZ = 1_000.0;
     private static final double AMPLITUDE_VRMS = 0.5;
@@ -256,7 +256,7 @@ class NetEndToEndTest {
 
         manager.setForm(GenSignalForm.SINE);
         manager.setFrequency(TONE_HZ);
-        manager.setAmplitudeVrms(AMPLITUDE_VRMS);
+        manager.setAmplitudesVrms(AMPLITUDE_VRMS, AMPLITUDE_VRMS);
         manager.startGenerator();
         awaitTrue(() -> manager.state().running(),
                 "spec 4.5: ev.gen.state is pushed on every state change, and the client "
@@ -264,7 +264,7 @@ class NetEndToEndTest {
         assertEquals(TONE_HZ, manager.state().emitHz(), HZ_TOLERANCE,
                 "and the frequency it reports is the one the bench says it emits");
         assertEquals(AMPLITUDE_VRMS,
-                dac.getConfigAtStart().path(NetFields.AMPLITUDE_VRMS).asDouble(), EPS,
+                dac.getConfigAtStart().path(NetFields.AMPLITUDE_VRMS_LEFT).asDouble(), EPS,
                 "spec 4.5: the amplitude is final - the client did the calibration "
                         + "arithmetic, so what crosses is volts RMS and not a fraction");
 
@@ -302,8 +302,8 @@ class NetEndToEndTest {
 
         NetMessage written = manager.withDeviceLock(input, () -> client.request(
                 input.into(client.newRequest(MessageType.DEVICE_SET_CALIBRATION))
-                        .put(NetFields.FS_RMS_LEFT, NEW_FS_LEFT)
-                        .put(NetFields.FS_RMS_RIGHT, NEW_FS_RIGHT)));
+                        .put(NetFields.CHANNEL, NetFields.LEFT)
+                        .put(NetFields.FS_RMS, NEW_FS_LEFT)));
 
         assertNotNull(written, "no lock could be taken, so the write never ran");
         assertTrue(written.isOk(), "the bench refused the write: " + written);
@@ -316,7 +316,8 @@ class NetEndToEndTest {
         DeviceCalibration refreshed = ((NetDeviceRef) manager.listInputDevices().get(0))
                 .calibration();
         assertEquals(NEW_FS_LEFT, refreshed.fsRmsLeft(), EPS);
-        assertEquals(NEW_FS_RIGHT, refreshed.fsRmsRight(), EPS);
+        assertEquals(IN_FS_RIGHT, refreshed.fsRmsRight(), EPS,
+                "one channel per write: the right channel stays as the bench had it");
 
         NetConnection observer = open(OBSERVER_NAME, new FakeTicker());
         NetDeviceManager observing = new NetDeviceManager();

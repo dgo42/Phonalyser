@@ -108,9 +108,6 @@ class DeviceCalibrationApplyTest {
                 EPS, "the wire carries RMS, the generator is driven at the peak form");
         assertEquals(WIRE_FS_RIGHT * Constants.SQRT2,
                 prefs.getDacFsVoltageAmpl(Channel.R), EPS);
-        assertEquals(WIRE_FS_LEFT / WIRE_FS_RIGHT, prefs.dacRightLaneScale(), EPS,
-                "and the per-lane scale a remote generator is sent follows from the "
-                        + "same pair, so both lanes emit the same physical level");
     }
 
     @Test
@@ -268,7 +265,9 @@ class DeviceCalibrationApplyTest {
 
     /**
      * The pair is READ under the monitor the calibrate writes hold, so no reader
-     * can catch the row between its {@code fsLeft} and {@code fsRight} writes.
+     * can catch the row between the {@code fsLeft} and {@code fsRight} writes one
+     * calibrate call makes - a MONO card's one physical channel lands on both
+     * row fields in one call.
      *
      * <p>A half-written pair is the worst kind of wrong value: a Phonalyser server
      * broadcasts this resolution as the {@code cal} of every device it offers, and
@@ -278,13 +277,15 @@ class DeviceCalibrationApplyTest {
     @Test
     void theCalibrationPairIsNeverReadHalfWritten() throws InterruptedException {
         Preferences prefs = detached();
-        prefs.putAudioDeviceProfile(card(true));
+        AudioDeviceProfile mono = card(true);
+        mono.getInput().setChannels(DeviceChannelMode.MONO);
+        prefs.putAudioDeviceProfile(mono);
         AtomicReference<String> torn = new AtomicReference<>();
         AtomicBoolean stop = new AtomicBoolean();
         Thread writer = new Thread(() -> {
             while (!stop.get()) {
-                prefs.storeDeviceCalibration(DEVICE_NAME, true, LOCAL_FS_LEFT, LOCAL_FS_RIGHT);
-                prefs.storeDeviceCalibration(DEVICE_NAME, true, WIRE_FS_LEFT, WIRE_FS_RIGHT);
+                prefs.storeDeviceCalibration(DEVICE_NAME, true, Channel.L, LOCAL_FS_LEFT);
+                prefs.storeDeviceCalibration(DEVICE_NAME, true, Channel.L, WIRE_FS_LEFT);
             }
         }, "torn-read-writer");
         writer.start();
@@ -292,10 +293,7 @@ class DeviceCalibrationApplyTest {
         while (torn.get() == null && System.nanoTime() < deadline) {
             DeviceCalibration cal = prefs.deviceCalibration(DEVICE_NAME, true);
             if (cal == null) continue;
-            boolean coherent =
-                    (cal.fsRmsLeft() == LOCAL_FS_LEFT && cal.fsRmsRight() == LOCAL_FS_RIGHT)
-                    || (cal.fsRmsLeft() == WIRE_FS_LEFT && cal.fsRmsRight() == WIRE_FS_RIGHT);
-            if (!coherent) {
+            if (cal.fsRmsLeft() != cal.fsRmsRight()) {
                 torn.set(cal.fsRmsLeft() + " / " + cal.fsRmsRight());
             }
         }

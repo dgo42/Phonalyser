@@ -37,6 +37,7 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
@@ -756,6 +757,66 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
         }
     }
 
+    /**
+     * Spec 4.3's {@code device.setCalibration}: the one channel's value goes to
+     * the bench the device is plugged into, under the lock on exactly that
+     * device, and NOTHING is written on this machine.  A device across the room
+     * is the bench's to calibrate, and this installation may hold the same model
+     * locally with a calibration of its own - so what this client measures
+     * against follows the bench's own broadcast of what it stored
+     * ({@code ev.devices.changed}, {@link #calibrationChanged}), and a refused
+     * write leaves this client exactly as the bench still has it.
+     *
+     * <p>The lock is {@link #withDeviceLock(NetDeviceRef, Supplier)}'s: taken for
+     * the one request and given back, or reused untouched when this session
+     * already holds it (a capture, or the generator, on that device).  The ref
+     * must be the one this backend listed in {@code input}'s direction - the
+     * lock is per direction, and a write sent under the other side's lock comes
+     * back {@code NOT_LOCKED}.
+     *
+     * @return whether the bench stored the value; {@code false} when there is
+     *         no session, the device is held elsewhere, the wire failed, or the
+     *         bench refused it (its own values - spec 4.3)
+     */
+    @Override
+    public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
+        NetDeviceRef ref = remoteRef(device);
+        if (ref.isInput() != input) {
+            throw new IllegalArgumentException(ref + " is not listed as an "
+                    + (input ? "input" : "output"));
+        }
+        String scope = ch == Channel.L ? NetFields.LEFT : NetFields.RIGHT;
+        NetMessage answer;
+        try {
+            answer = withDeviceLock(ref, () -> {
+                NetConnection open = requireConnection();
+                return open.uiRequest(ref.into(open.newRequest(MessageType.DEVICE_SET_CALIBRATION))
+                        .put(NetFields.CHANNEL, scope)
+                        .put(NetFields.FS_RMS, fsRms));
+            });
+        } catch (RuntimeException e) {
+            if (log.isWarnEnabled()) {
+                log.warn("net backend: calibrating {} failed: {}", ref, e.toString());
+            }
+            return false;
+        }
+        if (answer == null) {
+            return false;               // no session or no lock - already logged
+        }
+        if (!answer.isOk()) {
+            if (log.isWarnEnabled()) {
+                log.warn("net backend: {} did not store {} Vrms ({}) for {}: {}",
+                        remoteBackend, fsRms, scope, ref, answer.getError());
+            }
+            return false;
+        }
+        if (log.isInfoEnabled()) {
+            log.info("net backend: {} stored {} Vrms ({}) for {}", remoteBackend,
+                    fsRms, scope, ref);
+        }
+        return true;
+    }
+
     /** The devices a settings write may take, inputs first: spec 4.6 accepts
      *  either direction, and an input is the one every backend has. */
     private List<DeviceRef> lockCandidates() {
@@ -920,19 +981,23 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
                 .put(NetFields.AMP2_PCT, amp2Pct));
     }
 
+    /** Never sent: the bench converts each lane against its OWN card, and the
+     *  wire carries no full scale (spec 4.5).  The local kernel's setter has no
+     *  far-end twin. */
     @Override
-    public void setAmplitudeVrms(double vrms) {
-        config(NetFields.AMPLITUDE_VRMS, vrms);
+    public void setDacFsVoltageAmpls(double leftAmpl, double rightAmpl) {
+        // intentionally nothing
     }
 
     @Override
-    public void setDacFsVoltageAmpl(double volts) {
-        config(NetFields.DAC_FS_VOLTAGE_AMPL, volts);
-    }
-
-    @Override
-    public void setRightLaneScale(double scale) {
-        config(NetFields.RIGHT_LANE_SCALE, scale);
+    public void setAmplitudesVrms(double leftVrms, double rightVrms) {
+        // ONE update for both lanes: two messages would land a transient state
+        // with one lane at its new level and the other still at its old one.
+        NetMessage request = gen(MessageType.GEN_CONFIG);
+        if (request != null) {
+            push(request.put(NetFields.AMPLITUDE_VRMS_LEFT, leftVrms)
+                    .put(NetFields.AMPLITUDE_VRMS_RIGHT, rightVrms));
+        }
     }
 
     @Override

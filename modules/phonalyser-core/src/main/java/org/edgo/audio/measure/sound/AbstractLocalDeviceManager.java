@@ -1,0 +1,67 @@
+/*
+ * Phonalyser - precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.edgo.audio.measure.sound;
+
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.preferences.Preferences;
+
+import lombok.extern.log4j.Log4j2;
+
+/**
+ * What every backend whose devices are plugged into THIS machine shares.
+ *
+ * <p>The calibration of such a device lives in this machine's device cards, so
+ * a measured full scale is written there and applied to the live full-scale
+ * scalars at once - the scalars the dBV axis and the generator compute
+ * against.  The one manager NOT under this type is the net backend: its
+ * devices are plugged into a bench across the network and are calibrated
+ * there.
+ */
+@Log4j2
+public abstract class AbstractLocalDeviceManager implements AudioDeviceManager {
+
+    protected AbstractLocalDeviceManager() {
+    }
+
+    /**
+     * Writes {@code ch}'s full scale into the card that recognises {@code device}
+     * (created when none does) and applies the card to the live scalars of
+     * {@code input}'s direction.  The two steps are one operation on purpose: a
+     * card that changed on disk while the scalars stood still is a calibration
+     * the operator watched succeed and the screen never showed.
+     *
+     * @return {@code false}, with nothing written, when the endpoint's
+     *         calibration is the device's own - see
+     *         {@link Preferences#storeDeviceCalibration}
+     */
+    @Override
+    public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
+        String deviceName = device.name();
+        Preferences prefs = Preferences.instance();
+        if (!prefs.storeDeviceCalibration(deviceName, input, ch, fsRms)) {
+            return false;
+        }
+        prefs.applyDeviceProfile(device, input);
+        if (log.isInfoEnabled()) {
+            log.info("Calibration: stored {} Vrms for '{}' ({}, {}) in this machine's cards",
+                    fsRms, deviceName, input ? "input" : "output", ch);
+        }
+        return true;
+    }
+}

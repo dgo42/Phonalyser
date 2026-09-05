@@ -664,14 +664,14 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // trim to it (0 dBFS is exactly the top).  The field holds V RMS, so
         // capping it at the PEAK full scale would have allowed 3 dB of clipping.
         NumericStepField ampField = new NumericStepField(g, UnitFamily.AMPLITUDE,
-                FreqRespConstants.AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl() / Constants.SQRT2, FreqRespConstants.AMP_MAX_DECIMALS,
-                prefs::getDacFsVoltageAmpl, 110);
+                FreqRespConstants.AMP_MIN_VRMS, prefs.getDacFsVoltageAmplLeft() / Constants.SQRT2, FreqRespConstants.AMP_MAX_DECIMALS,
+                prefs::getDacFsVoltageAmplLeft, 110);
         ampField.setLayoutData(comboGd());
         // Follow a DAC recalibration - the ceiling was previously read once, at
         // construction, and never moved again.  Replaying the stored pair after
         // it leaves the entered text where it stands and re-solves what a
         // full-scale-relative entry resolves to.
-        Bindings.onChange(toolbarTabs, prefs.dacFsVoltageAmplProperty(), v -> {
+        Bindings.onChange(toolbarTabs, prefs.dacFsVoltageAmplLeftProperty(), v -> {
             ampField.setMax(v / Constants.SQRT2);
             ampField.seedPair(prefs.getFreqRespAmplitude());
         });

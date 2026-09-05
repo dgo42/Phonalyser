@@ -2422,7 +2422,8 @@ public final class PreferencesDialog {
     // singleton, never save()): edit.putAudioDeviceProfile() replaces by name
     // on the copy, whose save() is inert while detached.  OK commits the whole
     // copy via applyFromDialog(); the resolved FS is pushed by the sibling
-    // resolution call there through setAdcFsVoltageRms / setDacFsVoltageAmpl.
+    // resolution call there through setAdcFsVoltageRms / setDacFsVoltageAmplLeft
+    // and their right-channel siblings.
 
     /** Full-scale voltage floor used to seed a freshly added range when the
      *  endpoint has no prior range to copy from: a small positive value so the

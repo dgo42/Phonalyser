@@ -120,10 +120,13 @@ class Qa40xOutputScalingTest {
      *  {@code Preferences.applyOutputDeviceProfile} pushes. */
     private double renderPeak(double amplitudeVrms) {
         SignalGenerator generator = new SignalGenerator(GenSignalForm.SINE, FREQ_HZ, SAMPLE_RATE,
-                amplitudeVrms, OUTPUT_FS_RMS * Constants.SQRT2);
+                amplitudeVrms, amplitudeVrms,
+                OUTPUT_FS_RMS * Constants.SQRT2, OUTPUT_FS_RMS * Constants.SQRT2);
+        double[] frame = new double[2];
         double peak = 0.0;
         for (int i = 0; i < RENDERED; i++) {
-            peak = Math.max(peak, Math.abs(generator.nextSample()));
+            generator.nextFrame(frame);
+            peak = Math.max(peak, Math.abs(frame[0]));
         }
         return peak;
     }

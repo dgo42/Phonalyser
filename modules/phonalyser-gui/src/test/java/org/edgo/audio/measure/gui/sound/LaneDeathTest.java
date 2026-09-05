@@ -103,7 +103,8 @@ class LaneDeathTest {
         backend.setInputBitDepth(BIT_DEPTH);
         prefs.setGenSignalForm(GenSignalForm.SINE);
         prefs.setGenFrequencyHz(TONE_HZ);
-        prefs.setGenAmplitudeVrms(AMPLITUDE_VRMS);
+        prefs.setGenAmplitudeVrmsLeft(AMPLITUDE_VRMS);
+        prefs.setGenAmplitudeVrmsRight(AMPLITUDE_VRMS);
     }
 
     @AfterEach

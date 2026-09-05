@@ -26,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioCapture;
@@ -246,6 +247,13 @@ final class StubDeviceManager implements AudioDeviceManager, Qa40xControl {
     @Override
     public List<DeviceRef> listOutputDevices() {
         return listed(false, OUTPUT);
+    }
+
+    /** A server never calibrates through its managers - the catalog writes its
+     *  own cards - so the bench refuses, as a device-provided card would. */
+    @Override
+    public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
+        return false;
     }
 
     /** One direction's list, read off the SNAPSHOT rather than the bench - a

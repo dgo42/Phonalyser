@@ -355,14 +355,18 @@ class NetBenchUiLoopbackTest {
         fields.put(NetFields.INDEX, 0);
         fields.put(NetFields.INPUT, false);          // the OUTPUT lane
         fields.put(NetFields.NAME, BenchSocket.DEVICE_NAME);
-        fields.put(NetFields.FS_RMS_LEFT, FS_RMS_LEFT);
-        fields.put(NetFields.FS_RMS_RIGHT, FS_RMS_RIGHT);
+        fields.put(NetFields.CHANNEL, NetFields.LEFT);
+        fields.put(NetFields.FS_RMS, FS_RMS_LEFT);
 
         assertNotNull(bench.callLocked(analyzer(),
                 MessageType.DEVICE_SET_CALIBRATION.getWire(), fields),
                 "the write names the output device, so the output device is what has "
                         + "to be held - locking the first free INPUT instead is the "
                         + "NOT_LOCKED the operator never sees");
+        fields.put(NetFields.CHANNEL, NetFields.RIGHT);
+        fields.put(NetFields.FS_RMS, FS_RMS_RIGHT);
+        assertNotNull(bench.callLocked(analyzer(),
+                MessageType.DEVICE_SET_CALIBRATION.getWire(), fields));
 
         AudioDeviceManager manager = AudioBackend.instance().manager(AudioBackendType.NET);
         DeviceRef stored = manager.listOutputDevices().get(0);

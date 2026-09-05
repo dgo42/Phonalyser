@@ -51,28 +51,32 @@ class LegacyFsFallbackPersistenceTest {
     private static final double EPS         = 1e-12;
 
     private double savedAdcFs;
-    private double savedDacAmpl;
+    private double savedDacAmplLeft;
+    private double savedDacAmplRight;
 
     @BeforeEach
     void snapshot() {
         Preferences prefs = Preferences.instance();
         prefs.setTransientMode(true);
-        savedAdcFs   = prefs.getAdcFsVoltageRms();
-        savedDacAmpl = prefs.getDacFsVoltageAmpl();
+        savedAdcFs        = prefs.getAdcFsVoltageRms();
+        savedDacAmplLeft  = prefs.getDacFsVoltageAmplLeft();
+        savedDacAmplRight = prefs.getDacFsVoltageAmplRight();
     }
 
     @AfterEach
     void restore() {
         Preferences prefs = Preferences.instance();
         prefs.setAdcFsVoltageRms(savedAdcFs);
-        prefs.setDacFsVoltageAmpl(savedDacAmpl);
+        prefs.setDacFsVoltageAmplLeft(savedDacAmplLeft);
+        prefs.setDacFsVoltageAmplRight(savedDacAmplRight);
     }
 
     @Test
     void legacyFsKeysAreNeverWritten() throws Exception {
         Preferences prefs = Preferences.instance();
         prefs.setAdcFsVoltageRms(ADC_FS_VRMS);
-        prefs.setDacFsVoltageAmpl(DAC_FS_VRMS * Constants.SQRT2);
+        prefs.setDacFsVoltageAmplLeft(DAC_FS_VRMS * Constants.SQRT2);
+        prefs.setDacFsVoltageAmplRight(DAC_FS_VRMS * Constants.SQRT2);
 
         Map<?, ?> written = invokeToMap(prefs);
         assertFalse(written.containsKey("adcFsVoltageRms"),
@@ -87,13 +91,16 @@ class LegacyFsFallbackPersistenceTest {
         // fallback scalars on load - the one-way migration the 1.2 contract keeps.
         Preferences prefs = Preferences.instance();
         prefs.setAdcFsVoltageRms(1.0);
-        prefs.setDacFsVoltageAmpl(1.0);
+        prefs.setDacFsVoltageAmplLeft(1.0);
+        prefs.setDacFsVoltageAmplRight(1.0);
         Map<String, Object> legacy = new LinkedHashMap<>();
         legacy.put("adcFsVoltageRms", ADC_FS_VRMS);
         legacy.put("dacFsVoltageRms", DAC_FS_VRMS);   // on disk RMS, in memory amplitude
         invokeFromMap(prefs, legacy);
         assertEquals(ADC_FS_VRMS, prefs.getAdcFsVoltageRms(), EPS);
-        assertEquals(DAC_FS_VRMS * Constants.SQRT2, prefs.getDacFsVoltageAmpl(), EPS);
+        assertEquals(DAC_FS_VRMS * Constants.SQRT2, prefs.getDacFsVoltageAmplLeft(), EPS);
+        assertEquals(DAC_FS_VRMS * Constants.SQRT2, prefs.getDacFsVoltageAmplRight(), EPS,
+                "the one pre-lane value seeds both lanes");
     }
 
     private Map<?, ?> invokeToMap(Preferences prefs) throws Exception {

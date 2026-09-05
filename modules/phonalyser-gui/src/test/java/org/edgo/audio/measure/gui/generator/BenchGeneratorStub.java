@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
@@ -264,8 +265,8 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
     }
 
     @Override
-    public void setRightLaneScale(double scale) {
-        record("setRightLaneScale", scale);
+    public void setAmplitudesVrms(double leftVrms, double rightVrms) {
+        record("setAmplitudesVrms", leftVrms, rightVrms);
     }
 
     @Override
@@ -485,13 +486,8 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
     }
 
     @Override
-    public void setAmplitudeVrms(double vrms) {
-        record("setAmplitudeVrms", vrms);
-    }
-
-    @Override
-    public void setDacFsVoltageAmpl(double volts) {
-        record("setDacFsVoltageAmpl", volts);
+    public void setDacFsVoltageAmpls(double leftAmpl, double rightAmpl) {
+        record("setDacFsVoltageAmpls", leftAmpl, rightAmpl);
     }
 
     @Override
@@ -567,6 +563,12 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
     @Override
     public List<DeviceRef> listOutputDevices() {
         return List.of(output);
+    }
+
+    /** Nothing here is ever calibrated. */
+    @Override
+    public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
+        return false;
     }
 
     @Override

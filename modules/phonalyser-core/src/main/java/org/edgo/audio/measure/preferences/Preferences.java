@@ -366,24 +366,23 @@ public final class Preferences {
      *  save, and lets {@link #registerCustomPreferences} replay a late
      *  registrant's saved values. */
     private final Map<String, Object> customRaw = new LinkedHashMap<>();
-    /** DAC full-scale PEAK amplitude voltage (= full-scale-sine RMS × √2) - the
-     *  value the generator's amplitude scale divides by, so it is kept in this
-     *  amplitude form in memory (suited for the calculation).
+    /** LEFT-channel DAC full-scale PEAK amplitude voltage (= full-scale-sine RMS
+     *  × √2) - the value the left lane's amplitude scale divides by, so it is
+     *  kept in this amplitude form in memory (suited for the calculation).
      *  Calibrated by the user via the "Calibrate DAC" button in the generator
-     *  pane and read directly by {@code SignalGenerator}.  This scalar is the LEFT
-     *  channel value, the MONO/LINKED-mirror value, and the legacy fallback.
+     *  pane.
      *
-     *  <p>RUNTIME-ONLY since 1.2, exactly like
-     *  {@link #adcFsVoltageRms}: a pre-1.2 {@code dacFsVoltageRms} yaml entry is
-     *  converted RMS->ampl on load at the {@link #fromMap} boundary and never
-     *  written back - see {@link #toMap}. */
-    private final Property<Double> dacFsVoltageAmpl = bound(DEFAULT_DAC_FS_AMPL);
-    /** RIGHT-channel DAC full-scale PEAK amplitude - the per-channel sibling of
-     *  {@link #dacFsVoltageAmpl}.  Equals the left value in MONO mode (and for old
-     *  preference files that lack the key); LINKED reads both {@code fsLeft} /
-     *  {@code fsRight} of the shared active row, an INDEPENDENT card resolves it
-     *  from its right active range.  Persisted as RMS ({@code dacFsVoltageRmsRight}
-     *  in the yaml), converted ampl↔RMS at the {@link #toMap}/{@link #fromMap} boundary. */
+     *  <p>RUNTIME-ONLY since 1.2, exactly like {@link #adcFsVoltageRms}: the
+     *  card store holds the calibration and this scalar is the fallback for a
+     *  device with no card.  A pre-1.2 {@code dacFsVoltageRms} yaml entry seeds
+     *  BOTH lanes' scalars once, converted RMS->ampl at the {@link #fromMap}
+     *  boundary, and is never written back - see {@link #toMap}. */
+    private final Property<Double> dacFsVoltageAmplLeft = bound(DEFAULT_DAC_FS_AMPL);
+    /** RIGHT-channel DAC full-scale PEAK amplitude - the right lane's own value,
+     *  independent of the left: a MONO card gives both scalars the same value, a
+     *  LINKED card reads {@code fsLeft} / {@code fsRight} of the shared active
+     *  row, an INDEPENDENT card resolves it from its right active range.
+     *  Runtime-only like its left sibling. */
     private final Property<Double> dacFsVoltageAmplRight = bound(DEFAULT_DAC_FS_AMPL);
 
     /** Path to the most recently chosen scope "Save to..." file (last N seconds of capture). */
@@ -416,15 +415,19 @@ public final class Preferences {
      *  {@code DUAL_TONE}; the second tone receives {@code 100 − this}.
      *  Range [0, 100], default 50 = equal split. */
     private final Property<Double> genDualToneSplitPct = bound(50.0);
-    /** Generator amplitude AS ENTERED: the number the operator typed and the
-     *  unit they typed it in ({@code v}, {@code dbv}, {@code dbfs}), resolved
-     *  to canonical V RMS at USE ({@link #getGenAmplitudeVrms()}) - so a unit
-     *  that only means something against the calibration (dBFS) cannot be
-     *  silently redefined by a backend, device or full-scale change under a
-     *  value already stored.  ONE property, because a number and a unit are one
-     *  value: written apart, an observer would see the new unit against the old
-     *  number and drive the lane with a quantity nobody entered. */
-    private final Property<UnitValue> genAmplitude = bound(baseAmplitude(0.5));
+    /** Generator amplitude of the LEFT DAC lane AS ENTERED: the number the
+     *  operator typed and the unit they typed it in ({@code v}, {@code dbv},
+     *  {@code dbfs}), resolved to canonical V RMS at USE
+     *  ({@link #getGenAmplitudeVrmsLeft()}) against the lane's own full scale -
+     *  so a unit that only means something against the calibration (dBFS)
+     *  cannot be silently redefined by a backend, device or full-scale change
+     *  under a value already stored.  ONE property, because a number and a unit
+     *  are one value: written apart, an observer would see the new unit against
+     *  the old number and drive the lane with a quantity nobody entered.  Each
+     *  lane has its own entered amplitude, as each has its own full scale. */
+    private final Property<UnitValue> genAmplitudeLeft  = bound(baseAmplitude(0.5));
+    /** The RIGHT DAC lane's amplitude AS ENTERED - see {@link #genAmplitudeLeft}. */
+    private final Property<UnitValue> genAmplitudeRight = bound(baseAmplitude(0.5));
     /** Generator dither AS ENTERED ({@code bits} or {@code dbv}); 0 bits means
      *  "Off". */
     private final Property<UnitValue> genDither = bound(baseDither(0.0));
@@ -624,7 +627,8 @@ public final class Preferences {
      *  per-backend device-name strings are only aliases on it, and a well-known
      *  card also carries {@code match} recognition patterns.  Calibration
      *  full-scale values live in each direction's range table.  The legacy global
-     *  {@code adcFsVoltageRms} / {@code dacFsVoltageAmpl} scalars stay the read
+     *  {@code adcFsVoltageRms} / {@code dacFsVoltageAmplLeft} /
+     *  {@code dacFsVoltageAmplRight} scalars stay the read
      *  fallback for a card with no profile entry; a new calibration write
      *  auto-creates a profile via {@link #storeAdcCalibration} /
      *  {@link #storeDacCalibration}.  Mutated via {@code synchronized}
@@ -662,7 +666,7 @@ public final class Preferences {
      *  {@link #seedRateDependentFreqRespDefaults()}).  A saved value overrides. */
     private final Property<Double>  freqRespStopHz           = bound(FREQRESP_RATE_DEFAULT_SENTINEL);
     /** Generator drive amplitude at the DAC AS ENTERED - see
-     *  {@link #genAmplitude} for why the entered value is stored rather than
+     *  {@link #genAmplitudeLeft} for why the entered value is stored rather than
      *  the canonical voltage. */
     private final Property<UnitValue> freqRespAmplitude      = bound(baseAmplitude(1.0));
     /** Number of log-spaced output frequency points the deconvolution emits.
@@ -1033,7 +1037,7 @@ public final class Preferences {
         // is inert while detached.
         c.setAdcFsVoltageRms(adcFsVoltageRms.get());
         c.setAdcFsVoltageRmsRight(adcFsVoltageRmsRight.get());
-        c.setDacFsVoltageAmpl(dacFsVoltageAmpl.get());
+        c.setDacFsVoltageAmplLeft(dacFsVoltageAmplLeft.get());
         c.setDacFsVoltageAmplRight(dacFsVoltageAmplRight.get());
         // Deep-copy the per-card profiles so the dialog edits them freely.
         synchronized (audioDevices) {
@@ -1888,17 +1892,17 @@ public final class Preferences {
         }
     }
 
-    public double getDacFsVoltageAmpl()         { return dacFsVoltageAmpl.get(); }
-    public void setDacFsVoltageAmpl(double v)   {
+    public double getDacFsVoltageAmplLeft()         { return dacFsVoltageAmplLeft.get(); }
+    public void setDacFsVoltageAmplLeft(double v)   {
         if (!(v > 0.0)) {
             if (log.isWarnEnabled()) {
-                log.warn("Rejecting invalid DAC full-scale {} V (ampl) - keeping {} V", v, dacFsVoltageAmpl.get());
+                log.warn("Rejecting invalid DAC full-scale {} V (ampl) - keeping {} V", v, dacFsVoltageAmplLeft.get());
             }
             return;
         }
-        dacFsVoltageAmpl.set(v);
+        dacFsVoltageAmplLeft.set(v);
     }
-    public Property<Double> dacFsVoltageAmplProperty() { return dacFsVoltageAmpl; }
+    public Property<Double> dacFsVoltageAmplLeftProperty() { return dacFsVoltageAmplLeft; }
 
     public double getDacFsVoltageAmplRight()       { return dacFsVoltageAmplRight.get(); }
     public void setDacFsVoltageAmplRight(double v) {
@@ -1912,22 +1916,10 @@ public final class Preferences {
     }
     public Property<Double> dacFsVoltageAmplRightProperty() { return dacFsVoltageAmplRight; }
 
-    /** The DAC full-scale PEAK amplitude of {@code ch}: LEFT -> the {@link #dacFsVoltageAmpl}
-     *  scalar (also the MONO/LINKED-mirror / legacy value), RIGHT -> {@link #dacFsVoltageAmplRight}. */
+    /** The DAC full-scale PEAK amplitude of {@code ch} - {@link #dacFsVoltageAmplLeft}
+     *  or {@link #dacFsVoltageAmplRight}. */
     public double getDacFsVoltageAmpl(Channel ch) {
-        return ch == Channel.R ? dacFsVoltageAmplRight.get() : dacFsVoltageAmpl.get();
-    }
-
-    /** The per-lane RIGHT output scale - {@code fsLeft/fsRight} so a card with
-     *  distinct DAC full-scales emits the same physical level on both lanes;
-     *  {@code 1.0} when the full-scales are equal or the card is mono (both
-     *  scalars equal).  A driver's mono amplitude is computed against the LEFT
-     *  full-scale, so the left lane always scales by 1.0.  Shared by every
-     *  playback driver (generator, frequency-response sweep, tune-notch). */
-    public double dacRightLaneScale() {
-        double leftFs  = dacFsVoltageAmpl.get();
-        double rightFs = dacFsVoltageAmplRight.get();
-        return rightFs > 0.0 ? leftFs / rightFs : 1.0;
+        return ch == Channel.R ? dacFsVoltageAmplRight.get() : dacFsVoltageAmplLeft.get();
     }
 
     public String getOscSavePath()             { return oscSavePath.get(); }
@@ -1990,22 +1982,34 @@ public final class Preferences {
      *  peak full scale - so a recalibration moves what a dBFS entry means
      *  instead of quietly changing what was entered. */
     private double amplitudeVrms(UnitValue entered) {
+        return amplitudeVrms(entered, getDacFsVoltageAmplLeft());
+    }
+
+    /** {@link #amplitudeVrms(UnitValue)} against an explicit DAC peak full
+     *  scale - the lane's own, for a per-lane amplitude. */
+    private double amplitudeVrms(UnitValue entered, double fsAmpl) {
         return UnitConversion.convert(UnitFamily.AMPLITUDE, entered.value(), entered.unit(),
-                UnitConversion.baseToken(UnitFamily.AMPLITUDE), getDacFsVoltageAmpl());
+                UnitConversion.baseToken(UnitFamily.AMPLITUDE), fsAmpl);
     }
 
     /** Dither depth in bits of an entered value, resolved against the live DAC
      *  peak full scale (a dBV dither is a level, not a depth). */
     private double ditherBits(UnitValue entered) {
         return UnitConversion.convert(UnitFamily.DITHER, entered.value(), entered.unit(),
-                UnitConversion.baseToken(UnitFamily.DITHER), getDacFsVoltageAmpl());
+                UnitConversion.baseToken(UnitFamily.DITHER), getDacFsVoltageAmplLeft());
     }
 
-    public double getGenAmplitudeVrms()        { return amplitudeVrms(genAmplitude.get()); }
-    public void setGenAmplitudeVrms(double v)  { genAmplitude.set(baseAmplitude(v)); }
-    public UnitValue getGenAmplitude()         { return genAmplitude.get(); }
-    public void setGenAmplitude(UnitValue v)   { genAmplitude.set(v); }
-    public Property<UnitValue> genAmplitudeProperty() { return genAmplitude; }
+    public double getGenAmplitudeVrmsLeft()        { return amplitudeVrms(genAmplitudeLeft.get(), getDacFsVoltageAmpl(Channel.L)); }
+    public void setGenAmplitudeVrmsLeft(double v)  { genAmplitudeLeft.set(baseAmplitude(v)); }
+    public UnitValue getGenAmplitudeLeft()         { return genAmplitudeLeft.get(); }
+    public void setGenAmplitudeLeft(UnitValue v)   { genAmplitudeLeft.set(v); }
+    public Property<UnitValue> genAmplitudeLeftProperty() { return genAmplitudeLeft; }
+
+    public double getGenAmplitudeVrmsRight()       { return amplitudeVrms(genAmplitudeRight.get(), getDacFsVoltageAmpl(Channel.R)); }
+    public void setGenAmplitudeVrmsRight(double v) { genAmplitudeRight.set(baseAmplitude(v)); }
+    public UnitValue getGenAmplitudeRight()        { return genAmplitudeRight.get(); }
+    public void setGenAmplitudeRight(UnitValue v)  { genAmplitudeRight.set(v); }
+    public Property<UnitValue> genAmplitudeRightProperty() { return genAmplitudeRight; }
 
     public double getGenDitherBits()           { return ditherBits(genDither.get()); }
     public void setGenDitherBits(double v)     { genDither.set(baseDither(v)); }
@@ -2124,7 +2128,7 @@ public final class Preferences {
     public UnitValue freqRespAmplitudeIn(double vrms) {
         String unit = freqRespAmplitude.get().unit();
         return new UnitValue(UnitConversion.convert(UnitFamily.AMPLITUDE, vrms,
-                UnitConversion.baseToken(UnitFamily.AMPLITUDE), unit, getDacFsVoltageAmpl()), unit);
+                UnitConversion.baseToken(UnitFamily.AMPLITUDE), unit, getDacFsVoltageAmplLeft()), unit);
     }
 
     public int getFreqRespSweepPoints()        { return freqRespSweepPoints.get(); }
@@ -2444,8 +2448,10 @@ public final class Preferences {
         root.put("genDualToneSplitPct",          genDualToneSplitPct.get());
         // An entered value is ONE property but TWO keys on disk, so the file
         // stays readable: the number where it always was, the unit beside it.
-        root.put("genAmplitude",                 genAmplitude.get().value());
-        root.put("genAmplitudeUnit",             genAmplitude.get().unit());
+        root.put("genAmplitudeLeft",             genAmplitudeLeft.get().value());
+        root.put("genAmplitudeLeftUnit",         genAmplitudeLeft.get().unit());
+        root.put("genAmplitudeRight",            genAmplitudeRight.get().value());
+        root.put("genAmplitudeRightUnit",        genAmplitudeRight.get().unit());
         root.put("genDither",                    genDither.get().value());
         root.put("genDitherUnit",                genDither.get().unit());
         root.put("genOutputChannels",            genOutputChannels.get().name());
@@ -2824,13 +2830,19 @@ public final class Preferences {
         // is gone after the first save.  The setters validate and refresh the
         // cached dBV offsets.
         if (root.get("adcFsVoltageRms") instanceof Number n) setAdcFsVoltageRms(n.doubleValue());
-        if (root.get("dacFsVoltageRms") instanceof Number n) setDacFsVoltageAmpl(n.doubleValue() * Constants.SQRT2);
+        if (root.get("dacFsVoltageRms") instanceof Number n) {
+            // The one pre-lane value seeds BOTH lanes' scalars.
+            setDacFsVoltageAmplLeft(n.doubleValue() * Constants.SQRT2);
+            setDacFsVoltageAmplRight(n.doubleValue() * Constants.SQRT2);
+        }
         if (root.get("genSignalForm")                instanceof String s) genSignalForm.set(enumOr(GenSignalForm.class, s, genSignalForm.get()));
         if (root.get("genFrequencyHz")               instanceof Number n) genFrequencyHz.set(n.doubleValue());
         if (root.get("genDualToneFreq1Hz")           instanceof Number n) genDualToneFreq1Hz.set(n.doubleValue());
         if (root.get("genDualToneFreq2Hz")           instanceof Number n) genDualToneFreq2Hz.set(n.doubleValue());
         if (root.get("genDualToneSplitPct")          instanceof Number n) genDualToneSplitPct.set(n.doubleValue());
-        readEntered(root, "genAmplitude", genAmplitude);
+        readEntered(root, "genAmplitudeLeft",  genAmplitudeLeft);
+        readEntered(root, "genAmplitudeRight", genAmplitudeRight);
+        seedGenAmplitudeLanesFromSingle(root);
         readEntered(root, "genDither", genDither);
         if (root.get("genOutputChannels")            instanceof String s) genOutputChannels.set(enumOr(OutputChannels.class, s, genOutputChannels.get()));
         if (root.get("genDpd")                        instanceof String s) genDpd.set(s);
@@ -3195,15 +3207,16 @@ public final class Preferences {
         // A config that carries no pre-pair key needs no conversion - and no
         // full-scale resolution, whose device lookup is what used to force a
         // second read of the card store on every launch.
-        if (!(root.get("genAmplitudeVrms") instanceof Number
-                || root.get("freqRespAmplitudeVrms") instanceof Number
+        // The generator amplitude is not on this list: its pre-pair number
+        // predates the per-lane pairs by two storage generations and is not
+        // read - the lanes seed from the single entered pair only
+        // ({@link #seedGenAmplitudeLanesFromSingle}).
+        if (!(root.get("freqRespAmplitudeVrms") instanceof Number
                 || root.get("tuneNotchAmplitudeVrms") instanceof Number
                 || root.get("genDitherBits") instanceof Number)) {
             return;
         }
         double fsAmpl = prePairConversionFsAmpl();
-        seedEntered(root, UnitFamily.AMPLITUDE, "genAmplitude", "genAmplitudeVrms",
-                "genAmplitudeDbvDisplay", genAmplitude, fsAmpl);
         seedEntered(root, UnitFamily.AMPLITUDE, "freqRespAmplitude", "freqRespAmplitudeVrms",
                 "freqRespAmplitudeDbvDisplay", freqRespAmplitude, fsAmpl);
         // The tune-notch dialog never had a display flag of its own: its
@@ -3250,6 +3263,30 @@ public final class Preferences {
         double number = root.get(key) instanceof Number n ? n.doubleValue() : current.value();
         String unit = root.get(key + UNIT_KEY_SUFFIX) instanceof String s ? s : current.unit();
         entered.set(new UnitValue(number, unit));
+    }
+
+    /** Whether the configuration carries either key of the entered pair {@code key}. */
+    private boolean hasEntered(Map<?, ?> root, String key) {
+        return root.containsKey(key) || root.containsKey(key + UNIT_KEY_SUFFIX);
+    }
+
+    /**
+     * One-time conversion of a configuration written while the generator had ONE
+     * amplitude for both DAC lanes, stored as the entered pair {@code genAmplitude}
+     * / {@code genAmplitudeUnit}: both lanes start from that one value and are
+     * edited apart from then on.  Applied only where neither lane's own pair is
+     * present, and nothing writes the single pair again - it disappears with
+     * the first save.
+     */
+    private void seedGenAmplitudeLanesFromSingle(Map<?, ?> root) {
+        if (hasEntered(root, "genAmplitudeLeft") || hasEntered(root, "genAmplitudeRight")) {
+            return;
+        }
+        if (!hasEntered(root, "genAmplitude")) {
+            return;
+        }
+        readEntered(root, "genAmplitude", genAmplitudeLeft);
+        genAmplitudeRight.set(genAmplitudeLeft.get());
     }
 
     /**
@@ -4007,7 +4044,8 @@ public final class Preferences {
      *
      *  <p>{@code synchronized} on the SAME instance monitor the calibrate writes
      *  hold ({@link #storeDeviceCalibration} and its siblings write {@code fsLeft}
-     *  and {@code fsRight} as two separate field writes before
+     *  and {@code fsRight} as two separate field writes - a MONO card, or a
+     *  fresh card whose other channel is seeded - before
      *  {@link #putAudioDeviceProfile} re-puts the card).  Without it a server
      *  broadcasting {@code cal} could sample the row between those two writes and
      *  publish a half-updated pair - the new left against the old right - which is
@@ -4041,7 +4079,7 @@ public final class Preferences {
 
     /** Resolves the output device name to its owning card's per-channel
      *  active-range full-scales (stored RMS) and pushes the
-     *  peak-amplitude form ({@code × √2}) through {@link #setDacFsVoltageAmpl} /
+     *  peak-amplitude form ({@code × √2}) through {@link #setDacFsVoltageAmplLeft} /
      *  {@link #setDacFsVoltageAmplRight}.  MONO: the single physical channel's
      *  {@code fsLeft} fills BOTH scalars.  LINKED: left and right from the SAME
      *  active row's {@code fsLeft} / {@code fsRight}.  INDEPENDENT: left from the
@@ -4053,7 +4091,7 @@ public final class Preferences {
     public void applyOutputDeviceProfile(String deviceName) {
         DeviceCalibration cal = deviceCalibration(deviceName, false);
         if (cal == null) return;
-        setDacFsVoltageAmpl(cal.fsRmsLeft() * Constants.SQRT2);
+        setDacFsVoltageAmplLeft(cal.fsRmsLeft() * Constants.SQRT2);
         setDacFsVoltageAmplRight(cal.fsRmsRight() * Constants.SQRT2);
     }
 
@@ -4092,7 +4130,7 @@ public final class Preferences {
             setAdcFsVoltageRms(cal.fsRmsLeft());
             setAdcFsVoltageRmsRight(cal.fsRmsRight());
         } else {
-            setDacFsVoltageAmpl(cal.fsRmsLeft() * Constants.SQRT2);
+            setDacFsVoltageAmplLeft(cal.fsRmsLeft() * Constants.SQRT2);
             setDacFsVoltageAmplRight(cal.fsRmsRight() * Constants.SQRT2);
         }
     }
@@ -4205,7 +4243,7 @@ public final class Preferences {
      *  output device's DAC calibration: like {@link #storeAdcCalibration(double)}
      *  but on the output endpoint, storing the RMS form ({@code ÷ √2}) on disk for
      *  BOTH channels (the MONO / LINKED-mirror / legacy write), then applying the
-     *  amplitude to both scalars via {@link #setDacFsVoltageAmpl} /
+     *  amplitude to both scalars via {@link #setDacFsVoltageAmplLeft} /
      *  {@link #setDacFsVoltageAmplRight}. */
     public synchronized void storeDacCalibration(double fsAmpl) {
         String deviceName = current().getOutputDeviceName();
@@ -4219,7 +4257,7 @@ public final class Preferences {
         }
         writeActiveRangeFs(p.getOutput(), fsAmpl / Constants.SQRT2);
         putAudioDeviceProfile(p);   // add/replace + save()
-        setDacFsVoltageAmpl(fsAmpl);
+        setDacFsVoltageAmplLeft(fsAmpl);
         setDacFsVoltageAmplRight(fsAmpl);
     }
 
@@ -4248,17 +4286,17 @@ public final class Preferences {
         putAudioDeviceProfile(p);   // add/replace + save()
         if (mono) {
             // MONO card: one physical channel - both scalars move together.
-            setDacFsVoltageAmpl(fsAmpl);
+            setDacFsVoltageAmplLeft(fsAmpl);
             setDacFsVoltageAmplRight(fsAmpl);
         } else if (ch == Channel.R) {
             setDacFsVoltageAmplRight(fsAmpl);
         } else {
-            setDacFsVoltageAmpl(fsAmpl);
+            setDacFsVoltageAmplLeft(fsAmpl);
         }
     }
 
     /**
-     * Stores the pair of full-scale RMS volts as the calibration of {@code
+     * Stores {@code ch}'s full-scale RMS volts as the calibration of {@code
      * deviceName} in one direction - the card write of the calibrate flow, aimed
      * at a NAMED device instead of the currently selected one, and touching no
      * global scalar.
@@ -4272,12 +4310,22 @@ public final class Preferences {
      * ({@link #storeAdcCalibration(Channel, double)} and its siblings), so a
      * value written here reads back through {@link #deviceCalibration} unchanged.
      *
+     * <p>One channel per write; the other channel's row field is left as it is,
+     * with one exception: a field still at zero - never calibrated - takes the
+     * same value.  A row with one channel calibrated and the other at zero is
+     * no calibration at all ({@link #deviceCalibration} refuses it), so the
+     * first calibrate of a fresh card would leave the device uncalibrated
+     * until the other channel was measured too; the two channels of one card
+     * share its design, so the measured one is the best estimate of the other
+     * until it is measured itself.  On a MONO endpoint the one physical channel
+     * takes the value whichever channel names it.
+     *
      * @return {@code false} - and nothing is written - when the endpoint's
      *         calibration comes from the device itself (a QA40x): those values
      *         are the analyzer's, not a caller's to set
      */
     public synchronized boolean storeDeviceCalibration(String deviceName, boolean input,
-            double fsRmsLeft, double fsRmsRight) {
+            Channel ch, double fsRms) {
         AudioDeviceProfile p = resolveDeviceProfile(deviceName);
         if (p == null) {
             p = seedProfileFor(input, deviceName);
@@ -4287,11 +4335,14 @@ public final class Preferences {
             warnDeviceProvidedCalibration(p);
             return false;
         }
-        // LEFT first: on a MONO endpoint this single call fills both row fields,
-        // which is the one physical channel a mono card has.
-        writeActiveRangeFs(ep, Channel.L, fsRmsLeft);
+        writeActiveRangeFs(ep, ch, fsRms);
         if (ep.getChannels() != DeviceChannelMode.MONO) {
-            writeActiveRangeFs(ep, Channel.R, fsRmsRight);
+            Channel other = ch == Channel.L ? Channel.R : Channel.L;
+            DeviceRange otherRow = activeRange(ep, other);
+            double otherFs = other == Channel.L ? otherRow.getFsLeft() : otherRow.getFsRight();
+            if (otherFs <= 0.0) {
+                writeActiveRangeFs(ep, other, fsRms);
+            }
         }
         putAudioDeviceProfile(p);   // add/replace + saveDevices()
         return true;

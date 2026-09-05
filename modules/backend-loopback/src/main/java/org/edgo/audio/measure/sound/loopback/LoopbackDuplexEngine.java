@@ -239,7 +239,8 @@ public final class LoopbackDuplexEngine {
         // backend's floor is whatever dither the GENERATOR is configured to, and
         // nothing else - an undithered loopback measurement really reads zeros.
         PcmQuantizer quantizer = new PcmQuantizer(bits, -1.0 /* bits */);
-        SignalGenerator zero = new SignalGenerator(GenSignalForm.SINE, SILENCE_TONE_HZ, hz, 0.0, 1.0);
+        SignalGenerator zero = new SignalGenerator(GenSignalForm.SINE, SILENCE_TONE_HZ, hz,
+                0.0, 0.0, 1.0, 1.0);
         this.silence = (destination, frames) -> quantizer.encode(zero, destination, frames);
     }
 

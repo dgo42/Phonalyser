@@ -700,7 +700,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // Right-channel ADC full-scale rescales the RIGHT measured voltages the same way
         // - same clear+redraw so its running stats never go stale after a per-channel recal.
         Bindings.onChange(this, prefs.adcFsVoltageRmsRightProperty(), v -> { clearMeasurementHistory(); redraw(); });
-        Bindings.onChange(this, prefs.dacFsVoltageAmplProperty(), v -> { clearMeasurementHistory(); redraw(); });
+        Bindings.onChange(this, prefs.dacFsVoltageAmplLeftProperty(), v -> { clearMeasurementHistory(); redraw(); });
+        Bindings.onChange(this, prefs.dacFsVoltageAmplRightProperty(), v -> { clearMeasurementHistory(); redraw(); });
         syncScopeButtons();       // apply the initial signal-gated visibility
         syncMeasurementChannelButtons();   // grey the L/R selector for any channel that starts off
 

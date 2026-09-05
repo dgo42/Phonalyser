@@ -357,9 +357,9 @@ public final class TuneNotchWizardDialog {
         // dBFS now all trim to the same maximum (0 dBFS is the top).
         ampField = new NumericStepField(row, UnitFamily.AMPLITUDE,
                 FreqRespConstants.AMP_MIN_VRMS,
-                prefs.getDacFsVoltageAmpl() / Constants.SQRT2,
+                prefs.getDacFsVoltageAmplLeft() / Constants.SQRT2,
                 FreqRespConstants.AMP_MAX_DECIMALS,
-                prefs::getDacFsVoltageAmpl, FIELD_WIDTH_HINT);
+                prefs::getDacFsVoltageAmplLeft, FIELD_WIDTH_HINT);
         // Same amplitude semantics as the generator's field, so it borrows that
         // field's tooltip (unit switching, dBV, and the dbfs/dbf entry).
         ampField.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
@@ -643,7 +643,7 @@ public final class TuneNotchWizardDialog {
         GuiUtil.marshal(dialog, () -> {
             prefs.applyDeviceProfile(out, false);
             prefs.applyDeviceProfile(in, true);
-            ampField.setMax(prefs.getDacFsVoltageAmpl() / Constants.SQRT2);
+            ampField.setMax(prefs.getDacFsVoltageAmplLeft() / Constants.SQRT2);
             ampField.seedPair(prefs.getTuneNotchAmplitude());
         });
         // Each converter runs the format IT is configured with: the playback
@@ -656,8 +656,7 @@ public final class TuneNotchWizardDialog {
         int playbackBits = prefs.current().getOutputBitDepth();
         // Read the DAC/ADC voltage references + dither resolution once: they
         // don't change for the lifetime of the session.
-        double dacFsVrms = prefs.getDacFsVoltageAmpl();
-        double rightLaneScale = prefs.dacRightLaneScale();
+        double dacFsVrms = prefs.getDacFsVoltageAmplLeft();
         double adcFsVrmsLeft  = prefs.getAdcFsVoltageRms(Channel.L);
         double adcFsVrmsRight = prefs.getAdcFsVoltageRms(Channel.R);
         int    ditherBits = prefs.getFreqRespDitherBits();
@@ -697,7 +696,7 @@ public final class TuneNotchWizardDialog {
             // close().  There is no per-sweep open/close or recording wait.
             double[] band = sweepBand(curStartHz, curStopHz);
             engine.start(band[0], band[1], curAmpVrms, dacFsVrms, sweepSamples, fadeSamples,
-                    curOutputChannels, rightLaneScale);
+                    curOutputChannels);
             awaitSettle(sweepSamples);
             if (!running) return;
 

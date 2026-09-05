@@ -103,10 +103,10 @@ public final class SweepCapture {
             // behind but the capture reference the finally releases.
             requireRate(reader.getSampleRate(), captureRateHz, "input stream");
             GeneratorRun run = new GeneratorRun(GenSignalForm.LOG_SWEEP,
-                    0.0, amplitudeVrms, playbackRateHz, playbackBitDepth, ditherBits,
-                    dacFsVoltage, 1.0, channels,
+                    0.0, amplitudeVrms, amplitudeVrms,   // both lanes alike
+                    playbackRateHz, playbackBitDepth, ditherBits,
+                    dacFsVoltage, dacFsVoltage, channels,
                     true,    // sample counts on the asked clock - a mismatch refuses
-                    false,   // the bench's own device card owns its calibration
                     new GeneratorRun.SweepSpec(startHz, stopHz, sweepSamples,
                             leadInSamples, fadeSamples, fadeSamples, false));
             PlaybackStateEnum started = lane.start(run);
@@ -208,7 +208,7 @@ public final class SweepCapture {
             System.arraycopy(chunkR, 0, right, written, got);
             written += got;
             if (progress != null) {
-                progress.onBlock(written, blockRms(chunkL, chunkR, got));
+                progress.onBlock(written, blockRms(chunkL, got), blockRms(chunkR, got));
             }
         }
         if (written == total) {
@@ -232,15 +232,13 @@ public final class SweepCapture {
         }
     }
 
-    /** The larger of the two channels' RMS over the chunk - the level the
-     *  progress meter shows, same convention as the old private-line path. */
-    private double blockRms(double[] l, double[] r, int n) {
-        double sumL = 0;
-        double sumR = 0;
+    /** One channel's RMS over the chunk - the progress meter is handed both
+     *  channels' and shows the one its view has selected. */
+    private double blockRms(double[] samples, int n) {
+        double sum = 0;
         for (int i = 0; i < n; i++) {
-            sumL += l[i] * l[i];
-            sumR += r[i] * r[i];
+            sum += samples[i] * samples[i];
         }
-        return Math.sqrt(Math.max(sumL, sumR) / n);
+        return Math.sqrt(sum / n);
     }
 }

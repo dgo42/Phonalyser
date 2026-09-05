@@ -406,8 +406,8 @@ public final class DeviceCatalog {
     }
 
     /**
-     * Spec 4.3's {@code device.setCalibration}: stores the two full-scale RMS
-     * volts as this server's calibration of {@code name} in {@code device}'s
+     * Spec 4.3's {@code device.setCalibration}: stores {@code ch}'s full-scale
+     * RMS volts as this server's calibration of {@code name} in {@code device}'s
      * direction, creating the card when none recognises it, and persists.
      *
      * <p>The write goes to the SERVER's store because that is where the device
@@ -419,9 +419,8 @@ public final class DeviceCatalog {
      *         (a QA40x reads its own EEPROM), which spec 4.3 refuses with
      *         {@code BAD_REQUEST}: those values are the analyzer's
      */
-    public boolean storeCalibration(DeviceLock device, String name, double fsRmsLeft,
-            double fsRmsRight) {
-        return cards.storeDeviceCalibration(name, device.input(), fsRmsLeft, fsRmsRight);
+    public boolean storeCalibration(DeviceLock device, String name, Channel ch, double fsRms) {
+        return cards.storeDeviceCalibration(name, device.input(), ch, fsRms);
     }
 
     /**

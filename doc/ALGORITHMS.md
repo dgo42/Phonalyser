@@ -221,7 +221,7 @@ PCM packing is centralized in **`PcmQuantizer`** (`sound/PcmQuantizer.java`), ow
 
 ### 1.14 File export (WAV / AIFF / FLAC)
 
-`SignalFileExporter` picks the container by extension (`.wav`/`.flac`/`.aif`/`.aiff`) and writes through `WavWriter`/`AiffWriter`/`FlacWriter` behind a common `PcmSink`, using the same `fillBuffer` dither/quantize path as live playback. For **periodic** forms it truncates the length to the largest integer multiple of one signal period (`truncateToFullPeriods` `:95`, `period = round(fs/freq)`) so the file loops click-free; noise/sweeps use the requested duration as-is. `WavSignalExporter` is the WAV-only legacy variant. 8-bit export is WAV-only (FLAC rejects 8-bit).
+`SignalFileExporter` picks the container by extension (`.wav`/`.flac`/`.aif`/`.aiff`) and writes through `WavWriter`/`AiffWriter`/`FlacWriter` behind a common `PcmSink`, using the same `fillBuffer` dither/quantize path as live playback. For **periodic** forms it truncates the length to the largest integer multiple of one signal period (`truncateToFullPeriods` `:95`, `period = round(fs/freq)`) so the file loops click-free; noise/sweeps use the requested duration as-is. 8-bit export is WAV-only (FLAC rejects 8-bit).
 
 ### 1.15 Per-backend output mechanics
 

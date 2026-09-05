@@ -23,8 +23,8 @@ import java.util.List;
 
 import javax.sound.sampled.AudioFormat;
 
+import org.edgo.audio.measure.sound.AbstractLocalDeviceManager;
 import org.edgo.audio.measure.sound.AudioCapture;
-import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 
@@ -38,7 +38,7 @@ import org.edgo.audio.measure.sound.DeviceRef;
  * depths the encoder supports; nothing is probed, since there is no hardware to
  * ask.
  */
-public final class LoopbackDeviceManager implements AudioDeviceManager {
+public final class LoopbackDeviceManager extends AbstractLocalDeviceManager {
 
     /** The standard sample-rate ladder, 8 k to 768 k.  Both directions offer
      *  the same list - the loop has ONE clock, so an input and an output rate

@@ -334,7 +334,7 @@ public final class PredistortionEngine {
                     Preferences p = Preferences.instance();
                     GeneratorCorrections gc = harm.toGeneratorCorrections(
                             target, f -> calResponseAt(f, chanLeft),
-                            p.getAdcFsVoltageRms(), p.getGenAmplitudeVrms());
+                            p.getAdcFsVoltageRms(), p.getGenAmplitudeVrmsLeft());
                     stats.correction(round, gc);
                     ui(() -> gen.applyCompensation(gc.ampRatios(), gc.harmonicNumbers(), gc.phiInits()));
                 }
@@ -405,7 +405,7 @@ public final class PredistortionEngine {
         double w1 = p.getGenDualToneSplitPct() / 100.0;
         double w2 = 1.0 - w1;
         double norm = Math.hypot(w1, w2);
-        return norm > 0.0 ? p.getGenAmplitudeVrms() * w1 / norm : p.getGenAmplitudeVrms();
+        return norm > 0.0 ? p.getGenAmplitudeVrmsLeft() * w1 / norm : p.getGenAmplitudeVrmsLeft();
     }
 
     /** Dual-tone distortion figure being minimised: the combined intermod-product

@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.sound.AbstractPcmCapture;
 import org.edgo.audio.measure.sound.AudioCapture;
@@ -148,6 +149,12 @@ public final class DyingLaneStub implements AudioDeviceManager {
     @Override
     public List<DeviceRef> listOutputDevices() {
         return List.of(output);
+    }
+
+    /** Nothing here is ever calibrated. */
+    @Override
+    public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
+        return false;
     }
 
     @Override

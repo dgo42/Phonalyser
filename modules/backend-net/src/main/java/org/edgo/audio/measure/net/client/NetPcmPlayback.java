@@ -72,11 +72,6 @@ public final class NetPcmPlayback implements AudioPlayback {
     }
 
     @Override
-    public void setChannelScale(double left, double right) {
-        throw new UnsupportedOperationException(NOT_IMPLEMENTED);
-    }
-
-    @Override
     public void setOutputChannels(OutputChannels channels) {
         throw new UnsupportedOperationException(NOT_IMPLEMENTED);
     }

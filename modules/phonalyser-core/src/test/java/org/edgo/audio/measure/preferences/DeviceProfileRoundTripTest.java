@@ -541,7 +541,7 @@ class DeviceProfileRoundTripTest {
         p.storeDacCalibration(fsAmpl);
 
         // Global scalar took the peak-amplitude value.
-        assertEquals(fsAmpl, p.getDacFsVoltageAmpl(), EPS);
+        assertEquals(fsAmpl, p.getDacFsVoltageAmplLeft(), EPS);
 
         // The stored row is the RMS form (ampl / √2).
         AudioDeviceProfile created = p.resolveDeviceProfile("E1DA Cosmos DAC");
@@ -550,9 +550,9 @@ class DeviceProfileRoundTripTest {
         assertEquals(fsAmpl / Constants.SQRT2, row.getFsLeft(), EPS);
 
         // applyOutputDeviceProfile round-trips RMS->ampl back onto the global scalar.
-        p.setDacFsVoltageAmpl(1.0);
+        p.setDacFsVoltageAmplLeft(1.0);
         p.applyOutputDeviceProfile("E1DA Cosmos DAC");
-        assertEquals(fsAmpl, p.getDacFsVoltageAmpl(), EPS);
+        assertEquals(fsAmpl, p.getDacFsVoltageAmplLeft(), EPS);
     }
 
     @Test

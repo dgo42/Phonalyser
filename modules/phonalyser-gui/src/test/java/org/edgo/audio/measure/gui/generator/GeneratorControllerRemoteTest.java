@@ -161,7 +161,8 @@ class GeneratorControllerRemoteTest {
         // and asserting it here would only re-test FftBinSnap.
         prefs.setGenSnapToFftBin(false);
         prefs.setGenFrequencyHz(TONE_HZ);
-        prefs.setGenAmplitudeVrms(AMPLITUDE_VRMS);
+        prefs.setGenAmplitudeVrmsLeft(AMPLITUDE_VRMS);
+        prefs.setGenAmplitudeVrmsRight(AMPLITUDE_VRMS);
     }
 
     @AfterEach
@@ -198,11 +199,11 @@ class GeneratorControllerRemoteTest {
         assertEquals("openGenerator", sent.get(0), "the lane is taken before anything is set");
         assertTrue(sent.contains("setForm"));
         assertTrue(sent.contains("setFrequency"));
-        assertTrue(sent.contains("setAmplitudeVrms"));
-        assertTrue(sent.contains("setDacFsVoltageAmpl"));
-        assertTrue(sent.contains("setRightLaneScale"),
-                "a card whose two DAC full-scales differ emits an uncalibrated right lane "
-                        + "without it, and there is nothing on screen to say so");
+        assertTrue(sent.contains("setAmplitudesVrms"),
+                "both lanes' amplitudes travel, and the bench converts each against its "
+                        + "own card");
+        assertFalse(sent.contains("setDacFsVoltageAmpls"),
+                "spec 4.5: the wire carries no full scale - the bench's card converts");
         assertEquals("startGenerator", sent.get(sent.size() - 1));
         assertEquals(sent.size() - 2, sent.indexOf("fftGrid"),
                 "the grid is snapped against the waveform the far end HOLDS, so it must "
@@ -843,18 +844,19 @@ class GeneratorControllerRemoteTest {
     }
 
     @Test
-    void recalibratingTheRightLaneReachesTheBenchWhileTheToneIsPlaying() {
+    void editingTheRightLaneReachesTheBenchWhileTheToneIsPlaying() {
         Preferences prefs = Preferences.instance();
         prefs.setGenSignalForm(GenSignalForm.SINE);
         controller = new GeneratorController();
         controller.start();
         bench.reset();
 
-        prefs.setDacFsVoltageAmplRight(prefs.getDacFsVoltageAmpl() / 2.0);
+        prefs.setGenAmplitudeVrmsRight(AMPLITUDE_VRMS / 2.0);
 
-        assertNotNull(bench.firstArg("setRightLaneScale"),
-                "the lane the scale belongs to is the far end's - recalibrating a card must "
-                        + "take effect on the tone that is playing, as it does locally");
+        assertEquals(AMPLITUDE_VRMS, bench.firstArg("setAmplitudesVrms"),
+                "the lane the amplitudes belong to is the far end's - an edit on either "
+                        + "side must take effect on the tone that is playing, as it does "
+                        + "locally, and the pair travels together");
     }
 
     /** A minimal single-tone predistortion file on disk - what

@@ -51,14 +51,6 @@ public interface AudioPlayback extends AutoCloseable {
     default void setDitherBits(double bits) {}
 
     /**
-     * Live-updates the per-lane full-scale scale factors (left, right) - the
-     * ratio that lets a LINKED stereo card with distinct DAC full-scales emit
-     * the same physical level on both lanes.  No-op by default; honoured by the
-     * in-process backends wired to the GUI.
-     */
-    default void setChannelScale(double left, double right) {}
-
-    /**
      * Live-updates the output-lane gate (Left / Right / Both).  No-op by
      * default; honoured by the in-process backends wired to the GUI.
      */

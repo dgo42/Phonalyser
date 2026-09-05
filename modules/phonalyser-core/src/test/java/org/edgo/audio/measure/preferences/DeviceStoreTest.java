@@ -1417,7 +1417,7 @@ class DeviceStoreTest {
         p.putAudioDeviceProfile(deviceProvidedOutputCard());
         p.setBackend(AudioBackendType.WASAPI);
         p.current().setOutputDeviceName("QA40x Output");
-        p.setDacFsVoltageAmpl(1.5);
+        p.setDacFsVoltageAmplLeft(1.5);
         p.setDacFsVoltageAmplRight(1.5);
 
         List<String> warnings = capturePreferencesWarnings(() -> p.storeDacCalibration(9.9));
@@ -1425,7 +1425,7 @@ class DeviceStoreTest {
         DeviceRange row = p.findAudioDeviceProfile("QA40x").getOutput().getRanges().get(0);
         assertEquals(3.0, row.getFsLeft(), EPS, "the device-provided output range value is not overwritten");
         assertFalse(row.isCalibrated(), "a device-provided output row is never marked calibrated");
-        assertEquals(1.5, p.getDacFsVoltageAmpl(), EPS, "the global DAC scalar is left untouched");
+        assertEquals(1.5, p.getDacFsVoltageAmplLeft(), EPS, "the global DAC scalar is left untouched");
         assertTrue(warnings.stream().anyMatch(m -> m.contains("device-provided") && m.contains("QA40x")),
                 "the DAC guard warns that calibration is device-provided for the card");
     }
