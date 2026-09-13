@@ -17,8 +17,6 @@
  */
 package org.edgo.audio.measure.gui.bus;
 
-import org.edgo.audio.measure.enums.GenChangeCause;
-
 /**
  * Canonical names for every event passed through {@link MessageBus}.
  * Always reference these constants at call sites - never write a string
@@ -46,7 +44,7 @@ public final class Events {
     /** Fired once per direction by the Preferences dialog's OK for each
      *  device-provided card whose active full-scale range ACTUALLY changed
      *  (Cancel, or an unchanged range, fires nothing).  Payload:
-     *  {@link ActiveRange} - the direction and the newly active range's
+     *  {@link org.edgo.audio.measure.gui.bus.ActiveRange} - the direction and the newly active range's
      *  label, nothing else.  Device-agnostic: any backend that owns a live range
      *  may subscribe and act on the cards it recognises.  Today's subscriber is
      *  {@code Qa40xRangeController}, which decodes the label and re-ranges the open
@@ -120,7 +118,7 @@ public final class Events {
     public static final String GENERATOR_EMITTED_HZ = "generator.emitted.hz";
 
     /** Notification - a generator signal parameter (frequency, amplitude,
-     *  waveform, ...) changed.  Payload: {@link GenChangeCause} -
+     *  waveform, ...) changed.  Payload: {@link org.edgo.audio.measure.enums.GenChangeCause} -
      *  {@code USER_INPUT} when the user moved a control,
      *  {@code FLL_TRIM} when the FFT-side frequency-lock loop applied
      *  a sub-Hz alignment trim.  Subscribers that cache results
@@ -136,7 +134,7 @@ public final class Events {
      *  frequency in Hz ({@code Double}).  Subscriber:
      *  {@code GeneratorPane}; on receipt it live-applies the freq to
      *  the DDS and republishes {@link #GENERATOR_SIGNAL_CHANGED} with
-     *  cause {@link GenChangeCause#FLL_TRIM} so the FFT worker keeps
+     *  cause {@link org.edgo.audio.measure.enums.GenChangeCause#FLL_TRIM} so the FFT worker keeps
      *  its averaging.  Decouples FftView from the GeneratorController
      *  instance owned by GeneratorPane. */
     public static final String GENERATOR_FREQ_TRIM = "generator.freq.trim";
@@ -149,7 +147,7 @@ public final class Events {
      *  {@code GeneratorPane}; on receipt it live-applies the freq via
      *  {@code setDualToneFrequency2} and republishes
      *  {@link #GENERATOR_SIGNAL_CHANGED} with cause
-     *  {@link GenChangeCause#FLL_TRIM} so the FFT worker keeps its
+     *  {@link org.edgo.audio.measure.enums.GenChangeCause#FLL_TRIM} so the FFT worker keeps its
      *  averaging accumulator alive. */
     public static final String GENERATOR_FREQ_TRIM_2 = "generator.freq.trim.2";
 
@@ -313,6 +311,23 @@ public final class Events {
      *  file, so a freshly-saved calibration takes effect immediately without
      *  the user re-browsing for it. */
     public static final String CALIBRATION_FILE_SAVED = "calibration.file.saved";
+
+    /** The ADC calibration in force for one device changed - a measured full
+     *  scale stored, a range marker moved, a card bound, or a bench
+     *  recalibrating a device across the network.  Payload: the
+     *  {@code DeviceRef} whose capture direction moved.  Published by the
+     *  {@code AudioDeviceManager} the device belongs to, on whatever thread
+     *  the change arrived on (a calibrate dialog's, a server session's, the
+     *  net connection's reader thread): a subscriber that touches widgets
+     *  marshals to the display thread itself.  Subscribers re-read through
+     *  {@code AudioBackend.calibration} - nothing else in the process holds a
+     *  full scale. */
+    public static final String ADC_CALIBRATION_CHANGED = "device.adcCalibration.changed";
+
+    /** The DAC calibration in force for one device changed - the playback
+     *  twin of {@link #ADC_CALIBRATION_CHANGED}, same payload, same publisher,
+     *  same threading. */
+    public static final String DAC_CALIBRATION_CHANGED = "device.dacCalibration.changed";
 
     // AUDIO_DEVICE_ERROR was deleted with the device-error event machinery:
     // device loss travels bottom-up through the layer that owns it - capture

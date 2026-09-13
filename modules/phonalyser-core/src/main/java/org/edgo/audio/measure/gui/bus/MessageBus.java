@@ -55,14 +55,15 @@ import java.util.function.Supplier;
  * </ul>
  *
  * <h2>Threading</h2>
- * <p>The bus is UI-ONLY: publishers are on the display thread, handlers run
- * inline on it, and nothing here synchronises anything - a bus that never
- * crosses a thread needs no marshalling.
- * Controllers own the border between the UI and the worker threads; whatever
- * crosses it does so in a controller, never through this bus.  {@code publish}
- * dispatches synchronously on the calling thread, and the subscriber list is
- * a {@link CopyOnWriteArrayList}, so a handler may subscribe / unsubscribe
- * during dispatch.
+ * <p>{@code publish} dispatches synchronously on the calling thread: a
+ * handler runs on whatever thread published.  The GUI's own events are
+ * published on the display thread and their handlers run inline on it;
+ * events the audio layer publishes ({@link Events#ADC_CALIBRATION_CHANGED},
+ * {@link Events#DAC_CALIBRATION_CHANGED})
+ * arrive on the thread the change happened on, and a handler that touches
+ * widgets marshals to the display thread itself.  Nothing here synchronises
+ * the handlers; the subscriber list is a {@link CopyOnWriteArrayList}, so a
+ * handler may subscribe / unsubscribe during dispatch.
  *
  * <h2>Lifecycle</h2>
  * <p>The bus retains a strong reference to every registered handler;
