@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -45,6 +46,8 @@ import org.edgo.audio.measure.net.proto.JsonCodec;
 import org.edgo.audio.measure.net.proto.MessageType;
 import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.net.proto.NetMessage;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.CaptureEndReason;
@@ -545,32 +548,36 @@ class NetLoopbackTest {
      * computed against a full scale the bench no longer holds.
      */
     @Test
-    void aCalibrationThatMovesOnTheBenchIsReportedAndNotJustCached() throws Exception {
+    void aCalibrationThatMovesOnTheBenchIsPublishedAndNotJustCached() throws Exception {
         NetDeviceManager manager = connect(CLIENT_NAME);
-        Faults faults = new Faults();
-        manager.setFaultListener(faults);
-        assertNull(((NetDeviceRef) manager.listInputDevices().get(0)).calibration());
+        List<DeviceRef> recalibrated = new CopyOnWriteArrayList<>();
+        Consumer<DeviceRef> subscriber = recalibrated::add;
+        MessageBus.instance().subscribe(Events.ADC_CALIBRATION_CHANGED, subscriber);
+        try {
+            assertNull(((NetDeviceRef) manager.listInputDevices().get(0)).calibration());
 
-        bench.recalibrate(MockBench.FIRST_INPUT, true, FS_RMS_LEFT, FS_RMS_RIGHT);
+            bench.recalibrate(MockBench.FIRST_INPUT, true, FS_RMS_LEFT, FS_RMS_RIGHT);
 
-        assertTrue(waitFor(() -> !faults.recalibrated.isEmpty()),
-                "the broadcast carried a new cal for a device this client knows - "
-                        + "nothing else is going to tell it");
-        DeviceRef reported = faults.recalibrated.get(0);
-        assertEquals(MockBench.FIRST_INPUT, reported.name());
-        assertEquals(FS_RMS_LEFT, reported.calibration().fsRmsLeft(), EPS,
-                "and it is reported with the NEW values, so the listener needs no "
-                        + "second look at the catalogue");
+            assertTrue(waitFor(() -> !recalibrated.isEmpty()),
+                    "the broadcast carried a new cal for a device this client knows - "
+                            + "nothing else is going to tell it");
+            DeviceRef reported = recalibrated.get(0);
+            assertEquals(MockBench.FIRST_INPUT, reported.name());
+            assertEquals(FS_RMS_LEFT, manager.calibration(reported, true).fsRmsLeft(), EPS,
+                    "and the manager answers the NEW values for it");
 
-        // The SAME payload again - a lock change or a hot-plug re-sends it whole.
-        bench.recalibrate(MockBench.FIRST_INPUT, true, FS_RMS_LEFT, FS_RMS_RIGHT);
-        bench.detach(MockBench.SECOND_INPUT, true);
+            // The SAME payload again - a lock change or a hot-plug re-sends it whole.
+            bench.recalibrate(MockBench.FIRST_INPUT, true, FS_RMS_LEFT, FS_RMS_RIGHT);
+            bench.detach(MockBench.SECOND_INPUT, true);
 
-        assertTrue(waitFor(() -> manager.listInputDevices().size() == 1),
-                "the second broadcast was processed");
-        assertEquals(1, faults.recalibrated.size(),
-                "a calibration that did NOT move is not a change - re-applying it on "
-                        + "every event would rescale a running measurement for nothing");
+            assertTrue(waitFor(() -> manager.listInputDevices().size() == 1),
+                    "the second broadcast was processed");
+            assertEquals(1, recalibrated.size(),
+                    "a calibration that did NOT move is not a change - re-applying it on "
+                            + "every event would rescale a running measurement for nothing");
+        } finally {
+            MessageBus.instance().unsubscribe(Events.ADC_CALIBRATION_CHANGED, subscriber);
+        }
     }
 
     /**
@@ -931,7 +938,7 @@ class NetLoopbackTest {
         assertNotNull(stream, "the client opened no stream on the bench");
 
         DeviceRef output = manager.listOutputDevices().get(0);
-        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, OutputChannels.BOTH);
+        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, DITHER_BITS, OutputChannels.BOTH);
         manager.setForm(GenSignalForm.LOG_SWEEP);
         manager.setSweepFreqStart(SWEEP_F0_HZ);
         manager.setSweepFreqEnd(SWEEP_F1_HZ);
@@ -1337,7 +1344,7 @@ class NetLoopbackTest {
         NetDeviceManager manager = connect(CLIENT_NAME);
         DeviceRef output = manager.listOutputDevices().get(0);
 
-        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, OutputChannels.LEFT);
+        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, DITHER_BITS, OutputChannels.LEFT);
         manager.setForm(GenSignalForm.SINE);
         manager.setFrequency(TONE_HZ);
         manager.setAmplitudesVrms(AMPLITUDE_VRMS, AMPLITUDE_VRMS);
@@ -1348,9 +1355,10 @@ class NetLoopbackTest {
         assertNotNull(lane, "the client opened no generator on the bench");
         assertEquals(RATE_HZ, lane.getRate());
         assertEquals(BITS, lane.getBits());
-        assertEquals(DITHER_BITS, lane.getDitherBits(),
+        assertEquals(DITHER_BITS, lane.getDitherBitsLeft(),
                 "spec 4.5: gen.open fixes the INITIAL dither depth; the live half "
                         + "travels as gen.config");
+        assertEquals(DITHER_BITS, lane.getDitherBitsRight(), "per lane");
         assertEquals(OutputChannels.LEFT.name(), lane.getOutputChannels(),
                 "the lane gate travelled with the open, so the bench drives the side "
                         + "the operator selected");
@@ -1391,20 +1399,24 @@ class NetLoopbackTest {
         NetDeviceManager manager = connect(CLIENT_NAME);
         DeviceRef output = manager.listOutputDevices().get(0);
 
-        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, OutputChannels.BOTH);
+        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, DITHER_BITS, OutputChannels.BOTH);
         manager.startGenerator();
         MockBench.Generator lane = bench.getLastGenerator();
         assertNotNull(lane, "the client opened no generator on the bench");
-        assertEquals(DITHER_BITS, lane.getDitherBits(),
+        assertEquals(DITHER_BITS, lane.getDitherBitsLeft(),
                 "the open carried the initial depth");
-        assertNull(lane.getLiveDitherBits(),
+        assertEquals(DITHER_BITS, lane.getDitherBitsRight(), "on both lanes");
+        assertNull(lane.getLiveDitherBitsLeft(),
                 "and no config push has touched it yet");
+        assertNull(lane.getLiveDitherBitsRight());
 
-        manager.setDitherBits(LIVE_DITHER_BITS);
-        awaitTrue(() -> lane.getLiveDitherBits() != null,
+        manager.setDitherBits(LIVE_DITHER_BITS, LIVE_DITHER_BITS);
+        awaitTrue(() -> lane.getLiveDitherBitsLeft() != null,
                 "the dither edit never crossed the wire");
-        assertEquals(LIVE_DITHER_BITS, lane.getLiveDitherBits(),
+        assertEquals(LIVE_DITHER_BITS, lane.getLiveDitherBitsLeft(),
                 "spec 4.5: the config push carries the depth the operator set");
+        assertEquals(LIVE_DITHER_BITS, lane.getLiveDitherBitsRight(),
+                "for each lane - resolved against that lane's own full scale");
 
         manager.closeGenerator();
     }
@@ -1426,12 +1438,12 @@ class NetLoopbackTest {
         NetDeviceManager holder = connect(CLIENT_NAME);
         NetDeviceManager observer = connect(OBSERVER_NAME);
         holder.openGenerator(holder.listOutputDevices().get(0), RATE_HZ, BITS,
-                DITHER_BITS, OutputChannels.BOTH);
+                DITHER_BITS, DITHER_BITS, OutputChannels.BOTH);
         DeviceRef contended = observer.listOutputDevices().get(0);
 
         IllegalStateException refused = assertThrows(IllegalStateException.class,
                 () -> observer.openGenerator(contended, RATE_HZ, BITS, DITHER_BITS,
-                        OutputChannels.BOTH));
+                        DITHER_BITS, OutputChannels.BOTH));
 
         assertEquals(DeviceFailureReason.DEVICE_IN_USE, observer.classifyFailure(refused),
                 "the protocol's own error code says the device is taken, and that is "
@@ -1471,7 +1483,7 @@ class NetLoopbackTest {
     void everySweepFieldReachesTheBenchBeforeItIsToldToEmit() {
         NetDeviceManager manager = connect(CLIENT_NAME);
         DeviceRef output = manager.listOutputDevices().get(0);
-        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, OutputChannels.BOTH);
+        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, DITHER_BITS, OutputChannels.BOTH);
 
         // Everything the sweep needs, pushed onto an ALREADY OPEN lane.
         manager.setForm(GenSignalForm.LOG_SWEEP);
@@ -1520,7 +1532,7 @@ class NetLoopbackTest {
     void aGeneratorSetterSendsOnlyTheFieldItChanged() {
         NetDeviceManager manager = connect(CLIENT_NAME);
         manager.openGenerator(manager.listOutputDevices().get(0), RATE_HZ, BITS,
-                DITHER_BITS, OutputChannels.BOTH);
+                DITHER_BITS, DITHER_BITS, OutputChannels.BOTH);
 
         manager.setSweepLeadInSamples(LEAD_IN_SAMPLES);
 
@@ -1561,7 +1573,7 @@ class NetLoopbackTest {
                         + "nothing is emitting");
 
         DeviceRef output = manager.listOutputDevices().get(0);
-        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, OutputChannels.BOTH);
+        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, DITHER_BITS, OutputChannels.BOTH);
         manager.setForm(GenSignalForm.SINE);
         manager.setFrequency(TONE_HZ);
         manager.startGenerator();
@@ -1599,7 +1611,7 @@ class NetLoopbackTest {
     void aStateForAnotherGeneratorIsNotTaken() {
         NetDeviceManager manager = connect(CLIENT_NAME);
         DeviceRef output = manager.listOutputDevices().get(0);
-        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, OutputChannels.BOTH);
+        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, DITHER_BITS, OutputChannels.BOTH);
         manager.setForm(GenSignalForm.SINE);
         manager.setFrequency(TONE_HZ);
         manager.startGenerator();
@@ -1805,11 +1817,6 @@ class NetLoopbackTest {
          *  it, in order.  A LIST and not a last-one: what a wrong implementation
          *  gets wrong is reporting devices it should not have. */
         private final List<String> gone = new CopyOnWriteArrayList<>();
-        /** Every device reported as RECALIBRATED by the bench, in order, with the
-         *  values it was reported with - a list for the same reason {@link #gone}
-         *  is one: reporting a device whose calibration did NOT move is the
-         *  failure worth catching. */
-        private final List<DeviceRef> recalibrated = new CopyOnWriteArrayList<>();
 
         @Override
         public void gap(long lostFrames) {
@@ -1825,11 +1832,6 @@ class NetLoopbackTest {
         @Override
         public void deviceGone(DeviceRef device) {
             gone.add(device.name());
-        }
-
-        @Override
-        public void calibrationChanged(DeviceRef device) {
-            recalibrated.add(device);
         }
     }
 }

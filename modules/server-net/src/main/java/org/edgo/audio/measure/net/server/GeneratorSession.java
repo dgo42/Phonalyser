@@ -25,9 +25,11 @@ import java.util.LinkedHashMap;
 import java.util.Iterator;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -41,6 +43,8 @@ import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.FilePlaybackGenerator;
 import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.wav.PcmFileLoader;
 import org.edgo.audio.measure.net.proto.ErrorCode;
 import org.edgo.audio.measure.net.proto.JsonCodec;
@@ -166,6 +170,10 @@ public final class GeneratorSession {
      *  and file positions are derived from elapsed time, and a test must be able
      *  to place them exactly instead of sleeping for them. */
     private final LongSupplier clockMs;
+    /** This lane's ear on {@link Events#DAC_CALIBRATION_CHANGED}, subscribed
+     *  while a generator is open.  A field, because the same object has to be
+     *  handed back to unsubscribe. */
+    private final Consumer<DeviceRef> dacCalibrationChanged = this::dacCalibrationChanged;
 
     /* --------------------------- what gen.open fixed --------------------------- */
 
@@ -187,7 +195,10 @@ public final class GeneratorSession {
      *  file plays.  Kept because a refused swap has to put back the claim that
      *  described the lane, not the one {@code gen.open} was granted. */
     private int claimedRateHz;
-    private double ditherBits;
+    /** The two lanes' TPDF dither depths - each lane its own, a dither
+     *  entered as a level resolving against each lane's full scale. */
+    private double ditherBitsLeft;
+    private double ditherBitsRight;
     private OutputChannels outputChannels = OutputChannels.BOTH;
     /** Where the next handle comes from.  One generator is open per connection
      *  at a time, so there is nothing to skip - only the range to stay inside. */
@@ -267,7 +278,7 @@ public final class GeneratorSession {
      * @throws NetException with the spec 4.2 code the refusal deserves
      */
     public JsonNode open(DeviceLock lock, String name, Integer rate, Integer bitDepth,
-            Double dither, String channels) {
+            Double ditherLeft, Double ditherRight, String channels) {
         if (rate == null || bitDepth == null) {
             throw new NetException(ErrorCode.BAD_REQUEST,
                     "gen.open needs a rate and a bit depth");
@@ -286,7 +297,8 @@ public final class GeneratorSession {
         this.cardName = catalog.boundCard(ref.name());
         this.rateHz = rate;
         this.bits = bitDepth;
-        this.ditherBits = dither == null ? 0.0 : dither;
+        this.ditherBitsLeft = ditherLeft == null ? 0.0 : ditherLeft;
+        this.ditherBitsRight = ditherRight == null ? 0.0 : ditherRight;
         this.outputChannels = outputChannelsOf(channels);
         applyCardCalibration(lock, name);
         qa40x.claimRate(lock, rate);
@@ -299,9 +311,10 @@ public final class GeneratorSession {
             throw e;
         }
         this.genId = freeGenId();
+        MessageBus.instance().subscribe(Events.DAC_CALIBRATION_CHANGED, dacCalibrationChanged);
         if (log.isInfoEnabled()) {
-            log.info("net gen {}: open on {} at {} Hz / {} bit, dither {} bit, lanes {}",
-                    genId, lock, rate, bitDepth, ditherBits, outputChannels);
+            log.info("net gen {}: open on {} at {} Hz / {} bit, dither {} / {} bit, lanes {}",
+                    genId, lock, rate, bitDepth, ditherBitsLeft, ditherBitsRight, outputChannels);
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put(NetFields.GEN_ID, genId);
@@ -349,22 +362,33 @@ public final class GeneratorSession {
     }
 
     /**
-     * A calibration of {@code lock} was just stored on this bench (spec 4.3
-     * {@code device.setCalibration}, which needs that very lock - so a lane open
-     * on the device is this session's): the card is re-read and the tone that is
+     * The DAC calibration of this lane's device changed on this bench (spec 4.3
+     * {@code device.setCalibration}, a range move, a card binding - announced on
+     * the bus by whoever wrote it): the card is re-read and the tone that is
      * playing lands on the new full scales at once, per lane, exactly as a local
-     * recalibration lands on a local generator.  Any other device, or no open
-     * lane, is nothing to do.
+     * recalibration lands on a local generator.  On this session's worker,
+     * enqueued by {@link #dacCalibrationChanged}; no open lane is nothing to do.
      */
-    public void calibrationChanged(DeviceLock lock) {
-        if (genId == NO_GEN || !lock.equals(device)) {
+    private void reapplyCard() {
+        if (genId == NO_GEN) {
             return;
         }
-        applyCardCalibration(lock, deviceName);
+        applyCardCalibration(device, deviceName);
         this.cardName = catalog.boundCard(deviceName);
         SignalGenerator gen = generator;
         if (gen != null) {
             gen.setDacFsVoltageAmpls(dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
+        }
+    }
+
+    /** The bus side of {@link #reapplyCard}: the event arrives on the writer's
+     *  thread, so all that happens there is enqueueing the re-read onto this
+     *  session's worker, for a change of THIS lane's device.  The name is read
+     *  racily off the writer's thread and only compared - a stale null compares
+     *  false. */
+    private void dacCalibrationChanged(DeviceRef changed) {
+        if (Objects.equals(changed.name(), deviceName)) {
+            worker.submit(this::reapplyCard);
         }
     }
 
@@ -404,6 +428,7 @@ public final class GeneratorSession {
      */
     public void closeAll() {
         ticker.stop();
+        MessageBus.instance().unsubscribe(Events.DAC_CALIBRATION_CHANGED, dacCalibrationChanged);
         step(this::stopEmission, "stopping the emission");
         step(() -> stopFileSource(), "stopping the file source");
         step(this::closeLane, "closing the output line");
@@ -515,11 +540,17 @@ public final class GeneratorSession {
                 playing.setLoop(fileLoop);
             }
         }
-        Double dither = message.optDouble(NetFields.DITHER_BITS);
-        if (dither != null) {
-            ditherBits = dither;
+        Double ditherLeft = message.optDouble(NetFields.DITHER_BITS_LEFT);
+        Double ditherRight = message.optDouble(NetFields.DITHER_BITS_RIGHT);
+        if (ditherLeft != null || ditherRight != null) {
+            if (ditherLeft != null) {
+                ditherBitsLeft = ditherLeft;
+            }
+            if (ditherRight != null) {
+                ditherBitsRight = ditherRight;
+            }
             // Live like the amplitudes: the client's dither edit lands on the
-            // tone that is playing, and the stored value carries it across the
+            // tone that is playing, and the stored values carry it across the
             // lane reopen a device swap performs.
             applyDither();
         }
@@ -1247,12 +1278,13 @@ public final class GeneratorSession {
         }
     }
 
-    /** Pushes the dither depth to the line that is open, if one is - the live
-     *  half of {@code gen.config}'s {@code ditherBits} (spec 4.5). */
+    /** Pushes the two lanes' dither depths to the line that is open, if one is
+     *  - the live half of {@code gen.config}'s {@code ditherBitsLeft} /
+     *  {@code ditherBitsRight} (spec 4.5). */
     private void applyDither() {
         AudioPlayback lane = playback;
         if (lane != null) {
-            lane.setDitherBits(ditherBits);
+            lane.setDitherBits(ditherBitsLeft, ditherBitsRight);
         }
     }
 
@@ -1309,7 +1341,8 @@ public final class GeneratorSession {
         try {
             // The SPI form via playbackManager: the WIRE-requested rate (spec
             // 4.5), with the WASAPI -> JavaSound render reroute kept.
-            opened = playbackManager.openPlayback(ref, rate, bitDepth, ditherBits);
+            opened = playbackManager.openPlayback(ref, rate, bitDepth, ditherBitsLeft,
+                    ditherBitsRight);
             opened.open();
             opened.setOutputChannels(outputChannels);
             // Kept for the lane's LATER death: the render loop can fail long

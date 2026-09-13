@@ -679,7 +679,8 @@ final class MockBench extends WirePeer {
         }
         Generator generator = new Generator(lastGenId.incrementAndGet(), session, device,
                 request.optInt(NetFields.RATE), request.optInt(NetFields.BITS),
-                request.optDouble(NetFields.DITHER_BITS),
+                request.optDouble(NetFields.DITHER_BITS_LEFT),
+                request.optDouble(NetFields.DITHER_BITS_RIGHT),
                 request.optString(NetFields.OUTPUT_CHANNELS));
         session.generators.put(generator.id, generator);
         lastGenerator = generator;
@@ -704,11 +705,15 @@ final class MockBench extends WirePeer {
         if (fileLoop != null) {
             generator.fileLoop = fileLoop;
         }
-        // Spec 4.5: the live half of the dither depth - routed to a lane field
+        // Spec 4.5: the live half of the dither depths - routed to lane fields
         // for the same reason as the loop flag above.
-        Double dither = request.optDouble(NetFields.DITHER_BITS);
-        if (dither != null) {
-            generator.liveDitherBits = dither;
+        Double ditherLeft = request.optDouble(NetFields.DITHER_BITS_LEFT);
+        if (ditherLeft != null) {
+            generator.liveDitherBitsLeft = ditherLeft;
+        }
+        Double ditherRight = request.optDouble(NetFields.DITHER_BITS_RIGHT);
+        if (ditherRight != null) {
+            generator.liveDitherBitsRight = ditherRight;
         }
         return new NetMessage(id);
     }
@@ -1156,8 +1161,12 @@ final class MockBench extends WirePeer {
         private final int rate;
         @Getter
         private final int bits;
+        /** The initial dither depth, per lane - a dither entered as a level is a
+         *  different depth on each lane once the two full scales differ. */
         @Getter
-        private final double ditherBits;
+        private final double ditherBitsLeft;
+        @Getter
+        private final double ditherBitsRight;
         /** Which physical lane spec 4.5 gated the signal onto, as the wire text
          *  ({@code "BOTH"}, {@code "LEFT"}, {@code "RIGHT"}). */
         @Getter
@@ -1180,10 +1189,13 @@ final class MockBench extends WirePeer {
         /** The {@code loop} flag of that command. */
         @Getter
         private volatile boolean fileLoop;
-        /** The dither depth as last pushed through {@code gen.config}, or null
-         *  while the line still runs at the depth {@code gen.open} fixed. */
+        /** The dither depths as last pushed through {@code gen.config}, per
+         *  lane, or null while the line still runs at the depth
+         *  {@code gen.open} fixed. */
         @Getter
-        private volatile Double liveDitherBits;
+        private volatile Double liveDitherBitsLeft;
+        @Getter
+        private volatile Double liveDitherBitsRight;
         /** The configuration as it stood when {@code gen.start} arrived - what a
          *  bench would have built its waveform from, and therefore the only
          *  honest answer to "had the lead-in reached it in time". */
@@ -1198,13 +1210,14 @@ final class MockBench extends WirePeer {
         private volatile Double trimHz;
 
         private Generator(int id, Session session, BenchDevice device, int rate, int bits,
-                double ditherBits, String outputChannels) {
+                double ditherBitsLeft, double ditherBitsRight, String outputChannels) {
             this.id = id;
             this.session = session;
             this.device = device;
             this.rate = rate;
             this.bits = bits;
-            this.ditherBits = ditherBits;
+            this.ditherBitsLeft = ditherBitsLeft;
+            this.ditherBitsRight = ditherBitsRight;
             this.outputChannels = outputChannels;
         }
 

@@ -41,6 +41,8 @@ import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.net.proto.MessageType;
 import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.net.proto.NetMessage;
@@ -586,7 +588,7 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
      *  why the generator being server-side is what makes it unnecessary. */
     @Override
     public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
-            double ditherBits) {
+            double ditherBitsLeft, double ditherBitsRight) {
         return new NetPcmPlayback();
     }
 
@@ -874,7 +876,7 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
      */
     @Override
     public int openGenerator(DeviceRef device, int sampleRate, int bitDepth,
-            double ditherBits, OutputChannels channels) {
+            double ditherBitsLeft, double ditherBitsRight, OutputChannels channels) {
         NetConnection open = requireConnection();
         NetDeviceRef ref = remoteRef(device);
         closeGenerator();
@@ -890,7 +892,8 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
             opened = open.request(ref.into(open.newRequest(MessageType.GEN_OPEN))
                     .put(NetFields.RATE, sampleRate)
                     .put(NetFields.BITS, bitDepth)
-                    .put(NetFields.DITHER_BITS, ditherBits)
+                    .put(NetFields.DITHER_BITS_LEFT, ditherBitsLeft)
+                    .put(NetFields.DITHER_BITS_RIGHT, ditherBitsRight)
                     .put(NetFields.OUTPUT_CHANNELS, channels.name()));
         } catch (RuntimeException e) {
             releaseGenDevice();
@@ -906,8 +909,8 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
         fileError.set(null);
         int granted = opened.getData().path(NetFields.RATE).asInt(sampleRate);
         if (log.isInfoEnabled()) {
-            log.info("net gen {}: open on {} at {} Hz / {} bit, dither {} bit, lanes {}",
-                    genId, ref, granted, bitDepth, ditherBits, channels);
+            log.info("net gen {}: open on {} at {} Hz / {} bit, dither {} / {} bit, lanes {}",
+                    genId, ref, granted, bitDepth, ditherBitsLeft, ditherBitsRight, channels);
         }
         return granted;
     }
@@ -1001,8 +1004,13 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
     }
 
     @Override
-    public void setDitherBits(double bits) {
-        config(NetFields.DITHER_BITS, bits);
+    public void setDitherBits(double leftBits, double rightBits) {
+        // ONE update for both lanes, as for the amplitudes.
+        NetMessage request = gen(MessageType.GEN_CONFIG);
+        if (request != null) {
+            push(request.put(NetFields.DITHER_BITS_LEFT, leftBits)
+                    .put(NetFields.DITHER_BITS_RIGHT, rightBits));
+        }
     }
 
     @Override
@@ -1462,20 +1470,31 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
         }
     }
 
-    /** The bench's stored calibration for a device MOVED - see
-     *  {@link NetFaultListener#calibrationChanged}.  Logged even with nobody
-     *  subscribed: a full scale that changed under a running measurement is the
-     *  kind of thing a bench log has to be able to explain afterwards. */
-    @Override
-    public void calibrationChanged(DeviceRef device) {
+    /** The bench's stored calibration for a device MOVED: every subscriber of
+     *  {@link Events#ADC_CALIBRATION_CHANGED} / {@link Events#DAC_CALIBRATION_CHANGED}
+     *  is told, on this reader thread.  Logged as well: a full scale that
+     *  changed under a running measurement is the kind of thing a bench log
+     *  has to be able to explain afterwards. */
+    private void calibrationChanged(NetDeviceRef device) {
         if (log.isInfoEnabled()) {
             log.info("net backend: the bench recalibrated {} - {} now", device,
                     device.calibration());
         }
-        NetFaultListener listener = faultListener;
-        if (listener != null) {
-            listener.calibrationChanged(device);
+        MessageBus.instance().publish(device.isInput()
+                ? Events.ADC_CALIBRATION_CHANGED : Events.DAC_CALIBRATION_CHANGED, device);
+    }
+
+    /** Spec 4.3's {@code cal}: what the bench stores for the device, carried
+     *  on the ref it listed in {@code input}'s direction - nothing on this
+     *  machine says anything about a device across the room. */
+    @Override
+    public DeviceCalibration calibration(DeviceRef device, boolean input) {
+        NetDeviceRef ref = remoteRef(device);
+        if (ref.isInput() != input) {
+            throw new IllegalArgumentException(ref + " is not listed as an "
+                    + (input ? "input" : "output"));
         }
+        return ref.calibration();
     }
 
     /**

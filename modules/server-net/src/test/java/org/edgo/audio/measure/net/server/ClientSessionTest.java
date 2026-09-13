@@ -858,8 +858,8 @@ class ClientSessionTest {
         assertTrue(channel.responseTo(REQUEST_ID).getError().is(ErrorCode.BAD_REQUEST),
                 "cards.put creates - a silent overwrite would discard whatever "
                         + "somebody else calibrated on this bench");
-        assertEquals(FS_RMS_LEFT, cards.getPrefs()
-                .deviceCalibration(DEVICE_NAME, true).fsRmsLeft(), EPS,
+        assertEquals(FS_RMS_LEFT, cards.getPrefs().resolveDeviceProfile(DEVICE_NAME)
+                .getInput().calibration().fsRmsLeft(), EPS,
                 "and the card that was here is untouched");
     }
 

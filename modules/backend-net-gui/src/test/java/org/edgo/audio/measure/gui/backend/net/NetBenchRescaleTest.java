@@ -18,8 +18,13 @@
 
 package org.edgo.audio.measure.gui.backend.net;
 
+import java.io.IOException;
+import java.net.ServerSocket;
+
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.gui.common.RemoteBackendRegistry;
+import org.edgo.audio.measure.net.client.NetServerEntry;
+import org.edgo.audio.measure.net.proto.JsonCodec;
 import org.edgo.audio.measure.preferences.BackendKey;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -30,82 +35,98 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Which bench recalibrations this client applies to its own full-scale reference
- * (spec 4.3's {@code cal} on {@code ev.devices.changed}).
+ * Which bench recalibrations apply to this client's own full-scale reference
+ * (spec 4.3's {@code cal} on {@code ev.devices.changed}, announced on the bus
+ * as a calibration change of the device it names): every consumer asks
+ * {@link AudioBackend#isActiveDevice} before it acts.
  *
  * <p>Two questions, and BOTH have to be asked.  The device must be the one in
- * force - and the modules must be measuring on the bench at all.  A session stays
- * alive, and this listener stays subscribed, while the operator works on a LOCAL
- * backend; that is why the connection-loss box carries the same carrier guard.
+ * force - and the modules must be measuring on the bench at all.  A session
+ * stays alive, and its manager keeps announcing, while the operator works on a
+ * LOCAL backend.
  *
- * <p>The failure that makes the second question load-bearing is a NAME COLLISION:
- * a QA40x names itself after its model, so a local QA403 and a bench QA403 are one
- * name (the reason a hot-plug comparison needed more than a name in the first
- * place).  Without the guard, another operator recalibrating the BENCH's analyzer
- * would silently move the dBV reference of a local measurement.
+ * <p>The failure that makes the second question load-bearing is a NAME
+ * COLLISION: a QA40x names itself after its model, so a local QA403 and a bench
+ * QA403 are one name (the reason a hot-plug comparison needed more than a name
+ * in the first place).  Without the carrier in the match, another operator
+ * recalibrating the BENCH's analyzer would silently move the dBV reference of a
+ * local measurement.
  *
- * <p>No display is needed: what is asserted is the DECISION, which is taken before
- * anything is marshalled.
+ * <p>The bench is the loopback one of {@link NetBenchUiLoopbackTest}, so the
+ * device in force is a real enumeration and not a name typed into a stub.  No
+ * display is needed: what is asserted is the DECISION.
  */
 class NetBenchRescaleTest {
 
+    private static final String LOOPBACK = "127.0.0.1";
+    private static final String BENCH_ID = "b7e0c4d2-0000-4000-8000-0000000000a2";
     /** The one name both analyzers answer to - the collision itself. */
-    private static final String DEVICE_NAME = "QA403";
+    private static final String DEVICE_NAME = BenchSocket.DEVICE_NAME;
     private static final String OTHER_DEVICE = "Cosmos ADC";
-    /** A selection ON the bench: a remote key, whose CARRIER is what
-     *  {@code AudioBackend.active()} answers ({@code AudioBackendType.NET} is a
-     *  carrier, never a selection's type). */
-    private static final BackendKey BENCH =
-            BackendKey.of("b7e0-bench-uuid", AudioBackendType.QA40X);
-    /** And a selection on this machine, the same analyzer model. */
-    private static final BackendKey LOCAL = BackendKey.of(AudioBackendType.WASAPI);
+    private static final long BIND_TIMEOUT_MS = 5_000;
+    private static final long STOP_TIMEOUT_MS = 1_000;
 
     private final NetBenchUi ui = (NetBenchUi) RemoteBackendRegistry.instance().getUi();
 
+    private BenchSocket socket;
     private AudioBackendType backendBefore;
 
     @BeforeEach
-    void selectTheBenchDevice() {
+    void connectTheBenchAndSelectItsDevice() throws IOException {
         Preferences prefs = Preferences.instance();
         prefs.setTransientMode(true);
         backendBefore = AudioBackend.instance().active();
+        int benchPort = freePort();
+        socket = new BenchSocket(new JsonCodec(), BENCH_ID, benchPort);
+        socket.listen(BIND_TIMEOUT_MS);
+        assertNull(ui.connect(new NetServerEntry(LOOPBACK, BenchSocket.SERVER_NAME,
+                LOOPBACK, benchPort, true)), "the loopback bench refused the session");
         prefs.current().setInputDeviceName(DEVICE_NAME);
         prefs.current().setOutputDeviceName(DEVICE_NAME);
     }
 
     @AfterEach
-    void putTheBackendBack() {
+    void putTheBackendBackAndDisconnect() {
         AudioBackend.instance().setActive(backendBefore);
+        ui.disconnect();
+        socket.shutDown(STOP_TIMEOUT_MS);
     }
 
     @Test
     void aRecalibrationOfTheDeviceInForceOnTheBenchIsApplied() {
-        AudioBackend.instance().setActive(BENCH);
+        measureOnTheBench();
 
-        assertTrue(ui.rescales(device(DEVICE_NAME, true)),
+        assertTrue(AudioBackend.instance().isActiveDevice(device(DEVICE_NAME, true), true),
                 "the modules are on the bench and this IS the input they measure "
                         + "with - the new full scale is what every reading means now");
     }
 
-    /** The collision: same name, but the modules are measuring locally. */
+    /** The collision: same name, other machine.  The match compares the
+     *  CARRIER as well as the name, in both directions - here the modules are
+     *  on the bench and it is the LOCAL analyzer of the same name that was
+     *  recalibrated (this module's test class path carries no local backend to
+     *  select, so the mirror case - a local selection, a bench recalibration -
+     *  is the same comparison seen from the other side). */
     @Test
-    void aBenchRecalibrationNeverMovesALocalSelectionOfTheSameName() {
-        AudioBackend.instance().setActive(LOCAL);
+    void aRecalibrationOfTheSameNameOnTheOtherMachineNeverMovesTheSelection() {
+        measureOnTheBench();
 
-        assertFalse(ui.rescales(device(DEVICE_NAME, true)),
+        assertFalse(AudioBackend.instance().isActiveDevice(
+                new StubRef(DEVICE_NAME, true, AudioBackendType.WASAPI), true),
                 "a local QA403 and a bench QA403 are one NAME and two devices; the "
-                        + "bench's full scales are nothing to do with the local one, "
+                        + "local one's full scales are nothing to do with the bench's, "
                         + "and nothing on screen would say the axis had moved");
     }
 
     @Test
     void aDeviceThisClientIsNotMeasuringOnIsLeftAlone() {
-        AudioBackend.instance().setActive(BENCH);
+        measureOnTheBench();
 
-        assertFalse(ui.rescales(device(OTHER_DEVICE, true)),
+        assertFalse(AudioBackend.instance().isActiveDevice(device(OTHER_DEVICE, true), true),
                 "its calibration is not in force here; the catalogue already carries "
                         + "the new values for whenever it is");
     }
@@ -114,21 +135,42 @@ class NetBenchRescaleTest {
      *  the other endpoint, and only the one in force there decides. */
     @Test
     void theDirectionIsPartOfTheMatch() {
-        AudioBackend.instance().setActive(BENCH);
+        measureOnTheBench();
         Preferences.instance().current().setOutputDeviceName(OTHER_DEVICE);
 
-        assertTrue(ui.rescales(device(DEVICE_NAME, true)));
-        assertFalse(ui.rescales(device(DEVICE_NAME, false)),
+        assertTrue(AudioBackend.instance().isActiveDevice(device(DEVICE_NAME, true), true));
+        assertFalse(AudioBackend.instance().isActiveDevice(device(DEVICE_NAME, false), false),
                 "the output lane is on another device, so the bench's output "
                         + "calibration for this one is not in force here");
     }
 
-    private DeviceRef device(String name, boolean input) {
-        return new StubRef(name, input);
+    /** The bench's analyzer as the selection: the session commits it and hands
+     *  its device list to the net manager, and the live backend is pointed at
+     *  the bench - the two halves the Preferences dialog's OK does. */
+    private void measureOnTheBench() {
+        BackendKey bench = BackendKey.of(ui.getConnectedServer().serverId(),
+                AudioBackendType.QA40X);
+        assertTrue(ui.select(bench), "the bench refused the selection");
+        AudioBackend.instance().setActive(bench);
     }
 
-    /** A bench device, as little of it as the decision reads. */
-    private record StubRef(String name, boolean isInput) implements DeviceRef {
+    private DeviceRef device(String name, boolean input) {
+        return new StubRef(name, input, AudioBackendType.NET);
+    }
+
+    /** A port nobody is listening on, so two runs - or a developer's own server -
+     *  never collide.  The probe is closed before the bench binds it. */
+    private int freePort() throws IOException {
+        try (ServerSocket probe = new ServerSocket(0)) {
+            return probe.getLocalPort();
+        }
+    }
+
+    /** A device as the announcement carries it - as little of it as the
+     *  decision reads: its name, its direction and the carrier it is reached
+     *  through ({@code NET} for the bench's, a local type for this machine's). */
+    private record StubRef(String name, boolean isInput, AudioBackendType carrier)
+            implements DeviceRef {
 
         @Override
         public int index() {
@@ -148,11 +190,6 @@ class NetBenchRescaleTest {
         @Override
         public AudioBackendType backend() {
             return AudioBackendType.QA40X;
-        }
-
-        @Override
-        public AudioBackendType carrier() {
-            return AudioBackendType.NET;
         }
 
         @Override

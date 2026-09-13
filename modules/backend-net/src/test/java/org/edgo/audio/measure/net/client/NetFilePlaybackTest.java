@@ -304,7 +304,7 @@ class NetFilePlaybackTest {
         // only the test says where the file endpoint really is.
         manager.setUploadBase(bench.httpBase());
         DeviceRef output = manager.listOutputDevices().get(0);
-        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, OutputChannels.BOTH);
+        manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, DITHER_BITS, OutputChannels.BOTH);
         return manager;
     }
 

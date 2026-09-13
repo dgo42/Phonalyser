@@ -387,40 +387,20 @@ public final class DeviceCatalog {
      *
      * <p>Read fresh on every call: an operator recalibrating a device from
      * another client must not leave a generator opening at yesterday's full
-     * scale.  The name is the ref's own - a card is bound by device NAME, and the
-     * index says nothing about which card recognises it.
+     * scale.  The ref a client sent is RESOLVED first (spec 4.3's name check,
+     * one enumeration of that backend), which is why this is the form for a
+     * request that names a device - a lane open - and not for the listing
+     * overlay, which already holds the enumerated ref.
      *
-     * <p>CARD VALUES ONLY.  {@code deviceCalibration}
-     * resolves a card and answers null for an unbound device, for a card with no
-     * usable range row, and for a row whose full scales are not above zero - it
-     * never falls back to the machine-wide {@code adcFsVoltageRms} /
-     * {@code dacFsVoltageAmpl} scalars, which are this process's own runtime
-     * fallback and say nothing about the device a remote client asked about.  So
-     * the only two things this server can put on the wire are a measured pair and
-     * a JSON null, and a client is told plainly that it must fall back to
-     * something of its own rather than being handed a deprecated default dressed
-     * up as a calibration.
+     * <p>CARD VALUES ONLY.  The manager answers null for an unbound device, for
+     * a card with no usable range row, and for a row whose full scales are not
+     * above zero.  So the only two things this server can put on the wire are a
+     * measured pair and a JSON null, and a client is told plainly that it must
+     * fall back to something of its own rather than being handed a default
+     * dressed up as a calibration.
      */
     public DeviceCalibration calibration(DeviceLock device, String name) {
-        return cards.deviceCalibration(name, device.input());
-    }
-
-    /**
-     * Spec 4.3's {@code device.setCalibration}: stores {@code ch}'s full-scale
-     * RMS volts as this server's calibration of {@code name} in {@code device}'s
-     * direction, creating the card when none recognises it, and persists.
-     *
-     * <p>The write goes to the SERVER's store because that is where the device
-     * is plugged in - a client measuring across the room calibrates the bench's
-     * card, and every other client's {@code cal} refreshes from the broadcast
-     * that follows.
-     *
-     * @return false when the endpoint's calibration comes from the device itself
-     *         (a QA40x reads its own EEPROM), which spec 4.3 refuses with
-     *         {@code BAD_REQUEST}: those values are the analyzer's
-     */
-    public boolean storeCalibration(DeviceLock device, String name, Channel ch, double fsRms) {
-        return cards.storeDeviceCalibration(name, device.input(), ch, fsRms);
+        return audio.manager(device.backend()).calibration(resolve(device, name), device.input());
     }
 
     /**
@@ -634,7 +614,7 @@ public final class DeviceCatalog {
             List<AudioFormat> formats = input
                     ? audio.listSupportedInputFormats(type, ref)
                     : audio.listSupportedOutputFormats(type, ref);
-            devices.add(new DeviceEntry(new DeviceLock(type, ref.index(), input),
+            devices.add(new DeviceEntry(new DeviceLock(type, ref.index(), input), ref,
                     ref.name(), ref.description(), ref.vendor(), ref.identity(), formats));
         }
     }
@@ -646,9 +626,12 @@ public final class DeviceCatalog {
     /** Groups the entries by backend and adds the two overlays that are NOT
      *  properties of the hardware - the lock, and this server's stored
      *  calibration - both read fresh on every call, which is the whole point of
-     *  separating them from the enumeration.  {@code shown} is which backends get
-     *  an entry: every served one for {@code devices.list}, exactly the selected
-     *  one for {@code backend.select}. */
+     *  separating them from the enumeration, and both touching no hardware:
+     *  the calibration is read with the ref the enumeration produced, so a
+     *  {@code devices.list} answers from the last scan at once instead of
+     *  re-enumerating a backend per listed device.  {@code shown} is which
+     *  backends get an entry: every served one for {@code devices.list},
+     *  exactly the selected one for {@code backend.select}. */
     private JsonNode payload(List<DeviceEntry> devices, List<AudioBackendType> shown) {
         List<Map<String, Object>> backends = new ArrayList<>();
         for (AudioBackendType type : shown) {
@@ -656,7 +639,7 @@ public final class DeviceCatalog {
             for (DeviceEntry entry : devices) {
                 if (entry.device().backend() == type) {
                     entries.add(entry.toMap(locks.owner(entry.device()),
-                            calibration(entry.device(), entry.name()),
+                            audio.manager(type).calibration(entry.ref(), entry.device().input()),
                             boundCard(entry.name()),
                             calibrationFromDevice(entry.device(), entry.name())));
                 }
@@ -677,10 +660,12 @@ public final class DeviceCatalog {
      * <p>{@code identity} is the one field that is NOT on the wire: it is what
      * {@link #rescan()} compares two enumerations by (see {@link
      * DeviceRef#identity()}), and a client identifies a device by the ref fields
-     * the spec gives it.
+     * the spec gives it.  {@code ref} is the handle the enumeration produced -
+     * what the calibration overlay asks the device's manager with, so that read
+     * needs no re-resolution against the hardware.
      */
-    private record DeviceEntry(DeviceLock device, String name, String description,
-            String vendor, String identity, List<AudioFormat> formats) {
+    private record DeviceEntry(DeviceLock device, DeviceRef ref, String name,
+            String description, String vendor, String identity, List<AudioFormat> formats) {
 
         Map<String, Object> toMap(ClientSession owner, DeviceCalibration cal, String card,
                 boolean calFromDevice) {

@@ -313,7 +313,7 @@ class NetBenchUiLoopbackTest {
         NetDeviceManager manager =
                 (NetDeviceManager) AudioBackend.instance().manager(AudioBackendType.NET);
         DeviceRef dac = manager.listOutputDevices().get(0);
-        assertEquals(GEN_RATE_HZ, manager.openGenerator(dac, GEN_RATE_HZ, GEN_BITS, 0.0,
+        assertEquals(GEN_RATE_HZ, manager.openGenerator(dac, GEN_RATE_HZ, GEN_BITS, 0.0, 0.0,
                 OutputChannels.BOTH), "the bench granted its own rate for the lane");
         assertEquals(1, socket.openGenerators(), "the lane really is open on the bench");
 

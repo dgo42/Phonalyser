@@ -33,7 +33,9 @@ import org.edgo.audio.measure.net.proto.NetMessage;
 import org.edgo.audio.measure.net.proto.NetProto;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceRef;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -302,24 +304,25 @@ class DeviceCatalogTest {
      * its own, so the same device reads a different level on each of them.
      *
      * <p>The resolution is a substring test AGAINST THE DEVICE NAME
-     * ({@code AudioDeviceProfile.matchStrength}), and a sound card's name is what
-     * its host API calls it - on Linux {@code "CB5 [plughw:1,1]"}.  The
-     * manufacturer's own words for the same box ({@code "CUBILUX CB5"}) live in
-     * the DESCRIPTION and nowhere else, so a card recognised by them matches
-     * nothing, silently: nothing fails, the wire simply carries no calibration.
+     * ({@code AudioDeviceProfile.matchStrength}), and a device's name is what
+     * its host API calls it - the bench's analyzer is {@code "QA403"}.  The
+     * manufacturer's own words for the same box ({@code "QuantAsylum analyzer"})
+     * live in the DESCRIPTION and nowhere else, so a card recognised by them
+     * matches nothing, silently: nothing fails, the wire simply carries no
+     * calibration.
      *
      * <p>This test states the rule rather than asserting a preference - what a
      * card is allowed to be recognised by is a decision, not a guess.
      */
     @Test
     void aCardRecognisedByWordsTheDeviceNameDoesNotCarryCalibratesNothing() {
-        cards.card(CARD_NAME, "CUBILUX CB5", true, ADC_FS_LEFT, ADC_FS_RIGHT, false);
+        cards.card(CARD_NAME, "QuantAsylum analyzer", true, ADC_FS_LEFT, ADC_FS_RIGHT, false);
 
         assertNull(catalog.calibration(new DeviceLock(AudioBackendType.QA40X, 0, true),
-                "CB5 [plughw:1,1]"),
-                "the card names the box, the device names the ALSA endpoint, and the "
+                StubDeviceManager.FIRST_INPUT),
+                "the card names the box, the device names the endpoint, and the "
                         + "resolution only ever looks inside the latter");
-        assertNull(catalog.boundCard("CB5 [plughw:1,1]"),
+        assertNull(catalog.boundCard(StubDeviceManager.FIRST_INPUT),
                 "so the client is told of no card either - the chooser shows nothing "
                         + "for a device this bench is in fact calibrated for");
     }
@@ -329,12 +332,12 @@ class DeviceCatalogTest {
      *  fault and not a calibration one. */
     @Test
     void aCardRecognisedByWordsInTheDeviceNameCalibratesIt() {
-        cards.card(CARD_NAME, "CB5", true, ADC_FS_LEFT, ADC_FS_RIGHT, false);
+        cards.card(CARD_NAME, "QA4", true, ADC_FS_LEFT, ADC_FS_RIGHT, false);
 
         assertEquals(ADC_FS_LEFT,
                 catalog.calibration(new DeviceLock(AudioBackendType.QA40X, 0, true),
-                        "CB5 [plughw:1,1]").fsRmsLeft(), EPS);
-        assertEquals(CARD_NAME, catalog.boundCard("CB5 [plughw:1,1]"));
+                        StubDeviceManager.FIRST_INPUT).fsRmsLeft(), EPS);
+        assertEquals(CARD_NAME, catalog.boundCard(StubDeviceManager.FIRST_INPUT));
     }
 
     @Test
@@ -366,8 +369,9 @@ class DeviceCatalogTest {
         catalog.scan();
 
         DeviceLock first = new DeviceLock(AudioBackendType.QA40X, 0, true);
-        catalog.storeCalibration(first, StubDeviceManager.FIRST_INPUT, Channel.L, ADC_FS_LEFT);
-        catalog.storeCalibration(first, StubDeviceManager.FIRST_INPUT, Channel.R, ADC_FS_RIGHT);
+        DeviceRef device = catalog.resolve(first, StubDeviceManager.FIRST_INPUT);
+        manager().storeCalibration(device, true, Channel.L, ADC_FS_LEFT);
+        manager().storeCalibration(device, true, Channel.R, ADC_FS_RIGHT);
 
         JsonNode cal = catalog.lastScan().get(FIRST).path(NetFields.DEVICES).get(FIRST)
                 .path(NetFields.CAL);
@@ -585,8 +589,9 @@ class DeviceCatalogTest {
         cards.card(CARD_NAME, StubDeviceManager.FIRST_INPUT, true, ADC_FS_LEFT,
                 ADC_FS_RIGHT, true);
 
-        assertFalse(catalog.storeCalibration(new DeviceLock(AudioBackendType.QA40X, 0, true),
-                StubDeviceManager.FIRST_INPUT, Channel.L, 9.0),
+        assertFalse(manager().storeCalibration(catalog.resolve(
+                new DeviceLock(AudioBackendType.QA40X, 0, true), StubDeviceManager.FIRST_INPUT),
+                true, Channel.L, 9.0),
                 "a QA40x reads its full scales out of its own EEPROM: they are not a "
                         + "client's to write (spec 4.3)");
         JsonNode cal = devices().get(FIRST).path(NetFields.CAL);
@@ -649,8 +654,17 @@ class DeviceCatalogTest {
 
     /** The bench is the process-wide one every test class shares, so whatever a
      *  test unplugged goes back on it here - and the list with it. */
+    /** The bench's manager reads and writes THIS test's card store - the one
+     *  the catalog was built on - so a calibration written through it is the
+     *  one the payload reports. */
+    @BeforeEach
+    void hookTheCardStore() {
+        manager().setCards(cards.getPrefs());
+    }
+
     @AfterEach
     void replugTheBench() {
+        manager().setCards(null);
         manager().replugAll();
     }
 

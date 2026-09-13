@@ -48,7 +48,9 @@ import org.edgo.audio.measure.net.proto.MessageType;
 import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.net.proto.NetMessage;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceRef;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -78,6 +80,7 @@ class GeneratorSessionTest {
     private static final double DITHER_BITS = 1.5;
     /** A depth far from the open's, so the live push cannot pass by echo. */
     private static final double LIVE_DITHER_BITS = 4.0;
+    private static final double LIVE_DITHER_BITS_RIGHT = 5.0;
     private static final int DEVICE_INDEX = 0;
     private static final int FIRST_GEN_ID = 1;
     private static final int UNOPENED_GEN_ID = 7;
@@ -193,10 +196,19 @@ class GeneratorSessionTest {
     private final DeviceLock input =
             new DeviceLock(AudioBackendType.QA40X, DEVICE_INDEX, true);
 
+    /** The bench's manager reads and writes THIS test's card store - the one
+     *  the catalog was built on - so the full scale a lane opens at, and the
+     *  one a recalibration moves it to, are the test's. */
+    @BeforeEach
+    void hookTheCardStore() {
+        managerFor().setCards(cards.getPrefs());
+    }
+
     @AfterEach
     void giveTheBenchBack() {
         generator.closeAll();
         captures.closeAll();
+        managerFor().setCards(null);
     }
 
     // -------------------------------------------------------------------------
@@ -220,7 +232,7 @@ class GeneratorSessionTest {
     @Test
     void openOnAnInputRefIsRefused() {
         NetException refused = assertThrows(NetException.class, () -> generator.open(input,
-                StubDeviceManager.FIRST_INPUT, RATE_HZ, BITS, DITHER_BITS, null));
+                StubDeviceManager.FIRST_INPUT, RATE_HZ, BITS, DITHER_BITS, DITHER_BITS, null));
 
         assertEquals(ErrorCode.BAD_REQUEST, refused.getCode());
     }
@@ -239,7 +251,7 @@ class GeneratorSessionTest {
     @Test
     void aDeviceNameThatMovedIsRefusedBeforeTheLineIsTouched() {
         NetException refused = assertThrows(NetException.class, () -> generator.open(output,
-                "Some other card", RATE_HZ, BITS, DITHER_BITS, null));
+                "Some other card", RATE_HZ, BITS, DITHER_BITS, DITHER_BITS, null));
 
         assertEquals(ErrorCode.DEVICE_STALE, refused.getCode());
     }
@@ -383,10 +395,11 @@ class GeneratorSessionTest {
 
     /**
      * A calibration stored while the lane is open (spec 4.3
-     * {@code device.setCalibration}, which needs this very lock) re-pins the tone
-     * that is playing at once, per lane - each lane's rendered level against its
-     * own new full scale - exactly as a local recalibration lands on a local
-     * generator, and without a restart.
+     * {@code device.setCalibration}: the device's manager writes its card and
+     * announces the change on the bus) re-pins the tone that is playing at once,
+     * per lane - each lane's rendered level against its own new full scale -
+     * exactly as a local recalibration lands on a local generator, and without
+     * a restart.
      */
     @Test
     void aCalibrationStoredWhileTheToneIsPlayingRepinsBothLanesAtOnce() {
@@ -399,12 +412,10 @@ class GeneratorSessionTest {
                 .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
                 .put(NetFields.AMPLITUDE_VRMS_RIGHT, QUIETER_VRMS));
         generator.start(FIRST_GEN_ID);
-        assertTrue(catalog.storeCalibration(output, StubDeviceManager.OUTPUT, Channel.L,
-                RECALIBRATED_FS_LEFT));
-        assertTrue(catalog.storeCalibration(output, StubDeviceManager.OUTPUT, Channel.R,
-                RECALIBRATED_FS_RIGHT));
 
-        generator.calibrationChanged(output);
+        DeviceRef dac = catalog.resolve(output, StubDeviceManager.OUTPUT);
+        assertTrue(managerFor().storeCalibration(dac, false, Channel.L, RECALIBRATED_FS_LEFT));
+        assertTrue(managerFor().storeCalibration(dac, false, Channel.R, RECALIBRATED_FS_RIGHT));
 
         assertEquals(AMPLITUDE_VRMS / RECALIBRATED_FS_LEFT, peakOf(playback()), AMPLITUDE_EPS,
                 "the playing tone's left lane is rendered against the NEW left full scale");
@@ -419,7 +430,7 @@ class GeneratorSessionTest {
 
         NetException refused = assertThrows(NetException.class,
                 () -> generator.open(output, StubDeviceManager.OUTPUT,
-                        StubDeviceManager.RATE_96K, BITS, DITHER_BITS, null));
+                        StubDeviceManager.RATE_96K, BITS, DITHER_BITS, DITHER_BITS, null));
 
         assertEquals(ErrorCode.BAD_REQUEST, refused.getCode(),
                 "spec 4.4 names gen.open beside capture.open: one divider clocks both "
@@ -457,11 +468,15 @@ class GeneratorSessionTest {
     void aDitherEditLandsOnTheToneThatIsPlaying() {
         open();
         generator.config(FIRST_GEN_ID, config()
-                .put(NetFields.DITHER_BITS, LIVE_DITHER_BITS));
+                .put(NetFields.DITHER_BITS_LEFT, LIVE_DITHER_BITS)
+                .put(NetFields.DITHER_BITS_RIGHT, LIVE_DITHER_BITS_RIGHT));
 
-        assertEquals(LIVE_DITHER_BITS, playback().getDitherBits(), EXACT,
-                "spec 4.5: gen.config's ditherBits is the live half of the depth - "
-                        + "it reaches the OPEN lane's quantizer, not the next open");
+        assertEquals(LIVE_DITHER_BITS, playback().getDitherBitsLeft(), EXACT,
+                "spec 4.5: gen.config's dither depths are the live half of the depth - "
+                        + "they reach the OPEN lane's quantizer, not the next open");
+        assertEquals(LIVE_DITHER_BITS_RIGHT, playback().getDitherBitsRight(), EXACT,
+                "and each lane its own: a dither entered as a level is a different "
+                        + "depth on each lane once the two full scales differ");
     }
 
     @Test
@@ -1067,7 +1082,7 @@ class GeneratorSessionTest {
 
     private JsonNode open() {
         return generator.open(output, StubDeviceManager.OUTPUT, RATE_HZ, BITS, DITHER_BITS,
-                OutputChannels.LEFT.name());
+                DITHER_BITS, OutputChannels.LEFT.name());
     }
 
     /** Spec 4.7's sequence: a capture streams only once its data connection has

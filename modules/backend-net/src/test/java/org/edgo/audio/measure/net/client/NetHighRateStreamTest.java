@@ -508,10 +508,5 @@ class NetHighRateStreamTest {
         public void deviceGone(DeviceRef device) {
             // Nor this one: the bench keeps its devices for the whole run.
         }
-
-        @Override
-        public void calibrationChanged(DeviceRef device) {
-            // Nor this: the bench's calibration stands still for the whole run.
-        }
     }
 }

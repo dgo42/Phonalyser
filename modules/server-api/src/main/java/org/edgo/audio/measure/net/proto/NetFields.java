@@ -249,10 +249,15 @@ public class NetFields {
 
     /** Generator handle returned by {@code gen.open}. */
     public static final String GEN_ID = "genId";
-    /** {@code gen.open} and {@code gen.config}: TPDF dither depth in bits.
-     *  The open carries the initial depth; the config push is the live half,
-     *  applied to the tone that is playing. */
-    public static final String DITHER_BITS = "ditherBits";
+    /** {@code gen.open} and {@code gen.config}: the LEFT lane's TPDF dither
+     *  depth in bits.  The open carries the initial depth; the config push is
+     *  the live half, applied to the tone that is playing.  Per lane, because
+     *  a dither entered as a level resolves against each lane's own full
+     *  scale. */
+    public static final String DITHER_BITS_LEFT = "ditherBitsLeft";
+    /** {@code gen.open} and {@code gen.config}: the RIGHT lane's TPDF dither
+     *  depth in bits. */
+    public static final String DITHER_BITS_RIGHT = "ditherBitsRight";
     /** {@code gen.open}: which physical DAC lane carries the signal, as the
      *  server's {@code OutputChannels} name - {@code "BOTH"}, {@code "LEFT"} or
      *  {@code "RIGHT"}.  Not a channel COUNT: the lane is stereo either way, and

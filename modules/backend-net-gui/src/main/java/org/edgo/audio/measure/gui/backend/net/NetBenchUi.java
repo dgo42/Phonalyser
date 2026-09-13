@@ -33,16 +33,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
-import com.fasterxml.jackson.databind.JsonNode;
-
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
-
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
-import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.common.RemoteBackendUi;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.net.client.NetCloseReason;
@@ -56,14 +52,15 @@ import org.edgo.audio.measure.net.client.ScheduledTicker;
 import org.edgo.audio.measure.net.proto.JsonCodec;
 import org.edgo.audio.measure.net.proto.MessageType;
 import org.edgo.audio.measure.net.proto.NetFields;
-import org.edgo.audio.measure.net.proto.NetProto;
 import org.edgo.audio.measure.net.proto.NetMessage;
+import org.edgo.audio.measure.net.proto.NetProto;
 import org.edgo.audio.measure.preferences.BackendKey;
-import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.DeviceRef;
+
+import com.fasterxml.jackson.databind.JsonNode;
 
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -1087,64 +1084,6 @@ public final class NetBenchUi implements RemoteBackendUi, NetFaultListener {
             log.warn("net bench: held device '{}' left the bench's catalogue",
                     device.displayName());
         }
-    }
-
-    /**
-     * The bench's stored calibration for one of its devices moved (spec 4.3's
-     * {@code cal} on {@code ev.devices.changed}) - another client recalibrated it,
-     * bound it to another card, moved its active range, or moved the analyzer's
-     * attenuator.
-     *
-     * <p>If that device is the one THIS client is measuring on, the new full scale
-     * takes effect at once: every reading on screen is computed against it, and
-     * carrying on with the old one would show volts that are simply wrong until
-     * the next device open.  It goes through the SAME apply the Preferences dialog
-     * uses on OK, so there is one precedence and one arithmetic - the ref carries
-     * the new pair, and applying it is all this has to decide.
-     *
-     * <p>A device that is not the current selection is left alone: its calibration
-     * is not in force here, and the catalogue the manager just rebuilt already
-     * carries the new values for whenever it is.
-     *
-     * <p>Marshalled: this arrives on the connection's reader thread, and the
-     * scalars are bound to widgets whose listeners fire on the display thread.
-     */
-    @Override
-    public void calibrationChanged(DeviceRef device) {
-        if (!rescales(device)) {
-            return;
-        }
-        if (log.isInfoEnabled()) {
-            log.info("net bench: '{}' was recalibrated on the bench while it is the "
-                    + "selected {} - rescaling", device.name(),
-                    device.isInput() ? "input" : "output");
-        }
-        GuiUtil.marshal(() -> Preferences.instance()
-                .applyDeviceProfile(device, device.isInput()));
-    }
-
-    /**
-     * Whether a bench recalibration of {@code device} is THIS client's to apply:
-     * the modules must be measuring on a bench at all, and on that very device in
-     * that very direction.
-     *
-     * <p><b>The carrier check is not a formality.</b>  A session stays alive - and
-     * this listener stays subscribed - while the operator measures on a LOCAL
-     * backend; that is exactly why the connection-loss box has the same guard.  A
-     * QA40x names itself after its model, so a local QA403 and a bench QA403 are
-     * one name (which is why a hot-plug comparison needed more than the name,
-     * {@code DeviceRef.identity()}).  Without this, another operator recalibrating
-     * the BENCH's analyzer would silently move the dBV reference of a local
-     * measurement that has nothing to do with it.
-     */
-    boolean rescales(DeviceRef device) {
-        if (AudioBackend.instance().active() != AudioBackendType.NET) {
-            return false;
-        }
-        BackendPrefs current = Preferences.instance().current();
-        String inForce = device.isInput()
-                ? current.getInputDeviceName() : current.getOutputDeviceName();
-        return device.name().equals(inForce);
     }
 
     /**

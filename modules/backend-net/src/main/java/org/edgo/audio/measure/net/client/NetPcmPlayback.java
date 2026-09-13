@@ -67,7 +67,7 @@ public final class NetPcmPlayback implements AudioPlayback {
     }
 
     @Override
-    public void setDitherBits(double bits) {
+    public void setDitherBits(double leftBits, double rightBits) {
         throw new UnsupportedOperationException(NOT_IMPLEMENTED);
     }
 

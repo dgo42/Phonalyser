@@ -108,12 +108,19 @@ final class StubPlayback implements AudioPlayback {
         }
     }
 
-    /** The dither depth as last pushed; the setter IS the
-     *  {@code AudioPlayback} one.  It lands on the quantizer, so the rendered
-     *  waveform cannot show it. */
+    /** The dither depths as last pushed, per lane; the setter IS the
+     *  {@code AudioPlayback} one.  They land on the quantizer, so the rendered
+     *  waveform cannot show them. */
     @Getter
-    @Setter
-    private volatile double ditherBits;
+    private volatile double ditherBitsLeft;
+    @Getter
+    private volatile double ditherBitsRight;
+
+    @Override
+    public void setDitherBits(double leftBits, double rightBits) {
+        ditherBitsLeft = leftBits;
+        ditherBitsRight = rightBits;
+    }
 
     /** How many times this lane was closed - a lane handed back twice is a
      *  double release, which on a real device is a refusal or worse. */

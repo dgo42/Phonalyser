@@ -293,7 +293,8 @@ class ServerLoopbackTest {
                 .into(client.newRequest(MessageType.GEN_OPEN))
                 .put(NetFields.RATE, RATE_HZ)
                 .put(NetFields.BITS, BITS)
-                .put(NetFields.DITHER_BITS, NO_DITHER_BITS)
+                .put(NetFields.DITHER_BITS_LEFT, NO_DITHER_BITS)
+                .put(NetFields.DITHER_BITS_RIGHT, NO_DITHER_BITS)
                 .put(NetFields.OUTPUT_CHANNELS, OutputChannels.BOTH.name()));
         assertTrue(opened.isOk());
         int genId = opened.getData().path(NetFields.GEN_ID).asInt();

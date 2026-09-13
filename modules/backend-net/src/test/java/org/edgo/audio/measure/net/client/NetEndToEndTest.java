@@ -245,12 +245,13 @@ class NetEndToEndTest {
         // ------------------------------------------------------------------
         DeviceRef output = manager.listOutputDevices().get(0);
         assertEquals(RATE_HZ, manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS,
-                OutputChannels.BOTH), "spec 4.5: gen.open answers the rate it granted");
+                DITHER_BITS, OutputChannels.BOTH), "spec 4.5: gen.open answers the rate it granted");
         MockBench.Generator dac = bench.getLastGenerator();
         assertNotNull(dac, "the client opened no generator on the bench");
         assertEquals(BITS, dac.getBits());
-        assertEquals(DITHER_BITS, dac.getDitherBits(),
+        assertEquals(DITHER_BITS, dac.getDitherBitsLeft(),
                 "spec 4.5 fixes the dither depth at gen.open - it is the LINE's");
+        assertEquals(DITHER_BITS, dac.getDitherBitsRight(), "per lane");
         assertTrue(bench.isLocked(MockBench.OUTPUT, false),
                 "spec 4.5: all gen.* require the output-device lock, and the open took it");
 
@@ -525,11 +526,6 @@ class NetEndToEndTest {
         @Override
         public void deviceGone(DeviceRef device) {
             // A device leaving the catalogue is NetLoopbackTest's question.
-        }
-
-        @Override
-        public void calibrationChanged(DeviceRef device) {
-            // So is a calibration that moved on the bench.
         }
     }
 }
