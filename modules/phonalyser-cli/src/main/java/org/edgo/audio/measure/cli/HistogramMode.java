@@ -19,7 +19,6 @@
 package org.edgo.audio.measure.cli;
 
 import org.edgo.audio.measure.cli.util.*;
-import org.edgo.audio.measure.common.Constants;
 
 import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
@@ -28,7 +27,9 @@ import org.edgo.audio.measure.adc.WeightedBuffer;
 import org.edgo.audio.measure.chart.ChartExporter;
 import org.edgo.audio.measure.chart.HistogramExporter;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.DeviceRef;
 
@@ -71,9 +72,11 @@ public class HistogramMode {
         String heightArg     = ArgParser.getArgValue(args, "--height");
         String bitsArg       = ArgParser.getArgValue(args, "--bits");
         String adcFsArg      = ArgParser.getArgValue(args, "--adc-fs-vrms");
-        if (adcFsArg != null) {
-            prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
-        }
+        // The ADC full scale the code axis is labelled with: the flag, else the
+        // one-volt default an uncalibrated device measures against.
+        DeviceCalibration adc = adcFsArg != null
+                ? new DeviceCalibration(Double.parseDouble(adcFsArg), Double.parseDouble(adcFsArg))
+                : DeviceCalibration.DEFAULT;
 
         boolean loadMode   = (loadArg != null);
         boolean recordMode = !loadMode;
@@ -109,7 +112,7 @@ public class HistogramMode {
         }
         double scaleVolts = scaleArg != null
                 ? Double.parseDouble(scaleArg)
-                : 2.0 * Constants.SQRT2 * prefs.getAdcFsVoltageRms();
+                : 2.0 * adc.peakVolts(Channel.L);
         if (scaleVolts <= 0) {
             log.error("--scale must be a positive number.");
             System.exit(1);

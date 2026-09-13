@@ -375,7 +375,8 @@ public final class BenchCards {
     public Copied propagateLocalCard(BackendKey bench, DeviceRef device, String deviceName,
             boolean input) {
         AudioDeviceProfile local = localCopy(deviceName);
-        if (local == null || prefs.deviceCalibration(deviceName, input) == null) {
+        if (local == null
+                || (input ? local.getInput() : local.getOutput()).calibration() == null) {
             return Copied.NOTHING_TO_COPY;
         }
         local.bindDeviceName(deviceName);

@@ -47,6 +47,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.sound.CaptureEndReason;
@@ -1934,9 +1935,9 @@ public final class FftAnalyzerWorker {
             resultPool.release(r);
             return IDLE_TICK_MS;
         }
-        // The dBFS->dBV offset is the global ADC calibration constant
-        // (Preferences#getDbvOffsetDb), applied at display time - nothing to
-        // anchor per result here; dBFS is the result's only base scale.
+        // The dBFS->dBV offset is the analysed channel's ADC calibration, applied
+        // at display time - nothing to anchor per result here; dBFS is the
+        // result's only base scale.
         // Mode-transition detection - reset the cross-tick average only when the
         // new bound discards collected depth: the averaging mode flips
         // (idle ↔ averaging), a ring ↔ infinite switch, or a SMALLER ring.  A
@@ -2212,7 +2213,8 @@ public final class FftAnalyzerWorker {
         if (prefs.isFftManualFundEnabled()) {
             double v = prefs.getFftManualFundVrms();
             double dbv = (v > 0) ? 20.0 * Math.log10(v) : Double.NaN;
-            return dbv - prefs.getDbvOffsetDb(prefs.getFftChannel());   // NaN propagates
+            return dbv - AudioBackend.instance().calibrationOrDefault(true)
+                    .dbvOffsetDb(prefs.getFftChannel());   // NaN propagates
         }
         return Double.NaN;
     }

@@ -54,7 +54,6 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.bind.Property;
-import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
@@ -65,6 +64,9 @@ import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.enums.UnevenMode;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
+import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
@@ -500,9 +502,11 @@ public final class FreqRespTabControl extends AbstractTabControl {
             String hi = formatShortHz(prefs.getFreqRespStopHz());
             tiles.add(tile(String.format(Locale.US, "%s-%s", lo, hi),
                     I18n.t("freqResp.tile.range", lo, hi)));
-            tiles.add(tile(String.format(Locale.US, "%.2fV", prefs.getFreqRespAmplitudeVrms()),
+            double amplitudeVrms = AudioBackend.instance().calibrationOrDefault(false)
+                    .amplitudeVrms(prefs.getFreqRespAmplitude(), Channel.L);
+            tiles.add(tile(String.format(Locale.US, "%.2fV", amplitudeVrms),
                     I18n.t("freqResp.tile.amplitude",
-                            String.format(Locale.US, "%.2f V", prefs.getFreqRespAmplitudeVrms()))));
+                            String.format(Locale.US, "%.2f V", amplitudeVrms))));
             tiles.add(tile(formatShortCount(prefs.getFreqRespSweepPoints()) + " pts",
                     I18n.t("freqResp.tile.points", prefs.getFreqRespSweepPoints())));
             // FFT size tile (replaces the old sweep-duration tile, which is
@@ -663,16 +667,21 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // scale sits at fsPeak·rawRms(sweep) = fsPeak/√2 - V, dBV and dBFS all
         // trim to it (0 dBFS is exactly the top).  The field holds V RMS, so
         // capping it at the PEAK full scale would have allowed 3 dB of clipping.
+        // The sweep is rendered on both lanes alike, against the LEFT lane's
+        // full scale.
+        AudioBackend audio = AudioBackend.instance();
         NumericStepField ampField = new NumericStepField(g, UnitFamily.AMPLITUDE,
-                FreqRespConstants.AMP_MIN_VRMS, prefs.getDacFsVoltageAmplLeft() / Constants.SQRT2, FreqRespConstants.AMP_MAX_DECIMALS,
-                prefs::getDacFsVoltageAmplLeft, 110);
+                FreqRespConstants.AMP_MIN_VRMS,
+                audio.calibrationOrDefault(false).fsRms(Channel.L), FreqRespConstants.AMP_MAX_DECIMALS,
+                () -> audio.calibrationOrDefault(false).peakVolts(Channel.L), 110);
         ampField.setLayoutData(comboGd());
         // Follow a DAC recalibration - the ceiling was previously read once, at
         // construction, and never moved again.  Replaying the stored pair after
         // it leaves the entered text where it stands and re-solves what a
         // full-scale-relative entry resolves to.
-        Bindings.onChange(toolbarTabs, prefs.dacFsVoltageAmplLeftProperty(), v -> {
-            ampField.setMax(v / Constants.SQRT2);
+        Bindings.onEvent(toolbarTabs, Events.DAC_CALIBRATION_CHANGED, (DeviceRef device) -> {
+            if (!audio.isActiveDevice(device, false)) return;
+            ampField.setMax(audio.calibrationOrDefault(false).fsRms(Channel.L));
             ampField.seedPair(prefs.getFreqRespAmplitude());
         });
         ampField.setToolTipText(I18n.t("freqResp.settings.amplitude.tooltip"));
@@ -686,8 +695,10 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // operator is working in - clamping must not silently move them back to
         // volts.
         Bindings.onChange(toolbarTabs, prefs.freqRespAmplitudeProperty(), v -> {
-            if (prefs.getFreqRespAmplitudeVrms() < FreqRespConstants.AMP_MIN_VRMS) {
-                prefs.setFreqRespAmplitude(prefs.freqRespAmplitudeIn(FreqRespConstants.AMP_MIN_VRMS));
+            DeviceCalibration dac = audio.calibrationOrDefault(false);
+            if (dac.amplitudeVrms(v, Channel.L) < FreqRespConstants.AMP_MIN_VRMS) {
+                prefs.setFreqRespAmplitude(
+                        dac.amplitudeIn(FreqRespConstants.AMP_MIN_VRMS, v.unit(), Channel.L));
             }
             toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
         });

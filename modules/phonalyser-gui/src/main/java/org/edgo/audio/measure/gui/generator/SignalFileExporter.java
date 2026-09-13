@@ -65,7 +65,7 @@ public class SignalFileExporter {
      */
     public long export(SignalGenerator generator, File outFile,
                        int sampleRate, int bitDepth,
-                       double durationSeconds, double ditherBits,
+                       double durationSeconds, double ditherBitsLeft, double ditherBitsRight,
                        double signalFrequencyHz, OutputChannels gate) throws IOException {
         long requestedFrames = Math.max(1, Math.round(durationSeconds * sampleRate));
         long totalFrames = truncateToFullPeriods(requestedFrames, sampleRate, signalFrequencyHz);
@@ -77,7 +77,7 @@ public class SignalFileExporter {
               :                                                   AudioFileFormat.WAV;
 
         try (PcmSink sink = openSink(fmt, outFile, sampleRate, bitDepth)) {
-            Random rng = ditherBits > 0.0 ? new Random() : null;
+            Random rng = ditherBitsLeft > 0.0 || ditherBitsRight > 0.0 ? new Random() : null;
             int bytesPerSample = bitDepth / 8;
             int bytesPerFrame  = bytesPerSample * CHANNELS;
             byte[] buf = new byte[BUFFER_FRAMES * bytesPerFrame];
@@ -85,14 +85,15 @@ public class SignalFileExporter {
             long written = 0;
             while (written < totalFrames) {
                 int frames = (int) Math.min(BUFFER_FRAMES, totalFrames - written);
-                fillBuffer(generator, frame, buf, frames, bitDepth, ditherBits, rng, gate);
+                fillBuffer(generator, frame, buf, frames, bitDepth, ditherBitsLeft, ditherBitsRight,
+                        rng, gate);
                 sink.writeRaw(buf, frames * bytesPerFrame);
                 written += frames;
             }
-            log.info("Exported: {} ({}, {} frames, {} s, {} Hz / {} bit, dither {} bit)",
+            log.info("Exported: {} ({}, {} frames, {} s, {} Hz / {} bit, dither {} / {} bit)",
                     outFile.getAbsolutePath(), fmt, totalFrames,
                     String.format(Locale.ROOT, "%.4f", totalFrames / (double) sampleRate),
-                    sampleRate, bitDepth, ditherBits);
+                    sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight);
         }
         return outFile.length();
     }
@@ -142,7 +143,8 @@ public class SignalFileExporter {
      * the signed N-bit encodings).
      */
     private void fillBuffer(SignalGenerator gen, double[] frame, byte[] buf, int frames,
-                            int bitDepth, double ditherBits, Random rng, OutputChannels gate) {
+                            int bitDepth, double ditherBitsLeft, double ditherBitsRight,
+                            Random rng, OutputChannels gate) {
         int     bytesPerSample = bitDepth / 8;
         int     bytesPerFrame  = bytesPerSample * CHANNELS;
         boolean wantL          = gate != OutputChannels.RIGHT;
@@ -153,8 +155,8 @@ public class SignalFileExporter {
             // WAV-only by precondition).
             for (int i = 0; i < frames; i++) {
                 gen.nextFrame(frame);
-                double left  = clamp(frame[0] + tpdfNoise(ditherBits, rng));
-                double right = clamp(frame[1] + tpdfNoise(ditherBits, rng));
+                double left  = clamp(frame[0] + tpdfNoise(ditherBitsLeft, rng));
+                double right = clamp(frame[1] + tpdfNoise(ditherBitsRight, rng));
                 int    off   = i * bytesPerFrame;
                 buf[off]     = wantL ? (byte) ((int) Math.round(left * 127.0) + 128 & 0xFF) : (byte) 128;
                 buf[off + 1] = wantR ? (byte) ((int) Math.round(right * 127.0) + 128 & 0xFF) : (byte) 128;
@@ -163,8 +165,8 @@ public class SignalFileExporter {
             long maxVal = (1L << (bitDepth - 1)) - 1;
             for (int i = 0; i < frames; i++) {
                 gen.nextFrame(frame);
-                double left  = clamp(frame[0] + tpdfNoise(ditherBits, rng));
-                double right = clamp(frame[1] + tpdfNoise(ditherBits, rng));
+                double left  = clamp(frame[0] + tpdfNoise(ditherBitsLeft, rng));
+                double right = clamp(frame[1] + tpdfNoise(ditherBitsRight, rng));
                 long   pcmL  = wantL ? (long) Math.round(left * maxVal) : 0L;
                 long   pcmR  = wantR ? (long) Math.round(right * maxVal) : 0L;
                 int    off   = i * bytesPerFrame;

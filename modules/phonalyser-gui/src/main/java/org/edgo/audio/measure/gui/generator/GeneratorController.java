@@ -48,11 +48,13 @@ import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.sound.GeneratorLane;
 import org.edgo.audio.measure.gui.sound.GeneratorRun;
 import org.edgo.audio.measure.gui.sound.PlaybackStateEnum;
+import org.edgo.audio.measure.gui.widgets.UnitValue;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.RemoteGenerator;
 import org.edgo.audio.measure.wav.PcmFileLoader;
@@ -178,8 +180,18 @@ public final class GeneratorController {
         // would re-push it).
         onPref(prefs.genAmplitudeLeftProperty(), v -> pushLaneAmplitudes());
         onPref(prefs.genAmplitudeRightProperty(), v -> pushLaneAmplitudes());
-        onPref(prefs.dacFsVoltageAmplLeftProperty(), v -> pushLaneAmplitudes());
-        onPref(prefs.dacFsVoltageAmplRightProperty(), v -> pushLaneAmplitudes());
+        // The output device's calibration moved (a Calibrate DAC, a range move,
+        // a bench recalibrating it): both amplitudes and both dither depths
+        // resolve against the new full scales.  The event arrives on the
+        // thread the change happened on; the lane is driven from the UI thread.
+        onBus(Events.DAC_CALIBRATION_CHANGED, (DeviceRef device) -> {
+            if (AudioBackend.instance().isActiveDevice(device, false)) {
+                GuiUtil.marshal(() -> {
+                    pushLaneAmplitudes();
+                    pushDither();
+                });
+            }
+        });
         onPref(prefs.genOutputChannelsProperty(), v -> {
             lane.pushOutputRouting();
             publishSignalChanged();
@@ -198,7 +210,7 @@ public final class GeneratorController {
         });
         // The entered dither, resolved to bits - one notification per edit, for
         // the same reason as the amplitude above.
-        onPref(prefs.genDitherProperty(), v -> setDitherBits(prefs.getGenDitherBits()));
+        onPref(prefs.genDitherProperty(), v -> pushDither());
         onPref(prefs.genSweepFreqStartHzProperty(), v -> {
             if (!lane.restartFarinaOnParamChange()) lane.setSweepFreqStart(v);
             publishSignalChanged();
@@ -381,15 +393,20 @@ public final class GeneratorController {
                     Math.max(0, (int) Math.round(prefs.getGenSweepFadeOutSec() * sampleRate)),
                     prefs.isGenSweepLoop());
         }
+        // Every level in the run resolves against the output device's
+        // calibration in force, each lane against its own full scale.
+        DeviceCalibration dac = AudioBackend.instance().calibrationOrDefault(false);
+        UnitValue dither = prefs.getGenDither();
         return new GeneratorRun(form,
                 lane.resolveEmitFrequency(form, sampleRate),
-                prefs.getGenAmplitudeVrmsLeft(),
-                prefs.getGenAmplitudeVrmsRight(),
+                dac.amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L),
+                dac.amplitudeVrms(prefs.getGenAmplitudeRight(), Channel.R),
                 sampleRate,
                 bp.getOutputBitDepth(),
-                prefs.getGenDitherBits(),
-                prefs.getDacFsVoltageAmplLeft(),
-                prefs.getDacFsVoltageAmplRight(),
+                dac.ditherBits(dither, Channel.L),
+                dac.ditherBits(dither, Channel.R),
+                dac.peakVolts(Channel.L),
+                dac.peakVolts(Channel.R),
                 prefs.getGenOutputChannels(),
                 false,   // the pane's tone ADAPTS to a bench's granted rate
                 sweep);
@@ -542,8 +559,28 @@ public final class GeneratorController {
      *  always receives the pairs, never one side at a time. */
     private void pushLaneAmplitudes() {
         Preferences prefs = Preferences.instance();
-        lane.setDacFsVoltageAmpls(prefs.getDacFsVoltageAmplLeft(), prefs.getDacFsVoltageAmplRight());
-        lane.setAmplitudesVrms(prefs.getGenAmplitudeVrmsLeft(), prefs.getGenAmplitudeVrmsRight());
+        DeviceCalibration dac = AudioBackend.instance().calibrationOrDefault(false);
+        lane.setDacFsVoltageAmpls(dac.peakVolts(Channel.L), dac.peakVolts(Channel.R));
+        lane.setAmplitudesVrms(dac.amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L),
+                dac.amplitudeVrms(prefs.getGenAmplitudeRight(), Channel.R));
+        publishSignalChanged();
+    }
+
+    /** Re-pushes the entered dither, resolved per lane against that lane's
+     *  full scale - a dither entered as a level (dBV) is a different bit depth
+     *  on each lane once the two full scales differ.  BOTH lines: the tone's,
+     *  and the file line when a file is playing - a file is scaled and
+     *  re-quantised on its way out exactly as a tone is, so a dither the
+     *  operator changes mid-file has to reach it. */
+    private void pushDither() {
+        UnitValue dither = Preferences.instance().getGenDither();
+        DeviceCalibration dac = AudioBackend.instance().calibrationOrDefault(false);
+        double left = dac.ditherBits(dither, Channel.L);
+        double right = dac.ditherBits(dither, Channel.R);
+        lane.setDitherBits(left, right);
+        if (filePlayback != null) {
+            filePlayback.setDitherBits(left, right);
+        }
         publishSignalChanged();
     }
 
@@ -553,20 +590,7 @@ public final class GeneratorController {
 
     /** Live-applies the dither bit count, then signals a generator change so
      *  the FFT stats/accumulator and the scope persistence restart on the new
-     *  signal.
-     *
-     *  <p>BOTH lanes: the tone's, and the file line when a file is playing.  A
-     *  file is scaled and re-quantised on its way out exactly as a tone is, so a
-     *  dither the operator changes mid-file has to reach it - the same push, not
-     *  a mechanism of its own.  Null whenever no file is playing. */
-    public void setDitherBits(double bits) {
-        lane.setDitherBits(bits);
-        if (filePlayback != null) {
-            filePlayback.setDitherBits(bits);
-        }
-        publishSignalChanged();
-    }
-
+     *  signal. */
     public void setRectangleDuty(double dutyFrac) {
         lane.setRectangleDuty(dutyFrac);
     }
@@ -979,11 +1003,6 @@ public final class GeneratorController {
                 filePlayError = mismatch;
                 return;
             }
-            // The caller's step after resolution: the DAC full scale lands on
-            // the runtime scalars via the UI thread (prefs bindings are plain
-            // UI-only listeners).
-            GuiUtil.marshal(() -> Preferences.instance().applyDeviceProfile(device, false));
-
             // Played at the file's own rate and depth, so nothing is resampled -
             // the SPI form via playbackManager, since the format is the FILE's,
             // not the preferences'.
@@ -996,9 +1015,11 @@ public final class GeneratorController {
             // precisely what dither exists to linearise.  Off still means zero on
             // a hardware backend; the loopback keeps its own last-bit fallback, so
             // its known floor now shows on file play too.
+            DeviceCalibration dac = AudioBackend.instance().calibrationOrDefault(false);
+            UnitValue dither = Preferences.instance().getGenDither();
             playback = AudioBackend.instance().playbackManager(device).openPlayback(
                     device, source.getFileSampleRate(), source.getFileBitDepth(),
-                    Preferences.instance().getGenDitherBits());
+                    dac.ditherBits(dither, Channel.L), dac.ditherBits(dither, Channel.R));
             playback.open();
             filePlayback = playback;      // live dither changes reach it from here on
             // The DEVICE path's half of the file convention (0 dBFS = 2 Vrms,
@@ -1008,10 +1029,9 @@ public final class GeneratorController {
             // without it file play emitted uncalibrated.  A DAC whose full
             // scale is below 2 Vrms gets k > 1 and full-scale content clips -
             // the honest cost of asking a small DAC for convention level.
-            Preferences filePrefs = Preferences.instance();
             source.setLaneGains(
-                    EXPORT_FS_VOLTAGE_AMPL / filePrefs.getDacFsVoltageAmplLeft(),
-                    EXPORT_FS_VOLTAGE_AMPL / filePrefs.getDacFsVoltageAmplRight());
+                    EXPORT_FS_VOLTAGE_AMPL / dac.peakVolts(Channel.L),
+                    EXPORT_FS_VOLTAGE_AMPL / dac.peakVolts(Channel.R));
             log.info("File playback started: {} ({} Hz, {} bit{}) on {}",
                     file.getName(), source.getFileSampleRate(), source.getFileBitDepth(),
                     filePlayLoop ? ", looping" : "", device.name());
@@ -1078,7 +1098,14 @@ public final class GeneratorController {
         double  sweepDurSec = isSweep ? prefs.getGenSweepDurationSec() : 0.0;
         int    sampleRate    = prefs.current().getOutputSampleRate();
         int    bitDepth      = prefs.current().getOutputBitDepth();
-        double ditherBits    = prefs.getGenDitherBits();
+        // The file's own full scale (the 0 dBFS = 2 Vrms convention below) is
+        // what an entered dBV dither or a dBFS amplitude resolves against - the
+        // file carries no device calibration.
+        DeviceCalibration fileCal = new DeviceCalibration(
+                EXPORT_FS_VOLTAGE_AMPL / Constants.SQRT2, EXPORT_FS_VOLTAGE_AMPL / Constants.SQRT2);
+        UnitValue dither = prefs.getGenDither();
+        double ditherBitsLeft  = fileCal.ditherBits(dither, Channel.L);
+        double ditherBitsRight = fileCal.ditherBits(dither, Channel.R);
         // RECTANGLE and TRIANGLE export at the SAME integer-sample-period
         // frequency the live generator emits (fs/N) - so the file matches what
         // is heard, a looped WAV has no off-grid edge/corner seam, and the
@@ -1088,8 +1115,8 @@ public final class GeneratorController {
                 ? lane.samplePeriodAlignedHz(prefs.getGenFrequencyHz(), sampleRate)
                 : prefs.getGenFrequencyHz();
         // A stereo file: each channel at its own lane's amplitude.
-        double amplitudeVrmsLeft  = prefs.getGenAmplitudeVrmsLeft();
-        double amplitudeVrmsRight = prefs.getGenAmplitudeVrmsRight();
+        double amplitudeVrmsLeft  = fileCal.amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L);
+        double amplitudeVrmsRight = fileCal.amplitudeVrms(prefs.getGenAmplitudeRight(), Channel.R);
         // One-shot sweep: exactly one sweep (its frequency ends at the stop
         // frequency).  A LOOPED sweep is periodic - period = the sweep duration -
         // so it is exported like other periodic forms: the WAV-duration length,
@@ -1142,8 +1169,8 @@ public final class GeneratorController {
             // file is played on a device.  Only the output-lane gate (a routing
             // choice, not calibration) is kept.
             long bytes = SignalFileExporter.export(gen, new File(path),
-                    sampleRate, bitDepth, duration, ditherBits, freqForTruncation,
-                    prefs.getGenOutputChannels());
+                    sampleRate, bitDepth, duration, ditherBitsLeft, ditherBitsRight,
+                    freqForTruncation, prefs.getGenOutputChannels());
             log.info("File saved: {} ({} bytes)", path, bytes);
             return null;
         } catch (Exception ex) {

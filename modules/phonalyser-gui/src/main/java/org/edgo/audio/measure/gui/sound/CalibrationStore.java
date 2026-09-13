@@ -27,6 +27,7 @@ import org.edgo.audio.measure.gui.common.RemoteBackendRegistry;
 import org.edgo.audio.measure.gui.common.RemoteBackendUi;
 import org.edgo.audio.measure.net.proto.MessageType;
 import org.edgo.audio.measure.net.proto.NetFields;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.BackendKey;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -90,7 +91,12 @@ public final class CalibrationStore {
      *         not take it
      */
     public boolean copyCardCalibrationToBench(BackendKey bench, DeviceRef device) {
-        DeviceCalibration cal = prefs.deviceCalibration(device.name(), device.isInput());
+        AudioDeviceProfile local = prefs.resolveDeviceProfile(device.name());
+        if (local == null) {
+            return false;
+        }
+        DeviceCalibration cal = (device.isInput() ? local.getInput() : local.getOutput())
+                .calibration();
         if (cal == null) {
             return false;
         }

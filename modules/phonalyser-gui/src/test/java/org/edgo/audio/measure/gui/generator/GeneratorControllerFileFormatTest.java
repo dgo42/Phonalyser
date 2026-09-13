@@ -100,11 +100,13 @@ class GeneratorControllerFileFormatTest {
      */
     @Test
     void theLiveDitherPushSurvivesAnIdleFileLine() {
-        // The push now reaches TWO lanes from one setter. With no file playing the
-        // second is null, and that is the ordinary case every dither edit takes -
-        // it must not fault, and it must still reach the tone lane.
-        controller.setDitherBits(4.0);
-        controller.setDitherBits(0.0);
+        // The push reaches TWO lanes from one edit of the dither preference. With
+        // no file playing the second is null, and that is the ordinary case every
+        // dither edit takes - it must not fault, and it must still reach the tone
+        // lane.
+        Preferences prefs = Preferences.instance();
+        prefs.setGenDitherBits(4.0);
+        prefs.setGenDitherBits(0.0);
     }
 
     @Test

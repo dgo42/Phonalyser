@@ -71,6 +71,9 @@ import org.edgo.audio.measure.gui.widgets.ToolWindow;
 import org.edgo.audio.measure.gui.widgets.Toolbar;
 import org.edgo.audio.measure.gui.widgets.TransparentComposite;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
+import org.edgo.audio.measure.sound.DeviceRef;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -695,13 +698,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         resetBtn.addListener(SWT.Selection, e -> { clearMeasurementHistory(); redraw(); });
         // ADC re-calibration rescales every measured voltage; DAC re-calibration
         // changes the generated (loopback) level - either makes the accumulated
-        // running statistics inconsistent, so clear them on a calibration change.
-        Bindings.onChange(this, prefs.adcFsVoltageRmsProperty(), v -> { clearMeasurementHistory(); redraw(); });
-        // Right-channel ADC full-scale rescales the RIGHT measured voltages the same way
-        // - same clear+redraw so its running stats never go stale after a per-channel recal.
-        Bindings.onChange(this, prefs.adcFsVoltageRmsRightProperty(), v -> { clearMeasurementHistory(); redraw(); });
-        Bindings.onChange(this, prefs.dacFsVoltageAmplLeftProperty(), v -> { clearMeasurementHistory(); redraw(); });
-        Bindings.onChange(this, prefs.dacFsVoltageAmplRightProperty(), v -> { clearMeasurementHistory(); redraw(); });
+        // running statistics inconsistent, so clear them on a calibration change
+        // of the device in force.
+        Bindings.onEvent(this, Events.ADC_CALIBRATION_CHANGED, (DeviceRef device) -> {
+            if (AudioBackend.instance().isActiveDevice(device, true)) { clearMeasurementHistory(); redraw(); }
+        });
+        Bindings.onEvent(this, Events.DAC_CALIBRATION_CHANGED, (DeviceRef device) -> {
+            if (AudioBackend.instance().isActiveDevice(device, false)) { clearMeasurementHistory(); redraw(); }
+        });
         syncScopeButtons();       // apply the initial signal-gated visibility
         syncMeasurementChannelButtons();   // grey the L/R selector for any channel that starts off
 
@@ -841,8 +845,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // Mirrors the coupled move's existing per-channel V/div handling: the shared
         // delta is clamped against each channel's own ±FS/2-at-middle limit, so each
         // channel supplies its OWN full-scale (LINKED cards pass equal L/R peaks).
-        double peakL = p.getAdcPeakVolts(Channel.L);
-        double peakR = p.getAdcPeakVolts(Channel.R);
+        DeviceCalibration adc = AudioBackend.instance().calibrationOrDefault(true);
+        double peakL = adc.peakVolts(Channel.L);
+        double peakR = adc.peakVolts(Channel.R);
         double oldL = p.getOscLeftOffsetFrac();
         double oldR = p.getOscRightOffsetFrac();
         double[] off = nav.moveVertical(
@@ -1722,7 +1727,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         Preferences prefs = Preferences.instance();
         boolean acMode = left ? prefs.isOscLeftAcMode() : prefs.isOscRightAcMode();
         if (acMode || !(vDiv > 0)) return 0.5;
-        double peakVolts = prefs.getAdcPeakVolts(left ? Channel.L : Channel.R);
+        double peakVolts = AudioBackend.instance().calibrationOrDefault(true)
+                .peakVolts(left ? Channel.L : Channel.R);
         double meanV = acDcMean(left) * peakVolts;
         if (!Double.isFinite(meanV)) return 0.5;
         return 0.5 + meanV / (DIVISIONS_Y * vDiv);
@@ -1761,7 +1767,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // Pair the full-scale with the SAME reference channel measurementChannelVPDiv
         // resolves, so the scrollbar range is exact for the reference channel (the
         // scrollbar moves both together, so the other channel may clip a hair earlier).
-        double fs    = Preferences.instance().getAdcPeakVolts(measurementReferenceChannel());
+        double fs    = AudioBackend.instance().calibrationOrDefault(true)
+                .peakVolts(measurementReferenceChannel());
         double half  = ScopeFormat.offsetMoveHalfRange(vpdiv, fs, DIVISIONS_Y);
         return new double[] { 0.5 - half, 0.5 + half };
     }
@@ -2184,15 +2191,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // clamp ("a channel moves until ±FS/2 reaches the vertical middle").
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
         final int[] FS_DASH = { 2, 6 };
+        DeviceCalibration adc = AudioBackend.instance().calibrationOrDefault(true);
         if (showL) {
             drawFullScaleLines(gc, h, w, FS_DASH,
                     prefs.getOscLeftOffsetFrac(), leftVDiv,
-                    prefs.getAdcPeakVolts(Channel.L), pixelsPerDivY, color(ColorRole.LEFT_CHANNEL_MID));
+                    adc.peakVolts(Channel.L), pixelsPerDivY, color(ColorRole.LEFT_CHANNEL_MID));
         }
         if (showR) {
             drawFullScaleLines(gc, h, w, FS_DASH,
                     prefs.getOscRightOffsetFrac(), rightVDiv,
-                    prefs.getAdcPeakVolts(Channel.R), pixelsPerDivY, color(ColorRole.RIGHT_CHANNEL_MID));
+                    adc.peakVolts(Channel.R), pixelsPerDivY, color(ColorRole.RIGHT_CHANNEL_MID));
         }
 
         boolean activeIsL = (measCh == Channel.L);
@@ -3103,7 +3111,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // channel's V/div and its current vertical offset (the channel's
         // zero-line lives at offsetFrac × h on screen).
         double triggerVDiv = (triggerCh == Channel.L) ? leftVDiv : rightVDiv;
-        double triggerPeakVolts = prefs.getAdcPeakVolts(triggerCh);
+        double triggerPeakVolts = AudioBackend.instance().calibrationOrDefault(true)
+                .peakVolts(triggerCh);
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
         double vScaleTrig = triggerPeakVolts / triggerVDiv * pixelsPerDivY;
         double triggerCenterY = h * ((triggerCh == Channel.L)
@@ -3325,11 +3334,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             // A channel showing its RESIDUAL gets no beat overlay - the envelope
             // belongs to the tones the residual just removed, and at residual
             // zoom levels it would dwarf the trace.
+            DeviceCalibration beatAdc = AudioBackend.instance().calibrationOrDefault(true);
             if (showL && dataLeft != null && !prefs.isOscLeftResidualEnabled()) {
                 float[] beat = reconstructBeatSignal(dataLeft, dataLen, sampleRate, f1, f2);
                 drawTrace(gc, beat, dataLen, dispStart, subSampleOffset, dispCount,
                         w, h, h * prefs.getOscLeftOffsetFrac(),
-                        prefs.getAdcPeakVolts(Channel.L) / leftVDiv * pixelsPerDivY, lineWidth,
+                        beatAdc.peakVolts(Channel.L) / leftVDiv * pixelsPerDivY, lineWidth,
                         color(ColorRole.LEFT_BEAT),
                         /* sincEnabled = */ false, /* dcOffset = */ 0.0, /* dotDiameter = */ 0);
             }
@@ -3337,7 +3347,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 float[] beat = reconstructBeatSignal(dataRight, dataLen, sampleRate, f1, f2);
                 drawTrace(gc, beat, dataLen, dispStart, subSampleOffset, dispCount,
                         w, h, h * prefs.getOscRightOffsetFrac(),
-                        prefs.getAdcPeakVolts(Channel.R) / rightVDiv * pixelsPerDivY, lineWidth,
+                        beatAdc.peakVolts(Channel.R) / rightVDiv * pixelsPerDivY, lineWidth,
                         color(ColorRole.RIGHT_BEAT),
                         /* sincEnabled = */ false, /* dcOffset = */ 0.0, /* dotDiameter = */ 0);
             }
@@ -3914,8 +3924,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         double leftCenterY  = h * prefs.getOscLeftOffsetFrac();
         double rightCenterY = h * prefs.getOscRightOffsetFrac();
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
-        double peakVoltsL    = prefs.getAdcPeakVolts(Channel.L);
-        double peakVoltsR    = prefs.getAdcPeakVolts(Channel.R);
+        DeviceCalibration adc = AudioBackend.instance().calibrationOrDefault(true);
+        double peakVoltsL    = adc.peakVolts(Channel.L);
+        double peakVoltsR    = adc.peakVolts(Channel.R);
         float  lineWidth     = (float) prefs.getOscLineWidth();
         // Sample dots only with persistence OFF: the afterglow accumulates the
         // trace history, so dots would pile into opaque blobs on top of it.

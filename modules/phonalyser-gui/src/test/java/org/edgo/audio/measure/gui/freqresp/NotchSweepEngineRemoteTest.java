@@ -397,10 +397,11 @@ class NotchSweepEngineRemoteTest {
                 "the input line is back, which is what releases its device lock");
     }
 
-    /** The lane gate the bench's line was last OPENED with - argument 3 of
-     *  {@code openGenerator}, which is where spec 4.5 puts it. */
+    /** The lane gate the bench's line was last OPENED with - argument 4 of
+     *  {@code openGenerator} (after the rate, the depth and the two lanes'
+     *  dither), which is where spec 4.5 puts it. */
     private OutputChannels openedGate() {
-        return (OutputChannels) openedArg(3);
+        return (OutputChannels) openedArg(4);
     }
 
     /** Argument {@code index} of the bench's {@code openGenerator} - the line's

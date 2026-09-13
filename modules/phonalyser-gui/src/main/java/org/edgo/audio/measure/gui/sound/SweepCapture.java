@@ -104,7 +104,7 @@ public final class SweepCapture {
             requireRate(reader.getSampleRate(), captureRateHz, "input stream");
             GeneratorRun run = new GeneratorRun(GenSignalForm.LOG_SWEEP,
                     0.0, amplitudeVrms, amplitudeVrms,   // both lanes alike
-                    playbackRateHz, playbackBitDepth, ditherBits,
+                    playbackRateHz, playbackBitDepth, ditherBits, ditherBits,
                     dacFsVoltage, dacFsVoltage, channels,
                     true,    // sample counts on the asked clock - a mismatch refuses
                     new GeneratorRun.SweepSpec(startHz, stopHz, sweepSamples,

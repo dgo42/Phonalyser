@@ -33,6 +33,7 @@ import org.edgo.audio.measure.sound.AbstractPcmCapture;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import lombok.Getter;
@@ -158,6 +159,11 @@ public final class DyingLaneStub implements AudioDeviceManager {
     }
 
     @Override
+    public DeviceCalibration calibration(DeviceRef device, boolean input) {
+        return null;
+    }
+
+    @Override
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
         if (index != 0) {
             throw new IllegalArgumentException("no such device: " + index);
@@ -178,7 +184,7 @@ public final class DyingLaneStub implements AudioDeviceManager {
 
     @Override
     public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
-            double ditherBits) {
+            double ditherBitsLeft, double ditherBitsRight) {
         DyingPlayback lane = new DyingPlayback();
         playbacks.add(lane);
         return lane;

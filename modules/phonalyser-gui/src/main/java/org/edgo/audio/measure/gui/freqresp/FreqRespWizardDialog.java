@@ -50,7 +50,9 @@ import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import lombok.extern.log4j.Log4j2;
@@ -263,16 +265,17 @@ public final class FreqRespWizardDialog {
                     I18n.t("freqResp.error.noDevice"));
             return;
         }
-        // The caller's step after resolution (runs in place - this is the UI
-        // thread): the DAC/ADC full scales land before the sweep reads them.
-        GuiUtil.marshal(dialog, () -> {
-            prefs.applyDeviceProfile(out, false);
-            prefs.applyDeviceProfile(in, true);
-        });
         page1Play.setEnabled(false);
         page2Play.setEnabled(false);
         backBtn.setEnabled(false);
         nextBtn.setEnabled(false);
+        // The two devices' calibrations in force, read once for this
+        // measurement; the sweep is rendered on both lanes alike, against the
+        // LEFT lane's full scale.
+        AudioBackend audio = AudioBackend.instance();
+        DeviceCalibration dac = audio.calibrationOrDefault(false);
+        DeviceCalibration adc = audio.calibrationOrDefault(true);
+        double sweepAmplitudeVrms = dac.amplitudeVrms(prefs.getFreqRespAmplitude(), Channel.L);
 
         // Each converter runs the format IT is configured with - see
         // FreqRespAnalyzerWorker.  The busy meter's time axis is the RECORD's,
@@ -310,9 +313,9 @@ public final class FreqRespWizardDialog {
                         .sweepPoints(prefs.getFreqRespSweepPoints())
                         .durationSec(prefs.getFreqRespDurationSec())
                         .leadInSec(prefs.getFreqRespLeadInSec())
-                        .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
-                        .dacFsVoltageRms(prefs.getDacFsVoltageAmplLeft())
-                        .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
+                        .amplitudeVrms(sweepAmplitudeVrms)
+                        .dacFsVoltageRms(dac.peakVolts(Channel.L))
+                        .adcFsVoltageRms(adc.fsRms(Channel.L))
                         .applyCalibration(!directLeg)  // page 2 divides out the page-1 transfer
                         .captureProgress(progress)
                         // As in FreqRespAnalyzerWorker: the sweep leg belongs to
@@ -321,7 +324,7 @@ public final class FreqRespWizardDialog {
                         .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
                                 prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
                                 prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
-                                prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmplLeft()))
+                                sweepAmplitudeVrms, dac.peakVolts(Channel.L)))
                         .build();
                 StereoFreqRespResult r = new FreqRespAnalyzer(cfg).run(null, null);
                 GuiUtil.marshal(dialog, () -> onMeasurementDone(directLeg, r, null));

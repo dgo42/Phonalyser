@@ -44,7 +44,10 @@ import org.edgo.audio.measure.enums.OutputChannels;
  *                       engine commands both lanes alike
  * @param sampleRate     the output rate every sample count is computed against
  * @param bitDepth       the output word length
- * @param ditherBits     TPDF dither depth, 0 = off
+ * @param ditherBitsLeft  the LEFT lane's TPDF dither depth, 0 = off
+ * @param ditherBitsRight the RIGHT lane's TPDF dither depth - its own, since
+ *                       a dither entered as a level resolves against each
+ *                       lane's full scale
  * @param dacFsVoltageAmplLeft  the LOCAL left DAC full scale (peak) the left
  *                       lane's amplitude is scaled against; a bench converts
  *                       against its own card
@@ -67,7 +70,8 @@ public record GeneratorRun(
         double amplitudeVrmsRight,
         int sampleRate,
         int bitDepth,
-        double ditherBits,
+        double ditherBitsLeft,
+        double ditherBitsRight,
         double dacFsVoltageAmplLeft,
         double dacFsVoltageAmplRight,
         OutputChannels channels,
@@ -100,7 +104,8 @@ public record GeneratorRun(
      *  restarted with the changed run. */
     public GeneratorRun withChannels(OutputChannels channels) {
         return new GeneratorRun(form, frequencyHz, amplitudeVrmsLeft, amplitudeVrmsRight,
-                sampleRate, bitDepth, ditherBits, dacFsVoltageAmplLeft, dacFsVoltageAmplRight,
+                sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight,
+                dacFsVoltageAmplLeft, dacFsVoltageAmplRight,
                 channels, requireGrantedRate, sweep);
     }
 
@@ -111,7 +116,8 @@ public record GeneratorRun(
     public GeneratorRun withSweepStart(double hz) {
         if (sweep == null) return this;
         return new GeneratorRun(form, frequencyHz, amplitudeVrmsLeft, amplitudeVrmsRight,
-                sampleRate, bitDepth, ditherBits, dacFsVoltageAmplLeft, dacFsVoltageAmplRight,
+                sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight,
+                dacFsVoltageAmplLeft, dacFsVoltageAmplRight,
                 channels,
                 requireGrantedRate,
                 new SweepSpec(hz, sweep.stopHz(), sweep.durationSamples(),
@@ -123,7 +129,8 @@ public record GeneratorRun(
     public GeneratorRun withSweepStop(double hz) {
         if (sweep == null) return this;
         return new GeneratorRun(form, frequencyHz, amplitudeVrmsLeft, amplitudeVrmsRight,
-                sampleRate, bitDepth, ditherBits, dacFsVoltageAmplLeft, dacFsVoltageAmplRight,
+                sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight,
+                dacFsVoltageAmplLeft, dacFsVoltageAmplRight,
                 channels,
                 requireGrantedRate,
                 new SweepSpec(sweep.startHz(), hz, sweep.durationSamples(),

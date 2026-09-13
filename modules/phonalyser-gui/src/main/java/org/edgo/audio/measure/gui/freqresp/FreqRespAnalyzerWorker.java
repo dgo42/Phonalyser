@@ -21,16 +21,17 @@ package org.edgo.audio.measure.gui.freqresp;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.edgo.audio.measure.sound.StereoCaptureProgress;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
-import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
+import org.edgo.audio.measure.sound.StereoCaptureProgress;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -159,7 +160,6 @@ public final class FreqRespAnalyzerWorker {
                 log.warn("FreqResp: timeout waiting for other workers to release the audio device");
             }
             if (cancelFlag.get()) return;
-            Preferences prefs = Preferences.instance();
 
             // The one resolution seam: the backend resolves the ACTIVE devices;
             // this worker only words the failures.
@@ -173,14 +173,6 @@ public final class FreqRespAnalyzerWorker {
                 reportError(I18n.t("freqResp.error.noInputDevice"));
                 return;
             }
-            // The caller's step after resolution: the profile write goes
-            // through the UI thread (prefs bindings are plain UI-only
-            // listeners).
-            GuiUtil.marshal(() -> {
-                prefs.applyDeviceProfile(out, false);
-                prefs.applyDeviceProfile(in, true);
-            });
-
             if (cancelFlag.get()) return;
 
             // One stereo sweep, two parallel deconvolutions.
@@ -224,6 +216,13 @@ public final class FreqRespAnalyzerWorker {
         Preferences prefs = Preferences.instance();
         BackendPrefs backend = prefs.current();
         int playbackRate = backend.getOutputSampleRate();
+        // The selected devices' calibrations in force ({@code out} / {@code in}
+        // ARE the selection); the sweep is rendered on both lanes alike, against
+        // the LEFT lane's full scale.
+        AudioBackend audio = AudioBackend.instance();
+        DeviceCalibration dac = audio.calibrationOrDefault(false);
+        DeviceCalibration adc = audio.calibrationOrDefault(true);
+        double sweepAmplitudeVrms = dac.amplitudeVrms(prefs.getFreqRespAmplitude(), Channel.L);
         return FreqRespAnalyzerConfig.builder()
                 .outDevice(out)
                 .inDevice(in)
@@ -236,9 +235,9 @@ public final class FreqRespAnalyzerWorker {
                 .sweepPoints(prefs.getFreqRespSweepPoints())
                 .durationSec(prefs.getFreqRespDurationSec())
                 .leadInSec(prefs.getFreqRespLeadInSec())
-                .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
-                .dacFsVoltageRms(prefs.getDacFsVoltageAmplLeft())
-                .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
+                .amplitudeVrms(sweepAmplitudeVrms)
+                .dacFsVoltageRms(dac.peakVolts(Channel.L))
+                .adcFsVoltageRms(adc.fsRms(Channel.L))
                 .outputChannels(prefs.getFreqRespOutputChannels())
                 .applyCalibration(prefs.isFreqRespApplyCalibration())
                 .captureProgress(activeProgress)
@@ -250,7 +249,7 @@ public final class FreqRespAnalyzerWorker {
                 .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
                         prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
                         prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
-                        prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmplLeft()))
+                        sweepAmplitudeVrms, dac.peakVolts(Channel.L)))
                 .build();
     }
 

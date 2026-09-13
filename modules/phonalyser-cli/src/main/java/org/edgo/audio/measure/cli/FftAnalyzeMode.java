@@ -36,7 +36,9 @@ import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.wav.WavReader;
 
 import lombok.Setter;
@@ -87,10 +89,12 @@ public class FftAnalyzeMode {
         boolean calNoise     = ArgParser.hasArg(args, "--cal-noise");
         String  adcFsArg     = ArgParser.getArgValue(args, "--adc-fs-vrms");
         String  loadWeightedArg = ArgParser.getArgValue(args, "--load-weighted");
-        if (adcFsArg != null) {
-            // Inject for this run only - Main marked Preferences transient, so not persisted.
-            prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
-        }
+        // The ADC full scale the file was captured against: the flag, else the
+        // one-volt default an uncalibrated device measures against - a file
+        // names no device whose card could be asked.
+        DeviceCalibration adcCal = adcFsArg != null
+                ? new DeviceCalibration(Double.parseDouble(adcFsArg), Double.parseDouble(adcFsArg))
+                : DeviceCalibration.DEFAULT;
 
         if (fftSizeArg == null) {
             log.error("--fft-size is required for --fft-analyze.");
@@ -136,7 +140,7 @@ public class FftAnalyzeMode {
             fundRefDbV = Double.NaN;
         }
         // The analyzer speaks dBFS only - convert the user-supplied dBV anchor at the boundary.
-        double fundRefDbFs = fundRefDbV - prefs.getDbvOffsetDb();
+        double fundRefDbFs = fundRefDbV - adcCal.dbvOffsetDb(Channel.L);
 
         Double genFreqHz = freqArg != null ? Double.parseDouble(freqArg) : null;
 
@@ -243,7 +247,7 @@ public class FftAnalyzeMode {
         fftAnalyzer.exportFftCsv(result, "results");
         HarmonicsCsv.export(result, "results");
         FftChartExporter exporter = new FftChartExporter();
-        exporter.setAdcFsVoltageRms(prefs.getAdcFsVoltageRms());
+        exporter.setAdcFsVoltageRms(adcCal.fsRms(Channel.L));
         exporter.exportChart(result, chartWidth, chartHeight, "results",
                 commentArg, subHarmArg != null, null, genFreqHz,
                 overlayFreqs, overlayDbFs, preCorrFreqs, preCorrDbFs);

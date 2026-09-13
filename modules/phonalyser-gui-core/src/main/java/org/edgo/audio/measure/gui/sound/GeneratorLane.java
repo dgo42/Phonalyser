@@ -29,7 +29,6 @@ import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.GeneratorControls;
 import org.edgo.audio.measure.generator.Predistortion;
 import org.edgo.audio.measure.generator.SignalGenerator;
-import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -138,20 +137,15 @@ public final class GeneratorLane {
                     ? PlaybackStateEnum.NO_DEVICE
                     : PlaybackStateEnum.DEVICE_UNAVAILABLE;
         }
-        // Applying the profile (the two DAC full scales) is the caller's step
-        // after resolution - a preference write belongs on the UI thread,
-        // whose bindings are plain UI-only listeners.
-        GuiUtil.marshal(() -> Preferences.instance().applyDeviceProfile(device, false));
-
         // The DDS may not be in this process at all - then the whole engine
         // below is somebody else's, and what is left here is the command.
         RemoteGenerator remote = remote();
         if (remote != null) {
             PlaybackStateEnum state = startRemote(remote, run, device);
             if (state == PlaybackStateEnum.STARTED && log.isInfoEnabled()) {
-                log.info("Generator started on a remote bench: device={}, form={}, freq={} Hz, amp={} Vrms, rate={} Hz, depth={} bit, dither={} bit",
+                log.info("Generator started on a remote bench: device={}, form={}, freq={} Hz, amp={} Vrms, rate={} Hz, depth={} bit, dither={} / {} bit",
                         device.displayName(), run.form(), run.frequencyHz(), run.amplitudeVrmsLeft(),
-                        run.sampleRate(), run.bitDepth(), run.ditherBits());
+                        run.sampleRate(), run.bitDepth(), run.ditherBitsLeft(), run.ditherBitsRight());
             }
             return lastStartState = state;
         }
@@ -170,9 +164,9 @@ public final class GeneratorLane {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             attemptState = tryStartOnce(run, device, READY_TIMEOUT_S);
             if (attemptState == PlaybackStateEnum.STARTED) {
-                log.info("Generator started (attempt {}): device={}, form={}, freq={} Hz, amp={} Vrms, rate={} Hz, depth={} bit, dither={} bit",
+                log.info("Generator started (attempt {}): device={}, form={}, freq={} Hz, amp={} Vrms, rate={} Hz, depth={} bit, dither={} / {} bit",
                         attempt, device.displayName(), run.form(), run.frequencyHz(), run.amplitudeVrmsLeft(),
-                        run.sampleRate(), run.bitDepth(), run.ditherBits());
+                        run.sampleRate(), run.bitDepth(), run.ditherBitsLeft(), run.ditherBitsRight());
                 return lastStartState = attemptState;
             }
             log.warn("Generator start attempt {}/{} failed: {}", attempt, MAX_ATTEMPTS, attemptState);
@@ -256,7 +250,6 @@ public final class GeneratorLane {
                     ? PlaybackStateEnum.NO_DEVICE
                     : PlaybackStateEnum.DEVICE_UNAVAILABLE;
         }
-        GuiUtil.marshal(() -> Preferences.instance().applyDeviceProfile(device, false));
         return openRemoteLane(remote, run, device) ? PlaybackStateEnum.STARTED
                                                    : PlaybackStateEnum.REMOTE_REFUSED;
     }
@@ -391,7 +384,8 @@ public final class GeneratorLane {
             // depth - a sweep engine's duplex session must not pick up a
             // diverging output-prefs rate (the controller's run carries the
             // prefs values anyway).
-            ag = playback.openPlayback(device, sampleRate, run.bitDepth(), run.ditherBits());
+            ag = playback.openPlayback(device, sampleRate, run.bitDepth(),
+                    run.ditherBitsLeft(), run.ditherBitsRight());
             ag.open();
         } catch (Exception ex) {
             // The raw throwable to the LOG (it is what a developer needs), the
@@ -448,7 +442,7 @@ public final class GeneratorLane {
             DeviceRef device) {
         try {
             int granted = remote.openGenerator(device, run.sampleRate(), run.bitDepth(),
-                    run.ditherBits(), run.channels());
+                    run.ditherBitsLeft(), run.ditherBitsRight(), run.channels());
             lastGrantedRateHz = granted;
             remoteRateHz = granted > 0 ? granted : run.sampleRate();
             return true;
@@ -737,18 +731,18 @@ public final class GeneratorLane {
     // Live-apply setters (each a one-line no-op when nothing is playing)
     // -------------------------------------------------------------------------
 
-    /** Live-applies the dither bit count to the running playback line - the
-     *  local lane's quantizer, or the far end's through {@code gen.config}
-     *  (spec 4.5): the operator's dither edit reaches the tone that is
-     *  playing on either kind of bench. */
-    public void setDitherBits(double bits) {
+    /** Live-applies the two lanes' dither bit counts to the running playback
+     *  line - the local lane's quantizer, or the far end's through
+     *  {@code gen.config} (spec 4.5): the operator's dither edit reaches the
+     *  tone that is playing on either kind of bench. */
+    public void setDitherBits(double leftBits, double rightBits) {
         RemoteGenerator remote = remote();
         if (remote != null) {
-            remote.setDitherBits(bits);
+            remote.setDitherBits(leftBits, rightBits);
             return;
         }
         AudioPlayback ag = playbackLane.getPlayback();
-        if (ag != null) ag.setDitherBits(bits);
+        if (ag != null) ag.setDitherBits(leftBits, rightBits);
     }
 
     /** Live-applies a duty-cycle (fraction in [0.001, 0.999]) to the running rectangle generator. */
@@ -1118,7 +1112,7 @@ public final class GeneratorLane {
      *  amplitude field caps itself with this, so V, dBV and dBFS all trim to the
      *  same maximum and 0 dBFS is the top of the range. */
     public double maxAmplitudeVrms(GenSignalForm form, Channel ch) {
-        return Preferences.instance().getDacFsVoltageAmpl(ch) * rmsPerPeak(form);
+        return AudioBackend.instance().calibrationOrDefault(false).peakVolts(ch) * rmsPerPeak(form);
     }
 
     /** RMS of the unit-amplitude waveform - the peak->RMS factor behind

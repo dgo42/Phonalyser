@@ -74,6 +74,7 @@ import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FftPreset;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -900,8 +901,8 @@ public final class FftTabControl extends AbstractTabControl {
         if (new CalibrationStore(prefs).isCalibrationFromDevice(true)) {
             // Device-provided (a QA40x, here or on a bench): show the built-in
             // full-scale read-only.
-            new CalibrationDialog(parent, adcTexts(),
-                    prefs.getAdcFsVoltageRms(Channel.L), prefs.getAdcFsVoltageRms(Channel.R),
+            DeviceCalibration adc = AudioBackend.instance().calibrationOrDefault(true);
+            new CalibrationDialog(parent, adcTexts(), adc.fsRms(Channel.L), adc.fsRms(Channel.R),
                     true, actual -> { }).open();
             return;
         }

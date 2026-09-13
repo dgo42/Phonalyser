@@ -19,7 +19,10 @@
 package org.edgo.audio.measure.cli;
 
 import org.edgo.audio.measure.cli.util.*;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.CaptureWithGenerator;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.StereoSamples;
 
 import lombok.Setter;
@@ -106,10 +109,8 @@ public class FreqRespMode {
 
         if (samplerateArg == null) { log.error("--samplerate required"); System.exit(1); }
         if (amplitudeArg  == null) { log.error("--amplitude required");  System.exit(1); }
-        if (adcFsArg != null) {
-            // Inject for this run only - Main marked Preferences transient, so not persisted.
-            prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
-        }
+        // For this run only: the flag stands in for the input device's card.
+        Double adcFsOverride = adcFsArg != null ? Double.parseDouble(adcFsArg) : null;
 
         int sampleRate = Integer.parseInt(samplerateArg);
         int bitDepth   = bitsArg != null ? Integer.parseInt(bitsArg) : 24;
@@ -163,6 +164,13 @@ public class FreqRespMode {
         DeviceRef inDevice  = DeviceSelector.selectMixerByFlag(args, "--in-device",  false);
         if (outDevice == null) { log.error("No output device. Use --out-device <index>."); System.exit(1); }
         if (inDevice  == null) { log.error("No input device. Use --in-device <index>.");  System.exit(1); }
+        // The full scales in force for the two chosen devices - their cards, read
+        // through their managers - with the flag standing in for the ADC's.
+        AudioBackend audio = AudioBackend.instance();
+        DeviceCalibration adc = adcFsOverride != null
+                ? new DeviceCalibration(adcFsOverride, adcFsOverride)
+                : audio.calibrationOrDefault(inDevice, true);
+        DeviceCalibration dac = audio.calibrationOrDefault(outDevice, false);
 
         log.info("=== Frequency Response Measurement: Farina log-sweep deconvolution ===");
         log.info("Out device  : {}", outDevice.name());
@@ -182,7 +190,7 @@ public class FreqRespMode {
         log.info("Chart       : {}x{} px", chartWidth, chartHeight);
 
         SignalGenerator gen = new SignalGenerator(fStart, fEnd, sweepSamples, leadInSamples, sampleRate,
-                amp, amp, prefs.getDacFsVoltageAmplLeft(), prefs.getDacFsVoltageAmplRight());
+                amp, amp, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R));
         // One-shot sweep for the measurement: emit silence after the buffer
         // ends instead of looping a second cycle into the capture window,
         // which would alias into the deconvolution.  Hann fade-in/fade-out
@@ -194,7 +202,7 @@ public class FreqRespMode {
         // CLI mirrors the GUI's behaviour so a saved measurement carries
         // L and R deconvolved from the same sweep.
         StereoSamples rec = CaptureWithGenerator.runStereo(
-                gen, outDevice, inDevice, sampleRate, bitDepth, ditherBits,
+                gen, outDevice, inDevice, sampleRate, bitDepth, ditherBits, ditherBits,
                 OutputChannels.BOTH, durationSec, null, 0, null, null);
         log.info("Captured    : {} samples per channel ({} s)", rec.left().length,
                 String.format(Locale.US, "%.4f", rec.left().length / (double) sampleRate));
@@ -211,7 +219,7 @@ public class FreqRespMode {
         // but compute independently, so they run on separate futures off
         // the common ForkJoin pool.
         double[] sweepRef = gen.getLogSweepBuffer();
-        double adcFs = prefs.getAdcFsVoltageRms();
+        double adcFs = adc.fsRms(Channel.L);
         CompletableFuture<FreqRespCalibration> calLFut = CompletableFuture.supplyAsync(
                 () -> FreqRespCalHelper.computeFromLogSweep(
                         rec.left(), sweepRef, leadInSamples, sampleRate, freqs, amp,

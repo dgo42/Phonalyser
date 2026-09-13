@@ -35,6 +35,7 @@ import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.ToolButton;
 import org.edgo.audio.measure.gui.widgets.Toolbar;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
 
 /**
  * The amplitude-histogram plot: how often the signal sat at each voltage, drawn
@@ -197,7 +198,7 @@ public final class HistogramView extends AbstractMeasurementView {
         // The accumulator is unit-agnostic (normalised); the channel's peak volts
         // turns its bin edges into the voltage on the axis, so a recalibration
         // relabels the plot without disturbing a single count.
-        double peakV = Preferences.instance().getAdcPeakVolts(channel);
+        double peakV = AudioBackend.instance().calibrationOrDefault(true).peakVolts(channel);
         AmplitudeHistogram h = worker.getHistogram(channel);
         int lo = (h == null) ? -1 : h.firstOccupied();
         if (h == null || h.getTotal() == 0 || lo < 0) {

@@ -25,8 +25,10 @@ import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import java.util.Locale;
@@ -149,6 +151,8 @@ public class GenerateMode {
             log.error("No suitable audio output device found.");
             System.exit(1);
         }
+        // The chosen device's DAC full scales - its card, read through its manager.
+        DeviceCalibration dac = AudioBackend.instance().calibrationOrDefault(mixer, false);
 
         log.info("Mode      : generate");
         log.info("Device    : {}", mixer.name());
@@ -170,13 +174,13 @@ public class GenerateMode {
             }
             log.info("Harmonics : {}", harmonicsCsv);
             generator = new SignalGenerator(frequency, sampleRate, amplitudeVRms, amplitudeVRms,
-                    prefs.getDacFsVoltageAmplLeft(), prefs.getDacFsVoltageAmplRight(), harmonicsCsv);
+                    dac.peakVolts(Channel.L), dac.peakVolts(Channel.R), harmonicsCsv);
         } else {
             generator = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, amplitudeVRms,
-                    prefs.getDacFsVoltageAmplLeft(), prefs.getDacFsVoltageAmplRight());
+                    dac.peakVolts(Channel.L), dac.peakVolts(Channel.R));
         }
         try (AudioPlayback ag = AudioBackend.instance().playbackManager(mixer)
-                .openPlayback(mixer, sampleRate, bitDepth, ditherBits)) {
+                .openPlayback(mixer, sampleRate, bitDepth, ditherBits, ditherBits)) {
             ag.open();
             ag.play(generator, duration);
         }

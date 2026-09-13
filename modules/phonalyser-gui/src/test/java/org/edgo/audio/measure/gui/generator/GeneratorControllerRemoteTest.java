@@ -120,7 +120,6 @@ class GeneratorControllerRemoteTest {
     private GenSignalForm previousForm;
     private double previousFrequencyHz;
     private double previousSweepSeconds;
-    private double previousRightFs;
     private boolean previousSnap;
     private String previousDpd;
 
@@ -134,7 +133,6 @@ class GeneratorControllerRemoteTest {
         previousForm         = prefs.getGenSignalForm();
         previousFrequencyHz  = prefs.getGenFrequencyHz();
         previousSweepSeconds = prefs.getGenSweepDurationSec();
-        previousRightFs      = prefs.getDacFsVoltageAmplRight();
         previousSnap         = prefs.isGenSnapToFftBin();
         previousDpd          = prefs.getGenDpd();
 
@@ -182,7 +180,6 @@ class GeneratorControllerRemoteTest {
         prefs.setGenSignalForm(previousForm);
         prefs.setGenFrequencyHz(previousFrequencyHz);
         prefs.setGenSweepDurationSec(previousSweepSeconds);
-        prefs.setDacFsVoltageAmplRight(previousRightFs);
         prefs.setGenSnapToFftBin(previousSnap);
         prefs.setGenDpd(GenSignalForm.SINE_COMP, previousDpd == null ? "" : previousDpd);
     }

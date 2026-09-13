@@ -54,7 +54,10 @@ import org.edgo.audio.measure.gui.generator.GeneratorController;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -421,8 +424,10 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
                 : metric("thd_n", live != null ? fmtDb(-live.sinadDb) : "-"));
         snrLbl  .setText(metric("snr",      live != null ? fmtDb(live.snrDb) : "-"));
         sinadLbl.setText(metric("sinad",    live != null ? fmtDb(live.sinadDb) : "-"));
-        fundLbl .setText(metric("fund",     live != null ? fmtDbv(live.fundamentalDbFs + prefs.getDbvOffsetDb()) : "-"));
-        floorLbl.setText(metric("floor",    live != null ? fmtDbv(live.noisePeakFloorDbFs() + prefs.getDbvOffsetDb()) : "-"));
+        double dbvOffsetDb = AudioBackend.instance().calibrationOrDefault(true)
+                .dbvOffsetDb(prefs.getFftChannel());
+        fundLbl .setText(metric("fund",     live != null ? fmtDbv(live.fundamentalDbFs + dbvOffsetDb) : "-"));
+        floorLbl.setText(metric("floor",    live != null ? fmtDbv(live.noisePeakFloorDbFs() + dbvOffsetDb) : "-"));
 
         chart.redraw();
     }
@@ -690,17 +695,21 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         if (picked == null) return;
         try {
             int bitDepth = prefs.current().getOutputBitDepth();
+            AudioBackend audio = AudioBackend.instance();
+            double amplitudeVrms = audio.calibrationOrDefault(false)
+                    .amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L);
+            double adcFsVrms = audio.calibrationOrDefault(true).fsRms(Channel.L);
             if (dual) {
                 engine.getBestIntermod().writeDpd(Path.of(picked), buildHeader(r),
                         r.fundamentalHzRefined, r.fundamental2HzRefined, r.fundamentalDbFs,
-                        r.sampleRate, bitDepth, prefs.getGenAmplitudeVrmsLeft(),
-                        engine.calResponseFor(r.channelLeft), prefs.getAdcFsVoltageRms(),
+                        r.sampleRate, bitDepth, amplitudeVrms,
+                        engine.calResponseFor(r.channelLeft), adcFsVrms,
                         engine.dualToneFundamentalVrms());
             } else {
                 engine.getBestApplied().writeDpd(Path.of(picked), buildHeader(r),
                         r.fundamentalHzRefined, r.fundamentalDbFs,
-                        r.sampleRate, bitDepth, prefs.getGenAmplitudeVrmsLeft(),
-                        engine.calResponseFor(r.channelLeft), prefs.getAdcFsVoltageRms());
+                        r.sampleRate, bitDepth, amplitudeVrms,
+                        engine.calResponseFor(r.channelLeft), adcFsVrms);
             }
             savedPath = picked;
             prefs.setGenDpdFolder(new File(picked).getParent());
@@ -803,8 +812,9 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         } else {
             h.add("# gen_frequency_hz="   + fmt(prefs.getGenFrequencyHz()));
         }
-        h.add("# gen_amplitude_vrms=" + fmt(prefs.getGenAmplitudeVrmsLeft()));
-        h.add("# gen_dither_bits="    + prefs.getGenDitherBits());
+        DeviceCalibration dac = AudioBackend.instance().calibrationOrDefault(false);
+        h.add("# gen_amplitude_vrms=" + fmt(dac.amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L)));
+        h.add("# gen_dither_bits="    + dac.ditherBits(prefs.getGenDither(), Channel.L));
         h.add("# fft_size="           + r.fftSize);
         h.add("# fft_window="         + prefs.getFftWindow());
         h.add("# fft_overlap="        + prefs.getFftOverlap().label);

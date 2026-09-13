@@ -268,14 +268,14 @@ class GeneratorLaneLiveChangeTest {
     /** The run the pane's Play would derive for the compensated dual tone. */
     private GeneratorRun dualCompRun() {
         return new GeneratorRun(GenSignalForm.DUAL_TONE_COMP, TONE_HZ, AMPLITUDE_VRMS, AMPLITUDE_VRMS, RATE_HZ,
-                BIT_DEPTH, DITHER_BITS, DAC_FS_VOLTS, DAC_FS_VOLTS,
+                BIT_DEPTH, DITHER_BITS, DITHER_BITS, DAC_FS_VOLTS, DAC_FS_VOLTS,
                 OutputChannels.BOTH, false, null);
     }
 
     /** The run the pane's Play would derive: a plain sine at the test's tone. */
     private GeneratorRun sineRun() {
         return new GeneratorRun(GenSignalForm.SINE, TONE_HZ, AMPLITUDE_VRMS, AMPLITUDE_VRMS, RATE_HZ,
-                BIT_DEPTH, DITHER_BITS, DAC_FS_VOLTS, DAC_FS_VOLTS,
+                BIT_DEPTH, DITHER_BITS, DITHER_BITS, DAC_FS_VOLTS, DAC_FS_VOLTS,
                 OutputChannels.BOTH, false, null);
     }
 

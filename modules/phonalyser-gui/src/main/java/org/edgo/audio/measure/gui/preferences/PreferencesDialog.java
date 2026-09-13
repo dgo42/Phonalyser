@@ -1129,15 +1129,21 @@ public final class PreferencesDialog {
             // of those carries its own wait.
             BackendSettingsRegistry.instance().commitEdit();
             Preferences.instance().applyFromDialog(edit);
-            // Resolve per-card FS for the just-committed selection so the dBV
-            // axis and generator scale update immediately on OK (legacy scalars
-            // when the device is unbound).
-            Preferences committed = Preferences.instance();
-            BackendPrefs committedBp = committed.current();
-            applyCommittedProfile(committed, devices.inputs,
-                    committedBp.getInputDeviceName(), true);
-            applyCommittedProfile(committed, devices.outputs,
-                    committedBp.getOutputDeviceName(), false);
+            // The cards the dialog edited are in force now - a range moved, a
+            // value typed, a card bound - and every consumer of a full scale
+            // re-reads through its device manager on this announcement, one
+            // per direction of the selected devices.  The dialog is the
+            // writer here: the cards went in as a whole, not through a
+            // manager's own store.
+            AudioBackend audio = AudioBackend.instance();
+            DeviceRef selectedInput = audio.getActiveInputDevice();
+            if (selectedInput != null) {
+                MessageBus.instance().publish(Events.ADC_CALIBRATION_CHANGED, selectedInput);
+            }
+            DeviceRef selectedOutput = audio.getActiveOutputDevice();
+            if (selectedOutput != null) {
+                MessageBus.instance().publish(Events.DAC_CALIBRATION_CHANGED, selectedOutput);
+            }
             // The GPU toggle, like fonts, takes effect by rebuilding the panes -
             // the scope pane chooses its surface (GL vs GC) at construction.
             // AFTER the commit above, deliberately: the rebuilt panes read the
@@ -1176,6 +1182,8 @@ public final class PreferencesDialog {
             // The operator must be told when what they just committed
             // has no calibration behind it - LAST, so the commit is complete and
             // the streams are already back up while the warning is on screen.
+            Preferences committed = Preferences.instance();
+            BackendPrefs committedBp = committed.current();
             boolean selectionChanged =
                     !edit.getSelectedBackend().key().equals(openState.backendKey())
                     || !Objects.equals(committedBp.getInputDeviceName(),  openState.inputDevice())
@@ -1211,32 +1219,6 @@ public final class PreferencesDialog {
         Dialogs.centerOnParent(dialog);
         dialog.open();
         return dialog;
-    }
-
-    /**
-     * Pushes one direction's per-channel full-scales for the just-committed
-     * selection, resolving the committed device NAME back to the REF it was
-     * enumerated as.
-     *
-     * <p>The ref is what carries the calibration of a device on a Phonalyser
-     * server (spec 4.3 {@code cal}) - calibration lives where the device is
-     * connected, and this machine's card store knows nothing about that bench -
-     * so a name alone would silently fall back to a local card that merely
-     * happens to share the name.  A name the enumeration no longer offers still
-     * gets the name lookup, which is all there ever was for it.
-     */
-    private void applyCommittedProfile(Preferences committed, List<DeviceRef> refs,
-            String deviceName, boolean input) {
-        DeviceRef ref = refFor(refs, deviceName);
-        if (ref != null) {
-            committed.applyDeviceProfile(ref, input);
-            return;
-        }
-        if (input) {
-            committed.applyInputDeviceProfile(deviceName);
-        } else {
-            committed.applyOutputDeviceProfile(deviceName);
-        }
     }
 
     /**
@@ -2421,9 +2403,8 @@ public final class PreferencesDialog {
     // EVERYTHING here mutates the detached `edit` working copy (never the live
     // singleton, never save()): edit.putAudioDeviceProfile() replaces by name
     // on the copy, whose save() is inert while detached.  OK commits the whole
-    // copy via applyFromDialog(); the resolved FS is pushed by the sibling
-    // resolution call there through setAdcFsVoltageRms / setDacFsVoltageAmplLeft
-    // and their right-channel siblings.
+    // copy via applyFromDialog(); the full scales in force are read from the
+    // committed cards by every consumer through its device manager.
 
     /** Full-scale voltage floor used to seed a freshly added range when the
      *  endpoint has no prior range to copy from: a small positive value so the
@@ -2694,7 +2675,7 @@ public final class PreferencesDialog {
             if (ref == null || ref.calibration() != null) return;   // the bench has its own
             AudioDeviceProfile local = edit.resolveDeviceProfile(dev);
             boolean copyable = local != null && !endpointOf(local).isCalibrationFromDevice()
-                    && edit.deviceCalibration(dev, input) != null;
+                    && endpointOf(local).calibration() != null;
             // ONE offer per bench + direction + device per run, whichever of the two
             // it turns out to be: they are the same question - "this bench device
             // has no calibration; shall we give it one?" - and an operator who said

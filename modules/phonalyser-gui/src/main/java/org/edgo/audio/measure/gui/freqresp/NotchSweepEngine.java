@@ -193,7 +193,7 @@ public final class NotchSweepEngine implements AutoCloseable {
             // deconvolution reference.
             GeneratorRun run = new GeneratorRun(GenSignalForm.LOG_SWEEP,
                     0.0, ampVrms, ampVrms,   // both lanes alike
-                    playbackRateHz, playbackBitDepth, ditherBits,
+                    playbackRateHz, playbackBitDepth, ditherBits, ditherBits,
                     dacFsVrms, dacFsVrms, outputChannels,
                     true,    // the loop's period is samples on the asked clock
                     new GeneratorRun.SweepSpec(f0, f1, playSamples, 0,

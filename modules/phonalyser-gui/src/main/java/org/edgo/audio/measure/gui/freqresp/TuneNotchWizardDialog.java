@@ -39,7 +39,6 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.sound.StereoSamples;
-import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
@@ -57,6 +56,7 @@ import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import lombok.Getter;
@@ -357,9 +357,10 @@ public final class TuneNotchWizardDialog {
         // dBFS now all trim to the same maximum (0 dBFS is the top).
         ampField = new NumericStepField(row, UnitFamily.AMPLITUDE,
                 FreqRespConstants.AMP_MIN_VRMS,
-                prefs.getDacFsVoltageAmplLeft() / Constants.SQRT2,
+                AudioBackend.instance().calibrationOrDefault(false).fsRms(Channel.L),
                 FreqRespConstants.AMP_MAX_DECIMALS,
-                prefs::getDacFsVoltageAmplLeft, FIELD_WIDTH_HINT);
+                () -> AudioBackend.instance().calibrationOrDefault(false).peakVolts(Channel.L),
+                FIELD_WIDTH_HINT);
         // Same amplitude semantics as the generator's field, so it borrows that
         // field's tooltip (unit switching, dBV, and the dbfs/dbf entry).
         ampField.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
@@ -633,17 +634,17 @@ public final class TuneNotchWizardDialog {
             });
             return;
         }
-        // The caller's step after resolution: the profile write goes through
-        // the UI thread (prefs bindings are plain UI-only listeners).  The
-        // amplitude field's ceiling was frozen at build against the copy's
-        // then-current full scale - re-pull it and replay the entered pair so
-        // a dBFS entry resolves and re-renders against ONE full scale (a
-        // stale ceiling clamped the committed voltage and re-displayed a
-        // typed 0 dBFS as a negative level).
+        // The two devices' calibrations in force, read once: they don't change
+        // for the lifetime of the session.  The amplitude field's ceiling was
+        // frozen at build - re-pull it and replay the entered pair so a dBFS
+        // entry resolves and re-renders against ONE full scale (a stale ceiling
+        // clamped the committed voltage and re-displayed a typed 0 dBFS as a
+        // negative level).
+        AudioBackend audio = AudioBackend.instance();
+        DeviceCalibration dac = audio.calibrationOrDefault(false);
+        DeviceCalibration adc = audio.calibrationOrDefault(true);
         GuiUtil.marshal(dialog, () -> {
-            prefs.applyDeviceProfile(out, false);
-            prefs.applyDeviceProfile(in, true);
-            ampField.setMax(prefs.getDacFsVoltageAmplLeft() / Constants.SQRT2);
+            ampField.setMax(dac.fsRms(Channel.L));
             ampField.seedPair(prefs.getTuneNotchAmplitude());
         });
         // Each converter runs the format IT is configured with: the playback
@@ -654,11 +655,9 @@ public final class TuneNotchWizardDialog {
         int captureRate  = prefs.current().getInputSampleRate();
         int playbackRate = prefs.current().getOutputSampleRate();
         int playbackBits = prefs.current().getOutputBitDepth();
-        // Read the DAC/ADC voltage references + dither resolution once: they
-        // don't change for the lifetime of the session.
-        double dacFsVrms = prefs.getDacFsVoltageAmplLeft();
-        double adcFsVrmsLeft  = prefs.getAdcFsVoltageRms(Channel.L);
-        double adcFsVrmsRight = prefs.getAdcFsVoltageRms(Channel.R);
+        double dacFsVrms = dac.peakVolts(Channel.L);
+        double adcFsVrmsLeft  = adc.fsRms(Channel.L);
+        double adcFsVrmsRight = adc.fsRms(Channel.R);
         int    ditherBits = prefs.getFreqRespDitherBits();
 
         engine = new NotchSweepEngine(captureRate, playbackRate, playbackBits, ditherBits);

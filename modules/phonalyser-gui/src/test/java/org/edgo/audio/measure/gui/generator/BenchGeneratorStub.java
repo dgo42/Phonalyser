@@ -35,6 +35,7 @@ import org.edgo.audio.measure.sound.AbstractPcmCapture;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.MarkedCapture;
 import org.edgo.audio.measure.sound.RemoteGenerator;
@@ -224,9 +225,9 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
     // -------------------------------------------------------------------------
 
     @Override
-    public int openGenerator(DeviceRef device, int sampleRate, int bitDepth, double ditherBits,
-            OutputChannels channels) {
-        record("openGenerator", sampleRate, bitDepth, ditherBits, channels);
+    public int openGenerator(DeviceRef device, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight, OutputChannels channels) {
+        record("openGenerator", sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight, channels);
         openEntered.countDown();
         CountDownLatch gate = openGate;
         if (gate != null) {
@@ -270,8 +271,8 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
     }
 
     @Override
-    public void setDitherBits(double bits) {
-        record("setDitherBits", bits);
+    public void setDitherBits(double leftBits, double rightBits) {
+        record("setDitherBits", leftBits, rightBits);
     }
 
     @Override
@@ -571,6 +572,12 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
         return false;
     }
 
+    /** A bench device carries its own calibration, as the net manager reads it. */
+    @Override
+    public DeviceCalibration calibration(DeviceRef device, boolean input) {
+        return device.calibration();
+    }
+
     @Override
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
         if (index != 0) {
@@ -596,7 +603,7 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
 
     @Override
     public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
-            double ditherBits) {
+            double ditherBitsLeft, double ditherBitsRight) {
         throw new UnsupportedOperationException(
                 "a remote generator is COMMANDED, never rendered into - a controller that "
                         + "reaches this line took the local path against a remote bench");

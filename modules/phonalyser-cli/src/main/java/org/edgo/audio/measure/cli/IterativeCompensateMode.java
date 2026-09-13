@@ -31,7 +31,10 @@ import java.util.function.DoubleFunction;
 
 import org.edgo.audio.measure.chart.FftChartExporter;
 import org.edgo.audio.measure.cli.util.ArgParser;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.CaptureWithGenerator;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.cli.util.ClockMismatch;
 import org.edgo.audio.measure.cli.util.DeviceSelector;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
@@ -130,9 +133,8 @@ public class IterativeCompensateMode {
         String compStepArg   = ArgParser.getArgValue(args, "--compensation-step");
         double compStep      = compStepArg  != null ? Double.parseDouble(compStepArg)  : 1.0;
         String adcFsArg      = ArgParser.getArgValue(args, "--adc-fs-vrms");
-        if (adcFsArg != null) {
-            prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
-        }
+        // For this run only: the flag stands in for the input device's card.
+        Double adcFsOverride = adcFsArg != null ? Double.parseDouble(adcFsArg) : null;
 
         if (samplerateArg == null) { log.error("--samplerate required"); System.exit(1); }
         if (fftSizeArg    == null) { log.error("--fft-size required");   System.exit(1); }
@@ -169,9 +171,6 @@ public class IterativeCompensateMode {
         } else {
             fundRefDbV = Double.NaN;
         }
-        // The analyzer speaks dBFS only - convert the user-supplied dBV anchor at the boundary.
-        double fundRefDbFs = fundRefDbV - prefs.getDbvOffsetDb();
-
         if (!SampleRates.isValid(sampleRate)) {
             log.error("--samplerate must be one of the supported rates");
             System.exit(1);
@@ -201,6 +200,15 @@ public class IterativeCompensateMode {
         DeviceRef inDevice  = DeviceSelector.selectMixerByFlag(args, "--in-device",  false);
         if (outDevice == null) { log.error("No output device. Use --out-device <index>."); System.exit(1); }
         if (inDevice  == null) { log.error("No input device. Use --in-device <index>.");  System.exit(1); }
+        // The full scales in force for the two chosen devices - their cards, read
+        // through their managers - with the flag standing in for the ADC's.
+        AudioBackend audio = AudioBackend.instance();
+        DeviceCalibration adc = adcFsOverride != null
+                ? new DeviceCalibration(adcFsOverride, adcFsOverride)
+                : audio.calibrationOrDefault(inDevice, true);
+        DeviceCalibration dac = audio.calibrationOrDefault(outDevice, false);
+        // The analyzer speaks dBFS only - convert the user-supplied dBV anchor at the boundary.
+        double fundRefDbFs = fundRefDbV - adc.dbvOffsetDb(Channel.L);
 
         log.info("=== Iterative Harmonic Compensation Workflow ===");
         log.info("Out device : {}", outDevice.name());
@@ -269,8 +277,8 @@ public class IterativeCompensateMode {
         for (int retry = 0; ; retry++) {
             double[] s0 = CaptureWithGenerator.run(
                     new SignalGenerator(GenSignalForm.SINE, frequency, sampleRate, amplitude, amplitude,
-                            prefs.getDacFsVoltageAmplLeft(), prefs.getDacFsVoltageAmplRight()),
-                    outDevice, inDevice, sampleRate, bitDepth, ditherBits, duration);
+                            dac.peakVolts(Channel.L), dac.peakVolts(Channel.R)),
+                    outDevice, inDevice, sampleRate, bitDepth, ditherBits, ditherBits, duration);
             try {
                 result0 = fftAnalyzer.analyze(
                         s0, sampleRate, fftSize, harmonics,
@@ -326,7 +334,7 @@ public class IterativeCompensateMode {
         }
 
         FftChartExporter exporter = new FftChartExporter();
-        exporter.setAdcFsVoltageRms(prefs.getAdcFsVoltageRms());
+        exporter.setAdcFsVoltageRms(adc.fsRms(Channel.L));
         exporter.exportChart(result0, chartWidth, chartHeight, "results",
                 "Iteration 0 (uncompensated)", false,
                 "fft_chart_iter0_" + wfTs, frequency,
@@ -383,12 +391,12 @@ public class IterativeCompensateMode {
             for (int retry = 0; ; retry++) {
                 SignalGenerator gen = accumulate
                         ? buildAccumulatedGenerator(frequency, sampleRate, amplitude,
-                                prefs.getDacFsVoltageAmplLeft(), comp, calResponseAt, prefs.getAdcFsVoltageRms())
+                                dac.peakVolts(Channel.L), comp, calResponseAt, adc.fsRms(Channel.L))
                         : new SignalGenerator(frequency, sampleRate, amplitude, amplitude,
-                                prefs.getDacFsVoltageAmplLeft(), prefs.getDacFsVoltageAmplRight(),
+                                dac.peakVolts(Channel.L), dac.peakVolts(Channel.R),
                                 lastResult);
                 double[] s = CaptureWithGenerator.run(gen,
-                        outDevice, inDevice, sampleRate, bitDepth, ditherBits, duration);
+                        outDevice, inDevice, sampleRate, bitDepth, ditherBits, ditherBits, duration);
                 try {
                     result = fftAnalyzer.analyze(
                             s, sampleRate, fftSize, harmonics,
@@ -536,7 +544,7 @@ public class IterativeCompensateMode {
             bestApplied.writeDpd(appliedDpd.toPath(), null,
                     bestResult.fundamentalHzRefined, bestResult.fundamentalDbFs,
                     sampleRate, bitDepth, amplitude,
-                    calResponseAt, prefs.getAdcFsVoltageRms());
+                    calResponseAt, adc.fsRms(Channel.L));
             log.info("Applied compensation for best iter {}: {}", bestIter, appliedDpd.getAbsolutePath());
         }
 
