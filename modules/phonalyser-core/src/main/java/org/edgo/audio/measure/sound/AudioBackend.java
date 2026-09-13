@@ -26,9 +26,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.sound.sampled.AudioFormat;
 
-import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.preferences.BackendKey;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -92,7 +93,23 @@ public final class AudioBackend {
      *  idempotent; this stops the application paying for the enumeration twice. */
     private final AtomicBoolean setupStarted = new AtomicBoolean();
 
-    private AudioBackend() {}
+    /** The calibration in force for the active device of each direction, as
+     *  last resolved, keyed by the selection it was resolved for
+     *  ({@link #cachedInputKey} / {@link #cachedOutputKey}) - so a paint loop
+     *  that asks per frame does not resolve the device by name against the
+     *  backend's list per frame.  Dropped whenever a manager announces a
+     *  calibration change, and stale by construction when the selection
+     *  moves, since the key moves with it. */
+    private volatile DeviceCalibration cachedInput;
+    private volatile String cachedInputKey;
+    private volatile DeviceCalibration cachedOutput;
+    private volatile String cachedOutputKey;
+
+    private AudioBackend() {
+        MessageBus bus = MessageBus.instance();
+        bus.subscribe(Events.ADC_CALIBRATION_CHANGED, (DeviceRef device) -> cachedInputKey = null);
+        bus.subscribe(Events.DAC_CALIBRATION_CHANGED, (DeviceRef device) -> cachedOutputKey = null);
+    }
 
     /**
      * Returns the singleton instance, lazily creating it inside a synchronized
@@ -349,11 +366,74 @@ public final class AudioBackend {
             }
             return false;
         }
-        Preferences prefs = Preferences.instance();
-        double inForce = input ? prefs.getAdcFsVoltageRms(ch)
-                               : prefs.getDacFsVoltageAmpl(ch) / Constants.SQRT2;
-        double fsRms = inForce * (trueVrms / indicatedVrms);
-        return manager(device.carrier()).storeCalibration(device, input, ch, fsRms);
+        AudioDeviceManager manager = manager(device.carrier());
+        DeviceCalibration inForce = manager.calibration(device, input);
+        if (inForce == null) {
+            inForce = DeviceCalibration.DEFAULT;
+        }
+        double fsRms = inForce.fsRms(ch) * (trueVrms / indicatedVrms);
+        return manager.storeCalibration(device, input, ch, fsRms);
+    }
+
+    /**
+     * The calibration in force for the ACTIVE device in {@code input}'s
+     * direction, read through the manager of the backend it is on - what every
+     * reading is computed against.  Ask at use, once per measurement or paint,
+     * not per sample.  Cached per selection until a manager announces a change
+     * (see {@link #cachedInput}), so a caller pays the device resolution once
+     * per selection, not per call.
+     *
+     * @return the full scales, or {@code null} when no device is active in
+     *         that direction, or the active one is uncalibrated - see
+     *         {@link AudioDeviceManager#calibration}
+     */
+    public DeviceCalibration calibration(boolean input) {
+        BackendPrefs bp = Preferences.instance().current();
+        String name = input ? bp.getInputDeviceName() : bp.getOutputDeviceName();
+        String key = activeKey.key() + "|" + name;
+        if (key.equals(input ? cachedInputKey : cachedOutputKey)) {
+            return input ? cachedInput : cachedOutput;
+        }
+        DeviceRef device = activeDevice(input);
+        DeviceCalibration cal = device == null ? null
+                : manager(device.carrier()).calibration(device, input);
+        if (input) {
+            cachedInput = cal;
+            cachedInputKey = key;
+        } else {
+            cachedOutput = cal;
+            cachedOutputKey = key;
+        }
+        return cal;
+    }
+
+    /** {@link #calibration(boolean)}, with {@link DeviceCalibration#DEFAULT}
+     *  standing in for an uncalibrated or absent device - for the consumers
+     *  that must show SOMETHING (a scope axis, a generator level) and whose
+     *  uncalibrated state is announced elsewhere. */
+    public DeviceCalibration calibrationOrDefault(boolean input) {
+        DeviceCalibration cal = calibration(input);
+        return cal == null ? DeviceCalibration.DEFAULT : cal;
+    }
+
+    /** The calibration in force for an EXPLICIT device - one a caller chose
+     *  itself rather than the preferences' active one (the CLI's device flags)
+     *  - read through the manager of the backend it is on, with
+     *  {@link DeviceCalibration#DEFAULT} for an uncalibrated device. */
+    public DeviceCalibration calibrationOrDefault(DeviceRef device, boolean input) {
+        DeviceCalibration cal = manager(device.carrier()).calibration(device, input);
+        return cal == null ? DeviceCalibration.DEFAULT : cal;
+    }
+
+    /** Whether {@code device} is the ACTIVE device in {@code input}'s direction
+     *  - what a subscriber of the calibration-changed events asks before it
+     *  acts: a change on any other device is not in force here.
+     *  By name and carrier, not by ref identity - a catalogue rebuild hands out
+     *  new refs for the same device. */
+    public boolean isActiveDevice(DeviceRef device, boolean input) {
+        DeviceRef active = activeDevice(input);
+        return active != null && active.carrier() == device.carrier()
+                && active.name().equals(device.name());
     }
 
     public List<AudioFormat> listSupportedInputFormats(DeviceRef device) {
@@ -420,12 +500,13 @@ public final class AudioBackend {
     }
 
     /** Playback twin of {@link #openCapture(DeviceRef)}: rate and depth from
-     *  the preferences; only the dither depth - a generator setting, not a
-     *  device format - is the caller's. */
-    public AudioPlayback openPlayback(DeviceRef device, double ditherBits) {
+     *  the preferences; only the two lanes' dither depths - a generator
+     *  setting, not a device format - are the caller's. */
+    public AudioPlayback openPlayback(DeviceRef device, double ditherBitsLeft,
+            double ditherBitsRight) {
         BackendPrefs bp = Preferences.instance().current();
         return playbackManager(device).openPlayback(device,
-                bp.getOutputSampleRate(), bp.getOutputBitDepth(), ditherBits);
+                bp.getOutputSampleRate(), bp.getOutputBitDepth(), ditherBitsLeft, ditherBitsRight);
     }
 
     /**

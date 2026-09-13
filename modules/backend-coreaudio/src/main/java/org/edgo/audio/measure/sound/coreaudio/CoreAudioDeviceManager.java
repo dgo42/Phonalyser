@@ -244,8 +244,10 @@ public class CoreAudioDeviceManager extends AbstractLocalDeviceManager {
         return new CoreAudioRecorder((CoreAudioDeviceManager.CoreAudioDeviceRef) device, sampleRate, bitDepth, hal);
     }
 
-    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
-        return new CoreAudioGenerator((CoreAudioDeviceManager.CoreAudioDeviceRef) device, sampleRate, bitDepth, ditherBits, hal);
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight) {
+        return new CoreAudioGenerator((CoreAudioDeviceManager.CoreAudioDeviceRef) device, sampleRate,
+                bitDepth, ditherBitsLeft, ditherBitsRight, hal);
     }
 
     /** CoreAudio speaks the same PortAudio error vocabulary as WDM-KS - one

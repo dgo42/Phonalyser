@@ -175,8 +175,10 @@ public class WdmksDeviceManager extends AbstractLocalDeviceManager {
         return new WdmksRecorder((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth);
     }
 
-    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
-        return new WdmksGenerator((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth, ditherBits);
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight) {
+        return new WdmksGenerator((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth,
+                ditherBitsLeft, ditherBitsRight);
     }
 
     /** Every WDM-KS open and every WDM-KS capture fails through

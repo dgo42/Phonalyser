@@ -52,8 +52,9 @@ import org.junit.jupiter.api.Test;
  * is {@link SignalGenerator}, which normalises to a peak fraction of the DAC
  * full-scale PEAK voltage, and {@code Qa40xGenerator}, which multiplies that by
  * {@code MAXINT}. So the chain under test here is the real one, and the
- * full-scale voltage is fed in the way {@code Preferences.applyOutputDeviceProfile}
- * feeds it: the card stores RMS, and the generator is handed {@code RMS × √2}.
+ * full-scale voltage is fed in the way a generator lane reads it off the card
+ * ({@code DeviceCalibration.peakVolts}): the card stores RMS, and the generator
+ * is handed {@code RMS × √2}.
  */
 class Qa40xOutputScalingTest {
 
@@ -117,7 +118,7 @@ class Qa40xOutputScalingTest {
     /** Renders a sine at {@code amplitudeVrms} through the production generator
      *  and returns the largest normalised sample seen.  The full-scale voltage
      *  is handed in as PEAK (card RMS × √2), which is what
-     *  {@code Preferences.applyOutputDeviceProfile} pushes. */
+     *  {@code DeviceCalibration.peakVolts} answers a lane. */
     private double renderPeak(double amplitudeVrms) {
         SignalGenerator generator = new SignalGenerator(GenSignalForm.SINE, FREQ_HZ, SAMPLE_RATE,
                 amplitudeVrms, amplitudeVrms,

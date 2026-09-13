@@ -31,9 +31,11 @@ import java.util.function.Consumer;
 
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.DitherMath;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.widgets.UnitConversion;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.widgets.UnitValue;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -41,8 +43,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Pins the entered values: what the operator typed - number AND unit, as one
- * value - is what is stored, and the canonical getters resolve it at USE
- * against the live DAC calibration.
+ * value - is what is stored, and it is resolved at USE, per channel, against
+ * the DAC calibration in force ({@link DeviceCalibration}).
  *
  * <p>The defect these replace: a value entered in a calibration-dependent unit
  * was stored only in its canonical form, so a backend or device change - or a
@@ -59,12 +61,17 @@ class EnteredUnitPairTest {
      *  depends on the calibration provably moves with it. */
     private static final double FS_AMPL = 2.0;
     private static final double FS_AMPL_DOUBLED = 4.0;
+    /** The two as a DAC calibration - the record holds RMS, the peak form is
+     *  derived. */
+    private static final DeviceCalibration DAC =
+            new DeviceCalibration(FS_AMPL / Constants.SQRT2, FS_AMPL / Constants.SQRT2);
+    private static final DeviceCalibration DAC_DOUBLED = new DeviceCalibration(
+            FS_AMPL_DOUBLED / Constants.SQRT2, FS_AMPL_DOUBLED / Constants.SQRT2);
     private static final String VOLT = UnitConversion.baseToken(UnitFamily.AMPLITUDE);
     private static final String BITS = UnitConversion.baseToken(UnitFamily.DITHER);
     private static final String DBV  = UnitConversion.logToken(UnitFamily.AMPLITUDE);
     private static final String DBFS = "dbfs";
 
-    private double savedDacAmpl;
     private UnitValue savedGenAmplitudeLeft;
     private UnitValue savedGenAmplitudeRight;
     private UnitValue savedGenDither;
@@ -75,7 +82,6 @@ class EnteredUnitPairTest {
     void snapshot() {
         Preferences prefs = Preferences.instance();
         prefs.setTransientMode(true);
-        savedDacAmpl            = prefs.getDacFsVoltageAmplLeft();
         savedGenAmplitudeLeft   = prefs.getGenAmplitudeLeft();
         savedGenAmplitudeRight  = prefs.getGenAmplitudeRight();
         savedGenDither          = prefs.getGenDither();
@@ -86,7 +92,6 @@ class EnteredUnitPairTest {
     @AfterEach
     void restore() {
         Preferences prefs = Preferences.instance();
-        prefs.setDacFsVoltageAmplLeft(savedDacAmpl);
         prefs.setGenAmplitudeLeft(savedGenAmplitudeLeft);
         prefs.setGenAmplitudeRight(savedGenAmplitudeRight);
         prefs.setGenDither(savedGenDither);
@@ -135,23 +140,24 @@ class EnteredUnitPairTest {
     @DisplayName("the entered figures are unmoved by a full-scale change, and the getters re-solve")
     void enteredNumbersHoldWhileTheResolutionFollowsTheCalibration() {
         Preferences prefs = Preferences.instance();
-        prefs.setDacFsVoltageAmplLeft(FS_AMPL);
         prefs.setGenAmplitudeLeft(new UnitValue(-6.0, DBFS));
         prefs.setGenDither(new UnitValue(-100.0, DBV));
-        double vrmsBefore = prefs.getGenAmplitudeVrmsLeft();
-        double bitsBefore = prefs.getGenDitherBits();
+        double vrmsBefore = DAC.amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L);
+        double bitsBefore = DAC.ditherBits(prefs.getGenDither(), Channel.L);
         assertEquals(FS_AMPL / Constants.SQRT2 * Math.pow(10.0, -6.0 / 20.0), vrmsBefore, EPS);
         assertEquals(DitherMath.bitsForDbv(-100.0, FS_AMPL), bitsBefore, EPS);
 
-        prefs.setDacFsVoltageAmplLeft(FS_AMPL_DOUBLED);
+        // The same entered values against twice the full scale.
         assertEquals(new UnitValue(-6.0, DBFS), prefs.getGenAmplitudeLeft(),
                 "the entered value is untouched");
         assertEquals(new UnitValue(-100.0, DBV), prefs.getGenDither());
-        assertEquals(2 * vrmsBefore, prefs.getGenAmplitudeVrmsLeft(), EPS,
+        assertEquals(2 * vrmsBefore,
+                DAC_DOUBLED.amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L), EPS,
                 "twice the full scale is twice the volts for the same dBFS");
-        assertEquals(DitherMath.bitsForDbv(-100.0, FS_AMPL_DOUBLED), prefs.getGenDitherBits(), EPS,
+        double bitsDoubled = DAC_DOUBLED.ditherBits(prefs.getGenDither(), Channel.L);
+        assertEquals(DitherMath.bitsForDbv(-100.0, FS_AMPL_DOUBLED), bitsDoubled, EPS,
                 "the same level is one more bit under twice the full scale");
-        assertTrue(prefs.getGenDitherBits() > bitsBefore);
+        assertTrue(bitsDoubled > bitsBefore);
     }
 
     @Test
@@ -168,7 +174,8 @@ class EnteredUnitPairTest {
             prefs.setGenAmplitudeLeft(new UnitValue(1.0, DBV));
             assertEquals(1, seen.size(), "exactly one notification");
             assertEquals(new UnitValue(1.0, DBV), seen.get(0));
-            assertEquals(Math.pow(10.0, 1.0 / 20.0), prefs.getGenAmplitudeVrmsLeft(), EPS);
+            assertEquals(Math.pow(10.0, 1.0 / 20.0),
+                    DAC.amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L), EPS);
         } finally {
             prefs.genAmplitudeLeftProperty().removeListener(probe);
         }
@@ -183,14 +190,14 @@ class EnteredUnitPairTest {
         // to -100 dBV momentarily resolved as a real depth of about one bit,
         // which reached the running lane.  One value, one write, one event.
         Preferences prefs = Preferences.instance();
-        prefs.setDacFsVoltageAmplLeft(FS_AMPL);
         prefs.setGenDither(new UnitValue(0.0, BITS));
         List<UnitValue> seen = new ArrayList<>();
         List<Double> resolved = new ArrayList<>();
         Consumer<UnitValue> probe = v -> {
             seen.add(v);
-            // Read the way every consumer does - through the converting getter.
-            resolved.add(prefs.getGenDitherBits());
+            // Read the way every consumer does - resolved against the
+            // calibration in force.
+            resolved.add(DAC.ditherBits(prefs.getGenDither(), Channel.L));
         };
         prefs.genDitherProperty().addListener(probe);
         try {
@@ -208,7 +215,6 @@ class EnteredUnitPairTest {
     @DisplayName("a pre-pair configuration converts once, per field")
     void prePairConfigurationSeedsTheEnteredValues() throws Exception {
         Preferences prefs = Preferences.instance();
-        prefs.setDacFsVoltageAmplLeft(FS_AMPL);
         Map<String, Object> legacy = new LinkedHashMap<>();
         legacy.put("genDitherBits", 12.0);
         legacy.put("genDitherDbvDisplay", true);
@@ -235,7 +241,7 @@ class EnteredUnitPairTest {
         legacy.put("genDitherDbvDisplay", true);
         fromMap(prefs, legacy);
         assertEquals(new UnitValue(0.0, BITS), prefs.getGenDither());
-        assertEquals(0.0, prefs.getGenDitherBits(), EPS);
+        assertEquals(0.0, DAC.ditherBits(prefs.getGenDither(), Channel.L), EPS);
     }
 
     @Test
@@ -295,21 +301,20 @@ class EnteredUnitPairTest {
         prefs.setGenAmplitudeLeft(new UnitValue(-6.0, DBFS));
         prefs.setGenAmplitudeVrmsLeft(0.25);
         assertEquals(new UnitValue(0.25, VOLT), prefs.getGenAmplitudeLeft());
-        assertEquals(0.25, prefs.getGenAmplitudeVrmsLeft(), EPS);
+        assertEquals(0.25, DAC.amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L), EPS);
 
         prefs.setGenDither(new UnitValue(-100.0, DBV));
         prefs.setGenDitherBits(8.0);
         assertEquals(new UnitValue(8.0, BITS), prefs.getGenDither());
-        assertEquals(8.0, prefs.getGenDitherBits(), EPS);
+        assertEquals(8.0, DAC.ditherBits(prefs.getGenDither(), Channel.L), EPS);
     }
 
     @Test
     @DisplayName("the freqresp floor is expressed in the unit that is stored")
     void freqRespFloorKeepsTheStoredUnit() {
         Preferences prefs = Preferences.instance();
-        prefs.setDacFsVoltageAmplLeft(FS_AMPL);
         prefs.setFreqRespAmplitude(new UnitValue(-60.0, DBV));
-        UnitValue floor = prefs.freqRespAmplitudeIn(1e-4);
+        UnitValue floor = DAC.amplitudeIn(1e-4, prefs.getFreqRespAmplitude().unit(), Channel.L);
         assertEquals(DBV, floor.unit(), "clamping must not move the operator back to volts");
         assertEquals(20 * Math.log10(1e-4), floor.value(), EPS);
     }

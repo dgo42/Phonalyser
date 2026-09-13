@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.edgo.audio.measure.common.Constants;
-import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -496,18 +496,15 @@ class DeviceProfileRoundTripTest {
     }
 
     @Test
-    void storeAdcCalibration_autoCreatesBoundProfile_andSetsGlobalFs() {
+    void profileFor_autoCreatesBoundProfile_forAnUnrecognisedDevice() {
         Preferences p = detached();
-        p.setBackend(AudioBackendType.WDMKS);
         // A device recognised by no seeded card's match patterns, so this
         // exercises the bare "default"-row fallback (the recognised-card seeding
-        // path is covered by DeviceStoreTest).
-        p.current().setInputDeviceName("Generic USB Codec");
-
-        p.storeAdcCalibration(2.5);
-
-        // Global scalar took the value.
-        assertEquals(2.5, p.getAdcFsVoltageRms(), EPS);
+        // path is covered by DeviceStoreTest).  The three steps are the local
+        // manager's calibration store.
+        AudioDeviceProfile card = p.profileFor("Generic USB Codec", true);
+        card.getInput().storeFullScale(Channel.L, 2.5);
+        p.putAudioDeviceProfile(card);
 
         // A card was auto-created, recognising the exact device name via match.
         AudioDeviceProfile created = p.resolveDeviceProfile("Generic USB Codec");
@@ -525,42 +522,36 @@ class DeviceProfileRoundTripTest {
         assertEquals(2.5, row.getFsRight(), EPS);
 
         // A second calibrate on the same device updates the same profile's row.
-        p.storeAdcCalibration(3.1);
+        AudioDeviceProfile again = p.profileFor("Generic USB Codec", true);
+        again.getInput().storeFullScale(Channel.L, 3.1);
+        p.putAudioDeviceProfile(again);
         assertEquals(1, p.getAudioDeviceProfiles().size(), "no duplicate profile on recalibrate");
         assertEquals(3.1, p.resolveDeviceProfile("Generic USB Codec")
                 .getInput().getRanges().get(0).getFsLeft(), EPS);
     }
 
     @Test
-    void storeDacCalibration_storesRmsOnDisk_andSetsGlobalAmpl() {
+    void theDacRowHoldsRms_andThePeakFormIsDerivedOnRead() {
         Preferences p = detached();
-        p.setBackend(AudioBackendType.WDMKS);
-        p.current().setOutputDeviceName("E1DA Cosmos DAC");
-
         double fsAmpl = 2.79351;
-        p.storeDacCalibration(fsAmpl);
+        AudioDeviceProfile card = p.profileFor("E1DA Cosmos DAC", false);
+        card.getOutput().storeFullScale(Channel.L, fsAmpl / Constants.SQRT2);
+        p.putAudioDeviceProfile(card);
 
-        // Global scalar took the peak-amplitude value.
-        assertEquals(fsAmpl, p.getDacFsVoltageAmplLeft(), EPS);
-
-        // The stored row is the RMS form (ampl / √2).
+        // The stored row is the RMS form (ampl / √2) ...
         AudioDeviceProfile created = p.resolveDeviceProfile("E1DA Cosmos DAC");
         assertNotNull(created);
         DeviceRange row = created.getOutput().getRanges().get(0);
         assertEquals(fsAmpl / Constants.SQRT2, row.getFsLeft(), EPS);
-
-        // applyOutputDeviceProfile round-trips RMS->ampl back onto the global scalar.
-        p.setDacFsVoltageAmplLeft(1.0);
-        p.applyOutputDeviceProfile("E1DA Cosmos DAC");
-        assertEquals(fsAmpl, p.getDacFsVoltageAmplLeft(), EPS);
+        // ... and the peak form a generator lane divides by is derived on read.
+        assertEquals(fsAmpl, created.getOutput().calibration().peakVolts(Channel.L), EPS);
     }
 
     @Test
-    void applyInputDeviceProfile_unresolved_isLegacyNoOp() {
+    void resolveDeviceProfile_unboundDevice_isNull() {
         Preferences p = detached();
-        p.setAdcFsVoltageRms(1.234);
-        p.applyInputDeviceProfile("Some Unbound Card");
-        assertEquals(1.234, p.getAdcFsVoltageRms(), EPS, "unresolved device must not touch the global FS");
+        assertNull(p.resolveDeviceProfile("Some Unbound Card"),
+                "an unrecognised device has no card, and a read invents none");
     }
 
     @Test

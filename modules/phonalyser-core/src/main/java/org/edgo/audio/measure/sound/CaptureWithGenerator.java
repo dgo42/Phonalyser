@@ -43,9 +43,9 @@ public class CaptureWithGenerator {
      * Channel 0 (left / primary) of the input device is used.
      */
     public double[] run(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
-                       int sampleRate, int bitDepth, int ditherBits,
+                       int sampleRate, int bitDepth, double ditherBitsLeft, double ditherBitsRight,
                        int duration) throws Exception {
-        return run(gen, outDevice, inDevice, sampleRate, bitDepth, ditherBits,
+        return run(gen, outDevice, inDevice, sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight,
                 duration, null, 0);
     }
 
@@ -59,7 +59,7 @@ public class CaptureWithGenerator {
      * recorder starting capture.
      */
     public double[] run(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
-                       int sampleRate, int bitDepth, int ditherBits,
+                       int sampleRate, int bitDepth, double ditherBitsLeft, double ditherBitsRight,
                        int duration, WeightedBuffer weights,
                        int syncPauseSec) throws Exception {
         int   maxSamples = (int) Math.min((long) duration * sampleRate + sampleRate, Integer.MAX_VALUE);
@@ -77,7 +77,7 @@ public class CaptureWithGenerator {
 
         AudioBackend audio = AudioBackend.instance();
         AudioPlayback audioGen = audio.playbackManager(outDevice)
-                .openPlayback(outDevice, sampleRate, bitDepth, ditherBits);
+                .openPlayback(outDevice, sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight);
         audioGen.open();
 
         Thread genThread = new Thread(() -> {
@@ -162,7 +162,8 @@ public class CaptureWithGenerator {
     }
 
     public StereoSamples runStereo(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
-                                   int sampleRate, int bitDepth, int ditherBits,
+                                   int sampleRate, int bitDepth,
+                                   double ditherBitsLeft, double ditherBitsRight,
                                    OutputChannels outputChannels,
                                    int duration, WeightedBuffer weights,
                                    int syncPauseSec,
@@ -182,7 +183,7 @@ public class CaptureWithGenerator {
 
         AudioBackend audio = AudioBackend.instance();
         AudioPlayback audioGen = audio.playbackManager(outDevice)
-                .openPlayback(outDevice, sampleRate, bitDepth, ditherBits);
+                .openPlayback(outDevice, sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight);
         audioGen.open();
         // Gate the played sweep to the selected DAC lane(s) - LEFT / RIGHT write
         // digital silence to the un-driven lane at the quantizer's

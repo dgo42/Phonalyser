@@ -104,7 +104,7 @@ class PcmQuantizerTest {
     void bothWithUnityScale_isByteIdenticalToLegacy_16bit() {
         byte[] expected = legacyEncode(sine(), 16, FRAMES);
 
-        PcmQuantizer q = new PcmQuantizer(16, 0);   // defaults: scale 1.0, gate BOTH
+        PcmQuantizer q = new PcmQuantizer(16, 0, 0);   // defaults: scale 1.0, gate BOTH
         byte[] actual = new byte[FRAMES * 2 * 2];
         q.encode(sine(), actual, FRAMES);
 
@@ -116,7 +116,7 @@ class PcmQuantizerTest {
     void bothWithUnityScale_isByteIdenticalToLegacy_24bit() {
         byte[] expected = legacyEncode(sine(), 24, FRAMES);
 
-        PcmQuantizer q = new PcmQuantizer(24, 0);
+        PcmQuantizer q = new PcmQuantizer(24, 0, 0);
         q.setOutputChannels(OutputChannels.BOTH);
         byte[] actual = new byte[FRAMES * 3 * 2];
         q.encode(sine(), actual, FRAMES);
@@ -129,7 +129,7 @@ class PcmQuantizerTest {
     void bothWithUnityScale_isByteIdenticalToLegacy_8bit() {
         byte[] expected = legacyEncode(sine(), 8, FRAMES);
 
-        PcmQuantizer q = new PcmQuantizer(8, 0);
+        PcmQuantizer q = new PcmQuantizer(8, 0, 0);
         byte[] actual = new byte[FRAMES * 2];
         q.encode(sine(), actual, FRAMES);
 
@@ -139,7 +139,7 @@ class PcmQuantizerTest {
 
     @Test
     void bothLanesEqual_whenScalesEqual_16bit() {
-        PcmQuantizer q = new PcmQuantizer(16, 0);
+        PcmQuantizer q = new PcmQuantizer(16, 0, 0);
         byte[] buf = new byte[FRAMES * 2 * 2];
         q.encode(sine(), buf, FRAMES);
 
@@ -152,7 +152,7 @@ class PcmQuantizerTest {
 
     @Test
     void gateLeft_zeroesRightSlot_16bit() {
-        PcmQuantizer q = new PcmQuantizer(16, 0);
+        PcmQuantizer q = new PcmQuantizer(16, 0, 0);
         q.setOutputChannels(OutputChannels.LEFT);
         byte[] buf = new byte[FRAMES * 2 * 2];
         q.encode(sine(), buf, FRAMES);
@@ -173,7 +173,7 @@ class PcmQuantizerTest {
 
     @Test
     void gateRight_zeroesLeftSlot_16bit() {
-        PcmQuantizer q = new PcmQuantizer(16, 0);
+        PcmQuantizer q = new PcmQuantizer(16, 0, 0);
         q.setOutputChannels(OutputChannels.RIGHT);
         byte[] buf = new byte[FRAMES * 2 * 2];
         q.encode(sine(), buf, FRAMES);
@@ -193,7 +193,7 @@ class PcmQuantizerTest {
 
     @Test
     void gateLeft_zeroesRightSlot_8bit() {
-        PcmQuantizer q = new PcmQuantizer(8, 0);
+        PcmQuantizer q = new PcmQuantizer(8, 0, 0);
         q.setOutputChannels(OutputChannels.LEFT);
         byte[] buf = new byte[FRAMES * 2];
         q.encode(sine(), buf, FRAMES);
@@ -210,7 +210,7 @@ class PcmQuantizerTest {
         // The right lane commanded at twice the left's amplitude against the
         // same full scale: the right slot is twice the left slot (up to
         // clamping), the left slot is unchanged.
-        PcmQuantizer q = new PcmQuantizer(16, 0);
+        PcmQuantizer q = new PcmQuantizer(16, 0, 0);
         SignalGenerator gen = sine();
         gen.setAmplitudesVrms(VRMS, 2.0 * VRMS);
         byte[] buf = new byte[FRAMES * 2 * 2];
@@ -240,7 +240,7 @@ class PcmQuantizerTest {
     void rightLaneOverFullScale_clampsWithoutOverflow_16bit() {
         // A right amplitude far above the full scale drives the right lane past
         // it; it must clamp to ±(2^15−1), never wrap to a negative code.
-        PcmQuantizer q = new PcmQuantizer(16, 0);
+        PcmQuantizer q = new PcmQuantizer(16, 0, 0);
         SignalGenerator gen = sine();
         gen.setAmplitudesVrms(VRMS, 100.0 * VRMS);
         byte[] buf = new byte[FRAMES * 2 * 2];

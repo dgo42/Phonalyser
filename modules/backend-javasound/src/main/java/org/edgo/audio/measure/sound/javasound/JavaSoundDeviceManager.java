@@ -517,8 +517,10 @@ public final class JavaSoundDeviceManager extends AbstractLocalDeviceManager {
                 sampleRate, bitDepth, alsaVolumes);
     }
 
-    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
-        return new JavaSoundGenerator(sampleRate, bitDepth, ditherBits, device.name(), this);
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight) {
+        return new JavaSoundGenerator(sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight,
+                device.name(), this);
     }
 
     /**

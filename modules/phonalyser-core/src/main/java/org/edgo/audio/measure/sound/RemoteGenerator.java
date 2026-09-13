@@ -84,8 +84,8 @@ public interface RemoteGenerator extends GeneratorControls {
      *  @throws IllegalStateException when the far end refuses, with the reason
      *          in the message - a bench that will not give up its DAC is
      *          something the operator has to be told, not a silent no-op */
-    int openGenerator(DeviceRef device, int sampleRate, int bitDepth, double ditherBits,
-            OutputChannels channels);
+    int openGenerator(DeviceRef device, int sampleRate, int bitDepth, double ditherBitsLeft,
+            double ditherBitsRight, OutputChannels channels);
 
     /**
      * Whether this object holds an open generator session on the far end.
@@ -111,16 +111,17 @@ public interface RemoteGenerator extends GeneratorControls {
     /* -------------------- what only a far-away lane needs told -------------------- */
 
     /**
-     * The TPDF dither depth in bits, live-applied to the far end's quantizer.
+     * The two lanes' TPDF dither depths in bits, live-applied to the far end's
+     * quantizer.
      *
      * <p>Not part of {@link GeneratorControls}: locally dither is a
      * playback-line setting, pushed to the quantizer rather than to the
      * generator - and on a remote bench that quantizer is the far end's.
-     * {@link #openGenerator} carries the initial depth; this is the live half,
+     * {@link #openGenerator} carries the initial depths; this is the live half,
      * so the operator's dither edit reaches the tone that is playing instead of
      * the next open.
      */
-    void setDitherBits(double bits);
+    void setDitherBits(double leftBits, double rightBits);
 
     /**
      * The silence a sweep emits BEFORE its first chirp sample, in samples of the

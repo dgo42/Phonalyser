@@ -42,7 +42,9 @@ import org.edgo.audio.measure.generator.SignalGenerator;
  * one lane to the other.  This is the stereo-interleave seam for the live path,
  * and it owns the Left/Right/Both output gate ({@link #setOutputChannels}),
  * which silences the un-selected lane(s).  Dither is drawn per lane, so the two
- * lanes' dither is uncorrelated.
+ * lanes' dither is uncorrelated, and each lane has its own depth: a dither
+ * entered as a level (dBV) resolves to a different number of bits on each
+ * lane once the two lanes' full scales differ.
  *
  * <h2>Threading</h2>
  * <p>{@link #encode} is called from a single render thread at a time (the
@@ -60,10 +62,13 @@ public final class PcmQuantizer {
     private final int bitDepth;
     private final int bytesPerSample;
     private final int bytesPerFrame;
-    /** TPDF dither depth in bits (may be fractional); 0 = off.  Live-tunable
-     *  from the UI. */
+    /** The LEFT lane's TPDF dither depth in bits (may be fractional); 0 = off.
+     *  Live-tunable from the UI. */
     @Getter
-    private volatile double ditherBits;
+    private volatile double ditherBitsLeft;
+    /** The RIGHT lane's TPDF dither depth in bits. */
+    @Getter
+    private volatile double ditherBitsRight;
     /** Output-lane gate; the un-selected lane(s) are written as digital silence.
      *  {@link OutputChannels#BOTH} is the default / pre-feature behaviour. */
     @Setter
@@ -76,9 +81,10 @@ public final class PcmQuantizer {
      *  hot path allocates nothing. */
     private final double[] frame = new double[CHANNELS];
 
-    public PcmQuantizer(int bitDepth, double ditherBits) {
-        this.bitDepth       = bitDepth;
-        this.ditherBits     = Math.max(0.0, ditherBits);
+    public PcmQuantizer(int bitDepth, double ditherBitsLeft, double ditherBitsRight) {
+        this.bitDepth        = bitDepth;
+        this.ditherBitsLeft  = Math.max(0.0, ditherBitsLeft);
+        this.ditherBitsRight = Math.max(0.0, ditherBitsRight);
         // Rounded UP: a depth that is not a whole number of bytes rides
         // right-aligned in the next larger container (20 bits in 3 bytes,
         // S20_3LE-style).  Exact division for 16 / 24 / 32.
@@ -86,9 +92,11 @@ public final class PcmQuantizer {
         this.bytesPerFrame  = bytesPerSample * CHANNELS;
     }
 
-    /** Live-applies the dither bit count (may be fractional; clamped to ≥ 0). */
-    public void setDitherBits(double bits) {
-        this.ditherBits = Math.max(0.0, bits);
+    /** Live-applies the two lanes' dither bit counts (may be fractional;
+     *  clamped to ≥ 0). */
+    public void setDitherBits(double leftBits, double rightBits) {
+        this.ditherBitsLeft  = Math.max(0.0, leftBits);
+        this.ditherBitsRight = Math.max(0.0, rightBits);
     }
 
     /**
@@ -99,7 +107,7 @@ public final class PcmQuantizer {
      */
     public void encode(SignalGenerator gen, byte[] buf, int frames) {
         // Hoist the volatile gate once per block - a live change lands on the
-        // next call.  ditherBits stays a per-sample read inside tpdfNoise().
+        // next call.  The dither depths stay per-sample reads inside tpdfNoise().
         OutputChannels gate  = outputChannels;
         boolean        wantL = gate != OutputChannels.RIGHT;
         boolean        wantR = gate != OutputChannels.LEFT;
@@ -109,8 +117,8 @@ public final class PcmQuantizer {
             // lines/streams in signed formats.
             for (int i = 0; i < frames; i++) {
                 gen.nextFrame(lanes);
-                double left   = clamp(lanes[0] + tpdfNoise());
-                double right  = clamp(lanes[1] + tpdfNoise());
+                double left   = clamp(lanes[0] + tpdfNoise(ditherBitsLeft));
+                double right  = clamp(lanes[1] + tpdfNoise(ditherBitsRight));
                 int    offset = i * bytesPerFrame;
                 buf[offset]     = wantL ? (byte) Math.round(left * 127.0) : 0;  // left
                 buf[offset + 1] = wantR ? (byte) Math.round(right * 127.0) : 0; // right
@@ -119,8 +127,8 @@ public final class PcmQuantizer {
             long maxVal = (1L << (bitDepth - 1)) - 1;
             for (int i = 0; i < frames; i++) {
                 gen.nextFrame(lanes);
-                double left   = clamp(lanes[0] + tpdfNoise());
-                double right  = clamp(lanes[1] + tpdfNoise());
+                double left   = clamp(lanes[0] + tpdfNoise(ditherBitsLeft));
+                double right  = clamp(lanes[1] + tpdfNoise(ditherBitsRight));
                 long   pcmL   = wantL ? (long) Math.round(left * maxVal) : 0L;
                 long   pcmR   = wantR ? (long) Math.round(right * maxVal) : 0L;
                 int    offset = i * bytesPerFrame;
@@ -132,8 +140,10 @@ public final class PcmQuantizer {
         }
     }
 
-    private double tpdfNoise() {
-        double bits = ditherBits;   // single read - a live change can't shift by (0 − 1)
+    /** One lane's TPDF sample at {@code bits} depth - the volatile depth is
+     *  read ONCE by the caller per sample, so a live change can never shift a
+     *  sample by (0 − 1). */
+    private double tpdfNoise(double bits) {
         if (bits <= 0.0) return 0.0;
         // Math.pow(2, bits−1) equals the old 1L<<(bits−1) for whole bits, and
         // interpolates the ±1 LSB amplitude continuously for a fractional depth.

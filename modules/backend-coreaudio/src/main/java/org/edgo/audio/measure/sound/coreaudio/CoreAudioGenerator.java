@@ -42,8 +42,9 @@ public class CoreAudioGenerator extends AbstractPortAudioPlayback {
     private final CoreAudioHal hal;
 
     public CoreAudioGenerator(CoreAudioDeviceManager.CoreAudioDeviceRef device, int sampleRate,
-            int bitDepth, double ditherBits, CoreAudioHal hal) {
-        super(device.paDeviceIndex(), device.name(), "CoreAudio", sampleRate, bitDepth, ditherBits);
+            int bitDepth, double ditherBitsLeft, double ditherBitsRight, CoreAudioHal hal) {
+        super(device.paDeviceIndex(), device.name(), "CoreAudio", sampleRate, bitDepth,
+                ditherBitsLeft, ditherBitsRight);
         this.deviceName = device.name();
         this.hal = hal;
     }

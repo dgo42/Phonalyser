@@ -75,13 +75,14 @@ public class WasapiGenerator implements AudioPlayback {
 
     public WasapiGenerator(WasapiDeviceManager devices,
                            WasapiDeviceManager.WasapiDeviceRef device,
-                           int sampleRate, int bitDepth, double ditherBits) {
+                           int sampleRate, int bitDepth, double ditherBitsLeft,
+                           double ditherBitsRight) {
         this.devices        = devices;
         this.device         = device;
         this.sampleRate     = sampleRate;
         this.bitDepth       = bitDepth;
         this.bytesPerFrame  = (bitDepth / 8) * CHANNELS;
-        this.quantizer      = new PcmQuantizer(bitDepth, ditherBits);
+        this.quantizer      = new PcmQuantizer(bitDepth, ditherBitsLeft, ditherBitsRight);
     }
 
     @Override
@@ -139,7 +140,10 @@ public class WasapiGenerator implements AudioPlayback {
             log.info("HW buffer               : {} frames ({} ms)",
                     bufferFrames,
                     bufferFrames * 1000 / sampleRate);
-            if (quantizer.getDitherBits() > 0) log.info("Dithering               : TPDF {} bit", quantizer.getDitherBits());
+            if (quantizer.getDitherBitsLeft() > 0 || quantizer.getDitherBitsRight() > 0) {
+                log.info("Dithering               : TPDF {} / {} bit",
+                        quantizer.getDitherBitsLeft(), quantizer.getDitherBitsRight());
+            }
         } catch (RuntimeException ex) {
             closeQuietly();
             throw ex;
@@ -482,8 +486,8 @@ public class WasapiGenerator implements AudioPlayback {
     }
 
     @Override
-    public void setDitherBits(double bits) {
-        quantizer.setDitherBits(bits);
+    public void setDitherBits(double leftBits, double rightBits) {
+        quantizer.setDitherBits(leftBits, rightBits);
     }
 
     @Override

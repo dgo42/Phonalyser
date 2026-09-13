@@ -74,9 +74,10 @@ public final class Qa40xGenerator implements AudioPlayback,
     /** Output-lane gate, honoured live in {@link #nextFrames} (default BOTH). */
     @Setter
     private volatile OutputChannels outputChannels = OutputChannels.BOTH;
-    /** TPDF dither depth in bits (may be fractional); 0 = off.  Honoured live
-     *  in {@link #nextFrames}. */
-    private volatile double ditherBits;
+    /** The two lanes' TPDF dither depths in bits (may be fractional); 0 = off.
+     *  Honoured live in {@link #nextFrames}, each lane its own. */
+    private volatile double ditherBitsLeft;
+    private volatile double ditherBitsRight;
     private volatile boolean attached;
     /** Why the lane ended, or null while it is healthy - written by the engine
      *  on its USB event thread, read by the play thread that has to fail. */
@@ -85,10 +86,12 @@ public final class Qa40xGenerator implements AudioPlayback,
      *  render-thread rng); one shared across threads would be a data race. */
     private final SplittableRandom rng = new SplittableRandom();
 
-    Qa40xGenerator(Qa40xDeviceManager manager, int sampleRate, double ditherBits) {
-        this.manager    = manager;
-        this.sampleRate = sampleRate;
-        this.ditherBits = Math.max(0.0, ditherBits);
+    Qa40xGenerator(Qa40xDeviceManager manager, int sampleRate, double ditherBitsLeft,
+            double ditherBitsRight) {
+        this.manager         = manager;
+        this.sampleRate      = sampleRate;
+        this.ditherBitsLeft  = Math.max(0.0, ditherBitsLeft);
+        this.ditherBitsRight = Math.max(0.0, ditherBitsRight);
     }
 
     @Override
@@ -158,8 +161,9 @@ public final class Qa40xGenerator implements AudioPlayback,
     }
 
     @Override
-    public void setDitherBits(double bits) {
-        this.ditherBits = Math.max(0.0, bits);
+    public void setDitherBits(double leftBits, double rightBits) {
+        this.ditherBitsLeft  = Math.max(0.0, leftBits);
+        this.ditherBitsRight = Math.max(0.0, rightBits);
     }
 
     @Override
@@ -232,8 +236,8 @@ public final class Qa40xGenerator implements AudioPlayback,
             double right = 0.0;
             if (gen != null) {
                 gen.nextFrame(lanes);
-                left  = lanes[0] + tpdfNoise();
-                right = lanes[1] + tpdfNoise();
+                left  = lanes[0] + tpdfNoise(ditherBitsLeft);
+                right = lanes[1] + tpdfNoise(ditherBitsRight);
             }
             destination[CHANNELS * f]     = wantL ? toInt32(left) : 0;
             destination[CHANNELS * f + 1] = wantR ? toInt32(right) : 0;
@@ -255,10 +259,11 @@ public final class Qa40xGenerator implements AudioPlayback,
     /**
      * TPDF dither at the selected target bit depth - mirrors {@code
      * PcmQuantizer.tpdfNoise}, the dither the byte-PCM backends apply.  ±1 LSB
-     * at {@code ditherBits} resolution; 0 = off.
+     * at {@code bits} resolution - the lane's own depth, read once by the
+     * caller per sample so a live change can't shift a sample by (0 − 1); 0 =
+     * off.
      */
-    private double tpdfNoise() {
-        double bits = ditherBits;   // single read - a live change can't shift by (0 − 1)
+    private double tpdfNoise(double bits) {
         if (bits <= 0.0) return 0.0;
         // Math.pow(2, bits−1) equals the old 1L<<(bits−1) for whole bits, and
         // interpolates the ±1 LSB amplitude continuously for a fractional depth.

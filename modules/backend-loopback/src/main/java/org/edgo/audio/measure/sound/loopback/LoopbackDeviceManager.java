@@ -102,8 +102,9 @@ public final class LoopbackDeviceManager extends AbstractLocalDeviceManager {
      *  configured {@code ditherBits} reaches the lane; zero falls back to the
      *  last-bit default - see {@link LoopbackPlayback}. */
     @Override
-    public AudioPlayback openPlayback(DeviceRef ref, int sampleRate, int bitDepth, double ditherBits) {
-        return new LoopbackPlayback(this, sampleRate, bitDepth, ditherBits);
+    public AudioPlayback openPlayback(DeviceRef ref, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight) {
+        return new LoopbackPlayback(this, sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight);
     }
 
     /**

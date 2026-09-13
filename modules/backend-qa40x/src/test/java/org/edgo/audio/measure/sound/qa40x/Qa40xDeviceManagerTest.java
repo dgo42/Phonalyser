@@ -426,7 +426,7 @@ class Qa40xDeviceManagerTest {
         Qa40xCalibration cal = Qa40xCalibration.fromBlob(syntheticBlob());
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(new FakeTransport(), INSTANT);
         prefs.putAudioDeviceProfile(mgr.buildProfile(CARD_NAME, cal, null));
-        DeviceCalibration before = prefs.deviceCalibration(CARD_NAME, true);
+        DeviceCalibration before = prefs.findAudioDeviceProfile(CARD_NAME).getInput().calibration();
         assertEquals(Qa40xLevels.inputFullScaleRmsVolts(DEFAULT_INPUT_DBV,
                 cal.adcLinearFactor(DEFAULT_INPUT_DBV, false)), before.fsRmsLeft(), TOL,
                 "the card comes up on its default input range");
@@ -436,7 +436,7 @@ class Qa40xDeviceManagerTest {
         assertEquals(MOVED_INPUT_DBV + " dBV",
                 prefs.findAudioDeviceProfile(CARD_NAME).getInput().getActiveRange(),
                 "the attenuator moved, so the card's active row moves with it");
-        DeviceCalibration after = prefs.deviceCalibration(CARD_NAME, true);
+        DeviceCalibration after = prefs.findAudioDeviceProfile(CARD_NAME).getInput().calibration();
         assertEquals(Qa40xLevels.inputFullScaleRmsVolts(MOVED_INPUT_DBV,
                 cal.adcLinearFactor(MOVED_INPUT_DBV, false)), after.fsRmsLeft(), TOL,
                 "and the full scale the store answers is the NEW range's");
@@ -542,7 +542,7 @@ class Qa40xDeviceManagerTest {
 
         Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(
                 new Qa40xDeviceManager.Qa40xDeviceRef(0, "QA403", Qa40xModel.QA403, QA403_IDENTITY),
-                RATE_HZ, BITS, 0);
+                RATE_HZ, BITS, 0, 0);
         gen.open();
         SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 0.1, 0.1, 1.0, 1.0);
         AtomicBoolean stop = new AtomicBoolean(false);
@@ -628,7 +628,7 @@ class Qa40xDeviceManagerTest {
         AudioCapture rec = mgr.openCapture(null, RATE_HZ, BITS);
         rec.open();
         rec.startRecording();
-        Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, BITS, 0);
+        Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, BITS, 0, 0);
         gen.open();
         SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 0.1, 0.1, 1.0, 1.0);
 
@@ -1040,7 +1040,7 @@ class Qa40xDeviceManagerTest {
     void aDetachThatFaultedLeavesTheLaneForTheOwnersRetry() throws Exception {
         FakeTransport fake = new FakeTransport();
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(fake, INSTANT);
-        Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, BITS, 0);
+        Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, BITS, 0, 0);
         gen.open();
         SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 0.1, 0.1, 1.0, 1.0);
         AtomicBoolean stop = new AtomicBoolean();
@@ -1096,7 +1096,7 @@ class Qa40xDeviceManagerTest {
         // 0.707·MAXINT - this pins the peak convention (doc §6 / Qa40xLevels).
         FakeTransport fake = new FakeTransport();
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(fake, INSTANT);
-        Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, BITS, 0);
+        Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, BITS, 0, 0);
         gen.open();
 
         SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 1.0, 1.0,

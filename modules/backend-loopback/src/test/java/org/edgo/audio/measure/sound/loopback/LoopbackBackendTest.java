@@ -36,6 +36,7 @@ import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManagerProvider;
@@ -153,33 +154,56 @@ class LoopbackBackendTest {
     /**
      * The local half of the calibration rule, shared by every backend whose
      * devices are plugged into this machine: a measured channel goes into THIS
-     * machine's cards (the card is created when none recognises the device) and
-     * onto the live scalars the dBV axis reads, in one step - the store write IS
-     * the success, there is no bench to wait for.  One channel per write, and
-     * the second write leaves the first channel where the first write put it.
+     * machine's cards (the card is created when none recognises the device), and
+     * the manager answers it from there to every consumer from then on - the
+     * store write IS the success, there is no bench to wait for.  One channel per
+     * write, and the second write leaves the first channel where the first write
+     * put it.
      *
      * <p>On the one process-wide store: the test run points {@code app.data.dir}
      * at the module's build directory (surefire, parent POM), so the card lands
      * in that directory's own {@code devices.yaml} and never in an installation's.
      */
     @Test
-    @DisplayName("a calibration lands in this machine's cards and on the scalars at once")
-    void aCalibrationLandsInTheLocalCardsAndOnTheScalars() {
-        Preferences prefs = Preferences.instance();
+    @DisplayName("a calibration lands in this machine's cards and is read back from them")
+    void aCalibrationLandsInTheLocalCardsAndIsReadBackFromThem() {
         LoopbackDeviceManager manager = new LoopbackDeviceManager();
         DeviceRef device = manager.listInputDevices().get(0);
 
         assertTrue(manager.storeCalibration(device, true, Channel.L, FS_RMS_LEFT));
         assertTrue(manager.storeCalibration(device, true, Channel.R, FS_RMS_RIGHT));
 
-        DeviceCalibration stored = prefs.deviceCalibration(device.name(), true);
+        DeviceCalibration stored = manager.calibration(device, true);
         assertNotNull(stored, "the local calibrate flow created the card it needed");
         assertEquals(FS_RMS_LEFT, stored.fsRmsLeft(), EPS);
         assertEquals(FS_RMS_RIGHT, stored.fsRmsRight(), EPS,
                 "the second write touched only its own channel");
-        assertEquals(FS_RMS_LEFT, prefs.getAdcFsVoltageRms(Channel.L), EPS,
-                "and the scalars moved with it");
-        assertEquals(FS_RMS_RIGHT, prefs.getAdcFsVoltageRms(Channel.R), EPS);
+        assertEquals(FS_RMS_LEFT, stored.fsRms(Channel.L), EPS,
+                "and the pair every consumer reads is the one just written");
+        assertEquals(FS_RMS_RIGHT, stored.fsRms(Channel.R), EPS);
+    }
+
+    /** The store guard: an endpoint whose calibration is the DEVICE's own - a
+     *  QA40x reading its EEPROM - refuses the write and keeps its row. */
+    @Test
+    @DisplayName("a device whose calibration is its own refuses the write")
+    void aDeviceProvidedEndpointRefusesTheWrite() {
+        Preferences prefs = Preferences.instance();
+        LoopbackDeviceManager manager = new LoopbackDeviceManager();
+        DeviceRef device = manager.listInputDevices().get(0);
+        AudioDeviceProfile card = prefs.profileFor(device.name(), true);
+        card.getInput().storeFullScale(Channel.L, FS_RMS_LEFT);
+        card.getInput().setCalibrationFromDevice(true);
+        prefs.putAudioDeviceProfile(card);
+        try {
+            assertFalse(manager.storeCalibration(device, true, Channel.L, 9.0),
+                    "the analyzer's own values are not a caller's to set");
+            assertEquals(FS_RMS_LEFT, manager.calibration(device, true).fsRmsLeft(), EPS,
+                    "and the row is left exactly as the device said");
+        } finally {
+            card.getInput().setCalibrationFromDevice(false);
+            prefs.putAudioDeviceProfile(card);
+        }
     }
 
     @Test
@@ -217,7 +241,7 @@ class LoopbackBackendTest {
      *  before the lane attached. */
     private double ditheredSilenceRmsLsb(LoopbackDeviceManager manager, DeviceRef device,
             int depth, double ditherBits) throws Exception {
-        AudioPlayback playback = manager.openPlayback(device, RATE, depth, ditherBits);
+        AudioPlayback playback = manager.openPlayback(device, RATE, depth, ditherBits, ditherBits);
         playback.open();
         AtomicBoolean stop = new AtomicBoolean(false);
         SignalGenerator silent = new SignalGenerator(GenSignalForm.SINE, 1000.0, RATE, 0.0, 0.0, 1.0, 1.0);
@@ -245,7 +269,7 @@ class LoopbackBackendTest {
         LoopbackDeviceManager manager = new LoopbackDeviceManager();
         DeviceRef device = manager.listInputDevices().get(0);
         int depth = 24;
-        AudioPlayback playback = manager.openPlayback(device, RATE, depth, 0.0);
+        AudioPlayback playback = manager.openPlayback(device, RATE, depth, 0.0, 0.0);
         playback.open();
         AtomicBoolean stop = new AtomicBoolean(false);
         SignalGenerator gen = new SignalGenerator(GenSignalForm.SINE, 1000.0, RATE, 0.5, 0.5, 1.0, 1.0);
@@ -386,7 +410,7 @@ class LoopbackBackendTest {
         LoopbackDeviceManager manager = new LoopbackDeviceManager();
         DeviceRef device = manager.listInputDevices().get(0);
         int depth = 24;
-        LoopbackPlayback playback = (LoopbackPlayback) manager.openPlayback(device, RATE, depth, 0.0);
+        LoopbackPlayback playback = (LoopbackPlayback) manager.openPlayback(device, RATE, depth, 0.0, 0.0);
         playback.open();
         // The window between a detach and the lane's own bookkeeping: the session
         // still pulls this lane, and it has no generator to pull from.
@@ -456,7 +480,7 @@ class LoopbackBackendTest {
 
         // A file recorded at another rate: its playback lane opens at 96 kHz and the
         // WHOLE session follows it, because the loop has exactly one clock to move.
-        AudioPlayback playback = manager.openPlayback(device, MOVED_RATE, 24, 0.0);
+        AudioPlayback playback = manager.openPlayback(device, MOVED_RATE, 24, 0.0, 0.0);
         playback.open();
         assertEquals(MOVED_RATE, engine.getSampleRateHz(), "the session moved to the lane's rate");
         assertTrue(engine.isStreaming(), "the running capture survived the move");

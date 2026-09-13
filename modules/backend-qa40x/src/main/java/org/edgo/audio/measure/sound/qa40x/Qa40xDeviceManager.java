@@ -31,6 +31,8 @@ import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -418,8 +420,9 @@ public class Qa40xDeviceManager extends AbstractLocalDeviceManager implements Qa
 
     /** Opens a playback client bound to this manager's one duplex engine. */
     @Override
-    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
-        return new Qa40xGenerator(this, sampleRate, ditherBits);
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight) {
+        return new Qa40xGenerator(this, sampleRate, ditherBitsLeft, ditherBitsRight);
     }
 
     /**
@@ -735,6 +738,15 @@ public class Qa40xDeviceManager extends AbstractLocalDeviceManager implements Qa
         DeviceEndpointConfig endpoint = input ? card.getInput() : card.getOutput();
         endpoint.setActiveRange(Qa40xProtocol.rangeLabel(dbv));
         prefs.saveDevices();
+        // The row moved, so the full scale every consumer reads out of it did:
+        // the same announcement a stored calibration makes, for this direction
+        // of the analyzer on the bus.
+        List<DeviceRef> attached = listDevices();
+        if (!attached.isEmpty()) {
+            MessageBus.instance().publish(input
+                    ? Events.ADC_CALIBRATION_CHANGED : Events.DAC_CALIBRATION_CHANGED,
+                    attached.get(0));
+        }
     }
 
     /**

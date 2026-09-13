@@ -116,13 +116,14 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
     };
 
     protected AbstractPortAudioPlayback(int paDeviceIndex, String deviceName, String backendLabel,
-                                        int sampleRate, int bitDepth, double ditherBits) {
+                                        int sampleRate, int bitDepth,
+                                        double ditherBitsLeft, double ditherBitsRight) {
         this.paDeviceIndex = paDeviceIndex;
         this.deviceName    = deviceName;
         this.backendLabel  = backendLabel;
         this.sampleRate    = sampleRate;
         this.bitDepth      = bitDepth;
-        this.quantizer     = new PcmQuantizer(bitDepth, ditherBits);
+        this.quantizer     = new PcmQuantizer(bitDepth, ditherBitsLeft, ditherBitsRight);
         this.bytesPerFrame = (bitDepth / 8) * CHANNELS;
     }
 
@@ -170,7 +171,10 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
         log.info("Output rate/bits   : {} Hz / {} bit", sampleRate, bitDepth);
         log.info("Suggested latency  : {} ms (host-picked buffer size)",
                 Math.round(suggestedLatency * 1000));
-        if (quantizer.getDitherBits() > 0) log.info("Dithering          : TPDF {} bit", quantizer.getDitherBits());
+        if (quantizer.getDitherBitsLeft() > 0 || quantizer.getDitherBitsRight() > 0) {
+            log.info("Dithering          : TPDF {} / {} bit", quantizer.getDitherBitsLeft(),
+                    quantizer.getDitherBitsRight());
+        }
     }
 
     @Override
@@ -377,8 +381,8 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
     }
 
     @Override
-    public void setDitherBits(double bits) {
-        quantizer.setDitherBits(bits);
+    public void setDitherBits(double leftBits, double rightBits) {
+        quantizer.setDitherBits(leftBits, rightBits);
     }
 
     @Override

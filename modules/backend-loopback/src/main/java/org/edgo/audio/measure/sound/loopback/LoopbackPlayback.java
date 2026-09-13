@@ -66,11 +66,13 @@ public final class LoopbackPlayback implements AudioPlayback,
     private volatile SignalGenerator currentGenerator;
     private volatile boolean attached;
 
-    LoopbackPlayback(LoopbackDeviceManager manager, int sampleRate, int bitDepth, double ditherBits) {
+    LoopbackPlayback(LoopbackDeviceManager manager, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight) {
         this.manager    = manager;
         this.sampleRate = sampleRate;
         this.bitDepth   = bitDepth;
-        this.quantizer  = new PcmQuantizer(bitDepth, effectiveDither(ditherBits));
+        this.quantizer  = new PcmQuantizer(bitDepth, effectiveDither(ditherBitsLeft),
+                effectiveDither(ditherBitsRight));
     }
 
     /** A configured depth wins; zero (dither off) becomes the quantiser's
@@ -80,8 +82,8 @@ public final class LoopbackPlayback implements AudioPlayback,
     }
 
     @Override
-    public void setDitherBits(double bits) {
-        quantizer.setDitherBits(effectiveDither(bits));
+    public void setDitherBits(double leftBits, double rightBits) {
+        quantizer.setDitherBits(effectiveDither(leftBits), effectiveDither(rightBits));
     }
 
     @Override

@@ -41,7 +41,6 @@ import java.util.concurrent.TimeUnit;
 
 import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.common.AppPaths;
-import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.AudioBackendType;
@@ -120,12 +119,9 @@ public final class Preferences {
      *  this many milliseconds after the last change. */
     private static final long SAVE_COALESCE_MS = 250;
 
-    /** Factory-default ADC full-scale RMS voltage, used until the user calibrates. */
+    /** The full-scale RMS voltage a seeded range row starts at, until the user
+     *  calibrates it. */
     private static final double DEFAULT_ADC_FS_VRMS = 1.0;
-    /** The DAC full scale an uncalibrated installation starts at: unit RMS, held
-     *  in the PEAK amplitude form this field carries, until a calibration
-     *  replaces it.  The same figure the web port seeds. */
-    private static final double DEFAULT_DAC_FS_AMPL = 1.0 * Constants.SQRT2;
 
     /** Sentinel "unset" value for the rate-dependent FreqResp defaults
      *  (stop = Nyquist, points = FS/2).  A fresh install with no saved value
@@ -309,32 +305,8 @@ public final class Preferences {
      *  window comes back with the app; the distribution itself does not, since it
      *  accumulates from the live capture. */
     private final Property<Boolean> oscShowHistogram = bound(false);
-    /** ADC full-scale RMS voltage - calibration constant used to translate normalised samples into volts.
-     *  This scalar is the LEFT channel value, the LINKED-mode value for both channels, and the legacy
-     *  fallback read by every channel-less consumer.
-     *
-     *  <p>RUNTIME-ONLY since 1.2: the selected device's card owns the
-     *  calibration, and this scalar is only the fallback for a device whose card carries none.
-     *  It is LOADED from a pre-1.2 {@code preferences.yaml} once and never written back - see
-     *  {@link #toMap} for why saving it would leak one card's calibration onto the next
-     *  uncalibrated device. */
-    private final Property<Double> adcFsVoltageRms = bound(DEFAULT_ADC_FS_VRMS);
-    /** RIGHT-channel ADC full-scale RMS voltage - the per-channel sibling of {@link #adcFsVoltageRms}.
-     *  Equals the left value in LINKED mode (and for old preference files that lack the key); an
-     *  INDEPENDENT card resolves it from its right active range. */
-    private final Property<Double> adcFsVoltageRmsRight = bound(DEFAULT_ADC_FS_VRMS);
-    /** Cached dBV↔dBFS offset (= {@code 20·log10(adcFsVoltageRms)}).  Initialised from the
-     *  default and recomputed whenever the ADC full-scale is set / loaded, so it is valid even
-     *  when no {@code preferences.yaml} exists (or lacks the key) and in detached dialog copies;
-     *  {@code volatile} so the off-thread FFT consumers see the update.
-     *  {@code dBV = dBFS + dbvOffsetDb}.  This is the LEFT / LINKED / fallback offset. */
-    @Getter
-    private volatile double dbvOffsetDb = 20.0 * Math.log10(DEFAULT_ADC_FS_VRMS);
-    /** Cached RIGHT-channel dBV↔dBFS offset (= {@code 20·log10(adcFsVoltageRmsRight)}) - the
-     *  per-channel sibling of {@link #dbvOffsetDb}, recomputed alongside it. */
-    private volatile double dbvOffsetDbRight = 20.0 * Math.log10(DEFAULT_ADC_FS_VRMS);
     /** Cached √(bin bandwidth) of the live FFT config (= {@code √(inputSampleRate /
-     *  fftLength)}) - the V -> V/√Hz divisor in {@link #convertFromDbFs}.  Recomputed via
+     *  fftLength)}) - the V -> V/√Hz divisor of the FFT view's unit conversion.  Recomputed via
      *  the {@code fftLength} / {@code backend} property listeners (bidi-bound GUI edits
      *  bypass the setters) and after load / dialog-apply (the per-backend sample rate
      *  is a plain POJO write that fires no property event); {@code volatile} so
@@ -343,10 +315,11 @@ public final class Preferences {
     private volatile double binBwSqrt = 1.0;
     /** Cached live dBr reference level in dBFS - the DISPLAYED fundamental level of the
      *  current FFT spectrum, stamped by the FFT paint path.  A live measurement value,
-     *  NOT persisted; consulted by {@link #convertFromDbFs} for {@link MagnitudeUnit#DBR}
+     *  NOT persisted; consulted by the FFT view's unit conversion for {@link MagnitudeUnit#DBR}
      *  ({@code dBr = dBFS − fftDbrRefDbFs}, so the fundamental reads 0 dBr).  Defaults to 0
      *  (dBr ≡ dBFS) until a result stamps it; {@code volatile} so off-thread FFT consumers
      *  see the update. */
+    @Getter
     @Setter
     private volatile double fftDbrRefDbFs = 0.0;
     /** When {@code true}, {@link #save()} is a no-op.  Set by the CLI so a
@@ -366,24 +339,6 @@ public final class Preferences {
      *  save, and lets {@link #registerCustomPreferences} replay a late
      *  registrant's saved values. */
     private final Map<String, Object> customRaw = new LinkedHashMap<>();
-    /** LEFT-channel DAC full-scale PEAK amplitude voltage (= full-scale-sine RMS
-     *  × √2) - the value the left lane's amplitude scale divides by, so it is
-     *  kept in this amplitude form in memory (suited for the calculation).
-     *  Calibrated by the user via the "Calibrate DAC" button in the generator
-     *  pane.
-     *
-     *  <p>RUNTIME-ONLY since 1.2, exactly like {@link #adcFsVoltageRms}: the
-     *  card store holds the calibration and this scalar is the fallback for a
-     *  device with no card.  A pre-1.2 {@code dacFsVoltageRms} yaml entry seeds
-     *  BOTH lanes' scalars once, converted RMS->ampl at the {@link #fromMap}
-     *  boundary, and is never written back - see {@link #toMap}. */
-    private final Property<Double> dacFsVoltageAmplLeft = bound(DEFAULT_DAC_FS_AMPL);
-    /** RIGHT-channel DAC full-scale PEAK amplitude - the right lane's own value,
-     *  independent of the left: a MONO card gives both scalars the same value, a
-     *  LINKED card reads {@code fsLeft} / {@code fsRight} of the shared active
-     *  row, an INDEPENDENT card resolves it from its right active range.
-     *  Runtime-only like its left sibling. */
-    private final Property<Double> dacFsVoltageAmplRight = bound(DEFAULT_DAC_FS_AMPL);
 
     /** Path to the most recently chosen scope "Save to..." file (last N seconds of capture). */
     private final Property<String> oscSavePath   = bound(null);
@@ -418,7 +373,7 @@ public final class Preferences {
     /** Generator amplitude of the LEFT DAC lane AS ENTERED: the number the
      *  operator typed and the unit they typed it in ({@code v}, {@code dbv},
      *  {@code dbfs}), resolved to canonical V RMS at USE
-     *  ({@link #getGenAmplitudeVrmsLeft()}) against the lane's own full scale -
+     *  ({@code DeviceCalibration.amplitudeVrms}) against the lane's own full scale -
      *  so a unit that only means something against the calibration (dBFS)
      *  cannot be silently redefined by a backend, device or full-scale change
      *  under a value already stored.  ONE property, because a number and a unit
@@ -626,12 +581,11 @@ public final class Preferences {
      *  the user and from the UI.  A profile IS the physical soundcard;
      *  per-backend device-name strings are only aliases on it, and a well-known
      *  card also carries {@code match} recognition patterns.  Calibration
-     *  full-scale values live in each direction's range table.  The legacy global
-     *  {@code adcFsVoltageRms} / {@code dacFsVoltageAmplLeft} /
-     *  {@code dacFsVoltageAmplRight} scalars stay the read
-     *  fallback for a card with no profile entry; a new calibration write
-     *  auto-creates a profile via {@link #storeAdcCalibration} /
-     *  {@link #storeDacCalibration}.  Mutated via {@code synchronized}
+     *  full-scale values live in each direction's range table and nowhere
+     *  else: the device managers read them out of the profile
+     *  ({@link DeviceEndpointConfig#calibration()}) and write a measured one
+     *  into it, resolving the profile through {@link #profileFor}, which
+     *  creates one for a device no card recognises.  Mutated via {@code synchronized}
      *  {@link #putAudioDeviceProfile} / {@link #removeAudioDeviceProfile} + a
      *  direct {@link #saveDevices()} (preset style), so a structural change can't
      *  race a save iterating this list. */
@@ -1031,14 +985,6 @@ public final class Preferences {
         for (Map.Entry<String, BackendPrefs> e : perBackendSnapshot().entrySet()) {
             c.prefsFor(e.getKey()).copyFrom(e.getValue());
         }
-        // Seed the global full-scale scalars so the dialog's "New card..." seeds a
-        // range row from the CURRENT calibration (not the bound() defaults) -
-        // setters keep the detached copy's dbvOffsetDb consistent, and requestSave
-        // is inert while detached.
-        c.setAdcFsVoltageRms(adcFsVoltageRms.get());
-        c.setAdcFsVoltageRmsRight(adcFsVoltageRmsRight.get());
-        c.setDacFsVoltageAmplLeft(dacFsVoltageAmplLeft.get());
-        c.setDacFsVoltageAmplRight(dacFsVoltageAmplRight.get());
         // Deep-copy the per-card profiles so the dialog edits them freely.
         synchronized (audioDevices) {
             for (Map.Entry<String, AudioDeviceProfile> e : audioDevices.entrySet()) {
@@ -1781,63 +1727,6 @@ public final class Preferences {
     public void setOscShowHistogram(boolean v) { oscShowHistogram.set(v); }
     public Property<Boolean> oscShowHistogramProperty() { return oscShowHistogram; }
 
-    public double getAdcFsVoltageRms()         { return adcFsVoltageRms.get(); }
-    public void setAdcFsVoltageRms(double v)   {
-        if (!(v > 0.0)) {
-            if (log.isWarnEnabled()) {
-                log.warn("Rejecting invalid ADC full-scale {} Vrms - keeping {} Vrms", v, adcFsVoltageRms.get());
-            }
-            return;
-        }
-        adcFsVoltageRms.set(v);
-        dbvOffsetDb = dbvOffsetFor(v);
-    }
-    public Property<Double> adcFsVoltageRmsProperty() { return adcFsVoltageRms; }
-
-    public double getAdcFsVoltageRmsRight()       { return adcFsVoltageRmsRight.get(); }
-    public void setAdcFsVoltageRmsRight(double v) {
-        if (!(v > 0.0)) {
-            if (log.isWarnEnabled()) {
-                log.warn("Rejecting invalid RIGHT ADC full-scale {} Vrms - keeping {} Vrms", v, adcFsVoltageRmsRight.get());
-            }
-            return;
-        }
-        adcFsVoltageRmsRight.set(v);
-        dbvOffsetDbRight = dbvOffsetFor(v);
-    }
-    public Property<Double> adcFsVoltageRmsRightProperty() { return adcFsVoltageRmsRight; }
-
-    /** The ADC full-scale RMS voltage of {@code ch}: LEFT -> the {@link #adcFsVoltageRms} scalar
-     *  (also the LINKED / legacy value), RIGHT -> {@link #adcFsVoltageRmsRight}. */
-    public double getAdcFsVoltageRms(Channel ch) {
-        return ch == Channel.R ? adcFsVoltageRmsRight.get() : adcFsVoltageRms.get();
-    }
-
-    /** The ±full-scale PEAK volts of {@code ch} (= {@code fs(ch) · √2}) - the ±1.0 -> volts scale
-     *  every scope / measurement site derives inline today from the single scalar. */
-    public double getAdcPeakVolts(Channel ch) {
-        return getAdcFsVoltageRms(ch) * Constants.SQRT2;
-    }
-
-    /** The cached dBV↔dBFS offset of {@code ch}: LEFT -> {@link #dbvOffsetDb} (also the LINKED /
-     *  legacy value), RIGHT -> {@link #dbvOffsetDbRight}. */
-    public double getDbvOffsetDb(Channel ch) {
-        return ch == Channel.R ? dbvOffsetDbRight : dbvOffsetDb;
-    }
-
-    /** The dBV↔dBFS offset for a full-scale RMS voltage (= {@code 20·log10(fsVrms)}).  Shared by
-     *  the left / right setters and by {@link #fromMap}.  A non-positive (or NaN) full-scale would
-     *  put {@code -Infinity}/NaN into every dBV conversion, so it falls back to 0 dB (dBV ≡ dBFS). */
-    private double dbvOffsetFor(double fsVrms) {
-        if (!(fsVrms > 0.0)) {
-            if (log.isWarnEnabled()) {
-                log.warn("Invalid ADC full-scale {} Vrms - falling back to 0 dB dBV offset", fsVrms);
-            }
-            return 0.0;
-        }
-        return 20.0 * Math.log10(fsVrms);
-    }
-
     /** Recomputes the cached {@link #binBwSqrt} from the live capture config.  Hooked to
      *  the {@code fftLength} / {@code backend} property listeners and called after
      *  {@link #load()} / {@link #applyFromDialog} - see the field doc for why both are
@@ -1848,79 +1737,6 @@ public final class Preferences {
         binBwSqrt = (rate > 0 && len > 0) ? Math.sqrt((double) rate / len) : 1.0;
     }
 
-    /** Live-spectrum variant of {@link #convertFromDbFs(double, MagnitudeUnit, Double)}:
-     *  the V/√Hz scale comes from the cached live capture config. */
-    public double convertFromDbFs(double dbFs, MagnitudeUnit unit) {
-        return convertFromDbFs(dbFs, unit, (Double) null);
-    }
-
-    /**
-     * Converts an analyser dBFS magnitude into {@code unit} for display.  Pure
-     * cached-constant math, safe to call per bin in paint loops: dBV is a constant
-     * offset from dBFS ({@link #dbvOffsetDb}), V is the same value read linearly
-     * (0&nbsp;dBV = 1&nbsp;V), and V/√Hz additionally divides by √(bin bandwidth).
-     *
-     * @param binBwSqrt √(bin bandwidth in Hz) of the spectrum being converted -
-     *                  carried by file-loaded results ({@code FftResult#binBwSqrt});
-     *                  {@code null} uses the cached live config, which is bidi-bound
-     *                  and restarts the FFT on change, so it always matches the live
-     *                  measurement
-     */
-    public double convertFromDbFs(double dbFs, MagnitudeUnit unit, Double binBwSqrt) {
-        return convertFromDbFs(dbFs, unit, binBwSqrt, Channel.L);
-    }
-
-    /** Live-spectrum, channel-aware variant of {@link #convertFromDbFs(double, MagnitudeUnit, Double, Channel)}:
-     *  the V/√Hz scale comes from the cached live capture config. */
-    public double convertFromDbFs(double dbFs, MagnitudeUnit unit, Channel ch) {
-        return convertFromDbFs(dbFs, unit, null, ch);
-    }
-
-    /** Channel-aware {@link #convertFromDbFs(double, MagnitudeUnit, Double)}: the dBV offset
-     *  follows {@code ch} (LEFT / LINKED / legacy -> {@link #dbvOffsetDb}, RIGHT ->
-     *  {@link #dbvOffsetDbRight}), so the FFT absolute-dBV axis tracks the analysed channel. */
-    public double convertFromDbFs(double dbFs, MagnitudeUnit unit, Double binBwSqrt, Channel ch) {
-        double off = getDbvOffsetDb(ch);
-        switch (unit) {
-            case DBFS: return dbFs;
-            case DBR:  return dbFs - fftDbrRefDbFs;
-            case DBV:  return dbFs + off;
-            case V:         return Math.pow(10.0, (dbFs + off) / 20.0);
-            case V_SQRT_HZ: return Math.pow(10.0, (dbFs + off) / 20.0)
-                    / (binBwSqrt != null ? binBwSqrt : this.binBwSqrt);
-            default: return dbFs;
-        }
-    }
-
-    public double getDacFsVoltageAmplLeft()         { return dacFsVoltageAmplLeft.get(); }
-    public void setDacFsVoltageAmplLeft(double v)   {
-        if (!(v > 0.0)) {
-            if (log.isWarnEnabled()) {
-                log.warn("Rejecting invalid DAC full-scale {} V (ampl) - keeping {} V", v, dacFsVoltageAmplLeft.get());
-            }
-            return;
-        }
-        dacFsVoltageAmplLeft.set(v);
-    }
-    public Property<Double> dacFsVoltageAmplLeftProperty() { return dacFsVoltageAmplLeft; }
-
-    public double getDacFsVoltageAmplRight()       { return dacFsVoltageAmplRight.get(); }
-    public void setDacFsVoltageAmplRight(double v) {
-        if (!(v > 0.0)) {
-            if (log.isWarnEnabled()) {
-                log.warn("Rejecting invalid RIGHT DAC full-scale {} V (ampl) - keeping {} V", v, dacFsVoltageAmplRight.get());
-            }
-            return;
-        }
-        dacFsVoltageAmplRight.set(v);
-    }
-    public Property<Double> dacFsVoltageAmplRightProperty() { return dacFsVoltageAmplRight; }
-
-    /** The DAC full-scale PEAK amplitude of {@code ch} - {@link #dacFsVoltageAmplLeft}
-     *  or {@link #dacFsVoltageAmplRight}. */
-    public double getDacFsVoltageAmpl(Channel ch) {
-        return ch == Channel.R ? dacFsVoltageAmplRight.get() : dacFsVoltageAmplLeft.get();
-    }
 
     public String getOscSavePath()             { return oscSavePath.get(); }
     public void setOscSavePath(String v)       { oscSavePath.set(v); }
@@ -1978,40 +1794,21 @@ public final class Preferences {
         return new UnitValue(bits, UnitConversion.baseToken(UnitFamily.DITHER));
     }
 
-    /** Canonical V RMS of an entered amplitude, resolved against the LIVE DAC
-     *  peak full scale - so a recalibration moves what a dBFS entry means
-     *  instead of quietly changing what was entered. */
-    private double amplitudeVrms(UnitValue entered) {
-        return amplitudeVrms(entered, getDacFsVoltageAmplLeft());
-    }
-
-    /** {@link #amplitudeVrms(UnitValue)} against an explicit DAC peak full
-     *  scale - the lane's own, for a per-lane amplitude. */
-    private double amplitudeVrms(UnitValue entered, double fsAmpl) {
-        return UnitConversion.convert(UnitFamily.AMPLITUDE, entered.value(), entered.unit(),
-                UnitConversion.baseToken(UnitFamily.AMPLITUDE), fsAmpl);
-    }
-
-    /** Dither depth in bits of an entered value, resolved against the live DAC
-     *  peak full scale (a dBV dither is a level, not a depth). */
-    private double ditherBits(UnitValue entered) {
-        return UnitConversion.convert(UnitFamily.DITHER, entered.value(), entered.unit(),
-                UnitConversion.baseToken(UnitFamily.DITHER), getDacFsVoltageAmplLeft());
-    }
-
-    public double getGenAmplitudeVrmsLeft()        { return amplitudeVrms(genAmplitudeLeft.get(), getDacFsVoltageAmpl(Channel.L)); }
+    // The entered amplitudes and the dither are stored as the pair the operator
+    // typed - number and unit - and resolved to V RMS / bits WHERE THEY ARE
+    // USED, against the full scale of the lane in force there
+    // (DeviceCalibration.amplitudeVrms / ditherBits): a dBFS entry means
+    // something only against a calibration, and this store holds none.
     public void setGenAmplitudeVrmsLeft(double v)  { genAmplitudeLeft.set(baseAmplitude(v)); }
     public UnitValue getGenAmplitudeLeft()         { return genAmplitudeLeft.get(); }
     public void setGenAmplitudeLeft(UnitValue v)   { genAmplitudeLeft.set(v); }
     public Property<UnitValue> genAmplitudeLeftProperty() { return genAmplitudeLeft; }
 
-    public double getGenAmplitudeVrmsRight()       { return amplitudeVrms(genAmplitudeRight.get(), getDacFsVoltageAmpl(Channel.R)); }
     public void setGenAmplitudeVrmsRight(double v) { genAmplitudeRight.set(baseAmplitude(v)); }
     public UnitValue getGenAmplitudeRight()        { return genAmplitudeRight.get(); }
     public void setGenAmplitudeRight(UnitValue v)  { genAmplitudeRight.set(v); }
     public Property<UnitValue> genAmplitudeRightProperty() { return genAmplitudeRight; }
 
-    public double getGenDitherBits()           { return ditherBits(genDither.get()); }
     public void setGenDitherBits(double v)     { genDither.set(baseDither(v)); }
     public UnitValue getGenDither()            { return genDither.get(); }
     public void setGenDither(UnitValue v)      { genDither.set(v); }
@@ -2117,19 +1914,10 @@ public final class Preferences {
     public void setFreqRespStopHz(double v)    { freqRespStopHz.set(v); }
     public Property<Double> freqRespStopHzProperty() { return freqRespStopHz; }
 
-    public double getFreqRespAmplitudeVrms()   { return amplitudeVrms(freqRespAmplitude.get()); }
     public void setFreqRespAmplitudeVrms(double v) { freqRespAmplitude.set(baseAmplitude(v)); }
     public UnitValue getFreqRespAmplitude()    { return freqRespAmplitude.get(); }
     public void setFreqRespAmplitude(UnitValue v) { freqRespAmplitude.set(v); }
     public Property<UnitValue> freqRespAmplitudeProperty() { return freqRespAmplitude; }
-    /** {@code vrms} as an entered value in the unit the freqresp amplitude is
-     *  CURRENTLY stored in - so a clamp writes the floor without rewriting the
-     *  operator's unit choice underneath them. */
-    public UnitValue freqRespAmplitudeIn(double vrms) {
-        String unit = freqRespAmplitude.get().unit();
-        return new UnitValue(UnitConversion.convert(UnitFamily.AMPLITUDE, vrms,
-                UnitConversion.baseToken(UnitFamily.AMPLITUDE), unit, getDacFsVoltageAmplLeft()), unit);
-    }
 
     public int getFreqRespSweepPoints()        { return freqRespSweepPoints.get(); }
     public void setFreqRespSweepPoints(int v)  { freqRespSweepPoints.set(v); }
@@ -2159,7 +1947,6 @@ public final class Preferences {
     public void setTuneNotchStopHz(double v)   { tuneNotchStopHz.set(v); }
     public Property<Double> tuneNotchStopHzProperty() { return tuneNotchStopHz; }
 
-    public double getTuneNotchAmplitudeVrms()  { return amplitudeVrms(tuneNotchAmplitude.get()); }
     public void setTuneNotchAmplitudeVrms(double v) { tuneNotchAmplitude.set(baseAmplitude(v)); }
     public UnitValue getTuneNotchAmplitude()   { return tuneNotchAmplitude.get(); }
     public void setTuneNotchAmplitude(UnitValue v) { tuneNotchAmplitude.set(v); }
@@ -2432,15 +2219,9 @@ public final class Preferences {
         root.put("oscShowStats",                 oscShowStats.get());
         root.put("oscShowMeasurementTable",      oscShowMeasurementTable.get());
         root.put("oscShowHistogram",             oscShowHistogram.get());
-        // NOT WRITTEN - the deprecated shared full-scale scalars (adcFsVoltageRms /
-        // dacFsVoltageRms) are RUNTIME-ONLY since 1.2: they are the fallback for a
-        // device with no calibrated card, and a card that HAS its own calibration
-        // pushes its values into the very same scalars (applyInputDeviceProfile and
-        // siblings).  Persisting them would therefore save the last selected card's
-        // calibration as the machine-wide default and hand it to the next
-        // uncalibrated device as if it were measured there.  fromMap() still READS
-        // the keys so a pre-1.2 file seeds the fallback once; nothing writes them
-        // back, so the entry disappears with the first save.
+        // No full scale is written here: calibration lives in the device cards
+        // (devices.yaml) and nowhere else.  A pre-1.2 file's adcFsVoltageRms /
+        // dacFsVoltageRms keys are ignored on read and vanish with the first save.
         root.put("genSignalForm",                genSignalForm.get().name());
         root.put("genFrequencyHz",               genFrequencyHz.get());
         root.put("genDualToneFreq1Hz",           genDualToneFreq1Hz.get());
@@ -2824,17 +2605,6 @@ public final class Preferences {
         if (root.get("oscShowStats")                 instanceof Boolean b) oscShowStats.set(b);
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable.set(b);
         if (root.get("oscShowHistogram")             instanceof Boolean b) oscShowHistogram.set(b);
-        // DEPRECATED shared full-scale fallback (devices with no calibrated card) -
-        // READ-ONLY since 1.2, see toMap(): a pre-1.2 preferences.yaml seeds the
-        // runtime scalars once, and because nothing writes the keys back the entry
-        // is gone after the first save.  The setters validate and refresh the
-        // cached dBV offsets.
-        if (root.get("adcFsVoltageRms") instanceof Number n) setAdcFsVoltageRms(n.doubleValue());
-        if (root.get("dacFsVoltageRms") instanceof Number n) {
-            // The one pre-lane value seeds BOTH lanes' scalars.
-            setDacFsVoltageAmplLeft(n.doubleValue() * Constants.SQRT2);
-            setDacFsVoltageAmplRight(n.doubleValue() * Constants.SQRT2);
-        }
         if (root.get("genSignalForm")                instanceof String s) genSignalForm.set(enumOr(GenSignalForm.class, s, genSignalForm.get()));
         if (root.get("genFrequencyHz")               instanceof Number n) genFrequencyHz.set(n.doubleValue());
         if (root.get("genDualToneFreq1Hz")           instanceof Number n) genDualToneFreq1Hz.set(n.doubleValue());
@@ -3309,8 +3079,9 @@ public final class Preferences {
                 loadDevices();
             }
         }
-        DeviceCalibration cal = deviceCalibration(deviceName, false);
-        return cal == null ? 1.0 : cal.fsRmsLeft() * Constants.SQRT2;
+        AudioDeviceProfile p = resolveDeviceProfile(deviceName);
+        DeviceCalibration cal = p == null ? null : p.getOutput().calibration();
+        return cal == null ? 1.0 : cal.peakVolts(Channel.L);
     }
 
     private <E extends Enum<E>> E enumOr(Class<E> type, String name, E fallback) {
@@ -3999,142 +3770,6 @@ public final class Preferences {
         return false;
     }
 
-    /** Resolves the input device name to its owning card's per-channel
-     *  active-range full-scales and pushes them through
-     *  {@link #setAdcFsVoltageRms} / {@link #setAdcFsVoltageRmsRight}.  MONO: the
-     *  single physical channel's {@code fsLeft} fills BOTH scalars.  LINKED: left
-     *  and right from the SAME active row's {@code fsLeft} / {@code fsRight}.
-     *  INDEPENDENT: left from the {@code activeRange} row's {@code fsLeft}, right
-     *  from the {@code activeRangeRight} row's {@code fsRight} (a dangling right
-     *  label falls back to the {@code activeRange} row's {@code fsRight}).  A no-op
-     *  for BOTH channels (legacy global scalars stand) when the name is unbound or
-     *  the profile has no usable range row - which includes a row whose full scales
-     *  are not above zero, i.e. one that was never calibrated (see
-     *  {@link #deviceCalibration}). */
-    public void applyInputDeviceProfile(String deviceName) {
-        DeviceCalibration cal = deviceCalibration(deviceName, true);
-        if (cal == null) return;
-        setAdcFsVoltageRms(cal.fsRmsLeft());
-        setAdcFsVoltageRmsRight(cal.fsRmsRight());
-    }
-
-    /** The per-channel active-range full-scales (stored RMS) of the card
-     *  {@code deviceName} resolves to, in the given direction, or {@code null}
-     *  when nothing is bound or the endpoint has no usable range row.  MONO: the
-     *  single physical channel's {@code fsLeft} fills BOTH values.  LINKED: left
-     *  and right from the SAME active row.  INDEPENDENT: left from the
-     *  {@code activeRange} row's {@code fsLeft}, right from the
-     *  {@code activeRangeRight} row's {@code fsRight} (a dangling right label
-     *  falls back to the {@code activeRange} row's {@code fsRight}).
-     *
-     *  <p>"Usable" includes ABOVE ZERO, on both channels.  A full scale is the
-     *  divisor every level is computed against, so a zero is not a quiet device -
-     *  it is a division by zero, or an infinite reading, depending on which way it
-     *  is applied.  A range row that was never calibrated carries exactly that
-     *  zero, and such a row is an UNCALIBRATED device however it got there: the
-     *  honest answer is the same {@code null} an unbound name gets, so every
-     *  caller falls back to its own legacy default instead of inheriting a number
-     *  that cannot be arithmetic.
-     *
-     *  <p>The ONE resolution: the two apply methods above and below push it into
-     *  their own scalars, and a Phonalyser server publishes it as the {@code cal}
-     *  of every device it offers - so what a remote client is told and what this
-     *  machine would apply itself can never be computed two different ways, and
-     *  the zero guard lands on all of them at once.
-     *
-     *  <p>{@code synchronized} on the SAME instance monitor the calibrate writes
-     *  hold ({@link #storeDeviceCalibration} and its siblings write {@code fsLeft}
-     *  and {@code fsRight} as two separate field writes - a MONO card, or a
-     *  fresh card whose other channel is seeded - before
-     *  {@link #putAudioDeviceProfile} re-puts the card).  Without it a server
-     *  broadcasting {@code cal} could sample the row between those two writes and
-     *  publish a half-updated pair - the new left against the old right - which is
-     *  a plausible-looking channel imbalance no client could detect. */
-    public synchronized DeviceCalibration deviceCalibration(String deviceName, boolean input) {
-        AudioDeviceProfile p = resolveDeviceProfile(deviceName);
-        if (p == null) {
-            logProfileUnresolved(input, deviceName);
-            return null;
-        }
-        DeviceEndpointConfig ep = input ? p.getInput() : p.getOutput();
-        DeviceRange rowLeft = activeRange(ep, Channel.L);
-        if (rowLeft == null) {
-            logProfileUnresolved(input, deviceName);
-            return null;
-        }
-        double fsLeft = rowLeft.getFsLeft();
-        double fsRight;
-        switch (ep.getChannels()) {
-            case INDEPENDENT: fsRight = activeRange(ep, Channel.R).getFsRight(); break;
-            case LINKED:      fsRight = rowLeft.getFsRight();                    break;
-            default:          fsRight = fsLeft;                                  break;   // MONO: one value both sides
-        }
-        if (fsLeft <= 0.0 || fsRight <= 0.0) {
-            logProfileUncalibrated(input, deviceName, p, rowLeft, fsLeft, fsRight);
-            return null;
-        }
-        logProfileResolved(input, deviceName, p, rowLeft, fsLeft);
-        return new DeviceCalibration(fsLeft, fsRight);
-    }
-
-    /** Resolves the output device name to its owning card's per-channel
-     *  active-range full-scales (stored RMS) and pushes the
-     *  peak-amplitude form ({@code × √2}) through {@link #setDacFsVoltageAmplLeft} /
-     *  {@link #setDacFsVoltageAmplRight}.  MONO: the single physical channel's
-     *  {@code fsLeft} fills BOTH scalars.  LINKED: left and right from the SAME
-     *  active row's {@code fsLeft} / {@code fsRight}.  INDEPENDENT: left from the
-     *  {@code activeRange} row's {@code fsLeft}, right from the
-     *  {@code activeRangeRight} row's {@code fsRight} (a dangling right label falls
-     *  back to the {@code activeRange} row's {@code fsRight}).  A no-op (legacy
-     *  global scalars stand) when unbound or with no usable range row - which
-     *  includes an uncalibrated row, see {@link #deviceCalibration}. */
-    public void applyOutputDeviceProfile(String deviceName) {
-        DeviceCalibration cal = deviceCalibration(deviceName, false);
-        if (cal == null) return;
-        setDacFsVoltageAmplLeft(cal.fsRmsLeft() * Constants.SQRT2);
-        setDacFsVoltageAmplRight(cal.fsRmsRight() * Constants.SQRT2);
-    }
-
-    /** Applies {@code device}'s per-channel full-scales in one direction,
-     *  preferring the calibration the DEVICE carries over this machine's card
-     *  store: a device plugged into a Phonalyser server is calibrated there
-     *  (spec 4.3 {@code cal}), and its values must win - the local store knows
-     *  nothing about that bench and could only match it by a name collision, and
-     *  nothing about a foreign device is ever written into it.  A local device
-     *  carries no calibration and falls back to the name lookup, which is what
-     *  {@link #applyInputDeviceProfile} / {@link #applyOutputDeviceProfile} have
-     *  always done. */
-    public void applyDeviceProfile(DeviceRef device, boolean input) {
-        DeviceCalibration cal = device.calibration();
-        if (cal == null) {
-            if (device.remote()) {
-                // A device on a bench is calibrated by that bench and by nothing
-                // else: a matching local card is the SOURCE for propagating a
-                // calibration up to the server, never a silent calibrator down
-                // here.  Resolving it by name would put this machine's full
-                // scales under a device across the room on the strength of a
-                // name collision, and nothing on screen would say so
-                // - the scalars stay where they are and the selection is reported
-                // as uncalibrated ({@link #isUncalibrated}).
-                logRemoteUncalibrated(device, input);
-                return;
-            }
-            if (input) {
-                applyInputDeviceProfile(device.name());
-            } else {
-                applyOutputDeviceProfile(device.name());
-            }
-            return;
-        }
-        if (input) {
-            setAdcFsVoltageRms(cal.fsRmsLeft());
-            setAdcFsVoltageRmsRight(cal.fsRmsRight());
-        } else {
-            setDacFsVoltageAmplLeft(cal.fsRmsLeft() * Constants.SQRT2);
-            setDacFsVoltageAmplRight(cal.fsRmsRight() * Constants.SQRT2);
-        }
-    }
-
     /**
      * True when {@code device} would be measured with NO real calibration in this
      * direction - the test behind the warning the Preferences dialog raises when
@@ -4142,10 +3777,11 @@ public final class Preferences {
      * card has to be announced, because V, dBV and every value derived from them
      * are then not accurate.
      *
-     * <p>It reads the SAME precedence {@link #applyDeviceProfile} applies, in the
-     * same order, so the answer can never disagree with what the selection is
-     * actually measured against: the calibration the device carries wins, then
-     * this machine's card store, and anything else is uncalibrated.
+     * <p>The same precedence the device managers read by: the calibration the
+     * device carries wins (a bench device is calibrated by its bench and by
+     * nothing else - a local card of the same name is what the operator may
+     * propagate UP, never a silent calibrator down here), then this machine's
+     * card store, and anything else is uncalibrated.
      *
      * <p>A {@code calibrationFromDevice} endpoint is exempt - a QA40x carries its
      * own factory calibration and there is nothing for the operator to do about
@@ -4155,22 +3791,7 @@ public final class Preferences {
         if (device.calibration() != null) {
             return false;
         }
-        // A bench device the bench has no calibration for IS uncalibrated,
-        // whatever this machine's store happens to hold under the same name -
-        // the local card is what the operator may propagate UP, not a reason to
-        // keep quiet about a device that is measuring uncalibrated.
         return device.remote() || isUncalibrated(device.name(), input);
-    }
-
-    /** Guarded log for the one case that used to fall back silently: a bench
-     *  device with no calibration of its own, whose scalars this process
-     *  deliberately leaves alone (see {@link #applyDeviceProfile}). */
-    private void logRemoteUncalibrated(DeviceRef device, boolean input) {
-        if (log.isInfoEnabled()) {
-            log.info("'{}' ({}) is on a server that has no calibration for it - the "
-                    + "full scales stay as they are and the selection is uncalibrated",
-                    device.name(), input ? "input" : "output");
-        }
     }
 
     /** The name-only form of {@link #isUncalibrated(DeviceRef, boolean)} - for a
@@ -4178,183 +3799,11 @@ public final class Preferences {
      *  the name lookup has always covered on its own. */
     public synchronized boolean isUncalibrated(String deviceName, boolean input) {
         AudioDeviceProfile p = resolveDeviceProfile(deviceName);
-        if (p != null && (input ? p.getInput() : p.getOutput()).isCalibrationFromDevice()) {
-            return false;
-        }
-        return deviceCalibration(deviceName, input) == null;
-    }
-
-    /** Writes {@code fsVrms} as the current input device's ADC calibration:
-     *  resolves the bound card, auto-creating one (logical name = the normalised
-     *  device name, the exact device name appended to {@code match}, one
-     *  {@code "default"} LINKED range row) when the device is unbound.  Stores the
-     *  value into the active row (both channels, LINKED), ensures the active range
-     *  is selected, then applies it to BOTH scalars ({@link #setAdcFsVoltageRms} /
-     *  {@link #setAdcFsVoltageRmsRight}) and persists. */
-    public synchronized void storeAdcCalibration(double fsVrms) {
-        String deviceName = current().getInputDeviceName();
-        AudioDeviceProfile p = resolveDeviceProfile(deviceName);
         if (p == null) {
-            p = seedProfileFor(true, deviceName);
-        }
-        if (p.getInput().isCalibrationFromDevice()) {
-            warnDeviceProvidedCalibration(p);
-            return;
-        }
-        writeActiveRangeFs(p.getInput(), fsVrms);
-        putAudioDeviceProfile(p);   // add/replace + save()
-        setAdcFsVoltageRms(fsVrms);
-        setAdcFsVoltageRmsRight(fsVrms);
-    }
-
-    /** Per-channel ADC calibrate for backend + current input device.  On a bound
-     *  stereo card (LINKED or INDEPENDENT) it writes ONLY {@code ch}'s active-range
-     *  field ({@code fsLeft} of the {@code activeRange} row for LEFT; {@code fsRight}
-     *  of the {@code activeRangeRight} row for INDEPENDENT RIGHT, or the shared
-     *  active row's {@code fsRight} for LINKED RIGHT) and applies only that channel's
-     *  scalar.  On a MONO card it behaves like {@link #storeAdcCalibration(double)}
-     *  for either channel (both row fields + both scalars move together). */
-    public synchronized void storeAdcCalibration(Channel ch, double fsVrms) {
-        String deviceName = current().getInputDeviceName();
-        AudioDeviceProfile p = resolveDeviceProfile(deviceName);
-        if (p == null) {
-            p = seedProfileFor(true, deviceName);
-        }
-        DeviceEndpointConfig ep = p.getInput();
-        if (ep.isCalibrationFromDevice()) {
-            warnDeviceProvidedCalibration(p);
-            return;
-        }
-        boolean mono = ep.getChannels() == DeviceChannelMode.MONO;
-        writeActiveRangeFs(ep, ch, fsVrms);
-        putAudioDeviceProfile(p);   // add/replace + save()
-        if (mono) {
-            // MONO card: one physical channel - both scalars move together.
-            setAdcFsVoltageRms(fsVrms);
-            setAdcFsVoltageRmsRight(fsVrms);
-        } else if (ch == Channel.R) {
-            setAdcFsVoltageRmsRight(fsVrms);
-        } else {
-            setAdcFsVoltageRms(fsVrms);
-        }
-    }
-
-    /** Writes {@code fsAmpl} (peak amplitude) as the current backend + current
-     *  output device's DAC calibration: like {@link #storeAdcCalibration(double)}
-     *  but on the output endpoint, storing the RMS form ({@code ÷ √2}) on disk for
-     *  BOTH channels (the MONO / LINKED-mirror / legacy write), then applying the
-     *  amplitude to both scalars via {@link #setDacFsVoltageAmplLeft} /
-     *  {@link #setDacFsVoltageAmplRight}. */
-    public synchronized void storeDacCalibration(double fsAmpl) {
-        String deviceName = current().getOutputDeviceName();
-        AudioDeviceProfile p = resolveDeviceProfile(deviceName);
-        if (p == null) {
-            p = seedProfileFor(false, deviceName);
-        }
-        if (p.getOutput().isCalibrationFromDevice()) {
-            warnDeviceProvidedCalibration(p);
-            return;
-        }
-        writeActiveRangeFs(p.getOutput(), fsAmpl / Constants.SQRT2);
-        putAudioDeviceProfile(p);   // add/replace + save()
-        setDacFsVoltageAmplLeft(fsAmpl);
-        setDacFsVoltageAmplRight(fsAmpl);
-    }
-
-    /** Per-channel DAC calibrate for backend + current output device - the mirror
-     *  of {@link #storeAdcCalibration(Channel, double)} on the output endpoint.  On
-     *  a bound stereo card (LINKED or INDEPENDENT) it writes ONLY {@code ch}'s
-     *  active-range field (the RMS form {@code fsAmpl / √2}: {@code fsLeft} of the
-     *  {@code activeRange} row for LEFT; {@code fsRight} of the
-     *  {@code activeRangeRight} row for INDEPENDENT RIGHT, or the shared active row's
-     *  {@code fsRight} for LINKED RIGHT) and applies only that channel's scalar.  On
-     *  a MONO card it behaves like {@link #storeDacCalibration(double)} for either
-     *  channel (both row fields + both scalars move together). */
-    public synchronized void storeDacCalibration(Channel ch, double fsAmpl) {
-        String deviceName = current().getOutputDeviceName();
-        AudioDeviceProfile p = resolveDeviceProfile(deviceName);
-        if (p == null) {
-            p = seedProfileFor(false, deviceName);
-        }
-        DeviceEndpointConfig ep = p.getOutput();
-        if (ep.isCalibrationFromDevice()) {
-            warnDeviceProvidedCalibration(p);
-            return;
-        }
-        boolean mono = ep.getChannels() == DeviceChannelMode.MONO;
-        writeActiveRangeFs(ep, ch, fsAmpl / Constants.SQRT2);
-        putAudioDeviceProfile(p);   // add/replace + save()
-        if (mono) {
-            // MONO card: one physical channel - both scalars move together.
-            setDacFsVoltageAmplLeft(fsAmpl);
-            setDacFsVoltageAmplRight(fsAmpl);
-        } else if (ch == Channel.R) {
-            setDacFsVoltageAmplRight(fsAmpl);
-        } else {
-            setDacFsVoltageAmplLeft(fsAmpl);
-        }
-    }
-
-    /**
-     * Stores {@code ch}'s full-scale RMS volts as the calibration of {@code
-     * deviceName} in one direction - the card write of the calibrate flow, aimed
-     * at a NAMED device instead of the currently selected one, and touching no
-     * global scalar.
-     *
-     * <p>That is what a Phonalyser server needs: the calibration of every device
-     * plugged into it is ITS to keep (spec 4.3 {@code device.setCalibration}),
-     * the device a client is calibrating is not necessarily the one this process
-     * would measure on, and a server has no measurement of its own for a scalar
-     * to serve.  The card resolution, the auto-created card and the
-     * calibrated-row marking are the local flow's own
-     * ({@link #storeAdcCalibration(Channel, double)} and its siblings), so a
-     * value written here reads back through {@link #deviceCalibration} unchanged.
-     *
-     * <p>One channel per write; the other channel's row field is left as it is,
-     * with one exception: a field still at zero - never calibrated - takes the
-     * same value.  A row with one channel calibrated and the other at zero is
-     * no calibration at all ({@link #deviceCalibration} refuses it), so the
-     * first calibrate of a fresh card would leave the device uncalibrated
-     * until the other channel was measured too; the two channels of one card
-     * share its design, so the measured one is the best estimate of the other
-     * until it is measured itself.  On a MONO endpoint the one physical channel
-     * takes the value whichever channel names it.
-     *
-     * @return {@code false} - and nothing is written - when the endpoint's
-     *         calibration comes from the device itself (a QA40x): those values
-     *         are the analyzer's, not a caller's to set
-     */
-    public synchronized boolean storeDeviceCalibration(String deviceName, boolean input,
-            Channel ch, double fsRms) {
-        AudioDeviceProfile p = resolveDeviceProfile(deviceName);
-        if (p == null) {
-            p = seedProfileFor(input, deviceName);
+            return true;
         }
         DeviceEndpointConfig ep = input ? p.getInput() : p.getOutput();
-        if (ep.isCalibrationFromDevice()) {
-            warnDeviceProvidedCalibration(p);
-            return false;
-        }
-        writeActiveRangeFs(ep, ch, fsRms);
-        if (ep.getChannels() != DeviceChannelMode.MONO) {
-            Channel other = ch == Channel.L ? Channel.R : Channel.L;
-            DeviceRange otherRow = activeRange(ep, other);
-            double otherFs = other == Channel.L ? otherRow.getFsLeft() : otherRow.getFsRight();
-            if (otherFs <= 0.0) {
-                writeActiveRangeFs(ep, other, fsRms);
-            }
-        }
-        putAudioDeviceProfile(p);   // add/replace + saveDevices()
-        return true;
-    }
-
-    /** Guarded WARN when a calibrate write targets a device-provided endpoint (a
-     *  QA40x whose calibration is loaded from the device): the store rejects the
-     *  write and leaves both the range values and the global scalars untouched. */
-    private void warnDeviceProvidedCalibration(AudioDeviceProfile p) {
-        if (log.isWarnEnabled()) {
-            log.warn("Ignoring calibration write - calibration is device-provided for {}", p.getName());
-        }
+        return !ep.isCalibrationFromDevice() && ep.calibration() == null;
     }
 
     /** True when the active input device resolves to a card whose ADC full-scale
@@ -4373,16 +3822,20 @@ public final class Preferences {
         return p != null && p.getOutput().isCalibrationFromDevice();
     }
 
-    /** Resolves the card for a first calibrate on an UNBOUND device: a card whose
-     *  {@code match} entries already recognise {@code deviceName} (via
-     *  {@link #resolveDeviceProfile}) is BOUND - the device name is
-     *  {@link AudioDeviceProfile#bindDeviceName appended} to {@code match} when
-     *  nothing already matches, and the card keeps its ranges; nothing recognised
-     *  falls back to a fresh bare {@code "default"}-row card.  Returns the LIVE
-     *  store object for a recognised card so the caller's range write + re-put
-     *  updates that one card in place.  In both cases the caller then writes the
-     *  measured full-scale into the active range row. */
-    private AudioDeviceProfile seedProfileFor(boolean input, String deviceName) {
+    /**
+     * The profile a calibration of {@code deviceName} is written into - the card
+     * write of every calibrate flow, local and server alike.  A card whose
+     * {@code match} entries already recognise the name (via
+     * {@link #resolveDeviceProfile}) is BOUND - the device name is
+     * {@link AudioDeviceProfile#bindDeviceName appended} to {@code match} when
+     * nothing already matches, and the card keeps its ranges; a name no card
+     * recognises gets a fresh bare {@code "default"}-row card.  The LIVE store
+     * object for a recognised card, so the caller's range write and
+     * {@link #putAudioDeviceProfile} update that one card in place.  A device
+     * manager writes the measured full scale into the returned profile's
+     * endpoint ({@link DeviceEndpointConfig#storeFullScale}) and puts it back.
+     */
+    public synchronized AudioDeviceProfile profileFor(String deviceName, boolean input) {
         AudioDeviceProfile recognised = resolveDeviceProfile(deviceName);
         if (recognised != null) {
             if (recognised.bindDeviceName(deviceName) && log.isDebugEnabled()) {
@@ -4408,109 +3861,6 @@ public final class Preferences {
         ep.getRanges().add(row);
         ep.setActiveRange("default");
         return p;
-    }
-
-    /** Returns the active range row for {@code ch}.  LEFT (and any MONO / LINKED
-     *  endpoint) uses {@link DeviceEndpointConfig#getActiveRange}; RIGHT on an
-     *  INDEPENDENT endpoint uses {@link DeviceEndpointConfig#getActiveRangeRight},
-     *  falling back to the {@code activeRange} row when the right label is unset or
-     *  dangles.  Both fall back to the first row, or {@code null} when the table
-     *  is empty. */
-    private DeviceRange activeRange(DeviceEndpointConfig ep, Channel ch) {
-        List<DeviceRange> rows = ep.getRanges();
-        if (rows == null || rows.isEmpty()) return null;
-        String label = ep.getActiveRange();
-        if (ch == Channel.R && ep.getChannels() == DeviceChannelMode.INDEPENDENT
-                && ep.getActiveRangeRight() != null) {
-            for (DeviceRange r : rows) {
-                if (ep.getActiveRangeRight().equals(r.getLabel())) return r;
-            }
-            // Dangling right label -> fall back to the activeRange (left) row below.
-        }
-        if (label != null) {
-            for (DeviceRange r : rows) {
-                if (label.equals(r.getLabel())) return r;
-            }
-        }
-        return rows.get(0);
-    }
-
-    /** Writes {@code fs} into the endpoint's active row for BOTH channels (the
-     *  LINKED / legacy write) - the DAC calibrate path and the single-arg ADC
-     *  calibrate use this.  Creates a {@code "default"} row and selects it when the
-     *  table is empty, and selects the resolved row as active when no label was set. */
-    private void writeActiveRangeFs(DeviceEndpointConfig ep, double fs) {
-        DeviceRange row = seedableActiveRow(ep, Channel.L);
-        row.setFsLeft(fs);
-        row.setFsRight(fs);
-        // A real calibration wrote this row - protect it from seed-merge refresh.
-        row.setCalibrated(true);
-    }
-
-    /** Writes {@code fs} into ONLY {@code ch}'s active-range field on a bound stereo
-     *  endpoint: LEFT -> the {@code activeRange} row's {@code fsLeft}; RIGHT -> the
-     *  {@code activeRangeRight} row's {@code fsRight} for INDEPENDENT (dangling right
-     *  label -> the {@code activeRange} row), or the SAME active row's {@code fsRight}
-     *  for LINKED (shared range switching, per-channel values).  On a MONO endpoint
-     *  (one physical channel) it falls back to the legacy both-equal write so the
-     *  single value lands on both row fields. */
-    private void writeActiveRangeFs(DeviceEndpointConfig ep, Channel ch, double fs) {
-        if (ep.getChannels() == DeviceChannelMode.MONO) {
-            writeActiveRangeFs(ep, fs);
-            return;
-        }
-        DeviceRange row = seedableActiveRow(ep, ch);
-        if (ch == Channel.R) {
-            row.setFsRight(fs);
-        } else {
-            row.setFsLeft(fs);
-        }
-        // A real calibration wrote this row - protect it from seed-merge refresh.
-        row.setCalibrated(true);
-    }
-
-    /** Resolves {@code ch}'s active range row, seeding a {@code "default"} row (and
-     *  selecting it as active) when the range table is empty - the shared setup for
-     *  the two {@code writeActiveRangeFs} forms. */
-    private DeviceRange seedableActiveRow(DeviceEndpointConfig ep, Channel ch) {
-        DeviceRange row = activeRange(ep, ch);
-        if (row == null) {
-            row = new DeviceRange();
-            row.setLabel("default");
-            ep.getRanges().add(row);
-        }
-        if (ep.getActiveRange() == null) {
-            ep.setActiveRange(row.getLabel());
-        }
-        return row;
-    }
-
-    /** Guarded debug log of a resolved profile application (plan logging point 6). */
-    private void logProfileResolved(boolean input, String deviceName, AudioDeviceProfile p, DeviceRange row, double fs) {
-        if (log.isDebugEnabled()) {
-            log.debug("{} device '{}' -> card '{}' -> range '{}' -> FS {} Vrms",
-                    input ? "input" : "output", deviceName, p.getName(), row.getLabel(), fs);
-        }
-    }
-
-    /** Guarded debug log of a card whose active row carries no usable full scale -
-     *  a range row that was never calibrated.  Debug, not warn: an uncalibrated
-     *  card is an ordinary state of a fresh install, and this is read on every
-     *  device-list build (a Phonalyser server publishes it per device). */
-    private void logProfileUncalibrated(boolean input, String deviceName, AudioDeviceProfile p,
-                                        DeviceRange row, double fsLeft, double fsRight) {
-        if (log.isDebugEnabled()) {
-            log.debug("{} device '{}' -> card '{}' -> range '{}' is uncalibrated (FS {} / {} Vrms); keeping the global full-scale",
-                    input ? "input" : "output", deviceName, p.getName(), row.getLabel(), fsLeft, fsRight);
-        }
-    }
-
-    /** Guarded debug log of an unresolved device (legacy global scalar stands). */
-    private void logProfileUnresolved(boolean input, String deviceName) {
-        if (log.isDebugEnabled()) {
-            log.debug("{} device '{}' -> no profile; keeping the global full-scale",
-                    input ? "input" : "output", deviceName);
-        }
     }
 
     /** Deep-copies a profile: new match list, new endpoint configs, new range
