@@ -30,6 +30,7 @@ import org.edgo.audio.measure.net.proto.MessageType;
 import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.BackendKey;
+import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
@@ -104,6 +105,22 @@ public final class ServerCards {
      *  which direction's endpoint. */
     private record RangePick(String deviceName, String label, Channel side, boolean input) { }
 
+    /** Row renames made in the dialog but not yet sent - the same apply-on-OK
+     *  rule, keyed per bench, device, direction and the label the row had when
+     *  the dialog opened, so a row renamed twice is one write from that label to
+     *  the last one, and a row renamed back is no write at all. */
+    private final Map<String, RenamePick> stagedRenames = new LinkedHashMap<>();
+
+    /** One staged rename: which device, which direction, the row's label on the
+     *  bench and the label it gets. */
+    private record RenamePick(String deviceName, boolean input, String from, String to) { }
+
+    /** Card edits made in the dialog's card editor but not yet sent - the same
+     *  apply-on-OK rule, keyed per bench and the name the bench knows the card
+     *  by, so a card edited twice is one write and a renamed card is still
+     *  addressed by the name the bench has. */
+    private final Map<String, AudioDeviceProfile> stagedCards = new LinkedHashMap<>();
+
     /** A local card's full scales waiting to go up on their own - the
      *  values-only fallback of {@link #propagateLocalCard}, staged under the
      *  same apply-on-OK rule as a binding, keyed per bench, device and
@@ -159,18 +176,114 @@ public final class ServerCards {
                 names.add(name);
             }
         }
+        // A card edited in this dialog shows as edited, in place of the bench's
+        // copy, until OK makes the edit the bench's.
+        String prefix = cardKey(server, "");
+        for (Map.Entry<String, AudioDeviceProfile> entry : stagedCards.entrySet()) {
+            if (!entry.getKey().startsWith(prefix)) {
+                continue;
+            }
+            String original = entry.getKey().substring(prefix.length());
+            AudioDeviceProfile edited = entry.getValue();
+            byName.remove(original);
+            byName.put(edited.getName(), edited);
+            DeviceEndpointConfig ep = input ? edited.getInput() : edited.getOutput();
+            int at = names.indexOf(original);
+            if (ep.getRanges().isEmpty()) {
+                if (at >= 0) names.remove(at);
+            } else if (at >= 0) {
+                names.set(at, edited.getName());
+            } else if (!names.contains(edited.getName())) {
+                names.add(edited.getName());
+            }
+        }
         content.put(server.key(), byName);
         return names;
     }
 
-    /** One bench card as the bench described it, or null when this client has not
-     *  read that card (no {@code cards.list} yet, a bench too old to send the
-     *  content, or a name it does not offer).  The ranges table's source for a
-     *  device on a bench - the CARD's own rows, never a local card that merely
-     *  shares its name. */
+    /** One bench card as the bench described it - or as this dialog edited it
+     *  (see {@link #stageCard}), found under the edited name and under the name
+     *  the bench still has - or null when this client has not read that card
+     *  (no {@code cards.list} yet, a bench too old to send the content, or a name
+     *  it does not offer).  The ranges table's source for a device on a bench -
+     *  the CARD's own rows, never a local card that merely shares its name. */
     public AudioDeviceProfile card(BackendKey server, String cardName) {
+        if (cardName == null) {
+            return null;
+        }
+        AudioDeviceProfile edited = stagedCards.get(cardKey(server, cardName));
+        if (edited != null) {
+            return edited;
+        }
         Map<String, AudioDeviceProfile> byName = content.get(server.key());
-        return byName == null || cardName == null ? null : byName.get(cardName);
+        return byName == null ? null : byName.get(cardName);
+    }
+
+    /**
+     * Records a card edit without sending anything - the card-editor twin of
+     * {@link #stage}: the operator edited a bench card here (name, match list,
+     * directions, coupling), and the bench hears about it on OK through
+     * {@code AudioDeviceManager.updateCard}.
+     *
+     * <p>{@code name} is the name the card shows NOW.  An edit of a card edited
+     * already in this dialog folds into the first: the bench still knows the card
+     * by its original name and gets one write.  A staged pick naming the card
+     * follows its new name, and the cached copy is replaced so the chooser and the
+     * ranges table show the edit at once.
+     */
+    public void stageCard(BackendKey server, String name, AudioDeviceProfile card) {
+        String prefix = cardKey(server, "");
+        String original = name;
+        for (Map.Entry<String, AudioDeviceProfile> entry : stagedCards.entrySet()) {
+            if (entry.getKey().startsWith(prefix)
+                    && entry.getValue().getName().equalsIgnoreCase(name)) {
+                original = entry.getKey().substring(prefix.length());
+                break;
+            }
+        }
+        stagedCards.put(prefix + original, card);
+        String devicePrefix = key(server, "");
+        for (Map.Entry<String, Pick> entry : staged.entrySet()) {
+            if (entry.getKey().startsWith(devicePrefix)
+                    && entry.getValue().cardName().equalsIgnoreCase(name)) {
+                entry.setValue(new Pick(card.getName(), entry.getValue().input()));
+            }
+        }
+        Map<String, AudioDeviceProfile> byName = content.get(server.key());
+        if (byName != null) {
+            byName.remove(name);
+            byName.put(card.getName(), card);
+        }
+    }
+
+    /**
+     * Sends every staged card edit to {@code bench} - the OK half of
+     * {@link #stageCard} - through the bench's manager
+     * ({@code AudioDeviceManager.updateCard}), each under the name the bench
+     * has for it.  Sent FIRST on OK: a binding, a rename or a range move staged
+     * after the edit names the card as edited.
+     *
+     * @return the cards the bench would not replace, by the name it has for them
+     */
+    public List<String> commitStagedCards(BackendKey server) {
+        List<String> refused = new ArrayList<>();
+        String prefix = cardKey(server, "");
+        AudioDeviceManager manager = AudioBackend.instance().manager(server.carrier());
+        for (Map.Entry<String, AudioDeviceProfile> entry : stagedCards.entrySet()) {
+            if (!entry.getKey().startsWith(prefix)) {
+                continue;
+            }
+            String original = entry.getKey().substring(prefix.length());
+            if (!manager.updateCard(original, entry.getValue())) {
+                refused.add(original);
+            }
+        }
+        return refused;
+    }
+
+    /** The key of a staged card edit - the bench and the card's name there. */
+    private String cardKey(BackendKey server, String cardName) {
+        return server.key() + "|card|" + cardName;
     }
 
     /** Records a pick without sending anything - see {@link #staged}. */
@@ -250,6 +363,68 @@ public final class ServerCards {
             DeviceRef device = refFor(pick.input() ? inputs : outputs, pick.deviceName());
             if (!setActiveRange(server, device, pick.label(), pick.side())) {
                 refused.add(pick.label());
+            }
+        }
+        return refused;
+    }
+
+    /**
+     * Records a row rename without sending anything - the rename twin of
+     * {@link #stage}: a bench card's rows are named from the dialog exactly as
+     * a local card's, and the bench hears about it on OK.
+     *
+     * <p>{@code from} is the label the row shows NOW.  A rename of a row this
+     * dialog already renamed folds into the earlier pick, so the bench - which
+     * still knows the row by its original label - gets one write; a rename back
+     * to the original label drops the pick.  A staged active-range move naming
+     * the renamed row is re-targeted, since the move is sent after the rename.
+     */
+    public void stageRename(BackendKey server, boolean input, String deviceName,
+            String from, String to) {
+        String prefix = key(server, deviceName) + "|" + (input ? "in" : "out") + "|";
+        String original = from;
+        for (Map.Entry<String, RenamePick> entry : stagedRenames.entrySet()) {
+            if (entry.getKey().startsWith(prefix) && entry.getValue().to().equals(from)) {
+                original = entry.getValue().from();
+                break;
+            }
+        }
+        if (original.equals(to)) {
+            stagedRenames.remove(prefix + original);
+        } else {
+            stagedRenames.put(prefix + original, new RenamePick(deviceName, input, original, to));
+        }
+        for (Map.Entry<String, RangePick> entry : stagedRanges.entrySet()) {
+            RangePick pick = entry.getValue();
+            if (entry.getKey().startsWith(prefix) && pick.label().equals(from)) {
+                entry.setValue(new RangePick(pick.deviceName(), to, pick.side(), pick.input()));
+            }
+        }
+    }
+
+    /**
+     * Sends every staged rename to {@code bench} - the OK half of
+     * {@link #stageRename} - through the device's manager, the same seam a
+     * calibration write takes ({@code AudioDeviceManager.renameRange}), under
+     * the device lock it takes itself.  Sent BEFORE the active-range moves, so a
+     * move onto a renamed row finds the row under its new label.
+     *
+     * @return the labels the bench would not rename
+     */
+    public List<String> commitStagedRenames(BackendKey server, List<DeviceRef> inputs,
+            List<DeviceRef> outputs) {
+        List<String> refused = new ArrayList<>();
+        String prefix = key(server, "");
+        AudioDeviceManager manager = AudioBackend.instance().manager(server.carrier());
+        for (Map.Entry<String, RenamePick> entry : stagedRenames.entrySet()) {
+            if (!entry.getKey().startsWith(prefix)) {
+                continue;
+            }
+            RenamePick pick = entry.getValue();
+            DeviceRef device = refFor(pick.input() ? inputs : outputs, pick.deviceName());
+            if (device == null
+                    || !manager.renameRange(device, pick.input(), pick.from(), pick.to())) {
+                refused.add(pick.from());
             }
         }
         return refused;

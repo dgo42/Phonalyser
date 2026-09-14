@@ -69,6 +69,8 @@ class ServerCardsTest {
     private static final String OTHER_CARD = "QA402";
     private static final String RANGE_LABEL = "default";
     private static final String OTHER_RANGE = "0 dBV";
+    private static final String RENAMED_RANGE = "line";
+    private static final String EDITED_CARD = "QA403 edited";
     private static final int DEVICE_INDEX = 2;
     private static final double FS_LEFT = 1.9;
     private static final double FS_RIGHT = 2.1;
@@ -407,6 +409,101 @@ class ServerCardsTest {
         cards.commitStagedRanges(server, List.of(ref()), List.of());
 
         assertEquals(NetFields.RIGHT, remote.onlySent().fields().get(NetFields.CHANNEL));
+    }
+
+    // -- renaming a row of a bench card (spec 4.3 device.renameRange) ---------
+
+    @Test
+    void aStagedRenameReachesTheServerOnlyOnTheCommitThroughTheManager() {
+        ServerCards cards = cards(detached());
+        cards.stageRename(server, true, DEVICE_NAME, RANGE_LABEL, RENAMED_RANGE);
+
+        assertTrue(renames().isEmpty(), "staged, like every other edit");
+
+        assertTrue(cards.commitStagedRenames(server, List.of(ref()), List.of()).isEmpty());
+
+        assertEquals(1, renames().size(), "the device's manager, the same seam a "
+                + "calibration write takes - never a request built here");
+        assertEquals(List.of(DEVICE_NAME, true, RANGE_LABEL, RENAMED_RANGE),
+                renames().get(0).args());
+        assertTrue(remote.getSent().isEmpty(), "the wire is the manager's");
+    }
+
+    @Test
+    void aRangeMoveOntoARenamedRowNamesTheNewLabel() {
+        ServerCards cards = cards(detached());
+        cards.stageActiveRange(server, true, DEVICE_NAME, RANGE_LABEL, null);
+        cards.stageRename(server, true, DEVICE_NAME, RANGE_LABEL, RENAMED_RANGE);
+
+        cards.commitStagedRanges(server, List.of(ref()), List.of());
+
+        assertEquals(RENAMED_RANGE, remote.onlySent().fields().get(NetFields.RANGE),
+                "the renames go out first, so the bench knows the row by its new label");
+    }
+
+    @Test
+    void aRowRenamedTwiceIsOneWriteAndRenamedBackIsNone() {
+        ServerCards cards = cards(detached());
+        cards.stageRename(server, true, DEVICE_NAME, RANGE_LABEL, RENAMED_RANGE);
+        cards.stageRename(server, true, DEVICE_NAME, RENAMED_RANGE, OTHER_RANGE + " 2");
+        cards.commitStagedRenames(server, List.of(ref()), List.of());
+        assertEquals(List.of(List.of(DEVICE_NAME, true, RANGE_LABEL, OTHER_RANGE + " 2")),
+                renames().stream().map(ServerGeneratorStub.Command::args).toList(),
+                "the bench still knows the row by its original label");
+
+        serverManager().reset();
+        ServerCards undone = cards(detached());
+        undone.stageRename(server, true, DEVICE_NAME, RANGE_LABEL, RENAMED_RANGE);
+        undone.stageRename(server, true, DEVICE_NAME, RENAMED_RANGE, RANGE_LABEL);
+        assertTrue(undone.commitStagedRenames(server, List.of(ref()), List.of()).isEmpty());
+        assertTrue(renames().isEmpty(), "nothing changed, so nothing goes out");
+    }
+
+    private List<ServerGeneratorStub.Command> renames() {
+        return serverManager().commands().stream()
+                .filter(c -> c.name().equals("renameRange")).toList();
+    }
+
+    // -- editing a bench card in the card editor (spec 4.3 cards.update) ------
+
+    @Test
+    void aStagedCardEditReachesTheServerOnlyOnTheCommitThroughTheManager() {
+        ServerCards cards = cards(detached());
+        cards.stage(server, true, DEVICE_NAME, CHOSEN_CARD);
+        cards.stageCard(server, CHOSEN_CARD, card(EDITED_CARD));
+
+        assertTrue(updates().isEmpty(), "staged, like every other edit");
+        assertEquals(EDITED_CARD, cards.stagedCard(server, DEVICE_NAME),
+                "the pick follows the card's new name");
+
+        assertTrue(cards.commitStagedCards(server).isEmpty());
+
+        assertEquals(1, updates().size(), "the bench's manager, the same seam a "
+                + "calibration write takes");
+        assertEquals(CHOSEN_CARD, updates().get(0).args().get(0),
+                "addressed by the name the bench has for it");
+        assertEquals(EDITED_CARD, ((AudioDeviceProfile) updates().get(0).args().get(1)).getName());
+        assertTrue(remote.getSent().isEmpty(), "the wire is the manager's");
+    }
+
+    @Test
+    void theCardListShowsAStagedEditInPlaceOfTheServersCopy() {
+        remote.setAnswer(Map.of(NetFields.CARDS, List.of(
+                Map.of(NetFields.NAME, CHOSEN_CARD, NetFields.INPUT, true,
+                        NetFields.OUTPUT, true))));
+        ServerCards cards = cards(detached());
+        cards.stageCard(server, CHOSEN_CARD, card(EDITED_CARD));
+
+        assertEquals(List.of(EDITED_CARD), cards.list(server, true),
+                "what the operator did shows until OK makes it the bench's");
+        assertEquals(EDITED_CARD, cards.card(server, CHOSEN_CARD).getName(),
+                "and the name the bench still has finds the edited card - the "
+                        + "bench's binding names it");
+    }
+
+    private List<ServerGeneratorStub.Command> updates() {
+        return serverManager().commands().stream()
+                .filter(c -> c.name().equals("updateCard")).toList();
     }
 
     // -- the chooser's list --------------------------------------------------

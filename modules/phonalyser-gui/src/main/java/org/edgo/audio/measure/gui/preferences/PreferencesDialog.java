@@ -1237,8 +1237,14 @@ public final class PreferencesDialog {
      * bench's card, sent on OK and nowhere else.
      */
     private void commitStagedCardBindings(BackendKey committed) {
-        List<String> refused = new ArrayList<>(
-                serverCards.commitStagedBindings(committed, devices.inputs, devices.outputs));
+        // The card edits first: a binding, a rename or a move staged after an
+        // edit names the card as edited.
+        List<String> refused = new ArrayList<>(serverCards.commitStagedCards(committed));
+        refused.addAll(serverCards.commitStagedBindings(committed, devices.inputs,
+                devices.outputs));
+        // Renames before moves: a move onto a renamed row names the new label.
+        refused.addAll(serverCards.commitStagedRenames(committed, devices.inputs,
+                devices.outputs));
         refused.addAll(serverCards.commitStagedRanges(committed, devices.inputs,
                 devices.outputs));
         refused.addAll(serverCards.commitStagedValues(committed, devices.inputs,
@@ -2447,6 +2453,12 @@ public final class PreferencesDialog {
         /** True when the combo is showing the BENCH's cards rather than this
          *  machine's, i.e. the selected backend is remote. */
         private boolean remoteCards;
+        /** True when the selected backend's devices carry a static card
+         *  ({@code AudioDeviceManager.staticDeviceCard}), local or on a server:
+         *  the combo then holds the device's own card alone and is no choice -
+         *  no other card can describe the device, and none can be made for it
+         *  here, so the pencil and every card offer are off as well. */
+        private boolean staticDeviceCard;
         /** Logical name of the card the combo currently shows, or null when no
          *  card is selected - the value a cancelled "New card..." reverts to. */
         private String selectedName;
@@ -2508,15 +2520,25 @@ public final class PreferencesDialog {
             String dev = deviceName();
             BackendKey server = edit.getSelectedBackend();
             boolean remote = server != null && server.remote();
+            // A backend whose devices carry a static card - one built from the
+            // device itself - has exactly one card per device wherever the device
+            // is plugged in, so the combo shows that one and offers no choice, no
+            // "New card..." and no bench list.  The backend's manager answers,
+            // for a bench as the bench declared it.
+            boolean staticCard = server != null
+                    && AudioBackend.instance().manager(server.carrier()).staticDeviceCard();
             // What a rebuild WOULD show, resolved before a single widget is
             // touched: when it is what the section already shows, the teardown,
             // the row creation and the relayout below would only reproduce it -
             // and that trio is what a backend switch spends its seconds on.  A
             // BENCH section takes no such shortcut: its list is a cards.list round
             // trip whose answer IS the refresh.
-            List<AudioDeviceProfile> listable = remote ? List.of() : listableCards();
-            AudioDeviceProfile pick = !remote && dev != null ? edit.resolveDeviceProfile(dev) : null;
-            String identity = remote ? null : cardRenderIdentity(input, dev, listable, pick);
+            List<AudioDeviceProfile> listable = staticCard ? deviceOwnCard(dev)
+                    : remote ? List.of() : listableCards();
+            AudioDeviceProfile pick = staticCard ? (listable.isEmpty() ? null : listable.get(0))
+                    : !remote && dev != null ? edit.resolveDeviceProfile(dev) : null;
+            String identity = remote && !staticCard ? null
+                    : cardRenderIdentity(input, dev, listable, pick);
             if (identity != null && identity.equals(renderedIdentity)) {
                 return pick;
             }
@@ -2528,7 +2550,9 @@ public final class PreferencesDialog {
             comboProfiles.clear();
             comboNames.clear();
             remoteCards = remote;
-            if (remoteCards) {
+            staticDeviceCard = staticCard;
+            cardCombo.setEnabled(!staticCard);
+            if (remoteCards && !staticCard) {
                 return refreshServerCards(server, dev);
             }
             for (AudioDeviceProfile p : listable) {
@@ -2537,9 +2561,11 @@ public final class PreferencesDialog {
                 comboNames.add(p.getName());
             }
 
-            cardCombo.add(I18n.t("preferences.audio.card.new"));
-            comboProfiles.add(null);                                  // last = New card...
-            comboNames.add(null);
+            if (!staticCard) {
+                cardCombo.add(I18n.t("preferences.audio.card.new"));
+                comboProfiles.add(null);                              // last = New card...
+                comboNames.add(null);
+            }
 
             // A resolved / suggested card is selected; anything else (unknown
             // device, or no device) leaves the combo empty with no range table.
@@ -2557,6 +2583,15 @@ public final class PreferencesDialog {
         private AudioDeviceProfile refreshForced() {
             renderedIdentity = null;
             return refresh();
+        }
+
+        /** The device's own card - the device-calibrated one the working copy
+         *  holds for the device name (read from the device locally, rendered by
+         *  the backend's settings panel for one on a server) - or nothing while
+         *  the device has not been read yet.  Never any other card. */
+        private List<AudioDeviceProfile> deviceOwnCard(String dev) {
+            AudioDeviceProfile p = dev == null ? null : edit.resolveDeviceProfile(dev);
+            return p != null && endpointOf(p).isCalibrationFromDevice() ? List.of(p) : List.of();
         }
 
         /** The cards the combo lists: every profile in the working copy whose
@@ -2618,6 +2653,9 @@ public final class PreferencesDialog {
             AudioDeviceProfile pick = refresh();
             String dev = deviceName();
             if (dev == null) return;
+            // A static card is read from the device, never offered, copied or
+            // authored.
+            if (staticDeviceCard) return;
             if (remoteCards) {
                 // A device on a bench: its card is created and calibrated THERE,
                 // never here - a local one made for it could only ever be found
@@ -2775,7 +2813,7 @@ public final class PreferencesDialog {
         private void selectByProfile(AudioDeviceProfile p) {
             int idx = -1;
             if (p != null) {
-                for (int i = 0; i < comboProfiles.size() - 1; i++) {
+                for (int i = 0; i < comboProfiles.size(); i++) {
                     if (comboProfiles.get(i) != null && comboProfiles.get(i).getName().equals(p.getName())) {
                         idx = i;
                         break;
@@ -2893,27 +2931,41 @@ public final class PreferencesDialog {
             renderedIdentity = null;
         }
 
-        /** Opens the card edit dialog on the currently selected card and replaces
-         *  it in the working copy on OK, re-keying cleanly on a rename (remove the
-         *  old name, put under the new). */
         /** Builds (but does not open) the card editor on the currently selected
-         *  card, or null when nothing is selected - shared by the interactive
+         *  card - this machine's, or the bench's as it sent it - or null when
+         *  nothing is selected.  Shared by the interactive
          *  {@link #editSelectedCard()} and the help-capture hook
          *  {@link PreferencesDialog#openInputCardEditorForCapture()}. */
         private CardEditorDialog editorForSelected() {
             if (selectedName == null) return null;
-            AudioDeviceProfile live = edit.findAudioDeviceProfile(selectedName);
+            AudioDeviceProfile live = remoteCards
+                    ? serverCards.card(edit.getSelectedBackend(), selectedName)
+                    : edit.findAudioDeviceProfile(selectedName);
             if (live == null) return null;
             return new CardEditorDialog(parent, live,
                     CardEditorDialog.Capability.of(live),
-                    currentCardNames(), live.getName(), DEFAULT_ADC_FS_VRMS, DEFAULT_DAC_FS_AMPL);
+                    remoteCards ? serverCardNames() : currentCardNames(), live.getName(),
+                    DEFAULT_ADC_FS_VRMS, DEFAULT_DAC_FS_AMPL);
         }
 
+        /** Opens the card editor on the selected card and, on its OK, replaces
+         *  the card where it lives: in the working copy for this machine's card
+         *  (re-keyed cleanly on a rename - remove the old name, put under the
+         *  new), STAGED for the bench for a bench card ({@link ServerCards#stageCard}),
+         *  sent by this dialog's OK like every other bench edit. */
         private void editSelectedCard() {
             CardEditorDialog dlg = editorForSelected();
             if (dlg == null) return;
             AudioDeviceProfile p = dlg.open();
             if (p == null) return;                         // cancelled - nothing changed
+            if (remoteCards) {
+                serverCards.stageCard(edit.getSelectedBackend(), selectedName, p);
+                refreshForced();                           // the bench's list, as edited
+                selectByName(p.getName());
+                rebuildTable();
+                renderedIdentity = null;
+                return;
+            }
             if (!p.getName().equalsIgnoreCase(selectedName)) {
                 edit.removeAudioDeviceProfile(selectedName);   // rename - drop the old key
             }
@@ -2964,10 +3016,12 @@ public final class PreferencesDialog {
                 rows.clear();
                 AudioDeviceProfile p = rangeCard();
                 boolean show = p != null;
-                // Edit only a real, selected LOCAL card: a bench's card is created
-                // and calibrated where the device is, and the pencil edits this
-                // machine's store.
-                if (!editBtn.isDisposed()) editBtn.setEnabled(show && !remoteCards);
+                // Edit only a real, selected card the operator owns - this
+                // machine's, or the bench's (edited here, replaced there on OK);
+                // a static card is the device's.
+                if (!editBtn.isDisposed()) {
+                    editBtn.setEnabled(show && !staticDeviceCard);
+                }
                 rangesLabel.setVisible(show);
                 ((GridData) rangesLabel.getLayoutData()).exclude = !show;
                 rangesContainer.setVisible(show);
@@ -3066,10 +3120,11 @@ public final class PreferencesDialog {
             // A device-provided endpoint (QA40x) owns its labels + range set: the
             // label fields are read-only and the add / remove buttons are hidden,
             // but the active-range radios stay usable (the ranges are switchable).
-            // A BENCH card is the same case for a different reason - its shape is
-            // the bench's to edit, in front of the device; from here the operator
-            // may only choose which of its rows is in force.
-            boolean deviceProvided = ep.isCalibrationFromDevice() || remoteCards;
+            // A BENCH card's rows are named from here like a local card's - the
+            // rename reaches the bench on OK - but its shape is not: add / remove
+            // stay hidden on it.
+            boolean deviceProvided = ep.isCalibrationFromDevice();
+            boolean fixedShape = deviceProvided || remoteCards;
 
             // NO_RADIO_GROUP: in INDEPENDENT mode the row holds the Left AND the
             // Right active radio, which are two independent one-of-N columns -
@@ -3119,7 +3174,7 @@ public final class PreferencesDialog {
             addGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
             addBtn.setLayoutData(addGd);
             addBtn.setToolTipText(I18n.t("preferences.audio.range.add.tooltip"));
-            if (deviceProvided) addBtn.setVisible(false);
+            if (fixedShape) addBtn.setVisible(false);
 
             Image minus = IconUtils.icon(row.getDisplay(), Icon.MINUS);
             Button removeBtn = new Button(row, SWT.PUSH);
@@ -3128,7 +3183,7 @@ public final class PreferencesDialog {
             remGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
             removeBtn.setLayoutData(remGd);
             removeBtn.setToolTipText(I18n.t("preferences.audio.range.remove.tooltip"));
-            if (isRow0 || deviceProvided) removeBtn.setVisible(false);
+            if (isRow0 || fixedShape) removeBtn.setVisible(false);
 
             RangeRow r = new RangeRow();
             r.composite        = row;
@@ -3161,6 +3216,8 @@ public final class PreferencesDialog {
                     Text lfr = labelFieldRight;
                     lfr.addListener(SWT.FocusOut, e -> userRenameRange(ep, r, lfr));
                 }
+            }
+            if (!fixedShape) {
                 addBtn.addListener(SWT.Selection,    e -> userAddRange(ep));
                 if (!isRow0) removeBtn.addListener(SWT.Selection, e -> userRemoveRange(ep, r));
             }
@@ -3235,15 +3292,29 @@ public final class PreferencesDialog {
          *  mirror) is synced to the committed label. */
         private void userRenameRange(DeviceEndpointConfig ep, RangeRow r, Text edited) {
             String wanted = edited.getText().trim();
-            if (wanted.isEmpty()) { syncLabelFields(r, r.range.getLabel()); return; }
+            String was = r.range.getLabel();
+            if (wanted.isEmpty()) { syncLabelFields(r, was); return; }
             String unique = uniqueLabel(ep, wanted, r.range);
-            boolean wasActiveLeft  = r.range.getLabel().equals(ep.getActiveRangeLeft());
-            boolean wasActiveRight = r.range.getLabel().equals(ep.getActiveRangeRight());
+            if (unique.equals(was)) { syncLabelFields(r, was); return; }
+            boolean wasActiveLeft  = was.equals(ep.getActiveRangeLeft());
+            boolean wasActiveRight = was.equals(ep.getActiveRangeRight());
             r.range.setLabel(unique);
             syncLabelFields(r, unique);
             if (wasActiveLeft)  ep.setActiveRangeLeft(unique);
             if (wasActiveRight) ep.setActiveRangeRight(unique);
             commit();
+            stageServerRename(was, unique);
+        }
+
+        /** A rename on a BENCH card is staged for the bench (spec 4.3
+         *  {@code device.renameRange}), like an active-range move: the card just
+         *  edited is the bench's, shown from a cached copy, so OK is what makes
+         *  the new label real there and Cancel leaves the bench as it was. */
+        private void stageServerRename(String from, String to) {
+            BackendKey server = edit.getSelectedBackend();
+            String dev = deviceName();
+            if (!remoteCards || server == null || dev == null) return;
+            serverCards.stageRename(server, input, dev, from, to);
         }
 
         /** Shows {@code label} in both of the row's label fields (they mirror
