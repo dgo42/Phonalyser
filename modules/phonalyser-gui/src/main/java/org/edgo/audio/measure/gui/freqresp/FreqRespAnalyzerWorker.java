@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.freqresp;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -223,6 +224,9 @@ public final class FreqRespAnalyzerWorker {
         DeviceCalibration dac = audio.calibrationOrDefault(false);
         DeviceCalibration adc = audio.calibrationOrDefault(true);
         double sweepAmplitudeVrms = dac.amplitudeVrms(prefs.getFreqRespAmplitude(), Channel.L);
+        // The silence before the chirp: the fixed window the deconvolution
+        // measures each channel's DC offset on, plus the operator's lead-in.
+        double leadInSec = FreqRespCalHelper.OFFSET_LEAD_IN_SEC + prefs.getFreqRespLeadInSec();
         return FreqRespAnalyzerConfig.builder()
                 .outDevice(out)
                 .inDevice(in)
@@ -234,7 +238,7 @@ public final class FreqRespAnalyzerWorker {
                 .stopHz(prefs.getFreqRespStopHz())
                 .sweepPoints(prefs.getFreqRespSweepPoints())
                 .durationSec(prefs.getFreqRespDurationSec())
-                .leadInSec(prefs.getFreqRespLeadInSec())
+                .leadInSec(leadInSec)
                 .amplitudeVrms(sweepAmplitudeVrms)
                 .dacFsVoltageRmsLeft(dac.peakVolts(Channel.L))
                 .dacFsVoltageRmsRight(dac.peakVolts(Channel.R))
@@ -250,7 +254,7 @@ public final class FreqRespAnalyzerWorker {
                 // describe what the DAC emits, so they are on the playback clock.
                 .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
                         prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
-                        prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
+                        prefs.getFreqRespDurationSec(), leadInSec,
                         sweepAmplitudeVrms, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R)))
                 .build();
     }

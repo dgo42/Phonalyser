@@ -263,8 +263,8 @@ public final class FreqRespAnalyzer {
         if (cfg.getDurationSec() < FreqRespConstants.SWEEP_MIN_SEC) {
             throw new IllegalArgumentException("durationSec must be >= " + FreqRespConstants.SWEEP_MIN_SEC);
         }
-        if (cfg.getLeadInSec() < FreqRespConstants.LEAD_IN_MIN_SEC) {
-            throw new IllegalArgumentException("leadInSec must be >= " + FreqRespConstants.LEAD_IN_MIN_SEC);
+        if (cfg.getLeadInSec() < FreqRespCalHelper.OFFSET_LEAD_IN_SEC) {
+            throw new IllegalArgumentException("leadInSec must be >= " + FreqRespCalHelper.OFFSET_LEAD_IN_SEC);
         }
         if (cfg.getAmplitudeVrms() <= 0.0)           throw new IllegalArgumentException("amplitudeVrms must be > 0");
         if (cfg.getStereoCaptureProvider() == null)  throw new IllegalArgumentException("stereoCaptureProvider is required");

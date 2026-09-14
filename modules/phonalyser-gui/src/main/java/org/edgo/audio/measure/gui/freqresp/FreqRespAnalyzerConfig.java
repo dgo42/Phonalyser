@@ -20,6 +20,7 @@ package org.edgo.audio.measure.gui.freqresp;
 
 import lombok.Builder;
 import lombok.Getter;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.sound.StereoCaptureProgress;
 import org.edgo.audio.measure.sound.StereoSamples;
@@ -66,7 +67,10 @@ public final class FreqRespAnalyzerConfig {
     private final int sweepPoints;
     /** Sweep duration in seconds, excluding lead-in. */
     private final double durationSec;
-    /** Silent lead-in prepended to the sweep, in seconds. */
+    /** Silence before the chirp, in seconds: the fixed
+     *  {@link FreqRespCalHelper#OFFSET_LEAD_IN_SEC} window the deconvolution
+     *  measures each channel's DC offset on, plus the lead-in the operator
+     *  configured on top of it.  Never less than that window. */
     private final double leadInSec;
 
     /** Generator drive amplitude in V RMS at the DAC. */

@@ -20,6 +20,7 @@ package org.edgo.audio.measure.gui.sound;
 
 import java.util.function.BooleanSupplier;
 
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.sound.StereoCaptureProgress;
@@ -136,11 +137,13 @@ public final class SweepCapture {
                     // anchor instant the private-line path always used.
                     reader.seekToLatest();
                 }
-                // The lead-in on the record's own clock: the stretch of silence
-                // the progress meter measures each channel's offset on.
-                int leadInCaptureSamples = (int) Math.round(
-                        leadInSamples * (captureRateHz / (double) playbackRateHz));
-                return assemble(reader, captureRateHz, leadInCaptureSamples, durationSec,
+                // The offset window on the record's own clock: the fixed
+                // stretch of silence at the head of the record that the
+                // deconvolution measures each channel's offset on, and the
+                // progress meter with it.
+                int offsetSamples = (int) Math.round(
+                        FreqRespCalHelper.OFFSET_LEAD_IN_SEC * captureRateHz);
+                return assemble(reader, captureRateHz, offsetSamples, durationSec,
                         cancelToken, progress);
             } finally {
                 lane.stop();
@@ -183,20 +186,21 @@ public final class SweepCapture {
      *  wakeup between chunks.
      *
      *  <p>The level handed to the progress meter is taken with each channel's
-     *  DC offset removed - the mean of its first {@code leadInSamples}, the
+     *  DC offset removed - the mean of its first {@code offsetSamples}, the
      *  silence before the chirp - so a capture sitting off centre shows the
-     *  chirp's level and not the offset.  Until the lead-in is complete the
-     *  meter shows the raw level, offset included. */
+     *  chirp's level and not the offset.  The blocks of that window are not
+     *  reported at all: the offset is unknown until the window is complete,
+     *  and a raw level with the offset in it is not the signal's level. */
     private StereoSamples assemble(SignalBufferReader reader, int captureRateHz,
-            int leadInSamples, int durationSec, BooleanSupplier cancelToken,
+            int offsetSamples, int durationSec, BooleanSupplier cancelToken,
             StereoCaptureProgress progress) throws InterruptedException {
         int total = durationSec * captureRateHz;
         double[] left   = new double[total];
         double[] right  = new double[total];
         double[] chunkL = new double[CHUNK_FRAMES];
         double[] chunkR = new double[CHUNK_FRAMES];
-        double sumLeadInL = 0.0;
-        double sumLeadInR = 0.0;
+        double sumOffsetL = 0.0;
+        double sumOffsetR = 0.0;
         int written = 0;
         while (written < total) {
             if (cancelToken != null && cancelToken.getAsBoolean()) {
@@ -223,16 +227,15 @@ public final class SweepCapture {
             }
             System.arraycopy(chunkL, 0, left,  written, got);
             System.arraycopy(chunkR, 0, right, written, got);
-            int inLeadIn = Math.max(0, Math.min(got, leadInSamples - written));
-            for (int i = 0; i < inLeadIn; i++) {
-                sumLeadInL += chunkL[i];
-                sumLeadInR += chunkR[i];
+            int inWindow = Math.max(0, Math.min(got, offsetSamples - written));
+            for (int i = 0; i < inWindow; i++) {
+                sumOffsetL += chunkL[i];
+                sumOffsetR += chunkR[i];
             }
             written += got;
-            if (progress != null) {
-                boolean leadInDone = leadInSamples > 0 && written >= leadInSamples;
-                double offsetL = leadInDone ? sumLeadInL / leadInSamples : 0.0;
-                double offsetR = leadInDone ? sumLeadInR / leadInSamples : 0.0;
+            if (progress != null && written >= offsetSamples) {
+                double offsetL = offsetSamples > 0 ? sumOffsetL / offsetSamples : 0.0;
+                double offsetR = offsetSamples > 0 ? sumOffsetR / offsetSamples : 0.0;
                 progress.onBlock(written, blockRms(chunkL, got, offsetL),
                         blockRms(chunkR, got, offsetR));
             }

@@ -154,6 +154,9 @@ public class FreqRespMode {
         }
 
         int  sweepSamples    = (int) Math.round(sweepDurationSec * sampleRate);
+        // The silence before the chirp: the fixed window the deconvolution
+        // measures each channel's DC offset on, plus the --lead-in argument.
+        leadInSec += FreqRespCalHelper.OFFSET_LEAD_IN_SEC;
         int  leadInSamples   = (int) Math.round(leadInSec * sampleRate);
         int  tailSamples     = sampleRate / 2;
         long totalGenSamples = (long) leadInSamples + sweepSamples + tailSamples;

@@ -50,6 +50,12 @@ public class FreqRespCalHelper {
      *  swept band intact. */
     public static final double SWEEP_FADE_FRACTION_PER_SIDE = 0.05;
 
+    /** Fixed silence at the head of every one-shot sweep record, in seconds,
+     *  on which each channel's DC offset is measured (4410 samples at
+     *  44.1 kHz).  It precedes whatever lead-in the operator configures on
+     *  top of it, so the offset window never shrinks with a short lead-in. */
+    public static final double OFFSET_LEAD_IN_SEC = 0.1;
+
     /** Shared per-tone lobe geometry (robust local floor + data-derived lobe
      *  extent) - also used by the manual-fundamental display, so both agree on
      *  where a tone ends and the noise begins. */
@@ -240,14 +246,15 @@ public class FreqRespCalHelper {
         }
         // The record begins with the lead-in: the chirp has not started, so
         // those samples carry nothing but the channel's own offset and noise.
-        // Their mean is the DC offset - an ADC input sitting off centre, a DUT
-        // with an output offset - and it comes out of the whole record before
-        // the transform.  Left in, a constant over a one-shot record is a step
-        // at both ends whose 1/f leakage, divided by the chirp, ripples the
-        // whole low end of the trace.  A record without lead-in (a circular
-        // one-period window) has nothing to measure it on and needs nothing:
-        // there the offset is bin 0 alone, which is skipped.
-        double offset = leadInOffset(yRec, leadInSamples);
+        // Their mean over the fixed OFFSET_LEAD_IN_SEC window is the DC offset
+        // - an ADC input sitting off centre, a DUT with an output offset - and
+        // it comes out of the whole record before the transform.  Left in, a
+        // constant over a one-shot record is a step at both ends whose 1/f
+        // leakage, divided by the chirp, ripples the whole low end of the
+        // trace.  A record without lead-in (a circular one-period window) has
+        // nothing to measure it on and needs nothing: there the offset is
+        // bin 0 alone, which is skipped.
+        double offset = leadInOffset(yRec, leadInSamples, sampleRate);
         double[] yBuf = new double[M];
         for (int i = 0; i < yRec.length; i++) {
             yBuf[i] = yRec[i] - offset;
@@ -456,10 +463,12 @@ public class FreqRespCalHelper {
         return new FreqRespCalibration(freqs, magLin, phaseRad);
     }
 
-    /** The mean of the record's lead-in samples - the channel's DC offset - or
-     *  0 when the record has no lead-in to read it from. */
-    private double leadInOffset(double[] yRec, int leadInSamples) {
-        int n = Math.min(leadInSamples, yRec.length);
+    /** The mean of the record's first {@link #OFFSET_LEAD_IN_SEC} of lead-in
+     *  samples - the channel's DC offset - or 0 when the record has no lead-in
+     *  to read it from. */
+    private double leadInOffset(double[] yRec, int leadInSamples, int sampleRate) {
+        int window = (int) Math.round(OFFSET_LEAD_IN_SEC * sampleRate);
+        int n = Math.min(Math.min(leadInSamples, window), yRec.length);
         if (n <= 0) {
             return 0.0;
         }

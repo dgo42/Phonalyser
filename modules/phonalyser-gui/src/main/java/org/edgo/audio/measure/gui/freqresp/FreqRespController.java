@@ -24,6 +24,7 @@ import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 
 import org.edgo.audio.measure.bind.Property;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.sound.StereoCaptureProgress;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -121,10 +122,17 @@ public final class FreqRespController {
      *  ring-out needs the full half second even when the lead-in is short).
      *  Sizes the pane's progress meter time axis. */
     public double expectedMeasurementSeconds() {
-        Preferences prefs = Preferences.instance();
-        return prefs.getFreqRespLeadInSec()
-             + prefs.getFreqRespDurationSec()
+        return sweepLeadInSec()
+             + Preferences.instance().getFreqRespDurationSec()
              + FreqRespConstants.SWEEP_MIN_SEC;
+    }
+
+    /** The silence the sweep emits before the chirp: the fixed
+     *  {@link FreqRespCalHelper#OFFSET_LEAD_IN_SEC} window the deconvolution
+     *  measures each channel's DC offset on, plus the operator's lead-in. */
+    public double sweepLeadInSec() {
+        return FreqRespCalHelper.OFFSET_LEAD_IN_SEC
+             + Preferences.instance().getFreqRespLeadInSec();
     }
 
     /** Detaches every subscription and cancels an in-flight measurement -
@@ -147,7 +155,7 @@ public final class FreqRespController {
     private void deriveDuration() {
         Preferences prefs = Preferences.instance();
         int sr = Math.max(1, prefs.current().getInputSampleRate());
-        long leadIn   = Math.round(prefs.getFreqRespLeadInSec() * sr);
+        long leadIn   = Math.round(sweepLeadInSec() * sr);
         long tail     = Math.round(FreqRespConstants.SWEEP_MIN_SEC * sr);
         long sweep    = prefs.getFreqRespFftSize() - leadIn - tail;
         long minSweep = Math.round(FreqRespConstants.SWEEP_MIN_SEC * sr);
