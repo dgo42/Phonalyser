@@ -63,6 +63,15 @@ public abstract class AbstractLocalDeviceManager implements AudioDeviceManager {
         }
     }
 
+    @Override
+    public boolean calibrationFromDevice(DeviceRef device, boolean input) {
+        Preferences prefs = Preferences.instance();
+        synchronized (prefs) {
+            AudioDeviceProfile p = prefs.resolveDeviceProfile(device.name());
+            return p != null && (input ? p.getInput() : p.getOutput()).isCalibrationFromDevice();
+        }
+    }
+
     /**
      * Writes {@code ch}'s full scale into the card that recognises {@code device}
      * (created when none does), persists it, and tells every subscriber of

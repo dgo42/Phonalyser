@@ -51,7 +51,6 @@ import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.GlScopeSurface;
-import org.edgo.audio.measure.gui.sound.CalibrationStore;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
@@ -1045,7 +1044,7 @@ public final class ScopePane extends AbstractPane {
             // correction (newFs = currentFs x known / measured) reaches the same
             // answer from any seed, so a small reading costs accuracy, not
             // correctness.  A calibrated selection keeps the accuracy gate whole.
-            boolean uncalibrated = new CalibrationStore(prefs).isUncalibrated(true);
+            boolean uncalibrated = AudioBackend.instance().isUncalibrated(true);
             double minFraction = uncalibrated
                     ? CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED
                     : CALIBRATE_MIN_VPP_FRACTION;

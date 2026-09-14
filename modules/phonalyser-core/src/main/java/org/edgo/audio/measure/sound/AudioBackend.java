@@ -425,6 +425,25 @@ public final class AudioBackend {
         return cal == null ? DeviceCalibration.DEFAULT : cal;
     }
 
+    /** Whether the ACTIVE device's full scales in {@code input}'s direction are
+     *  the device's own ({@link AudioDeviceManager#calibrationFromDevice}), so a
+     *  calibrate dialog shows them read-only.  False with no device active. */
+    public boolean isCalibrationFromDevice(boolean input) {
+        DeviceRef device = activeDevice(input);
+        return device != null && manager(device.carrier()).calibrationFromDevice(device, input);
+    }
+
+    /** Whether the ACTIVE selection would be measured with NO real calibration
+     *  in {@code input}'s direction - the warning the Preferences dialog raises
+     *  on a committed selection, and the accuracy gate a calibrate button drops
+     *  when there is no full scale worth measuring against.  A device whose
+     *  calibration is its own is exempt: there is nothing for the operator to
+     *  do about it.  No device active, or one its backend no longer offers, is
+     *  uncalibrated too - nothing is left to vouch for what its volts mean. */
+    public boolean isUncalibrated(boolean input) {
+        return calibration(input) == null && !isCalibrationFromDevice(input);
+    }
+
     /** Whether {@code device} is the ACTIVE device in {@code input}'s direction
      *  - what a subscriber of the calibration-changed events asks before it
      *  acts: a change on any other device is not in force here.

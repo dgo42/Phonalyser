@@ -1497,6 +1497,12 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
         return ref.calibration();
     }
 
+    /** Spec 4.3's {@code calFromDevice}, carried on the ref the bench listed. */
+    @Override
+    public boolean calibrationFromDevice(DeviceRef device, boolean input) {
+        return remoteRef(device).calFromDevice();
+    }
+
     /**
      * Reports every device this session holds that the new catalogue no longer
      * offers, and forgets its lock.

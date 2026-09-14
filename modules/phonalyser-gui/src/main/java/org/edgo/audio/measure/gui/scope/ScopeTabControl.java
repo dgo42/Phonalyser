@@ -69,7 +69,6 @@ import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.sound.CalibrationStore;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
@@ -1160,7 +1159,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         Shell parent = getShell();
         Preferences prefs = Preferences.instance();
         // First, whether the calibration may be written at all.
-        if (new CalibrationStore(prefs).isCalibrationFromDevice(true)) {
+        if (AudioBackend.instance().isCalibrationFromDevice(true)) {
             // Device-provided (a QA40x, here or on a bench): show the built-in
             // full-scale read-only.
             DeviceCalibration adc = AudioBackend.instance().calibrationOrDefault(true);

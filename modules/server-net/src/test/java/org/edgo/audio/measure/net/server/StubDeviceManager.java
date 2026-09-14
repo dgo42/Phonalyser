@@ -289,6 +289,17 @@ final class StubDeviceManager implements AudioDeviceManager, Qa40xControl {
         return card == null ? null : (input ? card.getInput() : card.getOutput()).calibration();
     }
 
+    @Override
+    public boolean calibrationFromDevice(DeviceRef device, boolean input) {
+        Preferences store = cards;
+        if (store == null) {
+            return false;
+        }
+        AudioDeviceProfile card = store.resolveDeviceProfile(device.name());
+        return card != null
+                && (input ? card.getInput() : card.getOutput()).isCalibrationFromDevice();
+    }
+
     /** One direction's list, read off the SNAPSHOT rather than the bench - a
      *  device pulled out is still in it, and one plugged in is not, until
      *  something rebuilds it.  The index is the slot in this list, as the SPI

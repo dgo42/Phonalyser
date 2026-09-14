@@ -77,7 +77,6 @@ import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.sound.BenchCards;
 import org.edgo.audio.measure.gui.sound.CalibrationCopyOffers;
-import org.edgo.audio.measure.gui.sound.CalibrationStore;
 import org.edgo.audio.measure.gui.sound.DeviceCatalog;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.enums.TabOrientation;
@@ -214,10 +213,6 @@ public final class PreferencesDialog {
     private Property<Double> nyqWork;
     private CardSection inputCard;
     private CardSection outputCard;
-    /** Where a calibration write goes - used here for the operator-confirmed copy
-     *  of a local card's values onto a bench that has none.  Built on
-     *  the WORKING COPY: the values offered are the ones the dialog is showing. */
-    private CalibrationStore calibrationStore;
     /** One local-backend {@link AudioDeviceManager#setup()} in flight at a time -
      *  see {@link #setupShownBackendInBackground()}. */
     private final AtomicBoolean backendSetupRunning = new AtomicBoolean();
@@ -328,8 +323,7 @@ public final class PreferencesDialog {
         // backend currently shown in the combos is edit.getSelectedBackend() -
         // the single source of truth, no separate active-backend tracking.
         edit = Preferences.instance().copyForDialog();
-        calibrationStore = new CalibrationStore(edit);
-        benchCards = new BenchCards(edit, calibrationStore);
+        benchCards = new BenchCards(edit);
         // Component-owned blocks live on their owners, not in the working copy,
         // so give them the same session: seed their edit values now, commit them
         // beside applyFromDialog() on OK, leave them alone on Cancel.
@@ -1182,14 +1176,13 @@ public final class PreferencesDialog {
             // The operator must be told when what they just committed
             // has no calibration behind it - LAST, so the commit is complete and
             // the streams are already back up while the warning is on screen.
-            Preferences committed = Preferences.instance();
-            BackendPrefs committedBp = committed.current();
+            BackendPrefs committedBp = Preferences.instance().current();
             boolean selectionChanged =
                     !edit.getSelectedBackend().key().equals(openState.backendKey())
                     || !Objects.equals(committedBp.getInputDeviceName(),  openState.inputDevice())
                     || !Objects.equals(committedBp.getOutputDeviceName(), openState.outputDevice());
             if (selectionChanged) {
-                warnIfUncalibrated(committed, committedBp);
+                warnIfUncalibrated(committedBp);
             }
             // Committed: the bench the combo is on IS the live one now, so the
             // dispose handler must not point it back at the old selection.
@@ -1248,6 +1241,8 @@ public final class PreferencesDialog {
                 benchCards.commitStagedBindings(committed, devices.inputs, devices.outputs));
         refused.addAll(benchCards.commitStagedRanges(committed, devices.inputs,
                 devices.outputs));
+        refused.addAll(benchCards.commitStagedValues(committed, devices.inputs,
+                devices.outputs));
         if (refused.isEmpty()) return;
         Dialogs.error(parent, I18n.t("net.servers.error.title"),
                 I18n.t("preferences.audio.card.bindFailed", String.join(", ", refused)));
@@ -1274,15 +1269,17 @@ public final class PreferencesDialog {
      *
      * <p>Both directions are tested but only one dialog is raised, naming the
      * device(s) it applies to; the exemptions and the precedence are
-     * {@link Preferences#isUncalibrated}'s, so this cannot disagree with what the
-     * selection is actually measured against.
+     * {@link AudioBackend#isUncalibrated}'s - the committed selection's manager
+     * answers - so this cannot disagree with what the selection is actually
+     * measured against.  No device selected is nothing to warn about.
      */
-    private void warnIfUncalibrated(Preferences committed, BackendPrefs bp) {
+    private void warnIfUncalibrated(BackendPrefs bp) {
+        AudioBackend audio = AudioBackend.instance();
         List<String> uncalibrated = new ArrayList<>();
-        if (isUncalibrated(committed, devices.inputs, bp.getInputDeviceName(), true)) {
+        if (bp.getInputDeviceName() != null && audio.isUncalibrated(true)) {
             uncalibrated.add(bp.getInputDeviceName());
         }
-        if (isUncalibrated(committed, devices.outputs, bp.getOutputDeviceName(), false)) {
+        if (bp.getOutputDeviceName() != null && audio.isUncalibrated(false)) {
             uncalibrated.add(bp.getOutputDeviceName());
         }
         if (uncalibrated.isEmpty()) return;
@@ -1291,17 +1288,6 @@ public final class PreferencesDialog {
         }
         Dialogs.warn(parent, I18n.t("preferences.audio.uncalibrated.title"),
                 I18n.t("preferences.audio.uncalibrated.message", String.join(", ", uncalibrated)));
-    }
-
-    /** One direction's half of {@link #warnIfUncalibrated}: the ref's answer when
-     *  the enumeration still offers the device, the name-only one otherwise.  No
-     *  device selected is nothing to warn about. */
-    private boolean isUncalibrated(Preferences committed, List<DeviceRef> refs,
-            String deviceName, boolean input) {
-        if (deviceName == null) return false;
-        DeviceRef ref = refFor(refs, deviceName);
-        return ref != null ? committed.isUncalibrated(ref, input)
-                           : committed.isUncalibrated(deviceName, input);
     }
 
     /**
@@ -2662,10 +2648,11 @@ public final class PreferencesDialog {
          * about a {@code calibrationFromDevice} card - a QA40x's values are the
          * analyzer's and neither side may overwrite them.
          *
-         * <p>Accepting sends spec 4.3's {@code device.setCalibration}, which is the
-         * bench's store from then on; declining is remembered for the run
-         * ({@link CalibrationCopyOffers}), so neither switching device and back nor
-         * reopening this dialog asks again.
+         * <p>Accepting puts the card on the bench at once and STAGES the locked
+         * writes - the binding, or the values alone - for OK, when the session is
+         * routed at the backend and a locked write can go out; declining is
+         * remembered for the run ({@link CalibrationCopyOffers}), so neither
+         * switching device and back nor reopening this dialog asks again.
          */
         private void offerBenchCard() {
             BackendKey bench = edit.getSelectedBackend();
@@ -2683,8 +2670,8 @@ public final class PreferencesDialog {
             if (!copyable && ref.boundCard() != null) return;       // a card IS in force there
             if (!mainWindow.getCalibrationCopyOffers().mayAsk(bench, input, dev)) return;
             boolean answered = copyable
-                    ? copyLocalCardToBench(bench, ref, dev, local)
-                    : createBenchCard(bench, ref, dev);
+                    ? copyLocalCardToBench(bench, dev, local)
+                    : createBenchCard(bench, dev);
             // ONLY a settled question is remembered.  An attempt that never reached
             // the bench - a wire glitch, a device somebody took a second ago - is
             // not an answer, and burning the one offer on it would leave the device
@@ -2695,42 +2682,42 @@ public final class PreferencesDialog {
         }
 
         /**
-         * The copy offer's YES branch: the whole local card goes up (spec 4.3
-         * {@code cards.put} + {@code device.setCard}), and its full scales alone go
-         * up when the bench will not take the card - either way the device is
-         * calibrated where it is plugged in, and nothing was written here.
+         * The copy offer's YES branch: the whole local card goes up now (spec 4.3
+         * {@code cards.put}) and the device's binding to it is staged for OK
+         * ({@code device.setCard}); when the bench will not take the card, its
+         * full scales alone are staged to go up on OK - either way the device
+         * ends up calibrated where it is plugged in, and nothing is written here.
          *
          * <p>Every outcome is REPORTED, because they are not the same thing to an
-         * operator who confirmed "copy card X": the card and its binding, or only
-         * the numbers (into whichever card that bench resolves for the device), or
-         * a card that is there but bound to nothing.  The no-silent-copy rule cuts
-         * both ways - what actually happened has to be as visible as the offer was.
+         * operator who confirmed "copy card X": the card, or only the numbers
+         * (into whichever card that bench resolves for the device).  The
+         * no-silent-copy rule cuts both ways - what actually happened has to be
+         * as visible as the offer was.  A write the bench refuses on OK is
+         * reported by the commit's own dialog.
          *
-         * @return whether the question was ANSWERED (a decline, or something that
-         *         reached the bench) - see {@link CalibrationCopyOffers#settle}
+         * @return whether the question was ANSWERED (a decline, or something
+         *         staged for the bench) - see {@link CalibrationCopyOffers#settle}
          */
-        private boolean copyLocalCardToBench(BackendKey bench, DeviceRef ref, String dev,
+        private boolean copyLocalCardToBench(BackendKey bench, String dev,
                 AudioDeviceProfile local) {
             int answer = Dialogs.confirm(parent,
                     I18n.t("preferences.audio.card.copyCalibration.title"),
                     I18n.t("preferences.audio.card.copyCalibration.message", dev, local.getName()));
             if (answer != SWT.YES) return true;             // declined - asked and answered
-            BenchCards.Copied copied = benchCards.propagateLocalCard(bench, ref, dev, input);
+            BenchCards.Copied copied = benchCards.propagateLocalCard(bench, dev, input);
             switch (copied) {
-                case CARD -> { }                            // whole card, bound: nothing to say
+                case CARD -> { }                            // whole card, binding staged
                 case VALUES_ONLY -> Dialogs.info(parent,
                         I18n.t("preferences.audio.card.copyCalibration.title"),
                         I18n.t("preferences.audio.card.copyCalibration.valuesOnly",
                                 local.getName()));
-                case CARD_UNBOUND -> Dialogs.error(parent, I18n.t("net.servers.error.title"),
-                        I18n.t("preferences.audio.card.bindFailed", local.getName()));
                 default -> {
                     Dialogs.error(parent, I18n.t("net.servers.error.title"),
                             I18n.t("preferences.audio.card.copyCalibration.failed", dev));
-                    return false;                           // nothing landed - ask again later
+                    return false;                           // nothing staged - ask again later
                 }
             }
-            refresh();   // the bench's card list - and its binding - just moved
+            refresh();   // the bench's card list - and the staged pick - just moved
             return true;
         }
 
@@ -2738,14 +2725,15 @@ public final class PreferencesDialog {
          * NEITHER side has a card for this bench device, so the operator
          * is asked to make one - in the same card editor a local card is made in,
          * but the result is stored on the BENCH ({@code cards.put}) and bound there
-         * ({@code device.setCard}), never in this installation's store.
+         * on OK ({@code device.setCard}, staged like a chooser pick), never in
+         * this installation's store.
          *
          * <p>Declining is not a dead end: the next calibration written to this
          * device creates a bare card on the bench by itself
          * ({@code device.setCalibration} creates on write) - the create-an-empty-card
          * fallback, with no second protocol verb needed for it.
          */
-        private boolean createBenchCard(BackendKey bench, DeviceRef ref, String dev) {
+        private boolean createBenchCard(BackendKey bench, String dev) {
             int answer = Dialogs.confirm(parent,
                     I18n.t("preferences.audio.card.noCardAssigned.title"),
                     I18n.t("preferences.audio.card.noCardAssigned.message", dev));
@@ -2759,17 +2747,10 @@ public final class PreferencesDialog {
                     benchCardNames(), null, DEFAULT_ADC_FS_VRMS, DEFAULT_DAC_FS_AMPL);
             AudioDeviceProfile card = dlg.open();
             if (card == null) return true;                 // cancelled - nothing anywhere
-            BenchCards.Copied made = benchCards.createAndBind(bench, ref, card);
-            if (made == BenchCards.Copied.NOTHING) {
+            if (!benchCards.createAndStage(bench, dev, input, card)) {
                 Dialogs.error(parent, I18n.t("net.servers.error.title"),
                         I18n.t("preferences.audio.card.bindFailed", card.getName()));
                 return false;                              // the bench took nothing
-            }
-            if (made == BenchCards.Copied.CARD_UNBOUND) {
-                // The card IS on the bench - say so plainly rather than let the
-                // operator author it a second time and hit the name next run.
-                Dialogs.error(parent, I18n.t("net.servers.error.title"),
-                        I18n.t("preferences.audio.card.bindFailed", card.getName()));
             }
             refresh();
             return true;

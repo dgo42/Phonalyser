@@ -566,16 +566,24 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
         return List.of(output);
     }
 
-    /** Nothing here is ever calibrated. */
+    /** Recorded like every other command the bench is given - a calibration
+     *  write is one - and accepted; what the real net manager does with it
+     *  (the device lock, the wire message) is that manager's own test. */
     @Override
     public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
-        return false;
+        record("storeCalibration", device.name(), input, ch, fsRms);
+        return true;
     }
 
     /** A bench device carries its own calibration, as the net manager reads it. */
     @Override
     public DeviceCalibration calibration(DeviceRef device, boolean input) {
         return device.calibration();
+    }
+
+    @Override
+    public boolean calibrationFromDevice(DeviceRef device, boolean input) {
+        return device.calFromDevice();
     }
 
     @Override

@@ -55,7 +55,6 @@ import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.sound.CalibrationStore;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.gui.widgets.SignalFormCombo;
@@ -1163,7 +1162,7 @@ public final class GeneratorPane extends AbstractPane {
         Preferences prefs = Preferences.instance();
         DeviceCalibration dac = AudioBackend.instance().calibrationOrDefault(false);
         // First, whether the calibration may be written at all.
-        if (new CalibrationStore(prefs).isCalibrationFromDevice(false)) {
+        if (AudioBackend.instance().isCalibrationFromDevice(false)) {
             // Device-provided (a QA40x, here or on a bench): show the built-in
             // output full-scale (Vrms) read-only.
             new CalibrationDialog(parent, dacTexts(), dac.fsRms(Channel.L), dac.fsRms(Channel.R),

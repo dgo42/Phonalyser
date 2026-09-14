@@ -164,6 +164,11 @@ public final class DyingLaneStub implements AudioDeviceManager {
     }
 
     @Override
+    public boolean calibrationFromDevice(DeviceRef device, boolean input) {
+        return false;
+    }
+
+    @Override
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
         if (index != 0) {
             throw new IllegalArgumentException("no such device: " + index);

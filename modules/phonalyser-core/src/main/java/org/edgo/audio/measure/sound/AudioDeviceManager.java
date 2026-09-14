@@ -218,6 +218,16 @@ public interface AudioDeviceManager {
      */
     DeviceCalibration calibration(DeviceRef device, boolean input);
 
+    /**
+     * Whether the full scales of {@code device} in {@code input}'s direction are
+     * the DEVICE's own - a QA40x reads them from its EEPROM - so no caller may
+     * write them ({@link #storeCalibration} refuses) and a calibrate dialog
+     * shows them read-only.  Read where the device is connected, like
+     * {@link #calibration}: the card this machine holds for a local device, what
+     * the bench sent with a remote one.  False for a device no card recognises.
+     */
+    boolean calibrationFromDevice(DeviceRef device, boolean input);
+
 
     /**
      * WHY an open or start on this backend failed, as something an operator can

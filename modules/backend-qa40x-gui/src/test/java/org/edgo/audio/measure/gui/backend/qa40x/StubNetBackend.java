@@ -79,6 +79,11 @@ public final class StubNetBackend implements AudioDeviceManager {
     }
 
     @Override
+    public boolean calibrationFromDevice(DeviceRef device, boolean input) {
+        return device.calFromDevice();
+    }
+
+    @Override
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
         if (index != 0) {
             throw new IllegalArgumentException("no such device: " + index);

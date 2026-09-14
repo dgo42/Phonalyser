@@ -65,7 +65,6 @@ import org.edgo.audio.measure.gui.widgets.UnitConversion;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.widgets.UnitValue;
 import org.edgo.audio.measure.sound.DeviceCalibration;
-import org.edgo.audio.measure.sound.DeviceRef;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 
@@ -3768,58 +3767,6 @@ public final class Preferences {
             if (value.equalsIgnoreCase(s)) return true;
         }
         return false;
-    }
-
-    /**
-     * True when {@code device} would be measured with NO real calibration in this
-     * direction - the test behind the warning the Preferences dialog raises when
-     * the operator commits a changed backend / device: an uncalibrated device or
-     * card has to be announced, because V, dBV and every value derived from them
-     * are then not accurate.
-     *
-     * <p>The same precedence the device managers read by: the calibration the
-     * device carries wins (a bench device is calibrated by its bench and by
-     * nothing else - a local card of the same name is what the operator may
-     * propagate UP, never a silent calibrator down here), then this machine's
-     * card store, and anything else is uncalibrated.
-     *
-     * <p>A {@code calibrationFromDevice} endpoint is exempt - a QA40x carries its
-     * own factory calibration and there is nothing for the operator to do about
-     * it, so the warning would be noise.
-     */
-    public synchronized boolean isUncalibrated(DeviceRef device, boolean input) {
-        if (device.calibration() != null) {
-            return false;
-        }
-        return device.remote() || isUncalibrated(device.name(), input);
-    }
-
-    /** The name-only form of {@link #isUncalibrated(DeviceRef, boolean)} - for a
-     *  device this process holds no enumerated ref for, which is exactly the case
-     *  the name lookup has always covered on its own. */
-    public synchronized boolean isUncalibrated(String deviceName, boolean input) {
-        AudioDeviceProfile p = resolveDeviceProfile(deviceName);
-        if (p == null) {
-            return true;
-        }
-        DeviceEndpointConfig ep = input ? p.getInput() : p.getOutput();
-        return !ep.isCalibrationFromDevice() && ep.calibration() == null;
-    }
-
-    /** True when the active input device resolves to a card whose ADC full-scale
-     *  is provided by the device itself (a QA40x) - its calibration is read-only,
-     *  so the calibrate dialog opens view-only. */
-    public synchronized boolean isAdcCalibrationFromDevice() {
-        AudioDeviceProfile p = resolveDeviceProfile(current().getInputDeviceName());
-        return p != null && p.getInput().isCalibrationFromDevice();
-    }
-
-    /** True when the active output device resolves to a card whose DAC full-scale
-     *  is provided by the device itself (a QA40x) - its calibration is read-only,
-     *  so the calibrate dialog opens view-only. */
-    public synchronized boolean isDacCalibrationFromDevice() {
-        AudioDeviceProfile p = resolveDeviceProfile(current().getOutputDeviceName());
-        return p != null && p.getOutput().isCalibrationFromDevice();
     }
 
     /**

@@ -31,6 +31,9 @@ import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.BackendKey;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.AudioDeviceManager;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import lombok.RequiredArgsConstructor;
@@ -51,10 +54,11 @@ import lombok.extern.log4j.Log4j2;
  * show the remembered pick before, or without, an answer from the bench; the
  * card's VALUES never are.
  *
- * <p>Distinct from {@link CalibrationStore} on purpose: that one answers what the
- * selected device's calibration IS and copies a local card's VALUES up, this one
- * owns the CARDS - which exist, which is chosen, which row of one is active.  A
- * MEASURED value goes through neither: the backend the device is on stores it
+ * <p>This owns the CARDS - which exist, which is chosen, which row of one is
+ * active - and the copy of a local card's VALUES up when the bench will not take
+ * the card.  What the selected device's calibration IS, and whether it is the
+ * device's own, is {@code AudioBackend}'s to answer through the device's manager.
+ * A MEASURED value goes through neither: the backend the device is on stores it
  * ({@code AudioBackend.calibrate}).  The protocol draws the same line -
  * {@code device.setCard} is accepted for a {@code calibrationFromDevice} card,
  * which {@code device.setCalibration} and {@code cards.put} are not.
@@ -64,10 +68,6 @@ import lombok.extern.log4j.Log4j2;
 public final class BenchCards {
 
     private final Preferences prefs;
-    /** Where a bare pair of full scales goes when a whole card will not fit -
-     *  {@link #propagateLocalCard}'s fallback.  Injected rather than built here so
-     *  both types work on the SAME working copy the dialog edits. */
-    private final CalibrationStore calibration;
 
     /** Picks made in the dialog but not yet committed, keyed by bench and device
      *  NAME.  NOTHING here has reached the bench: the Preferences dialog applies on
@@ -103,6 +103,19 @@ public final class BenchCards {
     /** One staged active-range move: which device, which row, on which side, in
      *  which direction's endpoint. */
     private record RangePick(String deviceName, String label, Channel side, boolean input) { }
+
+    /** A local card's full scales waiting to go up on their own - the
+     *  values-only fallback of {@link #propagateLocalCard}, staged under the
+     *  same apply-on-OK rule as a binding, keyed per bench, device and
+     *  DIRECTION: the write is the device manager's calibration store, which is
+     *  per endpoint.  Every bench write from the dialog waits for OK for one
+     *  more reason than the rule: the session is routed at the chosen backend
+     *  only by the commit's {@code backend.select}, and a locked write needs
+     *  that routing - before it there is no session to send on. */
+    private final Map<String, ValuesPick> stagedValues = new LinkedHashMap<>();
+
+    /** One staged values copy: which device, which direction, which pair. */
+    private record ValuesPick(String deviceName, boolean input, DeviceCalibration values) { }
 
     /**
      * Spec 4.3's {@code cards.list}, filtered to the cards that can serve
@@ -333,24 +346,28 @@ public final class BenchCards {
     }
 
     /**
-     * {@link #create} then {@link #bind}: the card exists on the bench AND the
-     * device uses it, which is the only state that changes what the operator
-     * measures.  Used by both card-to-the-bench flows - the operator-authored card
-     * and the propagation of a local card.
+     * {@link #create} now, {@link #bind} on OK: the card goes to the bench at
+     * once - a card nothing is bound to is in force nowhere, so it needs neither
+     * a lock nor the commit - and the device's binding to it is {@link #stage
+     * staged} like any chooser pick, sent by the commit after the session has
+     * been routed at the backend ({@code backend.select}), which is the only
+     * moment a locked write CAN go out.  Used by both card-to-the-bench flows -
+     * the operator-authored card and the propagation of a local card.
      *
-     * <p>The half-done case is answered as itself.  A create that lands and a bind
-     * that does not (another client holds the device) leaves a real card on the
-     * bench that nothing uses - reporting that as "nothing happened" would send the
-     * operator round the same flow next time, where the create now fails on the
-     * name it made itself.  {@link Copied#CARD_UNBOUND} is what the caller tells
-     * them instead, and the card is deliberately NOT unwound: it is correct, it is
-     * theirs, and binding it is one retry away.
+     * <p>A binding the bench refuses on OK (another client holds the device) is
+     * reported by the commit's own error dialog; the card is deliberately NOT
+     * unwound: it is correct, it is theirs, and binding it is one retry away.
+     *
+     * @return whether the bench stored the card - false when it would not take it
+     *         (a name it already has) or could not be reached
      */
-    public Copied createAndBind(BackendKey bench, DeviceRef device, AudioDeviceProfile card) {
+    public boolean createAndStage(BackendKey bench, String deviceName, boolean input,
+            AudioDeviceProfile card) {
         if (!create(bench, card)) {
-            return Copied.NOTHING;
+            return false;
         }
-        return bind(bench, device, card.getName()) ? Copied.CARD : Copied.CARD_UNBOUND;
+        stage(bench, input, deviceName, card.getName());
+        return true;
     }
 
     /**
@@ -367,34 +384,68 @@ public final class BenchCards {
      * <p><b>The name goes as it is.</b>  A suffixed retry would put a second card
      * describing one box on the bench under a name the operator never chose;
      * instead a refusal (the bench already has that name) falls back to the values
-     * alone through {@code device.setCalibration}, which is the pre-v1.1 behaviour
-     * and still leaves the device calibrated.
+     * alone - the two full scales stored through the bench's own manager, one
+     * channel per write ({@code device.setCalibration} under the device lock),
+     * which is the pre-v1.1 behaviour and still leaves the device calibrated.
+     * Only values this machine actually has: a card with an uncalibrated row is
+     * nothing to copy, since a full scale of zero would mis-scale every
+     * measurement any client takes on the bench from then on.
      *
-     * @return what actually reached the bench, for the caller to tell the operator
+     * <p>The card goes up at once; the binding, and the values-only fallback,
+     * are STAGED and sent on OK (see {@link #createAndStage}) - both are locked
+     * writes, and the session is routed at the backend only by the commit.
+     *
+     * @return what was done, for the caller to tell the operator
      */
-    public Copied propagateLocalCard(BackendKey bench, DeviceRef device, String deviceName,
-            boolean input) {
+    public Copied propagateLocalCard(BackendKey bench, String deviceName, boolean input) {
         AudioDeviceProfile local = localCopy(deviceName);
-        if (local == null
-                || (input ? local.getInput() : local.getOutput()).calibration() == null) {
+        if (local == null) {
+            return Copied.NOTHING_TO_COPY;
+        }
+        DeviceCalibration values = (input ? local.getInput() : local.getOutput()).calibration();
+        if (values == null) {
             return Copied.NOTHING_TO_COPY;
         }
         local.bindDeviceName(deviceName);
-        Copied put = createAndBind(bench, device, local);
-        if (put != Copied.NOTHING) {
-            // CARD, or CARD_UNBOUND - either way the card IS on the bench with its
-            // values in it, so there is nothing left for the values-only fallback
-            // to add; what is missing is a binding, and the caller says so.
-            return put;
+        if (createAndStage(bench, deviceName, input, local)) {
+            return Copied.CARD;
         }
-        if (calibration.copyCardCalibrationToBench(bench, device)) {
-            if (log.isInfoEnabled()) {
-                log.info("Card: {} would not take the whole card '{}' - its full scales "
-                        + "went up on their own", bench.key(), local.getName());
+        stagedValues.put(key(bench, deviceName) + "|" + (input ? "in" : "out"),
+                new ValuesPick(deviceName, input, values));
+        if (log.isInfoEnabled()) {
+            log.info("Card: {} would not take the whole card '{}' - its full scales go "
+                    + "up on their own on OK", bench.key(), local.getName());
+        }
+        return Copied.VALUES_ONLY;
+    }
+
+    /**
+     * Sends every staged values copy to {@code bench} - the OK half of the
+     * values-only fallback of {@link #propagateLocalCard}: the bench manager's
+     * calibration store, one channel per write, under the device lock it takes
+     * itself.
+     *
+     * @return the devices whose values the bench would not take
+     */
+    public List<String> commitStagedValues(BackendKey bench, List<DeviceRef> inputs,
+            List<DeviceRef> outputs) {
+        List<String> refused = new ArrayList<>();
+        String prefix = key(bench, "");
+        AudioDeviceManager manager = AudioBackend.instance().manager(bench.carrier());
+        for (Map.Entry<String, ValuesPick> entry : stagedValues.entrySet()) {
+            if (!entry.getKey().startsWith(prefix)) {
+                continue;
             }
-            return Copied.VALUES_ONLY;
+            ValuesPick pick = entry.getValue();
+            DeviceRef device = refFor(pick.input() ? inputs : outputs, pick.deviceName());
+            DeviceCalibration values = pick.values();
+            if (device == null
+                    || !manager.storeCalibration(device, pick.input(), Channel.L, values.fsRmsLeft())
+                    || !manager.storeCalibration(device, pick.input(), Channel.R, values.fsRmsRight())) {
+                refused.add(pick.deviceName());
+            }
         }
-        return Copied.NOTHING;
+        return refused;
     }
 
     /** A DETACHED copy of the local card that recognises {@code deviceName} -
@@ -486,20 +537,16 @@ public final class BenchCards {
         return prefs.boundCardName(prefs.deviceBindingKey(bench.serverId(), deviceName));
     }
 
-    /** What {@link #propagateLocalCard} - or {@link #createAndBind} - managed to
-     *  put on the bench.  Every value but {@link #NOTHING} is a settled answer the
-     *  operator can be told and the offer need not be repeated for. */
+    /** What {@link #propagateLocalCard} did with a local card - a settled answer
+     *  the operator can be told and the offer need not be repeated for, except
+     *  {@link #NOTHING_TO_COPY}. */
     public enum Copied {
-        /** The whole card, and the device is bound to it. */
+        /** The whole card is on the bench, and the device's binding to it is
+         *  staged for OK. */
         CARD,
-        /** The card is on the bench but the device is NOT bound to it - the
-         *  binding was refused (another client holds the device). */
-        CARD_UNBOUND,
-        /** The bench would not take the card, but its full scales landed. */
+        /** The bench would not take the card; its full scales are staged to go
+         *  up on their own on OK. */
         VALUES_ONLY,
-        /** Nothing reached the bench - an unreachable bench, or a refusal all the
-         *  way down.  The only outcome worth offering again. */
-        NOTHING,
         /** This machine had nothing worth sending - no card for the name, or one
          *  whose row was never calibrated. */
         NOTHING_TO_COPY

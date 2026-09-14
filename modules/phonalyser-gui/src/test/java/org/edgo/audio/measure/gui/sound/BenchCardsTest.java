@@ -25,6 +25,7 @@ import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.gui.common.RemoteBackendRegistry;
+import org.edgo.audio.measure.gui.generator.BenchGeneratorStub;
 import org.edgo.audio.measure.net.proto.MessageType;
 import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
@@ -32,6 +33,7 @@ import org.edgo.audio.measure.preferences.BackendKey;
 import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
 import org.edgo.audio.measure.preferences.DeviceRange;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -78,11 +80,19 @@ class BenchCardsTest {
     @BeforeEach
     void armTheBench() {
         remote.reset();
+        benchManager().reset();
     }
 
     @AfterEach
     void disarmTheBench() {
         remote.reset();
+        benchManager().reset();
+    }
+
+    /** The bench's device manager - this module's net carrier, which is where
+     *  the values-only copy goes since the manager owns the calibration write. */
+    private BenchGeneratorStub benchManager() {
+        return (BenchGeneratorStub) AudioBackend.instance().manager(bench.carrier());
     }
 
     // -- staging -------------------------------------------------------------
@@ -202,22 +212,29 @@ class BenchCardsTest {
 
     // -- handing a whole card up (spec 4.3 cards.put) ------------------------
 
-    /** The create half: the card the operator authored goes up WHOLE and
-     *  the device is bound to it - two messages, in that order, because a card
-     *  nothing is bound to is in force nowhere. */
+    /** The create half: the card the operator authored goes up WHOLE at once -
+     *  a card nothing is bound to is in force nowhere, so it needs no lock and
+     *  no commit - and the device's binding to it waits for OK like any chooser
+     *  pick, because the binding is a locked write and the session is routed at
+     *  the backend only by the commit. */
     @Test
-    void aCardIsPutOnTheBenchWithoutALockAndThenBound() {
-        assertEquals(BenchCards.Copied.CARD,
-                cards(detached()).createAndBind(bench, ref(), card(CHOSEN_CARD)));
+    void aCardIsPutOnTheBenchAtOnceAndItsBindingWaitsForOk() {
+        BenchCards cards = cards(detached());
+
+        assertTrue(cards.createAndStage(bench, DEVICE_NAME, true, card(CHOSEN_CARD)));
 
         List<RecordingRemoteBackendUi.Sent> sent = remote.getSent();
-        assertEquals(2, sent.size());
+        assertEquals(1, sent.size(), "the card, and nothing else, before OK");
         assertEquals(MessageType.CARDS_PUT.getWire(), sent.get(0).request());
         assertFalse(sent.get(0).locked(),
                 "spec 4.3: nothing is bound to the new card, so nothing it says is "
                         + "in force and no lock is needed");
-        assertEquals(MessageType.DEVICE_SET_CARD.getWire(), sent.get(1).request());
-        assertTrue(sent.get(1).locked(), "the BINDING is what changes a measurement");
+        assertEquals(CHOSEN_CARD, cards.stagedCard(bench, DEVICE_NAME),
+                "the chooser shows the binding as staged");
+
+        assertTrue(cards.commitStagedBindings(bench, List.of(ref()), List.of()).isEmpty());
+        assertEquals(MessageType.DEVICE_SET_CARD.getWire(), remote.getSent().get(1).request());
+        assertTrue(remote.getSent().get(1).locked(), "the BINDING is what changes a measurement");
     }
 
     /** The card travels whole - the range table, the channel mode and the match
@@ -243,68 +260,83 @@ class BenchCardsTest {
         assertEquals(FS_RIGHT, arrived.getInput().getRanges().get(0).getFsRight());
     }
 
-    /** The local card goes up whole and the device is bound to it, and
-     *  the device's own name is added to what the bench recognises it by. */
+    /** The local card goes up whole at once, the device's own name added to what
+     *  the bench recognises it by, and the device's binding to it is staged -
+     *  sent on OK. */
     @Test
-    void propagatingALocalCardSendsItWholeAndBindsIt() {
+    void propagatingALocalCardSendsItWholeAndStagesItsBinding() {
         Preferences prefs = detached();
         prefs.putAudioDeviceProfile(card(OTHER_CARD));
+        BenchCards cards = cards(prefs);
 
-        assertEquals(BenchCards.Copied.CARD,
-                cards(prefs).propagateLocalCard(bench, ref(), DEVICE_NAME, true));
+        assertEquals(BenchCards.Copied.CARD, cards.propagateLocalCard(bench, DEVICE_NAME, true));
 
+        assertEquals(1, remote.getSent().size());
         assertEquals(MessageType.CARDS_PUT.getWire(), remote.getSent().get(0).request());
-        assertEquals(OTHER_CARD,
-                remote.getSent().get(1).fields().get(NetFields.CARD),
-                "and the device is bound to the card that just arrived");
+        assertEquals(OTHER_CARD, cards.stagedCard(bench, DEVICE_NAME),
+                "the binding to the card that just arrived waits for OK");
         assertNotNull(prefs.findAudioDeviceProfile(OTHER_CARD),
                 "the local card stays exactly where it was - this is a copy UP");
+
+        assertTrue(cards.commitStagedBindings(bench, List.of(ref()), List.of()).isEmpty());
+        assertEquals(OTHER_CARD, remote.getSent().get(1).fields().get(NetFields.CARD),
+                "and OK binds the device to it");
     }
 
     /** The bench already has a card of that name (a create-only verb refuses it),
-     *  so the values go up on their own - the device ends up calibrated either
-     *  way, which is the point of the fallback. */
+     *  so the values go up on their own - staged, and sent on OK through the
+     *  bench's manager, which is where the device ends up calibrated either way.
+     *  The manager's own write (spec 4.3's {@code device.setCalibration} under
+     *  the device lock) is the net manager's test; what is pinned here is that
+     *  it is asked on OK and not before, one channel per write, with this
+     *  machine's values. */
     @Test
-    void aBenchThatAlreadyHasTheNameGetsTheValuesInstead() {
+    void aBenchThatAlreadyHasTheNameGetsTheValuesInsteadOnOk() {
         Preferences prefs = detached();
         prefs.putAudioDeviceProfile(card(OTHER_CARD));
         remote.refuse(MessageType.CARDS_PUT.getWire());
+        BenchCards cards = cards(prefs);
 
         assertEquals(BenchCards.Copied.VALUES_ONLY,
-                cards(prefs).propagateLocalCard(bench, ref(), DEVICE_NAME, true));
+                cards.propagateLocalCard(bench, DEVICE_NAME, true));
 
         assertEquals(1, remote.sentOf(MessageType.CARDS_PUT.getWire()).size());
-        List<RecordingRemoteBackendUi.Sent> values =
-                remote.sentOf(MessageType.DEVICE_SET_CALIBRATION.getWire());
+        assertTrue(benchManager().names().isEmpty(),
+                "a locked write cannot go out before OK - there is no session "
+                        + "routed at the backend yet");
+        assertNull(cards.stagedCard(bench, DEVICE_NAME),
+                "the values alone: no card of ours is bound");
+
+        assertTrue(cards.commitStagedValues(bench, List.of(ref()), List.of()).isEmpty());
+        List<BenchGeneratorStub.Command> values = benchManager().commands().stream()
+                .filter(c -> c.name().equals("storeCalibration")).toList();
         assertEquals(2, values.size(), "the pre-v1.1 path is the fallback, not a "
                 + "second card under a name the operator never chose - one write "
                 + "per channel");
-        assertEquals(NetFields.LEFT, values.get(0).fields().get(NetFields.CHANNEL));
-        assertEquals(FS_LEFT, values.get(0).fields().get(NetFields.FS_RMS));
-        assertEquals(NetFields.RIGHT, values.get(1).fields().get(NetFields.CHANNEL));
-        assertEquals(FS_RIGHT, values.get(1).fields().get(NetFields.FS_RMS));
-        assertTrue(values.get(0).locked(), "spec 4.3 requires the device lock for it");
-        assertTrue(values.get(1).locked());
+        assertEquals(List.of(DEVICE_NAME, true, Channel.L, FS_LEFT), values.get(0).args());
+        assertEquals(List.of(DEVICE_NAME, true, Channel.R, FS_RIGHT), values.get(1).args());
     }
 
     /**
-     * The create lands and the BINDING is refused (another client holds the
-     * device): a real card is now on the bench that nothing uses, and saying
-     * "nothing was copied" would send the operator round the same flow - where
-     * the create then fails on the name it made itself.
+     * The create lands and the BINDING is refused on OK (another client holds
+     * the device): the commit reports the card, the card stays on the bench -
+     * correct, the operator's, one retry away - and no local mirror is written
+     * for a binding that did not happen.
      */
     @Test
-    void aCardThatLandedButCouldNotBeBoundIsReportedAsItself() {
+    void aBindingTheBenchRefusesOnOkIsReportedAndLeavesNoMirror() {
         Preferences prefs = detached();
         prefs.putAudioDeviceProfile(card(OTHER_CARD));
         remote.refuse(MessageType.DEVICE_SET_CARD.getWire());
+        BenchCards cards = cards(prefs);
+        assertEquals(BenchCards.Copied.CARD, cards.propagateLocalCard(bench, DEVICE_NAME, true));
 
-        assertEquals(BenchCards.Copied.CARD_UNBOUND,
-                cards(prefs).propagateLocalCard(bench, ref(), DEVICE_NAME, true));
+        assertEquals(List.of(OTHER_CARD),
+                cards.commitStagedBindings(bench, List.of(ref()), List.of()));
 
         assertEquals(1, remote.sentOf(MessageType.CARDS_PUT.getWire()).size());
         assertEquals(1, remote.sentOf(MessageType.DEVICE_SET_CARD.getWire()).size());
-        assertTrue(remote.sentOf(MessageType.DEVICE_SET_CALIBRATION.getWire()).isEmpty(),
+        assertTrue(benchManager().names().isEmpty(),
                 "the card IS on the bench with its values in it - there is nothing "
                         + "left for the values-only fallback to add");
         assertNull(prefs.boundCardName(prefs.deviceBindingKey(SERVER_ID, DEVICE_NAME)),
@@ -316,8 +348,35 @@ class BenchCardsTest {
     @Test
     void nothingIsSentWhenThisMachineHasNoCardForTheDevice() {
         assertEquals(BenchCards.Copied.NOTHING_TO_COPY,
-                cards(detached()).propagateLocalCard(bench, ref(), DEVICE_NAME, true));
+                cards(detached()).propagateLocalCard(bench, DEVICE_NAME, true));
 
+        assertTrue(remote.getSent().isEmpty());
+    }
+
+    /** A bound card with zeros in its row is an uncalibrated device, and a full
+     *  scale of zero is a division by zero on the bench - a copy must never
+     *  invent a calibration, since the number would look exactly as
+     *  authoritative as a measured one. */
+    @Test
+    void aCardWhoseRowWasNeverCalibratedHasNothingToCopyEither() {
+        Preferences prefs = detached();
+        prefs.putAudioDeviceProfile(card(CHOSEN_CARD, 0.0, 0.0));
+
+        assertEquals(BenchCards.Copied.NOTHING_TO_COPY,
+                cards(prefs).propagateLocalCard(bench, DEVICE_NAME, true));
+
+        assertTrue(remote.getSent().isEmpty());
+    }
+
+    @Test
+    void halfACalibrationIsNotOffered() {
+        Preferences prefs = detached();
+        prefs.putAudioDeviceProfile(card(CHOSEN_CARD, FS_LEFT, 0.0));
+
+        assertEquals(BenchCards.Copied.NOTHING_TO_COPY,
+                cards(prefs).propagateLocalCard(bench, DEVICE_NAME, true),
+                "one calibrated channel would scale one side of the bench and leave "
+                        + "the other reading infinity");
         assertTrue(remote.getSent().isEmpty());
     }
 
@@ -412,7 +471,7 @@ class BenchCardsTest {
     }
 
     private BenchCards cards(Preferences prefs) {
-        return new BenchCards(prefs, new CalibrationStore(prefs));
+        return new BenchCards(prefs);
     }
 
     private DeviceRef ref() {
@@ -430,13 +489,19 @@ class BenchCardsTest {
     /** A two-row LINKED card that recognises the device - the shape a bare
      *  values-only copy could not describe. */
     private AudioDeviceProfile card(String name) {
+        return card(name, FS_LEFT, FS_RIGHT);
+    }
+
+    /** The same card with the active row's full scales as given - zeros for a
+     *  row that was never calibrated. */
+    private AudioDeviceProfile card(String name, double fsLeft, double fsRight) {
         AudioDeviceProfile profile = new AudioDeviceProfile();
         profile.setName(name);
         profile.getMatch().add(DEVICE_NAME);
         for (DeviceEndpointConfig endpoint
                 : List.of(profile.getInput(), profile.getOutput())) {
             endpoint.setChannels(DeviceChannelMode.LINKED);
-            endpoint.getRanges().add(row(RANGE_LABEL, FS_LEFT, FS_RIGHT));
+            endpoint.getRanges().add(row(RANGE_LABEL, fsLeft, fsRight));
             endpoint.getRanges().add(row(OTHER_RANGE, FS_LEFT * 10, FS_RIGHT * 10));
             endpoint.setActiveRange(RANGE_LABEL);
         }
