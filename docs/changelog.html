@@ -73,19 +73,22 @@
         <li><b>The JavaSound format probe logs a start and a finish line per device and direction,</b> with format count and elapsed time, so a probe that never returns names its device.</li>
         <li><b>A varying FFT overlap.</b> The overlap selector gains Random: the hop between analysis windows cycles through a 16-point lattice in a high-overlap range, so the periodic structure a constant hop leaves on a deeply averaged noise floor averages out. Saved spectra record the overlap mode and the frame spacing; older files load unchanged. Desktop and web alike.</li>
         <li><b>The theory chapters explain measurement confidence and the bench delay.</b> The FFT chapter states what a harmonic reading is worth at a given clearance above the averaged noise floor, and why weak harmonics wander during a long average; the pre-distortion chapter, how the bench's frequency-response calibration already carries the delay in its measured phase, and why the loop needs the notch. All help languages.</li>
+        <li><b>The generator sets each channel's amplitude on its own.</b> The one Amplitude field becomes an Amplitude left and an Amplitude right field; each lane is rendered against its own DAC full scale, and a calibration is measured and written one channel at a time.</li>
+        <li><b>The pre-distortion wizard's convergence chart draws the round in progress</b> - a moving provisional point at the averaging depth collected so far and the distortion the running FFT reads at that moment, so the current round is watched settling instead of appearing only when it closes.</li>
       </ul>
       <h3 class="chg">Changed</h3>
       <ul>
         <li><b>Audio devices are enumerated once at start-up instead of on every dialog open.</b> Preferences fills its combos from that snapshot; Scan devices re-walks the drivers and is what makes a card plugged in since start-up appear.</li>
         <li><b>The GPU scope requests swap interval zero,</b> so with vsync active the buffer swap no longer blocks the interface thread until the display refresh. Windows and Linux; the macOS surface already ran unsynced.</li>
-        <li><b>A heavy render frame earns three times its own cost in idle,</b> so rendering settles at about a quarter of the interface thread; sub-millisecond frames keep the old cadence.</li>
+        <li><b>The oscilloscope is paced by the measured load of the interface thread:</b> it skips a frame while the thread is three quarters busy or more, so the FFT renders every result it is handed. The scope's Calibrate button gates on a quarter of full scale alone - the absolute 0.5 V RMS alternative was the product of the very calibration the button corrects.</li>
         <li><b>A Wayland session always runs through XWayland</b> - the X11 backend the GL scope needs no longer depends on the GPU preference.</li>
-        <li><b>The frequency-response lead-in floor drops from 50 ms to 5 ms;</b> values in between no longer snap back and no longer fail the sweep. The command-line interface keeps its 0.05 s floor. Desktop and web alike.</li>
+        <li><b>Web: the frequency-response lead-in floor drops from 50 ms to 5 ms;</b> values in between no longer snap back and no longer fail the sweep.</li>
         <li><b>The pre-distortion wizard recommends the Blackman-Harris 7 window and a generic passive notch.</b> The ultra-wide HFT248D folds about twice BH7's noise bandwidth into every harmonic lobe, so near the averaged floor its readings need about twice the averages for the same confidence.</li>
         <li><b>The distortion tables align as measured columns and read every level in the selected unit.</b> The noise line converts with the harmonics, the ratio rows carry the level before the percentage, and N+D and SNR read plain dB. Desktop and web alike.</li>
         <li><b>Coherent averaging is optimized for better performance.</b> Desktop and web alike.</li>
         <li><b>SINAD, THD+N and ENOB read unweighted</b> - the converter-datasheet definitions, so a dithered N-bit channel reads its datasheet number; the A-weighted residual stays as the N+D readout. Desktop and web alike.</li>
         <li><b>The pre-distortion wizard's metric grid shows the last completed round's distortion</b> beside the live figure - a dash until the first round finishes. Desktop and web alike.</li>
+        <li><b>Every text calls the remote process the server,</b> never the bench - "bench" now means only the physical measurement bench, in every language, help included.</li>
       </ul>
       <h3 class="chg">Fixed</h3>
       <ul>
@@ -113,7 +116,7 @@
         <li><b>The oscilloscope's sine-fit residual no longer drifts over long slices.</b> Desktop and web alike.</li>
         <li><b>FFT markers sit exactly on the trace</b> - the constant half-pixel offset every marker dot carried against its trace is gone.</li>
         <li><b>The digital loopback adds no dither of its own,</b> so a loopback measurement carries exactly the dither configured at the generator.</li>
-        <li><b>The frequency-response busy meter spans the real capture</b> - the old time axis counted the lead-in twice, so with a short lead-in the bar sat at 100 % for the last half second.</li>
+        <li><b>The frequency-response progress meter spans the real capture</b> - the old time axis counted the lead-in twice, so with a short lead-in the bar sat at 100 % for the last half second.</li>
         <li><b>Web: no overlap setting behaved as selected.</b> Windows the page fell behind on were dropped silently, which shifts the next by whole hops, so every setting behaved like the randomized one; the browser's averaged noise floor now matches the desktop's at every overlap.</li>
         <li><b>Web: a stored sweep amplitude below the field's lower limit is repaired up to it,</b> in the operator's unit, as the desktop does.</li>
         <li><b>Web: the fundamental-from-generator setting is read live,</b> so a wizard started mid-record can inject its frequency hint.</li>
@@ -122,6 +125,15 @@
         <li><b>Applying a pre-distortion file changed the generator's level and left the form selector behind</b> - behind a notch, 115 uV became 20 uV. The file now loads into the running generator without a restart, and the pane's form selector follows the preference. Clearing the corrections of a playing compensated sine stops the tone instead of playing it uncorrected.</li>
         <li><b>The de-embedding noise algorithm is optimized</b> - a de-embedded FFT frame renders several times faster.</li>
         <li><b>Switching the mains suppression no longer restarts the FFT average.</b> The average and its counter survive the switch; only a change of the pre-FFT filter type - into, out of or between Sync subtract and LMS - regathers the analysis window, which costs one window before the next displayed frame.</li>
+        <li><b>One frequency-response trace rippled at the low end while the other stayed flat.</b> An ADC input sitting off centre, or a DUT with an output offset, puts a constant into the one-shot sweep record - a step at both ends whose leakage, divided by the chirp, ripples that channel's low end. A fixed 100 ms of silence ahead of the lead-in now measures each channel's offset, the deconvolution takes it out of the record, and the progress meter shows the chirp's level about it, starting after that window. The lead-in field keeps its 50 ms floor; the command-line interface adds the same window to its --lead-in.</li>
+        <li><b>A running sweep left the chart's L / R buttons blank.</b> The lock greyed the whole pane, and a greyed button shows no active channel; the chart now keeps showing which channel the progress meter follows.</li>
+        <li><b>Tune-notch reported a device failure when a sample-rate pair was refused.</b> The dialog now names the reason - one loop period does not convert whole onto the output clock, which mixed 44.1 kHz and 48 kHz families cannot, or a server granted another rate - with both rates in the sentence and the advice to use two rates of one family.</li>
+        <li><b>A sweep drove the right lane at the left lane's full scale.</b> The frequency-response and tune-notch sweeps handed the left DAC and ADC full scale to both lanes, so a right lane with another full scale emitted the wrong level and its trace was normalised against the wrong scale; each lane carries its own now.</li>
+        <li><b>Copying a local card onto a server ended half done</b> when the session was not routed yet. The copy puts the card up at once and stages the writes for OK, when the session exists to send them on.</li>
+        <li><b>A coherent average without a tone stalled at the 24th frame.</b> With the generator off the fundamental refine pinned on a noise peak, the lock collapsed and the analysis ran millions of lines per tick; a refine beyond half a bin is discarded and re-anchored now.</li>
+        <li><b>Rectangle and triangle duty are whole samples of the period.</b> At 0.25 % of a 384-sample period the one high sample vanished whenever the phase accumulator's residual fell on the wrong side; the kernels emit exactly the bracket's samples high and put the triangle's corner on a sample. Desktop and web alike.</li>
+        <li><b>The oscilloscope's period detector has hysteresis</b> - a crossing arms below the band and commits at its upper edge, so a noise band inside the tone's swing cannot inflate the crossing count; duty, rise/fall and the whole-period integration are unchanged. Desktop and web alike.</li>
+        <li><b>The dual-tone compensated form refuses an empty correction slot and stops when it is emptied.</b> A compensated form is its corrections; two plain tones under that label would have their intermodulation measured and recorded as pre-distorted.</li>
       </ul>
 
       <h2><a name="v1.2.1" id="v1.2.1"></a>1.2.1 <span class="ver-date">2026-08-16</span></h2>

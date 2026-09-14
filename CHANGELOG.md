@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   during a long average; the pre-distortion chapter, how the bench's
   frequency-response calibration already carries the delay in its measured
   phase, and why the loop needs the notch. All help languages.
+- **The generator sets each channel's amplitude on its own.** The one
+  Amplitude field becomes an Amplitude left and an Amplitude right field;
+  each lane is rendered against its own DAC full scale, and a calibration is
+  measured and written one channel at a time.
+- **The pre-distortion wizard's convergence chart draws the round in
+  progress** - a moving provisional point at the averaging depth collected
+  so far and the distortion the running FFT reads at that moment, so the
+  current round is watched settling instead of appearing only when it
+  closes.
 
 ### Changed
 
@@ -37,14 +46,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The GPU scope requests swap interval zero,** so with vsync active the
   buffer swap no longer blocks the interface thread until the display
   refresh. Windows and Linux; the macOS surface already ran unsynced.
-- **A heavy render frame earns three times its own cost in idle,** so
-  rendering settles at about a quarter of the interface thread;
-  sub-millisecond frames keep the old cadence.
+- **The oscilloscope is paced by the measured load of the interface
+  thread:** it skips a frame while the thread is three quarters busy or
+  more, so the FFT renders every result it is handed. The scope's Calibrate
+  button gates on a quarter of full scale alone - the absolute 0.5 V RMS
+  alternative was the product of the very calibration the button corrects.
 - **A Wayland session always runs through XWayland** - the X11 backend the GL
   scope needs no longer depends on the GPU preference.
-- **The frequency-response lead-in floor drops from 50 ms to 5 ms;** values in
-  between no longer snap back and no longer fail the sweep. The command-line
-  interface keeps its 0.05 s floor. Desktop and web alike.
+- **Web: the frequency-response lead-in floor drops from 50 ms to 5 ms;**
+  values in between no longer snap back and no longer fail the sweep.
 - **The pre-distortion wizard recommends the Blackman-Harris 7 window and a
   generic passive notch.** The ultra-wide HFT248D folds about twice BH7's
   noise bandwidth into every harmonic lobe, so near the averaged floor its
@@ -61,6 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The pre-distortion wizard's metric grid shows the last completed round's
   distortion** beside the live figure - a dash until the first round
   finishes. Desktop and web alike.
+- **Every text calls the remote process the server,** never the bench -
+  "bench" now means only the physical measurement bench, in every language,
+  help included.
 
 ### Fixed
 
@@ -137,7 +150,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every marker dot carried against its trace is gone.
 - **The digital loopback adds no dither of its own,** so a loopback
   measurement carries exactly the dither configured at the generator.
-- **The frequency-response busy meter spans the real capture** - the old time
+- **The frequency-response progress meter spans the real capture** - the old time
   axis counted the lead-in twice, so with a short lead-in the bar sat at
   100 % for the last half second.
 - **Web: no overlap setting behaved as selected.** Windows the page fell
@@ -164,6 +177,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   average and its counter survive the switch; only a change of the pre-FFT
   filter type - into, out of or between Sync subtract and LMS - regathers the
   analysis window, which costs one window before the next displayed frame.
+- **One frequency-response trace rippled at the low end while the other
+  stayed flat.** An ADC input sitting off centre, or a DUT with an output
+  offset, puts a constant into the one-shot sweep record - a step at both
+  ends whose leakage, divided by the chirp, ripples that channel's low end.
+  A fixed 100 ms of silence ahead of the lead-in now measures each channel's
+  offset, the deconvolution takes it out of the record, and the progress
+  meter shows the chirp's level about it, starting after that window. The
+  lead-in field keeps its 50 ms floor; the command-line interface adds the
+  same window to its --lead-in.
+- **A running sweep left the chart's L / R buttons blank.** The lock greyed
+  the whole pane, and a greyed button shows no active channel; the chart now
+  keeps showing which channel the progress meter follows.
+- **Tune-notch reported a device failure when a sample-rate pair was
+  refused.** The dialog now names the reason - one loop period does not
+  convert whole onto the output clock, which mixed 44.1 kHz and 48 kHz
+  families cannot, or a server granted another rate - with both rates in the
+  sentence and the advice to use two rates of one family.
+- **A sweep drove the right lane at the left lane's full scale.** The
+  frequency-response and tune-notch sweeps handed the left DAC and ADC full
+  scale to both lanes, so a right lane with another full scale emitted the
+  wrong level and its trace was normalised against the wrong scale; each
+  lane carries its own now.
+- **Copying a local card onto a server ended half done** when the session
+  was not routed yet. The copy puts the card up at once and stages the
+  writes for OK, when the session exists to send them on.
+- **A coherent average without a tone stalled at the 24th frame.** With the
+  generator off the fundamental refine pinned on a noise peak, the lock
+  collapsed and the analysis ran millions of lines per tick; a refine beyond
+  half a bin is discarded and re-anchored now.
+- **Rectangle and triangle duty are whole samples of the period.** At 0.25 %
+  of a 384-sample period the one high sample vanished whenever the phase
+  accumulator's residual fell on the wrong side; the kernels emit exactly
+  the bracket's samples high and put the triangle's corner on a sample.
+  Desktop and web alike.
+- **The oscilloscope's period detector has hysteresis** - a crossing arms
+  below the band and commits at its upper edge, so a noise band inside the
+  tone's swing cannot inflate the crossing count; duty, rise/fall and the
+  whole-period integration are unchanged. Desktop and web alike.
+- **The dual-tone compensated form refuses an empty correction slot and
+  stops when it is emptied.** A compensated form is its corrections; two
+  plain tones under that label would have their intermodulation measured
+  and recorded as pre-distorted.
 
 ## [1.2.1] - 2026-08-16
 
