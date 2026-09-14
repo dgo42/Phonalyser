@@ -26,7 +26,9 @@ import java.util.function.Consumer;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Widget;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.bind.Property;
 
@@ -165,5 +167,27 @@ public final class Bindings {
     public static <T> void onChange(Widget owner, Property<T> property, Consumer<T> listener) { // static-ok: existing all-static binding namespace
         property.addListener(listener);
         owner.addDisposeListener(e -> property.removeListener(listener));
+    }
+
+    /** Subscribes {@code listener} to the bus event {@code event} for the life
+     *  of {@code owner} - unsubscribed when the owner widget is disposed - and
+     *  marshals every delivery onto the owner's display thread: an event the
+     *  audio layer publishes ({@code Events.ADC_CALIBRATION_CHANGED} and its
+     *  DAC twin) arrives on whatever thread the change happened on.  A
+     *  delivery that finds the owner disposed is dropped. */
+    public static <T> void onEvent(Widget owner, String event, Consumer<T> listener) { // static-ok: existing all-static binding namespace
+        Consumer<T> onEvent = payload -> {
+            if (owner.isDisposed()) return;
+            Display display = owner.getDisplay();
+            if (display.getThread() == Thread.currentThread()) {
+                listener.accept(payload);
+                return;
+            }
+            display.asyncExec(() -> {
+                if (!owner.isDisposed()) listener.accept(payload);
+            });
+        };
+        MessageBus.instance().subscribe(event, onEvent);
+        owner.addDisposeListener(e -> MessageBus.instance().unsubscribe(event, onEvent));
     }
 }

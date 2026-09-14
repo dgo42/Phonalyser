@@ -23,9 +23,11 @@ import java.util.List;
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 /**
@@ -64,6 +66,23 @@ public final class StubNetBackend implements AudioDeviceManager {
         return List.of(output);
     }
 
+    /** A settings panel never calibrates. */
+    @Override
+    public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
+        return false;
+    }
+
+    /** A bench device carries its own calibration, as the net manager reads it. */
+    @Override
+    public DeviceCalibration calibration(DeviceRef device, boolean input) {
+        return device.calibration();
+    }
+
+    @Override
+    public boolean calibrationFromDevice(DeviceRef device, boolean input) {
+        return device.calFromDevice();
+    }
+
     @Override
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
         if (index != 0) {
@@ -84,7 +103,7 @@ public final class StubNetBackend implements AudioDeviceManager {
 
     @Override
     public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
-            double ditherBits) {
+            double ditherBitsLeft, double ditherBitsRight) {
         throw new UnsupportedOperationException("a settings panel opens no stream");
     }
 

@@ -234,9 +234,9 @@ public final class Qa40xCalibration {
             ep.getRanges().add(row);
         }
         String defaultActive = Qa40xProtocol.rangeLabel(defaultDbv);
-        String active = (existing != null && hasRow(ep, existing.getActiveRange()))
-                ? existing.getActiveRange() : defaultActive;
-        ep.setActiveRange(active);
+        String active = (existing != null && hasRow(ep, existing.getActiveRangeLeft()))
+                ? existing.getActiveRangeLeft() : defaultActive;
+        ep.setActiveRangeLeft(active);
         if (existing != null && hasRow(ep, existing.getActiveRangeRight())) {
             ep.setActiveRangeRight(existing.getActiveRangeRight());
         }

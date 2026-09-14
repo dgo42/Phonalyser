@@ -60,7 +60,7 @@ import static java.util.Collections.synchronizedList;
  * not the database's Java classes.  Two of them live here: a peer that answers
  * nothing ({@link ScriptedServer}, for the handshake and keepalive rules, which
  * only a peer that goes QUIET can produce) and a peer that plays a whole bench
- * ({@link MockBench}).  What they share is this: binding, the handshake, the
+ * ({@link MockServer}).  What they share is this: binding, the handshake, the
  * record of what arrived, and the waiting.
  *
  * <p><b>Waiting.</b>  Nothing here sleeps for a fixed time.  Every wait is a

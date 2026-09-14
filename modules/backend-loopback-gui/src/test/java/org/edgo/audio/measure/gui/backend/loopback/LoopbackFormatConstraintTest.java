@@ -142,7 +142,7 @@ class LoopbackFormatConstraintTest {
     }
 
     @Test
-    void switchingBetweenTwoLoopbackBenches_forgetsThePairOfTheOneLeft() {
+    void switchingBetweenTwoLoopbackServers_forgetsThePairOfTheOneLeft() {
         // Bench A is tracked at 96 kHz / 24 bits on both directions.
         changed(true, 96_000, 24, LOCAL_LOOPBACK);
         emitted.clear();

@@ -22,78 +22,40 @@ import java.lang.reflect.Method;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import org.edgo.audio.measure.common.Constants;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
- * Pins the DEPRECATED shared full-scale fallback keys ({@code adcFsVoltageRms},
- * {@code dacFsVoltageRms}) to their 1.2 contract: LOAD
- * ONLY.  They are the calibration fallback for a device whose card carries none,
- * and a calibrated card pushes its own values into the very same runtime
- * scalars - so writing them back would save the last selected card's
- * calibration as the machine-wide default and hand it to the next uncalibrated
- * device as if it had been measured there.  The reader stays: a pre-1.2
- * {@code preferences.yaml} seeds the runtime fallback once, then the entry
- * disappears with the first save.
+ * A {@code preferences.yaml} that still carries the machine-wide full-scale
+ * keys of the pre-card releases ({@code adcFsVoltageRms}, {@code dacFsVoltageRms})
+ * loads without complaint and is written back WITHOUT them: a full scale is a
+ * property of a device card now, never of the installation, and a stray key
+ * must neither fail the load nor be carried forward as if it still meant
+ * something.
  *
- * <p>Runs against the live singleton in transient mode (no disk writes); every
- * touched preference is restored afterwards.
+ * <p>Runs against the live singleton in transient mode (no disk writes).
  */
 class LegacyFsFallbackPersistenceTest {
 
     private static final double ADC_FS_VRMS = 1.7895371493262566;
     private static final double DAC_FS_VRMS = 1.9122365402608692;
-    private static final double EPS         = 1e-12;
-
-    private double savedAdcFs;
-    private double savedDacAmpl;
-
-    @BeforeEach
-    void snapshot() {
-        Preferences prefs = Preferences.instance();
-        prefs.setTransientMode(true);
-        savedAdcFs   = prefs.getAdcFsVoltageRms();
-        savedDacAmpl = prefs.getDacFsVoltageAmpl();
-    }
-
-    @AfterEach
-    void restore() {
-        Preferences prefs = Preferences.instance();
-        prefs.setAdcFsVoltageRms(savedAdcFs);
-        prefs.setDacFsVoltageAmpl(savedDacAmpl);
-    }
 
     @Test
-    void legacyFsKeysAreNeverWritten() throws Exception {
+    void theMachineWideFullScaleKeysAreNeitherReadNorWrittenBack() throws Exception {
         Preferences prefs = Preferences.instance();
-        prefs.setAdcFsVoltageRms(ADC_FS_VRMS);
-        prefs.setDacFsVoltageAmpl(DAC_FS_VRMS * Constants.SQRT2);
+        prefs.setTransientMode(true);
+        Map<String, Object> legacy = new LinkedHashMap<>();
+        legacy.put("adcFsVoltageRms", ADC_FS_VRMS);
+        legacy.put("dacFsVoltageRms", DAC_FS_VRMS);
+
+        invokeFromMap(prefs, legacy);
 
         Map<?, ?> written = invokeToMap(prefs);
         assertFalse(written.containsKey("adcFsVoltageRms"),
-                "adcFsVoltageRms is runtime-only since 1.2 - it must not reach the yaml");
+                "a full scale lives in a device card - the installation has none");
         assertFalse(written.containsKey("dacFsVoltageRms"),
-                "dacFsVoltageRms is runtime-only since 1.2 - it must not reach the yaml");
-    }
-
-    @Test
-    void legacyFsKeysStillSeedTheRuntimeFallbackOnLoad() throws Exception {
-        // A pre-1.2 preferences.yaml carrying the two legacy keys must land in the
-        // fallback scalars on load - the one-way migration the 1.2 contract keeps.
-        Preferences prefs = Preferences.instance();
-        prefs.setAdcFsVoltageRms(1.0);
-        prefs.setDacFsVoltageAmpl(1.0);
-        Map<String, Object> legacy = new LinkedHashMap<>();
-        legacy.put("adcFsVoltageRms", ADC_FS_VRMS);
-        legacy.put("dacFsVoltageRms", DAC_FS_VRMS);   // on disk RMS, in memory amplitude
-        invokeFromMap(prefs, legacy);
-        assertEquals(ADC_FS_VRMS, prefs.getAdcFsVoltageRms(), EPS);
-        assertEquals(DAC_FS_VRMS * Constants.SQRT2, prefs.getDacFsVoltageAmpl(), EPS);
+                "a full scale lives in a device card - the installation has none");
     }
 
     private Map<?, ?> invokeToMap(Preferences prefs) throws Exception {

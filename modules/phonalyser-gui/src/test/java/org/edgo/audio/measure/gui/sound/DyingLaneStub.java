@@ -27,11 +27,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.sound.AbstractPcmCapture;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import lombok.Getter;
@@ -58,7 +60,7 @@ import lombok.Setter;
  *
  * <p>It claims {@link AudioBackendType#JAVASOUND} because a LOCAL slot is the
  * whole point: the net slot's manager is a remote generator, and the controller
- * COMMANDS those instead of rendering into them - so {@code BenchGeneratorStub},
+ * COMMANDS those instead of rendering into them - so {@code ServerGeneratorStub},
  * the sibling this would otherwise extend, refuses to open a playback at all.
  * The claim is contested (the CLI module puts the real JavaSound backend on this
  * test class path), so the tests assert which manager they actually got before
@@ -150,6 +152,22 @@ public final class DyingLaneStub implements AudioDeviceManager {
         return List.of(output);
     }
 
+    /** Nothing here is ever calibrated. */
+    @Override
+    public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
+        return false;
+    }
+
+    @Override
+    public DeviceCalibration calibration(DeviceRef device, boolean input) {
+        return null;
+    }
+
+    @Override
+    public boolean calibrationFromDevice(DeviceRef device, boolean input) {
+        return false;
+    }
+
     @Override
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
         if (index != 0) {
@@ -171,7 +189,7 @@ public final class DyingLaneStub implements AudioDeviceManager {
 
     @Override
     public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
-            double ditherBits) {
+            double ditherBitsLeft, double ditherBitsRight) {
         DyingPlayback lane = new DyingPlayback();
         playbacks.add(lane);
         return lane;

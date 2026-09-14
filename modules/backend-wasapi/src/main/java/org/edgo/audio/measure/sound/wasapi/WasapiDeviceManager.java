@@ -63,9 +63,9 @@ import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
+import org.edgo.audio.measure.sound.AbstractLocalDeviceManager;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioCapture;
-import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.wasapi.WasapiNative.Ole32;
@@ -90,7 +90,7 @@ import lombok.extern.log4j.Log4j2;
  * disposable-friendly even after the underlying COM objects are released.
  */
 @Log4j2
-public class WasapiDeviceManager implements AudioDeviceManager {
+public class WasapiDeviceManager extends AbstractLocalDeviceManager {
 
     /** The HRESULT this module prints into a failure message - "failed: 0x88890004". */
     private static final Pattern HRESULT = Pattern.compile("0x([0-9a-fA-F]{1,8})");
@@ -262,8 +262,10 @@ public class WasapiDeviceManager implements AudioDeviceManager {
         return new WasapiRecorder(this, (WasapiDeviceManager.WasapiDeviceRef) device, sampleRate, bitDepth);
     }
 
-    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
-        return new WasapiGenerator(this, (WasapiDeviceManager.WasapiDeviceRef) device, sampleRate, bitDepth, ditherBits);
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight) {
+        return new WasapiGenerator(this, (WasapiDeviceManager.WasapiDeviceRef) device, sampleRate,
+                bitDepth, ditherBitsLeft, ditherBitsRight);
     }
 
     /**

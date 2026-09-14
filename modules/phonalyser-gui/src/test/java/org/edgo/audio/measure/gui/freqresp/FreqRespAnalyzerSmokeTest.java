@@ -66,6 +66,11 @@ class FreqRespAnalyzerSmokeTest {
     private static final double RAIL_16_BIT    = 32767.0 / 32768.0;
     /** Hot but unrailed: −0.0087 dBFS, just under the clip threshold. */
     private static final double NEAR_RAIL_LIN  = 0.999;
+    /** A DC offset (normalised full scale) that leaves the chirp's peak of
+     *  {@code AMP_VRMS·√2 / DAC_FS_VRMS ≈ 0.25} under the rail. */
+    private static final double OFFSET_UNRAILED = 0.5;
+    /** An offset that pushes that same peak over the rail. */
+    private static final double OFFSET_RAILING  = 0.9;
 
     @Test
     void deconvolutionRecoversFlatResponseFromDelayLineOnBothChannels() throws Exception {
@@ -256,6 +261,41 @@ class FreqRespAnalyzerSmokeTest {
         assertTrue(stereo.clipped(), "a capture that touches the 16-bit rail is clipped");
     }
 
+    /**
+     * A DC offset on one channel - an ADC input sitting off centre, a DUT with
+     * an output offset - must not reach the trace.  The lead-in before the
+     * chirp carries nothing but that offset, so its mean is taken out of the
+     * record before the deconvolution; left in, the step at the record's ends
+     * ripples the whole low end.
+     */
+    @Test
+    void aDcOffsetOnOneChannelLeavesItsTraceIdenticalToTheOther() throws Exception {
+        FreqRespAnalyzerConfig cfg = baseConfig()
+                .stereoCaptureProvider(delayLineProvider(DELAY_SAMPLES, OFFSET_UNRAILED)).build();
+        StereoFreqRespResult stereo = new FreqRespAnalyzer(cfg).run(null, null);
+
+        double[] mL = stereo.left().getMagLin();
+        double[] mR = stereo.right().getMagLin();
+        for (int i = 0; i < SWEEP_POINTS; i++) {
+            assertEquals(mL[i], mR[i], 1e-9,
+                    "the offset channel must deconvolve exactly like the clean one at f="
+                            + stereo.right().getFreqs()[i]);
+        }
+        assertFalse(stereo.clipped(), "an offset that stays under the rail is not clipping");
+    }
+
+    /** The rail check reads the RAW record: an offset that pushes the chirp
+     *  into the rail is real clipping, information is gone there, and the
+     *  result must still say so even though the offset itself is removed. */
+    @Test
+    void anOffsetThatDrivesTheChirpIntoTheRailIsStillReportedClipped() throws Exception {
+        FreqRespAnalyzerConfig cfg = baseConfig()
+                .stereoCaptureProvider(delayLineProvider(DELAY_SAMPLES, OFFSET_RAILING)).build();
+        StereoFreqRespResult stereo = new FreqRespAnalyzer(cfg).run(null, null);
+
+        assertTrue(stereo.clipped(), "offset plus chirp above the rail is clipped");
+    }
+
     @Test
     void captureJustBelowTheThresholdIsNotClipped() throws Exception {
         FreqRespAnalyzerConfig cfg = baseConfig()
@@ -340,8 +380,10 @@ class FreqRespAnalyzerSmokeTest {
                 .durationSec(DURATION_SEC)
                 .leadInSec(LEAD_IN_SEC)
                 .amplitudeVrms(AMP_VRMS)
-                .dacFsVoltageRms(DAC_FS_VRMS)
-                .adcFsVoltageRms(ADC_FS_VRMS)
+                .dacFsVoltageRmsLeft(DAC_FS_VRMS)
+                .dacFsVoltageRmsRight(DAC_FS_VRMS)
+                .adcFsVoltageRmsLeft(ADC_FS_VRMS)
+                .adcFsVoltageRmsRight(ADC_FS_VRMS)
                 .applyCalibration(false);
     }
 
@@ -356,12 +398,19 @@ class FreqRespAnalyzerSmokeTest {
      *  while the two rates happen to be equal, and it is exactly the split case
      *  these tests have to be able to fail on. */
     private StereoCaptureProvider delayLineProvider(int delaySamples) {
+        return delayLineProvider(delaySamples, 0.0);
+    }
+
+    /** The same delay line with a constant DC offset (normalised full scale)
+     *  added to the RIGHT channel over the whole record, lead-in included - an
+     *  ADC input sitting off centre, or a DUT with an output offset. */
+    private StereoCaptureProvider delayLineProvider(int delaySamples, double rightOffset) {
         return (gen, outDev, inDev, capRate, playRate, playBits, dither, oc, durationSec, cancel) -> {
             assertNotNull(gen.getLogSweepBuffer(),
                     "the generator handed to the capture leg must expose its played sweep");
             double[] sweep = new SignalGenerator(START_HZ, STOP_HZ,
                     (int) Math.round(DURATION_SEC * capRate), 0,
-                    capRate, AMP_VRMS, DAC_FS_VRMS).getLogSweepBuffer();
+                    capRate, AMP_VRMS, AMP_VRMS, DAC_FS_VRMS, DAC_FS_VRMS).getLogSweepBuffer();
             int leadIn = (int) Math.round(LEAD_IN_SEC * capRate);
             int total  = leadIn + delaySamples + sweep.length + capRate / 2;
             double[] y  = new double[total];
@@ -379,7 +428,11 @@ class FreqRespAnalyzerSmokeTest {
             }
             // Same data on both channels for the test - the analyzer should
             // still deconvolve them independently in parallel.
-            return new StereoSamples(y, y.clone());
+            double[] right = y.clone();
+            for (int i = 0; i < right.length; i++) {
+                right[i] += rightOffset;
+            }
+            return new StereoSamples(y, right);
         };
     }
 

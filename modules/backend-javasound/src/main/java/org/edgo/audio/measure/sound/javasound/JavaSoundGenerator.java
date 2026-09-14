@@ -100,9 +100,9 @@ public class JavaSoundGenerator implements AudioPlayback {
      *  thread, read by the watchdog. */
     private volatile long lastWriteNanos;
 
-    public JavaSoundGenerator(int sampleRate, int bitDepth, double ditherBits,
-                              JavaSoundDeviceManager deviceManager) {
-        this(sampleRate, bitDepth, ditherBits, null, deviceManager);
+    public JavaSoundGenerator(int sampleRate, int bitDepth, double ditherBitsLeft,
+                              double ditherBitsRight, JavaSoundDeviceManager deviceManager) {
+        this(sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight, null, deviceManager);
     }
 
     /**
@@ -112,13 +112,14 @@ public class JavaSoundGenerator implements AudioPlayback {
      * @param deviceManager opens the {@link SourceDataLine} on the mixer whose
      *                      name matches {@code deviceName} (or the default).
      */
-    public JavaSoundGenerator(int sampleRate, int bitDepth, double ditherBits, String deviceName,
+    public JavaSoundGenerator(int sampleRate, int bitDepth, double ditherBitsLeft,
+                              double ditherBitsRight, String deviceName,
                               JavaSoundDeviceManager deviceManager) {
         this.sampleRate     = sampleRate;
         this.bitDepth       = bitDepth;
         this.deviceName     = deviceName;
         this.bytesPerFrame  = (bitDepth / 8) * CHANNELS;
-        this.quantizer      = new PcmQuantizer(bitDepth, ditherBits);
+        this.quantizer      = new PcmQuantizer(bitDepth, ditherBitsLeft, ditherBitsRight);
         this.deviceManager  = deviceManager;
     }
 
@@ -134,7 +135,10 @@ public class JavaSoundGenerator implements AudioPlayback {
             log.info("JavaSound generator opened: format={}, hw-buffer={} frames ({} ms)",
                     fmt, hwFrames, hwFrames * 1000 / sampleRate);
         }
-        if (quantizer.getDitherBits() > 0) log.info("Dithering: TPDF {} bit", quantizer.getDitherBits());
+        if (quantizer.getDitherBitsLeft() > 0 || quantizer.getDitherBitsRight() > 0) {
+            log.info("Dithering: TPDF {} / {} bit", quantizer.getDitherBitsLeft(),
+                    quantizer.getDitherBitsRight());
+        }
     }
 
     @Override
@@ -163,7 +167,7 @@ public class JavaSoundGenerator implements AudioPlayback {
 
         if (generator.needsJitWarmup()) {
             warmupJit(generator, buf);
-            // Warmup consumed nextSample() calls that advance sweep playback
+            // Warmup consumed frames that advance sweep playback
             // state; reset so the real stream sees the sweep from sample 0
             // (otherwise a freq-response measurement captures a mid-sweep
             // recording while the deconv reference starts at zero).
@@ -387,13 +391,8 @@ public class JavaSoundGenerator implements AudioPlayback {
     }
 
     @Override
-    public void setDitherBits(double bits) {
-        quantizer.setDitherBits(bits);
-    }
-
-    @Override
-    public void setChannelScale(double left, double right) {
-        quantizer.setChannelScale(left, right);
+    public void setDitherBits(double leftBits, double rightBits) {
+        quantizer.setDitherBits(leftBits, rightBits);
     }
 
     @Override

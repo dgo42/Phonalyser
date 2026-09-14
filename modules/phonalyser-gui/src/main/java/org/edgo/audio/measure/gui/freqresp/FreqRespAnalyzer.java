@@ -107,7 +107,8 @@ public final class FreqRespAnalyzer {
         reportProgress(progress, 0.0, "Preparing sweep");
         SignalGenerator gen = new SignalGenerator(
                 cfg.getStartHz(), cfg.getStopHz(), playSweepSamples, playLeadInSamples,
-                cfg.getPlaybackRateHz(), cfg.getAmplitudeVrms(), cfg.getDacFsVoltageRms());
+                cfg.getPlaybackRateHz(), cfg.getAmplitudeVrms(), cfg.getAmplitudeVrms(),
+                cfg.getDacFsVoltageRmsLeft(), cfg.getDacFsVoltageRmsRight());
         // One-shot sweep: emit silence after the buffer ends instead of looping
         // a second cycle into the capture window (which would alias into the
         // deconvolution and pollute the response).
@@ -171,7 +172,8 @@ public final class FreqRespAnalyzer {
         // rate.  The buffer is unit amplitude; the fade is applied inside.
         double[] sweepRef = new SignalGenerator(
                 cfg.getStartHz(), cfg.getStopHz(), recSweepSamples, recLeadInSamples,
-                cfg.getCaptureRateHz(), cfg.getAmplitudeVrms(), cfg.getDacFsVoltageRms())
+                cfg.getCaptureRateHz(), cfg.getAmplitudeVrms(), cfg.getAmplitudeVrms(),
+                cfg.getDacFsVoltageRmsLeft(), cfg.getDacFsVoltageRmsRight())
                 .getLogSweepBuffer();
         // Parallel deconv: both channels share inputs (sweepRef, leadIn,
         // capture rate, freqs) but compute independently, so they run on
@@ -184,12 +186,12 @@ public final class FreqRespAnalyzer {
                 () -> FreqRespCalHelper.computeFromLogSweep(
                         rec.left(), sweepRef, recLeadInSamples,
                         cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
-                        cfg.getAdcFsVoltageRms(), recFadeSamples, "L", false));
+                        cfg.getAdcFsVoltageRmsLeft(), recFadeSamples, "L", false));
         CompletableFuture<FreqRespCalibration> calRFut = CompletableFuture.supplyAsync(
                 () -> FreqRespCalHelper.computeFromLogSweep(
                         rec.right(), sweepRef, recLeadInSamples,
                         cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
-                        cfg.getAdcFsVoltageRms(), recFadeSamples, "R", false));
+                        cfg.getAdcFsVoltageRmsRight(), recFadeSamples, "R", false));
         FreqRespCalibration calL = awaitOrFail(calLFut);
         FreqRespCalibration calR = awaitOrFail(calRFut);
 
@@ -261,8 +263,8 @@ public final class FreqRespAnalyzer {
         if (cfg.getDurationSec() < FreqRespConstants.SWEEP_MIN_SEC) {
             throw new IllegalArgumentException("durationSec must be >= " + FreqRespConstants.SWEEP_MIN_SEC);
         }
-        if (cfg.getLeadInSec() < FreqRespConstants.LEAD_IN_MIN_SEC) {
-            throw new IllegalArgumentException("leadInSec must be >= " + FreqRespConstants.LEAD_IN_MIN_SEC);
+        if (cfg.getLeadInSec() < FreqRespCalHelper.OFFSET_LEAD_IN_SEC) {
+            throw new IllegalArgumentException("leadInSec must be >= " + FreqRespCalHelper.OFFSET_LEAD_IN_SEC);
         }
         if (cfg.getAmplitudeVrms() <= 0.0)           throw new IllegalArgumentException("amplitudeVrms must be > 0");
         if (cfg.getStereoCaptureProvider() == null)  throw new IllegalArgumentException("stereoCaptureProvider is required");

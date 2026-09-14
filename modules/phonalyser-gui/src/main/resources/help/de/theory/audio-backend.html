@@ -368,13 +368,13 @@
      hindurch kalibriert, stehen gelassen - und der Exklusivmodus umgeht den
      Mixer ohnehin.</p>
 
-  <h2 id="network">Ein Messplatz im Netz</h2>
+  <h2 id="network">Ein Server im Netz</h2>
   <p>Alles bisher Gesagte setzt voraus, dass die Wandler an der Maschine hängen,
      an der Sie sitzen.  Das müssen sie nicht.  Eine zweite
      Phonalyser-Installation, die kopflos als <b>Server</b> läuft, macht die
-     Maschine, an der sie <em>tatsächlich</em> hängen, zum <b>Messplatz</b>, und
+     Maschine, an der sie <em>tatsächlich</em> hängen, zum <b>Server</b>, und
      Ihr Arbeitsplatz misst über ihn.  An den Überlegungen dieser Seite ändert
-     das nichts - der Messplatz öffnet seine Geräte weiterhin exklusiv, weiterhin
+     das nichts - der Server öffnet seine Geräte weiterhin exklusiv, weiterhin
      mit genau der gewählten Rate und Bittiefe, weiterhin bit-exakt.  Über das
      Netz geht keine Audio-Hardware, sondern dieselben zwei Spuren, nur
      gestreckt.</p>
@@ -403,7 +403,7 @@
 
     <rect x="440" y="20" width="240" height="240" rx="8" fill="#eef" stroke="#88a" stroke-width="1.5"/>
     <text x="560" y="44" text-anchor="middle" font-weight="bold">Phonalyser-Server</text>
-    <text x="560" y="60" text-anchor="middle" fill="#557">der Messplatz</text>
+    <text x="560" y="60" text-anchor="middle" fill="#557">der Server</text>
 
     <rect x="460" y="76" width="200" height="54" rx="6" fill="#fffbe8" stroke="#cc9"/>
     <text x="560" y="98" text-anchor="middle">seine eigenen Backends</text>
@@ -445,13 +445,13 @@
      sich zweimal je Sekunde per Multicast an, an die Gruppe 239.255.83.77 auf
      8377/udp - dieser Ankündigungsport liegt fest und ist nicht der
      <code>--port</code>, auf dem der Server bedient: Ein auf einen anderen Port
-     gelegter Messplatz kündigt sich weiterhin dort an und trägt seinen echten
+     gelegter Server kündigt sich weiterhin dort an und trägt seinen echten
      Port in der Ankündigung -, sodass ein Client, der der Gruppe beitritt, ohne jede
-     Konfiguration von jedem Messplatz im Raum erfährt - und ebenso rasch davon,
+     Konfiguration von jedem Server im Raum erfährt - und ebenso rasch davon,
      dass einer verschwindet, denn eine Zeile, die nicht mehr angekündigt wird,
      altert aus.  Die Ankündigung trägt bewusst eine Lebensdauer von einem Sprung:
      Es ist ein Messgerät für ein lokales Netz, kein standortweit beworbener
-     Dienst.  Genau deshalb muss ein Messplatz in einem anderen Subnetz über seine
+     Dienst.  Genau deshalb muss ein Server in einem anderen Subnetz über seine
      Adresse hinzugefügt werden - die Ankündigung erreicht Sie nicht, obwohl die
      Sitzung selbst einwandfrei geroutet wird.</p>
 
@@ -460,25 +460,25 @@
      ein <em>Client</em> zur Zeit.  Der Server hält eine Sperre je Gerät und
      Richtung und veröffentlicht mit jedem Gerät, das er auflistet, den
      <b>Namen des Clients, der sie hält</b>.  So sehen zwei Bedienende, die sich
-     einen Messplatz teilen, die Belegung des anderen, bevor sie etwas zu öffnen
+     einen Server teilen, die Belegung des anderen, bevor sie etwas zu öffnen
      versuchen, statt es über eine Ablehnung zu erfahren.  Eine Sperre wird
      genommen, wenn eine Messung das Gerät öffnet, und zurückgegeben, wenn sie
      stoppt - und ein Client, der verschwindet, gibt alles frei, was er
      hielt.</p>
 
-  <p><b>Der Generator läuft auf dem Messplatz, beauftragt statt gestreamt.</b>
+  <p><b>Der Generator läuft auf dem Server, beauftragt statt gestreamt.</b>
      Das wiegt schwerer, als es klingt.  Der Arbeitsplatz schiebt kein Audio über
-     das Netz, das der Messplatz abspielen soll; er sagt ihm, <em>was</em>
-     auszugeben ist, und der Generator des Messplatzes rendert es in dessen
+     das Netz, das der Server abspielen soll; er sagt ihm, <em>was</em>
+     auszugeben ist, und der Generator des Servers rendert es in dessen
      eigenen DAC, auf dessen eigenem Takt.  Zwei Folgen ergeben sich, und die
      zweite ist die messtechnische:</p>
   <ul>
     <li>Das Netz muss nie einen lückenlosen Ausgabestrom in Echtzeit tragen - ein
         Jitter-Budget, von dem niemand eine Messung abhängig machen möchte.</li>
     <li>Ein <a href="freq-resp.html">Frequenzgang-Sweep</a> wird gegen
-        <b>das entfaltet, was der Messplatz tatsächlich gerendert hat</b>.  Das
+        <b>das entfaltet, was der Server tatsächlich gerendert hat</b>.  Das
         erste Sample des Sweeps ist im Aufnahmestrom selbst markiert, im Band,
-        sodass die Auswertung auf dem Zeitverhalten des Messplatzes ankert und
+        sodass die Auswertung auf dem Zeitverhalten des Servers ankert und
         nicht auf einer Ankunftszeit im Netz.  Die Entfaltung teilt die
         aufgenommene Antwort durch den Referenz-Sweep, und ein Anker, der um eine
         Paketlaufzeit driftet, verschmiert genau die Impulsantwort, auf der die
@@ -499,12 +499,12 @@
   <p><b>Der Audiostrom bekennt seine Lücken.</b>  Aufgenommene Samples gehen als
      Binärnachrichten dreier Arten über die Leitung, jede mit einem Zähler, der bei
      jeder Nachricht - welcher Art auch immer - weiterzählt.
-     <b>Sample</b>-Nachrichten tragen das native PCM des Messplatzes genau so, wie
+     <b>Sample</b>-Nachrichten tragen das native PCM des Servers genau so, wie
      sein Gerät es erzeugt hat, sodass der Arbeitsplatz sie mit demselben Code
      dekodiert, den auch eine lokale Karte durchläuft.  Eine <b>Marke</b> trägt
      überhaupt kein Audio: Sie kündigt an, dass das nächste Sample-Byte nach ihr
      das erste Sample des Sweeps selbst ist - genau das verankert eine Entfaltung
-     im Zeitverhalten des Messplatzes.  Und eine <b>Lücken</b>-Nachricht sagt mit
+     im Zeitverhalten des Servers.  Und eine <b>Lücken</b>-Nachricht sagt mit
      dürren Worten, dass der Server selbst <i>n</i> Stereo-Frames verloren hat -
      ein stehengebliebener Verbraucher, ein Geräte-Überlauf -, bevor sie überhaupt
      ins Netz gelangten.</p>
@@ -514,7 +514,7 @@
      deren Mittelung daher ein Grundrauschen und eine Phase meldet, die es nie
      gab.  Also wird der Verlust ausgesprochen, der Analysator setzt seine Mittelung
      zurück, statt zu spleißen, und die FFT hebt ihr Banner
-     <b>Messplatz verlor Audio</b>.  Ein Sprung im Zähler bedeutete dagegen einen
+     <b>Server verlor Audio</b>.  Ein Sprung im Zähler bedeutete dagegen einen
      Verlust im <em>Transport</em> - über eine intakte, geordnete Verbindung
      unmöglich - und wird als Protokollfehler behandelt: gemeldet und gestoppt,
      genau wie ein Gerätefehler.</p>
@@ -526,27 +526,27 @@
      und zählt die Antworten; <b>vier unbeantwortete in Folge - zwei Sekunden -
      erklären die Verbindung für tot</b>.  Danach wickelt sich alles in der
      Richtung ab, in der es muss: Auf dem Arbeitsplatz wird jedes Modul gestoppt,
-     das über diesen Messplatz misst, und der Grund wird genannt, statt ein
+     das über diesen Server misst, und der Grund wird genannt, statt ein
      Oszilloskop das zuletzt empfangene Bild weiterzeichnen zu lassen; auf dem
-     Messplatz werden die Sperren des verschwundenen Clients freigegeben und seine
+     Server werden die Sperren des verschwundenen Clients freigegeben und seine
      Hardware wird geparkt, sodass die nächste Bedienerin ein freies Gerät
      vorfindet und nicht eines, das eine längst heimgegangene Maschine hält.  Die
      Suche folgt derselben Schwellenphilosophie - ein Server, der aufhört, sich
      anzukündigen, altert nach vier verpassten Ankündigungen aus der Liste.</p>
 
-  <p><b>Eine auf dem Messplatz gespielte Datei reist einmal und gehört der
-     Sitzung.</b>  Das Protokoll trägt kein Audio vom Arbeitsplatz zum Messplatz,
+  <p><b>Eine auf dem Server gespielte Datei reist einmal und gehört der
+     Sitzung.</b>  Das Protokoll trägt kein Audio vom Arbeitsplatz zum Server,
      also kann <em>Abspielen&nbsp;aus...</em> nicht streamen: Stattdessen wird die
      gewählte Datei als Ganzes über denselben Port hochgeladen, und die
-     Generator-Spur des Messplatzes dekodiert sie und gibt sie aus dessen eigenem
+     Generator-Spur des Servers dekodiert sie und gibt sie aus dessen eigenem
      DAC aus.  Der Upload ist auf <b>50&nbsp;MB</b> begrenzt, und auch der Bestand
      als Ganzes ist beschränkt, sodass ein einzelner Client den Speicher eines
-     Messplatzes nicht füllen kann; der Arbeitsplatz prüft die Größe, bevor ein
+     Servers nicht füllen kann; der Arbeitsplatz prüft die Größe, bevor ein
      einziges Byte losgeht, sodass eine zu große Datei sofort abgelehnt wird und
      nicht erst nach der Übertragung.  Die Bytes liegen ausschließlich im
      Arbeitsspeicher des Servers, gehören der Sitzung, die sie referenziert hat,
      und werden <b>verworfen, sobald diese Verbindung schließt</b> - auf einem
-     Messplatz sammelt sich nichts an, und keine Datei überlebt die Bedienerin, die
+     Server sammelt sich nichts an, und keine Datei überlebt die Bedienerin, die
      sie geschickt hat.</p>
 
   <div class="note"><b>Keine Authentifizierung, mit Absicht.</b>  Ein Server
@@ -557,9 +557,9 @@
      beschränkt, steht unter
      <a href="../server.html">Der Phonalyser-Server</a>.</div>
 
-  <p>Wie ein Messplatz vom Arbeitsplatz aus erreicht wird - die Server-Liste, die
+  <p>Wie ein Server vom Arbeitsplatz aus erreicht wird - die Server-Liste, die
      Einträge <code>&lt;Server&gt; -> &lt;Backend&gt;</code>, die Karten und die
-     Kalibrierung des Messplatzes - steht unter
+     Kalibrierung des Servers - steht unter
      <a href="../preferences.html#prefs-audio-servers">Einstellungen ▸ Messen
      über einen Phonalyser-Server</a>.</p>
 

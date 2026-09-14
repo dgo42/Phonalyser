@@ -121,7 +121,8 @@ class LocalDualToneSnapRateTest {
         prefs.setGenSignalForm(GenSignalForm.DUAL_TONE);
         prefs.setGenDualToneFreq1Hz(TONE1_HZ);
         prefs.setGenDualToneFreq2Hz(TONE2_HZ);
-        prefs.setGenAmplitudeVrms(AMPLITUDE_VRMS);
+        prefs.setGenAmplitudeVrmsLeft(AMPLITUDE_VRMS);
+        prefs.setGenAmplitudeVrmsRight(AMPLITUDE_VRMS);
     }
 
     @AfterEach

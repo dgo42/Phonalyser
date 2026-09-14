@@ -2,13 +2,13 @@
 
 The machine your measurement hardware is plugged into does not have to be the
 machine you sit at. Run **Phonalyser server** on the one that *is* wired to the
-converters and it becomes a **bench**: it owns the sound cards and the QA40x
+converters and it becomes a **server**: it owns the sound cards and the QA40x
 analyzer and serves them over the network to Phonalyser clients elsewhere. It
 has no window and needs no desktop - a Raspberry Pi or any headless box will do.
 
 This document is self-contained: everything needed to get a server running and
 keep it running on a machine with no GUI is on this page. The **client** side -
-finding a bench, connecting and measuring through it - is operated from the
+finding a server, connecting and measuring through it - is operated from the
 desktop or web application, which carries its own help. What happens on the
 wire is specified in [NET-PROTOCOL.md](NET-PROTOCOL.md).
 
@@ -51,7 +51,7 @@ Every launcher takes the same four arguments:
 |---|---|
 | `--name <text>` | The name clients see in their server list and in the *in use by* note beside a device someone else holds. Defaults to the machine's host name. |
 | `--port <port>` | **One port carries everything** - the control channel, the audio stream, the informational endpoints, the file upload and the web bundle. Default **8377**. |
-| `--bind <address>` | Listen on one interface only. Default: all of them. This is the one knob that limits who can reach the bench - see *There is no authentication* below. |
+| `--bind <address>` | Listen on one interface only. Default: all of them. This is the one knob that limits who can reach the server - see *There is no authentication* below. |
 | `-d`, `--daemon` | Accepted, and every service definition passes it - but it changes nothing today: the server writes no console output in any mode, and the log file is written the same way with or without it. |
 
 **Ctrl-C stops it cleanly.** The shutdown hook closes the audio lines and
@@ -68,7 +68,7 @@ sensitive input range the last measurement selected.
 
 Clients find a server by **UDP multicast on 239.255.83.77, port 8377/udp** -
 the same number the server listens on, because UDP and TCP are separate port
-spaces. The announcement is **link-local**: routers do not pass it, so a bench
+spaces. The announcement is **link-local**: routers do not pass it, so a server
 on another subnet is never discovered and is added by its address in the client
 instead.
 
@@ -171,38 +171,38 @@ console run.
 
 > **The consequence to remember:** the desktop application's own calibration is
 > **not** what the server serves. Give the server its own - calibrate through a
-> connected client, which writes straight into the bench's store, or copy
+> connected client, which writes straight into the server's store, or copy
 > `devices.yaml` across. On Linux the same applies between a terminal run and
 > the systemd service, which have separate data directories.
 
 ## There is no authentication, on purpose
 
 A Phonalyser server does not ask for a password, and nothing on the wire is
-encrypted. That is a decision, not an omission: **a bench instrument belongs on
-a network you trust** - the room your measurement equipment is in - and adding
+encrypted. That is a decision, not an omission: **the server belongs on a
+network you trust** - the room your measurement equipment is in - and adding
 credentials to a LAN instrument protocol would buy nothing the network does not
 already provide. Anyone who can reach the port can list the devices and take
 one.
 
 So do not expose the port to the open internet. If the machine has more than
-one interface, `--bind` the server to the one your bench lives on and leave the
-rest unreachable.
+one interface, `--bind` the server to the interface of the trusted network and
+leave the rest unreachable.
 
 ## Measuring through it
 
 With a server running, the whole client side is three steps and it is all in
 Preferences ▸ Audio:
 
-1. **Find the bench.** *Servers...* opens the list. It usually fills by itself
-   the moment it opens; a bench on another subnet is added by its address.
+1. **Find the server.** *Servers...* opens the list. It usually fills by itself
+   the moment it opens; a server on another subnet is added by its address.
    **Connect** - or a double-click on the row - opens the session.
-2. **Pick a backend.** The bench's backends join the Backend list beside the
+2. **Pick a backend.** The server's backends join the Backend list beside the
    local ones, written `<server> -> <backend>`. Browsing only previews; **OK**
    commits.
 3. **Measure.** From there the device combos, the card section, the range
    radios, **QA40x preferences**, the generator, the sweeps and *Play from...* all
    behave exactly as they do for local hardware. Calibration belongs to the
-   bench, so a crosshair calibration writes into *its* store.
+   server, so a crosshair calibration writes into *its* store.
 
 The finer client-side details - what is staged and what takes effect at once,
 the *in use by* note on a device another client holds, the granted-rate rule,
@@ -212,9 +212,9 @@ are documented in the client applications themselves.
 ## While it runs
 
 - **Hardware is re-enumerated every two seconds**, so a device plugged in or
-  pulled out on the bench is noticed without restarting anything, and every
+  pulled out on the server is noticed without restarting anything, and every
   connected client is told. Two seconds rather than continuously on purpose:
-  enumeration talks to drivers and to USB, and nothing on a bench appears so
+  enumeration talks to drivers and to USB, and nothing on a server appears so
   urgently that the delay costs a measurement.
 - **One client at a time per device.** The server holds a lock per device, so
   two operators cannot talk over each other's measurement; the lock names its

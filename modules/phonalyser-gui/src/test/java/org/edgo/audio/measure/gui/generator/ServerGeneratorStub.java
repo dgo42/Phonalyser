@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
@@ -34,6 +35,7 @@ import org.edgo.audio.measure.sound.AbstractPcmCapture;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.MarkedCapture;
 import org.edgo.audio.measure.sound.RemoteGenerator;
@@ -53,7 +55,7 @@ import lombok.Setter;
  * defect this stub exists for was a method that silently sent nothing.
  *
  * <p>Reached the ordinary way, through {@code AudioBackend}: the manager is
- * built by {@link BenchGeneratorStubProvider} on the service-loader contract and
+ * built by {@link ServerGeneratorStubProvider} on the service-loader contract and
  * cached per backend type, so the test drives exactly the lookup production
  * does.  One instance therefore serves the whole JVM - {@link #reset()} is what
  * separates two tests.
@@ -65,7 +67,7 @@ import lombok.Setter;
  * the same kind of stub as the generator - no device behind it, the test says
  * which bytes arrive and where the mark and the losses fall.
  */
-public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGenerator {
+public final class ServerGeneratorStub implements AudioDeviceManager, RemoteGenerator {
 
     /** The one output device this bench offers; the tests put it into the
      *  backend's preferences so {@code start()} resolves a device at all. */
@@ -111,7 +113,7 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
     /** The input line last opened - where a test puts the bytes in.  Volatile:
      *  opened on the measuring thread, read from the test's. */
     @Getter
-    private volatile BenchCapture lastCapture;
+    private volatile ServerCapture lastCapture;
     /** What the bench last PUSHED about itself - the only thing
      *  {@link GeneratorController#isRunning()} may believe.  Settable so a test
      *  can stage the state an operator-driven disconnect leaves behind. */
@@ -120,8 +122,8 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
     private double emitHz;
     private double emit2Hz;
 
-    /** Public and no-argument for {@link BenchGeneratorStubProvider}. */
-    public BenchGeneratorStub() {
+    /** Public and no-argument for {@link ServerGeneratorStubProvider}. */
+    public ServerGeneratorStub() {
     }
 
     // -------------------------------------------------------------------------
@@ -202,10 +204,10 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
 
     /** The same for the input line: it exists only once the measurement has
      *  opened it. */
-    public BenchCapture awaitCapture(long timeoutMs) {
+    public ServerCapture awaitCapture(long timeoutMs) {
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {
-            BenchCapture open = lastCapture;
+            ServerCapture open = lastCapture;
             if (open != null && open.isRecording()) {
                 return open;
             }
@@ -223,9 +225,9 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
     // -------------------------------------------------------------------------
 
     @Override
-    public int openGenerator(DeviceRef device, int sampleRate, int bitDepth, double ditherBits,
-            OutputChannels channels) {
-        record("openGenerator", sampleRate, bitDepth, ditherBits, channels);
+    public int openGenerator(DeviceRef device, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight, OutputChannels channels) {
+        record("openGenerator", sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight, channels);
         openEntered.countDown();
         CountDownLatch gate = openGate;
         if (gate != null) {
@@ -264,13 +266,13 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
     }
 
     @Override
-    public void setRightLaneScale(double scale) {
-        record("setRightLaneScale", scale);
+    public void setAmplitudesVrms(double leftVrms, double rightVrms) {
+        record("setAmplitudesVrms", leftVrms, rightVrms);
     }
 
     @Override
-    public void setDitherBits(double bits) {
-        record("setDitherBits", bits);
+    public void setDitherBits(double leftBits, double rightBits) {
+        record("setDitherBits", leftBits, rightBits);
     }
 
     @Override
@@ -485,13 +487,8 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
     }
 
     @Override
-    public void setAmplitudeVrms(double vrms) {
-        record("setAmplitudeVrms", vrms);
-    }
-
-    @Override
-    public void setDacFsVoltageAmpl(double volts) {
-        record("setDacFsVoltageAmpl", volts);
+    public void setDacFsVoltageAmpls(double leftAmpl, double rightAmpl) {
+        record("setDacFsVoltageAmpls", leftAmpl, rightAmpl);
     }
 
     @Override
@@ -569,6 +566,26 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
         return List.of(output);
     }
 
+    /** Recorded like every other command the bench is given - a calibration
+     *  write is one - and accepted; what the real net manager does with it
+     *  (the device lock, the wire message) is that manager's own test. */
+    @Override
+    public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
+        record("storeCalibration", device.name(), input, ch, fsRms);
+        return true;
+    }
+
+    /** A bench device carries its own calibration, as the net manager reads it. */
+    @Override
+    public DeviceCalibration calibration(DeviceRef device, boolean input) {
+        return device.calibration();
+    }
+
+    @Override
+    public boolean calibrationFromDevice(DeviceRef device, boolean input) {
+        return device.calFromDevice();
+    }
+
     @Override
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
         if (index != 0) {
@@ -587,14 +604,14 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
      *  would count samples against a clock nothing runs at). */
     @Override
     public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
-        lastCapture = new BenchCapture(grantedCaptureRate > 0 ? grantedCaptureRate
+        lastCapture = new ServerCapture(grantedCaptureRate > 0 ? grantedCaptureRate
                 : sampleRate, bitDepth);
         return lastCapture;
     }
 
     @Override
     public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
-            double ditherBits) {
+            double ditherBitsLeft, double ditherBitsRight) {
         throw new UnsupportedOperationException(
                 "a remote generator is COMMANDED, never rendered into - a controller that "
                         + "reaches this line took the local path against a remote bench");
@@ -611,7 +628,7 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
      * carries the in-band marks, because a stream that could not be marked is not
      * the stream a sweep is cut out of.
      */
-    public static final class BenchCapture extends AbstractPcmCapture
+    public static final class ServerCapture extends AbstractPcmCapture
             implements MarkedCapture {
 
         /** How many PCM bytes have been handed to the pipeline - the position the
@@ -623,7 +640,7 @@ public final class BenchGeneratorStub implements AudioDeviceManager, RemoteGener
         @Getter
         private volatile boolean closed;
 
-        private BenchCapture(int sampleRate, int bitDepth) {
+        private ServerCapture(int sampleRate, int bitDepth) {
             super(sampleRate, bitDepth);
         }
 

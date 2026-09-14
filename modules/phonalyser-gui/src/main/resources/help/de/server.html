@@ -13,16 +13,16 @@
   <p>Die Maschine, an der Ihre Messhardware hängt, muss nicht die Maschine sein,
      an der Sie sitzen.  Lassen Sie den <b>Phonalyser-Server</b> auf derjenigen
      laufen, an der die Wandler <em>tatsächlich</em> hängen, und sie wird zum
-     <b>Messplatz</b>: Ihr gehören die Soundkarten und der QA40x-Analysator, und
+     <b>Server</b>: Ihr gehören die Soundkarten und der QA40x-Analysator, und
      sie bietet sie über das Netz den Phonalyser-Clients anderswo an.  Er hat
      kein Fenster und braucht keine Arbeitsoberfläche - ein Raspberry Pi oder
      eine beliebige kopflose Kiste genügt.</p>
   <p>Dieses Kapitel ist die <b>Server</b>-Hälfte: einen ans Laufen bringen und am
-     Laufen halten.  Die <b>Client</b>-Hälfte - einen Messplatz finden, sich mit
+     Laufen halten.  Die <b>Client</b>-Hälfte - einen Server finden, sich mit
      ihm verbinden und über ihn messen - steht unter
      <a href="preferences.html#prefs-audio-servers">Einstellungen ▸ Messen über
      einen Phonalyser-Server</a>, und was dabei über die Leitung geht, unter
-     <a href="theory/audio-backend.html#network">Funktionsprinzip ▸ Ein Messplatz
+     <a href="theory/audio-backend.html#network">Funktionsprinzip ▸ Ein Server
      im Netz</a>.</p>
 
   <h2 id="server-what">Was er ist und was Sie brauchen</h2>
@@ -74,14 +74,14 @@
      zuverlässig reservieren kann.  Ein QA40x muss bereits an den
      WinUSB-Treiber gebunden sein, was geschieht, sobald QuantAsylums eigene
      Software auf dieser Maschine gelaufen ist.</div>
-  <div class="note"><b>Betreiben Sie den Messplatz auf einer physischen Maschine,
+  <div class="note"><b>Betreiben Sie den Server auf einer physischen Maschine,
      nicht in einer virtuellen.</b>  Ein Server, der in einer virtuellen Maschine
      gemessen hat, zeigte starke periodische Aussetzer in beiden Richtungen;
      dieselbe Hardware auf einer physischen Maschine mass sauber.  Das Audiogerät
      wird über USB erreicht, und es ist die virtualisierte USB-Zeitsteuerung des
      Gastsystems, die bricht: die Samples treffen verspätet und stossweise ein,
      was eine Messung als Lücken im Signal liest.  Nichts im Server kann das
-     ausgleichen - stellen Sie den Messplatz auf echte Hardware.</div>
+     ausgleichen - stellen Sie den Server auf echte Hardware.</div>
 
   <h2 id="server-console">Betrieb in einer Konsole</h2>
   <pre>    phonalyser-server-x64.exe
@@ -101,7 +101,7 @@
             Standard <b>8377</b>.</td></tr>
     <tr><td><code>--bind &lt;address&gt;</code></td>
         <td>Nur auf einer Schnittstelle lauschen.  Voreinstellung: auf allen.
-            Das ist der eine Stellhebel, der begrenzt, wer den Messplatz
+            Das ist der eine Stellhebel, der begrenzt, wer den Server
             erreichen kann - siehe
             <a href="#server-noauth">keine Authentifizierung</a> weiter
             unten.</td></tr>
@@ -126,7 +126,7 @@
   <p>Clients finden einen Server über <b>UDP-Multicast an 239.255.83.77, Port
      8377/udp</b> - dieselbe Zahl, auf der der Server lauscht, denn UDP und TCP
      haben getrennte Portbereiche.  Die Ankündigung ist <b>link-lokal</b>: Router
-     reichen sie nicht weiter, sodass ein Messplatz in einem anderen Subnetz nie
+     reichen sie nicht weiter, sodass ein Server in einem anderen Subnetz nie
      gefunden und im Client stattdessen über seine Adresse hinzugefügt wird.</p>
   <p>Lassen Sie diesen einen Port durch die Firewall, <b>udp und tcp</b>, oder
      verzichten Sie ganz auf die Suche und tippen Sie die Adresse im Client von
@@ -249,9 +249,9 @@
   <div class="note"><b>Die Folge, die man sich merken muss:</b> Die Kalibrierung
      der Desktop-Anwendung ist <b>nicht</b> das, was der Server ausliefert.
      Geben Sie dem Server seine eigene - kalibrieren Sie über einen verbundenen
-     Client, was direkt in den Speicher des Messplatzes schreibt (siehe
+     Client, was direkt in den Speicher des Servers schreibt (siehe
      <a href="preferences.html#prefs-audio-server-cards">Karten und Kalibrierung
-     auf dem Messplatz</a>), oder kopieren Sie <code>devices.yaml</code>
+     auf dem Server</a>), oder kopieren Sie <code>devices.yaml</code>
      hinüber.  Unter Linux gilt dasselbe zwischen einem Terminal-Lauf und dem
      systemd-Dienst, die getrennte Datenverzeichnisse haben.</div>
 
@@ -265,19 +265,19 @@
      belegen.</p>
   <p>Stellen Sie den Port also nicht ins offene Internet.  Hat die Maschine mehr
      als eine Schnittstelle, binden Sie den Server mit <code>--bind</code> an
-     diejenige, an der Ihr Messplatz hängt, und lassen Sie den Rest
+     die Schnittstelle des vertrauenswürdigen Netzes, und lassen Sie den Rest
      unerreichbar.</p>
 
   <h2 id="server-measuring">Über ihn messen</h2>
   <p>Läuft ein Server, sind es auf der Client-Seite drei Schritte, und alle
      stehen in Einstellungen ▸ Audio:</p>
   <ol>
-    <li><b>Den Messplatz finden.</b>  <a href="preferences.html#prefs-audio-server-list">Server...</a>
+    <li><b>Den Server finden.</b>  <a href="preferences.html#prefs-audio-server-list">Server...</a>
         öffnet die Liste.  Sie füllt sich meist von allein, sobald sie geöffnet
-        wird; ein Messplatz in einem anderen Subnetz wird über seine Adresse
+        wird; ein Server in einem anderen Subnetz wird über seine Adresse
         hinzugefügt.  <b>Verbinden</b> - oder ein Doppelklick auf die Zeile -
         öffnet die Sitzung.</li>
-    <li><b>Ein Backend wählen.</b>  Die Backends des Messplatzes
+    <li><b>Ein Backend wählen.</b>  Die Backends des Servers
         <a href="preferences.html#prefs-audio-server-backends">reihen sich in die
         Backend-Liste</a> neben die lokalen ein, geschrieben als
         <code>&lt;Server&gt; -> &lt;Backend&gt;</code>.  Das Durchsehen ist nur
@@ -286,7 +286,7 @@
         Kartenbereich, die Auswahlknöpfe für den Bereich,
         <b>QA40x-Einstellungen</b>, der Generator, die Sweeps und
         <em>Abspielen aus...</em> genau wie bei lokaler Hardware.  Die Kalibrierung
-        gehört zum Messplatz, eine Fadenkreuz-Kalibrierung schreibt also in
+        gehört zum Server, eine Fadenkreuz-Kalibrierung schreibt also in
         <em>dessen</em> Speicher.</li>
   </ol>
   <p>Die Einzelheiten - was vorgemerkt wird und was sofort wirkt, der Hinweis
@@ -299,10 +299,10 @@
   <h2 id="server-hotplug">Während er läuft</h2>
   <ul>
     <li><b>Die Hardware wird alle zwei Sekunden neu aufgezählt</b>, sodass ein am
-        Messplatz eingestecktes oder abgezogenes Gerät bemerkt wird, ohne
+        Server eingestecktes oder abgezogenes Gerät bemerkt wird, ohne
         irgendetwas neu zu starten, und jeder verbundene Client davon erfährt.
         Zwei Sekunden statt fortlaufend, und zwar mit Absicht: Das Aufzählen
-        spricht mit Treibern und mit USB, und nichts an einem Messplatz erscheint
+        spricht mit Treibern und mit USB, und nichts an einem Server erscheint
         so dringend, dass die Verzögerung eine Messung kostete.</li>
     <li><b>Ein Client je Gerät zur Zeit.</b>  Der Server hält eine Sperre je
         Gerät, sodass zwei Bedienende einander nicht in die Messung reden; die
@@ -324,7 +324,7 @@
     <li><a href="preferences.html#prefs-audio-servers">Einstellungen ▸ Messen
         über einen Phonalyser-Server</a> - die gesamte Client-Seite.</li>
     <li><a href="theory/audio-backend.html#network">Funktionsprinzip ▸ Ein
-        Messplatz im Netz</a> - die Ports, die Bake, die Sperren, das Keepalive
+        Server im Netz</a> - die Ports, die Bake, die Sperren, das Keepalive
         und was der Audiostrom tatsächlich trägt.</li>
     <li><a href="bench.html">Messplatz &amp; Verkabelung</a> - der physische
         Messplatz, auf dem der Server steht.</li>

@@ -27,6 +27,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.preferences.BackendKey;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -90,7 +93,23 @@ public final class AudioBackend {
      *  idempotent; this stops the application paying for the enumeration twice. */
     private final AtomicBoolean setupStarted = new AtomicBoolean();
 
-    private AudioBackend() {}
+    /** The calibration in force for the active device of each direction, as
+     *  last resolved, keyed by the selection it was resolved for
+     *  ({@link #cachedInputKey} / {@link #cachedOutputKey}) - so a paint loop
+     *  that asks per frame does not resolve the device by name against the
+     *  backend's list per frame.  Dropped whenever a manager announces a
+     *  calibration change, and stale by construction when the selection
+     *  moves, since the key moves with it. */
+    private volatile DeviceCalibration cachedInput;
+    private volatile String cachedInputKey;
+    private volatile DeviceCalibration cachedOutput;
+    private volatile String cachedOutputKey;
+
+    private AudioBackend() {
+        MessageBus bus = MessageBus.instance();
+        bus.subscribe(Events.ADC_CALIBRATION_CHANGED, (DeviceRef device) -> cachedInputKey = null);
+        bus.subscribe(Events.DAC_CALIBRATION_CHANGED, (DeviceRef device) -> cachedOutputKey = null);
+    }
 
     /**
      * Returns the singleton instance, lazily creating it inside a synchronized
@@ -314,6 +333,128 @@ public final class AudioBackend {
         return activeManager().getDeviceByIndex(index, isOutput);
     }
 
+    // -------------------------------------------------------------------------
+    // Calibration - where a measured full scale goes
+    // -------------------------------------------------------------------------
+
+    /**
+     * Calibrates ONE channel of the active device in {@code input}'s direction
+     * from a Calibrate dialog's two numbers: what the channel indicated and what
+     * it truly carried.  A reading scales linearly with the full scale it is
+     * computed against, so the channel's true full scale is the one in force
+     * scaled by {@code trueVrms / indicatedVrms} - for the ADC the scope's or
+     * FFT's reading against the voltage the operator measured at the input,
+     * for the DAC the commanded amplitude against the voltage measured at the
+     * output.
+     *
+     * <p>The result goes to the backend the device is on, which is what decides
+     * where the calibration lives: this machine's cards for a local device, the
+     * bench's for a device across the network (see
+     * {@link AudioDeviceManager#storeCalibration}).  Full scales are RMS volts
+     * there, the form the card and the wire hold - the DAC's full scale is kept
+     * here as a peak amplitude and is divided by {@code √2} on the way.
+     *
+     * @return whether it was stored; {@code false} also when no device is
+     *         active in that direction, or the active one is not present
+     */
+    public boolean calibrate(boolean input, Channel ch, double indicatedVrms, double trueVrms) {
+        DeviceRef device = activeDevice(input);
+        if (device == null) {
+            if (log.isWarnEnabled()) {
+                log.warn("Calibration: no {} device is active, so {} is not calibrated",
+                        input ? "input" : "output", ch);
+            }
+            return false;
+        }
+        AudioDeviceManager manager = manager(device.carrier());
+        DeviceCalibration inForce = manager.calibration(device, input);
+        if (inForce == null) {
+            inForce = DeviceCalibration.DEFAULT;
+        }
+        double fsRms = inForce.fsRms(ch) * (trueVrms / indicatedVrms);
+        return manager.storeCalibration(device, input, ch, fsRms);
+    }
+
+    /**
+     * The calibration in force for the ACTIVE device in {@code input}'s
+     * direction, read through the manager of the backend it is on - what every
+     * reading is computed against.  Ask at use, once per measurement or paint,
+     * not per sample.  Cached per selection until a manager announces a change
+     * (see {@link #cachedInput}), so a caller pays the device resolution once
+     * per selection, not per call.
+     *
+     * @return the full scales, or {@code null} when no device is active in
+     *         that direction, or the active one is uncalibrated - see
+     *         {@link AudioDeviceManager#calibration}
+     */
+    public DeviceCalibration calibration(boolean input) {
+        BackendPrefs bp = Preferences.instance().current();
+        String name = input ? bp.getInputDeviceName() : bp.getOutputDeviceName();
+        String key = activeKey.key() + "|" + name;
+        if (key.equals(input ? cachedInputKey : cachedOutputKey)) {
+            return input ? cachedInput : cachedOutput;
+        }
+        DeviceRef device = activeDevice(input);
+        DeviceCalibration cal = device == null ? null
+                : manager(device.carrier()).calibration(device, input);
+        if (input) {
+            cachedInput = cal;
+            cachedInputKey = key;
+        } else {
+            cachedOutput = cal;
+            cachedOutputKey = key;
+        }
+        return cal;
+    }
+
+    /** {@link #calibration(boolean)}, with {@link DeviceCalibration#DEFAULT}
+     *  standing in for an uncalibrated or absent device - for the consumers
+     *  that must show SOMETHING (a scope axis, a generator level) and whose
+     *  uncalibrated state is announced elsewhere. */
+    public DeviceCalibration calibrationOrDefault(boolean input) {
+        DeviceCalibration cal = calibration(input);
+        return cal == null ? DeviceCalibration.DEFAULT : cal;
+    }
+
+    /** The calibration in force for an EXPLICIT device - one a caller chose
+     *  itself rather than the preferences' active one (the CLI's device flags)
+     *  - read through the manager of the backend it is on, with
+     *  {@link DeviceCalibration#DEFAULT} for an uncalibrated device. */
+    public DeviceCalibration calibrationOrDefault(DeviceRef device, boolean input) {
+        DeviceCalibration cal = manager(device.carrier()).calibration(device, input);
+        return cal == null ? DeviceCalibration.DEFAULT : cal;
+    }
+
+    /** Whether the ACTIVE device's full scales in {@code input}'s direction are
+     *  the device's own ({@link AudioDeviceManager#calibrationFromDevice}), so a
+     *  calibrate dialog shows them read-only.  False with no device active. */
+    public boolean isCalibrationFromDevice(boolean input) {
+        DeviceRef device = activeDevice(input);
+        return device != null && manager(device.carrier()).calibrationFromDevice(device, input);
+    }
+
+    /** Whether the ACTIVE selection would be measured with NO real calibration
+     *  in {@code input}'s direction - the warning the Preferences dialog raises
+     *  on a committed selection, and the accuracy gate a calibrate button drops
+     *  when there is no full scale worth measuring against.  A device whose
+     *  calibration is its own is exempt: there is nothing for the operator to
+     *  do about it.  No device active, or one its backend no longer offers, is
+     *  uncalibrated too - nothing is left to vouch for what its volts mean. */
+    public boolean isUncalibrated(boolean input) {
+        return calibration(input) == null && !isCalibrationFromDevice(input);
+    }
+
+    /** Whether {@code device} is the ACTIVE device in {@code input}'s direction
+     *  - what a subscriber of the calibration-changed events asks before it
+     *  acts: a change on any other device is not in force here.
+     *  By name and carrier, not by ref identity - a catalogue rebuild hands out
+     *  new refs for the same device. */
+    public boolean isActiveDevice(DeviceRef device, boolean input) {
+        DeviceRef active = activeDevice(input);
+        return active != null && active.carrier() == device.carrier()
+                && active.name().equals(device.name());
+    }
+
     public List<AudioFormat> listSupportedInputFormats(DeviceRef device) {
         return manager(device.carrier()).listSupportedFormats(device, false);
     }
@@ -378,12 +519,13 @@ public final class AudioBackend {
     }
 
     /** Playback twin of {@link #openCapture(DeviceRef)}: rate and depth from
-     *  the preferences; only the dither depth - a generator setting, not a
-     *  device format - is the caller's. */
-    public AudioPlayback openPlayback(DeviceRef device, double ditherBits) {
+     *  the preferences; only the two lanes' dither depths - a generator
+     *  setting, not a device format - are the caller's. */
+    public AudioPlayback openPlayback(DeviceRef device, double ditherBitsLeft,
+            double ditherBitsRight) {
         BackendPrefs bp = Preferences.instance().current();
         return playbackManager(device).openPlayback(device,
-                bp.getOutputSampleRate(), bp.getOutputBitDepth(), ditherBits);
+                bp.getOutputSampleRate(), bp.getOutputBitDepth(), ditherBitsLeft, ditherBitsRight);
     }
 
     /**

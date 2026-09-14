@@ -88,6 +88,9 @@ public final class FreqRespPane extends AbstractPane {
     /** The self-contained tile-tab folder hosting every settings / presets /
      *  calibration / save-load tab; see {@link FreqRespTabControl}. */
     private FreqRespTabControl tabControl;
+    /** The row holding the tab control and the Wizard / Play buttons - the
+     *  part of the pane a running sweep locks. */
+    private Composite    toolbarRow;
     private Button       wizardButton;
     private Button       playButton;
 
@@ -105,7 +108,7 @@ public final class FreqRespPane extends AbstractPane {
 
     /** Set when the finished sweep's raw capture touched the converter rail,
      *  cleared when the warning has been shown.  The flag exists because the
-     *  result arrives while the modal busy shell is still up - a dialog opened
+     *  result arrives while the modal progress dialog is still up - a dialog opened
      *  there would sit behind it - so the warning waits for the STOPPED event
      *  that closes the shell.  Written on the worker thread that publishes the
      *  result and read on the UI thread, hence volatile. */
@@ -150,18 +153,18 @@ public final class FreqRespPane extends AbstractPane {
         // Bus subscriptions.  Range-changed re-aligns the scrollbars after the
         // view's wheel-driven pan / zoom (and after a preset load, which the
         // tab control publishes).  STOPPED (always published, on the UI
-        // thread) unlocks the pane + closes the busy shell; FAILED carries
+        // thread) unlocks the pane + closes the progress dialog; FAILED carries
         // the error dialog text.  The calibration-changed subscription lives
         // inside FreqRespTabControl (it owns the calibration tab).
         rangeChangedListener = ignored -> syncScrollbars();
         measurementStoppedListener = ignored -> {
             if (group.isDisposed()) return;
-            // Unlock first (re-enables the group), then refresh the RIAA
+            // Unlock first (re-enables the toolbar row), then refresh the RIAA
             // enable cascade so Compare picks up the freshly-available
             // measurement (setLocked alone restores each child's prior
             // flag, which kept Compare disabled).
             setLocked(false);
-            closeBusyShell();
+            closeProgressDialog();
             tabControl.refreshRiaaEnable();
             warnIfClipped();
         };
@@ -257,7 +260,7 @@ public final class FreqRespPane extends AbstractPane {
         // explicitly so the Settings tab's 4-row body has room - without it
         // the tab folder gets vertically squeezed and the bottom row (dither /
         // Nyquist combos) clips out of view.
-        Composite toolbarRow = new Composite(group, SWT.NONE);
+        toolbarRow = new Composite(group, SWT.NONE);
         GridData trGd = new GridData(SWT.FILL, SWT.BEGINNING, true, false);
         trGd.heightHint = TOOLBAR_ROW_HEIGHT;
         toolbarRow.setLayoutData(trGd);
@@ -294,8 +297,8 @@ public final class FreqRespPane extends AbstractPane {
     // Play / measurement orchestration
     // -------------------------------------------------------------------------
 
-    /** Handler for the big Play button - locks the pane, opens the busy
-     *  shell, and hands the sweep to the controller.  Unlock + close ride
+    /** Handler for the big Play button - locks the pane, opens the progress
+     *  dialog, and hands the sweep to the controller.  Unlock + close ride
      *  the {@link Events#FREQRESP_MEASUREMENT_STOPPED} subscription, the
      *  error dialog rides {@link Events#FREQRESP_MEASUREMENT_FAILED}. */
     private void onPlayClicked() {
@@ -303,18 +306,22 @@ public final class FreqRespPane extends AbstractPane {
         // A fresh sweep replaces any loaded file - drop the "Loaded: ..." banner.
         view.setSourceFilePath(null);
         setLocked(true);
-        openBusyShell(controller.expectedMeasurementSeconds());
+        openProgressDialog(controller.expectedMeasurementSeconds());
         // Marshal each capture block's RMS to the SWT UI thread and
         // forward it to the live meter.  The callback fires on the audio
         // capture thread so we MUST asyncExec - touching the meter
-        // directly here would deadlock or crash.
-        int sr = Math.max(1, Preferences.instance().current().getInputSampleRate());
+        // directly here would deadlock or crash.  The meter shows the channel
+        // the view has selected (its L/R radio), read per block so a switch
+        // during the sweep takes effect at once.
+        Preferences prefs = Preferences.instance();
+        int sr = Math.max(1, prefs.current().getInputSampleRate());
         Shell paneShell = group.getShell();
-        StereoCaptureProgress progress = (totalSamples, rmsLin) -> {
+        StereoCaptureProgress progress = (totalSamples, rmsLeft, rmsRight) -> {
+            double rmsLin = prefs.isFreqRespLeftVisible() ? rmsLeft : rmsRight;
             double tSec = totalSamples / (double) sr;
             GuiUtil.marshal(paneShell, () -> {
-                if (busyMeter != null && !busyMeter.isDisposed()) {
-                    busyMeter.appendSample(tSec, rmsLin);
+                if (progressMeter != null && !progressMeter.isDisposed()) {
+                    progressMeter.appendSample(tSec, rmsLin);
                 }
             });
         };
@@ -323,36 +330,36 @@ public final class FreqRespPane extends AbstractPane {
 
     /** Shell shown for the duration of a measurement / deconvolution.
      *  Created on entry, closed by the worker's completion or error path. */
-    private Shell busyShell;
-    /** Live "level vs. time" meter inside {@link #busyShell}, fed by the
+    private Shell progressDialog;
+    /** Live "level vs. time" meter inside {@link #progressDialog}, fed by the
      *  capture-progress callback that the worker passes through to the
-     *  analyzer.  Null when no busy shell is open. */
-    private FreqRespLiveMeter busyMeter;
+     *  analyzer.  Null when no progress dialog is open. */
+    private FreqRespLiveMeter progressMeter;
 
-    private void openBusyShell(double totalDurationSec) {
-        if (busyShell != null && !busyShell.isDisposed()) return;
+    private void openProgressDialog(double totalDurationSec) {
+        if (progressDialog != null && !progressDialog.isDisposed()) return;
         Shell parent = group.getShell();
         Shell s = new Shell(parent, SWT.TITLE | SWT.BORDER
                 | SWT.APPLICATION_MODAL);
-        s.setText(I18n.t("freqResp.busy.title"));
+        s.setText(I18n.t("freqResp.progress.title"));
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 12; gl.marginHeight = 10;
         gl.verticalSpacing = 8;
         s.setLayout(gl);
         Label l = new Label(s, SWT.CENTER);
-        l.setText(I18n.t("freqResp.busy.message"));
+        l.setText(I18n.t("freqResp.progress.message"));
         l.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         // Sweep geometry feeds the meter's time -> instantaneous-frequency
         // mapping, which scales the trace smoothing with the period.
         Preferences prefs = Preferences.instance();
-        busyMeter = new FreqRespLiveMeter(s, totalDurationSec,
-                prefs.getFreqRespLeadInSec(), prefs.getFreqRespDurationSec(),
+        progressMeter = new FreqRespLiveMeter(s, totalDurationSec,
+                controller.sweepLeadInSec(), prefs.getFreqRespDurationSec(),
                 prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz());
         GridData mg = new GridData(SWT.FILL, SWT.CENTER, true, false);
         mg.widthHint  = 520;
         mg.heightHint = 100;
-        busyMeter.setLayoutData(mg);
+        progressMeter.setLayoutData(mg);
 
         // Cancel is cooperative - the worker's
         // cancel flag ends the sweep, and the normal STOPPED path closes this
@@ -389,15 +396,15 @@ public final class FreqRespPane extends AbstractPane {
         // worker's first sweep call blocks the UI thread.
         Display d = parent.getDisplay();
         for (int i = 0; i < 5; i++) if (!d.readAndDispatch()) break;
-        busyShell = s;
+        progressDialog = s;
     }
 
-    private void closeBusyShell() {
+    private void closeProgressDialog() {
         // dispose(), not close(): close() raises SWT.Close, which is the
         // user-close channel that turns into a cancel request above.
-        if (busyShell != null && !busyShell.isDisposed()) busyShell.dispose();
-        busyShell = null;
-        busyMeter = null;
+        if (progressDialog != null && !progressDialog.isDisposed()) progressDialog.dispose();
+        progressDialog = null;
+        progressMeter = null;
     }
 
     private void showError(String message) {
@@ -408,7 +415,7 @@ public final class FreqRespPane extends AbstractPane {
     }
 
     /** Warns once about a sweep whose raw capture reached the converter rail.
-     *  Called from the STOPPED handler, i.e. after the modal busy shell is
+     *  Called from the STOPPED handler, i.e. after the modal progress dialog is
      *  gone - the trace is already on screen behind the dialog, which is the
      *  point: the operator sees the curve the warning is about. */
     private void warnIfClipped() {
@@ -420,14 +427,17 @@ public final class FreqRespPane extends AbstractPane {
                 I18n.t("freqResp.warning.clipped.message"));
     }
 
-    /** Disables every interactive control under this pane (recursively).
-     *  When unlocked, restores enabled state.  A running sweep must leave
-     *  every tab control read-only, the Play button included - disabling the
-     *  root {@link Composite} cascades correctly to children on every
-     *  platform SWT supports. */
+    /** Disables every control of the toolbar row (recursively) - the tabs,
+     *  the Wizard and the Play button.  When unlocked, restores enabled state.
+     *  A running sweep must leave every tab control read-only, the Play
+     *  button included - disabling the row's {@link Composite} cascades
+     *  correctly to children on every platform SWT supports.  The view stays
+     *  enabled: its L / R buttons show which channel the progress meter is
+     *  following, and a disabled button never paints its active fill.  The
+     *  modal progress dialog keeps input away from it meanwhile. */
     private void setLocked(boolean locked) {
         if (group.isDisposed()) return;
-        group.setEnabled(!locked);
+        toolbarRow.setEnabled(!locked);
     }
 
     // -------------------------------------------------------------------------

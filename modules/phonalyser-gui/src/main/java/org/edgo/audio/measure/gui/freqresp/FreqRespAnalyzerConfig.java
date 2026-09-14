@@ -20,6 +20,7 @@ package org.edgo.audio.measure.gui.freqresp;
 
 import lombok.Builder;
 import lombok.Getter;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.sound.StereoCaptureProgress;
 import org.edgo.audio.measure.sound.StereoSamples;
@@ -66,16 +67,22 @@ public final class FreqRespAnalyzerConfig {
     private final int sweepPoints;
     /** Sweep duration in seconds, excluding lead-in. */
     private final double durationSec;
-    /** Silent lead-in prepended to the sweep, in seconds. */
+    /** Silence before the chirp, in seconds: the fixed
+     *  {@link FreqRespCalHelper#OFFSET_LEAD_IN_SEC} window the deconvolution
+     *  measures each channel's DC offset on, plus the lead-in the operator
+     *  configured on top of it.  Never less than that window. */
     private final double leadInSec;
 
     /** Generator drive amplitude in V RMS at the DAC. */
     private final double amplitudeVrms;
-    /** DAC full-scale RMS voltage the sweep generator's amplitude scale divides by. */
-    private final double dacFsVoltageRms;
-    /** ADC full-scale RMS voltage normalising the deconvolved magnitude to a
-     *  physical transfer function (1.0 = 0 dB at unity loopback). */
-    private final double adcFsVoltageRms;
+    /** DAC full-scale RMS voltage of each lane - what that lane's rendering of
+     *  the one drive amplitude divides by. */
+    private final double dacFsVoltageRmsLeft;
+    private final double dacFsVoltageRmsRight;
+    /** ADC full-scale RMS voltage of each channel, normalising its deconvolved
+     *  magnitude to a physical transfer function (1.0 = 0 dB at unity loopback). */
+    private final double adcFsVoltageRmsLeft;
+    private final double adcFsVoltageRmsRight;
 
     /** Which output lane(s) the sweep drives - the encoder gate applied to the
      *  played sweep ({@code BOTH} by default, which is the only behaviour before
@@ -111,7 +118,7 @@ public final class FreqRespAnalyzerConfig {
 
     /** Optional per-block progress hook for the capture leg - fires on
      *  the audio capture thread with the cumulative sample count and
-     *  the block's max-channel RMS.  Used by the GUI's busy-shell live
+     *  the block's max-channel RMS.  Used by the GUI's progress-dialog live
      *  meter; CLI / unit-test callers pass {@code null}. */
     @Builder.Default
     private final StereoCaptureProgress captureProgress = null;

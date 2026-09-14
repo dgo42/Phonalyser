@@ -128,10 +128,12 @@ public interface StereoCaptureProvider {
      *                      below is against it, which is why a lane that grants
      *                      another one fails the measurement instead of running it
      * @param durationSec   the chirp's own length, excluding the lead-in
-     * @param dacFsVoltage  the DAC full-scale the amplitude is scaled against
+     * @param dacFsVoltageLeft  the left lane's DAC full scale the amplitude is scaled against
+     * @param dacFsVoltageRight the same for the right lane
      */
     static StereoCaptureProvider forSweep(int playbackRateHz, double startHz, double stopHz,   // static-ok: interface factory - no instance exists to hang it on
-            double durationSec, double leadInSec, double amplitudeVrms, double dacFsVoltage) {
+            double durationSec, double leadInSec, double amplitudeVrms,
+            double dacFsVoltageLeft, double dacFsVoltageRight) {
         int sweepSamples  = (int) Math.round(durationSec * playbackRateHz);
         int leadInSamples = (int) Math.round(leadInSec * playbackRateHz);
         int fadeSamples   = FreqRespCalHelper.sweepFadeSamples(sweepSamples);
@@ -155,7 +157,7 @@ public interface StereoCaptureProvider {
                                                      StereoCaptureProgress progress) throws Exception {
                 ensureCaptureFits(captureRate, captureSec);
                 return new SweepCapture().run(startHz, stopHz, sweepSamples,
-                        leadInSamples, fadeSamples, amplitudeVrms, dacFsVoltage,
+                        leadInSamples, fadeSamples, amplitudeVrms, dacFsVoltageLeft, dacFsVoltageRight,
                         captureRate, playRate, playBits, ditherBits, outputChannels,
                         captureSec, cancelToken, progress);
             }

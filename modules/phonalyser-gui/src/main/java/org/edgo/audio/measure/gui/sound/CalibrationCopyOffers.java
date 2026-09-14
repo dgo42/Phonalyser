@@ -54,17 +54,17 @@ public final class CalibrationCopyOffers {
      * would re-arm it).  The caller records the outcome with {@link #settle} once
      * it HAS one: a decline, or an attempt that reached the bench.
      */
-    public boolean mayAsk(BackendKey bench, boolean input, String deviceName) {
-        return !settled.contains(key(bench, input, deviceName));
+    public boolean mayAsk(BackendKey server, boolean input, String deviceName) {
+        return !settled.contains(key(server, input, deviceName));
     }
 
     /** Records that the question has been answered - the operator declined, or
      *  something actually landed on the bench.  Idempotent. */
-    public void settle(BackendKey bench, boolean input, String deviceName) {
-        settled.add(key(bench, input, deviceName));
+    public void settle(BackendKey server, boolean input, String deviceName) {
+        settled.add(key(server, input, deviceName));
     }
 
-    private String key(BackendKey bench, boolean input, String deviceName) {
-        return bench.key() + "|" + (input ? "in" : "out") + "|" + deviceName;
+    private String key(BackendKey server, boolean input, String deviceName) {
+        return server.key() + "|" + (input ? "in" : "out") + "|" + deviceName;
     }
 }

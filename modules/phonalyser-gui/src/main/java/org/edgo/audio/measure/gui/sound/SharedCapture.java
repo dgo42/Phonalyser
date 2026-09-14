@@ -23,7 +23,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -166,10 +165,6 @@ public final class SharedCapture {
             log.warn("Capture: {}", lastStartError);
             return null;
         }
-        // The caller's step after resolution: the per-card ADC full scale lands
-        // on the runtime scalars via the UI thread (prefs bindings are plain
-        // UI-only listeners).
-        GuiUtil.marshal(() -> Preferences.instance().applyDeviceProfile(device, true));
         BackendPrefs bp = Preferences.instance().current();
         final int sampleRate = bp.getInputSampleRate();
         final int bitDepth   = bp.getInputBitDepth();

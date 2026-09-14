@@ -113,21 +113,21 @@ class AlsaJacksTest {
         // survive an enumeration - this is what makes the server's 2 s rescan
         // notice a cable being pulled - while one enumeration asking about four
         // devices must not run the command four times.
-        FixtureJacks bench = new FixtureJacks(CARD, CARD1_CONTENTS);
-        assertEquals(Boolean.TRUE,  bench.connected(CARD, "Line - Input Jack"));
-        assertEquals(Boolean.FALSE, bench.connected(CARD, "Mic - Input Jack"));
-        assertEquals(1, bench.reads(), "one reading serves a whole enumeration");
-        bench.forget();
-        assertEquals(Boolean.TRUE, bench.connected(CARD, "Line - Input Jack"));
-        assertEquals(2, bench.reads());
+        FixtureJacks server = new FixtureJacks(CARD, CARD1_CONTENTS);
+        assertEquals(Boolean.TRUE,  server.connected(CARD, "Line - Input Jack"));
+        assertEquals(Boolean.FALSE, server.connected(CARD, "Mic - Input Jack"));
+        assertEquals(1, server.reads(), "one reading serves a whole enumeration");
+        server.forget();
+        assertEquals(Boolean.TRUE, server.connected(CARD, "Line - Input Jack"));
+        assertEquals(2, server.reads());
     }
 
     @Test
     void aSocketTheCardDoesNotSenseIsNotAnEmptySocket() {
-        FixtureJacks bench = new FixtureJacks(CARD, CARD1_CONTENTS);
-        assertNull(bench.connected(CARD, "IEC958 In - Input Jack"),
+        FixtureJacks server = new FixtureJacks(CARD, CARD1_CONTENTS);
+        assertNull(server.connected(CARD, "IEC958 In - Input Jack"),
                 "the card senses no S/PDIF connector, which is not the same as an empty one");
-        assertNull(bench.connected(0, "Line - Input Jack"),
+        assertNull(server.connected(0, "Line - Input Jack"),
                 "and a card whose controls could not be read senses nothing at all");
     }
 }

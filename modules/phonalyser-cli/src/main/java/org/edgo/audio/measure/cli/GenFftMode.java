@@ -24,7 +24,10 @@ import java.util.Locale;
 import org.edgo.audio.measure.adc.WeightedBuffer;
 import org.edgo.audio.measure.chart.FftChartExporter;
 import org.edgo.audio.measure.cli.util.ArgParser;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.CaptureWithGenerator;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.cli.util.ClockMismatch;
 import org.edgo.audio.measure.cli.util.DeviceSelector;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
@@ -97,10 +100,8 @@ public class GenFftMode {
         String harmonicsCsv  = ArgParser.getArgValue(args, "--harmonics-csv");
         String loadWeightedArg = ArgParser.getArgValue(args, "--load-weighted");
         String syncPauseArg  = ArgParser.getArgValue(args, "--sync-pause");
-        if (adcFsArg != null) {
-            // Inject for this run only - Main marked Preferences transient, so not persisted.
-            prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
-        }
+        // For this run only: the flag stands in for the input device's card.
+        Double adcFsOverride = adcFsArg != null ? Double.parseDouble(adcFsArg) : null;
 
         if (samplerateArg == null) { log.error("--samplerate required"); System.exit(1); }
         if (freqArg       == null) { log.error("--freq required");       System.exit(1); }
@@ -147,9 +148,6 @@ public class GenFftMode {
         } else {
             fundRefDbV = Double.NaN;
         }
-        // The analyzer speaks dBFS only - convert the user-supplied dBV anchor at the boundary.
-        double fundRefDbFs = fundRefDbV - prefs.getDbvOffsetDb();
-
         double freqRequested = frequency;
         long   alignedBin    = Math.round(frequency * fftSize / (double) sampleRate);
         if (alignedBin < 1) alignedBin = 1;
@@ -164,6 +162,15 @@ public class GenFftMode {
         DeviceRef inDevice  = DeviceSelector.selectMixerByFlag(args, "--in-device",  false);
         if (outDevice == null) { log.error("No output device. Use --out-device <index>."); System.exit(1); }
         if (inDevice  == null) { log.error("No input device. Use --in-device <index>.");  System.exit(1); }
+        // The full scales in force for the two chosen devices - their cards, read
+        // through their managers - with the flag standing in for the ADC's.
+        AudioBackend audio = AudioBackend.instance();
+        DeviceCalibration adc = adcFsOverride != null
+                ? new DeviceCalibration(adcFsOverride, adcFsOverride)
+                : audio.calibrationOrDefault(inDevice, true);
+        DeviceCalibration dac = audio.calibrationOrDefault(outDevice, false);
+        // The analyzer speaks dBFS only - convert the user-supplied dBV anchor at the boundary.
+        double fundRefDbFs = fundRefDbV - adc.dbvOffsetDb(Channel.L);
 
         FreqRespCalibration freqRespCal = freqRespCalArg != null
                 ? FreqRespCalHelper.loadFrc(freqRespCalArg).left() : null;
@@ -220,15 +227,17 @@ public class GenFftMode {
                 log.error("--harmonics-csv <file> is required for --signal sine_compensated");
                 System.exit(1);
             }
-            gen = new SignalGenerator(frequency, sampleRate, amplitude, prefs.getDacFsVoltageAmpl(), harmonicsCsv);
+            gen = new SignalGenerator(frequency, sampleRate, amplitude, amplitude,
+                    dac.peakVolts(Channel.L), dac.peakVolts(Channel.R), harmonicsCsv);
         } else {
             if (harmonicsCsv != null) {
                 log.warn("--harmonics-csv is only used with --signal sine_compensated; ignoring");
             }
-            gen = new SignalGenerator(form, frequency, sampleRate, amplitude, prefs.getDacFsVoltageAmpl());
+            gen = new SignalGenerator(form, frequency, sampleRate, amplitude, amplitude,
+                    dac.peakVolts(Channel.L), dac.peakVolts(Channel.R));
         }
         double[] samples = CaptureWithGenerator.run(gen, outDevice, inDevice,
-                sampleRate, bitDepth, ditherBits, duration, weights, syncPauseSec);
+                sampleRate, bitDepth, ditherBits, ditherBits, duration, weights, syncPauseSec);
 
         FftAnalyzer fftAnalyzer = new FftAnalyzer();
         FftResult result = fftAnalyzer.analyze(
@@ -265,7 +274,7 @@ public class GenFftMode {
         fftAnalyzer.exportFftCsv(result, outputDir);
         HarmonicsCsv.export(result, outputDir);
         FftChartExporter exporter = new FftChartExporter();
-        exporter.setAdcFsVoltageRms(prefs.getAdcFsVoltageRms());
+        exporter.setAdcFsVoltageRms(adc.fsRms(Channel.L));
         exporter.exportChart(result, chartWidth, chartHeight, outputDir,
                 commentArg, false, null, frequency,
                 overlayFreqs, overlayDbFs, preCorrFreqs, preCorrDbFs);

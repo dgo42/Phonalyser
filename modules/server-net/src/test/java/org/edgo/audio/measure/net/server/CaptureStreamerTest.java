@@ -590,7 +590,7 @@ class CaptureStreamerTest {
     /** The bench is shared with every other test class, so whatever a test
      *  unplugged goes back on it here - and the list with it. */
     @AfterEach
-    void replugTheBench() {
+    void replugTheServer() {
         manager().replugAll();
     }
 

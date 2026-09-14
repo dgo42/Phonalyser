@@ -31,6 +31,9 @@ import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.BackendKey;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.AudioDeviceManager;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import lombok.RequiredArgsConstructor;
@@ -51,21 +54,20 @@ import lombok.extern.log4j.Log4j2;
  * show the remembered pick before, or without, an answer from the bench; the
  * card's VALUES never are.
  *
- * <p>Distinct from {@link CalibrationStore} on purpose: that one decides where a
- * measured VALUE goes, this one owns the CARDS - which exist, which is chosen,
- * which row of one is active.  The protocol draws the same line -
+ * <p>This owns the CARDS - which exist, which is chosen, which row of one is
+ * active - and the copy of a local card's VALUES up when the bench will not take
+ * the card.  What the selected device's calibration IS, and whether it is the
+ * device's own, is {@code AudioBackend}'s to answer through the device's manager.
+ * A MEASURED value goes through neither: the backend the device is on stores it
+ * ({@code AudioBackend.calibrate}).  The protocol draws the same line -
  * {@code device.setCard} is accepted for a {@code calibrationFromDevice} card,
  * which {@code device.setCalibration} and {@code cards.put} are not.
  */
 @Log4j2
 @RequiredArgsConstructor
-public final class BenchCards {
+public final class ServerCards {
 
     private final Preferences prefs;
-    /** Where a bare pair of full scales goes when a whole card will not fit -
-     *  {@link #propagateLocalCard}'s fallback.  Injected rather than built here so
-     *  both types work on the SAME working copy the dialog edits. */
-    private final CalibrationStore calibration;
 
     /** Picks made in the dialog but not yet committed, keyed by bench and device
      *  NAME.  NOTHING here has reached the bench: the Preferences dialog applies on
@@ -102,6 +104,19 @@ public final class BenchCards {
      *  which direction's endpoint. */
     private record RangePick(String deviceName, String label, Channel side, boolean input) { }
 
+    /** A local card's full scales waiting to go up on their own - the
+     *  values-only fallback of {@link #propagateLocalCard}, staged under the
+     *  same apply-on-OK rule as a binding, keyed per bench, device and
+     *  DIRECTION: the write is the device manager's calibration store, which is
+     *  per endpoint.  Every bench write from the dialog waits for OK for one
+     *  more reason than the rule: the session is routed at the chosen backend
+     *  only by the commit's {@code backend.select}, and a locked write needs
+     *  that routing - before it there is no session to send on. */
+    private final Map<String, ValuesPick> stagedValues = new LinkedHashMap<>();
+
+    /** One staged values copy: which device, which direction, which pair. */
+    private record ValuesPick(String deviceName, boolean input, DeviceCalibration values) { }
+
     /**
      * Spec 4.3's {@code cards.list}, filtered to the cards that can serve
      * {@code input} - a card with no row for a direction cannot calibrate
@@ -113,7 +128,7 @@ public final class BenchCards {
      * {@link #content}) - the same round trip that fills the chooser is the one
      * that has the rows in its hands.
      */
-    public List<String> list(BackendKey bench, boolean input) {
+    public List<String> list(BackendKey server, boolean input) {
         List<String> names = new ArrayList<>();
         RemoteBackendUi remote = RemoteBackendRegistry.instance().getUi();
         if (remote == null) {
@@ -121,10 +136,10 @@ public final class BenchCards {
         }
         // DIRECT on the caller's thread, bounded by the wire timeouts.
         Map<String, Object> answer =
-                remote.call(bench, MessageType.CARDS_LIST.getWire(), Map.of());
+                remote.call(server, MessageType.CARDS_LIST.getWire(), Map.of());
         if (answer == null || !(answer.get(NetFields.CARDS) instanceof List<?> cards)) {
             if (log.isWarnEnabled()) {
-                log.warn("Card binding: {} did not answer its card list", bench.key());
+                log.warn("Card binding: {} did not answer its card list", server.key());
             }
             return names;
         }
@@ -144,7 +159,7 @@ public final class BenchCards {
                 names.add(name);
             }
         }
-        content.put(bench.key(), byName);
+        content.put(server.key(), byName);
         return names;
     }
 
@@ -153,30 +168,30 @@ public final class BenchCards {
      *  content, or a name it does not offer).  The ranges table's source for a
      *  device on a bench - the CARD's own rows, never a local card that merely
      *  shares its name. */
-    public AudioDeviceProfile card(BackendKey bench, String cardName) {
-        Map<String, AudioDeviceProfile> byName = content.get(bench.key());
+    public AudioDeviceProfile card(BackendKey server, String cardName) {
+        Map<String, AudioDeviceProfile> byName = content.get(server.key());
         return byName == null || cardName == null ? null : byName.get(cardName);
     }
 
     /** Records a pick without sending anything - see {@link #staged}. */
-    public void stage(BackendKey bench, boolean input, String deviceName, String cardName) {
-        staged.put(key(bench, deviceName), new Pick(cardName, input));
+    public void stage(BackendKey server, boolean input, String deviceName, String cardName) {
+        staged.put(key(server, deviceName), new Pick(cardName, input));
     }
 
     /** The pick staged for this device, or null when the operator has not chosen
      *  one in this dialog - what BOTH direction combos show for a device that is
      *  listed under one name in both. */
-    public String stagedCard(BackendKey bench, String deviceName) {
-        Pick pick = staged.get(key(bench, deviceName));
+    public String stagedCard(BackendKey server, String deviceName) {
+        Pick pick = staged.get(key(server, deviceName));
         return pick == null ? null : pick.cardName();
     }
 
     /** Every pick staged for one bench, device name -> pick - what the OK commit
      *  walks, ONCE per box.  Empty when nothing was chosen, which is the usual
      *  case and the one where OK must send nothing at all. */
-    private Map<String, Pick> stagedFor(BackendKey bench) {
+    private Map<String, Pick> stagedFor(BackendKey server) {
         Map<String, Pick> out = new LinkedHashMap<>();
-        String prefix = key(bench, "");
+        String prefix = key(server, "");
         for (Map.Entry<String, Pick> entry : staged.entrySet()) {
             if (entry.getKey().startsWith(prefix)) {
                 out.put(entry.getKey().substring(prefix.length()), entry.getValue());
@@ -197,13 +212,13 @@ public final class BenchCards {
      *         dialog; a refusal writes no local mirror either, so what this machine
      *         remembers is only ever what the bench accepted
      */
-    public List<String> commitStagedBindings(BackendKey bench, List<DeviceRef> inputs,
+    public List<String> commitStagedBindings(BackendKey server, List<DeviceRef> inputs,
             List<DeviceRef> outputs) {
         List<String> refused = new ArrayList<>();
-        for (Map.Entry<String, Pick> entry : stagedFor(bench).entrySet()) {
+        for (Map.Entry<String, Pick> entry : stagedFor(server).entrySet()) {
             Pick pick = entry.getValue();
             DeviceRef device = refFor(pick.input() ? inputs : outputs, entry.getKey());
-            if (!bind(bench, device, pick.cardName())) {
+            if (!bind(server, device, pick.cardName())) {
                 refused.add(pick.cardName());
             }
         }
@@ -212,9 +227,9 @@ public final class BenchCards {
 
     /** Records an active-range move without sending anything - the range twin of
      *  {@link #stage}, and the only thing a bench card's radios do until OK. */
-    public void stageActiveRange(BackendKey bench, boolean input, String deviceName,
+    public void stageActiveRange(BackendKey server, boolean input, String deviceName,
             String label, Channel side) {
-        stagedRanges.put(key(bench, deviceName) + "|" + (input ? "in" : "out")
+        stagedRanges.put(key(server, deviceName) + "|" + (input ? "in" : "out")
                 + "|" + channelScope(side),
                 new RangePick(deviceName, label, side, input));
     }
@@ -223,17 +238,17 @@ public final class BenchCards {
      *  {@link #stageActiveRange}.
      *
      *  @return the range labels the bench would not take */
-    public List<String> commitStagedRanges(BackendKey bench, List<DeviceRef> inputs,
+    public List<String> commitStagedRanges(BackendKey server, List<DeviceRef> inputs,
             List<DeviceRef> outputs) {
         List<String> refused = new ArrayList<>();
-        String prefix = key(bench, "");
+        String prefix = key(server, "");
         for (Map.Entry<String, RangePick> entry : stagedRanges.entrySet()) {
             if (!entry.getKey().startsWith(prefix)) {
                 continue;
             }
             RangePick pick = entry.getValue();
             DeviceRef device = refFor(pick.input() ? inputs : outputs, pick.deviceName());
-            if (!setActiveRange(bench, device, pick.label(), pick.side())) {
+            if (!setActiveRange(server, device, pick.label(), pick.side())) {
                 refused.add(pick.label());
             }
         }
@@ -254,8 +269,8 @@ public final class BenchCards {
         return null;
     }
 
-    private String key(BackendKey bench, String deviceName) {
-        return bench.key() + "|" + deviceName;
+    private String key(BackendKey server, String deviceName) {
+        return server.key() + "|" + deviceName;
     }
 
     /**
@@ -272,27 +287,27 @@ public final class BenchCards {
      *
      * @return whether the bench stored the binding
      */
-    public boolean bind(BackendKey bench, DeviceRef device, String cardName) {
+    public boolean bind(BackendKey server, DeviceRef device, String cardName) {
         RemoteBackendUi remote = RemoteBackendRegistry.instance().getUi();
         if (remote == null || device == null) {
             return false;
         }
-        Map<String, Object> fields = deviceFields(bench, device);
+        Map<String, Object> fields = deviceFields(server, device);
         fields.put(NetFields.CARD, cardName == null || cardName.isEmpty() ? null : cardName);
         // DIRECT, one locked write per staged binding - acquire, set, release -
         // bounded by the wire timeouts.
-        if (remote.callLocked(bench, MessageType.DEVICE_SET_CARD.getWire(),
+        if (remote.callLocked(server, MessageType.DEVICE_SET_CARD.getWire(),
                 fields) == null) {
             if (log.isWarnEnabled()) {
-                log.warn("Card binding: {} did not bind '{}' to card '{}'", bench.key(),
+                log.warn("Card binding: {} did not bind '{}' to card '{}'", server.key(),
                         device.name(), cardName);
             }
             return false;
         }
-        prefs.bindDeviceToCard(prefs.deviceBindingKey(bench.serverId(), device.name()),
+        prefs.bindDeviceToCard(prefs.deviceBindingKey(server.serverId(), device.name()),
                 cardName);
         if (log.isInfoEnabled()) {
-            log.info("Card binding: {} bound '{}' to card '{}'", bench.key(),
+            log.info("Card binding: {} bound '{}' to card '{}'", server.key(),
                     device.name(), cardName);
         }
         return true;
@@ -310,45 +325,49 @@ public final class BenchCards {
      *         name it already has, a card it will not take, an unreachable bench),
      *         because a refusal reaches this client as a plain "no"
      */
-    public boolean create(BackendKey bench, AudioDeviceProfile card) {
+    public boolean create(BackendKey server, AudioDeviceProfile card) {
         RemoteBackendUi remote = RemoteBackendRegistry.instance().getUi();
         if (remote == null || card == null || card.getName() == null) {
             return false;
         }
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put(NetFields.CONTENT, prefs.cardToMap(card));
-        if (remote.call(bench, MessageType.CARDS_PUT.getWire(), fields) == null) {
+        if (remote.call(server, MessageType.CARDS_PUT.getWire(), fields) == null) {
             if (log.isWarnEnabled()) {
-                log.warn("Card: {} would not take a card named '{}'", bench.key(),
+                log.warn("Card: {} would not take a card named '{}'", server.key(),
                         card.getName());
             }
             return false;
         }
         if (log.isInfoEnabled()) {
-            log.info("Card: '{}' stored on {}", card.getName(), bench.key());
+            log.info("Card: '{}' stored on {}", card.getName(), server.key());
         }
         return true;
     }
 
     /**
-     * {@link #create} then {@link #bind}: the card exists on the bench AND the
-     * device uses it, which is the only state that changes what the operator
-     * measures.  Used by both card-to-the-bench flows - the operator-authored card
-     * and the propagation of a local card.
+     * {@link #create} now, {@link #bind} on OK: the card goes to the bench at
+     * once - a card nothing is bound to is in force nowhere, so it needs neither
+     * a lock nor the commit - and the device's binding to it is {@link #stage
+     * staged} like any chooser pick, sent by the commit after the session has
+     * been routed at the backend ({@code backend.select}), which is the only
+     * moment a locked write CAN go out.  Used by both card-to-the-bench flows -
+     * the operator-authored card and the propagation of a local card.
      *
-     * <p>The half-done case is answered as itself.  A create that lands and a bind
-     * that does not (another client holds the device) leaves a real card on the
-     * bench that nothing uses - reporting that as "nothing happened" would send the
-     * operator round the same flow next time, where the create now fails on the
-     * name it made itself.  {@link Copied#CARD_UNBOUND} is what the caller tells
-     * them instead, and the card is deliberately NOT unwound: it is correct, it is
-     * theirs, and binding it is one retry away.
+     * <p>A binding the bench refuses on OK (another client holds the device) is
+     * reported by the commit's own error dialog; the card is deliberately NOT
+     * unwound: it is correct, it is theirs, and binding it is one retry away.
+     *
+     * @return whether the bench stored the card - false when it would not take it
+     *         (a name it already has) or could not be reached
      */
-    public Copied createAndBind(BackendKey bench, DeviceRef device, AudioDeviceProfile card) {
-        if (!create(bench, card)) {
-            return Copied.NOTHING;
+    public boolean createAndStage(BackendKey server, String deviceName, boolean input,
+            AudioDeviceProfile card) {
+        if (!create(server, card)) {
+            return false;
         }
-        return bind(bench, device, card.getName()) ? Copied.CARD : Copied.CARD_UNBOUND;
+        stage(server, input, deviceName, card.getName());
+        return true;
     }
 
     /**
@@ -365,33 +384,68 @@ public final class BenchCards {
      * <p><b>The name goes as it is.</b>  A suffixed retry would put a second card
      * describing one box on the bench under a name the operator never chose;
      * instead a refusal (the bench already has that name) falls back to the values
-     * alone through {@code device.setCalibration}, which is the pre-v1.1 behaviour
-     * and still leaves the device calibrated.
+     * alone - the two full scales stored through the bench's own manager, one
+     * channel per write ({@code device.setCalibration} under the device lock),
+     * which is the pre-v1.1 behaviour and still leaves the device calibrated.
+     * Only values this machine actually has: a card with an uncalibrated row is
+     * nothing to copy, since a full scale of zero would mis-scale every
+     * measurement any client takes on the bench from then on.
      *
-     * @return what actually reached the bench, for the caller to tell the operator
+     * <p>The card goes up at once; the binding, and the values-only fallback,
+     * are STAGED and sent on OK (see {@link #createAndStage}) - both are locked
+     * writes, and the session is routed at the backend only by the commit.
+     *
+     * @return what was done, for the caller to tell the operator
      */
-    public Copied propagateLocalCard(BackendKey bench, DeviceRef device, String deviceName,
-            boolean input) {
+    public Copied propagateLocalCard(BackendKey server, String deviceName, boolean input) {
         AudioDeviceProfile local = localCopy(deviceName);
-        if (local == null || prefs.deviceCalibration(deviceName, input) == null) {
+        if (local == null) {
+            return Copied.NOTHING_TO_COPY;
+        }
+        DeviceCalibration values = (input ? local.getInput() : local.getOutput()).calibration();
+        if (values == null) {
             return Copied.NOTHING_TO_COPY;
         }
         local.bindDeviceName(deviceName);
-        Copied put = createAndBind(bench, device, local);
-        if (put != Copied.NOTHING) {
-            // CARD, or CARD_UNBOUND - either way the card IS on the bench with its
-            // values in it, so there is nothing left for the values-only fallback
-            // to add; what is missing is a binding, and the caller says so.
-            return put;
+        if (createAndStage(server, deviceName, input, local)) {
+            return Copied.CARD;
         }
-        if (calibration.copyCardCalibrationToBench(bench, device)) {
-            if (log.isInfoEnabled()) {
-                log.info("Card: {} would not take the whole card '{}' - its full scales "
-                        + "went up on their own", bench.key(), local.getName());
+        stagedValues.put(key(server, deviceName) + "|" + (input ? "in" : "out"),
+                new ValuesPick(deviceName, input, values));
+        if (log.isInfoEnabled()) {
+            log.info("Card: {} would not take the whole card '{}' - its full scales go "
+                    + "up on their own on OK", server.key(), local.getName());
+        }
+        return Copied.VALUES_ONLY;
+    }
+
+    /**
+     * Sends every staged values copy to {@code bench} - the OK half of the
+     * values-only fallback of {@link #propagateLocalCard}: the bench manager's
+     * calibration store, one channel per write, under the device lock it takes
+     * itself.
+     *
+     * @return the devices whose values the bench would not take
+     */
+    public List<String> commitStagedValues(BackendKey server, List<DeviceRef> inputs,
+            List<DeviceRef> outputs) {
+        List<String> refused = new ArrayList<>();
+        String prefix = key(server, "");
+        AudioDeviceManager manager = AudioBackend.instance().manager(server.carrier());
+        for (Map.Entry<String, ValuesPick> entry : stagedValues.entrySet()) {
+            if (!entry.getKey().startsWith(prefix)) {
+                continue;
             }
-            return Copied.VALUES_ONLY;
+            ValuesPick pick = entry.getValue();
+            DeviceRef device = refFor(pick.input() ? inputs : outputs, pick.deviceName());
+            DeviceCalibration values = pick.values();
+            if (device == null
+                    || !manager.storeCalibration(device, pick.input(), Channel.L, values.fsRmsLeft())
+                    || !manager.storeCalibration(device, pick.input(), Channel.R, values.fsRmsRight())) {
+                refused.add(pick.deviceName());
+            }
         }
-        return Copied.NOTHING;
+        return refused;
     }
 
     /** A DETACHED copy of the local card that recognises {@code deviceName} -
@@ -422,25 +476,25 @@ public final class BenchCards {
      *        marker; {@link Channel#R} moves the right channel's own marker on an
      *        INDEPENDENT card
      */
-    public boolean setActiveRange(BackendKey bench, DeviceRef device, String label,
+    public boolean setActiveRange(BackendKey server, DeviceRef device, String label,
             Channel side) {
         RemoteBackendUi remote = RemoteBackendRegistry.instance().getUi();
         if (remote == null || device == null || label == null) {
             return false;
         }
-        Map<String, Object> fields = deviceFields(bench, device);
+        Map<String, Object> fields = deviceFields(server, device);
         fields.put(NetFields.RANGE, label);
         fields.put(NetFields.CHANNEL, channelScope(side));
-        if (remote.callLocked(bench, MessageType.DEVICE_SET_ACTIVE_RANGE.getWire(),
+        if (remote.callLocked(server, MessageType.DEVICE_SET_ACTIVE_RANGE.getWire(),
                 fields) == null) {
             if (log.isWarnEnabled()) {
-                log.warn("Card range: {} did not move '{}' to range '{}'", bench.key(),
+                log.warn("Card range: {} did not move '{}' to range '{}'", server.key(),
                         device.name(), label);
             }
             return false;
         }
         if (log.isInfoEnabled()) {
-            log.info("Card range: {} moved '{}' to range '{}'", bench.key(),
+            log.info("Card range: {} moved '{}' to range '{}'", server.key(),
                     device.name(), label);
         }
         return true;
@@ -458,9 +512,9 @@ public final class BenchCards {
 
     /** The device ref of spec 4.3 as request fields - the four that name a device,
      *  written in one place so every per-device write names it the same way. */
-    private Map<String, Object> deviceFields(BackendKey bench, DeviceRef device) {
+    private Map<String, Object> deviceFields(BackendKey server, DeviceRef device) {
         Map<String, Object> fields = new LinkedHashMap<>();
-        fields.put(NetFields.BACKEND, bench.type().name());
+        fields.put(NetFields.BACKEND, server.type().name());
         fields.put(NetFields.INDEX, device.index());
         fields.put(NetFields.INPUT, device.isInput());
         fields.put(NetFields.NAME, device.name());
@@ -476,27 +530,23 @@ public final class BenchCards {
      * re-bound the device since - and the mirror only covers the moment before
      * the catalogue has been read, or a bench too old to send the field.
      */
-    public String boundCard(BackendKey bench, DeviceRef device, String deviceName) {
+    public String boundCard(BackendKey server, DeviceRef device, String deviceName) {
         if (device != null && device.boundCard() != null) {
             return device.boundCard();
         }
-        return prefs.boundCardName(prefs.deviceBindingKey(bench.serverId(), deviceName));
+        return prefs.boundCardName(prefs.deviceBindingKey(server.serverId(), deviceName));
     }
 
-    /** What {@link #propagateLocalCard} - or {@link #createAndBind} - managed to
-     *  put on the bench.  Every value but {@link #NOTHING} is a settled answer the
-     *  operator can be told and the offer need not be repeated for. */
+    /** What {@link #propagateLocalCard} did with a local card - a settled answer
+     *  the operator can be told and the offer need not be repeated for, except
+     *  {@link #NOTHING_TO_COPY}. */
     public enum Copied {
-        /** The whole card, and the device is bound to it. */
+        /** The whole card is on the bench, and the device's binding to it is
+         *  staged for OK. */
         CARD,
-        /** The card is on the bench but the device is NOT bound to it - the
-         *  binding was refused (another client holds the device). */
-        CARD_UNBOUND,
-        /** The bench would not take the card, but its full scales landed. */
+        /** The bench would not take the card; its full scales are staged to go
+         *  up on their own on OK. */
         VALUES_ONLY,
-        /** Nothing reached the bench - an unreachable bench, or a refusal all the
-         *  way down.  The only outcome worth offering again. */
-        NOTHING,
         /** This machine had nothing worth sending - no card for the name, or one
          *  whose row was never calibrated. */
         NOTHING_TO_COPY

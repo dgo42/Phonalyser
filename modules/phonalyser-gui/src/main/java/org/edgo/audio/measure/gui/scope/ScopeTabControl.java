@@ -69,7 +69,6 @@ import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.sound.CalibrationStore;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
@@ -78,6 +77,8 @@ import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.preferences.OscPreset;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -1157,15 +1158,13 @@ public final class ScopeTabControl extends AbstractTabControl {
         if (isDisposed()) return;
         Shell parent = getShell();
         Preferences prefs = Preferences.instance();
-        // Where the calibration goes - this machine's cards or the bench that owns
-        // the device - and, first, whether it may be written at all.
-        final CalibrationStore calibration = new CalibrationStore(prefs);
-        if (calibration.isCalibrationFromDevice(true)) {
+        // First, whether the calibration may be written at all.
+        if (AudioBackend.instance().isCalibrationFromDevice(true)) {
             // Device-provided (a QA40x, here or on a bench): show the built-in
             // full-scale read-only.
-            new CalibrationDialog(parent, adcTexts(),
-                    prefs.getAdcFsVoltageRms(Channel.L), prefs.getAdcFsVoltageRms(Channel.R),
-                    true, (ch, v) -> { }).open();
+            DeviceCalibration adc = AudioBackend.instance().calibrationOrDefault(true);
+            new CalibrationDialog(parent, adcTexts(), adc.fsRms(Channel.L), adc.fsRms(Channel.R),
+                    true, actual -> { }).open();
             return;
         }
         if (view == null) {
@@ -1179,24 +1178,17 @@ public final class ScopeTabControl extends AbstractTabControl {
             return;
         }
         final double measuredVrms = currentVrms;
-        final boolean stereo = prefs.isInputBoundStereo();
         Double seedL = measCh == Channel.L ? measuredVrms : null;
         Double seedR = measCh == Channel.R ? measuredVrms : null;
-        new CalibrationDialog(parent, adcTexts(), seedL, seedR, false, (ch, actualVrms) -> {
-            double scale = actualVrms / measuredVrms;
-            boolean stored;
-            if (stereo) {
-                double newFs = prefs.getAdcFsVoltageRms(ch) * scale;
-                stored = calibration.storeAdcCalibration(ch, newFs);
-            } else {
-                // MONO / unbound: shared both-channels full-scale (auto-creates the
-                // profile on first calibrate); also sets the FS scalar and persists.
-                double newFs = prefs.getAdcFsVoltageRms() * scale;
-                stored = calibration.storeAdcCalibration(newFs);
-            }
-            // A bench that would not take it leaves this client's reference where
-            // it was (see CalibrationStore's apply-on-success): say so, or the
-            // operator walks away believing the value they typed is in force.
+        new CalibrationDialog(parent, adcTexts(), seedL, seedR, false, actual -> {
+            // The backend the device is on calibrates the measurement channel
+            // from this reading and the entered voltage: this machine's cards,
+            // or the bench the device is plugged into (AudioBackend.calibrate).
+            boolean stored = AudioBackend.instance().calibrate(true, measCh, measuredVrms,
+                    actual.get(measCh));
+            // A bench that would not take it moved nothing here - this client's
+            // reference is still the bench's: say so, or the operator walks away
+            // believing the value they typed is in force.
             if (!stored) {
                 Dialogs.error(parent, I18n.t("calibrate.title"),
                         I18n.t("preferences.audio.card.copyCalibration.failed",
@@ -1525,8 +1517,9 @@ public final class ScopeTabControl extends AbstractTabControl {
         // Mirrors the coupled zoom's existing per-channel V/div handling: each channel's
         // FS-fills-height zoom-out ceiling comes from its OWN full-scale (LINKED cards
         // pass equal L/R peaks), same coupling - either channel's ceiling blocks both.
-        double peakL = prefs.getAdcPeakVolts(Channel.L);
-        double peakR = prefs.getAdcPeakVolts(Channel.R);
+        DeviceCalibration adc = AudioBackend.instance().calibrationOrDefault(true);
+        double peakL = adc.peakVolts(Channel.L);
+        double peakR = adc.peakVolts(Channel.R);
         double[] r = view.getNav().zoomVertical(
                 leftOld,  prefs.getOscLeftOffsetFrac(),  leftEn,
                 rightOld, prefs.getOscRightOffsetFrac(), rightEn,

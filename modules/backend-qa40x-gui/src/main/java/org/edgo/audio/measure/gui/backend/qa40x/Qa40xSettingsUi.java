@@ -101,7 +101,7 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
     /** The remote bench whose panel was accepted, and the value it was accepted
      *  with - null when there is nothing pending, which is every case but "the
      *  operator changed a remote analyzer's I2S port and has not pressed OK yet". */
-    private BackendKey pendingBench;
+    private BackendKey pendingServer;
     private boolean pendingI2s;
     /** The working copy {@link #onSelected} rendered a remote analyzer's card
      *  into, so {@link #commitEdit()} can take it back out again - see
@@ -122,7 +122,7 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
     /** The remote selection the values below were read from, and the card they
      *  were rendered into - so a range the operator stages is compared against
      *  the analyzer those numbers describe, and sent to that same bench. */
-    private BackendKey syncedBench;
+    private BackendKey syncedServer;
     private String syncedCardName;
     /** What the bench reported IN FORCE when its panel was selected
      *  ({@code qa40x.ranges}, spec 4.6).
@@ -135,8 +135,8 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
      *  <p>Null when that read did not answer - and then nothing is sent for
      *  ranges, because there is no in-force value to differ from and a guess
      *  would move an attenuator nobody asked to move. */
-    private Integer benchInputDbv;
-    private Integer benchOutputDbv;
+    private Integer serverInputDbv;
+    private Integer serverOutputDbv;
 
     @Override
     public AudioBackendType backendType() {
@@ -202,13 +202,13 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
         if (selection == null || !selection.remote() || editCopy == null) {
             return;
         }
-        RemoteBackendUi bench = RemoteBackendRegistry.instance().getUi();
-        if (bench == null) {
+        RemoteBackendUi server = RemoteBackendRegistry.instance().getUi();
+        if (server == null) {
             return;
         }
-        Map<String, Object> cal = offDisplayThread(() -> bench.call(selection,
+        Map<String, Object> cal = offDisplayThread(() -> server.call(selection,
                 MessageType.QA40X_CALIBRATION.getWire(), Map.of()));
-        Map<String, Object> ranges = offDisplayThread(() -> bench.call(selection,
+        Map<String, Object> ranges = offDisplayThread(() -> server.call(selection,
                 MessageType.QA40X_RANGES.getWire(), Map.of()));
         String cardName = remoteDeviceName();
         Integer activeIn  = intField(ranges, NetFields.ACTIVE_INPUT_DBV);
@@ -226,8 +226,8 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
                 editCopy.findAudioDeviceProfile(cardName), activeIn, activeOut);
         // The bench's state, not the stored card's: the analyzer is actually
         // running under these ranges right now.
-        card.getInput().setActiveRange(Qa40xProtocol.rangeLabel(activeIn));
-        card.getOutput().setActiveRange(Qa40xProtocol.rangeLabel(activeOut));
+        card.getInput().setActiveRangeLeft(Qa40xProtocol.rangeLabel(activeIn));
+        card.getOutput().setActiveRangeLeft(Qa40xProtocol.rangeLabel(activeOut));
         // What this name held before the render, so OK can put it back: the
         // copy is the dialog's to show from, never this installation's to keep.
         // Re-selecting the same bench must not record the rendered card as the
@@ -237,10 +237,10 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
         editCopy.putAudioDeviceProfile(card);
         // Kept, not just rendered: what the analyzer is running under NOW is what
         // the operator's staged choice has to be measured against on OK.
-        syncedBench = selection;
+        syncedServer = selection;
         syncedCardName = cardName;
-        benchInputDbv = activeIn;
-        benchOutputDbv = activeOut;
+        serverInputDbv = activeIn;
+        serverOutputDbv = activeOut;
         if (log.isInfoEnabled()) {
             log.info("QA40x card sync: '{}' calibrated from the bench, in {} dBV / out {} dBV",
                     cardName, activeIn, activeOut);
@@ -311,22 +311,22 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
      * attached analyzer that could not be read does.
      */
     private void openRemote(Shell parent, BackendKey selection) {
-        RemoteBackendUi bench = RemoteBackendRegistry.instance().getUi();
-        if (bench == null) {
+        RemoteBackendUi server = RemoteBackendRegistry.instance().getUi();
+        if (server == null) {
             return;
         }
-        Map<String, Object> settings = offDisplayThread(() -> bench.call(selection,
+        Map<String, Object> settings = offDisplayThread(() -> server.call(selection,
                 MessageType.QA40X_SETTINGS.getWire(), Map.of()));
-        boolean i2s = pendingBench != null && pendingBench.equals(selection)
+        boolean i2s = pendingServer != null && pendingServer.equals(selection)
                 ? pendingI2s : flag(settings, NetFields.I2S_ENABLED);
         boolean accepted = new Qa40xSettingsDialog(parent,
-                remoteInfo(bench, selection)).open(i2s);
+                remoteInfo(server, selection)).open(i2s);
         // Only a real CHANGE becomes a pending write.  The dialog answers the seed
         // when it is cancelled, so a panel that was opened and dismissed would
         // otherwise schedule a write of the value the bench already has - where
         // the local path simply re-writes its own edit copy and nothing happens.
         if (accepted != i2s) {
-            pendingBench = selection;
+            pendingServer = selection;
             pendingI2s = accepted;
         }
     }
@@ -342,8 +342,8 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
 
     /** The remote analyzer's identity and telemetry, as spec 4.6 formats them -
      *  strings the server already decoded, so nothing is re-interpreted here. */
-    private Qa40xDeviceInfo remoteInfo(RemoteBackendUi bench, BackendKey selection) {
-        Map<String, Object> info = offDisplayThread(() -> bench.call(selection,
+    private Qa40xDeviceInfo remoteInfo(RemoteBackendUi server, BackendKey selection) {
+        Map<String, Object> info = offDisplayThread(() -> server.call(selection,
                 MessageType.QA40X_INFO.getWire(), Map.of()));
         if (info == null) {
             return Qa40xDeviceInfo.NONE;
@@ -375,22 +375,22 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
      *  discarded with its Cancel and must not reach the bench now. */
     @Override
     public void beginEdit() {
-        pendingBench = null;
+        pendingServer = null;
         // A new working copy - whatever the previous session rendered into the old
         // one went away with it.
         syncedInto = null;
         syncedCards.clear();
-        forgetBenchRanges();
+        forgetServerRanges();
     }
 
     /** Drops the synced selection's in-force ranges: once they have been compared
      *  and sent - or once a new dialog session starts - they describe a state
      *  nobody has read since, and a stale one would decide a later comparison. */
-    private void forgetBenchRanges() {
-        syncedBench = null;
+    private void forgetServerRanges() {
+        syncedServer = null;
         syncedCardName = null;
-        benchInputDbv = null;
-        benchOutputDbv = null;
+        serverInputDbv = null;
+        serverOutputDbv = null;
     }
 
     /**
@@ -452,29 +452,29 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
     public void commitEdit() {
         Integer stagedInput = stagedRangeDbv(true);
         Integer stagedOutput = stagedRangeDbv(false);
-        BackendKey rangeBench = syncedBench;
-        Integer inForceInput = benchInputDbv;
-        Integer inForceOutput = benchOutputDbv;
+        BackendKey rangeServer = syncedServer;
+        Integer inForceInput = serverInputDbv;
+        Integer inForceOutput = serverOutputDbv;
         // The rendered bench cards leave the working copy before it is handed to
         // the live store.
         undoRenderedCards();
-        forgetBenchRanges();
-        BackendKey portBench = pendingBench;
-        pendingBench = null;
+        forgetServerRanges();
+        BackendKey portServer = pendingServer;
+        pendingServer = null;
         RemoteBackendUi remote = RemoteBackendRegistry.instance().getUi();
         if (remote == null) {
             return;
         }
-        sendRangeDelta(remote, rangeBench, true, stagedInput, inForceInput);
-        sendRangeDelta(remote, rangeBench, false, stagedOutput, inForceOutput);
-        if (portBench == null) {
+        sendRangeDelta(remote, rangeServer, true, stagedInput, inForceInput);
+        sendRangeDelta(remote, rangeServer, false, stagedOutput, inForceOutput);
+        if (portServer == null) {
             return;
         }
-        Map<String, Object> answer = offDisplayThread(() -> remote.callLocked(portBench,
+        Map<String, Object> answer = offDisplayThread(() -> remote.callLocked(portServer,
                 MessageType.QA40X_SETTINGS.getWire(),
                 Map.of(NetFields.I2S_ENABLED, pendingI2s)));
         if (answer == null && log.isWarnEnabled()) {
-            log.warn("QA40x settings: {} did not accept the I2S port change", portBench.key());
+            log.warn("QA40x settings: {} did not accept the I2S port change", portServer.key());
         }
     }
 
@@ -488,18 +488,18 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
      * side sends nothing either: no staged position means the operator touched no
      * row, and no in-force value means the bench never said where it was.
      */
-    private void sendRangeDelta(RemoteBackendUi remote, BackendKey bench, boolean input,
+    private void sendRangeDelta(RemoteBackendUi remote, BackendKey server, boolean input,
             Integer staged, Integer inForce) {
-        if (bench == null || staged == null || inForce == null || staged.equals(inForce)) {
+        if (server == null || staged == null || inForce == null || staged.equals(inForce)) {
             return;
         }
         MessageType request = input
                 ? MessageType.QA40X_SET_INPUT_RANGE
                 : MessageType.QA40X_SET_OUTPUT_RANGE;
-        Map<String, Object> answer = offDisplayThread(() -> remote.callLocked(bench,
+        Map<String, Object> answer = offDisplayThread(() -> remote.callLocked(server,
                 request.getWire(), Map.of(NetFields.DBV, staged)));
         if (answer == null && log.isWarnEnabled()) {
-            log.warn("QA40x range: {} did not take the {} range {} dBV", bench.key(),
+            log.warn("QA40x range: {} did not take the {} range {} dBV", server.key(),
                     input ? "input" : "output", staged);
         }
     }
@@ -521,7 +521,7 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
         if (card == null) {
             return null;
         }
-        String label = (input ? card.getInput() : card.getOutput()).getActiveRange();
+        String label = (input ? card.getInput() : card.getOutput()).getActiveRangeLeft();
         int dbv = Qa40xProtocol.rangeDbv(label, input ? Qa40xProtocol.inputRangeDbvValues()
                 : Qa40xProtocol.outputRangeDbvValues(), NO_RANGE);
         return dbv == NO_RANGE ? null : dbv;

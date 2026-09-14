@@ -28,9 +28,9 @@ import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
+import org.edgo.audio.measure.sound.AbstractLocalDeviceManager;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioCapture;
-import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.PortAudio;
@@ -56,7 +56,7 @@ import lombok.extern.log4j.Log4j2;
  * device, not the global PortAudio index).
  */
 @Log4j2
-public class CoreAudioDeviceManager implements AudioDeviceManager {
+public class CoreAudioDeviceManager extends AbstractLocalDeviceManager {
 
     /** {@link DeviceRef} backed by a PortAudio CoreAudio device index. */
     public record CoreAudioDeviceRef(int index, String name, String description, String vendor,
@@ -244,8 +244,10 @@ public class CoreAudioDeviceManager implements AudioDeviceManager {
         return new CoreAudioRecorder((CoreAudioDeviceManager.CoreAudioDeviceRef) device, sampleRate, bitDepth, hal);
     }
 
-    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
-        return new CoreAudioGenerator((CoreAudioDeviceManager.CoreAudioDeviceRef) device, sampleRate, bitDepth, ditherBits, hal);
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight) {
+        return new CoreAudioGenerator((CoreAudioDeviceManager.CoreAudioDeviceRef) device, sampleRate,
+                bitDepth, ditherBitsLeft, ditherBitsRight, hal);
     }
 
     /** CoreAudio speaks the same PortAudio error vocabulary as WDM-KS - one

@@ -29,12 +29,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@link PcmQuantizer} per-channel output: proves the encoder is byte-identical
- * to the pre-per-channel encoding in the default (BOTH + unity-scale) case, that
- * the Left/Right gate silences the un-selected lane (mid-code 0), and that the
- * right-lane scale is applied only to the right slot.
+ * to the pre-per-channel encoding in the default (BOTH, both lanes alike) case,
+ * that the Left/Right gate silences the un-selected lane (mid-code 0), and that
+ * a right lane commanded at its own level lands in the right slot only.
  *
  * <p>Dither is left OFF ({@code ditherBits == 0}) so {@code encode} is fully
- * deterministic and the two lanes come from the same {@code nextSample()} draw -
+ * deterministic and the two lanes come from the same {@code nextFrame} draw -
  * every assertion compares within one buffer, no RNG reproducibility needed.
  * The generator is a plain SINE DDS (no internal randomness), so a fresh
  * instance per encoder yields an identical sample stream.
@@ -48,7 +48,8 @@ class PcmQuantizerTest {
     private static final int    FRAMES      = 480;   // 10 full cycles at 1 kHz / 48 kHz
 
     private SignalGenerator sine() {
-        return new SignalGenerator(GenSignalForm.SINE, FREQ_HZ, SAMPLE_RATE, VRMS, DAC_FS_VRMS);
+        return new SignalGenerator(GenSignalForm.SINE, FREQ_HZ, SAMPLE_RATE, VRMS, VRMS,
+                DAC_FS_VRMS, DAC_FS_VRMS);
     }
 
     /** Reference encoder replicating the pre-per-channel behaviour: one sample
@@ -57,9 +58,11 @@ class PcmQuantizerTest {
         int bytesPerSample = bitDepth / 8;
         int bytesPerFrame  = bytesPerSample * 2;
         byte[] buf = new byte[frames * bytesPerFrame];
+        double[] frame = new double[2];
         if (bitDepth == 8) {
             for (int i = 0; i < frames; i++) {
-                double sample = clamp(gen.nextSample());
+                gen.nextFrame(frame);
+                double sample = clamp(frame[0]);
                 byte   val    = (byte) Math.round(sample * 127.0);
                 int    off    = i * bytesPerFrame;
                 buf[off]     = val;
@@ -68,7 +71,8 @@ class PcmQuantizerTest {
         } else {
             long maxVal = (1L << (bitDepth - 1)) - 1;
             for (int i = 0; i < frames; i++) {
-                double sample = clamp(gen.nextSample());
+                gen.nextFrame(frame);
+                double sample = clamp(frame[0]);
                 long   pcm    = (long) Math.round(sample * maxVal);
                 int    off    = i * bytesPerFrame;
                 for (int b = 0; b < bytesPerSample; b++) {
@@ -100,7 +104,7 @@ class PcmQuantizerTest {
     void bothWithUnityScale_isByteIdenticalToLegacy_16bit() {
         byte[] expected = legacyEncode(sine(), 16, FRAMES);
 
-        PcmQuantizer q = new PcmQuantizer(16, 0);   // defaults: scale 1.0, gate BOTH
+        PcmQuantizer q = new PcmQuantizer(16, 0, 0);   // defaults: scale 1.0, gate BOTH
         byte[] actual = new byte[FRAMES * 2 * 2];
         q.encode(sine(), actual, FRAMES);
 
@@ -112,21 +116,20 @@ class PcmQuantizerTest {
     void bothWithUnityScale_isByteIdenticalToLegacy_24bit() {
         byte[] expected = legacyEncode(sine(), 24, FRAMES);
 
-        PcmQuantizer q = new PcmQuantizer(24, 0);
-        q.setChannelScale(1.0, 1.0);
+        PcmQuantizer q = new PcmQuantizer(24, 0, 0);
         q.setOutputChannels(OutputChannels.BOTH);
         byte[] actual = new byte[FRAMES * 3 * 2];
         q.encode(sine(), actual, FRAMES);
 
         assertArrayEquals(expected, actual,
-                "explicit BOTH + unity scale 24-bit encoding must be byte-identical to the legacy encoder");
+                "explicit BOTH 24-bit encoding must be byte-identical to the legacy encoder");
     }
 
     @Test
     void bothWithUnityScale_isByteIdenticalToLegacy_8bit() {
         byte[] expected = legacyEncode(sine(), 8, FRAMES);
 
-        PcmQuantizer q = new PcmQuantizer(8, 0);
+        PcmQuantizer q = new PcmQuantizer(8, 0, 0);
         byte[] actual = new byte[FRAMES * 2];
         q.encode(sine(), actual, FRAMES);
 
@@ -136,7 +139,7 @@ class PcmQuantizerTest {
 
     @Test
     void bothLanesEqual_whenScalesEqual_16bit() {
-        PcmQuantizer q = new PcmQuantizer(16, 0);
+        PcmQuantizer q = new PcmQuantizer(16, 0, 0);
         byte[] buf = new byte[FRAMES * 2 * 2];
         q.encode(sine(), buf, FRAMES);
 
@@ -149,7 +152,7 @@ class PcmQuantizerTest {
 
     @Test
     void gateLeft_zeroesRightSlot_16bit() {
-        PcmQuantizer q = new PcmQuantizer(16, 0);
+        PcmQuantizer q = new PcmQuantizer(16, 0, 0);
         q.setOutputChannels(OutputChannels.LEFT);
         byte[] buf = new byte[FRAMES * 2 * 2];
         q.encode(sine(), buf, FRAMES);
@@ -170,7 +173,7 @@ class PcmQuantizerTest {
 
     @Test
     void gateRight_zeroesLeftSlot_16bit() {
-        PcmQuantizer q = new PcmQuantizer(16, 0);
+        PcmQuantizer q = new PcmQuantizer(16, 0, 0);
         q.setOutputChannels(OutputChannels.RIGHT);
         byte[] buf = new byte[FRAMES * 2 * 2];
         q.encode(sine(), buf, FRAMES);
@@ -190,7 +193,7 @@ class PcmQuantizerTest {
 
     @Test
     void gateLeft_zeroesRightSlot_8bit() {
-        PcmQuantizer q = new PcmQuantizer(8, 0);
+        PcmQuantizer q = new PcmQuantizer(8, 0, 0);
         q.setOutputChannels(OutputChannels.LEFT);
         byte[] buf = new byte[FRAMES * 2];
         q.encode(sine(), buf, FRAMES);
@@ -203,40 +206,45 @@ class PcmQuantizerTest {
     }
 
     @Test
-    void scaleR_appliedToRightLaneOnly_16bit() {
-        // Right full-scale is half the left -> scaleR = 2.0: the right slot is
-        // twice the left slot (up to clamping), the left slot is unchanged.
-        PcmQuantizer q = new PcmQuantizer(16, 0);
-        q.setChannelScale(1.0, 2.0);
+    void rightLaneAtItsOwnAmplitude_landsInTheRightSlotOnly_16bit() {
+        // The right lane commanded at twice the left's amplitude against the
+        // same full scale: the right slot is twice the left slot (up to
+        // clamping), the left slot is unchanged.
+        PcmQuantizer q = new PcmQuantizer(16, 0, 0);
+        SignalGenerator gen = sine();
+        gen.setAmplitudesVrms(VRMS, 2.0 * VRMS);
         byte[] buf = new byte[FRAMES * 2 * 2];
-        q.encode(sine(), buf, FRAMES);
+        q.encode(gen, buf, FRAMES);
 
         byte[] leftRef = legacyEncode(sine(), 16, FRAMES);
         // Expected right computed from a fresh generator with the SAME arithmetic
         // the quantizer uses on the true (pre-quantization) sample - comparing
         // against the quantized left code would inject a spurious ±1 LSB error.
         SignalGenerator ref = sine();
+        double[] refFrame = new double[2];
         long maxVal = (1L << 15) - 1;
         for (int i = 0; i < FRAMES; i++) {
             int off = i * 4;
             long left  = decode(buf, off, 2);
             long right = decode(buf, off + 2, 2);
             assertEquals(decode(leftRef, off, 2), left,
-                    "left lane (scale 1.0) must be unchanged at frame " + i);
-            long expectedRight = Math.round(clamp(ref.nextSample() * 2.0) * maxVal);
+                    "left lane (its own amplitude) must be unchanged at frame " + i);
+            ref.nextFrame(refFrame);
+            long expectedRight = Math.round(clamp(refFrame[0] * 2.0) * maxVal);
             assertEquals(expectedRight, right,
-                    "right lane must apply scaleR=2.0 (with clamp) at frame " + i);
+                    "right lane must render at twice the level (with clamp) at frame " + i);
         }
     }
 
     @Test
-    void scaleR_clampsWithoutOverflow_16bit() {
-        // A large right scale drives the right lane past full-scale; it must
-        // clamp to ±(2^15−1), never wrap to a negative code.
-        PcmQuantizer q = new PcmQuantizer(16, 0);
-        q.setChannelScale(1.0, 100.0);
+    void rightLaneOverFullScale_clampsWithoutOverflow_16bit() {
+        // A right amplitude far above the full scale drives the right lane past
+        // it; it must clamp to ±(2^15−1), never wrap to a negative code.
+        PcmQuantizer q = new PcmQuantizer(16, 0, 0);
+        SignalGenerator gen = sine();
+        gen.setAmplitudesVrms(VRMS, 100.0 * VRMS);
         byte[] buf = new byte[FRAMES * 2 * 2];
-        q.encode(sine(), buf, FRAMES);
+        q.encode(gen, buf, FRAMES);
 
         long maxVal = (1L << 15) - 1;
         for (int i = 0; i < FRAMES; i++) {

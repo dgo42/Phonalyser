@@ -97,9 +97,8 @@ public interface DeviceRef {
      * arrives already calibrated, so a client applies these values instead of
      * looking the device up in its own card store - which knows nothing about
      * that bench and could only match it by a name collision.  A device on this
-     * machine answers {@code null} and the caller falls back to the legacy path
-     * ({@code Preferences.applyInputDeviceProfile} /
-     * {@code applyOutputDeviceProfile} keyed on the device name).
+     * machine answers {@code null}: its manager reads the card this machine
+     * holds for it ({@link AudioDeviceManager#calibration}).
      */
     default DeviceCalibration calibration() {
         return null;

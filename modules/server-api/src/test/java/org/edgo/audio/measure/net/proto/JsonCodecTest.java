@@ -108,7 +108,7 @@ class JsonCodecTest {
 
         String json = codec.write(new NetMessage(ID, codec.toNode(data)));
 
-        assertEquals("{\"t\":\"resp\",\"id\":42,\"ok\":true,\"data\":{\"proto\":2,"
+        assertEquals("{\"t\":\"resp\",\"id\":42,\"ok\":true,\"data\":{\"proto\":3,"
                 + "\"serverId\":\"b7e0-uuid\",\"name\":\"Bench QA403\","
                 + "\"app\":\"1.2.0\",\"clientId\":\"c0ffee-uuid\","
                 + "\"caps\":[\"qa40x\",\"gen\",\"files\"]}}", json,
@@ -204,29 +204,29 @@ class JsonCodecTest {
     }
 
     @Test
-    void setCalibrationCarriesTheDeviceRefAndBothFullScales()
+    void setCalibrationCarriesTheDeviceRefAndOneChannelsFullScale()
             throws JsonProcessingException {
         NetMessage sent = new NetMessage(MessageType.DEVICE_SET_CALIBRATION, ID)
                 .put(NetFields.BACKEND, "QA40X")
                 .put(NetFields.INDEX, 1)
                 .put(NetFields.INPUT, true)
                 .put(NetFields.NAME, "QA403")
-                .put(NetFields.FS_RMS_LEFT, 1.234)
-                .put(NetFields.FS_RMS_RIGHT, 2.345);
+                .put(NetFields.CHANNEL, NetFields.RIGHT)
+                .put(NetFields.FS_RMS, 2.345);
 
         String json = codec.write(sent);
         NetMessage received = codec.read(json);
 
         assertEquals("{\"t\":\"device.setCalibration\",\"id\":42,\"backend\":\"QA40X\","
                 + "\"index\":1,\"input\":true,\"name\":\"QA403\","
-                + "\"fsRmsLeft\":1.234,\"fsRmsRight\":2.345}", json,
-                "the device ref of spec 4.3 plus the two full-scales, verbatim");
+                + "\"channel\":\"right\",\"fsRms\":2.345}", json,
+                "the device ref of spec 4.3 plus one channel's full-scale, verbatim");
         assertEquals(MessageType.DEVICE_SET_CALIBRATION, received.getType());
         assertEquals("QA40X", received.optString(NetFields.BACKEND));
         assertEquals(1, received.optInt(NetFields.INDEX));
         assertEquals(Boolean.TRUE, received.optBoolean(NetFields.INPUT));
-        assertEquals(1.234, received.optDouble(NetFields.FS_RMS_LEFT));
-        assertEquals(2.345, received.optDouble(NetFields.FS_RMS_RIGHT));
+        assertEquals(NetFields.RIGHT, received.optString(NetFields.CHANNEL));
+        assertEquals(2.345, received.optDouble(NetFields.FS_RMS));
     }
 
     @Test
@@ -261,7 +261,7 @@ class JsonCodecTest {
                 .path(NetFields.DURATION_SAMPLES).asLong());
         assertEquals(2, received.getNode(NetFields.COMPENSATION)
                 .path(NetFields.AMP_RATIOS).size());
-        assertFalse(received.has(NetFields.AMPLITUDE_VRMS),
+        assertFalse(received.has(NetFields.AMPLITUDE_VRMS_LEFT),
                 "a partial update carries nothing it did not set");
     }
 
@@ -287,7 +287,7 @@ class JsonCodecTest {
                         .put(NetFields.NOMINAL_HZ, 1_000.0)
                         .put(NetFields.EMIT_HZ, 999.9755859375)
                         .put(NetFields.EMIT2_HZ, 0.0)
-                        .put(NetFields.AMPLITUDE_VRMS, 0.5)
+                        .put(NetFields.AMPLITUDE_VRMS_LEFT, 0.5)
                         .put(NetFields.SWEEP, codec.toNode(sweep))
                         .put(NetFields.FILE, codec.toNode(file))));
 
@@ -312,7 +312,7 @@ class JsonCodecTest {
                     + " - a shared field is declared once, on purpose");
         }
         assertTrue(seen.contains("emitHz") && seen.contains("hasBitDepth")
-                && seen.contains("dacFsVoltageAmpl") && seen.contains("captureId"),
+                && seen.contains("amplitudeVrmsLeft") && seen.contains("captureId"),
                 "the spec's field names live here, not in hand-typed literals");
     }
 
@@ -472,9 +472,9 @@ class JsonCodecTest {
 
         assertEquals(0.0, received.optDouble(NetFields.FREQUENCY),
                 "a present zero is a real value");
-        assertNull(received.optDouble(NetFields.AMPLITUDE_VRMS),
+        assertNull(received.optDouble(NetFields.AMPLITUDE_VRMS_LEFT),
                 "an absent field must not be applied as 0");
-        assertFalse(received.has(NetFields.AMPLITUDE_VRMS));
+        assertFalse(received.has(NetFields.AMPLITUDE_VRMS_LEFT));
         assertTrue(received.has(NetFields.GEN_ID));
     }
 

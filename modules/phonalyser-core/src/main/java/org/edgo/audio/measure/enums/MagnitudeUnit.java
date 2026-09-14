@@ -24,7 +24,7 @@ import lombok.Getter;
  * Magnitude unit selector for a frequency-domain view's magnitude axis.
  * Carries only the unit identity and whether it plots on a log magnitude
  * axis - display labels live in the GUI (i18n) and the dBFS->unit conversion
- * in {@code Preferences#convertFromDbFs}.
+ * in the FFT view, against the analysed channel's ADC calibration.
  */
 public enum MagnitudeUnit {
     V        (true),
@@ -32,7 +32,7 @@ public enum MagnitudeUnit {
     DBV      (false),
     DBFS     (false),
     /** dB relative to the fundamental - 0 dBr is the fundamental's level.  The reference is
-     *  the cached {@code fftDbrRefDbFs} in Preferences, applied by {@code convertFromDbFs}. */
+     *  the cached {@code fftDbrRefDbFs} in Preferences, applied by the FFT view's conversion. */
     DBR      (false);
 
     /** Linear-amplitude units (V, V/√Hz) plot on a log magnitude axis; the dB units

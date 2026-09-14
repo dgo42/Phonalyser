@@ -33,9 +33,11 @@ import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.function.ObjDoubleConsumer;
+import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * Shared modal voltage-calibration dialog for the ADC (scope / FFT input) and
@@ -45,14 +47,15 @@ import java.util.function.ObjDoubleConsumer;
  *
  * <p>One shape, always two rows - a Left row and a Right row, each
  * {@code [channel label] [NumericStepField]} (no reference/readout voltage
- * column).  Each field takes a user-entered Vrms (nV / µV / mV / V, no dBV) and
- * emits it as canonical volts-RMS through an {@link ObjDoubleConsumer} tagged
- * with the row's {@link Channel}; the owner rescales that channel's full-scale.
+ * column).  Each field takes a user-entered Vrms (nV / µV / mV / V, no dBV).
+ * On OK the committed rows go to the owner together, as canonical volts-RMS by
+ * {@link Channel}, and the owner calibrates each of those channels against its
+ * own reference (see {@code AudioBackend.calibrate}).
  *
  * <p>A {@code null} seed disables its row and leaves the field <em>blank</em>
  * (the ADC's non-measured channel - no value, not the clamp-to-min "1 nV"
  * artifact).  A non-null seed prefills the field.  On OK only enabled rows whose
- * field carries a valid value fire.
+ * field carries a valid value are committed; with none, nothing fires.
  */
 @Log4j2
 public final class CalibrationDialog {
@@ -85,12 +88,12 @@ public final class CalibrationDialog {
 
     /** Two-row (per-channel) calibration: a Left row and a Right row, each
      *  seeded with that channel's reference Vrms (a {@code null} disables the
-     *  row and leaves its field blank); on OK every enabled+valid row fires
-     *  {@code onCalibrate} tagged with its {@link Channel}.  {@code viewOnly}
+     *  row and leaves its field blank); on OK the enabled+valid rows reach
+     *  {@code onCalibrate} together, by {@link Channel}.  {@code viewOnly}
      *  shows the seeded values read-only with OK disabled - a device-provided
      *  card (QA40x) whose built-in full-scale cannot be overwritten. */
     public CalibrationDialog(Shell parent, Texts texts, Double referenceLeftVrms, Double referenceRightVrms,
-                             boolean viewOnly, ObjDoubleConsumer<Channel> onCalibrate) {
+                             boolean viewOnly, Consumer<Map<Channel, Double>> onCalibrate) {
         this.dialog  = newShell(parent, texts.titleKey());
         this.content = newContent();
 
@@ -117,10 +120,14 @@ public final class CalibrationDialog {
                 row.parsedVrms = vrms;
                 committed.add(row);
             }
+            Map<Channel, Double> entered = new EnumMap<>(Channel.class);
             for (Row row : committed) {
-                onCalibrate.accept(row.channel, row.parsedVrms);
+                entered.put(row.channel, row.parsedVrms);
                 log.info("{} calibration [{}]: entered {} vs reference {} V RMS",
                         texts.logTag(), row.channel, formatVoltage(row.parsedVrms), formatVoltage(row.reference));
+            }
+            if (!entered.isEmpty()) {
+                onCalibrate.accept(entered);
             }
             dialog.close();
         };

@@ -358,18 +358,18 @@
      channel contributes and the sum is divided by their count, and no channel is
      dropped.  A stereo file whose two sides carry different material is therefore
      heard as their average, not as a stereo pair.</p>
-  <p><b>On a network bench.</b>  When the selected backend is a Phonalyser server,
+  <p><b>On a Phonalyser server.</b>  When the selected backend is a Phonalyser server,
      the generator is a network away and the protocol carries no audio from this
      machine to it - so the <em>file</em> travels instead.  It is uploaded once and
-     the bench's own generator lane decodes and plays it, out of the bench's
+     the server's own generator lane decodes and plays it, out of the server's
      converter at the file's own rate and depth.  <b>In&nbsp;loop</b> is honoured
      at the far end, and Stop reaches across.  Two differences worth knowing:
      a file may be at most <b>50&nbsp;MB</b> - the limit the server enforces,
      checked here before anything is sent, so an over-size file is refused at once
      rather than after the transfer - and the play indicator goes out when the
-     bench reports the file ended, so it follows the far end rather than this
+     server reports the file ended, so it follows the far end rather than this
      screen.  The upload lives in the server's memory and is dropped as soon as the
-     connection closes; nothing accumulates on the bench.</p>
+     connection closes; nothing accumulates on the server.</p>
 
   <h3 id="generator-play-file">Play / Stop file</h3>
   <p>Small play LED next to the path field.  Lit while the file is

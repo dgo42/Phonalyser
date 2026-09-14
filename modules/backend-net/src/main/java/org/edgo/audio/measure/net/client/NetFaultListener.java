@@ -80,24 +80,4 @@ public interface NetFaultListener {
      * @param device the held device the bench no longer offers
      */
     void deviceGone(DeviceRef device);
-
-    /**
-     * The bench changed what one of its devices MEANS: the calibration it stores
-     * for {@code device} is not the one the last catalogue carried (spec 4.3's
-     * {@code cal}, re-sent whole by every {@code ev.devices.changed}).
-     *
-     * <p>Not a fault - nothing failed - but it belongs on this seam for the same
-     * reason the two above do: it arrives on the connection's reader thread, only
-     * the client knows what it is measuring on, and only the glue knows how to
-     * make a full scale take effect there.  A second interface for one call would
-     * be a second setter and a second registration of the same subscriber.
-     *
-     * <p>The listener's job is to re-apply it where it is already in force, so a
-     * running dBV axis and a running generator amplitude follow the bench instead
-     * of scaling by yesterday's number until the next device open.
-     *
-     * @param device the bench device whose stored calibration moved, carrying the
-     *        NEW values ({@code DeviceRef.calibration()})
-     */
-    void calibrationChanged(DeviceRef device);
 }

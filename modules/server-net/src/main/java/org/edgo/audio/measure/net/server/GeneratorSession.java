@@ -25,9 +25,11 @@ import java.util.LinkedHashMap;
 import java.util.Iterator;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -41,6 +43,8 @@ import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.FilePlaybackGenerator;
 import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.wav.PcmFileLoader;
 import org.edgo.audio.measure.net.proto.ErrorCode;
 import org.edgo.audio.measure.net.proto.JsonCodec;
@@ -126,13 +130,6 @@ public final class GeneratorSession {
     /** DAC full-scale before the client sends its calibration.  Never 0 - it is
      *  the divisor of the amplitude scale. */
     private static final double DEFAULT_DAC_FS_VOLTAGE_AMPL = 1.0;
-    /** Per-lane output scale before the client sends one: both lanes alike,
-     *  which is what a card with one DAC full-scale means and what a client too
-     *  old to send the field expects. */
-    private static final double DEFAULT_RIGHT_LANE_SCALE = 1.0;
-    /** The LEFT lane's scale.  Always one: a mono amplitude is computed against
-     *  the left full-scale, so the right lane carries the whole ratio. */
-    private static final double LEFT_LANE_SCALE = 1.0;
     /** Symmetric duty, and an even two-tone split - the generator's own
      *  defaults. */
     private static final double DEFAULT_DUTY = 0.5;
@@ -173,6 +170,10 @@ public final class GeneratorSession {
      *  and file positions are derived from elapsed time, and a test must be able
      *  to place them exactly instead of sleeping for them. */
     private final LongSupplier clockMs;
+    /** This lane's ear on {@link Events#DAC_CALIBRATION_CHANGED}, subscribed
+     *  while a generator is open.  A field, because the same object has to be
+     *  handed back to unsubscribe. */
+    private final Consumer<DeviceRef> dacCalibrationChanged = this::dacCalibrationChanged;
 
     /* --------------------------- what gen.open fixed --------------------------- */
 
@@ -194,7 +195,10 @@ public final class GeneratorSession {
      *  file plays.  Kept because a refused swap has to put back the claim that
      *  described the lane, not the one {@code gen.open} was granted. */
     private int claimedRateHz;
-    private double ditherBits;
+    /** The two lanes' TPDF dither depths - each lane its own, a dither
+     *  entered as a level resolving against each lane's full scale. */
+    private double ditherBitsLeft;
+    private double ditherBitsRight;
     private OutputChannels outputChannels = OutputChannels.BOTH;
     /** Where the next handle comes from.  One generator is open per connection
      *  at a time, so there is nothing to skip - only the range to stay inside. */
@@ -205,12 +209,14 @@ public final class GeneratorSession {
     private GenSignalForm form = GenSignalForm.SINE;
     private double nominalHz = DEFAULT_FREQUENCY_HZ;
     private double nominal2Hz = DEFAULT_FREQUENCY_HZ;
-    private double amplitudeVrms = DEFAULT_AMPLITUDE_VRMS;
-    private double dacFsVoltageAmpl = DEFAULT_DAC_FS_VOLTAGE_AMPL;
-    /** {@code fsLeft/fsRight} - the client's calibration for a card whose two
-     *  DAC full-scales differ.  It belongs to the LANE, not to the DDS, so it is
-     *  pushed to the playback line rather than to the generator. */
-    private double rightLaneScale = DEFAULT_RIGHT_LANE_SCALE;
+    /** The two lanes' commanded amplitudes - each lane emits its own, converted
+     *  against its own full scale of this bench's card. */
+    private double amplitudeVrmsLeft = DEFAULT_AMPLITUDE_VRMS;
+    private double amplitudeVrmsRight = DEFAULT_AMPLITUDE_VRMS;
+    /** The card's two DAC full scales in peak form - the divisor each lane's
+     *  own amplitude is converted against. */
+    private double dacFsVoltageAmplLeft = DEFAULT_DAC_FS_VOLTAGE_AMPL;
+    private double dacFsVoltageAmplRight = DEFAULT_DAC_FS_VOLTAGE_AMPL;
     private double rectangleDuty = DEFAULT_DUTY;
     private double triangleDuty = DEFAULT_DUTY;
     private double amp1Pct = DEFAULT_SPLIT_PCT;
@@ -272,7 +278,7 @@ public final class GeneratorSession {
      * @throws NetException with the spec 4.2 code the refusal deserves
      */
     public JsonNode open(DeviceLock lock, String name, Integer rate, Integer bitDepth,
-            Double dither, String channels) {
+            Double ditherLeft, Double ditherRight, String channels) {
         if (rate == null || bitDepth == null) {
             throw new NetException(ErrorCode.BAD_REQUEST,
                     "gen.open needs a rate and a bit depth");
@@ -291,7 +297,8 @@ public final class GeneratorSession {
         this.cardName = catalog.boundCard(ref.name());
         this.rateHz = rate;
         this.bits = bitDepth;
-        this.ditherBits = dither == null ? 0.0 : dither;
+        this.ditherBitsLeft = ditherLeft == null ? 0.0 : ditherLeft;
+        this.ditherBitsRight = ditherRight == null ? 0.0 : ditherRight;
         this.outputChannels = outputChannelsOf(channels);
         applyCardCalibration(lock, name);
         qa40x.claimRate(lock, rate);
@@ -304,9 +311,10 @@ public final class GeneratorSession {
             throw e;
         }
         this.genId = freeGenId();
+        MessageBus.instance().subscribe(Events.DAC_CALIBRATION_CHANGED, dacCalibrationChanged);
         if (log.isInfoEnabled()) {
-            log.info("net gen {}: open on {} at {} Hz / {} bit, dither {} bit, lanes {}",
-                    genId, lock, rate, bitDepth, ditherBits, outputChannels);
+            log.info("net gen {}: open on {} at {} Hz / {} bit, dither {} / {} bit, lanes {}",
+                    genId, lock, rate, bitDepth, ditherBitsLeft, ditherBitsRight, outputChannels);
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put(NetFields.GEN_ID, genId);
@@ -315,19 +323,17 @@ public final class GeneratorSession {
     }
 
     /**
-     * Spec 4.5 (v1.1): the lane opens at the full scale THIS server stores for
-     * the output device - {@code dacFsVoltageAmpl} is the card's left
-     * full-scale in peak-amplitude form ({@code × √2}, the same conversion the
-     * desktop's own output profile makes), and {@code rightLaneScale} is
-     * {@code fsLeft/fsRight} for a card whose two DACs differ.
+     * Spec 4.5: the lane opens at the full scales THIS server stores for the
+     * output device - {@code dacFsVoltageAmplLeft} and
+     * {@code dacFsVoltageAmplRight} are the card's two full scales in
+     * peak-amplitude form ({@code × √2}, the same conversion the desktop's own
+     * output profile makes).
      *
      * <p>Calibration lives where the device is connected, so the bench's own
-     * numbers are not merely the starting point - they are the ONLY ones.  A
-     * client used to be able to push its own {@code dacFsVoltageAmpl} over these,
-     * and two clients with different local cards then drove the same output to
-     * different levels from the same entered amplitude.  The bench's card is the
-     * single converter, so the setter no longer reads that field and a client no
-     * longer sends it.
+     * numbers are not merely the starting point - they are the ONLY ones: the
+     * wire carries no full scale.  Two clients with different local cards would
+     * otherwise drive the same output to different levels from the same entered
+     * amplitude.  The bench's card is the single converter, for each lane.
      *
      * <p>Both fields are written on EVERY open, defaults included: one connection
      * opens one generator at a time but may open several in a row, and a lane
@@ -335,26 +341,55 @@ public final class GeneratorSession {
      * full scale.
      *
      * <p><b>A card must offer BOTH full scales, and both above zero, or neither
-     * is used.</b>  {@link #DEFAULT_DAC_FS_VOLTAGE_AMPL} says why: the full scale
-     * is the DIVISOR of the amplitude scale, so a zero there is not a quiet lane
-     * but a division by zero rendered into the DAC - and a zero on the right
-     * would make the lane ratio infinite and drive that side into the clipper.
-     * A card row that was never calibrated carries exactly those zeros, and it is
-     * an uncalibrated device however it got there: the 1.0 placeholder is the
-     * honest answer for it.  The resolution itself refuses such a row (an
-     * uncalibrated card answers no calibration at all), so this test is the belt
-     * that keeps a divisor of zero out of the DDS whatever the store learns to
-     * hand back.
+     * is used.</b>  {@link #DEFAULT_DAC_FS_VOLTAGE_AMPL} says why: a full scale
+     * is the DIVISOR of a lane's level, so a zero there is not a quiet lane but
+     * a division by zero rendered into the DAC.  A card row that was never
+     * calibrated carries exactly those zeros, and it is an uncalibrated device
+     * however it got there: the 1.0 placeholder is the honest answer for it.
+     * The resolution itself refuses such a row (an uncalibrated card answers no
+     * calibration at all), so this test is the belt that keeps a divisor of zero
+     * out of the DDS whatever the store learns to hand back.
      */
     private void applyCardCalibration(DeviceLock lock, String name) {
         DeviceCalibration cal = catalog.calibration(lock, name);
         if (cal == null || cal.fsRmsLeft() <= 0.0 || cal.fsRmsRight() <= 0.0) {
-            this.dacFsVoltageAmpl = DEFAULT_DAC_FS_VOLTAGE_AMPL;
-            this.rightLaneScale = DEFAULT_RIGHT_LANE_SCALE;
+            this.dacFsVoltageAmplLeft = DEFAULT_DAC_FS_VOLTAGE_AMPL;
+            this.dacFsVoltageAmplRight = DEFAULT_DAC_FS_VOLTAGE_AMPL;
             return;
         }
-        this.dacFsVoltageAmpl = cal.fsRmsLeft() * Constants.SQRT2;
-        this.rightLaneScale = cal.fsRmsLeft() / cal.fsRmsRight();
+        this.dacFsVoltageAmplLeft = cal.fsRmsLeft() * Constants.SQRT2;
+        this.dacFsVoltageAmplRight = cal.fsRmsRight() * Constants.SQRT2;
+    }
+
+    /**
+     * The DAC calibration of this lane's device changed on this bench (spec 4.3
+     * {@code device.setCalibration}, a range move, a card binding - announced on
+     * the bus by whoever wrote it): the card is re-read and the tone that is
+     * playing lands on the new full scales at once, per lane, exactly as a local
+     * recalibration lands on a local generator.  On this session's worker,
+     * enqueued by {@link #dacCalibrationChanged}; no open lane is nothing to do.
+     */
+    private void reapplyCard() {
+        if (genId == NO_GEN) {
+            return;
+        }
+        applyCardCalibration(device, deviceName);
+        this.cardName = catalog.boundCard(deviceName);
+        SignalGenerator gen = generator;
+        if (gen != null) {
+            gen.setDacFsVoltageAmpls(dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
+        }
+    }
+
+    /** The bus side of {@link #reapplyCard}: the event arrives on the writer's
+     *  thread, so all that happens there is enqueueing the re-read onto this
+     *  session's worker, for a change of THIS lane's device.  The name is read
+     *  racily off the writer's thread and only compared - a stale null compares
+     *  false. */
+    private void dacCalibrationChanged(DeviceRef changed) {
+        if (Objects.equals(changed.name(), deviceName)) {
+            worker.submit(this::reapplyCard);
+        }
     }
 
     /** Spec 4.5: "stops, closes server-side playback". */
@@ -393,6 +428,7 @@ public final class GeneratorSession {
      */
     public void closeAll() {
         ticker.stop();
+        MessageBus.instance().unsubscribe(Events.DAC_CALIBRATION_CHANGED, dacCalibrationChanged);
         step(this::stopEmission, "stopping the emission");
         step(() -> stopFileSource(), "stopping the file source");
         step(this::closeLane, "closing the output line");
@@ -478,18 +514,20 @@ public final class GeneratorSession {
             nominalHz = frequency;
             trimHz = null;
         }
-        Double amplitude = message.optDouble(NetFields.AMPLITUDE_VRMS);
-        if (amplitude != null) {
-            amplitudeVrms = amplitude;
+        Double left = message.optDouble(NetFields.AMPLITUDE_VRMS_LEFT);
+        if (left != null) {
+            amplitudeVrmsLeft = left;
         }
-        // dacFsVoltageAmpl is deliberately NOT read from the client any more.  The
-        // conversion from volts to the DAC's full scale belongs to the machine the
-        // DAC is plugged into, which is this one, and it is made from THIS server's
-        // card (applyCardCalibration).  A client that pushed its own number
-        // overwrote the bench's card, so the same amplitude entered on two clients
-        // came out of the same output at two different levels.  The bench's card
-        // alone converts.  This is the server half of the belt; the clients no
-        // longer send the field at all.
+        Double right = message.optDouble(NetFields.AMPLITUDE_VRMS_RIGHT);
+        if (right != null) {
+            amplitudeVrmsRight = right;
+        }
+        // No full scale is read from the client: the conversion from volts to
+        // the DAC's full scale belongs to the machine the DAC is plugged into,
+        // which is this one, and it is made from THIS server's card
+        // (applyCardCalibration), per lane.  A client that pushed its own number
+        // overwrote the bench's card, so the same amplitude entered on two
+        // clients came out of the same output at two different levels.
         Boolean fileLoop = message.optBoolean(NetFields.FILE_LOOP);
         if (fileLoop != null) {
             // Applied to the RUNNING file if there is one, and ignored otherwise
@@ -502,19 +540,17 @@ public final class GeneratorSession {
                 playing.setLoop(fileLoop);
             }
         }
-        Double laneScale = message.optDouble(NetFields.RIGHT_LANE_SCALE);
-        if (laneScale != null) {
-            rightLaneScale = laneScale;
-            // Straight to the line that is open: the quantizer reads the scales
-            // per block, so a recalibrated card takes effect on the tone that is
-            // playing instead of at the next open.
-            applyLaneScale();
-        }
-        Double dither = message.optDouble(NetFields.DITHER_BITS);
-        if (dither != null) {
-            ditherBits = dither;
-            // Live like the lane scale: the client's dither edit lands on the
-            // tone that is playing, and the stored value carries it across the
+        Double ditherLeft = message.optDouble(NetFields.DITHER_BITS_LEFT);
+        Double ditherRight = message.optDouble(NetFields.DITHER_BITS_RIGHT);
+        if (ditherLeft != null || ditherRight != null) {
+            if (ditherLeft != null) {
+                ditherBitsLeft = ditherLeft;
+            }
+            if (ditherRight != null) {
+                ditherBitsRight = ditherRight;
+            }
+            // Live like the amplitudes: the client's dither edit lands on the
+            // tone that is playing, and the stored values carry it across the
             // lane reopen a device swap performs.
             applyDither();
         }
@@ -852,14 +888,16 @@ public final class GeneratorSession {
         SignalGenerator gen;
         if (form == GenSignalForm.LINEAR_SWEEP) {
             gen = new SignalGenerator(sweepF0, sweepF1, rateHz, sweepSamples(),
-                    amplitudeVrms, dacFsVoltageAmpl);
+                    amplitudeVrmsLeft, amplitudeVrmsRight,
+                    dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
         } else if (form == GenSignalForm.LOG_SWEEP) {
             requireLogSweepBand();
             gen = new SignalGenerator(sweepF0, sweepF1, sweepSamples(),
-                    Math.max(0, leadInSamples), rateHz, amplitudeVrms, dacFsVoltageAmpl);
+                    Math.max(0, leadInSamples), rateHz, amplitudeVrmsLeft, amplitudeVrmsRight,
+                    dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
         } else {
-            gen = new SignalGenerator(form, emitHz(), rateHz, amplitudeVrms,
-                    dacFsVoltageAmpl);
+            gen = new SignalGenerator(form, emitHz(), rateHz, amplitudeVrmsLeft, amplitudeVrmsRight,
+                    dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
         }
         gen.setRectangleDuty(rectangleDuty);
         gen.setTriangleDuty(triangleDuty);
@@ -921,7 +959,7 @@ public final class GeneratorSession {
      * none, because for the sweep block "only present fields are applied" (spec
      * 4.5) is not a nicety: every one of those setters re-renders the chirp and
      * asks the DDS to restart it at sample 0.  A freq-response client trimming
-     * its level mid-sweep with {@code gen.config{amplitudeVrms}} would otherwise
+     * its level mid-sweep with {@code gen.config{amplitudeVrmsLeft}} would otherwise
      * have the sweep silently begin again underneath the record it is
      * assembling - and with no {@code sweepStart} marker to notice it by.
      */
@@ -940,8 +978,8 @@ public final class GeneratorSession {
         SignalGenerator gen = generator;
         gen.setForm(form);
         gen.setFrequency(emitHz());
-        gen.setAmplitudeVrms(amplitudeVrms);
-        gen.setDacFsVoltageAmpl(dacFsVoltageAmpl);
+        gen.setDacFsVoltageAmpls(dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
+        gen.setAmplitudesVrms(amplitudeVrmsLeft, amplitudeVrmsRight);
         gen.setRectangleDuty(rectangleDuty);
         gen.setTriangleDuty(triangleDuty);
         if (form.isDualTone()) {
@@ -1240,21 +1278,13 @@ public final class GeneratorSession {
         }
     }
 
-    /** Pushes the per-lane scale to the line that is open, if one is.  The LEFT
-     *  lane is always 1.0 - see {@link #LEFT_LANE_SCALE}. */
-    private void applyLaneScale() {
-        AudioPlayback lane = playback;
-        if (lane != null) {
-            lane.setChannelScale(LEFT_LANE_SCALE, rightLaneScale);
-        }
-    }
-
-    /** Pushes the dither depth to the line that is open, if one is - the live
-     *  half of {@code gen.config}'s {@code ditherBits} (spec 4.5). */
+    /** Pushes the two lanes' dither depths to the line that is open, if one is
+     *  - the live half of {@code gen.config}'s {@code ditherBitsLeft} /
+     *  {@code ditherBitsRight} (spec 4.5). */
     private void applyDither() {
         AudioPlayback lane = playback;
         if (lane != null) {
-            lane.setDitherBits(ditherBits);
+            lane.setDitherBits(ditherBitsLeft, ditherBitsRight);
         }
     }
 
@@ -1311,10 +1341,10 @@ public final class GeneratorSession {
         try {
             // The SPI form via playbackManager: the WIRE-requested rate (spec
             // 4.5), with the WASAPI -> JavaSound render reroute kept.
-            opened = playbackManager.openPlayback(ref, rate, bitDepth, ditherBits);
+            opened = playbackManager.openPlayback(ref, rate, bitDepth, ditherBitsLeft,
+                    ditherBitsRight);
             opened.open();
             opened.setOutputChannels(outputChannels);
-            opened.setChannelScale(LEFT_LANE_SCALE, rightLaneScale);
             // Kept for the lane's LATER death: the render loop can fail long
             // after this call returns, and the reading of that fault belongs to
             // the same backend that opened the line.
@@ -1496,7 +1526,8 @@ public final class GeneratorSession {
         data.put(NetFields.NOMINAL_HZ, nominalHz);
         data.put(NetFields.EMIT_HZ, reportedEmitHz());
         data.put(NetFields.EMIT2_HZ, reportedEmit2Hz());
-        data.put(NetFields.AMPLITUDE_VRMS, amplitudeVrms);
+        data.put(NetFields.AMPLITUDE_VRMS_LEFT, amplitudeVrmsLeft);
+        data.put(NetFields.AMPLITUDE_VRMS_RIGHT, amplitudeVrmsRight);
         Map<String, Object> sweep = new LinkedHashMap<>();
         sweep.put(NetFields.ACTIVE, running && isSweep(form));
         sweep.put(NetFields.POS_SAMPLES, sweepPosition());

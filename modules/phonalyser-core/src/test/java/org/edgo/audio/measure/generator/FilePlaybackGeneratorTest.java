@@ -58,6 +58,16 @@ class FilePlaybackGeneratorTest {
     @TempDir
     private Path tempDir;
 
+    /** The frame every pull here lands in - the player is asked the way the
+     *  render loop asks it. */
+    private final double[] frame = new double[2];
+
+    /** Pulls one frame and answers its left lane. */
+    private double next(FilePlaybackGenerator player) {
+        player.nextFrame(frame);
+        return frame[0];
+    }
+
     @Test
     void aWavLoopsAcrossItsEndThroughTheReopenFallback() throws Exception {
         // WAV comes back from AudioSystem on a BufferedInputStream, which honours
@@ -67,7 +77,7 @@ class FilePlaybackGeneratorTest {
         FilePlaybackGenerator player = new FilePlaybackGenerator(wavFile(FRAMES), true);
         try {
             for (int i = 0; i < FRAMES * 3; i++) {
-                player.nextSample();
+                next(player);
             }
             assertFalse(player.isFinished(),
                     "a looping file never finishes - it crossed each end");
@@ -92,7 +102,7 @@ class FilePlaybackGeneratorTest {
         FilePlaybackGenerator player = new FilePlaybackGenerator(wavFile(SMALL_FRAMES), true);
         try {
             for (int i = 0; i < SMALL_FRAMES * 3; i++) {
-                player.nextSample();
+                next(player);
             }
             assertFalse(player.isFinished(), "it loops either way");
             assertEquals(0, player.reopens,
@@ -108,10 +118,10 @@ class FilePlaybackGeneratorTest {
         FilePlaybackGenerator player = new FilePlaybackGenerator(wavFile(FRAMES), false);
         try {
             for (int i = 0; i < FRAMES * 3; i++) {
-                player.nextSample();
+                next(player);
             }
             assertTrue(player.isFinished(), "the end of a one-shot file is the end");
-            assertEquals(0.0, player.nextSample(),
+            assertEquals(0.0, next(player),
                     "and it answers silence afterwards - the caller stops it on "
                             + "isFinished(), it does not stop itself");
         } finally {
@@ -127,7 +137,7 @@ class FilePlaybackGeneratorTest {
         try {
             player.setLoop(true);
             for (int i = 0; i < FRAMES * 3; i++) {
-                player.nextSample();
+                next(player);
             }
             assertFalse(player.isFinished(),
                     "the flag is re-read at the end of stream, so a toggle reaches "
@@ -138,7 +148,7 @@ class FilePlaybackGeneratorTest {
             player.setLoop(false);
             assertFalse(player.isFinished(), "not stopped where it stands");
             for (int i = 0; i < FRAMES * 2; i++) {
-                player.nextSample();
+                next(player);
             }
             assertTrue(player.isFinished(), "it ended at the next boundary");
         } finally {

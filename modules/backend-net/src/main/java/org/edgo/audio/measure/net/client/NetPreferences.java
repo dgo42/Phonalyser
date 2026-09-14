@@ -69,7 +69,7 @@ public final class NetPreferences implements SubPreferences {
 
     /** The remembered servers the application runs on, keyed by server id and
      *  kept in the order they were added.  Display thread only - see the
-     *  threading note on {@code NetBenchUi.attemptReconnect}, which is why a
+     *  threading note on {@code NetServerUi.attemptReconnect}, which is why a
      *  reconnect that runs on a timer marshals before it touches this. */
     private final Map<String, NetServerEntry> servers = new LinkedHashMap<>();
     /** What the server list is editing; reaches {@link #servers} only through

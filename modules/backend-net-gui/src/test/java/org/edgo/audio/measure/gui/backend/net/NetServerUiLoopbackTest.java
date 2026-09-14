@@ -49,8 +49,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A backend's OWN requests over a live session: net protocol 4.6, sent by the
- * type that holds the session ({@link NetBenchUi}) against a bench that exists
- * only as the JSON it speaks ({@link BenchSocket}).
+ * type that holds the session ({@link NetServerUi}) against a bench that exists
+ * only as the JSON it speaks ({@link StubServerSocket}).
  *
  * <p>What this proves: the CLIENT half of the round trip.  {@code call} marshals
  * the caller's fields into a request and binds the answer back to a plain map,
@@ -70,7 +70,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>Nothing here needs a display and nothing needs an analyzer: no
  * {@code libusb} is loaded anywhere, on any host.
  */
-class NetBenchUiLoopbackTest {
+class NetServerUiLoopbackTest {
 
     private static final String LOOPBACK = "127.0.0.1";
     /** This bench's installation UUID (spec 2.1) - what the session is keyed on
@@ -94,22 +94,22 @@ class NetBenchUiLoopbackTest {
     private static final int GEN_RATE_HZ = 48_000;
     private static final int GEN_BITS = 24;
 
-    private BenchSocket socket;
-    private NetBenchUi bench;
+    private StubServerSocket socket;
+    private NetServerUi server;
 
     @BeforeEach
-    void startTheBenchAndConnect() throws IOException {
+    void startTheServerAndConnect() throws IOException {
         // The session's own server entry is remembered LIVE (it is an action, not
         // a setting), so this keeps the developer's preferences.yaml out of it.
         Preferences.instance().setTransientMode(true);
-        int benchPort = freePort();
-        socket = new BenchSocket(new JsonCodec(), BENCH_ID, benchPort);
+        int serverPort = freePort();
+        socket = new StubServerSocket(new JsonCodec(), BENCH_ID, serverPort);
         socket.listen(BIND_TIMEOUT_MS);
-        bench = (NetBenchUi) RemoteBackendRegistry.instance().getUi();
+        server = (NetServerUi) RemoteBackendRegistry.instance().getUi();
         // The id is unknown until the server answers - exactly what the dialog's
         // manual entry starts from, and what connect() replaces with the real one.
-        assertNull(bench.connect(new NetServerEntry(LOOPBACK, BenchSocket.SERVER_NAME,
-                LOOPBACK, benchPort, true)),
+        assertNull(server.connect(new NetServerEntry(LOOPBACK, StubServerSocket.SERVER_NAME,
+                LOOPBACK, serverPort, true)),
                 "the loopback bench refused the session");
     }
 
@@ -117,20 +117,20 @@ class NetBenchUiLoopbackTest {
      *  back - the analyzer's state died with the socket it lived on. */
     @AfterEach
     void disconnectAndStop() {
-        bench.disconnect();
+        server.disconnect();
         socket.shutDown(STOP_TIMEOUT_MS);
     }
 
     @Test
     void theAnalyzersTelemetryArrivesFieldByField() {
-        Map<String, Object> info = bench.call(analyzer(), MessageType.QA40X_INFO.getWire(),
+        Map<String, Object> info = server.call(analyzer(), MessageType.QA40X_INFO.getWire(),
                 Map.of());
 
         assertNotNull(info, "spec 4.6 marks qa40x.info read-only, so a client may read "
                 + "the bench's telemetry without holding it");
-        assertEquals(BenchSocket.FIRMWARE, info.get(NetFields.FIRMWARE_VERSION));
-        assertEquals(BenchSocket.SERIAL, info.get(NetFields.SERIAL_NUMBER));
-        assertEquals(BenchSocket.TEMPERATURE, info.get(NetFields.TEMPERATURE),
+        assertEquals(StubServerSocket.FIRMWARE, info.get(NetFields.FIRMWARE_VERSION));
+        assertEquals(StubServerSocket.SERIAL, info.get(NetFields.SERIAL_NUMBER));
+        assertEquals(StubServerSocket.TEMPERATURE, info.get(NetFields.TEMPERATURE),
                 "the strings are the ones the SERVER formatted - nothing is "
                         + "re-interpreted on the way, which is what lets the same panel "
                         + "show a local analyzer and one across the room");
@@ -138,29 +138,29 @@ class NetBenchUiLoopbackTest {
 
     @Test
     void theRangesAndTheCalibrationPageComeBackWithTheirShape() {
-        Map<String, Object> ranges = bench.call(analyzer(),
+        Map<String, Object> ranges = server.call(analyzer(),
                 MessageType.QA40X_RANGES.getWire(), Map.of());
-        assertEquals(BenchSocket.INPUT_RANGES_DBV.length,
+        assertEquals(StubServerSocket.INPUT_RANGES_DBV.length,
                 ((List<?>) ranges.get(NetFields.INPUT_DBV)).size());
-        assertEquals(BenchSocket.DEFAULT_INPUT_DBV, ranges.get(NetFields.ACTIVE_INPUT_DBV));
-        assertEquals(BenchSocket.DEFAULT_OUTPUT_DBV,
+        assertEquals(StubServerSocket.DEFAULT_INPUT_DBV, ranges.get(NetFields.ACTIVE_INPUT_DBV));
+        assertEquals(StubServerSocket.DEFAULT_OUTPUT_DBV,
                 ranges.get(NetFields.ACTIVE_OUTPUT_DBV));
 
-        Map<String, Object> page = bench.call(analyzer(),
+        Map<String, Object> page = server.call(analyzer(),
                 MessageType.QA40X_CALIBRATION.getWire(), Map.of());
         List<?> adc = (List<?>) page.get(NetFields.ADC);
-        assertEquals(BenchSocket.INPUT_RANGES_DBV.length, adc.size());
+        assertEquals(StubServerSocket.INPUT_RANGES_DBV.length, adc.size());
         Map<?, ?> row = (Map<?, ?>) adc.get(0);
-        assertEquals(BenchSocket.INPUT_RANGES_DBV[0], row.get(NetFields.DBV));
-        assertEquals(BenchSocket.CAL_LEFT, row.get(NetFields.LEFT));
-        assertEquals(BenchSocket.CAL_RIGHT, row.get(NetFields.RIGHT),
+        assertEquals(StubServerSocket.INPUT_RANGES_DBV[0], row.get(NetFields.DBV));
+        assertEquals(StubServerSocket.CAL_LEFT, row.get(NetFields.LEFT));
+        assertEquals(StubServerSocket.CAL_RIGHT, row.get(NetFields.RIGHT),
                 "left and right are not interchangeable: a card built from swapped "
                         + "factors mis-scales one channel and nothing says so");
     }
 
     @Test
     void theFrontPanelPortReadsBackAsABooleanAndNotAsText() {
-        Map<String, Object> settings = bench.call(analyzer(),
+        Map<String, Object> settings = server.call(analyzer(),
                 MessageType.QA40X_SETTINGS.getWire(), Map.of());
 
         assertEquals(Boolean.FALSE, settings.get(NetFields.I2S_ENABLED),
@@ -173,7 +173,7 @@ class NetBenchUiLoopbackTest {
         // Spec 4.6: only the reads are read-only.  Nothing here holds the
         // analyzer, so the bench refuses - and the panel must be told nothing
         // rather than told something.
-        assertNull(bench.call(analyzer(), MessageType.QA40X_SETTINGS.getWire(),
+        assertNull(server.call(analyzer(), MessageType.QA40X_SETTINGS.getWire(),
                 Map.of(NetFields.I2S_ENABLED, true)));
         assertFalse(socket.isI2sEnabled(), "and the port really did not move");
     }
@@ -192,18 +192,18 @@ class NetBenchUiLoopbackTest {
     @Test
     void theAnalyzerIsOfferedAsAnEntryAndSelectingItFillsTheDeviceLists() {
         BackendKey analyzer = analyzer();
-        assertTrue(bench.entries().stream().anyMatch(e -> analyzer.equals(e.key())),
+        assertTrue(server.entries().stream().anyMatch(e -> analyzer.equals(e.key())),
                 "a served backend must reach the combo - an entry dropped as "
                         + "non-operational is a bench the operator cannot pick at all");
 
-        assertTrue(bench.select(analyzer), "the bench refused backend.select QA40X");
+        assertTrue(server.select(analyzer), "the bench refused backend.select QA40X");
 
         AudioDeviceManager manager = AudioBackend.instance().manager(AudioBackendType.NET);
         assertEquals(1, manager.listInputDevices().size(),
                 "the devices of the selected backend arrive with the selection "
                         + "itself, in one round trip");
-        assertEquals(BenchSocket.DEVICE_NAME, manager.listInputDevices().get(0).name());
-        assertEquals(BenchSocket.DEVICE_NAME, manager.listOutputDevices().get(0).name());
+        assertEquals(StubServerSocket.DEVICE_NAME, manager.listInputDevices().get(0).name());
+        assertEquals(StubServerSocket.DEVICE_NAME, manager.listOutputDevices().get(0).name());
     }
 
     /**
@@ -221,19 +221,19 @@ class NetBenchUiLoopbackTest {
      */
     @Test
     void previewFillsTheDeviceListsAndSelectStaysTheIdempotentCommit() {
-        assertTrue(bench.preview(analyzer()), "the bench refused devices.list");
+        assertTrue(server.preview(analyzer()), "the bench refused devices.list");
         AudioDeviceManager manager = AudioBackend.instance().manager(AudioBackendType.NET);
-        assertEquals(BenchSocket.DEVICE_NAME, manager.listInputDevices().get(0).name(),
+        assertEquals(StubServerSocket.DEVICE_NAME, manager.listInputDevices().get(0).name(),
                 "the preview alone fills the lists the combos read");
         assertEquals(0, socket.selects(),
                 "and it commits NOTHING - a preview that sent backend.select would "
                         + "re-point the session while the dialog is still open, which is "
                         + "the teardown its whole staging exists to avoid");
 
-        assertTrue(bench.select(analyzer()),
+        assertTrue(server.select(analyzer()),
                 "the commit still runs after a preview - a preview must not fake it");
         assertEquals(1, socket.selects());
-        assertTrue(bench.select(analyzer()),
+        assertTrue(server.select(analyzer()),
                 "re-affirming the committed selection answers true");
         assertEquals(1, socket.selects(),
                 "and does it WITHOUT a second backend.select: re-pointing the manager "
@@ -249,9 +249,9 @@ class NetBenchUiLoopbackTest {
      */
     @Test
     void aLockedWriteReallyMovesTheFrontPanelPort() {
-        assertTrue(bench.select(analyzer()));
+        assertTrue(server.select(analyzer()));
 
-        Map<String, Object> answer = bench.callLocked(analyzer(),
+        Map<String, Object> answer = server.callLocked(analyzer(),
                 MessageType.QA40X_SETTINGS.getWire(), Map.of(NetFields.I2S_ENABLED, true));
 
         assertNotNull(answer, "the bench answered the write it was locked for");
@@ -264,9 +264,9 @@ class NetBenchUiLoopbackTest {
      *  range has to reach the remote attenuator, or the range table is decoration. */
     @Test
     void aLockedRangeWriteReallyMovesTheAttenuator() {
-        assertTrue(bench.select(analyzer()));
+        assertTrue(server.select(analyzer()));
 
-        assertNotNull(bench.callLocked(analyzer(),
+        assertNotNull(server.callLocked(analyzer(),
                 MessageType.QA40X_SET_INPUT_RANGE.getWire(),
                 Map.of(NetFields.DBV, OTHER_INPUT_DBV)));
 
@@ -277,14 +277,14 @@ class NetBenchUiLoopbackTest {
      *  leave the bench unusable to every other client (and to its own capture). */
     @Test
     void theDeviceIsGivenBackAfterTheWrite() {
-        assertTrue(bench.select(analyzer()));
-        bench.callLocked(analyzer(), MessageType.QA40X_SETTINGS.getWire(),
+        assertTrue(server.select(analyzer()));
+        server.callLocked(analyzer(), MessageType.QA40X_SETTINGS.getWire(),
                 Map.of(NetFields.I2S_ENABLED, true));
 
-        Map<String, Object> ranges = bench.call(analyzer(),
+        Map<String, Object> ranges = server.call(analyzer(),
                 MessageType.QA40X_RANGES.getWire(), Map.of());
         assertNotNull(ranges);
-        assertNull(bench.call(analyzer(), MessageType.QA40X_SETTINGS.getWire(),
+        assertNull(server.call(analyzer(), MessageType.QA40X_SETTINGS.getWire(),
                 Map.of(NetFields.I2S_ENABLED, false)),
                 "an unlocked write is refused again - so the lock the previous "
                         + "write took was really released");
@@ -309,15 +309,15 @@ class NetBenchUiLoopbackTest {
      */
     @Test
     void anOperatorsDisconnectGivesTheLaneAndTheLockBackBeforeTheFarewell() {
-        assertTrue(bench.select(analyzer()));
+        assertTrue(server.select(analyzer()));
         NetDeviceManager manager =
                 (NetDeviceManager) AudioBackend.instance().manager(AudioBackendType.NET);
         DeviceRef dac = manager.listOutputDevices().get(0);
-        assertEquals(GEN_RATE_HZ, manager.openGenerator(dac, GEN_RATE_HZ, GEN_BITS, 0.0,
+        assertEquals(GEN_RATE_HZ, manager.openGenerator(dac, GEN_RATE_HZ, GEN_BITS, 0.0, 0.0,
                 OutputChannels.BOTH), "the bench granted its own rate for the lane");
         assertEquals(1, socket.openGenerators(), "the lane really is open on the bench");
 
-        bench.disconnect();
+        server.disconnect();
 
         assertEquals(0, socket.openGenerators(),
                 "the lane was closed on the wire - a generator left behind is a DAC "
@@ -349,20 +349,24 @@ class NetBenchUiLoopbackTest {
      */
     @Test
     void aCalibrationIsLockedOnTheDeviceItNamesAndNotOnAnyOtherOne() {
-        assertTrue(bench.select(analyzer()));
+        assertTrue(server.select(analyzer()));
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put(NetFields.BACKEND, AudioBackendType.QA40X.name());
         fields.put(NetFields.INDEX, 0);
         fields.put(NetFields.INPUT, false);          // the OUTPUT lane
-        fields.put(NetFields.NAME, BenchSocket.DEVICE_NAME);
-        fields.put(NetFields.FS_RMS_LEFT, FS_RMS_LEFT);
-        fields.put(NetFields.FS_RMS_RIGHT, FS_RMS_RIGHT);
+        fields.put(NetFields.NAME, StubServerSocket.DEVICE_NAME);
+        fields.put(NetFields.CHANNEL, NetFields.LEFT);
+        fields.put(NetFields.FS_RMS, FS_RMS_LEFT);
 
-        assertNotNull(bench.callLocked(analyzer(),
+        assertNotNull(server.callLocked(analyzer(),
                 MessageType.DEVICE_SET_CALIBRATION.getWire(), fields),
                 "the write names the output device, so the output device is what has "
                         + "to be held - locking the first free INPUT instead is the "
                         + "NOT_LOCKED the operator never sees");
+        fields.put(NetFields.CHANNEL, NetFields.RIGHT);
+        fields.put(NetFields.FS_RMS, FS_RMS_RIGHT);
+        assertNotNull(server.callLocked(analyzer(),
+                MessageType.DEVICE_SET_CALIBRATION.getWire(), fields));
 
         AudioDeviceManager manager = AudioBackend.instance().manager(AudioBackendType.NET);
         DeviceRef stored = manager.listOutputDevices().get(0);
@@ -376,8 +380,8 @@ class NetBenchUiLoopbackTest {
     }
 
     @Test
-    void anotherBenchsSelectionIsNotAnsweredByTheOneOnTheWire() {
-        assertNull(bench.call(BackendKey.of(FOREIGN_ID, AudioBackendType.QA40X),
+    void anotherServersSelectionIsNotAnsweredByTheOneOnTheWire() {
+        assertNull(server.call(BackendKey.of(FOREIGN_ID, AudioBackendType.QA40X),
                 MessageType.QA40X_INFO.getWire(), Map.of()),
                 "a panel left open across a switch of bench must not have its reads "
                         + "answered by whichever server happens to be connected now");
@@ -390,7 +394,7 @@ class NetBenchUiLoopbackTest {
     /** The selection that names the analyzer on the CONNECTED server - what the
      *  Preferences dialog hands a settings panel. */
     private BackendKey analyzer() {
-        return BackendKey.of(bench.getConnectedServer().serverId(), AudioBackendType.QA40X);
+        return BackendKey.of(server.getConnectedServer().serverId(), AudioBackendType.QA40X);
     }
 
     /** A port nobody is listening on, so two runs - or a developer's own server -

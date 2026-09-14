@@ -39,13 +39,20 @@ import org.edgo.audio.measure.enums.OutputChannels;
  *                       {@code LINEAR_SWEEP} with {@code sweep} filled
  * @param frequencyHz    tone 1's emit frequency, already snapped/aligned by
  *                       the caller's boundary; ignored by the sweep forms
- * @param amplitudeVrms  the commanded amplitude
+ * @param amplitudeVrmsLeft  the LEFT lane's commanded amplitude
+ * @param amplitudeVrmsRight the RIGHT lane's commanded amplitude; a sweep
+ *                       engine commands both lanes alike
  * @param sampleRate     the output rate every sample count is computed against
  * @param bitDepth       the output word length
- * @param ditherBits     TPDF dither depth, 0 = off
- * @param dacFsVoltage   the DAC full-scale the amplitude is scaled against
- * @param rightLaneScale fsLeft/fsRight of a linked stereo card; 1.0 when
- *                       symmetric
+ * @param ditherBitsLeft  the LEFT lane's TPDF dither depth, 0 = off
+ * @param ditherBitsRight the RIGHT lane's TPDF dither depth - its own, since
+ *                       a dither entered as a level resolves against each
+ *                       lane's full scale
+ * @param dacFsVoltageAmplLeft  the LOCAL left DAC full scale (peak) the left
+ *                       lane's amplitude is scaled against; a bench converts
+ *                       against its own card
+ * @param dacFsVoltageAmplRight the LOCAL right DAC full scale (peak), the
+ *                       right lane's own
  * @param channels       which DAC lane(s) emit; fixed at open on a bench
  * @param requireGrantedRate whether a bench granting ANOTHER rate than
  *                       {@code sampleRate} REFUSES the start instead of being
@@ -53,27 +60,22 @@ import org.edgo.audio.measure.enums.OutputChannels;
  *                       number is recomputed against the grant); a sweep
  *                       consumer refuses - its whole premise is sample counts
  *                       on the asked clock
- * @param pushCalibration whether {@code dacFsVoltage} and
- *                       {@code rightLaneScale} are also COMMANDED to a bench.
- *                       The pane's tone pushes them - the operator calibrates
- *                       the DAC from this GUI even when the DDS is remote; a
- *                       sweep engine leaves the bench's own device card in
- *                       force (they always scale the LOCAL build either way)
  * @param sweep          the sweep description, {@code null} for every
  *                       non-sweep form
  */
 public record GeneratorRun(
         GenSignalForm form,
         double frequencyHz,
-        double amplitudeVrms,
+        double amplitudeVrmsLeft,
+        double amplitudeVrmsRight,
         int sampleRate,
         int bitDepth,
-        double ditherBits,
-        double dacFsVoltage,
-        double rightLaneScale,
+        double ditherBitsLeft,
+        double ditherBitsRight,
+        double dacFsVoltageAmplLeft,
+        double dacFsVoltageAmplRight,
         OutputChannels channels,
         boolean requireGrantedRate,
-        boolean pushCalibration,
         SweepSpec sweep) {
 
     /**
@@ -100,10 +102,11 @@ public record GeneratorRun(
     /** The same run on other output lane(s) - what a lane-gate change needs,
      *  since a bench fixes the gate at {@code gen.open} and is therefore
      *  restarted with the changed run. */
-    public GeneratorRun withChannels(OutputChannels newChannels) {
-        return new GeneratorRun(form, frequencyHz, amplitudeVrms, sampleRate,
-                bitDepth, ditherBits, dacFsVoltage, rightLaneScale, newChannels,
-                requireGrantedRate, pushCalibration, sweep);
+    public GeneratorRun withChannels(OutputChannels channels) {
+        return new GeneratorRun(form, frequencyHz, amplitudeVrmsLeft, amplitudeVrmsRight,
+                sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight,
+                dacFsVoltageAmplLeft, dacFsVoltageAmplRight,
+                channels, requireGrantedRate, sweep);
     }
 
     /** The same run with the sweep's start frequency edited - how a LIVE band
@@ -112,9 +115,11 @@ public record GeneratorRun(
      *  session began with.  No-op without a sweep. */
     public GeneratorRun withSweepStart(double hz) {
         if (sweep == null) return this;
-        return new GeneratorRun(form, frequencyHz, amplitudeVrms, sampleRate,
-                bitDepth, ditherBits, dacFsVoltage, rightLaneScale, channels,
-                requireGrantedRate, pushCalibration,
+        return new GeneratorRun(form, frequencyHz, amplitudeVrmsLeft, amplitudeVrmsRight,
+                sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight,
+                dacFsVoltageAmplLeft, dacFsVoltageAmplRight,
+                channels,
+                requireGrantedRate,
                 new SweepSpec(hz, sweep.stopHz(), sweep.durationSamples(),
                         sweep.leadInSamples(), sweep.fadeInSamples(),
                         sweep.fadeOutSamples(), sweep.loop()));
@@ -123,9 +128,11 @@ public record GeneratorRun(
     /** The stop-frequency twin of {@link #withSweepStart}. */
     public GeneratorRun withSweepStop(double hz) {
         if (sweep == null) return this;
-        return new GeneratorRun(form, frequencyHz, amplitudeVrms, sampleRate,
-                bitDepth, ditherBits, dacFsVoltage, rightLaneScale, channels,
-                requireGrantedRate, pushCalibration,
+        return new GeneratorRun(form, frequencyHz, amplitudeVrmsLeft, amplitudeVrmsRight,
+                sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight,
+                dacFsVoltageAmplLeft, dacFsVoltageAmplRight,
+                channels,
+                requireGrantedRate,
                 new SweepSpec(sweep.startHz(), hz, sweep.durationSamples(),
                         sweep.leadInSamples(), sweep.fadeInSamples(),
                         sweep.fadeOutSamples(), sweep.loop()));

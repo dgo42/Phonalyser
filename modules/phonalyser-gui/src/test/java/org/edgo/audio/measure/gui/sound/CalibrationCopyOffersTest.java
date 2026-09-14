@@ -40,46 +40,46 @@ class CalibrationCopyOffersTest {
     private static final String DEVICE = "QA403";
     private static final String OTHER_DEVICE = "Cosmos ADC";
 
-    private final BackendKey bench = BackendKey.of("bench-1", AudioBackendType.QA40X);
-    private final BackendKey otherBench = BackendKey.of("bench-2", AudioBackendType.QA40X);
+    private final BackendKey server = BackendKey.of("bench-1", AudioBackendType.QA40X);
+    private final BackendKey otherServer = BackendKey.of("bench-2", AudioBackendType.QA40X);
     private final CalibrationCopyOffers offers = new CalibrationCopyOffers();
 
     @Test
     void anUnsettledQuestionMayBeAskedAgain() {
-        assertTrue(offers.mayAsk(bench, true, DEVICE));
+        assertTrue(offers.mayAsk(server, true, DEVICE));
 
         // Asked, attempted - and nothing reached the bench, so it was never
         // answered.
-        assertTrue(offers.mayAsk(bench, true, DEVICE),
+        assertTrue(offers.mayAsk(server, true, DEVICE),
                 "a peek is not an answer: the next device change may offer again");
     }
 
     @Test
     void aSettledQuestionIsNotPutTwice() {
-        offers.settle(bench, true, DEVICE);
+        offers.settle(server, true, DEVICE);
 
-        assertFalse(offers.mayAsk(bench, true, DEVICE),
+        assertFalse(offers.mayAsk(server, true, DEVICE),
                 "asked and answered - an operator who said no must not be asked "
                         + "again the moment they switch device and back");
     }
 
     @Test
     void settlingIsIdempotent() {
-        offers.settle(bench, true, DEVICE);
-        offers.settle(bench, true, DEVICE);
+        offers.settle(server, true, DEVICE);
+        offers.settle(server, true, DEVICE);
 
-        assertFalse(offers.mayAsk(bench, true, DEVICE));
+        assertFalse(offers.mayAsk(server, true, DEVICE));
     }
 
     /** Keyed per bench, DIRECTION and device: a duplex device listed under one
      *  name is two uncalibrated endpoints, and settling one must not spend the
      *  offer the other is owed. */
     @Test
-    void eachBenchDirectionAndDeviceIsItsOwnQuestion() {
-        offers.settle(bench, true, DEVICE);
+    void eachServerDirectionAndDeviceIsItsOwnQuestion() {
+        offers.settle(server, true, DEVICE);
 
-        assertTrue(offers.mayAsk(bench, false, DEVICE), "the output half is its own");
-        assertTrue(offers.mayAsk(bench, true, OTHER_DEVICE), "another device is its own");
-        assertTrue(offers.mayAsk(otherBench, true, DEVICE), "another bench is its own");
+        assertTrue(offers.mayAsk(server, false, DEVICE), "the output half is its own");
+        assertTrue(offers.mayAsk(server, true, OTHER_DEVICE), "another device is its own");
+        assertTrue(offers.mayAsk(otherServer, true, DEVICE), "another bench is its own");
     }
 }

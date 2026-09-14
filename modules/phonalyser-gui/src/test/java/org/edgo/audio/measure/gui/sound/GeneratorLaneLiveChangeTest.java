@@ -66,7 +66,6 @@ class GeneratorLaneLiveChangeTest {
     /** DAC full scale of the run: 1.0 V, so an emitted peak IS the amplitude scale. */
     private static final double DAC_FS_VOLTS = 1.0;
     private static final double DITHER_BITS = 0.0;
-    private static final double RIGHT_LANE_SCALE = 1.0;
     /** 4800 samples at 48 kHz = 100 whole cycles of a 1 kHz tone (and 200 of its
      *  second harmonic), so both magnitudes are read on a coherent window. */
     private static final int COHERENT_SAMPLES = 4_800;
@@ -268,16 +267,16 @@ class GeneratorLaneLiveChangeTest {
 
     /** The run the pane's Play would derive for the compensated dual tone. */
     private GeneratorRun dualCompRun() {
-        return new GeneratorRun(GenSignalForm.DUAL_TONE_COMP, TONE_HZ, AMPLITUDE_VRMS, RATE_HZ,
-                BIT_DEPTH, DITHER_BITS, DAC_FS_VOLTS, RIGHT_LANE_SCALE,
-                OutputChannels.BOTH, false, true, null);
+        return new GeneratorRun(GenSignalForm.DUAL_TONE_COMP, TONE_HZ, AMPLITUDE_VRMS, AMPLITUDE_VRMS, RATE_HZ,
+                BIT_DEPTH, DITHER_BITS, DITHER_BITS, DAC_FS_VOLTS, DAC_FS_VOLTS,
+                OutputChannels.BOTH, false, null);
     }
 
     /** The run the pane's Play would derive: a plain sine at the test's tone. */
     private GeneratorRun sineRun() {
-        return new GeneratorRun(GenSignalForm.SINE, TONE_HZ, AMPLITUDE_VRMS, RATE_HZ,
-                BIT_DEPTH, DITHER_BITS, DAC_FS_VOLTS, RIGHT_LANE_SCALE,
-                OutputChannels.BOTH, false, true, null);
+        return new GeneratorRun(GenSignalForm.SINE, TONE_HZ, AMPLITUDE_VRMS, AMPLITUDE_VRMS, RATE_HZ,
+                BIT_DEPTH, DITHER_BITS, DITHER_BITS, DAC_FS_VOLTS, DAC_FS_VOLTS,
+                OutputChannels.BOTH, false, null);
     }
 
     /** The DDS the stub's output line is playing right now. */
@@ -304,9 +303,11 @@ class GeneratorLaneLiveChangeTest {
 
     /** {@code n} samples straight off the DDS - what the render thread would emit. */
     private double[] emit(SignalGenerator gen, int n) {
+        double[] frame = new double[2];
         double[] samples = new double[n];
         for (int i = 0; i < n; i++) {
-            samples[i] = gen.nextSample();
+            gen.nextFrame(frame);
+            samples[i] = frame[0];
         }
         return samples;
     }

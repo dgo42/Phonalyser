@@ -61,11 +61,15 @@ public interface GeneratorControls {
      *  requested V RMS. */
     void setDualToneAmplitudes(double amp1Pct, double amp2Pct);
 
-    void setAmplitudeVrms(double vrms);
+    /** The two lanes' amplitudes, volts RMS each - always the pair, so the two
+     *  lanes never sit at a transient in-between state; a single-amplitude
+     *  driver passes its one value twice. */
+    void setAmplitudesVrms(double leftVrms, double rightVrms);
 
-    /** The DAC's full-scale peak voltage, against which the amplitude scale is
-     *  computed - the LEFT lane's, which is the one a mono amplitude means. */
-    void setDacFsVoltageAmpl(double volts);
+    /** The two lanes' DAC full-scale peak voltages, against which each lane's
+     *  own level is computed.  A far-away generator converts against its own
+     *  card and ignores them. */
+    void setDacFsVoltageAmpls(double leftAmpl, double rightAmpl);
 
     void setRectangleDuty(double dutyFrac);
 

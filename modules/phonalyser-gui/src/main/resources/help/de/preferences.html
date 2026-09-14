@@ -115,7 +115,7 @@
             Analysator überhaupt als Backend auf - und fragt einen
             <a href="#prefs-audio-servers">verbundenen Server</a> erneut nach
             seinen Backends.  Eine Suche stört nie eine Messung: Bei einem
-            entfernten Messplatz wird die Geräteliste nur gelesen, nie neu
+            entfernten Server wird die Geräteliste nur gelesen, nie neu
             ausgewählt.  Derselbe Fehlercode löst zusätzlich von sich aus eine
             einmalige erneute Suche samt Wiederholung aus, und ein gespeichertes,
             in der Liste fehlendes Gerät wird nach einer frischen Aufzählung noch
@@ -124,14 +124,14 @@
         <td>Öffnet die <a href="#prefs-audio-servers">Server-Liste</a> - die
             Phonalyser-Server im Netz und die von Hand über ihre Adresse
             hinzugefügten.  Sie ist da, sobald die Installation das Netzmodul
-            mitbringt, und hängt nicht vom gewählten Backend ab: Ein Messplatz
+            mitbringt, und hängt nicht vom gewählten Backend ab: Ein Server
             muss gewählt sein, bevor eines seiner Backends gewählt werden
             kann.</td></tr>
     <tr><td><b>&lt;Backend&gt;-Einstellungen</b></td>
         <td>Die eigenen Einstellungen des gewählten Backends, und die
             Schaltfläche <b>trägt dessen Namen</b> -
             <b>QA40x-Einstellungen</b> für einen QA402 / QA403, gleich ob er an
-            dieser Maschine hängt oder an einem Messplatz im Netz.  Bei einem
+            dieser Maschine hängt oder an einem Server im Netz.  Bei einem
             Backend ohne eigene Einstellungen ist sie ausgeblendet, was derzeit
             auf jedes andere zutrifft.</td></tr>
   </table>
@@ -437,7 +437,7 @@ bindings:                          # Gerät -> Karte, wie im Dialog gewählt; fe
 
   <h4 id="prefs-audio-ranges-qa40x">Ein QA40x-Eingangsbereich ist nicht die dBV-Zahl, nach der er heißt</h4>
   <p>Bei einem QA402 / QA403 - an dieser Maschine oder an einem
-     <a href="#prefs-audio-servers">Messplatz im Netz</a> - trägt jede
+     <a href="#prefs-audio-servers">Server im Netz</a> - trägt jede
      <b>Eingangs</b>-Zeile hinter dem einfachen Namen ein zweites Label:</p>
   <p><code>0 "dBV" real 0 dBFS or -9 dBV</code></p>
   <p>Es steht dort, weil die Bereichsnamen des Analysators keine
@@ -571,11 +571,11 @@ bindings:                          # Gerät -> Karte, wie im Dialog gewählt; fe
   <p>Die Hardware muss nicht an der Maschine hängen, an der Sie sitzen.  Eine
      zweite Phonalyser-Installation, die als <b>Server</b> läuft, macht die
      Maschine, an der die Wandler <em>tatsächlich</em> hängen, zum
-     <b>Messplatz</b>, und diese Anwendung misst dann über ihn: Sie wählen in der
-     Liste oben eines der Backends des Messplatzes, und alles Weitere - Geräte,
+     <b>Server</b>, und diese Anwendung misst dann über ihn: Sie wählen in der
+     Liste oben eines der Backends des Servers, und alles Weitere - Geräte,
      Formate, Karten, Kalibrierung, Generator, Sweeps - arbeitet, als steckte die
      Hardware hier.  Was dabei über die Leitung geht, steht unter
-     <a href="theory/audio-backend.html#network">Funktionsprinzip ▸ Ein Messplatz
+     <a href="theory/audio-backend.html#network">Funktionsprinzip ▸ Ein Server
      im Netz</a>.</p>
   <div class="note">Es gibt bewusst <b>keine Authentifizierung</b>.  Ein Server
      ist ein Messgerät für ein Netz, dem Sie vertrauen - den Raum, in dem Ihre
@@ -603,7 +603,7 @@ bindings:                          # Gerät -> Karte, wie im Dialog gewählt; fe
         <td><b>aktiv</b> - kündigt sich gerade an; <b>offline</b> - ein
             gemerkter Server, der nicht antwortet; <b>verbunden</b> - der, über
             den diese Anwendung misst.  Die Zeilen <b>zeichnen sich selbst neu</b>,
-            solange das Fenster offen ist: Ein abgeschalteter Messplatz wechselt
+            solange das Fenster offen ist: Ein abgeschalteter Server wechselt
             von aktiv auf offline von allein statt erst beim nächsten Klick, und
             ein eingeschalteter erscheint, ohne dass das Fenster neu geöffnet
             werden muss.</td></tr>
@@ -628,11 +628,11 @@ bindings:                          # Gerät -> Karte, wie im Dialog gewählt; fe
             gewählt ist und auch ganz ohne Auswahl; verfügbar, sobald ein Server
             verbunden ist, und ausgegraut, wenn keiner es ist.  Nicht die
             Nichtigkeit, nach der es aussieht:
-            Die Generator-Spur des Messplatzes und jedes Gerät, das diese
+            Die Generator-Spur des Servers und jedes Gerät, das diese
             Installation dort hält, werden zuerst <em>über die Leitung</em>
             zurückgegeben, sodass die Hardware freigegeben und nicht dem
             Aufräumen des Servers überlassen wird.  Jedes Modul, das über diesen
-            Messplatz misst, hält an - genau wie beim Abriss der Verbindung.</td></tr>
+            Server misst, hält an - genau wie beim Abriss der Verbindung.</td></tr>
     <tr><td><b>Entfernen</b></td>
         <td>Vergisst den gewählten Server - und nur einen <b>von Hand
             hinzugefügten</b>.  Ein gefundener Server ist nicht entfernbar: Seine
@@ -647,7 +647,7 @@ bindings:                          # Gerät -> Karte, wie im Dialog gewählt; fe
   <table class="controls">
     <tr><th>Zeile</th><th>Hinweise</th></tr>
     <tr><td><b>Proxy-Server:</b></td>
-        <td>Ein HTTP-Proxy für einen Messplatz, den Ihr Netz nicht direkt
+        <td>Ein HTTP-Proxy für einen Server, den Ihr Netz nicht direkt
             erreicht.  <b>Beide Felder leer lassen heißt: kein Proxy</b> - das
             ist der Normalfall, und ein leerer Port bedeutet dasselbe.  Es gibt
             keine Übernehmen-Schaltfläche, und es fehlt auch keine: Die beiden
@@ -656,7 +656,7 @@ bindings:                          # Gerät -> Karte, wie im Dialog gewählt; fe
             Lebendprüfung hinter den Zeilen.</td></tr>
     <tr><td><b>Server manuell hinzufügen:</b> (mit der Schaltfläche
             <b>Hinzufügen</b> am Zeilenende)</td>
-        <td>Der Eintrag von Hand für einen Messplatz, den die Suche nicht sehen
+        <td>Der Eintrag von Hand für einen Server, den die Suche nicht sehen
             kann.  <b>Port</b> ist mit <b>8377</b> vorbelegt, dem Standard des
             Servers - ein Port trägt alles, es gibt also immer nur eine Zahl zu
             tippen.  <b>Hinzufügen</b> glaubt Ihnen nicht einfach: Es fragt die
@@ -672,53 +672,53 @@ bindings:                          # Gerät -> Karte, wie im Dialog gewählt; fe
      <b>Änderungen</b> - sie folgen dem Einstellungsdialog hinter diesem Fenster:
      <b>OK</b> schreibt sie, <b>Abbrechen</b> verwirft sie.  <b>Verbinden und
      Trennen sind Handlungen</b> und wirken sofort; ein Abbrechen danach gibt
-     keinen Messplatz zurück und nimmt keinen weg.  Der Messplatz, mit dem Sie
+     keinen Server zurück und nimmt keinen weg.  Der Server, mit dem Sie
      verbunden sind, wird in jedem Fall gemerkt, sodass ein Abbrechen nie den
      einzigen Eintrag eines Servers verlieren kann, den die Suche nicht
      wiederfindet.</div>
 
-  <h4 id="prefs-audio-server-backends">Ein Backend des Messplatzes wählen</h4>
+  <h4 id="prefs-audio-server-backends">Ein Backend des Servers wählen</h4>
   <p>Die Backends eines verbundenen Servers reihen sich neben den lokalen in die
      Liste <b>Backend</b> ein, geschrieben als
      <code>&lt;Server&gt; -> &lt;Backend&gt;</code> - etwa
-     <code>messplatz-pc -> QA40x</code>.  Angeboten wird nur, was der Messplatz
+     <code>messplatz-pc -> QA40x</code>.  Angeboten wird nur, was der Server
      wirklich betreiben kann: Was in seinem Build steckt, auf jener Maschine aber
      nicht laufen kann, wird weggelassen statt ausgegraut gezeigt.</p>
   <ul>
     <li><b>Gerät, Abtastrate und Bittiefe werden pro Server und pro Backend
         gemerkt</b>, genau wie bei einem lokalen Backend, sodass der Wechsel
-        zwischen zwei Messplätzen - oder zwischen einem Messplatz und der Karte
+        zwischen zwei Servern - oder zwischen einem Server und der Karte
         auf Ihrem Tisch - nicht das eingestellte Format kostet.  Eine ältere
         <code>preferences.yaml</code> wird unverändert gelesen, und Einträge
         einer neueren Version oder eines Servers, den diese Installation nie
         gesehen hat, überstehen ein Speichern unangetastet.</li>
     <li><b>Ein Gerät, das jemand anders benutzt, sagt es.</b>  Jedes Gerät des
-        Messplatzes kann zu einer Zeit exklusiv von einem Client gehalten werden;
+        Servers kann zu einer Zeit exklusiv von einem Client gehalten werden;
         ein belegtes liest sich als
         <code>&lt;Gerät&gt; - belegt von &lt;Client&gt;</code> und nennt die
         Maschine, die es hält.  Ein Gerät, das <em>diese</em> Installation hält,
         liest sich normal - Ihr eigenes laufendes Oszilloskop ist keine
         Neuigkeit.</li>
     <li><b>Das Durchsehen der Liste ist nur eine Vorschau.</b>  Die Auswahl eines
-        Server-Backends füllt die Gerätelisten von jenem Messplatz, ohne etwas zu
+        Server-Backends füllt die Gerätelisten von jenem Server, ohne etwas zu
         übernehmen; Schauen ist also frei.  <b>Abbrechen</b> stellt die vorherige
         Zuordnung unangetastet wieder her, <b>OK</b> übernimmt.  Ist der
-        Messplatz inzwischen verschwunden, wird es gesagt - <em>Das Backend
+        Server inzwischen verschwunden, wird es gesagt - <em>Das Backend
         dieses Servers ist nicht mehr erreichbar.  Seine Einträge wurden aus der
         Liste entfernt.</em></li>
   </ul>
 
-  <h4 id="prefs-audio-server-cards">Karten und Kalibrierung auf dem Messplatz</h4>
-  <p>Kalibrierung gehört zur Hardware; mit einem Backend des Messplatzes arbeitet
+  <h4 id="prefs-audio-server-cards">Karten und Kalibrierung auf dem Server</h4>
+  <p>Kalibrierung gehört zur Hardware; mit einem Backend des Servers arbeitet
      der Abschnitt <a href="#prefs-audio-card">Karte</a> deshalb gegen den
-     Speicher <em>des Messplatzes</em> statt gegen den dieser Maschine:</p>
+     Speicher <em>des Servers</em> statt gegen den dieser Maschine:</p>
   <ul>
-    <li>das Auswahlfeld <b>Karte</b> führt die Karten des Messplatzes;</li>
+    <li>das Auswahlfeld <b>Karte</b> führt die Karten des Servers;</li>
     <li>eine Fadenkreuz-<a href="#prefs-audio-calibrate">Kalibrierung</a>
         schreibt die gemessene Vollaussteuerung <b>in den Speicher des
-        Messplatzes</b>, wohin sie gehört und wo jede weitere Bedienerin dieses
-        Messplatzes etwas davon hat;</li>
-    <li>und wenn Sie ein Gerät des Messplatzes wählen, das <em>keine</em>
+        Servers</b>, wohin sie gehört und wo jede weitere Bedienerin dieses
+        Servers etwas davon hat;</li>
+    <li>und wenn Sie ein Gerät des Servers wählen, das <em>keine</em>
         Kalibrierung hat, während diese Maschine eine kalibrierte Karte dafür
         besitzt, werden Sie gefragt, ob sie hinüberkopiert werden soll -
         <em>Kalibrierung auf den Server kopieren?</em> - <b>einmal pro Sitzung
@@ -730,16 +730,16 @@ bindings:                          # Gerät -> Karte, wie im Dialog gewählt; fe
   <ul>
     <li><b>Die eigenen Einstellungen eines Backends.</b>
         <b>QA40x-Einstellungen</b> und die <b>Bereichs</b>-Auswahl für Ein- und
-        Ausgang steuern einen Analysator auf dem Messplatz genauso wie einen
+        Ausgang steuern einen Analysator auf dem Server genauso wie einen
         lokalen, Live-Telemetrie eingeschlossen - die Anzeige liest den
         Analysator, auf den die Auswahl zeigt.</li>
-    <li><b>Der Generator läuft auf dem Messplatz.</b>  Er wird
-        <em>beauftragt</em>, nicht gestreamt: Diese Anwendung sagt dem Messplatz,
+    <li><b>Der Generator läuft auf dem Server.</b>  Er wird
+        <em>beauftragt</em>, nicht gestreamt: Diese Anwendung sagt dem Server,
         was er ausgeben soll, und dessen eigener DAC gibt es aus.  Das hält einen
         Frequenzgang-Sweep ehrlich - er wird gegen genau das entfaltet, was der
-        Messplatz gespielt hat, wobei das erste Sample des Sweeps im
+        Server gespielt hat, wobei das erste Sample des Sweeps im
         Aufnahmestrom selbst markiert ist.</li>
-    <li><b>Eine Rate, die der Messplatz nicht geben kann.</b>  Gewährt das Gerät
+    <li><b>Eine Rate, die der Server nicht geben kann.</b>  Gewährt das Gerät
         eine andere Abtastrate als die angeforderte, so <b>läuft eine
         Live-Aufnahme mit der gewährten Rate</b> und wird auch so dargestellt -
         die Frequenzachse folgt der Wirklichkeit -, während ein <b>Sweep
@@ -748,15 +748,15 @@ bindings:                          # Gerät -> Karte, wie im Dialog gewählt; fe
     <li><b>Auch die Dateiwiedergabe geht hinüber.</b>  Die gewählte WAV- /
         AIFF- / FLAC-Datei wird einmal hochgeladen - bis <b>50 MB</b>, die
         Grenze, die der Server selbst durchsetzt und die hier geprüft wird, bevor
-        ein Byte losgeht - und der Messplatz dekodiert und spielt sie über seinen
+        ein Byte losgeht - und der Server dekodiert und spielt sie über seinen
         eigenen DAC, mit der Rate und Bittiefe der Datei.  <b>In Schleife</b>
         wird am anderen Ende beachtet, <b>Stopp</b> reicht hinüber, und die
-        Wiedergabeanzeige erlischt, wenn der <em>Messplatz</em> das Ende der
+        Wiedergabeanzeige erlischt, wenn der <em>Server</em> das Ende der
         Datei meldet, nicht wenn Sie auf Stopp drücken.  Der Upload liegt im
         Arbeitsspeicher des Servers und wird verworfen, sobald die Verbindung
-        endet, sodass sich auf dem Messplatz nichts ansammelt.</li>
+        endet, sodass sich auf dem Server nichts ansammelt.</li>
     <li><b>Eine Ablehnung liest sich wie eine lokale.</b>  Ein Gerät, das der
-        Messplatz nicht öffnet, kommt als dieselben
+        Server nicht öffnet, kommt als dieselben
         <a href="theory/audio-backend.html#errors">sechs Gründe</a> zurück, die
         ein lokaler Fehlschlag hat, in Ihrer Sprache.</li>
   </ul>
@@ -766,7 +766,7 @@ bindings:                          # Gerät -> Karte, wie im Dialog gewählt; fe
      übernommen hatten, wird auf der neuen Sitzung erneut übernommen - sodass es
      einfach funktioniert, wenn Sie das nächste Mal auf Aufnehmen oder Abspielen
      drücken.  Eine Messung wird dabei bewusst <em>nicht</em> neu gestartet: Ein
-     Messplatz, der von allein weitermisst, während niemand hinsieht, wäre
+     Server, der von allein weitermisst, während niemand hinsieht, wäre
      schlimmer als einer, der wartet.  Ein <b>Trennen</b>, das Sie gedrückt
      haben, bleibt getrennt - das ist eine Entscheidung, kein Fehler.  Endet eine
      Sitzung, während Sie über sie messen, sagt ein übersetzter Dialog es einmal
@@ -775,7 +775,7 @@ bindings:                          # Gerät -> Karte, wie im Dialog gewählt; fe
      oder er hat Audiodaten gesendet, die dieser Client nicht lesen kann.</div>
   <div class="note">Verliert der <em>Server</em> aufgenommene Samples, bevor sie
      das Netz erreichen, zeigt die FFT ihr Banner
-     <b>⚠ Messplatz verlor Audio - Mittelung fragwürdig</b>: Die Samples vor und
+     <b>⚠ Server verlor Audio - Mittelung fragwürdig</b>: Die Samples vor und
      nach der Lücke sind zeitlich nicht benachbart, sodass eine über die Naht
      hinweg gebildete Mittelung ein Grundrauschen und eine Phase meldet, die es
      nie gab.  Statistik zurücksetzen, um eine saubere zu erhalten.</div>

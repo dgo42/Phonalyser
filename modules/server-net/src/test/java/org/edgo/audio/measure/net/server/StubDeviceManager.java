@@ -26,11 +26,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
+import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.qa40x.Qa40xControl;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceInfo;
@@ -248,6 +253,53 @@ final class StubDeviceManager implements AudioDeviceManager, Qa40xControl {
         return listed(false, OUTPUT);
     }
 
+    /** The local manager's calibration store, against the card store a test
+     *  hooked in ({@link #cards}): the card that recognises the device is
+     *  written (created when none does) and the change announced on the bus,
+     *  exactly as a real local manager does.  A device-provided endpoint - a
+     *  QA40x reading its EEPROM - refuses.  No store hooked in: nothing to
+     *  write, and the bench refuses as a device-provided card would. */
+    @Override
+    public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
+        Preferences store = cards;
+        if (store == null) {
+            return false;
+        }
+        AudioDeviceProfile card = store.profileFor(device.name(), input);
+        DeviceEndpointConfig endpoint = input ? card.getInput() : card.getOutput();
+        if (endpoint.isCalibrationFromDevice()) {
+            return false;
+        }
+        endpoint.storeFullScale(ch, fsRms);
+        store.putAudioDeviceProfile(card);
+        MessageBus.instance().publish(
+                input ? Events.ADC_CALIBRATION_CHANGED : Events.DAC_CALIBRATION_CHANGED, device);
+        return true;
+    }
+
+    /** The full scales the hooked-in card store holds for the device, or null
+     *  without a store, a card, or a calibrated row. */
+    @Override
+    public DeviceCalibration calibration(DeviceRef device, boolean input) {
+        Preferences store = cards;
+        if (store == null) {
+            return null;
+        }
+        AudioDeviceProfile card = store.resolveDeviceProfile(device.name());
+        return card == null ? null : (input ? card.getInput() : card.getOutput()).calibration();
+    }
+
+    @Override
+    public boolean calibrationFromDevice(DeviceRef device, boolean input) {
+        Preferences store = cards;
+        if (store == null) {
+            return false;
+        }
+        AudioDeviceProfile card = store.resolveDeviceProfile(device.name());
+        return card != null
+                && (input ? card.getInput() : card.getOutput()).isCalibrationFromDevice();
+    }
+
     /** One direction's list, read off the SNAPSHOT rather than the bench - a
      *  device pulled out is still in it, and one plugged in is not, until
      *  something rebuilds it.  The index is the slot in this list, as the SPI
@@ -303,7 +355,7 @@ final class StubDeviceManager implements AudioDeviceManager, Qa40xControl {
 
     @Override
     public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
-            double ditherBits) {
+            double ditherBitsLeft, double ditherBitsRight) {
         requireOpenable(device);
         lastPlayback = new StubPlayback(sampleRate, bitDepth);
         return lastPlayback;
@@ -375,7 +427,7 @@ final class StubDeviceManager implements AudioDeviceManager, Qa40xControl {
             return;
         }
         (input ? card.getInput() : card.getOutput())
-                .setActiveRange(dbv + RANGE_LABEL_SUFFIX);
+                .setActiveRangeLeft(dbv + RANGE_LABEL_SUFFIX);
         store.saveDevices();
     }
 

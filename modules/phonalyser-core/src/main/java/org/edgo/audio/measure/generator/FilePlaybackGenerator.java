@@ -39,13 +39,13 @@ import org.edgo.audio.measure.wav.PcmFileLoader;
  * <p>Before this existed, "Play from..." opened a raw JavaSound output line of its
  * own, which meant it ignored the selected backend entirely - a QA40x user's file
  * came out of the computer's sound card.  Everything downstream (dither, the
- * per-lane full-scale ratio, the Left/Right output gate) is applied by the backend
- * exactly as it is for the tone; this class only supplies samples.
+ * Left/Right output gate) is applied by the backend exactly as it is for the
+ * tone; this class only supplies samples, at the per-lane gain the owner sets
+ * ({@link #setLaneGains}) - each lane's own calibration, nothing between lanes.
  *
- * <p>Samples are delivered MONO because that is the contract the playback path
- * pulls on: one value per frame, written to both lanes with their own scale
- * factors.  A multi-channel file is averaged down rather than having a channel
- * dropped.
+ * <p>The file is decoded to ONE sample per frame, because that is what the
+ * playback path scales per lane: a multi-channel file is averaged down rather
+ * than having a channel dropped.
  */
 @Log4j2
 public final class FilePlaybackGenerator extends SignalGenerator {
@@ -95,14 +95,22 @@ public final class FilePlaybackGenerator extends SignalGenerator {
      * @param file a WAV / AIFF / FLAC file that {@link PcmFileLoader} can decode
      */
     public FilePlaybackGenerator(File file, boolean loop) throws Exception {
-        // The inherited DDS state is unused - nextSample() is overridden - but the
+        // The inherited DDS state is unused - nextRaw() is overridden - but the
         // base still needs a legal form and a non-zero full scale to construct.
-        super(GenSignalForm.SINE, 1000.0, 48_000, 1.0, 1.0);
+        super(GenSignalForm.SINE, 1000.0, 48_000, 1.0, 1.0, 1.0, 1.0);
+        setLaneGains(1.0, 1.0);
         this.file = file;
         this.loop = loop;
         openStream();
         this.fileSampleRate = (int) Math.round(fmt.getSampleRate());
         this.fileBitDepth   = fmt.getSampleSizeInBits();
+    }
+
+    /** Each lane's gain on the file's samples - the owner's calibration of that
+     *  lane (the file convention's full scale over the lane's own DAC full
+     *  scale).  Live: the render loop reads the levels per frame. */
+    public void setLaneGains(double left, double right) {
+        setLevels(left, right);
     }
 
     private void openStream() throws Exception {
@@ -138,12 +146,13 @@ public final class FilePlaybackGenerator extends SignalGenerator {
     }
 
     /**
-     * The next mono sample in ±1.0, averaged across the file's channels.  Yields
-     * silence once the file has ended and looping is off - the playback loop is
-     * stopped by the caller watching {@link #isFinished()}.
+     * The next file sample in ±1.0, averaged across the file's channels - what
+     * the base scales per lane.  Yields silence once the file has ended and
+     * looping is off - the playback loop is stopped by the caller watching
+     * {@link #isFinished()}.
      */
     @Override
-    public double nextSample() {
+    protected double nextRaw() {
         int frameBytes = bytesPerSample * channels;
         if (bufPos + frameBytes > bufLen && !refill(frameBytes)) {
             return 0.0;
@@ -206,7 +215,7 @@ public final class FilePlaybackGenerator extends SignalGenerator {
      * Back to sample 0 for the next lap, WITHOUT re-decoding where that can be
      * avoided.
      *
-     * <p>This runs on the render pull thread, inside {@code nextSample()} - every
+     * <p>This runs on the render pull thread, inside {@code nextRaw()} - every
      * millisecond spent here is a millisecond the output line is not fed.  The
      * old path always called {@link #openStream()}, which for FLAC re-runs a
      * whole-file eager decode: on a 50 MB file that is seconds, and the playback

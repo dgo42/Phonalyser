@@ -29,9 +29,9 @@ import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
+import org.edgo.audio.measure.sound.AbstractLocalDeviceManager;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioCapture;
-import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.PortAudio;
@@ -49,7 +49,7 @@ import lombok.extern.log4j.Log4j2;
  * the global PortAudio index).
  */
 @Log4j2
-public class WdmksDeviceManager implements AudioDeviceManager {
+public class WdmksDeviceManager extends AbstractLocalDeviceManager {
 
     /** {@link DeviceRef} backed by a PortAudio WDM-KS device index. */
     public record WdmksDeviceRef(int index, String name, String description, String vendor,
@@ -175,8 +175,10 @@ public class WdmksDeviceManager implements AudioDeviceManager {
         return new WdmksRecorder((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth);
     }
 
-    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
-        return new WdmksGenerator((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth, ditherBits);
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight) {
+        return new WdmksGenerator((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth,
+                ditherBitsLeft, ditherBitsRight);
     }
 
     /** Every WDM-KS open and every WDM-KS capture fails through

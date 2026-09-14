@@ -173,14 +173,17 @@ public class NetFields {
      *  and {@link #FS_RMS_RIGHT} (spec 4.3, v1.1 - calibration lives where the
      *  device is connected, so every client arrives already calibrated). */
     public static final String CAL = "cal";
-    /** {@link #CAL} and {@code device.setCalibration}: the LEFT channel's
-     *  full-scale in volts RMS.  RMS on the wire in both directions - a card
-     *  stores RMS, and a generator's peak-amplitude form is {@code × √2} the
-     *  reader applies. */
+    /** {@link #CAL}: the LEFT channel's full-scale in volts RMS.  RMS on the
+     *  wire in both directions - a card stores RMS, and a generator's
+     *  peak-amplitude form is {@code × √2} the reader applies. */
     public static final String FS_RMS_LEFT = "fsRmsLeft";
-    /** {@link #CAL} and {@code device.setCalibration}: the RIGHT channel's
-     *  full-scale in volts RMS. */
+    /** {@link #CAL}: the RIGHT channel's full-scale in volts RMS. */
     public static final String FS_RMS_RIGHT = "fsRmsRight";
+    /** {@code device.setCalibration}: the full-scale in volts RMS of the ONE
+     *  channel the request's {@link #CHANNEL} names ({@link #LEFT} or
+     *  {@link #RIGHT}) - a calibration is written one channel at a time, so no
+     *  write carries the other channel's value along. */
+    public static final String FS_RMS = "fsRms";
     /** Whether the full scales of this device and direction are the DEVICE's own -
      *  a QA40x reads them from its EEPROM (spec 4.3, v1.1).  It is what makes a
      *  calibration write refusable before it is sent: a client shows such a device
@@ -211,7 +214,8 @@ public class NetFields {
     /** {@code device.setActiveRange}: which channel the new active range applies
      *  to - {@link #BOTH} (the LINKED / MONO case), {@code "left"} or
      *  {@code "right"} (an INDEPENDENT card, whose two channels sit on their own
-     *  rows). */
+     *  rows).  {@code device.setCalibration}: the one channel whose
+     *  {@link #FS_RMS} the request carries - {@link #LEFT} or {@link #RIGHT}. */
     public static final String CHANNEL = "channel";
     /** {@link #CHANNEL}: both channels at once, the only value a LINKED or MONO
      *  card accepts and the default when the field is absent.  The other two
@@ -245,10 +249,15 @@ public class NetFields {
 
     /** Generator handle returned by {@code gen.open}. */
     public static final String GEN_ID = "genId";
-    /** {@code gen.open} and {@code gen.config}: TPDF dither depth in bits.
-     *  The open carries the initial depth; the config push is the live half,
-     *  applied to the tone that is playing. */
-    public static final String DITHER_BITS = "ditherBits";
+    /** {@code gen.open} and {@code gen.config}: the LEFT lane's TPDF dither
+     *  depth in bits.  The open carries the initial depth; the config push is
+     *  the live half, applied to the tone that is playing.  Per lane, because
+     *  a dither entered as a level resolves against each lane's own full
+     *  scale. */
+    public static final String DITHER_BITS_LEFT = "ditherBitsLeft";
+    /** {@code gen.open} and {@code gen.config}: the RIGHT lane's TPDF dither
+     *  depth in bits. */
+    public static final String DITHER_BITS_RIGHT = "ditherBitsRight";
     /** {@code gen.open}: which physical DAC lane carries the signal, as the
      *  server's {@code OutputChannels} name - {@code "BOTH"}, {@code "LEFT"} or
      *  {@code "RIGHT"}.  Not a channel COUNT: the lane is stereo either way, and
@@ -259,16 +268,14 @@ public class NetFields {
     public static final String FORM = "form";
     /** Nominal tone frequency in Hz, before snap and trim. */
     public static final String FREQUENCY = "frequency";
-    /** Amplitude in volts RMS - final, the client already did the calibration. */
-    public static final String AMPLITUDE_VRMS = "amplitudeVrms";
-    /** DAC full-scale voltage amplitude the client computed. */
-    public static final String DAC_FS_VOLTAGE_AMPL = "dacFsVoltageAmpl";
-    /** {@code gen.config}: the RIGHT lane's output scale, {@code fsLeft/fsRight}
-     *  - the client's own calibration arithmetic, final like every other number
-     *  here (spec 4.5).  {@code 1.0} for a card whose two DAC full-scales are
-     *  equal, which is why an older server ignoring the field behaves exactly as
-     *  it did. */
-    public static final String RIGHT_LANE_SCALE = "rightLaneScale";
+    /** {@code gen.config}: the LEFT DAC lane's amplitude in volts RMS - final,
+     *  the operator's entry already resolved; the bench converts it against its
+     *  own card's left full scale (spec 4.5). */
+    public static final String AMPLITUDE_VRMS_LEFT = "amplitudeVrmsLeft";
+    /** The RIGHT lane's twin of {@link #AMPLITUDE_VRMS_LEFT}, converted against
+     *  the card's right full scale.  A single-amplitude driver (a sweep engine)
+     *  sends the same value on both. */
+    public static final String AMPLITUDE_VRMS_RIGHT = "amplitudeVrmsRight";
     /** Rectangle duty cycle. */
     public static final String RECTANGLE_DUTY = "rectangleDuty";
     /** Triangle duty cycle. */

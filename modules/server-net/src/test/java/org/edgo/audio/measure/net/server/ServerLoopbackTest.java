@@ -121,7 +121,6 @@ class ServerLoopbackTest {
 
     private static final double TONE_HZ = 1_000.0;
     private static final double TONE_VRMS = 0.5;
-    private static final double DAC_FS_VOLTAGE_AMPL = 1.0;
     private static final double NO_DITHER_BITS = 0.0;
     /** Zero-crossing counting over a second of samples resolves about 1 Hz. */
     private static final double TONE_TOLERANCE_HZ = 2.0;
@@ -214,11 +213,11 @@ class ServerLoopbackTest {
                 "spec 4.1: a cap is a promise the commands behind it work - this bench "
                         + "answers the analyzer surface of spec 4.6 as well");
 
-        Bench bench = benchOf(client);
-        assertTrue(acquire(client, bench.input()).isOk(),
+        Bench server = serverOf(client);
+        assertTrue(acquire(client, server.input()).isOk(),
                 "spec 4.4: streaming requires the input lock");
 
-        NetMessage opened = client.request(bench.input()
+        NetMessage opened = client.request(server.input()
                 .into(client.newRequest(MessageType.CAPTURE_OPEN))
                 .put(NetFields.RATE, RATE_HZ)
                 .put(NetFields.BITS, BITS));
@@ -230,7 +229,7 @@ class ServerLoopbackTest {
         assertEquals(2, opened.getData().path(NetFields.CHANNELS).asInt());
         assertEquals(FRAME_BYTES, opened.getData().path(NetFields.FRAME_BYTES).asInt());
 
-        StubCapture capture = stubBench(bench).getLastCapture();
+        StubCapture capture = stubServer(server).getLastCapture();
         // Spec 4.7: a second socket to the SAME url, declared by capture.attach,
         // and only then may the stream start.
         assertTrue(client.request(client.newRequest(MessageType.CAPTURE_START)
@@ -278,7 +277,7 @@ class ServerLoopbackTest {
                 "spec 4.7: capture.close ends the capture AND its data connection");
         assertFalse(client.isHungUp(),
                 "and the control connection outlives every capture on it");
-        assertTrue(client.request(bench.input()
+        assertTrue(client.request(server.input()
                 .into(client.newRequest(MessageType.DEVICE_RELEASE))).isOk());
     }
 
@@ -286,15 +285,16 @@ class ServerLoopbackTest {
     void theRemoteGeneratorIsDrivenFromTheClientAndConfirmsWhatItEmits() throws Exception {
         LoopbackClient client = open();
         greet(client, CLIENT_NAME);
-        Bench bench = benchOf(client);
-        assertTrue(acquire(client, bench.output()).isOk(),
+        Bench server = serverOf(client);
+        assertTrue(acquire(client, server.output()).isOk(),
                 "spec 4.5: every gen.* needs the output lock");
 
-        NetMessage opened = client.request(bench.output()
+        NetMessage opened = client.request(server.output()
                 .into(client.newRequest(MessageType.GEN_OPEN))
                 .put(NetFields.RATE, RATE_HZ)
                 .put(NetFields.BITS, BITS)
-                .put(NetFields.DITHER_BITS, NO_DITHER_BITS)
+                .put(NetFields.DITHER_BITS_LEFT, NO_DITHER_BITS)
+                .put(NetFields.DITHER_BITS_RIGHT, NO_DITHER_BITS)
                 .put(NetFields.OUTPUT_CHANNELS, OutputChannels.BOTH.name()));
         assertTrue(opened.isOk());
         int genId = opened.getData().path(NetFields.GEN_ID).asInt();
@@ -304,8 +304,8 @@ class ServerLoopbackTest {
                 .put(NetFields.GEN_ID, genId)
                 .put(NetFields.FORM, GenSignalForm.SINE.name())
                 .put(NetFields.FREQUENCY, TONE_HZ)
-                .put(NetFields.AMPLITUDE_VRMS, TONE_VRMS)
-                .put(NetFields.DAC_FS_VOLTAGE_AMPL, DAC_FS_VOLTAGE_AMPL)).isOk());
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, TONE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, TONE_VRMS)).isOk());
         assertTrue(client.request(client.newRequest(MessageType.GEN_START)
                 .put(NetFields.GEN_ID, genId)).isOk());
 
@@ -319,7 +319,7 @@ class ServerLoopbackTest {
                 "spec 4.5: emitHz is the post-snap, post-trim frequency actually "
                         + "emitted - what the client's hint plumbing feeds from");
 
-        StubPlayback playback = stubBench(bench).getLastPlayback();
+        StubPlayback playback = stubServer(server).getLastPlayback();
         assertTrue(playback.isOpened());
         assertEquals(1, playback.getPlayCount());
         assertEquals(TONE_HZ, playback.measuredHz(RATE_HZ), TONE_TOLERANCE_HZ,
@@ -331,7 +331,7 @@ class ServerLoopbackTest {
         assertTrue(client.request(client.newRequest(MessageType.GEN_CLOSE)
                 .put(NetFields.GEN_ID, genId)).isOk());
         assertTrue(playback.isClosed(), "spec 4.5: gen.close gives the output line back");
-        assertTrue(client.request(bench.output()
+        assertTrue(client.request(server.output()
                 .into(client.newRequest(MessageType.DEVICE_RELEASE))).isOk());
     }
 
@@ -340,14 +340,14 @@ class ServerLoopbackTest {
             throws Exception {
         LoopbackClient dying = open();
         NetMessage hello = greet(dying, CLIENT_NAME);
-        Bench bench = benchOf(dying);
-        assertTrue(acquire(dying, bench.input()).isOk());
-        NetMessage opened = dying.request(bench.input()
+        Bench server = serverOf(dying);
+        assertTrue(acquire(dying, server.input()).isOk());
+        NetMessage opened = dying.request(server.input()
                 .into(dying.newRequest(MessageType.CAPTURE_OPEN))
                 .put(NetFields.RATE, RATE_HZ)
                 .put(NetFields.BITS, BITS));
         assertTrue(opened.isOk());
-        StubCapture capture = stubBench(bench).getLastCapture();
+        StubCapture capture = stubServer(server).getLastCapture();
         int captureId = opened.getData().path(NetFields.CAPTURE_ID).asInt();
         LoopbackClient data = attachData(hello, captureId);
         assertTrue(dying.request(dying.newRequest(MessageType.CAPTURE_START)
@@ -358,7 +358,7 @@ class ServerLoopbackTest {
 
         LoopbackClient observer = open();
         greet(observer, OBSERVER_NAME);
-        NetError refused = acquire(observer, bench.input()).getError();
+        NetError refused = acquire(observer, server.input()).getError();
         assertTrue(refused.is(ErrorCode.DEVICE_LOCKED));
         assertEquals(CLIENT_NAME, refused.by(), "spec 4.3: the refusal names the holder");
         int told = observer.events(MessageType.EV_DEVICES_CHANGED).size();
@@ -381,7 +381,7 @@ class ServerLoopbackTest {
                 "spec 4.1: four unanswered pings (2 s) and the connection is dead");
         NetMessage changed = observer.awaitEvent(MessageType.EV_DEVICES_CHANGED, told + 1,
                 AWAIT_MS);
-        assertTrue(lockOf(changed, bench.input()).isNull(),
+        assertTrue(lockOf(changed, server.input()).isNull(),
                 "spec 6: the other clients see the device free again");
         assertTrue(capture.isClosed(),
                 "and it was free only AFTER the line went back - spec 4.1's teardown in "
@@ -390,7 +390,7 @@ class ServerLoopbackTest {
         assertTrue(data.awaitHangUp(AWAIT_MS),
                 "spec 4.1: the session is ONE thing, so the dead client's data "
                         + "connection is closed with its control one");
-        assertTrue(acquire(observer, bench.input()).isOk(),
+        assertTrue(acquire(observer, server.input()).isOk(),
                 "the device really is available, not merely announced as such");
     }
 
@@ -409,9 +409,9 @@ class ServerLoopbackTest {
     void aDataConnectionThatDropsKillsTheWholeSession() throws Exception {
         LoopbackClient client = open();
         NetMessage hello = greet(client, CLIENT_NAME);
-        Bench bench = benchOf(client);
-        assertTrue(acquire(client, bench.input()).isOk());
-        NetMessage opened = client.request(bench.input()
+        Bench server = serverOf(client);
+        assertTrue(acquire(client, server.input()).isOk());
+        NetMessage opened = client.request(server.input()
                 .into(client.newRequest(MessageType.CAPTURE_OPEN))
                 .put(NetFields.RATE, RATE_HZ)
                 .put(NetFields.BITS, BITS));
@@ -419,11 +419,11 @@ class ServerLoopbackTest {
         LoopbackClient data = attachData(hello, captureId);
         assertTrue(client.request(client.newRequest(MessageType.CAPTURE_START)
                 .put(NetFields.CAPTURE_ID, captureId)).isOk());
-        StubCapture capture = stubBench(bench).getLastCapture();
+        StubCapture capture = stubServer(server).getLastCapture();
 
         LoopbackClient observer = open();
         greet(observer, OBSERVER_NAME);
-        assertTrue(acquire(observer, bench.input()).getError().is(ErrorCode.DEVICE_LOCKED));
+        assertTrue(acquire(observer, server.input()).getError().is(ErrorCode.DEVICE_LOCKED));
         int told = observer.events(MessageType.EV_DEVICES_CHANGED).size();
 
         data.die();
@@ -435,7 +435,7 @@ class ServerLoopbackTest {
                         + "audio is going nowhere");
         NetMessage changed = observer.awaitEvent(MessageType.EV_DEVICES_CHANGED, told + 1,
                 AWAIT_MS);
-        assertTrue(lockOf(changed, bench.input()).isNull(),
+        assertTrue(lockOf(changed, server.input()).isNull(),
                 "and the devices come back to everyone else");
         assertTrue(capture.isClosed(), "spec 4.1: the line goes back before the lock does");
     }
@@ -525,9 +525,9 @@ class ServerLoopbackTest {
     void textOnAnAttachedDataConnectionEndsTheSession() throws Exception {
         LoopbackClient client = open();
         NetMessage hello = greet(client, CLIENT_NAME);
-        Bench bench = benchOf(client);
-        assertTrue(acquire(client, bench.input()).isOk());
-        NetMessage opened = client.request(bench.input()
+        Bench server = serverOf(client);
+        assertTrue(acquire(client, server.input()).isOk());
+        NetMessage opened = client.request(server.input()
                 .into(client.newRequest(MessageType.CAPTURE_OPEN))
                 .put(NetFields.RATE, RATE_HZ)
                 .put(NetFields.BITS, BITS));
@@ -554,9 +554,9 @@ class ServerLoopbackTest {
     void theDevicesChangedBroadcastReachesOnlyControlConnections() throws Exception {
         LoopbackClient client = open();
         NetMessage hello = greet(client, CLIENT_NAME);
-        Bench bench = benchOf(client);
-        assertTrue(acquire(client, bench.input()).isOk());
-        NetMessage opened = client.request(bench.input()
+        Bench server = serverOf(client);
+        assertTrue(acquire(client, server.input()).isOk());
+        NetMessage opened = client.request(server.input()
                 .into(client.newRequest(MessageType.CAPTURE_OPEN))
                 .put(NetFields.RATE, RATE_HZ)
                 .put(NetFields.BITS, BITS));
@@ -568,7 +568,7 @@ class ServerLoopbackTest {
         // broadcasts to every session.
         LoopbackClient other = open();
         greet(other, OBSERVER_NAME);
-        assertTrue(acquire(other, bench.output()).isOk());
+        assertTrue(acquire(other, server.output()).isOk());
 
         client.awaitEvent(MessageType.EV_DEVICES_CHANGED, told + 1, AWAIT_MS);
         assertTrue(data.events(MessageType.EV_DEVICES_CHANGED).isEmpty(),
@@ -598,15 +598,15 @@ class ServerLoopbackTest {
             throws Exception {
         LoopbackClient dying = open();
         greet(dying, CLIENT_NAME);
-        Bench bench = benchOf(dying);
-        assertTrue(acquire(dying, bench.input()).isOk());
-        assertTrue(acquire(dying, bench.output()).isOk(),
+        Bench server = serverOf(dying);
+        assertTrue(acquire(dying, server.input()).isOk());
+        assertTrue(acquire(dying, server.output()).isOk(),
                 "both directions, so a teardown that gave one back and forgot the "
                         + "other is visible");
 
         LoopbackClient observer = open();
         greet(observer, OBSERVER_NAME);
-        NetError refused = acquire(observer, bench.input()).getError();
+        NetError refused = acquire(observer, server.input()).getError();
         assertTrue(refused.is(ErrorCode.DEVICE_LOCKED));
         assertEquals(CLIENT_NAME, refused.by(), "spec 4.3: the refusal names the holder");
         int told = observer.events(MessageType.EV_DEVICES_CHANGED).size();
@@ -615,14 +615,14 @@ class ServerLoopbackTest {
 
         NetMessage changed = observer.awaitEvent(MessageType.EV_DEVICES_CHANGED, told + 1,
                 AWAIT_MS);
-        assertTrue(lockOf(changed, bench.input()).isNull(),
+        assertTrue(lockOf(changed, server.input()).isNull(),
                 "spec 4.3: every lock change is broadcast, and a connection dying is "
                         + "the change the other clients are waiting for");
-        assertTrue(lockOf(changed, bench.output()).isNull(),
+        assertTrue(lockOf(changed, server.output()).isNull(),
                 "both of the dead client's locks come back, not merely the first");
-        assertTrue(acquire(observer, bench.input()).isOk(),
+        assertTrue(acquire(observer, server.input()).isOk(),
                 "and the devices really are available, not merely announced as such");
-        assertTrue(acquire(observer, bench.output()).isOk());
+        assertTrue(acquire(observer, server.output()).isOk());
     }
 
     /**
@@ -638,13 +638,13 @@ class ServerLoopbackTest {
     void aClientThatSaysGoodbyeLosesItsLocksAndEveryOtherClientIsTold() throws Exception {
         LoopbackClient leaving = open();
         greet(leaving, CLIENT_NAME);
-        Bench bench = benchOf(leaving);
-        assertTrue(acquire(leaving, bench.input()).isOk());
-        assertTrue(acquire(leaving, bench.output()).isOk());
+        Bench server = serverOf(leaving);
+        assertTrue(acquire(leaving, server.input()).isOk());
+        assertTrue(acquire(leaving, server.output()).isOk());
 
         LoopbackClient observer = open();
         greet(observer, OBSERVER_NAME);
-        assertTrue(acquire(observer, bench.output()).getError().is(ErrorCode.DEVICE_LOCKED));
+        assertTrue(acquire(observer, server.output()).getError().is(ErrorCode.DEVICE_LOCKED));
         int told = observer.events(MessageType.EV_DEVICES_CHANGED).size();
 
         assertTrue(leaving.request(leaving.newRequest(MessageType.BYE)).isOk(),
@@ -653,10 +653,10 @@ class ServerLoopbackTest {
 
         NetMessage changed = observer.awaitEvent(MessageType.EV_DEVICES_CHANGED, told + 1,
                 AWAIT_MS);
-        assertTrue(lockOf(changed, bench.input()).isNull());
-        assertTrue(lockOf(changed, bench.output()).isNull());
-        assertTrue(acquire(observer, bench.input()).isOk());
-        assertTrue(acquire(observer, bench.output()).isOk());
+        assertTrue(lockOf(changed, server.input()).isNull());
+        assertTrue(lockOf(changed, server.output()).isNull());
+        assertTrue(acquire(observer, server.input()).isOk());
+        assertTrue(acquire(observer, server.output()).isOk());
     }
 
     /**
@@ -680,8 +680,8 @@ class ServerLoopbackTest {
             throws Exception {
         LoopbackClient holder = open();
         greet(holder, CLIENT_NAME);
-        Bench bench = benchOf(holder);
-        assertTrue(acquire(holder, bench.input()).isOk());
+        Bench server = serverOf(holder);
+        assertTrue(acquire(holder, server.input()).isOk());
 
         LoopbackClient arriving = open();
         greet(arriving, OBSERVER_NAME);
@@ -689,18 +689,18 @@ class ServerLoopbackTest {
         NetMessage list = arriving.request(arriving.newRequest(MessageType.DEVICES_LIST));
         assertTrue(list.isOk());
         JsonNode backends = list.getData().path(NetFields.BACKENDS);
-        assertEquals(CLIENT_NAME, lockIn(backends, bench.input()).path(NetFields.BY).asText(),
+        assertEquals(CLIENT_NAME, lockIn(backends, server.input()).path(NetFields.BY).asText(),
                 "spec 4.3: the very first devices.list names the client holding the "
                         + "device, so an arrival that missed every event still shows it "
                         + "as taken");
-        assertTrue(lockIn(backends, bench.output()).isNull(),
+        assertTrue(lockIn(backends, server.output()).isNull(),
                 "and the device nobody took is free in that same answer");
 
         NetMessage selected = arriving.request(arriving.newRequest(MessageType.BACKEND_SELECT)
-                .put(NetFields.BACKEND, bench.input().backend()));
+                .put(NetFields.BACKEND, server.input().backend()));
         assertTrue(selected.isOk());
         assertEquals(CLIENT_NAME,
-                lockInEntry(selected.getData(), bench.input()).path(NetFields.BY).asText(),
+                lockInEntry(selected.getData(), server.input()).path(NetFields.BY).asText(),
                 "and so does the backend.select entry, which is the one round-trip a "
                         + "desktop client fills its device combos from");
     }
@@ -810,7 +810,7 @@ class ServerLoopbackTest {
      * directions - which of them that is depends on the host, so the test reads
      * it instead of naming it (see the class comment).
      */
-    private Bench benchOf(LoopbackClient client) {
+    private Bench serverOf(LoopbackClient client) {
         NetMessage list = client.request(client.newRequest(MessageType.DEVICES_LIST));
         assertTrue(list.isOk());
         for (JsonNode backend : list.getData().path(NetFields.BACKENDS)) {
@@ -827,9 +827,9 @@ class ServerLoopbackTest {
 
     /** The stub bench behind a backend - where the test puts the bytes in and
      *  reads the emitted waveform back out. */
-    private StubDeviceManager stubBench(Bench bench) {
+    private StubDeviceManager stubServer(Bench server) {
         return (StubDeviceManager) AudioBackend.instance()
-                .manager(AudioBackendType.valueOf(bench.input().backend()));
+                .manager(AudioBackendType.valueOf(server.input().backend()));
     }
 
     private Ref firstDevice(JsonNode backend, boolean input) {

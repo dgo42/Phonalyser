@@ -67,7 +67,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p><b>What is real.</b>  The client is the shipping {@code NetConnection} /
  * {@code NetDeviceManager} / {@code NetPcmCapture}, the socket is a real one, and
- * the far end is {@link MockBench} - a peer that speaks the wire, which is this
+ * the far end is {@link MockServer} - a peer that speaks the wire, which is this
  * module's entire contract with the other half.  The one thing hand-cranked is
  * the CLIENT's own keepalive clock ({@link FakeTicker}), so spec 4.1's four
  * unanswered pings happen in no time at all.
@@ -97,8 +97,8 @@ class NetEndToEndTest {
      *  this whole budget whenever a client went away without a close handshake. */
     private static final long SHUTDOWN_MS = 200;
 
-    private static final int RATE_HZ = MockBench.RATE_48K;
-    private static final int BITS = MockBench.BITS_24;
+    private static final int RATE_HZ = MockServer.RATE_48K;
+    private static final int BITS = MockServer.BITS_24;
     /** 24-bit stereo: three bytes a sample, two samples a frame. */
     private static final int FRAME_BYTES = 6;
     /** One second of audio in the batches spec 5 describes (~10-100 ms). */
@@ -116,9 +116,9 @@ class NetEndToEndTest {
     private static final double IN_FS_RIGHT = 1.75;
     private static final double OUT_FS_LEFT = 2.0;
     private static final double OUT_FS_RIGHT = 2.5;
-    /** What the client recalibrates the bench's input to, mid-session. */
+    /** What the client recalibrates the bench's input's left channel to,
+     *  mid-session. */
     private static final double NEW_FS_LEFT = 0.316;
-    private static final double NEW_FS_RIGHT = 0.318;
 
     private static final double TONE_HZ = 1_000.0;
     private static final double AMPLITUDE_VRMS = 0.5;
@@ -135,25 +135,25 @@ class NetEndToEndTest {
     private final JsonCodec codec = new JsonCodec();
     private final List<NetConnection> connections = new ArrayList<>();
 
-    private MockBench bench;
+    private MockServer server;
     private URI wsUri;
 
     @BeforeEach
-    void startTheBench() {
-        bench = new MockBench(codec, SERVER_NAME);
+    void startTheServer() {
+        server = new MockServer(codec, SERVER_NAME);
         // Spec 4.3 v1.1: the calibration lives where the device is plugged in,
         // so it is on the bench before any client exists.
-        bench.storeCalibration(MockBench.FIRST_INPUT, true, IN_FS_LEFT, IN_FS_RIGHT);
-        bench.storeCalibration(MockBench.OUTPUT, false, OUT_FS_LEFT, OUT_FS_RIGHT);
-        wsUri = bench.listen(AWAIT_MS);
+        server.storeCalibration(MockServer.FIRST_INPUT, true, IN_FS_LEFT, IN_FS_RIGHT);
+        server.storeCalibration(MockServer.OUTPUT, false, OUT_FS_LEFT, OUT_FS_RIGHT);
+        wsUri = server.listen(AWAIT_MS);
     }
 
     @AfterEach
-    void stopTheBench() {
+    void stopTheServer() {
         for (NetConnection connection : connections) {
             connection.connClose(NetCloseReason.BYE);
         }
-        bench.shutDown(SHUTDOWN_MS);
+        server.shutDown(SHUTDOWN_MS);
     }
 
     @Test
@@ -186,7 +186,7 @@ class NetEndToEndTest {
         manager.setFaultListener(faults);
 
         NetDeviceRef input = (NetDeviceRef) manager.listInputDevices().get(0);
-        assertEquals(MockBench.FIRST_INPUT, input.name());
+        assertEquals(MockServer.FIRST_INPUT, input.name());
         DeviceCalibration stored = input.calibration();
         assertNotNull(stored, "spec 4.3 v1.1: the selection itself carries what the "
                 + "BENCH's card store holds for its own devices");
@@ -221,10 +221,10 @@ class NetEndToEndTest {
         assertEquals(RATE_HZ, Math.round(capture.getFormat().getSampleRate()),
                 "spec 4.4: the client re-pins to the format the bench GRANTED");
         assertEquals(BITS, capture.getFormat().getSampleSizeInBits());
-        assertTrue(bench.isLocked(MockBench.FIRST_INPUT, true),
+        assertTrue(server.isLocked(MockServer.FIRST_INPUT, true),
                 "spec 4.4: a capture requires the input lock, and the open took it");
         capture.startRecording();
-        MockBench.Capture adc = bench.getLastCapture();
+        MockServer.Capture adc = server.getLastCapture();
         assertNotNull(adc, "the client opened no stream on the bench");
 
         byte[] captured = new byte[SECOND_BYTES];
@@ -245,18 +245,19 @@ class NetEndToEndTest {
         // ------------------------------------------------------------------
         DeviceRef output = manager.listOutputDevices().get(0);
         assertEquals(RATE_HZ, manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS,
-                OutputChannels.BOTH), "spec 4.5: gen.open answers the rate it granted");
-        MockBench.Generator dac = bench.getLastGenerator();
+                DITHER_BITS, OutputChannels.BOTH), "spec 4.5: gen.open answers the rate it granted");
+        MockServer.Generator dac = server.getLastGenerator();
         assertNotNull(dac, "the client opened no generator on the bench");
         assertEquals(BITS, dac.getBits());
-        assertEquals(DITHER_BITS, dac.getDitherBits(),
+        assertEquals(DITHER_BITS, dac.getDitherBitsLeft(),
                 "spec 4.5 fixes the dither depth at gen.open - it is the LINE's");
-        assertTrue(bench.isLocked(MockBench.OUTPUT, false),
+        assertEquals(DITHER_BITS, dac.getDitherBitsRight(), "per lane");
+        assertTrue(server.isLocked(MockServer.OUTPUT, false),
                 "spec 4.5: all gen.* require the output-device lock, and the open took it");
 
         manager.setForm(GenSignalForm.SINE);
         manager.setFrequency(TONE_HZ);
-        manager.setAmplitudeVrms(AMPLITUDE_VRMS);
+        manager.setAmplitudesVrms(AMPLITUDE_VRMS, AMPLITUDE_VRMS);
         manager.startGenerator();
         awaitTrue(() -> manager.state().running(),
                 "spec 4.5: ev.gen.state is pushed on every state change, and the client "
@@ -264,7 +265,7 @@ class NetEndToEndTest {
         assertEquals(TONE_HZ, manager.state().emitHz(), HZ_TOLERANCE,
                 "and the frequency it reports is the one the bench says it emits");
         assertEquals(AMPLITUDE_VRMS,
-                dac.getConfigAtStart().path(NetFields.AMPLITUDE_VRMS).asDouble(), EPS,
+                dac.getConfigAtStart().path(NetFields.AMPLITUDE_VRMS_LEFT).asDouble(), EPS,
                 "spec 4.5: the amplitude is final - the client did the calibration "
                         + "arithmetic, so what crosses is volts RMS and not a fraction");
 
@@ -302,8 +303,8 @@ class NetEndToEndTest {
 
         NetMessage written = manager.withDeviceLock(input, () -> client.request(
                 input.into(client.newRequest(MessageType.DEVICE_SET_CALIBRATION))
-                        .put(NetFields.FS_RMS_LEFT, NEW_FS_LEFT)
-                        .put(NetFields.FS_RMS_RIGHT, NEW_FS_RIGHT)));
+                        .put(NetFields.CHANNEL, NetFields.LEFT)
+                        .put(NetFields.FS_RMS, NEW_FS_LEFT)));
 
         assertNotNull(written, "no lock could be taken, so the write never ran");
         assertTrue(written.isOk(), "the bench refused the write: " + written);
@@ -316,7 +317,8 @@ class NetEndToEndTest {
         DeviceCalibration refreshed = ((NetDeviceRef) manager.listInputDevices().get(0))
                 .calibration();
         assertEquals(NEW_FS_LEFT, refreshed.fsRmsLeft(), EPS);
-        assertEquals(NEW_FS_RIGHT, refreshed.fsRmsRight(), EPS);
+        assertEquals(IN_FS_RIGHT, refreshed.fsRmsRight(), EPS,
+                "one channel per write: the right channel stays as the bench had it");
 
         NetConnection observer = open(OBSERVER_NAME, new FakeTicker());
         NetDeviceManager observing = new NetDeviceManager();
@@ -328,7 +330,7 @@ class NetEndToEndTest {
                         + "is plugged in");
         assertEquals(CLIENT_NAME, observing.lockedBy(observed),
                 "and it sees who is measuring on it, by name");
-        assertEquals(2, bench.sessions(), "two sessions, as the bench counts them");
+        assertEquals(2, server.sessions(), "two sessions, as the bench counts them");
 
         // ------------------------------------------------------------------
         // 5  The heartbeat stops: the CLIENT declares its own session dead
@@ -341,7 +343,7 @@ class NetEndToEndTest {
         });
         // The bench keeps the socket up and stops answering - the one condition
         // spec 4.1's client half exists for, and one no correct server produces.
-        bench.setDeaf(true);
+        server.setDeaf(true);
 
         heartbeat.advance(TICKS_TO_DEATH);
 
@@ -365,11 +367,11 @@ class NetEndToEndTest {
 
         // The client really did drop its socket - which is how the far end learns
         // to free what that session held, and the observer proves it did.
-        awaitTrue(() -> bench.sessions() == 1, "the dead client's socket is still open");
-        awaitTrue(() -> !bench.isLocked(MockBench.FIRST_INPUT, true),
+        awaitTrue(() -> server.sessions() == 1, "the dead client's socket is still open");
+        awaitTrue(() -> !server.isLocked(MockServer.FIRST_INPUT, true),
                 "spec 4.1: the dead session's locks are released, so the input the dead "
                         + "client was streaming can be taken by somebody else");
-        awaitTrue(() -> !bench.isLocked(MockBench.OUTPUT, false),
+        awaitTrue(() -> !server.isLocked(MockServer.OUTPUT, false),
                 "and the output its generator held");
         DeviceRef otherInput = observing.listInputDevices().get(0);
         DeviceRef otherOutput = observing.listOutputDevices().get(0);
@@ -381,14 +383,14 @@ class NetEndToEndTest {
         // ------------------------------------------------------------------
         // 6  The bench is still a bench
         // ------------------------------------------------------------------
-        bench.setDeaf(false);
+        server.setDeaf(false);
         NetConnection late = open(LATE_NAME, new FakeTicker());
         assertEquals(NetProto.PROTO_VERSION, late.getProto(),
                 "a fresh handshake, on the same bench, after all of that");
         NetDeviceManager arriving = new NetDeviceManager();
         arriving.connect(late, select(late, served));
         DeviceRef lateInput = arriving.listInputDevices().get(0);
-        assertEquals(MockBench.FIRST_INPUT, lateInput.name());
+        assertEquals(MockServer.FIRST_INPUT, lateInput.name());
         assertEquals(NEW_FS_LEFT, ((NetDeviceRef) lateInput).calibration().fsRmsLeft(), EPS,
                 "carrying the calibration the whole scenario wrote");
         assertTrue(acquire(late, lateInput),
@@ -524,11 +526,6 @@ class NetEndToEndTest {
         @Override
         public void deviceGone(DeviceRef device) {
             // A device leaving the catalogue is NetLoopbackTest's question.
-        }
-
-        @Override
-        public void calibrationChanged(DeviceRef device) {
-            // So is a calibration that moved on the bench.
         }
     }
 }

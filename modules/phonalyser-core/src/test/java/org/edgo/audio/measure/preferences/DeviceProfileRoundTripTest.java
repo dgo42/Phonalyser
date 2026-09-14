@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.edgo.audio.measure.common.Constants;
-import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -149,7 +149,7 @@ class DeviceProfileRoundTripTest {
         p.getInput().setChannels(DeviceChannelMode.INDEPENDENT);
         p.getInput().getRanges().add(perChannel);
         p.getInput().getRanges().add(shared);
-        p.getInput().setActiveRange("DIP 1.7 Vrms");
+        p.getInput().setActiveRangeLeft("DIP 1.7 Vrms");
         p.getInput().setActiveRangeRight("DIP 4.5 Vrms");
 
         DeviceRange out = new DeviceRange();
@@ -158,7 +158,7 @@ class DeviceProfileRoundTripTest {
         out.setFsRight(1.975);
         p.getOutput().setChannels(DeviceChannelMode.LINKED);
         p.getOutput().getRanges().add(out);
-        p.getOutput().setActiveRange("direct");
+        p.getOutput().setActiveRangeLeft("direct");
         return p;
     }
 
@@ -188,7 +188,7 @@ class DeviceProfileRoundTripTest {
 
         DeviceEndpointConfig in = p.getInput();
         assertEquals(DeviceChannelMode.INDEPENDENT, in.getChannels());
-        assertEquals("DIP 1.7 Vrms", in.getActiveRange());
+        assertEquals("DIP 1.7 Vrms", in.getActiveRangeLeft());
         assertEquals("DIP 4.5 Vrms", in.getActiveRangeRight());
         assertEquals(2, in.getRanges().size());
         DeviceRange perCh = in.getRanges().get(0);
@@ -201,7 +201,7 @@ class DeviceProfileRoundTripTest {
 
         DeviceEndpointConfig out = p.getOutput();
         assertEquals(DeviceChannelMode.LINKED, out.getChannels());
-        assertEquals("direct", out.getActiveRange());
+        assertEquals("direct", out.getActiveRangeLeft());
         assertEquals(1, out.getRanges().size());
         assertEquals(1.975, out.getRanges().get(0).getFsLeft(), EPS);
     }
@@ -267,9 +267,9 @@ class DeviceProfileRoundTripTest {
         Preferences dst = detached();
         loadDevicesFrom(dst, store);
         DeviceEndpointConfig in = dst.findAudioDeviceProfile("Cosmos ADC").getInput();
-        assertEquals("DIP 1.7 Vrms", in.getActiveRange(), "map left -> activeRange field");
+        assertEquals("DIP 1.7 Vrms", in.getActiveRangeLeft(), "map left -> activeRange field");
         assertEquals("DIP 4.5 Vrms", in.getActiveRangeRight(), "map right -> activeRangeRight field");
-        assertEquals("direct", dst.findAudioDeviceProfile("Cosmos ADC").getOutput().getActiveRange());
+        assertEquals("direct", dst.findAudioDeviceProfile("Cosmos ADC").getOutput().getActiveRangeLeft());
     }
 
     @Test
@@ -308,14 +308,14 @@ class DeviceProfileRoundTripTest {
         in.setFsLeft(1.0);
         in.setFsRight(1.0);
         p.getInput().getRanges().add(in);
-        p.getInput().setActiveRange("0 dB");
+        p.getInput().setActiveRangeLeft("0 dB");
         p.getOutput().setChannels(DeviceChannelMode.LINKED);
         DeviceRange out = new DeviceRange();
         out.setLabel("default");
         out.setFsLeft(2.0);
         out.setFsRight(2.0);
         p.getOutput().getRanges().add(out);
-        p.getOutput().setActiveRange("default");
+        p.getOutput().setActiveRangeLeft("default");
         src.putAudioDeviceProfile(p);
         stampCurrentContentVersion(src);
         writeDevicesTo(src, store);
@@ -358,11 +358,11 @@ class DeviceProfileRoundTripTest {
         card.getInput().setChannels(DeviceChannelMode.INDEPENDENT);
         card.getInput().getRanges().add(range("default", 1.0, 1.1, true));
         card.getInput().getRanges().add(range("attenuated", 10.0, 11.0, false));
-        card.getInput().setActiveRange("default");
+        card.getInput().setActiveRangeLeft("default");
         card.getInput().setActiveRangeRight("attenuated");
         card.getOutput().setChannels(DeviceChannelMode.LINKED);
         card.getOutput().getRanges().add(range("default", 2.0, 2.0, true));
-        card.getOutput().setActiveRange("default");
+        card.getOutput().setActiveRangeLeft("default");
 
         AudioDeviceProfile back = p.cardFromMap(p.cardToMap(card));
 
@@ -375,11 +375,11 @@ class DeviceProfileRoundTripTest {
         assertEquals(1.1, back.getInput().getRanges().get(0).getFsRight());
         assertTrue(back.getInput().getRanges().get(0).isCalibrated());
         assertFalse(back.getInput().getRanges().get(1).isCalibrated());
-        assertEquals("default", back.getInput().getActiveRange());
+        assertEquals("default", back.getInput().getActiveRangeLeft());
         assertEquals("attenuated", back.getInput().getActiveRangeRight(),
                 "an INDEPENDENT endpoint's two markers travel as the file's own "
                         + "{left,right} pair");
-        assertEquals("default", back.getOutput().getActiveRange());
+        assertEquals("default", back.getOutput().getActiveRangeLeft());
     }
 
     /** The device-authored display text (the QA40x verbose range labels, quotes
@@ -422,7 +422,7 @@ class DeviceProfileRoundTripTest {
         AudioDeviceProfile card = new AudioDeviceProfile();
         card.setName("Input only");
         card.getInput().getRanges().add(range("default", 1.0, 1.0, true));
-        card.getInput().setActiveRange("default");
+        card.getInput().setActiveRangeLeft("default");
 
         Map<String, Object> wire = p.cardToMap(card);
 
@@ -496,18 +496,15 @@ class DeviceProfileRoundTripTest {
     }
 
     @Test
-    void storeAdcCalibration_autoCreatesBoundProfile_andSetsGlobalFs() {
+    void profileFor_autoCreatesBoundProfile_forAnUnrecognisedDevice() {
         Preferences p = detached();
-        p.setBackend(AudioBackendType.WDMKS);
         // A device recognised by no seeded card's match patterns, so this
         // exercises the bare "default"-row fallback (the recognised-card seeding
-        // path is covered by DeviceStoreTest).
-        p.current().setInputDeviceName("Generic USB Codec");
-
-        p.storeAdcCalibration(2.5);
-
-        // Global scalar took the value.
-        assertEquals(2.5, p.getAdcFsVoltageRms(), EPS);
+        // path is covered by DeviceStoreTest).  The three steps are the local
+        // manager's calibration store.
+        AudioDeviceProfile card = p.profileFor("Generic USB Codec", true);
+        card.getInput().storeFullScale(Channel.L, 2.5);
+        p.putAudioDeviceProfile(card);
 
         // A card was auto-created, recognising the exact device name via match.
         AudioDeviceProfile created = p.resolveDeviceProfile("Generic USB Codec");
@@ -520,47 +517,41 @@ class DeviceProfileRoundTripTest {
         assertEquals(1, in.getRanges().size());
         DeviceRange row = in.getRanges().get(0);
         assertEquals("default", row.getLabel());
-        assertEquals("default", in.getActiveRange());
+        assertEquals("default", in.getActiveRangeLeft());
         assertEquals(2.5, row.getFsLeft(),  EPS);
         assertEquals(2.5, row.getFsRight(), EPS);
 
         // A second calibrate on the same device updates the same profile's row.
-        p.storeAdcCalibration(3.1);
+        AudioDeviceProfile again = p.profileFor("Generic USB Codec", true);
+        again.getInput().storeFullScale(Channel.L, 3.1);
+        p.putAudioDeviceProfile(again);
         assertEquals(1, p.getAudioDeviceProfiles().size(), "no duplicate profile on recalibrate");
         assertEquals(3.1, p.resolveDeviceProfile("Generic USB Codec")
                 .getInput().getRanges().get(0).getFsLeft(), EPS);
     }
 
     @Test
-    void storeDacCalibration_storesRmsOnDisk_andSetsGlobalAmpl() {
+    void theDacRowHoldsRms_andThePeakFormIsDerivedOnRead() {
         Preferences p = detached();
-        p.setBackend(AudioBackendType.WDMKS);
-        p.current().setOutputDeviceName("E1DA Cosmos DAC");
-
         double fsAmpl = 2.79351;
-        p.storeDacCalibration(fsAmpl);
+        AudioDeviceProfile card = p.profileFor("E1DA Cosmos DAC", false);
+        card.getOutput().storeFullScale(Channel.L, fsAmpl / Constants.SQRT2);
+        p.putAudioDeviceProfile(card);
 
-        // Global scalar took the peak-amplitude value.
-        assertEquals(fsAmpl, p.getDacFsVoltageAmpl(), EPS);
-
-        // The stored row is the RMS form (ampl / √2).
+        // The stored row is the RMS form (ampl / √2) ...
         AudioDeviceProfile created = p.resolveDeviceProfile("E1DA Cosmos DAC");
         assertNotNull(created);
         DeviceRange row = created.getOutput().getRanges().get(0);
         assertEquals(fsAmpl / Constants.SQRT2, row.getFsLeft(), EPS);
-
-        // applyOutputDeviceProfile round-trips RMS->ampl back onto the global scalar.
-        p.setDacFsVoltageAmpl(1.0);
-        p.applyOutputDeviceProfile("E1DA Cosmos DAC");
-        assertEquals(fsAmpl, p.getDacFsVoltageAmpl(), EPS);
+        // ... and the peak form a generator lane divides by is derived on read.
+        assertEquals(fsAmpl, created.getOutput().calibration().peakVolts(Channel.L), EPS);
     }
 
     @Test
-    void applyInputDeviceProfile_unresolved_isLegacyNoOp() {
+    void resolveDeviceProfile_unboundDevice_isNull() {
         Preferences p = detached();
-        p.setAdcFsVoltageRms(1.234);
-        p.applyInputDeviceProfile("Some Unbound Card");
-        assertEquals(1.234, p.getAdcFsVoltageRms(), EPS, "unresolved device must not touch the global FS");
+        assertNull(p.resolveDeviceProfile("Some Unbound Card"),
+                "an unrecognised device has no card, and a read invents none");
     }
 
     @Test

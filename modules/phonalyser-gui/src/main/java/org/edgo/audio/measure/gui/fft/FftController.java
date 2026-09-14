@@ -41,6 +41,7 @@ import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.CaptureEndReason;
 
 import lombok.Getter;
@@ -265,9 +266,14 @@ public final class FftController {
         double[] emitted = MessageBus.instance()
                 .request(Events.GENERATOR_EMITTED_HZ, slot.sampleRate);
         if (emitted == null) return null;
-        Preferences prefs = Preferences.instance();
-        return imdAnalyzer.analyze(slot, emitted[0], emitted[1],
-                prefs.getDbvOffsetDb(prefs.getFftChannel()));
+        return imdAnalyzer.analyze(slot, emitted[0], emitted[1], analysedDbvOffsetDb());
+    }
+
+    /** The dBV↔dBFS offset of the channel the FFT analyses - the input
+     *  device's calibration in force for that channel. */
+    private double analysedDbvOffsetDb() {
+        return AudioBackend.instance().calibrationOrDefault(true)
+                .dbvOffsetDb(Preferences.instance().getFftChannel());
     }
 
     /** Feeds the latest FFT result into the closed-loop integrator and
@@ -487,9 +493,9 @@ public final class FftController {
         r.stepSamples      = stepSamples;
         r.harmonicCount    = harmCount;
         // The file stores dBV; dBFS is the result's base scale, so subtract the
-        // global ADC offset once on load (the writer adds it back on save, so a
-        // round-trip is exact).
-        double dbvOffsetDb = prefs.getDbvOffsetDb();
+        // analysed channel's ADC offset once on load (the writer adds it back
+        // on save, so a round-trip is exact).
+        double dbvOffsetDb = analysedDbvOffsetDb();
         for (int k = 0; k < n; k++) {
             double dbv = rows.get(k)[1], ph = rows.get(k)[2];
             double dbFs = dbv - dbvOffsetDb;
@@ -554,7 +560,7 @@ public final class FftController {
         }
         double manualVrms = prefs.getFftManualFundVrms();
         r.fundamentalTrueDbFs = (prefs.isFftManualFundEnabled() && manualVrms > 0)
-                ? 20.0 * Math.log10(manualVrms) - prefs.getDbvOffsetDb()
+                ? 20.0 * Math.log10(manualVrms) - analysedDbvOffsetDb()
                 : Double.NaN;
         r.snrFreqMin = prefs.isFftDistMinEnabled() ? prefs.getFftDistMinHz() : 0;
         r.snrFreqMax = prefs.isFftDistMaxEnabled() ? prefs.getFftDistMaxHz() : 0;
@@ -583,7 +589,7 @@ public final class FftController {
             // frequencies let IMD re-measure its products, and the analysis
             // parameters + applied calibrations are informational provenance.
             Preferences prefs = Preferences.instance();
-            double dbvOffset = prefs.getDbvOffsetDb();   // dBV = dBFs + global ADC offset
+            double dbvOffset = analysedDbvOffsetDb();   // dBV = dBFs + the analysed channel's ADC offset
             pw.println("# Phonalyser FFT spectrum");
             pw.println("# format_version=" + FileVersions.FFT_SPECTRUM);
             pw.println("# mode=" + (imd ? "IMD" : "THD"));

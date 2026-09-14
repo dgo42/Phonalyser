@@ -135,7 +135,7 @@ class PcmContainerSizingTest {
     void twentyBitEncodeDoesNotWrap() {
         // The encoder writes bitDepth/8 = 2 bytes before the fix, which cannot
         // hold 2^19-1: the top byte was dropped and +FS came back as -1 LSB.
-        PcmQuantizer quantizer = new PcmQuantizer(20, 0.0);
+        PcmQuantizer quantizer = new PcmQuantizer(20, 0.0, 0.0);
         int maxVal = (1 << 19) - 1;
         assertEquals(0xFFFFF, decode(20, le(maxVal, 3)));
         assertEquals(20, quantizer.getBitDepth());

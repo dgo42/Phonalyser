@@ -22,6 +22,7 @@ import java.util.List;
 
 import javax.sound.sampled.AudioFormat;
 
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 
 /**
@@ -167,9 +168,66 @@ public interface AudioDeviceManager {
     AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth);
 
     /** Creates an UNOPENED playback stream on {@code device};
-     *  {@code ditherBits} is the TPDF depth applied at quantisation
-     *  ({@code 0} = off). */
-    AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits);
+     *  {@code ditherBitsLeft} / {@code ditherBitsRight} are the two lanes' TPDF
+     *  depths applied at quantisation ({@code 0} = off) - each lane its own,
+     *  since a dither entered as a level resolves against each lane's full
+     *  scale. */
+    AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight);
+
+    /**
+     * Stores a measured calibration of ONE channel of {@code device} in
+     * {@code input}'s direction - that channel's full-scale RMS volts, the form
+     * a device card holds and spec 4.3's {@code device.setCalibration} carries -
+     * WHERE THE DEVICE IS CONNECTED.  A local backend writes this machine's card
+     * and applies the new full scale to the live scalars ({@link
+     * AbstractLocalDeviceManager}); the net backend sends the value to the bench
+     * the device is plugged into and writes nothing on this machine, so a bench
+     * device and a local device of the same name never share a calibration.
+     *
+     * <p>One channel per write: a channel that was not measured is not
+     * touched, and no write carries the other channel's value along - which
+     * is what lets two channels be calibrated one after the other without the
+     * second write putting a stale copy of the first back.  On a MONO card the
+     * one physical channel takes the value whichever channel names it.
+     *
+     * <p>{@code device} is a ref this backend listed in {@code input}'s
+     * direction: a duplex device is listed both ways, and which side is being
+     * calibrated is not readable off the ref alone.
+     *
+     * @return whether the value was stored - by the card store or by the bench;
+     *         {@code false}, with nothing written anywhere, when the device's
+     *         calibration is the DEVICE's own (a QA40x reads its full scales
+     *         from its EEPROM), when the bench refused it, or when there is no
+     *         session to send it on
+     */
+    boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms);
+
+    /**
+     * The calibration in force for {@code device} in {@code input}'s direction
+     * - what every reading on it is computed against - read WHERE THE DEVICE IS
+     * CONNECTED: a local backend resolves the card this machine holds for it,
+     * the net backend answers what the bench sent with the device.  Nothing
+     * else in the process holds a full scale; a consumer asks here, at use.
+     *
+     * @return the full scales, or {@code null} when the device is uncalibrated
+     *         - no card recognises it, or its active row was never calibrated
+     *         (a full scale of zero is a divisor of zero, not a quiet device);
+     *         the caller decides whether {@link DeviceCalibration#DEFAULT} will
+     *         do
+     */
+    DeviceCalibration calibration(DeviceRef device, boolean input);
+
+    /**
+     * Whether the full scales of {@code device} in {@code input}'s direction are
+     * the DEVICE's own - a QA40x reads them from its EEPROM - so no caller may
+     * write them ({@link #storeCalibration} refuses) and a calibrate dialog
+     * shows them read-only.  Read where the device is connected, like
+     * {@link #calibration}: the card this machine holds for a local device, what
+     * the bench sent with a remote one.  False for a device no card recognises.
+     */
+    boolean calibrationFromDevice(DeviceRef device, boolean input);
+
 
     /**
      * WHY an open or start on this backend failed, as something an operator can

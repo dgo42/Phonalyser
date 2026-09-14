@@ -12,16 +12,16 @@
   <h1>The Phonalyser server</h1>
   <p>The machine your measurement hardware is plugged into does not have to be
      the machine you sit at.  Run <b>Phonalyser server</b> on the one that
-     <em>is</em> wired to the converters and it becomes a <b>bench</b>: it owns
+     <em>is</em> wired to the converters and it becomes a <b>server</b>: it owns
      the sound cards and the QA40x analyzer and serves them over the network to
      Phonalyser clients elsewhere.  It has no window and needs no desktop - a
      Raspberry Pi or any headless box will do.</p>
   <p>This chapter is the <b>server</b> half: getting one running and keeping it
-     running.  The <b>client</b> half - finding a bench, connecting to it and
+     running.  The <b>client</b> half - finding a server, connecting to it and
      measuring through it - lives in
      <a href="preferences.html#prefs-audio-servers">Preferences ▸ Measuring
      through a Phonalyser server</a>, and what happens on the wire is in
-     <a href="theory/audio-backend.html#network">Theory ▸ A bench across the
+     <a href="theory/audio-backend.html#network">Theory ▸ A server across the
      network</a>.</p>
 
   <h2 id="server-what">What it is, and what you need</h2>
@@ -70,13 +70,13 @@
      1200 MB, as much as a 32-bit process can reliably reserve.  A QA40x must
      already be bound to the WinUSB driver, which happens once QuantAsylum's own
      software has been run on that machine.</div>
-  <div class="note"><b>Run the bench on a physical machine, not in a virtual
+  <div class="note"><b>Run the server on a physical machine, not in a virtual
      one.</b>  A server measured inside a virtual machine produced heavy periodic
      dropouts in both directions; the same hardware, on a physical machine,
      measured cleanly.  The audio device is reached over USB, and it is the
      guest's virtualised USB timing that breaks: samples arrive late and in
      bursts, which a measurement reads as gaps in the signal.  Nothing in the
-     server can compensate for that - put the bench on real hardware.</div>
+     server can compensate for that - put the server on real hardware.</div>
 
   <h2 id="server-console">Running it in a console</h2>
   <pre>    phonalyser-server-x64.exe
@@ -96,7 +96,7 @@
             bundle.  Default <b>8377</b>.</td></tr>
     <tr><td><code>--bind &lt;address&gt;</code></td>
         <td>Listen on one interface only.  Default: all of them.  This is the
-            one knob that limits who can reach the bench - see
+            one knob that limits who can reach the server - see
             <a href="#server-noauth">no authentication</a> below.</td></tr>
     <tr><td><code>-d</code>, <code>--daemon</code></td>
         <td>Accepted, and every service definition passes it - but it changes
@@ -117,7 +117,7 @@
   <p>Clients find a server by <b>UDP multicast on 239.255.83.77, port
      8377/udp</b> - the same number the server listens on, because UDP and TCP
      are separate port spaces.  The announcement is <b>link-local</b>: routers do
-     not pass it, so a bench on another subnet is never discovered and is added
+     not pass it, so a server on another subnet is never discovered and is added
      by its address in the client instead.</p>
   <p>Allow that one port through the firewall, <b>udp and tcp</b>, or skip
      discovery altogether and type the address into the client by hand.</p>
@@ -231,32 +231,32 @@
   <div class="note"><b>The consequence to remember:</b> the desktop
      application's own calibration is <b>not</b> what the server serves.  Give
      the server its own - calibrate through a connected client, which writes
-     straight into the bench's store (see
+     straight into the server's store (see
      <a href="preferences.html#prefs-audio-server-cards">Cards and calibration on
-     the bench</a>), or copy <code>devices.yaml</code> across.  On Linux the same
+     the server</a>), or copy <code>devices.yaml</code> across.  On Linux the same
      applies between a terminal run and the systemd service, which have separate
      data directories.</div>
 
   <h2 id="server-noauth">There is no authentication, on purpose</h2>
   <p>A Phonalyser server does not ask for a password, and nothing on the wire is
-     encrypted.  That is a decision, not an omission: <b>a bench instrument
-     belongs on a network you trust</b> - the room your measurement equipment is
+     encrypted.  That is a decision, not an omission: <b>the server belongs on
+     a network you trust</b> - the room your measurement equipment is
      in - and adding credentials to a LAN instrument protocol would buy nothing
      the network does not already provide.  Anyone who can reach the port can
      list the devices and take one.</p>
   <p>So do not expose the port to the open internet.  If the machine has more
-     than one interface, <code>--bind</code> the server to the one your bench
-     lives on and leave the rest unreachable.</p>
+     than one interface, <code>--bind</code> the server to the interface of the
+     trusted network and leave the rest unreachable.</p>
 
   <h2 id="server-measuring">Measuring through it</h2>
   <p>With a server running, the whole client side is three steps and it is all in
      Preferences ▸ Audio:</p>
   <ol>
-    <li><b>Find the bench.</b>  <a href="preferences.html#prefs-audio-server-list">Servers...</a>
-        opens the list.  It usually fills by itself the moment it opens; a bench
+    <li><b>Find the server.</b>  <a href="preferences.html#prefs-audio-server-list">Servers...</a>
+        opens the list.  It usually fills by itself the moment it opens; a server
         on another subnet is added by its address.  <b>Connect</b> - or a
         double-click on the row - opens the session.</li>
-    <li><b>Pick a backend.</b>  The bench's backends
+    <li><b>Pick a backend.</b>  The server's backends
         <a href="preferences.html#prefs-audio-server-backends">join the Backend
         list</a> beside the local ones, written
         <code>&lt;server&gt; -> &lt;backend&gt;</code>.  Browsing only previews;
@@ -264,7 +264,7 @@
     <li><b>Measure.</b>  From there the device combos, the card section, the
         range radios, <b>QA40x preferences</b>, the generator, the sweeps and
         <em>Play from...</em> all behave exactly as they do for local hardware.
-        Calibration belongs to the bench, so a crosshair calibration writes into
+        Calibration belongs to the server, so a crosshair calibration writes into
         <em>its</em> store.</li>
   </ol>
   <p>The details - what is staged and what takes effect at once, the <em>in use
@@ -277,9 +277,9 @@
   <h2 id="server-hotplug">While it runs</h2>
   <ul>
     <li><b>Hardware is re-enumerated every two seconds</b>, so a device plugged
-        in or pulled out on the bench is noticed without restarting anything, and
+        in or pulled out on the server is noticed without restarting anything, and
         every connected client is told.  Two seconds rather than continuously on
-        purpose: enumeration talks to drivers and to USB, and nothing on a bench
+        purpose: enumeration talks to drivers and to USB, and nothing on a server
         appears so urgently that the delay costs a measurement.</li>
     <li><b>One client at a time per device.</b>  The server holds a lock per
         device, so two operators cannot talk over each other's measurement; the
@@ -298,7 +298,7 @@
   <ul>
     <li><a href="preferences.html#prefs-audio-servers">Preferences ▸ Measuring
         through a Phonalyser server</a> - the whole client side.</li>
-    <li><a href="theory/audio-backend.html#network">Theory ▸ A bench across the
+    <li><a href="theory/audio-backend.html#network">Theory ▸ A server across the
         network</a> - the ports, the beacon, the locks, the keepalive and what
         the audio stream actually carries.</li>
     <li><a href="bench.html">Measurement bench &amp; wiring</a> - the physical

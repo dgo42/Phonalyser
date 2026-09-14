@@ -159,9 +159,10 @@ public final class NotchSweepEngine implements AutoCloseable {
      * <p>{@code sweepSamples} and {@code fadeSamples} are CAPTURE samples - the
      * loop is one duration, and the DAC's own count for it is derived here.
      */
-    public void start(double f0, double f1, double ampVrms, double dacFsVrms,
+    public void start(double f0, double f1, double ampVrms,
+                      double dacFsVrmsLeft, double dacFsVrmsRight,
                       int sweepSamples, int fadeSamples,
-                      OutputChannels outputChannels, double rightLaneScale) throws Exception {
+                      OutputChannels outputChannels) throws Exception {
         loopChannels = outputChannels;
         // Before anything is acquired: the same period on the output clock, or
         // a refusal that costs nothing.
@@ -186,16 +187,16 @@ public final class NotchSweepEngine implements AutoCloseable {
             // The window the deconvolution will divide comes off THIS stream,
             // so its reference is rendered on this clock and with its count.
             reference = new SignalGenerator(f0, f1, sweepSamples, 0,
-                    captureRateHz, ampVrms, dacFsVrms);
+                    captureRateHz, ampVrms, ampVrms, dacFsVrmsLeft, dacFsVrmsRight);
 
             // Loop ON with Hann fades at each cycle boundary; the SAME fades
             // (the same duration, counted on each side's clock) shape the
             // deconvolution reference.
             GeneratorRun run = new GeneratorRun(GenSignalForm.LOG_SWEEP,
-                    0.0, ampVrms, playbackRateHz, playbackBitDepth, ditherBits,
-                    dacFsVrms, rightLaneScale, outputChannels,
+                    0.0, ampVrms, ampVrms,   // both lanes alike
+                    playbackRateHz, playbackBitDepth, ditherBits, ditherBits,
+                    dacFsVrmsLeft, dacFsVrmsRight, outputChannels,
                     true,    // the loop's period is samples on the asked clock
-                    false,   // the bench's own device card owns its calibration
                     new GeneratorRun.SweepSpec(f0, f1, playSamples, 0,
                             playFade, playFade, true));
             PlaybackStateEnum started = lane.start(run);
@@ -234,10 +235,50 @@ public final class NotchSweepEngine implements AutoCloseable {
      */
     private void requireGrantedRate(long granted, int asked, String what) {
         if (granted != asked) {
-            throw new IllegalStateException("the bench granted " + granted + " Hz on its "
+            throw new RateRefusedException(RateRefusedException.Kind.RATE_NOT_GRANTED,
+                    asked, granted, 0,
+                    "the server granted " + granted + " Hz on its "
                     + what + " but the sweep loop was built for " + asked + " Hz - "
                     + "the deconvolution would no longer be circular over one period, so "
                     + "the tuning session is refused rather than shown wrong");
+        }
+    }
+
+    /**
+     * A refusal on the sample-rate pair - the one failure of this engine the
+     * operator can put right from the dialog, so it carries the numbers the
+     * dialog's sentence needs instead of only the sentence the log wants.
+     */
+    @Getter
+    public static final class RateRefusedException extends IllegalStateException {
+
+        private static final long serialVersionUID = 1L;
+
+        /** Which of the two rate rules refused. */
+        public enum Kind {
+            /** One capture-clock period is not a whole number of output samples. */
+            PERIOD_NOT_WHOLE,
+            /** The server granted another rate than the configured one. */
+            RATE_NOT_GRANTED
+        }
+
+        private final Kind kind;
+        /** The configured rate the loop was built for: the input rate for
+         *  {@link Kind#PERIOD_NOT_WHOLE}, the asked rate for
+         *  {@link Kind#RATE_NOT_GRANTED}. */
+        private final long configuredHz;
+        /** The rate it collides with: the output rate, or the granted one. */
+        private final long otherHz;
+        /** One loop period in input samples ({@link Kind#PERIOD_NOT_WHOLE} only). */
+        private final long periodSamples;
+
+        private RateRefusedException(Kind kind, long configuredHz, long otherHz,
+                long periodSamples, String message) {
+            super(message);
+            this.kind          = kind;
+            this.configuredHz  = configuredHz;
+            this.otherHz       = otherHz;
+            this.periodSamples = periodSamples;
         }
     }
 
@@ -256,7 +297,9 @@ public final class NotchSweepEngine implements AutoCloseable {
     private int playbackSamples(int captureSamples) {
         long scaled = (long) captureSamples * playbackRateHz;
         if (scaled % captureRateHz != 0) {
-            throw new IllegalStateException("one loop period is " + captureSamples
+            throw new RateRefusedException(RateRefusedException.Kind.PERIOD_NOT_WHOLE,
+                    captureRateHz, playbackRateHz, captureSamples,
+                    "one loop period is " + captureSamples
                     + " samples at the configured " + captureRateHz + " Hz input rate, "
                     + "which is not a whole number of samples at the configured "
                     + playbackRateHz + " Hz output rate - the looping sweep and the "
@@ -288,7 +331,7 @@ public final class NotchSweepEngine implements AutoCloseable {
      *  by ONE drive level, and a window spanning the change would draw the
      *  response offset by the level ratio. */
     public void setAmplitude(double ampVrms) {
-        lane.setAmplitudeVrms(ampVrms);
+        lane.setAmplitudesVrms(ampVrms, ampVrms);   // both lanes alike
         SignalBufferReader r = reader;
         if (r != null) sessionStart = r.getWritePos();
     }

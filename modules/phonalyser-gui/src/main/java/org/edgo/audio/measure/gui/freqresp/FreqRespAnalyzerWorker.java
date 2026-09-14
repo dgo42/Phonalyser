@@ -21,16 +21,18 @@ package org.edgo.audio.measure.gui.freqresp;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.edgo.audio.measure.sound.StereoCaptureProgress;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
-import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
+import org.edgo.audio.measure.sound.StereoCaptureProgress;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -159,7 +161,6 @@ public final class FreqRespAnalyzerWorker {
                 log.warn("FreqResp: timeout waiting for other workers to release the audio device");
             }
             if (cancelFlag.get()) return;
-            Preferences prefs = Preferences.instance();
 
             // The one resolution seam: the backend resolves the ACTIVE devices;
             // this worker only words the failures.
@@ -173,14 +174,6 @@ public final class FreqRespAnalyzerWorker {
                 reportError(I18n.t("freqResp.error.noInputDevice"));
                 return;
             }
-            // The caller's step after resolution: the profile write goes
-            // through the UI thread (prefs bindings are plain UI-only
-            // listeners).
-            GuiUtil.marshal(() -> {
-                prefs.applyDeviceProfile(out, false);
-                prefs.applyDeviceProfile(in, true);
-            });
-
             if (cancelFlag.get()) return;
 
             // One stereo sweep, two parallel deconvolutions.
@@ -196,7 +189,7 @@ public final class FreqRespAnalyzerWorker {
             reportError(ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
         } finally {
             // Publish STOPPED on the UI thread.  The host pane re-enables
-            // its controls and closes the busy shell on it; the other
+            // its controls and closes the progress dialog on it; the other
             // panes' subscribers restore their Record / Play buttons.
             uiExecutor.execute(() ->
                     MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED));
@@ -224,6 +217,16 @@ public final class FreqRespAnalyzerWorker {
         Preferences prefs = Preferences.instance();
         BackendPrefs backend = prefs.current();
         int playbackRate = backend.getOutputSampleRate();
+        // The selected devices' calibrations in force ({@code out} / {@code in}
+        // ARE the selection); the sweep is rendered on both lanes at the same
+        // level, each lane against its own full scale.
+        AudioBackend audio = AudioBackend.instance();
+        DeviceCalibration dac = audio.calibrationOrDefault(false);
+        DeviceCalibration adc = audio.calibrationOrDefault(true);
+        double sweepAmplitudeVrms = dac.amplitudeVrms(prefs.getFreqRespAmplitude(), Channel.L);
+        // The silence before the chirp: the fixed window the deconvolution
+        // measures each channel's DC offset on, plus the operator's lead-in.
+        double leadInSec = FreqRespCalHelper.OFFSET_LEAD_IN_SEC + prefs.getFreqRespLeadInSec();
         return FreqRespAnalyzerConfig.builder()
                 .outDevice(out)
                 .inDevice(in)
@@ -235,10 +238,12 @@ public final class FreqRespAnalyzerWorker {
                 .stopHz(prefs.getFreqRespStopHz())
                 .sweepPoints(prefs.getFreqRespSweepPoints())
                 .durationSec(prefs.getFreqRespDurationSec())
-                .leadInSec(prefs.getFreqRespLeadInSec())
-                .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
-                .dacFsVoltageRms(prefs.getDacFsVoltageAmpl())
-                .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
+                .leadInSec(leadInSec)
+                .amplitudeVrms(sweepAmplitudeVrms)
+                .dacFsVoltageRmsLeft(dac.peakVolts(Channel.L))
+                .dacFsVoltageRmsRight(dac.peakVolts(Channel.R))
+                .adcFsVoltageRmsLeft(adc.fsRms(Channel.L))
+                .adcFsVoltageRmsRight(adc.fsRms(Channel.R))
                 .outputChannels(prefs.getFreqRespOutputChannels())
                 .applyCalibration(prefs.isFreqRespApplyCalibration())
                 .captureProgress(activeProgress)
@@ -249,8 +254,8 @@ public final class FreqRespAnalyzerWorker {
                 // describe what the DAC emits, so they are on the playback clock.
                 .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
                         prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
-                        prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
-                        prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmpl()))
+                        prefs.getFreqRespDurationSec(), leadInSec,
+                        sweepAmplitudeVrms, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R)))
                 .build();
     }
 

@@ -46,9 +46,10 @@ import org.edgo.audio.measure.sound.AudioPlayback;
  * engine does the L/R swap and little-endian packing (doc §5).
  *
  * <h2>Live tunables</h2>
- * {@link #setChannelScale}, {@link #setOutputChannels} and {@link #setDitherBits}
- * are honoured live inside the sample source.  TPDF dither is added to the mono
- * sample before the per-lane scale, mirroring {@code PcmQuantizer} (the byte-PCM
+ * {@link #setOutputChannels} and {@link #setDitherBits} are honoured live inside
+ * the sample source; each lane arrives at its own level from the generator
+ * ({@link SignalGenerator#nextFrame}), nothing here relates the lanes.  TPDF
+ * dither is drawn per lane, mirroring {@code PcmQuantizer} (the byte-PCM
  * backends' encoder).  Its ±1 LSB amplitude is set by the <em>selected</em> target
  * bit depth, not the 32-bit wire container - so 8-bit dither raises the floor to
  * ~&minus;42&nbsp;dBFS, while 24-bit dither lands in the DAC's dropped low byte.
@@ -67,14 +68,16 @@ public final class Qa40xGenerator implements AudioPlayback,
 
     private Qa40xDuplexEngine engine;
     private volatile SignalGenerator currentGenerator;
-    private volatile double  scaleL = 1.0;
-    private volatile double  scaleR = 1.0;
+    /** The frame the generator fills - confined to the engine's event thread,
+     *  reused so {@link #nextFrames} allocates nothing. */
+    private final double[] frame = new double[CHANNELS];
     /** Output-lane gate, honoured live in {@link #nextFrames} (default BOTH). */
     @Setter
     private volatile OutputChannels outputChannels = OutputChannels.BOTH;
-    /** TPDF dither depth in bits (may be fractional); 0 = off.  Honoured live
-     *  in {@link #nextFrames}. */
-    private volatile double ditherBits;
+    /** The two lanes' TPDF dither depths in bits (may be fractional); 0 = off.
+     *  Honoured live in {@link #nextFrames}, each lane its own. */
+    private volatile double ditherBitsLeft;
+    private volatile double ditherBitsRight;
     private volatile boolean attached;
     /** Why the lane ended, or null while it is healthy - written by the engine
      *  on its USB event thread, read by the play thread that has to fail. */
@@ -83,10 +86,12 @@ public final class Qa40xGenerator implements AudioPlayback,
      *  render-thread rng); one shared across threads would be a data race. */
     private final SplittableRandom rng = new SplittableRandom();
 
-    Qa40xGenerator(Qa40xDeviceManager manager, int sampleRate, double ditherBits) {
-        this.manager    = manager;
-        this.sampleRate = sampleRate;
-        this.ditherBits = Math.max(0.0, ditherBits);
+    Qa40xGenerator(Qa40xDeviceManager manager, int sampleRate, double ditherBitsLeft,
+            double ditherBitsRight) {
+        this.manager         = manager;
+        this.sampleRate      = sampleRate;
+        this.ditherBitsLeft  = Math.max(0.0, ditherBitsLeft);
+        this.ditherBitsRight = Math.max(0.0, ditherBitsRight);
     }
 
     @Override
@@ -156,14 +161,9 @@ public final class Qa40xGenerator implements AudioPlayback,
     }
 
     @Override
-    public void setChannelScale(double left, double right) {
-        this.scaleL = left;
-        this.scaleR = right;
-    }
-
-    @Override
-    public void setDitherBits(double bits) {
-        this.ditherBits = Math.max(0.0, bits);
+    public void setDitherBits(double leftBits, double rightBits) {
+        this.ditherBitsLeft  = Math.max(0.0, leftBits);
+        this.ditherBitsRight = Math.max(0.0, rightBits);
     }
 
     @Override
@@ -176,7 +176,7 @@ public final class Qa40xGenerator implements AudioPlayback,
             engine = manager.acquireEngine(sampleRate);
         }
         currentGenerator = generator;
-        // Warmup consumed nextSample() advances sweep state; rewind to sample 0 so a
+        // Warmup consumed frames that advance sweep state; rewind to sample 0 so a
         // freq-response sweep aligns with the deconvolution reference (audio-backends memory).
         generator.resetSweepPosition();
         attached = true;
@@ -228,14 +228,19 @@ public final class Qa40xGenerator implements AudioPlayback,
     public void nextFrames(int[] destination, int frames) {
         SignalGenerator gen = currentGenerator;
         OutputChannels gate = outputChannels;
-        double sl = scaleL;
-        double sr = scaleR;
         boolean wantL = gate != OutputChannels.RIGHT;
         boolean wantR = gate != OutputChannels.LEFT;
+        double[] lanes = frame;
         for (int f = 0; f < frames; f++) {
-            double sample = (gen != null) ? clamp(gen.nextSample() + tpdfNoise()) : 0.0;
-            destination[CHANNELS * f]     = wantL ? toInt32(sample * sl) : 0;
-            destination[CHANNELS * f + 1] = wantR ? toInt32(sample * sr) : 0;
+            double left  = 0.0;
+            double right = 0.0;
+            if (gen != null) {
+                gen.nextFrame(lanes);
+                left  = lanes[0] + tpdfNoise(ditherBitsLeft);
+                right = lanes[1] + tpdfNoise(ditherBitsRight);
+            }
+            destination[CHANNELS * f]     = wantL ? toInt32(left) : 0;
+            destination[CHANNELS * f + 1] = wantR ? toInt32(right) : 0;
         }
     }
 
@@ -254,10 +259,11 @@ public final class Qa40xGenerator implements AudioPlayback,
     /**
      * TPDF dither at the selected target bit depth - mirrors {@code
      * PcmQuantizer.tpdfNoise}, the dither the byte-PCM backends apply.  ±1 LSB
-     * at {@code ditherBits} resolution; 0 = off.
+     * at {@code bits} resolution - the lane's own depth, read once by the
+     * caller per sample so a live change can't shift a sample by (0 − 1); 0 =
+     * off.
      */
-    private double tpdfNoise() {
-        double bits = ditherBits;   // single read - a live change can't shift by (0 − 1)
+    private double tpdfNoise(double bits) {
         if (bits <= 0.0) return 0.0;
         // Math.pow(2, bits−1) equals the old 1L<<(bits−1) for whole bits, and
         // interpolates the ±1 LSB amplitude continuously for a fractional depth.

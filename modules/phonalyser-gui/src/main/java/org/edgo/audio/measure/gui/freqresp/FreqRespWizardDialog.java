@@ -50,7 +50,9 @@ import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import lombok.extern.log4j.Log4j2;
@@ -88,13 +90,13 @@ public final class FreqRespWizardDialog {
     private String         savedCalPath;
     private boolean        unsavedDirty;
     /** "Please wait" modal shown for the duration of a wizard measurement.
-     *  Same shape as the pane's busy shell so the user sees consistent
+     *  Same shape as the pane's progress dialog so the user sees consistent
      *  feedback regardless of which Play button started the sweep. */
-    private Shell             busyShell;
-    /** Live "level vs. time" meter inside {@link #busyShell}, fed by the
+    private Shell             progressDialog;
+    /** Live "level vs. time" meter inside {@link #progressDialog}, fed by the
      *  capture-progress callback that the wizard passes through to the
-     *  analyzer config.  Null while no busy shell is open. */
-    private FreqRespLiveMeter busyMeter;
+     *  analyzer config.  Null while no progress dialog is open. */
+    private FreqRespLiveMeter progressMeter;
     private boolean        appliedSuccessfully;
     private int            currentPageIndex;
 
@@ -263,35 +265,41 @@ public final class FreqRespWizardDialog {
                     I18n.t("freqResp.error.noDevice"));
             return;
         }
-        // The caller's step after resolution (runs in place - this is the UI
-        // thread): the DAC/ADC full scales land before the sweep reads them.
-        GuiUtil.marshal(dialog, () -> {
-            prefs.applyDeviceProfile(out, false);
-            prefs.applyDeviceProfile(in, true);
-        });
         page1Play.setEnabled(false);
         page2Play.setEnabled(false);
         backBtn.setEnabled(false);
         nextBtn.setEnabled(false);
+        // The two devices' calibrations in force, read once for this
+        // measurement; the sweep is rendered on both lanes at the same level,
+        // each lane against its own full scale.
+        AudioBackend audio = AudioBackend.instance();
+        DeviceCalibration dac = audio.calibrationOrDefault(false);
+        DeviceCalibration adc = audio.calibrationOrDefault(true);
+        double sweepAmplitudeVrms = dac.amplitudeVrms(prefs.getFreqRespAmplitude(), Channel.L);
 
         // Each converter runs the format IT is configured with - see
-        // FreqRespAnalyzerWorker.  The busy meter's time axis is the RECORD's,
+        // FreqRespAnalyzerWorker.  The progress meter's time axis is the RECORD's,
         // so it divides by the capture rate.
         int captureRate  = Math.max(1, prefs.current().getInputSampleRate());
         int playbackRate = Math.max(1, prefs.current().getOutputSampleRate());
         int playbackBits = prefs.current().getOutputBitDepth();
-        double totalSec = prefs.getFreqRespLeadInSec()
+        // The silence before the chirp: the fixed window the deconvolution
+        // measures each channel's DC offset on, plus the operator's lead-in.
+        double leadInSec = FreqRespCalHelper.OFFSET_LEAD_IN_SEC + prefs.getFreqRespLeadInSec();
+        double totalSec = leadInSec
                         + prefs.getFreqRespDurationSec()
                         + 0.5;
-        openBusyShell(totalSec);
+        openProgressDialog(totalSec, leadInSec);
         MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
-        // Marshal capture-progress to the UI thread so the busy shell's
-        // live meter paints level-vs-time as the sweep runs.
-        StereoCaptureProgress progress = (totalSamples, rmsLin) -> {
+        // Marshal capture-progress to the UI thread so the progress dialog's
+        // live meter paints level-vs-time as the sweep runs.  The meter shows
+        // the channel the view has selected (its L/R radio), read per block.
+        StereoCaptureProgress progress = (totalSamples, rmsLeft, rmsRight) -> {
+            double rmsLin = prefs.isFreqRespLeftVisible() ? rmsLeft : rmsRight;
             double tSec = totalSamples / (double) captureRate;
             GuiUtil.marshal(dialog, () -> {
-                if (busyMeter != null && !busyMeter.isDisposed()) {
-                    busyMeter.appendSample(tSec, rmsLin);
+                if (progressMeter != null && !progressMeter.isDisposed()) {
+                    progressMeter.appendSample(tSec, rmsLin);
                 }
             });
         };
@@ -307,10 +315,12 @@ public final class FreqRespWizardDialog {
                         .stopHz(prefs.getFreqRespStopHz())
                         .sweepPoints(prefs.getFreqRespSweepPoints())
                         .durationSec(prefs.getFreqRespDurationSec())
-                        .leadInSec(prefs.getFreqRespLeadInSec())
-                        .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
-                        .dacFsVoltageRms(prefs.getDacFsVoltageAmpl())
-                        .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
+                        .leadInSec(leadInSec)
+                        .amplitudeVrms(sweepAmplitudeVrms)
+                        .dacFsVoltageRmsLeft(dac.peakVolts(Channel.L))
+                        .dacFsVoltageRmsRight(dac.peakVolts(Channel.R))
+                        .adcFsVoltageRmsLeft(adc.fsRms(Channel.L))
+                        .adcFsVoltageRmsRight(adc.fsRms(Channel.R))
                         .applyCalibration(!directLeg)  // page 2 divides out the page-1 transfer
                         .captureProgress(progress)
                         // As in FreqRespAnalyzerWorker: the sweep leg belongs to
@@ -318,8 +328,8 @@ public final class FreqRespWizardDialog {
                         // the chirp itself instead of being played into.
                         .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
                                 prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
-                                prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
-                                prefs.getFreqRespAmplitudeVrms(), prefs.getDacFsVoltageAmpl()))
+                                prefs.getFreqRespDurationSec(), leadInSec,
+                                sweepAmplitudeVrms, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R)))
                         .build();
                 StereoFreqRespResult r = new FreqRespAnalyzer(cfg).run(null, null);
                 GuiUtil.marshal(dialog, () -> onMeasurementDone(directLeg, r, null));
@@ -340,7 +350,7 @@ public final class FreqRespWizardDialog {
 
     private void onMeasurementDone(boolean directLeg, StereoFreqRespResult r, String error) {
         if (dialog.isDisposed()) return;
-        closeBusyShell();
+        closeProgressDialog();
         page1Play.setEnabled(true);
         page2Play.setEnabled(true);
         if (error != null) {
@@ -369,7 +379,7 @@ public final class FreqRespWizardDialog {
             hostView.setRightResult(r.right());
             showPage(2);
         }
-        // Both legs: the busy shell is closed and the trace is on screen, so a
+        // Both legs: the progress dialog is closed and the trace is on screen, so a
         // railed capture can be reported where the operator can act on it -
         // before they walk this leg's curve into a calibration.
         if (r.clipped()) {
@@ -500,29 +510,29 @@ public final class FreqRespWizardDialog {
         return true;
     }
 
-    private void openBusyShell(double totalDurationSec) {
-        if (busyShell != null && !busyShell.isDisposed()) return;
+    private void openProgressDialog(double totalDurationSec, double leadInSec) {
+        if (progressDialog != null && !progressDialog.isDisposed()) return;
         Shell s = new Shell(dialog, SWT.TITLE | SWT.BORDER
                 | SWT.APPLICATION_MODAL);
-        s.setText(I18n.t("freqResp.busy.title"));
+        s.setText(I18n.t("freqResp.progress.title"));
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 12; gl.marginHeight = 10;
         gl.verticalSpacing = 8;
         s.setLayout(gl);
         Label l = new Label(s, SWT.CENTER);
-        l.setText(I18n.t("freqResp.busy.message"));
+        l.setText(I18n.t("freqResp.progress.message"));
         l.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         // Sweep geometry feeds the meter's time -> instantaneous-frequency
         // mapping, which scales the trace smoothing with the period.
         Preferences prefs = Preferences.instance();
-        busyMeter = new FreqRespLiveMeter(s, totalDurationSec,
-                prefs.getFreqRespLeadInSec(), prefs.getFreqRespDurationSec(),
+        progressMeter = new FreqRespLiveMeter(s, totalDurationSec,
+                leadInSec, prefs.getFreqRespDurationSec(),
                 prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz());
         GridData mg = new GridData(SWT.FILL, SWT.CENTER, true, false);
         mg.widthHint  = 520;
         mg.heightHint = 100;
-        busyMeter.setLayoutData(mg);
+        progressMeter.setLayoutData(mg);
 
         // ESC and the window-manager close arrive as SWT.Close.  This trial
         // sweep has no cancel hook (the analyzer runs without one), and a
@@ -539,15 +549,15 @@ public final class FreqRespWizardDialog {
         s.open();
         Display d = dialog.getDisplay();
         for (int i = 0; i < 5; i++) if (!d.readAndDispatch()) break;
-        busyShell = s;
+        progressDialog = s;
     }
 
-    private void closeBusyShell() {
-        // dispose(), not close(): close() raises SWT.Close, which the busy
-        // shell refuses as a user-close.
-        if (busyShell != null && !busyShell.isDisposed()) busyShell.dispose();
-        busyShell = null;
-        busyMeter = null;
+    private void closeProgressDialog() {
+        // dispose(), not close(): close() raises SWT.Close, which the progress
+        // dialog refuses as a user-close.
+        if (progressDialog != null && !progressDialog.isDisposed()) progressDialog.dispose();
+        progressDialog = null;
+        progressMeter = null;
     }
 
 }

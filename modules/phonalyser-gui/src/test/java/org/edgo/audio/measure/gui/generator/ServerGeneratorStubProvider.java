@@ -23,7 +23,7 @@ import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioDeviceManagerProvider;
 
 /**
- * Registers {@link BenchGeneratorStub} as this test class path's net carrier, so
+ * Registers {@link ServerGeneratorStub} as this test class path's net carrier, so
  * {@code AudioBackend.remoteGenerator()} answers it once the active backend is
  * {@link AudioBackendType#NET}.
  *
@@ -32,10 +32,10 @@ import org.edgo.audio.measure.sound.AudioDeviceManagerProvider;
  * registry), so nothing else on this class path provides the carrier and the
  * first-registration-wins rule never has to decide anything.
  */
-public final class BenchGeneratorStubProvider implements AudioDeviceManagerProvider {
+public final class ServerGeneratorStubProvider implements AudioDeviceManagerProvider {
 
     /** Public and no-argument for the service loader. */
-    public BenchGeneratorStubProvider() {
+    public ServerGeneratorStubProvider() {
     }
 
     @Override
@@ -45,6 +45,6 @@ public final class BenchGeneratorStubProvider implements AudioDeviceManagerProvi
 
     @Override
     public AudioDeviceManager create() {
-        return new BenchGeneratorStub();
+        return new ServerGeneratorStub();
     }
 }

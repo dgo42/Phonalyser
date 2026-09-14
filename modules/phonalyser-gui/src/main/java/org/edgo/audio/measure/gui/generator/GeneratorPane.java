@@ -51,18 +51,20 @@ import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.GuiUtil;
-import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.sound.CalibrationStore;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.gui.widgets.SignalFormCombo;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.widgets.UnitValue;
+import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
+import org.edgo.audio.measure.sound.DeviceRef;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -112,7 +114,8 @@ public final class GeneratorPane extends AbstractPane {
     private final Label           freqLabel;
     private final NumericStepField freqField;
     private final Button          fftSnapBtn;
-    private final NumericStepField ampField;
+    private final NumericStepField ampFieldLeft;
+    private final NumericStepField ampFieldRight;
     private final NumericStepField dutyField;
     private final Label           dutyLabel;
     /** Container for sweep-only controls (start/stop freq, duration, fade
@@ -568,37 +571,16 @@ public final class GeneratorPane extends AbstractPane {
                 formCombo::setSelectedForm);
 
         // --------------------------------------------------------- Amplitude
-        addRowLabel(group, I18n.t("generator.amplitudeRms"));
-        ampField = new NumericStepField(group, UnitFamily.AMPLITUDE,
-                AMP_MIN_VRMS, controller.maxAmplitudeVrms(initialForm), AMP_MAX_DECIMALS,
-                prefs::getDacFsVoltageAmpl, 160);
-        ampField.setLayoutData(fillH());
-        ampField.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
-        // The field holds the pair the operator entered - the displayed number
-        // and its unit - and the store resolves it to Vrms at use, so a dBFS
-        // entry keeps meaning what was typed when the calibration moves.  Seed
-        // before the listener so the seed cannot re-enter the pref write;
-        // live-apply and the FFT-invalidation publish are the controller's
-        // subscription.
-        ampField.seedPair(prefs.getGenAmplitude());
-        ampField.addSelectionListener(e -> prefs.setGenAmplitude(ampField.enteredValue()));
-        // A value written from elsewhere (a programmatic writer, a preset) has
-        // to reach the field.
-        Bindings.onChange(group, prefs.genAmplitudeProperty(), v -> seedAmpFieldFromPrefs());
-        // A DAC recalibration (Calibrate DAC dialog) changes the output full-scale:
-        // the ceiling moves with it, and replaying the stored pair leaves the
-        // entered text exactly as it stands while re-solving what it resolves to
-        // (0 dBFS is a different voltage now).  The running generator is
-        // re-pushed by the controller's own subscription.
-        Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(), v -> {
-            ampField.setMax(controller.maxAmplitudeVrms(formCombo.getSelectedForm()));
-            seedAmpFieldFromPrefs();
-        });
-        // Each waveform reaches full scale at a different V RMS, so the ceiling
-        // moves with the form - re-cap here (registered after the field exists,
+        // One entered amplitude per DAC lane, each resolved against its own
+        // lane's full scale and capped at that lane's clipping ceiling.
+        ampFieldLeft  = buildAmpField(group, "generator.amplitudeLeftRms",  Channel.L, initialForm,
+                prefs.genAmplitudeLeftProperty());
+        ampFieldRight = buildAmpField(group, "generator.amplitudeRightRms", Channel.R, initialForm,
+                prefs.genAmplitudeRightProperty());
+        // Each waveform reaches full scale at a different V RMS, so the ceilings
+        // move with the form - re-cap here (registered after the fields exist,
         // alongside the form combo's own visual-reconfiguration listener).
-        formCombo.addSelectionListener(e ->
-                ampField.setMax(controller.maxAmplitudeVrms(formCombo.getSelectedForm())));
+        formCombo.addSelectionListener(e -> capAmpFields());
 
         // ----- Duty cycle (RECTANGLE or TRIANGLE) -----------------------
         // 1 to 99 percent with 3 decimal places.  Applies to RECTANGLE
@@ -647,7 +629,8 @@ public final class GeneratorPane extends AbstractPane {
         // entered dBV is window-invariant and checks against them with any
         // analysis window.
         ditherField = new NumericStepField(group, UnitFamily.DITHER,
-                prefs.current().getOutputBitDepth(), prefs::getDacFsVoltageAmpl,
+                prefs.current().getOutputBitDepth(),
+                () -> AudioBackend.instance().calibrationOrDefault(false).peakVolts(Channel.L),
                 160);
         ditherField.setLayoutData(fillH());
         ditherField.setToolTipText(I18n.t("generator.dither.tooltip"));
@@ -667,7 +650,8 @@ public final class GeneratorPane extends AbstractPane {
         // re-solves the bits underneath, so a dither entered as a level keeps
         // that level and only the companion readout moves.  The running
         // generator is re-pushed by the controller's own subscription.
-        Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(), v -> {
+        Bindings.onEvent(group, Events.DAC_CALIBRATION_CHANGED, (DeviceRef device) -> {
+            if (!AudioBackend.instance().isActiveDevice(device, false)) return;
             ditherField.seedPair(prefs.getGenDither());
             updateDitherLabel();
         });
@@ -985,7 +969,8 @@ public final class GeneratorPane extends AbstractPane {
         sweepFadeInField   .setData("helpAnchor", "generator.html#generator-sweep-fadein");
         sweepFadeOutField  .setData("helpAnchor", "generator.html#generator-sweep-fadeout");
         sweepLoopBtn       .setData("helpAnchor", "generator.html#generator-sweep-loop");
-        ampField           .setData("helpAnchor", "generator.html#generator-amplitude");
+        ampFieldLeft       .setData("helpAnchor", "generator.html#generator-amplitude");
+        ampFieldRight      .setData("helpAnchor", "generator.html#generator-amplitude");
         dutyField          .setData("helpAnchor", "generator.html#generator-duty");
         ditherField        .setData("helpAnchor", "generator.html#generator-dither");
         correctionsField   .setData("helpAnchor", "generator.html#generator-corrections");
@@ -1168,51 +1153,50 @@ public final class GeneratorPane extends AbstractPane {
      * Opens the DAC calibration dialog.  The dialog shows the
      * currently-commanded full-scale Vrms and lets the user enter the
      * voltage actually measured at the DAC output.  On accept, the new
-     * full-scale is persisted to {@link Preferences} - the generator reads
-     * {@link Preferences#getDacFsVoltageAmpl()} directly.
+     * full-scale is stored where the device is connected - its card, through
+     * its device manager - which is where the generator reads it.
      */
     private void openDacCalibrationDialog() {
         Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
         if (parent == null) return;
         Preferences prefs = Preferences.instance();
-        // Where the calibration goes - this machine's cards or the bench that owns
-        // the device - and, first, whether it may be written at all.
-        final CalibrationStore calibration = new CalibrationStore(prefs);
-        if (calibration.isCalibrationFromDevice(false)) {
+        DeviceCalibration dac = AudioBackend.instance().calibrationOrDefault(false);
+        // First, whether the calibration may be written at all.
+        if (AudioBackend.instance().isCalibrationFromDevice(false)) {
             // Device-provided (a QA40x, here or on a bench): show the built-in
             // output full-scale (Vrms) read-only.
-            double fsL = prefs.getDacFsVoltageAmpl(Channel.L) / Constants.SQRT2;
-            double fsR = prefs.getDacFsVoltageAmpl(Channel.R) / Constants.SQRT2;
-            new CalibrationDialog(parent, dacTexts(), fsL, fsR, true, (ch, v) -> { }).open();
+            new CalibrationDialog(parent, dacTexts(), dac.fsRms(Channel.L), dac.fsRms(Channel.R),
+                    true, measured -> { }).open();
             return;
         }
-        final double configuredVrms = prefs.getGenAmplitudeVrms();
+        final double configuredLeft  = dac.amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L);
+        final double configuredRight = dac.amplitudeVrms(prefs.getGenAmplitudeRight(), Channel.R);
         final boolean stereo = prefs.isOutputBoundStereo();
         // A stereo (LINKED / INDEPENDENT) card gets both rows, each prefilled with
-        // the single commanded amplitude (the generator drives both lanes from one
-        // amplitude), so each channel's measured output rescales its OWN DAC
-        // full-scale.  A MONO card or an unbound device is single-row (Left only) -
-        // the shared both-channels full-scale.  Output RMS scales linearly with FS,
-        // so the true FS satisfies measured/configured = FS_true/FS_old.
-        Double seedRight = stereo ? configuredVrms : null;
-        new CalibrationDialog(parent, dacTexts(), configuredVrms, seedRight, false, (ch, measuredVrms) -> {
-            boolean stored;
-            if (stereo) {
-                double oldFs = prefs.getDacFsVoltageAmpl(ch);
-                double newFs = oldFs * (measuredVrms / configuredVrms);
-                stored = calibration.storeDacCalibration(ch, newFs);
-            } else {
-                // MONO / unbound: shared both-channels full-scale (auto-creates the
-                // profile on first calibrate); also sets the FS scalar and persists.
-                double oldFs = prefs.getDacFsVoltageAmpl();
-                double newFs = oldFs * (measuredVrms / configuredVrms);
-                stored = calibration.storeDacCalibration(newFs);
+        // its own lane's commanded amplitude, so each channel's measured output
+        // rescales its OWN DAC full-scale.  A MONO card or an unbound device is
+        // single-row (Left only) - the shared both-channels full-scale.  Output
+        // RMS scales linearly with FS, so the true FS satisfies
+        // measured/configured = FS_true/FS_old.
+        Double seedRight = stereo ? configuredRight : null;
+        new CalibrationDialog(parent, dacTexts(), configuredLeft, seedRight, false, measured -> {
+            // The backend the device is on calibrates it from the commanded and
+            // the measured amplitude: this machine's cards, or the bench the
+            // device is plugged into (AudioBackend.calibrate) - one channel per
+            // committed row, each against its own lane's commanded amplitude.
+            AudioBackend audio = AudioBackend.instance();
+            boolean stored = true;
+            for (Channel ch : Channel.values()) {
+                Double measuredVrms = measured.get(ch);
+                if (measuredVrms == null) continue;
+                double configured = ch == Channel.R ? configuredRight : configuredLeft;
+                stored &= audio.calibrate(false, ch, configured, measuredVrms);
             }
-            // The store fires the dacFsVoltageRms binding, which recomputes the
+            // The store fires the dacFsVoltageAmpl binding, which recomputes the
             // running generator's amplitude against the new full-scale - so the
             // calibration takes effect immediately, without a restart.  A bench
-            // that refused it moved nothing (CalibrationStore applies on success),
-            // and the operator has to be told that.
+            // that refused it moved nothing here, and the operator has to be told
+            // that.
             if (!stored) {
                 Dialogs.error(parent, I18n.t("calibrate.dac.title"),
                         I18n.t("preferences.audio.card.copyCalibration.failed",
@@ -1229,15 +1213,19 @@ public final class GeneratorPane extends AbstractPane {
     }
 
     /** Capture support (help screenshots): builds the DAC calibration dialog in its
-     *  two-row (stereo) form with both channels prefilled at the configured amplitude
-     *  and shows it non-modally - no live measurement, no modal loop - returning it so
-     *  the automation can snapshot and dispose it.  The commit callback is a no-op:
-     *  the shot never presses Calibrate.  Mirrors {@link #openDacCalibrationDialog}. */
+     *  two-row (stereo) form with each channel prefilled at its lane's configured
+     *  amplitude and shows it non-modally - no live measurement, no modal loop -
+     *  returning it so the automation can snapshot and dispose it.  The commit
+     *  callback is a no-op: the shot never presses Calibrate.  Mirrors
+     *  {@link #openDacCalibrationDialog}. */
     public CalibrationDialog openDacCalibrationForCapture() {
         Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
         if (parent == null) return null;
-        double vrms = Preferences.instance().getGenAmplitudeVrms();
-        CalibrationDialog dlg = new CalibrationDialog(parent, dacTexts(), vrms, vrms, false, (ch, v) -> { });
+        Preferences prefs = Preferences.instance();
+        DeviceCalibration dac = AudioBackend.instance().calibrationOrDefault(false);
+        CalibrationDialog dlg = new CalibrationDialog(parent, dacTexts(),
+                dac.amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L),
+                dac.amplitudeVrms(prefs.getGenAmplitudeRight(), Channel.R), false, measured -> { });
         dlg.showForCapture();
         return dlg;
     }
@@ -1588,8 +1576,8 @@ public final class GeneratorPane extends AbstractPane {
         // and publishes the FFT invalidation.
         prefs.setGenDualToneSplitPct(a1);
         // The split sets the two-tone crest factor, hence the V RMS at which the
-        // pair reaches full scale - re-cap the amplitude field.
-        ampField.setMax(controller.maxAmplitudeVrms(formCombo.getSelectedForm()));
+        // pair reaches full scale - re-cap the amplitude fields.
+        capAmpFields();
     }
 
     /** Flips a control's GridData.exclude flag and visibility together. */
@@ -1800,13 +1788,57 @@ public final class GeneratorPane extends AbstractPane {
      * Off shows the plain caption.  The dBV side tracks the live DAC full-scale,
      * so this is re-run on calibration / output-format changes.
      */
-    /** Replays the stored amplitude into the field, unless it is already
+    /** Builds one lane's amplitude field - its label row, the field, and the
+     *  wiring to the lane's entered pair {@code stored} and to the lane's full
+     *  scale, read from the output device's calibration. */
+    private NumericStepField buildAmpField(Composite parent, String labelKey, Channel ch,
+                                           GenSignalForm initialForm, Property<UnitValue> stored) {
+        addRowLabel(parent, I18n.t(labelKey));
+        NumericStepField field = new NumericStepField(parent, UnitFamily.AMPLITUDE,
+                AMP_MIN_VRMS, controller.maxAmplitudeVrms(initialForm, ch), AMP_MAX_DECIMALS,
+                () -> AudioBackend.instance().calibrationOrDefault(false).peakVolts(ch), 160);
+        field.setLayoutData(fillH());
+        field.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
+        // The field holds the pair the operator entered - the displayed number
+        // and its unit - and the store resolves it to Vrms at use, so a dBFS
+        // entry keeps meaning what was typed when the calibration moves.  Seed
+        // before the listener so the seed cannot re-enter the pref write;
+        // live-apply and the FFT-invalidation publish are the controller's
+        // subscription.
+        field.seedPair(stored.get());
+        field.addSelectionListener(e -> stored.set(field.enteredValue()));
+        // A value written from elsewhere (a programmatic writer, a preset) has
+        // to reach the field.
+        Bindings.onChange(parent, stored, v -> seedAmpField(field, stored));
+        // A DAC recalibration (Calibrate DAC dialog) changes this lane's output
+        // full-scale: the ceiling moves with it, and replaying the stored pair
+        // leaves the entered text exactly as it stands while re-solving what it
+        // resolves to (0 dBFS is a different voltage now).  The running
+        // generator is re-pushed by the controller's own subscription.
+        Bindings.onEvent(parent, Events.DAC_CALIBRATION_CHANGED, (DeviceRef device) -> {
+            if (!AudioBackend.instance().isActiveDevice(device, false)) return;
+            field.setMax(controller.maxAmplitudeVrms(formCombo.getSelectedForm(), ch));
+            seedAmpField(field, stored);
+        });
+        return field;
+    }
+
+    /** Re-caps both amplitude fields at their lanes' clipping ceilings for the
+     *  selected form (the dual-tone split moves the crest factor, so it re-caps
+     *  too). */
+    private void capAmpFields() {
+        GenSignalForm form = formCombo.getSelectedForm();
+        ampFieldLeft .setMax(controller.maxAmplitudeVrms(form, Channel.L));
+        ampFieldRight.setMax(controller.maxAmplitudeVrms(form, Channel.R));
+    }
+
+    /** Replays a lane's stored amplitude into its field, unless it is already
      *  showing exactly that value - which is the case right after the field
      *  itself wrote it, and re-seeding then would fight the operator's caret. */
-    private void seedAmpFieldFromPrefs() {
-        UnitValue stored = Preferences.instance().getGenAmplitude();
-        if (!ampField.enteredValue().equals(stored)) {
-            ampField.seedPair(stored);
+    private void seedAmpField(NumericStepField field, Property<UnitValue> stored) {
+        UnitValue value = stored.get();
+        if (!field.enteredValue().equals(value)) {
+            field.seedPair(value);
         }
     }
 

@@ -20,6 +20,7 @@ package org.edgo.audio.measure.gui.sound;
 
 import java.util.function.BooleanSupplier;
 
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.sound.StereoCaptureProgress;
@@ -82,9 +83,13 @@ public final class SweepCapture {
      * @param playbackRateHz   the DAC's configured rate, which every sweep
      *                         count above is against
      * @param playbackBitDepth the DAC's configured word length
+     * @param dacFsVoltageLeft  the left lane's DAC full scale the one amplitude
+     *                          is rendered against
+     * @param dacFsVoltageRight the same for the right lane
      */
     public StereoSamples run(double startHz, double stopHz, int sweepSamples,
-            int leadInSamples, int fadeSamples, double amplitudeVrms, double dacFsVoltage,
+            int leadInSamples, int fadeSamples, double amplitudeVrms,
+            double dacFsVoltageLeft, double dacFsVoltageRight,
             int captureRateHz, int playbackRateHz, int playbackBitDepth, int ditherBits,
             OutputChannels channels,
             int durationSec, BooleanSupplier cancelToken,
@@ -103,10 +108,10 @@ public final class SweepCapture {
             // behind but the capture reference the finally releases.
             requireRate(reader.getSampleRate(), captureRateHz, "input stream");
             GeneratorRun run = new GeneratorRun(GenSignalForm.LOG_SWEEP,
-                    0.0, amplitudeVrms, playbackRateHz, playbackBitDepth, ditherBits,
-                    dacFsVoltage, 1.0, channels,
+                    0.0, amplitudeVrms, amplitudeVrms,   // both lanes alike
+                    playbackRateHz, playbackBitDepth, ditherBits, ditherBits,
+                    dacFsVoltageLeft, dacFsVoltageRight, channels,
                     true,    // sample counts on the asked clock - a mismatch refuses
-                    false,   // the bench's own device card owns its calibration
                     new GeneratorRun.SweepSpec(startHz, stopHz, sweepSamples,
                             leadInSamples, fadeSamples, fadeSamples, false));
             PlaybackStateEnum started = lane.start(run);
@@ -132,7 +137,14 @@ public final class SweepCapture {
                     // anchor instant the private-line path always used.
                     reader.seekToLatest();
                 }
-                return assemble(reader, captureRateHz, durationSec, cancelToken, progress);
+                // The offset window on the record's own clock: the fixed
+                // stretch of silence at the head of the record that the
+                // deconvolution measures each channel's offset on, and the
+                // progress meter with it.
+                int offsetSamples = (int) Math.round(
+                        FreqRespCalHelper.OFFSET_LEAD_IN_SEC * captureRateHz);
+                return assemble(reader, captureRateHz, offsetSamples, durationSec,
+                        cancelToken, progress);
             } finally {
                 lane.stop();
             }
@@ -171,15 +183,24 @@ public final class SweepCapture {
 
     /** Streams {@code durationSec * captureRateHz} contiguous frames from the
      *  cursor into a fresh {@link StereoSamples}, blocking on the ring's own
-     *  wakeup between chunks. */
+     *  wakeup between chunks.
+     *
+     *  <p>The level handed to the progress meter is taken with each channel's
+     *  DC offset removed - the mean of its first {@code offsetSamples}, the
+     *  silence before the chirp - so a capture sitting off centre shows the
+     *  chirp's level and not the offset.  The blocks of that window are not
+     *  reported at all: the offset is unknown until the window is complete,
+     *  and a raw level with the offset in it is not the signal's level. */
     private StereoSamples assemble(SignalBufferReader reader, int captureRateHz,
-            int durationSec, BooleanSupplier cancelToken,
+            int offsetSamples, int durationSec, BooleanSupplier cancelToken,
             StereoCaptureProgress progress) throws InterruptedException {
         int total = durationSec * captureRateHz;
         double[] left   = new double[total];
         double[] right  = new double[total];
         double[] chunkL = new double[CHUNK_FRAMES];
         double[] chunkR = new double[CHUNK_FRAMES];
+        double sumOffsetL = 0.0;
+        double sumOffsetR = 0.0;
         int written = 0;
         while (written < total) {
             if (cancelToken != null && cancelToken.getAsBoolean()) {
@@ -206,9 +227,17 @@ public final class SweepCapture {
             }
             System.arraycopy(chunkL, 0, left,  written, got);
             System.arraycopy(chunkR, 0, right, written, got);
+            int inWindow = Math.max(0, Math.min(got, offsetSamples - written));
+            for (int i = 0; i < inWindow; i++) {
+                sumOffsetL += chunkL[i];
+                sumOffsetR += chunkR[i];
+            }
             written += got;
-            if (progress != null) {
-                progress.onBlock(written, blockRms(chunkL, chunkR, got));
+            if (progress != null && written >= offsetSamples) {
+                double offsetL = offsetSamples > 0 ? sumOffsetL / offsetSamples : 0.0;
+                double offsetR = offsetSamples > 0 ? sumOffsetR / offsetSamples : 0.0;
+                progress.onBlock(written, blockRms(chunkL, got, offsetL),
+                        blockRms(chunkR, got, offsetR));
             }
         }
         if (written == total) {
@@ -232,15 +261,14 @@ public final class SweepCapture {
         }
     }
 
-    /** The larger of the two channels' RMS over the chunk - the level the
-     *  progress meter shows, same convention as the old private-line path. */
-    private double blockRms(double[] l, double[] r, int n) {
-        double sumL = 0;
-        double sumR = 0;
+    /** One channel's RMS over the chunk about {@code offset} - the progress
+     *  meter is handed both channels' and shows the one its view has selected. */
+    private double blockRms(double[] samples, int n, double offset) {
+        double sum = 0;
         for (int i = 0; i < n; i++) {
-            sumL += l[i] * l[i];
-            sumR += r[i] * r[i];
+            double v = samples[i] - offset;
+            sum += v * v;
         }
-        return Math.sqrt(Math.max(sumL, sumR) / n);
+        return Math.sqrt(sum / n);
     }
 }

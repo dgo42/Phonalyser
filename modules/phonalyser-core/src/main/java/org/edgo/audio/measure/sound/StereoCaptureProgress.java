@@ -39,9 +39,11 @@ public interface StereoCaptureProgress {
      * @param totalSamples cumulative sample count (per channel) at the end
      *                     of this block - combine with the sample rate to
      *                     get an elapsed-time value
-     * @param rmsLin       the larger of the L and R channels' RMS amplitude
-     *                     for the just-finished block, in linear scale where
-     *                     {@code 1.0} is digital full-scale
+     * @param rmsLeft      the LEFT channel's RMS amplitude for the just-finished
+     *                     block, in linear scale where {@code 1.0} is digital
+     *                     full-scale
+     * @param rmsRight     the RIGHT channel's, likewise - the consumer picks the
+     *                     channel its meter shows
      */
-    void onBlock(int totalSamples, double rmsLin);
+    void onBlock(int totalSamples, double rmsLeft, double rmsRight);
 }

@@ -31,11 +31,13 @@ import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AbstractLocalDeviceManager;
 import org.edgo.audio.measure.sound.AudioCapture;
-import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xDevice;
@@ -78,7 +80,7 @@ import lombok.extern.log4j.Log4j2;
  * which the QA402 does not have - doc §4).
  */
 @Log4j2
-public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
+public class Qa40xDeviceManager extends AbstractLocalDeviceManager implements Qa40xControl {
 
     /** Bit depth advertised to the UI and delivered by {@code Qa40xRecorder}: the
      *  wire container is 32-bit LE, but only the 24 MSBs carry signal (the low byte
@@ -195,6 +197,8 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
     /**
      * Headless test seam: enumeration against an injected (stub) finder - no
      * {@code libusb}, no device, no bus wiring, so it runs on any CI agent.
+     * The card store is the process's own: nothing driven through this seam
+     * calibrates.
      */
     Qa40xDeviceManager(Qa40xDeviceFinder finder) {
         this.finder  = finder;
@@ -416,8 +420,9 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
 
     /** Opens a playback client bound to this manager's one duplex engine. */
     @Override
-    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
-        return new Qa40xGenerator(this, sampleRate, ditherBits);
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth,
+            double ditherBitsLeft, double ditherBitsRight) {
+        return new Qa40xGenerator(this, sampleRate, ditherBitsLeft, ditherBitsRight);
     }
 
     /**
@@ -731,8 +736,17 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
             return;
         }
         DeviceEndpointConfig endpoint = input ? card.getInput() : card.getOutput();
-        endpoint.setActiveRange(Qa40xProtocol.rangeLabel(dbv));
+        endpoint.setActiveRangeLeft(Qa40xProtocol.rangeLabel(dbv));
         prefs.saveDevices();
+        // The row moved, so the full scale every consumer reads out of it did:
+        // the same announcement a stored calibration makes, for this direction
+        // of the analyzer on the bus.
+        List<DeviceRef> attached = listDevices();
+        if (!attached.isEmpty()) {
+            MessageBus.instance().publish(input
+                    ? Events.ADC_CALIBRATION_CHANGED : Events.DAC_CALIBRATION_CHANGED,
+                    attached.get(0));
+        }
     }
 
     /**
@@ -1244,8 +1258,8 @@ public class Qa40xDeviceManager implements AudioDeviceManager, Qa40xControl {
                 prefs.findAudioDeviceProfile(cardName));
         prefs.putAudioDeviceProfile(card);
         prefs.saveDevices();     // persist the device-read calibration; no-op in CLI / tests
-        inputRangeDbv  = Qa40xProtocol.rangeDbv(card.getInput().getActiveRange(),  Qa40xProtocol.inputRangeDbvValues(),  DEFAULT_INPUT_DBV);
-        outputRangeDbv = Qa40xProtocol.rangeDbv(card.getOutput().getActiveRange(), Qa40xProtocol.outputRangeDbvValues(), DEFAULT_OUTPUT_DBV);
+        inputRangeDbv  = Qa40xProtocol.rangeDbv(card.getInput().getActiveRangeLeft(),  Qa40xProtocol.inputRangeDbvValues(),  DEFAULT_INPUT_DBV);
+        outputRangeDbv = Qa40xProtocol.rangeDbv(card.getOutput().getActiveRangeLeft(), Qa40xProtocol.outputRangeDbvValues(), DEFAULT_OUTPUT_DBV);
     }
 
     /**

@@ -35,7 +35,7 @@ import lombok.Setter;
  * <p>That is the only honest way to ask what the generator is EMITTING.  The
  * commanded state says what was asked for; a trim, a bin snap or an amplitude
  * change is only real if it reaches the DDS, and the DDS answers exactly one
- * question - {@code nextSample()}.  So this stub renders like a real render loop
+ * question - {@code nextFrame}.  So this stub renders like a real render loop
  * does and {@link #measuredHz(int)} reads the frequency back off the waveform,
  * rather than the test asserting on the number it just sent.
  *
@@ -70,11 +70,8 @@ final class StubPlayback implements AudioPlayback {
     @Getter
     @Setter
     private volatile OutputChannels outputChannels;
-    /** The RIGHT lane's scale as last pushed - {@code fsLeft/fsRight} of the
-     *  card the lane was opened on (spec 4.5).  It never reaches the DDS, so the
-     *  rendered waveform cannot show it and the line has to say so itself. */
-    @Getter
-    private volatile double rightLaneScale;
+    /** The two DAC lanes of a frame. */
+    private static final int LANES = 2;
 
     private volatile SignalGenerator generator;
 
@@ -111,17 +108,19 @@ final class StubPlayback implements AudioPlayback {
         }
     }
 
-    @Override
-    public void setChannelScale(double left, double right) {
-        rightLaneScale = right;
-    }
-
-    /** The dither depth as last pushed; the setter IS the
-     *  {@code AudioPlayback} one.  Like the lane scale above it lands on the
-     *  quantizer, so the rendered waveform cannot show it. */
+    /** The dither depths as last pushed, per lane; the setter IS the
+     *  {@code AudioPlayback} one.  They land on the quantizer, so the rendered
+     *  waveform cannot show them. */
     @Getter
-    @Setter
-    private volatile double ditherBits;
+    private volatile double ditherBitsLeft;
+    @Getter
+    private volatile double ditherBitsRight;
+
+    @Override
+    public void setDitherBits(double leftBits, double rightBits) {
+        ditherBitsLeft = leftBits;
+        ditherBitsRight = rightBits;
+    }
 
     /** How many times this lane was closed - a lane handed back twice is a
      *  double release, which on a real device is a refusal or worse. */
@@ -134,12 +133,24 @@ final class StubPlayback implements AudioPlayback {
         closeCount++;
     }
 
-    /** Pulls {@code count} samples the way the render loop does. */
+    /** Pulls {@code count} LEFT-lane samples the way the render loop does. */
     double[] render(int count) {
+        return renderLane(count, 0);
+    }
+
+    /** Pulls {@code count} RIGHT-lane samples the way the render loop does -
+     *  the lane's own level, rendered by the DDS, not a scale on the line. */
+    double[] renderRight(int count) {
+        return renderLane(count, 1);
+    }
+
+    private double[] renderLane(int count, int lane) {
         SignalGenerator source = generator;
+        double[] frame = new double[LANES];
         double[] rendered = new double[count];
         for (int i = 0; i < count; i++) {
-            rendered[i] = source.nextSample();
+            source.nextFrame(frame);
+            rendered[i] = frame[lane];
         }
         return rendered;
     }

@@ -37,7 +37,9 @@ import org.edgo.audio.measure.gui.fft.FftController;
 import org.edgo.audio.measure.gui.fft.FftView;
 import org.edgo.audio.measure.gui.fft.ImdResult;
 import org.edgo.audio.measure.gui.generator.GeneratorController;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -323,18 +325,20 @@ public final class PredistortionEngine {
                             calResponseAt(f1Hz, chanLeft)[1],
                             calResponseAt(f2Hz, chanLeft)[1]);
                     imdAppl = imd.copy();
-                    Preferences pd = Preferences.instance();
                     IntermodCompensation.GeneratorCorrections gc = imd.toGeneratorCorrections(
-                            f -> calResponseAt(f, chanLeft), pd.getAdcFsVoltageRms(), dualToneFundamentalVrms());
+                            f -> calResponseAt(f, chanLeft),
+                            AudioBackend.instance().calibrationOrDefault(true).fsRms(Channel.L),
+                            dualToneFundamentalVrms());
                     stats.productCorrection(round, gc, f1Hz, f2Hz);
                     ui(() -> gen.applyDualToneCompensation(gc.ampRatios(), gc.coefA(), gc.coefB(), gc.phiInits()));
                 } else {
                     harm.accumulate(r, COMP_STEP, calResponseAt(r.fundamentalHzRefined, chanLeft)[1]);
                     harmAppl = harm.copy();
-                    Preferences p = Preferences.instance();
+                    AudioBackend audio = AudioBackend.instance();
                     GeneratorCorrections gc = harm.toGeneratorCorrections(
                             target, f -> calResponseAt(f, chanLeft),
-                            p.getAdcFsVoltageRms(), p.getGenAmplitudeVrms());
+                            audio.calibrationOrDefault(true).fsRms(Channel.L),
+                            generatorAmplitudeVrms());
                     stats.correction(round, gc);
                     ui(() -> gen.applyCompensation(gc.ampRatios(), gc.harmonicNumbers(), gc.phiInits()));
                 }
@@ -405,7 +409,15 @@ public final class PredistortionEngine {
         double w1 = p.getGenDualToneSplitPct() / 100.0;
         double w2 = 1.0 - w1;
         double norm = Math.hypot(w1, w2);
-        return norm > 0.0 ? p.getGenAmplitudeVrms() * w1 / norm : p.getGenAmplitudeVrms();
+        double total = generatorAmplitudeVrms();
+        return norm > 0.0 ? total * w1 / norm : total;
+    }
+
+    /** The left lane's entered generator amplitude as V RMS against the output
+     *  device's full scale in force - the lane the predistortion measures. */
+    private double generatorAmplitudeVrms() {
+        return AudioBackend.instance().calibrationOrDefault(false)
+                .amplitudeVrms(Preferences.instance().getGenAmplitudeLeft(), Channel.L);
     }
 
     /** Dual-tone distortion figure being minimised: the combined intermod-product

@@ -446,7 +446,7 @@ public final class CardEditorDialog {
     private void applyCapability(DeviceEndpointConfig ep, boolean want, double seedFs) {
         if (!want) {
             ep.getRanges().clear();
-            ep.setActiveRange(null);
+            ep.setActiveRangeLeft(null);
             ep.setActiveRangeRight(null);
             return;
         }
@@ -456,7 +456,7 @@ public final class CardEditorDialog {
             range.setFsLeft(seedFs);
             range.setFsRight(seedFs);
             ep.getRanges().add(range);
-            ep.setActiveRange(range.getLabel());
+            ep.setActiveRangeLeft(range.getLabel());
             ep.setActiveRangeRight(range.getLabel());
         }
     }

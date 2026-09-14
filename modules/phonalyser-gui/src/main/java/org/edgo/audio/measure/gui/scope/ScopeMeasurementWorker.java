@@ -32,6 +32,8 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.CaptureEndReason;
 
 import lombok.Getter;
@@ -648,8 +650,9 @@ public final class ScopeMeasurementWorker {
         // Each channel scales by its OWN ADC full-scale (LINKED cards give equal L/R
         // peaks), so the RIGHT channel's Vpp/Vrms/Vmean no longer inherit the LEFT
         // full-scale; the back-conversion below divides each mean by its own peak.
-        double peakVoltsL = prefs.getAdcPeakVolts(Channel.L);
-        double peakVoltsR = prefs.getAdcPeakVolts(Channel.R);
+        DeviceCalibration adc = AudioBackend.instance().calibrationOrDefault(true);
+        double peakVoltsL = adc.peakVolts(Channel.L);
+        double peakVoltsR = adc.peakVolts(Channel.R);
         // Both channels run the SAME measurement pipeline; the view shows the
         // channel the table's L/R selector points at.  The per-channel DC
         // means (AC-coupling offset, residual baseline) are the channels' own

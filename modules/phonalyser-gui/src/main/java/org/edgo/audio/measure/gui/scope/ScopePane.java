@@ -41,6 +41,8 @@ import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.MainWindow;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
@@ -49,7 +51,6 @@ import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.GlScopeSurface;
-import org.edgo.audio.measure.gui.sound.CalibrationStore;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
@@ -336,8 +337,9 @@ public final class ScopePane extends AbstractPane {
         Bindings.onChange(vertSlider, vsPrefs.oscRightChannelEnabledProperty(), v -> syncVertSliderFromPrefs());
         // Per-channel ADC full-scale sizes offsetFracBounds' range, so a recal must
         // resize the scrollbar immediately (the 250 ms timer would otherwise mask it).
-        Bindings.onChange(vertSlider, vsPrefs.adcFsVoltageRmsProperty(),        v -> syncVertSliderFromPrefs());
-        Bindings.onChange(vertSlider, vsPrefs.adcFsVoltageRmsRightProperty(),   v -> syncVertSliderFromPrefs());
+        Bindings.onEvent(vertSlider, Events.ADC_CALIBRATION_CHANGED, (DeviceRef device) -> {
+            if (AudioBackend.instance().isActiveDevice(device, true)) syncVertSliderFromPrefs();
+        });
 
         // Navigation slider between the main view and the condensed
         // strip.  Selection = how far back from the live writePos the
@@ -1031,7 +1033,8 @@ public final class ScopePane extends AbstractPane {
             double vpp = view.getLastVpp();
             // Pair the full-scale with getLastVpp's channel (the measurement channel)
             // so the gate compares like against like on an INDEPENDENT card.
-            double fsVpp = 2.0 * prefs.getAdcPeakVolts(prefs.getOscMeasurementChannel());
+            double fsVpp = 2.0 * AudioBackend.instance().calibrationOrDefault(true)
+                    .peakVolts(prefs.getOscMeasurementChannel());
             // The 25 % rule presumes a full scale worth measuring against, and an
             // UNCALIBRATED selection is precisely the case where there is none: the
             // volts on screen are a provisional full scale times a normalized
@@ -1041,7 +1044,7 @@ public final class ScopePane extends AbstractPane {
             // correction (newFs = currentFs x known / measured) reaches the same
             // answer from any seed, so a small reading costs accuracy, not
             // correctness.  A calibrated selection keeps the accuracy gate whole.
-            boolean uncalibrated = new CalibrationStore(prefs).isUncalibrated(true);
+            boolean uncalibrated = AudioBackend.instance().isUncalibrated(true);
             double minFraction = uncalibrated
                     ? CALIBRATE_MIN_VPP_FRACTION_UNCALIBRATED
                     : CALIBRATE_MIN_VPP_FRACTION;

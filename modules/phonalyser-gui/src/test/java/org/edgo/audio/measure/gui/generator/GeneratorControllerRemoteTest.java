@@ -63,7 +63,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * applied, a bench that was never told, and nothing on screen to say so.  None
  * of them is a wrong VALUE - they are commands that were not sent at all - so
  * the assertions are about the recorded command sequence rather than about
- * audio, and they run headless against {@link BenchGeneratorStub}.
+ * audio, and they run headless against {@link ServerGeneratorStub}.
  */
 class GeneratorControllerRemoteTest {
 
@@ -110,7 +110,7 @@ class GeneratorControllerRemoteTest {
      *  they cannot ask until they are told which one it is. */
     private static final String HOLDER = "Bench tablet";
 
-    private BenchGeneratorStub bench;
+    private ServerGeneratorStub server;
     /** The bench UI the device combos read lock state through - staged here so a
      *  refused start can be asked to name the holder. */
     private RecordingRemoteBackendUi remoteUi;
@@ -120,12 +120,11 @@ class GeneratorControllerRemoteTest {
     private GenSignalForm previousForm;
     private double previousFrequencyHz;
     private double previousSweepSeconds;
-    private double previousRightFs;
     private boolean previousSnap;
     private String previousDpd;
 
     @BeforeEach
-    void connectTheBench() {
+    void connectTheServer() {
         Preferences prefs = Preferences.instance();
         // The controller writes through the live singleton; transient mode makes
         // sure this test cannot reach the user's preferences file.
@@ -134,16 +133,15 @@ class GeneratorControllerRemoteTest {
         previousForm         = prefs.getGenSignalForm();
         previousFrequencyHz  = prefs.getGenFrequencyHz();
         previousSweepSeconds = prefs.getGenSweepDurationSec();
-        previousRightFs      = prefs.getDacFsVoltageAmplRight();
         previousSnap         = prefs.isGenSnapToFftBin();
         previousDpd          = prefs.getGenDpd();
 
         AudioBackend audio = AudioBackend.instance();
         previousActive = audio.activeKey();
-        bench = assertInstanceOf(BenchGeneratorStub.class, audio.manager(AudioBackendType.NET),
+        server = assertInstanceOf(ServerGeneratorStub.class, audio.manager(AudioBackendType.NET),
                 "META-INF/services/...AudioDeviceManagerProvider must name the stub, or this "
                         + "test would silently exercise the LOCAL generator path");
-        bench.reset();
+        server.reset();
         remoteUi = assertInstanceOf(RecordingRemoteBackendUi.class,
                 RemoteBackendRegistry.instance().getUi(),
                 "META-INF/services/...RemoteBackendUi must name the recording stub");
@@ -154,18 +152,19 @@ class GeneratorControllerRemoteTest {
 
         prefs.setSelectedBackend(BackendKey.of(SERVER_ID, AudioBackendType.QA40X));
         BackendPrefs backend = prefs.current();
-        backend.setOutputDeviceName(BenchGeneratorStub.DEVICE_NAME);
+        backend.setOutputDeviceName(ServerGeneratorStub.DEVICE_NAME);
         backend.setOutputSampleRate(ASKED_RATE);
         backend.setOutputBitDepth(BIT_DEPTH);
         // One grid question at a time: the snap is the far end's job (gen.fftGrid)
         // and asserting it here would only re-test FftBinSnap.
         prefs.setGenSnapToFftBin(false);
         prefs.setGenFrequencyHz(TONE_HZ);
-        prefs.setGenAmplitudeVrms(AMPLITUDE_VRMS);
+        prefs.setGenAmplitudeVrmsLeft(AMPLITUDE_VRMS);
+        prefs.setGenAmplitudeVrmsRight(AMPLITUDE_VRMS);
     }
 
     @AfterEach
-    void disconnectTheBench() {
+    void disconnectTheServer() {
         if (controller != null) {
             controller.shutdown();
             controller = null;
@@ -181,28 +180,27 @@ class GeneratorControllerRemoteTest {
         prefs.setGenSignalForm(previousForm);
         prefs.setGenFrequencyHz(previousFrequencyHz);
         prefs.setGenSweepDurationSec(previousSweepSeconds);
-        prefs.setDacFsVoltageAmplRight(previousRightFs);
         prefs.setGenSnapToFftBin(previousSnap);
         prefs.setGenDpd(GenSignalForm.SINE_COMP, previousDpd == null ? "" : previousDpd);
     }
 
     @Test
-    void everySettingReachesTheBenchAndTheAnalyzersGridGoesLast() {
+    void everySettingReachesTheServerAndTheAnalyzersGridGoesLast() {
         Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
         controller = new GeneratorController();
 
         controller.start();
 
         assertNull(controller.getLastStartError());
-        List<String> sent = bench.names();
+        List<String> sent = server.names();
         assertEquals("openGenerator", sent.get(0), "the lane is taken before anything is set");
         assertTrue(sent.contains("setForm"));
         assertTrue(sent.contains("setFrequency"));
-        assertTrue(sent.contains("setAmplitudeVrms"));
-        assertTrue(sent.contains("setDacFsVoltageAmpl"));
-        assertTrue(sent.contains("setRightLaneScale"),
-                "a card whose two DAC full-scales differ emits an uncalibrated right lane "
-                        + "without it, and there is nothing on screen to say so");
+        assertTrue(sent.contains("setAmplitudesVrms"),
+                "both lanes' amplitudes travel, and the bench converts each against its "
+                        + "own card");
+        assertFalse(sent.contains("setDacFsVoltageAmpls"),
+                "spec 4.5: the wire carries no full scale - the bench's card converts");
         assertEquals("startGenerator", sent.get(sent.size() - 1));
         assertEquals(sent.size() - 2, sent.indexOf("fftGrid"),
                 "the grid is snapped against the waveform the far end HOLDS, so it must "
@@ -213,16 +211,16 @@ class GeneratorControllerRemoteTest {
     /** Commands recorded after {@code mark} - the stub's log is never reset
      *  mid-scenario, because a reset also drops the pushed running state the
      *  bench answers {@code isRunning()} from. */
-    private List<BenchGeneratorStub.Command> commandsAfter(int mark) {
-        List<BenchGeneratorStub.Command> all = bench.commands();
+    private List<ServerGeneratorStub.Command> commandsAfter(int mark) {
+        List<ServerGeneratorStub.Command> all = server.commands();
         return all.subList(Math.min(mark, all.size()), all.size());
     }
 
     /** The waveform the bench was last told to hold, or null when none was
      *  pushed - what a form switch has to get right. */
-    private GenSignalForm formPushedIn(List<BenchGeneratorStub.Command> commands) {
+    private GenSignalForm formPushedIn(List<ServerGeneratorStub.Command> commands) {
         GenSignalForm pushed = null;
-        for (BenchGeneratorStub.Command c : commands) {
+        for (ServerGeneratorStub.Command c : commands) {
             if ("setForm".equals(c.name()) && !c.args().isEmpty()) {
                 pushed = (GenSignalForm) c.args().get(0);
             }
@@ -237,13 +235,13 @@ class GeneratorControllerRemoteTest {
         controller = new GeneratorController();
         controller.start();
         assertTrue(controller.isRunning());
-        int mark = bench.commands().size();
+        int mark = server.commands().size();
 
         prefs.setGenSignalForm(GenSignalForm.DUAL_TONE);
 
-        List<BenchGeneratorStub.Command> tail = commandsAfter(mark);
+        List<ServerGeneratorStub.Command> tail = commandsAfter(mark);
         List<String> sent = new ArrayList<>();
-        for (BenchGeneratorStub.Command c : tail) sent.add(c.name());
+        for (ServerGeneratorStub.Command c : tail) sent.add(c.name());
         assertTrue(sent.contains("stopGenerator") && sent.contains("startGenerator"),
                 "a second tone needs its own DDS accumulator, which only a rebuild "
                         + "stands up - a live form swap cannot: " + sent);
@@ -260,13 +258,13 @@ class GeneratorControllerRemoteTest {
         controller = new GeneratorController();
         controller.start();
         assertTrue(controller.isRunning());
-        int mark = bench.commands().size();
+        int mark = server.commands().size();
 
         prefs.setGenSignalForm(GenSignalForm.SINE);
 
-        List<BenchGeneratorStub.Command> tail = commandsAfter(mark);
+        List<ServerGeneratorStub.Command> tail = commandsAfter(mark);
         List<String> sent = new ArrayList<>();
-        for (BenchGeneratorStub.Command c : tail) sent.add(c.name());
+        for (ServerGeneratorStub.Command c : tail) sent.add(c.name());
         assertTrue(sent.contains("stopGenerator") && sent.contains("startGenerator"),
                 "leaving a dual tone tears the second accumulator down, which is a "
                         + "rebuild: " + sent);
@@ -277,7 +275,7 @@ class GeneratorControllerRemoteTest {
     }
 
     @Test
-    void aCompensatedWaveformCarriesItsSavedCorrectionsToTheBench() throws IOException {
+    void aCompensatedWaveformCarriesItsSavedCorrectionsToTheServer() throws IOException {
         Preferences prefs = Preferences.instance();
         prefs.setGenSignalForm(GenSignalForm.SINE_COMP);
         prefs.setGenDpd(GenSignalForm.SINE_COMP, writeHarmonicDpd().toString());
@@ -286,7 +284,7 @@ class GeneratorControllerRemoteTest {
         controller.start();
 
         assertNull(controller.getLastStartError());
-        List<String> sent = bench.names();
+        List<String> sent = server.names();
         assertTrue(sent.contains("applyCompensation"),
                 "compensated sine IS its corrections - a bench that never got them emits a "
                         + "plain sine whose THD is then recorded as if it were predistorted");
@@ -305,7 +303,7 @@ class GeneratorControllerRemoteTest {
 
         assertEquals(I18n.t("generator.error.needPredistortion"), controller.getLastStartError(),
                 "the same refusal the local path gives - the operator has to be told");
-        List<String> sent = bench.names();
+        List<String> sent = server.names();
         assertFalse(sent.contains("startGenerator"), "nothing may be emitted");
         assertTrue(sent.contains("closeGenerator"),
                 "and the lane goes back, or the bench holds a DAC for a client that gave up");
@@ -338,7 +336,7 @@ class GeneratorControllerRemoteTest {
         assertEquals(I18n.t("generator.error.predistortionFileMissing", missing), reported);
         assertFalse(reported.contains(I18n.t("device.error.reason.unknown")),
                 "and no device reason is invented for it: " + reported);
-        assertFalse(bench.names().contains("startGenerator"), "nothing may be emitted");
+        assertFalse(server.names().contains("startGenerator"), "nothing may be emitted");
     }
 
     /**
@@ -353,7 +351,7 @@ class GeneratorControllerRemoteTest {
     @Test
     void aDacAnotherClientHoldsIsRefusedByThatClientsName() {
         Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
-        bench.setRefuseOpen(true);
+        server.setRefuseOpen(true);
         remoteUi.setLockedBy(HOLDER);
         controller = new GeneratorController();
 
@@ -374,7 +372,7 @@ class GeneratorControllerRemoteTest {
     @Test
     void aRefusedDacWithNoHolderNamedStillSaysItIsInUse() {
         Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
-        bench.setRefuseOpen(true);
+        server.setRefuseOpen(true);
         controller = new GeneratorController();
 
         controller.start();
@@ -386,7 +384,7 @@ class GeneratorControllerRemoteTest {
 
     @Test
     void theGrantedRateIsWhatEverySampleCountIsComputedAgainst() {
-        bench.setGrantedRate(GRANTED_RATE);
+        server.setGrantedRate(GRANTED_RATE);
         Preferences prefs = Preferences.instance();
         prefs.setGenSignalForm(GenSignalForm.LINEAR_SWEEP);
         prefs.setGenSweepDurationSec(SWEEP_SECONDS);
@@ -395,13 +393,13 @@ class GeneratorControllerRemoteTest {
         controller.start();
 
         assertNull(controller.getLastStartError());
-        assertEquals(Integer.valueOf(GRANTED_RATE), bench.firstArg("setSweepDurationSamples"),
+        assertEquals(Integer.valueOf(GRANTED_RATE), server.firstArg("setSweepDurationSamples"),
                 "a duration in seconds turned into samples at the rate that was ASKED for is "
                         + "a sweep of the wrong length - 8.8 % long on a 44.1 kHz DAC");
     }
 
     @Test
-    void aBenchThatStoppedByItselfCanBeStartedAgain() {
+    void aServerThatStoppedByItselfCanBeStartedAgain() {
         Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
         controller = new GeneratorController();
         controller.start();
@@ -409,13 +407,13 @@ class GeneratorControllerRemoteTest {
 
         // The operator disconnected the server in the Preferences dialog and then
         // cancelled it: the tone is gone and nothing was published about it.
-        bench.reset();
+        server.reset();
 
         assertFalse(controller.isRunning(),
                 "the BENCH's answer is the only one a Play button may believe");
         controller.start();
         assertNull(controller.getLastStartError());
-        assertTrue(bench.names().contains("openGenerator"),
+        assertTrue(server.names().contains("openGenerator"),
                 "a local flag the bench never confirmed must not refuse every later Play");
     }
 
@@ -427,7 +425,7 @@ class GeneratorControllerRemoteTest {
 
         controller.stop();
 
-        List<String> sent = bench.names();
+        List<String> sent = server.names();
         assertEquals(List.of("stopGenerator", "closeGenerator"),
                 sent.subList(sent.size() - 2, sent.size()),
                 "the order the local path drains and closes in, and the reason a bench never "
@@ -445,18 +443,18 @@ class GeneratorControllerRemoteTest {
         // generator session, so playing a file first was refused before a byte
         // left this machine - no upload, no server activity, no dialog.
         controller = new GeneratorController();
-        bench.setFileState(new RemoteGenerator.FileState(true, false));
-        assertFalse(bench.isGeneratorOpen(), "no tone was started, so no lane is open");
+        server.setFileState(new RemoteGenerator.FileState(true, false));
+        assertFalse(server.isGeneratorOpen(), "no tone was started, so no lane is open");
 
         controller.startFilePlayback(writePlayableFile(), false);
 
-        assertTrue(awaitBenchCommand("openGenerator"),
+        assertTrue(awaitServerCommand("openGenerator"),
                 "the file path opens the lane itself, exactly as the local play "
                         + "loop opens its own line");
-        assertTrue(awaitBenchCommand("playFile"),
+        assertTrue(awaitServerCommand("playFile"),
                 "and the file really reaches the bench");
         assertNull(controller.getFilePlayError(), "with nothing refused");
-        assertTrue(bench.isGeneratorOpen(), "the session it opened stays open");
+        assertTrue(server.isGeneratorOpen(), "the session it opened stays open");
     }
 
     @Test
@@ -466,13 +464,13 @@ class GeneratorControllerRemoteTest {
         // invariant is not "opened once" but "open at the moment gen.playFile
         // is sent", which is the thing the bench refused on.
         controller = new GeneratorController();
-        bench.setFileState(new RemoteGenerator.FileState(true, false));
+        server.setFileState(new RemoteGenerator.FileState(true, false));
         controller.start();                       // a tone is playing on the lane
 
         controller.startFilePlayback(writePlayableFile(), false);
 
-        assertTrue(awaitBenchCommand("playFile"), "the file plays");
-        List<String> sent = bench.names();
+        assertTrue(awaitServerCommand("playFile"), "the file plays");
+        List<String> sent = server.names();
         assertTrue(sent.lastIndexOf("openGenerator") < sent.lastIndexOf("playFile"),
                 "the lane is opened before the file is commanded, not after: " + sent);
         assertTrue(sent.lastIndexOf("closeGenerator") < sent.lastIndexOf("openGenerator"),
@@ -480,21 +478,21 @@ class GeneratorControllerRemoteTest {
     }
 
     @Test
-    void aFileIsUploadedToTheBenchInsteadOfBeingRefused() throws IOException {
+    void aFileIsUploadedToTheServerInsteadOfBeingRefused() throws IOException {
         controller = new GeneratorController();
         File file = writePlayableFile();
-        bench.setFileState(new RemoteGenerator.FileState(true, false));
+        server.setFileState(new RemoteGenerator.FileState(true, false));
 
         controller.startFilePlayback(file, true);
 
-        assertTrue(awaitBenchCommand("playFile"),
+        assertTrue(awaitServerCommand("playFile"),
                 "the bench was actually told to play - not merely a flag set here");
         assertNull(controller.getFilePlayError(),
                 "a bench plays files now - the old refusal is gone");
-        assertArrayEquals(Files.readAllBytes(file.toPath()), bench.getPlayedFile(),
+        assertArrayEquals(Files.readAllBytes(file.toPath()), server.getPlayedFile(),
                 "the bench got the file's bytes, unchanged");
-        assertTrue(bench.isPlayedFileLoop(), "and the loop flag the operator ticked");
-        assertEquals(PcmFileLoader.MIME_WAV, bench.getPlayedFileMimeType(),
+        assertTrue(server.isPlayedFileLoop(), "and the loop flag the operator ticked");
+        assertEquals(PcmFileLoader.MIME_WAV, server.getPlayedFileMimeType(),
                 "the type comes from the decoder authority for the picked file, so "
                         + "the bench decodes by what it IS");
     }
@@ -502,56 +500,56 @@ class GeneratorControllerRemoteTest {
     @Test
     void theDeclaredTypeFollowsThePickedFilesExtension() throws IOException {
         controller = new GeneratorController();
-        bench.setFileState(new RemoteGenerator.FileState(true, false));
+        server.setFileState(new RemoteGenerator.FileState(true, false));
 
         controller.startFilePlayback(writePlayableFile("clip.flac"), false);
 
-        assertTrue(awaitBenchCommand("playFile"), "the bench was asked");
-        assertEquals(PcmFileLoader.MIME_FLAC, bench.getPlayedFileMimeType(),
+        assertTrue(awaitServerCommand("playFile"), "the bench was asked");
+        assertEquals(PcmFileLoader.MIME_FLAC, server.getPlayedFileMimeType(),
                 "a .flac is declared audio/flac - the case the bench's content "
                         + "sniff cannot settle when an ID3 tag precedes the marker");
     }
 
     @Test
-    void stoppingAFileOnTheBenchCommandsTheFarEnd() throws IOException {
+    void stoppingAFileOnTheServerCommandsTheFarEnd() throws IOException {
         controller = new GeneratorController();
-        bench.setFileState(new RemoteGenerator.FileState(true, false));
+        server.setFileState(new RemoteGenerator.FileState(true, false));
         controller.startFilePlayback(writePlayableFile(), false);
-        assertTrue(awaitBenchCommand("playFile"), "playing on the bench first");
+        assertTrue(awaitServerCommand("playFile"), "playing on the bench first");
 
         controller.stopFilePlayback();
 
-        assertTrue(awaitTrue(() -> bench.getStopFileCalls() == 1),
+        assertTrue(awaitTrue(() -> server.getStopFileCalls() == 1),
                 "stop reaches across the wire exactly once, not just the local flag");
     }
 
     @Test
-    void aFileThatRunsOutOnTheBenchClearsThePlayingFlag() throws IOException {
+    void aFileThatRunsOutOnTheServerClearsThePlayingFlag() throws IOException {
         controller = new GeneratorController();
-        bench.setFileState(new RemoteGenerator.FileState(true, false));
+        server.setFileState(new RemoteGenerator.FileState(true, false));
         controller.startFilePlayback(writePlayableFile(), false);
-        assertTrue(awaitBenchCommand("playFile"), "playing on the bench first");
+        assertTrue(awaitServerCommand("playFile"), "playing on the bench first");
 
         // The end-of-file edge a non-looping file reaches on its own.  playing
         // stays TRUE so only the `finished` clause can end the watch - a client
         // that dropped it would hang here rather than pass by accident.
-        bench.setFileState(new RemoteGenerator.FileState(true, true));
+        server.setFileState(new RemoteGenerator.FileState(true, true));
 
         assertTrue(awaitStopped(),
                 "a file that ran out on the bench stops the player here too, with "
                         + "nobody pressing anything");
-        assertEquals(0, bench.getStopFileCalls(),
+        assertEquals(0, server.getStopFileCalls(),
                 "and a file that ended by itself is never commanded to stop");
     }
 
     @Test
-    void aBenchThatRefusesTheFileLeavesTheControllerStoppedAndSaysWhy() throws IOException {
+    void aServerThatRefusesTheFileLeavesTheControllerStoppedAndSaysWhy() throws IOException {
         controller = new GeneratorController();
-        bench.setRefuseFile(new IllegalStateException("the bench's store is full"));
+        server.setRefuseFile(new IllegalStateException("the bench's store is full"));
 
         controller.startFilePlayback(writePlayableFile(), false);
 
-        assertTrue(awaitBenchCommand("playFile"),
+        assertTrue(awaitServerCommand("playFile"),
                 "the bench really was asked - this is a refusal, not an early return");
         assertTrue(awaitStopped(), "nothing is playing after a refusal");
         assertNotNull(controller.getFilePlayError(),
@@ -562,7 +560,7 @@ class GeneratorControllerRemoteTest {
     @Test
     void anAsyncFailureIsAnnouncedAndTheMessageIsClaimableExactlyOnce() throws IOException {
         controller = new GeneratorController();
-        bench.setRefuseFile(new IllegalStateException("the bench's store is full"));
+        server.setRefuseFile(new IllegalStateException("the bench's store is full"));
         List<Void> stopped = new ArrayList<>();
         Consumer<Void> listener = stopped::add;
         MessageBus.instance().subscribe(Events.FILE_PLAY_STOPPED, listener);
@@ -584,9 +582,9 @@ class GeneratorControllerRemoteTest {
     }
 
     @Test
-    void anOversizeFileIsReportedWithItsSizeAndTheBenchesLimit() throws IOException {
+    void anOversizeFileIsReportedWithItsSizeAndTheServersLimit() throws IOException {
         controller = new GeneratorController();
-        bench.setRefuseFile(new RemoteGenerator.FileTooLargeException(
+        server.setRefuseFile(new RemoteGenerator.FileTooLargeException(
                 "too big", OVERSIZE_BYTES, STUBBED_LIMIT_BYTES));
 
         controller.startFilePlayback(writePlayableFile(), false);
@@ -605,7 +603,7 @@ class GeneratorControllerRemoteTest {
     @Test
     void stoppingDuringAnUploadNeverStartsPlayingAndBlocksNothing() throws IOException {
         controller = new GeneratorController();
-        bench.setPlayFileDelayMs(SLOW_UPLOAD_MS);
+        server.setPlayFileDelayMs(SLOW_UPLOAD_MS);
 
         long startedAt = System.nanoTime();
         controller.startFilePlayback(writePlayableFile(), false);
@@ -620,14 +618,14 @@ class GeneratorControllerRemoteTest {
         controller.stopFilePlayback();   // must not block on the upload either
 
         assertTrue(awaitStopped(), "nothing is left playing");
-        assertTrue(awaitTrue(() -> bench.getStopFileCalls() >= 1),
+        assertTrue(awaitTrue(() -> server.getStopFileCalls() >= 1),
                 "the bench is told to stop, because by then it may hold the file");
     }
 
     @Test
     void theUploadNoticeIsRaisedAndAlwaysTakenDownAgain() throws IOException {
         controller = new GeneratorController();
-        bench.setFileState(new RemoteGenerator.FileState(true, false));
+        server.setFileState(new RemoteGenerator.FileState(true, false));
         List<String> notices = new ArrayList<>();
         Consumer<Void> up = ignored -> notices.add("started");
         Consumer<Void> down = ignored -> notices.add("finished");
@@ -642,7 +640,7 @@ class GeneratorControllerRemoteTest {
             // And on the FAILURE path too - a notice that outlives its transfer
             // is worse than none at all.
             notices.clear();
-            bench.setRefuseFile(new IllegalStateException("the bench's store is full"));
+            server.setRefuseFile(new IllegalStateException("the bench's store is full"));
             controller.stopFilePlayback();
             controller.startFilePlayback(writePlayableFile(), false);
 
@@ -656,22 +654,22 @@ class GeneratorControllerRemoteTest {
     }
 
     @Test
-    void togglingLoopMidPlayReachesTheBench() throws IOException {
+    void togglingLoopMidPlayReachesTheServer() throws IOException {
         controller = new GeneratorController();
-        bench.setFileState(new RemoteGenerator.FileState(true, false));
+        server.setFileState(new RemoteGenerator.FileState(true, false));
         controller.startFilePlayback(writePlayableFile(), false);
-        assertTrue(awaitBenchCommand("playFile"), "playing on the bench first");
-        assertNull(bench.getPushedFileLoop(), "nothing pushed yet");
+        assertTrue(awaitServerCommand("playFile"), "playing on the bench first");
+        assertNull(server.getPushedFileLoop(), "nothing pushed yet");
 
         Preferences.instance().setGenPlayFromLoop(true);
 
-        assertTrue(awaitTrue(() -> Boolean.TRUE.equals(bench.getPushedFileLoop())),
+        assertTrue(awaitTrue(() -> Boolean.TRUE.equals(server.getPushedFileLoop())),
                 "ticking loop mid-play reaches the far end, so the lap that is "
                         + "ending repeats instead of only the next start looping");
 
         Preferences.instance().setGenPlayFromLoop(false);
 
-        assertTrue(awaitTrue(() -> Boolean.FALSE.equals(bench.getPushedFileLoop())),
+        assertTrue(awaitTrue(() -> Boolean.FALSE.equals(server.getPushedFileLoop())),
                 "and unticking reaches it too - the lap FINISHES rather than "
                         + "being cut off");
     }
@@ -683,17 +681,17 @@ class GeneratorControllerRemoteTest {
         // appeared and vanished AFTER the wait it was meant to explain, so the
         // operator saw five seconds of nothing.
         controller = new GeneratorController();
-        bench.setFileState(new RemoteGenerator.FileState(true, false));
+        server.setFileState(new RemoteGenerator.FileState(true, false));
         List<String> notices = new ArrayList<>();
         Consumer<Void> up = ignored -> notices.add("started");
         Consumer<Void> down = ignored -> notices.add("finished");
         CountDownLatch open = new CountDownLatch(1);
-        bench.setOpenGate(open);
+        server.setOpenGate(open);
         MessageBus.instance().subscribe(Events.FILE_UPLOAD_STARTED, up);
         MessageBus.instance().subscribe(Events.FILE_UPLOAD_FINISHED, down);
         try {
             controller.startFilePlayback(writePlayableFile(), false);
-            assertTrue(bench.getOpenEntered().await(AWAIT_STOP_MS, TimeUnit.MILLISECONDS),
+            assertTrue(server.getOpenEntered().await(AWAIT_STOP_MS, TimeUnit.MILLISECONDS),
                     "the lane open really started");
 
             // The load-bearing assertion: the notice is ALREADY up while the open
@@ -705,7 +703,7 @@ class GeneratorControllerRemoteTest {
 
             open.countDown();
 
-            assertTrue(awaitBenchCommand("playFile"), "the file is commanded");
+            assertTrue(awaitServerCommand("playFile"), "the file is commanded");
             assertTrue(awaitTrue(() -> notices.contains("finished")),
                     "and the notice comes down once playback is commanded");
             assertEquals(List.of("started", "finished"), notices,
@@ -721,7 +719,7 @@ class GeneratorControllerRemoteTest {
         // The earliest exit of the new span: the open itself is refused, before
         // any byte is read.  A notice left up here would sit over a dead session.
         controller = new GeneratorController();
-        bench.setRefuseOpen(true);
+        server.setRefuseOpen(true);
         List<String> notices = new ArrayList<>();
         Consumer<Void> up = ignored -> notices.add("started");
         Consumer<Void> down = ignored -> notices.add("finished");
@@ -733,8 +731,8 @@ class GeneratorControllerRemoteTest {
             assertTrue(awaitTrue(() -> notices.size() >= 2), "both ends announced");
             assertEquals(List.of("started", "finished"), notices,
                     "a refused open takes the notice down with it");
-            assertTrue(bench.names().contains("openGenerator"), "the open was tried");
-            assertFalse(bench.names().contains("playFile"),
+            assertTrue(server.names().contains("openGenerator"), "the open was tried");
+            assertFalse(server.names().contains("playFile"),
                     "and nothing was uploaded - there was no lane to play on");
         } finally {
             MessageBus.instance().unsubscribe(Events.FILE_UPLOAD_STARTED, up);
@@ -743,7 +741,7 @@ class GeneratorControllerRemoteTest {
     }
 
     @Test
-    void aLoopToggledDuringTheUploadStillReachesTheBench() throws Exception {
+    void aLoopToggledDuringTheUploadStillReachesTheServer() throws Exception {
         // The bench case: a 45 MB file to a server over Wi-Fi is minutes of
         // upload, and the operator ticks "In loop" while the progress notice is
         // up.  Until this was fixed the tick was dropped at BOTH ends - the value
@@ -751,22 +749,22 @@ class GeneratorControllerRemoteTest {
         // had no file session yet, which ignores it by design.
         controller = new GeneratorController();
         Preferences.instance().setGenPlayFromLoop(false);
-        bench.setFileState(new RemoteGenerator.FileState(true, false));
+        server.setFileState(new RemoteGenerator.FileState(true, false));
         CountDownLatch upload = new CountDownLatch(1);
-        bench.setUploadGate(upload);            // a latch, so the ordering is exact
+        server.setUploadGate(upload);            // a latch, so the ordering is exact
 
         controller.startFilePlayback(writePlayableFile(), false);
-        assertTrue(bench.getUploadEntered().await(AWAIT_STOP_MS, TimeUnit.MILLISECONDS),
+        assertTrue(server.getUploadEntered().await(AWAIT_STOP_MS, TimeUnit.MILLISECONDS),
                 "the upload really started before the toggle");
 
         Preferences.instance().setGenPlayFromLoop(true);   // ticked mid-transfer
         upload.countDown();                                // the bytes land
 
-        assertTrue(awaitTrue(() -> Boolean.TRUE.equals(bench.getPushedFileLoop())),
+        assertTrue(awaitTrue(() -> Boolean.TRUE.equals(server.getPushedFileLoop())),
                 "the bench ends up looping as the operator last chose - the "
                         + "toggle is re-asserted once the far end has a file "
                         + "session to apply it to");
-        assertFalse(bench.isPlayedFileLoop(),
+        assertFalse(server.isPlayedFileLoop(),
                 "the gen.playFile command itself carried the flag as it stood "
                         + "when the transfer began - it cannot carry a decision "
                         + "made after it was sent, which is why the re-assert "
@@ -774,8 +772,8 @@ class GeneratorControllerRemoteTest {
     }
 
     /** Waits until {@code name} has reached the stubbed bench. */
-    private boolean awaitBenchCommand(String name) {
-        return awaitTrue(() -> bench.names().contains(name));
+    private boolean awaitServerCommand(String name) {
+        return awaitTrue(() -> server.names().contains(name));
     }
 
     private boolean awaitTrue(BooleanSupplier condition) {
@@ -829,32 +827,33 @@ class GeneratorControllerRemoteTest {
     }
 
     @Test
-    void theWizardsApplyReachesTheBench() throws IOException {
+    void theWizardsApplyReachesTheServer() throws IOException {
         Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
         controller = new GeneratorController();
         controller.start();
-        bench.reset();
+        server.reset();
 
         controller.loadCorrectionsFromFile(writeHarmonicDpd().toString());
 
-        assertTrue(bench.names().contains("applyCompensation"),
+        assertTrue(server.names().contains("applyCompensation"),
                 "the .dpd sits on the operator's machine and the bench cannot open it, so the "
                         + "TABLES have to travel - the wizard's commit is otherwise a no-op");
     }
 
     @Test
-    void recalibratingTheRightLaneReachesTheBenchWhileTheToneIsPlaying() {
+    void editingTheRightLaneReachesTheServerWhileTheToneIsPlaying() {
         Preferences prefs = Preferences.instance();
         prefs.setGenSignalForm(GenSignalForm.SINE);
         controller = new GeneratorController();
         controller.start();
-        bench.reset();
+        server.reset();
 
-        prefs.setDacFsVoltageAmplRight(prefs.getDacFsVoltageAmpl() / 2.0);
+        prefs.setGenAmplitudeVrmsRight(AMPLITUDE_VRMS / 2.0);
 
-        assertNotNull(bench.firstArg("setRightLaneScale"),
-                "the lane the scale belongs to is the far end's - recalibrating a card must "
-                        + "take effect on the tone that is playing, as it does locally");
+        assertEquals(AMPLITUDE_VRMS, server.firstArg("setAmplitudesVrms"),
+                "the lane the amplitudes belong to is the far end's - an edit on either "
+                        + "side must take effect on the tone that is playing, as it does "
+                        + "locally, and the pair travels together");
     }
 
     /** A minimal single-tone predistortion file on disk - what

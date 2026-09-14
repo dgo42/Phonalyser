@@ -29,17 +29,9 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.logging.log4j.Level;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.LogEvent;
-import org.apache.logging.log4j.core.Logger;
-import org.apache.logging.log4j.core.appender.AbstractAppender;
-import org.apache.logging.log4j.core.config.Property;
-import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.junit.jupiter.api.Test;
@@ -258,7 +250,7 @@ class DeviceStoreTest {
         row.setFsRight(1.0);
         p.getInput().setChannels(DeviceChannelMode.LINKED);
         p.getInput().getRanges().add(row);
-        p.getInput().setActiveRange("default");
+        p.getInput().setActiveRangeLeft("default");
         return p;
     }
 
@@ -389,7 +381,7 @@ class DeviceStoreTest {
         assertNotNull(adc, "the ADC seed lands as a profile");
         assertEquals(List.of("Fixture ADC"), adc.getMatch());
         assertEquals(DeviceChannelMode.INDEPENDENT, adc.getInput().getChannels());
-        assertEquals("1.7V", adc.getInput().getActiveRange());
+        assertEquals("1.7V", adc.getInput().getActiveRangeLeft());
         assertEquals("1.7V", adc.getInput().getActiveRangeRight());
         assertEquals(2, adc.getInput().getRanges().size());
         assertEquals(1.7,  adc.getInput().getRanges().get(0).getFsLeft(),  EPS);
@@ -495,21 +487,21 @@ class DeviceStoreTest {
         assertEquals(List.of("Cosmos ADC", "Focusrite Scarlett 2i2"), p.getMatch());
     }
 
-    // ── store*Calibration binds a recognised unbound seed in place ───────────
+    // ── a calibration store binds a recognised unbound seed in place ─────────
 
     @Test
-    void storeAdcCalibration_onRecognisedDevice_bindsSeededProfileInPlace(@TempDir Path dir) {
+    void calibrationStore_onRecognisedDevice_bindsSeededProfileInPlace(@TempDir Path dir) {
         Preferences p = detached();
         loadDevicesFrom(p, dir.resolve("devices.yaml"));
         int before = p.getAudioDeviceProfiles().size();
 
-        p.setBackend(AudioBackendType.WASAPI);
-        p.current().setInputDeviceName("Line (E1DA Cosmos ADC)");
-        p.storeAdcCalibration(1.82);
+        // The local manager's store: the card that recognises the device, its
+        // input endpoint written, the card handed back to the store.
+        AudioDeviceProfile card = p.profileFor("Line (E1DA Cosmos ADC)", true);
+        card.getInput().storeFullScale(Channel.L, 1.82);
+        card.getInput().storeFullScale(Channel.R, 1.82);
+        p.putAudioDeviceProfile(card);
 
-        assertEquals(1.82, p.getAdcFsVoltageRms(), EPS, "global scalar took the measured value");
-        assertEquals(1.82, p.getAdcFsVoltageRmsRight(), EPS,
-                "legacy single-arg calibrate keeps both channel scalars equal");
         assertEquals(before, p.getAudioDeviceProfiles().size(),
                 "recognition binds the existing seed - no new card is forked");
 
@@ -545,7 +537,7 @@ class DeviceStoreTest {
         row.setFsRight(2.0);
         prof.getOutput().setChannels(DeviceChannelMode.LINKED);
         prof.getOutput().getRanges().add(row);
-        prof.getOutput().setActiveRange("default");
+        prof.getOutput().setActiveRangeLeft("default");
         src.putAudioDeviceProfile(prof);
         // Stamp the current content version so the store is on-version and the
         // once-per-content-version merge stays dormant - this is a pure round-trip.
@@ -623,7 +615,7 @@ class DeviceStoreTest {
         row.setCalibrated(true);
         p.getInput().setChannels(DeviceChannelMode.LINKED);
         p.getInput().getRanges().add(row);
-        p.getInput().setActiveRange("default");
+        p.getInput().setActiveRangeLeft("default");
         return p;
     }
 
@@ -669,7 +661,7 @@ class DeviceStoreTest {
         nominal.setFsRight(2.5);
         prof.getInput().getRanges().add(calibrated);
         prof.getInput().getRanges().add(nominal);
-        prof.getInput().setActiveRange("A");
+        prof.getInput().setActiveRangeLeft("A");
         src.putAudioDeviceProfile(prof);
         writeDevicesTo(src, store);
 
@@ -687,13 +679,13 @@ class DeviceStoreTest {
     }
 
     @Test
-    void storeAdcCalibration_marksActiveRow_linkedPath(@TempDir Path dir) {
+    void calibrationStore_marksActiveRow_linkedPath(@TempDir Path dir) {
         Preferences p = detached();
         loadDevicesFrom(p, dir.resolve("devices.yaml"));
 
-        p.setBackend(AudioBackendType.WASAPI);
-        p.current().setInputDeviceName("Line (E1DA Cosmos ADC)");
-        p.storeAdcCalibration(1.82);
+        AudioDeviceProfile card = p.profileFor("Line (E1DA Cosmos ADC)", true);
+        card.getInput().storeFullScale(Channel.L, 1.82);
+        p.putAudioDeviceProfile(card);
 
         AudioDeviceProfile bound = p.resolveDeviceProfile("Line (E1DA Cosmos ADC)");
         assertNotNull(bound);
@@ -704,7 +696,7 @@ class DeviceStoreTest {
     }
 
     @Test
-    void storeAdcCalibration_marksActiveRow_perChannelIndependentPath(@TempDir Path dir) {
+    void calibrationStore_marksActiveRow_perChannelIndependentPath(@TempDir Path dir) {
         Path store = dir.resolve("devices.yaml");
 
         // An INDEPENDENT input card with two rows, so the per-channel write path
@@ -717,16 +709,16 @@ class DeviceStoreTest {
         DeviceRange a = new DeviceRange();
         a.setLabel("A"); a.setFsLeft(1.0); a.setFsRight(1.0);
         card.getInput().getRanges().add(a);
-        card.getInput().setActiveRange("A");
+        card.getInput().setActiveRangeLeft("A");
         card.getInput().setActiveRangeRight("A");
         seed.putAudioDeviceProfile(card);
         writeDevicesTo(seed, store);
 
         Preferences p = detached();
         loadDevicesFrom(p, store);
-        p.setBackend(AudioBackendType.WASAPI);
-        p.current().setInputDeviceName("Indep In");
-        p.storeAdcCalibration(Channel.R, 3.3);
+        AudioDeviceProfile recognised = p.profileFor("Indep In", true);
+        recognised.getInput().storeFullScale(Channel.R, 3.3);
+        p.putAudioDeviceProfile(recognised);
 
         AudioDeviceProfile bound = p.findAudioDeviceProfile("Indep Card");
         assertNotNull(bound);
@@ -1028,7 +1020,7 @@ class DeviceStoreTest {
         assertEquals(9.8, r99.getFsRight(), EPS);
 
         // The user's active-range selection is untouched.
-        assertEquals("1.7V", cosmos.getInput().getActiveRange());
+        assertEquals("1.7V", cosmos.getInput().getActiveRangeLeft());
         assertEquals("1.7V", cosmos.getInput().getActiveRangeRight());
 
         // The user-created card is untouched (structure + calibration + match).
@@ -1311,124 +1303,10 @@ class DeviceStoreTest {
                 "with the seed unreadable, the loaded store's own formatVersion stands");
     }
 
-    // ── calibrationFromDevice: store guard + seed-authoritative merge ─────────
-
-    /** Captures the WARN (and higher) messages the {@code Preferences} logger emits
-     *  while {@code action} runs - so a store-guard test can assert the guard warns
-     *  without inspecting the log file. */
-    private List<String> capturePreferencesWarnings(Runnable action) {
-        Logger logger = (Logger) LogManager.getLogger(Preferences.class);
-        List<String> messages = new ArrayList<>();
-        AbstractAppender appender =
-                new AbstractAppender("test-capture", null, null, true, Property.EMPTY_ARRAY) {
-                    @Override
-                    public void append(LogEvent event) {
-                        if (event.getLevel().isMoreSpecificThan(Level.WARN)) {
-                            messages.add(event.getMessage().getFormattedMessage());
-                        }
-                    }
-                };
-        appender.start();
-        logger.addAppender(appender);
-        try {
-            action.run();
-        } finally {
-            logger.removeAppender(appender);
-            appender.stop();
-        }
-        return messages;
-    }
-
-    /** A QA40x-style card whose INPUT endpoint is device-provided (its full-scale is
-     *  loaded from the device), bound to WASAPI, one nominal 0 dB range at 7.0 V. */
-    private AudioDeviceProfile deviceProvidedInputCard() {
-        AudioDeviceProfile p = new AudioDeviceProfile();
-        p.setName("QA40x");
-        p.getMatch().add("QA40x Input");
-        p.getInput().setChannels(DeviceChannelMode.LINKED);
-        p.getInput().setCalibrationFromDevice(true);
-        DeviceRange row = new DeviceRange();
-        row.setLabel("0 dB");
-        row.setFsLeft(7.0);
-        row.setFsRight(7.0);
-        p.getInput().getRanges().add(row);
-        p.getInput().setActiveRange("0 dB");
-        return p;
-    }
-
-    /** The output mirror of {@link #deviceProvidedInputCard()} - a device-provided
-     *  OUTPUT endpoint, one nominal 0 dB range at 3.0 V. */
-    private AudioDeviceProfile deviceProvidedOutputCard() {
-        AudioDeviceProfile p = new AudioDeviceProfile();
-        p.setName("QA40x");
-        p.getMatch().add("QA40x Output");
-        p.getOutput().setChannels(DeviceChannelMode.LINKED);
-        p.getOutput().setCalibrationFromDevice(true);
-        DeviceRange row = new DeviceRange();
-        row.setLabel("0 dB");
-        row.setFsLeft(3.0);
-        row.setFsRight(3.0);
-        p.getOutput().getRanges().add(row);
-        p.getOutput().setActiveRange("0 dB");
-        return p;
-    }
-
-    @Test
-    void storeAdcCalibration_deviceProvidedEndpoint_isNoOpAndWarns() {
-        Preferences p = detached();
-        p.putAudioDeviceProfile(deviceProvidedInputCard());
-        p.setBackend(AudioBackendType.WASAPI);
-        p.current().setInputDeviceName("QA40x Input");
-        p.setAdcFsVoltageRms(1.234);
-        p.setAdcFsVoltageRmsRight(1.234);
-
-        List<String> warnings = capturePreferencesWarnings(() -> p.storeAdcCalibration(5.0));
-
-        // The device-owned range value and BOTH global scalars are untouched.
-        DeviceRange row = p.findAudioDeviceProfile("QA40x").getInput().getRanges().get(0);
-        assertEquals(7.0, row.getFsLeft(), EPS, "the device-provided range value is not overwritten");
-        assertFalse(row.isCalibrated(), "a device-provided row is never marked calibrated by the guard");
-        assertEquals(1.234, p.getAdcFsVoltageRms(), EPS, "the global ADC scalar is left untouched");
-        assertEquals(1.234, p.getAdcFsVoltageRmsRight(), EPS, "the right ADC scalar is left untouched");
-
-        assertTrue(warnings.stream().anyMatch(m -> m.contains("device-provided") && m.contains("QA40x")),
-                "the guard warns that calibration is device-provided for the card");
-    }
-
-    @Test
-    void storeAdcCalibration_channelAware_deviceProvidedEndpoint_isNoOp() {
-        Preferences p = detached();
-        p.putAudioDeviceProfile(deviceProvidedInputCard());
-        p.setBackend(AudioBackendType.WASAPI);
-        p.current().setInputDeviceName("QA40x Input");
-        p.setAdcFsVoltageRmsRight(1.234);
-
-        p.storeAdcCalibration(Channel.R, 9.0);
-
-        DeviceRange row = p.findAudioDeviceProfile("QA40x").getInput().getRanges().get(0);
-        assertEquals(7.0, row.getFsRight(), EPS, "the channel-aware calibrate write is also blocked");
-        assertFalse(row.isCalibrated(), "no calibration flag is set");
-        assertEquals(1.234, p.getAdcFsVoltageRmsRight(), EPS, "the right scalar is left untouched");
-    }
-
-    @Test
-    void storeDacCalibration_deviceProvidedEndpoint_isNoOpAndWarns() {
-        Preferences p = detached();
-        p.putAudioDeviceProfile(deviceProvidedOutputCard());
-        p.setBackend(AudioBackendType.WASAPI);
-        p.current().setOutputDeviceName("QA40x Output");
-        p.setDacFsVoltageAmpl(1.5);
-        p.setDacFsVoltageAmplRight(1.5);
-
-        List<String> warnings = capturePreferencesWarnings(() -> p.storeDacCalibration(9.9));
-
-        DeviceRange row = p.findAudioDeviceProfile("QA40x").getOutput().getRanges().get(0);
-        assertEquals(3.0, row.getFsLeft(), EPS, "the device-provided output range value is not overwritten");
-        assertFalse(row.isCalibrated(), "a device-provided output row is never marked calibrated");
-        assertEquals(1.5, p.getDacFsVoltageAmpl(), EPS, "the global DAC scalar is left untouched");
-        assertTrue(warnings.stream().anyMatch(m -> m.contains("device-provided") && m.contains("QA40x")),
-                "the DAC guard warns that calibration is device-provided for the card");
-    }
+    // ── calibrationFromDevice: seed-authoritative merge ──────────────────────
+    // (The store guard - a device-provided endpoint refuses a calibration write
+    // - is the device manager's, covered where a local manager exists:
+    // LoopbackBackendTest.)
 
     @Test
     void mergeSeed_deviceProvidedEndpoint_ignoresUserValues_keepsActiveRange(@TempDir Path dir) throws Exception {
@@ -1473,7 +1351,7 @@ class DeviceStoreTest {
         assertFalse(findRow(in.getRanges(), "0dB").isCalibrated(),
                 "a device-provided row is never marked calibrated");
         // The switchable active-range selection the user made survives the merge.
-        assertEquals("18dB", in.getActiveRange(),
+        assertEquals("18dB", in.getActiveRangeLeft(),
                 "the user's active-range choice survives (the ranges stay switchable)");
     }
 }
