@@ -119,7 +119,7 @@ public final class FreqRespController {
     /** Total expected capture time of one sweep - lead-in + sweep + the
      *  analyzer's tail, which is the fixed minimum-sweep span (the decay
      *  ring-out needs the full half second even when the lead-in is short).
-     *  Sizes the pane's busy meter time axis. */
+     *  Sizes the pane's progress meter time axis. */
     public double expectedMeasurementSeconds() {
         Preferences prefs = Preferences.instance();
         return prefs.getFreqRespLeadInSec()

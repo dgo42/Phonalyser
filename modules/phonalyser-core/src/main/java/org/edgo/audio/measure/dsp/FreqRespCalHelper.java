@@ -238,9 +238,19 @@ public class FreqRespCalHelper {
             }
             xBuf[leadInSamples + i] = sweepRef[i] * env;
         }
+        // The record begins with the lead-in: the chirp has not started, so
+        // those samples carry nothing but the channel's own offset and noise.
+        // Their mean is the DC offset - an ADC input sitting off centre, a DUT
+        // with an output offset - and it comes out of the whole record before
+        // the transform.  Left in, a constant over a one-shot record is a step
+        // at both ends whose 1/f leakage, divided by the chirp, ripples the
+        // whole low end of the trace.  A record without lead-in (a circular
+        // one-period window) has nothing to measure it on and needs nothing:
+        // there the offset is bin 0 alone, which is skipped.
+        double offset = leadInOffset(yRec, leadInSamples);
         double[] yBuf = new double[M];
         for (int i = 0; i < yRec.length; i++) {
-            yBuf[i] = yRec[i];
+            yBuf[i] = yRec[i] - offset;
         }
 
         DoubleFFT_1D fft = new DoubleFFT_1D(M);
@@ -426,12 +436,14 @@ public class FreqRespCalHelper {
             if (db < minDb) { minDb = db; minF = freqs[k]; }
             if (db > maxDb) { maxDb = db; maxF = freqs[k]; }
         }
-        log.info("{}Filter cal: FFT M={} ({} bins, {} Hz/bin); transport delay {} samples ({} ms) removed",
+        log.info("{}Filter cal: FFT M={} ({} bins, {} Hz/bin); transport delay {} samples ({} ms) "
+                        + "removed; lead-in offset {} FS removed",
                 tag,
                 M, halfBins,
                 String.format(Locale.US, "%.4f", binHz),
                 String.format(Locale.US, "%.3f", delaySamples),
-                String.format(Locale.US, "%.4f", 1000.0 * delaySamples / sampleRate));
+                String.format(Locale.US, "%.4f", 1000.0 * delaySamples / sampleRate),
+                String.format(Locale.US, "%.6f", offset));
         if (Double.isFinite(minDb)) {
             log.info("{}Filter cal: min {} dBFS @ {} Hz   max {} dBFS @ {} Hz",
                     tag,
@@ -442,6 +454,20 @@ public class FreqRespCalHelper {
         }
 
         return new FreqRespCalibration(freqs, magLin, phaseRad);
+    }
+
+    /** The mean of the record's lead-in samples - the channel's DC offset - or
+     *  0 when the record has no lead-in to read it from. */
+    private double leadInOffset(double[] yRec, int leadInSamples) {
+        int n = Math.min(leadInSamples, yRec.length);
+        if (n <= 0) {
+            return 0.0;
+        }
+        double sum = 0.0;
+        for (int i = 0; i < n; i++) {
+            sum += yRec[i];
+        }
+        return sum / n;
     }
 
     /** Computes the central-tap Savitzky-Golay smoothing coefficients

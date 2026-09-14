@@ -188,7 +188,7 @@ public final class FreqRespAnalyzerWorker {
             reportError(ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
         } finally {
             // Publish STOPPED on the UI thread.  The host pane re-enables
-            // its controls and closes the busy shell on it; the other
+            // its controls and closes the progress dialog on it; the other
             // panes' subscribers restore their Record / Play buttons.
             uiExecutor.execute(() ->
                     MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED));

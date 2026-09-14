@@ -114,7 +114,7 @@ public final class FreqRespAnalyzerConfig {
 
     /** Optional per-block progress hook for the capture leg - fires on
      *  the audio capture thread with the cumulative sample count and
-     *  the block's max-channel RMS.  Used by the GUI's busy-shell live
+     *  the block's max-channel RMS.  Used by the GUI's progress-dialog live
      *  meter; CLI / unit-test callers pass {@code null}. */
     @Builder.Default
     private final StereoCaptureProgress captureProgress = null;

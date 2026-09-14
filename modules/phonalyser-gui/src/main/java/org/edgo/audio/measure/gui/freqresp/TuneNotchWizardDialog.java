@@ -744,13 +744,32 @@ public final class TuneNotchWizardDialog {
             // Without this the chart just freezes and the failure (an
             // OPEN_FAILED, say) lands in the log alone - tell the operator,
             // in their language; the technical detail stays in the log above.
+            String text = sweepFailureText(ex);
             GuiUtil.marshal(dialog, () -> {
                 if (dialog.isDisposed()) return;
-                setStatus(I18n.t("tuneNotch.error.sweepFailed"));
-                Dialogs.error(dialog, I18n.t("tuneNotch.title"),
-                        I18n.t("tuneNotch.error.sweepFailed"));
+                setStatus(text);
+                Dialogs.error(dialog, I18n.t("tuneNotch.title"), text);
             });
         }
+    }
+
+    /** The operator's sentence for a failed streaming sweep.  A refusal of the
+     *  sample-rate pair names its numbers - it is the one failure the operator
+     *  puts right in Preferences, and "the device failed" would send them to
+     *  the wrong place; every other failure gets the generic sentence. */
+    private String sweepFailureText(Exception ex) {
+        if (ex instanceof NotchSweepEngine.RateRefusedException refusal) {
+            return switch (refusal.getKind()) {
+                case PERIOD_NOT_WHOLE -> I18n.t("tuneNotch.error.rateRatio",
+                        Long.toString(refusal.getConfiguredHz()),
+                        Long.toString(refusal.getOtherHz()),
+                        Long.toString(refusal.getPeriodSamples()));
+                case RATE_NOT_GRANTED -> I18n.t("tuneNotch.error.rateNotGranted",
+                        Long.toString(refusal.getOtherHz()),
+                        Long.toString(refusal.getConfiguredHz()));
+            };
+        }
+        return I18n.t("tuneNotch.error.sweepFailed");
     }
 
     /** Blocks until the ring has buffered one full period (or the session

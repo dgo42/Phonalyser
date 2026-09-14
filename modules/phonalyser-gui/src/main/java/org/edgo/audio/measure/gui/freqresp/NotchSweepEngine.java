@@ -235,10 +235,50 @@ public final class NotchSweepEngine implements AutoCloseable {
      */
     private void requireGrantedRate(long granted, int asked, String what) {
         if (granted != asked) {
-            throw new IllegalStateException("the bench granted " + granted + " Hz on its "
+            throw new RateRefusedException(RateRefusedException.Kind.RATE_NOT_GRANTED,
+                    asked, granted, 0,
+                    "the server granted " + granted + " Hz on its "
                     + what + " but the sweep loop was built for " + asked + " Hz - "
                     + "the deconvolution would no longer be circular over one period, so "
                     + "the tuning session is refused rather than shown wrong");
+        }
+    }
+
+    /**
+     * A refusal on the sample-rate pair - the one failure of this engine the
+     * operator can put right from the dialog, so it carries the numbers the
+     * dialog's sentence needs instead of only the sentence the log wants.
+     */
+    @Getter
+    public static final class RateRefusedException extends IllegalStateException {
+
+        private static final long serialVersionUID = 1L;
+
+        /** Which of the two rate rules refused. */
+        public enum Kind {
+            /** One capture-clock period is not a whole number of output samples. */
+            PERIOD_NOT_WHOLE,
+            /** The server granted another rate than the configured one. */
+            RATE_NOT_GRANTED
+        }
+
+        private final Kind kind;
+        /** The configured rate the loop was built for: the input rate for
+         *  {@link Kind#PERIOD_NOT_WHOLE}, the asked rate for
+         *  {@link Kind#RATE_NOT_GRANTED}. */
+        private final long configuredHz;
+        /** The rate it collides with: the output rate, or the granted one. */
+        private final long otherHz;
+        /** One loop period in input samples ({@link Kind#PERIOD_NOT_WHOLE} only). */
+        private final long periodSamples;
+
+        private RateRefusedException(Kind kind, long configuredHz, long otherHz,
+                long periodSamples, String message) {
+            super(message);
+            this.kind          = kind;
+            this.configuredHz  = configuredHz;
+            this.otherHz       = otherHz;
+            this.periodSamples = periodSamples;
         }
     }
 
@@ -257,7 +297,9 @@ public final class NotchSweepEngine implements AutoCloseable {
     private int playbackSamples(int captureSamples) {
         long scaled = (long) captureSamples * playbackRateHz;
         if (scaled % captureRateHz != 0) {
-            throw new IllegalStateException("one loop period is " + captureSamples
+            throw new RateRefusedException(RateRefusedException.Kind.PERIOD_NOT_WHOLE,
+                    captureRateHz, playbackRateHz, captureSamples,
+                    "one loop period is " + captureSamples
                     + " samples at the configured " + captureRateHz + " Hz input rate, "
                     + "which is not a whole number of samples at the configured "
                     + playbackRateHz + " Hz output rate - the looping sweep and the "

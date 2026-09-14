@@ -36,7 +36,7 @@ import org.edgo.audio.measure.preferences.Preferences;
 
 /**
  * Compact live "input-level over time" chart shown inside the FreqResp
- * busy shell while a sweep is in progress.  Inspired by REW's per-sweep
+ * progress dialog while a sweep is in progress.  Inspired by REW's per-sweep
  * level monitor.
  *
  * <p>Axes:

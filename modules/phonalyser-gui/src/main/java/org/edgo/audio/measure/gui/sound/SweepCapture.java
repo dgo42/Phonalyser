@@ -136,7 +136,12 @@ public final class SweepCapture {
                     // anchor instant the private-line path always used.
                     reader.seekToLatest();
                 }
-                return assemble(reader, captureRateHz, durationSec, cancelToken, progress);
+                // The lead-in on the record's own clock: the stretch of silence
+                // the progress meter measures each channel's offset on.
+                int leadInCaptureSamples = (int) Math.round(
+                        leadInSamples * (captureRateHz / (double) playbackRateHz));
+                return assemble(reader, captureRateHz, leadInCaptureSamples, durationSec,
+                        cancelToken, progress);
             } finally {
                 lane.stop();
             }
@@ -175,15 +180,23 @@ public final class SweepCapture {
 
     /** Streams {@code durationSec * captureRateHz} contiguous frames from the
      *  cursor into a fresh {@link StereoSamples}, blocking on the ring's own
-     *  wakeup between chunks. */
+     *  wakeup between chunks.
+     *
+     *  <p>The level handed to the progress meter is taken with each channel's
+     *  DC offset removed - the mean of its first {@code leadInSamples}, the
+     *  silence before the chirp - so a capture sitting off centre shows the
+     *  chirp's level and not the offset.  Until the lead-in is complete the
+     *  meter shows the raw level, offset included. */
     private StereoSamples assemble(SignalBufferReader reader, int captureRateHz,
-            int durationSec, BooleanSupplier cancelToken,
+            int leadInSamples, int durationSec, BooleanSupplier cancelToken,
             StereoCaptureProgress progress) throws InterruptedException {
         int total = durationSec * captureRateHz;
         double[] left   = new double[total];
         double[] right  = new double[total];
         double[] chunkL = new double[CHUNK_FRAMES];
         double[] chunkR = new double[CHUNK_FRAMES];
+        double sumLeadInL = 0.0;
+        double sumLeadInR = 0.0;
         int written = 0;
         while (written < total) {
             if (cancelToken != null && cancelToken.getAsBoolean()) {
@@ -210,9 +223,18 @@ public final class SweepCapture {
             }
             System.arraycopy(chunkL, 0, left,  written, got);
             System.arraycopy(chunkR, 0, right, written, got);
+            int inLeadIn = Math.max(0, Math.min(got, leadInSamples - written));
+            for (int i = 0; i < inLeadIn; i++) {
+                sumLeadInL += chunkL[i];
+                sumLeadInR += chunkR[i];
+            }
             written += got;
             if (progress != null) {
-                progress.onBlock(written, blockRms(chunkL, got), blockRms(chunkR, got));
+                boolean leadInDone = leadInSamples > 0 && written >= leadInSamples;
+                double offsetL = leadInDone ? sumLeadInL / leadInSamples : 0.0;
+                double offsetR = leadInDone ? sumLeadInR / leadInSamples : 0.0;
+                progress.onBlock(written, blockRms(chunkL, got, offsetL),
+                        blockRms(chunkR, got, offsetR));
             }
         }
         if (written == total) {
@@ -236,12 +258,13 @@ public final class SweepCapture {
         }
     }
 
-    /** One channel's RMS over the chunk - the progress meter is handed both
-     *  channels' and shows the one its view has selected. */
-    private double blockRms(double[] samples, int n) {
+    /** One channel's RMS over the chunk about {@code offset} - the progress
+     *  meter is handed both channels' and shows the one its view has selected. */
+    private double blockRms(double[] samples, int n, double offset) {
         double sum = 0;
         for (int i = 0; i < n; i++) {
-            sum += samples[i] * samples[i];
+            double v = samples[i] - offset;
+            sum += v * v;
         }
         return Math.sqrt(sum / n);
     }

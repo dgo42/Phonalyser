@@ -33,8 +33,10 @@ public class FreqRespConstants {
 
     // --- Sweep timing --------------------------------------------------------
     /** Lead-in floor (s) - the entry field's clamp, enforced again by the
-     *  analyzer's config validation. */
-    public static final double LEAD_IN_MIN_SEC = 0.005;
+     *  analyzer's config validation.  Long enough that the silence before the
+     *  chirp measures the capture's own DC offset per channel (4410 samples at
+     *  44.1 kHz), which the deconvolution takes out of the record. */
+    public static final double LEAD_IN_MIN_SEC = 0.1;
     /** Sweep-duration floor (s) - a small FFT size with a long lead-in
      *  must not produce a negative or unworkable sweep. */
     public static final double SWEEP_MIN_SEC = 0.5;
