@@ -112,7 +112,7 @@ class DeviceCatalogTest {
     }
 
     @Test
-    void theFirstHotPlugLookNoticesTheBenchAndTheNextOneNoticesNothing() {
+    void theFirstHotPlugLookNoticesTheServerAndTheNextOneNoticesNothing() {
         assertTrue(catalog.rescan(),
                 "the first look is a change by definition - before it the server had "
                         + "told nobody anything about the bench");
@@ -163,7 +163,7 @@ class DeviceCatalogTest {
      * the only way the device can leave the list at all.
      */
     @Test
-    void aDeviceThatLeftTheBenchIsRebuiltOutOfTheListAndBroadcast() {
+    void aDeviceThatLeftTheServerIsRebuiltOutOfTheListAndBroadcast() {
         catalog.rescan();                       // the first look is a change by definition
         assertFalse(catalog.rescan());
         int rebuilds = manager().getRefreshCount();
@@ -663,7 +663,7 @@ class DeviceCatalogTest {
     }
 
     @AfterEach
-    void replugTheBench() {
+    void replugTheServer() {
         manager().setCards(null);
         manager().replugAll();
     }

@@ -341,12 +341,12 @@
      part of the calibration - set once, calibrated through, left alone - and
      the exclusive-mode path bypasses the mixer entirely.</p>
 
-  <h2 id="network">A bench across the network</h2>
+  <h2 id="network">A server across the network</h2>
   <p>Everything above assumes the converters are wired to the machine you are
      sitting at.  They need not be.  A second Phonalyser installation, run as a
-     headless <b>server</b>, turns the machine that <em>is</em> wired to them
-     into a <b>bench</b>, and your workbench measures through it.  The
-     arrangement changes nothing about the reasoning on this page - the bench
+     headless <b>server</b>, owns the machine that <em>is</em> wired to them,
+     and your workbench measures through it.  The
+     arrangement changes nothing about the reasoning on this page - the server
      still opens its devices exclusively, still at the exact rate and depth
      chosen, still bit-exact.  What crosses the network is not audio hardware
      but the same two lanes, stretched.</p>
@@ -375,7 +375,7 @@
 
     <rect x="440" y="20" width="240" height="240" rx="8" fill="#eef" stroke="#88a" stroke-width="1.5"/>
     <text x="560" y="44" text-anchor="middle" font-weight="bold">Phonalyser server</text>
-    <text x="560" y="60" text-anchor="middle" fill="#557">the bench</text>
+    <text x="560" y="60" text-anchor="middle" fill="#557">(the remote machine)</text>
 
     <rect x="460" y="76" width="200" height="54" rx="6" fill="#fffbe8" stroke="#cc9"/>
     <text x="560" y="98" text-anchor="middle">its own backends</text>
@@ -414,14 +414,14 @@
   <p><b>Discovery is a beacon, and it is link-local.</b>  A server announces
      itself twice a second by multicast, to the group 239.255.83.77 on
      8377/udp - that announcement port is fixed and is not the
-     <code>--port</code> the server serves on, so a bench moved to another port
+     <code>--port</code> the server serves on, so a server moved to another port
      still announces there and carries its real port inside the announcement -
-     so a client that joins the group learns of every bench in the
+     so a client that joins the group learns of every server in the
      room without being configured at all - and learns of one going away just as
      quickly, since a row that stops being announced ages out.  The announcement
-     deliberately carries a time-to-live of one hop: it is a bench instrument on
+     deliberately carries a time-to-live of one hop: it is an instrument on
      a local network, not a service advertised across a site.  That is exactly
-     why a bench on another subnet has to be added by its address - the
+     why a server on another subnet has to be added by its address - the
      announcement cannot reach you, though the session itself routes perfectly
      well.</p>
 
@@ -429,25 +429,25 @@
      one application at a time owns a device - becomes, across the network, one
      <em>client</em> at a time: the server holds a lock per device and per
      direction, and it publishes the <b>name of the client holding it</b> with
-     every device it lists.  So two operators sharing one bench see each other's
+     every device it lists.  So two operators sharing one server see each other's
      occupancy before they try to open something, instead of finding out through
      a refusal.  A lock is taken when a measurement opens the device and given
      back when it stops - and a client that disappears releases everything it
      held.</p>
 
-  <p><b>The generator runs on the bench, commanded rather than streamed.</b>
+  <p><b>The generator runs on the server, commanded rather than streamed.</b>
      This matters more than it sounds.  The workbench does not push audio across
-     the network for the bench to play; it tells the bench <em>what</em> to
-     emit, and the bench's own generator renders it into its own DAC, at the
+     the network for the server to play; it tells the server <em>what</em> to
+     emit, and the server's own generator renders it into its own DAC, at the
      device's own clock.  Two consequences follow, and the second is the
      measurement one:</p>
   <ul>
     <li>The network never has to carry a gap-free output stream in real time -
         a jitter budget nobody would want a measurement to depend on.</li>
     <li>A <a href="freq-resp.html">frequency-response sweep</a> is deconvolved
-        against <b>what the bench actually rendered</b>.  The sweep's own first
+        against <b>what the server actually rendered</b>.  The sweep's own first
         sample is marked in the capture stream itself, in band, so the analysis
-        anchors on the bench's timing rather than on a network arrival time.
+        anchors on the server's timing rather than on a network arrival time.
         Deconvolution divides the captured response by the reference sweep, and
         an anchor drifting by a packet's worth of latency would smear the
         impulse response the whole measurement rests on.</li>
@@ -465,11 +465,11 @@
 
   <p><b>The audio stream confesses its gaps.</b>  Captured samples cross as
      binary messages of three kinds, each carrying a counter that increments on
-     every message of any kind.  <b>Sample</b> messages carry the bench's native
+     every message of any kind.  <b>Sample</b> messages carry the server's native
      PCM exactly as its device produced it, so the workbench decodes them with
      the same code a local card goes through.  A <b>marker</b> carries no audio
      at all: it announces that the next sample byte after it is the sweep's own
-     first sample, which is what anchors a deconvolution to the bench's timing.
+     first sample, which is what anchors a deconvolution to the server's timing.
      And a <b>gap</b> message says, in as many words, that the server itself lost
      <i>n</i> stereo frames - a stalled consumer, a device overrun - before they
      ever reached the network.</p>
@@ -478,7 +478,7 @@
      produces a record whose samples are not adjacent in time and whose average
      therefore reports a noise floor and a phase that never existed.  So the loss
      is stated, the analyser resets its average rather than splicing, and the FFT
-     raises its <b>bench lost audio</b> banner.  A jump in the counter, by
+     raises its <b>server lost audio</b> banner.  A jump in the counter, by
      contrast, would mean loss in the <em>transport</em> - impossible over an
      intact ordered connection - and is treated as a protocol fault: surfaced and
      stopped, exactly like a device error.</p>
@@ -489,35 +489,35 @@
      each side sends a keepalive every <b>500&nbsp;ms</b> and counts the answers;
      <b>four unanswered in a row - two seconds - declares the connection
      dead</b>.  Everything then unwinds in the direction it must: on the
-     workbench every module measuring through that bench is stopped and the
+     workbench every module measuring through that server is stopped and the
      reason is shown, rather than leaving a scope drawing the last frame it
-     received; on the bench the vanished client's locks are released and its
+     received; on the server the vanished client's locks are released and its
      hardware is parked, so the next operator finds a free device rather than one
      held by a machine that has gone home.  Discovery uses the same threshold
      philosophy - a server that stops announcing ages out of the list after four
      missed announcements.</p>
 
-  <p><b>A file played on the bench travels once, and belongs to the session.</b>
-     The protocol carries no audio from the workbench to the bench, so
+  <p><b>A file played on the server travels once, and belongs to the session.</b>
+     The protocol carries no audio from the workbench to the server, so
      <em>Play&nbsp;from...</em> cannot stream: instead the chosen file is uploaded
-     whole, over the same port, and the bench's own generator lane decodes and
-     plays it out of the bench's DAC.  The upload is capped at <b>50&nbsp;MB</b>
-     and the store as a whole is bounded too, so one client cannot fill a bench's
+     whole, over the same port, and the server's own generator lane decodes and
+     plays it out of the server's DAC.  The upload is capped at <b>50&nbsp;MB</b>
+     and the store as a whole is bounded too, so one client cannot fill a server's
      memory; the workbench checks the size before a byte leaves, so an over-size
      file is refused immediately rather than after the transfer.  The bytes live
      in the server's memory only, are owned by the session that referenced them,
      and are <b>dropped when that connection closes</b> - nothing accumulates on
-     a bench, and no file outlives the operator who sent it.</p>
+     a server, and no file outlives the operator who sent it.</p>
 
   <div class="note"><b>No authentication, on purpose.</b>  A server accepts any
-     client that reaches it.  It is a bench instrument for a trusted network -
+     client that reaches it.  It is meant for a trusted network -
      the room the measurement equipment stands in - and its own documentation
      says so plainly; it is not something to publish to the open internet.
      Running one, and restricting it to a single interface, is described in
      <a href="../server.html">The Phonalyser server</a>.</div>
 
-  <p>How to reach a bench from the workbench - the server list, the
-     <code>&lt;server&gt; -> &lt;backend&gt;</code> entries, the per-bench cards
+  <p>How to reach a server from the workbench - the server list, the
+     <code>&lt;server&gt; -> &lt;backend&gt;</code> entries, the per-server cards
      and calibration - is described in
      <a href="../preferences.html#prefs-audio-servers">Preferences ▸ Measuring
      through a Phonalyser server</a>.</p>

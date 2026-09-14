@@ -59,7 +59,7 @@ class UsbDescriptorFixture {
      * unit - so streaming interfaces 1..4 are headphone, microphone, line out
      * and line in, which is what the {@code /proc} stream fixtures name.
      */
-    byte[] benchBlob() {
+    byte[] serverBlob() {
         deviceDescriptor();
         configurationDescriptor();
         audioInterface(0, SUBCLASS_CONTROL);

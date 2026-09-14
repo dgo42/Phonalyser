@@ -45,7 +45,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Driven headless through the real {@link MessageBus} with the real
  * {@code RemoteBackendRegistry} - the seam behind it is a recorder
- * ({@link StubRemoteBench}) found by the ordinary service loader, so anything
+ * ({@link StubRemoteServer}) found by the ordinary service loader, so anything
  * that DID leave this machine would be recorded here.
  *
  * <p>The local re-range itself is deliberately not driven: it needs an open
@@ -66,8 +66,8 @@ class Qa40xRangeControllerTest {
     private static final String FOREIGN_LABEL = "2 Vrms";
 
     private final MessageBus bus = MessageBus.instance();
-    private final StubRemoteBench bench =
-            (StubRemoteBench) RemoteBackendRegistry.instance().getUi();
+    private final StubRemoteServer server =
+            (StubRemoteServer) RemoteBackendRegistry.instance().getUi();
 
     @BeforeEach
     void setUp() {
@@ -75,13 +75,13 @@ class Qa40xRangeControllerTest {
         // real preferences.yaml out of it.
         Preferences.instance().setTransientMode(true);
         Qa40xRangeController.instance();      // arm the singleton subscriber
-        bench.clear();
+        server.clear();
     }
 
     @AfterEach
     void tearDown() {
         Preferences.instance().setSelectedBackend(BackendKey.of(AudioBackendType.JAVASOUND));
-        bench.clear();
+        server.clear();
     }
 
     /**
@@ -97,7 +97,7 @@ class Qa40xRangeControllerTest {
 
         publish(true, Qa40xProtocol.rangeLabel(INPUT_DBV));
 
-        assertTrue(bench.calls().isEmpty(),
+        assertTrue(server.calls().isEmpty(),
                 "the range write for a bench belongs to the settings panel's commit, "
                         + "which knows what that bench reported in force");
     }
@@ -108,7 +108,7 @@ class Qa40xRangeControllerTest {
 
         publish(true, FOREIGN_LABEL);
 
-        assertTrue(bench.calls().isEmpty(),
+        assertTrue(server.calls().isEmpty(),
                 "the event names no card, so a label that is not a QA40x position "
                         + "belongs to some other device's card");
     }
@@ -119,7 +119,7 @@ class Qa40xRangeControllerTest {
 
         publish(true, Qa40xProtocol.rangeLabel(INPUT_DBV));
 
-        assertTrue(bench.calls().isEmpty(),
+        assertTrue(server.calls().isEmpty(),
                 "a QA403 wired to this machine is re-ranged over USB - putting it "
                         + "on the wire would send it to a bench nobody selected");
     }

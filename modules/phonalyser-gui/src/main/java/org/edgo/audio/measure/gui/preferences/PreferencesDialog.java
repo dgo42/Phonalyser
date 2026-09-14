@@ -75,7 +75,7 @@ import org.edgo.audio.measure.gui.common.RemoteBackendRegistry;
 import org.edgo.audio.measure.gui.common.RemoteBackendUi;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.registry.UiRegistry;
-import org.edgo.audio.measure.gui.sound.BenchCards;
+import org.edgo.audio.measure.gui.sound.ServerCards;
 import org.edgo.audio.measure.gui.sound.CalibrationCopyOffers;
 import org.edgo.audio.measure.gui.sound.DeviceCatalog;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
@@ -249,7 +249,7 @@ public final class PreferencesDialog {
     /** The bench's card list and the device->card binding on it -
      *  what the card combo becomes for a remote selection.  Built on the working
      *  copy so the local mirror of a pick is committed by the same OK. */
-    private BenchCards benchCards;
+    private ServerCards serverCards;
     /** Outer V-scroll wrapping the Audio tab's content, so the tallest tab
      *  scrolls instead of growing the dialog past {@link #SHELL_OUTER_HEIGHT_PX}.
      *  Its min size tracks the audio content (refreshed on every card/range
@@ -323,7 +323,7 @@ public final class PreferencesDialog {
         // backend currently shown in the combos is edit.getSelectedBackend() -
         // the single source of truth, no separate active-backend tracking.
         edit = Preferences.instance().copyForDialog();
-        benchCards = new BenchCards(edit);
+        serverCards = new ServerCards(edit);
         // Component-owned blocks live on their owners, not in the working copy,
         // so give them the same session: seed their edit values now, commit them
         // beside applyFromDialog() on OK, leave them alone on Cancel.
@@ -1226,7 +1226,7 @@ public final class PreferencesDialog {
      * the commit continues, exactly as an unreachable bench does above - the rest
      * of the dialog's work is not the binding's to undo.
      *
-     * <p>Each binding carries its own wait (see {@code BenchCards.bind}), so this
+     * <p>Each binding carries its own wait (see {@code ServerCards.bind}), so this
      * stays on the display thread and may raise its dialog directly.
      *
      * <p>ONE walk, not one per direction: a card describes a physical box and the
@@ -1238,10 +1238,10 @@ public final class PreferencesDialog {
      */
     private void commitStagedCardBindings(BackendKey committed) {
         List<String> refused = new ArrayList<>(
-                benchCards.commitStagedBindings(committed, devices.inputs, devices.outputs));
-        refused.addAll(benchCards.commitStagedRanges(committed, devices.inputs,
+                serverCards.commitStagedBindings(committed, devices.inputs, devices.outputs));
+        refused.addAll(serverCards.commitStagedRanges(committed, devices.inputs,
                 devices.outputs));
-        refused.addAll(benchCards.commitStagedValues(committed, devices.inputs,
+        refused.addAll(serverCards.commitStagedValues(committed, devices.inputs,
                 devices.outputs));
         if (refused.isEmpty()) return;
         Dialogs.error(parent, I18n.t("net.servers.error.title"),
@@ -1536,8 +1536,8 @@ public final class PreferencesDialog {
         // The bench is now showing its devices: the give-this-device-a-card offer
         // belongs to this user-driven moment, not to the passive refresh that
         // filled the combos.
-        if (inputCard  != null) inputCard.offerBenchCard();
-        if (outputCard != null) outputCard.offerBenchCard();
+        if (inputCard  != null) inputCard.offerServerCard();
+        if (outputCard != null) outputCard.offerServerCard();
         setupShownBackendInBackground();
     }
 
@@ -2506,8 +2506,8 @@ public final class PreferencesDialog {
         private AudioDeviceProfile refresh() {
             if (cardCombo.isDisposed()) return null;
             String dev = deviceName();
-            BackendKey bench = edit.getSelectedBackend();
-            boolean remote = bench != null && bench.remote();
+            BackendKey server = edit.getSelectedBackend();
+            boolean remote = server != null && server.remote();
             // What a rebuild WOULD show, resolved before a single widget is
             // touched: when it is what the section already shows, the teardown,
             // the row creation and the relayout below would only reproduce it -
@@ -2529,7 +2529,7 @@ public final class PreferencesDialog {
             comboNames.clear();
             remoteCards = remote;
             if (remoteCards) {
-                return refreshBenchCards(bench, dev);
+                return refreshServerCards(server, dev);
             }
             for (AudioDeviceProfile p : listable) {
                 cardCombo.add(p.getName());
@@ -2586,8 +2586,8 @@ public final class PreferencesDialog {
          * @return null always - a bench device resolves to no local card, which is
          *         also what stops {@link #onDeviceChanged} offering to create one
          */
-        private AudioDeviceProfile refreshBenchCards(BackendKey bench, String dev) {
-            for (String name : benchCards.list(bench, input)) {
+        private AudioDeviceProfile refreshServerCards(BackendKey server, String dev) {
+            for (String name : serverCards.list(server, input)) {
                 cardCombo.add(name);
                 comboNames.add(name);
             }
@@ -2595,9 +2595,9 @@ public final class PreferencesDialog {
             // the operator chose, even though nothing has been sent yet.  It is
             // keyed on the device NAME, so both combos of a one-name-two-directions
             // box (the QA40x) show the one pick that will be sent for it.
-            String staged = benchCards.stagedCard(bench, dev);
+            String staged = serverCards.stagedCard(server, dev);
             selectByName(staged != null ? staged
-                    : benchCards.boundCard(bench, refFor(refs(), dev), dev));
+                    : serverCards.boundCard(server, refFor(refs(), dev), dev));
             rebuildTable();
             return null;
         }
@@ -2622,7 +2622,7 @@ public final class PreferencesDialog {
                 // A device on a bench: its card is created and calibrated THERE,
                 // never here - a local one made for it could only ever be found
                 // again by a name collision.
-                offerBenchCard();
+                offerServerCard();
                 return;
             }
             if (pick != null) return;                      // a local card correlated
@@ -2654,10 +2654,10 @@ public final class PreferencesDialog {
          * remembered for the run ({@link CalibrationCopyOffers}), so neither
          * switching device and back nor reopening this dialog asks again.
          */
-        private void offerBenchCard() {
-            BackendKey bench = edit.getSelectedBackend();
+        private void offerServerCard() {
+            BackendKey server = edit.getSelectedBackend();
             String dev = deviceName();
-            if (bench == null || !bench.remote() || dev == null || mainWindow == null) return;
+            if (server == null || !server.remote() || dev == null || mainWindow == null) return;
             DeviceRef ref = refFor(refs(), dev);
             if (ref == null || ref.calibration() != null) return;   // the bench has its own
             AudioDeviceProfile local = edit.resolveDeviceProfile(dev);
@@ -2668,16 +2668,16 @@ public final class PreferencesDialog {
             // has no calibration; shall we give it one?" - and an operator who said
             // no must not be asked the other way round straight after.
             if (!copyable && ref.boundCard() != null) return;       // a card IS in force there
-            if (!mainWindow.getCalibrationCopyOffers().mayAsk(bench, input, dev)) return;
+            if (!mainWindow.getCalibrationCopyOffers().mayAsk(server, input, dev)) return;
             boolean answered = copyable
-                    ? copyLocalCardToBench(bench, dev, local)
-                    : createBenchCard(bench, dev);
+                    ? copyLocalCardToServer(server, dev, local)
+                    : createServerCard(server, dev);
             // ONLY a settled question is remembered.  An attempt that never reached
             // the bench - a wire glitch, a device somebody took a second ago - is
             // not an answer, and burning the one offer on it would leave the device
             // uncalibrated for the whole run with no way back but a restart.
             if (answered) {
-                mainWindow.getCalibrationCopyOffers().settle(bench, input, dev);
+                mainWindow.getCalibrationCopyOffers().settle(server, input, dev);
             }
         }
 
@@ -2698,13 +2698,13 @@ public final class PreferencesDialog {
          * @return whether the question was ANSWERED (a decline, or something
          *         staged for the bench) - see {@link CalibrationCopyOffers#settle}
          */
-        private boolean copyLocalCardToBench(BackendKey bench, String dev,
+        private boolean copyLocalCardToServer(BackendKey server, String dev,
                 AudioDeviceProfile local) {
             int answer = Dialogs.confirm(parent,
                     I18n.t("preferences.audio.card.copyCalibration.title"),
                     I18n.t("preferences.audio.card.copyCalibration.message", dev, local.getName()));
             if (answer != SWT.YES) return true;             // declined - asked and answered
-            BenchCards.Copied copied = benchCards.propagateLocalCard(bench, dev, input);
+            ServerCards.Copied copied = serverCards.propagateLocalCard(server, dev, input);
             switch (copied) {
                 case CARD -> { }                            // whole card, binding staged
                 case VALUES_ONLY -> Dialogs.info(parent,
@@ -2733,7 +2733,7 @@ public final class PreferencesDialog {
          * ({@code device.setCalibration} creates on write) - the create-an-empty-card
          * fallback, with no second protocol verb needed for it.
          */
-        private boolean createBenchCard(BackendKey bench, String dev) {
+        private boolean createServerCard(BackendKey server, String dev) {
             int answer = Dialogs.confirm(parent,
                     I18n.t("preferences.audio.card.noCardAssigned.title"),
                     I18n.t("preferences.audio.card.noCardAssigned.message", dev));
@@ -2744,10 +2744,10 @@ public final class PreferencesDialog {
             CardEditorDialog dlg = new CardEditorDialog(parent, seed,
                     input ? CardEditorDialog.Capability.INPUT_ONLY
                           : CardEditorDialog.Capability.OUTPUT_ONLY,
-                    benchCardNames(), null, DEFAULT_ADC_FS_VRMS, DEFAULT_DAC_FS_AMPL);
+                    serverCardNames(), null, DEFAULT_ADC_FS_VRMS, DEFAULT_DAC_FS_AMPL);
             AudioDeviceProfile card = dlg.open();
             if (card == null) return true;                 // cancelled - nothing anywhere
-            if (!benchCards.createAndStage(bench, dev, input, card)) {
+            if (!serverCards.createAndStage(server, dev, input, card)) {
                 Dialogs.error(parent, I18n.t("net.servers.error.title"),
                         I18n.t("preferences.audio.card.bindFailed", card.getName()));
                 return false;                              // the bench took nothing
@@ -2760,7 +2760,7 @@ public final class PreferencesDialog {
          *  - the combo's own list, which is exactly what {@code cards.list} just
          *  answered.  The bench re-checks anyway; this only spares the operator a
          *  round trip to be told. */
-        private List<String> benchCardNames() {
+        private List<String> serverCardNames() {
             List<String> names = new ArrayList<>();
             for (String name : comboNames) {
                 if (name != null) names.add(name);
@@ -2814,7 +2814,7 @@ public final class PreferencesDialog {
             if (idx < 0) return;
             String dev = deviceName();
             if (remoteCards) {
-                bindBenchCard(dev, comboNames.get(idx));
+                bindServerCard(dev, comboNames.get(idx));
                 return;
             }
             if (idx == comboProfiles.size() - 1) {          // New card...
@@ -2849,10 +2849,10 @@ public final class PreferencesDialog {
          *  drops the working copy and nothing was ever sent - which matters more
          *  here than anywhere else in this dialog, because a write that had
          *  already left for another machine could not be taken back. */
-        private void bindBenchCard(String dev, String cardName) {
-            BackendKey bench = edit.getSelectedBackend();
-            if (dev == null || bench == null) return;
-            benchCards.stage(bench, input, dev, cardName);
+        private void bindServerCard(String dev, String cardName) {
+            BackendKey server = edit.getSelectedBackend();
+            if (dev == null || server == null) return;
+            serverCards.stage(server, input, dev, cardName);
             selectedName = cardName;
         }
 
@@ -3040,10 +3040,10 @@ public final class PreferencesDialog {
                 // for an ordinary bench card - and its radios have something real
                 // to move (device.setActiveRange).  An ordinary LOCAL card that
                 // merely shares a bench card's name is never rendered here.
-                BackendKey bench = edit.getSelectedBackend();
+                BackendKey server = edit.getSelectedBackend();
                 DeviceRef ref = dev == null ? null : refFor(refs(), dev);
-                p = bench == null ? null
-                        : benchCards.card(bench, benchCards.boundCard(bench, ref, dev));
+                p = server == null ? null
+                        : serverCards.card(server, serverCards.boundCard(server, ref, dev));
             } else {
                 p = selectedName == null ? null : edit.findAudioDeviceProfile(selectedName);
             }
@@ -3184,7 +3184,7 @@ public final class PreferencesDialog {
             for (RangeRow other : rows) {
                 if (other != r && !other.activeRadio.isDisposed()) other.activeRadio.setSelection(false);
             }
-            stageBenchRange(ep, r.range.getLabel(), Channel.L);
+            stageServerRange(ep, r.range.getLabel(), Channel.L);
             commit();
         }
 
@@ -3203,14 +3203,14 @@ public final class PreferencesDialog {
          * {@code qa40x.setOutputRange} on this dialog's OK; staging it here as
          * well would move the same attenuator twice.
          */
-        private void stageBenchRange(DeviceEndpointConfig ep, String label, Channel side) {
-            BackendKey bench = edit.getSelectedBackend();
+        private void stageServerRange(DeviceEndpointConfig ep, String label, Channel side) {
+            BackendKey server = edit.getSelectedBackend();
             String dev = deviceName();
-            if (!remoteCards || bench == null || dev == null
+            if (!remoteCards || server == null || dev == null
                     || ep.isCalibrationFromDevice()) {
                 return;
             }
-            benchCards.stageActiveRange(bench, input, dev, label,
+            serverCards.stageActiveRange(server, input, dev, label,
                     ep.getChannels() == DeviceChannelMode.INDEPENDENT ? side : null);
         }
 
@@ -3224,7 +3224,7 @@ public final class PreferencesDialog {
                     other.activeRadioRight.setSelection(false);
                 }
             }
-            stageBenchRange(ep, r.range.getLabel(), Channel.R);
+            stageServerRange(ep, r.range.getLabel(), Channel.R);
             commit();
         }
 

@@ -183,7 +183,7 @@ class NetKeepaliveTest {
                             + "answers nothing would freeze the Preferences dialog for it, "
                             + "and this one took " + spentMs + " ms");
             // The socket is left for the CALLER to close (both call sites do,
-            // see NetBenchUi.connect / probe): only a REFUSED session closes here.
+            // see NetServerUi.connect / probe): only a REFUSED session closes here.
         } finally {
             session.connClose(NetCloseReason.BYE);
             mute.shutDown(AWAIT_MS);

@@ -829,7 +829,7 @@ class ClientSessionTest {
      * to send before the operator has taken anything.
      */
     @Test
-    void aCardIsPutOnTheBenchWithoutALockAndWithoutABroadcast() {
+    void aCardIsPutOnTheServerWithoutALockAndWithoutABroadcast() {
         greet(session, CLIENT_NAME);
         AtomicInteger broadcasts = new AtomicInteger();
         locks.addChangeListener(broadcasts::incrementAndGet);
@@ -849,7 +849,7 @@ class ClientSessionTest {
     }
 
     @Test
-    void aCardNameTheBenchAlreadyHasIsABadRequest() {
+    void aCardNameTheServerAlreadyHasIsABadRequest() {
         cards.card(BINDABLE_CARD, DEVICE_NAME, true, FS_RMS_LEFT, FS_RMS_RIGHT, false);
         greet(session, CLIENT_NAME);
 
@@ -881,7 +881,7 @@ class ClientSessionTest {
      * its own.
      */
     @Test
-    void aCalibrationOnADeviceWithNoCardCreatesTheCardOnTheBench() {
+    void aCalibrationOnADeviceWithNoCardCreatesTheCardOnTheServer() {
         greet(session, CLIENT_NAME);
         acquire(session, REQUEST_ID, true);
         assertNull(catalog.boundCard(DEVICE_NAME), "the bench starts with no card");

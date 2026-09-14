@@ -41,7 +41,7 @@ import org.junit.jupiter.api.Timeout;
  *
  * <p><b>This closes a gap nothing else in the repository reaches.</b>
  * {@code server-net} is deliberately absent from every client POM, so no unit
- * test anywhere can wire a live {@code ServerMain} to a live {@code NetBenchUi}
+ * test anywhere can wire a live {@code ServerMain} to a live {@code NetServerUi}
  * - each side can only be tested against a stub of the other. Here neither side
  * is stubbed: the client dials an ephemeral port the OS chose, completes the
  * real handshake, and hangs up.

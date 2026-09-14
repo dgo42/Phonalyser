@@ -90,7 +90,7 @@ import lombok.extern.log4j.Log4j2;
  * owner, shows once.
  */
 @Log4j2
-public final class NetBenchUi implements RemoteBackendUi, NetFaultListener {
+public final class NetServerUi implements RemoteBackendUi, NetFaultListener {
 
     /** How long a connect attempt waits for the socket and the {@code hello}.
      *  Short on purpose - but no longer because of WHERE it runs: the dial is off
@@ -180,7 +180,7 @@ public final class NetBenchUi implements RemoteBackendUi, NetFaultListener {
     private volatile Executor uiExecutor;
 
     /** Public and no-argument for the service loader (see {@link RemoteBackendUi}). */
-    public NetBenchUi() {
+    public NetServerUi() {
         Preferences.instance().registerCustomPreferences(preferences);
     }
 

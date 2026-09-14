@@ -69,13 +69,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * the case it exists for.  No measurement is restarted: pressing play stays the
  * operator's move.
  *
- * <p><b>The far end is a socket</b> ({@link BenchSocket}), which is what the
+ * <p><b>The far end is a socket</b> ({@link StubServerSocket}), which is what the
  * three awkward cases need: a bench that comes back with the SAME installation
  * id after a restart, a bench that answers slowly enough for an attempt to be
  * provably in flight, and - hand-built here because it is not a Phonalyser bench
  * at all - one that accepts the socket and then says nothing.
  */
-class NetBenchUiReconnectTest {
+class NetServerUiReconnectTest {
 
     private static final String LOOPBACK = "127.0.0.1";
     /** The bench that goes away and comes back: spec 2.1 keys a server on its
@@ -115,21 +115,21 @@ class NetBenchUiReconnectTest {
      *  WHERE something ran and not merely that it ran. */
     private static final String DISPLAY_THREAD = "test-stand-in-display";
 
-    private int benchPort;
-    private BenchSocket socket;
-    private BenchSocket elsewhere;
-    private NetBenchUi bench;
+    private int serverPort;
+    private StubServerSocket socket;
+    private StubServerSocket elsewhere;
+    private NetServerUi server;
     private ExecutorService display;
     private BackendKey previousSelection;
 
     @BeforeEach
-    void startTheBenchAndConnect() throws IOException {
+    void startTheServerAndConnect() throws IOException {
         Preferences prefs = Preferences.instance();
         prefs.setTransientMode(true);
         previousSelection = prefs.getSelectedBackend();
-        benchPort = freePort();
-        socket = start(BENCH_ID, benchPort);
-        bench = (NetBenchUi) RemoteBackendRegistry.instance().getUi();
+        serverPort = freePort();
+        socket = start(BENCH_ID, serverPort);
+        server = (NetServerUi) RemoteBackendRegistry.instance().getUi();
         // The display this run cannot create, stood in for by one thread - which
         // is what makes the split assertable at all: without it the marshal runs
         // inline and a blocking dial on "the display thread" looks exactly like a
@@ -139,14 +139,14 @@ class NetBenchUiReconnectTest {
             thread.setDaemon(true);
             return thread;
         });
-        bench.setUiExecutor(display);
-        assertNull(bench.connect(entry(benchPort)), "the loopback bench refused the session");
+        server.setUiExecutor(display);
+        assertNull(server.connect(entry(serverPort)), "the loopback bench refused the session");
     }
 
     @AfterEach
     void disconnectAndStop() {
-        bench.disconnect();
-        bench.setUiExecutor(null);
+        server.disconnect();
+        server.setUiExecutor(null);
         display.shutdownNow();
         socket.shutDown(STOP_TIMEOUT_MS);
         if (elsewhere != null) {
@@ -163,11 +163,11 @@ class NetBenchUiReconnectTest {
     @Test
     void aServerThatComesBackIsPickedUpWithoutTheOperator() {
         BackendKey analyzer = analyzer();
-        assertTrue(bench.select(analyzer), "the bench refused backend.select");
+        assertTrue(server.select(analyzer), "the bench refused backend.select");
         Preferences.instance().setSelectedBackend(analyzer);
 
         socket.shutDown(STOP_TIMEOUT_MS);
-        awaitTrue(() -> !bench.isConnected(), RECONNECT_WINDOW_MS,
+        awaitTrue(() -> !server.isConnected(), RECONNECT_WINDOW_MS,
                 "the client never noticed the bench go away");
 
         // Where the state half lands: the publish is the last thing the commit
@@ -175,12 +175,12 @@ class NetBenchUiReconnectTest {
         AtomicReference<String> committedOn = new AtomicReference<>();
         Consumer<Object> watcher = ignored -> committedOn.set(Thread.currentThread().getName());
         MessageBus.instance().subscribe(Events.REMOTE_BACKENDS_CHANGED, watcher);
-        socket = start(BENCH_ID, benchPort);   // the operator's restart, and nothing more
+        socket = start(BENCH_ID, serverPort);   // the operator's restart, and nothing more
 
-        awaitTrue(bench::isConnected, RECONNECT_WINDOW_MS,
+        awaitTrue(server::isConnected, RECONNECT_WINDOW_MS,
                 "the client never came back by itself - which is the whole defect: it "
                         + "worked the moment somebody pressed Connect");
-        assertFalse(bench.entries().isEmpty(),
+        assertFalse(server.entries().isEmpty(),
                 "the combo's entries are the NEW session's, so anything showing them "
                         + "has something to show");
         MessageBus.instance().unsubscribe(Events.REMOTE_BACKENDS_CHANGED, watcher);
@@ -200,10 +200,10 @@ class NetBenchUiReconnectTest {
      */
     @Test
     void theOperatorsOwnDisconnectStaysDisconnected() {
-        bench.disconnect();
-        assertFalse(bench.isConnected());
+        server.disconnect();
+        assertFalse(server.isConnected());
 
-        assertFalse(waitedUntil(bench::isConnected, NO_RECONNECT_MS),
+        assertFalse(waitedUntil(server::isConnected, NO_RECONNECT_MS),
                 "the client reconnected to a bench the operator had disconnected from");
     }
 
@@ -222,12 +222,12 @@ class NetBenchUiReconnectTest {
     @Test
     void aManualConnectDuringTheRetryWindowCancelsIt() throws IOException {
         socket.shutDown(STOP_TIMEOUT_MS);
-        awaitTrue(() -> !bench.isConnected(), RECONNECT_WINDOW_MS,
+        awaitTrue(() -> !server.isConnected(), RECONNECT_WINDOW_MS,
                 "the client never noticed the bench go away");
 
         // The old bench is back on its port - but slow to answer, so the retry
         // that finds it is still in flight when the operator gives up on it.
-        socket = new BenchSocket(new JsonCodec(), BENCH_ID, benchPort);
+        socket = new StubServerSocket(new JsonCodec(), BENCH_ID, serverPort);
         socket.setHelloDelayMs(HELLO_HOLD_MS);
         socket.listen(BIND_TIMEOUT_MS);
         int otherPort = freePort();
@@ -236,7 +236,7 @@ class NetBenchUiReconnectTest {
         socket.awaitHello(RECONNECT_WINDOW_MS);
         // The operator does not wait: they connect somewhere else, and this is
         // the newer intention.
-        assertNull(bench.connect(entry(otherPort)), "the second bench refused the session");
+        assertNull(server.connect(entry(otherPort)), "the second bench refused the session");
 
         awaitTrue(() -> socket.closedSessions() > 0, RECONNECT_WINDOW_MS,
                 "the overtaken attempt kept the session it had dialled - a second live "
@@ -245,8 +245,8 @@ class NetBenchUiReconnectTest {
         assertFalse(waitedUntil(() -> !onPort(otherPort), NO_RECONNECT_MS),
                 "the pending retry took the session back off the server the operator "
                         + "had just chosen");
-        assertTrue(bench.isConnected());
-        assertEquals(otherPort, bench.getConnectedServer().port());
+        assertTrue(server.isConnected());
+        assertEquals(otherPort, server.getConnectedServer().port());
     }
 
     /**
@@ -265,12 +265,12 @@ class NetBenchUiReconnectTest {
      * accepted), and the thread that armed them stays answerable throughout.
      */
     @Test
-    void aBenchThatAnswersNothingIsDialledWithoutHoldingItsCaller() throws Exception {
+    void aServerThatAnswersNothingIsDialledWithoutHoldingItsCaller() throws Exception {
         socket.shutDown(STOP_TIMEOUT_MS);
-        awaitTrue(() -> !bench.isConnected(), RECONNECT_WINDOW_MS,
+        awaitTrue(() -> !server.isConnected(), RECONNECT_WINDOW_MS,
                 "the client never noticed the bench go away");
 
-        try (BlackHole hole = new BlackHole(benchPort)) {
+        try (BlackHole hole = new BlackHole(serverPort)) {
             long slowest = 0;
             long deadline = System.currentTimeMillis() + BLACK_HOLE_WINDOW_MS;
             while (System.currentTimeMillis() < deadline) {
@@ -290,7 +290,7 @@ class NetBenchUiReconnectTest {
                     "the display thread was held for " + slowest + " ms: the blocking "
                             + "dial is running where the state lives, which is the freeze "
                             + "this split exists to remove");
-            assertFalse(bench.isConnected(), "nothing ever answered, so nothing connected");
+            assertFalse(server.isConnected(), "nothing ever answered, so nothing connected");
         }
     }
 
@@ -314,15 +314,15 @@ class NetBenchUiReconnectTest {
     @Test
     void theReCommitAfterAReconnectIsNotMadeOnTheDisplayThread() throws Exception {
         BackendKey analyzer = analyzer();
-        assertTrue(bench.select(analyzer), "the bench refused backend.select");
+        assertTrue(server.select(analyzer), "the bench refused backend.select");
         Preferences.instance().setSelectedBackend(analyzer);
 
         socket.shutDown(STOP_TIMEOUT_MS);
-        awaitTrue(() -> !bench.isConnected(), RECONNECT_WINDOW_MS,
+        awaitTrue(() -> !server.isConnected(), RECONNECT_WINDOW_MS,
                 "the client never noticed the bench go away");
 
         // Back on its port, and slow to answer the commit that follows.
-        socket = new BenchSocket(new JsonCodec(), BENCH_ID, benchPort);
+        socket = new StubServerSocket(new JsonCodec(), BENCH_ID, serverPort);
         socket.setSelectDelayMs(SELECT_HOLD_MS);
         socket.listen(BIND_TIMEOUT_MS);
 
@@ -349,7 +349,7 @@ class NetBenchUiReconnectTest {
      * sockets are kept open on purpose - closing them would turn the black hole
      * into an ordinary refusal, which is the case that never hurt.
      *
-     * <p>Not a {@link BenchSocket}: what makes this case the discriminating one
+     * <p>Not a {@link StubServerSocket}: what makes this case the discriminating one
      * is that nothing on the far end speaks the protocol at all.
      */
     private static final class BlackHole implements AutoCloseable {
@@ -360,7 +360,7 @@ class NetBenchUiReconnectTest {
         private final Thread acceptor;
 
         private BlackHole(int port) throws IOException {
-            // Bound exactly as BenchSocket binds - loopback, and with the address
+            // Bound exactly as StubServerSocket binds - loopback, and with the address
             // reusable.  It used to take the WILDCARD without setReuseAddress,
             // which conflicts with the 127.0.0.1 bind the bench on this same port
             // has only just given up: the kernel holds that address briefly, and
@@ -401,23 +401,23 @@ class NetBenchUiReconnectTest {
     /** The bench, as the servers dialog's manual entry starts: an address, with
      *  the id left for the server's own {@code hello} to supply. */
     private NetServerEntry entry(int port) {
-        return new NetServerEntry(LOOPBACK, BenchSocket.SERVER_NAME, LOOPBACK, port, true);
+        return new NetServerEntry(LOOPBACK, StubServerSocket.SERVER_NAME, LOOPBACK, port, true);
     }
 
     /** A bench of installation {@code id} listening on {@code port} - the same
      *  shape the rest of this module's loopback runs use. */
-    private BenchSocket start(String id, int port) {
-        BenchSocket fresh = new BenchSocket(new JsonCodec(), id, port);
+    private StubServerSocket start(String id, int port) {
+        StubServerSocket fresh = new StubServerSocket(new JsonCodec(), id, port);
         fresh.listen(BIND_TIMEOUT_MS);
         return fresh;
     }
 
     private BackendKey analyzer() {
-        return BackendKey.of(bench.getConnectedServer().serverId(), AudioBackendType.QA40X);
+        return BackendKey.of(server.getConnectedServer().serverId(), AudioBackendType.QA40X);
     }
 
     private boolean onPort(int port) {
-        NetServerEntry connected = bench.getConnectedServer();
+        NetServerEntry connected = server.getConnectedServer();
         return connected != null && connected.port() == port;
     }
 

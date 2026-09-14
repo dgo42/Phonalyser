@@ -38,7 +38,7 @@ import org.edgo.audio.measure.preferences.BackendKey;
  * the value, the message name and the selection are all separately wrong-able,
  * and only the recorded call has all three.
  */
-public final class StubRemoteBench implements RemoteBackendUi {
+public final class StubRemoteServer implements RemoteBackendUi {
 
     /** One request as it was handed to the seam. */
     public record Call(BackendKey selection, String request, Map<String, Object> fields,
@@ -52,7 +52,7 @@ public final class StubRemoteBench implements RemoteBackendUi {
     private final Map<String, Map<String, Object>> answers = new LinkedHashMap<>();
 
     /** Public and no-argument for the service loader. */
-    public StubRemoteBench() {
+    public StubRemoteServer() {
     }
 
     /** Every call since the last {@link #clear()}, in order. */

@@ -54,7 +54,7 @@ import lombok.extern.log4j.Log4j2;
  * subclassing one throws at runtime with no compile warning.
  *
  * <p><b>It shows; it does not own.</b>  Which servers exist is
- * {@link NetServerList}'s, the session is {@link NetBenchUi}'s, and both outlive
+ * {@link NetServerList}'s, the session is {@link NetServerUi}'s, and both outlive
  * this window: the operator connects here and then goes on to pick a backend in
  * the Preferences dialog, which is still open behind it.  What is genuinely this
  * type's own is the two things that exist only while the window does - the
@@ -95,7 +95,7 @@ public final class NetServerListDialog {
     private static final String NO_ANSWER = "";
 
     private final Shell parent;
-    private final NetBenchUi bench;
+    private final NetServerUi server;
     private final NetServerList servers;
 
     /** Discovery, alive only while the window is: a client that kept the group
@@ -115,10 +115,10 @@ public final class NetServerListDialog {
     private Button disconnectButton;
     private Button removeButton;
 
-    public NetServerListDialog(Shell parent, NetBenchUi bench) {
+    public NetServerListDialog(Shell parent, NetServerUi server) {
         this.parent = parent;
-        this.bench = bench;
-        this.servers = bench.getServers();
+        this.server = server;
+        this.servers = server.getServers();
     }
 
     /** Shows the window modally and returns once it is closed. */
@@ -245,7 +245,7 @@ public final class NetServerListDialog {
      * rule as the server list itself.
      */
     private void buildProxyRow(Composite parent) {
-        NetPreferences prefs = bench.getPreferences();
+        NetPreferences prefs = server.getPreferences();
         Label rowLabel = new Label(parent, SWT.NONE);
         rowLabel.setText(I18n.t("net.servers.proxy.title"));
         proxyHostField = new Text(parent, SWT.SINGLE | SWT.BORDER);
@@ -329,7 +329,7 @@ public final class NetServerListDialog {
         // bounded by the wire timeouts.
         String failure;
         try {
-            failure = bench.probe(candidate);
+            failure = server.probe(candidate);
         } catch (RuntimeException ex) {
             log.warn("server probe failed: {}", ex.toString());
             failure = NO_ANSWER;
@@ -349,13 +349,13 @@ public final class NetServerListDialog {
      *  connectable, so neither way re-opens a session over the live one. */
     private void connectSelected() {
         NetServerEntry selected = selectedServer();
-        if (!servers.connectable(selected, bench.getConnectedServer())) {
+        if (!servers.connectable(selected, server.getConnectedServer())) {
             return;
         }
         // Same NO_ANSWER rule as the probe: connect reports success as null.
         String failure;
         try {
-            failure = bench.connect(selected);
+            failure = server.connect(selected);
         } catch (RuntimeException ex) {
             log.warn("server connect failed: {}", ex.toString());
             failure = NO_ANSWER;
@@ -374,7 +374,7 @@ public final class NetServerListDialog {
         if (selected == null || !selected.manual()) {
             return;
         }
-        NetServerEntry connected = bench.getConnectedServer();
+        NetServerEntry connected = server.getConnectedServer();
         if (connected != null && connected.serverId().equals(selected.serverId())) {
             // Forgetting the bench being measured on ends its session first, and
             // that teardown talks to it - see the Disconnect button.
@@ -389,7 +389,7 @@ public final class NetServerListDialog {
      *  timeouts. */
     private void disconnectQuietly() {
         try {
-            bench.disconnect();
+            server.disconnect();
         } catch (RuntimeException ex) {
             log.warn("server disconnect failed: {}", ex.toString());
         }
@@ -434,7 +434,7 @@ public final class NetServerListDialog {
      *  period rather than half a second into it. */
     private void startDiscovery() {
         Display display = dialog.getDisplay();
-        discovery = new BeaconListener(bench.getCodec(), (beacon, host) ->
+        discovery = new BeaconListener(server.getCodec(), (beacon, host) ->
                 GuiUtil.marshal(dialog, () -> {
                     // On the UI thread on purpose: the model writes into the
                     // settings block the rest of this dialog reads.
@@ -446,7 +446,7 @@ public final class NetServerListDialog {
         // The manual rows' beacons never cross their router; their liveness is a
         // unicast GET /info instead.  Same UI-thread marshal as the beacons - the
         // stamp lands in the model the widgets read, and the 500 ms tick repaints.
-        prober = new ServerProber(bench.getCodec(), serverId ->
+        prober = new ServerProber(server.getCodec(), serverId ->
                 GuiUtil.marshal(dialog,
                         () -> servers.alive(serverId, System.currentTimeMillis())));
         prober.setTargets(manualRows());
@@ -455,7 +455,7 @@ public final class NetServerListDialog {
         // it a repaint later - so without this the first poll of every routed
         // row would go direct, waste its whole timeout and leave the row grey
         // for a second longer than it needs to be.
-        prober.setProxy(bench.getPreferences().proxyEdit());
+        prober.setProxy(server.getPreferences().proxyEdit());
         prober.start();
         display.timerExec(REFRESH_MS, this::tick);
     }
@@ -499,7 +499,7 @@ public final class NetServerListDialog {
             return;
         }
         NetServerEntry selected = selectedServer();
-        NetServerEntry connected = bench.getConnectedServer();
+        NetServerEntry connected = server.getConnectedServer();
         table.removeAll();
         List<NetServerList.Row> rows = servers.rows(System.currentTimeMillis());
         for (NetServerList.Row row : rows) {
@@ -516,7 +516,7 @@ public final class NetServerListDialog {
             // Replaced whole on every repaint, exactly like the targets: the
             // operator can type a proxy while this is already polling, and the
             // rows it polls are the routed ones a proxy exists for.
-            prober.setProxy(bench.getPreferences().proxyEdit());
+            prober.setProxy(server.getPreferences().proxyEdit());
         }
         refreshButtons();
     }
@@ -534,8 +534,8 @@ public final class NetServerListDialog {
 
     private void refreshButtons() {
         NetServerEntry selected = selectedServer();
-        connectButton.setEnabled(servers.connectable(selected, bench.getConnectedServer()));
-        disconnectButton.setEnabled(bench.isConnected());
+        connectButton.setEnabled(servers.connectable(selected, server.getConnectedServer()));
+        disconnectButton.setEnabled(server.isConnected());
         removeButton.setEnabled(selected != null && selected.manual());
     }
 }

@@ -130,7 +130,7 @@ class Qa40xRateConstraintTest {
     }
 
     @Test
-    void switchingBetweenTwoQa40xBenches_forgetsThePairOfTheOneLeft() {
+    void switchingBetweenTwoQa40xServers_forgetsThePairOfTheOneLeft() {
         // Bench A is tracked at 96 kHz on both directions.
         changed(true, 96_000, LOCAL_QA40X);
         emitted.clear();

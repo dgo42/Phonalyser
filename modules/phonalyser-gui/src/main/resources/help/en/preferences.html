@@ -106,7 +106,7 @@
             It also re-composes the backend list itself, which is how an analyzer
             plugged in since start-up shows up as a backend at all, and it asks a
             <a href="#prefs-audio-servers">connected server</a> for its backends
-            again.  A scan never disturbs a measurement: for a remote bench the
+            again.  A scan never disturbs a measurement: for a server the
             device list is only read, never re-selected.  That same failure code
             additionally triggers one automatic rescan and retry on its own, and a
             saved device missing from the list is looked for once more after a
@@ -115,12 +115,12 @@
         <td>Opens the <a href="#prefs-audio-servers">server list</a> - the
             Phonalyser servers on the network, and the ones you added by
             address.  It is there whenever the installation carries the network
-            module, and it does not depend on the selected backend: a bench has
+            module, and it does not depend on the selected backend: a server has
             to be chosen before any of its backends can be.</td></tr>
     <tr><td><b>&lt;backend&gt; preferences</b></td>
         <td>The selected backend's own settings, and the button is
             <b>named after that backend</b> - <b>QA40x preferences</b> for a
-            QA402 / QA403, whether it is wired to this machine or to a bench
+            QA402 / QA403, whether it is wired to this machine or to a server
             across the network.  It is hidden for a backend that has no settings
             of its own, which is every other one at present.</td></tr>
   </table>
@@ -394,7 +394,7 @@ bindings:                          # device -> card choices you made in the dial
 
   <h4 id="prefs-audio-ranges-qa40x">A QA40x input range is not the dBV it is called</h4>
   <p>For a QA402 / QA403 - on this machine or on a
-     <a href="#prefs-audio-servers">bench across the network</a> - every
+     <a href="#prefs-audio-servers">server across the network</a> - every
      <b>input</b> row carries a second label after the plain one:</p>
   <p><code>0 "dBV" real 0 dBFS or -9 dBV</code></p>
   <p>It is there because the analyzer's range names are not RMS voltages, and
@@ -512,16 +512,16 @@ bindings:                          # device -> card choices you made in the dial
   <h3 id="prefs-audio-servers">Measuring through a Phonalyser server</h3>
   <p>The hardware does not have to be wired to the machine you are sitting at.
      A second Phonalyser installation running as a <b>server</b> turns the
-     machine that <em>is</em> wired to the converters into a <b>bench</b>, and
-     this application then measures through it: you pick one of the bench's
+     machine that <em>is</em> wired to the converters into a <b>server</b>, and
+     this application then measures through it: you pick one of the server's
      backends in the list above and everything - devices, formats, cards,
      calibration, the generator, the sweeps - works as though the hardware were
      plugged in here.  For what happens on the wire, see
-     <a href="theory/audio-backend.html#network">Theory ▸ A bench across the
+     <a href="theory/audio-backend.html#network">Theory ▸ A server across the
      network</a>.</p>
-  <div class="note">There is deliberately <b>no authentication</b>.  A server is a
-     bench instrument for a network you trust - the room your measurement
-     equipment is in - not something to expose to the open internet.</div>
+  <div class="note">There is deliberately <b>no authentication</b>.  A server is
+     meant for a network you trust - the room your measurement equipment is in -
+     not something to expose to the open internet.</div>
 
   <h4 id="prefs-audio-server-list">The server list</h4>
   <p>The <b>Servers...</b> button on the backend row opens <b>Phonalyser
@@ -544,7 +544,7 @@ bindings:                          # device -> card choices you made in the dial
         <td><b>live</b> - announcing itself right now; <b>offline</b> - a server
             this installation remembers that is not answering; <b>connected</b>
             - the one this application is measuring through.  The rows
-            <b>repaint themselves</b> while the window is open, so a bench that
+            <b>repaint themselves</b> while the window is open, so a server that
             is switched off turns from live to offline on its own rather than at
             your next click, and one that is switched on appears without
             re-opening the window.</td></tr>
@@ -567,11 +567,11 @@ bindings:                          # device -> card choices you made in the dial
         <td>Ends the session - <b>the live one</b>, whichever row happens to be
             selected and even with no row selected at all; it is available
             whenever a server is connected and greyed when none is.  Not the
-            no-op it looks like: the bench's
+            no-op it looks like: the server's
             generator lane and every device this installation holds there are
             given back <em>on the wire</em> first, so the hardware is released
             rather than abandoned to the server's own clean-up.  Every module
-            measuring through that bench stops, exactly as it would if the
+            measuring through that server stops, exactly as it would if the
             connection had died.</td></tr>
     <tr><td><b>Remove</b></td>
         <td>Forgets the selected server - and only one that was <b>added by
@@ -587,7 +587,7 @@ bindings:                          # device -> card choices you made in the dial
   <table class="controls">
     <tr><th>Row</th><th>Notes</th></tr>
     <tr><td><b>Proxy server:</b></td>
-        <td>An HTTP proxy to reach a bench your network does not route to
+        <td>An HTTP proxy to reach a server your network does not route to
             directly.  <b>Leave both fields empty for no proxy</b> - that is the
             ordinary case, and it is what an empty port means as well.  There is
             no Apply button and none is missing: the two fields take effect as
@@ -595,7 +595,7 @@ bindings:                          # device -> card choices you made in the dial
             Connect, Add, and the liveness poll behind the rows.</td></tr>
     <tr><td><b>Add server manually:</b> (with the <b>Add</b> button at the end
             of the row)</td>
-        <td>The manual entry for a bench discovery cannot see.  <b>Port</b> is
+        <td>The manual entry for a server discovery cannot see.  <b>Port</b> is
             pre-filled with <b>8377</b>, the server's default - one port carries
             everything, so there is only ever one number to type.  <b>Add</b>
             does not simply believe you: it asks the address for its name and
@@ -609,49 +609,49 @@ bindings:                          # device -> card choices you made in the dial
      remove, and the proxy you type, are <b>edits</b> - they follow the
      Preferences dialog behind this window: <b>OK</b> writes them, <b>Cancel</b>
      drops them.  <b>Connecting and disconnecting are actions</b> and take effect
-     at once; a Cancel afterwards does not hand a bench back or take one away.
-     The bench you are connected to is remembered whatever you press, so a
+     at once; a Cancel afterwards does not hand a server back or take one away.
+     The server you are connected to is remembered whatever you press, so a
      Cancel can never lose the only entry for a server discovery cannot
      re-find.</div>
 
-  <h4 id="prefs-audio-server-backends">Choosing a bench backend</h4>
+  <h4 id="prefs-audio-server-backends">Choosing a server backend</h4>
   <p>A connected server's backends join the <b>Backend</b> list beside the local
      ones, written <code>&lt;server&gt; -> &lt;backend&gt;</code> - e.g.
-     <code>bench-pc -> QA40x</code>.  Only backends the bench can really operate
+     <code>bench-pc -> QA40x</code>.  Only backends the server can really operate
      are offered: one that is in the server's build but cannot run on that
      machine is left out rather than shown greyed.</p>
   <ul>
     <li><b>Device, sample rate and bit depth are remembered per server and per
         backend</b>, exactly as they are for a local backend, so switching
-        between two benches - or between a bench and the card on your desk -
+        between two servers - or between a server and the card on your desk -
         does not cost you the format you had set.  An older
         <code>preferences.yaml</code> reads unchanged, and entries written by a
         newer release, or for a server this installation has never met, survive a
         save untouched.</li>
-    <li><b>A device another operator is using says so.</b>  Each of the bench's
+    <li><b>A device another operator is using says so.</b>  Each of the server's
         devices may be held exclusively by one client at a time, and one that is
         taken reads
         <code>&lt;device&gt; - in use by &lt;client&gt;</code>, naming the
         machine holding it.  A device <em>this</em> installation holds reads
         normally - your own running scope is not news.</li>
     <li><b>Browsing the list only previews.</b>  Selecting a server's backend
-        fills the device combos from that bench without committing anything, so
+        fills the device combos from that server without committing anything, so
         looking is free; <b>Cancel</b> puts the previous routing back untouched
-        and <b>OK</b> is what commits.  If the bench has gone away in the
+        and <b>OK</b> is what commits.  If the server has gone away in the
         meantime you are told - <em>This server's backend cannot be reached any
         more.  Its entries have been removed from the list.</em></li>
   </ul>
 
-  <h4 id="prefs-audio-server-cards">Cards and calibration on the bench</h4>
-  <p>Calibration belongs to the hardware, so with a bench backend selected the
+  <h4 id="prefs-audio-server-cards">Cards and calibration on the server</h4>
+  <p>Calibration belongs to the hardware, so with a server backend selected the
      <a href="#prefs-audio-card">Card</a> section works against the
-     <em>bench's</em> store rather than this machine's:</p>
+     <em>server's</em> store rather than this machine's:</p>
   <ul>
-    <li>the <b>Card</b> combo lists the bench's cards;</li>
+    <li>the <b>Card</b> combo lists the server's cards;</li>
     <li>a crosshair <a href="#prefs-audio-calibrate">Calibrate</a> writes the
-        measured full-scale <b>into the bench's store</b>, where it belongs and
-        where every other operator of that bench benefits from it;</li>
-    <li>and when you select a bench device that has <em>no</em> calibration
+        measured full-scale <b>into the server's store</b>, where it belongs and
+        where every other operator of that server benefits from it;</li>
+    <li>and when you select a server device that has <em>no</em> calibration
         while this machine holds a calibrated card for it, you are asked whether
         to copy it over - <em>Copy calibration to the server?</em> - <b>once per
         session and never silently</b>.  Say no and nothing is written.</li>
@@ -660,29 +660,29 @@ bindings:                          # device -> card choices you made in the dial
   <h4 id="prefs-audio-server-measuring">What else crosses the wire</h4>
   <ul>
     <li><b>A backend's own settings.</b>  <b>QA40x preferences</b> and the input
-        and output <b>range</b> radios drive an analyzer on the bench exactly as
+        and output <b>range</b> radios drive an analyzer on the server exactly as
         they drive a local one, live telemetry included - the panel reads
         whichever analyzer the selection points at.</li>
-    <li><b>The generator runs on the bench.</b>  It is <em>commanded</em>, not
-        streamed: this application tells the bench what to emit and the bench's
+    <li><b>The generator runs on the server.</b>  It is <em>commanded</em>, not
+        streamed: this application tells the server what to emit and the server's
         own DAC renders it.  That is what keeps a frequency-response sweep
-        honest - it is deconvolved against exactly what the bench played, with
+        honest - it is deconvolved against exactly what the server played, with
         the sweep's first sample marked in the capture stream itself.</li>
-    <li><b>A rate the bench cannot give you.</b>  If the device grants a
+    <li><b>A rate the server cannot give you.</b>  If the device grants a
         different sample rate than the one you asked for, a live capture
         <b>runs and is displayed at the granted rate</b> - the frequency axis
         follows the reality - while a <b>sweep is refused</b> rather than
         deconvolved against a rate that was never played.</li>
     <li><b>File playback crosses too.</b>  The chosen WAV / AIFF / FLAC is
         uploaded once - up to <b>50 MB</b>, the limit the server enforces,
-        checked here before a byte leaves - and the bench decodes and plays it
+        checked here before a byte leaves - and the server decodes and plays it
         out of its own DAC, at the file's own rate and depth.  <b>In loop</b> is
         honoured at the far end, <b>Stop</b> reaches across, and the play
-        indicator goes out when the <em>bench</em> says the file ended rather
+        indicator goes out when the <em>server</em> says the file ended rather
         than when you press stop.  The upload lives in the server's memory and
         is dropped when the connection closes, so nothing accumulates on the
-        bench.</li>
-    <li><b>A refusal reads like a local one.</b>  A device the bench will not
+        server.</li>
+    <li><b>A refusal reads like a local one.</b>  A device the server will not
         open comes back as the same
         <a href="theory/audio-backend.html#errors">six reasons</a> a local
         failure has, in your own language.</li>
@@ -692,7 +692,7 @@ bindings:                          # device -> card choices you made in the dial
      seconds</b> until you say otherwise, and the backend you had committed is
      committed again on the new session - so when you next press Record or Play,
      it simply works.  It deliberately does <em>not</em> restart a measurement:
-     a bench that resumed measuring while nobody was looking would be worse than
+     a server that resumed measuring while nobody was looking would be worse than
      one that waited.  A <b>Disconnect</b> you pressed stays disconnected - that
      is a decision, not a fault.  When a session ends while you are measuring
      through it, one translated dialog says so and names the reason: the server
@@ -700,7 +700,7 @@ bindings:                          # device -> card choices you made in the dial
      the session, or it sent audio this client cannot read.</div>
   <div class="note">If the <em>server</em> loses captured samples before they
      reach the network, the FFT raises its
-     <b>⚠ Bench lost audio - averaging suspect</b> banner: the samples on either
+     <b>⚠ Server lost audio - averaging suspect</b> banner: the samples on either
      side of the gap are not adjacent in time, so an average taken across the
      splice reports a noise floor and a phase that never existed.  Reset the
      statistics to collect a clean one.</div>

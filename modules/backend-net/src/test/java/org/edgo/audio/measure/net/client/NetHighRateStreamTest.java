@@ -112,21 +112,21 @@ class NetHighRateStreamTest {
     private final JsonCodec codec = new JsonCodec();
     private final List<NetConnection> connections = new ArrayList<>();
 
-    private MockBench bench;
+    private MockServer server;
     private URI wsUri;
 
     @BeforeEach
-    void startTheBench() {
-        bench = new MockBench(codec, SERVER_NAME);
-        wsUri = bench.listen(AWAIT_MS);
+    void startTheServer() {
+        server = new MockServer(codec, SERVER_NAME);
+        wsUri = server.listen(AWAIT_MS);
     }
 
     @AfterEach
-    void stopTheBench() {
+    void stopTheServer() {
         for (NetConnection connection : connections) {
             connection.connClose(NetCloseReason.BYE);
         }
-        bench.shutDown(SHUTDOWN_MS);
+        server.shutDown(SHUTDOWN_MS);
     }
 
     /**
@@ -153,7 +153,7 @@ class NetHighRateStreamTest {
         assertEquals(RATE_HZ, Math.round(capture.getFormat().getSampleRate()),
                 "the bench granted another rate, so this is not the case under test");
         capture.startRecording();
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
         assertNotNull(stream, "the client opened no stream on the bench");
 
         feed(stream, BATCHES);
@@ -202,7 +202,7 @@ class NetHighRateStreamTest {
         });
         capture.open();
         capture.startRecording();
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
         assertNotNull(stream, "the client opened no stream on the bench");
 
         feed(stream, BATCHES);
@@ -263,7 +263,7 @@ class NetHighRateStreamTest {
         });
         capture.open();
         capture.startRecording();
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
         assertNotNull(stream, "the client opened no stream on the bench");
 
         feed(stream, BATCHES);
@@ -306,7 +306,7 @@ class NetHighRateStreamTest {
                 check(pcm, validBytes, receivedBytes, mismatch, total, whole));
         capture.open();
         capture.startRecording();
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
         assertNotNull(stream, "the client opened no stream on the bench");
 
         feed(stream, LONG_BATCHES);
@@ -345,7 +345,7 @@ class NetHighRateStreamTest {
         });
         capture.open();
         capture.startRecording();
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
         assertNotNull(stream, "the client opened no stream on the bench");
 
         feed(stream, BATCHES);
@@ -390,7 +390,7 @@ class NetHighRateStreamTest {
     }
 
     /** Hands {@code batches} batches to the stream at the DEVICE's clock. */
-    private void feed(MockBench.Capture stream, int batches) {
+    private void feed(MockServer.Capture stream, int batches) {
         long start = System.nanoTime();
         for (int i = 0; i < batches; i++) {
             stream.feed(batch(i));

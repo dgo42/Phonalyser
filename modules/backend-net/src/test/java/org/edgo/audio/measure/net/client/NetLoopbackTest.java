@@ -72,7 +72,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The CLIENT half of the bridge against a peer that speaks the wire: a real
  * {@link NetConnection} / {@link NetDeviceManager} / {@link NetPcmCapture} on one
- * end of a real socket, and {@link MockBench} on the other.
+ * end of a real socket, and {@link MockServer} on the other.
  *
  * <p><b>Why the far end is a mock and not the server.</b>  This module depends on
  * the wire format and on nothing else - the server is not here in any scope,
@@ -116,8 +116,8 @@ class NetLoopbackTest {
      *  seconds each. */
     private static final long SHUTDOWN_MS = 200;
 
-    private static final int RATE_HZ = MockBench.RATE_48K;
-    private static final int BITS = MockBench.BITS_24;
+    private static final int RATE_HZ = MockServer.RATE_48K;
+    private static final int BITS = MockServer.BITS_24;
     /** 24-bit stereo: three bytes a sample, two samples a frame. */
     private static final int FRAME_BYTES = 6;
     /** One second of audio, delivered the way a backend delivers it: batches of
@@ -170,26 +170,26 @@ class NetLoopbackTest {
     /** A rate the bench GRANTS instead of the one asked for - a real analyzer
      *  really does have the last word (spec 4.4), and a bench that always
      *  granted the request could not show whether the client re-pins at all. */
-    private static final int GRANTED_RATE_HZ = MockBench.RATE_96K;
+    private static final int GRANTED_RATE_HZ = MockServer.RATE_96K;
 
     private final JsonCodec codec = new JsonCodec();
     private final List<NetConnection> connections = new ArrayList<>();
 
-    private MockBench bench;
+    private MockServer server;
     private URI wsUri;
 
     @BeforeEach
-    void startTheBench() {
-        bench = new MockBench(codec, SERVER_NAME);
-        wsUri = bench.listen(AWAIT_MS);
+    void startTheServer() {
+        server = new MockServer(codec, SERVER_NAME);
+        wsUri = server.listen(AWAIT_MS);
     }
 
     @AfterEach
-    void stopTheBench() {
+    void stopTheServer() {
         for (NetConnection connection : connections) {
             connection.connClose(NetCloseReason.BYE);
         }
-        bench.shutDown(SHUTDOWN_MS);
+        server.shutDown(SHUTDOWN_MS);
     }
 
     @Test
@@ -201,14 +201,14 @@ class NetLoopbackTest {
                         + "inputs");
         assertEquals(1, manager.listOutputDevices().size());
         DeviceRef device = inputs.get(0);
-        assertEquals(MockBench.FIRST_INPUT, device.name());
+        assertEquals(MockServer.FIRST_INPUT, device.name());
         assertEquals(AudioBackendType.NET, device.carrier(),
                 "the ref ROUTES at the net manager, never at the LOCAL manager of the "
                         + "same name - a bench across the room is not this machine's USB");
-        assertEquals(MockBench.REMOTE_BACKEND, device.backend().name(),
+        assertEquals(MockServer.REMOTE_BACKEND, device.backend().name(),
                 "while what it IS is the bench's TRUE backend type - the dual-level "
                         + "answer type-specific control keys on, local or remote alike");
-        assertEquals(MockBench.REMOTE_BACKEND, ((NetDeviceRef) device).remoteBackend(),
+        assertEquals(MockServer.REMOTE_BACKEND, ((NetDeviceRef) device).remoteBackend(),
                 "and the raw wire text it arrived as is kept - a server may know a "
                         + "backend this build does not");
         assertFalse(manager.listSupportedFormats(device, false).isEmpty(),
@@ -233,7 +233,7 @@ class NetLoopbackTest {
         assertEquals(BITS, capture.getFormat().getSampleSizeInBits());
         capture.startRecording();
 
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
         assertNotNull(stream, "the client opened no stream on the bench");
         byte[] recorded = new byte[SECOND_BYTES];
         for (int i = 0; i < BATCHES; i++) {
@@ -252,7 +252,7 @@ class NetLoopbackTest {
         capture.stopRecording();
         capture.close();
         assertTrue(stream.isClosed(), "spec 4.4: the stream is closed on the bench");
-        assertFalse(bench.isLocked(MockBench.FIRST_INPUT, true),
+        assertFalse(server.isLocked(MockServer.FIRST_INPUT, true),
                 "and the device line goes back with it: a lock left behind is a device "
                         + "no other client can ever take again");
     }
@@ -284,10 +284,10 @@ class NetLoopbackTest {
 
         capture.open();
 
-        assertEquals(1, bench.sessions(),
+        assertEquals(1, server.sessions(),
                 "spec 4: a data connection is not a session - only hello makes one");
         capture.startRecording();
-        bench.getLastCapture().feed(batch(0));
+        server.getLastCapture().feed(batch(0));
         awaitTrue(() -> batches.getCount() == 0,
                 "the audio did not arrive on the data connection");
         assertArrayEquals(batch(0), delivered.get(0));
@@ -307,9 +307,9 @@ class NetLoopbackTest {
      * device lock goes back, exactly as a refused open does.
      */
     @Test
-    void anAttachTheBenchRefusesIsReportedAsTheCaptureOpenFailing() {
+    void anAttachTheServerRefusesIsReportedAsTheCaptureOpenFailing() {
         NetDeviceManager manager = connect(CLIENT_NAME);
-        bench.setRefuseAttach(true);
+        server.setRefuseAttach(true);
         NetPcmCapture capture = (NetPcmCapture) manager.openCapture(
                 manager.listInputDevices().get(0), RATE_HZ, BITS);
 
@@ -317,7 +317,7 @@ class NetLoopbackTest {
                 "the operator is told the capture could not be opened, not that a "
                         + "socket could not be dialled");
 
-        awaitTrue(() -> !bench.isLocked(MockBench.FIRST_INPUT, true),
+        awaitTrue(() -> !server.isLocked(MockServer.FIRST_INPUT, true),
                 "an open that failed must cost nothing - the lock goes back");
         assertTrue(manager.getConnection().isOpen(),
                 "and the SESSION survives: a refused attach is answered and its socket "
@@ -338,7 +338,7 @@ class NetLoopbackTest {
         NetDeviceManager manager = connect(CLIENT_NAME);
         NetPcmCapture capture = openFirstInput(manager);
 
-        bench.getLastCapture().dropDataConnection();
+        server.getLastCapture().dropDataConnection();
 
         awaitTrue(() -> !manager.getConnection().isOpen(),
                 "spec 4.1: one connection dropping is the session dead");
@@ -364,7 +364,7 @@ class NetLoopbackTest {
         NetDeviceManager manager = connect(CLIENT_NAME);
         NetPcmCapture capture = openFirstInput(manager);
 
-        bench.getLastCapture().closeDataConnectionNormally();
+        server.getLastCapture().closeDataConnectionNormally();
 
         assertTrue(manager.getConnection().isOpen(),
                 "a NORMAL close is the ordinary end of a stream, not spec 4.1's drop - "
@@ -389,7 +389,7 @@ class NetLoopbackTest {
         NetDeviceManager manager = connect(CLIENT_NAME);
         openFirstInput(manager);
 
-        bench.getLastCapture().pushTextOnDataConnection(
+        server.getLastCapture().pushTextOnDataConnection(
                 new NetMessage(MessageType.EV_DEVICE_ERROR)
                         .put(NetFields.DIRECTION, NetFields.INPUT)
                         .put(NetFields.DETAIL, DEVICE_FAILURE));
@@ -409,8 +409,8 @@ class NetLoopbackTest {
      * contradict it.
      */
     @Test
-    void theClientRePinsToTheRateTheBenchGranted() {
-        bench.setGrantRate(GRANTED_RATE_HZ);
+    void theClientRePinsToTheRateTheServerGranted() {
+        server.setGrantRate(GRANTED_RATE_HZ);
         NetDeviceManager manager = connect(CLIENT_NAME);
         NetPcmCapture capture = (NetPcmCapture) manager.openCapture(
                 manager.listInputDevices().get(0), RATE_HZ, BITS);
@@ -432,7 +432,7 @@ class NetLoopbackTest {
      * catalogue this manager holds carries the new values without asking.
      */
     @Test
-    void aCalibrationWrittenToTheBenchComesBackWithEveryDeviceListing() throws Exception {
+    void aCalibrationWrittenToTheServerComesBackWithEveryDeviceListing() throws Exception {
         NetDeviceManager manager = connect(CLIENT_NAME);
         List<DeviceRef> before = manager.listInputDevices();
         NetDeviceRef device = (NetDeviceRef) before.get(0);
@@ -462,7 +462,7 @@ class NetLoopbackTest {
                 .put(NetFields.FS_RMS, FS_RMS_RIGHT));
 
         assertTrue(written.isOk(), "the bench refused the write: " + written);
-        assertEquals(FS_RMS_LEFT, bench.storedLeft(MockBench.FIRST_INPUT, true), EPS,
+        assertEquals(FS_RMS_LEFT, server.storedLeft(MockServer.FIRST_INPUT, true), EPS,
                 "the value really crossed the wire and reached the far end's own store");
         assertTrue(changed.await(AWAIT_MS, TimeUnit.MILLISECONDS),
                 "spec 4.3: the write broadcasts, so every client's cal view refreshes");
@@ -491,16 +491,16 @@ class NetLoopbackTest {
      * and given back, and nothing about the device is written on this machine.
      */
     @Test
-    void aCalibrationStoredThroughTheBackendReachesTheBenchUnderItsOwnLock() {
+    void aCalibrationStoredThroughTheBackendReachesTheServerUnderItsOwnLock() {
         NetDeviceManager manager = connect(CLIENT_NAME);
         NetDeviceRef device = (NetDeviceRef) manager.listInputDevices().get(0);
 
         assertTrue(manager.storeCalibration(device, true, Channel.L, FS_RMS_LEFT),
                 "the bench refused a write on a free device");
 
-        assertEquals(FS_RMS_LEFT, bench.storedLeft(MockBench.FIRST_INPUT, true), EPS,
+        assertEquals(FS_RMS_LEFT, server.storedLeft(MockServer.FIRST_INPUT, true), EPS,
                 "the value crossed the wire and reached the far end's own store");
-        assertFalse(bench.isLocked(MockBench.FIRST_INPUT, true),
+        assertFalse(server.isLocked(MockServer.FIRST_INPUT, true),
                 "the lock was borrowed for the one write and given back");
     }
 
@@ -525,7 +525,7 @@ class NetLoopbackTest {
      */
     @Test
     void aDeviceSaysWhetherItsFullScalesAreItsOwn() throws Exception {
-        bench.deviceOwnedCalibration(MockBench.FIRST_INPUT, true);
+        server.deviceOwnedCalibration(MockServer.FIRST_INPUT, true);
         NetDeviceManager manager = connect(CLIENT_NAME);
 
         List<DeviceRef> inputs = manager.listInputDevices();
@@ -548,7 +548,7 @@ class NetLoopbackTest {
      * computed against a full scale the bench no longer holds.
      */
     @Test
-    void aCalibrationThatMovesOnTheBenchIsPublishedAndNotJustCached() throws Exception {
+    void aCalibrationThatMovesOnTheServerIsPublishedAndNotJustCached() throws Exception {
         NetDeviceManager manager = connect(CLIENT_NAME);
         List<DeviceRef> recalibrated = new CopyOnWriteArrayList<>();
         Consumer<DeviceRef> subscriber = recalibrated::add;
@@ -556,19 +556,19 @@ class NetLoopbackTest {
         try {
             assertNull(((NetDeviceRef) manager.listInputDevices().get(0)).calibration());
 
-            bench.recalibrate(MockBench.FIRST_INPUT, true, FS_RMS_LEFT, FS_RMS_RIGHT);
+            server.recalibrate(MockServer.FIRST_INPUT, true, FS_RMS_LEFT, FS_RMS_RIGHT);
 
             assertTrue(waitFor(() -> !recalibrated.isEmpty()),
                     "the broadcast carried a new cal for a device this client knows - "
                             + "nothing else is going to tell it");
             DeviceRef reported = recalibrated.get(0);
-            assertEquals(MockBench.FIRST_INPUT, reported.name());
+            assertEquals(MockServer.FIRST_INPUT, reported.name());
             assertEquals(FS_RMS_LEFT, manager.calibration(reported, true).fsRmsLeft(), EPS,
                     "and the manager answers the NEW values for it");
 
             // The SAME payload again - a lock change or a hot-plug re-sends it whole.
-            bench.recalibrate(MockBench.FIRST_INPUT, true, FS_RMS_LEFT, FS_RMS_RIGHT);
-            bench.detach(MockBench.SECOND_INPUT, true);
+            server.recalibrate(MockServer.FIRST_INPUT, true, FS_RMS_LEFT, FS_RMS_RIGHT);
+            server.detach(MockServer.SECOND_INPUT, true);
 
             assertTrue(waitFor(() -> manager.listInputDevices().size() == 1),
                     "the second broadcast was processed");
@@ -605,7 +605,7 @@ class NetLoopbackTest {
         capture.setPcmBatchListener((pcm, validBytes) -> delivered.countDown());
         capture.open();                      // the input lock lands in the register
         capture.startRecording();
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
         assertNotNull(stream, "the client opened no stream on the bench");
         // Registered AFTER the manager's own subscription, so the cache has been
         // rebuilt by the time this fires (the listeners run in order).
@@ -685,7 +685,7 @@ class NetLoopbackTest {
 
         // A payload that DOES name backends and not this one: the bench saying
         // this backend is no longer served.
-        bench.pushDevicesChanged(codec.toNode(List.of(Map.of(
+        server.pushDevicesChanged(codec.toNode(List.of(Map.of(
                 NetFields.BACKEND, AudioBackendType.NET.name(),
                 NetFields.DEVICES, List.of()))));
 
@@ -702,7 +702,7 @@ class NetLoopbackTest {
         NetDeviceManager manager = connect(CLIENT_NAME);
         assertFalse(manager.listInputDevices().isEmpty(), "the selection filled them");
 
-        bench.pushDevicesChanged(codec.toNode(List.of()));
+        server.pushDevicesChanged(codec.toNode(List.of()));
 
         awaitTrue(() -> manager.listInputDevices().isEmpty(),
                 "spec 4.3: the event carries the full devices.list payload, so an empty "
@@ -727,12 +727,12 @@ class NetLoopbackTest {
         Faults faults = subscribe(manager);
         openFirstInput(manager);                       // takes the FIRST input's lock
 
-        bench.detach(MockBench.SECOND_INPUT, true);    // nobody here holds it
-        bench.detach(MockBench.FIRST_INPUT, true);     // and this one is in use
+        server.detach(MockServer.SECOND_INPUT, true);    // nobody here holds it
+        server.detach(MockServer.FIRST_INPUT, true);     // and this one is in use
 
-        awaitTrue(() -> faults.gone.contains(MockBench.FIRST_INPUT),
+        awaitTrue(() -> faults.gone.contains(MockServer.FIRST_INPUT),
                 "a device this client holds left the bench and nothing was said");
-        assertEquals(List.of(MockBench.FIRST_INPUT), List.copyOf(faults.gone),
+        assertEquals(List.of(MockServer.FIRST_INPUT), List.copyOf(faults.gone),
                 "and ONLY that one: a device nobody here opened is the bench's own "
                         + "business, not a failure to stop a measurement over");
     }
@@ -752,12 +752,12 @@ class NetLoopbackTest {
     void disconnectingGivesEveryHeldLockBackWhileTheSessionCanStillCarryIt() {
         NetDeviceManager manager = connect(CLIENT_NAME);
         openFirstInput(manager);
-        awaitTrue(() -> bench.isLocked(MockBench.FIRST_INPUT, true),
+        awaitTrue(() -> server.isLocked(MockServer.FIRST_INPUT, true),
                 "the capture takes the input lock spec 4.4 requires");
 
         manager.disconnect();
 
-        assertFalse(bench.isLocked(MockBench.FIRST_INPUT, true),
+        assertFalse(server.isLocked(MockServer.FIRST_INPUT, true),
                 "a lock left behind is a device no other client can take until the "
                         + "session dies");
     }
@@ -773,14 +773,14 @@ class NetLoopbackTest {
      * thing production calls, and a missing override passes every other test.
      */
     @Test
-    void switchingAwayFromTheBenchTearsItDownThroughTheSpisShutdown() {
+    void switchingAwayFromTheServerTearsItDownThroughTheSpisShutdown() {
         NetDeviceManager manager = connect(CLIENT_NAME);
         openFirstInput(manager);
         AudioDeviceManager spi = manager;
 
         spi.shutdown();
 
-        assertFalse(bench.isLocked(MockBench.FIRST_INPUT, true),
+        assertFalse(server.isLocked(MockServer.FIRST_INPUT, true),
                 "the bench must not go on holding a DAC or an ADC for a client that "
                         + "has moved to local hardware");
         assertTrue(manager.listInputDevices().isEmpty(),
@@ -794,7 +794,7 @@ class NetLoopbackTest {
         NetPcmCapture capture = openFirstInput(manager);
         AtomicInteger dispatched = new AtomicInteger();
         capture.setPcmBatchListener((pcm, validBytes) -> dispatched.incrementAndGet());
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
 
         stream.gap(LOST_FRAMES);
         awaitTrue(() -> faults.lost.get() == LOST_FRAMES,
@@ -834,7 +834,7 @@ class NetLoopbackTest {
                 marks.add(new long[] {kind, pcmBytes});
             }
         });
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
 
         // One batch BEFORE the sweep, then the mark, then the record's first.
         stream.feed(ONE_FRAME_PCM);
@@ -876,7 +876,7 @@ class NetLoopbackTest {
         first.setMarkerListener((kind, pcmBytes) -> markedAt.set(pcmBytes));
         first.open();
         first.startRecording();
-        MockBench.Capture firstStream = bench.getLastCapture();
+        MockServer.Capture firstStream = server.getLastCapture();
         firstStream.feed(batch(0));
         firstStream.mark(BinaryFrame.MARKER_SWEEP_START);
         awaitTrue(() -> markedAt.get() == BATCH_BYTES,
@@ -888,7 +888,7 @@ class NetLoopbackTest {
         second.setMarkerListener((kind, pcmBytes) -> markedAt.set(pcmBytes));
         second.open();
         second.startRecording();
-        MockBench.Capture secondStream = bench.getLastCapture();
+        MockServer.Capture secondStream = server.getLastCapture();
         assertNotSame(firstStream, secondStream, "the bench opened a second stream");
         secondStream.mark(BinaryFrame.MARKER_SWEEP_START);
 
@@ -934,7 +934,7 @@ class NetLoopbackTest {
         });
         capture.open();
         capture.startRecording();
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
         assertNotNull(stream, "the client opened no stream on the bench");
 
         DeviceRef output = manager.listOutputDevices().get(0);
@@ -1029,7 +1029,7 @@ class NetLoopbackTest {
         capture.setPcmBatchListener((pcm, validBytes) -> { });
         Marks marks = new Marks();
         capture.setMarkerListener(marks);
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
 
         stream.feed(ONE_FRAME_PCM);
         stream.gap(LOST_FRAMES);
@@ -1054,7 +1054,7 @@ class NetLoopbackTest {
         NetPcmCapture capture = openFirstInput(manager);
         AtomicInteger dispatched = new AtomicInteger();
         capture.setPcmBatchListener((pcm, validBytes) -> dispatched.incrementAndGet());
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
 
         stream.mark(BinaryFrame.MARKER_SWEEP_START);
         stream.unknownFrame();
@@ -1088,7 +1088,7 @@ class NetLoopbackTest {
                 ended.set(reason);
             }
         });
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
 
         stream.feed(ONE_FRAME_PCM);
         awaitTrue(() -> dispatched.get() == 1, "the first frame never arrived");
@@ -1105,7 +1105,7 @@ class NetLoopbackTest {
                         + "the data seam, not from a session-level fault fan-out");
 
         stream.feed(ONE_FRAME_PCM);
-        awaitTrue(() -> bench.receivedOf(MessageType.CAPTURE_STOP).size() == 1,
+        awaitTrue(() -> server.receivedOf(MessageType.CAPTURE_STOP).size() == 1,
                 "a broken stream tells the bench to stop sending");
         assertEquals(1, dispatched.get(),
                 "a broken stream stays broken - nothing after the jump reaches the "
@@ -1123,7 +1123,7 @@ class NetLoopbackTest {
         capture.setPcmBatchListener((pcm, validBytes) -> dispatched.incrementAndGet());
         AtomicLong markedAt = new AtomicLong(-1);
         capture.setMarkerListener((kind, pcmBytes) -> markedAt.set(pcmBytes));
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
 
         stream.feed(ONE_FRAME_PCM);
         awaitTrue(() -> dispatched.get() == 1, "the first frame never arrived");
@@ -1157,12 +1157,12 @@ class NetLoopbackTest {
     }
 
     @Test
-    void aDeviceErrorFromTheBenchStopsTheStreamAndReachesTheOperator() {
+    void aDeviceErrorFromTheServerStopsTheStreamAndReachesTheOperator() {
         NetDeviceManager manager = connect(CLIENT_NAME);
         Faults faults = subscribe(manager);
         NetPcmCapture capture = openFirstInput(manager);
 
-        bench.pushDeviceError(NetFields.INPUT, DEVICE_FAILURE);
+        server.pushDeviceError(NetFields.INPUT, DEVICE_FAILURE);
 
         awaitTrue(() -> DEVICE_FAILURE.equals(faults.detail.get()),
                 "spec 4.3: the client surfaces it exactly like a local device error - "
@@ -1190,7 +1190,7 @@ class NetLoopbackTest {
         Faults faults = subscribe(manager);
         NetPcmCapture capture = openFirstInput(manager);
 
-        bench.pushDeviceError(NetFields.OUTPUT, DEVICE_FAILURE);
+        server.pushDeviceError(NetFields.OUTPUT, DEVICE_FAILURE);
 
         awaitTrue(() -> DEVICE_FAILURE.equals(faults.detail.get()),
                 "the operator is still told - a dead DAC is a dead DAC");
@@ -1238,7 +1238,7 @@ class NetLoopbackTest {
         NetDeviceManager manager = connect(CLIENT_NAME);
         Faults faults = subscribe(manager);
         NetPcmCapture capture = openFirstInput(manager);
-        MockBench.Capture stream = bench.getLastCapture();
+        MockServer.Capture stream = server.getLastCapture();
         assertNotNull(stream);
 
         assertEquals(Boolean.TRUE, manager.withDeviceLock(() -> Boolean.TRUE),
@@ -1247,7 +1247,7 @@ class NetLoopbackTest {
         assertFalse(stream.isClosed(),
                 "the bench's stream is still open: a settings write may not close the "
                         + "capture the operator is measuring with");
-        assertEquals(0, bench.receivedOf(MessageType.DEVICE_RELEASE).size(),
+        assertEquals(0, server.receivedOf(MessageType.DEVICE_RELEASE).size(),
                 "and nothing was given back: the release is what would have closed it");
         assertTrue(capture.isRecording(), "and the stream is still running");
         assertNull(faults.detail.get(), "with nothing to report");
@@ -1267,7 +1267,7 @@ class NetLoopbackTest {
 
         assertEquals(Boolean.TRUE, manager.withDeviceLock(() -> Boolean.TRUE));
 
-        assertFalse(bench.isLocked(MockBench.FIRST_INPUT, true),
+        assertFalse(server.isLocked(MockServer.FIRST_INPUT, true),
                 "the device the write borrowed was given straight back");
         NetPcmCapture other = (NetPcmCapture) observer.openCapture(contended, RATE_HZ, BITS);
         other.open();
@@ -1340,7 +1340,7 @@ class NetLoopbackTest {
      * pass by echoing what it was told.
      */
     @Test
-    void theGeneratorRunsOnTheBenchAtTheFrequencyBothEndsCompute() {
+    void theGeneratorRunsOnTheServerAtTheFrequencyBothEndsCompute() {
         NetDeviceManager manager = connect(CLIENT_NAME);
         DeviceRef output = manager.listOutputDevices().get(0);
 
@@ -1351,7 +1351,7 @@ class NetLoopbackTest {
         manager.fftGrid(FFT_SIZE, true);
         manager.startGenerator();
 
-        MockBench.Generator lane = bench.getLastGenerator();
+        MockServer.Generator lane = server.getLastGenerator();
         assertNotNull(lane, "the client opened no generator on the bench");
         assertEquals(RATE_HZ, lane.getRate());
         assertEquals(BITS, lane.getBits());
@@ -1387,7 +1387,7 @@ class NetLoopbackTest {
         manager.stopGenerator();
         manager.closeGenerator();
         assertTrue(lane.isClosed(), "spec 4.5: gen.close gives the output line back");
-        assertFalse(bench.isLocked(MockBench.OUTPUT, false),
+        assertFalse(server.isLocked(MockServer.OUTPUT, false),
                 "and the device lock goes with it");
     }
 
@@ -1401,7 +1401,7 @@ class NetLoopbackTest {
 
         manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, DITHER_BITS, OutputChannels.BOTH);
         manager.startGenerator();
-        MockBench.Generator lane = bench.getLastGenerator();
+        MockServer.Generator lane = server.getLastGenerator();
         assertNotNull(lane, "the client opened no generator on the bench");
         assertEquals(DITHER_BITS, lane.getDitherBitsLeft(),
                 "the open carried the initial depth");
@@ -1480,7 +1480,7 @@ class NetLoopbackTest {
      * server's, and it is the server module's to prove.
      */
     @Test
-    void everySweepFieldReachesTheBenchBeforeItIsToldToEmit() {
+    void everySweepFieldReachesTheServerBeforeItIsToldToEmit() {
         NetDeviceManager manager = connect(CLIENT_NAME);
         DeviceRef output = manager.listOutputDevices().get(0);
         manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, DITHER_BITS, OutputChannels.BOTH);
@@ -1497,7 +1497,7 @@ class NetLoopbackTest {
         manager.setAmplitudesVrms(AMPLITUDE_VRMS, AMPLITUDE_VRMS);
         manager.startGenerator();
 
-        MockBench.Generator lane = bench.getLastGenerator();
+        MockServer.Generator lane = server.getLastGenerator();
         assertNotNull(lane, "the client opened no generator on the bench");
         ObjectNodeView commanded = new ObjectNodeView(lane.getConfigAtStart());
         assertEquals(GenSignalForm.LOG_SWEEP.name(), commanded.text(NetFields.FORM));
@@ -1515,9 +1515,9 @@ class NetLoopbackTest {
         assertFalse(sweep.flag(NetFields.LOOP),
                 "a looping sweep would restart underneath the record being cut from it");
 
-        assertEquals(1, bench.receivedOf(MessageType.GEN_OPEN).size(),
+        assertEquals(1, server.receivedOf(MessageType.GEN_OPEN).size(),
                 "one lane, opened once");
-        assertTrue(bench.receivedOf(MessageType.GEN_CONFIG).size() > 1,
+        assertTrue(server.receivedOf(MessageType.GEN_CONFIG).size() > 1,
                 "the fields are pushed one at a time as the operator sets them (spec "
                         + "4.5's partial update), which is exactly why the LAST one has "
                         + "to have landed before the start");
@@ -1536,7 +1536,7 @@ class NetLoopbackTest {
 
         manager.setSweepLeadInSamples(LEAD_IN_SAMPLES);
 
-        NetMessage pushed = bench.awaitNth(MessageType.GEN_CONFIG, 1, AWAIT_MS);
+        NetMessage pushed = server.awaitNth(MessageType.GEN_CONFIG, 1, AWAIT_MS);
         JsonNode sweep = pushed.getNode(NetFields.SWEEP);
         assertEquals(LEAD_IN_SAMPLES, sweep.path(NetFields.LEAD_IN_SAMPLES).asInt());
         assertTrue(sweep.path(NetFields.DURATION_SAMPLES).isMissingNode(),
@@ -1561,7 +1561,7 @@ class NetLoopbackTest {
      * corrected frequency, so the confirmation is exactly the value sent).
      */
     @Test
-    void theGeneratorStateIsWhateverTheBenchLastPushed() throws Exception {
+    void theGeneratorStateIsWhateverTheServerLastPushed() throws Exception {
         NetDeviceManager manager = connect(CLIENT_NAME);
         assertEquals(RemoteGenerator.State.IDLE, manager.state(),
                 "the bench has not spoken, so there is nothing to report");
@@ -1616,9 +1616,9 @@ class NetLoopbackTest {
         manager.setFrequency(TONE_HZ);
         manager.startGenerator();
         awaitTrue(() -> manager.state().running(), "the bench never said it was emitting");
-        int otherLane = bench.getLastGenerator().getId() + 1;
+        int otherLane = server.getLastGenerator().getId() + 1;
 
-        bench.push(new NetMessage(MessageType.EV_GEN_STATE)
+        server.push(new NetMessage(MessageType.EV_GEN_STATE)
                 .put(NetFields.GEN_ID, otherLane)
                 .put(NetFields.RUNNING, false)
                 .put(NetFields.EMIT_HZ, 0.0));

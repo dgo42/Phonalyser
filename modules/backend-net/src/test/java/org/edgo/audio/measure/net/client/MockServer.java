@@ -82,7 +82,7 @@ import lombok.Setter;
  * when to drop audio, how to render a chirp, which full scale a lane opens at -
  * is not proved here and is not pretended to be.
  */
-final class MockBench extends WirePeer {
+final class MockServer extends WirePeer {
 
     /** The names a device ref carries; every request naming a device is
      *  validated against them (spec 4.3), so a client that garbles one is
@@ -112,14 +112,14 @@ final class MockBench extends WirePeer {
     private final JsonNodeFactory json = JsonNodeFactory.instance;
     /** The bench's devices, fixed for its lifetime: two inputs and one output,
      *  which is what lets a test contend one device and still measure. */
-    private final List<BenchDevice> devices = List.of(
-            new BenchDevice(0, FIRST_INPUT, true),
-            new BenchDevice(1, SECOND_INPUT, true),
-            new BenchDevice(0, OUTPUT, false));
+    private final List<ServerDevice> devices = List.of(
+            new ServerDevice(0, FIRST_INPUT, true),
+            new ServerDevice(1, SECOND_INPUT, true),
+            new ServerDevice(0, OUTPUT, false));
     /** The devices this bench has LOST (see {@link #detach}).  They stay in the
      *  list above so a test can still name them; no catalogue mentions them
      *  again, which is all a client ever sees of a detachment. */
-    private final Set<BenchDevice> detached = ConcurrentHashMap.newKeySet();
+    private final Set<ServerDevice> detached = ConcurrentHashMap.newKeySet();
     private final Map<WebSocket, Session> sessions = new ConcurrentHashMap<>();
     private final AtomicInteger lastCaptureId = new AtomicInteger();
     private final AtomicInteger lastGenId = new AtomicInteger();
@@ -182,7 +182,7 @@ final class MockBench extends WirePeer {
     @Setter
     private volatile boolean refuseUploads;
 
-    MockBench(JsonCodec codec, String serverName) {
+    MockServer(JsonCodec codec, String serverName) {
         super(codec, serverName, List.of(NetFields.CAP_GEN, NetFields.CAP_FILES));
     }
 
@@ -294,7 +294,7 @@ final class MockBench extends WirePeer {
      *  spec 4.3 v1.1: the calibration lives where the device is plugged in, so
      *  it is there before any client connects. */
     void storeCalibration(String name, boolean input, double fsLeft, double fsRight) {
-        BenchDevice device = byName(name, input);
+        ServerDevice device = byName(name, input);
         device.fsLeft = fsLeft;
         device.fsRight = fsRight;
     }
@@ -504,7 +504,7 @@ final class MockBench extends WirePeer {
     // -------------------------------------------------------------------------
 
     private synchronized NetMessage acquire(Session session, int id, NetMessage request) {
-        BenchDevice device = named(request);
+        ServerDevice device = named(request);
         if (device == null) {
             return stale(id, request);
         }
@@ -525,7 +525,7 @@ final class MockBench extends WirePeer {
 
     private synchronized NetMessage releaseDevice(Session session, int id,
             NetMessage request) {
-        BenchDevice device = named(request);
+        ServerDevice device = named(request);
         if (device == null) {
             return stale(id, request);
         }
@@ -542,7 +542,7 @@ final class MockBench extends WirePeer {
 
     private synchronized NetMessage setCalibration(Session session, int id,
             NetMessage request) {
-        BenchDevice device = named(request);
+        ServerDevice device = named(request);
         if (device == null) {
             return stale(id, request);
         }
@@ -574,7 +574,7 @@ final class MockBench extends WirePeer {
     /** The device a request names, or null when the four ref fields of spec 4.3
      *  do not describe one - which is how a client that garbles a ref is caught
      *  on the wire instead of somewhere downstream. */
-    private BenchDevice named(NetMessage request) {
+    private ServerDevice named(NetMessage request) {
         Integer index = request.optInt(NetFields.INDEX);
         Boolean input = request.optBoolean(NetFields.INPUT);
         String name = request.optString(NetFields.NAME);
@@ -582,7 +582,7 @@ final class MockBench extends WirePeer {
         if (index == null || input == null || !REMOTE_BACKEND.equals(backend)) {
             return null;
         }
-        for (BenchDevice device : devices) {
+        for (ServerDevice device : devices) {
             if (device.index == index && device.input == input) {
                 return device.name.equals(name) ? device : null;
             }
@@ -595,8 +595,8 @@ final class MockBench extends WirePeer {
                 "no such device on this bench: " + request));
     }
 
-    private BenchDevice byName(String name, boolean input) {
-        for (BenchDevice device : devices) {
+    private ServerDevice byName(String name, boolean input) {
+        for (ServerDevice device : devices) {
             if (device.name.equals(name) && device.input == input) {
                 return device;
             }
@@ -611,7 +611,7 @@ final class MockBench extends WirePeer {
 
     private synchronized NetMessage captureOpen(Session session, int id,
             NetMessage request) {
-        BenchDevice device = named(request);
+        ServerDevice device = named(request);
         if (device == null) {
             return stale(id, request);
         }
@@ -669,7 +669,7 @@ final class MockBench extends WirePeer {
     // -------------------------------------------------------------------------
 
     private synchronized NetMessage genOpen(Session session, int id, NetMessage request) {
-        BenchDevice device = named(request);
+        ServerDevice device = named(request);
         if (device == null) {
             return stale(id, request);
         }
@@ -884,7 +884,7 @@ final class MockBench extends WirePeer {
         ObjectNode entry = json.objectNode();
         entry.put(NetFields.BACKEND, REMOTE_BACKEND);
         ArrayNode array = entry.putArray(NetFields.DEVICES);
-        for (BenchDevice device : devices) {
+        for (ServerDevice device : devices) {
             if (!detached.contains(device)) {
                 array.add(deviceNode(device));
             }
@@ -892,7 +892,7 @@ final class MockBench extends WirePeer {
         return entry;
     }
 
-    private ObjectNode deviceNode(BenchDevice device) {
+    private ObjectNode deviceNode(ServerDevice device) {
         ObjectNode node = json.objectNode();
         node.put(NetFields.INDEX, device.index);
         node.put(NetFields.NAME, device.name);
@@ -947,7 +947,7 @@ final class MockBench extends WirePeer {
 
     /** One device of this bench, in ONE direction - which is what spec 4.3 calls
      *  a device, and therefore what a lock is taken on. */
-    private static final class BenchDevice {
+    private static final class ServerDevice {
 
         private final int index;
         private final String name;
@@ -966,7 +966,7 @@ final class MockBench extends WirePeer {
          *  4.3 {@code calFromDevice}) - an analyzer reading its own EEPROM. */
         private boolean calFromDevice;
 
-        private BenchDevice(int index, String name, boolean input) {
+        private ServerDevice(int index, String name, boolean input) {
             this.index = index;
             this.name = name;
             this.input = input;
@@ -1003,7 +1003,7 @@ final class MockBench extends WirePeer {
         }
 
         /** Spec 4.3: releasing a device closes anything open on it. */
-        private void closeEverythingOn(BenchDevice device) {
+        private void closeEverythingOn(ServerDevice device) {
             for (Capture capture : List.copyOf(captures.values())) {
                 if (capture.device == device) {
                     capture.closed = true;
@@ -1030,7 +1030,7 @@ final class MockBench extends WirePeer {
                 generator.closed = true;
             }
             generators.clear();
-            for (BenchDevice device : devices) {
+            for (ServerDevice device : devices) {
                 if (device.holder == this) {
                     device.holder = null;
                 }
@@ -1048,7 +1048,7 @@ final class MockBench extends WirePeer {
         @Getter
         private final int id;
 
-        private final BenchDevice device;
+        private final ServerDevice device;
         /** Spec 5: per stream, starts at 0, +1 per frame of any type. */
         private final AtomicLong packet = new AtomicLong();
 
@@ -1063,7 +1063,7 @@ final class MockBench extends WirePeer {
         @Getter
         private volatile boolean started;
 
-        private Capture(int id, BenchDevice device) {
+        private Capture(int id, ServerDevice device) {
             this.id = id;
             this.device = device;
         }
@@ -1173,7 +1173,7 @@ final class MockBench extends WirePeer {
         private final String outputChannels;
 
         private final Session session;
-        private final BenchDevice device;
+        private final ServerDevice device;
         /** Everything {@code gen.config} has applied so far - a PARTIAL update,
          *  so the fields accumulate exactly as they do on a real bench. */
         private final ObjectNode config = json.objectNode();
@@ -1209,7 +1209,7 @@ final class MockBench extends WirePeer {
         private volatile boolean snapEnabled;
         private volatile Double trimHz;
 
-        private Generator(int id, Session session, BenchDevice device, int rate, int bits,
+        private Generator(int id, Session session, ServerDevice device, int rate, int bits,
                 double ditherBitsLeft, double ditherBitsRight, String outputChannels) {
             this.id = id;
             this.session = session;

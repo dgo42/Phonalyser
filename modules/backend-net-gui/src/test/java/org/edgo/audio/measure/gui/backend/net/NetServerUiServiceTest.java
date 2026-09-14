@@ -44,7 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>No display is needed: the registry only has to FIND the implementation, and
  * everything asserted below is what it answers before a server exists.
  */
-class NetBenchUiServiceTest {
+class NetServerUiServiceTest {
 
     @BeforeEach
     void keepThePreferencesFileOutOfIt() {
@@ -58,7 +58,7 @@ class NetBenchUiServiceTest {
         RemoteBackendUi ui = RemoteBackendRegistry.instance().getUi();
         assertNotNull(ui, "META-INF/services/...RemoteBackendUi must name this module's "
                 + "implementation, or the Preferences dialog shows no server button at all");
-        assertInstanceOf(NetBenchUi.class, ui);
+        assertInstanceOf(NetServerUi.class, ui);
     }
 
     @Test
@@ -73,7 +73,7 @@ class NetBenchUiServiceTest {
     }
 
     @Test
-    void aBackendsOwnRequestNeedsTheSessionThatReachesThatBench() {
+    void aBackendsOwnRequestNeedsTheSessionThatReachesThatServer() {
         RemoteBackendUi ui = RemoteBackendRegistry.instance().getUi();
         BackendKey remote = BackendKey.of("b7e0-bench-a", AudioBackendType.QA40X);
 

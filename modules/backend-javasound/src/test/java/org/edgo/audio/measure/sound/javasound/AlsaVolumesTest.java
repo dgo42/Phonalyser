@@ -104,9 +104,9 @@ class AlsaVolumesTest {
      *  levels below the USB device that carries it, and the descriptor blob -
      *  which is what names the socket - sits at the device. */
     @BeforeEach
-    void bench() throws IOException {
+    void server() throws IOException {
         Path device = Files.createDirectories(sysfs.resolve("usb1").resolve("1-2"));
-        Files.write(device.resolve("descriptors"), new UsbDescriptorFixture().benchBlob());
+        Files.write(device.resolve("descriptors"), new UsbDescriptorFixture().serverBlob());
         sysRoot = device.resolve("interface-0").resolve("sound");
         Files.createDirectories(sysRoot.resolve("card1"));
     }

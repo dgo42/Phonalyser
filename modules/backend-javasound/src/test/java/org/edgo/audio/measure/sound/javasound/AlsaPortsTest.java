@@ -70,9 +70,9 @@ class AlsaPortsTest {
      * card that is not on USB must fail at.
      */
     @BeforeEach
-    void bench() throws IOException {
+    void server() throws IOException {
         Path device = Files.createDirectories(sysfs.resolve("usb1").resolve("1-2"));
-        Files.write(device.resolve("descriptors"), new UsbDescriptorFixture().benchBlob());
+        Files.write(device.resolve("descriptors"), new UsbDescriptorFixture().serverBlob());
         // The interface directory below it - named "1-2:1.0" on the bench, which
         // is not a name this host can create, and the walk cares about the DEPTH.
         sysRoot = device.resolve("interface-0").resolve("sound");

@@ -791,7 +791,7 @@ public final class GeneratorController {
             // shell must not sit over it for the length of the track.
             watchRemoteFile(remote, sessionStop);
         } catch (RemoteGenerator.FileTooLargeException e) {
-            filePlayError = I18n.t("generator.error.playFile.tooLargeForBench",
+            filePlayError = I18n.t("generator.error.playFile.tooLargeForServer",
                     file.getName(), megabytes(e.getBytes()), megabytes(e.getLimitBytes()));
         } catch (IOException | OutOfMemoryError e) {
             log.warn("File playback: cannot read {}: {}", file, e.toString());
@@ -800,7 +800,7 @@ public final class GeneratorController {
             // The bench's own words stay in the log; the operator is told in
             // theirs, with the classified reason when the backend gave one.
             log.warn("File playback on the bench failed: {}", e.toString(), e);
-            filePlayError = benchFileError(e);
+            filePlayError = serverFileError(e);
         } finally {
             if (commanded && sessionStop.get()) {
                 // The operator stopped while the file was on its way, or while it
@@ -866,7 +866,7 @@ public final class GeneratorController {
                 if (died != null) {
                     log.warn("File playback on the bench ended from below: {}",
                             died.toString());
-                    filePlayError = benchFileError(died);
+                    filePlayError = serverFileError(died);
                     break;
                 }
                 RemoteGenerator.FileState state = remote.fileState();
@@ -896,7 +896,7 @@ public final class GeneratorController {
      * the same as one refused because the bench's store is full.  The reason is
      * asked of the backend that owns the error, exactly as the tone path asks.
      */
-    private String benchFileError(Throwable failure) {
+    private String serverFileError(Throwable failure) {
         DeviceFailureReason reason = DeviceFailureReason.UNKNOWN;
         DeviceRef output = AudioBackend.instance().getActiveOutputDevice();
         if (output != null) {

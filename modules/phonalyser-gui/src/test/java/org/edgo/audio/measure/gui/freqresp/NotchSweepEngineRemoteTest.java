@@ -23,7 +23,7 @@ import java.util.List;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
-import org.edgo.audio.measure.gui.generator.BenchGeneratorStub;
+import org.edgo.audio.measure.gui.generator.ServerGeneratorStub;
 import org.edgo.audio.measure.preferences.BackendKey;
 import org.edgo.audio.measure.gui.sound.PlaybackStateEnum;
 import org.edgo.audio.measure.preferences.BackendPrefs;
@@ -86,7 +86,7 @@ class NotchSweepEngineRemoteTest {
 
     private AudioBackend audio;
     private BackendKey previousActive;
-    private BenchGeneratorStub bench;
+    private ServerGeneratorStub server;
     private DeviceRef out;
     private DeviceRef in;
     private String previousInName;
@@ -96,17 +96,17 @@ class NotchSweepEngineRemoteTest {
     private NotchSweepEngine engine;
 
     @BeforeEach
-    void connectTheBench() {
+    void connectTheServer() {
         audio = AudioBackend.instance();
         previousActive = audio.activeKey();
-        bench = assertInstanceOf(BenchGeneratorStub.class, audio.manager(AudioBackendType.NET),
+        server = assertInstanceOf(ServerGeneratorStub.class, audio.manager(AudioBackendType.NET),
                 "META-INF/services/...AudioDeviceManagerProvider must name the stub, or this "
                         + "test would silently exercise the LOCAL loop");
-        bench.reset();
+        server.reset();
         // The full remote key - a bare net carrier is not a selection.
         audio.setActive(BackendKey.of("b7e0-bench-uuid", AudioBackendType.QA40X));
-        out = bench.listOutputDevices().get(0);
-        in = bench.listInputDevices().get(0);
+        out = server.listOutputDevices().get(0);
+        in = server.listInputDevices().get(0);
         // The engine resolves the ACTIVE devices from the preferences by itself
         // (the one seam), so the stub's devices are named there.  Transient mode
         // keeps this test off the developer's preferences file; the live
@@ -127,7 +127,7 @@ class NotchSweepEngineRemoteTest {
     }
 
     @AfterEach
-    void disconnectTheBench() {
+    void disconnectTheServer() {
         if (engine != null) {
             engine.close();
             engine = null;
@@ -139,7 +139,7 @@ class NotchSweepEngineRemoteTest {
         backend.setInputBitDepth(previousInBits);
         Preferences.instance().setTransientMode(false);
         audio.setActive(previousActive);
-        bench.reset();
+        server.reset();
     }
 
     /**
@@ -148,30 +148,30 @@ class NotchSweepEngineRemoteTest {
      * window, and closing gives the lane and the line back.
      */
     @Test
-    void theLoopIsCommandedOnTheBenchAndTheRingFillsFromTheWire() throws Exception {
+    void theLoopIsCommandedOnTheServerAndTheRingFillsFromTheWire() throws Exception {
         engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
 
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH);
 
-        assertEquals(GenSignalForm.LOG_SWEEP, bench.firstArg("setForm"));
-        assertEquals(Boolean.TRUE, bench.firstArg("setSweepLoop"),
+        assertEquals(GenSignalForm.LOG_SWEEP, server.firstArg("setForm"));
+        assertEquals(Boolean.TRUE, server.firstArg("setSweepLoop"),
                 "the wizard's sweep runs continuously - that is the whole speed win");
-        assertEquals(SWEEP_SAMPLES, bench.firstArg("setSweepDurationSamples"));
-        assertEquals(0, bench.firstArg("setSweepLeadInSamples"),
+        assertEquals(SWEEP_SAMPLES, server.firstArg("setSweepDurationSamples"));
+        assertEquals(0, server.firstArg("setSweepLeadInSamples"),
                 "a looping tuning sweep has no lead-in: the ring is read at any phase");
-        assertEquals(F0, bench.firstArg("setSweepFreqStart"));
-        assertEquals(AMPLITUDE_VRMS, bench.firstArg("setAmplitudesVrms"),
+        assertEquals(F0, server.firstArg("setSweepFreqStart"));
+        assertEquals(AMPLITUDE_VRMS, server.firstArg("setAmplitudesVrms"),
                 "a sweep engine commands both lanes at its one amplitude");
-        assertFalse(bench.names().contains("setDacFsVoltageAmpls"),
+        assertFalse(server.names().contains("setDacFsVoltageAmpls"),
                 "the bench's own card owns its full scale");
-        assertTrue(bench.names().contains("startGenerator"));
+        assertTrue(server.names().contains("startGenerator"));
         assertNotNull(engine.sweepRef(),
                 "the reference X(t) is still built here - it is what the deconvolution "
                         + "divides by, and a unit-amplitude buffer the bench's own full "
                         + "scale cannot change");
 
-        BenchGeneratorStub.BenchCapture capture = bench.getLastCapture();
+        ServerGeneratorStub.ServerCapture capture = server.getLastCapture();
         assertNotNull(capture, "the engine opened no input line on the bench");
         assertNull(engine.latestPeriod(SWEEP_SAMPLES), "nothing has been captured yet");
         capture.feed(period());
@@ -187,7 +187,7 @@ class NotchSweepEngineRemoteTest {
         engine.close();
         engine = null;
 
-        assertTrue(bench.names().contains("closeGenerator"),
+        assertTrue(server.names().contains("closeGenerator"),
                 "a lane left running on the bench is a DAC no other client can take");
         assertTrue(capture.isClosed(), "and the input line goes back with it");
     }
@@ -210,12 +210,12 @@ class NotchSweepEngineRemoteTest {
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH);
 
-        assertEquals(PLAYBACK_RATE_HZ, bench.firstArg("openGenerator"),
+        assertEquals(PLAYBACK_RATE_HZ, server.firstArg("openGenerator"),
                 "the DAC is opened on the OUTPUT rate - the ADC's is none of its business");
         assertEquals(PLAYBACK_BITS, openedArg(1),
                 "and on the output word length");
         assertEquals(SWEEP_SAMPLES * PLAYBACK_RATE_HZ / RATE_HZ,
-                bench.firstArg("setSweepDurationSamples"),
+                server.firstArg("setSweepDurationSamples"),
                 "one loop period is one DURATION: the same stretch of time is more "
                         + "samples on the faster clock");
         assertEquals(SWEEP_SAMPLES, engine.sweepRef().length,
@@ -248,24 +248,24 @@ class NotchSweepEngineRemoteTest {
                     "the refusal names both configured rates - " + failed.getMessage());
         }
 
-        assertFalse(bench.names().contains("openGenerator"),
+        assertFalse(server.names().contains("openGenerator"),
                 "and it took nothing from the bench: no lane was ever asked for");
-        assertNull(bench.getLastCapture(), "and no input line either");
+        assertNull(server.getLastCapture(), "and no input line either");
     }
 
     /** A live band change reaches the bench too, or it would go on emitting the
      *  old band while the wizard deconvolved against the new reference. */
     @Test
-    void aBandChangeReachesTheBenchAndTheReference() throws Exception {
+    void aBandChangeReachesTheServerAndTheReference() throws Exception {
         engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH);
-        bench.reset();
+        server.reset();
 
         engine.setBand(NEW_F0, NEW_F1);
 
-        assertEquals(NEW_F0, bench.firstArg("setSweepFreqStart"));
-        assertEquals(NEW_F1, bench.firstArg("setSweepFreqEnd"));
+        assertEquals(NEW_F0, server.firstArg("setSweepFreqStart"));
+        assertEquals(NEW_F1, server.firstArg("setSweepFreqEnd"));
     }
 
     /**
@@ -279,12 +279,12 @@ class NotchSweepEngineRemoteTest {
      * wizard still gets its window afterwards.
      */
     @Test
-    void aLaneGateChangeReopensTheBenchesLaneAndKeepsTheRingRunning() throws Exception {
+    void aLaneGateChangeReopensTheServersLaneAndKeepsTheRingRunning() throws Exception {
         engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH);
-        BenchGeneratorStub.BenchCapture capture = bench.getLastCapture();
-        bench.reset();
+        ServerGeneratorStub.ServerCapture capture = server.getLastCapture();
+        server.reset();
 
         engine.setOutputChannels(OutputChannels.LEFT);
 
@@ -297,7 +297,7 @@ class NotchSweepEngineRemoteTest {
                         "setSweepLeadInSamples", "setSweepFadeInSamples",
                         "setSweepFadeOutSamples", "setSweepLoop", "fftGrid",
                         "startGenerator"),
-                bench.names(),
+                server.names(),
                 "the gate belongs to the LINE, so the line is opened again - and a new "
                         + "line knows nothing about the sweep until it is told");
         assertEquals(OutputChannels.LEFT, openedGate(),
@@ -326,8 +326,8 @@ class NotchSweepEngineRemoteTest {
         engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH);
-        bench.reset();
-        bench.setRefuseOpen(true);
+        server.reset();
+        server.setRefuseOpen(true);
 
         IllegalStateException refused = assertThrows(IllegalStateException.class,
                 () -> engine.setOutputChannels(OutputChannels.LEFT));
@@ -339,7 +339,7 @@ class NotchSweepEngineRemoteTest {
         assertEquals(OutputChannels.BOTH, engine.getLoopChannels(),
                 "the gate the operator asked for never took effect, so what a control "
                         + "has to show is the one this session ran with");
-        assertEquals(List.of("closeGenerator", "openGenerator"), bench.names(),
+        assertEquals(List.of("closeGenerator", "openGenerator"), server.names(),
                 "the old lane really was given back before the new one was asked for - "
                         + "and nothing was started on a lane that never opened");
     }
@@ -356,8 +356,8 @@ class NotchSweepEngineRemoteTest {
      * refusal; the wizard that calls this only logs the failure.
      */
     @Test
-    void aBenchThatGrantsAnotherRateRefusesTheSessionAndGivesTheLaneBack() {
-        bench.setGrantedRate(RATE_HZ * 2);
+    void aServerThatGrantsAnotherRateRefusesTheSessionAndGivesTheLaneBack() {
+        server.setGrantedRate(RATE_HZ * 2);
         try (NotchSweepEngine refused = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS)) {
                 IllegalStateException failed = assertThrows(IllegalStateException.class,
                         () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
@@ -367,9 +367,9 @@ class NotchSweepEngineRemoteTest {
                         "the refusal names what the bench granted - " + failed.getMessage());
         }
 
-        assertFalse(bench.names().contains("startGenerator"),
+        assertFalse(server.names().contains("startGenerator"),
                 "and nothing was emitted on a grid nothing could be read on");
-        assertTrue(bench.names().contains("closeGenerator"),
+        assertTrue(server.names().contains("closeGenerator"),
                 "the lane the open TOOK is already back - nobody calls close() on an "
                         + "engine whose start threw");
     }
@@ -380,7 +380,7 @@ class NotchSweepEngineRemoteTest {
      *  the bench at all, and the capture reference goes back with the throw. */
     @Test
     void anInputStreamAtAnotherRateRefusesTheSessionAndGivesBothBack() {
-        bench.setGrantedCaptureRate(RATE_HZ * 2);
+        server.setGrantedCaptureRate(RATE_HZ * 2);
         try (NotchSweepEngine refused = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS)) {
                 IllegalStateException failed = assertThrows(IllegalStateException.class,
                         () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
@@ -390,10 +390,10 @@ class NotchSweepEngineRemoteTest {
                         failed.getMessage());
         }
 
-        assertFalse(bench.names().contains("openGenerator"),
+        assertFalse(server.names().contains("openGenerator"),
                 "a session refused on its input stream never took the bench's DAC");
-        assertFalse(bench.names().contains("startGenerator"));
-        assertTrue(bench.getLastCapture().isClosed(),
+        assertFalse(server.names().contains("startGenerator"));
+        assertTrue(server.getLastCapture().isClosed(),
                 "the input line is back, which is what releases its device lock");
     }
 
@@ -408,7 +408,7 @@ class NotchSweepEngineRemoteTest {
      *  format is fixed there, so this is where the rate, the word length and
      *  the gate are read back from. */
     private Object openedArg(int index) {
-        for (BenchGeneratorStub.Command command : bench.commands()) {
+        for (ServerGeneratorStub.Command command : server.commands()) {
             if ("openGenerator".equals(command.name())) {
                 return command.args().get(index);
             }

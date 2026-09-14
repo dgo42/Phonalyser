@@ -85,24 +85,24 @@ class BackendChoicesTest {
 
     @Test
     void aSelectionThatIsStillOfferedIsKept() {
-        BackendKey bench = BackendKey.of(BENCH_A, AudioBackendType.QA40X);
+        BackendKey server = BackendKey.of(BENCH_A, AudioBackendType.QA40X);
         choices.rebuild(List.of(entry(BENCH_A, AudioBackendType.QA40X, LABEL_A)));
 
-        assertEquals(bench, choices.resolve(bench));
-        assertEquals(bench, choices.at(choices.indexOf(bench)),
+        assertEquals(server, choices.resolve(server));
+        assertEquals(server, choices.at(choices.indexOf(server)),
                 "labels and keys stay index-aligned, or the combo would select another bench");
     }
 
     @Test
     void aDisconnectFallsBackToALocalBackendRatherThanToAnEmptyCombo() {
-        BackendKey bench = BackendKey.of(BENCH_A, AudioBackendType.QA40X);
+        BackendKey server = BackendKey.of(BENCH_A, AudioBackendType.QA40X);
         choices.rebuild(List.of(entry(BENCH_A, AudioBackendType.QA40X, LABEL_A)));
-        assertEquals(bench, choices.resolve(bench));
+        assertEquals(server, choices.resolve(server));
 
         choices.rebuild(List.of());            // the operator disconnected
 
-        assertEquals(-1, choices.indexOf(bench), "its entry is gone with the session");
-        BackendKey fallback = choices.resolve(bench);
+        assertEquals(-1, choices.indexOf(server), "its entry is gone with the session");
+        BackendKey fallback = choices.resolve(server);
         assertFalse(fallback.remote(),
                 "a bench that cannot be reached cannot stay selected - the dialog EDITS "
                         + "what it shows, so it falls back to a local backend");
@@ -125,10 +125,10 @@ class BackendChoicesTest {
         // shape of a build with no local backend and no bench.  This is asked
         // while the dialog is being BUILT, so an exception here would take the
         // whole window with it.
-        BackendKey bench = BackendKey.of(BENCH_A, AudioBackendType.QA40X);
+        BackendKey server = BackendKey.of(BENCH_A, AudioBackendType.QA40X);
 
         assertTrue(choices.labels().isEmpty());
-        assertEquals(bench, choices.resolve(bench), "there is nothing to fall back TO");
+        assertEquals(server, choices.resolve(server), "there is nothing to fall back TO");
         assertNull(choices.resolve(null));
     }
 

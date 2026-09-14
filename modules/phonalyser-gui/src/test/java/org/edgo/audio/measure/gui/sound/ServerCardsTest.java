@@ -25,7 +25,7 @@ import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.gui.common.RemoteBackendRegistry;
-import org.edgo.audio.measure.gui.generator.BenchGeneratorStub;
+import org.edgo.audio.measure.gui.generator.ServerGeneratorStub;
 import org.edgo.audio.measure.net.proto.MessageType;
 import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
@@ -61,7 +61,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * ({@link RecordingRemoteBackendUi}): "nothing was sent" is the assertion that
  * matters, and it can only be made against something that would have noticed.
  */
-class BenchCardsTest {
+class ServerCardsTest {
 
     private static final String SERVER_ID = "bench-1";
     private static final String DEVICE_NAME = "QA403";
@@ -73,26 +73,26 @@ class BenchCardsTest {
     private static final double FS_LEFT = 1.9;
     private static final double FS_RIGHT = 2.1;
 
-    private final BackendKey bench = BackendKey.of(SERVER_ID, AudioBackendType.QA40X);
+    private final BackendKey server = BackendKey.of(SERVER_ID, AudioBackendType.QA40X);
     private final RecordingRemoteBackendUi remote =
             (RecordingRemoteBackendUi) RemoteBackendRegistry.instance().getUi();
 
     @BeforeEach
-    void armTheBench() {
+    void armTheServer() {
         remote.reset();
-        benchManager().reset();
+        serverManager().reset();
     }
 
     @AfterEach
-    void disarmTheBench() {
+    void disarmTheServer() {
         remote.reset();
-        benchManager().reset();
+        serverManager().reset();
     }
 
     /** The bench's device manager - this module's net carrier, which is where
      *  the values-only copy goes since the manager owns the calibration write. */
-    private BenchGeneratorStub benchManager() {
-        return (BenchGeneratorStub) AudioBackend.instance().manager(bench.carrier());
+    private ServerGeneratorStub serverManager() {
+        return (ServerGeneratorStub) AudioBackend.instance().manager(server.carrier());
     }
 
     // -- staging -------------------------------------------------------------
@@ -100,13 +100,13 @@ class BenchCardsTest {
     @Test
     void aPickSendsNothing() {
         Preferences prefs = detached();
-        BenchCards cards = cards(prefs);
+        ServerCards cards = cards(prefs);
 
-        cards.stage(bench, true, DEVICE_NAME, CHOSEN_CARD);
+        cards.stage(server, true, DEVICE_NAME, CHOSEN_CARD);
 
         assertTrue(remote.getSent().isEmpty(),
                 "the pick is staged - the bench must not hear about it until OK");
-        assertEquals(CHOSEN_CARD, cards.stagedCard(bench, DEVICE_NAME),
+        assertEquals(CHOSEN_CARD, cards.stagedCard(server, DEVICE_NAME),
                 "though the chooser shows it while the dialog lives");
         assertNull(prefs.boundCardName(prefs.deviceBindingKey(SERVER_ID, DEVICE_NAME)),
                 "and nothing is recorded locally either - a mirror of a binding the "
@@ -117,17 +117,17 @@ class BenchCardsTest {
      *  to be true is that dropping it is ENOUGH, i.e. that no request ever left
      *  the process on its own. */
     @Test
-    void aPickThenCancelLeavesTheBenchUntouched() {
+    void aPickThenCancelLeavesTheServerUntouched() {
         Preferences prefs = detached();
-        BenchCards cancelled = cards(prefs);
-        cancelled.stage(bench, true, DEVICE_NAME, CHOSEN_CARD);
+        ServerCards cancelled = cards(prefs);
+        cancelled.stage(server, true, DEVICE_NAME, CHOSEN_CARD);
 
         // The dialog closes; the next open builds a fresh chooser over the store.
-        BenchCards reopened = cards(prefs);
+        ServerCards reopened = cards(prefs);
 
         assertTrue(remote.getSent().isEmpty(), "no request was ever sent");
-        assertNull(reopened.stagedCard(bench, DEVICE_NAME));
-        assertTrue(reopened.commitStagedBindings(bench, List.of(ref()), List.of()).isEmpty(),
+        assertNull(reopened.stagedCard(server, DEVICE_NAME));
+        assertTrue(reopened.commitStagedBindings(server, List.of(ref()), List.of()).isEmpty(),
                 "nothing is left to commit, so the next OK sends nothing either");
         assertTrue(remote.getSent().isEmpty());
         assertNull(prefs.boundCardName(prefs.deviceBindingKey(SERVER_ID, DEVICE_NAME)));
@@ -142,17 +142,17 @@ class BenchCardsTest {
      */
     @Test
     void oneBoxStagesOneCardHoweverManyCombosPickIt() {
-        BenchCards cards = cards(detached());
-        cards.stage(bench, true, DEVICE_NAME, CHOSEN_CARD);
-        cards.stage(bench, false, DEVICE_NAME, OTHER_CARD);
+        ServerCards cards = cards(detached());
+        cards.stage(server, true, DEVICE_NAME, CHOSEN_CARD);
+        cards.stage(server, false, DEVICE_NAME, OTHER_CARD);
         cards.stage(BackendKey.of("bench-2", AudioBackendType.QA40X), true, DEVICE_NAME,
                 OTHER_CARD);
 
-        assertEquals(OTHER_CARD, cards.stagedCard(bench, DEVICE_NAME),
+        assertEquals(OTHER_CARD, cards.stagedCard(server, DEVICE_NAME),
                 "the later pick replaces the earlier one - it is the same choice, "
                         + "made twice");
         List<String> refused =
-                cards.commitStagedBindings(bench, List.of(ref()), List.of(outputRef()));
+                cards.commitStagedBindings(server, List.of(ref()), List.of(outputRef()));
 
         assertTrue(refused.isEmpty());
         assertEquals(1, remote.sentOf(MessageType.DEVICE_SET_CARD.getWire()).size(),
@@ -168,7 +168,7 @@ class BenchCardsTest {
     void anAcceptedBindingIsSentAsSetCardUnderTheLockAndThenMirrored() {
         Preferences prefs = detached();
 
-        assertTrue(cards(prefs).bind(bench, ref(), CHOSEN_CARD));
+        assertTrue(cards(prefs).bind(server, ref(), CHOSEN_CARD));
 
         RecordingRemoteBackendUi.Sent sent = remote.onlySent();
         assertEquals(MessageType.DEVICE_SET_CARD.getWire(), sent.request());
@@ -194,7 +194,7 @@ class BenchCardsTest {
         Preferences prefs = detached();
         remote.setAnswer(null);                       // the bench refuses
 
-        assertFalse(cards(prefs).bind(bench, ref(), CHOSEN_CARD));
+        assertFalse(cards(prefs).bind(server, ref(), CHOSEN_CARD));
 
         assertEquals(MessageType.DEVICE_SET_CARD.getWire(), remote.onlySent().request(),
                 "it really was attempted - this is not the no-bench shortcut");
@@ -204,7 +204,7 @@ class BenchCardsTest {
 
     @Test
     void unbindingSendsANullCard() {
-        assertTrue(cards(detached()).bind(bench, ref(), null));
+        assertTrue(cards(detached()).bind(server, ref(), null));
 
         assertNull(remote.onlySent().fields().get(NetFields.CARD),
                 "spec 4.3: null unbinds, back to the bench's name-match rule");
@@ -218,10 +218,10 @@ class BenchCardsTest {
      *  pick, because the binding is a locked write and the session is routed at
      *  the backend only by the commit. */
     @Test
-    void aCardIsPutOnTheBenchAtOnceAndItsBindingWaitsForOk() {
-        BenchCards cards = cards(detached());
+    void aCardIsPutOnTheServerAtOnceAndItsBindingWaitsForOk() {
+        ServerCards cards = cards(detached());
 
-        assertTrue(cards.createAndStage(bench, DEVICE_NAME, true, card(CHOSEN_CARD)));
+        assertTrue(cards.createAndStage(server, DEVICE_NAME, true, card(CHOSEN_CARD)));
 
         List<RecordingRemoteBackendUi.Sent> sent = remote.getSent();
         assertEquals(1, sent.size(), "the card, and nothing else, before OK");
@@ -229,10 +229,10 @@ class BenchCardsTest {
         assertFalse(sent.get(0).locked(),
                 "spec 4.3: nothing is bound to the new card, so nothing it says is "
                         + "in force and no lock is needed");
-        assertEquals(CHOSEN_CARD, cards.stagedCard(bench, DEVICE_NAME),
+        assertEquals(CHOSEN_CARD, cards.stagedCard(server, DEVICE_NAME),
                 "the chooser shows the binding as staged");
 
-        assertTrue(cards.commitStagedBindings(bench, List.of(ref()), List.of()).isEmpty());
+        assertTrue(cards.commitStagedBindings(server, List.of(ref()), List.of()).isEmpty());
         assertEquals(MessageType.DEVICE_SET_CARD.getWire(), remote.getSent().get(1).request());
         assertTrue(remote.getSent().get(1).locked(), "the BINDING is what changes a measurement");
     }
@@ -243,7 +243,7 @@ class BenchCardsTest {
     @Test
     void theWholeCardTravelsInTheStoresOwnVocabulary() {
         Preferences prefs = detached();
-        assertTrue(cards(prefs).create(bench, card(CHOSEN_CARD)));
+        assertTrue(cards(prefs).create(server, card(CHOSEN_CARD)));
 
         Object content = remote.onlySent().fields().get(NetFields.CONTENT);
         assertTrue(content instanceof Map, "cards.put carries the card as its content");
@@ -267,18 +267,18 @@ class BenchCardsTest {
     void propagatingALocalCardSendsItWholeAndStagesItsBinding() {
         Preferences prefs = detached();
         prefs.putAudioDeviceProfile(card(OTHER_CARD));
-        BenchCards cards = cards(prefs);
+        ServerCards cards = cards(prefs);
 
-        assertEquals(BenchCards.Copied.CARD, cards.propagateLocalCard(bench, DEVICE_NAME, true));
+        assertEquals(ServerCards.Copied.CARD, cards.propagateLocalCard(server, DEVICE_NAME, true));
 
         assertEquals(1, remote.getSent().size());
         assertEquals(MessageType.CARDS_PUT.getWire(), remote.getSent().get(0).request());
-        assertEquals(OTHER_CARD, cards.stagedCard(bench, DEVICE_NAME),
+        assertEquals(OTHER_CARD, cards.stagedCard(server, DEVICE_NAME),
                 "the binding to the card that just arrived waits for OK");
         assertNotNull(prefs.findAudioDeviceProfile(OTHER_CARD),
                 "the local card stays exactly where it was - this is a copy UP");
 
-        assertTrue(cards.commitStagedBindings(bench, List.of(ref()), List.of()).isEmpty());
+        assertTrue(cards.commitStagedBindings(server, List.of(ref()), List.of()).isEmpty());
         assertEquals(OTHER_CARD, remote.getSent().get(1).fields().get(NetFields.CARD),
                 "and OK binds the device to it");
     }
@@ -291,24 +291,24 @@ class BenchCardsTest {
      *  it is asked on OK and not before, one channel per write, with this
      *  machine's values. */
     @Test
-    void aBenchThatAlreadyHasTheNameGetsTheValuesInsteadOnOk() {
+    void aServerThatAlreadyHasTheNameGetsTheValuesInsteadOnOk() {
         Preferences prefs = detached();
         prefs.putAudioDeviceProfile(card(OTHER_CARD));
         remote.refuse(MessageType.CARDS_PUT.getWire());
-        BenchCards cards = cards(prefs);
+        ServerCards cards = cards(prefs);
 
-        assertEquals(BenchCards.Copied.VALUES_ONLY,
-                cards.propagateLocalCard(bench, DEVICE_NAME, true));
+        assertEquals(ServerCards.Copied.VALUES_ONLY,
+                cards.propagateLocalCard(server, DEVICE_NAME, true));
 
         assertEquals(1, remote.sentOf(MessageType.CARDS_PUT.getWire()).size());
-        assertTrue(benchManager().names().isEmpty(),
+        assertTrue(serverManager().names().isEmpty(),
                 "a locked write cannot go out before OK - there is no session "
                         + "routed at the backend yet");
-        assertNull(cards.stagedCard(bench, DEVICE_NAME),
+        assertNull(cards.stagedCard(server, DEVICE_NAME),
                 "the values alone: no card of ours is bound");
 
-        assertTrue(cards.commitStagedValues(bench, List.of(ref()), List.of()).isEmpty());
-        List<BenchGeneratorStub.Command> values = benchManager().commands().stream()
+        assertTrue(cards.commitStagedValues(server, List.of(ref()), List.of()).isEmpty());
+        List<ServerGeneratorStub.Command> values = serverManager().commands().stream()
                 .filter(c -> c.name().equals("storeCalibration")).toList();
         assertEquals(2, values.size(), "the pre-v1.1 path is the fallback, not a "
                 + "second card under a name the operator never chose - one write "
@@ -324,19 +324,19 @@ class BenchCardsTest {
      * for a binding that did not happen.
      */
     @Test
-    void aBindingTheBenchRefusesOnOkIsReportedAndLeavesNoMirror() {
+    void aBindingTheServerRefusesOnOkIsReportedAndLeavesNoMirror() {
         Preferences prefs = detached();
         prefs.putAudioDeviceProfile(card(OTHER_CARD));
         remote.refuse(MessageType.DEVICE_SET_CARD.getWire());
-        BenchCards cards = cards(prefs);
-        assertEquals(BenchCards.Copied.CARD, cards.propagateLocalCard(bench, DEVICE_NAME, true));
+        ServerCards cards = cards(prefs);
+        assertEquals(ServerCards.Copied.CARD, cards.propagateLocalCard(server, DEVICE_NAME, true));
 
         assertEquals(List.of(OTHER_CARD),
-                cards.commitStagedBindings(bench, List.of(ref()), List.of()));
+                cards.commitStagedBindings(server, List.of(ref()), List.of()));
 
         assertEquals(1, remote.sentOf(MessageType.CARDS_PUT.getWire()).size());
         assertEquals(1, remote.sentOf(MessageType.DEVICE_SET_CARD.getWire()).size());
-        assertTrue(benchManager().names().isEmpty(),
+        assertTrue(serverManager().names().isEmpty(),
                 "the card IS on the bench with its values in it - there is nothing "
                         + "left for the values-only fallback to add");
         assertNull(prefs.boundCardName(prefs.deviceBindingKey(SERVER_ID, DEVICE_NAME)),
@@ -347,8 +347,8 @@ class BenchCardsTest {
      *  not be handed an invented calibration. */
     @Test
     void nothingIsSentWhenThisMachineHasNoCardForTheDevice() {
-        assertEquals(BenchCards.Copied.NOTHING_TO_COPY,
-                cards(detached()).propagateLocalCard(bench, DEVICE_NAME, true));
+        assertEquals(ServerCards.Copied.NOTHING_TO_COPY,
+                cards(detached()).propagateLocalCard(server, DEVICE_NAME, true));
 
         assertTrue(remote.getSent().isEmpty());
     }
@@ -362,8 +362,8 @@ class BenchCardsTest {
         Preferences prefs = detached();
         prefs.putAudioDeviceProfile(card(CHOSEN_CARD, 0.0, 0.0));
 
-        assertEquals(BenchCards.Copied.NOTHING_TO_COPY,
-                cards(prefs).propagateLocalCard(bench, DEVICE_NAME, true));
+        assertEquals(ServerCards.Copied.NOTHING_TO_COPY,
+                cards(prefs).propagateLocalCard(server, DEVICE_NAME, true));
 
         assertTrue(remote.getSent().isEmpty());
     }
@@ -373,8 +373,8 @@ class BenchCardsTest {
         Preferences prefs = detached();
         prefs.putAudioDeviceProfile(card(CHOSEN_CARD, FS_LEFT, 0.0));
 
-        assertEquals(BenchCards.Copied.NOTHING_TO_COPY,
-                cards(prefs).propagateLocalCard(bench, DEVICE_NAME, true),
+        assertEquals(ServerCards.Copied.NOTHING_TO_COPY,
+                cards(prefs).propagateLocalCard(server, DEVICE_NAME, true),
                 "one calibrated channel would scale one side of the bench and leave "
                         + "the other reading infinity");
         assertTrue(remote.getSent().isEmpty());
@@ -383,13 +383,13 @@ class BenchCardsTest {
     // -- the active range of a bench card (spec 4.3 device.setActiveRange) ----
 
     @Test
-    void aStagedRangeMoveReachesTheBenchOnlyOnTheCommit() {
-        BenchCards cards = cards(detached());
-        cards.stageActiveRange(bench, true, DEVICE_NAME, OTHER_RANGE, null);
+    void aStagedRangeMoveReachesTheServerOnlyOnTheCommit() {
+        ServerCards cards = cards(detached());
+        cards.stageActiveRange(server, true, DEVICE_NAME, OTHER_RANGE, null);
 
         assertTrue(remote.getSent().isEmpty(), "staged, like every other edit");
 
-        assertTrue(cards.commitStagedRanges(bench, List.of(ref()), List.of()).isEmpty());
+        assertTrue(cards.commitStagedRanges(server, List.of(ref()), List.of()).isEmpty());
 
         RecordingRemoteBackendUi.Sent sent = remote.onlySent();
         assertEquals(MessageType.DEVICE_SET_ACTIVE_RANGE.getWire(), sent.request());
@@ -402,9 +402,9 @@ class BenchCardsTest {
 
     @Test
     void anIndependentCardsRightChannelMovesOnItsOwn() {
-        BenchCards cards = cards(detached());
-        cards.stageActiveRange(bench, true, DEVICE_NAME, OTHER_RANGE, Channel.R);
-        cards.commitStagedRanges(bench, List.of(ref()), List.of());
+        ServerCards cards = cards(detached());
+        cards.stageActiveRange(server, true, DEVICE_NAME, OTHER_RANGE, Channel.R);
+        cards.commitStagedRanges(server, List.of(ref()), List.of());
 
         assertEquals(NetFields.RIGHT, remote.onlySent().fields().get(NetFields.CHANNEL));
     }
@@ -418,9 +418,9 @@ class BenchCardsTest {
                         NetFields.OUTPUT, false),
                 Map.of(NetFields.NAME, OTHER_CARD, NetFields.INPUT, false,
                         NetFields.OUTPUT, true))));
-        BenchCards cards = cards(detached());
+        ServerCards cards = cards(detached());
 
-        assertEquals(List.of(CHOSEN_CARD), cards.list(bench, true),
+        assertEquals(List.of(CHOSEN_CARD), cards.list(server, true),
                 "a card with no row for the direction cannot calibrate anything "
                         + "there, so the chooser must not offer it");
         assertEquals(MessageType.CARDS_LIST.getWire(), remote.onlySent().request());
@@ -436,42 +436,42 @@ class BenchCardsTest {
                 Map.of(NetFields.NAME, CHOSEN_CARD, NetFields.INPUT, true,
                         NetFields.OUTPUT, false,
                         NetFields.CONTENT, prefs.cardToMap(card(CHOSEN_CARD))))));
-        BenchCards cards = cards(prefs);
-        cards.list(bench, true);
+        ServerCards cards = cards(prefs);
+        cards.list(server, true);
 
-        AudioDeviceProfile listed = cards.card(bench, CHOSEN_CARD);
+        AudioDeviceProfile listed = cards.card(server, CHOSEN_CARD);
         assertNotNull(listed, "the card the bench described, by name");
         assertEquals(2, listed.getInput().getRanges().size());
         assertEquals(RANGE_LABEL, listed.getInput().getActiveRange());
-        assertNull(cards.card(bench, "a card this bench never listed"));
+        assertNull(cards.card(server, "a card this bench never listed"));
     }
 
     @Test
-    void aBenchThatWillNotAnswerOffersNoCards() {
+    void aServerThatWillNotAnswerOffersNoCards() {
         remote.setAnswer(null);
 
-        assertTrue(cards(detached()).list(bench, true).isEmpty(),
+        assertTrue(cards(detached()).list(server, true).isEmpty(),
                 "showing a stale list from another server would be worse than none");
     }
 
     // -- which binding the chooser shows -------------------------------------
 
     @Test
-    void theBenchsOwnAnswerBeatsTheLocalMirror() {
+    void theServersOwnAnswerBeatsTheLocalMirror() {
         Preferences prefs = detached();
         prefs.bindDeviceToCard(prefs.deviceBindingKey(SERVER_ID, DEVICE_NAME), OTHER_CARD);
 
         assertEquals(CHOSEN_CARD,
-                cards(prefs).boundCard(bench, ref(CHOSEN_CARD), DEVICE_NAME),
+                cards(prefs).boundCard(server, ref(CHOSEN_CARD), DEVICE_NAME),
                 "another operator may have re-bound the device since; the bench is "
                         + "authoritative and the mirror only covers the gap before its "
                         + "catalogue has been read");
-        assertEquals(OTHER_CARD, cards(prefs).boundCard(bench, ref(), DEVICE_NAME),
+        assertEquals(OTHER_CARD, cards(prefs).boundCard(server, ref(), DEVICE_NAME),
                 "and the mirror is what answers when the bench sent no card");
     }
 
-    private BenchCards cards(Preferences prefs) {
-        return new BenchCards(prefs);
+    private ServerCards cards(Preferences prefs) {
+        return new ServerCards(prefs);
     }
 
     private DeviceRef ref() {

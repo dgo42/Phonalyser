@@ -34,8 +34,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class UsbAudioDescriptorsTest {
 
-    private final UsbAudioDescriptors bench =
-            new UsbAudioDescriptors(new UsbDescriptorFixture().benchBlob());
+    private final UsbAudioDescriptors server =
+            new UsbAudioDescriptors(new UsbDescriptorFixture().serverBlob());
 
     // ------------------------------------------------------------- the sockets
 
@@ -43,16 +43,16 @@ class UsbAudioDescriptorsTest {
     void aPlaybackStreamIsNamedByTheSocketItDrains() {
         // Interface 1 links the USB INPUT terminal, so the socket is at the far
         // end of the graph: through the feature unit, out of the output terminal.
-        assertEquals(UsbDescriptorFixture.HEADPHONE, bench.terminalTypeOf(1));
-        assertEquals(UsbDescriptorFixture.LINE, bench.terminalTypeOf(3));
+        assertEquals(UsbDescriptorFixture.HEADPHONE, server.terminalTypeOf(1));
+        assertEquals(UsbDescriptorFixture.LINE, server.terminalTypeOf(3));
     }
 
     @Test
     void aCaptureStreamIsNamedByTheSocketThatFeedsIt() {
         // Interface 2 links the USB OUTPUT terminal, so the walk goes the other
         // way - and must not answer the USB terminal it started from.
-        assertEquals(UsbDescriptorFixture.MICROPHONE, bench.terminalTypeOf(2));
-        assertEquals(UsbDescriptorFixture.LINE, bench.terminalTypeOf(4));
+        assertEquals(UsbDescriptorFixture.MICROPHONE, server.terminalTypeOf(2));
+        assertEquals(UsbDescriptorFixture.LINE, server.terminalTypeOf(4));
     }
 
     @Test
@@ -60,18 +60,18 @@ class UsbAudioDescriptorsTest {
         // The whole point: one PCM device is the microphone and headphone pair,
         // the other the line pair, and a streaming interface must reach only
         // the socket its own graph leads to.
-        assertEquals(UsbDescriptorFixture.HEADPHONE, bench.terminalTypeOf(1));
-        assertEquals(UsbDescriptorFixture.MICROPHONE, bench.terminalTypeOf(2));
-        assertEquals(UsbDescriptorFixture.LINE, bench.terminalTypeOf(3));
-        assertEquals(UsbDescriptorFixture.LINE, bench.terminalTypeOf(4));
+        assertEquals(UsbDescriptorFixture.HEADPHONE, server.terminalTypeOf(1));
+        assertEquals(UsbDescriptorFixture.MICROPHONE, server.terminalTypeOf(2));
+        assertEquals(UsbDescriptorFixture.LINE, server.terminalTypeOf(3));
+        assertEquals(UsbDescriptorFixture.LINE, server.terminalTypeOf(4));
     }
 
     // ------------------------------------------------------------- the unknown
 
     @Test
     void anInterfaceTheDeviceDoesNotStreamOnHasNoSocket() {
-        assertEquals(UsbAudioDescriptors.NO_TERMINAL, bench.terminalTypeOf(9));
-        assertEquals(UsbAudioDescriptors.NO_TERMINAL, bench.terminalTypeOf(0),
+        assertEquals(UsbAudioDescriptors.NO_TERMINAL, server.terminalTypeOf(9));
+        assertEquals(UsbAudioDescriptors.NO_TERMINAL, server.terminalTypeOf(0),
                 "the control interface carries no stream");
     }
 
@@ -113,7 +113,7 @@ class UsbAudioDescriptorsTest {
 
     @Test
     void aTruncatedBlobIsReadAsFarAsItGoesAndGuessesNothing() {
-        byte[] whole = new UsbDescriptorFixture().benchBlob();
+        byte[] whole = new UsbDescriptorFixture().serverBlob();
         byte[] cut = new byte[whole.length / 2];
         System.arraycopy(whole, 0, cut, 0, cut.length);
         assertEquals(UsbAudioDescriptors.NO_TERMINAL,

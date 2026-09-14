@@ -154,18 +154,18 @@ class NetServerListTest {
     void theConnectedServerIsNotSomethingToConnectToAgain() {
         preferences.beginEdit();
         list.heard(beacon(BENCH_NAME), HOST, T0);
-        NetServerEntry bench = list.rows(T0).get(0).server();
+        NetServerEntry server = list.rows(T0).get(0).server();
         NetServerEntry other = new NetServerEntry(OTHER_ID, "Bench two", OTHER_HOST,
                 NetProto.DEFAULT_PORT, true);
 
         assertFalse(list.connectable(null, null),
                 "with no row selected there is nothing to connect to");
-        assertTrue(list.connectable(bench, null),
+        assertTrue(list.connectable(server, null),
                 "a selected bench and no session - this is the ordinary Connect");
-        assertFalse(list.connectable(bench, bench),
+        assertFalse(list.connectable(server, server),
                 "the row that IS the session offers nothing to connect to, so "
                         + "Connect is disabled on it");
-        assertTrue(list.connectable(other, bench),
+        assertTrue(list.connectable(other, server),
                 "another bench while one is connected is a switch, and switching is "
                         + "exactly what the button is for");
     }

@@ -53,7 +53,7 @@ public final class RecordingRemoteBackendUi implements RemoteBackendUi {
 
     /** One request as it went out - the bench, the message type, the fields with
      *  it, and whether the caller took the device lock for it. */
-    public record Sent(BackendKey bench, String request, Map<String, Object> fields,
+    public record Sent(BackendKey server, String request, Map<String, Object> fields,
             boolean locked) {
     }
 

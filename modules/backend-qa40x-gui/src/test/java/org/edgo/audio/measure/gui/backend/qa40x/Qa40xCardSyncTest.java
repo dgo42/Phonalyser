@@ -74,8 +74,8 @@ class Qa40xCardSyncTest {
     private static final double LEFT_FACTOR = 1.02;
     private static final double RIGHT_FACTOR = 0.97;
 
-    private final StubRemoteBench bench =
-            (StubRemoteBench) RemoteBackendRegistry.instance().getUi();
+    private final StubRemoteServer server =
+            (StubRemoteServer) RemoteBackendRegistry.instance().getUi();
 
     private Preferences live;
 
@@ -85,11 +85,11 @@ class Qa40xCardSyncTest {
         // The sync used to write through this singleton; transient mode keeps the
         // real devices.yaml out of it either way.
         live.setTransientMode(true);
-        bench.clear();
-        bench.answer(MessageType.QA40X_CALIBRATION.getWire(),
+        server.clear();
+        server.answer(MessageType.QA40X_CALIBRATION.getWire(),
                 Map.of(NetFields.ADC, factorRows(Qa40xProtocol.inputRangeDbvValues()),
                         NetFields.DAC, factorRows(Qa40xProtocol.outputRangeDbvValues())));
-        bench.answer(MessageType.QA40X_RANGES.getWire(),
+        server.answer(MessageType.QA40X_RANGES.getWire(),
                 Map.of(NetFields.ACTIVE_INPUT_DBV, ACTIVE_INPUT_DBV,
                         NetFields.ACTIVE_OUTPUT_DBV, ACTIVE_OUTPUT_DBV));
     }
@@ -97,11 +97,11 @@ class Qa40xCardSyncTest {
     @AfterEach
     void tearDown() {
         live.removeAudioDeviceProfile(StubNetBackend.DEVICE_NAME);
-        bench.clear();
+        server.clear();
     }
 
     @Test
-    void theBenchesRangesLandInTheDialogsWorkingCopyAndNotInTheLiveStore() {
+    void theServersRangesLandInTheDialogsWorkingCopyAndNotInTheLiveStore() {
         Preferences edit = live.copyForDialog();
 
         new Qa40xSettingsUi().onSelected(REMOTE_QA40X, edit);
@@ -145,7 +145,7 @@ class Qa40xCardSyncTest {
      * same name is exactly the collision every other path refuses.
      */
     @Test
-    void theRenderedBenchCardLeavesTheWorkingCopyBeforeOkCommitsIt() {
+    void theRenderedServerCardLeavesTheWorkingCopyBeforeOkCommitsIt() {
         Preferences edit = live.copyForDialog();
         Qa40xSettingsUi panel = new Qa40xSettingsUi();
         panel.beginEdit();
@@ -209,10 +209,10 @@ class Qa40xCardSyncTest {
 
         panel.commitEdit();
 
-        List<StubRemoteBench.Call> writes = writes();
+        List<StubRemoteServer.Call> writes = writes();
         assertEquals(1, writes.size(), "exactly one range write, and only for the "
                 + "direction the operator moved");
-        StubRemoteBench.Call write = writes.get(0);
+        StubRemoteServer.Call write = writes.get(0);
         assertEquals(REMOTE_QA40X, write.selection(),
                 "aimed at the bench whose ranges were read, not at 'the QA40x'");
         assertEquals(MessageType.QA40X_SET_INPUT_RANGE.getWire(), write.request());
@@ -232,7 +232,7 @@ class Qa40xCardSyncTest {
 
         panel.commitEdit();
 
-        List<StubRemoteBench.Call> writes = writes();
+        List<StubRemoteServer.Call> writes = writes();
         assertEquals(2, writes.size());
         assertEquals(MessageType.QA40X_SET_INPUT_RANGE.getWire(), writes.get(0).request());
         assertEquals(STAGED_INPUT_DBV, writes.get(0).fields().get(NetFields.DBV));
@@ -244,7 +244,7 @@ class Qa40xCardSyncTest {
      *  restarts the analyzer's session, which is a gap in whatever is streaming
      *  from that bench - for no change at all. */
     @Test
-    void aRangeTheBenchIsAlreadyOnIsNotSent() {
+    void aRangeTheServerIsAlreadyOnIsNotSent() {
         Preferences edit = live.copyForDialog();
         Qa40xSettingsUi panel = new Qa40xSettingsUi();
         panel.beginEdit();
@@ -268,8 +268,8 @@ class Qa40xCardSyncTest {
      * mistake pointed the other way, moving an attenuator nobody asked to move.
      */
     @Test
-    void aBenchThatDidNotAnswerItsRangesIsNotWrittenTo() {
-        bench.answer(MessageType.QA40X_RANGES.getWire(), Map.of());
+    void aServerThatDidNotAnswerItsRangesIsNotWrittenTo() {
+        server.answer(MessageType.QA40X_RANGES.getWire(), Map.of());
         Preferences edit = live.copyForDialog();
         // This installation's own card of that name, on another position - what a
         // comparison that fell back to the local store would find.
@@ -290,9 +290,9 @@ class Qa40xCardSyncTest {
 
     /** The writes the panel really made.  The stub records READS as calls too -
      *  the sync makes two per selection - and a write is the LOCKED one. */
-    private List<StubRemoteBench.Call> writes() {
-        List<StubRemoteBench.Call> locked = new ArrayList<>();
-        for (StubRemoteBench.Call call : bench.calls()) {
+    private List<StubRemoteServer.Call> writes() {
+        List<StubRemoteServer.Call> locked = new ArrayList<>();
+        for (StubRemoteServer.Call call : server.calls()) {
             if (call.locked()) {
                 locked.add(call);
             }

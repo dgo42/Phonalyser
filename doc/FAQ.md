@@ -126,13 +126,13 @@ accept.
 
 ## Does the Phonalyser server need authentication
 
-**No, and that is by design.** The server is a bench instrument for a
-trusted network, which is what the server documentation states as well. It
-carries no user accounts, no passwords and no tokens.
+**No, and that is by design.** The server is meant for a trusted network,
+which is what the server documentation states as well. It carries no user
+accounts, no passwords and no tokens.
 
 **What that means in practice.** Anyone who can reach the server on the
-network can use the bench: list its devices, drive its generator and take
-its measurements.
+network can use it: list its devices, drive its generator and take its
+measurements.
 
 **How to run it.** Keep it on the trusted segment it was meant for, and do
 not expose it beyond that - no port forwarding to the internet, and no

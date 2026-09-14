@@ -56,35 +56,35 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * recalibrating the BENCH's analyzer would silently move the dBV reference of a
  * local measurement.
  *
- * <p>The bench is the loopback one of {@link NetBenchUiLoopbackTest}, so the
+ * <p>The bench is the loopback one of {@link NetServerUiLoopbackTest}, so the
  * device in force is a real enumeration and not a name typed into a stub.  No
  * display is needed: what is asserted is the DECISION.
  */
-class NetBenchRescaleTest {
+class NetServerRescaleTest {
 
     private static final String LOOPBACK = "127.0.0.1";
     private static final String BENCH_ID = "b7e0c4d2-0000-4000-8000-0000000000a2";
     /** The one name both analyzers answer to - the collision itself. */
-    private static final String DEVICE_NAME = BenchSocket.DEVICE_NAME;
+    private static final String DEVICE_NAME = StubServerSocket.DEVICE_NAME;
     private static final String OTHER_DEVICE = "Cosmos ADC";
     private static final long BIND_TIMEOUT_MS = 5_000;
     private static final long STOP_TIMEOUT_MS = 1_000;
 
-    private final NetBenchUi ui = (NetBenchUi) RemoteBackendRegistry.instance().getUi();
+    private final NetServerUi ui = (NetServerUi) RemoteBackendRegistry.instance().getUi();
 
-    private BenchSocket socket;
+    private StubServerSocket socket;
     private AudioBackendType backendBefore;
 
     @BeforeEach
-    void connectTheBenchAndSelectItsDevice() throws IOException {
+    void connectTheServerAndSelectItsDevice() throws IOException {
         Preferences prefs = Preferences.instance();
         prefs.setTransientMode(true);
         backendBefore = AudioBackend.instance().active();
-        int benchPort = freePort();
-        socket = new BenchSocket(new JsonCodec(), BENCH_ID, benchPort);
+        int serverPort = freePort();
+        socket = new StubServerSocket(new JsonCodec(), BENCH_ID, serverPort);
         socket.listen(BIND_TIMEOUT_MS);
-        assertNull(ui.connect(new NetServerEntry(LOOPBACK, BenchSocket.SERVER_NAME,
-                LOOPBACK, benchPort, true)), "the loopback bench refused the session");
+        assertNull(ui.connect(new NetServerEntry(LOOPBACK, StubServerSocket.SERVER_NAME,
+                LOOPBACK, serverPort, true)), "the loopback bench refused the session");
         prefs.current().setInputDeviceName(DEVICE_NAME);
         prefs.current().setOutputDeviceName(DEVICE_NAME);
     }
@@ -97,8 +97,8 @@ class NetBenchRescaleTest {
     }
 
     @Test
-    void aRecalibrationOfTheDeviceInForceOnTheBenchIsApplied() {
-        measureOnTheBench();
+    void aRecalibrationOfTheDeviceInForceOnTheServerIsApplied() {
+        measureOnTheServer();
 
         assertTrue(AudioBackend.instance().isActiveDevice(device(DEVICE_NAME, true), true),
                 "the modules are on the bench and this IS the input they measure "
@@ -113,7 +113,7 @@ class NetBenchRescaleTest {
      *  is the same comparison seen from the other side). */
     @Test
     void aRecalibrationOfTheSameNameOnTheOtherMachineNeverMovesTheSelection() {
-        measureOnTheBench();
+        measureOnTheServer();
 
         assertFalse(AudioBackend.instance().isActiveDevice(
                 new StubRef(DEVICE_NAME, true, AudioBackendType.WASAPI), true),
@@ -124,7 +124,7 @@ class NetBenchRescaleTest {
 
     @Test
     void aDeviceThisClientIsNotMeasuringOnIsLeftAlone() {
-        measureOnTheBench();
+        measureOnTheServer();
 
         assertFalse(AudioBackend.instance().isActiveDevice(device(OTHER_DEVICE, true), true),
                 "its calibration is not in force here; the catalogue already carries "
@@ -135,7 +135,7 @@ class NetBenchRescaleTest {
      *  the other endpoint, and only the one in force there decides. */
     @Test
     void theDirectionIsPartOfTheMatch() {
-        measureOnTheBench();
+        measureOnTheServer();
         Preferences.instance().current().setOutputDeviceName(OTHER_DEVICE);
 
         assertTrue(AudioBackend.instance().isActiveDevice(device(DEVICE_NAME, true), true));
@@ -147,11 +147,11 @@ class NetBenchRescaleTest {
     /** The bench's analyzer as the selection: the session commits it and hands
      *  its device list to the net manager, and the live backend is pointed at
      *  the bench - the two halves the Preferences dialog's OK does. */
-    private void measureOnTheBench() {
-        BackendKey bench = BackendKey.of(ui.getConnectedServer().serverId(),
+    private void measureOnTheServer() {
+        BackendKey server = BackendKey.of(ui.getConnectedServer().serverId(),
                 AudioBackendType.QA40X);
-        assertTrue(ui.select(bench), "the bench refused the selection");
-        AudioBackend.instance().setActive(bench);
+        assertTrue(ui.select(server), "the bench refused the selection");
+        AudioBackend.instance().setActive(server);
     }
 
     private DeviceRef device(String name, boolean input) {

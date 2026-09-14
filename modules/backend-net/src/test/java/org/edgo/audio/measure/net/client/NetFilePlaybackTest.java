@@ -53,7 +53,7 @@ import org.junit.jupiter.api.Test;
  * renders it - there is no client-&gt;server PCM in this protocol version, so this
  * is upload-and-play and deliberately not streaming.
  *
- * <p>Proved against {@link MockBench}, which speaks the wire and serves the file
+ * <p>Proved against {@link MockServer}, which speaks the wire and serves the file
  * endpoint for real over HTTP: the bytes asserted here crossed a socket.
  */
 class NetFilePlaybackTest {
@@ -70,24 +70,24 @@ class NetFilePlaybackTest {
     private final JsonCodec codec = new JsonCodec();
     private final List<NetConnection> connections = new ArrayList<>();
 
-    private MockBench bench;
+    private MockServer server;
     private URI wsUri;
 
     @BeforeEach
-    void startTheBench() {
-        bench = new MockBench(codec, SERVER_NAME);
-        wsUri = bench.listen(AWAIT_MS);
+    void startTheServer() {
+        server = new MockServer(codec, SERVER_NAME);
+        wsUri = server.listen(AWAIT_MS);
     }
 
     @AfterEach
-    void stopTheBench() {
+    void stopTheServer() {
         for (NetConnection connection : connections) {
             connection.connClose(NetCloseReason.BYE);
         }
-        bench.shutDown(SHUTDOWN_MS);
+        server.shutDown(SHUTDOWN_MS);
         // shutDown() is final and stops only the WebSocket side; without this the
         // file endpoint leaks a bound port and a dispatcher thread per test.
-        bench.stopHttp();
+        server.stopHttp();
     }
 
     @Test
@@ -99,33 +99,33 @@ class NetFilePlaybackTest {
         manager.playFile(content, PcmFileLoader.MIME_WAV, true);
 
         // The bytes really crossed the HTTP endpoint.
-        assertEquals(1, bench.uploadCount(), "exactly one upload");
-        assertEquals(1, bench.uploadRequests(), "and exactly one request to make it");
-        assertEquals(content.length, bench.lastDeclaredLength(),
+        assertEquals(1, server.uploadCount(), "exactly one upload");
+        assertEquals(1, server.uploadRequests(), "and exactly one request to make it");
+        assertEquals(content.length, server.lastDeclaredLength(),
                 "the size is declared up front in Content-Length - what lets a real "
                         + "server refuse an over-size body before reading it");
-        assertEquals(PcmFileLoader.MIME_WAV, bench.getLastContentType(),
+        assertEquals(PcmFileLoader.MIME_WAV, server.getLastContentType(),
                 "and the file's own type, so the bench picks a decoder from what the "
                         + "file IS rather than from what its first bytes resemble");
-        String fileId = bench.getLastGenerator().getPlayingFileId();
+        String fileId = server.getLastGenerator().getPlayingFileId();
         assertNotNull(fileId, "the bench recorded which file it was told to play");
-        assertArrayEquals(content, bench.uploaded(fileId),
+        assertArrayEquals(content, server.uploaded(fileId),
                 "the bench holds the bytes the client sent, unchanged");
 
         // And the command named the lane, that file and the loop flag.
-        NetMessage played = bench.awaitNth(MessageType.GEN_PLAY_FILE, 1, AWAIT_MS);
-        assertEquals(bench.getLastGenerator().getId(),
+        NetMessage played = server.awaitNth(MessageType.GEN_PLAY_FILE, 1, AWAIT_MS);
+        assertEquals(server.getLastGenerator().getId(),
                 played.optInt(NetFields.GEN_ID), "the open generator handle");
         assertEquals(fileId, played.optString(NetFields.FILE_ID), "the uploaded file's id");
         assertEquals(Boolean.TRUE, played.optBoolean(NetFields.LOOP), "loop travelled");
-        assertTrue(bench.getLastGenerator().isFileLoop(), "and the bench read it as looping");
+        assertTrue(server.getLastGenerator().isFileLoop(), "and the bench read it as looping");
 
         manager.closeGenerator();
     }
 
     @Test
     @DisplayName("the bench's pushed file state is what the client reports, and finished clears playing")
-    void theFileStateFollowsWhatTheBenchPushes() {
+    void theFileStateFollowsWhatTheServerPushes() {
         NetDeviceManager manager = connectWithGenerator();
 
         manager.playFile(wavLike(1024), PcmFileLoader.MIME_WAV, false);
@@ -138,7 +138,7 @@ class NetFilePlaybackTest {
         // playing=TRUE + finished=TRUE so only the `finished` clause can satisfy a
         // reader: a client that dropped it and leaned on "stopped playing" alone
         // would hang here.
-        bench.pushFileState(bench.getLastGenerator(), true, true);
+        server.pushFileState(server.getLastGenerator(), true, true);
         assertTrue(awaitFileState(manager, true, true),
                 "the finished edge reaches the client on its own");
 
@@ -153,16 +153,16 @@ class NetFilePlaybackTest {
         NetDeviceManager manager = connectWithGenerator();
 
         manager.playFile(wavLike(512), PcmFileLoader.MIME_FLAC, false);
-        assertEquals(PcmFileLoader.MIME_FLAC, bench.getLastContentType(),
+        assertEquals(PcmFileLoader.MIME_FLAC, server.getLastContentType(),
                 "a FLAC is declared a FLAC - the one format the old content sniff "
                         + "could miss behind an ID3 tag");
 
         manager.playFile(wavLike(512), PcmFileLoader.MIME_AIFF, false);
-        assertEquals(PcmFileLoader.MIME_AIFF, bench.getLastContentType(),
+        assertEquals(PcmFileLoader.MIME_AIFF, server.getLastContentType(),
                 "and an AIFF an AIFF, which no sniff of the first bytes chose");
 
         manager.playFile(wavLike(512), null, false);
-        assertEquals("application/octet-stream", bench.getLastContentType(),
+        assertEquals("application/octet-stream", server.getLastContentType(),
                 "a caller that cannot tell declares opaque bytes rather than "
                         + "guessing, which leaves the bench on its own sniff");
 
@@ -171,7 +171,7 @@ class NetFilePlaybackTest {
 
     @Test
     @DisplayName("a session that dies mid-file finishes the file state and arms the error")
-    void aBenchThatDiesWhileAFileIsPlayingIsReportedAndNotLeftPlaying() {
+    void aServerThatDiesWhileAFileIsPlayingIsReportedAndNotLeftPlaying() {
         NetDeviceManager manager = connectWithGenerator();
         manager.playFile(wavLike(1024), PcmFileLoader.MIME_WAV, false);
         assertTrue(awaitFileState(manager, true, false), "playing first");
@@ -195,26 +195,26 @@ class NetFilePlaybackTest {
 
     @Test
     @DisplayName("a live loop toggle travels as gen.config{fileLoop}")
-    void theLiveLoopToggleReachesTheBenchOverTheWire() {
+    void theLiveLoopToggleReachesTheServerOverTheWire() {
         NetDeviceManager manager = connectWithGenerator();
         manager.playFile(wavLike(1024), PcmFileLoader.MIME_WAV, false);
         assertTrue(awaitFileState(manager, true, false), "playing first");
-        assertFalse(bench.getLastGenerator().isFileLoop(), "started not looping");
+        assertFalse(server.getLastGenerator().isFileLoop(), "started not looping");
 
         manager.setFileLoop(true);
 
         // The one line that builds the message, over a real socket - until now
         // the client half and the server half of the live toggle had never met.
-        NetMessage config = bench.awaitNth(MessageType.GEN_CONFIG, 1, AWAIT_MS);
-        assertEquals(bench.getLastGenerator().getId(), config.optInt(NetFields.GEN_ID),
+        NetMessage config = server.awaitNth(MessageType.GEN_CONFIG, 1, AWAIT_MS);
+        assertEquals(server.getLastGenerator().getId(), config.optInt(NetFields.GEN_ID),
                 "the config names the lane it belongs to");
         assertEquals(Boolean.TRUE, config.optBoolean(NetFields.FILE_LOOP),
                 "and carries the new flag");
-        assertTrue(awaitTrue(() -> bench.getLastGenerator().isFileLoop()),
+        assertTrue(awaitTrue(() -> server.getLastGenerator().isFileLoop()),
                 "which the bench applies to the file that is playing");
 
         manager.setFileLoop(false);
-        assertTrue(awaitTrue(() -> !bench.getLastGenerator().isFileLoop()),
+        assertTrue(awaitTrue(() -> !server.getLastGenerator().isFileLoop()),
                 "and the other way too - unticking travels the same path");
 
         manager.closeGenerator();
@@ -222,17 +222,17 @@ class NetFilePlaybackTest {
 
     @Test
     @DisplayName("stop sends gen.stopFile for the open lane")
-    void stoppingCommandsTheBench() {
+    void stoppingCommandsTheServer() {
         NetDeviceManager manager = connectWithGenerator();
         manager.playFile(wavLike(1024), PcmFileLoader.MIME_WAV, false);
         assertTrue(awaitFileState(manager, true, false), "playing first");
 
         manager.stopFile();
 
-        NetMessage stopped = bench.awaitNth(MessageType.GEN_STOP_FILE, 1, AWAIT_MS);
-        assertEquals(bench.getLastGenerator().getId(), stopped.optInt(NetFields.GEN_ID),
+        NetMessage stopped = server.awaitNth(MessageType.GEN_STOP_FILE, 1, AWAIT_MS);
+        assertEquals(server.getLastGenerator().getId(), stopped.optInt(NetFields.GEN_ID),
                 "the stop names the lane it belongs to");
-        assertNull(bench.getLastGenerator().getPlayingFileId(),
+        assertNull(server.getLastGenerator().getPlayingFileId(),
                 "and the bench dropped the file");
 
         manager.closeGenerator();
@@ -254,8 +254,8 @@ class NetFilePlaybackTest {
         // The load-bearing one: no REQUEST reached the bench at all, so the gate
         // really fired before a socket was opened rather than after 50 MB had
         // crossed the wire and been turned away.
-        assertEquals(0, bench.uploadRequests(), "no socket was opened");
-        assertTrue(bench.receivedOf(MessageType.GEN_PLAY_FILE).isEmpty(),
+        assertEquals(0, server.uploadRequests(), "no socket was opened");
+        assertTrue(server.receivedOf(MessageType.GEN_PLAY_FILE).isEmpty(),
                 "and no play command was sent either");
         assertFalse(manager.fileState().playing(),
                 "the client is left reporting no file");
@@ -265,9 +265,9 @@ class NetFilePlaybackTest {
 
     @Test
     @DisplayName("a bench that refuses the upload leaves the client with no file playing")
-    void anUploadTheBenchRefusesSurfacesAndLeavesNothingPlaying() {
+    void anUploadTheServerRefusesSurfacesAndLeavesNothingPlaying() {
         NetDeviceManager manager = connectWithGenerator();
-        bench.setRefuseUploads(true);          // the "store is full" 413 of spec §3
+        server.setRefuseUploads(true);          // the "store is full" 413 of spec §3
 
         IllegalStateException refused = assertThrows(IllegalStateException.class,
                 () -> manager.playFile(wavLike(2048), PcmFileLoader.MIME_WAV, false));
@@ -277,10 +277,10 @@ class NetFilePlaybackTest {
         // send the operator off shortening a file that was never the problem.
         assertFalse(refused instanceof RemoteGenerator.FileTooLargeException,
                 "a full store is not an over-size file: " + refused);
-        assertEquals(1, bench.uploadRequests(),
+        assertEquals(1, server.uploadRequests(),
                 "the body really was offered - this refusal comes from the bench");
-        assertEquals(0, bench.uploadCount(), "and the bench filed nothing");
-        assertTrue(bench.receivedOf(MessageType.GEN_PLAY_FILE).isEmpty(),
+        assertEquals(0, server.uploadCount(), "and the bench filed nothing");
+        assertTrue(server.receivedOf(MessageType.GEN_PLAY_FILE).isEmpty(),
                 "a failed upload is never followed by a play command");
         assertFalse(manager.fileState().playing(), "and nothing is reported playing");
 
@@ -302,7 +302,7 @@ class NetFilePlaybackTest {
         manager.connect(connection, select(connection, servedBackend(connection)));
         // The bench cannot serve HTTP on its WebSocket port; production does, so
         // only the test says where the file endpoint really is.
-        manager.setUploadBase(bench.httpBase());
+        manager.setUploadBase(server.httpBase());
         DeviceRef output = manager.listOutputDevices().get(0);
         manager.openGenerator(output, RATE_HZ, BITS, DITHER_BITS, DITHER_BITS, OutputChannels.BOTH);
         return manager;

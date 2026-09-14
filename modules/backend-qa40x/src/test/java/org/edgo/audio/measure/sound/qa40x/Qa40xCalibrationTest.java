@@ -173,7 +173,7 @@ class Qa40xCalibrationTest {
     }
 
     @Test
-    void toProfile_rendersTheCardWithTheBenchActivesAsDefaults() {
+    void toProfile_rendersTheCardWithTheServerActivesAsDefaults() {
         Qa40xCalibration cal = Qa40xCalibration.fromBlob(syntheticBlob());
 
         AudioDeviceProfile card = cal.toProfile("QA403 remote", null, 6, -2);

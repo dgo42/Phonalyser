@@ -20,7 +20,7 @@ package org.edgo.audio.measure.gui.sound;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
-import org.edgo.audio.measure.gui.generator.BenchGeneratorStub;
+import org.edgo.audio.measure.gui.generator.ServerGeneratorStub;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.BackendKey;
 import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
@@ -46,7 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * worth measuring against - so the pane asks this first and drops the accuracy
  * rule when the answer is that there is none.
  *
- * <p>The bench is the stub of the generator tests ({@link BenchGeneratorStub},
+ * <p>The bench is the stub of the generator tests ({@link ServerGeneratorStub},
  * this module's net carrier), whose devices carry whatever calibration they
  * carry and nothing of this machine's.  Runs against the live singleton in
  * transient mode; every touched preference is restored afterwards.
@@ -62,21 +62,21 @@ class CalibrationGateTest {
     private String previousInputDevice;
 
     @BeforeEach
-    void measureOnTheBench() {
+    void measureOnTheServer() {
         Preferences prefs = Preferences.instance();
         prefs.setTransientMode(true);
         previousSelection = prefs.getSelectedBackend();
         AudioBackend audio = AudioBackend.instance();
         previousActive = audio.activeKey();
-        BackendKey bench = BackendKey.of(SERVER_ID, AudioBackendType.QA40X);
-        audio.setActive(bench);
-        prefs.setSelectedBackend(bench);
+        BackendKey server = BackendKey.of(SERVER_ID, AudioBackendType.QA40X);
+        audio.setActive(server);
+        prefs.setSelectedBackend(server);
         previousInputDevice = prefs.current().getInputDeviceName();
-        prefs.current().setInputDeviceName(BenchGeneratorStub.INPUT_NAME);
+        prefs.current().setInputDeviceName(ServerGeneratorStub.INPUT_NAME);
     }
 
     @AfterEach
-    void leaveTheBench() {
+    void leaveTheServer() {
         Preferences prefs = Preferences.instance();
         prefs.current().setInputDeviceName(previousInputDevice);
         prefs.removeAudioDeviceProfile(LOCAL_CARD);
@@ -87,7 +87,7 @@ class CalibrationGateTest {
     }
 
     @Test
-    void aBenchDeviceTheBenchHasNoCalibrationForIsUncalibrated() {
+    void aServerDeviceTheServerHasNoCalibrationForIsUncalibrated() {
         assertTrue(AudioBackend.instance().isUncalibrated(true),
                 "the bench sent no calibration with the device, so nothing is left "
                         + "to vouch for what its volts mean");
@@ -102,8 +102,8 @@ class CalibrationGateTest {
      * calibration using numbers that belong to another device.
      */
     @Test
-    void aLocalCardOfTheSameNameNeverMakesABenchSelectionCalibrated() {
-        Preferences.instance().putAudioDeviceProfile(localCard(BenchGeneratorStub.INPUT_NAME));
+    void aLocalCardOfTheSameNameNeverMakesAServerSelectionCalibrated() {
+        Preferences.instance().putAudioDeviceProfile(localCard(ServerGeneratorStub.INPUT_NAME));
 
         assertTrue(AudioBackend.instance().isUncalibrated(true),
                 "a calibrated local card of the same name says nothing about the "

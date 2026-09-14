@@ -159,28 +159,28 @@ class BackendSelectionPrefsTest {
     @Test
     void aDialogEditReachesTheLiveSelectionOnlyOnApply() {
         Preferences prefs = Preferences.instance();
-        BackendKey benchA = BackendKey.of(SERVER_A, AudioBackendType.QA40X);
-        BackendKey benchB = BackendKey.of(SERVER_B, AudioBackendType.QA40X);
-        prefs.setSelectedBackend(benchA);
-        prefs.prefsFor(benchA).setInputSampleRate(RATE_96K);
+        BackendKey serverA = BackendKey.of(SERVER_A, AudioBackendType.QA40X);
+        BackendKey serverB = BackendKey.of(SERVER_B, AudioBackendType.QA40X);
+        prefs.setSelectedBackend(serverA);
+        prefs.prefsFor(serverA).setInputSampleRate(RATE_96K);
 
         // The dialog edits a detached copy: another bench, another rate.
         Preferences edit = prefs.copyForDialog();
-        assertEquals(benchA, edit.getSelectedBackend(), "the copy opens on the live selection");
+        assertEquals(serverA, edit.getSelectedBackend(), "the copy opens on the live selection");
         assertEquals(RATE_96K, edit.current().getInputSampleRate());
-        edit.setSelectedBackend(benchB);
+        edit.setSelectedBackend(serverB);
         edit.current().setInputSampleRate(RATE_192K);
         edit.current().setInputDeviceName(MIC_B);
 
         // ... and nothing of it is live until OK.
-        assertEquals(benchA, prefs.getSelectedBackend(), "Cancel would leave this untouched");
+        assertEquals(serverA, prefs.getSelectedBackend(), "Cancel would leave this untouched");
         assertEquals(RATE_96K, prefs.current().getInputSampleRate());
 
         prefs.applyFromDialog(edit);
-        assertEquals(benchB, prefs.getSelectedBackend(), "OK commits the whole selection");
+        assertEquals(serverB, prefs.getSelectedBackend(), "OK commits the whole selection");
         assertEquals(RATE_192K, prefs.current().getInputSampleRate());
         assertEquals(MIC_B, prefs.current().getInputDeviceName());
-        assertEquals(RATE_96K, prefs.prefsFor(benchA).getInputSampleRate(),
+        assertEquals(RATE_96K, prefs.prefsFor(serverA).getInputSampleRate(),
                 "the bench that was left keeps its own settings");
     }
 

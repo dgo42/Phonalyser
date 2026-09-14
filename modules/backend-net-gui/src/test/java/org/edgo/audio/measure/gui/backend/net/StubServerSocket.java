@@ -81,7 +81,7 @@ import lombok.Setter;
  * for as long as a test watches it, which is the opposite of what a scripted
  * peer proving the client's death detector wants.
  */
-final class BenchSocket extends WebSocketServer {
+final class StubServerSocket extends WebSocketServer {
 
     /** The operator-visible name this bench reports in its {@code hello}. */
     static final String SERVER_NAME = "Bench QA403";
@@ -126,7 +126,7 @@ final class BenchSocket extends WebSocketServer {
     private final String serverId;
     /** Guards everything the conversation touches - the library decodes on its
      *  own worker threads, and a test reads the analyzer's state from its own. */
-    private final Object bench = new Object();
+    private final Object server = new Object();
     private final CountDownLatch listening = new CountDownLatch(1);
     /** Counted down by the first {@code hello} that arrives, so a test can act
      *  at the exact moment a connect attempt is IN FLIGHT. */
@@ -180,7 +180,7 @@ final class BenchSocket extends WebSocketServer {
     @Setter
     private volatile long selectDelayMs;
 
-    BenchSocket(JsonCodec codec, String serverId, int port) {
+    StubServerSocket(JsonCodec codec, String serverId, int port) {
         super(new InetSocketAddress(LOOPBACK, port));
         this.codec = codec;
         this.serverId = serverId;
@@ -240,7 +240,7 @@ final class BenchSocket extends WebSocketServer {
      *  socket closing on purpose: a lane that is still counted after a
      *  disconnect is one the client abandoned rather than gave back. */
     int openGenerators() {
-        synchronized (bench) {
+        synchronized (server) {
             return generators.size();
         }
     }
@@ -248,7 +248,7 @@ final class BenchSocket extends WebSocketServer {
     /** Every request this bench answered, in order - what a teardown that has
      *  to happen BEFORE the farewell is asserted against. */
     List<MessageType> conversation() {
-        synchronized (bench) {
+        synchronized (server) {
             return List.copyOf(conversation);
         }
     }
@@ -265,7 +265,7 @@ final class BenchSocket extends WebSocketServer {
 
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-        synchronized (bench) {
+        synchronized (server) {
             // Spec 4.1: the locks a session held go back with it.
             locked.clear();
         }
@@ -304,7 +304,7 @@ final class BenchSocket extends WebSocketServer {
             selectSeen.countDown();
             pause(selectDelayMs);
         }
-        synchronized (bench) {
+        synchronized (server) {
             answer(conn, id, request);
         }
     }

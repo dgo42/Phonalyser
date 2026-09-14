@@ -205,7 +205,7 @@ class GeneratorSessionTest {
     }
 
     @AfterEach
-    void giveTheBenchBack() {
+    void giveTheServerBack() {
         generator.closeAll();
         captures.closeAll();
         managerFor().setCards(null);
@@ -283,7 +283,7 @@ class GeneratorSessionTest {
     }
 
     @Test
-    void aLaneOnADeviceThisBenchHasNoCardForOpensAtTheUnitFullScale() {
+    void aLaneOnADeviceThisServerHasNoCardForOpensAtTheUnitFullScale() {
         open();
         generator.config(FIRST_GEN_ID, config()
                 .put(NetFields.FORM, GenSignalForm.SINE.name())
@@ -300,7 +300,7 @@ class GeneratorSessionTest {
     }
 
     @Test
-    void aLaneOnACardedDeviceOpensAtTheBenchsOwnFullScale() {
+    void aLaneOnACardedDeviceOpensAtTheServersOwnFullScale() {
         cards.card(CARD_NAME, StubDeviceManager.OUTPUT, false, CARD_FS_LEFT, CARD_FS_RIGHT,
                 false);
 
