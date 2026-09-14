@@ -148,6 +148,12 @@ public class NetFields {
      *  module regardless of platform, so CoreAudio is available on Windows and
      *  not operational there. */
     public static final String OPERATIONAL = "operational";
+    /** A backend entry of {@code backend.list}, {@code devices.list} and the
+     *  {@code backend.select} answer: the backend's devices carry a STATIC card
+     *  built from the device itself (a QA40x's EEPROM factors) - one card per
+     *  device, neither chosen, authored nor edited by a client, so a chooser
+     *  shows it and offers no choice (v1.2).  Absent reads as false. */
+    public static final String STATIC_CARD = "staticCard";
     /** A backend's device array inside {@link #BACKENDS}. */
     public static final String DEVICES = "devices";
     /** Device ref: the backend's device index, validated against {@link #NAME}. */
@@ -211,6 +217,9 @@ public class NetFields {
     /** {@code device.setActiveRange}: the label of the range row that becomes the
      *  active one on the device's card (spec 4.3, v1.1). */
     public static final String RANGE = "range";
+    /** {@code device.renameRange}: the label the row named by {@link #RANGE}
+     *  carries from now on (spec 4.3, v1.2). */
+    public static final String NEW_LABEL = "newLabel";
     /** {@code device.setActiveRange}: which channel the new active range applies
      *  to - {@link #BOTH} (the LINKED / MONO case), {@code "left"} or
      *  {@code "right"} (an INDEPENDENT card, whose two channels sit on their own

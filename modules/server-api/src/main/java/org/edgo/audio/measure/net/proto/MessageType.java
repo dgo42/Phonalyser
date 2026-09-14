@@ -53,8 +53,10 @@ public enum MessageType {
     DEVICE_SET_CALIBRATION("device.setCalibration"),
     DEVICE_SET_CARD("device.setCard"),
     DEVICE_SET_ACTIVE_RANGE("device.setActiveRange"),
+    DEVICE_RENAME_RANGE("device.renameRange"),
     CARDS_LIST("cards.list"),
     CARDS_PUT("cards.put"),
+    CARDS_UPDATE("cards.update"),
     EV_DEVICES_CHANGED("ev.devices.changed"),
     EV_DEVICE_ERROR("ev.device.error"),
 
