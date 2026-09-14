@@ -106,6 +106,9 @@ class ClientSessionTest {
      *  nothing here can be mistaken for a QA40x attenuator position. */
     private static final String PUT_RANGE_LABEL = "default";
     private static final String OTHER_PUT_RANGE_LABEL = "attenuated";
+    private static final String RENAMED_RANGE_LABEL = "0 dBV";
+    private static final String RENAMED_CARD = "Bench ADC 2";
+    private static final String TAKEN_CARD = "Other bench ADC";
 
     private final ServerConfig config =
             new ServerConfig(new String[] {"--name", SERVER_NAME});
@@ -965,6 +968,107 @@ class ClientSessionTest {
                         + "against another channel's range");
     }
 
+    // ── device.renameRange - spec 4.3 v1.2 ───────────────────────────────────
+
+    /** The label is the key the active marker points at, so the marker follows
+     *  the renamed row and the full scale in force stays what it was. */
+    @Test
+    void renamingTheActiveRowKeepsItActiveAndItsFullScaleInForce() {
+        cards.rangedCard(BINDABLE_CARD, DEVICE_NAME, true, PUT_RANGE_LABEL, LOW_RANGE_FS,
+                OTHER_PUT_RANGE_LABEL, HIGH_RANGE_FS);
+        greet(session, CLIENT_NAME);
+        acquire(session, REQUEST_ID, true);
+
+        session.onMessage(renameRange(SECOND_REQUEST_ID, PUT_RANGE_LABEL, RENAMED_RANGE_LABEL));
+
+        assertTrue(channel.responseTo(SECOND_REQUEST_ID).isOk());
+        DeviceEndpointConfig endpoint =
+                cards.getPrefs().resolveDeviceProfile(DEVICE_NAME).getInput();
+        assertEquals(RENAMED_RANGE_LABEL, endpoint.getActiveRangeLeft(),
+                "the marker followed the row it pointed at");
+        assertEquals(LOW_RANGE_FS, catalog.calibration(
+                new DeviceLock(AudioBackendType.QA40X, DEVICE_INDEX, true), DEVICE_NAME)
+                .fsRmsLeft(), EPS, "and nothing measured changes meaning");
+    }
+
+    @Test
+    void renamingARangeWithoutTheLockIsNotLocked() {
+        cards.rangedCard(BINDABLE_CARD, DEVICE_NAME, true, PUT_RANGE_LABEL, LOW_RANGE_FS,
+                OTHER_PUT_RANGE_LABEL, HIGH_RANGE_FS);
+        greet(session, CLIENT_NAME);
+
+        session.onMessage(renameRange(REQUEST_ID, PUT_RANGE_LABEL, RENAMED_RANGE_LABEL));
+
+        assertTrue(channel.responseTo(REQUEST_ID).getError().is(ErrorCode.NOT_LOCKED),
+                "the label is what a later range move names");
+        assertEquals(PUT_RANGE_LABEL,
+                cards.getPrefs().resolveDeviceProfile(DEVICE_NAME).getInput().getActiveRangeLeft());
+    }
+
+    @Test
+    void renamingOntoALabelAnotherRowCarriesIsABadRequest() {
+        cards.rangedCard(BINDABLE_CARD, DEVICE_NAME, true, PUT_RANGE_LABEL, LOW_RANGE_FS,
+                OTHER_PUT_RANGE_LABEL, HIGH_RANGE_FS);
+        greet(session, CLIENT_NAME);
+        acquire(session, REQUEST_ID, true);
+
+        session.onMessage(renameRange(SECOND_REQUEST_ID, PUT_RANGE_LABEL, OTHER_PUT_RANGE_LABEL));
+
+        assertTrue(channel.responseTo(SECOND_REQUEST_ID).getError().is(ErrorCode.BAD_REQUEST),
+                "two rows under one label would leave the marker pointing at either");
+        assertEquals(PUT_RANGE_LABEL,
+                cards.getPrefs().resolveDeviceProfile(DEVICE_NAME).getInput().getActiveRangeLeft());
+    }
+
+    // ── cards.update - spec 4.3 v1.2 ─────────────────────────────────────────
+
+    /** The operator's card editor on a bench card: the backend's own manager
+     *  replaces the card under its new name, the binding that named it
+     *  follows, and every client hears. */
+    @Test
+    void anEditedCardIsReplacedUnderItsNewNameWithItsBindingAndTellsEveryClient() {
+        cards.card(BINDABLE_CARD, DEVICE_NAME, true, FS_RMS_LEFT, FS_RMS_RIGHT, false);
+        cards.getPrefs().bindDeviceToCard(DEVICE_NAME, BINDABLE_CARD);
+        greet(session, CLIENT_NAME);
+        AtomicInteger broadcasts = new AtomicInteger();
+        locks.addChangeListener(broadcasts::incrementAndGet);
+
+        session.onMessage(cardsUpdate(REQUEST_ID, BINDABLE_CARD, RENAMED_CARD));
+
+        assertTrue(channel.responseTo(REQUEST_ID).isOk());
+        assertNull(cards.getPrefs().findAudioDeviceProfile(BINDABLE_CARD), "the old name is gone");
+        assertNotNull(cards.getPrefs().findAudioDeviceProfile(RENAMED_CARD));
+        assertEquals(RENAMED_CARD, cards.getPrefs().boundCardName(DEVICE_NAME),
+                "the binding followed the rename");
+        assertEquals(1, broadcasts.get(), "the card may be in force for a device");
+    }
+
+    @Test
+    void editingACardTheServerDoesNotHaveIsABadRequest() {
+        cards.card(BINDABLE_CARD, DEVICE_NAME, true, FS_RMS_LEFT, FS_RMS_RIGHT, false);
+        greet(session, CLIENT_NAME);
+
+        session.onMessage(cardsUpdate(REQUEST_ID, BINDABLE_CARD, RENAMED_CARD)
+                .put(NetFields.NAME, "no such card"));
+
+        assertTrue(channel.responseTo(REQUEST_ID).getError().is(ErrorCode.BAD_REQUEST),
+                "cards.update replaces, cards.put creates");
+        assertNotNull(cards.getPrefs().findAudioDeviceProfile(BINDABLE_CARD));
+    }
+
+    @Test
+    void renamingACardOntoANameTheServerHasIsABadRequest() {
+        cards.card(BINDABLE_CARD, DEVICE_NAME, true, FS_RMS_LEFT, FS_RMS_RIGHT, false);
+        cards.card(TAKEN_CARD, SECOND_DEVICE_NAME, true, FS_RMS_LEFT, FS_RMS_RIGHT, false);
+        greet(session, CLIENT_NAME);
+
+        session.onMessage(cardsUpdate(REQUEST_ID, BINDABLE_CARD, TAKEN_CARD));
+
+        assertTrue(channel.responseTo(REQUEST_ID).getError().is(ErrorCode.BAD_REQUEST),
+                "two cards under one name would resolve to either");
+        assertNotNull(cards.getPrefs().findAudioDeviceProfile(BINDABLE_CARD));
+    }
+
     @Test
     void theCardListNeedsNoLockAndSaysWhatEachCardCanServe() {
         cards.card(BINDABLE_CARD, DEVICE_NAME, true, FS_RMS_LEFT, FS_RMS_RIGHT, false);
@@ -1213,6 +1317,25 @@ class ClientSessionTest {
         NetMessage request = deviceRef(MessageType.DEVICE_SET_ACTIVE_RANGE, id, true)
                 .put(NetFields.RANGE, label);
         return channel == null ? request : request.put(NetFields.CHANNEL, channel);
+    }
+
+    /** {@code cards.update} carrying the bench's card {@code name} as the card
+     *  editor returns it, renamed to {@code newName} - a detached copy through
+     *  the card codec, so the store's own object is never edited in place. */
+    private NetMessage cardsUpdate(int id, String name, String newName) {
+        AudioDeviceProfile edited = cards.getPrefs().cardFromMap(
+                cards.getPrefs().cardToMap(cards.getPrefs().findAudioDeviceProfile(name)));
+        edited.setName(newName);
+        return new NetMessage(MessageType.CARDS_UPDATE, id)
+                .put(NetFields.BACKEND, AudioBackendType.QA40X.name())
+                .put(NetFields.NAME, name)
+                .put(NetFields.CONTENT, codec.toNode(cards.getPrefs().cardToMap(edited)));
+    }
+
+    private NetMessage renameRange(int id, String label, String newLabel) {
+        return deviceRef(MessageType.DEVICE_RENAME_RANGE, id, true)
+                .put(NetFields.RANGE, label)
+                .put(NetFields.NEW_LABEL, newLabel);
     }
 
     private NetMessage setCalibration(int id, String channel, double fsRms) {

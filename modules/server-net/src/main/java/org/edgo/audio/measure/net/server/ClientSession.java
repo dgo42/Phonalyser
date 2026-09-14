@@ -34,6 +34,7 @@ import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.net.proto.ErrorCode;
@@ -262,8 +263,10 @@ public final class ClientSession {
                 case DEVICE_SET_CALIBRATION: deviceSetCalibration(id, message); break;
                 case DEVICE_SET_CARD: deviceSetCard(id, message); break;
                 case DEVICE_SET_ACTIVE_RANGE: deviceSetActiveRange(id, message); break;
+                case DEVICE_RENAME_RANGE: deviceRenameRange(id, message); break;
                 case CARDS_LIST:      cardsList(id); break;
                 case CARDS_PUT:       cardsPut(id, message); break;
+                case CARDS_UPDATE:    cardsUpdate(id, message); break;
                 case CAPTURE_OPEN:    captureOpen(id, message); break;
                 case CAPTURE_START:   captureCommand(id, message, captures::start); break;
                 case CAPTURE_STOP:    captureCommand(id, message, captures::stop); break;
@@ -619,6 +622,46 @@ public final class ClientSession {
         channel.send(new NetMessage(id));
     }
 
+    /**
+     * Spec 4.3's {@code device.renameRange}: an operator on a client renamed a
+     * row of the card in force for a device plugged in here - the label is the
+     * card's, and the card lives where the device is.  Like
+     * {@link #deviceSetCalibration}, the write goes to the device's own manager,
+     * which holds the card.
+     *
+     * <p>Gated like {@link #deviceSetActiveRange}: the ref's name is validated
+     * and the device lock is required, because the label is the key the active
+     * marker points at.  No broadcast: the marker follows the row, so the
+     * {@code cal} every client holds is unchanged.
+     */
+    private void deviceRenameRange(int id, NetMessage message) {
+        DeviceLock lock = deviceOf(message);
+        String name = message.optString(NetFields.NAME);
+        DeviceRef ref = catalog.resolve(lock, name);
+        if (locks.owner(lock) != this) {
+            fail(id, ErrorCode.NOT_LOCKED,
+                    lock + " must be acquired before a range of its card can be renamed");
+            return;
+        }
+        String label = message.optString(NetFields.RANGE);
+        String newLabel = message.optString(NetFields.NEW_LABEL);
+        if (label == null || label.isEmpty() || newLabel == null || newLabel.isBlank()) {
+            fail(id, ErrorCode.BAD_REQUEST, "device.renameRange needs a range and a newLabel");
+            return;
+        }
+        if (!AudioBackend.instance().manager(lock.backend())
+                .renameRange(ref, lock.input(), label, newLabel)) {
+            fail(id, ErrorCode.BAD_REQUEST, "no card in force for " + lock
+                    + " has a range named '" + label + "' that can become '" + newLabel + "'");
+            return;
+        }
+        if (log.isInfoEnabled()) {
+            log.info("net session {}: {} range '{}' is now '{}'", clientName, lock,
+                    label, newLabel);
+        }
+        channel.send(new NetMessage(id));
+    }
+
     /** The {@code channel} scope of {@code device.setActiveRange} and
      *  {@code device.setCalibration} as the store's own enum: null for
      *  {@code both} (and for an absent field), which is what a LINKED or MONO
@@ -647,6 +690,41 @@ public final class ClientSession {
             log.info("net session {}: card '{}' stored on this bench", clientName,
                     message.getNode(NetFields.CONTENT).path(NetFields.NAME).asText());
         }
+        channel.send(new NetMessage(id));
+    }
+
+    /**
+     * Spec 4.3's {@code cards.update}: a client hands back one of this server's
+     * cards, edited in its card editor - the card lives where the devices are,
+     * so the named backend's own manager performs the replace, exactly as
+     * {@link #deviceSetCalibration} hands a value to the device's manager.
+     *
+     * <p>No lock, as for {@code cards.put}: a card may serve several devices, and
+     * the write is the operator's card edit.  It DOES broadcast: the card may be
+     * in force for a device, and its edit may have moved the full scale every
+     * client reads for it.
+     */
+    private void cardsUpdate(int id, NetMessage message) {
+        String backendName = message.optString(NetFields.BACKEND);
+        AudioBackendType backend;
+        try {
+            backend = AudioBackendType.valueOf(backendName);
+        } catch (IllegalArgumentException | NullPointerException e) {
+            fail(id, ErrorCode.BAD_REQUEST, "cards.update needs a known backend: " + backendName);
+            return;
+        }
+        String name = message.optString(NetFields.NAME);
+        AudioDeviceProfile card = catalog.cardOf(codec.toMap(message.getNode(NetFields.CONTENT)));
+        if (!AudioBackend.instance().manager(backend).updateCard(name, card)) {
+            fail(id, ErrorCode.BAD_REQUEST, "this server has no card named '" + name
+                    + "' to replace, or already has one named as the edited card");
+            return;
+        }
+        if (log.isInfoEnabled()) {
+            log.info("net session {}: card '{}' replaced on this bench by '{}'", clientName, name,
+                    card.getName());
+        }
+        locks.notifyDevicesChanged();
         channel.send(new NetMessage(id));
     }
 

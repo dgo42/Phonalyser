@@ -178,6 +178,8 @@ public final class DeviceCatalog {
             backend.put(NetFields.AVAILABLE, audio.isAvailable(type));
             backend.put(NetFields.OPERATIONAL, operational);
             backend.put(NetFields.HAS_BIT_DEPTH, hasBitDepth(devices, type));
+            backend.put(NetFields.STATIC_CARD,
+                    served.contains(type) && audio.manager(type).staticDeviceCard());
             backends.add(backend);
         }
         return codec.toNode(backends);
@@ -538,6 +540,13 @@ public final class DeviceCatalog {
         cards.putAudioDeviceProfile(card);
     }
 
+    /** One card as a request carries it - the {@code content} of
+     *  {@code cards.put} and {@code cards.update} - read by the store's own
+     *  codec, or null for no content. */
+    public AudioDeviceProfile cardOf(Map<String, Object> content) {
+        return content == null ? null : cards.cardFromMap(content);
+    }
+
     /**
      * Spec 4.3's {@code device.setActiveRange}: moves the active marker of the
      * card in force for {@code name} to the row {@code label}, and persists.
@@ -646,6 +655,7 @@ public final class DeviceCatalog {
             }
             Map<String, Object> backend = new LinkedHashMap<>();
             backend.put(NetFields.BACKEND, type.name());
+            backend.put(NetFields.STATIC_CARD, audio.manager(type).staticDeviceCard());
             backend.put(NetFields.DEVICES, entries);
             backends.add(backend);
         }
