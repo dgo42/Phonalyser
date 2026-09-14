@@ -120,7 +120,7 @@ class CardRenderIdentityTest {
         assertNotEquals(baseline(), identityOf(added), "so is a row that was added");
 
         AudioDeviceProfile moved = cardA();
-        moved.getInput().setActiveRange(ROW_2);
+        moved.getInput().setActiveRangeLeft(ROW_2);
         assertNotEquals(baseline(), identityOf(moved), "the active radio sits on another row");
 
         AudioDeviceProfile movedRight = cardA();
@@ -199,7 +199,7 @@ class CardRenderIdentityTest {
         for (String label : rowLabels) {
             endpoint.getRanges().add(range(label));
         }
-        endpoint.setActiveRange(rowLabels[0]);
+        endpoint.setActiveRangeLeft(rowLabels[0]);
         return card;
     }
 

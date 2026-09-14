@@ -226,8 +226,8 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
                 editCopy.findAudioDeviceProfile(cardName), activeIn, activeOut);
         // The bench's state, not the stored card's: the analyzer is actually
         // running under these ranges right now.
-        card.getInput().setActiveRange(Qa40xProtocol.rangeLabel(activeIn));
-        card.getOutput().setActiveRange(Qa40xProtocol.rangeLabel(activeOut));
+        card.getInput().setActiveRangeLeft(Qa40xProtocol.rangeLabel(activeIn));
+        card.getOutput().setActiveRangeLeft(Qa40xProtocol.rangeLabel(activeOut));
         // What this name held before the render, so OK can put it back: the
         // copy is the dialog's to show from, never this installation's to keep.
         // Re-selecting the same bench must not record the rendered card as the
@@ -521,7 +521,7 @@ public final class Qa40xSettingsUi implements BackendSettingsUi {
         if (card == null) {
             return null;
         }
-        String label = (input ? card.getInput() : card.getOutput()).getActiveRange();
+        String label = (input ? card.getInput() : card.getOutput()).getActiveRangeLeft();
         int dbv = Qa40xProtocol.rangeDbv(label, input ? Qa40xProtocol.inputRangeDbvValues()
                 : Qa40xProtocol.outputRangeDbvValues(), NO_RANGE);
         return dbv == NO_RANGE ? null : dbv;

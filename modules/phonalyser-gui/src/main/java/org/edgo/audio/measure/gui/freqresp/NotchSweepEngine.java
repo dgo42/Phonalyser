@@ -159,7 +159,8 @@ public final class NotchSweepEngine implements AutoCloseable {
      * <p>{@code sweepSamples} and {@code fadeSamples} are CAPTURE samples - the
      * loop is one duration, and the DAC's own count for it is derived here.
      */
-    public void start(double f0, double f1, double ampVrms, double dacFsVrms,
+    public void start(double f0, double f1, double ampVrms,
+                      double dacFsVrmsLeft, double dacFsVrmsRight,
                       int sweepSamples, int fadeSamples,
                       OutputChannels outputChannels) throws Exception {
         loopChannels = outputChannels;
@@ -186,7 +187,7 @@ public final class NotchSweepEngine implements AutoCloseable {
             // The window the deconvolution will divide comes off THIS stream,
             // so its reference is rendered on this clock and with its count.
             reference = new SignalGenerator(f0, f1, sweepSamples, 0,
-                    captureRateHz, ampVrms, ampVrms, dacFsVrms, dacFsVrms);
+                    captureRateHz, ampVrms, ampVrms, dacFsVrmsLeft, dacFsVrmsRight);
 
             // Loop ON with Hann fades at each cycle boundary; the SAME fades
             // (the same duration, counted on each side's clock) shape the
@@ -194,7 +195,7 @@ public final class NotchSweepEngine implements AutoCloseable {
             GeneratorRun run = new GeneratorRun(GenSignalForm.LOG_SWEEP,
                     0.0, ampVrms, ampVrms,   // both lanes alike
                     playbackRateHz, playbackBitDepth, ditherBits, ditherBits,
-                    dacFsVrms, dacFsVrms, outputChannels,
+                    dacFsVrmsLeft, dacFsVrmsRight, outputChannels,
                     true,    // the loop's period is samples on the asked clock
                     new GeneratorRun.SweepSpec(f0, f1, playSamples, 0,
                             playFade, playFade, true));

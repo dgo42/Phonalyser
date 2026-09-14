@@ -842,7 +842,7 @@ class ClientSessionTest {
         assertNotNull(stored, "the bench stores it where the device is plugged in");
         assertEquals(2, stored.getInput().getRanges().size(),
                 "WHOLE: the range table is what makes the values mean something");
-        assertEquals(PUT_RANGE_LABEL, stored.getInput().getActiveRange());
+        assertEquals(PUT_RANGE_LABEL, stored.getInput().getActiveRangeLeft());
         assertEquals(LOW_RANGE_FS, stored.getInput().getRanges().get(0).getFsLeft(), EPS);
         assertEquals(0, broadcasts.get(),
                 "no device's cal moved, so no client has anything to re-read");
@@ -1195,7 +1195,7 @@ class ClientSessionTest {
         endpoint.setCalibrationFromDevice(fromDevice);
         endpoint.getRanges().add(range(PUT_RANGE_LABEL, LOW_RANGE_FS));
         endpoint.getRanges().add(range(OTHER_PUT_RANGE_LABEL, HIGH_RANGE_FS));
-        endpoint.setActiveRange(PUT_RANGE_LABEL);
+        endpoint.setActiveRangeLeft(PUT_RANGE_LABEL);
         return new NetMessage(MessageType.CARDS_PUT, id)
                 .put(NetFields.CONTENT, codec.toNode(cards.getPrefs().cardToMap(card)));
     }

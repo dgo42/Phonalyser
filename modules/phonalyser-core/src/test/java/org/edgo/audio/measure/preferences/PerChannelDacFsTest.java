@@ -52,7 +52,7 @@ class PerChannelDacFsTest {
         DeviceEndpointConfig ep = new DeviceEndpointConfig();
         ep.setChannels(mode);
         for (DeviceRange r : rows) ep.getRanges().add(r);
-        ep.setActiveRange(activeLeft);
+        ep.setActiveRangeLeft(activeLeft);
         ep.setActiveRangeRight(activeRight);
         return ep;
     }

@@ -53,7 +53,7 @@ class PerChannelAdcFsTest {
         DeviceEndpointConfig ep = new DeviceEndpointConfig();
         ep.setChannels(mode);
         for (DeviceRange r : rows) ep.getRanges().add(r);
-        ep.setActiveRange(activeLeft);
+        ep.setActiveRangeLeft(activeLeft);
         ep.setActiveRangeRight(activeRight);
         return ep;
     }
@@ -207,7 +207,7 @@ class PerChannelAdcFsTest {
         assertEquals(1, ep.getRanges().size(), "one row was created");
         DeviceRange seeded = ep.getRanges().get(0);
         assertEquals("default", seeded.getLabel());
-        assertEquals("default", ep.getActiveRange(),
+        assertEquals("default", ep.getActiveRangeLeft(),
                 "and selected as active");
         assertEquals(2.22, seeded.getFsLeft(),  EPS);
         assertEquals(2.22, seeded.getFsRight(), EPS,

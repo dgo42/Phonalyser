@@ -250,7 +250,7 @@ class DeviceStoreTest {
         row.setFsRight(1.0);
         p.getInput().setChannels(DeviceChannelMode.LINKED);
         p.getInput().getRanges().add(row);
-        p.getInput().setActiveRange("default");
+        p.getInput().setActiveRangeLeft("default");
         return p;
     }
 
@@ -381,7 +381,7 @@ class DeviceStoreTest {
         assertNotNull(adc, "the ADC seed lands as a profile");
         assertEquals(List.of("Fixture ADC"), adc.getMatch());
         assertEquals(DeviceChannelMode.INDEPENDENT, adc.getInput().getChannels());
-        assertEquals("1.7V", adc.getInput().getActiveRange());
+        assertEquals("1.7V", adc.getInput().getActiveRangeLeft());
         assertEquals("1.7V", adc.getInput().getActiveRangeRight());
         assertEquals(2, adc.getInput().getRanges().size());
         assertEquals(1.7,  adc.getInput().getRanges().get(0).getFsLeft(),  EPS);
@@ -537,7 +537,7 @@ class DeviceStoreTest {
         row.setFsRight(2.0);
         prof.getOutput().setChannels(DeviceChannelMode.LINKED);
         prof.getOutput().getRanges().add(row);
-        prof.getOutput().setActiveRange("default");
+        prof.getOutput().setActiveRangeLeft("default");
         src.putAudioDeviceProfile(prof);
         // Stamp the current content version so the store is on-version and the
         // once-per-content-version merge stays dormant - this is a pure round-trip.
@@ -615,7 +615,7 @@ class DeviceStoreTest {
         row.setCalibrated(true);
         p.getInput().setChannels(DeviceChannelMode.LINKED);
         p.getInput().getRanges().add(row);
-        p.getInput().setActiveRange("default");
+        p.getInput().setActiveRangeLeft("default");
         return p;
     }
 
@@ -661,7 +661,7 @@ class DeviceStoreTest {
         nominal.setFsRight(2.5);
         prof.getInput().getRanges().add(calibrated);
         prof.getInput().getRanges().add(nominal);
-        prof.getInput().setActiveRange("A");
+        prof.getInput().setActiveRangeLeft("A");
         src.putAudioDeviceProfile(prof);
         writeDevicesTo(src, store);
 
@@ -709,7 +709,7 @@ class DeviceStoreTest {
         DeviceRange a = new DeviceRange();
         a.setLabel("A"); a.setFsLeft(1.0); a.setFsRight(1.0);
         card.getInput().getRanges().add(a);
-        card.getInput().setActiveRange("A");
+        card.getInput().setActiveRangeLeft("A");
         card.getInput().setActiveRangeRight("A");
         seed.putAudioDeviceProfile(card);
         writeDevicesTo(seed, store);
@@ -1020,7 +1020,7 @@ class DeviceStoreTest {
         assertEquals(9.8, r99.getFsRight(), EPS);
 
         // The user's active-range selection is untouched.
-        assertEquals("1.7V", cosmos.getInput().getActiveRange());
+        assertEquals("1.7V", cosmos.getInput().getActiveRangeLeft());
         assertEquals("1.7V", cosmos.getInput().getActiveRangeRight());
 
         // The user-created card is untouched (structure + calibration + match).
@@ -1351,7 +1351,7 @@ class DeviceStoreTest {
         assertFalse(findRow(in.getRanges(), "0dB").isCalibrated(),
                 "a device-provided row is never marked calibrated");
         // The switchable active-range selection the user made survives the merge.
-        assertEquals("18dB", in.getActiveRange(),
+        assertEquals("18dB", in.getActiveRangeLeft(),
                 "the user's active-range choice survives (the ranges stay switchable)");
     }
 }

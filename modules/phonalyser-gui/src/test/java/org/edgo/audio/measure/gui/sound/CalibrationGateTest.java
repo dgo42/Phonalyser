@@ -122,7 +122,7 @@ class CalibrationGateTest {
         DeviceEndpointConfig endpoint = profile.getInput();
         endpoint.setChannels(DeviceChannelMode.LINKED);
         endpoint.getRanges().add(row);
-        endpoint.setActiveRange(RANGE_LABEL);
+        endpoint.setActiveRangeLeft(RANGE_LABEL);
         return profile;
     }
 }

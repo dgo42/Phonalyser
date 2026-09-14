@@ -1305,7 +1305,7 @@ public final class PreferencesDialog {
         AudioDeviceProfile profile = prefs.resolveDeviceProfile(dev);
         if (profile == null) return null;
         DeviceEndpointConfig endPoint = input ? profile.getInput() : profile.getOutput();
-        String newLabel = endPoint == null ? null : endPoint.getActiveRange();
+        String newLabel = endPoint == null ? null : endPoint.getActiveRangeLeft();
         if (newLabel == null) return null;
         return new ActiveRange(input, newLabel);
     }
@@ -2404,16 +2404,16 @@ public final class PreferencesDialog {
      *  crosshair Calibrate flows and persists on {@link DeviceRange}. */
     private static final class RangeRow {
         Composite        composite;
-        /** The LEFT-channel "active range" radio (drives {@code activeRange}).  In
+        /** The LEFT-channel "active range" radio (drives {@code activeRangeLeft}).  In
          *  LINKED mode this is the sole radio.  Each row sits in its own Composite,
-         *  so the radios do NOT auto-exclude - {@link CardSection#userSetActive}
+         *  so the radios do NOT auto-exclude - {@link CardSection#userSetActiveLeft}
          *  clears the siblings by hand. */
-        Button           activeRadio;
+        Button           activeRadioLeft;
         /** The RIGHT-channel active-range radio (drives {@code activeRangeRight}),
          *  present only in INDEPENDENT mode; {@code null} in LINKED mode. */
         Button           activeRadioRight;
-        Text             labelField;
-        /** INDEPENDENT-mode mirror of {@link #labelField} in the Right group -
+        Text             labelFieldLeft;
+        /** INDEPENDENT-mode mirror of {@link #labelFieldLeft} in the Right group -
          *  both show/edit the SAME range label (synced on rename); {@code null}
          *  in LINKED / MONO mode. */
         Text             labelFieldRight;
@@ -3083,17 +3083,17 @@ public final class PreferencesDialog {
 
             if (independent) createSideCaption(row, "scope.tab.left", isRow0);
 
-            Button activeRadio = new Button(row, SWT.RADIO);
-            activeRadio.setToolTipText(I18n.t("preferences.audio.range.active.tooltip"));
-            activeRadio.setSelection(range.getLabel().equals(ep.getActiveRange()));
-            activeRadio.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false));
+            Button activeRadioLeft = new Button(row, SWT.RADIO);
+            activeRadioLeft.setToolTipText(I18n.t("preferences.audio.range.active.tooltip"));
+            activeRadioLeft.setSelection(range.getLabel().equals(ep.getActiveRangeLeft()));
+            activeRadioLeft.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false));
 
-            Text labelField = new Text(row, SWT.BORDER);
+            Text labelFieldLeft = new Text(row, SWT.BORDER);
             // The freed FS column now falls to the label - let it grab the slack.
-            labelField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-            labelField.setText(range.displayLabelOrKey());
-            labelField.setToolTipText(I18n.t("preferences.audio.range.label.tooltip"));
-            labelField.setEditable(!deviceProvided);
+            labelFieldLeft.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+            labelFieldLeft.setText(range.displayLabelOrKey());
+            labelFieldLeft.setToolTipText(I18n.t("preferences.audio.range.label.tooltip"));
+            labelFieldLeft.setEditable(!deviceProvided);
 
             Button activeRadioRight = null;
             Text labelFieldRight = null;
@@ -3132,9 +3132,9 @@ public final class PreferencesDialog {
 
             RangeRow r = new RangeRow();
             r.composite        = row;
-            r.activeRadio      = activeRadio;
+            r.activeRadioLeft  = activeRadioLeft;
             r.activeRadioRight = activeRadioRight;
-            r.labelField       = labelField;
+            r.labelFieldLeft   = labelFieldLeft;
             r.labelFieldRight  = labelFieldRight;
             r.range            = range;
             rows.add(r);
@@ -3142,9 +3142,9 @@ public final class PreferencesDialog {
             // The row is NO_RADIO_GROUP, so a click TOGGLES the radio instead of
             // selecting it - bounce back a click that would leave the column with
             // nothing selected (no model change), and only act on a real pick.
-            activeRadio.addListener(SWT.Selection, e -> {
-                if (!activeRadio.getSelection()) { activeRadio.setSelection(true); return; }
-                userSetActive(ep, r);
+            activeRadioLeft.addListener(SWT.Selection, e -> {
+                if (!activeRadioLeft.getSelection()) { activeRadioLeft.setSelection(true); return; }
+                userSetActiveLeft(ep, r);
             });
             if (activeRadioRight != null) {
                 Button rr = activeRadioRight;
@@ -3156,7 +3156,7 @@ public final class PreferencesDialog {
             // A device-provided endpoint owns its labels + range set - only the
             // active-range radios above stay live; rename / add / remove are off.
             if (!deviceProvided) {
-                labelField.addListener(SWT.FocusOut,   e -> userRenameRange(ep, r, labelField));
+                labelFieldLeft.addListener(SWT.FocusOut, e -> userRenameRange(ep, r, labelFieldLeft));
                 if (labelFieldRight != null) {
                     Text lfr = labelFieldRight;
                     lfr.addListener(SWT.FocusOut, e -> userRenameRange(ep, r, lfr));
@@ -3177,12 +3177,12 @@ public final class PreferencesDialog {
             caption.setVisible(isRow0);
         }
 
-        private void userSetActive(DeviceEndpointConfig ep, RangeRow r) {
-            ep.setActiveRange(r.range.getLabel());
+        private void userSetActiveLeft(DeviceEndpointConfig ep, RangeRow r) {
+            ep.setActiveRangeLeft(r.range.getLabel());
             // Each row is its own NO_RADIO_GROUP Composite, so no radio ever
             // auto-excludes another - this column's exclusivity is by hand.
             for (RangeRow other : rows) {
-                if (other != r && !other.activeRadio.isDisposed()) other.activeRadio.setSelection(false);
+                if (other != r && !other.activeRadioLeft.isDisposed()) other.activeRadioLeft.setSelection(false);
             }
             stageServerRange(ep, r.range.getLabel(), Channel.L);
             commit();
@@ -3214,7 +3214,7 @@ public final class PreferencesDialog {
                     ep.getChannels() == DeviceChannelMode.INDEPENDENT ? side : null);
         }
 
-        /** RIGHT-column counterpart of {@link #userSetActive} (INDEPENDENT mode):
+        /** RIGHT-column counterpart of {@link #userSetActiveLeft} (INDEPENDENT mode):
          *  drives {@code activeRangeRight} and clears the sibling right radios.
          *  The LEFT radios are untouched - the two columns are independent. */
         private void userSetActiveRight(DeviceEndpointConfig ep, RangeRow r) {
@@ -3237,11 +3237,11 @@ public final class PreferencesDialog {
             String wanted = edited.getText().trim();
             if (wanted.isEmpty()) { syncLabelFields(r, r.range.getLabel()); return; }
             String unique = uniqueLabel(ep, wanted, r.range);
-            boolean wasActive      = r.range.getLabel().equals(ep.getActiveRange());
+            boolean wasActiveLeft  = r.range.getLabel().equals(ep.getActiveRangeLeft());
             boolean wasActiveRight = r.range.getLabel().equals(ep.getActiveRangeRight());
             r.range.setLabel(unique);
             syncLabelFields(r, unique);
-            if (wasActive)      ep.setActiveRange(unique);
+            if (wasActiveLeft)  ep.setActiveRangeLeft(unique);
             if (wasActiveRight) ep.setActiveRangeRight(unique);
             commit();
         }
@@ -3249,8 +3249,8 @@ public final class PreferencesDialog {
         /** Shows {@code label} in both of the row's label fields (they mirror
          *  one range label; no-op on the missing mirror in LINKED / MONO mode). */
         private void syncLabelFields(RangeRow r, String label) {
-            if (!r.labelField.isDisposed() && !r.labelField.getText().equals(label)) {
-                r.labelField.setText(label);
+            if (!r.labelFieldLeft.isDisposed() && !r.labelFieldLeft.getText().equals(label)) {
+                r.labelFieldLeft.setText(label);
             }
             if (r.labelFieldRight != null && !r.labelFieldRight.isDisposed()
                     && !r.labelFieldRight.getText().equals(label)) {
@@ -3278,8 +3278,8 @@ public final class PreferencesDialog {
             if (idx <= 0) return;
             rows.remove(idx);
             ep.getRanges().remove(r.range);
-            if (r.range.getLabel().equals(ep.getActiveRange()) && !ep.getRanges().isEmpty()) {
-                ep.setActiveRange(ep.getRanges().get(0).getLabel());
+            if (r.range.getLabel().equals(ep.getActiveRangeLeft()) && !ep.getRanges().isEmpty()) {
+                ep.setActiveRangeLeft(ep.getRanges().get(0).getLabel());
             }
             if (r.range.getLabel().equals(ep.getActiveRangeRight()) && !ep.getRanges().isEmpty()) {
                 ep.setActiveRangeRight(ep.getRanges().get(0).getLabel());
@@ -3370,7 +3370,7 @@ public final class PreferencesDialog {
      *  {@link #cardRenderIdentity}. */
     private void appendRangeIdentity(StringBuilder id, DeviceEndpointConfig ep) {
         id.append('[').append(ep.getChannels()).append(ep.isCalibrationFromDevice())
-                .append(ep.getActiveRange()).append('/').append(ep.getActiveRangeRight());
+                .append(ep.getActiveRangeLeft()).append('/').append(ep.getActiveRangeRight());
         for (DeviceRange range : ep.getRanges()) {
             id.append('/').append(range.getLabel())
                     .append('=').append(range.displayLabelOrKey());

@@ -427,7 +427,7 @@ final class StubDeviceManager implements AudioDeviceManager, Qa40xControl {
             return;
         }
         (input ? card.getInput() : card.getOutput())
-                .setActiveRange(dbv + RANGE_LABEL_SUFFIX);
+                .setActiveRangeLeft(dbv + RANGE_LABEL_SUFFIX);
         store.saveDevices();
     }
 

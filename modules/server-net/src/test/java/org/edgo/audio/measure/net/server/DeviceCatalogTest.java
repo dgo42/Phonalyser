@@ -557,7 +557,7 @@ class DeviceCatalogTest {
         assertNotNull(read);
         assertEquals(CARD_NAME, read.getName());
         assertEquals(2, read.getInput().getRanges().size(), "both rows");
-        assertEquals(ACTIVE_RANGE, read.getInput().getActiveRange(),
+        assertEquals(ACTIVE_RANGE, read.getInput().getActiveRangeLeft(),
                 "and which of them is in force");
         assertEquals(ADC_FS_LEFT, read.getInput().getRanges().get(FIRST).getFsLeft(), EPS);
     }

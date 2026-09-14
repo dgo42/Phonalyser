@@ -34,10 +34,10 @@ import lombok.Data;
  *
  * <p>The schema is per-channel-capable from day one: {@link #channels} declares
  * whether the two channels share one range ({@link DeviceChannelMode#LINKED}) or
- * each sit on their own ({@link DeviceChannelMode#INDEPENDENT}).  {@link #activeRange}
+ * each sit on their own ({@link DeviceChannelMode#INDEPENDENT}).  {@link #activeRangeLeft}
  * names the selected row's label; {@link #activeRangeRight} names the right
  * channel's active row and is consulted only in {@code INDEPENDENT} mode (a
- * {@code LINKED} endpoint resolves both channels from {@link #activeRange}).
+ * {@code LINKED} endpoint resolves both channels from {@link #activeRangeLeft}).
  *
  * <p>The full scales IN FORCE - the active row's, per channel, under the mode -
  * are read and written here, where the rows and the markers live
@@ -51,7 +51,7 @@ public class DeviceEndpointConfig {
     private static final String DEFAULT_RANGE_LABEL = "default";
     private DeviceChannelMode channels = DeviceChannelMode.LINKED;
     private List<DeviceRange> ranges   = new ArrayList<>();
-    private String activeRange;
+    private String activeRangeLeft;
     private String activeRangeRight;
 
     /** {@code true} when this direction's full-scale values are OWNED by the
@@ -67,7 +67,7 @@ public class DeviceEndpointConfig {
     /**
      * The full scales in force: the active row's, per channel.  MONO: the one
      * physical channel's {@code fsLeft} fills both.  LINKED: left and right from
-     * the SAME active row.  INDEPENDENT: left from the {@link #activeRange} row,
+     * the SAME active row.  INDEPENDENT: left from the {@link #activeRangeLeft} row,
      * right from the {@link #activeRangeRight} row (a dangling right label falls
      * back to the left marker's row).
      *
@@ -99,8 +99,8 @@ public class DeviceEndpointConfig {
     }
 
     /** The active range row for {@code ch}.  LEFT (and any MONO / LINKED
-     *  endpoint) uses {@link #activeRange}; RIGHT on an INDEPENDENT endpoint uses
-     *  {@link #activeRangeRight}, falling back to the {@code activeRange} row
+     *  endpoint) uses {@link #activeRangeLeft}; RIGHT on an INDEPENDENT endpoint uses
+     *  {@link #activeRangeRight}, falling back to the {@code activeRangeLeft} row
      *  when the right label is unset or dangles.  Both fall back to the first
      *  row, or {@code null} when the table is empty. */
     public DeviceRange activeRange(Channel ch) {
@@ -110,11 +110,11 @@ public class DeviceEndpointConfig {
             for (DeviceRange r : ranges) {
                 if (activeRangeRight.equals(r.getLabel())) return r;
             }
-            // Dangling right label -> fall back to the activeRange (left) row below.
+            // Dangling right label -> fall back to the activeRangeLeft row below.
         }
-        if (activeRange != null) {
+        if (activeRangeLeft != null) {
             for (DeviceRange r : ranges) {
-                if (activeRange.equals(r.getLabel())) return r;
+                if (activeRangeLeft.equals(r.getLabel())) return r;
             }
         }
         return ranges.get(0);
@@ -122,9 +122,9 @@ public class DeviceEndpointConfig {
 
     /**
      * Writes a measured full scale into {@code ch}'s active-range field: LEFT
-     * -> the {@link #activeRange} row's {@code fsLeft}; RIGHT -> the
+     * -> the {@link #activeRangeLeft} row's {@code fsLeft}; RIGHT -> the
      * {@link #activeRangeRight} row's {@code fsRight} on an INDEPENDENT endpoint
-     * (a dangling right label -> the {@code activeRange} row), or the SAME active
+     * (a dangling right label -> the {@code activeRangeLeft} row), or the SAME active
      * row's {@code fsRight} on a LINKED one.  A MONO endpoint has one physical
      * channel, so the value lands on both fields whichever channel names it.
      * An empty table gets a {@value #DEFAULT_RANGE_LABEL} row, selected as
@@ -176,8 +176,8 @@ public class DeviceEndpointConfig {
             row.setLabel(DEFAULT_RANGE_LABEL);
             ranges.add(row);
         }
-        if (activeRange == null) {
-            activeRange = row.getLabel();
+        if (activeRangeLeft == null) {
+            activeRangeLeft = row.getLabel();
         }
         return row;
     }
@@ -188,7 +188,7 @@ public class DeviceEndpointConfig {
     public DeviceEndpointConfig deepCopy() {
         DeviceEndpointConfig c = new DeviceEndpointConfig();
         c.channels              = channels;
-        c.activeRange           = activeRange;
+        c.activeRangeLeft       = activeRangeLeft;
         c.activeRangeRight      = activeRangeRight;
         c.calibrationFromDevice = calibrationFromDevice;
         for (DeviceRange r : ranges) {

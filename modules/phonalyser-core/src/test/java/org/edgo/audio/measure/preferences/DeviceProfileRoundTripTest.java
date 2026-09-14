@@ -149,7 +149,7 @@ class DeviceProfileRoundTripTest {
         p.getInput().setChannels(DeviceChannelMode.INDEPENDENT);
         p.getInput().getRanges().add(perChannel);
         p.getInput().getRanges().add(shared);
-        p.getInput().setActiveRange("DIP 1.7 Vrms");
+        p.getInput().setActiveRangeLeft("DIP 1.7 Vrms");
         p.getInput().setActiveRangeRight("DIP 4.5 Vrms");
 
         DeviceRange out = new DeviceRange();
@@ -158,7 +158,7 @@ class DeviceProfileRoundTripTest {
         out.setFsRight(1.975);
         p.getOutput().setChannels(DeviceChannelMode.LINKED);
         p.getOutput().getRanges().add(out);
-        p.getOutput().setActiveRange("direct");
+        p.getOutput().setActiveRangeLeft("direct");
         return p;
     }
 
@@ -188,7 +188,7 @@ class DeviceProfileRoundTripTest {
 
         DeviceEndpointConfig in = p.getInput();
         assertEquals(DeviceChannelMode.INDEPENDENT, in.getChannels());
-        assertEquals("DIP 1.7 Vrms", in.getActiveRange());
+        assertEquals("DIP 1.7 Vrms", in.getActiveRangeLeft());
         assertEquals("DIP 4.5 Vrms", in.getActiveRangeRight());
         assertEquals(2, in.getRanges().size());
         DeviceRange perCh = in.getRanges().get(0);
@@ -201,7 +201,7 @@ class DeviceProfileRoundTripTest {
 
         DeviceEndpointConfig out = p.getOutput();
         assertEquals(DeviceChannelMode.LINKED, out.getChannels());
-        assertEquals("direct", out.getActiveRange());
+        assertEquals("direct", out.getActiveRangeLeft());
         assertEquals(1, out.getRanges().size());
         assertEquals(1.975, out.getRanges().get(0).getFsLeft(), EPS);
     }
@@ -267,9 +267,9 @@ class DeviceProfileRoundTripTest {
         Preferences dst = detached();
         loadDevicesFrom(dst, store);
         DeviceEndpointConfig in = dst.findAudioDeviceProfile("Cosmos ADC").getInput();
-        assertEquals("DIP 1.7 Vrms", in.getActiveRange(), "map left -> activeRange field");
+        assertEquals("DIP 1.7 Vrms", in.getActiveRangeLeft(), "map left -> activeRange field");
         assertEquals("DIP 4.5 Vrms", in.getActiveRangeRight(), "map right -> activeRangeRight field");
-        assertEquals("direct", dst.findAudioDeviceProfile("Cosmos ADC").getOutput().getActiveRange());
+        assertEquals("direct", dst.findAudioDeviceProfile("Cosmos ADC").getOutput().getActiveRangeLeft());
     }
 
     @Test
@@ -308,14 +308,14 @@ class DeviceProfileRoundTripTest {
         in.setFsLeft(1.0);
         in.setFsRight(1.0);
         p.getInput().getRanges().add(in);
-        p.getInput().setActiveRange("0 dB");
+        p.getInput().setActiveRangeLeft("0 dB");
         p.getOutput().setChannels(DeviceChannelMode.LINKED);
         DeviceRange out = new DeviceRange();
         out.setLabel("default");
         out.setFsLeft(2.0);
         out.setFsRight(2.0);
         p.getOutput().getRanges().add(out);
-        p.getOutput().setActiveRange("default");
+        p.getOutput().setActiveRangeLeft("default");
         src.putAudioDeviceProfile(p);
         stampCurrentContentVersion(src);
         writeDevicesTo(src, store);
@@ -358,11 +358,11 @@ class DeviceProfileRoundTripTest {
         card.getInput().setChannels(DeviceChannelMode.INDEPENDENT);
         card.getInput().getRanges().add(range("default", 1.0, 1.1, true));
         card.getInput().getRanges().add(range("attenuated", 10.0, 11.0, false));
-        card.getInput().setActiveRange("default");
+        card.getInput().setActiveRangeLeft("default");
         card.getInput().setActiveRangeRight("attenuated");
         card.getOutput().setChannels(DeviceChannelMode.LINKED);
         card.getOutput().getRanges().add(range("default", 2.0, 2.0, true));
-        card.getOutput().setActiveRange("default");
+        card.getOutput().setActiveRangeLeft("default");
 
         AudioDeviceProfile back = p.cardFromMap(p.cardToMap(card));
 
@@ -375,11 +375,11 @@ class DeviceProfileRoundTripTest {
         assertEquals(1.1, back.getInput().getRanges().get(0).getFsRight());
         assertTrue(back.getInput().getRanges().get(0).isCalibrated());
         assertFalse(back.getInput().getRanges().get(1).isCalibrated());
-        assertEquals("default", back.getInput().getActiveRange());
+        assertEquals("default", back.getInput().getActiveRangeLeft());
         assertEquals("attenuated", back.getInput().getActiveRangeRight(),
                 "an INDEPENDENT endpoint's two markers travel as the file's own "
                         + "{left,right} pair");
-        assertEquals("default", back.getOutput().getActiveRange());
+        assertEquals("default", back.getOutput().getActiveRangeLeft());
     }
 
     /** The device-authored display text (the QA40x verbose range labels, quotes
@@ -422,7 +422,7 @@ class DeviceProfileRoundTripTest {
         AudioDeviceProfile card = new AudioDeviceProfile();
         card.setName("Input only");
         card.getInput().getRanges().add(range("default", 1.0, 1.0, true));
-        card.getInput().setActiveRange("default");
+        card.getInput().setActiveRangeLeft("default");
 
         Map<String, Object> wire = p.cardToMap(card);
 
@@ -517,7 +517,7 @@ class DeviceProfileRoundTripTest {
         assertEquals(1, in.getRanges().size());
         DeviceRange row = in.getRanges().get(0);
         assertEquals("default", row.getLabel());
-        assertEquals("default", in.getActiveRange());
+        assertEquals("default", in.getActiveRangeLeft());
         assertEquals(2.5, row.getFsLeft(),  EPS);
         assertEquals(2.5, row.getFsRight(), EPS);
 

@@ -151,7 +151,7 @@ class NotchSweepEngineRemoteTest {
     void theLoopIsCommandedOnTheServerAndTheRingFillsFromTheWire() throws Exception {
         engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
 
-        engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
+        engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH);
 
         assertEquals(GenSignalForm.LOG_SWEEP, server.firstArg("setForm"));
@@ -207,7 +207,7 @@ class NotchSweepEngineRemoteTest {
     void eachConverterIsOpenedInItsOwnConfiguredFormat() throws Exception {
         engine = new NotchSweepEngine(RATE_HZ, PLAYBACK_RATE_HZ, PLAYBACK_BITS, DITHER_BITS);
 
-        engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
+        engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH);
 
         assertEquals(PLAYBACK_RATE_HZ, server.firstArg("openGenerator"),
@@ -239,7 +239,7 @@ class NotchSweepEngineRemoteTest {
         try (NotchSweepEngine refused = new NotchSweepEngine(RATE_HZ,
                 INDIVISIBLE_PLAYBACK_RATE_HZ, PLAYBACK_BITS, DITHER_BITS)) {
             IllegalStateException failed = assertThrows(IllegalStateException.class,
-                    () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
+                    () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
                             FADE_SAMPLES, OutputChannels.BOTH));
 
             assertTrue(failed.getMessage().contains(String.valueOf(RATE_HZ))
@@ -258,7 +258,7 @@ class NotchSweepEngineRemoteTest {
     @Test
     void aBandChangeReachesTheServerAndTheReference() throws Exception {
         engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
-        engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
+        engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH);
         server.reset();
 
@@ -281,7 +281,7 @@ class NotchSweepEngineRemoteTest {
     @Test
     void aLaneGateChangeReopensTheServersLaneAndKeepsTheRingRunning() throws Exception {
         engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
-        engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
+        engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH);
         ServerGeneratorStub.ServerCapture capture = server.getLastCapture();
         server.reset();
@@ -324,7 +324,7 @@ class NotchSweepEngineRemoteTest {
     @Test
     void aRefusedReopenSaysSoAndLeavesTheGateThatIsStillInForce() throws Exception {
         engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
-        engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
+        engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
                 OutputChannels.BOTH);
         server.reset();
         server.setRefuseOpen(true);
@@ -360,7 +360,7 @@ class NotchSweepEngineRemoteTest {
         server.setGrantedRate(RATE_HZ * 2);
         try (NotchSweepEngine refused = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS)) {
                 IllegalStateException failed = assertThrows(IllegalStateException.class,
-                        () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
+                        () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
                                 FADE_SAMPLES, OutputChannels.BOTH));
 
                 assertTrue(failed.getMessage().contains(String.valueOf(RATE_HZ * 2)),
@@ -383,7 +383,7 @@ class NotchSweepEngineRemoteTest {
         server.setGrantedCaptureRate(RATE_HZ * 2);
         try (NotchSweepEngine refused = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS)) {
                 IllegalStateException failed = assertThrows(IllegalStateException.class,
-                        () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
+                        () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
                                 FADE_SAMPLES, OutputChannels.BOTH));
 
                 assertTrue(failed.getMessage().contains(String.valueOf(RATE_HZ * 2)),

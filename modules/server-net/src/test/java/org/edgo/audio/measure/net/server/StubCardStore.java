@@ -76,7 +76,7 @@ final class StubCardStore {
         endpoint.setChannels(DeviceChannelMode.LINKED);
         endpoint.setCalibrationFromDevice(fromDevice);
         endpoint.getRanges().add(row(RANGE_LABEL, fsLeft, fsRight));
-        endpoint.setActiveRange(RANGE_LABEL);
+        endpoint.setActiveRangeLeft(RANGE_LABEL);
         prefs.putAudioDeviceProfile(profile);
     }
 
@@ -98,7 +98,7 @@ final class StubCardStore {
         endpoint.setChannels(DeviceChannelMode.LINKED);
         endpoint.getRanges().add(row(activeLabel, activeFsLeft, activeFsLeft + RIGHT_OFFSET));
         endpoint.getRanges().add(row(otherLabel, otherFsLeft, otherFsLeft + RIGHT_OFFSET));
-        endpoint.setActiveRange(activeLabel);
+        endpoint.setActiveRangeLeft(activeLabel);
         prefs.putAudioDeviceProfile(profile);
     }
 

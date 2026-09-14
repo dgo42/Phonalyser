@@ -108,7 +108,7 @@ public final class FreqRespAnalyzer {
         SignalGenerator gen = new SignalGenerator(
                 cfg.getStartHz(), cfg.getStopHz(), playSweepSamples, playLeadInSamples,
                 cfg.getPlaybackRateHz(), cfg.getAmplitudeVrms(), cfg.getAmplitudeVrms(),
-                cfg.getDacFsVoltageRms(), cfg.getDacFsVoltageRms());
+                cfg.getDacFsVoltageRmsLeft(), cfg.getDacFsVoltageRmsRight());
         // One-shot sweep: emit silence after the buffer ends instead of looping
         // a second cycle into the capture window (which would alias into the
         // deconvolution and pollute the response).
@@ -173,7 +173,7 @@ public final class FreqRespAnalyzer {
         double[] sweepRef = new SignalGenerator(
                 cfg.getStartHz(), cfg.getStopHz(), recSweepSamples, recLeadInSamples,
                 cfg.getCaptureRateHz(), cfg.getAmplitudeVrms(), cfg.getAmplitudeVrms(),
-                cfg.getDacFsVoltageRms(), cfg.getDacFsVoltageRms())
+                cfg.getDacFsVoltageRmsLeft(), cfg.getDacFsVoltageRmsRight())
                 .getLogSweepBuffer();
         // Parallel deconv: both channels share inputs (sweepRef, leadIn,
         // capture rate, freqs) but compute independently, so they run on
@@ -186,12 +186,12 @@ public final class FreqRespAnalyzer {
                 () -> FreqRespCalHelper.computeFromLogSweep(
                         rec.left(), sweepRef, recLeadInSamples,
                         cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
-                        cfg.getAdcFsVoltageRms(), recFadeSamples, "L", false));
+                        cfg.getAdcFsVoltageRmsLeft(), recFadeSamples, "L", false));
         CompletableFuture<FreqRespCalibration> calRFut = CompletableFuture.supplyAsync(
                 () -> FreqRespCalHelper.computeFromLogSweep(
                         rec.right(), sweepRef, recLeadInSamples,
                         cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
-                        cfg.getAdcFsVoltageRms(), recFadeSamples, "R", false));
+                        cfg.getAdcFsVoltageRmsRight(), recFadeSamples, "R", false));
         FreqRespCalibration calL = awaitOrFail(calLFut);
         FreqRespCalibration calR = awaitOrFail(calRFut);
 

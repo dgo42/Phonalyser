@@ -270,8 +270,8 @@ public final class FreqRespWizardDialog {
         backBtn.setEnabled(false);
         nextBtn.setEnabled(false);
         // The two devices' calibrations in force, read once for this
-        // measurement; the sweep is rendered on both lanes alike, against the
-        // LEFT lane's full scale.
+        // measurement; the sweep is rendered on both lanes at the same level,
+        // each lane against its own full scale.
         AudioBackend audio = AudioBackend.instance();
         DeviceCalibration dac = audio.calibrationOrDefault(false);
         DeviceCalibration adc = audio.calibrationOrDefault(true);
@@ -314,8 +314,10 @@ public final class FreqRespWizardDialog {
                         .durationSec(prefs.getFreqRespDurationSec())
                         .leadInSec(prefs.getFreqRespLeadInSec())
                         .amplitudeVrms(sweepAmplitudeVrms)
-                        .dacFsVoltageRms(dac.peakVolts(Channel.L))
-                        .adcFsVoltageRms(adc.fsRms(Channel.L))
+                        .dacFsVoltageRmsLeft(dac.peakVolts(Channel.L))
+                        .dacFsVoltageRmsRight(dac.peakVolts(Channel.R))
+                        .adcFsVoltageRmsLeft(adc.fsRms(Channel.L))
+                        .adcFsVoltageRmsRight(adc.fsRms(Channel.R))
                         .applyCalibration(!directLeg)  // page 2 divides out the page-1 transfer
                         .captureProgress(progress)
                         // As in FreqRespAnalyzerWorker: the sweep leg belongs to
@@ -324,7 +326,7 @@ public final class FreqRespWizardDialog {
                         .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
                                 prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
                                 prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
-                                sweepAmplitudeVrms, dac.peakVolts(Channel.L)))
+                                sweepAmplitudeVrms, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R)))
                         .build();
                 StereoFreqRespResult r = new FreqRespAnalyzer(cfg).run(null, null);
                 GuiUtil.marshal(dialog, () -> onMeasurementDone(directLeg, r, null));

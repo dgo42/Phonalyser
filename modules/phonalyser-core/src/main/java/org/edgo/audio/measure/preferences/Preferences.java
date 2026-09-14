@@ -3806,7 +3806,7 @@ public final class Preferences {
         DeviceEndpointConfig ep = input ? p.getInput() : p.getOutput();
         ep.setChannels(DeviceChannelMode.LINKED);
         ep.getRanges().add(row);
-        ep.setActiveRange("default");
+        ep.setActiveRangeLeft("default");
         return p;
     }
 
@@ -3953,14 +3953,14 @@ public final class Preferences {
             rows.add(row);
         }
         out.put("ranges", rows);
-        if (ep.getActiveRange() != null) {
+        if (ep.getActiveRangeLeft() != null) {
             // The same two shapes the file has: one label, or the per-channel
             // pair an INDEPENDENT endpoint needs.
             out.put("activeRange", ep.getChannels() == DeviceChannelMode.INDEPENDENT
-                    ? Map.of("left", ep.getActiveRange(), "right",
+                    ? Map.of("left", ep.getActiveRangeLeft(), "right",
                             ep.getActiveRangeRight() != null
-                                    ? ep.getActiveRangeRight() : ep.getActiveRange())
-                    : ep.getActiveRange());
+                                    ? ep.getActiveRangeRight() : ep.getActiveRangeLeft())
+                    : ep.getActiveRangeLeft());
         }
         card.put(key, out);
     }
@@ -3994,7 +3994,7 @@ public final class Preferences {
         if (channel == Channel.R && ep.getChannels() == DeviceChannelMode.INDEPENDENT) {
             ep.setActiveRangeRight(label);
         } else {
-            ep.setActiveRange(label);
+            ep.setActiveRangeLeft(label);
             // A LINKED / MONO endpoint reads both channels off the one marker, so
             // a stale right marker left behind by an earlier INDEPENDENT spell
             // must not survive the move.
@@ -4049,7 +4049,7 @@ public final class Preferences {
         if (ep.isCalibrationFromDevice()) out.append("      calibrationFromDevice: true\n");
         out.append("      ranges:\n");
         for (DeviceRange r : ep.getRanges()) writeDeviceRange(out, r);
-        if (ep.getActiveRange() != null) {
+        if (ep.getActiveRangeLeft() != null) {
             out.append("      activeRange: ").append(writeActiveRange(ep)).append('\n');
         }
     }
@@ -4062,9 +4062,9 @@ public final class Preferences {
      *  MONO keep the scalar (quoted) row label.  Only called with a non-null
      *  {@code activeRange}. */
     private String writeActiveRange(DeviceEndpointConfig ep) {
-        if (ep.getChannels() != DeviceChannelMode.INDEPENDENT) return quoted(ep.getActiveRange());
-        String right = ep.getActiveRangeRight() != null ? ep.getActiveRangeRight() : ep.getActiveRange();
-        return "{ left: " + quoted(ep.getActiveRange()) + ", right: " + quoted(right) + " }";
+        if (ep.getChannels() != DeviceChannelMode.INDEPENDENT) return quoted(ep.getActiveRangeLeft());
+        String right = ep.getActiveRangeRight() != null ? ep.getActiveRangeRight() : ep.getActiveRangeLeft();
+        return "{ left: " + quoted(ep.getActiveRangeLeft()) + ", right: " + quoted(right) + " }";
     }
 
     /** Deserialises one {@link DeviceEndpointConfig} (channel mode via
@@ -4089,9 +4089,9 @@ public final class Preferences {
         }
         Object active = m.get("activeRange");
         if (active instanceof String s) {
-            ep.setActiveRange(s);
+            ep.setActiveRangeLeft(s);
         } else if (active instanceof Map<?, ?> am) {
-            if (am.get("left")  instanceof String s) ep.setActiveRange(s);
+            if (am.get("left")  instanceof String s) ep.setActiveRangeLeft(s);
             if (am.get("right") instanceof String s) ep.setActiveRangeRight(s);
         }
         return ep;

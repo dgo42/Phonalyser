@@ -82,9 +82,13 @@ public final class SweepCapture {
      * @param playbackRateHz   the DAC's configured rate, which every sweep
      *                         count above is against
      * @param playbackBitDepth the DAC's configured word length
+     * @param dacFsVoltageLeft  the left lane's DAC full scale the one amplitude
+     *                          is rendered against
+     * @param dacFsVoltageRight the same for the right lane
      */
     public StereoSamples run(double startHz, double stopHz, int sweepSamples,
-            int leadInSamples, int fadeSamples, double amplitudeVrms, double dacFsVoltage,
+            int leadInSamples, int fadeSamples, double amplitudeVrms,
+            double dacFsVoltageLeft, double dacFsVoltageRight,
             int captureRateHz, int playbackRateHz, int playbackBitDepth, int ditherBits,
             OutputChannels channels,
             int durationSec, BooleanSupplier cancelToken,
@@ -105,7 +109,7 @@ public final class SweepCapture {
             GeneratorRun run = new GeneratorRun(GenSignalForm.LOG_SWEEP,
                     0.0, amplitudeVrms, amplitudeVrms,   // both lanes alike
                     playbackRateHz, playbackBitDepth, ditherBits, ditherBits,
-                    dacFsVoltage, dacFsVoltage, channels,
+                    dacFsVoltageLeft, dacFsVoltageRight, channels,
                     true,    // sample counts on the asked clock - a mismatch refuses
                     new GeneratorRun.SweepSpec(startHz, stopHz, sweepSamples,
                             leadInSamples, fadeSamples, fadeSamples, false));

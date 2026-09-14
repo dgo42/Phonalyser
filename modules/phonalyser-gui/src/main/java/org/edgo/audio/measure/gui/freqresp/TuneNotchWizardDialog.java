@@ -655,7 +655,8 @@ public final class TuneNotchWizardDialog {
         int captureRate  = prefs.current().getInputSampleRate();
         int playbackRate = prefs.current().getOutputSampleRate();
         int playbackBits = prefs.current().getOutputBitDepth();
-        double dacFsVrms = dac.peakVolts(Channel.L);
+        double dacFsVrmsLeft  = dac.peakVolts(Channel.L);
+        double dacFsVrmsRight = dac.peakVolts(Channel.R);
         double adcFsVrmsLeft  = adc.fsRms(Channel.L);
         double adcFsVrmsRight = adc.fsRms(Channel.R);
         int    ditherBits = prefs.getFreqRespDitherBits();
@@ -694,8 +695,8 @@ public final class TuneNotchWizardDialog {
             // Open playback + capture ONCE; the looping generator streams until
             // close().  There is no per-sweep open/close or recording wait.
             double[] band = sweepBand(curStartHz, curStopHz);
-            engine.start(band[0], band[1], curAmpVrms, dacFsVrms, sweepSamples, fadeSamples,
-                    curOutputChannels);
+            engine.start(band[0], band[1], curAmpVrms, dacFsVrmsLeft, dacFsVrmsRight,
+                    sweepSamples, fadeSamples, curOutputChannels);
             awaitSettle(sweepSamples);
             if (!running) return;
 

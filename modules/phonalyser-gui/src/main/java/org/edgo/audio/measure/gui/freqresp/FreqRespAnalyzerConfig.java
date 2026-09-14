@@ -71,11 +71,14 @@ public final class FreqRespAnalyzerConfig {
 
     /** Generator drive amplitude in V RMS at the DAC. */
     private final double amplitudeVrms;
-    /** DAC full-scale RMS voltage the sweep generator's amplitude scale divides by. */
-    private final double dacFsVoltageRms;
-    /** ADC full-scale RMS voltage normalising the deconvolved magnitude to a
-     *  physical transfer function (1.0 = 0 dB at unity loopback). */
-    private final double adcFsVoltageRms;
+    /** DAC full-scale RMS voltage of each lane - what that lane's rendering of
+     *  the one drive amplitude divides by. */
+    private final double dacFsVoltageRmsLeft;
+    private final double dacFsVoltageRmsRight;
+    /** ADC full-scale RMS voltage of each channel, normalising its deconvolved
+     *  magnitude to a physical transfer function (1.0 = 0 dB at unity loopback). */
+    private final double adcFsVoltageRmsLeft;
+    private final double adcFsVoltageRmsRight;
 
     /** Which output lane(s) the sweep drives - the encoder gate applied to the
      *  played sweep ({@code BOTH} by default, which is the only behaviour before

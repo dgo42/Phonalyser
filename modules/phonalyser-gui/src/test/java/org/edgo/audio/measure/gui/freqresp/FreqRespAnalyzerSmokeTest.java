@@ -340,8 +340,10 @@ class FreqRespAnalyzerSmokeTest {
                 .durationSec(DURATION_SEC)
                 .leadInSec(LEAD_IN_SEC)
                 .amplitudeVrms(AMP_VRMS)
-                .dacFsVoltageRms(DAC_FS_VRMS)
-                .adcFsVoltageRms(ADC_FS_VRMS)
+                .dacFsVoltageRmsLeft(DAC_FS_VRMS)
+                .dacFsVoltageRmsRight(DAC_FS_VRMS)
+                .adcFsVoltageRmsLeft(ADC_FS_VRMS)
+                .adcFsVoltageRmsRight(ADC_FS_VRMS)
                 .applyCalibration(false);
     }
 

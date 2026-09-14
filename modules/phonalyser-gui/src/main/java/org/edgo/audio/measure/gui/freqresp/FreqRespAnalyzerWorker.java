@@ -217,8 +217,8 @@ public final class FreqRespAnalyzerWorker {
         BackendPrefs backend = prefs.current();
         int playbackRate = backend.getOutputSampleRate();
         // The selected devices' calibrations in force ({@code out} / {@code in}
-        // ARE the selection); the sweep is rendered on both lanes alike, against
-        // the LEFT lane's full scale.
+        // ARE the selection); the sweep is rendered on both lanes at the same
+        // level, each lane against its own full scale.
         AudioBackend audio = AudioBackend.instance();
         DeviceCalibration dac = audio.calibrationOrDefault(false);
         DeviceCalibration adc = audio.calibrationOrDefault(true);
@@ -236,8 +236,10 @@ public final class FreqRespAnalyzerWorker {
                 .durationSec(prefs.getFreqRespDurationSec())
                 .leadInSec(prefs.getFreqRespLeadInSec())
                 .amplitudeVrms(sweepAmplitudeVrms)
-                .dacFsVoltageRms(dac.peakVolts(Channel.L))
-                .adcFsVoltageRms(adc.fsRms(Channel.L))
+                .dacFsVoltageRmsLeft(dac.peakVolts(Channel.L))
+                .dacFsVoltageRmsRight(dac.peakVolts(Channel.R))
+                .adcFsVoltageRmsLeft(adc.fsRms(Channel.L))
+                .adcFsVoltageRmsRight(adc.fsRms(Channel.R))
                 .outputChannels(prefs.getFreqRespOutputChannels())
                 .applyCalibration(prefs.isFreqRespApplyCalibration())
                 .captureProgress(activeProgress)
@@ -249,7 +251,7 @@ public final class FreqRespAnalyzerWorker {
                 .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
                         prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
                         prefs.getFreqRespDurationSec(), prefs.getFreqRespLeadInSec(),
-                        sweepAmplitudeVrms, dac.peakVolts(Channel.L)))
+                        sweepAmplitudeVrms, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R)))
                 .build();
     }
 

@@ -385,8 +385,8 @@ class Qa40xDeviceManagerTest {
         // Default active ranges when the card is first created: the protected
         // (parked) state, so a never-configured analyzer starts at maximum
         // input attenuation and the low output range.
-        assertEquals(Qa40xProtocol.SAFE_INPUT_DBV + " dBV", in.getActiveRange());
-        assertEquals(Qa40xProtocol.SAFE_OUTPUT_DBV + " dBV", out.getActiveRange());
+        assertEquals(Qa40xProtocol.SAFE_INPUT_DBV + " dBV", in.getActiveRangeLeft());
+        assertEquals(Qa40xProtocol.SAFE_OUTPUT_DBV + " dBV", out.getActiveRangeLeft());
     }
 
     @Test
@@ -396,14 +396,14 @@ class Qa40xDeviceManagerTest {
 
         AudioDeviceProfile existing = new AudioDeviceProfile();
         existing.setName("QA403");
-        existing.getInput().setActiveRange("24 dBV");    // a valid, non-default input range
-        existing.getOutput().setActiveRange("-12 dBV");  // a valid, non-default output range
+        existing.getInput().setActiveRangeLeft("24 dBV");    // a valid, non-default input range
+        existing.getOutput().setActiveRangeLeft("-12 dBV");  // a valid, non-default output range
 
         AudioDeviceProfile refreshed = mgr.buildProfile("QA403", cal, existing);
 
-        assertEquals("24 dBV", refreshed.getInput().getActiveRange(),
+        assertEquals("24 dBV", refreshed.getInput().getActiveRangeLeft(),
                 "the user's input active-range selection survives a device refresh");
-        assertEquals("-12 dBV", refreshed.getOutput().getActiveRange(),
+        assertEquals("-12 dBV", refreshed.getOutput().getActiveRangeLeft(),
                 "the user's output active-range selection survives a device refresh");
     }
 
@@ -434,7 +434,7 @@ class Qa40xDeviceManagerTest {
         mgr.setInputRange(MOVED_INPUT_DBV);
 
         assertEquals(MOVED_INPUT_DBV + " dBV",
-                prefs.findAudioDeviceProfile(CARD_NAME).getInput().getActiveRange(),
+                prefs.findAudioDeviceProfile(CARD_NAME).getInput().getActiveRangeLeft(),
                 "the attenuator moved, so the card's active row moves with it");
         DeviceCalibration after = prefs.findAudioDeviceProfile(CARD_NAME).getInput().calibration();
         assertEquals(Qa40xLevels.inputFullScaleRmsVolts(MOVED_INPUT_DBV,
@@ -473,17 +473,17 @@ class Qa40xDeviceManagerTest {
         closed.setInputRange(MOVED_INPUT_DBV);
 
         AudioDeviceProfile card = prefs.findAudioDeviceProfile(CARD_NAME);
-        assertEquals(MOVED_INPUT_DBV + " dBV", card.getInput().getActiveRange(),
+        assertEquals(MOVED_INPUT_DBV + " dBV", card.getInput().getActiveRangeLeft(),
                 "a closed analyzer is the normal state for a range write, and the "
                         + "card is where the choice has to land");
 
         // What the next ensureOpen() does with it: refreshDeviceCard rebuilds the
         // card from the calibration page and reads the ranges back out of it.
         AudioDeviceProfile refreshed = builder.buildProfile(CARD_NAME, cal, card);
-        assertEquals(MOVED_INPUT_DBV + " dBV", refreshed.getInput().getActiveRange(),
+        assertEquals(MOVED_INPUT_DBV + " dBV", refreshed.getInput().getActiveRangeLeft(),
                 "the refresh preserves it rather than reverting it");
         assertEquals(MOVED_INPUT_DBV, Qa40xProtocol.rangeDbv(
-                refreshed.getInput().getActiveRange(),
+                refreshed.getInput().getActiveRangeLeft(),
                 Qa40xProtocol.inputRangeDbvValues(), DEFAULT_INPUT_DBV),
                 "so the registers the next open writes are the NEW range's");
     }
@@ -511,10 +511,10 @@ class Qa40xDeviceManagerTest {
         new Qa40xDeviceManager(noAnalyzer()).setInputRange(MOVED_INPUT_DBV);
 
         assertEquals(MOVED_INPUT_DBV + " dBV",
-                prefs.findAudioDeviceProfile(CARD_NAME).getInput().getActiveRange(),
+                prefs.findAudioDeviceProfile(CARD_NAME).getInput().getActiveRangeLeft(),
                 "the chosen card is the one the attenuator position belongs to");
         assertEquals(DEFAULT_INPUT_DBV + " dBV",
-                prefs.findAudioDeviceProfile(Qa40xModel.QA402.name()).getInput().getActiveRange(),
+                prefs.findAudioDeviceProfile(Qa40xModel.QA402.name()).getInput().getActiveRangeLeft(),
                 "and the analyzer that is NOT on the table keeps its own range - "
                         + "which the first-match scan could not promise");
     }
@@ -757,7 +757,7 @@ class Qa40xDeviceManagerTest {
         assertTrue(fake.ops.isEmpty(),
                 "no open, no register, no close: the analyzer was never touched");
         assertEquals(MOVED_INPUT_DBV + " dBV",
-                prefs.findAudioDeviceProfile(CARD_NAME).getInput().getActiveRange(),
+                prefs.findAudioDeviceProfile(CARD_NAME).getInput().getActiveRangeLeft(),
                 "and the operator's choice still landed in the card");
     }
 

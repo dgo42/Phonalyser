@@ -736,7 +736,7 @@ public class Qa40xDeviceManager extends AbstractLocalDeviceManager implements Qa
             return;
         }
         DeviceEndpointConfig endpoint = input ? card.getInput() : card.getOutput();
-        endpoint.setActiveRange(Qa40xProtocol.rangeLabel(dbv));
+        endpoint.setActiveRangeLeft(Qa40xProtocol.rangeLabel(dbv));
         prefs.saveDevices();
         // The row moved, so the full scale every consumer reads out of it did:
         // the same announcement a stored calibration makes, for this direction
@@ -1258,8 +1258,8 @@ public class Qa40xDeviceManager extends AbstractLocalDeviceManager implements Qa
                 prefs.findAudioDeviceProfile(cardName));
         prefs.putAudioDeviceProfile(card);
         prefs.saveDevices();     // persist the device-read calibration; no-op in CLI / tests
-        inputRangeDbv  = Qa40xProtocol.rangeDbv(card.getInput().getActiveRange(),  Qa40xProtocol.inputRangeDbvValues(),  DEFAULT_INPUT_DBV);
-        outputRangeDbv = Qa40xProtocol.rangeDbv(card.getOutput().getActiveRange(), Qa40xProtocol.outputRangeDbvValues(), DEFAULT_OUTPUT_DBV);
+        inputRangeDbv  = Qa40xProtocol.rangeDbv(card.getInput().getActiveRangeLeft(),  Qa40xProtocol.inputRangeDbvValues(),  DEFAULT_INPUT_DBV);
+        outputRangeDbv = Qa40xProtocol.rangeDbv(card.getOutput().getActiveRangeLeft(), Qa40xProtocol.outputRangeDbvValues(), DEFAULT_OUTPUT_DBV);
     }
 
     /**

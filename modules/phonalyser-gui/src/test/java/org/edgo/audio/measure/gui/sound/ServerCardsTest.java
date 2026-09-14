@@ -255,7 +255,7 @@ class ServerCardsTest {
         assertEquals(2, arrived.getInput().getRanges().size(),
                 "both range rows - a multi-range card that arrived with one row "
                         + "would describe a different box");
-        assertEquals(RANGE_LABEL, arrived.getInput().getActiveRange());
+        assertEquals(RANGE_LABEL, arrived.getInput().getActiveRangeLeft());
         assertEquals(FS_LEFT, arrived.getInput().getRanges().get(0).getFsLeft());
         assertEquals(FS_RIGHT, arrived.getInput().getRanges().get(0).getFsRight());
     }
@@ -442,7 +442,7 @@ class ServerCardsTest {
         AudioDeviceProfile listed = cards.card(server, CHOSEN_CARD);
         assertNotNull(listed, "the card the bench described, by name");
         assertEquals(2, listed.getInput().getRanges().size());
-        assertEquals(RANGE_LABEL, listed.getInput().getActiveRange());
+        assertEquals(RANGE_LABEL, listed.getInput().getActiveRangeLeft());
         assertNull(cards.card(server, "a card this bench never listed"));
     }
 
@@ -503,7 +503,7 @@ class ServerCardsTest {
             endpoint.setChannels(DeviceChannelMode.LINKED);
             endpoint.getRanges().add(row(RANGE_LABEL, fsLeft, fsRight));
             endpoint.getRanges().add(row(OTHER_RANGE, FS_LEFT * 10, FS_RIGHT * 10));
-            endpoint.setActiveRange(RANGE_LABEL);
+            endpoint.setActiveRangeLeft(RANGE_LABEL);
         }
         return profile;
     }

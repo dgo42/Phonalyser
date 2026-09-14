@@ -118,11 +118,11 @@ class Qa40xCardSyncTest {
         assertTrue(card.getInput().isCalibrationFromDevice(),
                 "the values are the ANALYZER's - neither side may overwrite them");
         assertEquals(Qa40xProtocol.rangeLabel(ACTIVE_INPUT_DBV),
-                card.getInput().getActiveRange(),
+                card.getInput().getActiveRangeLeft(),
                 "the card must say what the bench is actually running under, or the "
                         + "dialog shows an attenuator setting the hardware is not on");
         assertEquals(Qa40xProtocol.rangeLabel(ACTIVE_OUTPUT_DBV),
-                card.getOutput().getActiveRange());
+                card.getOutput().getActiveRangeLeft());
         DeviceRange firstInput = card.getInput().getRanges().get(0);
         assertNotEquals(firstInput.getFsLeft(), firstInput.getFsRight(),
                 "the bench's per-channel factors travelled - a card that lost them "
@@ -276,7 +276,7 @@ class Qa40xCardSyncTest {
         AudioDeviceProfile mine = new AudioDeviceProfile();
         mine.setName(StubNetBackend.DEVICE_NAME);
         mine.getMatch().add(StubNetBackend.DEVICE_NAME);
-        mine.getInput().setActiveRange(Qa40xProtocol.rangeLabel(STAGED_INPUT_DBV));
+        mine.getInput().setActiveRangeLeft(Qa40xProtocol.rangeLabel(STAGED_INPUT_DBV));
         edit.putAudioDeviceProfile(mine);
         Qa40xSettingsUi panel = new Qa40xSettingsUi();
         panel.beginEdit();
@@ -305,7 +305,7 @@ class Qa40xCardSyncTest {
     private void stageActiveRange(Preferences edit, boolean input, int dbv) {
         AudioDeviceProfile card = edit.findAudioDeviceProfile(StubNetBackend.DEVICE_NAME);
         (input ? card.getInput() : card.getOutput())
-                .setActiveRange(Qa40xProtocol.rangeLabel(dbv));
+                .setActiveRangeLeft(Qa40xProtocol.rangeLabel(dbv));
     }
 
     /** One {@code {dbv,left,right}} row per range, as spec 4.6 shapes

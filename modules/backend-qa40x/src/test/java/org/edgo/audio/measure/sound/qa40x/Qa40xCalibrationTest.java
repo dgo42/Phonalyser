@@ -180,9 +180,9 @@ class Qa40xCalibrationTest {
 
         assertTrue(card.getInput().isCalibrationFromDevice(),
                 "device-read factors make a calibrationFromDevice card");
-        assertEquals(Qa40xProtocol.rangeLabel(6), card.getInput().getActiveRange(),
+        assertEquals(Qa40xProtocol.rangeLabel(6), card.getInput().getActiveRangeLeft(),
                 "no existing card: the given default (the bench's actual range) is active");
-        assertEquals(Qa40xProtocol.rangeLabel(-2), card.getOutput().getActiveRange());
+        assertEquals(Qa40xProtocol.rangeLabel(-2), card.getOutput().getActiveRangeLeft());
         assertEquals(Qa40xProtocol.inputRangeDbvValues().length,
                 card.getInput().getRanges().size(), "one row per attenuator position");
         int dbv = Qa40xProtocol.inputRangeDbvValues()[0];
