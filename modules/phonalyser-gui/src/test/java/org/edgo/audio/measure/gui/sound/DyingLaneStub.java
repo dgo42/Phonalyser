@@ -29,6 +29,7 @@ import javax.sound.sampled.AudioFormat;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.sound.AbstractPcmCapture;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
@@ -155,6 +156,22 @@ public final class DyingLaneStub implements AudioDeviceManager {
     /** Nothing here is ever calibrated. */
     @Override
     public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
+        return false;
+    }
+
+    /** Nor has a range to rename. */
+    @Override
+    public boolean renameRange(DeviceRef device, boolean input, String label, String newLabel) {
+        return false;
+    }
+
+    @Override
+    public boolean staticDeviceCard() {
+        return false;
+    }
+
+    @Override
+    public boolean updateCard(String name, AudioDeviceProfile card) {
         return false;
     }
 

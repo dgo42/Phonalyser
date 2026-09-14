@@ -20,6 +20,7 @@ package org.edgo.audio.measure.net.server;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -274,6 +275,60 @@ final class StubDeviceManager implements AudioDeviceManager, Qa40xControl {
         store.putAudioDeviceProfile(card);
         MessageBus.instance().publish(
                 input ? Events.ADC_CALIBRATION_CHANGED : Events.DAC_CALIBRATION_CHANGED, device);
+        return true;
+    }
+
+    /** The stub's cards are ordinary ones the tests author and edit. */
+    @Override
+    public boolean staticDeviceCard() {
+        return false;
+    }
+
+    /** The local manager's card replace, against the hooked-in card store: the
+     *  old name goes on a rename and the bindings that named it follow, exactly
+     *  as a real local manager does; without a store there is nothing to
+     *  replace. */
+    @Override
+    public boolean updateCard(String name, AudioDeviceProfile card) {
+        Preferences store = cards;
+        if (store == null || name == null || card == null || card.getName() == null
+                || card.getName().isBlank() || store.findAudioDeviceProfile(name) == null) {
+            return false;
+        }
+        boolean renamed = !name.equalsIgnoreCase(card.getName());
+        if (renamed && store.findAudioDeviceProfile(card.getName()) != null) {
+            return false;
+        }
+        if (renamed) {
+            store.removeAudioDeviceProfile(name);
+            for (Map.Entry<String, String> binding : store.getDeviceCardBindings().entrySet()) {
+                if (name.equalsIgnoreCase(binding.getValue())) {
+                    store.bindDeviceToCard(binding.getKey(), card.getName());
+                }
+            }
+        }
+        store.putAudioDeviceProfile(card);
+        return true;
+    }
+
+    /** The local manager's rename, against the hooked-in card store: the card
+     *  that recognises the device renames its own row, a device-provided
+     *  endpoint refuses, and without a store there is nothing to rename. */
+    @Override
+    public boolean renameRange(DeviceRef device, boolean input, String label, String newLabel) {
+        Preferences store = cards;
+        if (store == null) {
+            return false;
+        }
+        AudioDeviceProfile card = store.resolveDeviceProfile(device.name());
+        if (card == null) {
+            return false;
+        }
+        DeviceEndpointConfig endpoint = input ? card.getInput() : card.getOutput();
+        if (endpoint.isCalibrationFromDevice() || !endpoint.renameRange(label, newLabel)) {
+            return false;
+        }
+        store.putAudioDeviceProfile(card);
         return true;
     }
 

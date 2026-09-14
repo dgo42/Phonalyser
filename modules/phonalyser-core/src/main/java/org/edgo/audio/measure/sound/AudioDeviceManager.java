@@ -24,6 +24,7 @@ import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 
 /**
  * Common contract of the per-backend device managers (WASAPI, WDM-KS,
@@ -202,6 +203,49 @@ public interface AudioDeviceManager {
      *         session to send it on
      */
     boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms);
+
+    /**
+     * Renames one range row of the card in force for {@code device} in
+     * {@code input}'s direction - WHERE THE DEVICE IS CONNECTED, like
+     * {@link #storeCalibration}: a local backend renames the row in this
+     * machine's card, the net backend sends spec 4.3's {@code device.renameRange}
+     * to the bench the device is plugged into and writes nothing here.  An
+     * active marker pointing at the row follows it, so no full scale moves.
+     *
+     * @return whether the row was renamed; {@code false}, with nothing written
+     *         anywhere, when no card is in force for the device, it has no row
+     *         of that label, the new label is blank or names another row, the
+     *         card is the DEVICE's own (its labels are the analyzer's), the
+     *         bench refused, or there is no session to send on
+     */
+    boolean renameRange(DeviceRef device, boolean input, String label, String newLabel);
+
+    /**
+     * Replaces the card {@code name} - as the store it lives in knows it - by
+     * {@code card}, the operator's edit of it in the card editor: its name, its
+     * match list, the directions it serves and their coupling.  WHERE THE CARD
+     * LIVES, like {@link #storeCalibration}: a local backend writes this
+     * machine's store, the net backend sends spec 4.3's {@code cards.update} to
+     * the bench and writes nothing here.  A renamed card keeps its device
+     * bindings - they follow the new name.
+     *
+     * @return whether the card was replaced; {@code false}, with nothing
+     *         written anywhere, when the store has no card of that name, the
+     *         new name is blank or another card's, the bench refused, or there
+     *         is no session to send on
+     */
+    boolean updateCard(String name, AudioDeviceProfile card);
+
+    /**
+     * Whether this backend's devices carry a STATIC card - one built from the
+     * device itself (a QA40x renders its card from its own EEPROM factors), so
+     * there is exactly one card per device and it is neither chosen among
+     * others, authored, nor edited by an operator.  A card chooser shows that
+     * one card and offers no choice.  Answered where the device is connected:
+     * a local backend for itself, the net backend as the bench declared it for
+     * the routed backend.
+     */
+    boolean staticDeviceCard();
 
     /**
      * The calibration in force for {@code device} in {@code input}'s direction

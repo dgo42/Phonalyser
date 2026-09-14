@@ -24,6 +24,7 @@ import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
@@ -69,6 +70,22 @@ public final class StubNetBackend implements AudioDeviceManager {
     /** A settings panel never calibrates. */
     @Override
     public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
+        return false;
+    }
+
+    /** Nor renames a range. */
+    @Override
+    public boolean renameRange(DeviceRef device, boolean input, String label, String newLabel) {
+        return false;
+    }
+
+    @Override
+    public boolean staticDeviceCard() {
+        return false;
+    }
+
+    @Override
+    public boolean updateCard(String name, AudioDeviceProfile card) {
         return false;
     }
 

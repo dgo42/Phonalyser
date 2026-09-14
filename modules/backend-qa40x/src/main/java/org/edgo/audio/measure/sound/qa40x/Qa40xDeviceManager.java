@@ -1234,6 +1234,13 @@ public class Qa40xDeviceManager extends AbstractLocalDeviceManager implements Qa
 
     // --- device card (doc §10 dBV/cal plumbing; device-profile policy) --------
 
+    /** The analyzer's card is rendered from its own calibration page: one card
+     *  per analyzer, the analyzer's own, never chosen or authored. */
+    @Override
+    public boolean staticDeviceCard() {
+        return true;
+    }
+
     /**
      * Creates-or-refreshes this device's card in the store from the freshly read
      * calibration page, preserving the user's active-range selections (the

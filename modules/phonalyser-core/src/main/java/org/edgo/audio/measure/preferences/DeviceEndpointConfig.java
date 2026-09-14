@@ -139,6 +139,29 @@ public class DeviceEndpointConfig {
      * measured one is the best estimate of the other until it is measured
      * itself.
      */
+    /**
+     * Renames the row {@code label} to {@code newLabel}.  The label is the key
+     * an active marker points at, so a marker on that row follows it and the
+     * full scale in force does not move.
+     *
+     * @return false when there is no row of that label, or the new label is
+     *         blank or already names another row - labels are unique per
+     *         endpoint, since the markers resolve by them
+     */
+    public boolean renameRange(String label, String newLabel) {
+        if (label == null || newLabel == null || newLabel.isBlank() || ranges == null) return false;
+        DeviceRange row = null;
+        for (DeviceRange r : ranges) {
+            if (newLabel.equals(r.getLabel()) && !label.equals(r.getLabel())) return false;
+            if (label.equals(r.getLabel())) row = r;
+        }
+        if (row == null) return false;
+        row.setLabel(newLabel);
+        if (label.equals(activeRangeLeft))  activeRangeLeft  = newLabel;
+        if (label.equals(activeRangeRight)) activeRangeRight = newLabel;
+        return true;
+    }
+
     public void storeFullScale(Channel ch, double fsRms) {
         if (channels == DeviceChannelMode.MONO) {
             DeviceRange row = seedableActiveRow(Channel.L);

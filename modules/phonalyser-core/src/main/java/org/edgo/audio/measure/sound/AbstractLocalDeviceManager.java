@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.sound;
 
+import java.util.Map;
+
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -107,6 +109,71 @@ public abstract class AbstractLocalDeviceManager implements AudioDeviceManager {
         }
         MessageBus.instance().publish(
                 input ? Events.ADC_CALIBRATION_CHANGED : Events.DAC_CALIBRATION_CHANGED, device);
+        return true;
+    }
+
+    /** A sound card's card is the operator's: chosen, authored and edited here. */
+    @Override
+    public boolean staticDeviceCard() {
+        return false;
+    }
+
+    /** The card edit lands in this machine's cards: the card {@code name} is
+     *  replaced by {@code card} - under a new name when the editor renamed it,
+     *  the old name dropped and every device binding that named it following -
+     *  and persisted.  Refused for a name this machine does not have, a
+     *  nameless card, or a new name another card holds. */
+    @Override
+    public boolean updateCard(String name, AudioDeviceProfile card) {
+        Preferences prefs = Preferences.instance();
+        synchronized (prefs) {
+            if (name == null || card == null || card.getName() == null || card.getName().isBlank()
+                    || prefs.findAudioDeviceProfile(name) == null) {
+                return false;
+            }
+            boolean renamed = !name.equalsIgnoreCase(card.getName());
+            if (renamed && prefs.findAudioDeviceProfile(card.getName()) != null) {
+                return false;
+            }
+            if (renamed) {
+                prefs.removeAudioDeviceProfile(name);
+                for (Map.Entry<String, String> binding : prefs.getDeviceCardBindings().entrySet()) {
+                    if (name.equalsIgnoreCase(binding.getValue())) {
+                        prefs.bindDeviceToCard(binding.getKey(), card.getName());
+                    }
+                }
+            }
+            prefs.putAudioDeviceProfile(card);
+        }
+        if (log.isInfoEnabled()) {
+            log.info("Card: '{}' replaced by '{}' in this machine's cards", name, card.getName());
+        }
+        return true;
+    }
+
+    /** The rename lands in the card this machine holds for the device - the
+     *  endpoint renames its own row and marker, the store persists.  A device
+     *  with no card, a device-provided endpoint and a label that is missing,
+     *  blank or taken refuse; no full scale moves, so nothing is announced. */
+    @Override
+    public boolean renameRange(DeviceRef device, boolean input, String label, String newLabel) {
+        String deviceName = device.name();
+        Preferences prefs = Preferences.instance();
+        synchronized (prefs) {
+            AudioDeviceProfile p = prefs.resolveDeviceProfile(deviceName);
+            if (p == null) {
+                return false;
+            }
+            DeviceEndpointConfig ep = input ? p.getInput() : p.getOutput();
+            if (ep.isCalibrationFromDevice() || !ep.renameRange(label, newLabel)) {
+                return false;
+            }
+            prefs.putAudioDeviceProfile(p);
+        }
+        if (log.isInfoEnabled()) {
+            log.info("Card range: renamed '{}' to '{}' for '{}' ({}) in this machine's cards",
+                    label, newLabel, deviceName, input ? "input" : "output");
+        }
         return true;
     }
 }

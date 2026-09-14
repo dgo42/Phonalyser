@@ -46,6 +46,8 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.net.proto.MessageType;
 import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.net.proto.NetMessage;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
@@ -147,6 +149,10 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
     /** The catalogue as last heard, replaced whole - never mutated in place, so
      *  a reader always sees one consistent enumeration. */
     private volatile List<RemoteDevice> devices = List.of();
+    /** Whether the routed (or previewed) backend's devices carry a static card,
+     *  as the bench declared it in that backend's entry (spec 4.3
+     *  {@code staticCard}); false until a backend has been read. */
+    private volatile boolean staticCard;
     /** The open generator's handle (spec 4.5), or {@link #NO_GEN}.  Volatile:
      *  opened and closed on the operator's thread, read by every setter the
      *  generator controller drives. */
@@ -219,6 +225,7 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
         this.connection = connection;
         connection.addEventListener(events);
         devices = devicesOf(selected, backend);
+        staticCard = selected.path(NetFields.STATIC_CARD).asBoolean(false);
         if (log.isInfoEnabled()) {
             log.info("net backend: routed at {} on '{}' with {} device(s)", backend,
                     connection.getServerName(), devices.size());
@@ -244,10 +251,63 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
         String backend = selected.path(NetFields.BACKEND).asText(null);
         this.remoteBackend = backend;
         devices = devicesOf(selected, backend);
+        staticCard = selected.path(NetFields.STATIC_CARD).asBoolean(false);
         if (log.isDebugEnabled()) {
             log.debug("net backend: previewing {} with {} device(s)", backend,
                     devices.size());
         }
+    }
+
+    /** As the bench declared it for the routed or previewed backend. */
+    @Override
+    public boolean staticDeviceCard() {
+        return staticCard;
+    }
+
+    /**
+     * Spec 4.3's {@code cards.update}: the operator edited one of the bench's
+     * cards in the card editor, and the card lives where the devices are - the
+     * bench's own manager for the routed backend performs the replace.  No
+     * device lock, as for {@code cards.put}: a card may serve several devices,
+     * and the write is the operator's card edit, not a measurement on one of
+     * them.  Nothing is written on this machine.
+     *
+     * @return whether the bench stored it; {@code false} when there is no
+     *         session, the wire failed, or the bench refused it (a name it does
+     *         not have, a new name it already has)
+     */
+    @Override
+    public boolean updateCard(String name, AudioDeviceProfile card) {
+        String backend = remoteBackend;
+        NetMessage answer;
+        try {
+            NetConnection open = requireConnection();
+            answer = open.uiRequest(open.newRequest(MessageType.CARDS_UPDATE)
+                    .put(NetFields.BACKEND, backend)
+                    .put(NetFields.NAME, name)
+                    .put(NetFields.CONTENT,
+                            open.getCodec().toNode(Preferences.instance().cardToMap(card))));
+        } catch (RuntimeException e) {
+            if (log.isWarnEnabled()) {
+                log.warn("net backend: replacing card '{}' failed: {}", name, e.toString());
+            }
+            return false;
+        }
+        if (answer == null) {
+            return false;               // no session - already logged
+        }
+        if (!answer.isOk()) {
+            if (log.isWarnEnabled()) {
+                log.warn("net backend: {} did not replace card '{}' by '{}': {}",
+                        backend, name, card.getName(), answer.getError());
+            }
+            return false;
+        }
+        if (log.isInfoEnabled()) {
+            log.info("net backend: {} replaced card '{}' by '{}'", backend, name,
+                    card.getName());
+        }
+        return true;
     }
 
     /**
@@ -302,6 +362,7 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
         connection = null;
         remoteBackend = null;
         devices = List.of();
+        staticCard = false;
         held.clear();
         genId = NO_GEN;
         genDevice = null;
@@ -815,6 +876,54 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
         if (log.isInfoEnabled()) {
             log.info("net backend: {} stored {} Vrms ({}) for {}", remoteBackend,
                     fsRms, scope, ref);
+        }
+        return true;
+    }
+
+    /**
+     * Spec 4.3's {@code device.renameRange}: the row keeps its full scales and
+     * its marker, only its label changes - on the bench the device is plugged
+     * into, under the lock on exactly that device, and nothing is written on
+     * this machine.  Same lock and same ref rule as {@link #storeCalibration}.
+     *
+     * @return whether the bench renamed the row; {@code false} when there is no
+     *         session, the device is held elsewhere, the wire failed, or the
+     *         bench refused it (no such row, a taken label, its own card)
+     */
+    @Override
+    public boolean renameRange(DeviceRef device, boolean input, String label, String newLabel) {
+        NetDeviceRef ref = remoteRef(device);
+        if (ref.isInput() != input) {
+            throw new IllegalArgumentException(ref + " is not listed as an "
+                    + (input ? "input" : "output"));
+        }
+        NetMessage answer;
+        try {
+            answer = withDeviceLock(ref, () -> {
+                NetConnection open = requireConnection();
+                return open.uiRequest(ref.into(open.newRequest(MessageType.DEVICE_RENAME_RANGE))
+                        .put(NetFields.RANGE, label)
+                        .put(NetFields.NEW_LABEL, newLabel));
+            });
+        } catch (RuntimeException e) {
+            if (log.isWarnEnabled()) {
+                log.warn("net backend: renaming a range of {} failed: {}", ref, e.toString());
+            }
+            return false;
+        }
+        if (answer == null) {
+            return false;               // no session or no lock - already logged
+        }
+        if (!answer.isOk()) {
+            if (log.isWarnEnabled()) {
+                log.warn("net backend: {} did not rename range '{}' to '{}' for {}: {}",
+                        remoteBackend, label, newLabel, ref, answer.getError());
+            }
+            return false;
+        }
+        if (log.isInfoEnabled()) {
+            log.info("net backend: {} renamed range '{}' to '{}' for {}", remoteBackend,
+                    label, newLabel, ref);
         }
         return true;
     }

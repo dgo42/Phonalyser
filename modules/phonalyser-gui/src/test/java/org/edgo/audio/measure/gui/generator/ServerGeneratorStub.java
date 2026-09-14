@@ -36,6 +36,7 @@ import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceCalibration;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.MarkedCapture;
 import org.edgo.audio.measure.sound.RemoteGenerator;
@@ -572,6 +573,27 @@ public final class ServerGeneratorStub implements AudioDeviceManager, RemoteGene
     @Override
     public boolean storeCalibration(DeviceRef device, boolean input, Channel ch, double fsRms) {
         record("storeCalibration", device.name(), input, ch, fsRms);
+        return true;
+    }
+
+    /** Recorded and accepted, like a calibration write - the wire is the net
+     *  manager's own test. */
+    @Override
+    public boolean renameRange(DeviceRef device, boolean input, String label, String newLabel) {
+        record("renameRange", device.name(), input, label, newLabel);
+        return true;
+    }
+
+    /** The stub bench serves ordinary cards. */
+    @Override
+    public boolean staticDeviceCard() {
+        return false;
+    }
+
+    /** Recorded and accepted, like a calibration write. */
+    @Override
+    public boolean updateCard(String name, AudioDeviceProfile card) {
+        record("updateCard", name, card);
         return true;
     }
 
