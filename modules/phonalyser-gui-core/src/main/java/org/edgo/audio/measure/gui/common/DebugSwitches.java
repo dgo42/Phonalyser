@@ -75,6 +75,19 @@ public final class DebugSwitches {
      *  the correction math run either way. */
     public static final boolean WRITE_DPD_STATS = Boolean.parseBoolean("false");
 
+    /** DEBUG hard switch: trace what the fundamental's phase does to its
+     *  harmonics across a coherent FFT average.  With it on, the worker logs
+     *  the phase of every harmonic h relative to h times the fundamental's own
+     *  phase - a relation a pure time shift leaves alone, so what moves in it
+     *  is the fundamental moving by itself, which is exactly what a drifting
+     *  notch does and what the phase alignment corrects.  Three lines: the
+     *  relations at the first accumulated frame of a collection (no correction
+     *  applied yet), every phase excess as it is measured, and the relations
+     *  again on every later frame with that excess taken into account - so the
+     *  correction can be read off the log as the numbers standing still.
+     *  {@code false} logs none of it. */
+    public static final boolean TRACE_HARMONIC_PHASE = Boolean.parseBoolean("true");
+
     /** DEBUG hard switch: write a per-tick record of the coherent FFT
      *  accumulator - one {@code fft-ticks-<timestamp>.csv} per accumulator
      *  run in the application's log directory: every tick's de-rotation

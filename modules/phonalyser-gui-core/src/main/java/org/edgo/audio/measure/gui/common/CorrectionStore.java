@@ -21,7 +21,10 @@ package org.edgo.audio.measure.gui.common;
 import lombok.Getter;
 import lombok.Value;
 import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 
 import java.util.ArrayList;
@@ -156,6 +159,79 @@ public final class CorrectionStore {
                     label, entries.size() - 1, calibration.left().freqs.length, withNoise, path);
         }
         fire();
+    }
+
+    /**
+     * Replaces one band of the topmost with-noise entry's response, on one
+     * channel only, with a freshly measured one - the de-embedding refresh a
+     * notch-phase probe makes after it has measured the filter again.
+     *
+     * <p>The measured response arrives on its own frequency grid and is
+     * interpolated onto the entry's grid ({@link FreqRespCalHelper#interpolate},
+     * the same log-frequency reading the plot-time cascade uses), so the entry
+     * keeps its own points and only their magnitude and phase move.  Points
+     * outside {@code [bandLoHz, bandHiHz]} keep the numbers they had, and the
+     * band is first cut down to what {@code measured} actually covers:
+     * beyond its ends the interpolation returns its end point, which would
+     * flatten the entry's own response there.
+     *
+     * <p>The entry is edited in place - no entry is added or removed, so a
+     * cascade that already holds this row cannot end up correcting twice - and
+     * nothing is written to disk: the file the row was loaded from keeps the
+     * response it was saved with.  The change notification is what carries the
+     * edit to the consumer, whose derived correction is cached and is not keyed
+     * on the arrays' content.
+     *
+     * <p>Store membership IS activity for this store: only rows the operator
+     * has switched on are pushed into it, so "the topmost with-noise entry" is
+     * simply the first {@link Entry#isWithNoise()} entry in
+     * {@link #getEntries()} order.
+     *
+     * @param side      the channel whose side of the entry is refreshed; the
+     *                  other side is left untouched
+     * @param bandLoHz  low edge of the refreshed band, inclusive
+     * @param bandHiHz  high edge of the refreshed band, inclusive
+     * @param measured  the freshly measured response (its own freqs / magLin /
+     *                  phaseRad grid)
+     * @return {@code true} when an entry was refreshed and the change
+     *         published; {@code false} when no with-noise entry is loaded, in
+     *         which case nothing is touched
+     */
+    public boolean refreshBand(Channel side, double bandLoHz, double bandHiHz,
+                               FreqRespCalibration measured) {
+        FreqRespCalibration target = null;
+        for (Entry entry : entries) {
+            if (entry.isWithNoise()) {
+                target = side == Channel.L
+                        ? entry.getCalibration().left()
+                        : entry.getCalibration().right();
+                break;
+            }
+        }
+        if (target == null) {
+            if (log.isInfoEnabled()) {
+                log.info("{} band refresh skipped: no with-noise calibration row is loaded",
+                        label);
+            }
+            return false;
+        }
+        double lo = Math.max(bandLoHz, measured.freqs[0]);
+        double hi = Math.min(bandHiHz, measured.freqs[measured.freqs.length - 1]);
+        int replaced = 0;
+        for (int i = 0; i < target.freqs.length; i++) {
+            double f = target.freqs[i];
+            if (f < lo || f > hi) continue;
+            double[] h = FreqRespCalHelper.interpolate(measured, f);
+            target.magLin[i]   = h[0];
+            target.phaseRad[i] = h[1];
+            replaced++;
+        }
+        if (log.isInfoEnabled()) {
+            log.info("{} band refresh on {}: {} of {} points replaced between {} and {} Hz",
+                    label, side, replaced, target.freqs.length, lo, hi);
+        }
+        fire();
+        return true;
     }
 
     /** Clears every entry and fires one change notification (no-op when
