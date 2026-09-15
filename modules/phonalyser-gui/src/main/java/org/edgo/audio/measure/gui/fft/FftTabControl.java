@@ -50,8 +50,8 @@ import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.GenChangeCause;
-import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bind.Bindings;
@@ -186,7 +186,6 @@ public final class FftTabControl extends AbstractTabControl {
     private NumericStepField   averagesField;
     private Button             stopAfterNEnable;
     private NumericStepField   stopAfterNField;
-    private Combo              mainsSuppressionCombo;
     private Button             fundFromGenCheck;
     private Button             logFreqCheck;
     private Button             detectTimeDiscCheck;
@@ -483,25 +482,32 @@ public final class FftTabControl extends AbstractTabControl {
         Bindings.onChange(toolbarTabs, prefs.fftStopAfterNEnabledProperty(),
                 v -> refreshStopAfterEnable());
 
-        // Mains-suppression selector sits in the outer grid's right-hand column
-        // pair (col 2 label + col 3 combo) - sharing the stop-after grid row but
-        // lining up with Window / Averages above and Align generator below,
-        // instead of floating after the stop-after field.  Pre-filters the
-        // captured signal (50/60 Hz + harmonics) before averaging; tracks the
-        // mains frequency live while recording.
-        addLabel(g, I18n.t("fft.settings.mainsSuppression"));
-        mainsSuppressionCombo = new Combo(g, SWT.READ_ONLY);
-        mainsSuppressionCombo.setItems(MainsSuppression.LABELS);
-        mainsSuppressionCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        mainsSuppressionCombo.setToolTipText(I18n.t("fft.settings.mainsSuppression.tooltip"));
-        Bindings.combo(mainsSuppressionCombo, prefs.fftMainsSuppressionProperty(),
-                MainsSuppression.values());
+        // Fundamental-phase-alignment selector sits in the outer grid's
+        // right-hand column pair (col 2 label + col 3 combo) - sharing the
+        // stop-after grid row but lining up with Window / Averages above and
+        // Align generator below, instead of floating after the stop-after
+        // field.  Behind a notch whose centre frequency drifts, the
+        // fundamental's phase decoheres from its harmonics - the selected mode
+        // gives the coherent average a drift-free time base.  Items are in
+        // FundamentalPhaseAlignment order, which is what Bindings.combo maps
+        // the selection index onto.  (The mains-suppression preference has no
+        // control on this tab; it keeps its stored value.)
+        addLabel(g, I18n.t("fft.settings.phaseAlign"));
+        Combo phaseAlignCombo = new Combo(g, SWT.READ_ONLY);
+        phaseAlignCombo.setItems(new String[] {
+                I18n.t("fft.settings.phaseAlign.none"),
+                I18n.t("fft.settings.phaseAlign.reference"),
+                I18n.t("fft.settings.phaseAlign.sweep") });
+        phaseAlignCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        phaseAlignCombo.setToolTipText(I18n.t("fft.settings.phaseAlign.tooltip"));
+        Bindings.combo(phaseAlignCombo, prefs.fftFundamentalPhaseAlignmentProperty(),
+                FundamentalPhaseAlignment.values());
 
-        // Four boolean knobs packed onto two rows so the tab content
-        // fits inside the typical FFT-pane height (the previous 3-rows-
-        // of-spans-4 layout pushed the third checkbox below the visible
-        // CTabFolder client area).
-        // Row: Get fundamental from generator (span 2) | Align generator (span 2)
+        // The boolean knobs share their grid rows with the selectors so the tab
+        // content stays as close to the typical FFT-pane height as it can (the
+        // previous 3-rows-of-spans-4 layout pushed the third checkbox below the
+        // visible CTabFolder client area).
+        // Row: Get fundamental from generator (span 2) | Align generator
         fundFromGenCheck = new Button(g, SWT.CHECK);
         fundFromGenCheck.setText(I18n.t("fft.settings.fundFromGen"));
         GridData fgGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
@@ -530,7 +536,7 @@ public final class FftTabControl extends AbstractTabControl {
         // two-way value bind.
         Bindings.combo(alignGenCombo, prefs.fftAlignGeneratorProperty(), AlignGenerator.values());
 
-        // Row: Coherent averaging (span 2) | Log freq (span 2)
+        // Row: Coherent averaging (span 2) | Log freq | Detect time discontinuity
         coherentCheck = new Button(g, SWT.CHECK);
         coherentCheck.setText(I18n.t("fft.settings.coherent"));
         GridData cohGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);

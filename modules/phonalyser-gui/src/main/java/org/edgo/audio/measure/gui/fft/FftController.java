@@ -29,7 +29,9 @@ import java.util.List;
 import java.util.Locale;
 
 import org.edgo.audio.measure.common.FileVersions;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.enums.AlignGenerator;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftAnalyzer;
@@ -39,10 +41,12 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
+import org.edgo.audio.measure.gui.freqresp.NotchPhaseProbe;
 import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.CaptureEndReason;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -64,7 +68,7 @@ import lombok.extern.log4j.Log4j2;
  * the bus.
  */
 @Log4j2
-public final class FftController {
+public final class FftController implements PhaseProbeHost {
 
     /** FLL measurement plausibility bound, relative part: generator-vs-ADC
      *  clock drift is ppm-scale (observed ≤ ~130 ppm), so 500 ppm is a
@@ -123,6 +127,55 @@ public final class FftController {
     public FftController(FftAnalyzerWorker worker) {
         this.worker          = worker;
         this.correctionStore = new CorrectionStore("FFT", Events.FFT_CALIBRATION_CHANGED);
+    }
+
+    // -------------------------------------------------------------------------
+    // The notch-phase probe's seam (mode PERIODICAL_SWEEP)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Wires the probe seam: this controller becomes the worker's probe host,
+     * so a probe is built from the converter and drive settings in force and
+     * what it measures is folded into the correction store this controller
+     * owns.  The generator's tone is not part of it - the worker announces a
+     * probe on the bus and the generator answers that announcement itself.
+     * Called once at the composition root; an offscreen controller is never
+     * wired and therefore never probes.
+     */
+    public void attachPhaseProbe() {
+        worker.setProbeHost(this);
+    }
+
+    /** A probe on the settings in force, read where the tune-notch wizard
+     *  reads them - the converter rates and word length from the backend
+     *  preferences, the full-scale voltages from the device calibrations, and
+     *  the drive from the generator's own left-lane amplitude, so the notch is
+     *  probed at the level the measurement drives it with and through the same
+     *  output path. */
+    @Override
+    public NotchPhaseProbe newProbe() {
+        Preferences prefs  = Preferences.instance();
+        AudioBackend audio = AudioBackend.instance();
+        DeviceCalibration dac = audio.calibrationOrDefault(false);
+        DeviceCalibration adc = audio.calibrationOrDefault(true);
+        Channel analysed = prefs.getFftChannel();
+        return new NotchPhaseProbe(
+                prefs.current().getInputSampleRate(),
+                prefs.current().getOutputSampleRate(),
+                prefs.current().getOutputBitDepth(),
+                prefs.getFreqRespDitherBits(),
+                dac.peakVolts(Channel.L),
+                dac.peakVolts(Channel.R),
+                adc.fsRms(analysed),
+                dac.amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L),
+                prefs.getGenOutputChannels(),
+                analysed);
+    }
+
+    @Override
+    public void refreshDeEmbedding(Channel side, double bandLoHz, double bandHiHz,
+                                   FreqRespCalibration measured) {
+        correctionStore.refreshBand(side, bandLoHz, bandHiHz, measured);
     }
 
     // -------------------------------------------------------------------------
@@ -313,14 +366,20 @@ public final class FftController {
             double t2 = FftBinSnap.snapIfEnabled(GenSignalForm.DUAL_TONE,
                     slot.sampleRate, prefs.getFftLength(), prefs.isGenSnapToFftBin(),
                     prefs.getGenDualToneFreq2Hz());
-            if (t1 > 0 && Double.isFinite(imd.f1Hz)
-                    && plausibleFllMeasurement(t1, imd.f1Hz, slot.sampleRate, slot.fftSize)) {
-                fll.update(t1, imd.f1Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
+            // Each tone's measurement: the reference channel's when this cycle
+            // measured it (the phase-alignment mode reads that channel, where
+            // the tones stand clear of the notch), else the analysed channel's
+            // per-tone estimate as before.
+            double m1 = loopMeasurement(slot.referenceFundamentalHzRefined,  imd.f1Hz);
+            double m2 = loopMeasurement(slot.referenceFundamental2HzRefined, imd.f2Hz);
+            if (t1 > 0 && Double.isFinite(m1)
+                    && plausibleFllMeasurement(t1, m1, slot.sampleRate, slot.fftSize)) {
+                fll.update(t1, m1, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
                 double pub1 = t1 + fll.getCorrection();
                 if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
                     log.warn("FLL t1: target={} meas={} corr={} pub={}",
                             String.format(Locale.US, "%.6f", t1),
-                            String.format(Locale.US, "%.6f", imd.f1Hz),
+                            String.format(Locale.US, "%.6f", m1),
                             String.format(Locale.US, "%+.6f", fll.getCorrection()),
                             String.format(Locale.US, "%.6f", pub1));
                 }
@@ -328,16 +387,16 @@ public final class FftController {
             } else if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
                 log.warn("FLL t1 GATED: target={} meas={}",
                         String.format(Locale.US, "%.6f", t1),
-                        String.format(Locale.US, "%.6f", imd.f1Hz));
+                        String.format(Locale.US, "%.6f", m1));
             }
-            if (t2 > 0 && Double.isFinite(imd.f2Hz)
-                    && plausibleFllMeasurement(t2, imd.f2Hz, slot.sampleRate, slot.fftSize)) {
-                fll2.update(t2, imd.f2Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
+            if (t2 > 0 && Double.isFinite(m2)
+                    && plausibleFllMeasurement(t2, m2, slot.sampleRate, slot.fftSize)) {
+                fll2.update(t2, m2, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
                 double pub2 = t2 + fll2.getCorrection();
                 if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
                     log.warn("FLL t2: target={} meas={} corr={} pub={}",
                             String.format(Locale.US, "%.6f", t2),
-                            String.format(Locale.US, "%.6f", imd.f2Hz),
+                            String.format(Locale.US, "%.6f", m2),
                             String.format(Locale.US, "%+.6f", fll2.getCorrection()),
                             String.format(Locale.US, "%.6f", pub2));
                 }
@@ -345,29 +404,42 @@ public final class FftController {
             } else if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
                 log.warn("FLL t2 GATED: target={} meas={}",
                         String.format(Locale.US, "%.6f", t2),
-                        String.format(Locale.US, "%.6f", imd.f2Hz));
+                        String.format(Locale.US, "%.6f", m2));
             }
             boolean aligned = t1 > 0 && t2 > 0
-                    && Math.abs(imd.f1Hz - t1) <= t1 * ALIGN_DONE_PPM * 1e-6
-                    && Math.abs(imd.f2Hz - t2) <= t2 * ALIGN_DONE_PPM * 1e-6;
+                    && Math.abs(m1 - t1) <= t1 * ALIGN_DONE_PPM * 1e-6
+                    && Math.abs(m2 - t2) <= t2 * ALIGN_DONE_PPM * 1e-6;
             watchAlignmentMagnitudeDrift(imd.f1DbV, imd.f2DbV, aligned);
         } else {
             if (!Double.isFinite(slot.fundamentalHzRefined)) return;
+            double measured = loopMeasurement(slot.referenceFundamentalHzRefined,
+                    slot.fundamentalHzRefined);
             double target = FftBinSnap.snapIfEnabled(GenSignalForm.SINE,
                     slot.sampleRate, prefs.getFftLength(), prefs.isGenSnapToFftBin(),
                     prefs.getGenFrequencyHz());
             if (!(target > 0)) return;
-            if (!plausibleFllMeasurement(target, slot.fundamentalHzRefined,
+            if (!plausibleFllMeasurement(target, measured,
                     slot.sampleRate, slot.fftSize)) {
                 return;
             }
-            fll.update(target, slot.fundamentalHzRefined, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
+            fll.update(target, measured, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
             bus.publish(Events.GENERATOR_FREQ_TRIM,
                     target + fll.getCorrection());
-            boolean aligned = Math.abs(slot.fundamentalHzRefined - target)
+            boolean aligned = Math.abs(measured - target)
                     <= target * ALIGN_DONE_PPM * 1e-6;
             watchAlignmentMagnitudeDrift(slot.fundamentalDbFs, Double.NaN, aligned);
         }
+    }
+
+    /** One tone's frequency for the lock: the reference channel's measurement
+     *  when this cycle produced one, else the analysed channel's.  Behind a
+     *  notch the analysed tone is buried and its sub-bin estimate wanders,
+     *  while the reference channel carries the same tone clear of it - so where
+     *  a reference number exists it is the one the loop steers on.  Everything
+     *  else in the feed - the plausibility gate, the trim publish, the aligned
+     *  test - works on whichever number comes back. */
+    private double loopMeasurement(double referenceHz, double analysedHz) {
+        return Double.isFinite(referenceHz) ? referenceHz : analysedHz;
     }
 
     /** Magnitude-drift watch: baselines the fundamental level(s) on the

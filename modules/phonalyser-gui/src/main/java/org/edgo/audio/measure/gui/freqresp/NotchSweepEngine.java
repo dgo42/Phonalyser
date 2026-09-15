@@ -71,6 +71,12 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class NotchSweepEngine implements AutoCloseable {
 
+    /** Safety factor on the swept-band margin (see {@link #sweptBand}).  The
+     *  computed margin is the bare stretch the fade eats; a band read right up
+     *  to where the stimulus has only just come back is still read on a weak
+     *  X, so the widening is taken a couple of times further out. */
+    private static final double FADE_MARGIN_SAFETY = 2.5;
+
     /** The ADC's configured rate: the shared ring's clock, the clock every
      *  captured window is counted in, and the clock the deconvolution reads
      *  its bins on. */
@@ -133,6 +139,52 @@ public final class NotchSweepEngine implements AutoCloseable {
      */
     public double deconvBinHz(int sweepSamples) {
         return captureRateHz / (double) MathUtil.nextPow2(sweepSamples);
+    }
+
+    /**
+     * One loop period in CAPTURE samples: the power of two nearest
+     * {@code targetSec} on this engine's capture clock.  The caller names the
+     * duration it wants; what comes back is the nearest period that keeps the
+     * premise this whole engine rests on.
+     *
+     * <p>That premise is the power of two itself, not a rounding convenience:
+     * {@link FreqRespCalHelper#computeFromLogSweep} sizes its FFT to
+     * {@code nextPow2(window)}, so only a power-of-two period makes that
+     * transform exactly ONE period - a CIRCULAR one, in which a window grabbed
+     * at an arbitrary loop phase is a harmless circular shift.  Off that grid
+     * the transform is zero-padded, the grabbed window wraps the period inside
+     * it, and every bin corrupts into a spike.
+     */
+    public int loopPeriodSamples(double targetSec) {
+        int raw   = (int) Math.round(targetSec * captureRateHz);
+        int below = Integer.highestOneBit(Math.max(2, raw));
+        int above = below << 1;
+        return (raw - below < above - raw) ? below : above;
+    }
+
+    /**
+     * The band the loop has to be SWEPT over for {@code [readLoHz, readHiHz]}
+     * to come back fully excited, given the per-seam Hann fade as a fraction
+     * of one loop period.
+     *
+     * <p>The fade drives the stimulus to zero over the first and the last
+     * {@code fadeFraction} of every period, and a log sweep maps time linearly
+     * onto log-frequency, so those two stretches are that same fraction of the
+     * band's log span at each end.  Read out to its own edges, such a band is
+     * a division of noise by nearly nothing there ({@code H = Y/X} with X
+     * vanishing), on top of the log sweep's own 1/f roll-off.  Widening by that
+     * fraction keeps the band that is READ inside the fully excited middle.
+     *
+     * <p>The fraction is a parameter and not read off the session because both
+     * kinds of caller need the swept band BEFORE {@link #start} has been told
+     * anything: the band is one of its arguments.
+     *
+     * @return the swept band as {@code { lowHz, highHz }}
+     */
+    public double[] sweptBand(double readLoHz, double readHiHz, double fadeFraction) {
+        double marginFrac = FADE_MARGIN_SAFETY * fadeFraction / (1.0 - 2.0 * fadeFraction);
+        double m = Math.log(readHiHz / readLoHz) * marginFrac;
+        return new double[] { readLoHz * Math.exp(-m), readHiHz * Math.exp(m) };
     }
 
     /** The looping sweep's one-period reference X(t) - the buffer

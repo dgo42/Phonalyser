@@ -102,6 +102,12 @@ public final class GeneratorController {
     /** Detach actions for every Preferences / bus subscription made in the
      *  constructor; run by {@link #shutdown()}. */
     private final List<Runnable> unsubscribes = new ArrayList<>();
+    /** True between {@link #suspendTone()} and {@link #resumeTone()}, and only
+     *  when the lane really was playing at the suspend - the memory that makes
+     *  the resume put back exactly what it found and start nothing else.
+     *  Volatile because the pair is called from the thread running the
+     *  measurement that needs the tone down, not from the UI thread. */
+    private volatile boolean toneSuspended;
 
     // ----- file playback (shares the output device with the DDS tone) -----
 
@@ -302,6 +308,17 @@ public final class GeneratorController {
         // The FreqResp sweep needs the DAC exclusively - stop both engines.
         Consumer<Void> freqRespStarted = ignored -> stopEngines();
         onBus(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStarted);
+        // The FFT's notch-phase probe sweeps the same DAC for a few seconds and
+        // cannot share it: the tone goes down for the probe and comes back when
+        // it ends.  The bus is the whole seam - the analyser never holds this
+        // controller - and dispatch is synchronous on the publisher's thread,
+        // so the tone is already down when the probe starts and already back
+        // when the analysis continues.  That thread is the analyser's worker,
+        // which is where the lane's blocking start belongs anyway.
+        Consumer<Void> probeStarted = ignored -> suspendTone();
+        onBus(Events.FFT_PHASE_PROBE_STARTED, probeStarted);
+        Consumer<Void> probeStopped = ignored -> resumeTone();
+        onBus(Events.FFT_PHASE_PROBE_STOPPED, probeStopped);
         // "Is the generator running?" - read by the FFT worker to decide
         // whether to anchor the fundamental to the generator's frequency.
         bus.registerResponder(Events.GENERATOR_RUNNING,
@@ -353,19 +370,29 @@ public final class GeneratorController {
      *  failure {@link #isRunning()} answers false and
      *  {@link #getLastStartError()} carries the operator-language reason. */
     public void start() {
-        // DDS tone and file playback share the output device - only one of
-        // them may drive it at a time (the exclusivity the lane's start used
-        // to enforce before the file player merged up here).
-        stopFilePlayback();
-        PlaybackStateEnum state = lane.start(buildRun());
-        lastStartError = localize(state);
-        if (state == PlaybackStateEnum.STARTED) {
+        if (startLane() == PlaybackStateEnum.STARTED) {
             // Starting IS a signal change: what the ADC sees goes from whatever
             // was there to the generated tone, so the scope's running statistics
             // and amplitude distribution, and the FFT's accumulator, must
             // restart rather than average the two together.
             publishSignalChanged();
         }
+    }
+
+    /** The one start sequence, shared by the operator's Play and by the resume
+     *  that ends a probe pause: the file player stands down, the run is built
+     *  from the settings as they now stand and the failure is localized.
+     *  Announcing the change is the CALLER's - a Play is a new signal for every
+     *  analyzer, while the tone a pause puts back is the one that left and
+     *  nothing is told about it. */
+    private PlaybackStateEnum startLane() {
+        // DDS tone and file playback share the output device - only one of
+        // them may drive it at a time (the exclusivity the lane's start used
+        // to enforce before the file player merged up here).
+        stopFilePlayback();
+        PlaybackStateEnum state = lane.start(buildRun());
+        lastStartError = localize(state);
+        return state;
     }
 
     /**
@@ -428,6 +455,50 @@ public final class GeneratorController {
     public void restart() {
         stop();
         start();
+    }
+
+    /**
+     * Stops the tone for the length of a measurement that needs the output
+     * device to itself - the FFT's periodical notch-phase probe drives the same
+     * DAC through its own sweep engine - remembering whether the lane was
+     * playing at all, so {@link #resumeTone()} puts back exactly what it found.
+     *
+     * <p>File playback is not touched: the two engines are mutually exclusive,
+     * so a lane that was running means no file was playing.
+     *
+     * <p>NOTHING is published, here or at the resume: the pause is not a change
+     * of the generated signal but a gap inside one measurement, invisible to
+     * everyone except the measurement that asked for it.  An announcement would
+     * reach precisely the consumers that restart a running measurement on a
+     * real signal change - the frequency lock and the averaged spectrum, the
+     * scope's history and persistence - and destroy the very average the probe
+     * is taken to protect.  The tone that comes back is the one that left.
+     *
+     * <p>Both halves run on the CALLING thread, which is the analyser's worker:
+     * a lane start blocks, so it does not belong on the display thread, and the
+     * bus delivers the probe events synchronously on the publisher's thread,
+     * which is what makes the tone already gone when the sweep begins.
+     */
+    public void suspendTone() {
+        toneSuspended = lane.isRunning();
+        if (toneSuspended) {
+            lane.stop();
+        }
+    }
+
+    /** Restarts the tone a {@link #suspendTone()} stopped - and only that: a
+     *  lane that was already silent when it was suspended stays silent, and a
+     *  second resume does nothing.  The run is rebuilt from the preferences as
+     *  they now stand (the same start sequence {@link #start()} takes), so a
+     *  setting edited during the pause is what plays afterwards, while the
+     *  signal-change announcement that start makes is deliberately not made
+     *  here; a restart that fails leaves {@link #isRunning()} false and
+     *  {@link #getLastStartError()} carrying the reason, exactly as a Play that
+     *  fails does. */
+    public void resumeTone() {
+        if (!toneSuspended) return;
+        toneSuspended = false;
+        startLane();
     }
 
     /** Stops both engines - used when the FreqResp sweep claims the DAC

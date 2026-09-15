@@ -19,6 +19,7 @@
 package org.edgo.audio.measure.gui.fft;
 
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -29,11 +30,13 @@ import java.util.stream.IntStream;
 
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.common.AppPaths;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.dsp.TimeDiscontinuityDetector;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.dsp.MainsFilters;
 import org.edgo.audio.measure.dsp.MainsTimeFilter;
@@ -46,13 +49,16 @@ import org.edgo.audio.measure.fft.FftResultPool;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
+import org.edgo.audio.measure.gui.freqresp.NotchPhaseProbe;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.sound.CaptureEndReason;
 
+import lombok.AccessLevel;
 import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -216,6 +222,20 @@ public final class FftAnalyzerWorker {
      *  stream the de-rotation depends on. */
     private double[] analyzeBuf = new double[0];
     private double[] hopBuf     = new double[0];
+    /** The OPPOSITE channel's copy of the very same spans as {@link #winBuf} /
+     *  {@link #hopBuf}, filled by the SAME reader call (both output arrays of
+     *  one {@code read} - a second call would advance the cursor twice and tear
+     *  the stream).  Held only while the fundamental phase alignment runs in
+     *  mode {@link FundamentalPhaseAlignment#REFERENCE_CHANNEL}, and dropped as
+     *  soon as it does not, so the mode coming back on cannot resume a window
+     *  whose reference half stopped being filled.  Their fill progress IS
+     *  {@link #winFill} / {@link #hopFill} - one call fills both arrays to the
+     *  same offset - so {@link #invalidateWindow()} invalidates them with the
+     *  analysed window.  No analysis copy is needed: the single-bin phasor
+     *  reads the samples without mutating them, and the reference feed is
+     *  deliberately not mains-filtered. */
+    private double[] refWinBuf;
+    private double[] refHopBuf;
     /** The hop the window slides by next - drawn per tick in the random
      *  overlap mode, constant otherwise.  FROZEN while its gather is in
      *  flight: it is redrawn only after the slide it sizes has completed.
@@ -559,6 +579,79 @@ public final class FftAnalyzerWorker {
      *  cleared the cache.  Worker-thread only. */
     private MainsSuppression lastMainsMode;
 
+    // ─── Fundamental phase alignment ───────────────────────────────────────
+    /** The fundamental's phase excess for the NEXT accumulated tick, in
+     *  radians: how far the analysed channel's fundamental phase stands from
+     *  the drift-free time base the selected alignment mode supplies.  Zero in
+     *  mode {@link FundamentalPhaseAlignment#NONE}.  Behind a notch filter the
+     *  centre frequency drifts thermally and the phase response at the centre
+     *  is steep, so the fundamental - and only it - moves; the tracking loop
+     *  has one phase input and would charge that move to the time base, where
+     *  it lands on harmonic h multiplied by h.  Set once per tick before
+     *  {@link #accumulateIntoForeverBuffer} and consumed there at exactly two
+     *  points. */
+    private double pendingPhiF;
+    /** True while the reference feed failed the start check below, so this
+     *  collection accumulates unaligned (phiF held at zero).  Re-evaluated at
+     *  every accumulator restart. */
+    private boolean phaseAlignRefused;
+    /** One refusal notice per collection: cleared by {@link #start()}, set by
+     *  the first publish, so a run that restarts its accumulator repeatedly
+     *  does not raise the operator's dialog again and again. */
+    private boolean phaseAlignRefusalPublished;
+    /** Accumulated ticks since {@link #start()}, counting only the ticks that
+     *  actually computed a reference phase - the cadence of the live readout
+     *  below. */
+    private int phaseAlignTicks;
+    /** Ticks between two live readouts of the analysed-to-reference ratio.
+     *  Frequent enough to show a feed degrading during a long average, rare
+     *  enough to cost nothing per tick. */
+    private static final int PHASE_ALIGN_READOUT_TICKS = 100;
+    /** Half-width, in bins, of the neighbourhood the reference bin's local
+     *  floor is taken from, and the half-width of the fundamental's own lobe
+     *  excluded from it - a windowed tone spreads over a few bins, which would
+     *  otherwise lift the very floor it is being measured against. */
+    private static final int PHASE_ALIGN_FLOOR_SPAN_BINS    = 32;
+    private static final int PHASE_ALIGN_FLOOR_EXCLUDE_BINS = 2;
+    /** Least margin, in dB, the reference bin's power must hold over that
+     *  local floor for the feed to count as carrying the fundamental: below it
+     *  the phase handed to the loop is the phase of noise. */
+    private static final double PHASE_ALIGN_MIN_MARGIN_DB = 20.0;
+    /** Least level, in dBFS, the reference bin must reach.  A feed this far
+     *  down is at the converter's own noise, whatever its local margin. */
+    private static final double PHASE_ALIGN_MIN_LEVEL_DBFS = -100.0;
+
+    /** Why the reference-channel alignment refused to run, in the three
+     *  numbers the operator's message states: the fundamental's frequency, the
+     *  reference bin's level and its margin over the reference channel's local
+     *  floor.  Payload of {@link Events#FFT_PHASE_ALIGN_REFUSED}. */
+    public record PhaseAlignRefusal(double fundamentalHz, double levelDbFs, double marginDb) {}
+
+    // ─── Periodical-sweep probe ─────────────────────────────────────────────
+    /** The probe's collaborator ({@link PhaseProbeHost}), or null while none
+     *  was wired (the offscreen controller, which never records). */
+    @Setter(AccessLevel.PACKAGE)
+    private volatile PhaseProbeHost probeHost;
+    /** When the next probe is due.  Reset at every collection start: a drift
+     *  rate measured across a stopped collection says nothing about this one. */
+    private final PhaseProbeScheduler probeScheduler = new PhaseProbeScheduler();
+    /** De-trended phase of the collection's FIRST probe, in radians - the
+     *  baseline every later probe is measured against.  A probe's absolute
+     *  residual carries no meaning; only the change since the baseline does. */
+    private double  probeBaselineRad;
+    private boolean probeBaselineTaken;
+    /** The phase excess the latest probe measured against that baseline, held
+     *  until the next probe replaces it - the value mode PERIODICAL_SWEEP
+     *  feeds the accumulator every tick. */
+    private double probeDeltaRad;
+    /** True while a probe owns the output device.  The tone going down and
+     *  coming back is the probe's own doing, not a change of the measured
+     *  signal, so the tick's generator transition does not act on it. */
+    private volatile boolean probeInFlight;
+    /** Seconds per nanosecond's worth of nanoTime - the probe schedule is
+     *  stated in seconds and the worker's clock in nanoseconds. */
+    private static final double NANOS_PER_SEC = 1e9;
+
     /**
      * @param display SWT display used to marshal {@link Events#FFT_RESULT_AVAILABLE}
      *                publishes back to the UI thread.  Subscribers to that
@@ -735,12 +828,10 @@ public final class FftAnalyzerWorker {
      *  @return {@code true} if this tick was accumulated; {@code false} while
      *         the phase lock is still converging (the caller should then show
      *         the live single-tick spectrum, not the accumulator). */
-    // Package-private (not private) so the cross-tick drift harness
-    // (FftCrossTickDriftTest) can drive the real accumulator + PLL headlessly.
-    boolean accumulateIntoForeverBuffer(FftResult r,
-                                        long samplesAbsStart,
-                                        boolean coherent,
-                                        int targetN) {
+    private boolean accumulateIntoForeverBuffer(FftResult r,
+                                                long samplesAbsStart,
+                                                boolean coherent,
+                                                int targetN) {
         int fftSize  = r.fftSize;
         int halfSize = fftSize / 2;
         int N        = halfSize + 1;
@@ -788,7 +879,18 @@ public final class FftAnalyzerWorker {
                         + "- κ phase-slope refine + phase-lock loop",
                         accumKappa2 > 0.0 ? " + dual pair/product grid" : "");
             }
+            // The reference feed is re-qualified whenever the average starts
+            // anew - at the first tick of a collection and after any change
+            // that drops the accumulator - so a feed that is missing now can
+            // still carry the next run.
+            checkPhaseAlignStart(r, halfSize);
         }
+        // The fundamental's phase excess for THIS tick.  Zero in mode NONE and
+        // for as long as the reference feed stands refused; it enters the
+        // accumulator at exactly two points - the tracking loop's fundamental
+        // phase below, and the fundamental region's own rotation further down -
+        // and nowhere else.
+        final double phiF = phaseAlignRefused ? 0.0 : pendingPhiF;
 
         // Time-shift offset from the pinned reference frame-0.  An overrun /
         // discontinuity re-anchor jumps samplesAbsStart, but the COVERAGE gap is
@@ -855,8 +957,14 @@ public final class FftAnalyzerWorker {
                 double krot = -2.0 * Math.PI
                         * Math.IEEEremainder(delta * accumKFractional, fftSize) / fftSize;
                 double cr   = Math.cos(krot), sr = Math.sin(krot);
+                // Minus the fundamental's phase excess: what the κ refine and
+                // the loop below see is the fundamental with the notch's own
+                // drift taken out - in mode REFERENCE_CHANNEL that difference
+                // IS the reference channel's fundamental phase.  Everything the
+                // loop then does (residual, fork, the sample-domain correction)
+                // is unchanged.
                 double obsPhase = Math.atan2(r.re[k0] * sr + r.im[k0] * cr,
-                                             r.re[k0] * cr - r.im[k0] * sr);
+                                             r.re[k0] * cr - r.im[k0] * sr) - phiF;
                 if (!kappaRefined) {
                     // One-shot κ refine from the de-rotated fundamental's phase
                     // slope: dφ/dΔ over KAPPA_MEAS_FRAMES CLEAN frames IS
@@ -976,6 +1084,17 @@ public final class FftAnalyzerWorker {
                         * Math.IEEEremainder(delta * scale, fftSize) / fftSize;
                 final double stepRe = Math.cos(theta);
                 final double stepIm = Math.sin(theta);
+                // The fundamental's phase excess reaches the RECT path on the
+                // OUTPUT of the fundamental's own bins alone (on-bin content
+                // occupies a single bin, so ±2 bins covers it): the incremental
+                // recurrence that generates the per-bin ramp is left untouched,
+                // or every bin above the fundamental would shift with it.  An
+                // empty range (phiF = 0) costs one comparison per bin.
+                final double fundRotRe =  Math.cos(phiF);
+                final double fundRotIm = -Math.sin(phiF);
+                final int    fundRotLo = (phiF != 0.0)
+                        ? accumIntFundBinRounded - 2 : Integer.MAX_VALUE;
+                final int    fundRotHi = accumIntFundBinRounded + 2;
                 final double[] pvR = prevTickRe[prevSlot], pvI = prevTickIm[prevSlot];
                 parallelChunks(N, (kLo, kHi) -> {
                     double ang  = Math.IEEEremainder(theta * kLo, 2.0 * Math.PI);
@@ -986,6 +1105,11 @@ public final class FftAnalyzerWorker {
                         double rIm = r.im[k] * weight;
                         double cRe = rRe * phRe - rIm * phIm;
                         double cIm = rRe * phIm + rIm * phRe;
+                        if (k >= fundRotLo && k <= fundRotHi) {
+                            double rotRe = cRe * fundRotRe - cIm * fundRotIm;
+                            cIm = cRe * fundRotIm + cIm * fundRotRe;
+                            cRe = rotRe;
+                        }
                         accumRe[k] += cRe;
                         accumIm[k] += cIm;
                         pvR[k] = cRe;
@@ -1005,7 +1129,7 @@ public final class FftAnalyzerWorker {
                         ? -2.0 * Math.PI
                             * Math.IEEEremainder(delta * accumKappa2, fftSize) / fftSize
                         : 0.0;
-                final int nFam = buildFamily(r, halfSize, phi1, phi2);
+                final int nFam = buildFamily(r, halfSize, phi1, phi2, phiF);
                 final double[] pvR = prevTickRe[prevSlot], pvI = prevTickIm[prevSlot];
                 if (nFam <= 0) {
                     // No pinned fundamental: nothing coherent needs aligning -
@@ -1043,6 +1167,24 @@ public final class FftAnalyzerWorker {
             tickStats.tick(r, samplesAbsStart, delta, accumDroppedSamples,
                     accumKFractional, accumIntFundBinRounded, rotationRef,
                     accumRe, accumIm, accumFrames + weight);
+            if (DebugSwitches.TRACE_HARMONIC_PHASE && log.isInfoEnabled()) {
+                // The first frame of a collection is the reference the rest is
+                // read against, so it is traced as the spectrum stands; every
+                // later frame is traced with the phase excess taken out, which
+                // is what keeps the relations still if the alignment works.
+                traceHarmonicPhases(r.re, r.im, halfSize, restart ? 0.0 : phiF,
+                        "frame " + completedAnalyses + (restart
+                                ? " (first accumulated frame, spectrum as it stands)"
+                                : " (phase excess taken out)"));
+                // The accumulator with this frame already in it, read the same
+                // way but with NO excess taken out: the accumulated fundamental
+                // carries -phiF from the family rotation, so taking it out again
+                // here would count it twice.  This is the line that says whether
+                // the harmonics of a LONG average hold together, which no
+                // single-tick reading can show.
+                traceHarmonicPhases(accumRe, accumIm, halfSize, 0.0,
+                        "accumulator after frame " + completedAnalyses);
+            }
         } else {
             // Incoherent analyze stores the RAW FFT magnitude in r.re (im = 0).
             // Sum its POWER - NOT the already-amplitude r.amplitudeDbFs - so the
@@ -1093,6 +1235,373 @@ public final class FftAnalyzerWorker {
                     prevTickCount, removedFrames);
         }
         prevTickCount = 0;
+    }
+
+    /** Highest harmonic the phase trace reports.  The ladder H2 to H9 is the
+     *  one the distortion readouts are built on, so the trace speaks the same
+     *  set. */
+    private static final int TRACE_MAX_HARMONIC = 9;
+
+    /**
+     * One line of the harmonic phase trace (see
+     * {@link DebugSwitches#TRACE_HARMONIC_PHASE}): for h = 2 to
+     * {@link #TRACE_MAX_HARMONIC}, the phase of harmonic h measured against h
+     * times the fundamental's own phase, in degrees, read from THIS tick's
+     * spectrum at the harmonics' bins.
+     *
+     * <p>Why that relation.  A pure time shift of the whole capture turns
+     * harmonic h by h times what it turns the fundamental by, so the relation
+     * below is blind to it - it is blind to everything the accumulator's time
+     * base does.  What it is NOT blind to is the fundamental moving ALONE,
+     * which is what a notch's thermal drift does to it.  Traced against the
+     * first frame of a collection the numbers therefore walk away by h times
+     * the drift; traced with the measured excess taken out of the
+     * fundamental's phase they stand still, and that difference is the whole
+     * claim of the phase alignment, readable in a log.
+     *
+     * <p>The same reading serves two spectra, which is why the arrays arrive as
+     * parameters: this tick's own, where the excess is taken out to show the
+     * relations standing still, and the ACCUMULATOR as it stands after this
+     * tick was added, where no excess is taken out because the accumulated
+     * fundamental already carries it through the family rotation.  The
+     * accumulator's line is the one that says whether a long average keeps its
+     * harmonics, which a per-tick reading cannot tell.
+     *
+     * @param re       real parts to read, indexed by bin
+     * @param im       imaginary parts to read, indexed by bin
+     * @param halfSize highest bin index either array is read at
+     * @param phiF     the phase excess to take out of the fundamental's phase;
+     *                 zero reads the spectrum as it stands
+     * @param label    what this line reads - the frame and how, or the
+     *                 accumulator after that frame
+     */
+    private void traceHarmonicPhases(double[] re, double[] im, int halfSize, double phiF,
+            String label) {
+        if (accumKFractional < KAPPA_FAMILY_MIN_BIN || accumIntFundBinRounded <= 0) return;
+        int k0 = Math.min(accumIntFundBinRounded, halfSize);
+        double fundPhase = Math.atan2(im[k0], re[k0]) - phiF;
+        StringBuilder rel = new StringBuilder();
+        for (int h = 2; h <= TRACE_MAX_HARMONIC; h++) {
+            int kh = (int) Math.round(h * accumKFractional);
+            if (kh > halfSize) break;
+            double d = Math.IEEEremainder(Math.atan2(im[kh], re[kh]) - h * fundPhase,
+                    2.0 * Math.PI);
+            rel.append(String.format(" H%d=%.2f", h, Math.toDegrees(d)));
+        }
+        log.info("FFT harmonic phase trace, {}:{}", label, rel);
+    }
+
+    /** This tick's fundamental phase excess for the selected alignment mode,
+     *  in radians: measured against the reference channel per tick, held from
+     *  the latest sweep probe, or zero when no alignment runs. */
+    private double tickPhiF(FundamentalPhaseAlignment mode, FftResult r, boolean coherent) {
+        switch (mode) {
+            case REFERENCE_CHANNEL:
+                return referencePhiF(r, coherent);
+            case PERIODICAL_SWEEP:
+                return probeDeltaRad;
+            default:
+                return 0.0;
+        }
+    }
+
+    /** The bin the accumulator reads the fundamental at for THIS tick: its
+     *  pinned {@link #accumIntFundBinRounded} while the accumulator is live for
+     *  this geometry, and otherwise the bin this tick is about to pin - the
+     *  same rule the restart block applies, so the reference phasor is taken at
+     *  the loop's bin even on the tick that pins it.  A bin that wandered with
+     *  the per-tick peak would compare two different frequencies' phases. */
+    private int phaseAlignBin(FftResult r, int halfSize, boolean coherent) {
+        boolean live = accumHasData && accumFftSize == r.fftSize && accumCoherent == coherent
+                && accumIntFundBinRounded > 0;
+        int k0 = live ? accumIntFundBinRounded
+                      : Math.max(1, (int) Math.round(r.fundamentalHzRefined / r.freqResolution));
+        return Math.min(k0, halfSize);
+    }
+
+    /** The fundamental's phase excess measured against the reference channel:
+     *  the phase of the analysed spectrum's raw fundamental bin (before the
+     *  accumulator's own de-rotation - that one carries the tick-to-tick hop
+     *  advance, which must not land in the difference) minus the phase of the
+     *  SAME bin of the reference window, computed by the analyser's own
+     *  single-bin recipe over the same span and the same frame geometry.  What
+     *  remains is the phase the notch adds to the fundamental alone.  Nothing
+     *  is accumulated across ticks here - the answer is this tick's alone.
+     *  Returns 0 while the reference window is not available.
+     *
+     *  <p>Also carries the live readout of the feed: the analysed-to-reference
+     *  ratio, magnitude and phase, every
+     *  {@link #PHASE_ALIGN_READOUT_TICKS} accumulated ticks. */
+    private double referencePhiF(FftResult r, boolean coherent) {
+        if (refWinBuf == null || !winValid || r.freqResolution <= 0.0) return 0.0;
+        int halfSize = r.fftSize / 2;
+        int k0 = phaseAlignBin(r, halfSize, coherent);
+        if (k0 <= 0) return 0.0;
+        double kFractional = r.fundamentalHzRefined / r.freqResolution;
+        int frames = Math.max(1, r.frameCount);
+        FftAnalyzer.BinPhasor ref = analyzer.binPhasor(refWinBuf, r.fftSize, r.windowType,
+                k0, pendingHopSamples, frames, kFractional);
+        double refMag = Math.hypot(ref.re(), ref.im());
+        double anaMag = Math.hypot(r.re[k0], r.im[k0]);
+        if (refMag <= 0.0 || anaMag <= 0.0) return 0.0;
+        double phiF = Math.IEEEremainder(
+                Math.atan2(r.im[k0], r.re[k0]) - Math.atan2(ref.im(), ref.re()),
+                2.0 * Math.PI);
+        if (DebugSwitches.TRACE_HARMONIC_PHASE && log.isInfoEnabled()) {
+            log.info("FFT phase excess, tick {}: {} deg (reference channel)",
+                    completedAnalyses, String.format("%.3f", Math.toDegrees(phiF)));
+        }
+        phaseAlignTicks++;
+        if (phaseAlignTicks % PHASE_ALIGN_READOUT_TICKS == 0 && log.isInfoEnabled()) {
+            log.info("FFT phase alignment, tick {}: analysed/reference at bin {} = {} dB, {} deg",
+                    phaseAlignTicks, k0,
+                    String.format("%.2f", 20.0 * Math.log10(anaMag / refMag)),
+                    String.format("%.2f", Math.toDegrees(phiF)));
+        }
+        return phiF;
+    }
+
+    /**
+     * Measures, on the reference window this cycle holds, the tone frequencies
+     * the frequency lock steers on, and stamps them on the result: the
+     * fundamental always, the second tone whenever the analysis found one (its
+     * bin comes from the analysed channel's own refined estimate - the same
+     * tone is at the same place on both channels).  Both stay
+     * {@link Double#NaN} when no reference window exists, which is every mode
+     * but the reference-channel alignment.
+     *
+     * <p>Called for EVERY analysed cycle, not only for the ones that reach the
+     * accumulator: the frequency lock runs with the averaging off or set to one
+     * as well, and a measurement tied to the accumulate flag would leave it
+     * steering on the notched channel in exactly those settings.  It therefore
+     * derives its own geometry - the alignment bin, the frame count and the
+     * de-rotation frequency - by the same rules the per-tick phase excess uses.
+     *
+     * <p>Why measure them at all: behind a notch the analysed fundamental sits
+     * tens of dB into the noise, where a sub-bin estimate wanders, while the
+     * reference channel carries the same tone clear of it.  Only the loop's
+     * input changes - the accumulator, the coherent bin and the plots keep the
+     * analysed channel's numbers.
+     *
+     * <p>A feed the start check refused carries no tone at all - the bin holds
+     * noise, and the frequency read off noise is as meaningless as the phase
+     * the accumulator already discards for it.  Nothing is stamped then, and
+     * the lock keeps steering on the analysed channel.
+     */
+    private void measureReferenceFrequencies(FftResult r, boolean coherent) {
+        if (refWinBuf == null || !winValid || r.freqResolution <= 0.0 || phaseAlignRefused) {
+            return;
+        }
+        int halfSize = r.fftSize / 2;
+        int k0 = phaseAlignBin(r, halfSize, coherent);
+        if (k0 <= 0) return;
+        int frames = Math.max(1, r.frameCount);
+        double kFractional = r.fundamentalHzRefined / r.freqResolution;
+        r.referenceFundamentalHzRefined = analyzer.refinedBin(refWinBuf, r.fftSize, r.windowType,
+                k0, pendingHopSamples, frames, kFractional) * r.freqResolution;
+        if (!(r.fundamental2HzRefined > 0.0)) return;
+        int k2 = (int) Math.round(r.fundamental2HzRefined / r.freqResolution);
+        if (k2 < 1 || k2 > halfSize) return;
+        r.referenceFundamental2HzRefined = analyzer.refinedBin(refWinBuf, r.fftSize, r.windowType,
+                k2, pendingHopSamples, frames, kFractional) * r.freqResolution;
+    }
+
+    /** Qualifies the reference feed at an accumulator restart: the reference
+     *  bin must stand {@link #PHASE_ALIGN_MIN_MARGIN_DB} over the median power
+     *  of its neighbourhood (the fundamental's own lobe left out of that floor)
+     *  and reach {@link #PHASE_ALIGN_MIN_LEVEL_DBFS}.  A feed that fails either
+     *  test carries no fundamental to compare against - its phase is the phase
+     *  of noise, and aligning to it would inject that noise into the average -
+     *  so the collection runs unaligned, with the two numbers logged and, once
+     *  per collection, handed to the pane for the operator.  The sweep costs
+     *  one single-bin transform per neighbourhood bin, paid once per restart,
+     *  never per tick.  A no-op in every other alignment mode, which keep no
+     *  reference window. */
+    private void checkPhaseAlignStart(FftResult r, int halfSize) {
+        phaseAlignRefused = false;
+        if (refWinBuf == null || !winValid || r.freqResolution <= 0.0) return;
+        int k0 = Math.min(accumIntFundBinRounded, halfSize);
+        if (k0 <= 0) return;
+        double kFractional = r.fundamentalHzRefined / r.freqResolution;
+        int frames = Math.max(1, r.frameCount);
+        int lo = Math.max(0, k0 - PHASE_ALIGN_FLOOR_SPAN_BINS);
+        int hi = Math.min(halfSize, k0 + PHASE_ALIGN_FLOOR_SPAN_BINS);
+        double[] floor = new double[hi - lo + 1];
+        int nFloor = 0;
+        double refPow = 0.0;
+        for (int k = lo; k <= hi; k++) {
+            FftAnalyzer.BinPhasor p = analyzer.binPhasor(refWinBuf, r.fftSize, r.windowType,
+                    k, pendingHopSamples, frames, kFractional);
+            double pow = p.re() * p.re() + p.im() * p.im();
+            if (k == k0) refPow = pow;
+            if (Math.abs(k - k0) > PHASE_ALIGN_FLOOR_EXCLUDE_BINS) floor[nFloor++] = pow;
+        }
+        Arrays.sort(floor, 0, nFloor);
+        double median   = nFloor > 0 ? floor[nFloor / 2] : 0.0;
+        double marginDb = (refPow > 0.0 && median > 0.0)
+                ? 10.0 * Math.log10(refPow / median) : -300.0;
+        double conv     = magToAmplitudeFactor(r, halfSize);
+        double levelDbFs = (refPow > 0.0 && conv > 0.0)
+                ? 20.0 * Math.log10(Math.sqrt(refPow) * conv) : -300.0;
+        if (marginDb >= PHASE_ALIGN_MIN_MARGIN_DB && levelDbFs >= PHASE_ALIGN_MIN_LEVEL_DBFS) {
+            return;
+        }
+        phaseAlignRefused = true;
+        if (log.isWarnEnabled()) {
+            log.warn("FFT phase alignment refused: the reference channel's bin {} is at {} dBFS, "
+                    + "{} dB over its local floor (needs {} dBFS and {} dB) - averaging unaligned",
+                    k0, String.format("%.1f", levelDbFs), String.format("%.1f", marginDb),
+                    String.format("%.0f", PHASE_ALIGN_MIN_LEVEL_DBFS),
+                    String.format("%.0f", PHASE_ALIGN_MIN_MARGIN_DB));
+        }
+        publishPhaseAlignRefusal(new PhaseAlignRefusal(r.fundamentalHzRefined, levelDbFs, marginDb));
+    }
+
+    /** Hands one refusal to the UI thread - the bus dispatches synchronously on
+     *  the publishing thread, and the subscriber opens a dialog - and only the
+     *  first one of a collection, so a run that restarts its accumulator does
+     *  not raise the same dialog again. */
+    private void publishPhaseAlignRefusal(PhaseAlignRefusal refusal) {
+        if (phaseAlignRefusalPublished || display == null || display.isDisposed()) return;
+        phaseAlignRefusalPublished = true;
+        display.asyncExec(() -> {
+            try {
+                MessageBus.instance().publish(Events.FFT_PHASE_ALIGN_REFUSED, refusal);
+            } catch (Exception e) {
+                if (log.isErrorEnabled()) log.error("Can't dispatch {}", Events.FFT_PHASE_ALIGN_REFUSED, e);
+            }
+        });
+        display.wake();
+    }
+
+    /** Runs a periodical-sweep probe when the schedule says one is due.  This
+     *  is the seam: the collection stops between two ticks - the accumulator
+     *  and its averages count untouched - the tone goes down, a sweep measures
+     *  the notch's phase at the fundamental afresh, the tone comes back and
+     *  collecting continues with the phase excess the probe measured.  Runs on
+     *  the worker's own thread, so no tick can start inside it. */
+    private void maybeRunPhaseProbe(Preferences prefs, int sampleRate) {
+        PhaseProbeHost host = probeHost;
+        if (host == null) return;
+        if (!probeScheduler.isDue(System.nanoTime() / NANOS_PER_SEC)) return;
+        double fundamentalHz = probeFundamentalHz(sampleRate);
+        // Nothing to centre a probe on yet (no tone, no measurement): leave the
+        // probe due and look again next tick.
+        if (!(fundamentalHz > 0.0)) return;
+        runPhaseProbe(host, prefs, fundamentalHz);
+    }
+
+    /** The frequency a probe is centred on: the accumulator's PINNED
+     *  fundamental while one is running - the measured value the whole average
+     *  is de-rotated by - and otherwise what the generator says it emits, which
+     *  is all the baseline probe can have, running as it does before the first
+     *  tick has measured anything. */
+    private double probeFundamentalHz(int sampleRate) {
+        if (accumHasData && accumKFractional > 0.0 && accumFftSize > 0) {
+            return accumKFractional * sampleRate / (double) accumFftSize;
+        }
+        double[] emitted = MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, sampleRate);
+        return (emitted != null && emitted.length > 0) ? emitted[0] : Double.NaN;
+    }
+
+    /** One probe, start to finish.  The announcement IS the seam: both events
+     *  are published synchronously on this thread, so the generator - which
+     *  subscribes to them - has taken its tone down before the sweep starts
+     *  and put it back before the tick goes on.  Every exit path announces the
+     *  end and re-anchors the capture, because the probe held the output
+     *  device for seconds and the ring moved on without the analyser reading
+     *  it. */
+    private void runPhaseProbe(PhaseProbeHost host, Preferences prefs, double fundamentalHz) {
+        if (log.isInfoEnabled()) {
+            log.info("FFT notch-phase probe at {} Hz: accumulation pauses and the tone goes down",
+                    String.format("%.3f", fundamentalHz));
+        }
+        probeInFlight = true;
+        publishProbeEvent(Events.FFT_PHASE_PROBE_STARTED);
+        NotchPhaseProbe.Result result = null;
+        try {
+            result = host.newProbe().run(fundamentalHz);
+        } catch (RuntimeException ex) {
+            if (log.isWarnEnabled()) {
+                log.warn("FFT notch-phase probe at {} Hz failed", fundamentalHz, ex);
+            }
+        } finally {
+            publishProbeEvent(Events.FFT_PHASE_PROBE_STOPPED);
+            // The tone is back - and the transition check reads the state the
+            // probe leaves behind, so neither its stop nor its start can be
+            // taken for a change of the measured signal.
+            lastGeneratorActive = isGeneratorActive();
+            probeInFlight = false;
+            // Seconds of the 22-second ring went by with nothing reading it:
+            // rebuild the window from fresh samples, discard the span still
+            // carrying the sweep out of the DAC's own buffer, and let the loop
+            // realign once on the jumped delta instead of tracking it in a
+            // fraction at a time.
+            invalidateWindow();
+            reAnchorPending   = true;
+            drainSkipPending.set(true);
+            kappaSkipNext     = true;
+            gapRecoverPending = true;
+        }
+        applyProbe(host, prefs, result);
+    }
+
+    /** Records a finished probe on the schedule and, when it produced a
+     *  reading, holds its phase excess and refreshes the de-embedding with the
+     *  response it measured.  The FIRST probe of a collection is the baseline:
+     *  it defines the zero every later probe is measured against, so it applies
+     *  no excess of its own. */
+    private void applyProbe(PhaseProbeHost host, Preferences prefs, NotchPhaseProbe.Result result) {
+        double nowSec = System.nanoTime() / NANOS_PER_SEC;
+        if (result == null) {
+            // An abandoned probe applies nothing and measures nothing: it
+            // enters no drift history and leaves the interval where it was,
+            // and only the next opportunity moves, so a probe that cannot
+            // deliver is not retried on every tick.
+            probeScheduler.probeFailed(nowSec);
+            return;
+        }
+        double residualDeg = Math.toDegrees(result.residualRad());
+        probeScheduler.probeCompleted(nowSec, residualDeg);
+        if (!probeBaselineTaken) {
+            probeBaselineRad   = result.residualRad();
+            probeBaselineTaken = true;
+            probeDeltaRad      = 0.0;
+        } else {
+            probeDeltaRad = Math.IEEEremainder(result.residualRad() - probeBaselineRad,
+                    2.0 * Math.PI);
+        }
+        // The probe measured the notch's response over its band on the analysed
+        // channel: the de-embedding that band is corrected with is replaced by
+        // it, so the correction and the phase excess describe the same filter.
+        FreqRespCalibration response = result.response();
+        double[] freqs = response.freqs;
+        host.refreshDeEmbedding(prefs.getFftChannel(), freqs[0], freqs[freqs.length - 1], response);
+        if (DebugSwitches.TRACE_HARMONIC_PHASE && log.isInfoEnabled()) {
+            log.info("FFT phase excess, tick {}: {} deg (sweep probe)",
+                    completedAnalyses, String.format("%.3f", Math.toDegrees(probeDeltaRad)));
+        }
+        if (log.isInfoEnabled()) {
+            log.info("FFT notch-phase probe done: residual {} deg, held phase excess {} deg, "
+                    + "next probe in {} s",
+                    String.format("%.3f", residualDeg),
+                    String.format("%.3f", Math.toDegrees(probeDeltaRad)),
+                    String.format("%.0f", probeScheduler.getPeriodSec()));
+        }
+    }
+
+    /** Announces a probe's start or end on THIS thread.  Bus dispatch is
+     *  synchronous on the publishing thread, and that is the point: the
+     *  generator's subscriber takes the tone down inside this call, so the
+     *  sweep never overlaps the tone and the tick cannot go on until the tone
+     *  is back.  A subscriber that touches a widget marshals itself - the
+     *  event's javadoc says which thread it arrives on. */
+    private void publishProbeEvent(String eventName) {
+        try {
+            MessageBus.instance().publish(eventName);
+        } catch (Exception e) {
+            if (log.isErrorEnabled()) log.error("Can't dispatch {}", eventName, e);
+        }
     }
 
     /** The FORK: the per-tick tracking correction (in samples) pooled from
@@ -1180,8 +1689,13 @@ public final class FftAnalyzerWorker {
      *  intermodulation grid a·κ1 + b·κ2 when a dual pair is pinned.  Phasors:
      *  the ladder by incremental recurrence from Φ1, the grid members directly
      *  from a·Φ1 + b·Φ2.  Returns the member count; 0 when no fundamental is
-     *  pinned (the caller then adds without rotation). */
-    private int buildFamily(FftResult r, int halfSize, double phi1, double phi2) {
+     *  pinned (the caller then adds without rotation).
+     *
+     *  @param phiF the fundamental's phase excess for this tick: the h = 1 rung
+     *         alone takes the extra rotation -phiF, so the fundamental's region
+     *         follows the notch's phase drift while every harmonic keeps the
+     *         phase the shared time base gives it */
+    private int buildFamily(FftResult r, int halfSize, double phi1, double phi2, double phiF) {
         double kappa = accumKFractional;
         // No family below one bin: the ladder would be the whole half spectrum,
         // member for bin.
@@ -1239,8 +1753,23 @@ public final class FftAnalyzerWorker {
                 pi++;
             }
             famPos[n] = hp;
-            famCos[n] = ch;
-            famSin[n] = sh;
+            if (h == 1 && phiF != 0.0) {
+                // The FUNDAMENTAL rung - the member whose position is κ itself.
+                // (Member 0 is DC, and a dual pair's difference product can sit
+                // between the two, so the rung is identified by h, never by an
+                // index.)  Its constant phasor turns by a further -phiF, which
+                // every bin of its region - the DC midpoint to the H2 midpoint,
+                // about 0.5·κ to 1.5·κ - turns with.  The ladder's recurrence
+                // continues from the UNROTATED phasor below, so H2 and up are
+                // untouched.
+                double c = Math.cos(phiF);
+                double s = Math.sin(phiF);
+                famCos[n] =  ch * c + sh * s;
+                famSin[n] = -ch * s + sh * c;
+            } else {
+                famCos[n] = ch;
+                famSin[n] = sh;
+            }
             n++;
             double next = ch * c1 - sh * s1;
             sh = ch * s1 + sh * c1;
@@ -1256,21 +1785,13 @@ public final class FftAnalyzerWorker {
         return n;
     }
 
-    /** Mutates {@code r}'s re/im/amplitudeDbFs/phaseDeg arrays in place to
-     *  reflect the cumulative accumulator average.  After this, the caller
-     *  should run {@link FftAnalyzer#recomputeStats} so the fundamental,
-     *  harmonic table, THD/SNR are re-derived from the cumulative spectrum
-     *  (the per-tick stats were just one tick's contribution). */
-    void overlayAccumulatorOnto(FftResult r) {   // package-private for the cross-tick drift harness
-        if (!accumHasData || accumFrames <= 0) return;
-        int halfSize = r.fftSize / 2;
-        int N        = halfSize + 1;
-
-        // Derive the (mag -> amplitude) conversion factor used by analyze()
-        // from the pre-overlay r itself: amplLin = hypot(re,im) · normFactor·2
-        // for non-DC/Nyquist bins.  Picking the fundamental bin guarantees
-        // a high-SNR sample for the ratio; the factor depends only on the
-        // window's coherent gain (= constant for a given fftSize/window).
+    /** The (raw magnitude -> amplitude) conversion factor {@code analyze} used
+     *  for this result, derived from the result itself: for a non-DC/Nyquist
+     *  bin {@code amplLin = hypot(re, im) · normFactor · 2}, and the factor
+     *  depends only on the window's coherent gain, so one high-SNR bin fixes
+     *  it - the fundamental's.  Returns 0 when the result carries no usable
+     *  sample of the ratio (a silent or unpopulated spectrum). */
+    private double magToAmplitudeFactor(FftResult r, int halfSize) {
         int kFund = Math.max(1, (int) Math.round(
                 r.fundamentalHzRefined / r.freqResolution));
         if (kFund > halfSize) kFund = halfSize;
@@ -1278,8 +1799,22 @@ public final class FftAnalyzerWorker {
         double ampFund = r.amplitudeDbFs[kFund] > -290.0
                 ? Math.pow(10.0, r.amplitudeDbFs[kFund] / 20.0)
                 : 0.0;
-        if (magFund < 1e-30 || ampFund < 1e-30) return;
-        double conv = ampFund / magFund;   // normFactor · 2 (for non-DC/Nyquist)
+        if (magFund < 1e-30 || ampFund < 1e-30) return 0.0;
+        return ampFund / magFund;
+    }
+
+    /** Mutates {@code r}'s re/im/amplitudeDbFs/phaseDeg arrays in place to
+     *  reflect the cumulative accumulator average.  After this, the caller
+     *  should run {@link FftAnalyzer#recomputeStats} so the fundamental,
+     *  harmonic table, THD/SNR are re-derived from the cumulative spectrum
+     *  (the per-tick stats were just one tick's contribution). */
+    private void overlayAccumulatorOnto(FftResult r) {
+        if (!accumHasData || accumFrames <= 0) return;
+        int halfSize = r.fftSize / 2;
+        int N        = halfSize + 1;
+
+        double conv = magToAmplitudeFactor(r, halfSize);
+        if (conv <= 0.0) return;
 
         // Per-bin and independent -> parallelize the dB rebuild (1M× log10/atan2)
         // across cores; disjoint k-writes, no recursion.
@@ -1354,6 +1889,17 @@ public final class FftAnalyzerWorker {
         completedAnalyses     = 0;
         resetStatistics();
         paused.set(false);
+        // One refusal notice per collection, and a readout cadence that starts
+        // with the collection.
+        phaseAlignRefusalPublished = false;
+        phaseAlignTicks            = 0;
+        // A new collection needs its own baseline probe: a phase excess and a
+        // drift rate from a collection that has ended describe a filter at a
+        // temperature this one knows nothing about.
+        probeScheduler.reset();
+        probeBaselineTaken = false;
+        probeBaselineRad   = 0.0;
+        probeDeltaRad      = 0.0;
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnGenChange);
         bus.subscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
@@ -1396,6 +1942,8 @@ public final class FftAnalyzerWorker {
             winBuf     = new double[0];
             analyzeBuf = new double[0];
             hopBuf     = new double[0];
+            refWinBuf  = null;      // the reference mirror is the same size again
+            refHopBuf  = null;
             invalidateWindow();
             winNeeded  = -1;
             analyzer.releaseScratch();
@@ -1562,10 +2110,16 @@ public final class FftAnalyzerWorker {
         // Generator-state transition: wipe accumulated stats so the next
         // analysis starts with a clean slate.
         boolean genActiveNow = isGeneratorActive();
-        if (lastGeneratorActive != null && lastGeneratorActive != genActiveNow) {
-            resetStatisticsAfterSignalChange();
+        // A probe's own pause of the tone is not a change of the measured
+        // signal - the tone is on its way back and the average it feeds is
+        // meant to survive the seam - so only a transition outside a probe
+        // wipes, and the probe re-seeds this field from the state it leaves.
+        if (!probeInFlight) {
+            if (lastGeneratorActive != null && lastGeneratorActive != genActiveNow) {
+                resetStatisticsAfterSignalChange();
+            }
+            lastGeneratorActive = genActiveNow;
         }
-        lastGeneratorActive = genActiveNow;
         // Consume a pending foreign reset (or the transition reset just
         // above): the accumulator / mains-tracking wipe runs HERE, on the
         // worker thread, so it can never race the accumulate loops.
@@ -1646,6 +2200,16 @@ public final class FftAnalyzerWorker {
         Channel channel = prefs.getFftChannel();
         boolean wantLeft = (channel == Channel.L);
 
+        FundamentalPhaseAlignment alignMode = prefs.getFftFundamentalPhaseAlignment();
+        // The periodical-sweep seam sits HERE, before this tick touches the
+        // reader: the probe drives the output device itself and costs seconds
+        // of capture, and the re-anchor it arms is consumed by the block right
+        // below, so the tick that pays for a probe is also the one that starts
+        // the window again.
+        if (alignMode == FundamentalPhaseAlignment.PERIODICAL_SWEEP) {
+            maybeRunPhaseProbe(prefs, sampleRate);
+        }
+
         // Re-anchor on (re)start / reset so the sliding window is rebuilt only
         // from FRESH samples captured after this point (no ghosting after the
         // generator stops).  Done on the worker thread to keep the cursor's
@@ -1682,6 +2246,18 @@ public final class FftAnalyzerWorker {
             winChannelLeft = wantLeft;
             if (winBuf.length != needed) winBuf = new double[needed];
         }
+        // The reference channel's mirror of the same span exists only while the
+        // mode asks for it; dropping it when the mode goes off is what makes
+        // turning the mode back on rebuild the window instead of resuming one
+        // whose reference half was not being filled.
+        boolean refWanted = alignMode == FundamentalPhaseAlignment.REFERENCE_CHANNEL;
+        if (!refWanted) {
+            refWinBuf = null;
+            refHopBuf = null;
+        } else if (refWinBuf == null || refWinBuf.length != needed) {
+            invalidateWindow();
+            refWinBuf = new double[needed];
+        }
 
         long avail = rdr.available();
         if (avail == SignalBufferReader.OVERRUN) {
@@ -1702,7 +2278,7 @@ public final class FftAnalyzerWorker {
             // than the ring, and every tick's share is consumed as it arrives,
             // so the cursor stays right behind the writer instead of standing
             // still and being lapped.
-            winFill = gather(rdr, winBuf, winFill, needed, wantLeft, avail);
+            winFill = gather(rdr, winBuf, refWinBuf, winFill, needed, wantLeft, avail);
             if (winFill == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
             if (winFill < needed) return awaitFor(needed - winFill, sampleRate);
             winLen      = needed;
@@ -1730,11 +2306,21 @@ public final class FftAnalyzerWorker {
                 hopBuf  = new double[maxHopSamples];
                 hopFill = 0;
             }
-            hopFill = gather(rdr, hopBuf, hopFill, slideHop, wantLeft, avail);
+            if (refWanted && (refHopBuf == null || refHopBuf.length != maxHopSamples)) {
+                // Only ever reached with nothing gathered yet: the mode turning
+                // on drops the reference window above, which restarts the whole
+                // span, and a changed hop capacity changes `needed` with it.
+                refHopBuf = new double[maxHopSamples];
+            }
+            hopFill = gather(rdr, hopBuf, refHopBuf, hopFill, slideHop, wantLeft, avail);
             if (hopFill == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
             if (hopFill < slideHop) return awaitFor(slideHop - hopFill, sampleRate);
             System.arraycopy(winBuf, slideHop, winBuf, 0, winLen - slideHop);
             System.arraycopy(hopBuf, 0, winBuf, winLen - slideHop, slideHop);
+            if (refWinBuf != null && refHopBuf != null && refWinBuf.length == winLen) {
+                System.arraycopy(refWinBuf, slideHop, refWinBuf, 0, winLen - slideHop);
+                System.arraycopy(refHopBuf, 0, refWinBuf, winLen - slideHop, slideHop);
+            }
             winAbsStart += slideHop;
             hopFill = 0;
             // The slide is complete - take the NEXT hop.  It is the spacing
@@ -2014,6 +2600,17 @@ public final class FftAnalyzerWorker {
             resultPool.release(r);
             return IDLE_TICK_MS;
         }
+        // The reference channel's tone frequencies for the frequency lock -
+        // every analysed cycle, whether or not this one is averaged: the lock
+        // runs with the averaging off or at one too, and those are settings in
+        // which it would otherwise keep steering on the notched channel.
+        measureReferenceFrequencies(r, coherent);
+        // Fundamental phase alignment: this tick's phase excess, measured after
+        // the gates (a tick that never reaches the accumulator needs none) and
+        // before the accumulator, which consumes it at its two points.  Mode
+        // REFERENCE_CHANNEL measures it per tick against the opposite channel;
+        // mode PERIODICAL_SWEEP holds what its latest probe measured.
+        pendingPhiF = accumulate ? tickPhiF(alignMode, r, coherent) : 0.0;
         boolean accumulated = accumulate
                 && accumulateIntoForeverBuffer(r, samplesAbsStart, coherent, targetFrames);
 
@@ -2194,11 +2791,11 @@ public final class FftAnalyzerWorker {
      *  every tick is what keeps the cursor close behind the writer while a span
      *  longer than the ring is being assembled.  Worker-thread only (it
      *  advances the cursor). */
-    private int gather(SignalBufferReader rdr, double[] dst, int have, int target,
+    private int gather(SignalBufferReader rdr, double[] dst, double[] refDst, int have, int target,
                        boolean wantLeft, long avail) {
         int chunk = (int) Math.min(avail, target - have);
         if (chunk <= 0) return have;
-        int got = rdr.read(chunk, wantLeft ? dst : null, wantLeft ? null : dst, have);
+        int got = rdr.read(chunk, wantLeft ? dst : refDst, wantLeft ? refDst : dst, have);
         return got == SignalBufferReader.OVERRUN ? SignalBufferReader.OVERRUN : have + got;
     }
 

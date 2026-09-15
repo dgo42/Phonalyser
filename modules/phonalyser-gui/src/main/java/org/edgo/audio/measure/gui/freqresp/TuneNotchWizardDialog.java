@@ -102,12 +102,6 @@ public final class TuneNotchWizardDialog {
      *  and the deconvolution reference.  25 ms was found on the scope to best
      *  suppress the loop-seam spikes; it overrides the shared 5% default. */
     private static final double FADE_SEC = 0.025;
-    /** Safety multiplier on the sweep-band margin (see {@link #sweepBand}).  The
-     *  Hann fades drive the sweep energy |X|->0 at the swept ends, so the
-     *  displayed band must sit well inside the fully-excited middle; >1 keeps the
-     *  displayed edges clear of the fade and the log sweep's 1/f roll-off (which
-     *  otherwise flatten the trace at the edges). */
-    private static final double SWEEP_MARGIN_SAFETY = 2.5;
     /** Wait for the overlapping deconvolution executor to drain on close. */
     private static final long   DECONV_SHUTDOWN_TIMEOUT_S = 3L;
 
@@ -516,14 +510,11 @@ public final class TuneNotchWizardDialog {
     /** The DDS sweep band: WIDER than the displayed [start, stop] so the Hann
      *  fades - which zero the sweep energy |X| over {@code FADE_SEC /
      *  SWEEP_DURATION_SEC} of the log range at each swept end - fall OUTSIDE the
-     *  displayed band, with {@link #SWEEP_MARGIN_SAFETY} headroom for the log
-     *  sweep's 1/f roll-off (so the displayed edges aren't flattened).  The view
-     *  shows only [start, stop]; the widened ends are cut.  Returns {f0, f1}. */
-    private double[] sweepBand(double startHz, double stopHz) {
-        double ff = FADE_SEC / SWEEP_DURATION_SEC;
-        double marginFrac = SWEEP_MARGIN_SAFETY * ff / (1.0 - 2.0 * ff);
-        double m = Math.log(stopHz / startHz) * marginFrac;
-        return new double[] { startHz * Math.exp(-m), stopHz * Math.exp(m) };
+     *  displayed band, with the engine's own headroom for the log sweep's 1/f
+     *  roll-off (so the displayed edges aren't flattened).  The view shows only
+     *  [start, stop]; the widened ends are cut.  Returns {f0, f1}. */
+    private double[] sweepBand(NotchSweepEngine e, double startHz, double stopHz) {
+        return e.sweptBand(startHz, stopHz, FADE_SEC / SWEEP_DURATION_SEC);
     }
 
     /** Live-retunes the streamed sweep to the current [start, stop] without
@@ -532,7 +523,7 @@ public final class TuneNotchWizardDialog {
     private void retuneEngineBand() {
         NotchSweepEngine e = engine;
         if (e == null) return;
-        double[] b = sweepBand(curStartHz, curStopHz);
+        double[] b = sweepBand(e, curStartHz, curStopHz);
         e.setBand(b[0], b[1]);
     }
 
@@ -669,18 +660,12 @@ public final class TuneNotchWizardDialog {
             return t;
         });
 
-        // The loop period MUST be a power of two IN CAPTURE SAMPLES - that is
-        // the stream the window is grabbed from and the transform is run on;
-        // the engine converts the same duration to the DAC's own sample count.
-        // computeFromLogSweep sizes its
-        // FFT to nextPow2(period), so a power-of-two period makes that FFT
-        // exactly ONE period - a CIRCULAR transform, not a zero-padded linear
-        // one.  Only then is a window grabbed at an arbitrary loop phase just a
-        // circular shift that leaves |H(f)| unchanged; a linear FFT of an
-        // unaligned window wraps the period and corrupts every bin into a spike.
-        int rawSamples   = (int) Math.round(SWEEP_DURATION_SEC * captureRate);
-        int loPow2       = Integer.highestOneBit(Math.max(2, rawSamples));
-        int sweepSamples = (rawSamples - loPow2 < (loPow2 << 1) - rawSamples) ? loPow2 : loPow2 << 1;
+        // The loop period is the engine's own rule: the power of two nearest
+        // this duration IN CAPTURE SAMPLES, which is what keeps the
+        // deconvolution circular over exactly one period (see
+        // loopPeriodSamples).  The engine converts the same duration to the
+        // DAC's own sample count.
+        int sweepSamples = engine.loopPeriodSamples(SWEEP_DURATION_SEC);
         int fadeSamples  = (int) Math.round(FADE_SEC * captureRate);
         // One loop period of the captured stream, in ms - the grab cadence and
         // the percentage's denominator.
@@ -694,7 +679,7 @@ public final class TuneNotchWizardDialog {
         try {
             // Open playback + capture ONCE; the looping generator streams until
             // close().  There is no per-sweep open/close or recording wait.
-            double[] band = sweepBand(curStartHz, curStopHz);
+            double[] band = sweepBand(engine, curStartHz, curStopHz);
             engine.start(band[0], band[1], curAmpVrms, dacFsVrmsLeft, dacFsVrmsRight,
                     sweepSamples, fadeSamples, curOutputChannels);
             awaitSettle(sweepSamples);
