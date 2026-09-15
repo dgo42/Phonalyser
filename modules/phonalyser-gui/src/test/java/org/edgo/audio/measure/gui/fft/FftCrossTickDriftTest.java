@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.fft;
 
+import org.apache.commons.lang3.reflect.MethodUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.edgo.audio.measure.enums.FftOverlap;
@@ -38,10 +39,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>Unlike {@code FftHarmonicStabilityTest} (a single long {@code analyze()} call),
  * this drives the <b>real</b> {@link FftAnalyzerWorker} cross-tick path - the one the
  * live FFT view actually uses: 2 frames per tick (averages = 2), accumulated across
- * ticks by {@link FftAnalyzerWorker#accumulateIntoForeverBuffer} with its type-1
- * phase-lock loop, then read back via {@link FftAnalyzerWorker#overlayAccumulatorOnto}
+ * ticks by {@code accumulateIntoForeverBuffer} with its type-1
+ * phase-lock loop, then read back via {@code overlayAccumulatorOnto}
  * + {@link FftAnalyzer#recomputeStats}.  Only the Thread/Display/MessageBus plumbing
- * is bypassed; the accumulator + PLL are the production code.
+ * is bypassed; the accumulator + PLL are the production code, reached through
+ * reflection because both worker members are private.
  *
  * <p>The capture is a continuous tone+harmonics whose frequency <b>chirps</b> at a
  * configurable rate (the DAC↔ADC relative drift).  The worker de-rotates each tick by
@@ -74,7 +76,24 @@ class FftCrossTickDriftTest {
     /** Relative DAC↔ADC drift rate, ppm/min.  0.01 ppm/min = 10 ppb/min (the rig). */
     private static final double[]   DRIFT_PPM_PER_MIN = {0.0, 0.01, 1.0, 10.0};
 
+    /** The worker members this harness drives, by name because that is what
+     *  reflection takes: the private accumulate step and the private overlay
+     *  that writes the accumulator back onto a result for the display path.
+     *  A productive class is not widened to let a test in. */
+    private static final String ACCUMULATE = "accumulateIntoForeverBuffer";
+    private static final String OVERLAY    = "overlayAccumulatorOnto";
+
     private static final Logger LOG = LogManager.getLogger("FftCrossTickDrift");
+
+    /** The one place this harness reaches into the worker, so a renamed
+     *  member fails here and not at a dozen call sites. */
+    private void call(FftAnalyzerWorker worker, String method, Object... args) {
+        try {
+            MethodUtils.invokeMethod(worker, true, method, args);
+        } catch (ReflectiveOperationException ex) {
+            throw new AssertionError("the worker's " + method + " is not reachable", ex);
+        }
+    }
 
     @Test
     void crossTickHarmonicDriftSweep() {
@@ -111,10 +130,10 @@ class FftCrossTickDriftTest {
                 analyzer.setSecondToneHintHz(Double.NaN);
                 r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
                         WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
-                worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+                call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
 
                 if ((t + 1) % READOUT_EVERY == 0) {
-                    worker.overlayAccumulatorOnto(r);
+                    call(worker, OVERLAY, r);
                     analyzer.recomputeStats(r);
                     StringBuilder sb = new StringBuilder();
                     for (int i = 0; i < HARMONIC_COUNT; i++) {
@@ -180,10 +199,10 @@ class FftCrossTickDriftTest {
                 r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
                         WINDOW, FftOverlap.RAND, 0.0, 0.0, true, Double.NaN,
                         false, Double.NaN, new FftResult(), hop, 2);
-                worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+                call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
 
                 if ((t + 1) % READOUT_EVERY == 0) {
-                    worker.overlayAccumulatorOnto(r);
+                    call(worker, OVERLAY, r);
                     analyzer.recomputeStats(r);
                     StringBuilder sb = new StringBuilder();
                     for (int i = 0; i < HARMONIC_COUNT; i++) {
@@ -246,10 +265,10 @@ class FftCrossTickDriftTest {
                 analyzer.setSecondToneHintHz(freqs[1]);
                 r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
                         WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
-                worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+                call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
 
                 if ((t + 1) % (READOUT_EVERY * 5) == 0) {
-                    worker.overlayAccumulatorOnto(r);
+                    call(worker, OVERLAY, r);
                     StringBuilder sb = new StringBuilder();
                     for (int i = 0; i < bins.length; i++) {
                         double lv = (r.amplitudeDbFs != null && bins[i] < r.amplitudeDbFs.length)
@@ -320,9 +339,9 @@ class FftCrossTickDriftTest {
                             r.amplitudeDbFs[f1Bin], r.amplitudeDbFs[f2Bin],
                             r.amplitudeDbFs[f2Bin] - r.amplitudeDbFs[f1Bin]));
                 }
-                worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+                call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
                 if ((t + 1) % (READOUT_EVERY * 2) == 0) {
-                    worker.overlayAccumulatorOnto(r);
+                    call(worker, OVERLAY, r);
                     double f1 = r.amplitudeDbFs[f1Bin], f2 = r.amplitudeDbFs[f2Bin];
                     LOG.info(String.format("  tick %4d  frames=%6d |  F1=%.2f  F2=%.2f  (F2-F1=%.2f dB)",
                             t + 1, worker.getAccumulatedFrames(), f1, f2, f2 - f1));
@@ -452,9 +471,9 @@ class FftCrossTickDriftTest {
                 analyzer.setSecondToneHintHz(f2);
                 FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
                         WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
-                worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+                call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
                 if (t == 50 || t == ticks - 1) {
-                    worker.overlayAccumulatorOnto(r);
+                    call(worker, OVERLAY, r);
                     double[] dst = (t == 50) ? early : late;
                     for (int i = 0; i < freqs.length; i++) {
                         dst[i] = (r.amplitudeDbFs != null && bins[i] < r.amplitudeDbFs.length)
@@ -505,9 +524,9 @@ class FftCrossTickDriftTest {
                 fund0 = r.amplitudeDbFs[fundBin];
                 line0 = Math.max(r.amplitudeDbFs[lineBin], r.amplitudeDbFs[lineBin + 1]);
             }
-            worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+            call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
             if (t == ticks - 1) {
-                worker.overlayAccumulatorOnto(r);
+                call(worker, OVERLAY, r);
                 fundLate = r.amplitudeDbFs[fundBin];
                 lineLate = Math.max(r.amplitudeDbFs[lineBin], r.amplitudeDbFs[lineBin + 1]);
             }

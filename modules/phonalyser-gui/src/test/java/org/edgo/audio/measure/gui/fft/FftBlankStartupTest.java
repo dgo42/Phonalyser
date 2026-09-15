@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.fft;
 
+import org.apache.commons.lang3.reflect.MethodUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.edgo.audio.measure.enums.FftOverlap;
@@ -46,8 +47,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Same driving pattern as {@link FftCrossTickDriftTest}: the real
  * {@link FftAnalyzerWorker} accumulator + PLL headlessly, read back
- * through {@link FftAnalyzerWorker#overlayAccumulatorOnto} +
- * {@link FftAnalyzer#recomputeStats} - the exact display path.  The
+ * through {@code overlayAccumulatorOnto} +
+ * {@link FftAnalyzer#recomputeStats} - the exact display path.  Both of
+ * those worker members are private - a productive class is not widened to
+ * let a test in - so this harness reaches them by reflection.  The
  * geometry mirrors the reported bench: 32 kHz, 64k FFT, Hann, 0 %
  * overlap, ring of 4 (targetN 8), tone 999.96 Hz at -2.8 dBFS.
  */
@@ -68,7 +71,24 @@ class FftBlankStartupTest {
     /** A displayed fundamental this far above the clamp floor counts as drawn. */
     private static final double     HEALTHY_DBFS = -30.0;
 
+    /** The worker members this harness drives, by name because that is what
+     *  reflection takes: the private accumulate step and the private overlay
+     *  that writes the accumulator back onto a result for the display path. */
+    private static final String ACCUMULATE = "accumulateIntoForeverBuffer";
+    private static final String OVERLAY    = "overlayAccumulatorOnto";
+
     private static final Logger LOG = LogManager.getLogger("FftBlankStartup");
+
+    /** The one place this harness reaches into the worker: both members it
+     *  drives are private, so a renamed member fails here and not at every
+     *  call site. */
+    private void call(FftAnalyzerWorker worker, String method, Object... args) {
+        try {
+            MethodUtils.invokeMethod(worker, true, method, args);
+        } catch (ReflectiveOperationException ex) {
+            throw new AssertionError("the worker's " + method + " is not reachable", ex);
+        }
+    }
 
     /** How the capture begins, before the continuous clean sine. */
     private enum Start {
@@ -125,9 +145,9 @@ class FftBlankStartupTest {
             analyzer.setSecondToneHintHz(Double.NaN);
             FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONICS,
                     WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, FUND_HZ);
-            worker.accumulateIntoForeverBuffer(r, base, true, TARGET_N);
+            call(worker, ACCUMULATE, r, base, true, TARGET_N);
 
-            worker.overlayAccumulatorOnto(r);        // the display path, every tick
+            call(worker, OVERLAY, r);                // the display path, every tick
             analyzer.recomputeStats(r);
             int nanBins = 0, liveBins = 0;
             for (int k = 1; k < r.amplitudeDbFs.length; k++) {
