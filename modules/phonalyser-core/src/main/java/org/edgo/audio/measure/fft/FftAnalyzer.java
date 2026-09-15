@@ -316,6 +316,135 @@ public class FftAnalyzer {
         }
     }
 
+    /** One frame's windowed single-bin Goertzel: runs the recurrence over
+     *  {@code samples[base .. base+fftSize)} weighted by {@code window} and
+     *  writes the complex result into {@code out[0]} / {@code out[1]}.
+     *  {@code cw} / {@code sw} are the cosine and sine of the bin's angular
+     *  frequency {@code 2π·k/fftSize}.  The value produced is the Goertzel
+     *  terminal {@code s[N-1] − e^{−jω}·s[N-2]}, which equals the DFT bin
+     *  times the constant factor {@code e^{−jω}} - frame-independent, so it
+     *  cancels in any phase SLOPE or frame-to-frame difference; a caller that
+     *  needs the bin's true phase multiplies by {@code e^{jω}}.  The caller
+     *  supplies {@code out} so a per-frame loop allocates nothing. */
+    private void goertzelFrameBin(double[] samples, int base, int fftSize,
+                                  double[] window, double cw, double sw, double[] out) {
+        final double coeff = 2.0 * cw;
+        double sp = 0.0, sp2 = 0.0;
+        for (int n = 0; n < fftSize; n++) {
+            double s = samples[base + n] * window[n] + coeff * sp - sp2;
+            sp2 = sp;
+            sp  = s;
+        }
+        out[0] = sp - sp2 * cw;
+        out[1] = sp2 * sw;
+    }
+
+    /** One spectral bin's complex value, in the raw FFT units of
+     *  {@link FftResult#re} / {@link FftResult#im}. */
+    public record BinPhasor(double re, double im) {}
+
+    /** The frame-averaged phasor of ONE bin of {@code samples}, produced by
+     *  the recipe {@code analyze} uses for its coherent {@code re[k]/im[k]}:
+     *  per frame of {@code fftSize} samples (frame f starting at
+     *  {@code f·step}) a windowed single-bin Goertzel, de-rotated to the
+     *  window's own origin by the fundamental's phase advance
+     *  {@code −2π·base·kFractional/fftSize} - the same region-constant angle
+     *  the coherent pass applies to the fundamental's bin - and the frames
+     *  averaged.  The window table is the analyser's own cached one, so the
+     *  caller never holds a second copy of the coefficients.
+     *
+     *  <p>The answer therefore shares the time origin and the scale of a
+     *  spectrum computed by {@code analyze} over the same span, and the phase
+     *  difference between the two is free of any hop-dependent term.  That is
+     *  what the FFT worker's reference-channel phase alignment compares: the
+     *  analysed channel's fundamental bin against the same bin of the
+     *  opposite channel.
+     *
+     *  @param bin         integer bin, 0 .. fftSize/2
+     *  @param step        spacing between successive frame starts, in samples
+     *  @param frameCount  frames to average, the first one starting at
+     *                     {@code samples[0]}
+     *  @param kFractional the de-rotation frequency in fractional bins (the
+     *                     tick's refined fundamental bin) */
+    public BinPhasor binPhasor(double[] samples, int fftSize, WindowType windowType,
+                               int bin, int step, int frameCount, double kFractional) {
+        if (Integer.bitCount(fftSize) != 1) {
+            throw new IllegalArgumentException("fftSize must be a power of 2, got: " + fftSize);
+        }
+        if (bin < 0 || bin > fftSize / 2) {
+            throw new IllegalArgumentException("Bin out of range: " + bin);
+        }
+        if (step < 1 || frameCount < 1) {
+            throw new IllegalArgumentException("Frame geometry must be positive, got step "
+                    + step + " and " + frameCount + " frame(s)");
+        }
+        if ((long) (frameCount - 1) * step + fftSize > samples.length) {
+            throw new IllegalArgumentException(
+                    "Stated geometry exceeds the buffer: " + frameCount + " frames at step "
+                    + step + " need " + ((long) (frameCount - 1) * step + fftSize)
+                    + " samples, got " + samples.length);
+        }
+        double[] window = getCachedWindow(fftSize, windowType);
+        final double w  = 2.0 * Math.PI * bin / fftSize;
+        final double cw = Math.cos(w);
+        final double sw = Math.sin(w);
+        double[] gz    = new double[2];
+        double   sumRe = 0.0;
+        double   sumIm = 0.0;
+        for (int f = 0; f < frameCount; f++) {
+            int base = f * step;
+            goertzelFrameBin(samples, base, fftSize, window, cw, sw, gz);
+            // e^{jω} undoes the Goertzel's constant factor, leaving the DFT bin
+            // itself - the quantity the FFT path produces for this bin.
+            double binRe = gz[0] * cw - gz[1] * sw;
+            double binIm = gz[0] * sw + gz[1] * cw;
+            double ang   = -2.0 * Math.PI
+                    * Math.IEEEremainder((double) base * kFractional, fftSize) / fftSize;
+            double c = Math.cos(ang);
+            double s = Math.sin(ang);
+            sumRe += binRe * c - binIm * s;
+            sumIm += binRe * s + binIm * c;
+        }
+        return new BinPhasor(sumRe / frameCount, sumIm / frameCount);
+    }
+
+    /**
+     * The fractional bin of a tone sitting at {@code bin} in {@code samples},
+     * measured the way the analysis refines the fundamental on a single clean
+     * frame: the three bin phasors {@code bin-1}, {@code bin} and
+     * {@code bin+1} by the {@link #binPhasor} recipe - same window table, same
+     * de-rotation, same frames - and the log-power parabolic fit of
+     * {@link MathUtil#parabolicBinInterp(double, double, double, double, double, double, int)}.
+     * Multiplied by the frequency resolution it is that tone's frequency.
+     *
+     * <p>It exists for a buffer the analysis never transformed - the opposite
+     * channel's window in the reference-channel phase alignment, whose
+     * fundamental stands tens of dB clear of the notched one and is therefore
+     * the better measurement to steer a frequency lock with.  Three single-bin
+     * transforms per call; no spectrum is built and no window table copied.
+     *
+     * <p>The three bins are clamped into {@code 1 .. fftSize/2}, so a tone at
+     * the very first or last bin degenerates to a two-point fit exactly as the
+     * array form of the same fit does.
+     *
+     * @param bin         the tone's integer bin - the index the answer's
+     *                    fractional offset is measured from
+     * @param step        spacing between successive frame starts, in samples
+     * @param frameCount  frames to average, the first at {@code samples[0]}
+     * @param kFractional the de-rotation frequency in fractional bins
+     */
+    public double refinedBin(double[] samples, int fftSize, WindowType windowType,
+                             int bin, int step, int frameCount, double kFractional) {
+        int halfSize = fftSize / 2;
+        int lo = Math.max(1, bin - 1);
+        int hi = Math.min(halfSize, bin + 1);
+        BinPhasor pLo  = binPhasor(samples, fftSize, windowType, lo,  step, frameCount, kFractional);
+        BinPhasor pMid = binPhasor(samples, fftSize, windowType, bin, step, frameCount, kFractional);
+        BinPhasor pHi  = binPhasor(samples, fftSize, windowType, hi,  step, frameCount, kFractional);
+        return MathUtil.parabolicBinInterp(pLo.re(), pLo.im(), pMid.re(), pMid.im(),
+                pHi.re(), pHi.im(), bin);
+    }
+
     /**
      * Full-integration refinement of the fundamental's fractional bin κ.  The
      * coarse estimate is a single one-hop phase difference; its residual error δk
@@ -341,18 +470,13 @@ public class FftAnalyzer {
         final double w     = 2.0 * Math.PI * refIntBin / fftSize;
         final double cw    = Math.cos(w);
         final double sw    = Math.sin(w);
-        final double coeff = 2.0 * cw;
         double[] resid  = new double[bestLen];
+        double[] gz     = new double[2];                        // one frame's Goertzel result
         double   sumCos = 0.0, sumSin = 0.0;
         for (int f = bestStart; f < bestStart + bestLen; f++) {
             int base = f * step;
-            double sp = 0.0, sp2 = 0.0;                         // Goertzel state at refIntBin
-            for (int n = 0; n < fftSize; n++) {
-                double s = samples[base + n] * window[n] + coeff * sp - sp2;
-                sp2 = sp;
-                sp  = s;
-            }
-            double ph       = Math.atan2(sp2 * sw, sp - sp2 * cw);
+            goertzelFrameBin(samples, base, fftSize, window, cw, sw, gz);
+            double ph       = Math.atan2(gz[1], gz[0]);
             double expected = 2.0 * Math.PI * kCoarse * base / (double) fftSize;
             double r        = Math.IEEEremainder(ph - expected, 2.0 * Math.PI);
             resid[f - bestStart] = r;
@@ -1551,6 +1675,12 @@ public class FftAnalyzer {
             outResult.avgNoiseFloorDbFs          = fundDbFs - 300.0;
             outResult.fundamentalDynExclusionHz  = 0.0;
             outResult.preCorrectionPeaks         = null;
+            // The reference channel's frequencies are the worker's to write
+            // after this returns; cleared here for the same reason
+            // preCorrectionPeaks is - a pooled slot must not hand the next tick
+            // the previous one's numbers.
+            outResult.referenceFundamentalHzRefined  = Double.NaN;
+            outResult.referenceFundamental2HzRefined = Double.NaN;
             outResult.captureRawPeaks();   // raw F + peak phasors for the DAC-predistortion de-embed
             return outResult;
         }
@@ -1739,8 +1869,11 @@ public class FftAnalyzer {
         outResult.fundamentalDynExclusionHz  = dynWidthBins * freqRes;
         // preCorrectionPeaks is owned by the worker (set after analyze
         // returns when calibration is loaded); reset here so a previous
-        // tick's value doesn't leak across pool slot recycle.
+        // tick's value doesn't leak across pool slot recycle.  The reference
+        // channel's two frequencies are the worker's in exactly the same way.
         outResult.preCorrectionPeaks = null;
+        outResult.referenceFundamentalHzRefined  = Double.NaN;
+        outResult.referenceFundamental2HzRefined = Double.NaN;
         outResult.captureRawPeaks();   // raw F + peak phasors for the DAC-predistortion de-embed
         return outResult;
     }

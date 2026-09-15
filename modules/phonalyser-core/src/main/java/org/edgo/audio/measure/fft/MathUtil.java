@@ -50,6 +50,13 @@ public final class MathUtil {
         return Math.log(x + Math.sqrt(x * x - 1.0));
     }
 
+    /** Added to a bin's power before its logarithm, so a bin that cancelled to
+     *  exactly zero reads as a very small power instead of minus infinity. */
+    private static final double BIN_POWER_FLOOR = 1e-30;
+    /** Below this the parabola's curvature term is indistinguishable from zero
+     *  (three equal log powers), and the fit has no peak to offer. */
+    private static final double FLAT_CURVATURE = 1e-15;
+
     /**
      * Parabolic interpolation on the log-power spectrum to refine a
      * peak bin to a fractional bin index.  Uses the three-point formula
@@ -63,11 +70,30 @@ public final class MathUtil {
         int halfSize = fftSize / 2;
         int lo = Math.max(1, peakBin - 1);
         int hi = Math.min(halfSize, peakBin + 1);
-        double pLo   = Math.log(re[lo] * re[lo] + im[lo] * im[lo] + 1e-30);
-        double pMid  = Math.log(re[peakBin] * re[peakBin] + im[peakBin] * im[peakBin] + 1e-30);
-        double pHi   = Math.log(re[hi] * re[hi] + im[hi] * im[hi] + 1e-30);
+        return parabolicBinInterp(re[lo], im[lo], re[peakBin], im[peakBin],
+                re[hi], im[hi], peakBin);
+    }
+
+    /**
+     * The three-value core of the fit above, for a caller that MEASURED the
+     * peak bin and its two neighbours instead of holding a whole spectrum -
+     * three bin phasors, one fit, the same formula and the same log-power
+     * domain, so a bin refined from single-bin transforms and one refined from
+     * an FFT array cannot disagree.
+     *
+     * <p>The caller owns the clamping: it passes whatever three bins it read,
+     * and {@code peakBin} is the index the offset is measured from.
+     *
+     * @return fractional bin index (peakBin + δ)
+     */
+    public static double parabolicBinInterp(double loRe, double loIm,
+                                            double midRe, double midIm,
+                                            double hiRe, double hiIm, int peakBin) {
+        double pLo   = Math.log(loRe * loRe + loIm * loIm + BIN_POWER_FLOOR);
+        double pMid  = Math.log(midRe * midRe + midIm * midIm + BIN_POWER_FLOOR);
+        double pHi   = Math.log(hiRe * hiRe + hiIm * hiIm + BIN_POWER_FLOOR);
         double denom = pLo - 2.0 * pMid + pHi;
-        if (Math.abs(denom) < 1e-15) {
+        if (Math.abs(denom) < FLAT_CURVATURE) {
             return peakBin;
         }
         double delta = 0.5 * (pLo - pHi) / denom;

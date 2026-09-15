@@ -36,7 +36,11 @@ package org.edgo.audio.measure.dsp;
 public class FreqRespCalibration {
     public final double[] freqs;       // length N, strictly ascending Hz
     public final double[] magLin;      // |H| linear, passband normalised to 1.0
-    public final double[] phaseRad;    // phase in radians, unwrapped
+    public final double[] phaseRad;    // phase in radians, WRAPPED into
+                                       // (-pi, pi] by atan2 - a reader that
+                                       // needs a continuous curve (a trend,
+                                       // a group delay, an interpolation
+                                       // across a notch) unwraps it itself
 
     public FreqRespCalibration(double[] freqs, double[] magLin, double[] phaseRad) {
         this.freqs    = freqs;

@@ -49,6 +49,7 @@ import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.FilterResponse;
 import org.edgo.audio.measure.enums.FilterType;
+import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
@@ -485,6 +486,10 @@ public final class Preferences {
     /** {@code MainsSuppression} enum name - mains-hum filter applied to
      *  the captured signal before FFT averaging. */
     private final Property<MainsSuppression> fftMainsSuppression = bound(MainsSuppression.NONE);
+    /** {@code FundamentalPhaseAlignment} enum name - time base the coherent
+     *  average uses for the fundamental's phase. */
+    private final Property<FundamentalPhaseAlignment> fftFundamentalPhaseAlignment =
+            bound(FundamentalPhaseAlignment.NONE);
     /** When true, the FFT-side frequency-lock loop drives the generator
      *  to keep the fundamental on the nearest FFT bin centre.  Only
      *  takes effect when {@code genSnapToFftBin} AND
@@ -1426,6 +1431,10 @@ public final class Preferences {
     public void setFftMainsSuppression(MainsSuppression v) { fftMainsSuppression.set(v); }
     public Property<MainsSuppression> fftMainsSuppressionProperty() { return fftMainsSuppression; }
 
+    public FundamentalPhaseAlignment getFftFundamentalPhaseAlignment() { return fftFundamentalPhaseAlignment.get(); }
+    public void setFftFundamentalPhaseAlignment(FundamentalPhaseAlignment v) { fftFundamentalPhaseAlignment.set(v); }
+    public Property<FundamentalPhaseAlignment> fftFundamentalPhaseAlignmentProperty() { return fftFundamentalPhaseAlignment; }
+
     public AlignGenerator getFftAlignGenerator() { return fftAlignGenerator.get(); }
     public void setFftAlignGenerator(AlignGenerator v) { fftAlignGenerator.set(v); }
     public Property<AlignGenerator> fftAlignGeneratorProperty() { return fftAlignGenerator; }
@@ -2316,6 +2325,7 @@ public final class Preferences {
         root.put("fftOverlap",                fftOverlap.get().name());
         root.put("fftCoherentAveraging",      fftCoherentAveraging.get());
         root.put("fftMainsSuppression",       fftMainsSuppression.get().name());
+        root.put("fftFundamentalPhaseAlignment", fftFundamentalPhaseAlignment.get().name());
         root.put("fftAlignGenerator",         fftAlignGenerator.get().name());
         root.put("fftDistMinHz",              fftDistMinHz.get());
         root.put("fftDistMaxHz",              fftDistMaxHz.get());
@@ -2698,7 +2708,13 @@ public final class Preferences {
         if (root.get("fftWindow")                 instanceof String  s) fftWindow.set(enumOr(WindowType.class, s, fftWindow.get()));
         if (root.get("fftOverlap")                instanceof String  s) fftOverlap.set(enumOr(FftOverlap.class, s, fftOverlap.get()));
         if (root.get("fftCoherentAveraging")      instanceof Boolean b) fftCoherentAveraging.set(b);
-        if (root.get("fftMainsSuppression")       instanceof String  s) fftMainsSuppression.set(enumOr(MainsSuppression.class, s, fftMainsSuppression.get()));
+        // The FFT settings tab carries no mains-suppression control any more, so
+        // a stored value could only act on the spectrum with nothing in the UI
+        // to show or undo it: the load pins the preference to NONE whatever the
+        // file holds, while the save keeps writing the key so the file still
+        // round-trips.
+        fftMainsSuppression.set(MainsSuppression.NONE);
+        if (root.get("fftFundamentalPhaseAlignment") instanceof String  s) fftFundamentalPhaseAlignment.set(enumOr(FundamentalPhaseAlignment.class, s, fftFundamentalPhaseAlignment.get()));
         if (root.get("fftAlignGenerator")         instanceof String  s) fftAlignGenerator.set(AlignGenerator.fromString(s));
         else if (root.get("fftAlignGenToFreqDiff") instanceof Boolean b)   // migrate the old checkbox
             fftAlignGenerator.set(b ? AlignGenerator.FLL : AlignGenerator.NONE);

@@ -84,6 +84,19 @@ public class FftResult {
      *  {@link #fundamentalHzRefined}.  {@link Double#NaN} for single-tone
      *  (no second-tone hint was supplied). */
     public double fundamental2HzRefined = Double.NaN;
+    /** The fundamental's frequency in Hz as the REFERENCE channel carries it,
+     *  refined the same sub-bin way, or {@link Double#NaN} whenever no
+     *  reference channel was read this cycle.  Behind a notch the analysed
+     *  fundamental is buried tens of dB deep while the reference one stands
+     *  clear, so this is the better number to steer a frequency lock with; the
+     *  accumulator, the coherent bin κ and every plot keep using the analysed
+     *  channel's own estimate.  Written by the FFT worker after the analysis,
+     *  never by {@code analyze}. */
+    public double referenceFundamentalHzRefined = Double.NaN;
+    /** The second tone's frequency in Hz on the reference channel, the
+     *  dual-tone companion of {@link #referenceFundamentalHzRefined} and
+     *  {@link Double#NaN} under the same conditions and for a single tone. */
+    public double referenceFundamental2HzRefined = Double.NaN;
     public double fundamentalDbFs;
     public double fundamentalLinear;
 
@@ -346,6 +359,8 @@ public class FftResult {
         c.fundamentalHz              = src.fundamentalHz;
         c.fundamentalHzRefined       = src.fundamentalHzRefined;
         c.fundamental2HzRefined      = src.fundamental2HzRefined;
+        c.referenceFundamentalHzRefined  = src.referenceFundamentalHzRefined;
+        c.referenceFundamental2HzRefined = src.referenceFundamental2HzRefined;
         c.fundamentalDbFs            = src.fundamentalDbFs;
         c.fundamentalLinear          = src.fundamentalLinear;
         c.mainsF0Hz                  = src.mainsF0Hz;

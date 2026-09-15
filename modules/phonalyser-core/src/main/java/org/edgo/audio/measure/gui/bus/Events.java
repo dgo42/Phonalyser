@@ -214,6 +214,34 @@ public final class Events {
      *  glue - subscribers marshal. */
     public static final String FFT_CAPTURE_RESYNC = "fft.capture.resync";
 
+    /** Notification - the selected fundamental-phase-alignment mode cannot
+     *  run this collection and the coherent average proceeds without it (the
+     *  reference channel carries no usable fundamental).  Payload: a
+     *  {@code FftAnalyzerWorker.PhaseAlignRefusal} carrying the three numbers
+     *  the operator's message states - the fundamental's frequency in Hz, the
+     *  reference bin's level in dBFS and its margin over that channel's local
+     *  floor in dB; the pane formats the text.  Published on the UI thread by
+     *  {@code FftAnalyzerWorker}. */
+    public static final String FFT_PHASE_ALIGN_REFUSED = "fft.phase.align.refused";
+
+    /** Notification - the periodical-sweep alignment probe begins: FFT
+     *  accumulation is paused (the accumulator is kept) and the probe drives
+     *  the output device itself, so the generator's tone has to go down.  No
+     *  payload.  Published on the WORKER thread by {@code FftAnalyzerWorker},
+     *  synchronously: the generator's subscriber stops its lane inside the
+     *  publish, which is what keeps the sweep and the tone from overlapping.
+     *  A subscriber that touches a widget marshals itself. */
+    public static final String FFT_PHASE_PROBE_STARTED = "fft.phase.probe.started";
+
+    /** Notification - the periodical-sweep alignment probe ended (completed,
+     *  timed out or refused to start); the generator's tone goes back up and
+     *  accumulation continues.  No payload.  Published on the WORKER thread by
+     *  {@code FftAnalyzerWorker}, synchronously: the generator's subscriber
+     *  restarts its lane inside the publish, so the tone is back before the
+     *  next analysis cycle reads any samples.  A subscriber that touches a
+     *  widget marshals itself. */
+    public static final String FFT_PHASE_PROBE_STOPPED = "fft.phase.probe.stopped";
+
     /** Notification - the generator's file-player thread finished
      *  (user stop, EOF without loop, or playback error).  Subscribers
      *  (the generator pane) reset the play-from LED.  No payload.
