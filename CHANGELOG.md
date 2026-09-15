@@ -36,6 +36,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so far and the distortion the running FFT reads at that moment, so the
   current round is watched settling instead of appearing only when it
   closes.
+- **Fundamental phase alignment for the coherent average.** Behind a drifting
+  notch the fundamental's phase wanders while its harmonics hold still, and
+  the analyser's tracking loop spreads that wander over harmonic h h-fold - a
+  long average then sinks the harmonics instead of lifting them out of the
+  noise. A new FFT-settings selector gives the average a drift-free time base:
+  Reference channel reads the tone a second time on the channel not being
+  analysed, fed from the DAC output through a pad at least 60 dB below the
+  fundamental; Periodical sweep interrupts the tone now and then and
+  re-measures the notch with a short looping log sweep. Because the alignment
+  tracks the drift alone and everything absolute comes from the loaded .frc
+  calibration, starting a recording in either mode asks for confirmation when
+  that calibration is missing or older than ten minutes. The Mains suppression
+  selector leaves the FFT settings tab, where the new selector takes its
+  place.
 
 ### Changed
 

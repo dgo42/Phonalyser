@@ -461,17 +461,73 @@
      frames already in the running average are best cleared with
      <a href="#fft-reset">Reset</a> for a clean average.</p>
 
-  <h4 id="fft-mains-suppression">Mains suppression</h4>
-  <p>Combo - <b>None</b> or <b>IIR comb</b>.  The comb pre-filters the captured
-     signal <em>before</em> averaging with a frequency-tracked IIR comb locked
-     to the live mains frequency, pulling down the mains line and <em>all</em>
-     its harmonics (50 / 100 / 150 ... Hz, or 60 / 120 / 180 ... Hz).</p>
-  <p><b>Use it with care.</b>  Because the comb notches every mains harmonic, a
-     measurement tone that lands on one of them - a round 1000&nbsp;Hz is the
-     20th harmonic of 50&nbsp;Hz - gets attenuated along with the hum.  When you
-     drive a tone, nudge it off the grid (1005&nbsp;Hz instead of 1000&nbsp;Hz,
-     say) so the comb can clean the mains without touching your signal or its
-     harmonics.</p>
+  <h4 id="fft-phase-align">Fundamental phase alignment</h4>
+  <p>Combo - <b>None</b>, <b>Reference channel</b> or <b>Periodical sweep</b>.
+     It keeps a long <a href="#fft-coherent-avg">coherent average</a> behind a
+     notch filter from falling apart.  A twin-T notch drifts with its own
+     temperature, and right in its null the phase runs about 160 degrees per
+     hertz, so the fundamental's phase wanders by up to 160 degrees per kelvin
+     of filter temperature while the harmonics H2..H9 move about 0.008 degrees
+     per kelvin.  The analyser has only the fundamental to steer its averaging
+     clock by, so it reads that wander as a time slip and applies it to
+     harmonic <i>h</i> multiplied by <i>h</i>: the harmonics smear and sink the
+     longer you average, instead of rising out of the floor.  Both modes
+     measure the fundamental's excess phase where the notch cannot falsify it
+     and hand the average a drift-free time base; <b>None</b> is the analyser
+     as it has always been.</p>
+  <p><b>Reference channel</b> uses the second ADC channel - the one not being
+     analysed - as that time base: the analyser reads the tone's phase on both
+     channels of the same capture window and subtracts, so only the notch's own
+     excess phase reaches the average.  <b>It costs one wire on the bench.</b>
+     The reference feed is tapped at the <b>DAC output</b>, ahead of the device
+     under test and ahead of the notch, and it is <b>padded to at least 60 dB
+     below the fundamental</b> - a 1&nbsp;V (0&nbsp;dBV) fundamental means
+     1&nbsp;mV (−60&nbsp;dBV) or less into the reference input.  The pad is not
+     optional: with the ~120 dB channel-to-channel isolation an ADC gives, a
+     −60&nbsp;dBV reference leaks into the measured channel at about
+     −180&nbsp;dBV, one decade below a −160&nbsp;dB residual referred to the
+     fundamental, while a full-level reference would leak at about
+     −120&nbsp;dBV and cover the very floor the measurement is there to
+     resolve.  Pad deeper if leakage ever shows - the reference is read for its
+     phase, not for its level.</p>
+  <p>The feed is checked whenever averaging starts afresh: at the fundamental
+     the reference channel must stand at least <b>20 dB</b> above the noise of
+     its own neighbouring bins and reach at least <b>−100&nbsp;dBFS</b>.  A
+     dead, unwired or over-padded input fails that check; a dialog says so once
+     for that recording, naming the frequency, the reference level and its
+     margin, and the average then runs unaligned - exactly as under None.  The
+     next average is checked again, so a wire fixed in the meantime is picked
+     up.</p>
+  <p><b>Periodical sweep</b> needs no extra wiring and measures the notch
+     itself.  Every so often the analyser pauses the average, silences the
+     generator's tone, plays a looping logarithmic sweep over the band around
+     the fundamental (from its frequency divided by 1.1 to its frequency times
+     1.1) the way the <a href="tune-notch.html">tune-notch wizard</a> does,
+     reads the phase at the fundamental out of the deconvolved response,
+     restores the tone and averages on with the value it just found; only the
+     change since the first probe of the recording is applied.  The spectrum is
+     not blanked while a probe runs and the averages count does not move.
+     <b>The measurement tone stops for a few seconds each time</b> - a device
+     under test that has to stay driven without interruption is a case for
+     Reference channel.  The first probe runs before the first averaged
+     spectrum, the next one
+     60&nbsp;s later; after that the interval follows the drift the last two
+     probes measured - as long as one degree of fundamental phase takes - kept
+     between 30&nbsp;s and 600&nbsp;s.  A probe that cannot finish within
+     15&nbsp;s, or whose sweep refuses to start, is abandoned and the average
+     simply keeps the previous value.</p>
+  <p class="note"><b>Either mode wants a fresh calibration.</b>  The alignment
+     tracks the drift of the fundamental and nothing else; everything absolute
+     - the phase and magnitude of the whole chain at the start, the harmonic
+     region included - comes from the
+     <a href="#fft-tab-calibration"><code>.frc</code> calibration</a> that
+     drift rides on, so a stale baseline lets a perfectly tracked drift correct
+     towards the wrong response.  When recording starts in either mode with no
+     <a href="#fft-tab-calibration">With noise</a> calibration loaded, or with
+     the newest one's file older than <b>10 minutes</b>, a confirmation names
+     the age (or the absence) and asks whether to go on: confirm and the
+     recording starts as it is, decline and it does not start at all - measure
+     a fresh <code>.frc</code> first.</p>
 
   <h4 id="fft-log-freq-axis">Logarithmic frequency axis</h4>
   <p>Frequency axis switches between log and linear.  Log is

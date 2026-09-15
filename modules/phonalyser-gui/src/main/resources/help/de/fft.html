@@ -489,19 +489,79 @@
      laufenden Frequenzregelschleife (FLL) im Hinweis, während ein lokaler
      Generator stattdessen seinen eingerasteten Sollwert meldet.</p>
 
-  <h4 id="fft-mains-suppression">Netzunterdrückung</h4>
-  <p>Auswahlfeld - <b>Keine</b> oder <b>IIR-Kammfilter</b>.  Der Kammfilter
-     filtert das erfasste Signal <em>vor</em> der Mittelung mit einem
-     frequenzgeregelten IIR-Kammfilter, der auf die aktuelle Netzfrequenz
-     eingerastet ist, und dämpft die Netzleitung sowie <em>alle</em> ihre
-     Harmonischen (50 / 100 / 150 ... Hz oder 60 / 120 / 180 ... Hz).</p>
-  <p><b>Mit Vorsicht verwenden.</b>  Da der Kammfilter jede Netzharmonische
-     kerbt, wird ein Messtons, der auf eine davon trifft - ein rundes
-     1000&nbsp;Hz ist die 20. Harmonische von 50&nbsp;Hz - zusammen mit dem
-     Brummen gedämpft.  Wenn ein Ton eingespeist wird, diesen von der Rasterung
-     wegbewegen (z. B. 1005&nbsp;Hz statt 1000&nbsp;Hz), damit der Kammfilter
-     das Netz bereinigen kann, ohne das Signal oder seine Harmonischen zu
-     beeinflussen.</p>
+  <h4 id="fft-phase-align">Grundwellen-Phasenabgleich</h4>
+  <p>Auswahlfeld - <b>Keiner</b>, <b>Referenzkanal</b> oder <b>Periodischer
+     Sweep</b>.  Es hält eine lange
+     <a href="#fft-coherent-avg">kohärente Mittelung</a> hinter einem
+     Kerbfilter zusammen.  Ein Twin-T-Kerbfilter driftet mit seiner eigenen
+     Temperatur, und genau in seiner Kerbe läuft die Phase mit rund 160 Grad
+     pro Hertz: die Phase des Grundtons wandert um bis zu 160 Grad je Kelvin
+     Filtertemperatur, während die Harmonischen H2..H9 nur etwa 0,008 Grad je
+     Kelvin wandern.  Der Analysator hat für seine Mittelungsuhr allein den
+     Grundton, liest dieses Wandern daher als Zeitversatz und rechnet ihn mit
+     dem Faktor <i>h</i> auf die Harmonische <i>h</i> an: die Harmonischen
+     verschmieren und sinken, je länger gemittelt wird, statt aus dem Rauschen
+     herauszutreten.  Beide Modi messen die überschüssige Phase des Grundtons
+     dort, wo der Kerbfilter sie nicht verfälschen kann, und geben der
+     Mittelung eine driftfreie Zeitbasis; <b>Keiner</b> ist der Analysator wie
+     bisher.</p>
+  <p><b>Referenzkanal</b> nimmt den zweiten ADC-Kanal - den gerade nicht
+     analysierten - als diese Zeitbasis: der Analysator liest die Phase des Tons
+     auf beiden Kanälen desselben Erfassungsfensters und zieht sie voneinander
+     ab, sodass nur die überschüssige Phase des Kerbfilters in die Mittelung
+     gelangt.  <b>Das kostet eine Leitung am Messplatz.</b>  Die Referenz wird
+     am <b>DAC-Ausgang</b> abgegriffen, vor dem Prüfling und vor dem Kerbfilter,
+     und um <b>mindestens 60 dB unter den Grundton</b> abgeschwächt - bei einem
+     Grundton von 1&nbsp;V (0&nbsp;dBV) also 1&nbsp;mV (−60&nbsp;dBV) oder
+     weniger am Referenzeingang.  Das Dämpfungsglied ist Pflicht: bei den rund
+     120 dB Kanaltrennung eines ADC gelangt eine Referenz von −60&nbsp;dBV als
+     Übersprechen mit etwa −180&nbsp;dBV in den Messkanal - eine Dekade unter
+     einem auf den Grundton bezogenen Restpegel von −160&nbsp;dB -, während das
+     Übersprechen einer Referenz in voller Höhe bei etwa −120&nbsp;dBV läge und
+     genau das Grundrauschen zudecken würde, das die Messung auflösen soll.
+     Zeigt sich Übersprechen, tiefer abschwächen - die Referenz wird wegen
+     ihrer Phase gelesen, nicht wegen ihres Pegels.</p>
+  <p>Die Referenz wird bei jedem Neubeginn der Mittelung geprüft: beim Grundton
+     muss der Referenzkanal mindestens <b>20 dB</b> über dem Rauschen seiner
+     eigenen Nachbarbins liegen und mindestens <b>−100&nbsp;dBFS</b> erreichen.
+     Ein toter, nicht verdrahteter oder zu stark abgeschwächter Eingang fällt
+     durch; ein Dialog meldet das einmal je Aufnahme und nennt Frequenz,
+     Referenzpegel und Abstand, und die Mittelung läuft dann ohne Abgleich -
+     genau wie unter Keiner.  Die nächste Mittelung wird erneut geprüft, eine
+     inzwischen gesteckte Leitung wird also aufgenommen.</p>
+  <p><b>Periodischer Sweep</b> braucht keine zusätzliche Verdrahtung und misst
+     stattdessen den Kerbfilter selbst.  In Abständen hält der Analysator die
+     Mittelung an, schaltet den Ton des Generators stumm, spielt einen
+     geschleiften logarithmischen Sweep über das Band um den Grundton (von
+     seiner Frequenz geteilt durch 1,1 bis zu seiner Frequenz mal 1,1), wie es
+     der <a href="tune-notch.html">Kerbfilter-Abgleichassistent</a> tut, liest
+     die Phase beim Grundton aus dem entfalteten Frequenzgang, stellt den Ton
+     wieder her und mittelt mit dem eben gefundenen Wert weiter; angewendet wird
+     nur die Änderung gegenüber der ersten Messung der Aufnahme.  Das Spektrum
+     wird währenddessen nicht geleert, und der Mittelungszähler bleibt stehen.
+     <b>Der Messton setzt dabei jedes Mal einige Sekunden aus</b> - ein
+     Prüfling, der ununterbrochen angeregt bleiben muss, ist ein Fall für den
+     Referenzkanal.  Die erste Messung läuft vor dem ersten gemittelten
+     Spektrum, die nächste 60&nbsp;s später; danach folgt der Abstand der Drift,
+     die die letzten beiden Messungen ergeben haben - so lange, wie ein Grad
+     Grundtonphase dauert -, begrenzt auf 30&nbsp;s bis 600&nbsp;s.  Eine
+     Messung, die nicht binnen 15&nbsp;s fertig wird oder deren Sweep nicht
+     startet, wird verworfen, und die Mittelung behält einfach den vorigen
+     Wert.</p>
+  <p class="note"><b>Beide Modi wollen eine frische Kalibrierung.</b>  Der
+     Abgleich verfolgt allein die Drift des Grundtons; alles Absolute - Phase
+     und Betrag der ganzen Kette zu Beginn, den Bereich der Harmonischen
+     eingeschlossen - stammt aus der
+     <a href="#fft-tab-calibration"><code>.frc</code>-Kalibrierung</a>, auf der
+     diese Drift aufsetzt; eine veraltete Basis lässt also eine perfekt
+     verfolgte Drift auf den falschen Frequenzgang hin korrigieren.  Startet die
+     Aufnahme in einem der beiden Modi ohne geladene Kalibrierung
+     <a href="#fft-tab-calibration">Mit Rauschen</a>, oder ist die Datei der
+     neuesten älter als <b>10 Minuten</b>, nennt eine Rückfrage das Alter (oder
+     das Fehlen) und fragt, ob fortgefahren werden soll: wird sie bestätigt,
+     startet die Aufnahme so, wie sie ist; wird sie abgelehnt, startet sie gar
+     nicht - dann
+     zuerst eine frische <code>.frc</code> messen.</p>
 
   <h4 id="fft-log-freq-axis">Logarithmische Frequenzachse</h4>
   <p>Schaltet die Frequenzachse zwischen logarithmisch und linear.
