@@ -32,6 +32,8 @@ import org.edgo.audio.measure.cli.util.ClockMismatch;
 import org.edgo.audio.measure.cli.util.DeviceSelector;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.InverseCascade;
+import org.edgo.audio.measure.dsp.ToneLobe;
 import org.edgo.audio.measure.cli.util.SampleRates;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
@@ -258,15 +260,14 @@ public class GenFftMode {
             // One loaded row: it goes into the cascade alone, in the group its
             // flag names - every bin with noise, only the tone lobes without.
             double[] tones = FreqRespCalHelper.toneFrequencies(result);
-            int[][] spans  = FreqRespCalHelper.toneLobeSpans(result, tones);
+            ToneLobe[] spans = FreqRespCalHelper.toneLobeSpans(result, tones);
             List<FreqRespCalibration> withNoiseRows =
                     calNoise ? List.of(freqRespCal) : List.of();
             List<FreqRespCalibration> toneOnlyRows =
                     calNoise ? List.of() : List.of(freqRespCal);
-            double[][] inv = FreqRespCalHelper.cascadeInverse(withNoiseRows, toneOnlyRows,
+            InverseCascade inv = FreqRespCalHelper.cascadeInverse(withNoiseRows, toneOnlyRows,
                     tones, spans, result.fftSize, result.sampleRate);
-            FreqRespCalHelper.applyInverseInPlace(result, inv,
-                    calNoise ? null : FreqRespCalHelper.toneBins(spans, result.fftSize / 2));
+            FreqRespCalHelper.applyInverseInPlace(result, inv);
             log.info("THD   : {}%  ({} dB)  [after frequency response de-attenuation]",
                     String.format(Locale.US, "%.8f", result.thdPct),
                     String.format(Locale.US, "%.2f", result.thdDb));

@@ -57,6 +57,9 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public class SignalGenerator implements GeneratorControls {
 
+    /** dB per factor-of-10 amplitude - the dBV to V RMS exponent scale the
+     *  pilot's level is stated in. */
+    private static final double DB_PER_DECADE = 20.0;
 
     // -------------------------------------------------------------------------
     // DDS sine evaluation
@@ -86,6 +89,78 @@ public class SignalGenerator implements GeneratorControls {
     /** Second phase increment for the dual-tone waveform.  Live-swappable
      *  via {@link #setDualToneFrequency2}. */
     private volatile long phaseInc2;
+    /** Third 64-bit phase accumulator, for the FIRST PILOT line - one of the
+     *  two generated tones the FFT-side phase alignment reads as a time-base
+     *  reference.  Independent of the two tone accumulators: the pilot is
+     *  its own line, at a frequency the caller keeps in a fixed ratio to the
+     *  main tone's. */
+    private long pilotPhaseAcc = 0;
+    /** The first pilot's phase increment.  Live-swappable via
+     *  {@link #setPilotTones}, which writes this and the level and never the
+     *  accumulator, so the line's phase runs on across a re-aim. */
+    private volatile long pilotPhaseInc;
+    /** The first pilot's level as an RMS voltage, {@code 0} when that line is
+     *  off.  Also the remembered request: a pilot asked for while a sweep or a
+     *  noise form runs is emitted as soon as a tonal form starts. */
+    private volatile double pilotVrms = 0.0;
+    /** The two lanes' peak levels [0..1] of digital full scale for the first
+     *  pilot - its own V RMS against that lane's DAC full-scale peak voltage,
+     *  at a sine's peak/RMS ratio.  Derived in {@link #recomputeLevels()}
+     *  beside the main levels, so a recalibration moves both; kept apart from
+     *  them because the pilot's voltage is absolute and the main tone's is what
+     *  the operator dialled. */
+    private volatile double pilotAmplLeft;
+    private volatile double pilotAmplRight;
+    /** Fourth 64-bit phase accumulator, for the SECOND PILOT line.  The
+     *  alignment reads a PAIR of pilots: each line pins the elapsed sample
+     *  count only modulo its own period, and the whole periods a gap in the
+     *  capture may have added are settled by the two readings together, so the
+     *  second line is as independent of the first as both are of the tones. */
+    private long pilotPhaseAcc2 = 0;
+    /** Set when a pilot line is switched ON, cleared by the audio thread on
+     *  the first tonal sample at which the line is silent - at once for a
+     *  line that was off, after the fade-out for one switched on again while
+     *  still fading out: that sample seeds the line's
+     *  accumulator from the main tone's, scaled by the two increments, so the
+     *  pilot's phase is the main tone's phase times their frequency ratio
+     *  from then on.  Two pilots spaced the fundamental's bin apart then
+     *  differ in phase by exactly the fundamental's own phase - which is what
+     *  lets a reading of the two pilots stand in for the fundamental where the
+     *  fundamental itself is behind a filter.  A re-aim of a line already on
+     *  does not set it: its phase must carry across, or the jump would read as
+     *  the time-base drift the pilots exist to measure. */
+    private volatile boolean pilotLock1Pending;
+    private volatile boolean pilotLock2Pending;
+    /** The second pilot's phase increment, written by {@link #setPilotTones}
+     *  under the same rule as the first's - never the accumulator. */
+    private volatile long pilotPhaseInc2;
+    /** The second pilot's level as an RMS voltage, {@code 0} when that line is
+     *  off - which is what a one-line request leaves behind. */
+    private volatile double pilotVrms2 = 0.0;
+    /** The two lanes' peak levels for the second pilot, derived exactly as the
+     *  first's. */
+    private volatile double pilotAmplLeft2;
+    private volatile double pilotAmplRight2;
+    /** The pilot levels the audio thread is actually rendering, lane by lane
+     *  and line by line: they move toward {@link #pilotAmplLeft} and its
+     *  siblings with a one-pole fade instead of jumping to them.  A step in a
+     *  line's level spreads energy across the whole spectrum for the frame it
+     *  falls in, which a discontinuity detector can take for a glitch and
+     *  answer with a re-sync; a fade over tens of milliseconds keeps every
+     *  frame's spectrum a clean line.  Audio-thread state only. */
+    private double pilotCurLeft;
+    private double pilotCurRight;
+    private double pilotCurLeft2;
+    private double pilotCurRight2;
+    /** The fade's per-sample step toward the target, from its time constant
+     *  and the sample rate: {@code 1 - exp(-1 / (tau fs))}. */
+    private double pilotFadeCoef = 1.0;
+    /** The fade's time constant, seconds: a level change is 63 % done after
+     *  it and practically complete after five of it. */
+    private static final double PILOT_FADE_TAU_S = 0.05;
+    /** Below this a fading-out line counts as silent and stops being
+     *  rendered - far under any converter's resolution. */
+    private static final double PILOT_SILENT = 1e-12;
     /** Per-tone linear amplitude weights for the dual-tone waveform.
      *  Each weight equals the user's amplitude percentage / 100.
      *  Combined-signal RMS = {@code amplitude · √((w₁² + w₂²) / 2)},
@@ -616,11 +691,26 @@ public class SignalGenerator implements GeneratorControls {
     }
 
     /** Re-derives both lanes' levels from the cached amplitudes and full scales
-     *  against the current form's peak / RMS ratio. */
+     *  against the current form's peak / RMS ratio, and each pilot's two lane
+     *  levels from its own V RMS - a pilot is a sine whatever the form is, so
+     *  it converts at a sine's peak / RMS ratio and never at the form's. */
     private void recomputeLevels() {
         double raw = rawRms(form);
-        this.amplitudeLeft  = currentVrmsLeft  / (dacFsVoltageAmplLeft  * raw);
-        this.amplitudeRight = currentVrmsRight / (dacFsVoltageAmplRight * raw);
+        this.amplitudeLeft   = currentVrmsLeft  / (dacFsVoltageAmplLeft  * raw);
+        this.amplitudeRight  = currentVrmsRight / (dacFsVoltageAmplRight * raw);
+        this.pilotAmplLeft   = pilotVrms  * Constants.SQRT2 / dacFsVoltageAmplLeft;
+        this.pilotAmplRight  = pilotVrms  * Constants.SQRT2 / dacFsVoltageAmplRight;
+        this.pilotAmplLeft2  = pilotVrms2 * Constants.SQRT2 / dacFsVoltageAmplLeft;
+        this.pilotAmplRight2 = pilotVrms2 * Constants.SQRT2 / dacFsVoltageAmplRight;
+        this.pilotFadeCoef   = sampleRate > 0
+                ? 1.0 - Math.exp(-1.0 / (PILOT_FADE_TAU_S * sampleRate)) : 1.0;
+    }
+
+    /** One sample of a pilot level's fade toward its target, snapped to
+     *  silence once a line fading out has fallen below any resolution. */
+    private double fadeToward(double current, double target, double coef) {
+        double next = current + (target - current) * coef;
+        return (target == 0.0 && Math.abs(next) < PILOT_SILENT) ? 0.0 : next;
     }
 
     /** Sets both lanes' digital levels directly - for a source whose samples
@@ -653,6 +743,23 @@ public class SignalGenerator implements GeneratorControls {
     public void applyCompensation(double[] ampRatios, int[] hNums, double[] phiInits) {
         this.comp = new Compensation(ampRatios, hNums, phiInits);
         this.form = GenSignalForm.SINE_COMP;
+        logCompensation(ampRatios, hNums, phiInits);
+    }
+
+    /** The harmonic set as it reaches the DDS - ratio to the fundamental in
+     *  percent and initial phase in degrees, the numbers a {@code .dpd} row
+     *  carries - so a round's hot-swap and a file load read alike in the
+     *  log and can be compared. */
+    private void logCompensation(double[] ampRatios, int[] hNums, double[] phiInits) {
+        if (!log.isInfoEnabled()) return;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < hNums.length; i++) {
+            double deg = Math.toDegrees(phiInits[i]);
+            deg -= 360.0 * Math.round(deg / 360.0);
+            sb.append(String.format(Locale.US, " H%d %.4e %% %+.2f deg;",
+                    hNums[i], ampRatios[i] * 100.0, deg));
+        }
+        log.info("Harmonic compensation applied ({} harmonic(s)):{}", hNums.length, sb);
     }
 
     /**
@@ -677,7 +784,7 @@ public class SignalGenerator implements GeneratorControls {
     /** Drops any compensation and returns a compensated generator to its plain
      *  tone - {@link GenSignalForm#SINE_COMP} -> {@link GenSignalForm#SINE},
      *  {@link GenSignalForm#DUAL_TONE_COMP} -> {@link GenSignalForm#DUAL_TONE}.
-     *  The wizard's cancel path. */
+     *  The start of a predistortion run, which measures the raw DAC. */
     public void clearCompensation() {
         this.comp   = null;
         this.dtComp = null;
@@ -700,6 +807,61 @@ public class SignalGenerator implements GeneratorControls {
      *  ({@code fs/2^64}). */
     public double getDualToneFrequency2Hz() {
         return phaseInc2 / Constants.TWO_POW_64 * sampleRate;
+    }
+
+    /**
+     * Starts or re-aims the pilot lines at {@code hz1} and {@code hz2}, both at
+     * the absolute level {@code levelDbv} (V RMS against each lane's own DAC
+     * full scale).  A {@code hz2} that is not a positive frequency - NaN is how
+     * the alignment states it - asks for the first line alone and switches the
+     * second off.  Live: the next frame carries them, as long as the current
+     * form is a tonal one - pilots asked for under a sweep or a noise form wait
+     * in {@link #pilotVrms} / {@link #pilotVrms2} and start with the next tonal
+     * form.  A re-aim writes the increments and the levels and leaves both
+     * accumulators alone, exactly as {@link #setDualToneFrequency2} does, so
+     * each line's phase carries across it - a restart there would look like the
+     * time-base drift the pilots exist to measure.
+     */
+    @Override
+    public void setPilotTones(double hz1, double hz2, double levelDbv) {
+        double vrms = Math.pow(10.0, levelDbv / DB_PER_DECADE);
+        // A line that was OFF starts phase-locked to the main tone on its first
+        // sample (see nextFrame); a line that is merely re-aimed keeps its
+        // accumulator, so its phase carries across.
+        boolean on1 = this.pilotVrms == 0.0;
+        boolean on2 = hz2 > 0.0 && this.pilotVrms2 == 0.0;
+        if (on1) pilotLock1Pending = true;
+        this.pilotPhaseInc = toPhaseInc(hz1);
+        this.pilotVrms     = vrms;
+        if (hz2 > 0.0) {
+            if (on2) pilotLock2Pending = true;
+            this.pilotPhaseInc2 = toPhaseInc(hz2);
+            this.pilotVrms2     = vrms;
+        } else {
+            this.pilotVrms2 = 0.0;
+        }
+        recomputeLevels();
+        // One line per pilot event, so a log can say whether the lines were
+        // switched, re-aimed or taken down when a reader loses them.
+        if (log.isInfoEnabled()) {
+            log.info("Pilot tones {}: {} Hz / {} Hz at {} dBV",
+                    (on1 || on2) ? "switched on" : "re-aimed",
+                    String.format("%.6f", hz1), String.format("%.6f", hz2),
+                    String.format("%.1f", levelDbv));
+        }
+    }
+
+    /** Stops both pilots: every lane level of theirs goes to zero and the third
+     *  and fourth accumulators stop advancing.  Nothing of the main waveform
+     *  moves - the pilots were never part of its level or of the RMS
+     *  normalisation. */
+    @Override
+    public void clearPilotTones() {
+        boolean wereOn = this.pilotVrms != 0.0 || this.pilotVrms2 != 0.0;
+        this.pilotVrms  = 0.0;
+        this.pilotVrms2 = 0.0;
+        recomputeLevels();
+        if (wereOn && log.isInfoEnabled()) log.info("Pilot tones switched off");
     }
 
     /** Live-updates the dual-tone amplitude split.  {@code amp1Pct} +
@@ -775,11 +937,102 @@ public class SignalGenerator implements GeneratorControls {
      * the ONE waveform sample, scaled by each lane's own level.  Advances the
      * phase accumulator by one step.  {@code frame[0]} is the left lane,
      * {@code frame[1]} the right; no allocation - the audio hot path.
+     *
+     * <p>The pilot lines are added HERE and not in {@link #nextRaw()}, because
+     * their level is an absolute voltage per lane: they have to stay outside
+     * the per-lane amplitude scaling, outside the RMS normalisation the main
+     * tone's level is derived from ({@link #rawRms}), and outside every
+     * predistortion kernel, which corrects the main tone alone.  Each
+     * accumulator advances whenever its line is on, so every pilot's phase is a
+     * continuous function of time even across a form that does not carry it.
      */
     public void nextFrame(double[] frame) {
         double raw = nextRaw();
         frame[0] = raw * amplitudeLeft;
         frame[1] = raw * amplitudeRight;
+        // A line is rendered while it is asked for AND while it is still
+        // fading out after being taken off - its phase keeps advancing
+        // throughout, so it stays a continuous function of time.
+        boolean line1 = pilotVrms  > 0.0 || pilotCurLeft  != 0.0 || pilotCurRight  != 0.0;
+        boolean line2 = pilotVrms2 > 0.0 || pilotCurLeft2 != 0.0 || pilotCurRight2 != 0.0;
+        if (line1 || line2) {
+            boolean tonal = carriesPilot();   // one form read for both lines
+            double  coef  = pilotFadeCoef;
+            // The main tone's phase on THIS sample: nextRaw read it and then
+            // advanced the accumulator, so it stands one increment back.
+            long mainNow = phaseAcc - phaseInc;
+            if (line1) {
+                if (tonal) {
+                    // The phase lock is taken from silence only - a line still
+                    // audible would jump - so a line switched on while it
+                    // fades out finishes the fade-out first, then locks and
+                    // fades in.  Silence is read BEFORE this sample's step.
+                    if (pilotLock1Pending && pilotCurLeft == 0.0 && pilotCurRight == 0.0) {
+                        pilotPhaseAcc     = lockedToMain(mainNow, pilotPhaseInc);
+                        pilotLock1Pending = false;
+                        if (log.isInfoEnabled()) log.info("Pilot line 1 locked to the main tone");
+                    }
+                    boolean hold1 = pilotLock1Pending;
+                    pilotCurLeft  = fadeToward(pilotCurLeft,  hold1 ? 0.0 : pilotAmplLeft,  coef);
+                    pilotCurRight = fadeToward(pilotCurRight, hold1 ? 0.0 : pilotAmplRight, coef);
+                    double pilot = SineKernel.sinAtPhaseAcc(pilotPhaseAcc);
+                    frame[0] += pilot * pilotCurLeft;
+                    frame[1] += pilot * pilotCurRight;
+                } else {
+                    // A form that carries no pilot renders it at zero, so the
+                    // line fades in - and takes a pending lock - from silence
+                    // when a tonal form returns.
+                    pilotCurLeft  = 0.0;
+                    pilotCurRight = 0.0;
+                }
+                pilotPhaseAcc += pilotPhaseInc;   // long overflow IS the 2^64 wrap
+            }
+            if (line2) {
+                if (tonal) {
+                    if (pilotLock2Pending && pilotCurLeft2 == 0.0 && pilotCurRight2 == 0.0) {
+                        pilotPhaseAcc2    = lockedToMain(mainNow, pilotPhaseInc2);
+                        pilotLock2Pending = false;
+                        if (log.isInfoEnabled()) log.info("Pilot line 2 locked to the main tone");
+                    }
+                    boolean hold2 = pilotLock2Pending;
+                    pilotCurLeft2  = fadeToward(pilotCurLeft2,  hold2 ? 0.0 : pilotAmplLeft2,  coef);
+                    pilotCurRight2 = fadeToward(pilotCurRight2, hold2 ? 0.0 : pilotAmplRight2, coef);
+                    double pilot = SineKernel.sinAtPhaseAcc(pilotPhaseAcc2);
+                    frame[0] += pilot * pilotCurLeft2;
+                    frame[1] += pilot * pilotCurRight2;
+                } else {
+                    pilotCurLeft2  = 0.0;
+                    pilotCurRight2 = 0.0;
+                }
+                pilotPhaseAcc2 += pilotPhaseInc2;
+            }
+        }
+    }
+
+    /** A pilot accumulator phase-locked to the main tone: the main tone's
+     *  phase, as a fraction of a turn, times the ratio of the two increments -
+     *  which is the ratio of the two frequencies - wrapped to a turn.  Read
+     *  through 53 bits of the accumulator, so the lock is exact to 2^-53 of a
+     *  turn before the ratio scales it; the lowest bit of the result is not
+     *  kept, which is 2^-63 of a turn.  Zero where the main tone has no
+     *  increment to scale by. */
+    private long lockedToMain(long mainAcc, long pilotInc) {
+        long inc = phaseInc;
+        if (inc == 0L) return 0L;
+        double turns = (mainAcc >>> 11) / 0x1p53;
+        double frac  = turns * ((double) pilotInc / (double) inc);
+        frac -= Math.floor(frac);
+        return ((long) (frac * 0x1p63)) << 1;
+    }
+
+    /** Whether a pilot line may ride on the frames this source renders: the
+     *  tonal DDS forms carry one, the sweeps and the noise forms do not (their
+     *  spectrum is the measurement), and a source whose samples are not a DDS
+     *  waveform at all carries none. */
+    protected boolean carriesPilot() {
+        GenSignalForm f = form;               // single volatile read
+        return f == GenSignalForm.SINE      || f == GenSignalForm.SINE_COMP
+            || f == GenSignalForm.DUAL_TONE || f == GenSignalForm.DUAL_TONE_COMP;
     }
 
     /** The next sample of the waveform itself, at unit level, advancing the

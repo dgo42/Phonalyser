@@ -165,6 +165,15 @@ public final class FilePlaybackGenerator extends SignalGenerator {
         return sum / channels;
     }
 
+    /** A file's frames carry what the file holds and nothing else - no pilot
+     *  line is added to them.  The base's form test cannot see that on its
+     *  own: the inherited DDS form is SINE, a legal value the constructor
+     *  needs, and SINE is one of the forms that do carry a pilot. */
+    @Override
+    protected boolean carriesPilot() {
+        return false;
+    }
+
     /** Reads the next block, reopening the file at end of stream while looping.
      *  @return false when nothing more can be read */
     private boolean refill(int frameBytes) {

@@ -154,7 +154,7 @@ public final class MainsFrequencyTracker {
         double[] mag = new double[m];
         int bestK = 0;
         for (int k = 0; k < m; k++) {
-            mag[k] = goertzelPower(w, len, lo + k * DETECT_STEP_HZ);
+            mag[k] = linePower(w, len, lo + k * DETECT_STEP_HZ);
             if (mag[k] > mag[bestK]) bestK = k;
         }
         double refinedHz = lo + bestK * DETECT_STEP_HZ;
@@ -203,16 +203,11 @@ public final class MainsFrequencyTracker {
         return idx;
     }
 
-    /** Goertzel single-frequency power |X(f)|² over a windowed block. */
-    private double goertzelPower(double[] w, int len, double freqHz) {
-        double omega = 2.0 * Math.PI * freqHz / sampleRate;
-        double coeff = 2.0 * Math.cos(omega);
-        double s1 = 0.0, s2 = 0.0;
-        for (int i = 0; i < len; i++) {
-            double s = w[i] + coeff * s1 - s2;
-            s2 = s1;
-            s1 = s;
-        }
-        return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+    /** Single-frequency power |X(f)|² over a block the caller has already
+     *  windowed - one line of the detection grid. */
+    private double linePower(double[] w, int len, double freqHz) {
+        Goertzel.SingleBin bin = Goertzel.goertzelBin(w, 0, len, null,
+                2.0 * Math.PI * freqHz / sampleRate, 0.0);
+        return bin.re() * bin.re() + bin.im() * bin.im();
     }
 }

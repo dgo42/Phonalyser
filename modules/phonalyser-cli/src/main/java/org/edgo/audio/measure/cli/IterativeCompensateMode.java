@@ -40,6 +40,8 @@ import org.edgo.audio.measure.cli.util.DeviceSelector;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.HarmonicCompensation;
+import org.edgo.audio.measure.dsp.InverseCascade;
+import org.edgo.audio.measure.dsp.ToneLobe;
 import org.edgo.audio.measure.dsp.HarmonicCompensation.GeneratorCorrections;
 import org.edgo.audio.measure.cli.util.SampleRates;
 import org.edgo.audio.measure.common.Constants;
@@ -563,13 +565,12 @@ public class IterativeCompensateMode {
      *  also the bin list the applying pass walks. */
     private void deEmbedWithCal(FftResult result, FreqRespCalibration cal, boolean withNoise) {
         double[] tones = FreqRespCalHelper.toneFrequencies(result);
-        int[][] spans  = FreqRespCalHelper.toneLobeSpans(result, tones);
+        ToneLobe[] spans = FreqRespCalHelper.toneLobeSpans(result, tones);
         List<FreqRespCalibration> withNoiseRows = withNoise ? List.of(cal) : List.of();
         List<FreqRespCalibration> toneOnlyRows  = withNoise ? List.of() : List.of(cal);
-        double[][] inv = FreqRespCalHelper.cascadeInverse(withNoiseRows, toneOnlyRows,
+        InverseCascade inv = FreqRespCalHelper.cascadeInverse(withNoiseRows, toneOnlyRows,
                 tones, spans, result.fftSize, result.sampleRate);
-        FreqRespCalHelper.applyInverseInPlace(result, inv,
-                withNoise ? null : FreqRespCalHelper.toneBins(spans, result.fftSize / 2));
+        FreqRespCalHelper.applyInverseInPlace(result, inv);
     }
 
     /** Builds a {@code SINE_COMPENSATED} generator from the accumulated

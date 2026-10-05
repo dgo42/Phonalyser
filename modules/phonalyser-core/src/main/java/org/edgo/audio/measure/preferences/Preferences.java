@@ -508,6 +508,13 @@ public final class Preferences {
      *  the single-reference phase-lock path; real dual-tone / IMD partners are
      *  comparable in level and survive. */
     private final Property<Double>  fftStrongToneRelDb   = bound(100.0);
+    /** Level of the two pilot lines the pilot-tone phase alignment puts on
+     *  the generator, dBV.  Low enough to stay out of every product that
+     *  matters, high enough to stand well clear of the floor around them. */
+    private final Property<Double>  fftPilotLevelDbv     = bound(-100.0);
+    /** How far a pilot line must stand over the median of its neighbourhood,
+     *  dB, for its bin to count as carrying the line on a frame. */
+    private final Property<Double>  fftPilotMarginDb     = bound(20.0);
     private final Property<Double>  fftManualFundVrms    = bound(1.0);
     /** True = the manual-fundamental field displays in dBV; persisted. */
     private final Property<Boolean> fftManualFundDbvDisplay = bound(false);
@@ -664,6 +671,12 @@ public final class Preferences {
     /** Tune-notch wizard target (desired) notch frequency in Hz - the dashed
      *  marker the live readout is tuned onto. */
     private final Property<Double>  tuneNotchTargetHz        = bound(1000.0);
+    /** Measure-delay tool: the pulse's amplitude at the DAC AS ENTERED. */
+    private final Property<UnitValue> measureDelayAmplitude  = bound(baseAmplitude(0.5));
+    /** Measure-delay tool: which output lane(s) emit the pulse. */
+    private final Property<OutputChannels> measureDelayOutputChannels = bound(OutputChannels.BOTH);
+    /** Measure-delay tool: which capture channel the pulse's edges are read on. */
+    private final Property<Channel> measureDelayInputChannel = bound(Channel.L);
     /** Which output lane(s) the tune-notch sweep drives - the encoder gate
      *  ({@code BOTH} by default).  Kept independent of the main FreqResp pane, like
      *  the other {@code tuneNotch*} dialog fields (the tune-notch capture channel is
@@ -946,6 +959,8 @@ public final class Preferences {
         c.uiFontNormal.set(uiFontNormal.get());
         c.uiFontBold.set(uiFontBold.get());
         c.fftStrongToneRelDb.set(fftStrongToneRelDb.get());
+        c.fftPilotLevelDbv.set(fftPilotLevelDbv.get());
+        c.fftPilotMarginDb.set(fftPilotMarginDb.get());
         c.freqRespNyquistFraction.set(freqRespNyquistFraction.get());
         c.freqRespFreqMaxHz.set(freqRespFreqMaxHz.get());
         c.freqRespFreqMinHz.set(freqRespFreqMinHz.get());
@@ -1045,6 +1060,8 @@ public final class Preferences {
         setUiFontNormal(edit.uiFontNormal.get());
         setUiFontBold(edit.uiFontBold.get());
         setFftStrongToneRelDb(edit.fftStrongToneRelDb.get());
+        setFftPilotLevelDbv(edit.fftPilotLevelDbv.get());
+        setFftPilotMarginDb(edit.fftPilotMarginDb.get());
         setFreqRespCompareSmoothWindow(edit.freqRespCompareSmoothWindow.get());
         setFreqRespNotchEnabled(edit.freqRespNotchEnabled.get());
         setFreqRespNotchBaseHz(edit.freqRespNotchBaseHz.get());
@@ -1466,6 +1483,14 @@ public final class Preferences {
     public double getFftStrongToneRelDb()      { return fftStrongToneRelDb.get(); }
     public void setFftStrongToneRelDb(double v) { fftStrongToneRelDb.set(v); }
     public Property<Double> fftStrongToneRelDbProperty() { return fftStrongToneRelDb; }
+
+    public double getFftPilotLevelDbv()        { return fftPilotLevelDbv.get(); }
+    public void setFftPilotLevelDbv(double v)  { fftPilotLevelDbv.set(v); }
+    public Property<Double> fftPilotLevelDbvProperty() { return fftPilotLevelDbv; }
+
+    public double getFftPilotMarginDb()        { return fftPilotMarginDb.get(); }
+    public void setFftPilotMarginDb(double v)  { fftPilotMarginDb.set(v); }
+    public Property<Double> fftPilotMarginDbProperty() { return fftPilotMarginDb; }
 
     public double getFftManualFundVrms()       { return fftManualFundVrms.get(); }
     public void setFftManualFundVrms(double v) { fftManualFundVrms.set(v); }
@@ -1960,6 +1985,13 @@ public final class Preferences {
     public void setTuneNotchAmplitude(UnitValue v) { tuneNotchAmplitude.set(v); }
     public Property<UnitValue> tuneNotchAmplitudeProperty() { return tuneNotchAmplitude; }
 
+    public UnitValue getMeasureDelayAmplitude() { return measureDelayAmplitude.get(); }
+    public void setMeasureDelayAmplitude(UnitValue v) { measureDelayAmplitude.set(v); }
+    public OutputChannels getMeasureDelayOutputChannels() { return measureDelayOutputChannels.get(); }
+    public void setMeasureDelayOutputChannels(OutputChannels v) { measureDelayOutputChannels.set(v); }
+    public Channel getMeasureDelayInputChannel() { return measureDelayInputChannel.get(); }
+    public void setMeasureDelayInputChannel(Channel v) { measureDelayInputChannel.set(v); }
+
     public double getTuneNotchTargetHz()       { return tuneNotchTargetHz.get(); }
     public void setTuneNotchTargetHz(double v) { tuneNotchTargetHz.set(v); }
     public Property<Double> tuneNotchTargetHzProperty() { return tuneNotchTargetHz; }
@@ -2334,6 +2366,8 @@ public final class Preferences {
         root.put("fftThdMaxHarmonic",         fftThdMaxHarmonic.get());
         root.put("fftCalcMaxHarmonic",        fftCalcMaxHarmonic.get());
         root.put("fftStrongToneRelDb",        fftStrongToneRelDb.get());
+        root.put("fftPilotLevelDbv",          fftPilotLevelDbv.get());
+        root.put("fftPilotMarginDb",          fftPilotMarginDb.get());
         root.put("fftManualFundVrms",         fftManualFundVrms.get());
         root.put("fftManualFundDbvDisplay",   fftManualFundDbvDisplay.get());
         root.put("fftManualFundEnabled",      fftManualFundEnabled.get());
@@ -2387,6 +2421,10 @@ public final class Preferences {
         root.put("tuneNotchAmplitudeUnit",    tuneNotchAmplitude.get().unit());
         root.put("tuneNotchTargetHz",         tuneNotchTargetHz.get());
         root.put("tuneNotchOutputChannels",   tuneNotchOutputChannels.get().name());
+        root.put("measureDelayAmplitude",     measureDelayAmplitude.get().value());
+        root.put("measureDelayAmplitudeUnit", measureDelayAmplitude.get().unit());
+        root.put("measureDelayOutputChannels", measureDelayOutputChannels.get().name());
+        root.put("measureDelayInputChannel",  measureDelayInputChannel.get().name());
         root.put("freqRespLeftVisible",       freqRespLeftVisible.get());
         root.put("freqRespRightVisible",      freqRespRightVisible.get());
         root.put("freqRespPhaseVisible",      freqRespPhaseVisible.get());
@@ -2725,6 +2763,8 @@ public final class Preferences {
         if (root.get("fftThdMaxHarmonic")         instanceof Number  n) fftThdMaxHarmonic.set(n.intValue());
         if (root.get("fftCalcMaxHarmonic")        instanceof Number  n) fftCalcMaxHarmonic.set(n.intValue());
         if (root.get("fftStrongToneRelDb")        instanceof Number  n) fftStrongToneRelDb.set(n.doubleValue());
+        if (root.get("fftPilotLevelDbv")          instanceof Number  n) fftPilotLevelDbv.set(n.doubleValue());
+        if (root.get("fftPilotMarginDb")          instanceof Number  n) fftPilotMarginDb.set(n.doubleValue());
         if (root.get("fftManualFundVrms")         instanceof Number  n) fftManualFundVrms.set(n.doubleValue());
         if (root.get("fftManualFundDbvDisplay")   instanceof Boolean b) fftManualFundDbvDisplay.set(b);
         if (root.get("fftManualFundEnabled")      instanceof Boolean b) fftManualFundEnabled.set(b);
@@ -2765,6 +2805,9 @@ public final class Preferences {
         readEntered(root, "tuneNotchAmplitude", tuneNotchAmplitude);
         if (root.get("tuneNotchTargetHz")         instanceof Number  n) tuneNotchTargetHz.set(n.doubleValue());
         if (root.get("tuneNotchOutputChannels")   instanceof String  s) tuneNotchOutputChannels.set(enumOr(OutputChannels.class, s, tuneNotchOutputChannels.get()));
+        readEntered(root, "measureDelayAmplitude", measureDelayAmplitude);
+        if (root.get("measureDelayOutputChannels") instanceof String s) measureDelayOutputChannels.set(enumOr(OutputChannels.class, s, measureDelayOutputChannels.get()));
+        if (root.get("measureDelayInputChannel")  instanceof String  s) measureDelayInputChannel.set(enumOr(Channel.class, s, measureDelayInputChannel.get()));
         if (root.get("freqRespLeftVisible")       instanceof Boolean b) freqRespLeftVisible.set(b);
         if (root.get("freqRespRightVisible")      instanceof Boolean b) freqRespRightVisible.set(b);
         if (root.get("freqRespPhaseVisible")      instanceof Boolean b) freqRespPhaseVisible.set(b);

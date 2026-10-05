@@ -32,6 +32,7 @@ import java.util.Locale;
 import java.util.stream.IntStream;
 
 import org.edgo.audio.measure.common.Constants;
+import org.edgo.audio.measure.dsp.Goertzel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 
@@ -126,6 +127,28 @@ public class FftAnalyzer {
      *  every sample, then invalidate itself and accept all frames anyway. */
     private boolean multiTone = false;
 
+    /** The bins the two pilot tones sit on for the next {@code analyze};
+     *  {@code -1} = that slot carries no pilot.  A pilot is a generated line
+     *  the phase alignment reads as its time-base reference, held on a whole
+     *  bin of the analysis grid, so its position does not follow the
+     *  fundamental's fractional one.  Pinning a bin here has three effects:
+     *  the pilot gets its own member in the coherent de-rotation family at
+     *  that bin, so the frames of a tick sum without the residual a
+     *  nearest-harmonic rotation would leave on it; the result carries the
+     *  bin and the frequency it stands for; and the bin plus its window main
+     *  lobe stay out of the noise, SNR and ENOB sums.
+     *  Written by {@link #setPilotBins(int, int)}. */
+    private int pilotBin1 = -1;
+    private int pilotBin2 = -1;
+
+    /** Pins the pilot bins for the next {@code analyze} - see
+     *  {@link #pilotBin1}.  {@code -1} in a slot clears it, and two cleared
+     *  slots are a run with no pilot at all. */
+    public void setPilotBins(int p1, int p2) {
+        pilotBin1 = p1;
+        pilotBin2 = p2;
+    }
+
     /** Spectrum-only fast-path flag for the next {@code analyze}.  When set,
      *  {@code analyze} produces the averaged complex spectrum + dB magnitude +
      *  fundamental / harmonic BIN positions, but SKIPS the throwaway per-tick
@@ -137,6 +160,29 @@ public class FftAnalyzer {
      *  one-shot CLI / test callers and single-tick (non-averaging) display. */
     @Setter
     private boolean spectrumOnly = false;
+
+    /** The STORED spectrum this instance measures - one read back from file,
+     *  which arrives as magnitude and phase instead of samples.  Held so every
+     *  step that measures it ({@link #rebuildPhasors}, {@link #findFundamental},
+     *  {@link #applyDistortionSettings}) speaks about the same spectrum;
+     *  {@code null} on an analyser built for live samples. */
+    private final FftResult stored;
+
+    /** The intermodulation estimator every dual-tone result's {@code imd} is
+     *  derived with - one per analyser, so its noise-floor scratch is reused
+     *  across results instead of reallocated per spectrum. */
+    private final ImdAnalyzer imdAnalyzer;
+
+    /** An analyser for live samples - what {@link #analyze} is called on. */
+    public FftAnalyzer() {
+        this(null);
+    }
+
+    /** An analyser bound to one stored spectrum, for the file-read path. */
+    public FftAnalyzer(FftResult stored) {
+        this.stored = stored;
+        this.imdAnalyzer = new ImdAnalyzer();
+    }
 
     // =========================================================================
     // Reusable scratch buffers
@@ -294,6 +340,7 @@ public class FftAnalyzer {
         cachedWindowType  = null;
         cachedAweight        = null;
         cachedAweightFreqRes = 0.0;
+        imdAnalyzer.releaseScratch();
     }
 
     /** Tries the cache for the windowed FFT of the frame starting at
@@ -314,29 +361,6 @@ public class FftAnalyzer {
         if (frameCache != null) {
             frameCache.put(absStart, fftSize, re, im);
         }
-    }
-
-    /** One frame's windowed single-bin Goertzel: runs the recurrence over
-     *  {@code samples[base .. base+fftSize)} weighted by {@code window} and
-     *  writes the complex result into {@code out[0]} / {@code out[1]}.
-     *  {@code cw} / {@code sw} are the cosine and sine of the bin's angular
-     *  frequency {@code 2π·k/fftSize}.  The value produced is the Goertzel
-     *  terminal {@code s[N-1] − e^{−jω}·s[N-2]}, which equals the DFT bin
-     *  times the constant factor {@code e^{−jω}} - frame-independent, so it
-     *  cancels in any phase SLOPE or frame-to-frame difference; a caller that
-     *  needs the bin's true phase multiplies by {@code e^{jω}}.  The caller
-     *  supplies {@code out} so a per-frame loop allocates nothing. */
-    private void goertzelFrameBin(double[] samples, int base, int fftSize,
-                                  double[] window, double cw, double sw, double[] out) {
-        final double coeff = 2.0 * cw;
-        double sp = 0.0, sp2 = 0.0;
-        for (int n = 0; n < fftSize; n++) {
-            double s = samples[base + n] * window[n] + coeff * sp - sp2;
-            sp2 = sp;
-            sp  = s;
-        }
-        out[0] = sp - sp2 * cw;
-        out[1] = sp2 * sw;
     }
 
     /** One spectral bin's complex value, in the raw FFT units of
@@ -386,61 +410,94 @@ public class FftAnalyzer {
         }
         double[] window = getCachedWindow(fftSize, windowType);
         final double w  = 2.0 * Math.PI * bin / fftSize;
-        final double cw = Math.cos(w);
-        final double sw = Math.sin(w);
-        double[] gz    = new double[2];
         double   sumRe = 0.0;
         double   sumIm = 0.0;
         for (int f = 0; f < frameCount; f++) {
             int base = f * step;
-            goertzelFrameBin(samples, base, fftSize, window, cw, sw, gz);
-            // e^{jω} undoes the Goertzel's constant factor, leaving the DFT bin
-            // itself - the quantity the FFT path produces for this bin.
-            double binRe = gz[0] * cw - gz[1] * sw;
-            double binIm = gz[0] * sw + gz[1] * cw;
+            Goertzel.SingleBin gz = Goertzel.goertzelBin(samples, base, fftSize, window, w, 0.0);
             double ang   = -2.0 * Math.PI
                     * Math.IEEEremainder((double) base * kFractional, fftSize) / fftSize;
             double c = Math.cos(ang);
             double s = Math.sin(ang);
-            sumRe += binRe * c - binIm * s;
-            sumIm += binRe * s + binIm * c;
+            sumRe += gz.re() * c - gz.im() * s;
+            sumIm += gz.re() * s + gz.im() * c;
         }
         return new BinPhasor(sumRe / frameCount, sumIm / frameCount);
     }
 
+    /** The raw DFT bin {@code bin} of ONE frame of {@code samples}, the frame
+     *  starting at {@code base}: the windowed single-bin Goertzel with its
+     *  constant factor undone, in the units of {@link FftResult#re} /
+     *  {@link FftResult#im} - the frame's own phase at its own start, with no
+     *  de-rotation and nothing summed.  What a phase relation formed inside
+     *  one frame reads, where a mean of frames would already be an average.
+     *
+     *  @param base first sample of the frame
+     *  @param bin  integer bin, 0 .. fftSize/2 */
+    public BinPhasor frameBinPhasor(double[] samples, int base, int fftSize,
+                                    WindowType windowType, int bin) {
+        if (Integer.bitCount(fftSize) != 1) {
+            throw new IllegalArgumentException("fftSize must be a power of 2, got: " + fftSize);
+        }
+        if (bin < 0 || bin > fftSize / 2) {
+            throw new IllegalArgumentException("Bin out of range: " + bin);
+        }
+        if (base < 0 || (long) base + fftSize > samples.length) {
+            throw new IllegalArgumentException("Frame at " + base + " exceeds the buffer: "
+                    + fftSize + " samples needed, " + samples.length + " held");
+        }
+        double[] window = getCachedWindow(fftSize, windowType);
+        Goertzel.SingleBin gz = Goertzel.goertzelBin(samples, base, fftSize, window,
+                2.0 * Math.PI * bin / fftSize, 0.0);
+        return new BinPhasor(gz.re(), gz.im());
+    }
+
     /**
      * The fractional bin of a tone sitting at {@code bin} in {@code samples},
-     * measured the way the analysis refines the fundamental on a single clean
-     * frame: the three bin phasors {@code bin-1}, {@code bin} and
-     * {@code bin+1} by the {@link #binPhasor} recipe - same window table, same
-     * de-rotation, same frames - and the log-power parabolic fit of
-     * {@link MathUtil#parabolicBinInterp(double, double, double, double, double, double, int)}.
+     * measured the way the analysis refines the fundamental: with two frames or
+     * more, the tone's phase change at {@code bin} between the first frame and
+     * the one {@code step} samples later ({@link #kappaFromPhaseStep}); with a
+     * single frame, the log-power parabolic fit of
+     * {@link MathUtil#parabolicBinInterp(double, double, double, double, double, double, int)}
+     * over {@code bin-1}, {@code bin} and {@code bin+1} of that frame.
      * Multiplied by the frequency resolution it is that tone's frequency.
      *
      * <p>It exists for a buffer the analysis never transformed - the opposite
      * channel's window in the reference-channel phase alignment, whose
      * fundamental stands tens of dB clear of the notched one and is therefore
-     * the better measurement to steer a frequency lock with.  Three single-bin
-     * transforms per call; no spectrum is built and no window table copied.
+     * the better measurement to steer a frequency lock with.  The same
+     * estimator as on the analysed channel, so the two readings differ by the
+     * channel and nothing else.  Two single-bin transforms per call (three for
+     * a single frame); no spectrum is built and no window table copied.
      *
-     * <p>The three bins are clamped into {@code 1 .. fftSize/2}, so a tone at
-     * the very first or last bin degenerates to a two-point fit exactly as the
-     * array form of the same fit does.
+     * <p>In the single-frame fit the three bins are clamped into
+     * {@code 1 .. fftSize/2}, so a tone at the very first or last bin
+     * degenerates to a two-point fit exactly as the array form of the same fit
+     * does.
      *
-     * @param bin         the tone's integer bin - the index the answer's
-     *                    fractional offset is measured from
-     * @param step        spacing between successive frame starts, in samples
-     * @param frameCount  frames to average, the first at {@code samples[0]}
-     * @param kFractional the de-rotation frequency in fractional bins
+     * @param bin        the tone's integer bin - the phase is read there, and
+     *                   the answer's whole turns are resolved against it
+     * @param step       spacing between successive frame starts, in samples
+     * @param frameCount frames the buffer holds, the first at {@code samples[0]}
      */
     public double refinedBin(double[] samples, int fftSize, WindowType windowType,
-                             int bin, int step, int frameCount, double kFractional) {
+                             int bin, int step, int frameCount) {
+        if (step < 1 || frameCount < 1) {
+            throw new IllegalArgumentException("Frame geometry must be positive, got step "
+                    + step + " and " + frameCount + " frame(s)");
+        }
+        if (frameCount >= 2) {
+            BinPhasor first  = frameBinPhasor(samples, 0,    fftSize, windowType, bin);
+            BinPhasor second = frameBinPhasor(samples, step, fftSize, windowType, bin);
+            return kappaFromPhaseStep(Math.atan2(first.im(), first.re()),
+                    Math.atan2(second.im(), second.re()), bin, step, fftSize);
+        }
         int halfSize = fftSize / 2;
         int lo = Math.max(1, bin - 1);
         int hi = Math.min(halfSize, bin + 1);
-        BinPhasor pLo  = binPhasor(samples, fftSize, windowType, lo,  step, frameCount, kFractional);
-        BinPhasor pMid = binPhasor(samples, fftSize, windowType, bin, step, frameCount, kFractional);
-        BinPhasor pHi  = binPhasor(samples, fftSize, windowType, hi,  step, frameCount, kFractional);
+        BinPhasor pLo  = frameBinPhasor(samples, 0, fftSize, windowType, lo);
+        BinPhasor pMid = frameBinPhasor(samples, 0, fftSize, windowType, bin);
+        BinPhasor pHi  = frameBinPhasor(samples, 0, fftSize, windowType, hi);
         return MathUtil.parabolicBinInterp(pLo.re(), pLo.im(), pMid.re(), pMid.im(),
                 pHi.re(), pHi.im(), bin);
     }
@@ -468,15 +525,12 @@ public class FftAnalyzer {
                                           int step, int bestStart, int bestLen,
                                           int refIntBin, double kCoarse) {
         final double w     = 2.0 * Math.PI * refIntBin / fftSize;
-        final double cw    = Math.cos(w);
-        final double sw    = Math.sin(w);
         double[] resid  = new double[bestLen];
-        double[] gz     = new double[2];                        // one frame's Goertzel result
         double   sumCos = 0.0, sumSin = 0.0;
         for (int f = bestStart; f < bestStart + bestLen; f++) {
             int base = f * step;
-            goertzelFrameBin(samples, base, fftSize, window, cw, sw, gz);
-            double ph       = Math.atan2(gz[1], gz[0]);
+            Goertzel.SingleBin gz = Goertzel.goertzelBin(samples, base, fftSize, window, w, 0.0);
+            double ph       = Math.atan2(gz.im(), gz.re());
             double expected = 2.0 * Math.PI * kCoarse * base / (double) fftSize;
             double r        = Math.IEEEremainder(ph - expected, 2.0 * Math.PI);
             resid[f - bestStart] = r;
@@ -498,6 +552,91 @@ public class FftAnalyzer {
         return kCoarse + (sDbR / sDb2) * fftSize / (2.0 * Math.PI);
     }
 
+    /**
+     * Sub-bin fractional bin κ of the line sitting near {@code hintBin},
+     * measured on the clean segment the same way the fundamental's own κ is:
+     * the peak is re-found within ±{@code searchBins} of the hint, then the
+     * one-hop phase difference between the segment's first two frames gives
+     * the fractional position; with a single frame ({@code s1Re == null}) the
+     * three lobe bins carry a parabolic interpolation instead.  Only the lobe
+     * bins feed the estimate, so noise elsewhere in the spectrum cannot bias
+     * it.  The integer part of the answer is the bin the search settled on, so
+     * a caller whose line can stray states how far; a caller that knows where
+     * its line stands passes 0 and the hint bin is measured as it is, which
+     * also keeps a neighbouring line from taking the bin.  The phase
+     * difference then resolves an offset of up to half a frame spacing's worth
+     * of bins ({@code fftSize / (2·step)}, one bin at 50 % overlap) either way.
+     *
+     * <p>Serves every line the analysis reports a TRUE frequency for beside the
+     * fundamental - the second tone of a dual-tone signal - so it too is read
+     * off a fresh frame rather than off the
+     * coherently-collapsed average.  Returns {@link Double#NaN} when the hint
+     * sits within 3 bins of an edge of the single-sided spectrum, where no full
+     * lobe exists to measure.
+     */
+    private double refineToneKappaAt(int hintBin, int searchBins,
+                                     double[] s0Re, double[] s0Im,
+                                     double[] s1Re, double[] s1Im,
+                                     int halfSize, int fftSize, int step) {
+        if (hintBin < 3 || hintBin > halfSize - 3) {
+            return Double.NaN;
+        }
+        int peak = peakBin(s0Re, s0Im,
+                Math.max(1, hintBin - searchBins), Math.min(halfSize, hintBin + searchBins));
+        if (s1Re == null) {
+            return MathUtil.parabolicBinInterp(s0Re, s0Im, peak, fftSize);
+        }
+        double p0 = Math.atan2(s0Im[peak], s0Re[peak]);
+        double p1 = Math.atan2(s1Im[peak], s1Re[peak]);
+        return kappaFromPhaseStep(p0, p1, peak, step, fftSize);
+    }
+
+    /**
+     * The fractional bin of a tone from its phase at {@code bin} in two frames
+     * {@code step} samples apart: the phase change with its whole turns taken
+     * from the advance a tone exactly on {@code bin} makes, scaled to bins.
+     * Resolves an offset of up to {@code fftSize / (2·step)} bins either way of
+     * {@code bin}.  The one recipe every live tone frequency is read with - the
+     * fundamental, the second tone and the reference channel's tones.
+     *
+     * @param p0 the tone's phase at {@code bin} in the first frame, radians
+     * @param p1 the same in the frame {@code step} samples later
+     */
+    private double kappaFromPhaseStep(double p0, double p1, int bin, int step, int fftSize) {
+        double expected = 2.0 * Math.PI * bin * step / (double) fftSize;
+        long   turns    = Math.round((p1 - p0 - expected) / (2.0 * Math.PI));
+        return (p1 - p0 - 2.0 * Math.PI * turns) * fftSize / (2.0 * Math.PI * step);
+    }
+
+    /**
+     * Bin of the second tone of a dual-tone spectrum given as the phasor pair
+     * {@code re} / {@code im}: the pair is simply the two strongest tones, so
+     * the partner is the strongest local maximum left once the fundamental's
+     * own peak - {@code fundBin} and the 2 bins either side of it - is
+     * excluded.  No minimum separation and no minimum level; the lower edge is
+     * a fixed 10 Hz guard keeping the leakage of a residual DC offset through
+     * the window main lobe out of the contest.  Returns {@code -1} when no
+     * local maximum qualifies.  Serves the clean frame of a live analysis and
+     * a stored spectrum alike ({@link #findSecondTone}).
+     */
+    private int partnerToneBin(double[] re, double[] im, int fundBin,
+                               int halfSize, double freqRes) {
+        int    loB      = Math.max(3, (int) Math.ceil(10.0 / freqRes));
+        double bestAmp2 = 0.0;
+        int    bestK    = -1;
+        for (int k = loB; k < halfSize; k++) {
+            if (Math.abs(k - fundBin) <= 2) continue;   // F1's own peak, not a partner
+            double a2 = re[k] * re[k] + im[k] * im[k];
+            if (a2 > bestAmp2
+                    && a2 >= re[k - 1] * re[k - 1] + im[k - 1] * im[k - 1]
+                    && a2 >  re[k + 1] * re[k + 1] + im[k + 1] * im[k + 1]) {
+                bestAmp2 = a2;
+                bestK = k;
+            }
+        }
+        return bestK;
+    }
+
 
     // =========================================================================
     // Result - extracted to the standalone top-level class FftResult so a
@@ -505,6 +644,12 @@ public class FftAnalyzer {
     // =========================================================================
 
     // (FftResult lives in its own file now.)
+
+    /** Harmonics the THD sums when the caller states no limit: H2..H9, the
+     *  sum every overload below the full one has always taken.  A caller that
+     *  offers the limit as a setting passes its own count to the full
+     *  overload. */
+    private static final int THD_HARMONICS_LEGACY = 8;
 
     // =========================================================================
     // Analysis - backward-compatible overload (Hann, 0 % overlap)
@@ -590,10 +735,12 @@ public class FftAnalyzer {
      * loudest-bin behaviour.
      *
      * <p>Allocates a fresh {@link FftResult} per call - preferred for one-shot
-     * CLI / test callers.  The live FFT view goes through
-     * {@link #analyze(double[], int, int, int, WindowType, FftOverlap,
+     * CLI / test callers; the THD sums its historic H2..H9.  The live FFT view
+     * goes through
+     * {@link #analyze(double[], int, int, int, int, WindowType, FftOverlap,
      * double, double, boolean, double, boolean, double, FftResult, int, int)}
-     * to write into a pre-allocated pool slot and avoid per-tick array churn.
+     * to state the THD's harmonic limit and to write into a pre-allocated pool
+     * slot, avoiding per-tick array churn.
      */
     public FftResult analyze(double[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
@@ -609,7 +756,7 @@ public class FftAnalyzer {
         int frameCount = samples.length >= fftSize
                 ? (samples.length - fftSize) / step + 1
                 : 0;
-        return analyze(samples, sampleRate, fftSize, harmonicCount,
+        return analyze(samples, sampleRate, fftSize, harmonicCount, THD_HARMONICS_LEGACY,
                 windowType, overlap, snrFreqMin, snrFreqMax, coherentAveraging,
                 fundRefDbFs, logSummary, expectedFundHz, new FftResult(),
                 step, frameCount);
@@ -645,6 +792,11 @@ public class FftAnalyzer {
      * the next tick, so the second frame is exactly the next tick's first
      * and the raw-frame cache keeps hitting.
      *
+     * <p>{@code thdHarmonics} is how many of the evaluated harmonics the THD
+     * sums, counted from the 2nd (H2 .. H(thdHarmonics+1)), each still subject
+     * to the distortion window; the harmonic table itself always holds all
+     * {@code harmonicCount}.  The result carries the number it summed.
+     *
      * <p>Writes the analysis into the supplied {@code outResult} slot instead
      * of allocating a fresh result: the slot's bin / harmonic arrays are
      * resized as needed ({@link FftResult#ensureArrays}) and then used
@@ -654,7 +806,7 @@ public class FftAnalyzer {
      */
     @SuppressWarnings("unused")
     public FftResult analyze(double[] samples, int sampleRate,
-                                 int fftSize, int harmonicCount,
+                                 int fftSize, int harmonicCount, int thdHarmonics,
                                  WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
                                  boolean coherentAveraging, double fundRefDbFs,
@@ -1056,10 +1208,7 @@ public class FftAnalyzer {
             cachedFrameFft(samples, segBaseSample + estStep, fftSize, window, s1Re, s1Im);
             double phi0 = Math.atan2(s0Im[refIntBin], s0Re[refIntBin]);
             double phi1 = Math.atan2(s1Im[refIntBin], s1Re[refIntBin]);
-            double expectedDiff = 2.0 * Math.PI * refIntBin * estStep / (double) fftSize;
-            double rawDiff      = phi1 - phi0;
-            long   m            = Math.round((rawDiff - expectedDiff) / (2.0 * Math.PI));
-            kFractional = (rawDiff - 2.0 * Math.PI * m) * fftSize / (2.0 * Math.PI * estStep);
+            kFractional = kappaFromPhaseStep(phi0, phi1, refIntBin, estStep, fftSize);
         } else {
             kFractional = MathUtil.parabolicBinInterp(s0Re, s0Im, refIntBin, fftSize);
         }
@@ -1091,37 +1240,18 @@ public class FftAnalyzer {
         // window main lobe out of the contest.
         double effHint = secondToneHintHz;
         if (Double.isNaN(effHint) && multiTone && intFundBin > 0) {
-            int    loB      = Math.max(3, (int) Math.ceil(10.0 / freqRes));
-            double bestAmp2 = 0.0;
-            int    bestK    = -1;
-            for (int k = loB; k < halfSize; k++) {
-                if (Math.abs(k - intFundBin) <= 2) continue;   // F1's own peak, not a partner
-                double a2 = s0Re[k] * s0Re[k] + s0Im[k] * s0Im[k];
-                if (a2 > bestAmp2
-                        && a2 >= s0Re[k - 1] * s0Re[k - 1] + s0Im[k - 1] * s0Im[k - 1]
-                        && a2 >  s0Re[k + 1] * s0Re[k + 1] + s0Im[k + 1] * s0Im[k + 1]) {
-                    bestAmp2 = a2;
-                    bestK = k;
-                }
-            }
+            int bestK = partnerToneBin(s0Re, s0Im, intFundBin, halfSize, freqRes);
             if (bestK > 0) effHint = bestK * freqRes;
         }
+        // The clean segment's SECOND frame, or null when the segment is one
+        // frame long - that is what decides between the one-hop phase
+        // difference and the single-frame parabola in the estimate below.
+        double[] segS1Re = (bestLen >= 2) ? scratchS1Re : null;
+        double[] segS1Im = (bestLen >= 2) ? scratchS1Im : null;
         if (!Double.isNaN(effHint) && effHint > 0.0) {
-            int k0b = (int) Math.round(effHint / freqRes);
-            if (k0b >= 3 && k0b <= halfSize - 3) {
-                int ri2 = peakBin(s0Re, s0Im,
-                        Math.max(1, k0b - 2), Math.min(halfSize, k0b + 2));
-                double kf2;
-                if (bestLen >= 2) {
-                    int    estStep = step;
-                    double p0   = Math.atan2(s0Im[ri2], s0Re[ri2]);
-                    double p1   = Math.atan2(scratchS1Im[ri2], scratchS1Re[ri2]);
-                    double exp2 = 2.0 * Math.PI * ri2 * estStep / (double) fftSize;
-                    long   m2   = Math.round((p1 - p0 - exp2) / (2.0 * Math.PI));
-                    kf2 = (p1 - p0 - 2.0 * Math.PI * m2) * fftSize / (2.0 * Math.PI * estStep);
-                } else {
-                    kf2 = MathUtil.parabolicBinInterp(s0Re, s0Im, ri2, fftSize);
-                }
+            double kf2 = refineToneKappaAt((int) Math.round(effHint / freqRes), 2,
+                    s0Re, s0Im, segS1Re, segS1Im, halfSize, fftSize, step);
+            if (!Double.isNaN(kf2)) {
                 outResult.fundamental2HzRefined = kf2 * freqRes;
             }
         }
@@ -1147,6 +1277,27 @@ public class FftAnalyzer {
                 kFractional = kRefined;
             }
         }
+
+        // --- Pilot tones: the two bins the generator holds them on.  Written
+        // on every call (NaN / -1 when a slot carries no pilot) so a recycled
+        // result slot cannot hand the next tick a pilot that is no longer
+        // there.  Nothing is measured at a pilot itself: it stands on a whole
+        // bin of this very grid, so its frequency is that bin times the bin
+        // width, whatever fractional position the fundamental holds.
+        outResult.pilot1Bin = pilotBin1;
+        outResult.pilot2Bin = pilotBin2;
+        outResult.pilot1HzRefined = (pilotBin1 > 0) ? pilotBin1 * freqRes : Double.NaN;
+        outResult.pilot2HzRefined = (pilotBin2 > 0) ? pilotBin2 * freqRes : Double.NaN;
+        // The bins each one covers travel with it: the readouts outside this
+        // class that integrate bins - the dual-tone TD+N residual - have to
+        // leave the same spans out as the noise, SNR and ENOB sums below, and
+        // the window the width comes from is known here alone.
+        int[] pilot1Span = pilotMaskSpan(pilotBin1, windowType, halfSize);
+        outResult.pilot1MaskLoBin = pilot1Span[0];
+        outResult.pilot1MaskHiBin = pilot1Span[1];
+        int[] pilot2Span = pilotMaskSpan(pilotBin2, windowType, halfSize);
+        outResult.pilot2MaskLoBin = pilot2Span[0];
+        outResult.pilot2MaskHiBin = pilot2Span[1];
 
         // --- Dual-tone: publish the intermodulation-product grid -------------
         // Every product a·κ_F1 + b·κ_F2 (b≠0, |a|+|b| ≤ order) that lands in
@@ -1195,24 +1346,35 @@ public class FftAnalyzer {
         double[] fundCorrIm = coherentAveraging ? new double[bestLen] : null;
         // Coherent family for the region-constant de-rotation (the same
         // construction as the cross-tick accumulator's - see the pass-2
-        // comment below): member positions and (a, b) coefficients built once
-        // per call, phasors re-derived per frame from that frame's Φ1/Φ2.
-        // Members: the harmonic ladder h·κ (h = 0 covers DC and the deep bass
-        // side) merged position-sorted with the published product grid.
+        // comment below): member positions and (a, b, p) coefficients built
+        // once per call, phasors re-derived per frame from that frame's
+        // Φ1/Φ2/Φpilot1/Φpilot2.  The pilot coefficient p names which pilot a
+        // member is: 0 none, 1 the first, 2 the second.  Members: the harmonic
+        // ladder h·κ (h = 0 covers DC and the deep bass side) merged
+        // position-sorted with the published product grid and with the bin of
+        // each pinned pilot.  A pilot is neither a multiple of κ nor a
+        // product, so without a member of its own its lobe would ride the
+        // nearest harmonic's rotation and the frames of a tick would sum there
+        // with a residual of up to half the harmonic spacing - attenuated and
+        // turned by the drawn hop.  As a member it sums as coherently as the
+        // fundamental does, and each pilot turns by its own bin's time-shift
+        // phase alone, independent of the fundamental's fractional position.
         final double f2Kappa = (outResult.imdProductBin.length > 0)
                 ? outResult.fundamental2HzRefined / freqRes : Double.NaN;
         int     famCount = 0;
         int[]   fA  = null;
         int[]   fB  = null;
+        int[]   fPil = null;
         double[] fP = null;
         if (coherentAveraging && kFractional > 0.0) {
             int hMaxT = (int) Math.min(halfSize, halfSize / kFractional);
             int[] pa = outResult.imdProductA;
             int[] pb = outResult.imdProductB;
             int   nGrid = (f2Kappa > 0.0) ? pa.length : 0;
-            int[]    spA = new int[nGrid];
-            int[]    spB = new int[nGrid];
-            double[] spP = new double[nGrid];
+            int[]    spA = new int[nGrid + 2];              // + a slot per pilot
+            int[]    spB = new int[nGrid + 2];
+            int[]    spPil = new int[nGrid + 2];
+            double[] spP = new double[nGrid + 2];
             int nP = 0;
             for (int p = 0; p < nGrid; p++) {
                 double posP = pa[p] * kFractional + pb[p] * f2Kappa;
@@ -1222,23 +1384,41 @@ public class FftAnalyzer {
                 spP[nP] = posP;
                 nP++;
             }
+            if (pilotBin1 > 1 && pilotBin1 < halfSize - 1) {
+                spA[nP] = 0;
+                spB[nP] = 0;
+                spPil[nP] = 1;
+                spP[nP] = pilotBin1;
+                nP++;
+            }
+            if (pilotBin2 > 1 && pilotBin2 < halfSize - 1) {
+                spA[nP] = 0;
+                spB[nP] = 0;
+                spPil[nP] = 2;
+                spP[nP] = pilotBin2;
+                nP++;
+            }
             for (int i = 1; i < nP; i++) {                  // position sort, tiny n
                 int ia = spA[i];
                 int ib = spB[i];
+                int ip2 = spPil[i];
                 double ip = spP[i];
                 int j = i - 1;
                 while (j >= 0 && spP[j] > ip) {
                     spA[j + 1] = spA[j];
                     spB[j + 1] = spB[j];
+                    spPil[j + 1] = spPil[j];
                     spP[j + 1] = spP[j];
                     j--;
                 }
                 spA[j + 1] = ia;
                 spB[j + 1] = ib;
+                spPil[j + 1] = ip2;
                 spP[j + 1] = ip;
             }
             fA = new int[hMaxT + 1 + nP];
             fB = new int[fA.length];
+            fPil = new int[fA.length];
             fP = new double[fA.length];
             int pi = 0;
             for (int h = 0; h <= hMaxT; h++) {
@@ -1246,18 +1426,21 @@ public class FftAnalyzer {
                 while (pi < nP && spP[pi] <= hp) {
                     fA[famCount] = spA[pi];
                     fB[famCount] = spB[pi];
+                    fPil[famCount] = spPil[pi];
                     fP[famCount] = spP[pi];
                     famCount++;
                     pi++;
                 }
                 fA[famCount] = h;
                 fB[famCount] = 0;
+                fPil[famCount] = 0;
                 fP[famCount] = hp;
                 famCount++;
             }
             while (pi < nP) {
                 fA[famCount] = spA[pi];
                 fB[famCount] = spB[pi];
+                fPil[famCount] = spPil[pi];
                 fP[famCount] = spP[pi];
                 famCount++;
                 pi++;
@@ -1266,6 +1449,7 @@ public class FftAnalyzer {
         final int      nFam   = famCount;
         final int[]    famA   = fA;
         final int[]    famB   = fB;
+        final int[]    famPil = fPil;
         final double[] famPos = fP;
         final double[] famC   = (nFam > 0) ? new double[nFam] : null;
         final double[] famS   = (nFam > 0) ? new double[nFam] : null;
@@ -1333,8 +1517,21 @@ public class FftAnalyzer {
                         ? -2.0 * Math.PI
                             * Math.IEEEremainder((double) base * f2Kappa, fftSize) / fftSize
                         : 0.0;
+                // Indexed by the member's pilot coefficient: slot 0 is the
+                // members that are no pilot and contributes nothing.
+                final double[] phiPilot = {
+                        0.0,
+                        (pilotBin1 > 0)
+                                ? -2.0 * Math.PI
+                                    * Math.IEEEremainder((double) base * pilotBin1, fftSize) / fftSize
+                                : 0.0,
+                        (pilotBin2 > 0)
+                                ? -2.0 * Math.PI
+                                    * Math.IEEEremainder((double) base * pilotBin2, fftSize) / fftSize
+                                : 0.0 };
                 for (int i = 0; i < nFam; i++) {
-                    double ang = Math.IEEEremainder(famA[i] * phi1 + famB[i] * phi2,
+                    double ang = Math.IEEEremainder(
+                            famA[i] * phi1 + famB[i] * phi2 + phiPilot[famPil[i]],
                             2.0 * Math.PI);
                     famC[i] = Math.cos(ang);
                     famS[i] = Math.sin(ang);
@@ -1659,6 +1856,7 @@ public class FftAnalyzer {
             outResult.fundamentalDbFs            = fundDbFs;
             outResult.fundamentalLinear          = fundLinear;
             outResult.harmonicCount              = harmonicCount;
+            outResult.thdHarmonics               = thdHarmonics;
             outResult.snrFreqMin                 = snrFreqMin;
             outResult.snrFreqMax                 = snrFreqMax;
             outResult.coherentAveraging          = coherentAveraging;
@@ -1674,6 +1872,10 @@ public class FftAnalyzer {
             outResult.awNoisePower               = 0.0;
             outResult.avgNoiseFloorDbFs          = fundDbFs - 300.0;
             outResult.fundamentalDynExclusionHz  = 0.0;
+            // The intermodulation readout is a statistic too - re-derived with
+            // the rest by recomputeStats(); a pooled slot must not republish a
+            // previous dual-tone tick's products.
+            outResult.imd                        = null;
             outResult.preCorrectionPeaks         = null;
             // The reference channel's frequencies are the worker's to write
             // after this returns; cleared here for the same reason
@@ -1688,12 +1890,12 @@ public class FftAnalyzer {
         double snrLo = snrFreqMin > 0.0 ? snrFreqMin : 0.0;
         double snrHi = snrFreqMax > 0.0 ? snrFreqMax : Double.MAX_VALUE;
 
-        // --- THD - H2..H9 (max 8 harmonics) that fall within dist range ------
+        // --- THD - H2..H(thdHarmonics+1) that fall within dist range --------
         // awHarmPowerSum carries the same powers through the IEC A-weighting
         // curve for the A-suffixed readouts (N+D / THD+N / SINAD -> ENOB).
         double harmPowerSum   = 0.0;
         double awHarmPowerSum = 0.0;
-        for (int h = 0; h < Math.min(harmonicCount, 8); h++) {
+        for (int h = 0; h < Math.min(harmonicCount, thdHarmonics); h++) {
             if (hBins[h] > 0) {
                 double harmFreq = hHz[h];
                 if (harmFreq >= snrLo && harmFreq <= snrHi) {
@@ -1715,7 +1917,8 @@ public class FftAnalyzer {
         //              Excluded from both the noise-floor median and the SNR
         //              peak-spur search, so harmonics do not appear in SNR.
         final int EXCL_BINS = 4;
-        boolean[] isSignalBin = buildSignalBinMask(halfSize, fundBin, hBins, harmonicCount, EXCL_BINS);
+        boolean[] isSignalBin = buildSignalBinMask(halfSize, fundBin, hBins, harmonicCount,
+                EXCL_BINS, windowType, outResult.pilot1Bin, outResult.pilot2Bin);
 
         // --- SNR - integrated noise over the measurement band ----------------
         // Fundamental and all harmonics are excluded via isSignalBin.
@@ -1851,6 +2054,7 @@ public class FftAnalyzer {
         outResult.fundamentalDbFs            = fundDbFs;
         outResult.fundamentalLinear          = fundLinear;
         outResult.harmonicCount              = harmonicCount;
+        outResult.thdHarmonics               = thdHarmonics;
         outResult.thdPct                     = thdPct;
         outResult.thdDb                      = thdDb;
         outResult.thdNDb                     = thdNDb;
@@ -1867,6 +2071,7 @@ public class FftAnalyzer {
         outResult.avgNoiseFloorDbFs          = avgNoiseFloorDbFs;
         outResult.fundamentalTrueDbFs        = fundTrueDbFs;
         outResult.fundamentalDynExclusionHz  = dynWidthBins * freqRes;
+        deriveImd(outResult);
         // preCorrectionPeaks is owned by the worker (set after analyze
         // returns when calibration is loaded); reset here so a previous
         // tick's value doesn't leak across pool slot recycle.  The reference
@@ -1876,6 +2081,114 @@ public class FftAnalyzer {
         outResult.referenceFundamental2HzRefined = Double.NaN;
         outResult.captureRawPeaks();   // raw F + peak phasors for the DAC-predistortion de-embed
         return outResult;
+    }
+
+    /**
+     * Rebuilds the bin phasors of a spectrum that arrives as magnitude and
+     * phase instead of samples - a stored spectrum read back from file.
+     * {@code amplitudeDbFs} and {@code phaseDeg} are the source; {@code re} and
+     * {@code im} are written from them, so every later step that reads phasors
+     * (the sub-bin refinement, the intermodulation products) sees the same
+     * spectrum the stats are derived from.
+     */
+    public void rebuildPhasors() {
+        if (stored == null) return;     // no spectrum held - nothing to rebuild
+        int n = stored.amplitudeDbFs.length;
+        for (int k = 0; k < n; k++) {
+            double lin = Math.pow(10.0, stored.amplitudeDbFs[k] / 20.0);
+            double rad = Math.toRadians(stored.phaseDeg != null && k < stored.phaseDeg.length
+                    ? stored.phaseDeg[k] : 0.0);
+            stored.re[k] = lin * Math.cos(rad);
+            stored.im[k] = lin * Math.sin(rad);
+        }
+    }
+
+    /**
+     * Measures the fundamental of a spectrum that states none: the strongest
+     * bin at or above {@code minHz}, refined to sub-bin by the same parabolic
+     * fit the live path uses, written to {@code fundamentalBin},
+     * {@code fundamentalHz} and {@code fundamentalHzRefined}.
+     *
+     * <p>The floor keeps the search off the DC and mains foot, which outweighs
+     * the tone in a spectrum recorded through a notch at the fundamental.  A
+     * capture knows its own fundamental and states it; this is for the stored
+     * spectrum whose file does not.
+     */
+    public void findFundamental(double minHz) {
+        if (stored == null) return;     // no spectrum held - nothing to search
+        int    halfSize = stored.amplitudeDbFs.length - 1;
+        double freqRes  = stored.freqResolution;
+        int    minBin   = Math.min(halfSize, Math.max(1, (int) Math.ceil(minHz / freqRes)));
+        int    fundBin  = peakBin(stored.re, stored.im, minBin, halfSize);
+        stored.fundamentalBin       = fundBin;
+        stored.fundamentalHz        = fundBin * freqRes;
+        stored.fundamentalHzRefined =
+                MathUtil.parabolicBinInterp(stored.re, stored.im, fundBin, stored.fftSize) * freqRes;
+    }
+
+    /**
+     * Measures the second tone of a stored dual-tone spectrum: the strongest
+     * partner of the fundamental ({@link #partnerToneBin}, the detection the
+     * live path runs when no hint is given), refined to sub-bin the way the
+     * live path refines a one-frame segment, written to
+     * {@code fundamental2HzRefined} - {@link Double#NaN} when no partner is
+     * found.  Needs {@code fundamentalBin} (a stated one, or
+     * {@link #findFundamental}) and the phasors ({@link #rebuildPhasors}).
+     *
+     * <p>The detection sets no minimum level, so on a single-tone spectrum it
+     * names the strongest spur: call it only for a spectrum known to be dual
+     * tone, as the live path searches only on a multi-tone signal.
+     */
+    public void findSecondTone() {
+        if (stored == null) return;     // no spectrum held - nothing to search
+        int    halfSize = stored.amplitudeDbFs.length - 1;
+        double freqRes  = stored.freqResolution;
+        stored.fundamental2HzRefined = Double.NaN;
+        if (stored.fundamentalBin <= 0) return;
+        int partnerBin = partnerToneBin(stored.re, stored.im, stored.fundamentalBin,
+                halfSize, freqRes);
+        if (partnerBin <= 0) return;
+        // One spectrum, no second frame: the parabolic branch, so the hop
+        // length is never read.
+        double kf2 = refineToneKappaAt(partnerBin, 2, stored.re, stored.im, null, null,
+                halfSize, stored.fftSize, 0);
+        if (!Double.isNaN(kf2)) {
+            stored.fundamental2HzRefined = kf2 * freqRes;
+        }
+    }
+
+    /**
+     * Applies the distortion settings to a STORED spectrum and recomputes its
+     * statistics: the harmonic ladder from the refined fundamental, the manual
+     * fundamental anchor, the distortion band, the number of harmonics the THD
+     * sum takes, then {@link #recomputeStats}.  The harmonic arrays grow with
+     * {@code calcHarmonics} and the spectrum itself is preserved.
+     *
+     * <p>The live path carries the same settings into {@link #analyze} as
+     * arguments; a stored spectrum has no samples to analyse, so the settings
+     * are written onto the result here instead.  {@code fundRefDbFs} is the
+     * manual anchor in dBFS, {@code NaN} when the reading stands on the
+     * measured fundamental; {@code distMinHz} / {@code distMaxHz} are 0 when
+     * the band is not limited.
+     */
+    public void applyDistortionSettings(int calcHarmonics, int thdHarmonics,
+                                        double fundRefDbFs, double distMinHz, double distMaxHz) {
+        if (stored == null) return;     // no spectrum held - nothing to recompute
+        int halfSize = stored.amplitudeDbFs.length - 1;
+        // Spectrum kept; the harmonic arrays resize only when the count changed.
+        stored.ensureArrays(stored.amplitudeDbFs.length, calcHarmonics);
+        stored.harmonicCount = calcHarmonics;
+        for (int h = 0; h < calcHarmonics; h++) {
+            double hz = (h + 2) * stored.fundamentalHzRefined;
+            int    hb = (int) Math.round(hz / stored.freqResolution);
+            stored.harmonicHz[h]   = hz;
+            stored.harmonicBins[h] = (hb >= 1 && hb <= halfSize) ? hb : -1;
+        }
+        stored.fundamentalTrueDbFs = fundRefDbFs;
+        stored.snrFreqMin          = distMinHz;
+        stored.snrFreqMax          = distMaxHz;
+        stored.thdHarmonics        = thdHarmonics;
+        recomputeStats(stored);
     }
 
     /**
@@ -1966,12 +2279,14 @@ public class FftAnalyzer {
             hLinear[h]        = aCombined;
         }
 
-        // --- THD (H2..H9 within SNR range) ---------------------------------
+        // --- THD (H2..H(thdHarmonics+1) within SNR range) -------------------
         // awHarmPowerSum: the same powers through the IEC A-weighting curve
-        // for the A-suffixed readouts - see analyze().
+        // for the A-suffixed readouts - see analyze().  A result never told
+        // its limit sums the historic H2..H9.
+        int thdHarmonics = r.thdHarmonics > 0 ? r.thdHarmonics : THD_HARMONICS_LEGACY;
         double harmPowerSum   = 0.0;
         double awHarmPowerSum = 0.0;
-        for (int h = 0; h < Math.min(harmonicCount, 8); h++) {
+        for (int h = 0; h < Math.min(harmonicCount, thdHarmonics); h++) {
             int hb = r.harmonicBins[h];
             if (hb > 0) {
                 double freq = r.harmonicHz[h];
@@ -1988,7 +2303,8 @@ public class FftAnalyzer {
         // --- Signal-bin mask: fundamental + every harmonic +/- EXCL_BINS ---
         final int EXCL_BINS = 4;
         boolean[] isSignalBin = buildSignalBinMask(halfSize, fundBin,
-                r.harmonicBins, harmonicCount, EXCL_BINS);
+                r.harmonicBins, harmonicCount, EXCL_BINS, r.windowType,
+                r.pilot1Bin, r.pilot2Bin);
 
         // --- Noise floor + signal-mask extension (shared with analyze()) ---
         // recomputeStats discards dynWidthBins - the
@@ -2060,6 +2376,23 @@ public class FftAnalyzer {
         // THD+N is the reciprocal of SINAD: −sinadDb in dB.
         r.awNoisePower = awNoisePower;
         r.thdNDb       = -r.sinadDb;
+        deriveImd(r);
+    }
+
+    /**
+     * Writes {@code r.imd}: the intermodulation readout of the tone pair
+     * {@code fundamentalHzRefined} / {@code fundamental2HzRefined} when the
+     * spectrum carries a second tone, {@code null} otherwise - so a result
+     * never keeps a previous spectrum's products.  Each call hands a NEW
+     * {@link ImdResult}; a reader may compare the object to tell a fresh
+     * readout from the one it already shows.  Reads the result's stored
+     * fields only (spectrum, manual fundamental, pilot spans), so it runs
+     * last among the stats.
+     */
+    private void deriveImd(FftResult r) {
+        r.imd = r.fundamental2HzRefined > 0.0
+                ? imdAnalyzer.analyze(r, r.fundamentalHzRefined, r.fundamental2HzRefined)
+                : null;
     }
 
     // =========================================================================
@@ -2072,56 +2405,24 @@ public class FftAnalyzer {
      * periodic (N) normalization for optimal amplitude accuracy.
      */
     double[] buildWindow(int N, WindowType type) {
-        double[] w = new double[N];
         switch (type) {
-            case RECT:
-                Arrays.fill(w, 1.0);
-                break;
+            case RECT: {
+                double[] w = new double[N];
+                Arrays.fill(w, RECT_COEFFS[0]);
+                return w;
+            }
 
             case HANN:
-                for (int n = 0; n < N; n++) {
-                    w[n] = 0.5 * (1.0 - Math.cos(2.0 * Math.PI * n / (N - 1)));
-                }
-                break;
+                return buildCosineSum(N, HANN_COEFFS, N - 1);
 
-            case BH4: {
-                // Harris 1978 "minimum 4-term Blackman-Harris"
-                double a0 = 0.35875, a1 = 0.48829, a2 = 0.14128, a3 = 0.01168;
-                for (int n = 0; n < N; n++) {
-                    double t = 2.0 * Math.PI * n / (N - 1);
-                    w[n] = a0 - a1 * Math.cos(t) + a2 * Math.cos(2 * t) - a3 * Math.cos(3 * t);
-                }
-                break;
-            }
+            case BH4:
+                return buildCosineSum(N, BH4_COEFFS, N - 1);
 
-            case BH7: {
-                // Nuttall 1981 7-term Blackman-Harris
-                double[] a = {
-                    0.2712203606, 0.4334446123, 0.2180041184, 0.0657853433,
-                    0.0107618673, 0.0007700127, 0.0000136547
-                };
-                for (int n = 0; n < N; n++) {
-                    double t   = 2.0 * Math.PI * n / (N - 1);
-                    double val = 0.0;
-                    for (int k = 0; k < a.length; k++) {
-                        val += (k % 2 == 0 ? 1.0 : -1.0) * a[k] * Math.cos(k * t);
-                    }
-                    w[n] = val;
-                }
-                break;
-            }
+            case BH7:
+                return buildCosineSum(N, BH7_COEFFS, N - 1);
 
-            case FT: {
-                // SRS SR785 5-term flat-top (periodic normalization, N)
-                double a0 = 0.21557895, a1 = 0.41663158, a2 = 0.27726316,
-                       a3 = 0.08357895, a4 = 0.00694737;
-                for (int n = 0; n < N; n++) {
-                    double t = 2.0 * Math.PI * n / N;
-                    w[n] = a0 - a1 * Math.cos(t) + a2 * Math.cos(2 * t)
-                              - a3 * Math.cos(3 * t) + a4 * Math.cos(4 * t);
-                }
-                break;
-            }
+            case FT:
+                return buildCosineSum(N, FT_COEFFS, N);
 
             case HFT144D:
                 return buildHftWindow(N, HFT144D_COEFFS);
@@ -2130,28 +2431,63 @@ public class FftAnalyzer {
                 return buildHftWindow(N, HFT248D_COEFFS);
 
             case KB24:
-                return buildKaiserWindow(N, 24.0);
+                return buildKaiserWindow(N, KB24_BETA);
 
             case KB38:
-                return buildKaiserWindow(N, 38.0);
+                return buildKaiserWindow(N, KB38_BETA);
 
             case DC150:
-                return buildChebyshevWindow(N, 150.0);
+                return buildChebyshevWindow(N, DC150_ATTEN_DB);
 
             case DC200:
-                return buildChebyshevWindow(N, 200.0);
+                return buildChebyshevWindow(N, DC200_ATTEN_DB);
 
             case DC250:
-                return buildChebyshevWindow(N, 250.0);
+                return buildChebyshevWindow(N, DC250_ATTEN_DB);
 
             case DC300:
-                return buildChebyshevWindow(N, 300.0);
+                return buildChebyshevWindow(N, DC300_ATTEN_DB);
 
             default:
                 throw new IllegalArgumentException("Unknown window type: " + type);
         }
+    }
+
+    /** Builds a cosine-sum window of length {@code N} from {@code coeffs}:
+     *  {@code w[n] = Σ (−1)ᵏ·cₖ·cos(k·2πn/period)}, the sign alternating with
+     *  the term index.  {@code period} is {@code N−1} for the symmetric
+     *  windows and {@code N} for the periodic flat-top, the normalization
+     *  each family is defined with. */
+    private double[] buildCosineSum(int N, double[] coeffs, int period) {
+        double[] w = new double[N];
+        for (int n = 0; n < N; n++) {
+            double t   = 2.0 * Math.PI * n / period;
+            double val = 0.0;
+            for (int k = 0; k < coeffs.length; k++) {
+                val += (k % 2 == 0 ? 1.0 : -1.0) * coeffs[k] * Math.cos(k * t);
+            }
+            w[n] = val;
+        }
         return w;
     }
+
+    /** Rectangular window: one constant term, no cosine at all. */
+    private static final double[] RECT_COEFFS = { 1.0 };
+
+    /** Hann coefficients - the raised cosine {@code ½(1 − cos t)}. */
+    private static final double[] HANN_COEFFS = { 0.5, 0.5 };
+
+    /** Minimum 4-term Blackman-Harris coefficients (Harris 1978). */
+    private static final double[] BH4_COEFFS = { 0.35875, 0.48829, 0.14128, 0.01168 };
+
+    /** 7-term Blackman-Harris coefficients (Nuttall 1981). */
+    private static final double[] BH7_COEFFS = {
+            0.2712203606, 0.4334446123, 0.2180041184, 0.0657853433,
+            0.0107618673, 0.0007700127, 0.0000136547 };
+
+    /** SRS SR785 5-term flat-top coefficients - periodic normalization (N). */
+    private static final double[] FT_COEFFS = {
+            0.21557895, 0.41663158, 0.27726316, 0.08357895, 0.00694737 };
 
     /** HFT144D cosine-sum coefficients (Heinzel/Rüdiger/Schilling 2002,
      *  "Spectrum and spectral density estimation by the DFT...") - flat-top,
@@ -2169,6 +2505,145 @@ public class FftAnalyzer {
             0.667777530266, -0.240160796576, 0.056656381764,
             -0.008134974479, 0.000624544650, -0.000019808998,
             0.000000132974 };
+
+    /** Kaiser-Bessel shape parameters β of the two offered windows. */
+    private static final double KB24_BETA = 24.0;
+    private static final double KB38_BETA = 38.0;
+
+    /** Dolph-Chebyshev sidelobe attenuations of the four offered windows, dB. */
+    private static final double DC150_ATTEN_DB = 150.0;
+    private static final double DC200_ATTEN_DB = 200.0;
+    private static final double DC250_ATTEN_DB = 250.0;
+    private static final double DC300_ATTEN_DB = 300.0;
+
+    /**
+     * Main-lobe half-width of a window in BINS - the first null of its own
+     * transform, so two lines closer than this are one hump and neither can be
+     * read.  Analytic, from the window's definition alone: it does not depend
+     * on the transform size and no window table is built to obtain it.
+     *
+     * <ul>
+     *   <li>cosine sums (incl. the HFT flat-tops): a tone sitting on a bin
+     *       raises exactly the {@code coeffs.length − 1} bins each side and
+     *       nothing beyond, so the first null is the coefficient count;</li>
+     *   <li>Kaiser: the trigonometric branch of its transform,
+     *       {@code sin(√(u² − β²))/√(u² − β²)} with {@code u = πd}, first
+     *       vanishes at {@code d = √(β² + π²)/π};</li>
+     *   <li>Dolph-Chebyshev: the first zero of {@code T_{N−1}(x₀·cos(πd/N))}
+     *       sits at {@code d = N·acos(cos(π/(2(N−1)))/x₀)/π}, and since
+     *       {@code x₀ = cosh(acosh(10^(A/20))/(N−1))} that equals
+     *       {@code √((π/2)² + acosh(10^(A/20))²)/π} for every transform size
+     *       in use, far inside the one bin the ceiling rounds to.</li>
+     * </ul>
+     */
+    int mainLobeBins(WindowType type) {
+        switch (type) {
+            case RECT:
+                return RECT_COEFFS.length;
+            case HANN:
+                return HANN_COEFFS.length;
+            case BH4:
+                return BH4_COEFFS.length;
+            case BH7:
+                return BH7_COEFFS.length;
+            case FT:
+                return FT_COEFFS.length;
+            case HFT144D:
+                return HFT144D_COEFFS.length;
+            case HFT248D:
+                return HFT248D_COEFFS.length;
+            case KB24:
+                return kaiserLobeBins(KB24_BETA);
+            case KB38:
+                return kaiserLobeBins(KB38_BETA);
+            case DC150:
+                return chebyshevLobeBins(DC150_ATTEN_DB);
+            case DC200:
+                return chebyshevLobeBins(DC200_ATTEN_DB);
+            case DC250:
+                return chebyshevLobeBins(DC250_ATTEN_DB);
+            case DC300:
+                return chebyshevLobeBins(DC300_ATTEN_DB);
+            default:
+                throw new IllegalArgumentException("Unknown window type: " + type);
+        }
+    }
+
+    /** Bins added to a main lobe before a clearance is reported, so that no
+     *  distance is ever answered from inside the lobe itself. */
+    private static final int LEAKAGE_GUARD_BINS = 2;
+
+    /**
+     * The smallest WHOLE-bin distance at which this window's own leakage from
+     * a line sitting on a bin is {@code dbDown} or more below that line -
+     * never less than {@link #mainLobeBins} plus {@value #LEAKAGE_GUARD_BINS}
+     * bins.  What a caller needs that has to keep two generated lines far
+     * enough apart for each to be read at its own bin without the other's
+     * skirt turning the phase it reads.
+     *
+     * <p>Derivation for a cosine sum {@code w[n] = Σ aₘ·cos(2πmn/N)}: its
+     * transform is the sum of Dirichlet kernels displaced by {@code ±m},
+     * {@code W(d) = Σ aₘ/2 · (sinc(d − m) + sinc(d + m))} in the large-N
+     * limit, worth {@code a₀} at {@code d = 0}.  At a WHOLE bin {@code d} the
+     * sinc of every non-zero integer vanishes, so a single term survives,
+     * {@code a_d / 2}, and the leakage is {@code |a_d| / (2·a₀)} of the peak -
+     * a magnitude, so which of the two families carries the alternating sign
+     * in its table does not enter.  Past the last coefficient the transform is
+     * zero, which bounds the search.  Two lines on whole bins of one grid are
+     * exactly the case this answers.
+     *
+     * <p>Kaiser and Dolph-Chebyshev are not cosine sums - their transforms
+     * have no such closed form and do not vanish between bins - so for them
+     * the answer is the main lobe plus the guard.
+     */
+    int leakageClearBins(WindowType type, double dbDown) {
+        double[] coeffs;
+        switch (type) {
+            case RECT:
+                coeffs = RECT_COEFFS;
+                break;
+            case HANN:
+                coeffs = HANN_COEFFS;
+                break;
+            case BH4:
+                coeffs = BH4_COEFFS;
+                break;
+            case BH7:
+                coeffs = BH7_COEFFS;
+                break;
+            case FT:
+                coeffs = FT_COEFFS;
+                break;
+            case HFT144D:
+                coeffs = HFT144D_COEFFS;
+                break;
+            case HFT248D:
+                coeffs = HFT248D_COEFFS;
+                break;
+            default:
+                return mainLobeBins(type) + LEAKAGE_GUARD_BINS;
+        }
+        double limit = Math.pow(10.0, -dbDown / 20.0);
+        int    d     = 1;
+        while (d < coeffs.length
+                && Math.abs(coeffs[d]) / (2.0 * Math.abs(coeffs[0])) > limit) {
+            d++;
+        }
+        return Math.max(d, mainLobeBins(type) + LEAKAGE_GUARD_BINS);
+    }
+
+    /** First null of the Kaiser transform, {@code √(β² + π²)/π} bins. */
+    private int kaiserLobeBins(double beta) {
+        return (int) Math.ceil(Math.sqrt(beta * beta + Math.PI * Math.PI) / Math.PI);
+    }
+
+    /** First null of the Dolph-Chebyshev transform for a sidelobe attenuation
+     *  of {@code attenDb}, {@code √((π/2)² + acosh(10^(A/20))²)/π} bins. */
+    private int chebyshevLobeBins(double attenDb) {
+        double ripple = MathUtil.acosh(Math.pow(10.0, attenDb / 20.0));
+        double halfPi = Math.PI / 2.0;
+        return (int) Math.ceil(Math.sqrt(halfPi * halfPi + ripple * ripple) / Math.PI);
+    }
 
     /** Builds an HFT-family flat-top window: a PERIODIC cosine sum
      *  {@code w(z) = Σ cₖ·cos(k·z)}, {@code z = 2πn/N} (signs live in the
@@ -2395,14 +2870,42 @@ public class FftAnalyzer {
         }
     }
 
+    /** The bins one pilot line covers, as the inclusive pair
+     *  {@code {lo, hi}}: the bin it sits on, widened by the window's own
+     *  main-lobe half-width, which is the width its skirt occupies, and
+     *  clamped to the spectrum.  {@code {0, -1}}, an empty span, for a slot
+     *  that carries no pilot.
+     *
+     *  <p>The one place that width is decided.  Each span is stamped on the
+     *  result for the readouts that integrate bins outside this class - the
+     *  dual-tone TD+N residual is one - and it is what
+     *  {@link #buildSignalBinMask} takes out of the noise, SNR and ENOB sums,
+     *  so a pilot cannot be excluded in one of them and counted in another. */
+    private int[] pilotMaskSpan(int pilotBin, WindowType windowType, int halfSize) {
+        if (pilotBin < 0) return new int[]{ 0, -1 };
+        int lobe = mainLobeBins(windowType);
+        int lo   = Math.max(0, pilotBin - lobe);
+        int hi   = Math.min(halfSize, pilotBin + lobe);
+        return new int[]{ lo, hi };
+    }
+
     /** Builds the "signal bin" mask: fundamental bin + all harmonic bins,
      *  each smeared by {@code exclBins} on either side to cover window
-     *  leakage.  Used by both {@link #analyze} and {@code recomputeStats}
-     *  as the starting mask for the noise-floor computation; the mask is
-     *  then extended by {@link #computeNoiseFloorAndExtendSignalMask}
-     *  with the dynamic fundamental-exclusion walk and phase-noise zone. */
+     *  leakage, plus - for a pilot bin of 0 or more - that bin smeared by the
+     *  window's own main-lobe half-width, which is the width its skirt
+     *  actually occupies.  A generated pilot is neither signal nor noise, so
+     *  leaving one in would raise the noise integral behind SNR, N+D and ENOB
+     *  by its whole power.  The pilot bins are parameters rather than the live
+     *  fields: a recompute works on a spectrum that was analysed earlier and
+     *  takes the bins THAT analysis pinned, which a re-selection in between
+     *  can have moved.  Used by both
+     *  {@link #analyze} and {@code recomputeStats} as the starting mask for
+     *  the noise-floor computation; the mask is then extended by
+     *  {@link #computeNoiseFloorAndExtendSignalMask} with the dynamic
+     *  fundamental-exclusion walk and phase-noise zone. */
     private boolean[] buildSignalBinMask(int halfSize, int fundBin,
-                                         int[] hBins, int harmonicCount, int exclBins) {
+                                         int[] hBins, int harmonicCount, int exclBins,
+                                         WindowType windowType, int pilot1Bin, int pilot2Bin) {
         // Reused scratch (1 MB at fftSize 2 M, rebuilt per stats pass) -
         // must be re-zeroed since previous masks marked other bins.
         boolean[] isSignalBin =
@@ -2421,6 +2924,14 @@ public class FftAnalyzer {
                     if (bin >= 0 && bin <= halfSize) isSignalBin[bin] = true;
                 }
             }
+        }
+        int[] pilot1Span = pilotMaskSpan(pilot1Bin, windowType, halfSize);
+        for (int bin = pilot1Span[0]; bin <= pilot1Span[1]; bin++) {
+            isSignalBin[bin] = true;
+        }
+        int[] pilot2Span = pilotMaskSpan(pilot2Bin, windowType, halfSize);
+        for (int bin = pilot2Span[0]; bin <= pilot2Span[1]; bin++) {
+            isSignalBin[bin] = true;
         }
         return isSignalBin;
     }

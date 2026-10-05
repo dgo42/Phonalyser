@@ -84,6 +84,37 @@ public class FftResult {
      *  {@link #fundamentalHzRefined}.  {@link Double#NaN} for single-tone
      *  (no second-tone hint was supplied). */
     public double fundamental2HzRefined = Double.NaN;
+    /** Frequency (Hz) of the first pilot tone - one of the two generated
+     *  lines the fundamental's phase alignment reads as its time base.  A
+     *  pilot stands on a WHOLE bin of this very grid, so this is
+     *  {@link #pilot1Bin} times {@link #freqResolution} and nothing about the
+     *  fundamental's fractional position enters it.  {@link Double#NaN}
+     *  whenever no first pilot is pinned. */
+    public double pilot1HzRefined = Double.NaN;
+    /** Frequency (Hz) of the second pilot tone, the companion of
+     *  {@link #pilot1HzRefined}; {@link Double#NaN} whenever the second slot
+     *  carries no pilot. */
+    public double pilot2HzRefined = Double.NaN;
+    /** The bin the first pilot sits on as pinned on the analyser, or
+     *  {@code -1} when no first pilot is running. */
+    public int pilot1Bin = -1;
+    /** The bin the second pilot sits on, or {@code -1} when the second slot
+     *  carries no pilot. */
+    public int pilot2Bin = -1;
+    /** The bins the first pilot's line covers, INCLUSIVE: its bin and the
+     *  window's own main-lobe half-width on either side, clamped to the
+     *  spectrum.  The span is empty whenever {@link #pilot1MaskHiBin} is
+     *  below {@link #pilot1MaskLoBin}, which is what a result with no first
+     *  pilot carries.  A generated pilot is neither signal nor distortion, so
+     *  every readout that integrates bins leaves both spans out - the noise
+     *  floor, SNR and ENOB of the single-tone path, and the dual-tone TD+N
+     *  residual. */
+    public int pilot1MaskLoBin =  0;
+    public int pilot1MaskHiBin = -1;
+    /** The bins the second pilot's line covers, the companion pair of
+     *  {@link #pilot1MaskLoBin} / {@link #pilot1MaskHiBin}. */
+    public int pilot2MaskLoBin =  0;
+    public int pilot2MaskHiBin = -1;
     /** The fundamental's frequency in Hz as the REFERENCE channel carries it,
      *  refined the same sub-bin way, or {@link Double#NaN} whenever no
      *  reference channel was read this cycle.  Behind a notch the analysed
@@ -97,6 +128,16 @@ public class FftResult {
      *  dual-tone companion of {@link #referenceFundamentalHzRefined} and
      *  {@link Double#NaN} under the same conditions and for a single tone. */
     public double referenceFundamental2HzRefined = Double.NaN;
+    /** The fundamental's frequency in Hz the generator frequency lock steers
+     *  on while it is tracking: the moving average of its readings over the
+     *  last two FFT lengths of samples, fewer while that span is still
+     *  filling - the reference channel's readings in the reference-channel
+     *  alignment, the analysed channel's otherwise.  {@link Double#NaN} while
+     *  the lock is not tracking.  Written by the FFT worker, never by
+     *  {@code analyze}. */
+    public double fllAveragedHz  = Double.NaN;
+    /** The second tone's, the dual-tone companion of {@link #fllAveragedHz}. */
+    public double fllAveraged2Hz = Double.NaN;
     public double fundamentalDbFs;
     public double fundamentalLinear;
 
@@ -115,22 +156,16 @@ public class FftResult {
      *  left/right .frc calibration in the UI's post-average pipeline. */
     public boolean channelLeft = true;
     /** Absolute sample index of this result's analysis-window start (the
-     *  worker's {@code samplesAbsStart}).  Lets the frequency-lock loop compute
-     *  the REAL elapsed time between corrections - {@code (Δstart)/sampleRate} -
-     *  so its gain is time-correct under wildly varying tick durations. */
+     *  worker's {@code samplesAbsStart}) - a frame's identity downstream: the
+     *  predistortion statistics writer records each analysed frame once by it,
+     *  however often the same result is polled. */
     public long samplesAbsStart;
-    /** Live capture {@code writePos} when this result was produced - where a
-     *  correction issued in response first lands in the capture stream.  Lets the
-     *  frequency-lock loop place the correction's change-point past the
-     *  analysis/publish backlog ({@code writePos − samplesAbsStart − fftSize}). */
-    public long writePos;
     /** The producing worker's reset epoch at analysis start.  A result can sit
      *  parked in the coalescing UI hand-off across a signal change (the worker's
      *  epoch gates only cover production, not consumption); consumers compare
      *  this against the worker's CURRENT epoch and drop stale frames - without
-     *  it, a pre-change spectrum reaches the FLL after the change, and e.g. the
-     *  old 1 kHz tone's H20 (2.6 Hz from a 20 kHz target - inside the
-     *  plausibility gate) trims the live generator to a garbage frequency. */
+     *  it, a pre-change spectrum is displayed and analysed as the new signal's
+     *  after the change. */
     public long epoch;
 
     // Harmonics (index 0 = 2nd harmonic, ...)
@@ -156,6 +191,21 @@ public class FftResult {
     public double[] rawPeakRe;
     public double[] rawPeakIm;
 
+    /** Each tone's phase AS THE DAC EMITTED IT, radians in a measured bin's
+     *  convention, at the time origin the accumulated spectrum - and so
+     *  {@link #rawPeakRe} - is referenced to.  {@link Double#NaN} where the
+     *  run cannot know it.
+     *
+     *  <p>The predistortion loop measures every harmonic against the tone
+     *  that generated it, and taking that tone off the fundamental's own bin
+     *  reads it through the notch: its phase there is the calibration's
+     *  static value plus however far the null has moved since, and that
+     *  error reaches harmonic h multiplied by h.  The phase alignment already
+     *  has the tone away from the notch - the opposite channel never passes
+     *  it, and the pilot lines stand far above it - and states it here. */
+    public double   dacFundPhaseRad  = Double.NaN;
+    public double   dacFund2PhaseRad = Double.NaN;
+
     // Dual-tone intermod-product grid - for every intermodulation product
     // a·f1 + b·f2 (b ≠ 0) the analyzer de-rotated by a·Φ(F1) + b·Φ(F2) over
     // its lobe, the integer coefficients and the product's bin index, aligned
@@ -168,6 +218,12 @@ public class FftResult {
     public int[] imdProductA;
     public int[] imdProductB;
     public int[] imdProductBin;
+
+    /** Intermodulation readout of a dual-tone spectrum, all levels in dBFS -
+     *  written wherever the analyser derives this result's statistics, from
+     *  {@link #fundamentalHzRefined} and {@link #fundamental2HzRefined}.
+     *  {@code null} when the spectrum carries no second tone. */
+    public ImdResult imd;
 
     // Metrics - non-final so post-processing (e.g. ADC/frequency response correction) can mutate.
     public double thdPct;
@@ -191,6 +247,12 @@ public class FftResult {
     public double snrFreqMin;
     /** Upper bound of the frequency range used for SNR (Hz); 0 = no limit. */
     public double snrFreqMax;
+    /** How many harmonics the THD sums, counted from the 2nd: H2 .. H(n+1),
+     *  each still subject to the distortion window above.  Set by the caller
+     *  the same way the window is - the analysis input, and what the readout
+     *  labels the sum with; 0 on a result never told, which the analyser
+     *  treats as its historic H2..H9. */
+    public int thdHarmonics;
     /** True = coherent (complex) averaging; false = incoherent (power) averaging. */
     public boolean coherentAveraging;
     /** Sum of amplLinear[k]^2 for noise bins inside the SNR band (unweighted),
@@ -359,15 +421,24 @@ public class FftResult {
         c.fundamentalHz              = src.fundamentalHz;
         c.fundamentalHzRefined       = src.fundamentalHzRefined;
         c.fundamental2HzRefined      = src.fundamental2HzRefined;
+        c.pilot1HzRefined            = src.pilot1HzRefined;
+        c.pilot2HzRefined            = src.pilot2HzRefined;
+        c.pilot1Bin                  = src.pilot1Bin;
+        c.pilot2Bin                  = src.pilot2Bin;
+        c.pilot1MaskLoBin            = src.pilot1MaskLoBin;
+        c.pilot1MaskHiBin            = src.pilot1MaskHiBin;
+        c.pilot2MaskLoBin            = src.pilot2MaskLoBin;
+        c.pilot2MaskHiBin            = src.pilot2MaskHiBin;
         c.referenceFundamentalHzRefined  = src.referenceFundamentalHzRefined;
         c.referenceFundamental2HzRefined = src.referenceFundamental2HzRefined;
+        c.fllAveragedHz              = src.fllAveragedHz;
+        c.fllAveraged2Hz             = src.fllAveraged2Hz;
         c.fundamentalDbFs            = src.fundamentalDbFs;
         c.fundamentalLinear          = src.fundamentalLinear;
         c.mainsF0Hz                  = src.mainsF0Hz;
         c.coherentKappa              = src.coherentKappa;
         c.channelLeft                = src.channelLeft;
         c.samplesAbsStart            = src.samplesAbsStart;
-        c.writePos                   = src.writePos;
         c.epoch                      = src.epoch;
         c.harmonicCount              = src.harmonicCount;
         c.harmonicBins               = reuseCopy(c.harmonicBins,  src.harmonicBins);
@@ -376,11 +447,14 @@ public class FftResult {
         c.harmonicPct                = reuseCopy(c.harmonicPct,   src.harmonicPct);
         c.rawFundRe                  = src.rawFundRe;
         c.rawFundIm                  = src.rawFundIm;
+        c.dacFundPhaseRad            = src.dacFundPhaseRad;
+        c.dacFund2PhaseRad           = src.dacFund2PhaseRad;
         c.rawPeakRe                  = reuseCopy(c.rawPeakRe,     src.rawPeakRe);
         c.rawPeakIm                  = reuseCopy(c.rawPeakIm,     src.rawPeakIm);
         c.imdProductA                = reuseCopy(c.imdProductA,   src.imdProductA);
         c.imdProductB                = reuseCopy(c.imdProductB,   src.imdProductB);
         c.imdProductBin              = reuseCopy(c.imdProductBin, src.imdProductBin);
+        c.imd                        = src.imd != null ? src.imd.copy() : null;
         c.thdPct                     = src.thdPct;
         c.thdDb                      = src.thdDb;
         c.thdNDb                     = src.thdNDb;
@@ -390,6 +464,7 @@ public class FftResult {
         c.enobSinadDb                = src.enobSinadDb;
         c.snrFreqMin                 = src.snrFreqMin;
         c.snrFreqMax                 = src.snrFreqMax;
+        c.thdHarmonics               = src.thdHarmonics;
         c.coherentAveraging          = src.coherentAveraging;
         c.noisePower                 = src.noisePower;
         c.awNoisePower               = src.awNoisePower;

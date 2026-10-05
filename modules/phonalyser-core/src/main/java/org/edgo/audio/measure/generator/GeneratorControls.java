@@ -99,4 +99,26 @@ public interface GeneratorControls {
     /** Drops every correction table and returns a compensated form to its plain
      *  tone. */
     void clearCompensation();
+
+    /** Starts - or re-aims - the PILOTS: two generated lines, far above the
+     *  harmonics a measurement protects, whose phases the analysis reads on
+     *  every FFT frame as a time-base reference.  {@code hz2} NaN asks for one
+     *  line alone.  {@code levelDbv} is ABSOLUTE and carries both lines: each
+     *  one's own V RMS against the lane's DAC full scale, independent of what
+     *  the main tone is dialled to, so the pilots keep their voltage across
+     *  every amplitude change.  A re-aim is phase-continuous for both, because
+     *  the lines' phases ARE the measurement: the pilots follow every
+     *  correction of the main tone, and a re-aim that restarted a phase would
+     *  show up as the very drift the alignment reads.
+     *
+     *  <p>Every implementor answers this one way or the other, and that is why
+     *  it lives here: a pilot that quietly went nowhere would leave the
+     *  analysis reading the phase of a bin that carries no line, which is not a
+     *  failure anything downstream can tell from a bad measurement.  An
+     *  implementation that cannot emit one therefore refuses out loud. */
+    void setPilotTones(double hz1, double hz2, double levelDbv);
+
+    /** Stops both pilots.  The main waveform is left exactly as it is - the
+     *  pilots never entered its level nor its RMS normalisation. */
+    void clearPilotTones();
 }

@@ -184,12 +184,20 @@ public final class IntermodCompensation {
 
         double f1Re = !Double.isNaN(r.rawFundRe) ? r.rawFundRe : r.re[fundBin];
         double f1Im = !Double.isNaN(r.rawFundIm) ? r.rawFundIm : r.im[fundBin];
-        double phi1 = Math.atan2(f1Im, f1Re) - calF1PhaseRad;        // F1 frame, notch phase removed
+        // Each tone as the DAC emitted it, where the alignment has it - from
+        // the pilots or the opposite channel, at the same origin as the peaks
+        // below - and otherwise the notched reading less the calibration's
+        // static phase.  See FftResult.dacFundPhaseRad.
+        double phi1 = !Double.isNaN(r.dacFundPhaseRad)
+                ? r.dacFundPhaseRad
+                : Math.atan2(f1Im, f1Re) - calF1PhaseRad;        // F1 frame, notch phase removed
         // F2 is the (0,1) product in the analyzer's de-rotated grid.
         int f2Idx = productIndex(r, 0, 1);
-        double phi2 = (f2Idx >= 0 && r.rawPeakRe != null && f2Idx < r.rawPeakRe.length)
-                ? Math.atan2(r.rawPeakIm[f2Idx], r.rawPeakRe[f2Idx]) - calF2PhaseRad
-                : phi1;
+        double phi2 = !Double.isNaN(r.dacFund2PhaseRad)
+                ? r.dacFund2PhaseRad
+                : ((f2Idx >= 0 && r.rawPeakRe != null && f2Idx < r.rawPeakRe.length)
+                        ? Math.atan2(r.rawPeakIm[f2Idx], r.rawPeakRe[f2Idx]) - calF2PhaseRad
+                        : phi1);
 
         for (int g = 0; g < coefA.length; g++) {
             double[] slot = rawSlot(r, g, f1Hz, f2Hz);
@@ -408,7 +416,7 @@ public final class IntermodCompensation {
                 double phaseDeg = Math.toDegrees(phase);
                 double ampPct   = amp * 100.0;
                 double ampDbV   = vP > 0.0 ? 20.0 * Math.log10(vP) : -300.0;
-                pw.printf(Locale.GERMAN, "%d;%d;%.6f;%.4f;%.9f;%.4f;%.10e;%.10e%n",
+                pw.printf(Locale.GERMAN, "%d;%d;%.6f;%.4f;%.15f;%.4f;%.10e;%.10e%n",
                         coefA[g], coefB[g], freqHz[g], ampDbV, ampPct, phaseDeg, re, im);
             }
         }

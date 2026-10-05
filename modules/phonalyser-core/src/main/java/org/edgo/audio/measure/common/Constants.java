@@ -49,4 +49,9 @@ public class Constants {
     /** 2⁻⁵³ - converts the top 53 phase-accumulator bits to a [0, 1) phase
      *  fraction (53 bits = everything a double can hold). */
     public final double ONE_OVER_2_53 = 0x1.0p-53;
+
+    /** One part per million - turns a ppm figure into a fraction of the
+     *  quantity it is stated against (a frequency's ppm into hertz, times the
+     *  frequency). */
+    public final double PPM = 1e-6;
 }

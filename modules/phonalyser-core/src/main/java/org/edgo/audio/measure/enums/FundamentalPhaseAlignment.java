@@ -24,15 +24,16 @@ package org.edgo.audio.measure.enums;
  *  fundamental's phase alone and the loop misreads it as a time slip,
  *  landing it on harmonic h multiplied by h; {@link #REFERENCE_CHANNEL} =
  *  the opposite input channel carries the un-notched fundamental and
- *  supplies the drift-free phase the loop tracks; {@link #PERIODICAL_SWEEP}
- *  = a periodic sweep probe of the notch region measures the fundamental's
- *  phase drift and rotates the fundamental region alone by it, leaving the
- *  harmonics untouched.  Combo labels come from the i18n bundle, not from
- *  this enum. */
+ *  supplies the drift-free phase the loop tracks; {@link #PILOT_TONE} = the
+ *  same generator emits a second tone far above the protected harmonics, and
+ *  because both tones share one clock, the fundamental's phase change less
+ *  the pilot's, scaled by the ratio of their bins, is the notch's own drift
+ *  and nothing else.
+ *  Combo labels come from the i18n bundle, not from this enum. */
 public enum FundamentalPhaseAlignment {
     NONE,
     REFERENCE_CHANNEL,
-    PERIODICAL_SWEEP;
+    PILOT_TONE;
 
     private FundamentalPhaseAlignment() {}
 

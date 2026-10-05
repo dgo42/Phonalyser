@@ -204,11 +204,13 @@ public final class Predistortion {
     /**
      * Parses an {@code fft_harmonics_*.csv} row set into {@code harmonics}.
      * Skips H1 (the fundamental) and returns its measured phase, which is the
-     * system-delay reference.  Each phasor is read from the {@code re}/{@code im}
-     * columns when present (full double precision), otherwise from
-     * {@code phase_deg}.  The correction amplitude comes from
-     * {@code amplitude_pct / 100}, so it is relative to the fundamental
-     * regardless of the absolute DAC/ADC level.
+     * system-delay reference.  Each phasor - amplitude and phase alike - is
+     * read from the {@code re}/{@code im} columns when present (the ratio to
+     * the fundamental at full double precision; the decimal
+     * {@code amplitude_pct} column is rounded for reading), otherwise the
+     * amplitude from {@code amplitude_pct / 100} and the phase from
+     * {@code phase_deg}.  Either way the amplitude is relative to the
+     * fundamental regardless of the absolute DAC/ADC level.
      */
     private double readHarmonics(String path, List<double[]> harmonics) throws IOException {
         double phi1 = Double.NaN;
@@ -221,21 +223,23 @@ public final class Predistortion {
                 String[] cols = line.split(COLUMN_SEPARATOR);
                 if (cols.length < HARMONIC_MIN_COLUMNS) continue;
                 int hIndex = Integer.parseInt(cols[COL_HARMONIC].trim());
+                double amp;
                 double phi;
                 if (cols.length >= HARMONIC_PHASOR_COLUMNS) {
                     double re = number(cols[COL_HARMONIC_RE]);
                     double im = number(cols[COL_HARMONIC_IM]);
+                    amp = Math.hypot(re, im);
                     phi = Math.atan2(im, re);
                 } else {
+                    amp = number(cols[COL_HARMONIC_AMP_PCT]) / 100.0;
                     phi = Math.toRadians(number(cols[COL_HARMONIC_PHASE_DEG]));
                 }
                 if (hIndex == FUNDAMENTAL_HARMONIC) {
                     phi1 = phi;   // capture fundamental phase for delay compensation
                     continue;
                 }
-                double ampPct = number(cols[COL_HARMONIC_AMP_PCT]);
                 double freqHz = number(cols[COL_HARMONIC_FREQ]);
-                harmonics.add(new double[] {ampPct / 100.0, phi, freqHz, hIndex});
+                harmonics.add(new double[] {amp, phi, freqHz, hIndex});
             }
         }
         if (Double.isNaN(phi1)) {

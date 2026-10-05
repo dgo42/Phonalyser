@@ -63,6 +63,20 @@ public enum GenSignalForm {
         return this == SINE_COMP || this == DUAL_TONE_COMP;
     }
 
+    /** The plain form that renders the same tones as this one from the same
+     *  DDS state but subtracts no correction table: {@link #SINE_COMP} gives
+     *  {@link #SINE}, {@link #DUAL_TONE_COMP} gives {@link #DUAL_TONE}, and
+     *  every uncompensated form is its own.  A measurement that has to see the
+     *  converter's own distortion plays this instead of the configured form,
+     *  so no saved correction file reaches the tone under it. */
+    public GenSignalForm plainSibling() {
+        return switch (this) {
+            case SINE_COMP      -> SINE;
+            case DUAL_TONE_COMP -> DUAL_TONE;
+            default             -> this;
+        };
+    }
+
     public static GenSignalForm fromString(String s) {
         return switch (s.toLowerCase()) {
             case "sine"                                                 -> SINE;

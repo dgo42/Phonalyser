@@ -104,6 +104,11 @@ public enum UnitFamily {
     PERCENT(0,   new Unit("unit.percent", 1.0, false, List.of("%"))),
     PIXEL(0,     new Unit("unit.px",      1.0, false, List.of("px"))),
     DECIBEL(0,   new Unit("unit.db",      1.0, false, List.of("db"))),
+    /** A level whose canonical value IS the dBV figure (the pilot tones'
+     *  level): one unit, no conversion, displayed and typed as dBV - unlike
+     *  {@link #AMPLITUDE}, whose canonical unit is volts and whose dBV is a
+     *  view of them. */
+    LEVEL_DBV(0, new Unit("unit.dbv",     1.0, false, List.of("dbv", "db", "d"))),
     SECONDS(0,   new Unit("unit.s",       1.0, false, List.of("s"))),
     DIVISIONS(0, new Unit("unit.div",     1.0, false, List.of("div"))),
 

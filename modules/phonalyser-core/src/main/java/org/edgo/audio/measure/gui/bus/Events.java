@@ -135,8 +135,12 @@ public final class Events {
      *  {@code GeneratorPane}; on receipt it live-applies the freq to
      *  the DDS and republishes {@link #GENERATOR_SIGNAL_CHANGED} with
      *  cause {@link org.edgo.audio.measure.enums.GenChangeCause#FLL_TRIM} so the FFT worker keeps
-     *  its averaging.  Decouples FftView from the GeneratorController
-     *  instance owned by GeneratorPane. */
+     *  its averaging.  Published by the FFT analyser worker through the UI
+     *  thread, only when its loop's correction moved - and on the next update
+     *  after the generator's standing trim may have been dropped: at loop
+     *  creation, a lock reset, a statistics reset, an alignment restart and a
+     *  window-geometry rebuild.  Decouples the analyser from the
+     *  GeneratorController instance owned by GeneratorPane. */
     public static final String GENERATOR_FREQ_TRIM = "generator.freq.trim";
 
     /** Notification - the FFT-side frequency-lock loop wants the
@@ -159,8 +163,57 @@ public final class Events {
      *  then wrong by exactly that stale trim and its first correction
      *  overshoots by the same amount - visible as a frequency diff stuck
      *  at ±the stale trim until the generator is restarted.  No payload.
-     *  Subscriber: {@code GeneratorPane} (re-applies the snap targets). */
+     *  Subscriber: {@code GeneratorPane} (re-applies the snap targets), which
+     *  also returns a running pilot tone to its selected frequency - the
+     *  pilot is carried as a bin of the capture grid and its trim is the same
+     *  stale correction once the loops are gone. */
     public static final String GENERATOR_FREQ_TRIM_RESET = "generator.freq.trim.reset";
+
+    /** Notification - the FFT-side phase alignment wants the generator to
+     *  emit its pilot tones beside the main waveform.  Payload:
+     *  {@link PilotToneRequest} - two frequencies in Hz and one level in dBV
+     *  for both, the second frequency NaN when the selection found room for
+     *  one line only.  The pilots are added lines far above the protected
+     *  harmonics whose phases the analysis reads on every FFT frame as a
+     *  time-base reference; each pins the elapsed sample count only modulo its
+     *  own period, which is why there are two.  Subscriber: the generator
+     *  controller, which sets them on the running waveform and announces
+     *  nothing - the analysis elects these lines and asks for them again
+     *  whenever it restarts its alignment, so this side remembers nothing, and
+     *  announcing a changed signal would restart the very alignment that
+     *  asked. */
+    public static final String GENERATOR_PILOT_ON = "generator.pilot.on";
+
+    /** Notification - the pilot tones are no longer wanted: the phase
+     *  alignment left the pilot mode, the analysis stopped, or the generator
+     *  is not emitting.  No payload.  Subscriber: the generator controller,
+     *  which drops both lines from the running waveform and forgets them, so a
+     *  later generator start carries no pilot until they are asked for again.
+     *  Announced no more than the request is, for the same reason. */
+    public static final String GENERATOR_PILOT_OFF = "generator.pilot.off";
+
+    /** Request - the generator's OUTPUT side, as the FFT needs it to place a
+     *  pilot: the playback sample rate (the pilot's bin is derived on the
+     *  capture grid, but a whole number of playback samples per period is a
+     *  knock-out) and whether a server drives the DDS (a remote generator
+     *  gets no pilot at all).  No payload.  Response:
+     *  {@link GeneratorOutput}; {@code null} when no responder is
+     *  registered, which the caller treats as "no pilot". */
+    public static final String GENERATOR_OUTPUT = "generator.output";
+
+    /** Notification - a distortion measurement wants the generator's live
+     *  correction tables changed: dropped, or replaced by the single-tone
+     *  harmonic set or the dual-tone intermodulation set it just computed.
+     *  Payload: {@link GeneratorCorrectionsRequest}.  Subscriber: the
+     *  generator controller, which applies the set to the running tone the
+     *  way its own hot-swap does (and remembers it for a probe pause's
+     *  resume).  Nothing is announced for it: the measurement resets the
+     *  analyser's statistics itself, and a {@link #GENERATOR_SIGNAL_CHANGED}
+     *  here would restart the analyser's fundamental alignment with a sweep
+     *  of its own.  The measurement never holds the controller: this event is
+     *  the whole seam, as the frequency trims are for the frequency lock.
+     *  Published on the UI thread. */
+    public static final String GENERATOR_CORRECTIONS = "generator.corrections";
 
     /** Notification - the fundamental magnitude(s) moved by more than the
      *  drift threshold between the FIRST result after a generator change
@@ -224,23 +277,18 @@ public final class Events {
      *  {@code FftAnalyzerWorker}. */
     public static final String FFT_PHASE_ALIGN_REFUSED = "fft.phase.align.refused";
 
-    /** Notification - the periodical-sweep alignment probe begins: FFT
-     *  accumulation is paused (the accumulator is kept) and the probe drives
-     *  the output device itself, so the generator's tone has to go down.  No
-     *  payload.  Published on the WORKER thread by {@code FftAnalyzerWorker},
-     *  synchronously: the generator's subscriber stops its lane inside the
-     *  publish, which is what keeps the sweep and the tone from overlapping.
-     *  A subscriber that touches a widget marshals itself. */
-    public static final String FFT_PHASE_PROBE_STARTED = "fft.phase.probe.started";
-
-    /** Notification - the periodical-sweep alignment probe ended (completed,
-     *  timed out or refused to start); the generator's tone goes back up and
-     *  accumulation continues.  No payload.  Published on the WORKER thread by
-     *  {@code FftAnalyzerWorker}, synchronously: the generator's subscriber
-     *  restarts its lane inside the publish, so the tone is back before the
-     *  next analysis cycle reads any samples.  A subscriber that touches a
-     *  widget marshals itself. */
-    public static final String FFT_PHASE_PROBE_STOPPED = "fft.phase.probe.stopped";
+    /** Notification - the pilot-tone alignment has run out of pilot and the
+     *  recording is ending: a pilot line failed its level test on three
+     *  accepted FFT frames in a row (the first is extrapolated from its own
+     *  trend, the second re-syncs the capture, the third leaves the coherent
+     *  average with no time base), which can happen in the pilot-tone
+     *  alignment mode alone.  Payload: a {@code FftAnalyzerWorker.PilotLost}
+     *  carrying the one number the operator's message states, the
+     *  fundamental's frequency in Hz; the pane formats the text and stops
+     *  nothing - the stop itself travels the existing auto-stop path,
+     *  {@link #FFT_RECORDING_AUTO_STOPPED}.  Published on the UI thread by
+     *  {@code FftAnalyzerWorker}. */
+    public static final String FFT_PHASE_ALIGN_PILOT_LOST = "fft.phase.align.pilotLost";
 
     /** Notification - the generator's file-player thread finished
      *  (user stop, EOF without loop, or playback error).  Subscribers

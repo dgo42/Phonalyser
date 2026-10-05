@@ -23,6 +23,7 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.DoubleFunction;
@@ -48,8 +49,40 @@ import org.edgo.audio.measure.fft.FftResult;
  * rotation a correction needs (a phase is only defined modulo one turn, so a
  * transport delay is indistinguishable from its per-frequency rotation, and
  * the rotation is what the calibration measures).
+ *
+ * <p><b>The step is the plain inversion.</b>  A correction sent to the
+ * generator comes back at the analyser inverted, so the correction that
+ * cancels a measured residual is the residual itself in this frame: each
+ * round adds the clear harmonics' measured phasors to the corrections in
+ * force and applies the sums.  Whatever error the chain leaves - a reference
+ * phase off by a few degrees, a gain a few percent off - stays as a smaller
+ * residual that the next round measures and adds again; the loop converges
+ * as long as that error keeps the step under about 60 degrees, which the
+ * un-notched frame reference and a fresh calibration ensure.
  */
 public final class HarmonicCompensation {
+
+    /** A reading moves the correction only when the harmonic stands this far
+     *  above its own local noise floor.  At 5 dB the reading's phase
+     *  scatters by about 32 degrees (one sigma), where a full step still
+     *  cancels about half of the harmonic; a reading at the floor is a noise
+     *  vector, and a step on it writes that noise into the generator as a
+     *  new harmonic. */
+    public static final double APPLY_CLEARANCE_DB = 5.0;
+    /** Half-width of the local-floor window around a harmonic, in Hz -
+     *  converted to bins with the result's own resolution, so the window
+     *  covers the same spectral neighbourhood at every sample rate and FFT
+     *  size. */
+    private static final double LOCAL_FLOOR_SPAN_HZ = 25.0;
+    /** The lobe exclusion at the window's centre, in equivalent noise
+     *  bandwidths of the result's own window function: the main lobe widens
+     *  with the window's NENBW, so the exclusion follows it instead of
+     *  assuming one window type. */
+    private static final double LOCAL_FLOOR_EXCLUDE_NENBW = 4.0;
+    /** The neighbour bins' median stands for the local floor only over
+     *  enough bins; fewer than this beyond the exclusion and the window is
+     *  too narrow to read a floor from. */
+    private static final int LOCAL_FLOOR_MIN_BINS = 16;
 
     private final int      maxHarmonics;
     /** Per-harmonic accumulated correction phasor (real / imaginary parts)
@@ -57,12 +90,18 @@ public final class HarmonicCompensation {
     private final double[] accRe;
     private final double[] accIm;
     private final double[] hFreqs;
+    /** The change the last {@link #accumulate} made to each harmonic's
+     *  correction - zero where the apply gate held the harmonic. */
+    private final double[]  lastDeltaRe;
+    private final double[]  lastDeltaIm;
 
     public HarmonicCompensation(int maxHarmonics) {
-        this.maxHarmonics = maxHarmonics;
-        this.accRe   = new double[maxHarmonics];
-        this.accIm   = new double[maxHarmonics];
-        this.hFreqs  = new double[maxHarmonics];
+        this.maxHarmonics    = maxHarmonics;
+        this.accRe           = new double[maxHarmonics];
+        this.accIm           = new double[maxHarmonics];
+        this.hFreqs          = new double[maxHarmonics];
+        this.lastDeltaRe     = new double[maxHarmonics];
+        this.lastDeltaIm     = new double[maxHarmonics];
     }
 
     /** Generator-shaped snapshot: only the non-zero correction phasors, as
@@ -70,9 +109,23 @@ public final class HarmonicCompensation {
      *  generator's compensation API consumes. */
     public record GeneratorCorrections(double[] ampRatios, int[] harmonicNumbers, double[] phiInits) {}
 
-    /** Per-harmonic complex phasors with the frequency each belongs to, index
-     *  h = harmonic H(h+2) - a frame's measurement ({@link #measurePhasors}). */
-    public record HarmonicPhasors(double[] re, double[] im, double[] hz) {}
+    /** Per-harmonic complex phasors with the frequency each belongs to and
+     *  how far each stood above the displayed noise floor (dB, {@code NaN}
+     *  when unknown), index h = harmonic H(h+2) - a frame's measurement
+     *  ({@link #measurePhasors}). */
+    public record HarmonicPhasors(double[] re, double[] im, double[] hz, double[] clearanceDb) {}
+
+    /** Harmonic H(h+2)'s accumulated correction phasor as {@code [re, im]},
+     *  linear ADC level in the accumulator's frame. */
+    public double[] correction(int h) {
+        return new double[] { accRe[h], accIm[h] };
+    }
+
+    /** The change the last {@link #accumulate} made to harmonic H(h+2)'s
+     *  correction as {@code [re, im]} - zero where the apply gate held it. */
+    public double[] lastDelta(int h) {
+        return new double[] { lastDeltaRe[h], lastDeltaIm[h] };
+    }
 
     /**
      * LMS-style accumulate of the harmonics measured in {@code r}.  The
@@ -99,11 +152,32 @@ public final class HarmonicCompensation {
      * doesn't blow it up; any residual is only the cal-vs-live notch drift.
      */
     public void accumulate(FftResult r, double step, double calFundPhaseRad) {
-        HarmonicPhasors z = measurePhasors(r, calFundPhaseRad);
+        accumulate(measurePhasors(r, calFundPhaseRad), step);
+    }
+
+    /**
+     * The round's update from its measured phasors: the plain inversion, a
+     * clear harmonic's measured residual added at {@code step} to the
+     * correction in force - the correction comes back inverted through the
+     * chain, so adding the residual itself is what cancels it.  Only a
+     * reading that cleared its local floor moves the correction: a
+     * floor-level reading is a noise vector, and a step on it writes that
+     * noise into the generator, to be measured as a real harmonic one round
+     * later.  A gated-out harmonic keeps its correction unchanged.
+     */
+    public void accumulate(HarmonicPhasors z, double step) {
         for (int h = 0; h < maxHarmonics; h++) {
             if (!(z.hz()[h] > 0.0)) continue;          // harmonic not measured in this frame
-            accRe[h] += step * z.re()[h];
-            accIm[h] += step * z.im()[h];
+            double clearance = z.clearanceDb() != null ? z.clearanceDb()[h] : Double.NaN;
+            boolean clear = Double.isFinite(clearance) && clearance >= APPLY_CLEARANCE_DB;
+            lastDeltaRe[h] = 0.0;
+            lastDeltaIm[h] = 0.0;
+            if (clear) {
+                lastDeltaRe[h] = step * z.re()[h];
+                lastDeltaIm[h] = step * z.im()[h];
+                accRe[h] += lastDeltaRe[h];
+                accIm[h] += lastDeltaIm[h];
+            }
             hFreqs[h] = z.hz()[h];
         }
     }
@@ -111,18 +185,27 @@ public final class HarmonicCompensation {
     /**
      * The harmonics of one frame as complex phasors in the accumulator's frame
      * - the construction {@link #accumulate} adds in.  Magnitude is the
-     * harmonic's ABSOLUTE measured level (linear, from its de-embedded-chain
-     * dBFS), phase is the RAW measured phase de-rotated by n*phi1 as described
-     * on {@link #accumulate}; a harmonic that was not located carries
-     * {@code (0, 0)} at frequency 0.
+     * harmonic's ABSOLUTE measured level (linear, from its raw dBFS before
+     * the chain's de-embedding), phase is the RAW measured phase de-rotated by
+     * n*phi1 as described on {@link #accumulate}; a harmonic that was not
+     * located carries {@code (0, 0)} at frequency 0.  The clearance is the
+     * same raw level over the median of the neighbour bins outside the lobe.
      */
     public HarmonicPhasors measurePhasors(FftResult r, double calFundPhaseRad) {
         double[] re = new double[maxHarmonics];
         double[] im = new double[maxHarmonics];
         double[] hz = new double[maxHarmonics];
+        double[] clearance = new double[maxHarmonics];
+        Arrays.fill(clearance, Double.NaN);
         double re1 = !Double.isNaN(r.rawFundRe) ? r.rawFundRe : r.re[r.fundamentalBin];
         double im1 = !Double.isNaN(r.rawFundIm) ? r.rawFundIm : r.im[r.fundamentalBin];
-        double phi1          = Math.atan2(im1, re1) - calFundPhaseRad;      // window phase, F0 notch phase removed
+        // The tone as the DAC emitted it, where the alignment has it - from
+        // the pilots or the opposite channel, at the same origin as the peaks
+        // below - and otherwise the notched reading less the calibration's
+        // static phase.  See FftResult.dacFundPhaseRad.
+        double phi1 = !Double.isNaN(r.dacFundPhaseRad)
+                ? r.dacFundPhaseRad
+                : Math.atan2(im1, re1) - calFundPhaseRad;      // window phase, F0 notch phase removed
         // Frame-reference slope: rotating each harmonic by its frequency times
         // this puts the whole frame in the accumulator's fundamental-referenced
         // convention (F0 -> -90 degrees, each harmonic de-rotated by n*phi1).
@@ -141,8 +224,48 @@ public final class HarmonicCompensation {
             re[h] = magLin * Math.cos(phiInit);
             im[h] = magLin * Math.sin(phiInit);
             hz[h] = r.harmonicHz[h];
+            // Both RAW: the harmonic as the ADC captured it against the raw
+            // noise grass around it.  The displayed spectrum is de-embedded at
+            // the tone bins and their lobes only - a harmonic bin read from it
+            // stands lifted by the chain's loss at that frequency (about 19 dB
+            // at H2) while its neighbours do not, which would fake exactly
+            // that much clearance.
+            if (r.amplitudeDbFs != null && bin < r.amplitudeDbFs.length) {
+                double rawDb   = r.rawHarmonicDbFs(h);
+                double floorDb = localFloorDb(r, bin);
+                if (Double.isFinite(rawDb) && Double.isFinite(floorDb)) clearance[h] = rawDb - floorDb;
+            }
         }
-        return new HarmonicPhasors(re, im, hz);
+        return new HarmonicPhasors(re, im, hz, clearance);
+    }
+
+    /** One harmonic's local noise floor: the MEDIAN bin level (dB) inside
+     *  {@link #LOCAL_FLOOR_SPAN_HZ} around its bin, the lobe at the centre
+     *  excluded over {@link #LOCAL_FLOOR_EXCLUDE_NENBW} noise bandwidths of
+     *  the result's window - the level of the local grass.  The median, not
+     *  the highest bin: the window is half the mains spacing wide to either
+     *  side, so it always holds one mains harmonic, and a single foreign
+     *  line standing in it would otherwise be read as the floor and gate
+     *  out a harmonic far above the noise.  {@code NaN} when the window
+     *  leaves too few floor bins to mean anything. */
+    private double localFloorDb(FftResult r, int bin) {
+        double[] ampDb = r.amplitudeDbFs;
+        if (ampDb == null || r.freqResolution <= 0.0) return Double.NaN;
+        int exclude = (int) Math.ceil(LOCAL_FLOOR_EXCLUDE_NENBW
+                * Math.max(1.0, r.windowNenbwBins));
+        int span = Math.max((int) Math.round(LOCAL_FLOOR_SPAN_HZ / r.freqResolution),
+                exclude + LOCAL_FLOOR_MIN_BINS);
+        int lo = Math.max(0, bin - span);
+        int hi = Math.min(ampDb.length - 1, bin + span);
+        double[] floor = new double[Math.max(0, hi - lo + 1)];
+        int n = 0;
+        for (int k = lo; k <= hi; k++) {
+            if (Math.abs(k - bin) <= exclude || !Double.isFinite(ampDb[k])) continue;
+            floor[n++] = ampDb[k];
+        }
+        if (n < LOCAL_FLOOR_MIN_BINS) return Double.NaN;
+        Arrays.sort(floor, 0, n);
+        return floor[n / 2];
     }
 
     /** True once at least one harmonic has accumulated a non-zero correction. */
@@ -192,9 +315,11 @@ public final class HarmonicCompensation {
      *  accumulator while the loop keeps updating the live one. */
     public HarmonicCompensation copy() {
         HarmonicCompensation c = new HarmonicCompensation(maxHarmonics);
-        System.arraycopy(accRe,   0, c.accRe,   0, maxHarmonics);
-        System.arraycopy(accIm,   0, c.accIm,   0, maxHarmonics);
-        System.arraycopy(hFreqs,  0, c.hFreqs,  0, maxHarmonics);
+        System.arraycopy(accRe,           0, c.accRe,           0, maxHarmonics);
+        System.arraycopy(accIm,           0, c.accIm,           0, maxHarmonics);
+        System.arraycopy(hFreqs,          0, c.hFreqs,          0, maxHarmonics);
+        System.arraycopy(lastDeltaRe,     0, c.lastDeltaRe,     0, maxHarmonics);
+        System.arraycopy(lastDeltaIm,     0, c.lastDeltaIm,     0, maxHarmonics);
         return c;
     }
 
@@ -212,9 +337,10 @@ public final class HarmonicCompensation {
                          int sampleRate, int bitDepth, double amplitudeVrms,
                          DoubleFunction<double[]> calResponseAt, double adcFsVoltageRms) throws IOException {
         // amplitudeVrms IS the DAC fundamental (genAmplitudeVrms); the ratio columns
-        // (amplitude_pct + re/im, consumed by the SINE_COMPENSATED loader) are taken
-        // against it.  The amplitude_dbfs column instead carries the de-embedded
-        // ABSOLUTE dBV (V_h via the ADC full-scale) - the honest measured level.
+        // are taken against it: re/im carry the phasor the SINE_COMPENSATED loader
+        // consumes, amplitude_pct the same magnitude in percent for reading.  The
+        // amplitude_dbv column instead carries the de-embedded ABSOLUTE dBV (V_h
+        // via the ADC full-scale) - the honest measured level.
         double fundDbV = amplitudeVrms > 0.0 ? 20.0 * Math.log10(amplitudeVrms) : 0.0;
         try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8))) {
             if (extraHeaderLines != null) {
@@ -241,7 +367,7 @@ public final class HarmonicCompensation {
                 double phaseDeg = Math.toDegrees(phase);
                 double ampPct   = amp * 100.0;
                 double ampDbV   = vH > 0.0 ? 20.0 * Math.log10(vH) : -300.0;
-                pw.printf(Locale.GERMAN, "%d;%.6f;%.4f;%.9f;%.4f;%.10e;%.10e%n",
+                pw.printf(Locale.GERMAN, "%d;%.6f;%.4f;%.15f;%.4f;%.10e;%.10e%n",
                         h + 2, hFreqs[h], ampDbV, ampPct, phaseDeg, re, im);
             }
         }
