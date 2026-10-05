@@ -490,9 +490,11 @@ public final class NetConnection {
 
     /** The same wait with an explicit budget - the handshake of
      *  {@link #open(long)} may not outlive the connect timeout its caller asked
-     *  for.  Private: every other request is a device operation, and those get
+     *  for, and a measurement that runs for seconds on the far end
+     *  ({@code device.measureDelay}) names a budget beyond the device
+     *  operations'.  Every other request is a device operation, and those get
      *  the generous {@link #REQUEST_TIMEOUT_MS} on purpose. */
-    private NetMessage request(NetMessage message, long timeoutMs) {
+    public NetMessage request(NetMessage message, long timeoutMs) {
         return requestOn(transport, message, timeoutMs);
     }
 

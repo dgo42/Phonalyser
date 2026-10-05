@@ -51,6 +51,7 @@ import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
+import org.edgo.audio.measure.gui.delay.MeasureDelayDialog;
 import org.edgo.audio.measure.gui.freqresp.TuneNotchWizardDialog;
 import org.edgo.audio.measure.gui.helpviewer.HelpIndexBuilder;
 import org.edgo.audio.measure.gui.helpviewer.HelpUrls;
@@ -386,6 +387,10 @@ public final class MainWindow {
         tuneNotchItem.setText(I18n.t("menu.tools.tuneNotch"));
         tuneNotchItem.setImage(IconUtils.icon(shell.getDisplay(), Icon.NOTCH_FILTER));
         tuneNotchItem.addListener(SWT.Selection, e -> openTuneNotchDialog());
+        MenuItem measureDelayItem = new MenuItem(toolsMenu, SWT.PUSH);
+        measureDelayItem.setText(I18n.t("menu.tools.measureDelay"));
+        measureDelayItem.setImage(IconUtils.icon(shell.getDisplay(), Icon.SIGNAL_RECTANGLE));
+        measureDelayItem.addListener(SWT.Selection, e -> openMeasureDelayDialog());
         if (!mac) {
             MenuItem preferencesItem = new MenuItem(toolsMenu, SWT.PUSH);
             preferencesItem.setText(I18n.t("menu.tools.preferences"));
@@ -472,6 +477,12 @@ public final class MainWindow {
      *  response chart for live notch-filter tuning. */
     private void openTuneNotchDialog() {
         new TuneNotchWizardDialog(shell).open();
+    }
+
+    /** Opens the delay tool - one rectangle period through the direct
+     *  output-to-input path, timed from render to capture. */
+    private void openMeasureDelayDialog() {
+        new MeasureDelayDialog(shell).open();
     }
 
     /** Shows the splash in its "About" mode.  Shared by the Help menu

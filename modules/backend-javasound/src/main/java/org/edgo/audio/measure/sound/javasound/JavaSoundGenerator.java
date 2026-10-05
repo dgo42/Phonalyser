@@ -18,8 +18,11 @@
 
 package org.edgo.audio.measure.sound.javasound;
 
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.LockSupport;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.LineUnavailableException;
@@ -31,6 +34,7 @@ import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.PcmQuantizer;
+import org.edgo.audio.measure.sound.PulseHandshake;
 
 /**
  * Generator that streams a {@link SignalGenerator} to the JVM's default
@@ -75,6 +79,11 @@ public class JavaSoundGenerator implements AudioPlayback {
      *  inside one block time at any rate, so admission is never the cadence
      *  bottleneck. */
     private static final long WRITE_POLL_MS = 3L;
+    /** How often {@link #pulse}'s writer looks at the ring while an edge is
+     *  still in it: the resolution of the edge's departure stamp.  Far
+     *  inside any provider period, and only for the second or so one pulse
+     *  takes. */
+    private static final long EDGE_WATCH_POLL_NANOS = 250_000L;
 
     private final int          sampleRate;
     private final int          bitDepth;
@@ -82,6 +91,10 @@ public class JavaSoundGenerator implements AudioPlayback {
     private final String       deviceName;   // null = JavaSound default mixer
     private final PcmQuantizer quantizer;
     private final JavaSoundDeviceManager deviceManager;
+    /** The line's queue in frames, {@code 0} for the provider's default - the
+     *  render path's; the delay measurement's pulse line asks for a short
+     *  one. */
+    private final int          ringFrames;
 
     private SourceDataLine   line;
     /** Raised (once, CAS) when the device stopped accepting audio - by the
@@ -115,12 +128,23 @@ public class JavaSoundGenerator implements AudioPlayback {
     public JavaSoundGenerator(int sampleRate, int bitDepth, double ditherBitsLeft,
                               double ditherBitsRight, String deviceName,
                               JavaSoundDeviceManager deviceManager) {
+        this(sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight, deviceName, deviceManager, 0);
+    }
+
+    /**
+     * @param ringFrames the line's queue in frames, {@code 0} for the
+     *                   provider's default
+     */
+    JavaSoundGenerator(int sampleRate, int bitDepth, double ditherBitsLeft,
+                       double ditherBitsRight, String deviceName,
+                       JavaSoundDeviceManager deviceManager, int ringFrames) {
         this.sampleRate     = sampleRate;
         this.bitDepth       = bitDepth;
         this.deviceName     = deviceName;
         this.bytesPerFrame  = (bitDepth / 8) * CHANNELS;
         this.quantizer      = new PcmQuantizer(bitDepth, ditherBitsLeft, ditherBitsRight);
         this.deviceManager  = deviceManager;
+        this.ringFrames     = ringFrames;
     }
 
     @Override
@@ -129,7 +153,20 @@ public class JavaSoundGenerator implements AudioPlayback {
                 AudioFormat.Encoding.PCM_SIGNED,
                 sampleRate, bitDepth, CHANNELS,
                 bytesPerFrame, sampleRate, false);
-        line = deviceManager.openOutputLine(deviceName, fmt);
+        try {
+            line = deviceManager.openOutputLine(deviceName, fmt, ringFrames);
+        } catch (LineUnavailableException ex) {
+            if (ringFrames == 0) {
+                throw ex;
+            }
+            // A provider that refuses a sized queue still opens on its default;
+            // the pulses then run long, not not at all.
+            if (log.isWarnEnabled()) {
+                log.warn("JavaSound output line refused a {}-frame queue ({}) - opening on the"
+                        + " provider's default", ringFrames, ex.toString());
+            }
+            line = deviceManager.openOutputLine(deviceName, fmt, 0);
+        }
         int hwFrames = line.getBufferSize() / bytesPerFrame;
         if (log.isInfoEnabled()) {
             log.info("JavaSound generator opened: format={}, hw-buffer={} frames ({} ms)",
@@ -296,6 +333,208 @@ public class JavaSoundGenerator implements AudioPlayback {
                 Thread.currentThread().interrupt();
                 return;
             }
+        }
+    }
+
+    /** The pulses' program after the lead, in the order it is written. */
+    private enum PulsePhase {
+        /** The pulses: {@code -level} until the handshake asks for a rise,
+         *  {@code +level} until it asks for the fall, for every edge in turn. */
+        PULSES,
+        /** {@code -level} for a ring plus {@link #PULSE_LOW_SECONDS} after the
+         *  last fall, so the ring stays full until that fall has left it. */
+        HOLD,
+        /** A ring of silence, pushing the last fall out of the line. */
+        TAIL
+    }
+
+    /** How long the signal sits at {@code -level} after the last fall beyond
+     *  the ring it waits out: long enough for the capture to see the level
+     *  on the fall's far side. */
+    private static final double PULSE_LOW_SECONDS = 0.05;
+    /** How many distinct drain counts the start trace of {@link #pulse}
+     *  records: the provider's first takes from the ring, which show how
+     *  many periods it holds in flight once the device runs. */
+    private static final int DRAIN_TRACE_STEPS = 12;
+
+    @Override
+    public void pulse(double levelLeft, double levelRight, PulseHandshake handshake)
+            throws InterruptedException {
+        int    bufferBytes    = line.getBufferSize();
+        int    bufferFrames   = bufferBytes / bytesPerFrame;
+        int    lowFrames      = Math.max(1, (int) Math.round(PULSE_LOW_SECONDS * sampleRate));
+        // Each level as a ring's worth of frames: any chunk of the program is
+        // a prefix of one of these.
+        byte[] silence = new byte[bufferBytes];
+        byte[] low     = new byte[bufferBytes];
+        byte[] high    = new byte[bufferBytes];
+        quantizer.encodeLevel(high, bufferFrames, levelLeft, levelRight);
+        quantizer.encodeLevel(low, bufferFrames, -levelLeft, -levelRight);
+        // A ring of silence before the line starts, the line restarted until
+        // the provider starts the device the way the drain count assumes
+        // (see startFilled).  The silence is also what the capture takes its
+        // noise baseline on.  The trailing silence pushes the last fall out:
+        // a provider that moves whole periods to the device never flushes a
+        // tail shorter than one.
+        int leadFrames = startFilled(silence, bufferBytes);
+        writeProgram(silence, low, high, bufferFrames, lowFrames, leadFrames, handshake);
+    }
+
+    /** How long after a start the provider is watched for its second take
+     *  from the ring - longer than its period, shorter than the gap of a
+     *  start gone the other way. */
+    private static final long START_WATCH_NANOS = 45_000_000L;
+    /** How many starts {@link #startFilled} tries before it runs with what
+     *  it has. */
+    private static final int START_ATTEMPTS = 6;
+
+    /**
+     * Fills the ring with {@code silence} and starts the line, again until
+     * the provider has taken two periods from the ring within
+     * {@link #START_WATCH_NANOS} of the start.  The provider starts the
+     * device in one of two ways, decided inside it between its first fill
+     * and the device's start: with both periods of its own buffer filled,
+     * the second taken at once, or with one, the second taken only after
+     * the device has played the first, some 70 ms later at 384 kHz.  Every
+     * frame of a run started the second way plays 20 ms later than the
+     * ring's drain says, so the whole run would read 20 ms high; the first
+     * way is the one the departure stamp assumes.  The pattern is visible
+     * in the first 45 ms, and a stopped and flushed line starts afresh.
+     *
+     * @return the frames of silence in the ring at the start that was kept
+     */
+    private int startFilled(byte[] silence, int bufferBytes) {
+        for (int attempt = 1; ; attempt++) {
+            int  lead     = line.write(silence, 0, bufferBytes);
+            line.start();
+            long deadline = System.nanoTime() + START_WATCH_NANOS;
+            long taken    = 0L;
+            int  takes    = 0;
+            while (System.nanoTime() < deadline && takes < 2) {
+                long now = lead - (bufferBytes - line.available());
+                if (now > taken) {
+                    taken = now;
+                    takes++;
+                }
+                LockSupport.parkNanos(EDGE_WATCH_POLL_NANOS);
+            }
+            if (takes >= 2 || attempt == START_ATTEMPTS) {
+                if (log.isInfoEnabled()) {
+                    log.info("Pulse line started on attempt {} ({} takes in the first {} ms)",
+                            attempt, takes, START_WATCH_NANOS / 1_000_000L);
+                }
+                return lead / bytesPerFrame;
+            }
+            line.stop();
+            line.flush();
+        }
+    }
+
+    /**
+     * Writes the pulse's program phase by phase, paced on the line's
+     * admission exactly as {@link #writeBlock} is, and watches the ring drain
+     * past each edge: what the provider has taken out of the ring is what was
+     * handed over less what the ring still holds, read from
+     * {@code available()} at every poll, and the stamp is the poll at which
+     * that count crosses the edge's frame, plus the edge's offset inside what
+     * that pass took, at the line's rate.  Watched rather than computed from
+     * the queue because a provider that moves whole periods drains in jumps,
+     * and "queued frames over the rate" would be wrong by up to one period.
+     * The line's own play position is no better: csjsound's
+     * {@code getLongFramePosition()} is the same count 30 ms later, not the
+     * device's clock.  Polled every {@link #EDGE_WATCH_POLL_NANOS} while an
+     * edge is still in the ring, {@link #WRITE_POLL_MS} otherwise.  In the
+     * PULSES phase each
+     * level is held until the handshake asks for the edge out of it; an
+     * edge's frame is the count handed over at that moment, its exchange is
+     * answered as soon as the first chunk at the new level is in the line,
+     * and its departure is stamped into the exchange when the ring has
+     * drained past it.  An abandoned handshake ends the program where it
+     * stands.
+     *
+     * @param leadFrames the frames of silence already in the ring when the
+     *                   line started - the first frames the provider takes
+     */
+    private void writeProgram(byte[] silence, byte[] low, byte[] high, int ringFrames,
+                              int lowFrames, int leadFrames, PulseHandshake handshake) {
+        List<PulseHandshake.Edge> edges = handshake.getEdges();
+        long       startNanos   = System.nanoTime();
+        long       handedOver   = leadFrames;
+        long       lastProgress = startNanos;
+        long       consumedPrev = -1L;
+        long       pendingFrame = -1L;
+        long       lastTraced   = -1L;
+        int        traced       = 0;
+        StringBuilder drainTrace = new StringBuilder();
+        int        bufferBytes  = line.getBufferSize();
+        int        next         = 0;              // the edge the held level waits for
+        byte[]     pattern      = low;
+        PulsePhase phase        = PulsePhase.PULSES;
+        long       phaseLeft    = Long.MAX_VALUE;
+        // The edge whose departure the ring is being watched for, and the
+        // edge the next chunk written answers.
+        PulseHandshake.Edge pending  = null;
+        PulseHandshake.Edge toAnswer = null;
+        while (!Thread.currentThread().isInterrupted()) {
+            if (phase == PulsePhase.PULSES) {
+                if (handshake.isAbandoned()) return;
+                PulseHandshake.Edge edge = edges.get(next);
+                if (edge.isRequested()) {
+                    pendingFrame = handedOver;
+                    pending      = edge;
+                    toAnswer     = edge;
+                    consumedPrev = -1L;
+                    pattern      = edge.isRising() ? high : low;
+                    if (++next == edges.size()) {
+                        phase     = PulsePhase.HOLD;
+                        phaseLeft = (long) ringFrames + lowFrames;
+                    }
+                }
+            } else if (phaseLeft == 0L) {
+                if (phase == PulsePhase.TAIL) break;
+                phase     = PulsePhase.TAIL;
+                phaseLeft = ringFrames;
+                pattern   = silence;
+                continue;
+            }
+            long now       = System.nanoTime();
+            int  available = line.available();
+            long consumed  = handedOver - (bufferBytes - available) / bytesPerFrame;
+            if (traced < DRAIN_TRACE_STEPS && consumed != lastTraced) {
+                drainTrace.append(String.format(Locale.ROOT, " %dms:%d",
+                        (now - startNanos) / 1_000_000L, consumed));
+                lastTraced = consumed;
+                traced++;
+            }
+            if (pending != null) {
+                if (consumedPrev >= 0L && consumedPrev < pendingFrame && consumed >= pendingFrame) {
+                    pending.setDepartureNanos(
+                            now + Math.round((pendingFrame - consumedPrev) * 1e9 / sampleRate));
+                    pending = null;
+                }
+                consumedPrev = consumed;
+            }
+            int room  = (available / bytesPerFrame) * bytesPerFrame;
+            int chunk = (int) Math.min(room, Math.min(phaseLeft, ringFrames) * bytesPerFrame);
+            if (chunk > 0) {
+                int written = line.write(pattern, 0, chunk);
+                if (written <= 0) break;
+                int frames = written / bytesPerFrame;
+                handedOver += frames;
+                if (phaseLeft != Long.MAX_VALUE) phaseLeft -= frames;
+                if (toAnswer != null) {
+                    toAnswer.answer();
+                    toAnswer = null;
+                }
+                lastProgress = System.nanoTime();
+                continue;
+            }
+            if (System.nanoTime() - lastProgress > MIN_WRITE_DEADLINE_NANOS) break;
+            LockSupport.parkNanos(pending != null ? EDGE_WATCH_POLL_NANOS : WRITE_POLL_MS * 1_000_000L);
+        }
+        if (log.isInfoEnabled()) {
+            log.info("Pulse line drain from start (ms:frames the provider has taken; ring {} frames):{}",
+                    ringFrames, drainTrace);
         }
     }
 

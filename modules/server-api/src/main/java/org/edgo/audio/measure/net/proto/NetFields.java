@@ -196,6 +196,22 @@ public class NetFields {
      *  read-only instead of offering an edit its own bench would answer
      *  {@code BAD_REQUEST}. */
     public static final String CAL_FROM_DEVICE = "calFromDevice";
+    /** {@code device.measureDelay}: the rectangle pulse's level, volts RMS -
+     *  the peak the pulse reaches.  The request names no device: the server
+     *  measures between the output and the input the session holds - the
+     *  devices it acquired.  The pulse's output lane(s) travel as
+     *  {@link #OUTPUT_CHANNELS}, the
+     *  capture channel the edges are read on as {@link #CHANNEL}, the playback
+     *  line's format as {@link #RATE} / {@link #BITS} and the capture line's as
+     *  {@link #DELAY_INPUT_RATE} / {@link #DELAY_INPUT_BITS}. */
+    public static final String DELAY_AMPLITUDE_VRMS = "amplitudeVrms";
+    /** {@code device.measureDelay}: the capture line's sample rate, Hz. */
+    public static final String DELAY_INPUT_RATE = "inputRate";
+    /** {@code device.measureDelay}: the capture line's sample depth, bits. */
+    public static final String DELAY_INPUT_BITS = "inputBits";
+    /** {@code device.measureDelay}'s answer: the delay in milliseconds; absent
+     *  when the bench found no edge. */
+    public static final String DELAY_MS = "delayMs";
     /** The logical name of the server card BOUND to a device and direction -
      *  the user's saved card choice, authoritative over the server's name-match
      *  resolution; JSON null when nothing is bound (spec 4.3, v1.1).  Also the

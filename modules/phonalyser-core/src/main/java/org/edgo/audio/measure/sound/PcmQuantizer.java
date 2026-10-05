@@ -140,6 +140,37 @@ public final class PcmQuantizer {
         }
     }
 
+    /**
+     * Encodes {@code frames} frames of one constant level per lane - digital
+     * full scale in −1...+1, clamped - as stereo signed little-endian PCM into
+     * {@code buf}: plain, with no dither and no output gate.  The delay tool's
+     * pulse levels, where a lane left out is passed as {@code 0}.  No
+     * allocation.
+     */
+    public void encodeLevel(byte[] buf, int frames, double left, double right) {
+        double l = clamp(left);
+        double r = clamp(right);
+        if (bitDepth == 8) {
+            byte pcmL = (byte) Math.round(l * 127.0);
+            byte pcmR = (byte) Math.round(r * 127.0);
+            for (int i = 0; i < frames; i++) {
+                buf[i * bytesPerFrame]     = pcmL;
+                buf[i * bytesPerFrame + 1] = pcmR;
+            }
+            return;
+        }
+        long maxVal = (1L << (bitDepth - 1)) - 1;
+        long pcmL   = Math.round(l * maxVal);
+        long pcmR   = Math.round(r * maxVal);
+        for (int i = 0; i < frames; i++) {
+            int offset = i * bytesPerFrame;
+            for (int b = 0; b < bytesPerSample; b++) {
+                buf[offset + b]                  = (byte) (pcmL >> (8 * b));
+                buf[offset + bytesPerSample + b] = (byte) (pcmR >> (8 * b));
+            }
+        }
+    }
+
     /** One lane's TPDF sample at {@code bits} depth - the volatile depth is
      *  read ONCE by the caller per sample, so a live change can never shift a
      *  sample by (0 − 1). */

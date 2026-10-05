@@ -28,6 +28,7 @@ import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.preferences.BackendKey;
@@ -416,6 +417,14 @@ public final class AudioBackend {
         return cal == null ? DeviceCalibration.DEFAULT : cal;
     }
 
+    /** The dBV-to-dBFS offset of the channel the FFT analyses
+     *  ({@code dBV = dBFS + offset}): the input calibration in force, read for
+     *  the channel the FFT preferences select - the one place the two meet,
+     *  so every readout converts with the same number. */
+    public double analysedChannelDbvOffsetDb() {
+        return calibrationOrDefault(true).dbvOffsetDb(Preferences.instance().getFftChannel());
+    }
+
     /** The calibration in force for an EXPLICIT device - one a caller chose
      *  itself rather than the preferences' active one (the CLI's device flags)
      *  - read through the manager of the backend it is on, with
@@ -526,6 +535,34 @@ public final class AudioBackend {
         BackendPrefs bp = Preferences.instance().current();
         return playbackManager(device).openPlayback(device,
                 bp.getOutputSampleRate(), bp.getOutputBitDepth(), ditherBitsLeft, ditherBitsRight);
+    }
+
+    /**
+     * The delay from the ACTIVE output device to the ACTIVE input device,
+     * measured by the manager of the backend the output lives on
+     * ({@link AudioDeviceManager#measureDelay}) with one rectangle pulse at
+     * {@code amplitudeVrms} on {@code lanes}, its edges read on
+     * {@code edgeChannel}; the lines open in the preferences' formats.
+     * The caller has made sure nothing else holds the devices.
+     *
+     * @return the delay in milliseconds; {@code NaN} with no device active, or
+     *         when the backend found no edge
+     */
+    public float measureDelay(double amplitudeVrms, OutputChannels lanes, Channel edgeChannel)
+            throws InterruptedException {
+        DeviceRef out = getActiveOutputDevice();
+        DeviceRef in  = getActiveInputDevice();
+        if (out == null || in == null) {
+            if (log.isWarnEnabled()) {
+                log.warn("Delay measurement: no active output or input device");
+            }
+            return Float.NaN;
+        }
+        BackendPrefs bp = Preferences.instance().current();
+        DelayProbe probe = new DelayProbe(amplitudeVrms, lanes, edgeChannel,
+                bp.getOutputSampleRate(), bp.getOutputBitDepth(),
+                bp.getInputSampleRate(), bp.getInputBitDepth());
+        return manager(out.carrier()).measureDelay(out, in, probe);
     }
 
     /**

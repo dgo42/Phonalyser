@@ -54,6 +54,7 @@ public enum MessageType {
     DEVICE_SET_CARD("device.setCard"),
     DEVICE_SET_ACTIVE_RANGE("device.setActiveRange"),
     DEVICE_RENAME_RANGE("device.renameRange"),
+    DEVICE_MEASURE_DELAY("device.measureDelay"),
     CARDS_LIST("cards.list"),
     CARDS_PUT("cards.put"),
     CARDS_UPDATE("cards.update"),

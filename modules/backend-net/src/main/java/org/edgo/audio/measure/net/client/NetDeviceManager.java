@@ -51,6 +51,7 @@ import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.DelayProbe;
 import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.RemoteGenerator;
@@ -117,6 +118,15 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
     /** Value of {@link #genId} while no remote generator is open - the same
      *  "nothing is open" the server's own session uses. */
     private static final int NO_GEN = 0;
+    /** How long a {@code device.measureDelay} may take on the far end: the
+     *  server opens both lines (an exclusive-mode open can take seconds) and
+     *  then sends five pulses whose every edge waits out the output ring and
+     *  the path - about eight seconds of measurement, beyond the device
+     *  operations' budget. */
+    private static final long DELAY_REQUEST_TIMEOUT_MS = 30_000;
+    /** What the pilot controls refuse with - see {@link #setPilotTones}. */
+    private static final String NO_PILOT = "the pilot tones exist only for the local "
+            + "generator: the protocol carries no pilot line";
 
     /** Held as a field, not as a method reference at the call site: the same
      *  object has to be handed back to remove the subscription again. */
@@ -1192,6 +1202,19 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
         config(NetFields.CLEAR_COMPENSATION, true);
     }
 
+    /** Refused, not silently dropped: a pilot is a line the FFT-side phase
+     *  alignment then reads on a bin that would carry nothing, which is
+     *  indistinguishable downstream from a bad measurement. */
+    @Override
+    public void setPilotTones(double hz1, double hz2, double levelDbv) {
+        throw new UnsupportedOperationException(NO_PILOT);
+    }
+
+    @Override
+    public void clearPilotTones() {
+        throw new UnsupportedOperationException(NO_PILOT);
+    }
+
     /** Spec 4.5's {@code gen.fftGrid}: the analyzer's grid, so the far end snaps
      *  with the same math the local path uses. */
     @Override
@@ -1610,6 +1633,46 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
     @Override
     public boolean calibrationFromDevice(DeviceRef device, boolean input) {
         return remoteRef(device).calFromDevice();
+    }
+
+    /**
+     * {@code device.measureDelay}: the bench measures between the two devices
+     * this session holds - the ones it acquired, which the server knows
+     * without being sent the refs - and answers the milliseconds.  The whole
+     * measurement runs on the far end, so the request waits the
+     * device-operation budget, not the UI's.
+     *
+     * @return the bench's delay; {@code NaN} when there is no session, the
+     *         wire failed, or the bench found no edge
+     */
+    @Override
+    public float measureDelay(DeviceRef out, DeviceRef in, DelayProbe probe) {
+        NetMessage answer;
+        try {
+            NetConnection open = requireConnection();
+            answer = open.request(open.newRequest(MessageType.DEVICE_MEASURE_DELAY)
+                    .put(NetFields.DELAY_AMPLITUDE_VRMS, probe.amplitudeVrms())
+                    .put(NetFields.OUTPUT_CHANNELS, probe.lanes().name())
+                    .put(NetFields.CHANNEL, probe.edgeChannel() == Channel.L ? NetFields.LEFT : NetFields.RIGHT)
+                    .put(NetFields.RATE, probe.outputRate())
+                    .put(NetFields.BITS, probe.outputBits())
+                    .put(NetFields.DELAY_INPUT_RATE, probe.inputRate())
+                    .put(NetFields.DELAY_INPUT_BITS, probe.inputBits()), DELAY_REQUEST_TIMEOUT_MS);
+        } catch (RuntimeException e) {
+            if (log.isWarnEnabled()) {
+                log.warn("net backend: delay measurement on {} failed: {}", remoteBackend, e.toString());
+            }
+            return Float.NaN;
+        }
+        if (answer == null || !answer.isOk()) {
+            if (log.isWarnEnabled()) {
+                log.warn("net backend: {} did not measure the delay: {}", remoteBackend,
+                        answer == null ? "no answer" : answer.getError());
+            }
+            return Float.NaN;
+        }
+        Double delayMs = answer.optDouble(NetFields.DELAY_MS);
+        return delayMs == null ? Float.NaN : delayMs.floatValue();
     }
 
     /**

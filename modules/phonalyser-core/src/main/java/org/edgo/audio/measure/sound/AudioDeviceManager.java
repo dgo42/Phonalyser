@@ -177,6 +177,29 @@ public interface AudioDeviceManager {
             double ditherBitsLeft, double ditherBitsRight);
 
     /**
+     * Measures the delay from {@code out} to {@code in} - the output path, the
+     * connection between them and the input path together - with one rectangle
+     * pulse train ({@link AudioPlayback#pulse}) whose edges, each written when
+     * the capture asks for it, are timed on both sides
+     * ({@link AudioCapture#capturePulse}); the delay is the smallest of the
+     * edges'.  Measured WHERE THE DEVICES
+     * ARE CONNECTED: a local backend opens both lines itself and closes them
+     * after; the net backend asks the bench, which measures between the two
+     * devices the session holds there.  The caller has made sure nothing else
+     * holds the devices.
+     *
+     * @param out   the device the pulse is played on
+     * @param in    the device the edges are read on
+     * @param probe the pulse, where it is read, and the two lines' formats
+     * @return the delay in milliseconds; {@code NaN} when no edge arrived or a
+     *         line could not be opened - the default, for a backend that
+     *         cannot measure at all
+     */
+    default float measureDelay(DeviceRef out, DeviceRef in, DelayProbe probe) throws InterruptedException {
+        return Float.NaN;
+    }
+
+    /**
      * Stores a measured calibration of ONE channel of {@code device} in
      * {@code input}'s direction - that channel's full-scale RMS volts, the form
      * a device card holds and spec 4.3's {@code device.setCalibration} carries -

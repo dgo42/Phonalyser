@@ -32,10 +32,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DelayProbe;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.net.proto.ErrorCode;
 import org.edgo.audio.measure.net.proto.JsonCodec;
@@ -264,6 +266,7 @@ public final class ClientSession {
                 case DEVICE_SET_CARD: deviceSetCard(id, message); break;
                 case DEVICE_SET_ACTIVE_RANGE: deviceSetActiveRange(id, message); break;
                 case DEVICE_RENAME_RANGE: deviceRenameRange(id, message); break;
+                case DEVICE_MEASURE_DELAY: deviceMeasureDelay(id, message); break;
                 case CARDS_LIST:      cardsList(id); break;
                 case CARDS_PUT:       cardsPut(id, message); break;
                 case CARDS_UPDATE:    cardsUpdate(id, message); break;
@@ -660,6 +663,71 @@ public final class ClientSession {
                     label, newLabel);
         }
         channel.send(new NetMessage(id));
+    }
+
+    /**
+     * {@code device.measureDelay}: the bench measures the delay from its own
+     * output line to its own input line - the two devices this session holds,
+     * which acquiring them selected - with one rectangle pulse at the level
+     * and lanes the request carries, read on the capture channel it names,
+     * the lines opened in the formats it carries; and
+     * answers the milliseconds, or no value when no edge arrived.  The whole
+     * measurement runs here, lines opened and closed by the manager of the
+     * backend the two devices are on.  {@code NOT_LOCKED} when this connection
+     * does not hold a device in both directions.
+     */
+    private void deviceMeasureDelay(int id, NetMessage message) {
+        LockRegistry.HeldDevices held = locks.heldDevices(this);
+        if (held.output() == null || held.input() == null) {
+            fail(id, ErrorCode.NOT_LOCKED,
+                    "device.measureDelay needs this connection's output and input device acquired");
+            return;
+        }
+        AudioBackendType backend = held.output().backend();
+        if (held.input().backend() != backend) {
+            fail(id, ErrorCode.BAD_REQUEST, "device.measureDelay needs the output and the input on one "
+                    + "backend - " + held.output() + " and " + held.input() + " are not");
+            return;
+        }
+        Double  amplitude = message.optDouble(NetFields.DELAY_AMPLITUDE_VRMS);
+        String  laneName  = message.optString(NetFields.OUTPUT_CHANNELS);
+        Channel edge      = channelOf(message.optString(NetFields.CHANNEL));
+        Integer outRate   = message.optInt(NetFields.RATE);
+        Integer outBits   = message.optInt(NetFields.BITS);
+        Integer inRate    = message.optInt(NetFields.DELAY_INPUT_RATE);
+        Integer inBits    = message.optInt(NetFields.DELAY_INPUT_BITS);
+        OutputChannels lanes = null;
+        if (laneName != null) {
+            try {
+                lanes = OutputChannels.valueOf(laneName);
+            } catch (IllegalArgumentException e) {
+                lanes = null;
+            }
+        }
+        if (amplitude == null || lanes == null || edge == null
+                || outRate == null || outBits == null || inRate == null || inBits == null) {
+            fail(id, ErrorCode.BAD_REQUEST, "device.measureDelay needs amplitudeVrms, outputChannels, "
+                    + "a channel ('left' or 'right'), rate, bits, inputRate and inputBits");
+            return;
+        }
+        DelayProbe probe = new DelayProbe(amplitude, lanes, edge, outRate, outBits, inRate, inBits);
+        float delayMs;
+        try {
+            delayMs = AudioBackend.instance().manager(backend)
+                    .measureDelay(catalog.resolve(held.output()), catalog.resolve(held.input()), probe);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            fail(id, ErrorCode.BAD_REQUEST, "the delay measurement was interrupted");
+            return;
+        }
+        if (log.isInfoEnabled()) {
+            log.info("net session {}: delay measured on {}: {} ms", clientName, backend, delayMs);
+        }
+        NetMessage answer = new NetMessage(id);
+        if (!Float.isNaN(delayMs)) {
+            answer.put(NetFields.DELAY_MS, delayMs);
+        }
+        channel.send(answer);
     }
 
     /** The {@code channel} scope of {@code device.setActiveRange} and

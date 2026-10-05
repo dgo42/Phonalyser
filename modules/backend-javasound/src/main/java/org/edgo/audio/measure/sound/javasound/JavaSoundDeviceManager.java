@@ -428,6 +428,18 @@ public final class JavaSoundDeviceManager extends AbstractLocalDeviceManager {
      * ({@link AlsaVolumes}), once per open and never per buffer.
      */
     public SourceDataLine openOutputLine(String deviceName, AudioFormat fmt) throws LineUnavailableException {
+        return openOutputLine(deviceName, fmt, 0);
+    }
+
+    /**
+     * {@link #openOutputLine(String, AudioFormat)} with the line's queue sized
+     * to {@code ringFrames} frames, {@code 0} for the provider's default.  The
+     * render path keeps the default; the delay measurement's pulse line asks
+     * for a short queue, because every edge of its pulses waits out the whole
+     * queue before it leaves for the device.
+     */
+    SourceDataLine openOutputLine(String deviceName, AudioFormat fmt, int ringFrames)
+            throws LineUnavailableException {
         DataLine.Info info = new DataLine.Info(SourceDataLine.class, fmt);
         Mixer.Info chosen = findMixer(deviceName, info);
         SourceDataLine line = (SourceDataLine) (chosen != null
@@ -436,7 +448,11 @@ public final class JavaSoundDeviceManager extends AbstractLocalDeviceManager {
         // Time-based buffer (see OUTPUT_BUFFER_SEC): a fixed frame count would
         // halve the underrun margin each time the rate doubles.  fmt carries the
         // selected output rate, so the buffer tracks it; floored at 4096 frames.
-        line.open(fmt);
+        if (ringFrames > 0) {
+            line.open(fmt, ringFrames * fmt.getFrameSize());
+        } else {
+            line.open(fmt);
+        }
         /*int bufferFrames = Math.max(BASE_BUFFER_FRAMES,
                 (int) Math.round(fmt.getSampleRate() * (double) BASE_BUFFER_FRAMES / BASE_SAMPLE_RATE));
         line.open(fmt, bufferFrames * fmt.getFrameSize());*/
@@ -521,6 +537,20 @@ public final class JavaSoundDeviceManager extends AbstractLocalDeviceManager {
             double ditherBitsLeft, double ditherBitsRight) {
         return new JavaSoundGenerator(sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight,
                 device.name(), this);
+    }
+
+    /** The queue the delay measurement's pulse line asks for, in seconds of
+     *  audio: well above the two WASAPI periods the provider plays from and
+     *  the paced writer's poll, so the pulses never starve the device, and a
+     *  fifth of the provider's default, so the pulses' edges, each of which
+     *  waits out the queue, follow each other that much faster. */
+    private static final double PULSE_RING_SECONDS = 0.1;
+
+    /** The pulse line on a short queue - see {@link #PULSE_RING_SECONDS}. */
+    @Override
+    protected AudioPlayback openPulsePlayback(DeviceRef device, int sampleRate, int bitDepth) {
+        return new JavaSoundGenerator(sampleRate, bitDepth, 0.0, 0.0, device.name(), this,
+                (int) Math.round(PULSE_RING_SECONDS * sampleRate));
     }
 
     /**

@@ -33,6 +33,29 @@ public interface AudioPlayback extends AutoCloseable {
 
     void open() throws Exception;
 
+    /**
+     * The delay tool's signal: silence until the line runs in the steady
+     * state the render path keeps it in, then the handshake's edges in turn -
+     * {@code -level} until the capture asks for a rise, {@code +level} until
+     * it asks for the fall - then {@code -level} for a short fixed time, then
+     * silence again, enough to push the last fall out of the line - on each
+     * lane at its own level in digital full scale ({@code 0} keeps that lane
+     * silent).  The capture side takes its noise baseline on the leading
+     * silence.  Each edge is answered on its exchange the moment it is
+     * written, and the moment it left the line's queue for the device is
+     * stamped into that exchange.  Blocks until the whole signal has been
+     * handed to the line, or returns early when the handshake was abandoned;
+     * the caller stops the line.
+     * The default is the answer of a backend whose output path has no moment
+     * it can stamp - a callback or event-driven line, a remote one: it throws
+     * {@link UnsupportedOperationException}.
+     */
+    default void pulse(double levelLeft, double levelRight, PulseHandshake handshake)
+            throws InterruptedException {
+        throw new UnsupportedOperationException(getClass().getSimpleName()
+                + " has no write of its own to time a pulse on");
+    }
+
     /** Plays a fixed duration, then drains and stops. */
     void play(SignalGenerator generator, int durationSeconds);
 

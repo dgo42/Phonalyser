@@ -19,12 +19,16 @@
 package org.edgo.audio.measure.sound;
 
 import java.util.Arrays;
+import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.common.StereoSample;
+import org.edgo.audio.measure.enums.Channel;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -329,5 +333,220 @@ public abstract class AbstractPcmCapture implements AudioCapture {
     @Override
     public boolean isRecording() {
         return recording.get();
+    }
+
+    @Override
+    public boolean capturePulse(Channel input, PulseHandshake handshake, long timeoutMs)
+            throws InterruptedException {
+        PulseWatch watch = new PulseWatch(input == Channel.L ? 0 : sampleBytes, System.nanoTime());
+        setPcmBatchListener(watch);
+        startRecording();
+        try {
+            if (!watch.awaitLevel(timeoutMs)) {
+                return false;
+            }
+            for (PulseHandshake.Edge edge : handshake.getEdges()) {
+                if (!captureEdge(watch, edge, timeoutMs)) {
+                    return false;
+                }
+            }
+            return true;
+        } finally {
+            if (!handshake.isAbandoned()) {
+                handshake.abandon();
+            }
+            setPcmBatchListener(null);
+            if (log.isInfoEnabled()) {
+                log.info("Pulse capture blocks from start (ms:frames delivered):{}", watch.blockTrace());
+            }
+        }
+    }
+
+    /** One edge's exchange from the capture's side: the level before it
+     *  settles, the edge is asked for, the answer awaited, the watch armed,
+     *  and the edge's arrival stamped into the exchange. */
+    private boolean captureEdge(PulseWatch watch, PulseHandshake.Edge edge, long timeoutMs)
+            throws InterruptedException {
+        Thread.sleep(PULSE_SETTLE_MS);
+        // Armed BEFORE the request: a loop that delivers the edge in the very
+        // call that answers would otherwise hand that block over before this
+        // thread has woken to arm the search, and the edge would be gone.
+        // Harmless early: the level before the edge is established, and the
+        // search trips only on the crossing.
+        watch.armEdge(edge.isRising());
+        edge.request();
+        if (!edge.awaitAnswer(timeoutMs)) {
+            return false;
+        }
+        long arrival = watch.awaitEdge(timeoutMs);
+        if (arrival < 0L) {
+            return false;
+        }
+        edge.setArrivalNanos(arrival);
+        return true;
+    }
+
+    /** The silence the noise baseline is taken on, seconds of the stream's
+     *  own start - before the pulse's own pre-silence can have ended. */
+    private static final double PULSE_BASELINE_SEC = 0.1;
+    /** The level before an edge must reach this many baseline RMS away from
+     *  zero, on the edge's own side, before a crossing counts as the edge. */
+    private static final double PULSE_LOW_SIGMAS = 8.0;
+    /** Floor of that threshold, in digital full scale, for a capture quieter
+     *  than its baseline can measure. */
+    private static final double PULSE_LOW_MIN = 1e-4;
+    /** The samples a level must hold, and the samples after a crossing that
+     *  must stay on the edge's far side, before either is answered - a
+     *  bounce resets the search. */
+    private static final int PULSE_CONFIRM_SAMPLES = 20;
+    /** How long the capture lets a level settle before it asks for the edge
+     *  out of it. */
+    private static final long PULSE_SETTLE_MS = 25;
+    /** How many of the first blocks the start trace records: their arrival
+     *  times and sizes show the provider's delivery period and how far
+     *  behind the device it starts. */
+    private static final int BLOCK_TRACE_STEPS = 12;
+
+    /**
+     * The delay tool's reader of one channel, fed by {@link #dispatch} on the
+     * capture thread: nothing is stored, each block is read once as it
+     * arrives.  First the pulse's low level (held below minus the threshold),
+     * then, each time {@link #awaitEdge} arms it for an edge that has been
+     * written, that edge: the level on its near side, then the first sample
+     * across zero, confirmed by the samples after it staying there - a rise
+     * as is, a fall mirrored.  An edge's time is the block's arrival less the
+     * frames the block still held after it.
+     */
+    private final class PulseWatch implements PcmBatchListener {
+
+        private final int laneOffset;
+        private final long startNanos;
+        private final StringBuilder blockTrace = new StringBuilder();
+        private int blocksTraced;
+        private final CountDownLatch level = new CountDownLatch(1);
+        /** The search armed for: its sign (a fall is the rise mirrored, the
+         *  sign flips every comparison), the latch its finder trips, and the
+         *  edge's arrival once found.  Written by the capture's waiting thread
+         *  before {@link #armed} is raised, read on the consume thread. */
+        private volatile double sign = 1.0;
+        private volatile CountDownLatch found;
+        private volatile long edgeNanos = -1L;
+        /** Whether an edge is being watched for - raised from the capture's
+         *  waiting thread, dropped on the consume thread when it is found. */
+        private volatile boolean armed;
+        private long   baselineFrames;
+        private double baselineSquares;
+        private double lowThreshold = Double.NaN;
+        private boolean levelSeen;
+        private int  levelHeld;
+        private boolean sawLevel;
+        private long candidateNanos = -1L;
+        private int  confirmLeft;
+        /** The extremes seen on the channel over the blocks the watch read,
+         *  digital full scale. */
+        private double lowest;
+        private double highest;
+
+        PulseWatch(int laneOffset, long startNanos) {
+            this.laneOffset = laneOffset;
+            this.startNanos = startNanos;
+        }
+
+        /** The first blocks' arrivals, ms after the recording started, with
+         *  their frame counts, then the baseline's threshold and the extremes
+         *  seen on the channel in digital full scale - read after the capture
+         *  thread is done. */
+        String blockTrace() {
+            return blockTrace + String.format(Locale.ROOT,
+                    "; threshold %.2e, lowest %.4f, highest %.4f", lowThreshold, lowest, highest);
+        }
+
+        boolean awaitLevel(long timeoutMs) throws InterruptedException {
+            return level.await(timeoutMs, TimeUnit.MILLISECONDS);
+        }
+
+        /** Arms the search for the next edge.  The level on the edge's near
+         *  side counts as seen: the capture asks for an edge only after it
+         *  has confirmed that level, and the edge may arrive in the very next
+         *  block, with no block at that level delivered while armed. */
+        void armEdge(boolean rising) {
+            edgeNanos = -1L;
+            sign      = rising ? 1.0 : -1.0;
+            sawLevel  = true;
+            found     = new CountDownLatch(1);
+            armed     = true;
+        }
+
+        /** Waits for the edge last armed for.
+         *  @return the edge's arrival, or {@code -1} when it did not come
+         *          within {@code timeoutMs} */
+        long awaitEdge(long timeoutMs) throws InterruptedException {
+            found.await(timeoutMs, TimeUnit.MILLISECONDS);
+            return edgeNanos;
+        }
+
+        @Override
+        public void accept(byte[] pcm, int validBytes) {
+            long now = System.nanoTime();
+            int frames = validBytes / frameSize;
+            if (blocksTraced < BLOCK_TRACE_STEPS) {
+                blockTrace.append(String.format(Locale.ROOT, " %dms:%d",
+                        (now - startNanos) / 1_000_000L, frames));
+                blocksTraced++;
+            }
+            if (levelSeen && !armed) return;
+            double midpoint = 1L << (bitDepth - 1);
+            // readSample answers the offset-binary code in an int, so at 32
+            // bits a code at or above the midpoint wraps negative: masked back
+            // to unsigned before the midpoint comes off, as the scope's decoder
+            // does.
+            long unsignedMask = (1L << bitDepth) - 1;
+            long baselineWanted = Math.round(PULSE_BASELINE_SEC * sampleRate);
+            double s = sign;
+            for (int f = 0; f < frames; f++) {
+                long code = ((long) readSample(pcm, f * frameSize + laneOffset)) & unsignedMask;
+                double x = (code - midpoint) / midpoint;
+                if (x < lowest)  lowest  = x;
+                if (x > highest) highest = x;
+                double v = s * x;
+                if (Double.isNaN(lowThreshold)) {
+                    baselineSquares += v * v;
+                    if (++baselineFrames >= baselineWanted) {
+                        lowThreshold = Math.max(PULSE_LOW_MIN,
+                                PULSE_LOW_SIGMAS * Math.sqrt(baselineSquares / baselineFrames));
+                    }
+                    continue;
+                }
+                if (!levelSeen) {
+                    if (v < -lowThreshold) {
+                        if (++levelHeld >= PULSE_CONFIRM_SAMPLES) {
+                            levelSeen = true;
+                            level.countDown();
+                            return;
+                        }
+                    } else {
+                        levelHeld = 0;
+                    }
+                    continue;
+                }
+                if (candidateNanos < 0L) {
+                    if (v < -lowThreshold) {
+                        sawLevel = true;
+                    } else if (sawLevel && v >= 0.0) {
+                        candidateNanos = now - Math.round((frames - 1 - f) * 1e9 / sampleRate);
+                        confirmLeft    = PULSE_CONFIRM_SAMPLES;
+                    }
+                } else if (v < 0.0) {
+                    candidateNanos = -1L;           // a bounce: the crossing is sought again
+                } else if (--confirmLeft == 0) {
+                    edgeNanos      = candidateNanos;
+                    candidateNanos = -1L;
+                    sawLevel       = false;
+                    armed          = false;
+                    found.countDown();
+                    return;
+                }
+            }
+        }
     }
 }

@@ -23,6 +23,7 @@ import java.util.function.Consumer;
 import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.common.StereoSample;
+import org.edgo.audio.measure.enums.Channel;
 
 /**
  * Backend-agnostic stereo PCM capture line. Implementations:
@@ -88,6 +89,22 @@ public interface AudioCapture extends AutoCloseable {
     void open() throws Exception;
 
     void startRecording();
+
+    /**
+     * Starts recording and watches {@code input} for the delay tool's pulse,
+     * analysing the blocks as they arrive and storing none: a noise baseline
+     * on the opening silence, then the pulse's low level - under minus
+     * several times that noise, held.  Then, for every edge of
+     * {@code handshake} in turn: once the level before it has settled it asks
+     * the playback for the edge, waits for the answer, then watches for the
+     * edge - the first sample across zero, confirmed by the samples after it
+     * staying there, a rise as is, a fall mirrored - and stamps its arrival
+     * into the exchange.  Answers whether every edge arrived; {@code false}
+     * when a level, an answer or an edge did not come within
+     * {@code timeoutMs}, the handshake abandoned and the edges before it
+     * keeping their stamps.  The caller stops the recording.
+     */
+    boolean capturePulse(Channel input, PulseHandshake handshake, long timeoutMs) throws InterruptedException;
 
     void stopRecording() throws InterruptedException;
 

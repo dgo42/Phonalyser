@@ -18,7 +18,9 @@
 
 package org.edgo.audio.measure.sound.loopback;
 
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import lombok.extern.log4j.Log4j2;
@@ -26,6 +28,7 @@ import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.PcmQuantizer;
+import org.edgo.audio.measure.sound.PulseHandshake;
 
 /**
  * The playback lane of the digital loopback - a thin AudioPlayback client that
@@ -52,6 +55,25 @@ public final class LoopbackPlayback implements AudioPlayback,
 
     /** Stop-flag poll period on the play thread; the samples come off the engine's clock. */
     private static final long STOP_POLL_MILLIS = 50;
+    /** The delay tool's silence before its first level: longer than the
+     *  capture's noise baseline, which a hardware line gets from its ring. */
+    private static final double PULSE_LEAD_SECONDS = 0.2;
+    /** How long the delay tool's signal sits at {@code -level} after its last
+     *  fall, so the capture sees the level on the fall's far side. */
+    private static final double PULSE_LOW_SECONDS = 0.05;
+
+    /** The delay tool's program on this lane, in the order it is rendered. */
+    private enum PulsePhase {
+        /** Silence for {@link #PULSE_LEAD_SECONDS}. */
+        LEAD,
+        /** {@code -level} until the handshake asks for a rise, {@code +level}
+         *  until it asks for the fall, for every edge in turn. */
+        PULSES,
+        /** {@code -level} for {@link #PULSE_LOW_SECONDS} after the last fall. */
+        HOLD,
+        /** Silence; the pulse call may return. */
+        DONE
+    }
 
     private final LoopbackDeviceManager manager;
     private final int sampleRate;
@@ -65,6 +87,21 @@ public final class LoopbackPlayback implements AudioPlayback,
     private LoopbackDuplexEngine engine;
     private volatile SignalGenerator currentGenerator;
     private volatile boolean attached;
+
+    /** The delay tool's exchange while this lane renders its pulses, null
+     *  otherwise.  The program below is written before the lane attaches and
+     *  then touched on the pacer thread only. */
+    private volatile PulseHandshake pulseHandshake;
+    private double pulseLeft;
+    private double pulseRight;
+    /** The lane's current level as a sign: -1 low, +1 high, 0 silence. */
+    private double pulseLevel;
+    private PulsePhase pulsePhase;
+    /** Frames left in the timed phases, the lead and the hold. */
+    private long pulseFramesLeft;
+    /** The edge the held level waits for. */
+    private int pulseNext;
+    private CountDownLatch pulseDone;
 
     LoopbackPlayback(LoopbackDeviceManager manager, int sampleRate, int bitDepth,
             double ditherBitsLeft, double ditherBitsRight) {
@@ -121,6 +158,90 @@ public final class LoopbackPlayback implements AudioPlayback,
         stopLane();
     }
 
+    /**
+     * The delay tool's pulses on this lane: the program runs block by block
+     * on the pacer thread ({@link #pulseBlock}), this call waits for its end
+     * or for the handshake to be abandoned, then gives the lane back.
+     */
+    @Override
+    public void pulse(double levelLeft, double levelRight, PulseHandshake handshake)
+            throws InterruptedException {
+        if (engine == null) {
+            engine = manager.acquireEngine(sampleRate, bitDepth);
+        }
+        CountDownLatch done = new CountDownLatch(1);
+        pulseLeft       = levelLeft;
+        pulseRight      = levelRight;
+        pulseLevel      = 0.0;
+        pulsePhase      = PulsePhase.LEAD;
+        pulseFramesLeft = Math.round(PULSE_LEAD_SECONDS * sampleRate);
+        pulseNext       = 0;
+        pulseDone       = done;
+        pulseHandshake  = handshake;        // published to the pacer by the attach
+        attached        = true;
+        engine.attachGenerator(this);
+        try {
+            while (!done.await(STOP_POLL_MILLIS, TimeUnit.MILLISECONDS)) {
+                if (handshake.isAbandoned()) {
+                    break;
+                }
+            }
+        } finally {
+            stopLane();
+            pulseHandshake = null;
+        }
+    }
+
+    /**
+     * One block of the pulse program, on the pacer thread.  A requested edge
+     * becomes this block's first frame.  The capture places a delivered
+     * block's last frame at the handover instant and the frames before it on
+     * the sample grid behind; the block has no play time of its own, so the
+     * departure of its first frame sits on that same grid, and a perfect loop
+     * reads zero.
+     */
+    private void pulseBlock(byte[] destination, int frames, PulseHandshake handshake) {
+        List<PulseHandshake.Edge> edges = handshake.getEdges();
+        switch (pulsePhase) {
+            case LEAD -> {
+                if ((pulseFramesLeft -= frames) <= 0) {
+                    pulsePhase = PulsePhase.PULSES;
+                    pulseLevel = -1.0;
+                }
+            }
+            case PULSES -> {
+                if (handshake.isAbandoned()) {
+                    finishPulse();
+                } else {
+                    PulseHandshake.Edge edge = edges.get(pulseNext);
+                    if (edge.isRequested()) {
+                        edge.setDepartureNanos(System.nanoTime()
+                                - Math.round((frames - 1) * 1e9 / sampleRate));
+                        pulseLevel = edge.isRising() ? 1.0 : -1.0;
+                        edge.answer();
+                        if (++pulseNext == edges.size()) {
+                            pulsePhase      = PulsePhase.HOLD;
+                            pulseFramesLeft = Math.round(PULSE_LOW_SECONDS * sampleRate);
+                        }
+                    }
+                }
+            }
+            case HOLD -> {
+                if ((pulseFramesLeft -= frames) <= 0) {
+                    finishPulse();
+                }
+            }
+            case DONE -> { }
+        }
+        quantizer.encodeLevel(destination, frames, pulseLevel * pulseLeft, pulseLevel * pulseRight);
+    }
+
+    private void finishPulse() {
+        pulsePhase = PulsePhase.DONE;
+        pulseLevel = 0.0;
+        pulseDone.countDown();
+    }
+
     @Override
     public void close() {
         stopLane();
@@ -159,6 +280,11 @@ public final class LoopbackPlayback implements AudioPlayback,
      */
     @Override
     public void nextBlock(byte[] destination, int frames) {
+        PulseHandshake pulses = pulseHandshake;
+        if (pulses != null) {
+            pulseBlock(destination, frames, pulses);
+            return;
+        }
         SignalGenerator gen = currentGenerator;
         if (gen == null) {
             // Between the detach and the lane's own bookkeeping.  Filled from the

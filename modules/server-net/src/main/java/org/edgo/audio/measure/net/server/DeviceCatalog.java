@@ -362,6 +362,24 @@ public final class DeviceCatalog {
                     "device ref needs the device name, so the server can tell "
                             + "whether the index still means the same device");
         }
+        DeviceRef found = resolve(device);
+        if (!name.equals(found.name())) {
+            throw new NetException(ErrorCode.DEVICE_STALE,
+                    device + " is now '" + found.name() + "', not '" + name
+                            + "' - the device list moved, re-read it");
+        }
+        return found;
+    }
+
+    /**
+     * The device a lock names in the current enumeration, without the name
+     * check - for a lock this server granted itself, whose acquire validated
+     * the name.
+     *
+     * @throws NetException {@code DEVICE_STALE} when the backend is not served
+     *         or the index is out of range
+     */
+    public DeviceRef resolve(DeviceLock device) {
         if (!served.contains(device.backend())) {
             throw new NetException(ErrorCode.DEVICE_STALE,
                     device.backend() + " is not served by this server");
@@ -372,13 +390,7 @@ public final class DeviceCatalog {
                     device + " is out of range - the device list has "
                             + devices.size() + " entries now, re-read it");
         }
-        DeviceRef found = devices.get(device.index());
-        if (!name.equals(found.name())) {
-            throw new NetException(ErrorCode.DEVICE_STALE,
-                    device + " is now '" + found.name() + "', not '" + name
-                            + "' - the device list moved, re-read it");
-        }
-        return found;
+        return devices.get(device.index());
     }
 
     /**

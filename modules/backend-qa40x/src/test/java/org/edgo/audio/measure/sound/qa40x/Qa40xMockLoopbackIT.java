@@ -30,6 +30,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.edgo.audio.measure.common.Constants;
+import org.edgo.audio.measure.dsp.Goertzel;
 import org.edgo.audio.measure.sound.LibUsb;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xDevice;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xModel;
@@ -295,17 +296,16 @@ class Qa40xMockLoopbackIT {
         return Math.sqrt(sumSquares / samples.length);
     }
 
-    /** Goertzel single-bin power at {@code freqHz} (samples taken at {@link #RATE_HZ}). */
+    /** Single-bin power at {@code freqHz} (samples taken at {@link #RATE_HZ}).
+     *  The capture arrives as integers, so it is widened for the transform. */
     private double goertzelPower(int[] samples, double freqHz) {
-        double coeff = 2.0 * Math.cos(2.0 * Math.PI * freqHz / RATE_HZ);
-        double s1 = 0.0;
-        double s2 = 0.0;
-        for (int sample : samples) {
-            double s0 = sample + coeff * s1 - s2;
-            s2 = s1;
-            s1 = s0;
+        double[] block = new double[samples.length];
+        for (int i = 0; i < samples.length; i++) {
+            block[i] = samples[i];
         }
-        return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+        Goertzel.SingleBin bin = Goertzel.goertzelBin(block, 0, block.length, null,
+                2.0 * Math.PI * freqHz / RATE_HZ, 0.0);
+        return bin.re() * bin.re() + bin.im() * bin.im();
     }
 
     /** Continuous-phase 1 kHz sine on the LOGICAL left lane; right lane silent. */

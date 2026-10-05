@@ -49,6 +49,10 @@ import lombok.extern.log4j.Log4j2;
 public final class LockRegistry {
 
     private final Map<DeviceLock, ClientSession> owners = new ConcurrentHashMap<>();
+    /** The same ownership seen from the session: the output and the input each
+     *  session holds, kept beside {@link #owners} so a session's devices are one
+     *  read, not a walk over every lock on the server. */
+    private final Map<ClientSession, HeldDevices> held = new ConcurrentHashMap<>();
     private final List<Runnable> changeListeners = new CopyOnWriteArrayList<>();
 
     /** Registers a listener fired after every ownership change. */
@@ -81,6 +85,7 @@ public final class LockRegistry {
     public ClientSession acquire(DeviceLock lock, ClientSession session) {
         ClientSession current = owners.putIfAbsent(lock, session);
         if (current == null) {
+            held.compute(session, (s, devices) -> (devices == null ? HeldDevices.NONE : devices).with(lock));
             if (log.isInfoEnabled()) {
                 log.info("net lock: {} acquired by {}", lock, session.getClientName());
             }
@@ -96,6 +101,7 @@ public final class LockRegistry {
         if (!owners.remove(lock, session)) {
             return false;
         }
+        held.computeIfPresent(session, (s, devices) -> devices.without(lock));
         if (log.isInfoEnabled()) {
             log.info("net lock: {} released by {}", lock, session.getClientName());
         }
@@ -116,6 +122,7 @@ public final class LockRegistry {
                 freed++;
             }
         }
+        held.remove(session);
         if (freed > 0) {
             if (log.isInfoEnabled()) {
                 log.info("net lock: {} lock(s) released with session {}",
@@ -159,6 +166,14 @@ public final class LockRegistry {
         return false;
     }
 
+    /** The devices {@code session} holds, one per direction - the ones it
+     *  acquired, which is how a client selects the devices a measurement
+     *  across the bench runs on.  {@link HeldDevices#NONE} for a session that
+     *  holds nothing. */
+    public HeldDevices heldDevices(ClientSession session) {
+        return held.getOrDefault(session, HeldDevices.NONE);
+    }
+
     /** How many locks are held right now - the state a test asserts on. */
     public int size() {
         return owners.size();
@@ -184,6 +199,31 @@ public final class LockRegistry {
                     log.warn("net lock: a devices-changed listener failed: {}", t.toString());
                 }
             }
+        }
+    }
+
+    /** A session's devices: the output and the input it holds, null where it
+     *  holds none.  One per direction - a later acquire in the same direction
+     *  replaces the earlier one here, as the newest selection. */
+    public record HeldDevices(DeviceLock output, DeviceLock input) {
+
+        public static final HeldDevices NONE = new HeldDevices(null, null);
+
+        /** These devices with {@code lock} in its direction. */
+        HeldDevices with(DeviceLock lock) {
+            return lock.input() ? new HeldDevices(output, lock) : new HeldDevices(lock, input);
+        }
+
+        /** These devices without {@code lock}, unchanged when it is not among
+         *  them. */
+        HeldDevices without(DeviceLock lock) {
+            if (lock.equals(input)) {
+                return new HeldDevices(output, null);
+            }
+            if (lock.equals(output)) {
+                return new HeldDevices(null, input);
+            }
+            return this;
         }
     }
 }
