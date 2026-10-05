@@ -490,8 +490,8 @@
      Generator stattdessen seinen eingerasteten Sollwert meldet.</p>
 
   <h4 id="fft-phase-align">Grundwellen-Phasenabgleich</h4>
-  <p>Auswahlfeld - <b>Keiner</b>, <b>Referenzkanal</b> oder <b>Periodischer
-     Sweep</b>.  Es hält eine lange
+  <p>Auswahlfeld - <b>Keiner</b>, <b>Referenzkanal</b> oder <b>Pilotton</b>.
+     Es hält eine lange
      <a href="#fft-coherent-avg">kohärente Mittelung</a> hinter einem
      Kerbfilter zusammen.  Ein Twin-T-Kerbfilter driftet mit seiner eigenen
      Temperatur, und genau in seiner Kerbe läuft die Phase mit rund 160 Grad
@@ -529,25 +529,10 @@
      Referenzpegel und Abstand, und die Mittelung läuft dann ohne Abgleich -
      genau wie unter Keiner.  Die nächste Mittelung wird erneut geprüft, eine
      inzwischen gesteckte Leitung wird also aufgenommen.</p>
-  <p><b>Periodischer Sweep</b> braucht keine zusätzliche Verdrahtung und misst
-     stattdessen den Kerbfilter selbst.  In Abständen hält der Analysator die
-     Mittelung an, schaltet den Ton des Generators stumm, spielt einen
-     geschleiften logarithmischen Sweep über das Band um den Grundton (von
-     seiner Frequenz geteilt durch 1,1 bis zu seiner Frequenz mal 1,1), wie es
-     der <a href="tune-notch.html">Kerbfilter-Abgleichassistent</a> tut, liest
-     die Phase beim Grundton aus dem entfalteten Frequenzgang, stellt den Ton
-     wieder her und mittelt mit dem eben gefundenen Wert weiter; angewendet wird
-     nur die Änderung gegenüber der ersten Messung der Aufnahme.  Das Spektrum
-     wird währenddessen nicht geleert, und der Mittelungszähler bleibt stehen.
-     <b>Der Messton setzt dabei jedes Mal einige Sekunden aus</b> - ein
-     Prüfling, der ununterbrochen angeregt bleiben muss, ist ein Fall für den
-     Referenzkanal.  Die erste Messung läuft vor dem ersten gemittelten
-     Spektrum, die nächste 60&nbsp;s später; danach folgt der Abstand der Drift,
-     die die letzten beiden Messungen ergeben haben - so lange, wie ein Grad
-     Grundtonphase dauert -, begrenzt auf 30&nbsp;s bis 600&nbsp;s.  Eine
-     Messung, die nicht binnen 15&nbsp;s fertig wird oder deren Sweep nicht
-     startet, wird verworfen, und die Mittelung behält einfach den vorigen
-     Wert.</p>
+  <p><b>Pilotton</b> ist eine zweite Linie, die der Generator zusammen mit dem
+     Messton erzeugt, bei einem ungeraden Vielfachen der halben
+     Grundtonfrequenz; ihre Phase, im selben Erfassungsfenster wie die des
+     Grundtons gelesen, ergibt die Drift des Grundtons.</p>
   <p class="note"><b>Beide Modi wollen eine frische Kalibrierung.</b>  Der
      Abgleich verfolgt allein die Drift des Grundtons; alles Absolute - Phase
      und Betrag der ganzen Kette zu Beginn, den Bereich der Harmonischen

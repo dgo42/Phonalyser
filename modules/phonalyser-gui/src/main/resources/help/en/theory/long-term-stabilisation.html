@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser - Theory: Long-term average stabilisation</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to Theory of operation</a></p>
+
+  <h1>Long-term average stabilisation</h1>
+
+  <h2 id="purpose">The question this page answers</h2>
+  <p>A distortion measurement behind a twin-T notch filter can run for hours.
+     The <a href="fft.html#coherent">coherent average</a> keeps adding
+     phase-aligned blocks, and the harmonics rise out of a floor that falls as
+     1/√<i>n</i>.  The block-to-block alignment is steered by the fundamental -
+     the only line strong enough to steer by - and here the notch bites back:
+     its phase at the fundamental drifts with the filter's temperature, and the
+     analyser cannot tell a fundamental that moved <em>on its own</em> from a
+     fundamental that moved because the whole block shifted in time.  Read as
+     a time shift, the notch's drift is applied to harmonic <i>h</i> with the
+     factor <i>h</i>: a walk of one degree at the fundamental turns H2 by two
+     degrees, H7 by seven and H9 by nine.  Over a long run the harmonics smear
+     and sink instead of rising.</p>
+  <p>The <a href="../fft.html#fft-phase-align">Fundamental phase alignment</a>
+     control exists for that.  This page explains what the drift really looks
+     like on a bench, and what its two modes read instead of the notched
+     fundamental: <b>Reference channel</b> the tone on the channel that does
+     not carry the notch, <b>Pilot tone</b> a second generated line read in the
+     same block as the fundamental.</p>
+
+  <div class="note"><b>Why one degree matters.</b>
+     <a href="dac-predistortion.html">DAC pre-distortion</a> cancels a
+     harmonic by adding its anti-phase twin from the generator.  A
+     cancellation 30&nbsp;dB deep leaves a residual of 3&nbsp;% of the raw
+     harmonic.  A correction computed while the fundamental's phase was off by
+     an angle <i>e</i> is applied <i>h</i>·<i>e</i> off at harmonic <i>h</i>,
+     and the residual it leaves is raw × |1 − e<sup>j·<i>h</i>·<i>e</i></sup>|
+     ≈ raw × <i>h</i>·<i>e</i>.  For 40&nbsp;dB of cancellation at H7 the
+     fundamental's phase has to be right to 0.08° while the correction is
+     being measured.  That is the accuracy the stabilisation has to deliver,
+     and the reason a sweep every ten minutes cannot be the whole answer.</div>
+
+  <h2 id="drift">What drifts, and by how much</h2>
+  <p>Across its null a twin-T notch turns the phase by about 180 degrees, and
+     the phase <em>falls</em> with rising frequency: on one reference filter
+     it goes from about +135° a hertz below the null to about −45° a hertz
+     above it, with a slope of 80 to 100 degrees per hertz half a hertz from
+     the null and about 50 degrees per hertz further out.  When the filter
+     warms, its null moves <em>down</em> in frequency; when it cools, the null
+     moves up and deepens (about 4.6&nbsp;dB per kelvin on that filter).  For
+     a fundamental held at a fixed frequency this means: <b>the phase at the
+     fundamental rises when the filter cools</b>, because the null moves up
+     and away, and falls when it warms.</p>
+  <p>The numbers on that bench, with the fundamental half a hertz below the
+     null: <b>−28 degrees per kelvin</b> of enclosure temperature, drift rates
+     up to 0.2-0.4 degrees per minute during an ordinary room-temperature
+     swing, and over ten-minute stretches a phase change of more than one
+     degree in a quarter of all cases, up to eight degrees.  The fundamental's
+     <em>level</em> after the notch moves with the phase - about 0.25 to
+     0.3&nbsp;dB per degree on the flank - because both are one and the same
+     quantity, the position of the null relative to the fundamental.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 300" width="100%" height="300" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="lsa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+    <!-- axes -->
+    <line x1="60" y1="30" x2="60" y2="250" stroke="#446" stroke-width="1.2"/>
+    <line x1="60" y1="250" x2="790" y2="250" stroke="#446" stroke-width="1.2" marker-end="url(#lsa)"/>
+    <text x="790" y="268" text-anchor="end" fill="#557">frequency -></text>
+    <text x="52" y="40" text-anchor="end" fill="#338">|H|</text>
+    <text x="52" y="56" text-anchor="end" fill="#a33">phase</text>
+    <!-- magnitude: V-shaped null -->
+    <path d="M 60 60 C 250 62, 340 70, 390 120 L 425 235 L 460 120 C 510 70, 600 62, 790 60"
+          fill="none" stroke="#33a" stroke-width="1.8"/>
+    <!-- phase: falling S across the null -->
+    <path d="M 60 90 C 300 92, 380 100, 415 150 C 440 190, 520 205, 790 208"
+          fill="none" stroke="#c33" stroke-width="1.8"/>
+    <!-- the null -->
+    <line x1="425" y1="235" x2="425" y2="250" stroke="#446" stroke-dasharray="3 3"/>
+    <text x="425" y="264" text-anchor="middle" fill="#557">null</text>
+    <!-- the fundamental on the left flank -->
+    <line x1="392" y1="30" x2="392" y2="250" stroke="#446" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="392" y="24" text-anchor="middle" fill="#446" font-weight="bold">f0</text>
+    <circle cx="392" cy="124" r="4" fill="#33a"/>
+    <circle cx="392" cy="128" r="4" fill="#c33"/>
+    <!-- the shifted null (cooler): curves move right -->
+    <path d="M 60 60 C 280 62, 370 70, 420 120 L 455 235 L 490 120 C 540 70, 630 62, 790 60"
+          fill="none" stroke="#33a" stroke-width="1" stroke-dasharray="5 4" stroke-opacity="0.7"/>
+    <path d="M 60 90 C 330 92, 410 100, 445 150 C 470 190, 550 205, 790 208"
+          fill="none" stroke="#c33" stroke-width="1" stroke-dasharray="5 4" stroke-opacity="0.7"/>
+    <circle cx="392" cy="107" r="4" fill="none" stroke="#33a" stroke-width="1.5"/>
+    <circle cx="392" cy="112" r="4" fill="none" stroke="#c33" stroke-width="1.5"/>
+    <path d="M 430 236 L 452 236" fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#lsa)"/>
+    <text x="470" y="228" fill="#557">null moves up (filter cools)</text>
+    <text x="70" y="140" fill="#338">level at f0 rises ...</text>
+    <text x="70" y="156" fill="#a33">... and so does the phase:</text>
+    <text x="70" y="172" fill="#557">one shift, two readings</text>
+  </svg>
+  </div>
+
+  <div class="note"><b>Where to put the fundamental.</b>  On a flank, not in
+     the bottom of the null.  In the bottom the level after the notch is
+     lowest and least stable, and the level's slope is zero, so a shift of the
+     null in either direction reads the same.  On a flank the level is a clean,
+     one-to-one reading of the null's position.  A fundamental of about
+     −82&nbsp;dBV after the notch - a few hundred microvolts from a 1&nbsp;V
+     tone - is a good working point.  The
+     <a href="tune-notch.html">tune-notch measurement</a> is a tool for tuning
+     the filter itself; which side of the null the measurement frequency sits
+     on, and how far from it, is the user's choice - the DAC pre-distortion
+     wizard selects no frequency either.</div>
+
+  <h2 id="status">What is in this version</h2>
+  <p>The <b>Reference channel</b> mode reads the excess on every block from
+     the second ADC channel, which carries the tone ahead of the notch.  The
+     <b>Pilot tone</b> mode reads it on every block from a second generated
+     line at an odd multiple of half the fundamental, whose phase is measured
+     in the same block as the fundamental's.</p>
+
+  <h2 id="bottom">Bottom line</h2>
+  <ul>
+    <li><b>The enemy</b> is the notch's phase at the fundamental, which drifts
+        by tens of degrees per kelvin and is applied to harmonic <i>h</i>
+        with the factor <i>h</i>; the pre-distortion needs it right to a
+        tenth of a degree.</li>
+    <li><b>Put the fundamental on a flank</b>, about −82&nbsp;dBV after the
+        notch, never in the null's bottom.</li>
+  </ul>
+
+  <p class="back"><a href="derotation-accuracy.html">◀ De-rotation accuracy</a> ·
+     <a href="index.html">Theory of operation</a> ·
+     next: <a href="dac-predistortion.html">DAC pre-distortion ▶</a></p>
+
+</body>
+</html>

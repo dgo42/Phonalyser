@@ -462,7 +462,7 @@
      <a href="#fft-reset">Reset</a> for a clean average.</p>
 
   <h4 id="fft-phase-align">Fundamental phase alignment</h4>
-  <p>Combo - <b>None</b>, <b>Reference channel</b> or <b>Periodical sweep</b>.
+  <p>Combo - <b>None</b>, <b>Reference channel</b> or <b>Pilot tone</b>.
      It keeps a long <a href="#fft-coherent-avg">coherent average</a> behind a
      notch filter from falling apart.  A twin-T notch drifts with its own
      temperature, and right in its null the phase runs about 160 degrees per
@@ -498,24 +498,9 @@
      margin, and the average then runs unaligned - exactly as under None.  The
      next average is checked again, so a wire fixed in the meantime is picked
      up.</p>
-  <p><b>Periodical sweep</b> needs no extra wiring and measures the notch
-     itself.  Every so often the analyser pauses the average, silences the
-     generator's tone, plays a looping logarithmic sweep over the band around
-     the fundamental (from its frequency divided by 1.1 to its frequency times
-     1.1) the way the <a href="tune-notch.html">tune-notch wizard</a> does,
-     reads the phase at the fundamental out of the deconvolved response,
-     restores the tone and averages on with the value it just found; only the
-     change since the first probe of the recording is applied.  The spectrum is
-     not blanked while a probe runs and the averages count does not move.
-     <b>The measurement tone stops for a few seconds each time</b> - a device
-     under test that has to stay driven without interruption is a case for
-     Reference channel.  The first probe runs before the first averaged
-     spectrum, the next one
-     60&nbsp;s later; after that the interval follows the drift the last two
-     probes measured - as long as one degree of fundamental phase takes - kept
-     between 30&nbsp;s and 600&nbsp;s.  A probe that cannot finish within
-     15&nbsp;s, or whose sweep refuses to start, is abandoned and the average
-     simply keeps the previous value.</p>
+  <p><b>Pilot tone</b> is a second line the generator emits together with the
+     measured tone, at an odd multiple of half the fundamental; its phase, read
+     in the same frame as the fundamental's, gives the fundamental's drift.</p>
   <p class="note"><b>Either mode wants a fresh calibration.</b>  The alignment
      tracks the drift of the fundamental and nothing else; everything absolute
      - the phase and magnitude of the whole chain at the start, the harmonic

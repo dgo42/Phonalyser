@@ -486,6 +486,24 @@
         residual and corrects again, converging round on round until you stop or
         a target THD is reached.</li>
   </ol>
+  <p><b>The loop measures its own plant.</b>  The frame every harmonic is read
+     in is set by the fundamental's phase minus the calibration's phase at
+     <i>f</i>₁ - and the notch that phase belongs to drifts after the
+     calibration was taken (see <a href="long-term-stabilisation.html">Theory ▸
+     Long-term average stabilisation</a>).  An error <i>e</i> in that
+     reference turns harmonic <i>h</i>'s reading by <i>h·e</i>, and a
+     correction built on a turned reading is applied that far off: with a full
+     step the loop converges only while <i>h·e</i> stays under about 60
+     degrees, and beyond that every round adds energy - a calibration an hour
+     old can be enough to make H5 and up diverge while H2 still converges.  So
+     the loop does not trust the reference.  From its own first step it fits,
+     per harmonic, the complex factor a correction appears with at the
+     analyser - the change of the reading between two rounds over the change
+     of the correction applied between them, ideally −1 - and every later
+     update passes through that factor's inverse.  The first correction is
+     taken blind, the second lands; a harmonic still within 15&nbsp;dB of the
+     floor keeps the ideal factor.  The log states the identified factors
+     after every round.</p>
   <p>The wizard's left column shows the live THD updating <em>within</em> a round,
      the averaging depth climbing, and the last round's figure; the convergence
      chart plots each round's residual on a log axis, spacing the markers along

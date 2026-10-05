@@ -512,6 +512,27 @@
         kleineren Restfehler und korrigiert erneut, konvergiert Runde um Runde, bis
         man stoppt oder ein Ziel-THD erreicht ist.</li>
   </ol>
+  <p><b>Die Schleife misst ihre eigene Strecke.</b>  Der Rahmen, in dem jede
+     Harmonische gelesen wird, ist durch die Phase des Grundtons minus die
+     Phase der Kalibrierung bei <i>f</i>₁ festgelegt - und der Kerbfilter, dem
+     diese Phase gehört, driftet, nachdem die Kalibrierung aufgenommen wurde
+     (siehe <a href="long-term-stabilisation.html">Theorie ▸
+     Langzeitstabilisierung der Mittelung</a>).  Ein Fehler <i>e</i> in dieser
+     Referenz dreht die Ablesung der Harmonischen <i>h</i> um <i>h·e</i>, und
+     eine Korrektur, die auf einer gedrehten Ablesung aufbaut, wird um ebenso
+     viel falsch angewendet: mit vollem Schritt konvergiert die Schleife nur,
+     solange <i>h·e</i> unter etwa 60 Grad bleibt, und darüber fügt jede Runde
+     Energie hinzu - eine eine Stunde alte Kalibrierung kann reichen, damit H5
+     und höher divergieren, während H2 noch konvergiert.  Deshalb vertraut die
+     Schleife der Referenz nicht.  Aus ihrem eigenen ersten Schritt bestimmt
+     sie je Harmonische den komplexen Faktor, mit dem eine Korrektur am
+     Analysator erscheint - die Änderung der Ablesung zwischen zwei Runden
+     geteilt durch die Änderung der dazwischen angewendeten Korrektur, im
+     Idealfall −1 -, und jede spätere Aktualisierung läuft durch den Kehrwert
+     dieses Faktors.  Die erste Korrektur wird blind gesetzt, die zweite
+     trifft; eine Harmonische, die noch binnen 15&nbsp;dB über dem Grundrauschen
+     liegt, behält den idealen Faktor.  Das Protokoll nennt die bestimmten
+     Faktoren nach jeder Runde.</p>
   <p>Die linke Spalte des Assistenten zeigt das live aktualisierte THD
      <em>innerhalb</em> einer Runde, die steigende Mittelungstiefe und die Zahl der
      letzten Runde; das Konvergenzdiagramm zeichnet den Restfehler jeder Runde auf

@@ -108,6 +108,7 @@
       <li><a href="server.html#server-measuring">Вимірювання через нього</a> <span class="small">(Сервер Phonalyser)</span> - <span class="small">Коли сервер працює, уся клієнтська частина - це три кроки, і всі вони в Налаштування ▸ Аудіо: Знайдіть сервер. Сервери......</span></li>
       <li><a href="preferences.html#prefs-audio-servers">Вимірювання через сервер Phonalyser</a> <span class="small">(Налаштування)</span> - <span class="small">Обладнання не мусить бути під&#x27;єднане до машини, за якою ви сидите. Друга інсталяція Phonalyser, запущена як сервер , перетворює...</span></li>
       <li><a href="theory/dac-predistortion.html#imd">Вимірювання інтермодуляції - двотональний фільтр</a> <span class="small">(Theory ▸ Теорія: попереднє спотворення DAC)</span> - <span class="small">Двотональний шлях майстра попередньо спотворює інтермодуляцію , і це вимірювання стикається з тією самою стіною, що й THD,...</span></li>
+      <li><a href="fft.html#fft-phase-align">Вирівнювання фази основної</a> <span class="small">(FFT аналізатор)</span> - <span class="small">Комбобокс - Немає , Опорний канал або Пілот-тон . Він утримує довге когерентне усереднення за режекторним фільтром від розпаду....</span></li>
       <li><a href="fft.html#fft-align-generator">Вирівняти генератор</a> <span class="small">(FFT аналізатор)</span> - <span class="small">Комбобокс - Немає або FLL . Він наводить генератор точно на центр біна FFT, у який потрапляє основний тон: Немає лишає тон...</span></li>
       <li><a href="generator.html#generator-output-channel">Вихідний канал</a> <span class="small">(Генератор)</span> - <span class="small">Комбо у верхньому рядку заголовка - у рядку «Форма сигналу» , над селектором форми сигналу та поряд з індикатором ON AIR -, що...</span></li>
       <li><a href="fft.html#fft-detect-time-discontinuity">Виявляти часову розривність</a> <span class="small">(FFT аналізатор)</span> - <span class="small">Прапорець, типово увімкнено . Під час усереднення кожен блок захоплення перевіряється в часовій області за власною рекурентністю...</span></li>
@@ -248,6 +249,7 @@
     </ul>
     <h3>Н</h3>
     <ul>
+      <li><a href="theory/long-term-stabilisation.html#purpose">На яке питання відповідає ця сторінка</a> <span class="small">(Theory ▸ Теорія: стабілізація довгого усереднення)</span> - <span class="small">Вимірювання спотворень за режекторним фільтром twin-T може тривати годинами. Когерентне усереднення додає блок за блоком із...</span></li>
       <li><a href="theory/derotation-accuracy.html#purpose">На яке питання відповідає ця сторінка</a> <span class="small">(Theory ▸ Теорія: точність де-ротації)</span> - <span class="small">Когерентне усереднення працює лише тому, що кожен захоплений блок повертається назад до спільної фази перед сумуванням - це...</span></li>
       <li><a href="generator.html#generator-sweep-fadein">Наростання</a> <span class="small">(Генератор)</span> - <span class="small">Секунди. Рампа амплітуди на початку чірпу, що пригнічує клацання, яке спричинив би різкий стрибок...</span></li>
       <li><a href="theory/dac-predistortion.html#tempco">Наскільки дрейфує кожен клас резисторів?</a> <span class="small">(Theory ▸ Теорія: попереднє спотворення DAC)</span> - <span class="small">Для фіксованого тону на номінальній западині температурна зміна Δ T зсуває западину на дробову зміну RC : Δ f 0 / f 0 = (α R + α...</span></li>
@@ -326,7 +328,6 @@
       <li><a href="generator.html#generator-snap-fft-bin">Прив&#x27;язати частоту до найближчого</a> <span class="small">(Генератор)</span> - <span class="small">Прапорець. Якщо увімкнено, випромінювана частота прив&#x27;язується до найближчого бін FFT для поточної довжини FFT-аналізатора....</span></li>
       <li><a href="theory/derotation-accuracy.html#reference">Прив&#x27;язка до плинного середнього - без самоотруєння</a> <span class="small">(Theory ▸ Теорія: точність де-ротації)</span> - <span class="small">Як насправді формується де-ротація основного тону: Абсолютна модель, прив&#x27;язана до першого блока. Кожен блок повертається на кут,</span></li>
       <li><a href="theory/oscilloscope.html#mains">Придушення мережевого фону: відстежуваний гребінчастий фільтр</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> - <span class="small">Мережева завада знаходиться на частоті мережі та всіх її цілих гармоніках. Один зворотній гребінчастий фільтр [6] одночасно...</span></li>
-      <li><a href="fft.html#fft-mains-suppression">Придушення мережі</a> <span class="small">(FFT аналізатор)</span> - <span class="small">Комбобокс - Немає або IIR-гребінчастий фільтр . Гребінчастий фільтр попередньо фільтрує захоплений сигнал до усереднення за...</span></li>
       <li><a href="theory/audio-backend.html#purpose">Призначення</a> <span class="small">(Theory ▸ Теорія: Аудіо-бекенд)</span> - <span class="small">Аудіо-бекенд - це міст між Phonalyser і звуковим обладнанням. Його єдине завдання - переміщати відліки між програмою і...</span></li>
       <li><a href="theory/oscilloscope.html#purpose">Призначення</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> - <span class="small">Осцилограф - це вигляд у часовій області, і саме з нього слід починати. Перш ніж довіряти будь-якому спектральному значенню,...</span></li>
       <li><a href="theory/freq-resp.html#purpose">Призначення</a> <span class="small">(Theory ▸ Теорія: Частотна характеристика)</span> - <span class="small">Модуль частотної характеристики вимірює передавальну функцію пристрою - його коефіцієнт підсилення та фазовий зсув на кожній...</span></li>
@@ -339,6 +340,7 @@
       <li><a href="oscilloscope.html#scope-trigger-start">Пуск (повторне збройне взведення для одиночного)</a> <span class="small">(Осцилограф)</span> - <span class="small">Активна лише в режимі Одиночний . Натискання зводить тригер для наступного одиночного...</span></li>
       <li><a href="theory/oscilloscope.html#conditioning">Підготовка сигналу</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> - <span class="small">Перед відображенням можуть виконуватися два необов&#x27;язкових фільтри: Антиаліасний / придушувальний фільтр низьких частот. Крутий...</span></li>
       <li><a href="theory/dac-predistortion.html#bottom">Підсумок</a> <span class="small">(Theory ▸ Теорія: попереднє спотворення DAC)</span> - <span class="small">Пасивний twin-T режекторний фільтр обов&#x27;язковий - він знімає 40-80 dB основного тону, щоб ADC оцифровував гармоніки, а не тон....</span></li>
+      <li><a href="theory/long-term-stabilisation.html#bottom">Підсумок</a> <span class="small">(Theory ▸ Теорія: стабілізація довгого усереднення)</span> - <span class="small">Супротивник - фаза режектора на основному тоні, яка дрейфує на десятки градусів на кельвін і прикладається до гармоніки h з...</span></li>
       <li><a href="theory/derotation-accuracy.html#bottom">Підсумок</a> <span class="small">(Theory ▸ Теорія: точність де-ротації)</span> - <span class="small">Кут де-ротації відомий з точністю σ θ ≈ 0.023° на блок (з домінуванням основного тону). Він не накопичується, а його відбиток на...</span></li>
       <li><a href="oscilloscope.html#scope-persistence">Післясвічення дисплея</a> <span class="small">(Осцилограф)</span> - <span class="small">Коли Налаштування ▸ Осцилограф ▸ Післясвічення дисплея встановлено на будь-що, крім Вимк. , кожна розгорнута траса затримується і</span></li>
     </ul>
@@ -448,10 +450,12 @@
     <ul>
       <li><a href="dac-predistortion.html#dpd-readouts">Що ви бачите</a> <span class="small">(Майстер предспотворення ЦАП)</span> - <span class="small">Блок Налаштування FFT відтворює розмір, частоту дискретизації та вікно, які прогін успадковує з FFT-панелі (лише для читання -...</span></li>
       <li><a href="theory/fft.html#longrun">Що все це дає</a> <span class="small">(Theory ▸ Теорія: FFT-аналізатор)</span> - <span class="small">Глибоке когерентне усереднення лише настільки добре, наскільки міцна найслабша ланка його синхронізації. Кожен механізм у цьому...</span></li>
+      <li><a href="theory/long-term-stabilisation.html#drift">Що дрейфує і на скільки</a> <span class="small">(Theory ▸ Теорія: стабілізація довгого усереднення)</span> - <span class="small">Через свій провал режектор twin-T повертає фазу приблизно на 180 градусів, і фаза спадає зі зростанням частоти: на одному...</span></li>
       <li><a href="theory/audio-backend.html#qa40x-ranges">Що насправді означає вхідний діапазон «dBV»</a> <span class="small">(Theory ▸ Теорія: Аудіо-бекенд)</span> - <span class="small">Аналізатор називає свої вхідні діапазони в dBV - 0 dBV , +18 dBV тощо, - і читати ці назви як напруги повної шкали в СКЗ означає...</span></li>
       <li><a href="theory/derotation-accuracy.html#magnitude">Що це робить з виміряними рівнями</a> <span class="small">(Theory ▸ Теорія: точність де-ротації)</span> - <span class="small">Після де-ротації гармоніка h несе залишковий поворот − h ·(похибка блока). Накопичення і розкладання цього малого повороту...</span></li>
       <li><a href="server.html#server-what">Що це таке і що вам потрібно</a> <span class="small">(Сервер Phonalyser)</span> - <span class="small">Сервер постачається окремим завантаженням, по одному ZIP на платформу - Windows x64 і x86, Linux x86_64 і aarch64, macOS Intel і...</span></li>
       <li><a href="preferences.html#prefs-audio-server-measuring">Що ще йде дротом</a> <span class="small">(Налаштування)</span> - <span class="small">Власні налаштування бекенда. Налаштування QA40x та перемикачі діапазонів входу й виходу керують аналізатором на сервері точно так</span></li>
+      <li><a href="theory/long-term-stabilisation.html#status">Що є в цій версії</a> <span class="small">(Theory ▸ Теорія: стабілізація довгого усереднення)</span> - <span class="small">Режим Опорний канал читає надлишкову фазу на кожному блоці з другого каналу АЦП, який несе тон перед режектором. Режим Пілот-тон...</span></li>
     </ul>
     <h3>Я</h3>
     <ul>
@@ -589,9 +593,11 @@
     </ul>
     <h3>H</h3>
     <ul>
-      <li><b>H2</b> - <a href="fft.html#fft-max-harmonic-thd">FFT аналізатор ▸ Максимальна гармоніка для THD</a>, <a href="howto.html#">Найкоротший у світі HOW-TO ▸ 4 · Передспотворення, а потім вимірювання</a>, <a href="theory/dac-predistortion.html#tempco">Theory ▸ Теорія: попереднє спотворення DAC ▸ Наскільки дрейфує кожен клас резисторів?</a>, <a href="theory/derotation-accuracy.html#">Theory ▸ Теорія: точність де-ротації ▸ Випадкова похибка рівня - звичайний 1/√ n</a></li>
+      <li><b>H2</b> - <a href="fft.html#fft-phase-align">FFT аналізатор ▸ Вирівнювання фази основної</a>, <a href="fft.html#fft-max-harmonic-thd">FFT аналізатор ▸ Максимальна гармоніка для THD</a>, <a href="howto.html#">Найкоротший у світі HOW-TO ▸ 4 · Передспотворення, а потім вимірювання</a>, <a href="theory/dac-predistortion.html#tempco">Theory ▸ Теорія: попереднє спотворення DAC ▸ Наскільки дрейфує кожен клас резисторів?</a>, <a href="theory/dac-predistortion.html#loop">Theory ▸ Теорія: попереднє спотворення DAC ▸ Як корекція формується й застосовується</a>, <a href="theory/derotation-accuracy.html#">Theory ▸ Теорія: точність де-ротації ▸ Випадкова похибка рівня - звичайний 1/√ n</a></li>
       <li><b>H3</b> - <a href="theory/dac-predistortion.html#tempco">Theory ▸ Теорія: попереднє спотворення DAC ▸ Наскільки дрейфує кожен клас резисторів?</a>, <a href="theory/derotation-accuracy.html#">Theory ▸ Теорія: точність де-ротації ▸ Випадкова похибка рівня - звичайний 1/√ n</a></li>
-      <li><b>H9</b> - <a href="fft.html#fft-tile-maxharmonic">FFT аналізатор ▸ Плитка максимальної гармоніки</a>, <a href="howto.html#">Найкоротший у світі HOW-TO ▸ 4 · Передспотворення, а потім вимірювання</a></li>
+      <li><b>H5</b> - <a href="theory/dac-predistortion.html#loop">Theory ▸ Теорія: попереднє спотворення DAC ▸ Як корекція формується й застосовується</a></li>
+      <li><b>H7</b> - <a href="theory/long-term-stabilisation.html#purpose">Theory ▸ Теорія: стабілізація довгого усереднення ▸ На яке питання відповідає ця сторінка</a></li>
+      <li><b>H9</b> - <a href="fft.html#fft-phase-align">FFT аналізатор ▸ Вирівнювання фази основної</a>, <a href="fft.html#fft-tile-maxharmonic">FFT аналізатор ▸ Плитка максимальної гармоніки</a>, <a href="howto.html#">Найкоротший у світі HOW-TO ▸ 4 · Передспотворення, а потім вимірювання</a>, <a href="theory/long-term-stabilisation.html#purpose">Theory ▸ Теорія: стабілізація довгого усереднення ▸ На яке питання відповідає ця сторінка</a></li>
       <li><b>HAL</b> - <a href="backend.html#backend-list">Аудіо-бекенди ▸ Який бекенд у якій системі</a>, <a href="theory/audio-backend.html#volume">Theory ▸ Теорія: Аудіо-бекенд ▸ Апаратна гучність - частина тракту</a>, <a href="theory/audio-backend.html#errors-macos">Theory ▸ Теорія: Аудіо-бекенд ▸ Пристрій, що йде без жодного слова (macOS)</a></li>
       <li><b>Hann</b> - <a href="external/fft-analysis.html#">Further reading ▸ Додаткове читання: основи FFT-аналізу ▸ Розтікання спектра та віконні функції</a>, <a href="external/fft-analysis.html#">Further reading ▸ Додаткове читання: основи FFT-аналізу ▸ Усереднення та перекриття</a>, <a href="fft.html#fft-window">FFT аналізатор ▸ Віконна функція</a>, <a href="fft.html#fft-tile-window">FFT аналізатор ▸ Плитка віконної функції</a>, <a href="theory/algorithms.html#synth">Theory ▸ Теорія: Довідник алгоритмів ▸ Синтез сигналу та квантування</a>, <a href="theory/algorithms.html#spectral">Theory ▸ Теорія: Довідник алгоритмів ▸ Спектральний аналіз</a></li>
       <li><b>Hans Rosenberg</b> - <a href="credits.html#">Подяки</a></li>
@@ -610,9 +616,8 @@
     <ul>
       <li><b>I2S</b> - <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="preferences.html#prefs-audio">Налаштування ▸ Аудіо</a>, <a href="tips.html#">Поради ▸ Поради</a></li>
       <li><b>IEC</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="credits.html#credits-thanks">Подяки ▸ Із вдячністю</a>, <a href="freqresp.html#">Частотна характеристика ▸ Частотна характеристика</a>, <a href="freqresp.html#freqresp-overview">Частотна характеристика ▸ Короткий огляд</a>, <a href="freqresp.html#freqresp-tabs">Частотна характеристика ▸ Вкладки налаштувань</a>, <a href="freqresp.html#freqresp-tab-riaa">Частотна характеристика ▸ RIAA &amp; IEC</a></li>
-      <li><b>IIR</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="fft.html#fft-mains-suppression">FFT аналізатор ▸ Придушення мережі</a>, <a href="oscilloscope.html#scope-mains">Осцилограф ▸ Мережа</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Теорія: Довідник алгоритмів ▸ Фільтрація та оцінювання</a></li>
+      <li><b>IIR</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="oscilloscope.html#scope-mains">Осцилограф ▸ Мережа</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Теорія: Довідник алгоритмів ▸ Фільтрація та оцінювання</a></li>
       <li><b>IIR comb</b> - <a href="oscilloscope.html#">Осцилограф</a></li>
-      <li><b>IIR-гребінчастий фільтр</b> - <a href="fft.html#">FFT аналізатор</a></li>
       <li><b>IMD</b> - <a href="changelog.html#">Що нового ▸ Додано</a>, <a href="changelog.html#">Що нового ▸ Виправлено</a>, <a href="changelog.html#">Що нового ▸ 1.0-RC1 - 2026-06-19</a>, <a href="dac-predistortion.html#dpd-readouts">Майстер предспотворення ЦАП ▸ Що ви бачите</a>, <a href="theory/algorithms.html#spectral">Theory ▸ Теорія: Довідник алгоритмів ▸ Спектральний аналіз</a>, <a href="theory/dac-predistortion.html#imd">Theory ▸ Теорія: попереднє спотворення DAC ▸ Вимірювання інтермодуляції - двотональний фільтр</a></li>
       <li><b>IME</b> - <a href="changelog.html#">Що нового ▸ Виправлено</a></li>
       <li><b>INDEPENDENT</b> - <a href="preferences.html#prefs-audio-devices-file">Налаштування ▸ Файл devices.yaml - редагування вручну</a>, <a href="preferences.html#">Налаштування</a></li>
@@ -912,6 +917,7 @@
     <ul>
       <li><b>Обидва</b> - <a href="freqresp.html#">Частотна характеристика</a>, <a href="generator.html#">Генератор</a>, <a href="preferences.html#">Налаштування</a>, <a href="tune-notch.html#">Майстер налаштування режектора</a></li>
       <li><b>Одиночний</b> - <a href="oscilloscope.html#">Осцилограф</a></li>
+      <li><b>Опорний канал</b> - <a href="fft.html#">FFT аналізатор</a>, <a href="theory/long-term-stabilisation.html#">Theory ▸ Теорія: стабілізація довгого усереднення</a></li>
       <li><b>Основи FFT-аналізу</b> - <a href="theory/index.html#">Theory ▸ Принцип роботи</a></li>
       <li><b>Останнє вікно</b> - <a href="theory/ring-buffer.html#">Theory ▸ Теорія: Кільцевий буфер та споживачі</a></li>
       <li><b>Останній THD</b> - <a href="dac-predistortion.html#">Майстер предспотворення ЦАП</a></li>
@@ -961,6 +967,7 @@
       <li><b>Прямокутник</b> - <a href="theory/generator.html#">Theory ▸ Теорія: Генератор сигналів</a></li>
       <li><b>Пуск</b> - <a href="howto.html#">Найкоротший у світі HOW-TO</a></li>
       <li><b>Під&#x27;єднатися</b> - <a href="preferences.html#">Налаштування</a>, <a href="server.html#">Сервер Phonalyser</a></li>
+      <li><b>Пілот-тон</b> - <a href="fft.html#">FFT аналізатор</a>, <a href="theory/long-term-stabilisation.html#">Theory ▸ Теорія: стабілізація довгого усереднення</a></li>
     </ul>
     <h3>Р</h3>
     <ul>
@@ -971,6 +978,7 @@
       <li><b>Рожевий</b> - <a href="theory/generator.html#">Theory ▸ Теорія: Генератор сигналів</a></li>
       <li><b>Ручний основний тон</b> - <a href="tips.html#">Поради</a></li>
       <li><b>Рядок стану</b> - <a href="dac-predistortion.html#">Майстер предспотворення ЦАП</a>, <a href="tune-notch.html#">Майстер налаштування режектора</a></li>
+      <li><b>Рівень</b> - <a href="theory/long-term-stabilisation.html#">Theory ▸ Теорія: стабілізація довгого усереднення</a></li>
     </ul>
     <h3>С</h3>
     <ul>
@@ -993,6 +1001,7 @@
       <li><b>Старт</b> - <a href="dac-predistortion.html#">Майстер предспотворення ЦАП</a></li>
       <li><b>Стерео</b> - <a href="preferences.html#">Налаштування</a></li>
       <li><b>Стоп</b> - <a href="preferences.html#">Налаштування</a></li>
+      <li><b>Супротивник</b> - <a href="theory/long-term-stabilisation.html#">Theory ▸ Теорія: стабілізація довгого усереднення</a></li>
     </ul>
     <h3>Т</h3>
     <ul>

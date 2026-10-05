@@ -48,6 +48,7 @@
       <li><a href="theory/dac-predistortion.html#bigpicture">Big picture: drift moves the fundamental, barely touches the harmonics</a> <span class="small">(Theory ▸ DAC pre-distortion)</span> - <span class="small">Now zoom out to the whole band. The notch sits at the fundamental; the harmonics climb the gentle flank above it. The blue dots...</span></li>
       <li><a href="theory/dac-predistortion.html#bottom">Bottom line</a> <span class="small">(Theory ▸ DAC pre-distortion)</span> - <span class="small">A passive twin-T notch is mandatory - it strips 40-80 dB of fundamental so the ADC digitises the harmonics, not the tone. Without</span></li>
       <li><a href="theory/derotation-accuracy.html#bottom">Bottom line</a> <span class="small">(Theory ▸ De-rotation accuracy)</span> - <span class="small">The de-rotation angle is known to σ θ ≈ 0.023° per block (fundamental-dominated). It does not accumulate, and its level footprint</span></li>
+      <li><a href="theory/long-term-stabilisation.html#bottom">Bottom line</a> <span class="small">(Theory ▸ Long-term average stabilisation)</span> - <span class="small">The enemy is the notch&#x27;s phase at the fundamental, which drifts by tens of degrees per kelvin and is applied to harmonic h with...</span></li>
     </ul>
     <h3>C</h3>
     <ul>
@@ -124,6 +125,7 @@
       <li><a href="theory/fft.html#cal">Frequency-response compensation: the red and blue dots</a> <span class="small">(Theory ▸ FFT analyser)</span> - <span class="small">A measurement through any real chain - a notch filter, an attenuator, the soundcard&#x27;s own roll-off - reads each harmonic through...</span></li>
       <li><a href="theory/oscilloscope.html#path">From ring buffer to screen</a> <span class="small">(Theory ▸ Oscilloscope)</span> - <span class="small">The scope reads the newest window from the ring buffer on every repaint, conditions it, finds a stable trigger point, and draws...</span></li>
       <li><a href="theory/ring-buffer.html#snapshot">Frozen copies and file-fed buffers</a> <span class="small">(Theory ▸ Ring buffer &amp; consumers)</span> - <span class="small">A consumer can request a frozen copy - a standalone duplicate of the ring&#x27;s current contents with no live writer. This is how the</span></li>
+      <li><a href="fft.html#fft-phase-align">Fundamental phase alignment</a> <span class="small">(FFT analyser)</span> - <span class="small">Combo - None , Reference channel or Pilot tone . It keeps a long coherent average behind a notch filter from falling apart. A...</span></li>
     </ul>
     <h3>G</h3>
     <ul>
@@ -189,7 +191,6 @@
       <li><a href="backend.html#backend-mac-glitches">macOS: capture glitches on some devices</a> <span class="small">(Audio backends)</span> - <span class="small">Some USB devices tear the CAPTURE stream on macOS at operating-system level: every capture shows ringing bursts and...</span></li>
       <li><a href="fft.html#fft-mag-unit">Magnitude unit</a> <span class="small">(FFT analyser)</span> - <span class="small">Combo at the top-right with five choices: V , V/√Hz , dBV , dBFS , dBr . Switching unit converts the axis labels and scrollbar...</span></li>
       <li><a href="oscilloscope.html#scope-mains">Mains</a> <span class="small">(Oscilloscope)</span> - <span class="small">Drop-down that applies a per-channel mains-hum rejection filter, tracked live at the line frequency (50 / 60 Hz and its...</span></li>
-      <li><a href="fft.html#fft-mains-suppression">Mains suppression</a> <span class="small">(FFT analyser)</span> - <span class="small">Combo - None or IIR comb . The comb pre-filters the captured signal before averaging with a frequency-tracked IIR comb locked to...</span></li>
       <li><a href="theory/oscilloscope.html#mains">Mains-hum rejection: the tracked comb</a> <span class="small">(Theory ▸ Oscilloscope)</span> - <span class="small">Mains interference sits at the line frequency and every integer harmonic of it. A single feedback comb filter [6] places a notch...</span></li>
       <li><a href="fft.html#fft-manual-fund">Manual fundamental</a> <span class="small">(FFT analyser)</span> - <span class="small">When on, the analyser treats this value as the fundamental&#x27;s dBV instead of using the de-embedded value or the one from the...</span></li>
       <li><a href="fft.html#fft-tile-manfund">Manual-fundamental tile</a> <span class="small">(FFT analyser)</span> - <span class="small">manF . Visible only when the manual-fundamental override is enabled. ◀ Back to...</span></li>
@@ -339,6 +340,7 @@
       <li><a href="theory/audio-backend.html#qa40x">The QA40x analyzer backend</a> <span class="small">(Theory ▸ Audio backend)</span> - <span class="small">Alongside the three general-purpose paths, Phonalyser can drive a QuantAsylum QA402 / QA403 audio analyzer directly, over USB,...</span></li>
       <li><a href="theory/dac-predistortion.html#purpose">The question this page answers</a> <span class="small">(Theory ▸ DAC pre-distortion)</span> - <span class="small">Every DAC adds harmonic distortion of its own. When you measure a device under test you want the stimulus to be cleaner than the...</span></li>
       <li><a href="theory/derotation-accuracy.html#purpose">The question this page answers</a> <span class="small">(Theory ▸ De-rotation accuracy)</span> - <span class="small">Coherent averaging only works because every captured block is rotated back onto a common phase before it is summed - the...</span></li>
+      <li><a href="theory/long-term-stabilisation.html#purpose">The question this page answers</a> <span class="small">(Theory ▸ Long-term average stabilisation)</span> - <span class="small">A distortion measurement behind a twin-T notch filter can run for hours. The coherent average keeps adding phase-aligned blocks,...</span></li>
       <li><a href="theory/ring-buffer.html#reader">The read cursor</a> <span class="small">(Theory ▸ Ring buffer &amp; consumers)</span> - <span class="small">Consumers fall into two camps, and the cursor exists for the second one: &quot;Show me now&quot; consumers - the oscilloscope, the...</span></li>
       <li><a href="theory/freq-resp.html#reference">The reference must be exactly what was played</a> <span class="small">(Theory ▸ Frequency response)</span> - <span class="small">Equation (1) is only honest if X is precisely the signal that drove the DAC. This is why the sweep is pre-rendered into a buffer...</span></li>
       <li><a href="theory/ring-buffer.html#ring">The ring</a> <span class="small">(Theory ▸ Ring buffer &amp; consumers)</span> - <span class="small">The ring holds the most recent 22 seconds of stereo capture as normalised values in [−1, +1] - enough for two full oscilloscope...</span></li>
@@ -382,7 +384,9 @@
       <li><a href="generator.html#generator-playback">WAV playback</a> <span class="small">(Generator)</span></li>
       <li><a href="theory/audio-backend.html#qa40x-ranges">What a &quot;dBV&quot; input range actually is</a> <span class="small">(Theory ▸ Audio backend)</span> - <span class="small">The analyzer names its input ranges in dBV - 0 dBV , +18 dBV , and so on - and taking those names for RMS full-scale voltages is...</span></li>
       <li><a href="theory/fft.html#longrun">What all of this buys</a> <span class="small">(Theory ▸ FFT analyser)</span> - <span class="small">Deep coherent averaging is only as good as its weakest synchronisation link. Each mechanism in this chapter removes one way a...</span></li>
+      <li><a href="theory/long-term-stabilisation.html#drift">What drifts, and by how much</a> <span class="small">(Theory ▸ Long-term average stabilisation)</span> - <span class="small">Across its null a twin-T notch turns the phase by about 180 degrees, and the phase falls with rising frequency: on one reference...</span></li>
       <li><a href="preferences.html#prefs-audio-server-measuring">What else crosses the wire</a> <span class="small">(Preferences)</span> - <span class="small">A backend&#x27;s own settings. QA40x preferences and the input and output range radios drive an analyzer on the server exactly as they</span></li>
+      <li><a href="theory/long-term-stabilisation.html#status">What is in this version</a> <span class="small">(Theory ▸ Long-term average stabilisation)</span> - <span class="small">The Reference channel mode reads the excess on every block from the second ADC channel, which carries the tone ahead of the...</span></li>
       <li><a href="theory/derotation-accuracy.html#magnitude">What it does to the measured levels</a> <span class="small">(Theory ▸ De-rotation accuracy)</span> - <span class="small">After de-rotation, harmonic h carries a residual rotation of − h ·(block error). Accumulating and expanding that small rotation...</span></li>
       <li><a href="theory/audio-backend.html#purpose">What it is for</a> <span class="small">(Theory ▸ Audio backend)</span> - <span class="small">The audio backend is the bridge between Phonalyser and the sound hardware. Its one job is to move samples between the application</span></li>
       <li><a href="theory/fft.html#purpose">What it is for</a> <span class="small">(Theory ▸ FFT analyser)</span> - <span class="small">The FFT analyser is the frequency-domain workhorse: it shows the spectrum and measures harmonic distortion (THD, THD+N),...</span></li>
@@ -509,6 +513,7 @@
     <h3>D</h3>
     <ul>
       <li><b>DAC</b> - <a href="bench.html#">Measurement bench &amp; wiring ▸ Measurement bench &amp; wiring</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ Changed</a>, <a href="changelog.html#">What&#x27;s new ▸ Deprecated</a>, <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a></li>
+      <li><b>DAC output</b> - <a href="fft.html#">FFT analyser</a></li>
       <li><b>DAC pre-distortion</b> - <a href="theory/index.html#">Theory ▸ Overview</a></li>
       <li><b>DAC pre-distortion wizard</b> - <a href="index.html#">Help</a>, <a href="theory/dac-predistortion.html#">Theory ▸ DAC pre-distortion</a></li>
       <li><b>DC</b> - <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="fft.html#fft-dist-min">FFT analyser ▸ Enable distortion HP + frequency</a>, <a href="oscilloscope.html#scope-meas-table">Oscilloscope ▸ Measurement table</a>, <a href="oscilloscope.html#scope-histogram-window">Oscilloscope ▸ Amplitude-histogram window</a>, <a href="oscilloscope.html#scope-tab-left">Oscilloscope ▸ Left tab</a>, <a href="oscilloscope.html#scope-acdc">Oscilloscope ▸ AC / DC</a></li>
@@ -593,9 +598,11 @@
     </ul>
     <h3>H</h3>
     <ul>
-      <li><b>H2</b> - <a href="fft.html#fft-max-harmonic-thd">FFT analyser ▸ Max harmonic for THD</a>, <a href="howto.html#">World&#x27;s shortest HOW-TO ▸ 4 · Pre-distort, then measure</a>, <a href="theory/dac-predistortion.html#tempco">Theory ▸ DAC pre-distortion ▸ How much does each resistor class drift?</a>, <a href="theory/derotation-accuracy.html#">Theory ▸ De-rotation accuracy ▸ A random level error - the ordinary 1/√ n</a></li>
+      <li><b>H2</b> - <a href="fft.html#fft-phase-align">FFT analyser ▸ Fundamental phase alignment</a>, <a href="fft.html#fft-max-harmonic-thd">FFT analyser ▸ Max harmonic for THD</a>, <a href="howto.html#">World&#x27;s shortest HOW-TO ▸ 4 · Pre-distort, then measure</a>, <a href="theory/dac-predistortion.html#tempco">Theory ▸ DAC pre-distortion ▸ How much does each resistor class drift?</a>, <a href="theory/dac-predistortion.html#loop">Theory ▸ DAC pre-distortion ▸ How the correction is formed and applied</a>, <a href="theory/derotation-accuracy.html#">Theory ▸ De-rotation accuracy ▸ A random level error - the ordinary 1/√ n</a></li>
       <li><b>H3</b> - <a href="theory/dac-predistortion.html#tempco">Theory ▸ DAC pre-distortion ▸ How much does each resistor class drift?</a>, <a href="theory/derotation-accuracy.html#">Theory ▸ De-rotation accuracy ▸ A random level error - the ordinary 1/√ n</a></li>
-      <li><b>H9</b> - <a href="fft.html#fft-tile-maxharmonic">FFT analyser ▸ Max-harmonic tile</a>, <a href="howto.html#">World&#x27;s shortest HOW-TO ▸ 4 · Pre-distort, then measure</a></li>
+      <li><b>H5</b> - <a href="theory/dac-predistortion.html#loop">Theory ▸ DAC pre-distortion ▸ How the correction is formed and applied</a></li>
+      <li><b>H7</b> - <a href="theory/long-term-stabilisation.html#purpose">Theory ▸ Long-term average stabilisation ▸ The question this page answers</a></li>
+      <li><b>H9</b> - <a href="fft.html#fft-phase-align">FFT analyser ▸ Fundamental phase alignment</a>, <a href="fft.html#fft-tile-maxharmonic">FFT analyser ▸ Max-harmonic tile</a>, <a href="howto.html#">World&#x27;s shortest HOW-TO ▸ 4 · Pre-distort, then measure</a>, <a href="theory/long-term-stabilisation.html#purpose">Theory ▸ Long-term average stabilisation ▸ The question this page answers</a></li>
       <li><b>HAL</b> - <a href="backend.html#backend-list">Audio backends ▸ Which backend on which system</a>, <a href="theory/audio-backend.html#volume">Theory ▸ Audio backend ▸ The hardware volume is part of the chain</a>, <a href="theory/audio-backend.html#errors-macos">Theory ▸ Audio backend ▸ The device that leaves without a word (macOS)</a></li>
       <li><b>Hann</b> - <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="external/fft-analysis.html#">Further reading ▸ FFT analysis essentials ▸ Leakage and windows</a>, <a href="external/fft-analysis.html#">Further reading ▸ FFT analysis essentials ▸ Averaging and overlap</a>, <a href="fft.html#fft-window">FFT analyser ▸ Window</a>, <a href="fft.html#fft-tile-window">FFT analyser ▸ Window tile</a>, <a href="theory/algorithms.html#synth">Theory ▸ Algorithm reference ▸ Signal synthesis &amp; quantization</a></li>
       <li><b>Hans Rosenberg</b> - <a href="credits.html#">Credits</a></li>
@@ -618,8 +625,8 @@
     <ul>
       <li><b>I2S</b> - <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="preferences.html#prefs-audio">Preferences ▸ Audio</a>, <a href="tips.html#">Tips ▸ Tips</a></li>
       <li><b>IEC</b> - <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="credits.html#credits-thanks">Credits ▸ With thanks</a>, <a href="freqresp.html#">Frequency response ▸ Frequency response</a>, <a href="freqresp.html#freqresp-overview">Frequency response ▸ At a glance</a>, <a href="freqresp.html#freqresp-tabs">Frequency response ▸ Settings tabs</a>, <a href="freqresp.html#freqresp-tab-riaa">Frequency response ▸ RIAA &amp; IEC</a></li>
-      <li><b>IIR</b> - <a href="fft.html#fft-mains-suppression">FFT analyser ▸ Mains suppression</a>, <a href="oscilloscope.html#scope-mains">Oscilloscope ▸ Mains</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Algorithm reference ▸ Filtering &amp; estimation</a></li>
-      <li><b>IIR comb</b> - <a href="fft.html#">FFT analyser</a>, <a href="oscilloscope.html#">Oscilloscope</a></li>
+      <li><b>IIR</b> - <a href="oscilloscope.html#scope-mains">Oscilloscope ▸ Mains</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Algorithm reference ▸ Filtering &amp; estimation</a></li>
+      <li><b>IIR comb</b> - <a href="oscilloscope.html#">Oscilloscope</a></li>
       <li><b>IMD</b> - <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ Changed</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ 1.0-RC1 - 2026-06-19</a>, <a href="dac-predistortion.html#dpd-readouts">DAC pre-distortion wizard ▸ What you see</a>, <a href="theory/algorithms.html#spectral">Theory ▸ Algorithm reference ▸ Spectral analysis</a></li>
       <li><b>IME</b> - <a href="changelog.html#">What&#x27;s new ▸ Fixed</a></li>
       <li><b>Incoherent (power) averaging</b> - <a href="theory/fft.html#">Theory ▸ FFT analyser</a></li>
@@ -740,6 +747,7 @@
       <li><b>PET</b> - <a href="bench.html#">Measurement bench &amp; wiring ▸ The cable: CAT.8 patch cable, not &quot;audio&quot; coax</a></li>
       <li><b>Phase</b> - <a href="freqresp.html#">Frequency response</a></li>
       <li><b>PhonalyserServer</b> - <a href="server.html#">The Phonalyser server</a></li>
+      <li><b>Pilot tone</b> - <a href="fft.html#">FFT analyser</a>, <a href="theory/long-term-stabilisation.html#">Theory ▸ Long-term average stabilisation</a></li>
       <li><b>Pink</b> - <a href="theory/generator.html#">Theory ▸ Signal generator</a></li>
       <li><b>Play</b> - <a href="freqresp.html#">Frequency response</a></li>
       <li><b>Port</b> - <a href="preferences.html#">Preferences</a>, <a href="theory/audio-backend.html#volume">Theory ▸ Audio backend ▸ The hardware volume is part of the chain</a></li>
@@ -775,6 +783,7 @@
       <li><b>RECT</b> - <a href="fft.html#fft-tile-window">FFT analyser ▸ Window tile</a></li>
       <li><b>Rectangle</b> - <a href="theory/generator.html#">Theory ▸ Signal generator</a></li>
       <li><b>Red dots</b> - <a href="theory/fft.html#">Theory ▸ FFT analyser</a></li>
+      <li><b>Reference channel</b> - <a href="fft.html#">FFT analyser</a>, <a href="theory/long-term-stabilisation.html#">Theory ▸ Long-term average stabilisation</a></li>
       <li><b>Remove</b> - <a href="preferences.html#">Preferences</a></li>
       <li><b>Reset</b> - <a href="oscilloscope.html#">Oscilloscope</a></li>
       <li><b>Residual</b> - <a href="tips.html#">Tips</a></li>

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser - Theorie: Langzeitstabilisierung der Mittelung</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zur Theorie der Funktionsweise</a></p>
+
+  <h1>Langzeitstabilisierung der Mittelung</h1>
+
+  <h2 id="purpose">Die Frage, die diese Seite beantwortet</h2>
+  <p>Eine Verzerrungsmessung hinter einem Twin-T-Kerbfilter kann stundenlang
+     laufen.  Die <a href="fft.html#coherent">kohärente Mittelung</a> addiert
+     Block für Block phasenrichtig auf, und die Harmonischen treten aus einem
+     Grundrauschen heraus, das mit 1/√<i>n</i> fällt.  Die Ausrichtung von
+     Block zu Block wird vom Grundton gesteuert - der einzigen Linie, die dafür
+     stark genug ist -, und genau hier schlägt der Kerbfilter zurück: seine
+     Phase beim Grundton driftet mit der Temperatur des Filters, und der
+     Analysator kann einen Grundton, der sich <em>allein</em> bewegt hat,
+     nicht von einem unterscheiden, der sich bewegt hat, weil der ganze Block
+     zeitlich verschoben war.  Als Zeitversatz gelesen, wird die Drift des
+     Kerbfilters mit dem Faktor <i>h</i> auf die Harmonische <i>h</i>
+     angewendet: ein Grad beim Grundton dreht H2 um zwei Grad, H7 um sieben
+     und H9 um neun.  Über einen langen Lauf verschmieren und sinken die
+     Harmonischen, statt herauszutreten.</p>
+  <p>Dafür gibt es das Auswahlfeld
+     <a href="../fft.html#fft-phase-align">Grundwellen-Phasenabgleich</a>.
+     Diese Seite erklärt, wie die Drift auf einem Messplatz wirklich aussieht
+     und was seine beiden Modi statt des vom Kerbfilter verfälschten Grundtons
+     lesen: <b>Referenzkanal</b> den Ton auf dem Kanal ohne Kerbfilter,
+     <b>Pilotton</b> eine zweite erzeugte Linie im selben Block wie den
+     Grundton.</p>
+
+  <div class="note"><b>Warum ein Grad zählt.</b>  Die
+     <a href="dac-predistortion.html">DAC-Vorverzerrung</a> löscht eine
+     Harmonische aus, indem der Generator ihren gegenphasigen Zwilling
+     hinzufügt.  Eine 30&nbsp;dB tiefe Auslöschung lässt einen Rest von
+     3&nbsp;% der rohen Harmonischen.  Eine Korrektur, die berechnet wurde,
+     während die Phase des Grundtons um einen Winkel <i>e</i> falsch lag, wird
+     bei der Harmonischen <i>h</i> um <i>h</i>·<i>e</i> falsch angewendet, und
+     der Rest, den sie lässt, ist roh × |1 − e<sup>j·<i>h</i>·<i>e</i></sup>|
+     ≈ roh × <i>h</i>·<i>e</i>.  Für 40&nbsp;dB Auslöschung bei H7 muss die
+     Phase des Grundtons während der Messung der Korrektur auf 0,08° stimmen.
+     Das ist die Genauigkeit, die die Stabilisierung liefern muss, und der
+     Grund, warum ein Sweep alle zehn Minuten nicht die ganze Antwort sein
+     kann.</div>
+
+  <h2 id="drift">Was driftet, und um wie viel</h2>
+  <p>Über seine Kerbe hinweg dreht ein Twin-T-Kerbfilter die Phase um etwa
+     180 Grad, und die Phase <em>fällt</em> mit steigender Frequenz: auf einem
+     Referenzfilter geht sie von etwa +135° ein Hertz unterhalb der Kerbe auf
+     etwa −45° ein Hertz oberhalb, mit einer Steigung von 80 bis 100 Grad je
+     Hertz ein halbes Hertz neben der Kerbe und rund 50 Grad je Hertz weiter
+     draußen.  Erwärmt sich das Filter, wandert seine Kerbe in der Frequenz
+     nach <em>unten</em>; kühlt es ab, wandert die Kerbe nach oben und wird
+     tiefer (etwa 4,6&nbsp;dB je Kelvin bei diesem Filter).  Für einen Grundton
+     auf fester Frequenz heißt das: <b>die Phase beim Grundton steigt, wenn das
+     Filter abkühlt</b>, weil die Kerbe nach oben und von ihm weg wandert, und
+     fällt, wenn es sich erwärmt.</p>
+  <p>Die Zahlen auf diesem Messplatz, mit dem Grundton ein halbes Hertz
+     unterhalb der Kerbe: <b>−28 Grad je Kelvin</b> Gehäusetemperatur,
+     Driftraten bis 0,2-0,4 Grad je Minute bei einem gewöhnlichen Gang der
+     Raumtemperatur, und über Abschnitte von zehn Minuten eine Phasenänderung
+     von mehr als einem Grad in einem Viertel aller Fälle, bis zu acht Grad.
+     Der <em>Pegel</em> des Grundtons hinter dem Kerbfilter bewegt sich mit
+     der Phase - etwa 0,25 bis 0,3&nbsp;dB je Grad auf der Flanke -, weil
+     beides ein und dieselbe Größe ist: die Lage der Kerbe relativ zum
+     Grundton.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 300" width="100%" height="300" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="lsa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+    <line x1="60" y1="30" x2="60" y2="250" stroke="#446" stroke-width="1.2"/>
+    <line x1="60" y1="250" x2="790" y2="250" stroke="#446" stroke-width="1.2" marker-end="url(#lsa)"/>
+    <text x="790" y="268" text-anchor="end" fill="#557">Frequenz -></text>
+    <text x="52" y="40" text-anchor="end" fill="#338">|H|</text>
+    <text x="52" y="56" text-anchor="end" fill="#a33">Phase</text>
+    <path d="M 60 60 C 250 62, 340 70, 390 120 L 425 235 L 460 120 C 510 70, 600 62, 790 60"
+          fill="none" stroke="#33a" stroke-width="1.8"/>
+    <path d="M 60 90 C 300 92, 380 100, 415 150 C 440 190, 520 205, 790 208"
+          fill="none" stroke="#c33" stroke-width="1.8"/>
+    <line x1="425" y1="235" x2="425" y2="250" stroke="#446" stroke-dasharray="3 3"/>
+    <text x="425" y="264" text-anchor="middle" fill="#557">Kerbe</text>
+    <line x1="392" y1="30" x2="392" y2="250" stroke="#446" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="392" y="24" text-anchor="middle" fill="#446" font-weight="bold">f0</text>
+    <circle cx="392" cy="124" r="4" fill="#33a"/>
+    <circle cx="392" cy="128" r="4" fill="#c33"/>
+    <path d="M 60 60 C 280 62, 370 70, 420 120 L 455 235 L 490 120 C 540 70, 630 62, 790 60"
+          fill="none" stroke="#33a" stroke-width="1" stroke-dasharray="5 4" stroke-opacity="0.7"/>
+    <path d="M 60 90 C 330 92, 410 100, 445 150 C 470 190, 550 205, 790 208"
+          fill="none" stroke="#c33" stroke-width="1" stroke-dasharray="5 4" stroke-opacity="0.7"/>
+    <circle cx="392" cy="107" r="4" fill="none" stroke="#33a" stroke-width="1.5"/>
+    <circle cx="392" cy="112" r="4" fill="none" stroke="#c33" stroke-width="1.5"/>
+    <path d="M 430 236 L 452 236" fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#lsa)"/>
+    <text x="470" y="228" fill="#557">Kerbe wandert nach oben (Filter kühlt ab)</text>
+    <text x="70" y="140" fill="#338">Pegel bei f0 steigt ...</text>
+    <text x="70" y="156" fill="#a33">... und die Phase auch:</text>
+    <text x="70" y="172" fill="#557">eine Verschiebung, zwei Ablesungen</text>
+  </svg>
+  </div>
+
+  <div class="note"><b>Wo der Grundton hingehört.</b>  Auf eine Flanke, nicht
+     in den Grund der Kerbe.  Im Grund ist der Pegel hinter dem Kerbfilter am
+     niedrigsten und am wenigsten stabil, und die Steigung des Pegels ist null,
+     sodass eine Verschiebung der Kerbe in beide Richtungen gleich abgelesen
+     wird.  Auf einer Flanke ist der Pegel eine saubere, eindeutige Ablesung
+     der Lage der Kerbe.  Ein Grundton von etwa −82&nbsp;dBV hinter dem
+     Kerbfilter - einige hundert Mikrovolt aus einem 1-V-Ton - ist ein guter
+     Arbeitspunkt.  Die <a href="tune-notch.html">Kerbfilter-Abgleichmessung</a>
+     ist ein Werkzeug zum Abgleich des Filters selbst; auf welcher Seite der
+     Kerbe die Messfrequenz liegt und wie weit von ihr entfernt, entscheidet
+     der Benutzer - auch der Vorverzerrungsassistent wählt keine Frequenz.</div>
+
+  <h2 id="status">Was in dieser Version steckt</h2>
+  <p>Der Modus <b>Referenzkanal</b> liest die überschüssige Phase auf jedem
+     Block vom zweiten ADC-Kanal, der den Ton vor dem Kerbfilter führt.  Der
+     Modus <b>Pilotton</b> liest sie auf jedem Block von einer zweiten
+     erzeugten Linie bei einem ungeraden Vielfachen der halben
+     Grundtonfrequenz, deren Phase im selben Block wie die des Grundtons
+     gemessen wird.</p>
+
+  <h2 id="bottom">Fazit</h2>
+  <ul>
+    <li><b>Der Gegner</b> ist die Phase des Kerbfilters beim Grundton, die um
+        Dutzende Grad je Kelvin driftet und mit dem Faktor <i>h</i> auf die
+        Harmonische <i>h</i> angewendet wird; die Vorverzerrung braucht sie auf
+        ein Zehntelgrad genau.</li>
+    <li><b>Den Grundton auf eine Flanke legen</b>, etwa −82&nbsp;dBV hinter dem
+        Kerbfilter, nie in den Grund der Kerbe.</li>
+  </ul>
+
+  <p class="back"><a href="derotation-accuracy.html">◀ De-Rotations-Genauigkeit</a> ·
+     <a href="index.html">Theorie der Funktionsweise</a> ·
+     weiter: <a href="dac-predistortion.html">DAC-Vorverzerrung ▶</a></p>
+
+</body>
+</html>
