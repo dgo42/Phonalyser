@@ -55,14 +55,16 @@ public final class DebugSwitches {
     public static final boolean SHOW_FFT_ANALYZE_TIME = Boolean.parseBoolean("false");
 
     /** DEBUG hard switch: trace the generator frequency-lock chain, one WARN
-     *  line per link per displayed frame - the loop inputs/outputs in
-     *  {@code FftController.applyFrequencyLock} (per-tone target, measured,
-     *  correction, published trim, plus gate refusals) and the trim
+     *  line per link per analysed tick - the loop inputs/outputs in
+     *  {@code FftAnalyzerWorker.applyFrequencyLock} (per-tone target, measured,
+     *  correction, then {@code pub=} with the trim when one went out on that
+     *  update or {@code held} when the correction did not move, plus gate
+     *  refusals) and the trim
      *  application in {@code GeneratorController}.  Shows which link breaks
      *  when a frequency diff sticks: loop never called, measurement biased,
      *  trim published but not applied, or applied but the analog tone
      *  doesn't move. */
-    public static final boolean TRACE_FLL = Boolean.parseBoolean("false");
+    public static final boolean TRACE_FLL = Boolean.parseBoolean("true");
 
     /** DEBUG hard switch: write the DAC-predistortion training statistics file
      *  - one {@code dpd-stats-<timestamp>.csv} per training session in the
@@ -75,19 +77,6 @@ public final class DebugSwitches {
      *  the correction math run either way. */
     public static final boolean WRITE_DPD_STATS = Boolean.parseBoolean("false");
 
-    /** DEBUG hard switch: trace what the fundamental's phase does to its
-     *  harmonics across a coherent FFT average.  With it on, the worker logs
-     *  the phase of every harmonic h relative to h times the fundamental's own
-     *  phase - a relation a pure time shift leaves alone, so what moves in it
-     *  is the fundamental moving by itself, which is exactly what a drifting
-     *  notch does and what the phase alignment corrects.  Three lines: the
-     *  relations at the first accumulated frame of a collection (no correction
-     *  applied yet), every phase excess as it is measured, and the relations
-     *  again on every later frame with that excess taken into account - so the
-     *  correction can be read off the log as the numbers standing still.
-     *  {@code false} logs none of it. */
-    public static final boolean TRACE_HARMONIC_PHASE = Boolean.parseBoolean("true");
-
     /** DEBUG hard switch: write a per-tick record of the coherent FFT
      *  accumulator - one {@code fft-ticks-<timestamp>.csv} per accumulator
      *  run in the application's log directory: every tick's de-rotation
@@ -98,4 +87,51 @@ public final class DebugSwitches {
      *  log - a long run writes thousands of rows, hence a switch.
      *  {@code false} writes nothing. */
     public static final boolean WRITE_FFT_TICK_STATS = Boolean.parseBoolean("false");
+
+    /** DEBUG hard switch: trace what the fundamental's phase does to its
+     *  harmonics across a coherent FFT average.  With it on, the worker logs
+     *  the phase of every harmonic h relative to h times the fundamental's own
+     *  phase - a relation a pure time shift leaves alone, so what moves in it
+     *  is the fundamental moving by itself, which is exactly what a drifting
+     *  notch does and what the phase alignment corrects.  Three lines: the
+     *  relations at the first accumulated frame of a collection (no correction
+     *  applied yet), every phase excess as it is measured, and the relations
+     *  again on every later frame with that excess taken into account - so the
+     *  correction can be read off the log as the numbers standing still.
+     *  Beside each phase line a level line: the fundamental and the harmonics
+     *  in dBFS at their bins, for the fresh frame and for the accumulator, so
+     *  a residual harmonic growing or shrinking over a long collection (a DAC
+     *  correction ageing, a floor averaging down) can be read off the log too.
+     *  {@code false} logs none of it. */
+    public static final boolean TRACE_HARMONIC_PHASE = Boolean.parseBoolean("true");
+
+    /** DEBUG hard switch: in the pilot-tone phase alignment, measure the
+     *  FUNDAMENTAL on the reference channel on every tick - the analyser's
+     *  windowed single-bin Goertzel of the opposite channel's window at the
+     *  fundamental's bin - and extend the per-tick phase excess line with
+     *  what it yields.  That channel carries the fundamental clear of the
+     *  notch, so it is the control the pilot is held against: its phase
+     *  change is the time base alone, and the pilot's own change less that
+     *  change scaled by the ratio of the two bins is the pilot's deviation,
+     *  expected to stand at zero.  The pilot is never read on the reference
+     *  channel - a pilot read there is that channel's own converter path and
+     *  says nothing about the notch.  Costs the reference mirror and one
+     *  Goertzel per tick.  Steers nothing: the frequency lock and the excess
+     *  stay as they are in that mode.  In the reference-channel alignment
+     *  the same switch asks the generator for the pilot and reads it as the
+     *  control of the reference's reading, the roles reversed, on the same
+     *  trace line.  {@code false} measures nothing.  Needs
+     *  {@link #TRACE_HARMONIC_PHASE}, which writes the line it extends. */
+    public static final boolean TRACE_PILOT_PHASE = Boolean.parseBoolean("false");
+
+    /** DEBUG hard value: accepted frames the pilot-tone phase alignment
+     *  averages its two readings over - the relation's change and the
+     *  fundamental's change against the reference channel, each over the
+     *  last this many frames.  Zero averages nothing: every value is the
+     *  fresh frame's own, so a step between two frames shows whole in the
+     *  frame it happens in; N divides the frame's own noise down by N and
+     *  spreads a step over N frames.  The phases themselves are read from
+     *  one raw frame at any setting. */
+    public static final int PILOT_AVERAGE_FRAMES = Integer.parseInt("0");
+
 }

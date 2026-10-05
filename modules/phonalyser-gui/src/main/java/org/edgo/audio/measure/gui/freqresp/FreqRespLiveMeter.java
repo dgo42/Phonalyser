@@ -112,6 +112,10 @@ public final class FreqRespLiveMeter extends Canvas {
      *  drives the frequency-proportional smoothing. */
     private final double leadInSec;
     private final double sweepSec;
+    /** The band the stimulus really travels - the SWEPT band the caller
+     *  derives with {@link FreqRespConstants#sweptBandHz}, wider at both ends
+     *  than the configured one: the estimate below has to follow what is
+     *  emitted, not what is read. */
     private final double startHz;
     private final double stopHz;
 
@@ -131,15 +135,18 @@ public final class FreqRespLiveMeter extends Canvas {
      *  interval. */
     private double  lastTimeSec;
 
+    /** @param sweptStartHz where the emitted sweep starts (the swept band,
+     *                      not the configured one)
+     *  @param sweptStopHz  where it ends */
     public FreqRespLiveMeter(Composite parent, double totalDurationSec,
                              double leadInSec, double sweepSec,
-                             double startHz, double stopHz) {
+                             double sweptStartHz, double sweptStopHz) {
         super(parent, SWT.NO_BACKGROUND | SWT.DOUBLE_BUFFERED);
         this.totalDurationSec = Math.max(0.001, totalDurationSec);
         this.leadInSec        = Math.max(0.0, leadInSec);
         this.sweepSec         = Math.max(1e-9, sweepSec);
-        this.startHz          = Math.max(0.001, startHz);
-        this.stopHz           = Math.max(this.startHz, stopHz);
+        this.startHz          = Math.max(0.001, sweptStartHz);
+        this.stopHz           = Math.max(this.startHz, sweptStopHz);
         Display d = getDisplay();
 
         background = new Color(d, 0xFF, 0xFF, 0xFF);

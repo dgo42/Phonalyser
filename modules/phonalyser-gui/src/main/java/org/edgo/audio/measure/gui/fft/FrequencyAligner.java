@@ -25,9 +25,10 @@ import org.edgo.audio.measure.enums.AlignGenerator;
  * frequency onto the FFT bin grid by feeding back the per-frame error between
  * the commanded {@code target} and the FFT's refined {@code detected} estimate.
  *
- * <p>The sole implementation is {@link FrequencyFll}.  The view holds one per
- * tone and adds {@link #getCorrection()} to the snap target before publishing the
- * trim.  Not synchronized - called from the SWT UI thread.
+ * <p>The sole implementation is {@link FrequencyFll}.  The FFT analyser worker
+ * holds one per tone and adds {@link #getCorrection()} to the snap target before
+ * publishing the trim.  Not synchronized - stepped on the worker's thread, and
+ * reset there or, while no worker thread runs, on the caller's thread.
  */
 public interface FrequencyAligner {
 
@@ -45,6 +46,14 @@ public interface FrequencyAligner {
     /** Zeroes the loop state.  Call on Record stop and on user-initiated
      *  generator-frequency / FFT-length changes (both invalidate the lock). */
     void reset();
+
+    /** Whether the loop has left its start regime: the first correction has
+     *  been observed and a reading has landed on grid, so the tone the
+     *  capture holds is the trimmed one.  An aligner without a start regime
+     *  is tracking from its first correction on. */
+    default boolean isTracking() {
+        return true;
+    }
 
     AlignGenerator getMode();
 }

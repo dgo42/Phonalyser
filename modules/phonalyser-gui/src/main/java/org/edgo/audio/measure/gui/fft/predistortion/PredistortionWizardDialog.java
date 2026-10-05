@@ -43,14 +43,16 @@ import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.ImdResult;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.fft.FftController;
 import org.edgo.audio.measure.gui.fft.FftView;
-import org.edgo.audio.measure.gui.fft.ImdResult;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine.Phase;
-import org.edgo.audio.measure.gui.generator.GeneratorController;
+import org.edgo.audio.measure.gui.bus.GeneratorCorrectionsRequest;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
@@ -78,7 +80,9 @@ import lombok.extern.log4j.Log4j2;
  * auto-stops on the target distortion or when it stalls.  <b>Save</b> writes
  * the {@code .dpd} predistortion file; it then becomes <b>Apply</b>, which
  * loads that file onto the generator and switches it to the compensated form.
- * <b>Cancel</b> reverts the generator to the plain tone.
+ * Closing the window any other way after a run puts the generator back on the
+ * form the preferences hold: a compensated form gets its saved {@code .dpd}
+ * reloaded, a plain form is restarted without corrections.
  */
 @Log4j2
 public final class PredistortionWizardDialog implements PredistortionEngine.Listener {
@@ -87,12 +91,14 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
      *  coherent average to read the harmonics cleanly. */
     private static final double MIN_AVERAGES = 10.0;
     private static final double MAX_AVERAGES = 1_000_000.0;
+    /** Floor of the target THD (%): the round sizing measures each harmonic's
+     *  relevance against the target, so it must stay a real number. */
+    private static final double MIN_TARGET_PCT = 0.1e-6;
     /** Live-refresh cadence (ms) for the polling render - fast enough that the
      *  per-round progress bar and averages climb smoothly. */
     private static final int    TIMER_MS = 100;
 
     private final Shell               parentShell;
-    private final GeneratorController gen;
     private final FftController       fft;
     private final FftView             view;
     /** Loaded {@code .frc} corrections, handed to the engine so it de-embeds
@@ -131,6 +137,14 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
      *  the generator and the analyser carry this wizard's state.  A window
      *  closed before that must leave both untouched. */
     private boolean engaged;
+    /** The waveform the preferences held when the run started.  A run measures
+     *  the converter's own distortion, so it plays the plain sibling of a
+     *  compensated form for its whole length - every rebuild of the tone
+     *  derives from the preferences, and a compensated form there would load
+     *  its saved correction file back under the measurement.  Restored when
+     *  the window closes without Apply; Apply sets the compensated form
+     *  itself. */
+    private GenSignalForm formBeforeRun;
     /** Terminal status key set by {@link #onFinished} and shown while idle. */
     private String  terminalStatusKey = "predistortion.status.idle";
 
@@ -144,11 +158,9 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
      *  first round finishes. */
     private double   latestDistPct = Double.NaN;
 
-    public PredistortionWizardDialog(Shell parent, GeneratorController gen,
-                                     FftController fft, FftView view,
+    public PredistortionWizardDialog(Shell parent, FftController fft, FftView view,
                                      CorrectionStore correctionStore) {
         this.parentShell     = parent;
-        this.gen             = gen;
         this.fft             = fft;
         this.view            = view;
         this.correctionStore = correctionStore;
@@ -279,9 +291,11 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
 
         targetLabel = new Label(c, SWT.NONE);
         targetLabel.setText(I18n.t("predistortion.targetThd"));
-        // PERCENT policy, like the other % fields; 0 = no target.  8 decimals
-        // so a sub-ppm target distortion can be entered.
-        targetField = new NumericStepField(c, UnitFamily.PERCENT, 0.0, 100.0, 8, 90);
+        // PERCENT policy, like the other % fields.  8 decimals so a sub-ppm
+        // target distortion can be entered; the floor of 0.1e-6 % keeps the
+        // target meaningful, as the round sizing measures every harmonic's
+        // relevance against it.
+        targetField = new NumericStepField(c, UnitFamily.PERCENT, MIN_TARGET_PCT, 100.0, 8, 90);
         targetField.setValue(prefs.getPredistortionTargetPct());
         targetField.setToolTipText(I18n.t("predistortion.targetThd.tooltip"));
         targetField.addSelectionListener(e ->
@@ -400,8 +414,11 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // Dual-tone signal -> the loop minimises INTERMOD, not THD; show IMD /
         // D+N in place of THD / THD+N (the figures already are IMD-based for the
         // last/best readouts - the engine's per-round metric is the IMD %).
+        // The products ride on the live result; one without them (no second
+        // tone found) reads "-" - a THD figure measures a single tone and says
+        // nothing about the intermod the loop minimises.
         boolean dual = prefs.getGenSignalForm().isDualTone();
-        ImdResult imd = (dual && live != null) ? fft.analyzeImd(live) : null;
+        ImdResult imd = (dual && live != null) ? live.imd : null;
 
         roundLbl.setText(metric("round",    running ? Integer.toString(engine.getCurrentRound() + 1) : "-"));
         // Live distortion straight off the running FFT (updates within a round),
@@ -409,10 +426,10 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         curThdLbl.setText(dual
                 ? metric("currentImd", imd != null ? fmtPct(imd.imdPwrPct) : "-")
                 : metric("currentThd", live != null ? fmtPct(live.thdPct) : "-"));
-        // The cross-tick averaging depth - the SAME counter the FFT view shows
+        // What is inside the average - the SAME number the FFT pane shows
         // (climbs over a round, reset each round), NOT the per-call frameCount
         // (only the 2-3 frames of one analyze() segment).
-        avgLbl  .setText(metric("averages", Integer.toString(fft.completedAnalyses())));
+        avgLbl  .setText(metric("averages", Integer.toString(fft.averagesInWindow())));
         distLbl .setText(metric(dual ? "imd"      : "thd",      fmtPct(latestDistPct)));
         bestLbl .setText(metric(dual ? "best_imd" : "best_thd", bestText()));
         // Match the FFT pane: the ratio figures (THD+N / TD+N / SNR / SINAD)
@@ -424,8 +441,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
                 : metric("thd_n", live != null ? fmtDb(-live.sinadDb) : "-"));
         snrLbl  .setText(metric("snr",      live != null ? fmtDb(live.snrDb) : "-"));
         sinadLbl.setText(metric("sinad",    live != null ? fmtDb(live.sinadDb) : "-"));
-        double dbvOffsetDb = AudioBackend.instance().calibrationOrDefault(true)
-                .dbvOffsetDb(prefs.getFftChannel());
+        double dbvOffsetDb = AudioBackend.instance().analysedChannelDbvOffsetDb();
         fundLbl .setText(metric("fund",     live != null ? fmtDbv(live.fundamentalDbFs + dbvOffsetDb) : "-"));
         floorLbl.setText(metric("floor",    live != null ? fmtDbv(live.noisePeakFloorDbFs() + dbvOffsetDb) : "-"));
 
@@ -460,16 +476,15 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
 
     /** The distortion the running FFT reads RIGHT NOW - the figure {@code curThdLbl}
      *  carries: the intermod percentage for a dual tone, THD for a single one.
-     *  {@link Double#NaN} with no result yet, and for a dual tone whose products the
-     *  analyser could not read. */
+     *  {@link Double#NaN} with no result yet, and for a dual tone whose result
+     *  carries no products. */
     private double liveDistPct() {
         FftResult live = view.getLastResult();
         if (live == null) {
             return Double.NaN;
         }
         if (Preferences.instance().getGenSignalForm().isDualTone()) {
-            ImdResult imd = fft.analyzeImd(live);
-            return imd != null ? imd.imdPwrPct : Double.NaN;
+            return live.imd != null ? live.imd.imdPwrPct : Double.NaN;
         }
         return live.thdPct;
     }
@@ -498,7 +513,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         double[] h = distHistory;
         int[] g = avgHistory;
         double livePct = liveDistPct();
-        int liveAvgs = fft.completedAnalyses();
+        int liveAvgs = fft.averagesInWindow();
         if (running && engine != null && engine.getPhase() == Phase.COLLECTING
                 && Double.isFinite(livePct) && livePct > 0 && liveAvgs > 0) {
             h = Arrays.copyOf(h, h.length + 1);
@@ -584,12 +599,16 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
             startStopBtn.setEnabled(false);   // re-enabled by onFinished
             return;
         }
-        if (!gen.isRunning()) {
+        // "Is the generator emitting?" - the same bus question the analyser
+        // asks; this window holds no generator.
+        Boolean emitting = MessageBus.instance().request(Events.GENERATOR_RUNNING);
+        if (!Boolean.TRUE.equals(emitting)) {
             Dialogs.error(dialog, I18n.t("predistortion.wizard.title"),
                     I18n.t("predistortion.error.noGenerator"));
             return;
         }
-        GenSignalForm form = Preferences.instance().getGenSignalForm();
+        Preferences prefs = Preferences.instance();
+        GenSignalForm form = prefs.getGenSignalForm();
         boolean supported = form == GenSignalForm.SINE
                 || form == GenSignalForm.SINE_COMP
                 || form.isDualTone();
@@ -619,7 +638,17 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         targetField.setEnabled(false);
         startStopBtn.setText(I18n.t("predistortion.button.stop"));
 
-        engine = new PredistortionEngine(dialog.getDisplay(), gen, fft, view, correctionStore, this);
+        // The run measures the raw converter: a compensated preference form
+        // gives way to its plain sibling for the run's length, through the
+        // preferences the generator derives every start from (see
+        // formBeforeRun).  The generator's form listener switches the running
+        // tone live and forgets what was hot-swapped onto it.
+        formBeforeRun = form;
+        if (form.isCompensated()) {
+            prefs.setGenSignalForm(form.plainSibling());
+        }
+
+        engine = new PredistortionEngine(dialog.getDisplay(), fft, view, correctionStore, this);
         engine.start(baseAverages, targetThdPct);
     }
 
@@ -784,16 +813,15 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // then - written the other way round, the compensated tone comes up on
         // whatever .dpd was configured before this session.
         //
-        // The explicit load stays, and is not redundant: a preference write with
-        // an unchanged value notifies nobody, so re-applying to the SAME path
-        // while the generator is already on the compensated form leaves both
-        // writes silent - and the just-measured tables would never reach the
-        // tone.
+        // No explicit load of the file here: the run played the PLAIN sibling
+        // (see formBeforeRun), so the form written below always differs from
+        // the one in force, the generator's form listener fires, switches the
+        // tone to the compensated form live and loads the file the path now
+        // names - the case of re-applying to the SAME path included.
         GenSignalForm form = engine.isDualTone()
                 ? GenSignalForm.DUAL_TONE_COMP : GenSignalForm.SINE_COMP;
         prefs.setGenDpd(form, savedPath);
         prefs.setGenSignalForm(form);
-        gen.loadCorrectionsFromFile(savedPath);
         prefs.save();
         applied = true;
         dialog.close();
@@ -843,19 +871,31 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // deep average the operator collected before opening this window.
         if (!engaged) return true;
         // Undo what the run did to the generator, unless the user committed via
-        // Apply.  A run always begins by clearing whatever compensation was
-        // live, so "undo" is not the plain tone: it is the correction file the
-        // generator was configured with BEFORE this window opened.  That path is
-        // still in the preferences - only Apply overwrites it - so re-loading it
-        // restores the previous state; with none configured the plain tone IS
-        // the previous state.
+        // Apply.  The run hot-swapped its corrections onto the running tone and
+        // played the plain sibling of the configured form, so the state to
+        // return to is the form the preferences held before the run - only
+        // Apply changes that.  A compensated form IS its saved correction file:
+        // writing it back into the preferences makes the generator's form
+        // listener switch the tone live, load the file and forget the
+        // hot-swapped set.  A plain form carries no corrections at all: the
+        // tables are dropped over the bus, and the generator announces that as
+        // the signal change the FFT and the scope restart on - no rebuild of
+        // the tone is needed for it.  The single-tone .dpd slot keeps its path
+        // while the form is plain, so a plain form must never consult it - that
+        // is how a closed wizard used to leave an old correction file playing
+        // under the plain-sine label.
+        // The analyser goes down BEFORE the generator is touched, on the same
+        // path the Record button takes, and comes back up on the restored tone
+        // below: no tick then analyses the seam in which the tone is rebuilt.
+        boolean wasRecording = fft.isRecording();
+        if (wasRecording) fft.stopRecording();
         if (!applied) {
-            String previous = Preferences.instance()
-                    .getGenDpd(Preferences.instance().getGenSignalForm());
-            if (previous != null && !previous.isBlank() && new File(previous).isFile()) {
-                gen.loadCorrectionsFromFile(previous);
+            if (formBeforeRun != null && formBeforeRun.isCompensated()) {
+                Preferences.instance().setGenSignalForm(formBeforeRun);
             } else {
-                gen.clearCompensation();
+                MessageBus.instance().publish(Events.GENERATOR_CORRECTIONS,
+                        new GeneratorCorrectionsRequest(GeneratorCorrectionsRequest.Kind.CLEAR,
+                                null, null, null, null, null));
             }
         }
         // The run left the FFT in infinite coherent averaging with a deep
@@ -863,6 +903,9 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // the signal just changed); clear the statistics + accumulator so the
         // live view restarts clean instead of averaging across the change.
         fft.resetStatistics();
+        // Back up on the restored tone - an analyser that was not recording
+        // when this window closed stays as it was.
+        if (wasRecording) fft.startRecording();
         return true;
     }
 

@@ -286,10 +286,15 @@ public final class FreqRespWizardDialog {
         // The silence before the chirp: the fixed window the deconvolution
         // measures each channel's DC offset on, plus the operator's lead-in.
         double leadInSec = FreqRespCalHelper.OFFSET_LEAD_IN_SEC + prefs.getFreqRespLeadInSec();
+        // The chirp is played over the SWEPT band - the configured band widened
+        // at both ends - and the analyzer's deconvolution reference is built by
+        // the same rule, so the two are one chirp; the meter follows it too.
+        double[] swept = FreqRespConstants.sweptBandHz(prefs.getFreqRespStartHz(),
+                prefs.getFreqRespStopHz(), captureRate, playbackRate);
         double totalSec = leadInSec
                         + prefs.getFreqRespDurationSec()
                         + 0.5;
-        openProgressDialog(totalSec, leadInSec);
+        openProgressDialog(totalSec, leadInSec, swept[0], swept[1]);
         MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
         // Marshal capture-progress to the UI thread so the progress dialog's
         // live meter paints level-vs-time as the sweep runs.  The meter shows
@@ -327,7 +332,7 @@ public final class FreqRespWizardDialog {
                         // whichever backend is active, and a remote bench renders
                         // the chirp itself instead of being played into.
                         .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
-                                prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
+                                swept[0], swept[1],
                                 prefs.getFreqRespDurationSec(), leadInSec,
                                 sweepAmplitudeVrms, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R)))
                         .build();
@@ -510,7 +515,8 @@ public final class FreqRespWizardDialog {
         return true;
     }
 
-    private void openProgressDialog(double totalDurationSec, double leadInSec) {
+    private void openProgressDialog(double totalDurationSec, double leadInSec,
+                                    double sweptStartHz, double sweptStopHz) {
         if (progressDialog != null && !progressDialog.isDisposed()) return;
         Shell s = new Shell(dialog, SWT.TITLE | SWT.BORDER
                 | SWT.APPLICATION_MODAL);
@@ -528,7 +534,7 @@ public final class FreqRespWizardDialog {
         Preferences prefs = Preferences.instance();
         progressMeter = new FreqRespLiveMeter(s, totalDurationSec,
                 leadInSec, prefs.getFreqRespDurationSec(),
-                prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz());
+                sweptStartHz, sweptStopHz);
         GridData mg = new GridData(SWT.FILL, SWT.CENTER, true, false);
         mg.widthHint  = 520;
         mg.heightHint = 100;

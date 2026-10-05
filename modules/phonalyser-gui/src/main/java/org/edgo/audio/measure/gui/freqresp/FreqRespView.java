@@ -138,6 +138,15 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  calibration. */
     private FreqRespResult leftResult;
     private FreqRespResult rightResult;
+    /** Per-channel cache of the displayed (unwrapped) phase in degrees, with
+     *  the result object it was built from - see {@link #unwrappedPhaseDeg}.
+     *  Holding the SOURCE rather than a dirty flag means a new measurement, a
+     *  reload and a calibration change all invalidate it by simply handing the
+     *  view a different object. */
+    private double[]       leftPhaseUnwrappedDeg;
+    private FreqRespResult leftUnwrapSrc;
+    private double[]       rightPhaseUnwrappedDeg;
+    private FreqRespResult rightUnwrapSrc;
     /** Source file path of the loaded measurement, or null for a live sweep. */
     @Getter
     private String         sourceFilePath;
@@ -775,12 +784,14 @@ public final class FreqRespView extends AbstractFreqDomainView {
     }
 
     /** Auto-fits the view's frequency and magnitude windows to the
-     *  visible result data.  Horizontal range goes to
-     *  {@code FreqRespConstants.FREQ_MIN_HZ -> nyquistHz()} (i.e. the full band the
-     *  user has allowed via the Max-freq-%-Nyquist pref).  Vertical
-     *  range is taken from the magnitude min/max across whichever
-     *  channels are shown, padded by 10 % above and below.  No-op when
-     *  no visible channel has any usable data in the band.
+     *  visible result data.  Horizontal range goes to the span the visible
+     *  measurements were actually SWEPT over ({@link #fitFrequencyBand()}),
+     *  so a 800 Hz - 1.2 kHz sweep fills the plot instead of sitting as a
+     *  short segment inside a floor-to-Nyquist axis; a result that states no
+     *  sweep range keeps the full band.  Vertical range is taken from the
+     *  magnitude min/max across whichever channels are shown, inside that
+     *  same band, padded by 10 % above and below.  No-op when no visible
+     *  channel has any usable data in the band.
      *
      *  <p>When compare mode is active the call is dispatched to
      *  {@link #autoSetupCompare(Preferences)} instead, so the header
@@ -791,15 +802,17 @@ public final class FreqRespView extends AbstractFreqDomainView {
             autoSetupCompare(prefs);
             return;
         }
-        double fHi = nyquistHz();
+        double[] band = fitFrequencyBand();
+        double fLo = band[0];
+        double fHi = band[1];
         double minDb = Double.POSITIVE_INFINITY;
         double maxDb = Double.NEGATIVE_INFINITY;
         if (prefs.isFreqRespLeftVisible()  && leftResult  != null) {
-            double[] ext = magExtremaInBand(leftResult,  0.0, fHi);
+            double[] ext = magExtremaInBand(leftResult,  fLo, fHi);
             if (ext != null) { minDb = Math.min(minDb, ext[0]); maxDb = Math.max(maxDb, ext[1]); }
         }
         if (prefs.isFreqRespRightVisible() && rightResult != null) {
-            double[] ext = magExtremaInBand(rightResult, 0.0, fHi);
+            double[] ext = magExtremaInBand(rightResult, fLo, fHi);
             if (ext != null) { minDb = Math.min(minDb, ext[0]); maxDb = Math.max(maxDb, ext[1]); }
         }
         if (!Double.isFinite(minDb) || !Double.isFinite(maxDb) || maxDb <= minDb) {
@@ -822,15 +835,57 @@ public final class FreqRespView extends AbstractFreqDomainView {
         }
         newTop = Math.min(MAG_TOP_ZOOM_MAX_DB, newTop);
         newBot = Math.max(FreqRespConstants.MAG_BOT_MIN_DB, newBot);
-        prefs.setFreqRespFreqMinHz(FreqRespConstants.FREQ_MIN_HZ);
+        prefs.setFreqRespFreqMinHz(fLo);
         prefs.setFreqRespFreqMaxHz(fHi);
         // Bake the +20 dB headroom above the corrected peak into the STORED top - autosetup
         // is one of the two fit actions allowed to set it; scroll/zoom stay free above it.
-        prefs.setFreqRespMagTopDb(softMagTopDb(newTop, FreqRespConstants.FREQ_MIN_HZ, fHi));
+        prefs.setFreqRespMagTopDb(softMagTopDb(newTop, fLo, fHi));
         prefs.setFreqRespMagBotDb(newBot);
         if (!isolated) prefs.save();
         publishRangeChanged();
         redraw();
+    }
+
+    /**
+     * The horizontal band the auto-setup fits to: the union of the frequency
+     * spans the VISIBLE measurements were swept over, clamped into the range
+     * the view allows ({@code FreqRespConstants.FREQ_MIN_HZ} to
+     * {@link #nyquistHz()}).
+     *
+     * <p>Falls back to that full range whenever no visible result states a
+     * usable sweep span - a curve loaded from a file saved without sweep
+     * parameters, where the only honest answer is the whole axis.  The
+     * fallback is also what a degenerate pair (a stop at or below the start,
+     * or a span clamped to nothing) lands on.
+     */
+    private double[] fitFrequencyBand() {
+        double lo = Double.POSITIVE_INFINITY;
+        double hi = Double.NEGATIVE_INFINITY;
+        if (prefs.isFreqRespLeftVisible()  && leftResult  != null) {
+            double[] span = sweptSpan(leftResult);
+            if (span != null) { lo = Math.min(lo, span[0]); hi = Math.max(hi, span[1]); }
+        }
+        if (prefs.isFreqRespRightVisible() && rightResult != null) {
+            double[] span = sweptSpan(rightResult);
+            if (span != null) { lo = Math.min(lo, span[0]); hi = Math.max(hi, span[1]); }
+        }
+        double[] full = { FreqRespConstants.FREQ_MIN_HZ, nyquistHz() };
+        if (!Double.isFinite(lo) || !Double.isFinite(hi)) return full;
+        double fitLo = Math.max(full[0], lo);
+        double fitHi = Math.min(full[1], hi);
+        return fitHi > fitLo ? new double[] { fitLo, fitHi } : full;
+    }
+
+    /** The start and stop frequency {@code r} was swept between, as its sweep
+     *  parameters recorded them at measurement time, or {@code null} when it
+     *  carries none or carries an unusable pair. */
+    private double[] sweptSpan(FreqRespResult r) {
+        FreqRespSweepParams p = r.getSweepParams();
+        if (p == null) return null;
+        double start = p.getStartHz();
+        double stop  = p.getStopHz();
+        if (!(start > 0.0) || !(stop > start)) return null;
+        return new double[] { start, stop };
     }
 
     /** Returns {@code [minDb, maxDb]} of the magnitudes in {@code r}
@@ -950,6 +1005,13 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // AbstractFreqDomainView; we just hand it a fingerprint and the
         // static-layer painter.
         final double fFreqMin = freqMin;
+        // The phase axis follows the unwrapped traces inside the visible span,
+        // so it is derived here, once, and used by both the axis and the trace -
+        // and it needs no place in the fingerprint below, deriving from the
+        // results and the window that are already in it.
+        double[] phaseWin = phaseWindowDeg(fFreqMin, freqMax);
+        final double phaseBot = phaseWin[0];
+        final double phaseTop = phaseWin[1];
         long fp = computeFingerprint(area, prefs, phaseVisible,
                 fFreqMin, freqMax, magTop, magBot);
         paintCachedStatic(gc, area, fp, bgc -> {
@@ -963,7 +1025,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
                     .withFormat(LabelFormat.DB)
                     .withUnit(I18n.t("unit.db"));
             AxisSpec yRightSpec = phaseVisible
-                    ? AxisSpec.linear(-180, 180, 8)
+                    ? AxisSpec.linear(phaseBot, phaseTop,
+                            (int) Math.round((phaseTop - phaseBot) / PHASE_AXIS_STEP_DEG))
                             .withFormat(LabelFormat.PHASE_DEG)
                             .withUnit("φ")
                     : null;
@@ -973,7 +1036,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
             if (compareActive()) {
                 drawCompareTrace(bgc, plot, fFreqMin, freqMax, magTop, magBot, prefs);
             } else {
-                drawTraces(bgc, plot, fFreqMin, freqMax, magTop, magBot);
+                drawTraces(bgc, plot, fFreqMin, freqMax, magTop, magBot, phaseBot, phaseTop);
                 if (referenceActive()) {
                     drawReferenceOverlay(bgc, plot, fFreqMin, freqMax, magTop, magBot, prefs);
                 }
@@ -2349,7 +2412,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
     }
 
     private void drawTraces(GC gc, Rectangle plot, double freqMin, double freqMax,
-                            double magTop, double magBot) {
+                            double magTop, double magBot,
+                            double phaseBotDeg, double phaseTopDeg) {
         if (prefs.isFreqRespLeftVisible() && leftResult != null) {
             paintTrace(gc, leftResult, plot, freqMin, freqMax, magTop, magBot,
                     color(ColorRole.LEFT_TRACE));
@@ -2360,10 +2424,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
         }
         if (prefs.isFreqRespPhaseVisible()) {
             if (prefs.isFreqRespLeftVisible() && leftResult != null) {
-                paintPhase(gc, leftResult, plot, freqMin, freqMax, color(ColorRole.PHASE_TRACE));
+                paintPhase(gc, leftResult, plot, freqMin, freqMax, color(ColorRole.PHASE_TRACE),
+                        phaseBotDeg, phaseTopDeg);
             }
             if (prefs.isFreqRespRightVisible() && rightResult != null) {
-                paintPhase(gc, rightResult, plot, freqMin, freqMax, color(ColorRole.PHASE_TRACE));
+                paintPhase(gc, rightResult, plot, freqMin, freqMax, color(ColorRole.PHASE_TRACE),
+                        phaseBotDeg, phaseTopDeg);
             }
         }
     }
@@ -2417,7 +2483,13 @@ public final class FreqRespView extends AbstractFreqDomainView {
     /** Draws one data-driven trace through {@link #paintPolyline}: a per-pixel Lanczos
      *  reconstruction of {@code data} (aligned with {@code freqs}) when smoothing is on and
      *  the span is sparse enough, else the linear per-point feed.  {@code toY} maps a
-     *  reconstructed-or-raw sample value to its sub-pixel Y (or {@code NaN} to drop it). */
+     *  reconstructed-or-raw sample value to its sub-pixel Y (or {@code NaN} to drop it).
+     *
+     *  <p>The per-pixel path walks the whole plot width, so pixels outside the measured
+     *  grid are dropped here: the index the kernel reads is clamped to the ends of the
+     *  data, which would otherwise repeat the first and the last sample and draw the
+     *  curve on as a horizontal line into frequencies the sweep never visited.  The
+     *  per-point path needs no such rule - it feeds the data points themselves. */
     private void paintDataTrace(GC gc, Rectangle plot, double freqMin, double freqMax,
                                 Color color, int lineStyle, double[] freqs, double[] data,
                                 DoubleUnaryOperator toY) {
@@ -2425,10 +2497,16 @@ public final class FreqRespView extends AbstractFreqDomainView {
         int n = freqs.length;
         float lw = (float) prefs.getFreqRespLineWidth();
         if (scale > 0) {
+            double measuredLo = freqs[0];
+            double measuredHi = freqs[n - 1];
             paintPolyline(gc, plot, color, lineStyle, lw, plot.width,
                     i -> plot.x + i,
-                    i -> toY.applyAsDouble(Lanczos.lanczos(data, n,
-                            fracIndex(freqs, xToFreq(plot.x + i, plot, freqMin, freqMax, true)), scale)));
+                    i -> {
+                        double f = xToFreq(plot.x + i, plot, freqMin, freqMax, true);
+                        if (f < measuredLo || f > measuredHi) return Double.NaN;
+                        return toY.applyAsDouble(Lanczos.lanczos(data, n,
+                                fracIndex(freqs, f), scale));
+                    });
         } else {
             paintPolyline(gc, plot, color, lineStyle, lw, n,
                     i -> freqToX(freqs[i], plot, freqMin, freqMax, true),
@@ -2446,43 +2524,163 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 v -> dbToY(FreqRespFormat.linToDb(Math.max(LANCZOS_MAG_FLOOR_LIN, v)), plot, magTop, magBot));
     }
 
+    /** Draws one channel's phase, one sample per pixel, through the SAME
+     *  reading the cursor quotes ({@link #drawnPhaseDeg}): unwrapped, so the
+     *  curve continues past ±180° instead of jumping, and taken between the two
+     *  grid points around the pixel, so a steep transition is neither smeared
+     *  by a wide reconstruction kernel nor bent across the wrap.  Nothing is
+     *  drawn outside the measured grid - the sweep visited nothing there. */
     private void paintPhase(GC gc, FreqRespResult result, Rectangle plot,
-                            double freqMin, double freqMax, Color color) {
-        double[] freqs    = result.getFreqs();
-        double[] phaseRad = result.getPhaseRad();
-        if (freqs == null || phaseRad == null) return;
-        double scale = lanczosScale(freqs, freqMin, freqMax, plot.width);
+                            double freqMin, double freqMax, Color color,
+                            double phaseBotDeg, double phaseTopDeg) {
+        double[] freqs = result.getFreqs();
+        if (freqs == null || result.getPhaseRad() == null || freqs.length < 2) return;
         float lw = (float) prefs.getFreqRespLineWidth();
-        if (scale <= 0) {
-            paintPolyline(gc, plot, color, SWT.LINE_DOT, lw, freqs.length,
-                    i -> freqToX(freqs[i], plot, freqMin, freqMax, true),
-                    i -> phaseToYf(Math.toDegrees(phaseRad[i]), plot));
-            return;
-        }
-        // Lanczos with a LOCAL phase unwrap so the kernel never rings across a ±180° wrap;
-        // re-wrapped at draw time so the wrap still shows as a clean vertical jump with
-        // smooth curves either side.  Only the visible span (+ kernel padding) is unwrapped
-        // - cheap, no per-result cache.
-        int pad  = (int) Math.ceil(Lanczos.LANCZOS_A * scale) + 1;
-        int from = Math.max(0, indexBelow(freqs, freqMin) - pad);
-        int to   = Math.min(freqs.length - 1, indexBelow(freqs, freqMax) + pad);
-        int len  = to - from + 1;
-        double[] uw = new double[len];
-        uw[0] = phaseRad[from];
-        for (int k = 1; k < len; k++) {
-            uw[k] = uw[k - 1] + wrapToPi(phaseRad[from + k] - phaseRad[from + k - 1]);
-        }
+        double measuredLo = freqs[0];
+        double measuredHi = freqs[freqs.length - 1];
         paintPolyline(gc, plot, color, SWT.LINE_DOT, lw, plot.width,
                 i -> plot.x + i,
-                i -> phaseToYf(Math.toDegrees(wrapToPi(Lanczos.lanczos(uw, len,
-                        fracIndex(freqs, xToFreq(plot.x + i, plot, freqMin, freqMax, true)) - from, scale))), plot));
+                i -> {
+                    double f = xToFreq(plot.x + i, plot, freqMin, freqMax, true);
+                    if (f < measuredLo || f > measuredHi) return Double.NaN;
+                    double deg = drawnPhaseDeg(result, f);
+                    return Double.isNaN(deg) ? Double.NaN
+                            : phaseToYf(deg, plot, phaseBotDeg, phaseTopDeg);
+                });
     }
 
-    /** Wraps a radian angle to (−π, π] - used to unwrap the phase before Lanczos and to
-     *  re-wrap the reconstructed value for display. */
+    /** Wraps a radian angle to (−π, π] - the step that turns a stored wrapped grid
+     *  into a continuous run, and that lifts an interpolated angle back onto it. */
     private double wrapToPi(double r) {
         double twoPi = 2.0 * Math.PI;
         return r - twoPi * Math.floor((r + Math.PI) / twoPi);
+    }
+
+    /**
+     * The phase of {@code r}'s grid, unwrapped into a continuous run of degrees:
+     * each point is its predecessor plus the shortest step to it, so a response
+     * that keeps turning past −180° keeps descending instead of jumping back to
+     * +180°.  The stored grid and the saved file keep their wrapped values -
+     * this is a display reading of them.
+     *
+     * <p>Cached per result object, one slot per channel: the arrays are rebuilt
+     * only when a new measurement, a reload or a calibration change hands the
+     * view a different object, never per paint.
+     */
+    private double[] unwrappedPhaseDeg(FreqRespResult r) {
+        if (r == null) return null;
+        if (r == leftResult) {
+            if (leftUnwrapSrc != r) {
+                leftPhaseUnwrappedDeg = unwrapDegrees(r.getPhaseRad());
+                leftUnwrapSrc = r;
+            }
+            return leftPhaseUnwrappedDeg;
+        }
+        if (r == rightResult) {
+            if (rightUnwrapSrc != r) {
+                rightPhaseUnwrappedDeg = unwrapDegrees(r.getPhaseRad());
+                rightUnwrapSrc = r;
+            }
+            return rightPhaseUnwrappedDeg;
+        }
+        return unwrapDegrees(r.getPhaseRad());
+    }
+
+    /** One wrapped radian grid as a continuous degree run. */
+    private double[] unwrapDegrees(double[] phaseRad) {
+        if (phaseRad == null || phaseRad.length == 0) return null;
+        double[] deg = new double[phaseRad.length];
+        double run = phaseRad[0];
+        deg[0] = Math.toDegrees(run);
+        for (int i = 1; i < phaseRad.length; i++) {
+            run += wrapToPi(phaseRad[i] - phaseRad[i - 1]);
+            deg[i] = Math.toDegrees(run);
+        }
+        return deg;
+    }
+
+    /**
+     * The phase at {@code f} in degrees, unwrapped - the ONE reading behind both
+     * the drawn trace and the cursor readout, so the two can never quote
+     * different numbers for the same point.
+     *
+     * <p>The rule is the complex one: the unit phasors of the two grid points
+     * around {@code f} are blended in log-frequency and taken back with
+     * {@code atan2} - the same reading a {@code .frc} row gets when it is
+     * interpolated - and the answer is then lifted onto the left point's own
+     * turn so the curve stays continuous.  Interpolating the ANGLES linearly
+     * instead is what made a pair straddling ±180° read as a swing through
+     * zero: between a grid point at −173.5° and the next at +174.2° (the same
+     * descent seen as −185.8° unwrapped) the linear blend answers about −41°,
+     * while this reading answers −178°, which is where the curve is drawn.
+     *
+     * <p>{@link Double#NaN} outside the measured grid: nothing was swept there
+     * and nothing is drawn or read there.
+     */
+    private double drawnPhaseDeg(FreqRespResult r, double f) {
+        double[] freqs = r.getFreqs();
+        double[] uw    = unwrappedPhaseDeg(r);
+        if (freqs == null || uw == null || freqs.length < 2) return Double.NaN;
+        if (f < freqs[0] || f > freqs[freqs.length - 1]) return Double.NaN;
+        int lo = indexBelow(freqs, f);
+        if (lo >= freqs.length - 1) return uw[freqs.length - 1];
+        int hi = lo + 1;
+        double f0 = freqs[lo];
+        double f1 = freqs[hi];
+        if (!(f1 > f0)) return uw[lo];
+        double t  = (Math.log(f) - Math.log(f0)) / (Math.log(f1) - Math.log(f0));
+        double a0 = Math.toRadians(uw[lo]);
+        double a1 = Math.toRadians(uw[hi]);
+        double re = Math.cos(a0) * (1.0 - t) + Math.cos(a1) * t;
+        double im = Math.sin(a0) * (1.0 - t) + Math.sin(a1) * t;
+        if (re == 0.0 && im == 0.0) return uw[lo];
+        return uw[lo] + Math.toDegrees(wrapToPi(Math.atan2(im, re) - a0));
+    }
+
+    /**
+     * The phase axis window in degrees, {@code [bottom, top]}: ±180° while the
+     * unwrapped traces fit inside it, and otherwise extended outward to the
+     * next whole {@link #PHASE_AXIS_STEP_DEG} so the whole descent of a notch
+     * is on screen instead of running off the bottom.
+     *
+     * <p>Only the points inside the visible frequency window count - the axis
+     * follows what is actually drawn, so zooming into a flat stretch brings the
+     * axis back to ±180°.
+     */
+    private double[] phaseWindowDeg(double freqMin, double freqMax) {
+        double lo = -PHASE_AXIS_MIN_DEG;
+        double hi = PHASE_AXIS_MIN_DEG;
+        if (prefs.isFreqRespLeftVisible()  && leftResult  != null) {
+            double[] ext = phaseExtremaInBand(leftResult,  freqMin, freqMax);
+            if (ext != null) { lo = Math.min(lo, ext[0]); hi = Math.max(hi, ext[1]); }
+        }
+        if (prefs.isFreqRespRightVisible() && rightResult != null) {
+            double[] ext = phaseExtremaInBand(rightResult, freqMin, freqMax);
+            if (ext != null) { lo = Math.min(lo, ext[0]); hi = Math.max(hi, ext[1]); }
+        }
+        return new double[] {
+                PHASE_AXIS_STEP_DEG * Math.floor(lo / PHASE_AXIS_STEP_DEG),
+                PHASE_AXIS_STEP_DEG * Math.ceil(hi / PHASE_AXIS_STEP_DEG) };
+    }
+
+    /** {@code [min, max]} of {@code r}'s unwrapped phase over the grid points
+     *  inside {@code [fLo, fHi]}, or {@code null} when none falls there. */
+    private double[] phaseExtremaInBand(FreqRespResult r, double fLo, double fHi) {
+        double[] freqs = r.getFreqs();
+        double[] uw    = unwrappedPhaseDeg(r);
+        if (freqs == null || uw == null) return null;
+        double min = Double.POSITIVE_INFINITY;
+        double max = Double.NEGATIVE_INFINITY;
+        for (int i = 0; i < freqs.length; i++) {
+            double f = freqs[i];
+            if (f < fLo || f > fHi) continue;
+            double d = uw[i];
+            if (!Double.isFinite(d)) continue;
+            if (d < min) min = d;
+            if (d > max) max = d;
+        }
+        if (!Double.isFinite(min) || !Double.isFinite(max)) return null;
+        return new double[] { min, max };
     }
 
 
@@ -2551,9 +2749,11 @@ public final class FreqRespView extends AbstractFreqDomainView {
                   : (prefs.isFreqRespRightVisible() && rightResult != null) ? rightResult
                   : null;
             if (phaseSrc != null) {
-                double phaseRad = interpPhase(phaseSrc, cursorFreq);
+                // The number the TRACE is drawn from, unwrapped, read by the one
+                // interpolation both sides share.
                 sb.append('\n').append("φ = ")
-                        .append(FreqRespFormat.formatPhaseReadout(Math.toDegrees(phaseRad)));
+                        .append(FreqRespFormat.formatPhaseReadout(
+                                drawnPhaseDeg(phaseSrc, cursorFreq)));
             }
         }
         drawReadoutBox(gc, sb.toString(), mouseX + 12, mouseY + 12, plot,
@@ -2687,20 +2887,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         return v0 + t * (v1 - v0);
     }
 
-    private double interpPhase(FreqRespResult r, double f) {
-        double[] freqs = r.getFreqs();
-        double[] p     = r.getPhaseRad();
-        if (freqs == null || p == null || freqs.length < 2) return Double.NaN;
-        if (f < freqs[0] || f > freqs[freqs.length - 1]) return Double.NaN;
-        int lo = 0, hi = freqs.length - 1;
-        while (hi - lo > 1) {
-            int mid = (lo + hi) >>> 1;
-            if (freqs[mid] <= f) lo = mid; else hi = mid;
-        }
-        double t = (Math.log(f) - Math.log(freqs[lo])) / (Math.log(freqs[hi]) - Math.log(freqs[lo]));
-        return p[lo] + t * (p[hi] - p[lo]);
-    }
-
     // -------------------------------------------------------------------------
     // Mouse handling
     // -------------------------------------------------------------------------
@@ -2763,6 +2949,17 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  any analog device measurement without burning vertical pixels on
      *  the noise floor below −150 dB. */
     private static final double MAG_DEFAULT_BOT_DB = -150.0;
+
+    /** The phase axis never shrinks below ±this: one full turn of the response
+     *  is the familiar frame every phase plot is read against, and a flat
+     *  response must not be drawn on a window so tight that its ripple looks
+     *  like a swing. */
+    private static final double PHASE_AXIS_MIN_DEG = 180.0;
+    /** Granularity the phase axis grows in when an unwrapped trace runs past
+     *  ±180°.  Whole eighths of a turn keep the labelled grid lines on the
+     *  angles a phase plot is read at (45°, 90°, 135°, 180° ...) whatever the
+     *  extra range. */
+    private static final double PHASE_AXIS_STEP_DEG = 45.0;
 
     /** Returns the maximal analyzed frequency - the active backend's
      *  Nyquist (sampleRate/2) scaled by the user's
@@ -2891,8 +3088,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
     // -------------------------------------------------------------------------
 
     /** Maps a phase in degrees to its sub-pixel ({@code double}) Y on the φ axis - the
-     *  dotted phase trace strokes between integer pixel rows. */
-    private double phaseToYf(double deg, Rectangle plot) {
-        return plot.y + FreqRespFormat.phaseToYFraction(deg) * plot.height;
+     *  dotted phase trace strokes between integer pixel rows.  The axis window is
+     *  passed in because it follows the unwrapped trace ({@link #phaseWindowDeg}),
+     *  and a value outside it is held at the edge rather than drawn past the plot. */
+    private double phaseToYf(double deg, Rectangle plot, double botDeg, double topDeg) {
+        if (topDeg <= botDeg) return plot.y;
+        double clamped = Math.max(botDeg, Math.min(topDeg, deg));
+        return plot.y + (topDeg - clamped) / (topDeg - botDeg) * plot.height;
     }
 }

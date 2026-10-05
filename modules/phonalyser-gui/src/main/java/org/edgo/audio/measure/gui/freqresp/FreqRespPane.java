@@ -351,11 +351,16 @@ public final class FreqRespPane extends AbstractPane {
         l.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         // Sweep geometry feeds the meter's time -> instantaneous-frequency
-        // mapping, which scales the trace smoothing with the period.
+        // mapping, which scales the trace smoothing with the period.  The
+        // band is the SWEPT one, derived by the rule the worker plays the
+        // chirp by, so the estimate follows what is emitted.
         Preferences prefs = Preferences.instance();
+        double[] swept = FreqRespConstants.sweptBandHz(prefs.getFreqRespStartHz(),
+                prefs.getFreqRespStopHz(), prefs.current().getInputSampleRate(),
+                prefs.current().getOutputSampleRate());
         progressMeter = new FreqRespLiveMeter(s, totalDurationSec,
                 controller.sweepLeadInSec(), prefs.getFreqRespDurationSec(),
-                prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz());
+                swept[0], swept[1]);
         GridData mg = new GridData(SWT.FILL, SWT.CENTER, true, false);
         mg.widthHint  = 520;
         mg.heightHint = 100;

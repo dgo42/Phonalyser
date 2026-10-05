@@ -70,11 +70,6 @@ public final class UIEngines {
         scopeController     = new ScopeController();
         fftController       = new FftController(new FftAnalyzerWorker(display));
         deviceCatalog       = new DeviceCatalog(AudioBackend.instance());
-        // The FFT's notch-phase probe builds itself from the settings in force
-        // and folds what it measures into the controller's correction store;
-        // the generator's tone goes down over the bus, on the probe's own
-        // announcement, so nothing here connects the two engines.
-        fftController.attachPhaseProbe();
     }
 
     /** Stops every engine and releases their capture / playback resources.

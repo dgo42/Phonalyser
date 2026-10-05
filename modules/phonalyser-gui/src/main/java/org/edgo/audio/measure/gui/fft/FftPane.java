@@ -18,7 +18,6 @@
 
 package org.edgo.audio.measure.gui.fft;
 
-import java.io.File;
 import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
@@ -33,7 +32,6 @@ import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.common.Constants;
-import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -74,16 +72,6 @@ public final class FftPane extends AbstractPane {
      *  resolution a flatness or notch-depth check needs.  The dB tick labels
      *  follow the step down to four decimals, so the grid stays readable. */
     private static final double MIN_MAG_SPAN_DB = 0.01;
-    /** Age (minutes) beyond which the loaded frequency-response calibration is
-     *  no longer trusted as the absolute response for a fundamental phase
-     *  alignment run.  The alignment keeps only the fundamental's phase fresh;
-     *  the notch's magnitude and the rest of its phase still come from the
-     *  .frc file, and a notch drifting thermally leaves that file behind
-     *  within minutes. */
-    private static final int  FRC_FRESH_MINUTES  = 10;
-    /** Milliseconds per minute - the calibration age is read from the file
-     *  system in millis and stated to the operator in minutes. */
-    private static final long MILLIS_PER_MINUTE  = 60_000L;
 
     @Getter
     private FftView         view;
@@ -143,6 +131,11 @@ public final class FftPane extends AbstractPane {
      *  fundamental on it, so the run continues unaligned; the operator is told
      *  once, with the three numbers the worker measured. */
     private Consumer<FftAnalyzerWorker.PhaseAlignRefusal> phaseAlignRefusedListener;
+    /** Subscriber for {@link Events#FFT_PHASE_ALIGN_PILOT_LOST} - the pilot
+     *  lines the alignment measures its time base from stayed unreadable, so
+     *  the analyser is ending the recording; the operator is told on which
+     *  signal it happened. */
+    private Consumer<FftAnalyzerWorker.PilotLost> phaseAlignPilotLostListener;
 
     /**
      * Constructs the live pane around the injected app-lifetime engine -
@@ -172,7 +165,7 @@ public final class FftPane extends AbstractPane {
     public PredistortionWizardDialog openPredistortionForCapture() {
         if (genController == null) return null;
         PredistortionWizardDialog d = new PredistortionWizardDialog(
-                getGroup().getShell(), genController, controller, view,
+                getGroup().getShell(), controller, view,
                 controller.getCorrectionStore());
         d.buildAndShow();
         return d;
@@ -304,7 +297,7 @@ public final class FftPane extends AbstractPane {
             wizardButton.setImage(IconUtils.icon(d, Icon.WAND));
             wizardButton.setToolTipText(I18n.t("predistortion.button.wizard.tooltip"));
             wizardButton.addListener(SWT.Selection, e ->
-                    new PredistortionWizardDialog(group.getShell(), genController, wizardController, view, correctionStore).open());
+                    new PredistortionWizardDialog(group.getShell(), wizardController, view, correctionStore).open());
             wizardButton.setData("helpAnchor", "fft.html#fft-predistortion");
         }
 
@@ -335,6 +328,7 @@ public final class FftPane extends AbstractPane {
         freqRespStartedListener     = ignored -> onFreqRespMeasurementStarted();
         freqRespStoppedListener     = ignored -> onFreqRespMeasurementStopped();
         phaseAlignRefusedListener   = this::onPhaseAlignRefused;
+        phaseAlignPilotLostListener = this::onPhaseAlignPilotLost;
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.FFT_RANGE_CHANGED,             rangeChangedListener);
         bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED,    autoStoppedListener);
@@ -343,17 +337,13 @@ public final class FftPane extends AbstractPane {
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
         bus.subscribe(Events.FFT_PHASE_ALIGN_REFUSED,       phaseAlignRefusedListener);
+        bus.subscribe(Events.FFT_PHASE_ALIGN_PILOT_LOST,    phaseAlignPilotLostListener);
 
-        // The operator's own Record click is the one start that carries the
-        // fresh-calibration gate of the fundamental phase alignment; a
-        // declined gate starts nothing and drops the toggle back off.
         recordButton.addListener(SWT.Selection, e -> {
-            if (!recordButton.getSelection()) {
-                recordOff();
-            } else if (confirmPhaseAlignCalibration()) {
+            if (recordButton.getSelection()) {
                 recordOn();
             } else {
-                recordButton.setSelection(false);
+                recordOff();
             }
         });
 
@@ -379,6 +369,7 @@ public final class FftPane extends AbstractPane {
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
             bus2.unsubscribe(Events.FFT_PHASE_ALIGN_REFUSED,       phaseAlignRefusedListener);
+            bus2.unsubscribe(Events.FFT_PHASE_ALIGN_PILOT_LOST,    phaseAlignPilotLostListener);
         });
 
         // Re-layout once the event loop spins up.  At constructor exit
@@ -501,50 +492,19 @@ public final class FftPane extends AbstractPane {
                         String.format("%.1f", refusal.marginDb())));
     }
 
-    /** Fresh-calibration precondition of the fundamental phase alignment,
-     *  asked before anything is started.  An alignment mode other than
-     *  {@link FundamentalPhaseAlignment#NONE} keeps only the FUNDAMENTAL's
-     *  phase fresh against the notch's thermal drift; the absolute response -
-     *  the notch depth and the phase of everything else - still comes from the
-     *  loaded frequency-response calibration, so a stale or absent .frc turns
-     *  a correctly aligned average into a wrongly de-embedded one.  Answers
-     *  {@code true} when recording may start: at once in mode NONE and while a
-     *  with-noise correction row is younger than {@link #FRC_FRESH_MINUTES};
-     *  otherwise the operator decides in the house confirm dialog, and a No
-     *  leaves the Record button off and starts nothing.  Only the Record
-     *  button's own click reaches this gate - {@link #engageRecord()} must
-     *  never stop an unattended run on a modal dialog. */
-    private boolean confirmPhaseAlignCalibration() {
-        if (Preferences.instance().getFftFundamentalPhaseAlignment() == FundamentalPhaseAlignment.NONE) {
-            return true;
-        }
-        long newestMillis = newestWithNoiseCalibrationMillis();
-        // No with-noise row at all, or its file is gone: there is no age to
-        // state, and the message's own "or missing" clause carries that case.
-        Object age = "-";
-        if (newestMillis > 0L) {
-            long ageMinutes = (System.currentTimeMillis() - newestMillis) / MILLIS_PER_MINUTE;
-            if (ageMinutes < FRC_FRESH_MINUTES) return true;
-            age = ageMinutes;
-        }
-        return Dialogs.confirm(group.getShell(), I18n.t("fft.phaseAlign.frc.title"),
-                I18n.t("fft.phaseAlign.frc.message", age)) == SWT.YES;
-    }
-
-    /** Last-modified time (epoch millis) of the newest file behind a with-noise
-     *  row of this pane's correction store, or 0 when no such row is loaded and
-     *  when none of their files is on disk any more: a row reaches the store
-     *  only while the operator keeps it active, and {@link File#lastModified()}
-     *  answers 0 for a path that no longer exists, so a deleted .frc counts as
-     *  no calibration instead of throwing. */
-    private long newestWithNoiseCalibrationMillis() {
-        long newest = 0L;
-        for (CorrectionStore.Entry e : controller.getCorrectionStore().getEntries()) {
-            if (e.isWithNoise()) {
-                newest = Math.max(newest, new File(e.getPath()).lastModified());
-            }
-        }
-        return newest;
+    /** {@link Events#FFT_PHASE_ALIGN_PILOT_LOST} handler: the pilot lines the
+     *  alignment measures the elapsed samples between FFT frames from stayed
+     *  unreadable, so the coherent average has no time base left and the
+     *  analyser is ending the recording on its own auto-stop path.  Nothing is
+     *  stopped or cleared here - the Record button follows that path as it does
+     *  for every auto-stop; this handler only tells the operator, with the
+     *  frequency the collection was running at.  The number is formatted here
+     *  because the message is the pane's. */
+    private void onPhaseAlignPilotLost(FftAnalyzerWorker.PilotLost lost) {
+        if (lost == null || group.isDisposed()) return;
+        Dialogs.error(group.getShell(), I18n.t("fft.phaseAlign.pilotLost.title"),
+                I18n.t("fft.phaseAlign.pilotLost.message",
+                        String.format("%.2f", lost.fundamentalHz())));
     }
 
     /** Turns the Record button ON - starts the analyser worker, which acquires

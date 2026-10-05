@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.gui.scope;
 
+import org.edgo.audio.measure.dsp.Goertzel;
+
 import lombok.Getter;
 
 /**
@@ -74,27 +76,32 @@ final class SignalMeasurements {
         this.dualF2 = dualF2;
     }
 
-    private SignalMeasurements() {
-        this(0, 0, 0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN,
-                Double.NaN, Double.NaN);
-    }
-
     /**
-     * Computes measurements over the first {@code n} samples of {@code data}.
-     * {@code peakVolts} converts a normalised sample of ±1.0 into the full-scale
-     * ADC voltage swing - i.e. {@code adcFsVoltageRms · √2}.
+     * Measures the first {@code n} samples of {@code data}.  {@code peakVolts}
+     * converts a normalised sample of ±1.0 into the full-scale ADC voltage
+     * swing - i.e. {@code adcFsVoltageRms · √2}.  A buffer shorter than four
+     * samples carries no measurement, and every field keeps its empty value.
      *
      * <p>{@code broadScan} enables the costly broad-band fundamental fallback
-     * (a per-bin Goertzel sweep over the whole window), used only when the
+     * (a single-bin sweep over the whole window), used only when the
      * crossing-derived frequency is low-quality - i.e. weak / noisy signals.
      * The scope worker passes {@code false} on its real-time path and runs the
      * {@code true} variant off-thread so a weak signal can't throttle the table.
      */
-    static SignalMeasurements from(float[] data, int n, double sampleRate, double peakVolts,
-                                   boolean broadScan) {
+    public SignalMeasurements(float[] data, int n, double sampleRate, double peakVolts,
+                              boolean broadScan) {
         if (n < 4) {
-            return new SignalMeasurements(0, 0, 0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN,
-                    Double.NaN, Double.NaN);
+            this.vpp       = 0;
+            this.vrms      = 0;
+            this.vmean     = 0;
+            this.period    = Double.NaN;
+            this.riseTime  = Double.NaN;
+            this.fallTime  = Double.NaN;
+            this.frequency = Double.NaN;
+            this.dutyCycle = Double.NaN;
+            this.dualF1    = Double.NaN;
+            this.dualF2    = Double.NaN;
+            return;
         }
         double sum = 0;
         double sumSq = 0;
@@ -235,7 +242,7 @@ final class SignalMeasurements {
             double coarseFreq = sampleRate / coarsePeriod;
             double refinedA = refineAroundEstimate(data, n, sampleRate, coarseFreq, mean,
                                                     coarseFreq * 0.25);
-            double magA = goertzelMagnitude(data, n, sampleRate, refinedA, mean);
+            double magA = magnitudeAt(data, n, sampleRate, refinedA, mean);
             double rmsAc = Math.sqrt(Math.max(0, variance));
             double qA = (rmsAc > 1e-12) ? magA / n / rmsAc : 0;
 
@@ -249,7 +256,7 @@ final class SignalMeasurements {
             if (qA < 0.1 && broadScan) {   // broad-band scan is costly - the worker runs it off-thread
                 double refinedB = scanForFundamental(data, n, sampleRate, mean);
                 if (refinedB > 0) {
-                    double magB = goertzelMagnitude(data, n, sampleRate, refinedB, mean);
+                    double magB = magnitudeAt(data, n, sampleRate, refinedB, mean);
                     double qB = (rmsAc > 1e-12) ? magB / n / rmsAc : 0;
                     if (qB > qA) {
                         bestFreq = refinedB;
@@ -282,8 +289,16 @@ final class SignalMeasurements {
                 duty = (double) highCount / n;
             }
         }
-        return new SignalMeasurements(vpp, vrms, vmean, period, riseTime, fallTime, frequency, duty,
-                Double.NaN, Double.NaN);
+        this.vpp       = vpp;
+        this.vrms      = vrms;
+        this.vmean     = vmean;
+        this.period    = period;
+        this.riseTime  = riseTime;
+        this.fallTime  = fallTime;
+        this.frequency = frequency;
+        this.dutyCycle = duty;
+        this.dualF1    = Double.NaN;
+        this.dualF2    = Double.NaN;
     }
 
     /**
@@ -295,18 +310,18 @@ final class SignalMeasurements {
      * starting {@code halfWidth}, so the call is cheap enough to invoke once
      * per measurement update.
      */
-    private static double refineAroundEstimate(float[] data, int n, double sampleRate,
+    private double refineAroundEstimate(float[] data, int n, double sampleRate,
                                                 double estimate, double mean,
                                                 double halfWidth) {
         int stage1Probes = 100;
         double stage1Step = halfWidth * 2.0 / stage1Probes;
         double bestFreq = estimate;
-        double bestMag  = goertzelMagnitude(data, n, sampleRate, estimate, mean);
+        double bestMag  = magnitudeAt(data, n, sampleRate, estimate, mean);
         for (int k = -stage1Probes / 2; k <= stage1Probes / 2; k++) {
             if (k == 0) continue;
             double f = estimate + k * stage1Step;
             if (f <= 0 || f >= sampleRate / 2.0) continue;
-            double mag = goertzelMagnitude(data, n, sampleRate, f, mean);
+            double mag = magnitudeAt(data, n, sampleRate, f, mean);
             if (mag > bestMag) { bestMag = mag; bestFreq = f; }
         }
 
@@ -316,7 +331,7 @@ final class SignalMeasurements {
             if (k == 0) continue;
             double f = bestFreq + k * stage2Step;
             if (f <= 0 || f >= sampleRate / 2.0) continue;
-            double mag = goertzelMagnitude(data, n, sampleRate, f, mean);
+            double mag = magnitudeAt(data, n, sampleRate, f, mean);
             if (mag > bestMag) { bestMag = mag; bestFreq = f; }
         }
 
@@ -326,7 +341,7 @@ final class SignalMeasurements {
             if (k == 0) continue;
             double f = bestFreq + k * stage3Step;
             if (f <= 0 || f >= sampleRate / 2.0) continue;
-            double mag = goertzelMagnitude(data, n, sampleRate, f, mean);
+            double mag = magnitudeAt(data, n, sampleRate, f, mean);
             if (mag > bestMag) { bestMag = mag; bestFreq = f; }
         }
 
@@ -337,8 +352,8 @@ final class SignalMeasurements {
         double leftF  = bestFreq - stage3Step;
         double rightF = bestFreq + stage3Step;
         if (leftF > 0 && rightF < sampleRate / 2.0) {
-            double leftMag  = goertzelMagnitude(data, n, sampleRate, leftF,  mean);
-            double rightMag = goertzelMagnitude(data, n, sampleRate, rightF, mean);
+            double leftMag  = magnitudeAt(data, n, sampleRate, leftF,  mean);
+            double rightMag = magnitudeAt(data, n, sampleRate, rightF, mean);
             double denom = leftMag - 2.0 * bestMag + rightMag;
             if (denom < 0) {
                 double delta = 0.5 * (leftMag - rightMag) / denom;
@@ -359,7 +374,7 @@ final class SignalMeasurements {
      * corrupted by noise; for clean signals the crossing-based primary path
      * locks onto the true fundamental and this scan is skipped entirely.
      */
-    private static double scanForFundamental(float[] data, int n, double sampleRate, double mean) {
+    private double scanForFundamental(float[] data, int n, double sampleRate, double mean) {
         int coarseN = Math.min(n, (int) (sampleRate * 0.1));        // 0.1 s sub-window
         if (coarseN < 64) coarseN = n;
         double coarseBinHz = sampleRate / (double) coarseN;          // = 10 Hz at 48 kHz
@@ -368,7 +383,7 @@ final class SignalMeasurements {
 
         double bestFreq = -1, bestMag = -1;
         for (double f = minScanFreq; f < maxScanFreq; f += coarseBinHz) {
-            double mag = goertzelMagnitude(data, coarseN, sampleRate, f, mean);
+            double mag = magnitudeAt(data, coarseN, sampleRate, f, mean);
             if (mag > bestMag) { bestMag = mag; bestFreq = f; }
         }
         if (bestFreq <= 0) return -1.0;
@@ -377,20 +392,15 @@ final class SignalMeasurements {
     }
 
     /**
-     * Goertzel single-bin DFT magnitude at {@code freq}.  Subtracts the DC
-     * mean so the result reflects only the AC component at that frequency.
+     * Single-bin DFT magnitude at {@code freq} over the first {@code n}
+     * samples.  The transform reads the capture buffer as it stands and
+     * subtracts the DC mean as it sweeps, so a probe copies nothing.
      */
-    private static double goertzelMagnitude(float[] data, int n, double sampleRate,
-                                             double freq, double mean) {
-        double omega = 2 * Math.PI * freq / sampleRate;
-        double coeff = 2 * Math.cos(omega);
-        double q1 = 0, q2 = 0;
-        for (int i = 0; i < n; i++) {
-            double q0 = (data[i] - mean) + coeff * q1 - q2;
-            q2 = q1;
-            q1 = q0;
-        }
-        return Math.sqrt(q1 * q1 + q2 * q2 - q1 * q2 * coeff);
+    private double magnitudeAt(float[] data, int n,
+                               double sampleRate, double freq, double mean) {
+        Goertzel.SingleBin bin = Goertzel.goertzelBin(data, 0, n, null,
+                2 * Math.PI * freq / sampleRate, mean);
+        return Math.hypot(bin.re(), bin.im());
     }
 
     /**
@@ -400,7 +410,7 @@ final class SignalMeasurements {
      * the bare (rectangular-window) Goertzel peak on short buffers.  The copy is
      * already mean-subtracted, so the refinement runs with {@code mean = 0}.
      */
-    private static float[] hannWindowed(float[] data, int n, double mean) {
+    private float[] hannWindowed(float[] data, int n, double mean) {
         float[] w = new float[n];
         double scale = 2 * Math.PI / (n - 1);
         for (int i = 0; i < n; i++) {
@@ -419,7 +429,7 @@ final class SignalMeasurements {
      *  formatting) instead of latching onto an arbitrary value.
      *  Vpp / Vrms / Vmean stay valid since they're meaningful in
      *  every signal mode. */
-    SignalMeasurements withoutTimes() {
+    public SignalMeasurements withoutTimes() {
         return new SignalMeasurements(vpp, vrms, vmean,
                 Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN,
                 dualF1, dualF2);
@@ -428,7 +438,7 @@ final class SignalMeasurements {
     /** Returns a copy with {@code frequency} (and the matching {@code period})
      *  replaced, keeping every other field.  The scope worker uses this to
      *  swap in a comb-bias-free frequency re-measured on the raw signal. */
-    SignalMeasurements withFrequency(double freq) {
+    public SignalMeasurements withFrequency(double freq) {
         return new SignalMeasurements(vpp, vrms, vmean,
                 (freq > 0 ? 1.0 / freq : Double.NaN), riseTime, fallTime, freq, dutyCycle,
                 dualF1, dualF2);
@@ -439,7 +449,7 @@ final class SignalMeasurements {
      *  in the two tones as re-measured on the raw (as-captured) signal, so the
      *  residual fit can subtract them at their true ADC-domain frequencies
      *  rather than the generator's commanded (DAC-domain, clock-offset) values. */
-    SignalMeasurements withDualTones(double f1, double f2) {
+    public SignalMeasurements withDualTones(double f1, double f2) {
         return new SignalMeasurements(vpp, vrms, vmean,
                 period, riseTime, fallTime, frequency, dutyCycle,
                 f1, f2);
@@ -456,7 +466,7 @@ final class SignalMeasurements {
      *  frequency; the raw signal is un-biased and - because mains harmonics
      *  are tens of Hz apart - carries no competing component inside this
      *  narrow band.  Returns NaN for a non-finite seed. */
-    static double refineFrequencyAround(float[] data, int n, double sampleRate,
+    public double refineFrequencyAround(float[] data, int n, double sampleRate,
                                         double seedHz, double halfHz) {
         if (!(seedHz > 0) || n < 4) return Double.NaN;
         double sum = 0;

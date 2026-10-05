@@ -43,8 +43,10 @@ import org.eclipse.swt.widgets.Label;
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.InverseCascade;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
+import org.edgo.audio.measure.dsp.ToneLobe;
 import org.edgo.audio.measure.dsp.ToneLobeLift;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
@@ -52,6 +54,7 @@ import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.ImdResult;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -140,9 +143,10 @@ public final class FftView extends AbstractFreqDomainView {
      *  bar's: a native drop-down sits slightly higher than the flat buttons so
      *  their visual centres line up. */
     private static final int DISTORTION_COMBO_TOP = 5;
-    /** Floor (V_rms) for the IMD reference level, mirroring the divisor floor in
-     *  ImdAnalyzer: two muted tones must not divide by zero. */
-    private static final double MIN_REF_VRMS = 1e-12;
+    /** Floor (full-scale magnitude) under a tone level read in dB, mirroring
+     *  the divisor floor in ImdAnalyzer: two muted tones must not divide by
+     *  zero, and a muted tone must not read as minus infinity. */
+    private static final double MIN_REF_MAG = 1e-12;
 
     /** A spectrum has a "real" signal only when its measured fundamental sits at
      *  least this far (dB) above the LOCAL noise floor (the grass in its near
@@ -170,8 +174,9 @@ public final class FftView extends AbstractFreqDomainView {
     /** Count of completed analyses since the last reset / record-start. */
     private Label averagesCountLabel;
 
-    /** Controller owning the analyser worker, the frequency-lock loops and
-     *  the IMD analysis - the view issues commands / queries and renders.
+    /** Controller owning the analyser worker (which runs the frequency-lock
+     *  loops) and the IMD analysis - the view issues commands / queries and
+     *  renders.
      *  Assigned exactly once in the constructor; NOT {@code final} because
      *  the field-initializer lambdas below ({@code onGenChangeForFll},
      *  {@code onResultReady}) read it and javac's definite-assignment
@@ -248,7 +253,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  dual-tone frequencies, amplitude / balance, duty) both the locked
      *  alignment and the averaged spectrum are stale (they were measured
      *  for the old signal), so reset the FLL(s) AND wipe the FFT
-     *  statistics including the retained lastResult / lastImd readout.
+     *  statistics including the retained lastResult readout.
      *  Ignores FLL_TRIM (that's our own trim coming back round the bus). */
     private final Consumer<GenChangeCause> onGenChangeForFll = cause -> {
         if (cause == GenChangeCause.USER_INPUT) {
@@ -265,7 +270,6 @@ public final class FftView extends AbstractFreqDomainView {
             // javac's definite-assignment analysis.
             if (!this.controller.isRecording()) return;
             this.controller.resetFrequencyLock();
-            lastImd = null;
             // Signal-change variant: the worker also skips the DAC-buffer
             // drain after re-anchoring, so the fresh accumulator and the
             // FLL's first measurement never see the old tone.
@@ -301,11 +305,9 @@ public final class FftView extends AbstractFreqDomainView {
      *  redraw - paint code reads {@link #lastResult} directly. */
     private final Consumer<FftResult> onResultReady = slot -> {
         if (isDisposed()) return;
-        // Stale-frame guard: a result parked in the worker's coalescing
-        // hand-off across a signal change drains AFTER the change - its
-        // spectrum is the old signal's.  Displaying it flashes stale data;
-        // feeding it onward poisons the FLL/IMD (see isResultCurrent).
-        if (!this.controller.isResultCurrent(slot)) return;
+        // Every result that arrives here belongs to the current collection: a
+        // slot parked across a reset or a change of the generated signal is
+        // dropped by the worker at its hand-off, not published.
         // this-qualified controller reads throughout this initializer
         // lambda - see onGenChangeForFll.
         this.controller.resultConsumed();
@@ -318,7 +320,8 @@ public final class FftView extends AbstractFreqDomainView {
             gotFftResult = true;
             // Post-average pipeline (mains -> recompute -> .frc -> dBV), run ONCE
             // here on the DISPLAYED frame (post throttle + coalescing) - before
-            // the deep-copy / IMD so both see the finished spectrum + readouts.
+            // the deep-copy so it holds the finished spectrum + readouts, the
+            // dual-tone IMD products among them.
             finalizeResult(slot);
             // In-place refresh of the displayed snapshot: a deepCopy per
             // displayed frame is ~64 MB of garbage at paint rate at fftSize
@@ -357,8 +360,6 @@ public final class FftView extends AbstractFreqDomainView {
             boolean prevTableModeIsImd = tableModeIsImd;
             Preferences prefs = Preferences.instance();
             tableModeIsImd = prefs.getGenSignalForm().isDualTone();
-            lastImd = tableModeIsImd ? this.controller.analyzeImd(slot) : null;
-            if (tableModeIsImd) logRenderStep("3.7 IMD analysis");
             // Mode just flipped (THD ↔ IMD): refresh the extracted window's
             // title + size.  It's set at create time and on form-change, but
             // tableModeIsImd only updates here - one tick later - so without
@@ -368,9 +369,6 @@ public final class FftView extends AbstractFreqDomainView {
             // repaints it (see renderRealtimeFrame) instead of painting inline,
             // so scope and FFT share one cadence and neither starves the other.
             fftDirty = true;
-            // this-qualified: lastImd is declared below this initializer
-            // lambda (a simple-name read would be an illegal forward ref).
-            controller.applyFrequencyLock(slot, this.lastImd);
         }
     };
 
@@ -399,7 +397,7 @@ public final class FftView extends AbstractFreqDomainView {
     };
 
     /** Subscriber for {@link Events#FFT_ALIGN_MAG_DRIFT}: the fundamental
-     *  level(s) moved by more than the controller's drift threshold while
+     *  level(s) moved by more than the analyser worker's drift threshold while
      *  the frequency lock pulled the generator onto the bin grid - the
      *  running average still contains pre-alignment frames, so hint at a
      *  statistics reset with a 20 s blinking banner.  Payload: the largest
@@ -453,20 +451,12 @@ public final class FftView extends AbstractFreqDomainView {
      *  reference, so paint code and the pane's Save-CSV / screenshot
      *  paths can read or even mutate it without coordinating with the
      *  analyser.  Lombok provides a public {@code getLastResult}
-     *  accessor; the offscreen screenshot pane injects this and the
-     *  IMD snapshot via {@link #copySnapshotFrom(FftView)} without
-     *  running the analysis loop. */
+     *  accessor; the offscreen screenshot pane injects this (the dual-tone
+     *  IMD products ride along in {@link FftResult#imd}) via
+     *  {@link #copySnapshotFrom(FftView)} without running the analysis
+     *  loop. */
     @Getter
     private FftResult lastResult;
-
-    /** Latest dual-tone IMD result computed from {@link #lastResult}
-     *  whenever the generator form is {@code DUAL_TONE}.  {@code null}
-     *  when single-tone - the THD table is drawn in that case
-     *  instead.  Recomputed synchronously on the UI thread inside
-     *  {@link #onResultReady}; the math (peak-interp + ~24 bin reads)
-     *  is microseconds-scale so it doesn't move the paint budget. */
-    @Getter
-    private ImdResult lastImd;
 
     // Static-layer paint cache (traceBuffer Image + fingerprint) now
     // lives in AbstractFreqDomainView.  Mouse-move / crosshair redraws
@@ -488,14 +478,8 @@ public final class FftView extends AbstractFreqDomainView {
      *  {@link #resetStatistics}), the capture rate (a fresh recording), and the
      *  frame's own tone positions and lobe extents ({@link #calInverseFits}).
      *  {@code null} means "build on the next frame"; the correction, the blue
-     *  dots and the rejected-block overlay all read this one array. */
-    private double[][] calInv;
-
-    /** The bins the tone-only rows wrote, ascending - the walk the correction
-     *  makes while no with-noise row is loaded.  {@code null} once one is: it
-     *  marks most of the spectrum, so the full walk with the per-bin skip test
-     *  is the cheaper one. */
-    private int[] calInvToneBins;
+     *  dots and the rejected-block overlay all read this one cascade. */
+    private InverseCascade calInv;
 
     /** {@code true} while a tone-only row is loaded - only then does
      *  {@link #calInv} depend on the frame's tones, and only then are the tone
@@ -509,7 +493,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  built again. */
     private int calInvFundBin;
     private int calInvF2Bin;
-    private int[][] calInvSpans;
+    private ToneLobe[] calInvSpans;
 
     public FftView(Composite parent, CorrectionStore correctionStore,
                    FftController controller) {
@@ -806,22 +790,15 @@ public final class FftView extends AbstractFreqDomainView {
             String txt = pct + "%";
             if (!txt.equals(fillPercentLabel.getText())) fillPercentLabel.setText(txt);
             if (averagesCountLabel != null && !averagesCountLabel.isDisposed()) {
-                // Tick-based count (consistent across cycled and forever
-                // modes - both increment by exactly one per analysis).
-                // For finite N: capped at N once the moving window is
-                // full.  For "forever": climbs without limit.
+                // What the analyser says is inside the average, shown as it
+                // stands: the window length once a moving average has filled
+                // it, climbing without limit under "forever".
                 // The cross-tick accumulator math (forever mode) makes
                 // each displayed tick contribute additional SNR depth -
                 // the actual frames-averaged depth is roughly 2× the
                 // displayed N because each forever tick contributes
                 // ~2 FFT frames to the running sum.
-                int done = getCompletedAnalyses();
-                int n = Math.max(0, done - 1);
-                double avgRaw = Preferences.instance().getFftAverages();
-                if (!Double.isInfinite(avgRaw)) {
-                    int N = Math.max(1, (int) avgRaw);
-                    if (n > N) n = N;
-                }
+                int n = getAveragesInWindow();
                 String ns = I18n.t("fft.avgCount.label", String.valueOf(n));
                 if (!ns.equals(averagesCountLabel.getText())) averagesCountLabel.setText(ns);
             }
@@ -885,27 +862,26 @@ public final class FftView extends AbstractFreqDomainView {
     // Public API
     // =========================================================================
 
-    /** Copies the paint-relevant snapshot - last spectrum result, the
-     *  dual-tone IMD slot and the THD/IMD table-mode flag - from
-     *  {@code source} into this view.  Used by the screenshot renderer
+    /** Copies the paint-relevant snapshot - last spectrum result (the
+     *  dual-tone IMD products included) and the THD/IMD table-mode flag -
+     *  from {@code source} into this view.  Used by the screenshot renderer
      *  so a passive (worker-less) clone draws exactly the table and
-     *  dots the live view shows; without the IMD slot the offscreen
+     *  dots the live view shows; without the table-mode flag the offscreen
      *  view would fall back to the THD table. */
     public void copySnapshotFrom(FftView source) {
         if (source == null || source == this) return;
         this.lastResult     = source.lastResult;
-        this.lastImd        = source.lastImd;
         this.tableModeIsImd = source.tableModeIsImd;
         // Carry the live readouts across so the screenshot shows the real
         // "N average(s)" / "NN%" instead of this idle clone's controller 0.
-        this.snapshotCompleted = source.getCompletedAnalyses();
+        this.snapshotCompleted = source.getAveragesInWindow();
         this.snapshotFill      = source.getNextFrameProgress();
     }
 
-    /** Number of analyses completed since the last reset (or the snapshot
-     *  override on an offscreen screenshot clone). */
-    public int getCompletedAnalyses() {
-        return snapshotCompleted >= 0 ? snapshotCompleted : controller.completedAnalyses();
+    /** Averages currently inside the average (or the snapshot override on an
+     *  offscreen screenshot clone) - the readout's own number. */
+    public int getAveragesInWindow() {
+        return snapshotCompleted >= 0 ? snapshotCompleted : controller.averagesInWindow();
     }
 
     /** True if the analyser worker is currently running. */
@@ -967,8 +943,7 @@ public final class FftView extends AbstractFreqDomainView {
     private void clearRetainedResultsAfterReset() {
         if (isRunning()) {
             lastResult = null;
-            lastImd    = null;
-            clearBanner();          // drop any re-sync / overrun warning on reset
+            clearBanner();         // drop any re-sync / overrun warning on reset
         }
         syncDataButtons();
         GuiUtil.marshal(() -> { if (!isDisposed()) redraw(); });
@@ -1009,7 +984,7 @@ public final class FftView extends AbstractFreqDomainView {
                 buildCalInverse(r);
                 logRenderStep("3.2 .frc response build");
             }
-            correctedBins = FreqRespCalHelper.applyInverseInPlace(r, calInv, calInvToneBins);
+            correctedBins = FreqRespCalHelper.applyInverseInPlace(r, calInv);
             // The bin count goes into the step's own text, so the switch is
             // tested here as well: the message must not be built when it is off.
             if (DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
@@ -1055,22 +1030,16 @@ public final class FftView extends AbstractFreqDomainView {
 
     }
 
-    /** Shows a static spectrum loaded from file instead of live data, in
-     *  single-tone THD mode.  The caller must have already stopped recording
-     *  (so the worker won't overwrite it). */
+    /** Shows a static spectrum loaded from file instead of live data.  When
+     *  the result carries IMD products ({@link FftResult#imd}) the view
+     *  switches to IMD (dual-tone) table mode and renders them; otherwise it
+     *  shows the single-tone THD / harmonic table.  The THD / IMD metrics
+     *  themselves are recomputed by the caller from the loaded spectrum, and
+     *  the caller must have already stopped recording (so the worker won't
+     *  overwrite it). */
     public void displayLoadedResult(FftResult r) {
-        displayLoadedResult(r, null);
-    }
-
-    /** Shows a static loaded spectrum.  When {@code imd} is non-null the view
-     *  switches to IMD (dual-tone) table mode and renders that result;
-     *  otherwise it shows the single-tone THD / harmonic table.  The THD /
-     *  IMD metrics themselves are recomputed by the caller from the loaded
-     *  spectrum. */
-    public void displayLoadedResult(FftResult r, ImdResult imd) {
         lastResult = r;
-        lastImd = imd;
-        tableModeIsImd = (imd != null);
+        tableModeIsImd = (r.imd != null);
         syncDataButtons();
         if (!isDisposed()) { redraw(); update(); }
     }
@@ -1193,15 +1162,16 @@ public final class FftView extends AbstractFreqDomainView {
         // single-tone (THD) mode keep the existing "one decade either
         // side of the fundamental" behaviour.
         double lo, hi;
-        if (lastImd != null) {
+        ImdResult imd = lastResult.imd;
+        if (imd != null) {
             // Aggregate every dot frequency we'd potentially plot.
-            double minHz = Math.min(lastImd.f1Hz, lastImd.f2Hz);
-            double maxHz = Math.max(lastImd.f1Hz, lastImd.f2Hz);
-            double diff  = Math.abs(lastImd.f2Hz - lastImd.f1Hz);
+            double minHz = Math.min(imd.f1Hz, imd.f2Hz);
+            double maxHz = Math.max(imd.f1Hz, imd.f2Hz);
+            double diff  = Math.abs(imd.f2Hz - imd.f1Hz);
             if (diff > 0) minHz = Math.min(minHz, diff);
             for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
-                double dl = lastImd.dnLHz[k];
-                double dh = lastImd.dnHHz[k];
+                double dl = imd.dnLHz[k];
+                double dh = imd.dnHHz[k];
                 if (Double.isFinite(dl) && dl > 0) {
                     minHz = Math.min(minHz, dl);
                     maxHz = Math.max(maxHz, dl);
@@ -1241,9 +1211,9 @@ public final class FftView extends AbstractFreqDomainView {
             // else the measured level (already .frc-corrected in place by the worker).
             double peakDbFs = displayedFundDbFs();
             if (!Double.isFinite(peakDbFs)) peakDbFs = lastResult.fundamentalDbFs;
-            if (lastImd != null) {
-                if (Double.isFinite(lastImd.f1DbFs)) peakDbFs = Math.max(peakDbFs, lastImd.f1DbFs);
-                if (Double.isFinite(lastImd.f2DbFs)) peakDbFs = Math.max(peakDbFs, lastImd.f2DbFs);
+            if (imd != null) {
+                if (Double.isFinite(imd.f1DbFs)) peakDbFs = Math.max(peakDbFs, imd.f1DbFs);
+                if (Double.isFinite(imd.f2DbFs)) peakDbFs = Math.max(peakDbFs, imd.f2DbFs);
             }
             // Range is stored canonically in dBFS; the unit conversion happens only at
             // draw / readout time, so every unit pans + zooms identically.
@@ -1347,6 +1317,13 @@ public final class FftView extends AbstractFreqDomainView {
      *  the device per bin) and used by every conversion of that paint. */
     private double paintDbvOffsetDb;
 
+    /** A full-scale magnitude (1 = full scale) as dBFS, floored at
+     *  {@link #MIN_REF_MAG} - the tone levels the intermodulation result
+     *  carries linearly, read the way every other level of the table is. */
+    private double dbFsOfMagnitude(double magFs) {
+        return 20.0 * Math.log10(Math.max(MIN_REF_MAG, magFs));
+    }
+
     /**
      * Converts an analyser dBFS magnitude into {@code unit} for display.  Pure
      * constant math, safe to call per bin in paint loops: dBV is a constant
@@ -1398,8 +1375,7 @@ public final class FftView extends AbstractFreqDomainView {
 
         MagnitudeUnit unit = prefs.getFftMagUnit();
         // The analysed channel's calibration, once for this paint.
-        paintDbvOffsetDb = AudioBackend.instance().calibrationOrDefault(true)
-                .dbvOffsetDb(prefs.getFftChannel());
+        paintDbvOffsetDb = AudioBackend.instance().analysedChannelDbvOffsetDb();
         // dBr reference = the DISPLAYED fundamental level (manual override when set, else the
         // measured level); re-stamped every paint so the DBR axis + cursor readouts pin the
         // fundamental to 0 dBr.  NaN (no fundamental yet) leaves the previous reference intact.
@@ -1446,35 +1422,37 @@ public final class FftView extends AbstractFreqDomainView {
                      MAJOR_TICK_LEN, MINOR_TICK_LEN, null);
             drawDistortionBands(bgc, plot, fFreqMin, freqMax, logFreq);
             logRenderStep("3.8 grid + bands");
-            if (lastResult != null) {
-                drawSpectrum(bgc, plot, lastResult, unit, fFreqMin, freqMax, magTop, magBot, logFreq);
-                // DEBUG overlay: de-embedded calibration filter response (green line).
-                if (DebugSwitches.SHOW_CAL_OVERLAY) {
-                    drawCalOverlay(bgc, plot, lastResult, unit, fFreqMin, freqMax,
-                            magTop, magBot, logFreq);
-                }
-                logRenderStep("3.9 spectrum trace");
-                // Harmonic dots are THD-mode markers - hide them when
-                // an IMD result is present (DUAL_TONE generator) so the
-                // F1/F2/dnL/dnH annotations don't compete with the
-                // single-fundamental-anchored H2..Hn series for the
-                // same screen space.
-                if (lastImd == null && hasDistinguishableSignal(lastResult)) {
-                    drawHarmonicDots(bgc, plot, lastResult, unit, fFreqMin, freqMax,
-                            magTop, magBot, logFreq);
-                }
+            // The frame stands on its own; everything from here reads the
+            // result, and nothing below tests it again.
+            if (lastResult == null) return;
+            drawSpectrum(bgc, plot, lastResult, unit, fFreqMin, freqMax, magTop, magBot, logFreq);
+            // DEBUG overlay: de-embedded calibration filter response (green line).
+            if (DebugSwitches.SHOW_CAL_OVERLAY) {
+                drawCalOverlay(bgc, plot, lastResult, unit, fFreqMin, freqMax,
+                        magTop, magBot, logFreq);
             }
-            if (lastImd != null && hasDistinguishableSignal(lastResult)) {
-                drawImdDots(bgc, plot, lastImd, lastResult, unit, fFreqMin, freqMax,
+            logRenderStep("3.9 spectrum trace");
+            // Harmonic dots are THD-mode markers - hide them when
+            // an IMD result is present (DUAL_TONE generator) so the
+            // F1/F2/dnL/dnH annotations don't compete with the
+            // single-fundamental-anchored H2..Hn series for the
+            // same screen space.
+            ImdResult imd = lastResult.imd;
+            if (imd == null && hasDistinguishableSignal(lastResult)) {
+                drawHarmonicDots(bgc, plot, lastResult, unit, fFreqMin, freqMax,
+                        magTop, magBot, logFreq);
+            }
+            if (imd != null && hasDistinguishableSignal(lastResult)) {
+                drawImdDots(bgc, plot, imd, lastResult, unit, fFreqMin, freqMax,
                         magTop, magBot, logFreq);
             }
             // THD / IMD readout table - static per result, so it renders
             // into the cached layer: its ~35 outlined labels (≈315 GDI text
             // calls) used to re-draw on every crosshair mouse-move.
-            if (lastResult != null && Preferences.instance().isFftDistortionTableVisible()
+            if (Preferences.instance().isFftDistortionTableVisible()
                     && !tableExtracted && hasDistinguishableSignal(lastResult)) {
-                if (tableModeIsImd && lastImd != null) {
-                    drawImdTable(bgc, lastImd, MARGIN_LEFT + 6, TABLE_TOP_Y);
+                if (tableModeIsImd && imd != null) {
+                    drawImdTable(bgc, imd, MARGIN_LEFT + 6, TABLE_TOP_Y);
                 } else {
                     drawDistortionTable(bgc, lastResult, unit);
                 }
@@ -1635,7 +1613,7 @@ public final class FftView extends AbstractFreqDomainView {
         // the post-cal dots so both share one tick's harmonicHz
         // values - the snapshot was deep-copied at publish time, so
         // BLUE and RED can never end up from different ticks.
-        double[][] before = (r != null) ? r.preCorrectionPeaks : null;
+        double[][] before = r.preCorrectionPeaks;
         if (before != null && before.length == 2
                 && before[0] != null && before[1] != null) {
             gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
@@ -2145,17 +2123,15 @@ public final class FftView extends AbstractFreqDomainView {
         double v = convertFromDbFs(dbFs, unit, null);
         double t = magToYFraction(v, magTop, magBot, unit);
         if (t < 0 || t > 1) return;
-        // Anchored on the dot's FRACTIONAL centre and rounded ONCE, at the end.
-        // Centring on the already-rounded dot x and then halving the text width
-        // in integer division rounded twice, which could leave the caption a
-        // whole pixel off the dot it names.  The glyphs themselves stay on the
-        // pixel grid - drawText has no fractional origin.
+        // Anchored on the dot's FRACTIONAL centre and handed over fractionally:
+        // the caption's origin rides the same sub-pixel column and height as
+        // the dot it names, through the painter's fractional text primitive.
         double x = freqToX(hz, plot, freqMin, freqMax, logFreq);
         double y = magToY(v, plot, magTop, magBot, unit);
         Point ext = gc.textExtent(text);
-        int lx = Math.max(plot.x, Math.min(plot.x + plot.width - ext.x,
-                (int) Math.round(x - ext.x / 2.0)));
-        int ly = Math.max(plot.y, (int) Math.round(y - ext.y - 4));
+        double lx = Math.max(plot.x, Math.min((double) (plot.x + plot.width - ext.x),
+                x - ext.x / 2.0));
+        double ly = Math.max(plot.y, y - ext.y - 4);
         drawOutlinedText(gc, text, lx, ly);
     }
 
@@ -2173,11 +2149,6 @@ public final class FftView extends AbstractFreqDomainView {
                              double freqMin, double freqMax,
                              double magTop, double magBot,
                              boolean logFreq) {
-        if (r == null) return;
-        // dBV -> dBFs is the analysed channel's ADC offset (dBFs = dBV − offset)
-        // - the same constant for every bin, not a per-result fundamental delta.
-        double refDbV = paintDbvOffsetDb;
-
         // Aggregate every dot's (freq, post-cal dBFs) so the blue
         // pre-cal and red post-cal passes walk the same list.  Order:
         // F1, F2, dnL[2..5], dnH[2..5].
@@ -2189,10 +2160,10 @@ public final class FftView extends AbstractFreqDomainView {
         int idx = 2;
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
             hz[idx]   = imd.dnLHz[k];
-            dbFs[idx] = imd.dnLDbV[k] - refDbV;
+            dbFs[idx] = imd.dnLDbFs[k];
             idx++;
             hz[idx]   = imd.dnHHz[k];
-            dbFs[idx] = imd.dnHDbV[k] - refDbV;
+            dbFs[idx] = imd.dnHDbFs[k];
             idx++;
         }
 
@@ -2221,7 +2192,7 @@ public final class FftView extends AbstractFreqDomainView {
 
         // DEBUG overlay: mains comb response (red), anchored at d2L's level
         // (the order-2 lower IMD product - H2 isn't present in IMD mode).
-        drawMainsResponse(gc, plot, r, imd.dnLDbV[2] - refDbV, unit,
+        drawMainsResponse(gc, plot, r, imd.dnLDbFs[2], unit,
                 freqMin, freqMax, magTop, magBot, logFreq);
 
         // F1 / F2 labels: each anchored just above its own dot, but if
@@ -2237,8 +2208,8 @@ public final class FftView extends AbstractFreqDomainView {
         Point p2 = dotScreenPos(plot, imd.f2Hz, imd.f2DbFs, unit, freqMin, freqMax,
                 magTop, magBot, logFreq);
         if (p1 != null || p2 != null) {
-            // Horizontal centring runs off the FRACTIONAL dot column, rounded
-            // once at the end - as the dnL / dnH captions do through
+            // Horizontal centring runs off the FRACTIONAL dot column and is
+            // handed over fractionally - as the dnL / dnH captions do through
             // drawHarmonicLabel.  The Point above stays integer on purpose: it
             // drives the vertical stacking below, which works in whole text
             // rows.
@@ -2277,29 +2248,26 @@ public final class FftView extends AbstractFreqDomainView {
                 }
             }
             if (p1 != null) {
-                int lx = Math.max(plot.x, Math.min(plot.x + plot.width - ext1.x,
-                        (int) Math.round(x1f - ext1.x / 2.0)));
-                drawOutlinedText(gc, t1, lx, Math.max(plot.y, ly1));
+                double lx = Math.max(plot.x, Math.min((double) (plot.x + plot.width - ext1.x),
+                        x1f - ext1.x / 2.0));
+                drawOutlinedText(gc, t1, lx, (double) Math.max(plot.y, ly1));
             }
             if (p2 != null) {
-                int lx = Math.max(plot.x, Math.min(plot.x + plot.width - ext2.x,
-                        (int) Math.round(x2f - ext2.x / 2.0)));
-                drawOutlinedText(gc, t2, lx, Math.max(plot.y, ly2));
+                double lx = Math.max(plot.x, Math.min((double) (plot.x + plot.width - ext2.x),
+                        x2f - ext2.x / 2.0));
+                drawOutlinedText(gc, t2, lx, (double) Math.max(plot.y, ly2));
             }
         }
 
         // dnL (lower sideband) + dnH (upper sideband) labels for
         // n = 2..5.  Frequency anchors are imd.dnLHz / dnHHz; level
-        // anchors come from the dnLDbV / dnHDbV arrays converted back
-        // to dBFs via refDbV.
+        // anchors are the dnLDbFs / dnHDbFs arrays.
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
-            double lDbFs = imd.dnLDbV[k] - refDbV;
-            double hDbFs = imd.dnHDbV[k] - refDbV;
             drawHarmonicLabel(gc, plot, "d" + k + "L",
-                    imd.dnLHz[k], lDbFs, unit, freqMin, freqMax,
+                    imd.dnLHz[k], imd.dnLDbFs[k], unit, freqMin, freqMax,
                     magTop, magBot, logFreq);
             drawHarmonicLabel(gc, plot, "d" + k + "H",
-                    imd.dnHHz[k], hDbFs, unit, freqMin, freqMax,
+                    imd.dnHHz[k], imd.dnHDbFs[k], unit, freqMin, freqMax,
                     magTop, magBot, logFreq);
         }
     }
@@ -2414,7 +2382,7 @@ public final class FftView extends AbstractFreqDomainView {
                                          boolean logFreq) {
         Preferences prefs = Preferences.instance();
         return new TraceFingerprint(
-                r, controller.completedAnalyses(), lastImd,
+                r, controller.completedAnalyses(), r != null ? r.imd : null,
                 area.width, area.height, unit,
                 freqMin, freqMax, magTop, magBot, logFreq,
                 prefs.isFftDistMinEnabled(), prefs.isFftDistMaxEnabled(),
@@ -2635,11 +2603,11 @@ public final class FftView extends AbstractFreqDomainView {
         // Anchor at H2 in THD mode, or at d2L (the order-2 lower IMD product) in
         // IMD mode - H2 isn't marked there.
         double anchorFreq, anchorDbFs;
-        if (lastImd != null && lastImd.dnLHz != null && lastImd.dnLHz.length > 2
-                && Double.isFinite(lastImd.dnLDbV[2])) {
-            double ref = paintDbvOffsetDb;   // dBFs = dBV − analyzed-channel ADC offset
-            anchorFreq = lastImd.dnLHz[2];
-            anchorDbFs = lastImd.dnLDbV[2] - ref;
+        ImdResult imd = r.imd;
+        if (imd != null && imd.dnLHz != null && imd.dnLHz.length > 2
+                && Double.isFinite(imd.dnLDbFs[2])) {
+            anchorFreq = imd.dnLHz[2];
+            anchorDbFs = imd.dnLDbFs[2];
         } else if (r.harmonicCount > 0 && r.harmonicBins != null
                 && r.harmonicBins.length > 0 && r.harmonicBins[0] > 0) {
             anchorFreq = r.harmonicHz[0];
@@ -2774,13 +2742,9 @@ public final class FftView extends AbstractFreqDomainView {
             }
         }
         double[] tones = FreqRespCalHelper.toneFrequencies(r);
-        int[][] spans  = FreqRespCalHelper.toneLobeSpans(r, tones);
+        ToneLobe[] spans = FreqRespCalHelper.toneLobeSpans(r, tones);
         calInv = FreqRespCalHelper.cascadeInverse(withNoise, toneOnly, tones, spans,
                 r.fftSize, r.sampleRate);
-        // Only the tone-only rows write into the lobes, so while no with-noise
-        // row is loaded their bin list IS the whole correction.
-        calInvToneBins = withNoise.isEmpty()
-                ? FreqRespCalHelper.toneBins(spans, r.fftSize / 2) : null;
         calInvToneKeys   = !toneOnly.isEmpty();
         calInvFundBin    = r.fundamentalBin;
         calInvF2Bin      = secondFundamentalBin(r);
@@ -2799,7 +2763,7 @@ public final class FftView extends AbstractFreqDomainView {
             return false;
         }
         double[] tones = FreqRespCalHelper.toneFrequencies(r);
-        return Arrays.deepEquals(calInvSpans, FreqRespCalHelper.toneLobeSpans(r, tones));
+        return FreqRespCalHelper.sameGeometry(calInvSpans, FreqRespCalHelper.toneLobeSpans(r, tones));
     }
 
     /** The second fundamental's bin on {@code r}'s grid, or
@@ -2905,23 +2869,23 @@ public final class FftView extends AbstractFreqDomainView {
         // ── Centred F1 / F2 headers (bold). ────────────────────────────
         gc.setFont(monoBoldFont);
         drawCentred(gc, String.format("F1: %.4f Hz   %.2f dBFS   %.2f dBV",
-                imd.f1Hz, imd.f1DbFs, imd.f1DbV), centreX, y);
+                imd.f1Hz, imd.f1DbFs,
+                convertFromDbFs(dbFsOfMagnitude(imd.f1Mag), MagnitudeUnit.DBV, null)), centreX, y);
         y += lineH;
         drawCentred(gc, String.format("F2: %.4f Hz   %.2f dBFS   %.2f dBV",
-                imd.f2Hz, imd.f2DbFs, imd.f2DbV), centreX, y);
+                imd.f2Hz, imd.f2DbFs,
+                convertFromDbFs(dbFsOfMagnitude(imd.f2Mag), MagnitudeUnit.DBV, null)), centreX, y);
         y += lineH;
 
-        // ── Span line (re-uses the THD format from a Result if any). ──
-        if (lastResult != null) {
-            drawCentred(gc, formatSpan(lastResult), centreX, y);
-            y += lineH;
-        }
+        // ── Span line (re-uses the THD format). ──
+        drawCentred(gc, formatSpan(lastResult), centreX, y);
+        y += lineH;
 
         // ── Δf1 / Δf2 (per-tone clock drift).  Only meaningful when
         // the generator is running AND fund-from-gen is on - same gate
         // the THD table uses for its ΔF row.
         boolean genActive = isGeneratorActive();
-        if (genActive && prefs.isFftFundFromGenerator() && lastResult != null) {
+        if (genActive && prefs.isFftFundFromGenerator()) {
             int sr = lastResult.sampleRate;
             // Against what is EMITTED, not what these preferences would compute:
             // a bench a network away snapped on its own lane's rate and holds
@@ -2930,9 +2894,15 @@ public final class FftView extends AbstractFreqDomainView {
             double[] emitted = MessageBus.instance()
                     .request(Events.GENERATOR_EMITTED_HZ, sr);
             if (emitted != null) {
-                drawCentred(gc, formatDeltaF("Δf1", emitted[0], imd.f1Hz, sr), centreX, y);
+                // While a tone's frequency lock tracks, the frequency it steers
+                // on: its readings averaged over two FFT lengths of samples.
+                double f1Hz = Double.isFinite(lastResult.fllAveragedHz)
+                        ? lastResult.fllAveragedHz : imd.f1Hz;
+                double f2Hz = Double.isFinite(lastResult.fllAveraged2Hz)
+                        ? lastResult.fllAveraged2Hz : imd.f2Hz;
+                drawCentred(gc, formatDeltaF("Δf1", emitted[0], f1Hz, sr), centreX, y);
                 y += lineH;
-                drawCentred(gc, formatDeltaF("Δf2", emitted[1], imd.f2Hz, sr), centreX, y);
+                drawCentred(gc, formatDeltaF("Δf2", emitted[1], f2Hz, sr), centreX, y);
                 y += lineH;
             }
         }
@@ -2940,14 +2910,13 @@ public final class FftView extends AbstractFreqDomainView {
         y += 2;
 
         // Level unit + reference, shared by the metric AND product rows.  The
-        // products are stored in dBV; drop the ADC offset to get the measured
-        // dBFS the unit selector works from.  The relative unit measures against
-        // |F1| + |F2|, the divisor ImdAnalyzer uses for every product percentage,
-        // floored like it is there so muted tones cannot divide by zero.
+        // products and the tone magnitudes are full-scale relative, the scale
+        // the unit selector works from.  The relative unit measures against
+        // |F1| + |F2|, the divisor ImdAnalyzer uses for every product percentage.
         double dbvOff    = paintDbvOffsetDb;
         MagnitudeUnit tableUnit = prefs.getFftDistortionUnit();
         String unitLabel = distortionUnitLabel(tableUnit);
-        double refDbFs   = 20.0 * Math.log10(Math.max(MIN_REF_VRMS, imd.f1Mag + imd.f2Mag)) - dbvOff;
+        double refDbFs   = dbFsOfMagnitude(imd.f1Mag + imd.f2Mag);
 
         // Metric and product rows as ONE measured column set - see
         // drawColumnRows.  The metric rows carry the same level+percent cell
@@ -2963,10 +2932,10 @@ public final class FftView extends AbstractFreqDomainView {
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
             rows.add(new String[]{
                     String.format("d%dL:", k),
-                    imdRowText(levelInDistortionUnit(imd.dnLDbV[k] - dbvOff,
+                    imdRowText(levelInDistortionUnit(imd.dnLDbFs[k],
                             refDbFs, tableUnit, dbvOff), imd.dnLPct[k], unitLabel),
                     String.format("d%dH:", k),
-                    imdRowText(levelInDistortionUnit(imd.dnHDbV[k] - dbvOff,
+                    imdRowText(levelInDistortionUnit(imd.dnHDbFs[k],
                             refDbFs, tableUnit, dbvOff), imd.dnHPct[k], unitLabel)});
         }
         drawColumnRows(gc, rows, xLeft, y, lineH);
@@ -3028,7 +2997,8 @@ public final class FftView extends AbstractFreqDomainView {
         int centreX = xLeft + tableW / 2;
 
         // ── Centred header (bold) ─────────────────────────────────────
-        double thdMaxH = prefs.getFftThdMaxHarmonic();
+        // The row label names what the sum in this result actually holds.
+        int thdMaxH = r.thdHarmonics > 0 ? r.thdHarmonics + 1 : prefs.getFftThdMaxHarmonic();
         gc.setFont(monoBoldFont);
         // dBV column: the manual fundamental (fundamentalTrueDbFs) when set,
         // else the measured fundamental - both lifted to dBV by the same global
@@ -3056,7 +3026,9 @@ public final class FftView extends AbstractFreqDomainView {
             boolean genActive = isGeneratorActive();
             if (genActive && prefs.isFftFundFromGenerator()) {
                 // Compare against what the generator is EMITTING - the
-                // engine that owns it answers post-snap and post-trim.
+                // engine that owns it answers post-snap (a remote server
+                // post-trim as well; the local lane states its snapped
+                // nominal, the trim being the analyser's own).
                 // The field holds the raw user value (e.g. 1000 Hz)
                 // while the tone sits on the nearest bin (e.g.
                 // 999.987 Hz), and a bench a network away snapped it
@@ -3066,8 +3038,12 @@ public final class FftView extends AbstractFreqDomainView {
                 double[] emitted = MessageBus.instance()
                         .request(Events.GENERATOR_EMITTED_HZ, r.sampleRate);
                 double expected = emitted == null ? 0 : emitted[0];
-                if (expected > 0 && Double.isFinite(r.fundamentalHzRefined)) {
-                    double delta = r.fundamentalHzRefined - expected;
+                // While the frequency lock tracks, the frequency it steers on:
+                // its readings averaged over two FFT lengths of samples.
+                double measuredHz = Double.isFinite(r.fllAveragedHz)
+                        ? r.fllAveragedHz : r.fundamentalHzRefined;
+                if (expected > 0 && Double.isFinite(measuredHz)) {
+                    double delta = measuredHz - expected;
                     double ppm   = 1e6 * delta / expected;
                     double osc;
                     String oscName;
@@ -3108,7 +3084,7 @@ public final class FftView extends AbstractFreqDomainView {
         List<String[]> rows = new ArrayList<>();
         rows.add(new String[]{
                 "N+D:",  fmtDb(r.awThdNDb)  + " A",
-                String.format("THD H2..%d:", (int) thdMaxH),
+                String.format("THD H2..%d:", thdMaxH),
                 ratioLevelPctText(r.thdPct, tableUnit, refDbFs, dbvOffsetDb, unitLabel)});
         rows.add(new String[]{
                 "N:",    fmtUnit(levelInDistortionUnit(noiseDbFs(r), refDbFs, tableUnit, dbvOffsetDb), unitLabel),
@@ -3450,8 +3426,9 @@ public final class FftView extends AbstractFreqDomainView {
         gc.setTextAntialias(SWT.ON);
         ensureFonts();
         int y = top + EXT_LEFT_PAD;
-        if (tableModeIsImd && lastImd != null) {
-            drawImdTable(gc, lastImd, EXT_LEFT_PAD, y);
+        ImdResult imd = lastResult.imd;
+        if (tableModeIsImd && imd != null) {
+            drawImdTable(gc, imd, EXT_LEFT_PAD, y);
         } else {
             MagnitudeUnit unit = Preferences.instance().getFftMagUnit();
             drawDistortionTable(gc, lastResult, unit, EXT_LEFT_PAD, y, true);

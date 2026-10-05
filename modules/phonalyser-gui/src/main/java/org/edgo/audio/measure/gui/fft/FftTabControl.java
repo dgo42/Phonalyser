@@ -54,6 +54,7 @@ import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.ImdResult;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -195,7 +196,7 @@ public final class FftTabControl extends AbstractTabControl {
      *  snap-to-FFT-bin and fund-from-generator are on, since the loop
      *  needs a target bin (snap) and a target frequency (fund-from-gen)
      *  to lock onto.  Even when a mode is selected the loop only fires if
-     *  the other two are also on - see {@code FftView.applyFrequencyLockLoop}. */
+     *  the other two are also on - see {@code FftAnalyzerWorker.applyFrequencyLock}. */
     private Combo              alignGenCombo;
     private Button             distMinEnable;
     private NumericStepField   distMinField;
@@ -497,7 +498,7 @@ public final class FftTabControl extends AbstractTabControl {
         phaseAlignCombo.setItems(new String[] {
                 I18n.t("fft.settings.phaseAlign.none"),
                 I18n.t("fft.settings.phaseAlign.reference"),
-                I18n.t("fft.settings.phaseAlign.sweep") });
+                I18n.t("fft.settings.phaseAlign.pilot") });
         phaseAlignCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         phaseAlignCombo.setToolTipText(I18n.t("fft.settings.phaseAlign.tooltip"));
         Bindings.combo(phaseAlignCombo, prefs.fftFundamentalPhaseAlignmentProperty(),
@@ -520,7 +521,7 @@ public final class FftTabControl extends AbstractTabControl {
         // snap-to-bin (provides a target bin) and fund-from-generator (provides a
         // target frequency) are on, so the combo is disabled otherwise.  Even when
         // a mode is selected the loop only fires if the other two are also on - see
-        // FftView.applyFrequencyLockLoop.
+        // FftAnalyzerWorker.applyFrequencyLock.
         Label algLbl = new Label(g, SWT.NONE);
         algLbl.setText(I18n.t("fft.settings.alignGen"));
         algLbl.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
@@ -1001,7 +1002,7 @@ public final class FftTabControl extends AbstractTabControl {
             double tone1 = 0.0;
             double tone2 = 0.0;
             if (imd) {
-                ImdResult lastImd = view.getLastImd();
+                ImdResult lastImd = r.imd;
                 if (lastImd != null) {
                     tone1 = lastImd.f1Hz;
                     tone2 = lastImd.f2Hz;
@@ -1110,7 +1111,7 @@ public final class FftTabControl extends AbstractTabControl {
         // owns the Record button and shared capture, so request the stop on the
         // bus instead of reaching into it.
         MessageBus.instance().publish(Events.FFT_RECORDING_STOP_REQUESTED);
-        view.displayLoadedResult(loaded.result(), loaded.imd());
+        view.displayLoadedResult(loaded.result());
         view.setSourceFilePath(path);
     }
 

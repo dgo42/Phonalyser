@@ -144,10 +144,4 @@ public class FreqRespFormat {
         return (magTop - db) / (magTop - magBot);
     }
 
-    /** Fractional Y position {@code [0, 1]} of {@code phaseDeg} inside the
-     *  fixed ±180° phase axis.  0 = +180°, 1 = −180°. */
-    public double phaseToYFraction(double phaseDeg) {
-        double clamped = Math.max(-180.0, Math.min(180.0, phaseDeg));
-        return (180.0 - clamped) / 360.0;
-    }
 }

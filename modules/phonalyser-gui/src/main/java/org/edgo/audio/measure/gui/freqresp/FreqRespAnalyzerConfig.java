@@ -72,6 +72,15 @@ public final class FreqRespAnalyzerConfig {
      *  measures each channel's DC offset on, plus the lead-in the operator
      *  configured on top of it.  Never less than that window. */
     private final double leadInSec;
+    /** The ratio the swept band is widened by at each end of the read band
+     *  ({@link FreqRespConstants#sweptBandHz}): the measurement's
+     *  {@link FreqRespConstants#SWEEP_BAND_MARGIN} by default, so the read
+     *  band's ends lie clear of the chirp's fades; 1.0 makes the chirp the
+     *  read band itself, for a probe that needs every second of the sweep on
+     *  that band.  The provider that plays the chirp has to be built with the
+     *  same value - the analyzer's reference is the chirp this says. */
+    @Builder.Default
+    private final double sweepBandMargin = FreqRespConstants.SWEEP_BAND_MARGIN;
 
     /** Generator drive amplitude in V RMS at the DAC. */
     private final double amplitudeVrms;

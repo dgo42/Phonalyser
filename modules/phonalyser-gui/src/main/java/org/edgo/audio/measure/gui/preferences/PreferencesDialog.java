@@ -82,6 +82,7 @@ import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
+import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import javax.sound.sampled.AudioFormat;
@@ -187,6 +188,18 @@ public final class PreferencesDialog {
     private static final double STRONG_TONE_MIN_DB   = 10;
     private static final double STRONG_TONE_MAX_DB   = 140;
     private static final double STRONG_TONE_WHEEL_DB = 10;
+    /** Pilot-line level (dBV): wheel ±10 dB, arrows ±1 dB.  The range runs
+     *  from lines far under any converter's floor to lines loud enough to
+     *  start mixing into the measured products. */
+    private static final double PILOT_LEVEL_MIN_DBV   = -160;
+    private static final double PILOT_LEVEL_MAX_DBV   = -40;
+    private static final double PILOT_LEVEL_WHEEL_DB  = 10;
+    /** Pilot-line margin over its local floor (dB): wheel ±5 dB, arrows ±1 dB.
+     *  Below 6 dB a noise peak passes for a line; above 60 dB a real line on
+     *  a noisy bench fails. */
+    private static final double PILOT_MARGIN_MIN_DB   = 6;
+    private static final double PILOT_MARGIN_MAX_DB   = 60;
+    private static final double PILOT_MARGIN_WHEEL_DB = 5;
 
     private final Shell parent;
 
@@ -667,6 +680,24 @@ public final class PreferencesDialog {
         fftStrongToneRelDbField.setToolTipText(I18n.t("preferences.fft.strongToneRelDb.tooltip"));
         Bindings.stepField(fftStrongToneRelDbField, edit.fftStrongToneRelDbProperty());
 
+        // Pilot-tone phase alignment: the level of the two pilot lines and the
+        // margin a line must hold over its local floor to count as present.
+        // Both take effect on OK without restarting the average - the level
+        // re-aims the running lines, keeping their phase.
+        gridLabel(fftTab, I18n.t("preferences.fft.pilotLevel"));
+        NumericStepField fftPilotLevelField = new NumericStepField(fftTab, UnitFamily.LEVEL_DBV,
+                PILOT_LEVEL_MIN_DBV, PILOT_LEVEL_MAX_DBV, PILOT_LEVEL_WHEEL_DB, 1, 1, 90);
+        fftPilotLevelField.setLayoutData(comboData());
+        fftPilotLevelField.setToolTipText(I18n.t("preferences.fft.pilotLevel.tooltip"));
+        Bindings.stepField(fftPilotLevelField, edit.fftPilotLevelDbvProperty());
+
+        gridLabel(fftTab, I18n.t("preferences.fft.pilotMargin"));
+        NumericStepField fftPilotMarginField = new NumericStepField(fftTab, UnitFamily.DECIBEL,
+                PILOT_MARGIN_MIN_DB, PILOT_MARGIN_MAX_DB, PILOT_MARGIN_WHEEL_DB, 1, 1, 90);
+        fftPilotMarginField.setLayoutData(comboData());
+        fftPilotMarginField.setToolTipText(I18n.t("preferences.fft.pilotMargin.tooltip"));
+        Bindings.stepField(fftPilotMarginField, edit.fftPilotMarginDbProperty());
+
         // Spectrum line colour.
         int[] fftLineColorHolder = { edit.getFftLineColor() };
         gridLabel(fftTab,I18n.t("preferences.fft.lineColor"));
@@ -1038,6 +1069,10 @@ public final class PreferencesDialog {
 
         okButton.addListener(SWT.Selection, e -> {
 
+            // The full scales in force before anything below commits, compared
+            // with the committed ones further down.
+            CalibrationState inCalBefore  = calibrationState(true);
+            CalibrationState outCalBefore = calibrationState(false);
             // Fold every control's value into the working copy `edit`.
             // --- Per-backend device / rate / depth for the shown backend.
             captureUiToActive();
@@ -1128,15 +1163,18 @@ public final class PreferencesDialog {
             // re-reads through its device manager on this announcement, one
             // per direction of the selected devices.  The dialog is the
             // writer here: the cards went in as a whole, not through a
-            // manager's own store.
-            AudioBackend audio = AudioBackend.instance();
-            DeviceRef selectedInput = audio.getActiveInputDevice();
-            if (selectedInput != null) {
-                MessageBus.instance().publish(Events.ADC_CALIBRATION_CHANGED, selectedInput);
+            // manager's own store.  Announced only for a direction whose
+            // device or full scales changed, or when the audio configuration
+            // did: the generator answers the announcement by re-pushing its
+            // levels as a changed signal, which restarts the FFT average, so
+            // an OK that changed neither must not send it.
+            CalibrationState inCalAfter  = calibrationState(true);
+            CalibrationState outCalAfter = calibrationState(false);
+            if (inCalAfter.device() != null && (needStartAudio || !inCalAfter.equals(inCalBefore))) {
+                MessageBus.instance().publish(Events.ADC_CALIBRATION_CHANGED, inCalAfter.device());
             }
-            DeviceRef selectedOutput = audio.getActiveOutputDevice();
-            if (selectedOutput != null) {
-                MessageBus.instance().publish(Events.DAC_CALIBRATION_CHANGED, selectedOutput);
+            if (outCalAfter.device() != null && (needStartAudio || !outCalAfter.equals(outCalBefore))) {
+                MessageBus.instance().publish(Events.DAC_CALIBRATION_CHANGED, outCalAfter.device());
             }
             // The GPU toggle, like fonts, takes effect by rebuilding the panes -
             // the scope pane chooses its surface (GL vs GC) at construction.
@@ -3528,6 +3566,22 @@ public final class PreferencesDialog {
     /** The audio selection the dialog opened on - see {@link #openState}. */
     private record OpenState(String audioConfig, String backendKey, String inputDevice,
             String outputDevice, ActiveRange inputRange, ActiveRange outputRange) {
+    }
+
+    /** One direction's active device and its full scales, read through the
+     *  device manager and not the backend's per-selection cache, which only
+     *  the announcement itself drops - {@link DeviceCalibration#DEFAULT} for
+     *  an uncalibrated device, a {@code null} device when none is active. */
+    private CalibrationState calibrationState(boolean input) {
+        AudioBackend audio = AudioBackend.instance();
+        DeviceRef device = input ? audio.getActiveInputDevice() : audio.getActiveOutputDevice();
+        return new CalibrationState(device,
+                device == null ? null : audio.calibrationOrDefault(device, input));
+    }
+
+    /** What the OK handler compares across its commit - see
+     *  {@link #calibrationState}. */
+    private record CalibrationState(DeviceRef device, DeviceCalibration calibration) {
     }
 
     private static final class DeviceListState {

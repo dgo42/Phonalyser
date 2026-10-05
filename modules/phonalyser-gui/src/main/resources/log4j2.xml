@@ -42,6 +42,38 @@
             <AppenderRef ref="Console" level="ERROR"/>
             <AppenderRef ref="File" level="DEBUG"/>
         </Logger-->
+        <Logger name="org.edgo.audio.measure.generator.SignalGenerator" level="INFO" additivity="false">
+            <AppenderRef ref="Console" level="ERROR"/>
+            <AppenderRef ref="File" level="INFO"/>
+        </Logger>
+        <Logger name="org.edgo.audio.measure.gui.fft.FftAnalyzerWorker" level="INFO" additivity="false">
+            <AppenderRef ref="Console" level="ERROR"/>
+            <AppenderRef ref="File" level="INFO"/>
+        </Logger>
+        <Logger name="org.edgo.audio.measure.dsp.FreqRespCalHelper" level="INFO" additivity="false">
+            <AppenderRef ref="Console" level="ERROR"/>
+            <AppenderRef ref="File" level="INFO"/>
+        </Logger>
+        <Logger name="org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine" level="INFO" additivity="false">
+            <AppenderRef ref="Console" level="ERROR"/>
+            <AppenderRef ref="File" level="INFO"/>
+        </Logger>
+        <Logger name="org.edgo.audio.measure.sound.javasound.JavaSoundRecorder" level="INFO" additivity="false">
+            <AppenderRef ref="Console" level="ERROR"/>
+            <AppenderRef ref="File" level="INFO"/>
+        </Logger>
+        <Logger name="org.edgo.audio.measure.sound.javasound.JavaSoundGenerator" level="INFO" additivity="false">
+            <AppenderRef ref="Console" level="ERROR"/>
+            <AppenderRef ref="File" level="INFO"/>
+        </Logger>
+        <Logger name="org.edgo.audio.measure.sound.AbstractLocalDeviceManager" level="INFO" additivity="false">
+            <AppenderRef ref="Console" level="ERROR"/>
+            <AppenderRef ref="File" level="INFO"/>
+        </Logger>
+        <Logger name="org.edgo.audio.measure.sound.AbstractPcmCapture" level="INFO" additivity="false">
+            <AppenderRef ref="Console" level="ERROR"/>
+            <AppenderRef ref="File" level="INFO"/>
+        </Logger>
         <Root level="INFO">
             <AppenderRef ref="Console" level="ERROR" />
             <AppenderRef ref="File" level="WARN" />

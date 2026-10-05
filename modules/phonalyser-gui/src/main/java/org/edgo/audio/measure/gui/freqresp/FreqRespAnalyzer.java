@@ -94,10 +94,30 @@ public final class FreqRespAnalyzer {
         int      durationSec  = (int) Math.ceil(cfg.getLeadInSec() + cfg.getDurationSec()
                 + FreqRespConstants.SWEEP_MIN_SEC);
 
-        log.info("FreqResp analyzer: {} Hz -> {} Hz, {} {}-spaced points, sweep {} s, lead-in {} s, "
+        // The band that is EMITTED, wider at both ends than the one that is
+        // read: the Tukey fade takes the stimulus to zero over the first and
+        // last stretch of the sweep and its leakage reaches further still, so
+        // the outermost part of a swept band is measured on a stimulus on its
+        // way out - the wobble at the ends of a deep trace.  Sweeping past the
+        // configured band on both sides leaves that stretch outside everything
+        // that is read: the grid, the result's parameters, the saved file and
+        // the view all keep the configured band, below and further down.
+        // Clamped to what the pair of converters can carry, which is also the
+        // limit validate() already refuses a configured stop above.  The same
+        // rule the capture provider played the chirp by - the reference below
+        // has to be that chirp and nothing else.
+        double[] swept = FreqRespConstants.sweptBandHz(cfg.getStartHz(), cfg.getStopHz(),
+                cfg.getCaptureRateHz(), cfg.getPlaybackRateHz(), cfg.getSweepBandMargin());
+        double sweptStartHz = swept[0];
+        double sweptStopHz  = swept[1];
+
+        log.info("FreqResp analyzer: {} Hz -> {} Hz read, {} Hz -> {} Hz swept, "
+                        + "{} {}-spaced points, sweep {} s, lead-in {} s, "
                         + "DAC {} Hz/{} bit, ADC {} Hz",
                 String.format(Locale.US, "%.3f", cfg.getStartHz()),
                 String.format(Locale.US, "%.3f", cfg.getStopHz()),
+                String.format(Locale.US, "%.3f", sweptStartHz),
+                String.format(Locale.US, "%.3f", sweptStopHz),
                 cfg.getSweepPoints(),
                 USE_LOG_GRID ? "log" : "linear",
                 String.format(Locale.US, "%.3f", cfg.getDurationSec()),
@@ -106,7 +126,7 @@ public final class FreqRespAnalyzer {
 
         reportProgress(progress, 0.0, "Preparing sweep");
         SignalGenerator gen = new SignalGenerator(
-                cfg.getStartHz(), cfg.getStopHz(), playSweepSamples, playLeadInSamples,
+                sweptStartHz, sweptStopHz, playSweepSamples, playLeadInSamples,
                 cfg.getPlaybackRateHz(), cfg.getAmplitudeVrms(), cfg.getAmplitudeVrms(),
                 cfg.getDacFsVoltageRmsLeft(), cfg.getDacFsVoltageRmsRight());
         // One-shot sweep: emit silence after the buffer ends instead of looping
@@ -170,8 +190,11 @@ public final class FreqRespAnalyzer {
         // of samples for the same seconds, zero-pad the recording inside that
         // transform, and divide the response by a chirp that sweeps at another
         // rate.  The buffer is unit amplitude; the fade is applied inside.
+        // The SWEPT band again, not the configured one: X is the model of what
+        // was actually played, and a reference over a different band would
+        // divide the recording by a chirp that sweeps at another rate.
         double[] sweepRef = new SignalGenerator(
-                cfg.getStartHz(), cfg.getStopHz(), recSweepSamples, recLeadInSamples,
+                sweptStartHz, sweptStopHz, recSweepSamples, recLeadInSamples,
                 cfg.getCaptureRateHz(), cfg.getAmplitudeVrms(), cfg.getAmplitudeVrms(),
                 cfg.getDacFsVoltageRmsLeft(), cfg.getDacFsVoltageRmsRight())
                 .getLogSweepBuffer();
@@ -251,7 +274,8 @@ public final class FreqRespAnalyzer {
         // plausible, because the impulse-response peak that sets the delay
         // correction is computed from that same polluted division.  Refused, with
         // both configured rates named, rather than drawn.
-        double bandCeilingHz = Math.min(cfg.getCaptureRateHz(), cfg.getPlaybackRateHz()) / 2.0;
+        double bandCeilingHz = FreqRespConstants.bandCeilingHz(
+                cfg.getCaptureRateHz(), cfg.getPlaybackRateHz());
         if (cfg.getStopHz() > bandCeilingHz) {
             throw new IllegalArgumentException("stopHz " + cfg.getStopHz() + " Hz is above "
                     + bandCeilingHz + " Hz, half the lower of the configured "
@@ -260,6 +284,7 @@ public final class FreqRespAnalyzer {
                     + "wrong everywhere, not just at the top");
         }
         if (cfg.getSweepPoints() < 4)                throw new IllegalArgumentException("sweepPoints must be >= 4");
+        if (cfg.getSweepBandMargin() < 1.0)          throw new IllegalArgumentException("sweepBandMargin must be >= 1.0");
         if (cfg.getDurationSec() < FreqRespConstants.SWEEP_MIN_SEC) {
             throw new IllegalArgumentException("durationSec must be >= " + FreqRespConstants.SWEEP_MIN_SEC);
         }

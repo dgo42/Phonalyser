@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.fft;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -30,14 +31,17 @@ import java.util.stream.IntStream;
 
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.common.AppPaths;
-import org.edgo.audio.measure.dsp.FreqRespCalibration;
+import org.edgo.audio.measure.common.Constants;
+import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.dsp.TimeDiscontinuityDetector;
+import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.GenChangeCause;
+import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.dsp.MainsFilters;
 import org.edgo.audio.measure.dsp.MainsTimeFilter;
 import org.edgo.audio.measure.enums.MainsSuppression;
@@ -46,19 +50,19 @@ import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftAnalyzer.FrameFftCache;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.FftResultPool;
+import org.edgo.audio.measure.fft.PilotToneSelector;
 import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.GeneratorOutput;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.bus.PilotToneRequest;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
-import org.edgo.audio.measure.gui.freqresp.NotchPhaseProbe;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.sound.CaptureEndReason;
 
-import lombok.AccessLevel;
 import lombok.Getter;
-import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -105,6 +109,12 @@ public final class FftAnalyzerWorker {
      *  budget that 93.75 % overlap at 1 M needs to stay under its 170 ms
      *  hop. */
     private static final int MAINS_TRACK_TICK_INTERVAL = 5;
+    /** Lowest harmonic ORDER the analysis always evaluates, whatever the
+     *  preference states: the ladder H2 to H9 the distortion readouts are
+     *  built on.  The count handed to the analysis is one less - it counts
+     *  from the SECOND harmonic - and the protected ladder of the pilot's
+     *  selection is that count plus one again. */
+    private static final int MIN_CALC_MAX_HARMONIC = 9;
     private long lastShowNanos;
 
     private final Display  display;
@@ -117,6 +127,12 @@ public final class FftAnalyzerWorker {
      *  capture lifecycle, so the view / pane never touch the sample buffer. */
     private boolean captureHeld;
     private final    AtomicBoolean      paused = new AtomicBoolean(false);
+    /** Armed by a change of the generated signal - the bus event the average
+     *  restarts on - and consumed on the worker's thread at the next tick: the
+     *  alignment starts afresh, with a new reference baseline and the pilot
+     *  elected again.  A tone that changed has a new phase through the notch,
+     *  so an excess taken on the old tone would be applied to the new one. */
+    private final    AtomicBoolean      alignRestartPending = new AtomicBoolean(false);
     /** Bumped by every {@link #resetStatistics()}.  An analysis tick stamps
      *  the epoch at its start and discards its result when a reset landed
      *  while it was assembling / analysing: such a window straddles the
@@ -166,8 +182,20 @@ public final class FftAnalyzerWorker {
      *  filled, one parked in {@link #latestForUi}, one in the UI
      *  dispatch). */
     private final FftResultPool resultPool = new FftResultPool();
+    /** Averages PERFORMED since the last reset, unbounded: the collection's
+     *  first cycle seeds the accumulator - it starts the average instead of
+     *  adding to one - so it does not raise this, and nothing caps it
+     *  afterwards.  What a consumer counting its own target against the
+     *  average's progress reads (the predistortion rounds). */
     @Getter
     private volatile int                completedAnalyses;
+    /** Averages currently INSIDE the average, which is what every "N averages"
+     *  readout states: equal to {@link #completedAnalyses} while the averaging
+     *  is unbounded, and the configured window length once a moving average has
+     *  filled it - a moving average of N may have performed twenty thousand
+     *  averages and still hold the last N. */
+    @Getter
+    private volatile int                averagesInWindow;
     @Getter
     private volatile boolean            running;
     /** WHY the capture ended from below (device lost / delivery stalled) -
@@ -236,6 +264,14 @@ public final class FftAnalyzerWorker {
      *  deliberately not mains-filtered. */
     private double[] refWinBuf;
     private double[] refHopBuf;
+    /** True while the reference mirror exists for the trace alone - mode
+     *  {@link FundamentalPhaseAlignment#PILOT_TONE} with
+     *  {@link DebugSwitches#TRACE_PILOT_PHASE} - and not for the
+     *  reference-channel alignment.  The frequency lock's reference
+     *  measurement and the reference feed check then stay off, as in every
+     *  mode that keeps no mirror: the trace reads the mirror, it steers
+     *  nothing. */
+    private boolean  refMirrorForTrace;
     /** The hop the window slides by next - drawn per tick in the random
      *  overlap mode, constant otherwise.  FROZEN while its gather is in
      *  flight: it is redrawn only after the slide it sizes has completed.
@@ -341,7 +377,39 @@ public final class FftAnalyzerWorker {
     private final Consumer<GenChangeCause> invalidateOnGenChange = cause -> {
         if (cause == GenChangeCause.FLL_TRIM) return;
         recycleAndClearCache();
+        // The changed tone also ends the alignment's collection: consumed by
+        // the worker's own thread at the next tick, see alignRestartPending.
+        alignRestartPending.set(true);
     };
+    /** A change of the alignment mode ends the collection the same way: the
+     *  mode decides what the time base is, so nothing measured under the old
+     *  one may be applied under the new.  Entering the pilot mode elects a
+     *  pilot and asks the generator for it; leaving it is answered by the
+     *  take-down the tick makes itself.  Written on the thread that changes
+     *  the setting and consumed by the worker's own at the next tick, like a
+     *  changed tone. */
+    private final Consumer<FundamentalPhaseAlignment> alignModeChanged =
+            mode -> alignRestartPending.set(true);
+    /** The pilot lines' level (dBV) and the margin (dB) a line must hold over
+     *  its local floor, kept current by subscription.  Neither restarts
+     *  anything: the generator rescales its running lines itself, and the
+     *  margin applies from the next frame the lines are tested on. */
+    private volatile double pilotLevelDbv;
+    private volatile double pilotMarginDb;
+    private final Consumer<Double> pilotLevelChanged  = v -> pilotLevelDbv = v;
+    private final Consumer<Double> pilotMarginChanged = v -> pilotMarginDb = v;
+    /** The tones the generator emits, as it answered ONCE at the start of the
+     *  collection - index 0 is tone 1, index 1 tone 2 (0.0 when the waveform
+     *  has no second tone); {@code null} while no generator states its tones.
+     *  A change of the generated signal resets the whole collection, so the
+     *  pair is asked for again there and nowhere else; between resets the
+     *  frequency lock is the only thing that moves the tones, and it moves
+     *  them from here, so every trim it publishes is written back into this
+     *  pair.  Worker-thread state. */
+    private double[] heldEmittedHz;
+    /** Set where a collection starts; the next analysis cycle asks the
+     *  generator for its pair and clears it. */
+    private boolean  emittedPairPending = true;
     /** Cache adapter passed to {@link FftAnalyzer#setFrameCache}; backed
      *  by {@link #frameCacheMap} under {@link #frameCacheLock}. */
     private final FftAnalyzer.FrameFftCache frameFftCacheImpl =
@@ -442,6 +510,16 @@ public final class FftAnalyzerWorker {
      *  spectrum is phase-rotated by the time delta from this reference
      *  to keep tones coherent across ticks. */
     private long    accumRefSampleStart;
+    /** The pilots' measured advance on the reference tick, samples, or
+     *  {@link Double#NaN} where the pair had nothing settled then.  A tick's
+     *  rotation is its own measured advance less this one. */
+    private double  accumRefPilotAdvance = Double.NaN;
+    /** The reference channel's tone phases on the reference tick, radians, or
+     *  {@link Double#NaN} where that tick read none: in mode
+     *  {@link FundamentalPhaseAlignment#REFERENCE_CHANNEL} a tick's rotation
+     *  is its own reading less this one. */
+    private double  accumRefTone1Rad = Double.NaN;
+    private double  accumRefTone2Rad = Double.NaN;
     /** Cross-tick de-rotation frequency (fractional fundamental bin), PINNED at
      *  the first contributing tick from the refined fundamental and held
      *  constant for the run so the rotation is well-defined.  A source whose
@@ -595,6 +673,38 @@ public final class FftAnalyzerWorker {
      *  collection accumulates unaligned (phiF held at zero).  Re-evaluated at
      *  every accumulator restart. */
     private boolean phaseAlignRefused;
+    /** True for a tick whose alignment has no measurement of its own: the
+     *  pilots have not settled a correction yet - the collection's opening
+     *  frames, or the frames after lost samples until a new one is decided
+     *  and confirmed.  Such a tick is NOT accumulated - its excess is the last
+     *  settled one held, which stands still while the notch drifts on - and is
+     *  not published either, so the view keeps the last averaged spectrum. */
+    private boolean phaseAlignUnsettled;
+    /** The advance the pair settled on for THIS tick, samples since the
+     *  collection's first read frame, or {@link Double#NaN} where the pair
+     *  has nothing settled.  Measured from the two pilot lines, so it carries
+     *  neither the capture's count of the samples nor the phase of the
+     *  fundamental, and it is the rotation the accumulator turns the frame by
+     *  at every bin. */
+    private double pilotAdvanceSamples = Double.NaN;
+    /** The reference channel's own phase of each tone on THIS tick's frame,
+     *  radians at the window's start - F1's and, while a dual pair is pinned,
+     *  F2's - or {@link Double#NaN} where mode
+     *  {@link FundamentalPhaseAlignment#REFERENCE_CHANNEL} read none.  That
+     *  channel carries the tones clear of the notch, so a tone's change
+     *  between two ticks IS the turn the advance between them gives that
+     *  tone: the reference mode's measurement of the advance, as
+     *  {@link #pilotAdvanceSamples} is the pilot mode's.  Kept as a phase and
+     *  not in samples: every harmonic and every product owes a whole-number
+     *  combination of these two turns, so no whole period has to be counted
+     *  and none can be miscounted. */
+    private double referenceTone1Rad = Double.NaN;
+    private double referenceTone2Rad = Double.NaN;
+    /** True while the operator has been told that the alignment is deciding.
+     *  Raised on the first unsettled tick of a stretch so the notice is posted
+     *  once, dropped on the first settled tick; the banner itself goes when a
+     *  published frame reaches the view, or on a reset or a stop. */
+    private boolean phaseAlignBannerUp;
     /** One refusal notice per collection: cleared by {@link #start()}, set by
      *  the first publish, so a run that restarts its accumulator repeatedly
      *  does not raise the operator's dialog again and again. */
@@ -621,36 +731,326 @@ public final class FftAnalyzerWorker {
      *  down is at the converter's own noise, whatever its local margin. */
     private static final double PHASE_ALIGN_MIN_LEVEL_DBFS = -100.0;
 
+    /** The notice that stands while the alignment has nothing settled: no
+     *  frame is averaged then, and no other capture notice is shown over it. */
+    private static final String PHASE_ALIGNING_BANNER = "fft.warning.phaseAligning";
+
     /** Why the reference-channel alignment refused to run, in the three
      *  numbers the operator's message states: the fundamental's frequency, the
      *  reference bin's level and its margin over the reference channel's local
      *  floor.  Payload of {@link Events#FFT_PHASE_ALIGN_REFUSED}. */
     public record PhaseAlignRefusal(double fundamentalHz, double levelDbFs, double marginDb) {}
 
-    // ─── Periodical-sweep probe ─────────────────────────────────────────────
-    /** The probe's collaborator ({@link PhaseProbeHost}), or null while none
-     *  was wired (the offscreen controller, which never records). */
-    @Setter(AccessLevel.PACKAGE)
-    private volatile PhaseProbeHost probeHost;
-    /** When the next probe is due.  Reset at every collection start: a drift
-     *  rate measured across a stopped collection says nothing about this one. */
-    private final PhaseProbeScheduler probeScheduler = new PhaseProbeScheduler();
-    /** De-trended phase of the collection's FIRST probe, in radians - the
-     *  baseline every later probe is measured against.  A probe's absolute
-     *  residual carries no meaning; only the change since the baseline does. */
-    private double  probeBaselineRad;
-    private boolean probeBaselineTaken;
-    /** The phase excess the latest probe measured against that baseline, held
-     *  until the next probe replaces it - the value mode PERIODICAL_SWEEP
-     *  feeds the accumulator every tick. */
-    private double probeDeltaRad;
-    /** True while a probe owns the output device.  The tone going down and
-     *  coming back is the probe's own doing, not a change of the measured
-     *  signal, so the tick's generator transition does not act on it. */
-    private volatile boolean probeInFlight;
-    /** Seconds per nanosecond's worth of nanoTime - the probe schedule is
-     *  stated in seconds and the worker's clock in nanoseconds. */
-    private static final double NANOS_PER_SEC = 1e9;
+    /** Why the pilot-tone alignment ended the recording, in the one number
+     *  the operator's message states: the fundamental's frequency.  A pilot
+     *  line failed its level test on three frames in a row, which leaves the
+     *  coherent average with no time base at all.  Payload of
+     *  {@link Events#FFT_PHASE_ALIGN_PILOT_LOST}. */
+    public record PilotLost(double fundamentalHz) {}
+
+    /** How long {@link #stop()} waits for the worker thread to leave its
+     *  tick, in milliseconds; the teardown goes on once it has elapsed. */
+    private static final long STOP_JOIN_MS = 3_000;
+
+    // ─── Pilot tone ─────────────────────────────────────────────────────────
+    /** The chain's usable bandwidth, Hz: the highest frequency the amplifier,
+     *  the filter under test and the converters still carry.  The pilot is
+     *  read for its phase only, so the level loss towards this corner does
+     *  not matter, but a line beyond it arrives as noise. */
+    private static final double PILOT_CEILING_HZ = 20_000.0;
+    /** The highest harmonic order the pilots keep clear of: the ladder the
+     *  THD readout sums, H2 to H9.  A fixed number, taken from no setting:
+     *  a protected order that followed a preference would move the pilots
+     *  whenever the operator changed that number, and moved pilots mean a
+     *  new election, a new request to the generator and an average started
+     *  again from zero.  The view's "calculate up to" count in particular
+     *  only says how many harmonics are displayed. */
+    private static final int PILOT_PROTECTED_ORDER = 9;
+    /** The two pilot lines' readers, {@code null} while no pilot runs: each
+     *  holds the whole bin its line sits on and that line's phase in the
+     *  previous frame the line was read on, and gives the turn the line made
+     *  between the two.  Re-created at every election - a reader's bin is the
+     *  election's own - and dropped when the pilot is taken down. */
+    private PilotReader pilotReader1;
+    private PilotReader pilotReader2;
+    /** The elected pair's turn arithmetic: how far the capture advanced
+     *  between two read frames, settled from the two pilots and the
+     *  fundamental.  Re-created with the readers. */
+    private PairAdvance pilotPair;
+    /** Each pilot line's raw phase on this frame's spectrum, and the raw phase
+     *  it had on the accumulation's reference frame: their difference is the
+     *  turn the line made by itself, which is all its lobe is de-rotated by
+     *  ({@link #derotatePilotLobes}).  NaN while the line is not read. */
+    private double pilotRawPhase1 = Double.NaN;
+    private double pilotRawPhase2 = Double.NaN;
+    private double pilotRawRef1   = Double.NaN;
+    private double pilotRawRef2   = Double.NaN;
+    /** Set on the second frame in a row without a pilot reading, consumed by
+     *  the tick loop: that frame is discarded and the capture re-anchored
+     *  through the discontinuity path.  The discard is what makes the warning
+     *  banner stand - a frame that still published its own result would reach
+     *  the view right after the banner and clear it as stale - and the next
+     *  reading starts from the reloaded window. */
+    private boolean pilotResyncPending;
+    /** Whether the collection's first read frame has been taken: its phases
+     *  are the zero every later frame is measured against, and it yields no
+     *  change of its own. */
+    private boolean pilotFirstTaken;
+    /** That first frame's raw phases of F1 and of F2 ({@link Double#NaN} in
+     *  single tone) - the tones' half of the zero, the pilots' half living in
+     *  their readers. */
+    private double toneFirstPhase1;
+    private double toneFirstPhase2;
+    /** That first frame's position in the stream, samples: this frame's
+     *  position less it is the capture's own count of what passed between
+     *  them, the anchor that says which repetition of the lines this frame is
+     *  on.  What the count cannot know - the samples dropped without an
+     *  announcement - is what the lines themselves resolve. */
+    private long pilotFirstAbsStart;
+    /** Each tone's excess since the collection's first read frame, radians -
+     *  F1's and, in dual tone, F2's.  Each frame READS its own value against
+     *  that first frame, so an error stays on the frame that made it; a frame
+     *  without a pilot line takes its value from the trend instead. */
+    private double excessF1Rad;
+    private double excessF2Rad;
+    /** The SECOND tone's phase excess for the NEXT accumulated tick, radians
+     *  - the companion of {@link #pendingPhiF}.  A notch's phase response at
+     *  F2 is not the one it has at F1, so the two tones carry their own
+     *  numbers: the (0,1) member of the product grid, F2 itself, turns by
+     *  minus this, and the fork pool takes it out of F2's fresh phasor.
+     *  Zero in single tone and in mode {@link FundamentalPhaseAlignment#NONE}. */
+    private double pendingPhiF2;
+    /** Frames in a row the pilots gave no measurement on: the first is
+     *  extrapolated, the second re-syncs the capture, the third ends the
+     *  recording.  Reset by every frame they do measure. */
+    private int pilotMissingFrames;
+    /** One pilot-lost notice per RUN, on the footing of the refusal's: the
+     *  stop travels the auto-stop path and takes a few analysis cycles to
+     *  reach the worker, so the condition is still there on the cycles in
+     *  between and the operator is told once.  Cleared by {@link #start()}. */
+    private boolean pilotLostPublished;
+    /** The same for the fundamental against the REFERENCE channel, taken at
+     *  the collection's first frame that has the reference mirror - the
+     *  excess itself in mode REFERENCE_CHANNEL, the control of the pilot's
+     *  reading in mode PILOT_TONE.  The second tone has its own, read at its
+     *  own bin on the same mirror. */
+    private boolean pilotRefFirstTaken;
+    private double  pilotRefFirstRad;
+    private boolean pilotRef2FirstTaken;
+    private double  pilotRef2FirstRad;
+    /** The changes since their first frame, radians, continued unwrapped from
+     *  the previous frame: each tone's against the reference channel, which
+     *  can pass half a turn through a notch.  A wrapped reading fed to an
+     *  average would average a wrap. */
+    private double  pilotRefChangeRad;
+    private double  pilotRef2ChangeRad;
+    /** Those changes averaged over the last
+     *  {@link DebugSwitches#PILOT_AVERAGE_FRAMES} accepted frames, one
+     *  average each, so both tones are smoothed alike - {@code null} at zero,
+     *  where every value is the fresh frame's own.  Allocated here and only
+     *  cleared later: a collection start runs on the caller's thread. */
+    private final MovingAverage pilotRefAverage  = pilotAverage();
+    private final MovingAverage pilotRef2Average = pilotAverage();
+    /** Those changes as the excess and the trace take them: the averages'
+     *  values where those exist, else the changes themselves. */
+    private double  pilotRefValueRad;
+    private double  pilotRef2ValueRad;
+    /** Frames each tone's excess is fitted over, against the frames' own
+     *  times, to predict it on a frame the pilots cannot measure. */
+    private static final int PILOT_PREDICT_POINTS = 10;
+    /** How far past its newest frame the excess trend is trusted to tell
+     *  repetitions of the fundamental's period apart, in transform lengths:
+     *  the repetition two periods out stands 0.6 degrees off at the bench
+     *  pair's ratio, and the notch's drift moves 0.2-0.3 degrees within
+     *  30-60 s on the bench, so two transforms (11 s at 2M points and
+     *  384 kHz) keep the prediction well inside the half spacing; beyond
+     *  them the pair decides on the pilots alone. */
+    private static final double PILOT_PREDICT_HORIZON_TRANSFORMS = 2.0;
+    /** Each tone's excess over the last {@link #PILOT_PREDICT_POINTS} frames
+     *  the pilots measured, against those frames' times on the capture's
+     *  clock.  Allocated here and only cleared later, like the averages. */
+    private final PhaseTrend excessTrend1 = new PhaseTrend(PILOT_PREDICT_POINTS);
+    private final PhaseTrend excessTrend2 = new PhaseTrend(PILOT_PREDICT_POINTS);
+    /** Where the two readings stood against each other at the first frame
+     *  both had been read, radians, and whether that frame has come: the
+     *  reference's change less the pilot's reading of the drift is zeroed
+     *  there, so a pilot whose line was refused on the collection's first
+     *  frames compares from the frame it was first read on, without the
+     *  drift before it counted in. */
+    private boolean pilotRefOffsetTaken;
+    private double  pilotRefOffsetRad;
+    /** The analysed fundamental's level over the reference channel's at the
+     *  fresh frame, dB - the feed's live readout in mode REFERENCE_CHANNEL. */
+    private double  referenceFeedDb;
+    /** One notice per collection for each of the two conditions that leave
+     *  the mode without a measurement: a generator a server drives, and a
+     *  pilot bin that carries no line. */
+    private boolean pilotRemoteWarned;
+    private boolean pilotNoLineWarned;
+    /** What the last measured frame's pair arithmetic came to, for the frame
+     *  trace alone: the whole turns each pilot has made since the collection's
+     *  first frame.  Zero on a frame that measured none, the collection's own
+     *  first frame among them.  Written on every measured frame, read only
+     *  under {@link DebugSwitches#TRACE_HARMONIC_PHASE}. */
+    private long traceTurns1;
+    private long traceTurns2;
+    /** The rigid residual the pair the frame settled on reached: how far
+     *  apart the two pilots' fine readings stood, radians at the
+     *  fundamental. */
+    private double traceRigidRad;
+    /** The two pilot lines' own levels on the frame their phases were read
+     *  from, dBFS: what says whether a line was still there to be read. */
+    private double tracePilot1DbFs = Double.NaN;
+    private double tracePilot2DbFs = Double.NaN;
+    /** The margin each pilot line held over the median power of its
+     *  neighbourhood on that frame, dB: what the pair's admission is scaled
+     *  from.  NaN before a frame was measured. */
+    private double traceMargin1Db = Double.NaN;
+    private double traceMargin2Db = Double.NaN;
+    /** The three lines' plain phases on the analysed channel, radians: one
+     *  single frame taken at the window's start - the base the pilot turns are
+     *  counted from - with no de-rotation, no summing of the cycle's frames
+     *  and no mains comb, so the trace states what the samples themselves hold
+     *  before any step of the alignment.  NaN where the line has no bin on
+     *  this frame or the window is not filled. */
+    private double traceRawFundRad = Double.NaN;
+    private double traceRawP1Rad   = Double.NaN;
+    private double traceRawP2Rad   = Double.NaN;
+    /** The same for the reference channel's fundamental, read on the mirror
+     *  window at that same start.  NaN on a frame with no mirror. */
+    private double traceRawRefRad = Double.NaN;
+    /** The one-shot re-zero of the pilot tracking once the frequency lock is
+     *  tracking: the collection's opening frames stand on the untrimmed tone
+     *  (the crystals' offset, corrected by the lock's first trim), and with
+     *  it the pilots' first phases, the tone's first phase and the pair's
+     *  turn counting.  When the lock reports tracking, the next settled
+     *  frame's totals become CARRIES and that frame becomes the new zero, so
+     *  the whole tracking stands on the on-bin tone while the accumulator -
+     *  which is never touched - keeps its de-rotation continuous: every
+     *  advance and excess handed on is the new measurement plus its carry.
+     *  Latched once per lock acquisition, so lock trouble later in the
+     *  recording cannot pile up re-zeros. */
+    private boolean pilotRetrackDone;
+    private boolean pilotRetrackPending;
+    /** What the pilot tracking had measured when it was re-zeroed: the
+     *  advance (samples) and each tone's excess (radians) at the frame that
+     *  became the new zero.  Added to every reading of the new epoch before
+     *  the accumulator sees it; zero for a collection whose zeros needed no
+     *  re-take. */
+    private double pilotAdvanceCarrySamples;
+    private double excessCarry1Rad;
+    private double excessCarry2Rad;
+
+    // ─── Generator frequency lock ───────────────────────────────────────────
+    /** FLL measurement plausibility bound, relative part: generator-vs-ADC
+     *  clock drift is ppm-scale (observed ≤ ~130 ppm), so 500 ppm is a
+     *  generous ceiling for a REAL mistune; anything beyond it is a
+     *  mis-measurement that must not reach the loop. */
+    private static final double FLL_MAX_ERROR_PPM  = 500;
+    /** FLL measurement plausibility bound, absolute floor in FFT bins -
+     *  keeps the gate permissive at low target frequencies where the
+     *  ppm part collapses below the spectral resolution. */
+    private static final double FLL_MAX_ERROR_BINS = 5;
+    /** Alignment-done threshold for the magnitude-drift watch (ppm of the
+     *  tone target): once every locked tone measures within this of its
+     *  target, the FLL is considered settled and the drift comparison
+     *  fires.  Comfortably above the converged loop's frequency jitter
+     *  (~0.005 ppm) and below the raw clock offset (~1.5 ppm). */
+    private static final double ALIGN_DONE_PPM  = 0.1;
+    /** Magnitude-drift threshold (dB): a fundamental whose level moved by
+     *  more than this between the first fed tick after a lock reset and the
+     *  aligned tick means the running average still carries pre-alignment
+     *  frames at a depressed level - worth suggesting a statistics reset. */
+    private static final double ALIGN_DRIFT_DB  = 0.1;
+    /** Frequency-lock loops: {@link #fll} tracks the SINE / dual-tone
+     *  tone-1 correction; {@link #fll2} tracks dual-tone tone-2.  The pilot
+     *  tone of the pilot phase alignment has no loop of its own: the
+     *  generator carries it at the exact ratio of its bin to the
+     *  fundamental's, so tone 1's correction holds it on its bin - and a loop
+     *  of its own would trim away the very frequency shift the alignment
+     *  reads.  Created lazily when an alignment mode is active.  Worker-thread
+     *  only, like every field of this section but the reset request. */
+    private FrequencyAligner fll;
+    private FrequencyAligner fll2;
+    /** The correction each loop last published as a trim, Hz.  A trim goes
+     *  out only when the loop's correction differs from it, so a holding loop
+     *  moves nothing on the generator side.  NaN forces the next update to
+     *  publish: set at loop creation and reset, where the generator's trim
+     *  has been dropped (a statistics reset, a restarted alignment, a new
+     *  window geometry - an FFT length change re-snaps the generator). */
+    private double fllPublishedCorrection  = Double.NaN;
+    private double fll2PublishedCorrection = Double.NaN;
+    /** The untrimmed, bin-snapped generator frequency each loop steers to,
+     *  Hz, as the last loop step computed it; 0.0 while no step computed one
+     *  (tone 2's also in single-tone, which has no second tone).  A reset
+     *  drops the generator's trims, so these are the tones it plays after
+     *  one and the held pair takes them there. */
+    private double fllTargetHz;
+    private double fll2TargetHz;
+    /** Set by {@link #resetFrequencyLock()} on the caller's thread while the
+     *  worker runs, and consumed at the top of the worker's loop iteration,
+     *  where the whole reset runs - the loops and the magnitude-drift watch
+     *  are worker state, and the reset event is posted behind any trim
+     *  already on its way. */
+    private final AtomicBoolean frequencyLockResetPending = new AtomicBoolean();
+    /** Set by every capture re-sync - {@link #onCaptureOverrun},
+     *  {@link #onSignalDiscontinuity} (which the pilot-missing re-sync goes
+     *  through as well) and the {@link #reAnchorPending} re-anchor - and
+     *  tested and cleared only by {@link #applyFrequencyLock}, after every
+     *  other gate of the tick has passed: the first tick that would feed a
+     *  loop after a re-sync is skipped.  That is the accumulator's one-shot
+     *  realign tick where a realign runs, and the first accumulated tick
+     *  where none does.  The loops themselves are not reset - the elapsed
+     *  capture time reaches them through the next window's absolute start. */
+    private boolean fllResyncHold;
+    /** One analysis cycle's reading for the frequency lock, kept for one
+     *  cycle: the tones' measured frequencies (tone 2 NaN in single tone),
+     *  the frame's start and geometry, the epoch it was read under, and the
+     *  tones' levels for the magnitude-drift watch.  Fed on the NEXT cycle,
+     *  once that cycle's gates have passed: a discontinuity sitting at a
+     *  window's edge is found by the gates only on the cycle after it, and
+     *  a reading fed on its own cycle would carry it into the loop. */
+    private record FllReading(double measured1, double measured2, long absStart,
+                              int sampleRate, int fftSize, long epoch,
+                              double fundamentalDbFs, double tone2DbFs) {}
+    /** The previous cycle's reading, or {@code null} after a re-sync, a lock
+     *  reset or a cycle the lock's gates refused. */
+    private FllReading pendingFllReading;
+    /** FFT lengths of samples a tracking loop's readings are averaged over:
+     *  the newest window and the windows starting up to one FFT length before
+     *  it.  A re-sync rebuilds the window from fresh samples, so the average
+     *  is whole again one FFT length after the first window that follows it. */
+    private static final int FLL_AVERAGE_FRAMES = 2;
+    /** How far before the newest window, in FFT lengths, the windows a loop
+     *  still starting averages may begin.  A window starting up to half a
+     *  length before a trim landed has its centre after it, so the phase
+     *  change it reads is the trimmed tone's: a starting loop's large
+     *  corrections are never averaged with readings of the untrimmed tone,
+     *  and a weak tone is still read over several cycles before the loop
+     *  acts on it. */
+    private static final double FLL_START_AVERAGE_FRACTION = 0.5;
+    /** One reading a loop was fed: its window's absolute start and the tone
+     *  frequency it measured, Hz. */
+    private record FllSample(long absStart, double hz) {}
+    /** Each loop's readings - tone 1's and tone 2's - kept while their
+     *  windows start inside the span the loop's state allows: up to one FFT
+     *  length before the newest window while it is tracking (so the windows
+     *  cover {@link #FLL_AVERAGE_FRAMES} FFT lengths of samples), up to
+     *  {@link #FLL_START_AVERAGE_FRACTION} of one while it is still starting;
+     *  the loop steers on their mean.  How many readings a span holds follows
+     *  from the hops, which a random overlap draws per cycle.  Emptied by
+     *  anything that ends the readings' stream: a re-sync, a lock reset, a new
+     *  loop. */
+    private final ArrayDeque<FllSample> fllAverage1 = new ArrayDeque<>();
+    private final ArrayDeque<FllSample> fllAverage2 = new ArrayDeque<>();
+    /** Magnitude-drift watch state - armed by a lock reset (generator change /
+     *  align-on / record stop), baselined from the first tick that reaches
+     *  the watch, resolved one-shot when the loop(s) report aligned.  See
+     *  {@link #ALIGN_DRIFT_DB}. */
+    private boolean alignWatchArmed;
+    private boolean alignWatchBaselined;
+    private double  alignWatchBaseF1Db;
+    private double  alignWatchBaseF2Db;
 
     /**
      * @param display SWT display used to marshal {@link Events#FFT_RESULT_AVAILABLE}
@@ -699,6 +1099,19 @@ public final class FftAnalyzerWorker {
         lastRejectGates     = null;
         prevTickCount = 0;
         tickStats.close();          // the diagnostic record ends with the run it describes
+        // The pilot's reading goes with the accumulator: each tone's excess is
+        // its drift since the average's first frame, so the zeros, the
+        // baselines and the averages start over with the average they serve.
+        pilotFirstTaken     = false;
+        pilotRefFirstTaken  = false;
+        pilotRef2FirstTaken = false;
+        pilotRefOffsetTaken = false;
+        excessF1Rad         = 0.0;
+        excessF2Rad         = 0.0;
+        pendingPhiF2        = 0.0;
+        pilotMissingFrames  = 0;
+        pilotResyncPending  = false;
+        resetPilotHistory();
     }
 
     /** Drops the analysis window AND whatever had been gathered towards the
@@ -724,6 +1137,7 @@ public final class FftAnalyzerWorker {
         rdr.seekToLatest();
         kappaSkipNext      = true;   // κ measurement: re-anchor on the jumped frame, don't fold its step
         gapRecoverPending  = true;   // re-sync: one-shot full realign on the next clean frame, then track
+        dropFllFeed();
         if (log.isWarnEnabled()) {
             log.warn("FFT ring overrun - analyser fell a full buffer behind; window re-anchored, "
                     + "averaging continues (lower the overlap or FFT length if this repeats)");
@@ -736,6 +1150,11 @@ public final class FftAnalyzerWorker {
      *  "overrun" vs "discontinuity" messages depending on the caller. */
     private void publishCaptureBanner(String messageKey) {
         if (display == null || display.isDisposed()) return;
+        // While the alignment has nothing settled, nothing is being averaged,
+        // and that is what the operator needs to read.  A re-sync notice put
+        // up in that state replaces it with a message about an event that is
+        // already over, so it is not shown at all until averaging resumes.
+        if (phaseAlignUnsettled && !PHASE_ALIGNING_BANNER.equals(messageKey)) return;
         display.asyncExec(() -> {
             try {
                 MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, messageKey);
@@ -767,6 +1186,7 @@ public final class FftAnalyzerWorker {
                 (long) Math.ceil(POST_GLITCH_SKIP_SEC * reader.getSampleRate()));
         kappaSkipNext      = true;   // κ measurement: re-anchor on the jumped frame, don't fold its step
         gapRecoverPending  = true;   // re-sync: one-shot full realign on the next clean frame, then track
+        dropFllFeed();
         if (log.isWarnEnabled()) {
             log.warn("Found signal discontinuity - re-synced (glitched window discarded, "
                     + "averaging continues)");
@@ -857,6 +1277,14 @@ public final class FftAnalyzerWorker {
             accumFftSize = fftSize;
             accumCoherent = coherent;
             accumRefSampleStart    = samplesAbsStart;
+            // The aligning mode's reading on the tick that becomes the
+            // reference - the pair's advance, or the reference channel's tone
+            // phases: every later tick's rotation is its own reading less this
+            // one, so the accumulator turns by an advance that was MEASURED
+            // rather than by the count the capture kept.
+            accumRefPilotAdvance   = pilotAdvanceSamples;
+            accumRefTone1Rad       = referenceTone1Rad;
+            accumRefTone2Rad       = referenceTone2Rad;
             accumKFractional       = kFrac;
             accumIntFundBinRounded = intFundBin;
             accumKappa2            = (coherent && r.fundamental2HzRefined > 0.0
@@ -885,12 +1313,15 @@ public final class FftAnalyzerWorker {
             // still carry the next run.
             checkPhaseAlignStart(r, halfSize);
         }
-        // The fundamental's phase excess for THIS tick.  Zero in mode NONE and
-        // for as long as the reference feed stands refused; it enters the
+        // The tones' phase excesses for THIS tick.  Zero in mode NONE and for
+        // as long as the reference feed stands refused; F1's enters the
         // accumulator at exactly two points - the tracking loop's fundamental
         // phase below, and the fundamental region's own rotation further down -
-        // and nowhere else.
-        final double phiF = phaseAlignRefused ? 0.0 : pendingPhiF;
+        // and F2's at the three that answer them for the second tone: its own
+        // region's rotation, its range on the RECT path, and the fork pool's
+        // reading of its bin.  Nowhere else.
+        final double phiF  = phaseAlignRefused ? 0.0 : pendingPhiF;
+        final double phiF2 = phaseAlignRefused ? 0.0 : pendingPhiF2;
 
         // Time-shift offset from the pinned reference frame-0.  An overrun /
         // discontinuity re-anchor jumps samplesAbsStart, but the COVERAGE gap is
@@ -899,6 +1330,29 @@ public final class FftAnalyzerWorker {
         // that's recovered into accumDroppedSamples by the gap-correction below
         // and added here so the pinned-κ rotation stays exact across the drop.
         double delta = (samplesAbsStart - accumRefSampleStart) + accumDroppedSamples;
+        // With an aligning mode in force the advance is MEASURED, not counted,
+        // and on lines the notch does not touch: the reading carries neither
+        // the fundamental's own drift nor anything the capture's counter got
+        // wrong across a re-anchor.  The notched fundamental's phase then
+        // steers nothing - it is a line to be corrected, not a clock - which
+        // is what keeps a re-sync from leaving a rotation behind on every
+        // harmonic.  The pilot pair states the advance itself, and this
+        // tick's rotation is that reading less the reference tick's.  The
+        // reference channel states the fundamental's TURN over the advance,
+        // which places the advance within one period of the fundamental -
+        // all that a ladder of its whole multiples can tell apart - so the
+        // count is moved to the nearest advance that turn fits.
+        final boolean pilotGeometry = !Double.isNaN(pilotAdvanceSamples)
+                && !Double.isNaN(accumRefPilotAdvance);
+        final boolean referenceGeometry = !pilotGeometry && !phaseAlignRefused
+                && accumKFractional > 0.0
+                && !Double.isNaN(referenceTone1Rad) && !Double.isNaN(accumRefTone1Rad);
+        if (pilotGeometry) {
+            delta = pilotAdvanceSamples - accumRefPilotAdvance;
+        } else if (referenceGeometry) {
+            delta = advanceForTurn(delta, referenceTone1Rad - accumRefTone1Rad, fftSize);
+        }
+        final boolean measuredGeometry = pilotGeometry || referenceGeometry;
 
         int weight = Math.max(1, r.frameCount);
         // A coherent "dropout hold" used to sit here: when the pinned fundamental's
@@ -959,10 +1413,10 @@ public final class FftAnalyzerWorker {
                 double cr   = Math.cos(krot), sr = Math.sin(krot);
                 // Minus the fundamental's phase excess: what the κ refine and
                 // the loop below see is the fundamental with the notch's own
-                // drift taken out - in mode REFERENCE_CHANNEL that difference
-                // IS the reference channel's fundamental phase.  Everything the
-                // loop then does (residual, fork, the sample-domain correction)
-                // is unchanged.
+                // drift taken out.  Under a measured advance only the refine
+                // reads it; in the reference mode the advance is placed by the
+                // very κ it is turned back by here, so the refine reads a
+                // standing phase and leaves κ where it was pinned.
                 double obsPhase = Math.atan2(r.re[k0] * sr + r.im[k0] * cr,
                                              r.re[k0] * cr - r.im[k0] * sr) - phiF;
                 if (!kappaRefined) {
@@ -1012,7 +1466,13 @@ public final class FftAnalyzerWorker {
                             }
                         }
                     }
-                } else if (accumKFractional != 0.0) {
+                } else if (accumKFractional != 0.0 && !measuredGeometry) {
+                    // Skipped entirely while the advance is measured - by the
+                    // pair or by the reference channel: this loop
+                    // derives the geometry from the FUNDAMENTAL's phase against
+                    // the accumulated reference, which forces f0 into agreement
+                    // by construction and therefore cannot see its own error -
+                    // the error lands on harmonic h multiplied by h instead.
                     // Continuous phase-tracking loop on the cross-tick spectrum.
                     // Instead of trusting a frozen pinned κ - whose residual
                     // error ramps the de-rotated phase and slowly
@@ -1046,7 +1506,7 @@ public final class FftAnalyzerWorker {
                         }
                     } else {
                         accumDroppedSamples += PHASE_TRACK_GAIN
-                                * forkPooledOffset(r, halfSize, delta, k0, fundOffset);
+                                * forkPooledOffset(r, halfSize, delta, k0, fundOffset, phiF2);
                     }
                 }
             }
@@ -1084,17 +1544,28 @@ public final class FftAnalyzerWorker {
                         * Math.IEEEremainder(delta * scale, fftSize) / fftSize;
                 final double stepRe = Math.cos(theta);
                 final double stepIm = Math.sin(theta);
-                // The fundamental's phase excess reaches the RECT path on the
-                // OUTPUT of the fundamental's own bins alone (on-bin content
-                // occupies a single bin, so ±2 bins covers it): the incremental
-                // recurrence that generates the per-bin ramp is left untouched,
-                // or every bin above the fundamental would shift with it.  An
-                // empty range (phiF = 0) costs one comparison per bin.
+                // A tone's phase excess reaches the RECT path on the OUTPUT of
+                // that tone's own bins alone (on-bin content occupies a single
+                // bin, so ±2 bins covers it): the incremental recurrence that
+                // generates the per-bin ramp is left untouched, or every bin
+                // above the tone would shift with it.  An empty range (excess
+                // 0) costs one comparison per bin.  In dual tone the second
+                // tone has a range of its own with its own excess; the two are
+                // exclusive - a bin inside both would otherwise be turned
+                // twice - and F1's wins, which can only arise if the two tones
+                // stand within four bins of each other, where they are one
+                // line for every other purpose as well.
                 final double fundRotRe =  Math.cos(phiF);
                 final double fundRotIm = -Math.sin(phiF);
                 final int    fundRotLo = (phiF != 0.0)
                         ? accumIntFundBinRounded - 2 : Integer.MAX_VALUE;
                 final int    fundRotHi = accumIntFundBinRounded + 2;
+                final int    tone2Bin  = (accumKappa2 > 0.0) ? (int) Math.round(accumKappa2) : -1;
+                final double tone2RotRe =  Math.cos(phiF2);
+                final double tone2RotIm = -Math.sin(phiF2);
+                final int    tone2RotLo = (phiF2 != 0.0 && tone2Bin > 0)
+                        ? tone2Bin - 2 : Integer.MAX_VALUE;
+                final int    tone2RotHi = tone2Bin + 2;
                 final double[] pvR = prevTickRe[prevSlot], pvI = prevTickIm[prevSlot];
                 parallelChunks(N, (kLo, kHi) -> {
                     double ang  = Math.IEEEremainder(theta * kLo, 2.0 * Math.PI);
@@ -1108,6 +1579,10 @@ public final class FftAnalyzerWorker {
                         if (k >= fundRotLo && k <= fundRotHi) {
                             double rotRe = cRe * fundRotRe - cIm * fundRotIm;
                             cIm = cRe * fundRotIm + cIm * fundRotRe;
+                            cRe = rotRe;
+                        } else if (k >= tone2RotLo && k <= tone2RotHi) {
+                            double rotRe = cRe * tone2RotRe - cIm * tone2RotIm;
+                            cIm = cRe * tone2RotIm + cIm * tone2RotRe;
                             cRe = rotRe;
                         }
                         accumRe[k] += cRe;
@@ -1125,11 +1600,19 @@ public final class FftAnalyzerWorker {
                         ? -2.0 * Math.PI
                             * Math.IEEEremainder(delta * accumKFractional, fftSize) / fftSize
                         : 0.0;
-                final double phi2 = (accumKappa2 > 0.0)
-                        ? -2.0 * Math.PI
-                            * Math.IEEEremainder(delta * accumKappa2, fftSize) / fftSize
-                        : 0.0;
-                final int nFam = buildFamily(r, halfSize, phi1, phi2, phiF);
+                // In the reference mode the second tone's turn is read on the
+                // reference channel as the fundamental's is, and taken as
+                // read: the advance above is placed by the fundamental alone,
+                // within one of ITS periods, and a whole period of the
+                // fundamental is no whole turn of the second tone.
+                final boolean referenceTone2 = referenceGeometry
+                        && !Double.isNaN(referenceTone2Rad) && !Double.isNaN(accumRefTone2Rad);
+                final double phi2 = !(accumKappa2 > 0.0) ? 0.0
+                        : referenceTone2
+                            ? -Math.IEEEremainder(referenceTone2Rad - accumRefTone2Rad, 2.0 * Math.PI)
+                            : -2.0 * Math.PI
+                                * Math.IEEEremainder(delta * accumKappa2, fftSize) / fftSize;
+                final int nFam = buildFamily(r, halfSize, phi1, phi2, phiF, phiF2);
                 final double[] pvR = prevTickRe[prevSlot], pvI = prevTickIm[prevSlot];
                 if (nFam <= 0) {
                     // No pinned fundamental: nothing coherent needs aligning -
@@ -1164,6 +1647,8 @@ public final class FftAnalyzerWorker {
                 }
                 rotationRef = phi1;
             }
+            derotatePilotLobes(r, accumRe, accumIm, prevTickRe[prevSlot], prevTickIm[prevSlot],
+                    weight, halfSize, restart);
             tickStats.tick(r, samplesAbsStart, delta, accumDroppedSamples,
                     accumKFractional, accumIntFundBinRounded, rotationRef,
                     accumRe, accumIm, accumFrames + weight);
@@ -1184,6 +1669,15 @@ public final class FftAnalyzerWorker {
                 // single-tick reading can show.
                 traceHarmonicPhases(accumRe, accumIm, halfSize, 0.0,
                         "accumulator after frame " + completedAnalyses);
+                // The levels beside the phases: the same bins, the fresh
+                // frame as one frame and the accumulator over the frames it
+                // holds with this one in, so a residual that grows or shrinks
+                // across a long collection shows in the log as well.
+                double conv = magToAmplitudeFactor(r, halfSize);
+                traceHarmonicLevels(r.re, r.im, halfSize, conv, 1.0,
+                        "frame " + completedAnalyses);
+                traceHarmonicLevels(accumRe, accumIm, halfSize, conv, accumFrames + weight,
+                        "accumulator after frame " + completedAnalyses);
             }
         } else {
             // Incoherent analyze stores the RAW FFT magnitude in r.re (im = 0).
@@ -1201,6 +1695,19 @@ public final class FftAnalyzerWorker {
         }
         accumFrames += weight;
         return true;
+    }
+
+    /** The counted advance moved to the nearest one over which the pinned
+     *  fundamental makes the turn {@code turnRad}, samples.  The reference
+     *  channel's reading fixes the advance within one period of the
+     *  fundamental, and the count says which period.  A count that is off by
+     *  whole periods leaves the result off by the same periods, which no
+     *  whole multiple of the fundamental can see. */
+    private double advanceForTurn(double counted, double turnRad, int fftSize) {
+        double countedTurn = 2.0 * Math.PI
+                * Math.IEEEremainder(counted * accumKFractional, fftSize) / fftSize;
+        double missingTurn = Math.IEEEremainder(turnRad - countedTurn, 2.0 * Math.PI);
+        return counted + missingTurn * fftSize / (2.0 * Math.PI * accumKFractional);
     }
 
     /** Removes the subtractable ring's held contributions - the last accepted
@@ -1291,18 +1798,853 @@ public final class FftAnalyzerWorker {
         log.info("FFT harmonic phase trace, {}:{}", label, rel);
     }
 
-    /** This tick's fundamental phase excess for the selected alignment mode,
-     *  in radians: measured against the reference channel per tick, held from
-     *  the latest sweep probe, or zero when no alignment runs. */
+    /**
+     * One line of the harmonic level trace, the level half of the
+     * {@link DebugSwitches#TRACE_HARMONIC_PHASE} record: the fundamental and
+     * every harmonic h up to {@link #TRACE_MAX_HARMONIC} in dBFS, read from
+     * the bin nearest h times the pinned fractional fundamental bin.  One bin,
+     * no lobe integration: a tone off the grid reads low by its scalloping,
+     * so the numbers are a trend over a collection, not the THD table's
+     * values.  What the phase trace cannot show is whether a residual
+     * harmonic grows or shrinks across a long average - a DAC correction
+     * ageing, or a floor averaging down; this line is that.
+     *
+     * @param re       real parts to read, indexed by bin
+     * @param im       imaginary parts to read, indexed by bin
+     * @param halfSize highest bin index either array is read at
+     * @param conv     the magnitude-to-amplitude factor of this spectrum's
+     *                 window and length, see {@link #magToAmplitudeFactor}
+     * @param norm     what the arrays are a sum of: one for a single frame,
+     *                 the accumulated frame count for the accumulator
+     * @param label    what this line reads - the frame, or the accumulator
+     *                 after that frame
+     */
+    private void traceHarmonicLevels(double[] re, double[] im, int halfSize, double conv,
+            double norm, String label) {
+        if (accumKFractional < KAPPA_FAMILY_MIN_BIN || accumIntFundBinRounded <= 0
+                || conv <= 0.0 || norm <= 0.0) {
+            return;
+        }
+        StringBuilder levels = new StringBuilder();
+        for (int h = 1; h <= TRACE_MAX_HARMONIC; h++) {
+            int kh = (int) Math.round(h * accumKFractional);
+            if (kh > halfSize) break;
+            double amp = Math.hypot(re[kh], im[kh]) * conv / norm;
+            levels.append(String.format(" H%d=%.2f", h, amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0));
+        }
+        log.info("FFT harmonic level trace, {} (dBFS):{}", label, levels);
+    }
+
+    /** This tick's FUNDAMENTAL phase excess for the selected alignment mode,
+     *  in radians - the notch's phase against the collection's own start in
+     *  both aligning modes: measured against the reference channel per tick
+     *  and taken against the first tick's value, or measured from the tone's
+     *  own turn less the turn the advance the pilot pair resolved explains;
+     *  zero when no alignment runs or the mode's own reference is not
+     *  available this tick.  The second tone's excess is written to
+     *  {@link #pendingPhiF2} on the same pass, there being one reading of the
+     *  frame for both. */
     private double tickPhiF(FundamentalPhaseAlignment mode, FftResult r, boolean coherent) {
         switch (mode) {
             case REFERENCE_CHANNEL:
                 return referencePhiF(r, coherent);
-            case PERIODICAL_SWEEP:
-                return probeDeltaRad;
+            case PILOT_TONE:
+                return pilotPhiF(r, coherent);
             default:
+                pendingPhiF2 = 0.0;
                 return 0.0;
         }
+    }
+
+    /**
+     * Mode PILOT_TONE's excess for this frame: what each tone's phase has
+     * gained beyond the turn the capture's own advance explains, counted from
+     * the collection's first read frame.
+     *
+     * <p>Two pilot lines are generated on whole bins of the transform, clear
+     * of the tones and of everything they produce, and read for their phases
+     * alone.  A line at bin p turns by {@code 2 pi p D / N} over an advance of
+     * D samples, so its own reading fixes D only modulo its period {@code N/p}
+     * - a score of samples near the top of the band - while the hop counter's
+     * figure misses whatever the converter dropped unannounced.  The two lines
+     * together fix it: over the range the pair was elected for, only one rung
+     * of the first line's ladder of admissible advances stands close to a rung
+     * of the second's.  That search is {@link PairAdvance}.
+     *
+     * <p>With the advance known, a tone at bin k owes {@code 2 pi k D / N} of
+     * turn to it; whatever it gained beyond that is the notch's own drift at
+     * that tone, and it is summed frame by frame into the tone's excess.  Each
+     * tone keeps its own sum: a notch's phase response at F2 is not the one it
+     * has at F1, so one number cannot serve both.
+     *
+     * <p>The frame is read by {@link #readAlignmentFrame}: every phase from
+     * ONE raw frame - the cycle's fresh frame, the one its spectrum will share
+     * with the next cycle's - by the analyser's single-frame bin read at the
+     * frame's own start, no de-rotation and no mean of frames.  The cycle's
+     * spectrum, the coherent mean of its frame pair, serves the line checks
+     * alone.
+     *
+     * <p>A frame whose pilot bin holds no line is not read - its phase is the
+     * phase of noise - and neither is one whose two ladders fail to agree.
+     * Such a frame takes each tone's excess from that tone's own trend over
+     * the frames before it; the frames after it are counted in
+     * {@link #pilotsMissing}.
+     */
+    private double pilotPhiF(FftResult r, boolean coherent) {
+        readAlignmentFrame(FundamentalPhaseAlignment.PILOT_TONE, r, coherent);
+        // A second tone the pair cannot carry - its bin is no whole multiple of
+        // the spacing, which is the ordinary dual pair - has no excess of its
+        // own.  It is then left ALONE: zero turns its lobe by nothing, where
+        // the unknown would turn it by NaN and erase it from the average.
+        pendingPhiF2 = Double.isNaN(excessF2Rad) ? 0.0 : wrapTurn(excessF2Rad);
+        double excess = pilotDriftRad();
+        if (pilotFirstTaken) {
+            traceExcess(excess);
+            traceExcessF2();
+        }
+        return excess;
+    }
+
+    /**
+     * Mode REFERENCE_CHANNEL's excess for this frame: the fundamental's
+     * change against the reference channel since the collection's first
+     * frame, read by {@link #readAlignmentFrame} on the footing of the pilot
+     * mode's readings - one raw frame, continued unwrapped, smoothed by the
+     * same setting - and traced on the same line.  The reference channel
+     * carries the fundamental clear of the notch, so its change is the
+     * notch's drift; a pilot elected in this mode is read on the same frame
+     * as the control, the roles of the pilot mode reversed.
+     *
+     * <p>In dual tone the second tone is read the same way at its own bin on
+     * the same mirror, and its change becomes {@link #pendingPhiF2}: the
+     * mirror carries both tones un-notched, so no advance has to be resolved
+     * for either of them - the difference of two phases read in ONE frame
+     * holds nothing of the frame's position.
+     *
+     * <p>What the accumulator is fed is the CHANGE since the first frame,
+     * not the phase difference itself: the accumulated fundamental then
+     * keeps the phase the notch had at the collection's start - the phase
+     * the loaded correction de-embeds and the predistortion frame reference
+     * subtracts - instead of losing the notch's phase altogether, which
+     * that reference would then take out a second time, turning harmonic h
+     * by h times the notch's phase.
+     *
+     * <p>The same read hands the accumulator the frame's advance, as the
+     * pilot pair does in its mode: the reference channel's own tone phases
+     * ({@link #referenceTone1Rad}), whose change is the turn that advance
+     * gives each tone.  The two modes differ in how they find the advance
+     * and the excess, and in nothing the accumulator does with them.
+     *
+     * <p>Also carries the live readout of the feed: the analysed-to-reference
+     * ratio and the raw phase difference, every
+     * {@link #PHASE_ALIGN_READOUT_TICKS} accumulated ticks.  Zero while the
+     * reference window is not available.
+     */
+    private double referencePhiF(FftResult r, boolean coherent) {
+        int k0 = readAlignmentFrame(FundamentalPhaseAlignment.REFERENCE_CHANNEL, r, coherent);
+        if (k0 <= 0 || !pilotRefFirstTaken) return 0.0;
+        pendingPhiF2 = pilotRef2FirstTaken ? wrapTurn(pilotRef2ValueRad) : 0.0;
+        double excess = wrapTurn(pilotRefValueRad);
+        traceExcess(excess);
+        phaseAlignTicks++;
+        if (phaseAlignTicks % PHASE_ALIGN_READOUT_TICKS == 0 && log.isInfoEnabled()) {
+            log.info("FFT phase alignment, tick {}: analysed/reference at bin {} = {} dB, {} deg",
+                    phaseAlignTicks, k0,
+                    String.format("%.2f", referenceFeedDb),
+                    String.format("%.2f", Math.toDegrees(Math.IEEEremainder(
+                            pilotRefFirstRad + pilotRefChangeRad, 2.0 * Math.PI))));
+        }
+        return excess;
+    }
+
+    /**
+     * Reads the cycle's fresh frame for the two modes that measure a phase:
+     * the tones' raw phases at their bins - F1 always, F2 while a dual pair
+     * is pinned - then their changes against the reference channel and the
+     * two pilots' readings, each against the frame before it.  The fresh
+     * frame starts one drawn hop into the window; the cycle's frame pair is
+     * spaced by that hop, its first frame being the previous cycle's second.
+     * At the first frame both paths have read, the reference's change less
+     * the pilot's reading of the drift is zeroed, so the two compare from
+     * that frame on.
+     *
+     * @return the fundamental's bin, or 0 when the frame gives none
+     */
+    private int readAlignmentFrame(FundamentalPhaseAlignment mode, FftResult r, boolean coherent) {
+        int halfSize = r.fftSize / 2;
+        int k0 = phaseAlignBin(r, halfSize, coherent);
+        if (k0 <= 0) return 0;
+        // The analysed channel's phases come from this cycle's own spectrum:
+        // its frames are de-rotated to the window's start and summed there, so
+        // every bin of it carries that line's phase at that one origin - the
+        // same origin for every line, cycle after cycle.
+        double phiF  = Math.atan2(r.im[k0], r.re[k0]);
+        takeRawPhases(r, k0);
+        int    k1    = secondToneBin(r, halfSize);
+        double phiF2 = (k1 > 0) ? Math.atan2(r.im[k1], r.re[k1]) : Double.NaN;
+        readReferenceChange(mode, r, k0, k1, Math.hypot(r.re[k0], r.im[k0]), phiF, phiF2);
+        readPilots(mode, r, halfSize, k0, k1, phiF, phiF2);
+        if (!pilotRefOffsetTaken && pilotFirstTaken && pilotRefFirstTaken) {
+            pilotRefOffsetTaken = true;
+            pilotRefOffsetRad   = wrapTurn(pilotRefValueRad - pilotDriftRad());
+        }
+        return k0;
+    }
+
+    /** The second tone's bin for this frame, or -1 in single tone: its
+     *  refined frequency over the frequency resolution, the derivation the
+     *  accumulator pins {@code accumKappa2} by, rounded to the bin the line
+     *  is read at. */
+    private int secondToneBin(FftResult r, int halfSize) {
+        if (!(r.fundamental2HzRefined > 0.0) || !(r.freqResolution > 0.0)) return -1;
+        int k1 = (int) Math.round(r.fundamental2HzRefined / r.freqResolution);
+        return (k1 > 0 && k1 <= halfSize) ? k1 : -1;
+    }
+
+    /** One bin's raw phase in the frame that starts {@code base} samples into
+     *  {@code buf}, radians. */
+    private double framePhase(double[] buf, FftResult r, int base, int bin) {
+        FftAnalyzer.BinPhasor p = analyzer.frameBinPhasor(buf, base, r.fftSize, r.windowType, bin);
+        return Math.atan2(p.im(), p.re());
+    }
+
+    /**
+     * Takes the three lines' plain phases on the analysed channel for the
+     * frame trace: the fundamental and both pilots, each one single frame at
+     * the window's start.  That start is the base the whole alignment counts
+     * from - the advance handed to {@link PairAdvance} is measured between
+     * window starts - so these phases stand at the same origin as everything
+     * derived from them, with the cycle's de-rotation and summing, and the
+     * mains comb, left out.  Costs one single-bin transform per line, paid
+     * only while {@link DebugSwitches#TRACE_PILOT_PHASE} is on.
+     */
+    private void takeRawPhases(FftResult r, int k0) {
+        traceRawFundRad = Double.NaN;
+        traceRawP1Rad   = Double.NaN;
+        traceRawP2Rad   = Double.NaN;
+        if (!DebugSwitches.TRACE_PILOT_PHASE || !winValid || winBuf.length < r.fftSize) return;
+        traceRawFundRad = framePhase(winBuf, r, 0, k0);
+        if (pilotReader1 == null) return;
+        traceRawP1Rad = framePhase(winBuf, r, 0, pilotReader1.getBin());
+        if (pilotReader2 == null) return;
+        traceRawP2Rad = framePhase(winBuf, r, 0, pilotReader2.getBin());
+    }
+
+    /** A phase reduced to the nearest branch of one turn, radians. */
+    private double wrapTurn(double rad) {
+        return Math.IEEEremainder(rad, 2.0 * Math.PI);
+    }
+
+    /**
+     * The two pilots on the fresh frame, and what they make of each tone's
+     * excess.
+     *
+     * <p>Both lines are read first.  A line that fails its level test carries
+     * the phase of noise, so the frame measures nothing and is handed to
+     * {@link #pilotsMissing}; the phases held from the frame before it stay,
+     * and the next frame's difference reaches across the hole.  With both
+     * lines held, each reader gives the turn its line made since the frame it
+     * was last accepted on, modulo one turn, and {@link PairAdvance} settles
+     * the advance from those two readings and the fundamental's own change:
+     * the pilots' rigid relation lists the pairs of whole turns that fit, the
+     * fundamental's continuity picks the one whose excess change stays within
+     * the drift bound for the elapsed time, over half the transform on either
+     * side of the advance the hop counter implies.
+     *
+     * <p>A frame the three lines refuse is discarded: its readings contradict
+     * each other, so nothing of it becomes a baseline and nothing is guessed
+     * in its place; the next frame is measured across the whole span since
+     * the last accepted one.
+     *
+     * <p>What a settled frame leaves is each tone's own drift - its measured
+     * change less the turn the advance explains at its bin - summed into that
+     * tone's excess and fed to that tone's trend against the frame's time;
+     * the pilots' own disagreement on it feeds the tolerance the next frame's
+     * search applies.
+     *
+     * <p>Where the election found ONE admissible pilot the same path runs on
+     * that line alone, with the whole turns taken from the hop counter instead
+     * of from the pair - see {@link #resolveAdvance}.
+     */
+    private void readPilots(FundamentalPhaseAlignment mode, FftResult r, int halfSize,
+                            int k0, int k1, double phiF, double phiF2) {
+        if (pilotReader1 == null) return;
+        double timeSec = frameTimeSec(r);
+        // Measured FIRST, on this frame's own bins: a frame whose line fails
+        // the margin test is exactly the frame whose level has to be read, and
+        // measuring after that test returned would print the level of the last
+        // frame that passed it - a number that reads as a measurement and is
+        // not one.
+        tracePilotLevels(r, halfSize);
+        // A bin carries its line when its power stands the pilot-margin
+        // preference over the median power of its neighbourhood, the lobe
+        // left out of that median - the floor recipe of the reference feed
+        // check, here on the analysed frame's own raw bins and per tick.  The
+        // same margins give the pair its reading noise for this frame.
+        double  margin1 = analysedPilotMarginDb(r, pilotReader1.getBin(), halfSize);
+        double  margin2 = pilotReader2 == null ? Double.POSITIVE_INFINITY
+                : analysedPilotMarginDb(r, pilotReader2.getBin(), halfSize);
+        traceMargin1Db = margin1;   // on record for the failing frame as well
+        traceMargin2Db = margin2;
+        boolean held1   = margin1 >= pilotMarginDb;
+        boolean held2   = margin2 >= pilotMarginDb;
+        pilotReader1.setLineHeld(held1);
+        if (pilotReader2 != null) pilotReader2.setLineHeld(held2);
+        if (!held1 || !held2) {
+            pilotRawPhase1 = Double.NaN;    // no line, no phase of its own to turn by
+            pilotRawPhase2 = Double.NaN;
+            warnNoPilotLine(held1 ? pilotReader2.getBin() : pilotReader1.getBin());
+            pilotsMissing(mode, r, timeSec);
+            return;
+        }
+        double raw1 = Math.atan2(r.im[pilotReader1.getBin()], r.re[pilotReader1.getBin()]);
+        double raw2 = pilotReader2 != null
+                ? Math.atan2(r.im[pilotReader2.getBin()], r.re[pilotReader2.getBin()])
+                : Double.NaN;
+        pilotRawPhase1 = raw1;      // the lobes' own de-rotation reads them, accepted or not
+        pilotRawPhase2 = raw2;
+        if (!pilotFirstTaken) {
+            // The collection's first read frame is the zero everything after
+            // it is measured from: it holds the phases and states no change.
+            pilotFirstTaken = true;
+            takeFirstPilotFrame(raw1, raw2, phiF, phiF2, winAbsStart);
+            excessF1Rad        = 0.0;
+            excessF2Rad        = 0.0;
+            pilotMissingFrames = 0;
+            excessTrend1.reset();
+            excessTrend2.reset();
+            return;
+        }
+        // Every line's change since that first frame, each known modulo its own
+        // turn: the pilots' two and the tones', which is what the relations are
+        // written in.
+        double d1 = pilotReader1.changeSince(raw1);
+        double d2 = pilotReader2 != null ? pilotReader2.changeSince(raw2) : 0.0;
+        double c1 = wrapTurn(phiF - toneFirstPhase1);
+        double c2 = (k1 > 0 && !Double.isNaN(phiF2) && !Double.isNaN(toneFirstPhase2))
+                ? wrapTurn(phiF2 - toneFirstPhase2) : Double.NaN;
+        PairAdvance.Result advance = resolveAdvance(d1, d2, (double) (winAbsStart - pilotFirstAbsStart),
+                c1, k0, c2, k1, r.fftSize, timeSec,
+                PILOT_PREDICT_HORIZON_TRANSFORMS * r.fftSize / (double) r.sampleRate,
+                Math.hypot(pilotPhaseNoiseRad(margin1), pilotPhaseNoiseRad(margin2)));
+        pilotMissingFrames = 0;
+        // The excess is READ, not accumulated: each frame's own distance from
+        // the first frame, so a frame the search settles wrongly is wrong on
+        // that frame alone.
+        // A frame the pair has not settled a correction for carries the last
+        // settled drift, which stands still while the notch does not.  It is
+        // good enough to show and not good enough to average on, so the tick
+        // is kept out of the accumulator altogether.
+        phaseAlignUnsettled = !advance.settled();
+        // The advance the pair settled on, since the collection's first read
+        // frame: what the accumulator turns this frame by, at every bin.  The
+        // capture's own count and the phase the fundamental happens to show
+        // no longer enter that rotation - see the accumulator's use of it.
+        // MODE PILOT_TONE ONLY: the reference-channel mode reads the pair as
+        // the control of its own reading, under a trace switch, and a switch
+        // that is there to observe must not change what is measured.
+        pilotAdvanceSamples = (mode == FundamentalPhaseAlignment.PILOT_TONE)
+                ? advance.advanceSamples() + pilotAdvanceCarrySamples : Double.NaN;
+        excessF1Rad = advance.excessChangeRad() + excessCarry1Rad;
+        excessTrend1.add(timeSec, excessF1Rad);
+        if (!Double.isNaN(c2)) {
+            excessF2Rad = advance.excessChange2Rad() + excessCarry2Rad;
+            // A tone the pair cannot carry states NaN, and a trend fed NaN
+            // answers NaN for every frame after it - including the bridged
+            // ones, which read from the trend alone.
+            if (!Double.isNaN(excessF2Rad)) excessTrend2.add(timeSec, excessF2Rad);
+        }
+        traceAdvance(advance);
+        if (pilotRetrackPending && mode == FundamentalPhaseAlignment.PILOT_TONE
+                && advance.settled()) {
+            // The frequency lock is tracking: this settled frame's totals
+            // become the carries and its readings the new zero, so the turn
+            // counting restarts on the trimmed tone while everything handed
+            // to the accumulator stays continuous.  The frame itself was
+            // measured and averaged on the old basis above.
+            pilotRetrackPending      = false;
+            pilotAdvanceCarrySamples = pilotAdvanceSamples;
+            excessCarry1Rad          = excessF1Rad;
+            if (!Double.isNaN(excessF2Rad)) excessCarry2Rad = excessF2Rad;
+            if (pilotPair != null) pilotPair.reset();
+            takeFirstPilotFrame(raw1, raw2, phiF, phiF2, winAbsStart);
+            // The control comparison's zero is re-taken with the tracking:
+            // the reference reading's baseline keeps the untrimmed first
+            // frame's term, and only a fresh offset taken on the trimmed
+            // tone cancels it out of the pilot-versus-reference readout.
+            pilotRefOffsetTaken = false;
+            if (log.isInfoEnabled()) {
+                log.info("FFT phase alignment: pilot tracking re-zeroed on the trimmed tone "
+                        + "(frequency lock tracking); advance {} samples and excess {} deg carried",
+                        String.format("%.1f", pilotAdvanceCarrySamples),
+                        String.format("%.3f", Math.toDegrees(excessCarry1Rad)));
+            }
+        }
+    }
+
+    /** Makes this frame's readings the zero every later frame of the
+     *  collection is measured from - the readers' raw phases and the tones'
+     *  phases.  Set once per collection, on its first read frame. */
+    private void takeFirstPilotFrame(double raw1, double raw2, double phiF, double phiF2,
+                                     long absStart) {
+        pilotReader1.takeFirst(raw1);
+        if (pilotReader2 != null) pilotReader2.takeFirst(raw2);
+        toneFirstPhase1    = phiF;
+        toneFirstPhase2    = phiF2;
+        pilotFirstAbsStart = absStart;
+    }
+
+    /**
+     * The advance since the previous read frame, from the lines the election
+     * left.
+     *
+     * <p>With the pair it is the choice of {@link PairAdvance}: the
+     * repetitions of the fundamental's period within reach of the capture's
+     * count are scored by the pilots' two residuals and, within
+     * {@code horizonSec} of the trend's newest frame, by how far each
+     * repetition's excess stands from what the trend over the earlier frames
+     * predicts for this one - NaN past that horizon or before the trend
+     * holds a frame, which leaves the pilots to decide.
+     *
+     * <p>With ONE pilot there is no vernier and no search: the whole turns it
+     * has made are the count the capture's own figure implies, and the tones
+     * are measured against that line's phase at their own frequency.  Every
+     * frame resolves, because nothing can disagree - which is exactly what
+     * the second line would have been for: samples lost without an
+     * announcement move the true turn count off the capture's, and a single
+     * line cannot tell that from its own next whole turn.  The election
+     * states the condition, once per collection.
+     */
+    private PairAdvance.Result resolveAdvance(double d1, double d2, double nominal, double c1,
+                                              int k0, double c2, int k1, int fftSize,
+                                              double timeSec, double horizonSec,
+                                              double readingSigmaRad) {
+        // The trends hold the CARRIED totals; the pair measures from its own
+        // zero, so its prediction is the total less the carry.
+        double expected1 = excessTrend1.predict(timeSec, horizonSec) - excessCarry1Rad;
+        double expected2 = Double.isNaN(c2) ? Double.NaN
+                : excessTrend2.predict(timeSec, horizonSec) - excessCarry2Rad;
+        if (pilotPair != null) {
+            return pilotPair.resolve(d1, d2, nominal, c1, k0, c2, k1, expected1, expected2,
+                    readingSigmaRad);
+        }
+        // One line: its whole turns are the count the capture's own figure
+        // implies, and its phase brought to the fundamental's frequency is
+        // what the tones are measured against, exactly as the pair's is.
+        int    p1      = pilotReader1.getBin();
+        double turns   = d1 / (2.0 * Math.PI);
+        long   m1      = Math.round(nominal * p1 / fftSize - turns);
+        double atTone  = 2.0 * Math.PI * k0 * (turns + m1) / p1;
+        return new PairAdvance.Result(m1, 0, 0.0, 0.0,
+                wrapTurn(c1 - atTone),
+                Double.isNaN(c2) ? Double.NaN : wrapTurn(c2 - atTone * k1 / (double) k0),
+                true, (turns + m1) * fftSize / (double) p1);
+    }
+
+    /** One notice per collection that a pilot bin carries no line. */
+    private void warnNoPilotLine(int bin) {
+        if (pilotNoLineWarned) return;
+        pilotNoLineWarned = true;
+        if (log.isWarnEnabled()) {
+            log.warn("FFT phase alignment: the pilot's bin {} holds no line - less than {} dB "
+                    + "over its local floor; the frame measures nothing and its excess is "
+                    + "predicted from the last {} measured frames", bin,
+                    String.format("%.0f", pilotMarginDb), PILOT_PREDICT_POINTS);
+        }
+    }
+
+    /**
+     * A frame the pilots gave no measurement on, and what the ones after it
+     * cost.  What arrives here is a frame with a pilot line absent; a frame
+     * whose lines were read always settles.
+     *
+     * <p>The first of a run is bridged: each tone's excess is what its own
+     * trend over the measured frames before it predicts at this frame's time,
+     * and the frame is accumulated with that value - a drift that bends
+     * within the window is followed by the fit where a held value would lag
+     * it.
+     *
+     * <p>The second re-syncs the capture through the path a detected
+     * discontinuity takes: two frames in a row without a time base is what a
+     * gap in the stream looks like from here.  The re-sync itself belongs to
+     * the tick loop, which discards this frame with it - see
+     * {@link #pilotResyncPending} - so the window is re-anchored and reloaded
+     * before the next reading.
+     *
+     * <p>The third means the re-sync did not bring the lines back, so the
+     * coherent average has no time base at all: the operator is told and the
+     * recording ends through the auto-stop path the stop-after-N count uses.
+     * That last step belongs to the pilot mode alone - in the
+     * reference-channel mode the pilots are only the trace's control, and
+     * losing them costs a trace line.
+     */
+    private void pilotsMissing(FundamentalPhaseAlignment mode, FftResult r, double timeSec) {
+        // Before the collection's first measured frame there is nothing to
+        // bridge and nothing to lose: a generator that has not brought its
+        // lines up yet leaves the average unaligned, as it does with no pilot
+        // at all, and the count starts when the pair has measured once.
+        if (!pilotFirstTaken) return;
+        pilotMissingFrames++;
+        // No line to read: the frame is bridged by each tone's own trend at
+        // the frame's time and accumulated with that value.
+        if (excessTrend1.getCount() > 0) excessF1Rad = excessTrend1.predict(timeSec);
+        if (excessTrend2.getCount() > 0) excessF2Rad = excessTrend2.predict(timeSec);
+        traceTurns1     = 0;                // this frame resolved none
+        traceTurns2     = 0;
+        traceRigidRad   = 0.0;
+        if (pilotMissingFrames == 2) {
+            // The tick loop does the re-sync: this frame has to be DISCARDED
+            // with it, and a frame that still published its own result would
+            // reach the view right after the warning banner and clear it.
+            pilotResyncPending = true;
+            return;
+        }
+        if (pilotMissingFrames < 3 || mode != FundamentalPhaseAlignment.PILOT_TONE) return;
+        if (!pilotLostPublished) {
+            pilotLostPublished = true;
+            if (log.isWarnEnabled()) {
+                log.warn("FFT phase alignment: no pilot line on {} frames in a row - the coherent "
+                        + "average has no time base and the recording is ending", pilotMissingFrames);
+            }
+            publishOnUiThread(Events.FFT_PHASE_ALIGN_PILOT_LOST,
+                    new PilotLost(r.fundamentalHzRefined));
+        }
+        paused.set(true);
+        if (display != null && !display.isDisposed()) {
+            display.asyncExec(() ->
+                    MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
+        }
+    }
+
+    /** This cycle's time on the capture's own clock, seconds: the window's
+     *  absolute start - the origin the cycle's phases are read at - over the
+     *  sample rate.  What the trend fits against: a re-sync gap enters as the
+     *  samples that arrived, so a value read after it is read at the right
+     *  distance. */
+    private double frameTimeSec(FftResult r) {
+        return winAbsStart / (double) r.sampleRate;
+    }
+
+    /** Each tone against the REFERENCE channel in the SAME raw frame - the
+     *  same bin on the two paths, read the same way, so nothing of the
+     *  frame's position enters - taken against the first frame that had the
+     *  mirror and continued unwrapped.  F1 always; F2 at its own bin while a
+     *  dual pair is pinned, on its own baseline, because a notch turns the
+     *  two tones by different amounts.  Without the mirror nothing is read
+     *  and the reference values stay unset.
+     *
+     *  <p>In mode REFERENCE_CHANNEL the mirror's own tone phases are handed
+     *  on as well: their change from tick to tick is the turn the advance
+     *  gives each tone, which the accumulator turns the frame by.  In the
+     *  pilot mode the mirror is the control of the pair's reading, and a
+     *  reading taken to observe must not change what is measured, so nothing
+     *  is handed on there. */
+    private void readReferenceChange(FundamentalPhaseAlignment mode, FftResult r, int k0, int k1,
+            double fundMag, double phiF, double phiF2) {
+        traceRawRefRad    = Double.NaN;     // no mirror read yet on this frame
+        referenceTone1Rad = Double.NaN;
+        referenceTone2Rad = Double.NaN;
+        boolean steers = mode == FundamentalPhaseAlignment.REFERENCE_CHANNEL;
+        if (refWinBuf == null || !winValid) return;
+        // Read at the window's start, the origin the analysed channel's own
+        // phases carry, so nothing of the drawn hop enters the comparison.
+        FftAnalyzer.BinPhasor ref = analyzer.frameBinPhasor(refWinBuf, 0, r.fftSize, r.windowType, k0);
+        double refMag = Math.hypot(ref.re(), ref.im());
+        if (refMag == 0.0) return;
+        double refPhase = Math.atan2(ref.im(), ref.re());
+        traceRawRefRad  = refPhase;
+        if (steers) referenceTone1Rad = refPhase;
+        double against  = wrapTurn(phiF - refPhase);
+        referenceFeedDb = 20.0 * Math.log10(fundMag / refMag);
+        if (!pilotRefFirstTaken) {
+            pilotRefFirstTaken = true;
+            pilotRefFirstRad   = against;
+            pilotRefChangeRad  = 0.0;
+            if (pilotRefAverage != null) pilotRefAverage.reset();
+        } else {
+            pilotRefChangeRad = continuedChangeRad(pilotRefChangeRad, against - pilotRefFirstRad);
+        }
+        pilotRefValueRad = smoothed(pilotRefAverage, pilotRefChangeRad);
+        if (k1 <= 0 || Double.isNaN(phiF2)) return;
+        double ref2Phase = framePhase(refWinBuf, r, 0, k1);
+        if (steers) referenceTone2Rad = ref2Phase;
+        double against2 = wrapTurn(phiF2 - ref2Phase);
+        if (!pilotRef2FirstTaken) {
+            pilotRef2FirstTaken = true;
+            pilotRef2FirstRad   = against2;
+            pilotRef2ChangeRad  = 0.0;
+            if (pilotRef2Average != null) pilotRef2Average.reset();
+        } else {
+            pilotRef2ChangeRad = continuedChangeRad(pilotRef2ChangeRad, against2 - pilotRef2FirstRad);
+        }
+        pilotRef2ValueRad = smoothed(pilotRef2Average, pilotRef2ChangeRad);
+    }
+
+    /** The pilots' reading of the FUNDAMENTAL's drift, radians, wrapped to
+     *  plus or minus pi: F1's excess since the collection's first read frame
+     *  - mode PILOT_TONE's own excess, and the control of the reading in mode
+     *  REFERENCE_CHANNEL.  Zero until that first frame, and the trend's
+     *  prediction on a frame the pilots could not measure. */
+    private double pilotDriftRad() {
+        if (!pilotFirstTaken) return 0.0;
+        return wrapTurn(excessF1Rad);
+    }
+
+    /** One line of the per-frame trace under
+     *  {@link DebugSwitches#TRACE_HARMONIC_PHASE}: the mode's excess, what
+     *  each pilot alone made of the fundamental's change on this frame, and
+     *  the reading against the reference channel. */
+    private void traceExcess(double excessRad) {
+        if (!DebugSwitches.TRACE_HARMONIC_PHASE || !log.isInfoEnabled()) return;
+        log.info("FFT phase excess, frame {}: {} deg{}{}{}",
+                completedAnalyses,
+                String.format("%.3f", Math.toDegrees(excessRad)),
+                pairTrace(),
+                pilotReferenceTrace(),
+                rawPhaseTrace());
+    }
+
+    /**
+     * The four phases the samples themselves hold, degrees: the fundamental
+     * and the two pilots on the analysed channel and the fundamental on the
+     * reference channel, each the plain {@code atan2} of one single frame's
+     * bin taken at the window's start - the base the advance is counted
+     * between.  Nothing of the alignment has touched them: no de-rotation, no
+     * summing of the cycle's frames, no mains comb, no first-frame zero, no
+     * turn resolution, no average.  Everything else on the line is derived
+     * from these four, so a collection can be re-read from the trace alone.
+     * NaN where a line had nothing to read on this frame: no window, no bin,
+     * or no mirror.
+     */
+    private String rawPhaseTrace() {
+        if (!DebugSwitches.TRACE_PILOT_PHASE) return "";
+        return String.format("; raw f0 %.4f deg; raw P1 %.4f deg; raw P2 %.4f deg; raw ref %.4f deg",
+                Math.toDegrees(traceRawFundRad), Math.toDegrees(traceRawP1Rad),
+                Math.toDegrees(traceRawP2Rad), Math.toDegrees(traceRawRefRad));
+    }
+
+    /** The second tone's own line of the same trace, in dual tone only: F2
+     *  carries its own excess through its own member of the family, so the
+     *  two lines together say whether the pair holds BOTH tones. */
+    private void traceExcessF2() {
+        if (!DebugSwitches.TRACE_HARMONIC_PHASE || !log.isInfoEnabled()) return;
+        if (!(accumKappa2 > 0.0)) return;
+        log.info("FFT phase excess F2, frame {}: {} deg{}",
+                completedAnalyses,
+                String.format("%.3f", Math.toDegrees(wrapTurn(excessF2Rad))),
+                pairTrace());
+    }
+
+    /** The pair's part of a trace line: the two pilot lines' own levels and
+     *  margins over their floor, the admission those margins gave the frame,
+     *  the whole turns each line has made since the collection's first
+     *  frame, and how far apart their figures stood.  Empty while no frame
+     *  has been measured. */
+    private String pairTrace() {
+        if (!pilotFirstTaken) return "";
+        String readings = "";
+        PairAdvance pair = pilotPair;
+        double admitRad = pair != null ? pair.getTraceAdmitRad() : Double.NaN;
+        if (pair != null && !Double.isNaN(pair.getTraceCoarseRad())) {
+            // The frame's own readings at the fundamental, settled or not: the
+            // pilots' difference, each pilot's fine reading under the
+            // correction in force, and the miss of their mean against the
+            // difference - the figure a frame that settles nothing leaves
+            // behind, so its size is on record.
+            double coarse = pair.getTraceCoarseRad();
+            double fine1  = pair.getTraceFine1Rad();
+            double fine2  = pair.getTraceFine2Rad();
+            double miss   = Math.IEEEremainder(0.5 * (fine1 + fine2) - coarse, 2.0 * Math.PI);
+            readings = String.format("; coarse %.3f deg, fine1 %.3f deg, fine2 %.3f deg, miss %.3f deg",
+                    Math.toDegrees(coarse), Math.toDegrees(fine1), Math.toDegrees(fine2),
+                    Math.toDegrees(miss));
+        }
+        return String.format("; P1&2 %.1f&%.1f dBFS; margin1&2 %.1f&%.1f dB; admit %.3f deg; "
+                        + "turns %d/%d; res. rigid %.4f deg%s",
+                tracePilot1DbFs, tracePilot2DbFs, traceMargin1Db, traceMargin2Db,
+                Math.toDegrees(admitRad), traceTurns1, traceTurns2,
+                Math.toDegrees(traceRigidRad), readings);
+    }
+
+    /** Keeps what the frame trace states about a measured frame: the whole
+     *  turns the pair settled on since the collection's first frame and how
+     *  far apart the two pilots' figures stood on them. */
+    private void traceAdvance(PairAdvance.Result advance) {
+        if (!DebugSwitches.TRACE_HARMONIC_PHASE) return;
+        traceTurns1         = advance.m1();
+        traceTurns2         = advance.m2();
+        traceRigidRad       = advance.rigidRad();
+    }
+
+    /** Each pilot line's level on this frame, dBFS, for the trace: the bin's
+     *  magnitude on the conversion the result itself fixes, NaN where no
+     *  reader stands or the scale cannot be derived. */
+    private void tracePilotLevels(FftResult r, int halfSize) {
+        if (!DebugSwitches.TRACE_HARMONIC_PHASE || r.amplitudeDbFs == null) {
+            tracePilot1DbFs = Double.NaN;
+            tracePilot2DbFs = Double.NaN;
+            return;
+        }
+        double conv = magToAmplitudeFactor(r, halfSize);
+        tracePilot1DbFs = pilotLevelDbFs(r, pilotReader1, conv);
+        tracePilot2DbFs = pilotLevelDbFs(r, pilotReader2, conv);
+    }
+
+    private double pilotLevelDbFs(FftResult r, PilotReader reader, double conv) {
+        if (reader == null || conv <= 0.0) return Double.NaN;
+        double ampl = Math.hypot(r.re[reader.getBin()], r.im[reader.getBin()]) * conv;
+        return ampl > 1e-15 ? 20.0 * Math.log10(ampl) : -300.0;
+    }
+
+    /** One of the pilot path's two averages: over
+     *  {@link DebugSwitches#PILOT_AVERAGE_FRAMES} accepted frames, or none
+     *  at zero. */
+    private MovingAverage pilotAverage() {
+        int frames = DebugSwitches.PILOT_AVERAGE_FRAMES;
+        return frames > 0 ? new MovingAverage(frames) : null;
+    }
+
+    /** A change as the excess and the trace take it: fed to {@code average}
+     *  and read back from it where one exists, else the change itself. */
+    private double smoothed(MovingAverage average, double changeRad) {
+        if (average == null) return changeRad;
+        average.feed(changeRad);
+        return average.value();
+    }
+
+    /** Forgets everything the alignment has read: the collection's zero - the
+     *  first frame's tone phases and stream position, and the readers' own -
+     *  the residual statistic behind the reading spread, both tones' trends
+     *  and, where they exist, the reference channel's averages.  Every reading
+     *  is relative to that zero, so none of it may cross into a new
+     *  collection. */
+    private void resetPilotHistory() {
+        toneFirstPhase1    = Double.NaN;
+        toneFirstPhase2    = Double.NaN;
+        pilotFirstAbsStart = 0L;
+        // A reset or a restart clears the banner in the view, so the next
+        // undecided stretch has to post its notice afresh.
+        phaseAlignUnsettled = false;
+        phaseAlignBannerUp  = false;
+        pilotAdvanceSamples = Double.NaN;   // nothing measured for the new collection
+        referenceTone1Rad   = Double.NaN;
+        referenceTone2Rad   = Double.NaN;
+        // A new collection's zeros are its own: nothing to carry, and a
+        // re-zero armed for the old collection is void.
+        pilotRetrackPending      = false;
+        pilotAdvanceCarrySamples = 0.0;
+        excessCarry1Rad          = 0.0;
+        excessCarry2Rad          = 0.0;
+        // The trace states what THIS collection has measured: its first frame
+        // measures nothing, and the previous collection's turns are not its.
+        traceTurns1         = 0;
+        traceTurns2         = 0;
+        traceRigidRad       = 0.0;
+        tracePilot1DbFs     = Double.NaN;
+        tracePilot2DbFs     = Double.NaN;
+        traceMargin1Db      = Double.NaN;
+        traceMargin2Db      = Double.NaN;
+        traceRawFundRad     = Double.NaN;
+        traceRawP1Rad       = Double.NaN;
+        traceRawP2Rad       = Double.NaN;
+        traceRawRefRad      = Double.NaN;
+        if (pilotPair != null) pilotPair.reset();
+        if (pilotReader1 != null) pilotReader1.reset();
+        if (pilotReader2 != null) pilotReader2.reset();
+        excessTrend1.reset();
+        excessTrend2.reset();
+        if (pilotRefAverage == null) return;
+        pilotRefAverage.reset();
+        pilotRef2Average.reset();
+    }
+
+    /** A line's change continued from the previous accepted frame's: the
+     *  fresh reading, known modulo a turn, is placed on the turn the
+     *  previous value had reached, so the change stays continuous where the
+     *  reading alone would wrap. */
+    private double continuedChangeRad(double previousRad, double readingRad) {
+        return previousRad + Math.IEEEremainder(readingRad - previousRad, 2.0 * Math.PI);
+    }
+
+    /** The phase noise of a line standing {@code marginDb} over the median
+     *  power of its neighbourhood, radians rms: the noise's quadrature
+     *  component over the line's amplitude, the median of an exponential
+     *  being ln 2 of its mean power.  What the pair measures its admission
+     *  in; zero for a margin without bound. */
+    private double pilotPhaseNoiseRad(double marginDb) {
+        return Math.pow(10.0, -marginDb / 20.0) / Math.sqrt(2.0 * Math.log(2.0));
+    }
+
+    /** The pilot's level over its own local floor on the ANALYSED channel,
+     *  dB, read from the fresh frame's raw bins. */
+    private double analysedPilotMarginDb(FftResult r, int k2, int halfSize) {
+        int lo = Math.max(0, k2 - PHASE_ALIGN_FLOOR_SPAN_BINS);
+        int hi = Math.min(halfSize, k2 + PHASE_ALIGN_FLOOR_SPAN_BINS);
+        double[] powers = new double[hi - lo + 1];
+        for (int k = lo; k <= hi; k++) {
+            powers[k - lo] = r.re[k] * r.re[k] + r.im[k] * r.im[k];
+        }
+        return marginOverFloorDb(powers, k2 - lo);
+    }
+
+    /** A line's power over the median power of its neighbourhood, dB, with
+     *  its own lobe left out of that median - a windowed tone spreads over a
+     *  few bins and would lift the very floor it is measured against.
+     *  {@code powers} holds the neighbourhood in bin order and
+     *  {@code powers[centre]} is the line's own bin. */
+    private double marginOverFloorDb(double[] powers, int centre) {
+        double[] floor = new double[powers.length];
+        int nFloor = 0;
+        for (int i = 0; i < powers.length; i++) {
+            if (Math.abs(i - centre) > PHASE_ALIGN_FLOOR_EXCLUDE_BINS) {
+                floor[nFloor++] = powers[i];
+            }
+        }
+        Arrays.sort(floor, 0, nFloor);
+        double median   = nFloor > 0 ? floor[nFloor / 2] : 0.0;
+        double linePow  = powers[centre];
+        return (median > 0.0 && linePow > 0.0) ? 10.0 * Math.log10(linePow / median) : -300.0;
+    }
+
+    /**
+     * The tail of the pilot frame trace under
+     * {@link DebugSwitches#TRACE_PILOT_PHASE}.  The control is the
+     * fundamental on the REFERENCE channel - the un-notched tone - and never
+     * a pilot read on that channel: the pilot's phase there would be its own
+     * second converter path, which says nothing about the notch.  One value
+     * comes from it, at the fundamental and from the averaged changes: the
+     * difference between that channel's reading of the fundamental's drift
+     * and the pilot's - zero for a pilot that is the clean time base the
+     * method takes it for.
+     *
+     * <p>Read here and applied nowhere.  Empty when the switch is off or no
+     * frame has been read against the mirror with the pilot read as well.
+     */
+    private String pilotReferenceTrace() {
+        if (!DebugSwitches.TRACE_PILOT_PHASE || !pilotRefOffsetTaken) return "";
+        double againstReference = fundamentalAgainstReferenceRad();
+        if (Double.isNaN(againstReference)) return "";
+        return String.format("; pilot vs ref %.3f deg",
+                Math.toDegrees(pilotAgainstReferenceRad(againstReference)));
+    }
+
+    /** The fundamental's change against the reference channel, smoothed as
+     *  the excess is and wrapped to plus or minus pi: the fundamental's
+     *  drift as the reference channel sees it.  NaN while no frame of the
+     *  collection has been read against the mirror. */
+    private double fundamentalAgainstReferenceRad() {
+        if (!pilotRefFirstTaken) return Double.NaN;
+        return Math.IEEEremainder(pilotRefValueRad, 2.0 * Math.PI);
+    }
+
+    /** The reference channel's reading of the fundamental's drift less the
+     *  pilot's, both at the fundamental, zeroed at the first frame both were
+     *  read and wrapped to plus or minus pi: zero for a pilot that is the
+     *  clean time base the method takes it for, and the pilot method's own
+     *  error where it is not. */
+    private double pilotAgainstReferenceRad(double fundamentalAgainstReferenceRad) {
+        return Math.IEEEremainder(
+                fundamentalAgainstReferenceRad - pilotDriftRad() - pilotRefOffsetRad, 2.0 * Math.PI);
     }
 
     /** The bin the accumulator reads the fundamental at for THIS tick: its
@@ -1319,48 +2661,6 @@ public final class FftAnalyzerWorker {
         return Math.min(k0, halfSize);
     }
 
-    /** The fundamental's phase excess measured against the reference channel:
-     *  the phase of the analysed spectrum's raw fundamental bin (before the
-     *  accumulator's own de-rotation - that one carries the tick-to-tick hop
-     *  advance, which must not land in the difference) minus the phase of the
-     *  SAME bin of the reference window, computed by the analyser's own
-     *  single-bin recipe over the same span and the same frame geometry.  What
-     *  remains is the phase the notch adds to the fundamental alone.  Nothing
-     *  is accumulated across ticks here - the answer is this tick's alone.
-     *  Returns 0 while the reference window is not available.
-     *
-     *  <p>Also carries the live readout of the feed: the analysed-to-reference
-     *  ratio, magnitude and phase, every
-     *  {@link #PHASE_ALIGN_READOUT_TICKS} accumulated ticks. */
-    private double referencePhiF(FftResult r, boolean coherent) {
-        if (refWinBuf == null || !winValid || r.freqResolution <= 0.0) return 0.0;
-        int halfSize = r.fftSize / 2;
-        int k0 = phaseAlignBin(r, halfSize, coherent);
-        if (k0 <= 0) return 0.0;
-        double kFractional = r.fundamentalHzRefined / r.freqResolution;
-        int frames = Math.max(1, r.frameCount);
-        FftAnalyzer.BinPhasor ref = analyzer.binPhasor(refWinBuf, r.fftSize, r.windowType,
-                k0, pendingHopSamples, frames, kFractional);
-        double refMag = Math.hypot(ref.re(), ref.im());
-        double anaMag = Math.hypot(r.re[k0], r.im[k0]);
-        if (refMag <= 0.0 || anaMag <= 0.0) return 0.0;
-        double phiF = Math.IEEEremainder(
-                Math.atan2(r.im[k0], r.re[k0]) - Math.atan2(ref.im(), ref.re()),
-                2.0 * Math.PI);
-        if (DebugSwitches.TRACE_HARMONIC_PHASE && log.isInfoEnabled()) {
-            log.info("FFT phase excess, tick {}: {} deg (reference channel)",
-                    completedAnalyses, String.format("%.3f", Math.toDegrees(phiF)));
-        }
-        phaseAlignTicks++;
-        if (phaseAlignTicks % PHASE_ALIGN_READOUT_TICKS == 0 && log.isInfoEnabled()) {
-            log.info("FFT phase alignment, tick {}: analysed/reference at bin {} = {} dB, {} deg",
-                    phaseAlignTicks, k0,
-                    String.format("%.2f", 20.0 * Math.log10(anaMag / refMag)),
-                    String.format("%.2f", Math.toDegrees(phiF)));
-        }
-        return phiF;
-    }
-
     /**
      * Measures, on the reference window this cycle holds, the tone frequencies
      * the frequency lock steers on, and stamps them on the result: the
@@ -1374,8 +2674,11 @@ public final class FftAnalyzerWorker {
      * accumulator: the frequency lock runs with the averaging off or set to one
      * as well, and a measurement tied to the accumulate flag would leave it
      * steering on the notched channel in exactly those settings.  It therefore
-     * derives its own geometry - the alignment bin, the frame count and the
-     * de-rotation frequency - by the same rules the per-tick phase excess uses.
+     * derives its own geometry - the alignment bin and the frame count - by
+     * the same rules the phase excess uses, and reads each tone with the
+     * estimator the analysis reads the analysed channel's tones with
+     * ({@link FftAnalyzer#refinedBin}): the phase change between the window's
+     * two frames, one hop apart.
      *
      * <p>Why measure them at all: behind a notch the analysed fundamental sits
      * tens of dB into the noise, where a sub-bin estimate wanders, while the
@@ -1389,21 +2692,361 @@ public final class FftAnalyzerWorker {
      * the lock keeps steering on the analysed channel.
      */
     private void measureReferenceFrequencies(FftResult r, boolean coherent) {
-        if (refWinBuf == null || !winValid || r.freqResolution <= 0.0 || phaseAlignRefused) {
+        if (refWinBuf == null || refMirrorForTrace || !winValid || r.freqResolution <= 0.0
+                || phaseAlignRefused) {
             return;
         }
         int halfSize = r.fftSize / 2;
         int k0 = phaseAlignBin(r, halfSize, coherent);
         if (k0 <= 0) return;
         int frames = Math.max(1, r.frameCount);
-        double kFractional = r.fundamentalHzRefined / r.freqResolution;
         r.referenceFundamentalHzRefined = analyzer.refinedBin(refWinBuf, r.fftSize, r.windowType,
-                k0, pendingHopSamples, frames, kFractional) * r.freqResolution;
+                k0, pendingHopSamples, frames) * r.freqResolution;
         if (!(r.fundamental2HzRefined > 0.0)) return;
         int k2 = (int) Math.round(r.fundamental2HzRefined / r.freqResolution);
         if (k2 < 1 || k2 > halfSize) return;
         r.referenceFundamental2HzRefined = analyzer.refinedBin(refWinBuf, r.fftSize, r.windowType,
-                k2, pendingHopSamples, frames, kFractional) * r.freqResolution;
+                k2, pendingHopSamples, frames) * r.freqResolution;
+    }
+
+    /** Resets the frequency-lock loop(s) so alignment converges fresh from
+     *  zero - called when the user turns alignment ON, on a change of the
+     *  generated signal and on Record stop.  Kept separate from
+     *  {@link #resetStatistics()} so a manual statistics reset keeps the
+     *  converged alignment intact.  Any thread: while the worker runs, the
+     *  whole reset runs on its thread at the top of its next loop iteration
+     *  (paused or not); with no worker thread it runs here, the way
+     *  {@link #resetStatistics()} wipes worker state when stopped. */
+    public void resetFrequencyLock() {
+        if (running) {
+            frequencyLockResetPending.set(true);
+        } else {
+            resetFrequencyLockState();      // no worker thread to race with
+        }
+    }
+
+    /** The reset itself: re-arms the magnitude-drift watch, zeroes the loops
+     *  and tells the generator to drop any residual trim
+     *  ({@link Events#GENERATOR_FREQ_TRIM_RESET}).  Clearing only the loop
+     *  state would leave the generator at the last published trim, and the
+     *  fresh loop - which assumes "generator = target + correction" - would
+     *  overshoot by exactly that stale amount on its first correction.  The
+     *  event goes through the UI thread's queue behind every trim already
+     *  posted, so the reset is what the generator ends on. */
+    private void resetFrequencyLockState() {
+        // Re-arm the magnitude-drift watch: the next fed tick baselines the
+        // fundamental level(s); the comparison fires once alignment settles.
+        alignWatchArmed     = true;
+        alignWatchBaselined = false;
+        // The lock re-acquires from scratch, so the pilot tracking's one-shot
+        // re-zero is armed again for the moment it is tracking once more.
+        pilotRetrackDone    = false;
+        pilotRetrackPending = false;
+        if (fll == null && fll2 == null) return;   // alignment never engaged - no trims published
+        // The generator returns to its untrimmed tones with the event below, so
+        // the held pair takes the untrimmed targets the loops steer to.  They
+        // come from this worker, not from the pair minus a correction: a pair
+        // answered by the local generator is untrimmed already.
+        if (heldEmittedHz != null) {
+            if (fllTargetHz > 0) heldEmittedHz[0] = fllTargetHz;
+            if (fll2TargetHz > 0 && heldEmittedHz.length > 1) heldEmittedHz[1] = fll2TargetHz;
+        }
+        if (fll  != null) fll.reset();
+        if (fll2 != null) fll2.reset();
+        pendingFllReading = null;       // read before the reset: not the fresh loops' to act on
+        clearFllAverages();
+        republishTrims();
+        publishOnUiThread(Events.GENERATOR_FREQ_TRIM_RESET, null);
+    }
+
+    /** Makes the next update of each loop publish its trim whatever its
+     *  correction: the generator's standing trim has been dropped. */
+    private void republishTrims() {
+        fllPublishedCorrection  = Double.NaN;
+        fll2PublishedCorrection = Double.NaN;
+    }
+
+    /**
+     * The generator frequency lock, fed from the PREVIOUS tick's reading on
+     * the worker thread, and the trims it publishes.  Called once per
+     * analysed tick, settled or not, after the accumulate step and before
+     * the unsettled return and the display throttle - so every tick that
+     * gets here passed both discontinuity gates on a full post-seek window
+     * with the drain finished.  This tick's
+     * own reading is kept for the next call ({@link #pendingFllReading}): a
+     * discontinuity sitting at a window's edge is found by the gates only on
+     * the tick after it, so a tick passing them is what clears the reading
+     * before it.
+     *
+     * <p>Gated, in this order: a reset that landed while this window was
+     * analysed (the tick's epoch); in mode PILOT_TONE with a pilot elected, a
+     * tick whose pilot reading lost a line - the frame is disturbed; the
+     * three prerequisite prefs (snap-to-bin, fund-from-gen, align mode) and
+     * the generator actively emitting - a tick refused by any of these drops
+     * the pending reading as well; then, on the pending reading, per tone
+     * the target, a finite measurement and the plausibility bound.  Last,
+     * the first tick after a re-sync that passed all of these is skipped
+     * ({@link #fllResyncHold}); the re-sync itself dropped the pending
+     * reading ({@link #dropFllFeed}).
+     *
+     * <p>A trim is published only when the loop's correction moved since the
+     * last published one, so a holding loop leaves the generator alone.
+     *
+     * @param r               this tick's result, before the accumulator overlay
+     * @param alignMode       the tick's fundamental phase alignment mode
+     * @param samplesAbsStart absolute capture position of the window's start
+     * @param writePos        live capture head - where a correction issued now lands
+     * @param epochAtStart    the reset epoch the tick started under
+     */
+    private void applyFrequencyLock(FftResult r, FundamentalPhaseAlignment alignMode,
+                                    long samplesAbsStart, long writePos, long epochAtStart) {
+        FllReading reading = pendingFllReading;
+        pendingFllReading  = null;
+        if (epochAtStart != resetEpoch.get()) return;
+        if (alignMode == FundamentalPhaseAlignment.PILOT_TONE && pilotReader1 != null
+                && pilotMissingFrames > 0) {
+            return;
+        }
+        Preferences prefs = Preferences.instance();
+        if (!prefs.isGenSnapToFftBin())       return;
+        if (!prefs.isFftFundFromGenerator())  return;
+        AlignGenerator mode = prefs.getFftAlignGenerator();
+        if (mode == AlignGenerator.NONE)      return;
+        if (!isGeneratorActive())             return;
+        // Swap the loop type to match the selected mode (a change resets both loops).
+        if (fll == null || fll.getMode() != mode) {
+            FrequencyAlignerFactory factory = FrequencyAlignerFactory.instance();
+            fll  = factory.create(mode);
+            fll2 = factory.create(mode);
+            republishTrims();
+            clearFllAverages();
+        }
+        // Branch on generator form: single-tone runs one loop, dual-tone two
+        // independent loops driven by the per-tone refined frequencies.
+        boolean dualTone = prefs.getGenSignalForm().isDualTone();
+        // Each tone's measurement: the reference channel's when this cycle
+        // measured it (the phase-alignment mode reads that channel, where
+        // the tones stand clear of the notch), else the analysed channel's
+        // per-tone estimate.  Kept for the next cycle; what is fed below is
+        // the reading the previous cycle kept.
+        int k2 = dualTone ? secondToneBin(r, r.fftSize / 2) : 0;
+        pendingFllReading = new FllReading(
+                loopMeasurement(r.referenceFundamentalHzRefined, r.fundamentalHzRefined),
+                dualTone ? loopMeasurement(r.referenceFundamental2HzRefined, r.fundamental2HzRefined)
+                         : Double.NaN,
+                samplesAbsStart, r.sampleRate, r.fftSize, epochAtStart,
+                r.fundamentalDbFs, k2 > 0 ? r.amplitudeDbFs[k2] : Double.NaN);
+        if (reading == null || reading.epoch() != epochAtStart) return;
+        if (dualTone) {
+            double t1 = FftBinSnap.snapIfEnabled(GenSignalForm.DUAL_TONE,
+                    reading.sampleRate(), prefs.getFftLength(), prefs.isGenSnapToFftBin(),
+                    prefs.getGenDualToneFreq1Hz());
+            double t2 = FftBinSnap.snapIfEnabled(GenSignalForm.DUAL_TONE,
+                    reading.sampleRate(), prefs.getFftLength(), prefs.isGenSnapToFftBin(),
+                    prefs.getGenDualToneFreq2Hz());
+            fllTargetHz  = t1;
+            fll2TargetHz = t2;
+            // A tone without a finite estimate is gated.
+            double m1 = reading.measured1();
+            double m2 = reading.measured2();
+            boolean feed1 = t1 > 0 && Double.isFinite(m1)
+                    && plausibleFllMeasurement(t1, m1, reading.sampleRate(), reading.fftSize());
+            boolean feed2 = t2 > 0 && Double.isFinite(m2)
+                    && plausibleFllMeasurement(t2, m2, reading.sampleRate(), reading.fftSize());
+            if ((feed1 || feed2) && skipAfterResync()) return;
+            if (feed1) m1 = fllFeed(fll,  fllAverage1, m1, reading.absStart(), reading.fftSize());
+            if (feed2) m2 = fllFeed(fll2, fllAverage2, m2, reading.absStart(), reading.fftSize());
+            if (feed1) {
+                fll.update(t1, m1, reading.absStart(), writePos, reading.sampleRate(), reading.fftSize());
+                double pub1 = t1 + fll.getCorrection();
+                boolean moved1 = fll.getCorrection() != fllPublishedCorrection;
+                if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
+                    log.warn("FLL t1: target={} meas={} corr={} {}",
+                            String.format(Locale.US, "%.6f", t1),
+                            String.format(Locale.US, "%.6f", m1),
+                            String.format(Locale.US, "%+.6f", fll.getCorrection()),
+                            moved1 ? String.format(Locale.US, "pub=%.6f", pub1) : "held");
+                }
+                if (moved1) {
+                    fllPublishedCorrection = fll.getCorrection();
+                    if (heldEmittedHz != null) heldEmittedHz[0] = pub1;
+                    publishOnUiThread(Events.GENERATOR_FREQ_TRIM, pub1);
+                }
+            } else if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
+                log.warn("FLL t1 GATED: target={} meas={}",
+                        String.format(Locale.US, "%.6f", t1),
+                        String.format(Locale.US, "%.6f", m1));
+            }
+            if (feed2) {
+                fll2.update(t2, m2, reading.absStart(), writePos, reading.sampleRate(), reading.fftSize());
+                double pub2 = t2 + fll2.getCorrection();
+                boolean moved2 = fll2.getCorrection() != fll2PublishedCorrection;
+                if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
+                    log.warn("FLL t2: target={} meas={} corr={} {}",
+                            String.format(Locale.US, "%.6f", t2),
+                            String.format(Locale.US, "%.6f", m2),
+                            String.format(Locale.US, "%+.6f", fll2.getCorrection()),
+                            moved2 ? String.format(Locale.US, "pub=%.6f", pub2) : "held");
+                }
+                if (moved2) {
+                    fll2PublishedCorrection = fll2.getCorrection();
+                    if (heldEmittedHz != null && heldEmittedHz.length > 1) heldEmittedHz[1] = pub2;
+                    publishOnUiThread(Events.GENERATOR_FREQ_TRIM_2, pub2);
+                }
+            } else if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
+                log.warn("FLL t2 GATED: target={} meas={}",
+                        String.format(Locale.US, "%.6f", t2),
+                        String.format(Locale.US, "%.6f", m2));
+            }
+            boolean aligned = t1 > 0 && t2 > 0
+                    && Math.abs(m1 - t1) <= t1 * ALIGN_DONE_PPM * Constants.PPM
+                    && Math.abs(m2 - t2) <= t2 * ALIGN_DONE_PPM * Constants.PPM;
+            // The reading's own levels, before the accumulator overlay: tone
+            // 2's is its bin's, read where the second tone's line is read.
+            watchAlignmentMagnitudeDrift(reading.fundamentalDbFs(), reading.tone2DbFs(), aligned);
+        } else {
+            double measured = reading.measured1();
+            if (!Double.isFinite(measured)) return;
+            double target = FftBinSnap.snapIfEnabled(GenSignalForm.SINE,
+                    reading.sampleRate(), prefs.getFftLength(), prefs.isGenSnapToFftBin(),
+                    prefs.getGenFrequencyHz());
+            fllTargetHz  = target;
+            fll2TargetHz = 0.0;
+            if (!(target > 0)) return;
+            if (!plausibleFllMeasurement(target, measured,
+                    reading.sampleRate(), reading.fftSize())) {
+                return;
+            }
+            if (skipAfterResync()) return;
+            measured = fllFeed(fll, fllAverage1, measured, reading.absStart(), reading.fftSize());
+            fll.update(target, measured, reading.absStart(), writePos,
+                    reading.sampleRate(), reading.fftSize());
+            if (fll.getCorrection() != fllPublishedCorrection) {
+                fllPublishedCorrection = fll.getCorrection();
+                if (heldEmittedHz != null) heldEmittedHz[0] = target + fllPublishedCorrection;
+                publishOnUiThread(Events.GENERATOR_FREQ_TRIM, target + fllPublishedCorrection);
+            }
+            boolean aligned = Math.abs(measured - target)
+                    <= target * ALIGN_DONE_PPM * Constants.PPM;
+            watchAlignmentMagnitudeDrift(reading.fundamentalDbFs(), Double.NaN, aligned);
+        }
+    }
+
+    /** A re-sync's effect on the frequency lock: the reading the previous
+     *  cycle kept is dropped - its window met the discontinuity - and the
+     *  first tick that would feed the lock afterwards is skipped
+     *  ({@link #fllResyncHold}). */
+    private void dropFllFeed() {
+        pendingFllReading = null;
+        fllResyncHold     = true;
+        clearFllAverages();
+    }
+
+    /** The reading one loop is fed: {@code measured} joins {@code average},
+     *  the readings whose windows started before the span the loop's state
+     *  allows drop out - one FFT length before this window while
+     *  {@code loop} is tracking, {@link #FLL_START_AVERAGE_FRACTION} of one
+     *  while it is starting - and the mean of the rest is fed.
+     *
+     *  @param absStart the reading's window start, absolute capture position */
+    private double fllFeed(FrequencyAligner loop, ArrayDeque<FllSample> average, double measured,
+                           long absStart, int fftSize) {
+        average.addLast(new FllSample(absStart, measured));
+        long span = loop.isTracking()
+                ? (long) (FLL_AVERAGE_FRAMES - 1) * fftSize
+                : Math.round(FLL_START_AVERAGE_FRACTION * fftSize);
+        long oldestStart = absStart - span;
+        while (average.peekFirst().absStart() < oldestStart) {
+            average.removeFirst();
+        }
+        return meanHz(average);
+    }
+
+    /** The mean of {@code average}'s readings, Hz; NaN while it holds none. */
+    private double meanHz(ArrayDeque<FllSample> average) {
+        if (average.isEmpty()) return Double.NaN;
+        double sum = 0.0;
+        for (FllSample s : average) sum += s.hz();
+        return sum / average.size();
+    }
+
+    /** Ends the tracking averages: the next tracking reading starts them
+     *  afresh. */
+    private void clearFllAverages() {
+        fllAverage1.clear();
+        fllAverage2.clear();
+    }
+
+    /** Stamps on {@code r} the frequencies the loops steer on while they
+     *  track - each tracking loop's average - for the view's ΔF readout;
+     *  NaN for a loop that is not tracking, where the readout shows the
+     *  cycle's own measurement. */
+    private void stampFllAverages(FftResult r) {
+        r.fllAveragedHz  = (fll  != null && fll.isTracking())  ? meanHz(fllAverage1) : Double.NaN;
+        r.fllAveraged2Hz = (fll2 != null && fll2.isTracking()) ? meanHz(fllAverage2) : Double.NaN;
+    }
+
+    /** Tests and clears {@link #fllResyncHold}: {@code true} on the one tick
+     *  after a re-sync that it skips.  Asked only once every other gate of
+     *  the tick has passed, so a tick that would not have fed a loop anyway
+     *  does not use it up. */
+    private boolean skipAfterResync() {
+        if (!fllResyncHold) return false;
+        fllResyncHold = false;
+        return true;
+    }
+
+    /** One tone's frequency for the lock: the reference channel's measurement
+     *  when this cycle produced one, else the analysed channel's.  Behind a
+     *  notch the analysed tone is buried and its sub-bin estimate wanders,
+     *  while the reference channel carries the same tone clear of it - so where
+     *  a reference number exists it is the one the loop steers on.  Everything
+     *  else in the feed - the plausibility gate, the trim publish, the aligned
+     *  test - works on whichever number comes back. */
+    private double loopMeasurement(double referenceHz, double analysedHz) {
+        return Double.isFinite(referenceHz) ? referenceHz : analysedHz;
+    }
+
+    /** Magnitude-drift watch: baselines the fundamental level(s) on the
+     *  first tick after a lock reset re-armed it, then - once the loop(s)
+     *  report aligned - compares the current level(s) against that baseline
+     *  ONE time.  A drift beyond {@link #ALIGN_DRIFT_DB} means the running
+     *  average still contains pre-alignment frames at a depressed level; the
+     *  view shows a blinking hint to reset statistics.  Levels in dBFS - the
+     *  dBV offset cancels in the delta; {@code f2Db} is {@code NaN} in
+     *  single-tone mode. */
+    private void watchAlignmentMagnitudeDrift(double f1Db, double f2Db, boolean aligned) {
+        if (!alignWatchArmed || Double.isNaN(f1Db)) return;
+        if (!alignWatchBaselined) {
+            alignWatchBaseF1Db  = f1Db;
+            alignWatchBaseF2Db  = f2Db;
+            alignWatchBaselined = true;
+            return;
+        }
+        if (!aligned) return;                       // loop still pulling - keep waiting
+        alignWatchArmed = false;                    // one-shot per re-arm
+        double delta = Math.abs(f1Db - alignWatchBaseF1Db);
+        if (!Double.isNaN(f2Db) && !Double.isNaN(alignWatchBaseF2Db)) {
+            delta = Math.max(delta, Math.abs(f2Db - alignWatchBaseF2Db));
+        }
+        if (delta > ALIGN_DRIFT_DB) {
+            publishOnUiThread(Events.FFT_ALIGN_MAG_DRIFT, delta);
+        }
+    }
+
+    /** True when the measured frequency is close enough to the target to
+     *  plausibly be the generator's own tone - clock drift is ppm-scale.
+     *  A larger mismatch is a mis-measurement (a window still containing
+     *  the OLD signal draining through the output buffer after a form /
+     *  frequency switch, a harmonic mis-lock, a capture glitch); feeding
+     *  it to the FLL published corrections like "19 kHz target − 1 kHz
+     *  measured = +18 kHz" that trimmed the live generator to 37 kHz. */
+    private boolean plausibleFllMeasurement(double targetHz, double measuredHz,
+                                            int sampleRate, int fftSize) {
+        double binHz = sampleRate / (double) fftSize;
+        double maxErrHz = Math.max(FLL_MAX_ERROR_BINS * binHz,
+                targetHz * FLL_MAX_ERROR_PPM * Constants.PPM);
+        return Math.abs(measuredHz - targetHz) <= maxErrHz;
     }
 
     /** Qualifies the reference feed at an accumulator restart: the reference
@@ -1416,10 +3059,10 @@ public final class FftAnalyzerWorker {
      *  per collection, handed to the pane for the operator.  The sweep costs
      *  one single-bin transform per neighbourhood bin, paid once per restart,
      *  never per tick.  A no-op in every other alignment mode, which keep no
-     *  reference window. */
+     *  reference window - or keep it for the trace alone. */
     private void checkPhaseAlignStart(FftResult r, int halfSize) {
         phaseAlignRefused = false;
-        if (refWinBuf == null || !winValid || r.freqResolution <= 0.0) return;
+        if (refWinBuf == null || refMirrorForTrace || !winValid || r.freqResolution <= 0.0) return;
         int k0 = Math.min(accumIntFundBinRounded, halfSize);
         if (k0 <= 0) return;
         double kFractional = r.fundamentalHzRefined / r.freqResolution;
@@ -1462,146 +3105,217 @@ public final class FftAnalyzerWorker {
      *  first one of a collection, so a run that restarts its accumulator does
      *  not raise the same dialog again. */
     private void publishPhaseAlignRefusal(PhaseAlignRefusal refusal) {
-        if (phaseAlignRefusalPublished || display == null || display.isDisposed()) return;
+        if (phaseAlignRefusalPublished) return;
         phaseAlignRefusalPublished = true;
+        publishOnUiThread(Events.FFT_PHASE_ALIGN_REFUSED, refusal);
+    }
+
+    /** Hands one message of the alignment to the UI thread: the bus
+     *  dispatches synchronously on the publishing thread, and the
+     *  subscribers of these messages open a dialog or - for the pilot the
+     *  generator is asked for and released - announce a changed signal,
+     *  whose own subscribers touch widgets.  Neither may happen on the
+     *  worker thread.  Messages keep the order they were handed over in, so
+     *  two pilot messages of one analysis cycle reach the generator in the
+     *  order that cycle produced them.  Nothing is sent while no display is
+     *  wired (the offscreen controller). */
+    private void publishOnUiThread(String event, Object payload) {
+        if (display == null || display.isDisposed()) return;
         display.asyncExec(() -> {
             try {
-                MessageBus.instance().publish(Events.FFT_PHASE_ALIGN_REFUSED, refusal);
+                MessageBus.instance().publish(event, payload);
             } catch (Exception e) {
-                if (log.isErrorEnabled()) log.error("Can't dispatch {}", Events.FFT_PHASE_ALIGN_REFUSED, e);
+                if (log.isErrorEnabled()) log.error("Can't dispatch {}", event, e);
             }
         });
         display.wake();
     }
 
-    /** Runs a periodical-sweep probe when the schedule says one is due.  This
-     *  is the seam: the collection stops between two ticks - the accumulator
-     *  and its averages count untouched - the tone goes down, a sweep measures
-     *  the notch's phase at the fundamental afresh, the tone comes back and
-     *  collecting continues with the phase excess the probe measured.  Runs on
-     *  the worker's own thread, so no tick can start inside it. */
-    private void maybeRunPhaseProbe(Preferences prefs, int sampleRate) {
-        PhaseProbeHost host = probeHost;
-        if (host == null) return;
-        if (!probeScheduler.isDue(System.nanoTime() / NANOS_PER_SEC)) return;
-        double fundamentalHz = probeFundamentalHz(sampleRate);
-        // Nothing to centre a probe on yet (no tone, no measurement): leave the
-        // probe due and look again next tick.
-        if (!(fundamentalHz > 0.0)) return;
-        runPhaseProbe(host, prefs, fundamentalHz);
+    /** The alignment afresh, in every aligning mode: the reference channel's
+     *  baseline is taken anew at the next tick and the pilot is elected again
+     *  for the geometry in force.  What a collection start does, and what a
+     *  change of the generated signal does in the middle of one - the tone
+     *  that changed has a new phase through the notch, so nothing measured on
+     *  the old tone may be applied to it.  Runs on the worker thread and, at a
+     *  collection start, on the caller's. */
+    private void restartAlignment() {
+        restartPilot();
     }
 
-    /** The frequency a probe is centred on: the accumulator's PINNED
-     *  fundamental while one is running - the measured value the whole average
-     *  is de-rotated by - and otherwise what the generator says it emits, which
-     *  is all the baseline probe can have, running as it does before the first
-     *  tick has measured anything. */
-    private double probeFundamentalHz(int sampleRate) {
-        if (accumHasData && accumKFractional > 0.0 && accumFftSize > 0) {
-            return accumKFractional * sampleRate / (double) accumFftSize;
-        }
-        double[] emitted = MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, sampleRate);
-        return (emitted != null && emitted.length > 0) ? emitted[0] : Double.NaN;
-    }
-
-    /** One probe, start to finish.  The announcement IS the seam: both events
-     *  are published synchronously on this thread, so the generator - which
-     *  subscribes to them - has taken its tone down before the sweep starts
-     *  and put it back before the tick goes on.  Every exit path announces the
-     *  end and re-anchors the capture, because the probe held the output
-     *  device for seconds and the ring moved on without the analyser reading
-     *  it. */
-    private void runPhaseProbe(PhaseProbeHost host, Preferences prefs, double fundamentalHz) {
-        if (log.isInfoEnabled()) {
-            log.info("FFT notch-phase probe at {} Hz: accumulation pauses and the tone goes down",
-                    String.format("%.3f", fundamentalHz));
-        }
-        probeInFlight = true;
-        publishProbeEvent(Events.FFT_PHASE_PROBE_STARTED);
-        NotchPhaseProbe.Result result = null;
-        try {
-            result = host.newProbe().run(fundamentalHz);
-        } catch (RuntimeException ex) {
-            if (log.isWarnEnabled()) {
-                log.warn("FFT notch-phase probe at {} Hz failed", fundamentalHz, ex);
-            }
-        } finally {
-            publishProbeEvent(Events.FFT_PHASE_PROBE_STOPPED);
-            // The tone is back - and the transition check reads the state the
-            // probe leaves behind, so neither its stop nor its start can be
-            // taken for a change of the measured signal.
-            lastGeneratorActive = isGeneratorActive();
-            probeInFlight = false;
-            // Seconds of the 22-second ring went by with nothing reading it:
-            // rebuild the window from fresh samples, discard the span still
-            // carrying the sweep out of the DAC's own buffer, and let the loop
-            // realign once on the jumped delta instead of tracking it in a
-            // fraction at a time.
-            invalidateWindow();
-            reAnchorPending   = true;
-            drainSkipPending.set(true);
-            kappaSkipNext     = true;
-            gapRecoverPending = true;
-        }
-        applyProbe(host, prefs, result);
-    }
-
-    /** Records a finished probe on the schedule and, when it produced a
-     *  reading, holds its phase excess and refreshes the de-embedding with the
-     *  response it measured.  The FIRST probe of a collection is the baseline:
-     *  it defines the zero every later probe is measured against, so it applies
-     *  no excess of its own. */
-    private void applyProbe(PhaseProbeHost host, Preferences prefs, NotchPhaseProbe.Result result) {
-        double nowSec = System.nanoTime() / NANOS_PER_SEC;
-        if (result == null) {
-            // An abandoned probe applies nothing and measures nothing: it
-            // enters no drift history and leaves the interval where it was,
-            // and only the next opportunity moves, so a probe that cannot
-            // deliver is not retried on every tick.
-            probeScheduler.probeFailed(nowSec);
+    /** The pilot afresh for the collection that starts here: the first
+     *  frame's reading, the excess and the collection's notices go, and the
+     *  pilot is elected again for the geometry in force - the capture rate,
+     *  the transform size, the fundamental's bin or the dual pair's bins, the
+     *  window and the generator's playback rate can all have changed since
+     *  the last collection, and the elected bin is relative to every one of
+     *  them.  The elected pilot is asked of the generator every time, the same
+     *  one included: the generator remembers no pilot of its own and answers
+     *  the request without announcing a changed signal, so a repeated request
+     *  starts nothing over. */
+    private void restartPilot() {
+        pilotFirstTaken     = false;
+        pilotRefFirstTaken  = false;
+        pilotRef2FirstTaken = false;
+        pilotRefOffsetTaken = false;
+        pilotRemoteWarned   = false;
+        pilotNoLineWarned   = false;
+        excessF1Rad         = 0.0;
+        excessF2Rad         = 0.0;
+        pendingPhiF2        = 0.0;
+        pilotMissingFrames  = 0;
+        pilotResyncPending  = false;
+        resetPilotHistory();
+        Preferences prefs = Preferences.instance();
+        if (!pilotWanted(prefs.getFftFundamentalPhaseAlignment())) {
+            clearPilot();
             return;
         }
-        double residualDeg = Math.toDegrees(result.residualRad());
-        probeScheduler.probeCompleted(nowSec, residualDeg);
-        if (!probeBaselineTaken) {
-            probeBaselineRad   = result.residualRad();
-            probeBaselineTaken = true;
-            probeDeltaRad      = 0.0;
-        } else {
-            probeDeltaRad = Math.IEEEremainder(result.residualRad() - probeBaselineRad,
-                    2.0 * Math.PI);
-        }
-        // The probe measured the notch's response over its band on the analysed
-        // channel: the de-embedding that band is corrected with is replaced by
-        // it, so the correction and the phase excess describe the same filter.
-        FreqRespCalibration response = result.response();
-        double[] freqs = response.freqs;
-        host.refreshDeEmbedding(prefs.getFftChannel(), freqs[0], freqs[freqs.length - 1], response);
-        if (DebugSwitches.TRACE_HARMONIC_PHASE && log.isInfoEnabled()) {
-            log.info("FFT phase excess, tick {}: {} deg (sweep probe)",
-                    completedAnalyses, String.format("%.3f", Math.toDegrees(probeDeltaRad)));
-        }
-        if (log.isInfoEnabled()) {
-            log.info("FFT notch-phase probe done: residual {} deg, held phase excess {} deg, "
-                    + "next probe in {} s",
-                    String.format("%.3f", residualDeg),
-                    String.format("%.3f", Math.toDegrees(probeDeltaRad)),
-                    String.format("%.0f", probeScheduler.getPeriodSec()));
-        }
+        selectPilot(prefs);
     }
 
-    /** Announces a probe's start or end on THIS thread.  Bus dispatch is
-     *  synchronous on the publishing thread, and that is the point: the
-     *  generator's subscriber takes the tone down inside this call, so the
-     *  sweep never overlaps the tone and the tick cannot go on until the tone
-     *  is back.  A subscriber that touches a widget marshals itself - the
-     *  event's javadoc says which thread it arrives on. */
-    private void publishProbeEvent(String eventName) {
-        try {
-            MessageBus.instance().publish(eventName);
-        } catch (Exception e) {
-            if (log.isErrorEnabled()) log.error("Can't dispatch {}", eventName, e);
+    /** Whether a mode asks the generator for the pilot: the pilot mode
+     *  always; the reference-channel mode under the pilot trace switch,
+     *  where the pilot is read as the control of the reference's reading. */
+    private boolean pilotWanted(FundamentalPhaseAlignment mode) {
+        return mode == FundamentalPhaseAlignment.PILOT_TONE
+                || (mode == FundamentalPhaseAlignment.REFERENCE_CHANNEL
+                        && DebugSwitches.TRACE_PILOT_PHASE);
+    }
+
+    /**
+     * Elects the PAIR of pilots for the geometry in force and asks the
+     * generator for both.  The band they are elected from ends at
+     * {@link #PILOT_CEILING_HZ} and starts above the protected ladder, whose
+     * highest ORDER is {@link #PILOT_PROTECTED_ORDER}, the ladder the THD
+     * readout sums; no setting moves it.  The election also states the
+     * clearance the pair
+     * was admitted at, and the reader searches with those numbers and no
+     * others.
+     *
+     * <p>The fundamental is taken from what the generator EMITS, never from a
+     * peak search: the pilot passes no notch and arrives far above the
+     * notched fundamental, so a search would take the pilot itself for the
+     * fundamental.  A generator a server drives gets no pilot at all - the
+     * pilot's controls exist on the local DDS alone - and the mode then
+     * measures no excess.
+     */
+    private void selectPilot(Preferences prefs) {
+        // Every exit below takes the pilot down: it runs only while one can
+        // be elected for the configuration in force right now, and the next
+        // restart asks again.
+        SignalBufferReader rdr = reader;
+        int sampleRate = rdr != null ? rdr.getSampleRate() : 0;
+        int fftSize    = prefs.getFftLength();
+        if (sampleRate <= 0 || fftSize < 8 || !isGeneratorActive()) {
+            clearPilot();
+            return;
         }
+        MessageBus bus = MessageBus.instance();
+        GeneratorOutput output = bus.request(Events.GENERATOR_OUTPUT);
+        if (output != null && output.remote()) {
+            if (!pilotRemoteWarned) {
+                pilotRemoteWarned = true;
+                if (log.isWarnEnabled()) {
+                    log.warn("FFT phase alignment: pilot tone needs the local generator");
+                }
+            }
+            clearPilot();
+            return;
+        }
+        // A responder that answers no rate leaves the capture grid as the only
+        // one known; the whole-period knock-out is then evaluated on it alone.
+        double playbackRateHz = (output != null && output.rateHz() > 0.0)
+                ? output.rateHz() : sampleRate;
+        int[] fundamentalBins = emittedBins(prefs, sampleRate, fftSize);
+        if (fundamentalBins == null) {
+            clearPilot();
+            return;
+        }
+        PilotToneSelector.PilotPair elected = new PilotToneSelector(analyzer, sampleRate,
+                playbackRateHz, fftSize, fundamentalBins, PILOT_PROTECTED_ORDER,
+                prefs.getFftWindow(), PILOT_CEILING_HZ).selectPair();
+        if (elected.bin1() <= 0) {
+            if (log.isWarnEnabled()) {
+                log.warn("FFT phase alignment: no pilot fits this configuration - {}",
+                        elected.reason());
+            }
+            clearPilot();
+            return;
+        }
+        // One admissible pilot still aligns: the hop counter's own count of
+        // whole turns stands in for the vernier the second line would give.
+        boolean pair          = elected.bin2() > 0;
+        pilotReader1          = new PilotReader(elected.bin1());
+        pilotReader2          = pair ? new PilotReader(elected.bin2()) : null;
+        pilotPair             = pair
+                ? new PairAdvance(elected.bin1(), elected.bin2(), fftSize, sampleRate)
+                : null;
+        analyzer.setPilotBins(elected.bin1(), pair ? elected.bin2() : -1);
+        double levelDbv = pilotLevelDbv;
+        PilotToneRequest request = new PilotToneRequest(elected.hz1(),
+                pair ? elected.hz2() : Double.NaN, levelDbv);
+        if (pair && log.isInfoEnabled()) {
+            log.info("FFT phase alignment: pilot tones at bins {} ({} Hz) and {} ({} Hz), {} dBV",
+                    elected.bin1(), String.format("%.6f", elected.hz1()),
+                    elected.bin2(), String.format("%.6f", elected.hz2()),
+                    String.format("%.1f", levelDbv));
+        } else if (!pair && log.isWarnEnabled()) {
+            log.warn("FFT phase alignment: one pilot only, at bin {} ({} Hz), {} dBV - {}. "
+                    + "A single line knows the advance between two frames modulo its own "
+                    + "period alone, so the whole turns are taken from the hop counter and "
+                    + "samples lost between two frames pass unnoticed",
+                    elected.bin1(), String.format("%.6f", elected.hz1()),
+                    String.format("%.1f", levelDbv), elected.reason());
+        }
+        publishOnUiThread(Events.GENERATOR_PILOT_ON, request);
+    }
+
+    /** The generator's emitted pair for this collection - {@link #heldEmittedHz},
+     *  asked of the generator on the first call after a collection started and
+     *  held from then on, so the pilot election and the analysis hints share
+     *  ONE request whichever of them comes first.  Worker thread only. */
+    private double[] emittedPair(int sampleRate) {
+        if (emittedPairPending) {
+            heldEmittedHz      = MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, sampleRate);
+            emittedPairPending = false;
+        }
+        return heldEmittedHz;
+    }
+
+    /** The bins the protected ladder is built on: the tone the generator
+     *  emits, and the upper one as well while a dual pair runs.  {@code null}
+     *  while the generator states no tone to protect - a sweep, the noise
+     *  forms, or no responder at all. */
+    private int[] emittedBins(Preferences prefs, int sampleRate, int fftSize) {
+        double[] emitted = emittedPair(sampleRate);
+        if (emitted == null || !(emitted[0] > 0.0)) return null;
+        double binHz = sampleRate / (double) fftSize;
+        int    k1    = (int) Math.round(emitted[0] / binHz);
+        if (k1 < 1) return null;
+        if (!prefs.getGenSignalForm().isDualTone() || !(emitted[1] > 0.0)) {
+            return new int[]{ k1 };
+        }
+        int k2 = (int) Math.round(emitted[1] / binHz);
+        return k2 > 0 ? new int[]{ k1, k2 } : new int[]{ k1 };
+    }
+
+    /** Takes both pilots down: the generator is told once, the analyser stops
+     *  holding bins that are no longer there, and the readers go with them, so
+     *  a pilot coming back is read against a frame of its own instead of one
+     *  read before the gap. */
+    private void clearPilot() {
+        pilotFirstTaken = false;
+        pilotRawPhase1  = Double.NaN;
+        pilotRawPhase2  = Double.NaN;
+        pilotRawRef1    = Double.NaN;
+        pilotRawRef2    = Double.NaN;
+        resetPilotHistory();
+        if (pilotReader1 == null) return;
+        pilotReader1 = null;
+        pilotReader2 = null;
+        pilotPair    = null;
+        analyzer.setPilotBins(-1, -1);
+        publishOnUiThread(Events.GENERATOR_PILOT_OFF, null);
     }
 
     /** The FORK: the per-tick tracking correction (in samples) pooled from
@@ -1622,7 +3336,7 @@ public final class FftAnalyzerWorker {
      *  theory chapter's fork.  With nothing else admitted, returns the
      *  fundamental's own estimate unchanged. */
     private double forkPooledOffset(FftResult r, int halfSize, double delta, int k0,
-                                    double fundOffset) {
+                                    double fundOffset, double phiF2) {
         double kappa = accumKFractional;
         // The ladder below runs h while h·κ < halfSize: bounded by the family,
         // not by the spectrum, so a sub-bin κ has no ladder to pool - the
@@ -1633,9 +3347,11 @@ public final class FftAnalyzerWorker {
         double minPow  = fundPow * Math.pow(10.0, -relDb / 10.0);
         double sumW    = kappa * kappa * fundPow;
         double sumWOff = sumW * fundOffset;
-        // The harmonic ladder h·κ, h = 2 and up.
+        // The harmonic ladder h·κ, h = 2 and up.  No excess is taken out of
+        // these: the accumulator turns the h = 1 rung alone, so the harmonics'
+        // accumulated bins carry none either and the two sides agree.
         for (int h = 2; h * kappa < halfSize - 1.0; h++) {
-            double[] est = forkLineOffset(r, halfSize, delta, h * kappa, minPow, false);
+            double[] est = forkLineOffset(r, halfSize, delta, h * kappa, minPow, false, 0.0);
             if (est != null) {
                 sumW    += est[0];
                 sumWOff += est[0] * est[1];
@@ -1650,7 +3366,12 @@ public final class FftAnalyzerWorker {
                 double kappaP = pa[p] * kappa + pb[p] * accumKappa2;
                 if (kappaP < 1.0 || kappaP > halfSize - 1.0) continue;
                 boolean exempt = pa[p] == 0 && pb[p] == 1;
-                double[] est = forkLineOffset(r, halfSize, delta, kappaP, minPow, exempt);
+                // F2's accumulated region carries -phiF2, so its fresh phasor
+                // has to be read with the same excess taken out; without that
+                // the whole excess would come back as a systematic residual
+                // and be folded into the dropped-sample estimate.
+                double[] est = forkLineOffset(r, halfSize, delta, kappaP, minPow, exempt,
+                        exempt ? phiF2 : 0.0);
                 if (est != null) {
                     sumW    += est[0];
                     sumWOff += est[0] * est[1];
@@ -1663,10 +3384,14 @@ public final class FftAnalyzerWorker {
     /** One fork line's {@code [weight, offset-estimate]} - or {@code null}
      *  when the line is below the admission level (unless {@code exempt}),
      *  out of range, or too close to the phase wrap this tick.  The fresh
-     *  phasor is de-rotated by the line's own family angle, exactly as the
-     *  accumulator rotated its bin, so the two phases compare directly. */
+     *  phasor is de-rotated by the line's own family angle and by
+     *  {@code excessRad}, the phase excess the accumulator turned that line's
+     *  region by, exactly as the accumulator rotated its bin - so the two
+     *  phases compare directly and the residual holds the sample offset
+     *  alone. */
     private double[] forkLineOffset(FftResult r, int halfSize, double delta,
-                                    double kappaL, double minPow, boolean exempt) {
+                                    double kappaL, double minPow, boolean exempt,
+                                    double excessRad) {
         int k = (int) Math.round(kappaL);
         if (k <= 1 || k > halfSize) return null;
         double pow = r.re[k] * r.re[k] + r.im[k] * r.im[k];
@@ -1675,7 +3400,7 @@ public final class FftAnalyzerWorker {
                 * Math.IEEEremainder(delta * kappaL, accumFftSize) / accumFftSize;
         double c   = Math.cos(ang), s = Math.sin(ang);
         double obs = Math.atan2(r.re[k] * s + r.im[k] * c,
-                                r.re[k] * c - r.im[k] * s);
+                                r.re[k] * c - r.im[k] * s) - excessRad;
         double accumPhase = Math.atan2(accumIm[k], accumRe[k]);
         double res = Math.IEEEremainder(obs - accumPhase, 2.0 * Math.PI);
         if (Math.abs(res) > FORK_WRAP_GUARD_RAD) return null;
@@ -1691,11 +3416,26 @@ public final class FftAnalyzerWorker {
      *  from a·Φ1 + b·Φ2.  Returns the member count; 0 when no fundamental is
      *  pinned (the caller then adds without rotation).
      *
+     *  <p>Each pilot line held for the alignment earns a member of its own, at
+     *  its whole bin and turned by that bin's own time shift over this frame's
+     *  advance: a pilot's phase advances with its own bin and with nothing of
+     *  the fundamental's fractional position, so riding the region of whichever
+     *  ladder or grid member happens to be nearest would turn it by a phase
+     *  that is not its own and the line would decohere over a long average.
+     *
      *  @param phiF the fundamental's phase excess for this tick: the h = 1 rung
      *         alone takes the extra rotation -phiF, so the fundamental's region
      *         follows the notch's phase drift while every harmonic keeps the
-     *         phase the shared time base gives it */
-    private int buildFamily(FftResult r, int halfSize, double phi1, double phi2, double phiF) {
+     *         phase the shared time base gives it
+     *  @param phiF2 the SECOND tone's phase excess: the (0,1) grid member - F2
+     *         itself - takes the extra rotation -phiF2 the same way, and no
+     *         other product does.  A notch's phase response at F2 is its own,
+     *         so F1's number would be the wrong correction there; and the grid
+     *         holds no member with a zero F2 coefficient, so a product built
+     *         on F2 keeps the phase the shared time base gives it, exactly as
+     *         the harmonics of F1 do */
+    private int buildFamily(FftResult r, int halfSize, double phi1, double phi2,
+                            double phiF, double phiF2) {
         double kappa = accumKFractional;
         // No family below one bin: the ladder would be the whole half spectrum,
         // member for bin.
@@ -1704,7 +3444,8 @@ public final class FftAnalyzerWorker {
         int[] pa = r.imdProductA;
         int[] pb = r.imdProductB;
         boolean products = accumKappa2 > 0.0 && pa != null && pb != null && pa.length > 0;
-        int cap = hMax + 1 + (products ? pa.length : 0);
+        int nGrid = products ? pa.length : 0;
+        int cap = hMax + 1 + nGrid;
         if (famPos.length < cap) {
             famPos = new double[cap];
             famCos = new double[cap];
@@ -1712,30 +3453,32 @@ public final class FftAnalyzerWorker {
         }
         // The grid members, position-sorted (a handful of entries).
         int nP = 0;
-        double[] pPos = null;
-        double[] pAng = null;
+        double[] pPos = new double[nGrid];
+        double[] pAng = new double[nGrid];
         if (products) {
-            pPos = new double[pa.length];
-            pAng = new double[pa.length];
             for (int p = 0; p < pa.length; p++) {
                 double posP = pa[p] * kappa + pb[p] * accumKappa2;
                 if (posP < 1.0 || posP > halfSize - 1) continue;
+                // The (0,1) member IS the second tone, and it alone carries
+                // that tone's own excess.
+                double excessP = (pa[p] == 0 && pb[p] == 1) ? phiF2 : 0.0;
                 pPos[nP] = posP;
-                pAng[nP] = Math.IEEEremainder(pa[p] * phi1 + pb[p] * phi2, 2.0 * Math.PI);
+                pAng[nP] = Math.IEEEremainder(pa[p] * phi1 + pb[p] * phi2 - excessP,
+                        2.0 * Math.PI);
                 nP++;
             }
-            for (int i = 1; i < nP; i++) {
-                double vp = pPos[i];
-                double va = pAng[i];
-                int j = i - 1;
-                while (j >= 0 && pPos[j] > vp) {
-                    pPos[j + 1] = pPos[j];
-                    pAng[j + 1] = pAng[j];
-                    j--;
-                }
-                pPos[j + 1] = vp;
-                pAng[j + 1] = va;
+        }
+        for (int i = 1; i < nP; i++) {
+            double vp = pPos[i];
+            double va = pAng[i];
+            int j = i - 1;
+            while (j >= 0 && pPos[j] > vp) {
+                pPos[j + 1] = pPos[j];
+                pAng[j + 1] = pAng[j];
+                j--;
             }
+            pPos[j + 1] = vp;
+            pAng[j + 1] = va;
         }
         // Merge the (already ascending) ladder with the sorted grid members;
         // the ladder phasor h·Φ1 advances by an incremental complex multiply.
@@ -1785,6 +3528,108 @@ public final class FftAnalyzerWorker {
         return n;
     }
 
+    /**
+     * The two pilot lobes, de-rotated each by its own line: a pilot is
+     * coherent with nothing but itself - not with the fundamental, whose
+     * tracking (the counted advance, the loop's corrections, the one-shot
+     * realign modulo the fundamental's period) it does not share, and not
+     * with the other pilot - so the bins of its lobe span are turned back by
+     * the phase its own line gained since the accumulation's reference frame,
+     * read on this frame's raw spectrum, and by nothing else.  The family's
+     * region rotation these bins received is taken out first, from the
+     * subtractable ring that holds exactly what was added.  A pilot whose
+     * line was not read on this frame keeps the family's rotation.
+     */
+    private void derotatePilotLobes(FftResult r, double[] accumRe, double[] accumIm,
+                                    double[] pvR, double[] pvI, int weight, int halfSize,
+                                    boolean restart) {
+        if (restart) {
+            pilotRawRef1 = pilotRawPhase1;
+            pilotRawRef2 = pilotRawPhase2;
+        }
+        derotatePilotLobe(r, accumRe, accumIm, pvR, pvI, weight, halfSize,
+                r.pilot1MaskLoBin, r.pilot1MaskHiBin, pilotRawPhase1, pilotRawRef1);
+        derotatePilotLobe(r, accumRe, accumIm, pvR, pvI, weight, halfSize,
+                r.pilot2MaskLoBin, r.pilot2MaskHiBin, pilotRawPhase2, pilotRawRef2);
+    }
+
+    private void derotatePilotLobe(FftResult r, double[] accumRe, double[] accumIm,
+                                   double[] pvR, double[] pvI, int weight, int halfSize,
+                                   int lo, int hi, double rawPhase, double rawRef) {
+        if (lo < 0 || hi < lo || Double.isNaN(rawPhase) || Double.isNaN(rawRef)) return;
+        double ang = -Math.IEEEremainder(rawPhase - rawRef, 2.0 * Math.PI);
+        double c   = Math.cos(ang);
+        double s   = Math.sin(ang);
+        int    top = Math.min(hi, halfSize);
+        for (int k = Math.max(0, lo); k <= top; k++) {
+            accumRe[k] -= pvR[k];
+            accumIm[k] -= pvI[k];
+            double rRe = r.re[k] * weight;
+            double rIm = r.im[k] * weight;
+            double cRe = rRe * c - rIm * s;
+            double cIm = rRe * s + rIm * c;
+            accumRe[k] += cRe;
+            accumIm[k] += cIm;
+            pvR[k] = cRe;
+            pvI[k] = cIm;
+        }
+    }
+
+    /**
+     * States on the result the fundamental's phase AS THE DAC EMITTED IT, at
+     * the accumulator's own time origin, for the predistortion loop - see
+     * {@link FftResult#dacFundPhaseRad}.  Read off the spectrum the
+     * accumulator was just written into, so it shares the origin of the
+     * harmonic phasors captured right after it; a value taken on the fresh
+     * frame would sit at that frame's origin instead, and the two differ by
+     * the rotation at the fundamental over the whole advance since the
+     * reference frame.
+     *
+     * <p>Mode PILOT_TONE: the two pilot lobes are held in the accumulator at
+     * their reference-frame phases, they are spaced the fundamental's bin
+     * apart, and the generator starts them phase-locked to the main tone -
+     * so their difference IS the fundamental's phase at that origin, and it
+     * never passed the notch.  A second tone gets the same reading scaled by
+     * its bin over the fundamental's where that is a whole multiple; a dual
+     * pair's second tone is left unset.
+     *
+     * <p>Mode REFERENCE_CHANNEL: the accumulated fundamental holds the
+     * notch's phase as it stood on the reference frame, and the difference
+     * between the analysed and the reference channel on that very frame is
+     * that phase, measured - taking it out leaves the tone as emitted.
+     *
+     * <p>Stated in the convention a measured bin has, so it drops into the
+     * loop's reference where the notched reading used to stand.
+     */
+    private void stampDacFundamentalPhase(FftResult r, FundamentalPhaseAlignment mode) {
+        r.dacFundPhaseRad  = Double.NaN;
+        r.dacFund2PhaseRad = Double.NaN;
+        int halfSize = r.fftSize / 2;
+        int k0 = accumIntFundBinRounded;
+        int k1 = (accumKappa2 > 0.0) ? (int) Math.round(accumKappa2) : -1;
+        if (k0 <= 0 || k0 > halfSize) return;
+        if (mode == FundamentalPhaseAlignment.PILOT_TONE) {
+            if (pilotPair == null || pilotReader1 == null || pilotReader2 == null) return;
+            int p1 = pilotReader1.getBin();
+            int p2 = pilotReader2.getBin();
+            if (p1 <= 0 || p2 <= 0 || p1 > halfSize || p2 > halfSize) return;
+            double atFund = Math.atan2(r.im[p1], r.re[p1]) - Math.atan2(r.im[p2], r.re[p2]);
+            // A sine's bin reads a quarter turn behind its accumulator phase;
+            // the pilots' difference has that quarter turn cancelled out.
+            r.dacFundPhaseRad = wrapTurn(atFund - Math.PI / 2.0);
+            if (k1 > 0 && k1 <= halfSize && k1 % k0 == 0) {
+                r.dacFund2PhaseRad = wrapTurn(atFund * (k1 / k0) - Math.PI / 2.0);
+            }
+            return;
+        }
+        if (mode == FundamentalPhaseAlignment.REFERENCE_CHANNEL && pilotRefFirstTaken) {
+            r.dacFundPhaseRad = wrapTurn(Math.atan2(r.im[k0], r.re[k0]) - pilotRefFirstRad);
+            if (k1 > 0 && k1 <= halfSize && pilotRef2FirstTaken) {
+                r.dacFund2PhaseRad = wrapTurn(Math.atan2(r.im[k1], r.re[k1]) - pilotRef2FirstRad);
+            }
+        }
+    }
+
     /** The (raw magnitude -> amplitude) conversion factor {@code analyze} used
      *  for this result, derived from the result itself: for a non-DC/Nyquist
      *  bin {@code amplLin = hypot(re, im) · normFactor · 2}, and the factor
@@ -1804,10 +3649,20 @@ public final class FftAnalyzerWorker {
     }
 
     /** Mutates {@code r}'s re/im/amplitudeDbFs/phaseDeg arrays in place to
-     *  reflect the cumulative accumulator average.  After this, the caller
-     *  should run {@link FftAnalyzer#recomputeStats} so the fundamental,
+     *  reflect the cumulative accumulator average, and restates the
+     *  fundamental's level scalars from the bin just written.  After this,
+     *  the caller should run {@link FftAnalyzer#recomputeStats} so the
      *  harmonic table, THD/SNR are re-derived from the cumulative spectrum
-     *  (the per-tick stats were just one tick's contribution). */
+     *  (the per-tick stats were just one tick's contribution).
+     *
+     *  <p>The scalars cannot wait for that recompute: the frequency-response
+     *  correction runs on the overlaid spectrum before it and reads its
+     *  level scale as the fundamental's level over the fundamental bin's
+     *  magnitude.  Left as the fresh tick wrote them, the level would be the
+     *  fresh tick's while the magnitude is the accumulated one, and under a
+     *  notch drifting across the fundamental the two differ by however far
+     *  the notch has moved since the collection began - a scale error every
+     *  corrected bin, the harmonics included, would then carry. */
     private void overlayAccumulatorOnto(FftResult r) {
         if (!accumHasData || accumFrames <= 0) return;
         int halfSize = r.fftSize / 2;
@@ -1851,6 +3706,13 @@ public final class FftAnalyzerWorker {
                 }
             });
         }
+        int kFund = Math.min(halfSize, Math.max(1, r.fundamentalBin));
+        r.fundamentalDbFs   = r.amplitudeDbFs[kFund];
+        r.fundamentalLinear = Math.pow(10.0, r.fundamentalDbFs / 20.0);
+        // The spectrum the result now carries is the average of the frames
+        // the accumulator holds, so the frame count is the accumulator's - the
+        // analyzer had stamped the frames of its own call, two per cycle.
+        r.frameCount = accumFrames;
     }
 
     // ─── External wiring ────────────────────────────────────────────────────
@@ -1887,22 +3749,29 @@ public final class FftAnalyzerWorker {
         invalidateWindow();
         reAnchorPending       = true;
         completedAnalyses     = 0;
+        averagesInWindow      = 0;
         resetStatistics();
         paused.set(false);
-        // One refusal notice per collection, and a readout cadence that starts
-        // with the collection.
+        // One refusal notice per collection, one pilot-lost notice per run,
+        // and a readout cadence that starts with the collection.
         phaseAlignRefusalPublished = false;
+        pilotLostPublished         = false;
         phaseAlignTicks            = 0;
-        // A new collection needs its own baseline probe: a phase excess and a
-        // drift rate from a collection that has ended describe a filter at a
-        // temperature this one knows nothing about.
-        probeScheduler.reset();
-        probeBaselineTaken = false;
-        probeBaselineRad   = 0.0;
-        probeDeltaRad      = 0.0;
+        // A new collection needs its own baseline - a phase excess from a
+        // collection that has ended describes a filter at a temperature this
+        // one knows nothing about - and it gets one from the statistics reset
+        // above, which the first tick consumes.  A restart armed before this
+        // press belonged to the collection that ended and is dropped here.
+        alignRestartPending.set(false);
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnGenChange);
         bus.subscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
+        Preferences prefs0 = Preferences.instance();
+        prefs0.fftFundamentalPhaseAlignmentProperty().addListener(alignModeChanged);
+        pilotLevelDbv = prefs0.getFftPilotLevelDbv();
+        pilotMarginDb = prefs0.getFftPilotMarginDb();
+        prefs0.fftPilotLevelDbvProperty().addListener(pilotLevelChanged);
+        prefs0.fftPilotMarginDbProperty().addListener(pilotMarginChanged);
         worker = new Thread(this::workerLoop, "fft-analyzer");
         worker.setDaemon(true);
         worker.start();
@@ -1918,7 +3787,7 @@ public final class FftAnalyzerWorker {
         if (w != null) {
             w.interrupt();
             try {
-                w.join(3_000);
+                w.join(STOP_JOIN_MS);
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }
@@ -1926,6 +3795,21 @@ public final class FftAnalyzerWorker {
         MessageBus bus = MessageBus.instance();
         bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnGenChange);
         bus.unsubscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
+        Preferences prefs0 = Preferences.instance();
+        prefs0.fftFundamentalPhaseAlignmentProperty().removeListener(alignModeChanged);
+        prefs0.fftPilotLevelDbvProperty().removeListener(pilotLevelChanged);
+        prefs0.fftPilotMarginDbProperty().removeListener(pilotMarginChanged);
+        // Nothing reads the pilot once the analysis is over, and the generator
+        // keeps what it was asked for until it is told otherwise - so the
+        // request is withdrawn here, after the join, where no tick can ask
+        // for it again.
+        clearPilot();
+        // The lock goes with the capture: its estimate of the two converters'
+        // drift describes a capture that is over, and a generator left at the
+        // last trim would be measured against a fresh loop's first correction
+        // on top of it.  After the join, and with the loops the worker's own,
+        // this runs here rather than being asked for from outside.
+        resetFrequencyLock();
         if (w == null || !w.isAlive()) {
             discardCacheAndPool();
             resetAccumulator();
@@ -1969,6 +3853,7 @@ public final class FftAnalyzerWorker {
         resetEpoch.incrementAndGet();   // first: a mid-tick analysis must see it
         paused.set(false);
         completedAnalyses     = 0;
+        averagesInWindow      = 0;
         firstFrameDone        = false;
         invalidateWindow();
         reAnchorPending       = true;
@@ -1995,9 +3880,10 @@ public final class FftAnalyzerWorker {
         resetStatistics();
     }
 
-    /** Current reset epoch - compare against {@link FftResult#epoch} to
-     *  detect a result produced before the latest reset (e.g. one that sat
-     *  parked in the coalescing UI hand-off across a signal change). */
+    /** The current collection's epoch, stamped on every result it produces:
+     *  a result whose {@link FftResult#epoch} differs was measured before the
+     *  latest reset.  The hand-off drops such a result itself - see
+     *  {@link #drainPendingResult()}. */
     public long currentResetEpoch() {
         return resetEpoch.get();
     }
@@ -2009,6 +3895,7 @@ public final class FftAnalyzerWorker {
     private void resetWorkerOwnedState() {
         resetAccumulator();
         completedAnalyses = 0;          // re-zero: a racing worker-side ++ may have resurrected a stale count
+        averagesInWindow  = 0;
         mainsTrackTick = 0;             // re-lock mains on the very next tick
         if (mainsComb != null) mainsComb.resetTracking();   // re-lock mains from scratch
     }
@@ -2069,12 +3956,19 @@ public final class FftAnalyzerWorker {
         while (running) {
             int sleepMs = IDLE_TICK_MS;
             awaitSamplesNext = 0;
+            // A frequency-lock reset asked for since the last iteration, taken
+            // before the paused test so a paused worker still performs it.
+            if (frequencyLockResetPending.getAndSet(false)) {
+                resetFrequencyLockState();
+            }
             if (!paused.get()) {
                 try {
                     sleepMs = doAnalysis();
                 } catch (Throwable t) {
                     if (log.isWarnEnabled()) {
-                        log.warn("FFT analysis tick failed", t);
+                        if (!(t.getCause() instanceof InterruptedException)) {
+                            log.warn("FFT analysis tick failed", t);
+                        }
                     }
                     sleepMs = IDLE_TICK_MS;
                     awaitSamplesNext = 0;
@@ -2110,21 +4004,23 @@ public final class FftAnalyzerWorker {
         // Generator-state transition: wipe accumulated stats so the next
         // analysis starts with a clean slate.
         boolean genActiveNow = isGeneratorActive();
-        // A probe's own pause of the tone is not a change of the measured
-        // signal - the tone is on its way back and the average it feeds is
-        // meant to survive the seam - so only a transition outside a probe
-        // wipes, and the probe re-seeds this field from the state it leaves.
-        if (!probeInFlight) {
-            if (lastGeneratorActive != null && lastGeneratorActive != genActiveNow) {
-                resetStatisticsAfterSignalChange();
-            }
-            lastGeneratorActive = genActiveNow;
+        if (lastGeneratorActive != null && lastGeneratorActive != genActiveNow) {
+            resetStatisticsAfterSignalChange();
         }
+        lastGeneratorActive = genActiveNow;
         // Consume a pending foreign reset (or the transition reset just
         // above): the accumulator / mains-tracking wipe runs HERE, on the
         // worker thread, so it can never race the accumulate loops.
         if (resetPending.getAndSet(false)) {
             resetWorkerOwnedState();
+            // The average starts from zero here, so the alignment starts from
+            // its own first frame again: the pilot is elected afresh for the
+            // geometry in force and asked of the generator once more.
+            restartAlignment();
+            republishTrims();       // the loops keep their state; their next update re-sends the trim
+            emittedPairPending = true;  // a collection starts: the generator states its tones once
+            fllTargetHz  = 0.0;         // the loops' targets belong to the collection they steered
+            fll2TargetHz = 0.0;
         }
         // Stamp AFTER the transition reset above so this tick doesn't
         // discard itself; see the epoch check below the analyze call.
@@ -2201,13 +4097,19 @@ public final class FftAnalyzerWorker {
         boolean wantLeft = (channel == Channel.L);
 
         FundamentalPhaseAlignment alignMode = prefs.getFftFundamentalPhaseAlignment();
-        // The periodical-sweep seam sits HERE, before this tick touches the
-        // reader: the probe drives the output device itself and costs seconds
-        // of capture, and the re-anchor it arms is consumed by the block right
-        // below, so the tick that pays for a probe is also the one that starts
-        // the window again.
-        if (alignMode == FundamentalPhaseAlignment.PERIODICAL_SWEEP) {
-            maybeRunPhaseProbe(prefs, sampleRate);
+        // A generated signal that changed since the last tick starts the
+        // alignment afresh, before this tick reads its first sample.
+        if (alignRestartPending.getAndSet(false)) {
+            restartAlignment();
+            republishTrims();       // the loops keep their state; their next update re-sends the trim
+            emittedPairPending = true;  // the signal changed: the generator states its tones once more
+        }
+        // The pilot lives only while the mode asks for it and the generator
+        // plays.  A mode left behind and a tone taken down are both silent
+        // events for the alignment - nothing restarts it - so the tick
+        // itself takes the pilot back off the generator.
+        if (!pilotWanted(alignMode) || !genActiveNow) {
+            clearPilot();
         }
 
         // Re-anchor on (re)start / reset so the sliding window is rebuilt only
@@ -2218,6 +4120,7 @@ public final class FftAnalyzerWorker {
             rdr.seekToLatest();
             reAnchorPending = false;
             invalidateWindow();
+            dropFllFeed();
             if (drainSkipPending.getAndSet(false)) {
                 drainSkipRemaining = (long) Math.ceil(OUTPUT_DRAIN_SKIP_SEC * sampleRate);
             }
@@ -2225,9 +4128,10 @@ public final class FftAnalyzerWorker {
         // Output-drain skip: after a signal-change re-anchor, consume and
         // discard the span still carrying the old tone (the DAC buffer
         // keeps it flowing into the ADC after the change) so the first
-        // window - and the FLL's first measurement - see only the new
-        // signal.  Also armed (5 ms) by a discontinuity re-sync, so the
-        // rebuild starts past the glitch's END, not at its detected start.
+        // window sees only the new signal - as does every window the
+        // frequency lock is fed, which skips that first one besides (see
+        // fllResyncHold).  Also armed (5 ms) by a discontinuity re-sync, so
+        // the rebuild starts past the glitch's END, not at its detected start.
         if (drainSkipRemaining > 0) {
             long skipAvail = rdr.available();
             if (skipAvail > 0) {
@@ -2245,12 +4149,20 @@ public final class FftAnalyzerWorker {
             winNeeded      = needed;
             winChannelLeft = wantLeft;
             if (winBuf.length != needed) winBuf = new double[needed];
+            republishTrims();       // an FFT length change re-snaps the generator, dropping its trim
         }
         // The reference channel's mirror of the same span exists only while the
-        // mode asks for it; dropping it when the mode goes off is what makes
-        // turning the mode back on rebuild the window instead of resuming one
-        // whose reference half was not being filled.
-        boolean refWanted = alignMode == FundamentalPhaseAlignment.REFERENCE_CHANNEL;
+        // mode asks for it - the reference-channel alignment, or the pilot's
+        // trace of both its bins against it; dropping it when none
+        // asks is what makes a mode coming back on rebuild the window instead
+        // of resuming one whose reference half was not being filled.  In the
+        // pilot mode the mirror serves the trace alone - the excess is read
+        // on the analysed channel there.
+        boolean refForAlignment = alignMode == FundamentalPhaseAlignment.REFERENCE_CHANNEL;
+        boolean refForTrace     = alignMode == FundamentalPhaseAlignment.PILOT_TONE
+                && DebugSwitches.TRACE_PILOT_PHASE;
+        refMirrorForTrace = refForTrace && !refForAlignment;
+        boolean refWanted = refForAlignment || refForTrace;
         if (!refWanted) {
             refWinBuf = null;
             refHopBuf = null;
@@ -2408,7 +4320,10 @@ public final class FftAnalyzerWorker {
         // comb / FFT window mutate this copy in place, never winBuf.
         double[] samples = analyzeBuf;
 
-        int    calcMaxH = Math.max(9, prefs.getFftCalcMaxHarmonic()) - 1;
+        int    calcMaxH = Math.max(MIN_CALC_MAX_HARMONIC, prefs.getFftCalcMaxHarmonic()) - 1;
+        // "Max harmonic for THD" names the highest harmonic the sum takes; the
+        // analyser counts harmonics from the 2nd, so H(N) is N - 1 of them.
+        int    thdMaxH  = Math.max(1, prefs.getFftThdMaxHarmonic() - 1);
         double distMin  = prefs.isFftDistMinEnabled() ? prefs.getFftDistMinHz() : 0;
         double distMax  = prefs.isFftDistMaxEnabled() ? prefs.getFftDistMaxHz() : 0;
         boolean coherent = prefs.isFftCoherentAveraging();
@@ -2430,9 +4345,16 @@ public final class FftAnalyzerWorker {
         // preferences: a bench a network away snapped against ITS lane's rate
         // and holds the frequency-lock trims, so a locally recomputed hint
         // points between bins and the de-rotation locks onto the wrong one.
+        // Asked ONCE per collection (see emittedPair): a changed signal resets
+        // the collection, and the lock's own trims are written back into the
+        // held pair as they are published.  The fund-from-generator preference
+        // is tested every cycle, where the hints are formed: it can change
+        // within a collection, and the hints follow it off and on again on the
+        // pair already held.  No generator, no pair: the transition to a
+        // running one resets the collection and asks again.
+        if (!genActive) heldEmittedHz = null;
         double[] emitted = (genActive && prefs.isFftFundFromGenerator())
-                ? MessageBus.instance().request(Events.GENERATOR_EMITTED_HZ, sampleRate)
-                : null;
+                ? emittedPair(sampleRate) : null;
         double expectedFundHz = emitted == null ? Double.NaN
                 : hintHz(dualTone ? Math.min(emitted[0], emitted[1]) : emitted[0]);
 
@@ -2492,7 +4414,7 @@ public final class FftAnalyzerWorker {
             // the raw-frame cache) and the frame count is stated - the window
             // may be sized for the LARGEST hop, so inferring frames from the
             // buffer length would over-count under the random mode.
-            r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH,
+            r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH, thdMaxH,
                     window, overlap, distMin, distMax, coherent, fundRefDbFs,
                     false, expectedFundHz, slot, pendingHopSamples, averages);
         } catch (RuntimeException ex) {
@@ -2511,8 +4433,9 @@ public final class FftAnalyzerWorker {
         // A signal change (resetStatistics) landed while this window was
         // being assembled / analyzed - it straddles the old and the new
         // signal.  Discard it: neither accumulate (it would poison the
-        // freshly cleared average) nor publish (its stale fundamental would
-        // step the FLL and trim the live generator to a garbage frequency).
+        // freshly cleared average) nor publish (its spectrum is the old
+        // signal's, stamped with the epoch the reset just ended).  Returning
+        // here also keeps it away from the frequency-lock step further down.
         // The reset's pending re-anchor rebuilds from post-change samples.
         if (epochAtStart != resetEpoch.get()) {
             if (log.isInfoEnabled()) {
@@ -2535,6 +4458,7 @@ public final class FftAnalyzerWorker {
         if (discard) {
             resetAccumulator();
             completedAnalyses = 0;
+            averagesInWindow  = 0;
             firstFrameDone    = false;
         }
         lastAccumulate  = accumulate;
@@ -2608,23 +4532,85 @@ public final class FftAnalyzerWorker {
         // Fundamental phase alignment: this tick's phase excess, measured after
         // the gates (a tick that never reaches the accumulator needs none) and
         // before the accumulator, which consumes it at its two points.  Mode
-        // REFERENCE_CHANNEL measures it per tick against the opposite channel;
-        // mode PERIODICAL_SWEEP holds what its latest probe measured.
-        pendingPhiF = accumulate ? tickPhiF(alignMode, r, coherent) : 0.0;
-        boolean accumulated = accumulate
+        // REFERENCE_CHANNEL measures it per tick against the opposite channel.
+        phaseAlignUnsettled = false;
+        if (accumulate) {
+            pendingPhiF = tickPhiF(alignMode, r, coherent);
+        } else {
+            pendingPhiF  = 0.0;
+            pendingPhiF2 = 0.0;
+        }
+        // Two frames in a row without a pilot reading are a gap in the stream
+        // as far as this path can tell, so the frame goes the way a detected
+        // discontinuity's does: discarded whole, the window re-anchored, no
+        // result published - which is also what leaves the warning banner
+        // standing until the reloaded window produces one.  The frames before
+        // it were sound or bridged, so nothing is taken back out of the
+        // accumulator.
+        if (pilotResyncPending) {
+            pilotResyncPending = false;
+            if (log.isWarnEnabled()) {
+                log.warn("FFT phase alignment: two frames in a row without a pilot line - "
+                        + "window discarded and the capture re-synced through the discontinuity path");
+            }
+            onSignalDiscontinuity(rdr);
+            resultPool.release(r);
+            return IDLE_TICK_MS;
+        }
+        // A tick whose alignment has settled nothing is read and published but
+        // never averaged: the drift it carries is the last settled one, held
+        // while the notch moves on, so accumulating it would fold a stale
+        // rotation into every line.
+        boolean accumulated = accumulate && !phaseAlignUnsettled
                 && accumulateIntoForeverBuffer(r, samplesAbsStart, coherent, targetFrames);
 
-        // Per-tick bookkeeping runs EVERY tick (the averaging depth is the tick
-        // count), even on ticks whose display we skip below.
-        completedAnalyses++;
+        // The generator frequency lock, on every tick that got here - settled
+        // or not: each passed both discontinuity gates on a full post-seek
+        // window, and the lock's reading is the reference channel's tone,
+        // which the pair's settling does not touch.  A lock that stood
+        // still while the pair was unsettled left the generator wherever a
+        // false reading had put it, with nothing to bring it back.  Ahead of
+        // the unsettled return and the display throttle, so neither an
+        // unsettled tick nor a tick the display skips starves the loop.
+        applyFrequencyLock(r, alignMode, samplesAbsStart, rdr.getWritePos(), epochAtStart);
+        stampFllAverages(r);
+
+        // The pilot tracking's one-shot re-zero: armed the first time the
+        // lock reports tracking, executed by the next settled pilot frame.
+        if (!pilotRetrackDone && fll != null && fll.isTracking()) {
+            pilotRetrackDone    = true;
+            pilotRetrackPending = true;
+        }
+
+        // A tick the alignment has not settled is analysed but not averaged, so
+        // it must not reach the view either: drawn among averaged frames it
+        // shows one frame's noise floor, which reads as the average collapsing.
+        // The tick goes the way a re-sync tick goes - nothing published - and
+        // the banner raised here stands until a published frame clears it,
+        // which is the first frame that was averaged again.
+        if (phaseAlignUnsettled) {
+            if (!phaseAlignBannerUp) {
+                phaseAlignBannerUp = true;
+                publishCaptureBanner(PHASE_ALIGNING_BANNER);
+            }
+            resultPool.release(r);
+            return awaitFor(pendingHopSamples, sampleRate);
+        }
+        phaseAlignBannerUp = false;
+
+        // Per-tick bookkeeping runs EVERY tick, even on ticks whose display we
+        // skip below.  Neither counter counts the collection's first cycle:
+        // that one seeds the accumulator instead of averaging into it.
+        if (firstFrameDone) {
+            completedAnalyses++;
+            if (foreverMode || averagesInWindow < ringN) averagesInWindow++;
+        }
         firstFrameDone = true;
-        // Stop-after-N: forever mode + cap enabled.  The FftView label shows
-        // ticks − 1 (the first tick is the seed, not an average), so stop when
-        // that displayed count reaches N.  The cross-tick accumulator deepens
-        // past 2 frames.
+        // Stop-after-N: forever mode + cap enabled.  The bound is that same
+        // depth.  The cross-tick accumulator deepens past 2 frames.
         if (foreverMode
                 && prefs.isFftStopAfterNEnabled()
-                && (completedAnalyses - 1) >= prefs.getFftStopAfterN()) {
+                && completedAnalyses >= prefs.getFftStopAfterN()) {
             paused.set(true);
             if (display != null && !display.isDisposed()) {
                 display.asyncExec(() ->
@@ -2650,6 +4636,7 @@ public final class FftAnalyzerWorker {
 
         if (accumulated) {
             overlayAccumulatorOnto(r);          // r.amplitudeDbFs <- RAW cumulative average
+            stampDacFundamentalPhase(r, alignMode);   // on the SAME spectrum the peaks come from
             r.captureRawPeaks();                // refresh raw F + peak phasors off the averaged re/im
         }
         // The whole post-average pipeline - mains rejection -> recomputeStats ->
@@ -2665,8 +4652,7 @@ public final class FftAnalyzerWorker {
                                 : (r.freqResolution > 0 ? r.fundamentalHzRefined / r.freqResolution : 0.0))
                 : Double.NaN;
         r.channelLeft      = wantLeft;
-        r.samplesAbsStart  = samplesAbsStart;   // for the FLL's real-time dt
-        r.writePos         = rdr.getWritePos();   // live capture head - where a correction issued now lands
+        r.samplesAbsStart  = samplesAbsStart;   // the window's absolute start
         r.epoch            = epochAtStart;      // consumers drop frames from a pre-reset epoch
         r.gateRejectDbFs   = lastRejectBlockDbFs;   // debug: last gate-rejected block + verdict
         r.gateRejectGates  = lastRejectGates;
@@ -2679,8 +4665,8 @@ public final class FftAnalyzerWorker {
             log.warn("1. FFT analyze took {} ms",
                     String.format("%.2f", (System.nanoTime() - startAnalyze) / 1_000_000.0));
         }
-        // Final epoch gate before the hand-off: a stale fundamental published
-        // after a reset would feed the FLL one garbage trim.
+        // Final epoch gate before the hand-off: a reset that landed during the
+        // display rebuild leaves this a spectrum of the old signal.
         if (epochAtStart != resetEpoch.get()) {
             if (log.isInfoEnabled()) {
                 log.info("Signal changed mid-analysis - straddling window discarded before publish");
@@ -2738,6 +4724,15 @@ public final class FftAnalyzerWorker {
     public void drainPendingResult() {
         FftResult slot = latestForUi.getAndSet(null);
         if (slot == null) return;
+        // A slot parked here across a reset or a change of the generated signal
+        // carries the spectrum of what was measured BEFORE it: shown, it flashes
+        // as the new signal's reading, and measured on, it reports the old
+        // signal's products.  It dies where it waited instead of being handed
+        // over for its consumers to recognise.
+        if (slot.epoch != resetEpoch.get()) {
+            resultPool.release(slot);
+            return;
+        }
         try {
             MessageBus.instance().publish(Events.FFT_RESULT_AVAILABLE, slot);
         } catch (Exception e) {
@@ -2810,8 +4805,7 @@ public final class FftAnalyzerWorker {
         if (prefs.isFftManualFundEnabled()) {
             double v = prefs.getFftManualFundVrms();
             double dbv = (v > 0) ? 20.0 * Math.log10(v) : Double.NaN;
-            return dbv - AudioBackend.instance().calibrationOrDefault(true)
-                    .dbvOffsetDb(prefs.getFftChannel());   // NaN propagates
+            return dbv - AudioBackend.instance().analysedChannelDbvOffsetDb();   // NaN propagates
         }
         return Double.NaN;
     }

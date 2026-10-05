@@ -106,6 +106,29 @@ public final class GeneratorLane {
     /** The run the lane was last started with - what {@link #restart()}
      *  replays, so no caller re-derives anything for a stop/start pair. */
     private volatile GeneratorRun lastRun;
+    /** The first pilot tone's SELECTED frequency in Hz, 0 while no pilot is
+     *  asked for.  A pilot has no preference of its own - it is elected for the
+     *  analysis grid - so the selected value is remembered here the way the
+     *  snap targets are remembered in the preferences: a frequency-lock trim
+     *  moves the emitted pilot without touching it, and
+     *  {@link #reapplySnap()} puts the pilot back on it. */
+    private volatile double pilotHz1;
+    /** The second pilot tone's selected frequency in Hz, remembered exactly as
+     *  the first's.  Not a positive frequency while only one line is asked for:
+     *  NaN as the alignment states a single line, 0 while no pilot stands at
+     *  all - the generator emits the second line on a positive value alone. */
+    private volatile double pilotHz2;
+    /** The pilot tones' level in dBV, one value for both lines and meaningful
+     *  while {@link #pilotHz1} is set - re-applied together with the
+     *  frequencies. */
+    private volatile double pilotLevelDbv;
+    /** The frequency tone 1 was last TRIMMED to by its lock, 0 while no trim
+     *  stands (no lock has spoken yet, or a new nominal has dropped it).  The
+     *  local path applies a trim by setting the running frequency, so without
+     *  this the lane could no longer tell the corrected value from the
+     *  nominal one - and the pilots need the difference, see
+     *  {@link #setPilotTones}. */
+    private volatile double tone1TrimmedHz;
 
     // -------------------------------------------------------------------------
     // Start / stop / restart
@@ -267,13 +290,24 @@ public final class GeneratorLane {
      *  cannot take live AND that alters the run itself.  The waveform is such a
      *  change: the run carries the form, so replaying the stored one would
      *  rebuild the generator around the form that was started rather than the
-     *  one just selected. */
+     *  one just selected.
+     *
+     *  <p>The rebuilt tone carries no pilots and stands at the frequency the
+     *  run names: the pilots are the analysis's own lines, which it asks for
+     *  again once it has restarted its alignment on the changed signal, and
+     *  the lock's correction belonged to the tone that has just ended.  So
+     *  both memories are dropped here - a pilot re-issued from this side would
+     *  ride the old trim while the tone itself came up on its nominal. */
     public synchronized PlaybackStateEnum restart(GeneratorRun run) {
         if (run == null) {
             return lastStartState;   // never started - nothing to replay
         }
         stop();
-        return start(run);
+        PlaybackStateEnum state = start(run);
+        pilotHz1       = 0.0;
+        pilotHz2       = 0.0;
+        tone1TrimmedHz = 0.0;
+        return state;
     }
 
     // -------------------------------------------------------------------------
@@ -795,14 +829,28 @@ public final class GeneratorLane {
      *  apart, so that a trim can be reset without losing what the operator
      *  typed. */
     public void setFrequency(double hz) {
+        // A new nominal ends whatever the lock had corrected: the trim it
+        // found belongs to the frequency it was measured at.
+        tone1TrimmedHz = 0.0;
         GeneratorControls g = live();
         if (g != null) g.setFrequency(hz);
     }
 
-    /** The frequency-lock loop's absolute corrected frequency for tone 1.  On
-     *  the local DDS that is simply the running frequency; a remote generator
-     *  takes it as a TRIM, which its {@code trimReset} can undo and which does
-     *  not overwrite the nominal the operator entered. */
+    /**
+     * The frequency-lock loop's absolute corrected frequency for tone 1.  On
+     * the local DDS that is simply the running frequency; a remote generator
+     * takes it as a TRIM, which its {@code trimReset} can undo and which does
+     * not overwrite the nominal the operator entered.
+     *
+     * <p>Running pilots follow every correction: all the lines come from one
+     * DDS, and the mismatch between the two converters' clocks is one ratio
+     * that moves every line in proportion to its frequency.  Re-issuing each
+     * pilot at its selected frequency times that ratio holds it on its bin -
+     * which is what lets the analysis read a pilot AT its bin instead of
+     * searching for it - and keeps the lines in the exact ratio of their
+     * bins, which is what the alignment's reading of the pilots against the
+     * fundamental rests on.  A pilot has no lock of its own.
+     */
     public void trimFrequency(double hz) {
         RemoteGenerator remote = remote();
         if (remote != null) {
@@ -810,6 +858,11 @@ public final class GeneratorLane {
             return;
         }
         setFrequency(hz);
+        // After the setter, which drops a stale trim: this IS the standing one.
+        tone1TrimmedHz = hz;
+        if (pilotHz1 > 0.0) {
+            setPilotTones(pilotHz1, pilotHz2, pilotLevelDbv);
+        }
     }
 
     /** The same for tone 2 of a dual-tone signal. */
@@ -872,6 +925,78 @@ public final class GeneratorLane {
     public void setDualToneFrequency2(double hz) {
         GeneratorControls g = live();
         if (g != null) g.setDualToneFrequency2(hz);
+    }
+
+    /**
+     * Live-applies the PILOT tones: two generated lines far above the
+     * protected harmonics whose phases the analysis reads on every FFT frame
+     * as a time-base reference.  {@code hz1} and {@code hz2} are the
+     * frequencies the selection elected on the capture grid, {@code hz2} NaN
+     * when it found room for one line only; they are remembered as given, so a
+     * later {@link #reapplySnap()} puts the pilots back on exactly them.
+     * No-op if not running.
+     *
+     * <p>What is ISSUED is each frequency times the relative correction tone
+     * 1's lock has found - the running tone 1 over its nominal.  The two
+     * converters differ by one clock ratio, and a clock ratio moves every
+     * line in proportion to its frequency: at a pilot's bin, which is an
+     * order of magnitude above the fundamental's, the same mismatch is
+     * several bins wide.  Carried on tone 1's ratio a pilot sits on its
+     * bin whenever the fundamental does, and the lines keep the exact
+     * ratio of their bins, which the alignment's reading of the pilots
+     * against the fundamental rests on.  A pilot started before any trim
+     * stands is issued unchanged and follows the first trim that comes.
+     *
+     * <p>Nothing is sent to a REMOTE generator: every line must come from
+     * ONE clock for the pilots to say anything about the fundamental's time
+     * base, so the pilots exist for the local DDS only.
+     */
+    public void setPilotTones(double hz1, double hz2, double levelDbv) {
+        if (remote() != null) return;
+        pilotHz1 = hz1;
+        pilotHz2 = hz2;
+        pilotLevelDbv = levelDbv;
+        GeneratorControls g = live();
+        if (g != null) {
+            // NaN times the ratio is NaN, so a one-line request stays one line.
+            double ratio = tone1TrimRatio();
+            g.setPilotTones(hz1 * ratio, hz2 * ratio, levelDbv);
+        }
+    }
+
+    /** The relative frequency correction standing on tone 1: its trimmed
+     *  frequency over the nominal the trim was measured against, and exactly
+     *  1 while no trim stands.  Every line comes from one DDS clock, so this
+     *  ratio is the converter-pair mismatch and applies to the pilots as
+     *  it does to the fundamental. */
+    private double tone1TrimRatio() {
+        double trimmed = tone1TrimmedHz;
+        double nominal = commandedFrequency();
+        if (trimmed <= 0.0 || nominal <= 0.0) {
+            return 1.0;
+        }
+        return trimmed / nominal;
+    }
+
+    /** Drops both pilots from the running generator and forgets the selected
+     *  frequencies, so a later snap re-apply carries no pilot.  Local
+     *  generator only, see {@link #setPilotTones}. */
+    public void clearPilotTones() {
+        if (remote() != null) return;
+        pilotHz1 = 0.0;
+        pilotHz2 = 0.0;
+        GeneratorControls g = live();
+        if (g != null) g.clearPilotTones();
+    }
+
+    /** A new level for the pilot lines: running lines are re-requested at the
+     *  same frequencies, which the generator takes as a re-aim that carries
+     *  each line's phase across - so an average in progress goes on
+     *  undisturbed.  With no pilot running nothing is touched: the pilots are
+     *  the analyser's, and its next request carries the level it wants. */
+    public void setPilotLevel(double levelDbv) {
+        if (pilotHz1 <= 0.0) return;
+        setPilotTones(pilotHz1, pilotHz2, levelDbv);
     }
 
     /** Live-applies the dual-tone per-tone amplitude percentages.
@@ -1095,6 +1220,11 @@ public final class GeneratorLane {
         setFrequency(commandedFrequency());
         if (prefs.getGenSignalForm().isDualTone()) {
             setDualToneFrequency2(snapDualTone(prefs.getGenDualToneFreq2Hz()));
+        }
+        // The pilots' selected frequencies are bins of the ANALYSIS grid, not
+        // preferences, so they come from this lane's own memory of them.
+        if (pilotHz1 > 0.0) {
+            setPilotTones(pilotHz1, pilotHz2, pilotLevelDbv);
         }
     }
 

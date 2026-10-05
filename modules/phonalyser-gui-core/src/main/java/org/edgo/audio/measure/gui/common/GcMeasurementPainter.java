@@ -116,6 +116,27 @@ public final class GcMeasurementPainter implements MeasurementPainter {
     @Override public void drawImage(Image image, int x, int y)          { gc.drawImage(image, x, y); }
     @Override public void drawText(String s, int x, int y, boolean t)   { gc.drawText(s, x, y, t); }
 
+    @Override public void drawTextAt(String s, double x, double y, boolean transparent) {
+        // The text rasteriser grid-fits: even drawn under a transform carrying
+        // a sub-pixel remainder, each glyph is snapped back onto the pixel
+        // grid, so transformed drawText still moves in whole pixels.  The
+        // string is therefore drawn as its outline path: addString places the
+        // glyph outlines at the exact fractional origin and the antialiased
+        // path fill rasterises them between pixels - the same primitive the
+        // sub-pixel disc uses.  The background is never painted here, so the
+        // draw is transparent regardless of the flag.
+        Path p = new Path(gc.getDevice());
+        Color bg = gc.getBackground();
+        try {
+            p.addString(s, (float) x, (float) y, gc.getFont());
+            gc.setBackground(gc.getForeground());   // fillPath paints with the background colour
+            gc.fillPath(p);
+        } finally {
+            gc.setBackground(bg);
+            p.dispose();
+        }
+    }
+
     /** Builds a 24-bit {@code ImageData} with a per-pixel alpha channel (the same
      *  {@code ImageData} + {@code alphaData} shape {@code ScopePhosphor.readback}
      *  produces for the screenshot), all pixels solid {@code tint}, and draws it scaled

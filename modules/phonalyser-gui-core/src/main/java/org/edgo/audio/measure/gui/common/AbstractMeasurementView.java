@@ -520,6 +520,21 @@ public abstract class AbstractMeasurementView extends Canvas {
         p.drawText(s, x, y, true);
     }
 
+    /** Fractional-origin variant of {@link #drawOutlinedText(GC, String, int,
+     *  int)} for captions anchored to a sub-pixel chart position - shadow and
+     *  face keep the same one-pixel offset on the fractional origin. */
+    protected final void drawOutlinedText(GC gc, String s, double x, double y) {
+        drawOutlinedText(new GcMeasurementPainter(gc), s, x, y);
+    }
+
+    protected final void drawOutlinedText(MeasurementPainter p, String s, double x, double y) {
+        Color fg = p.getForeground();
+        p.setForeground(color(ColorRole.BACKGROUND));
+        p.drawTextAt(s, x + 1, y + 1, true);
+        p.setForeground(fg);
+        p.drawTextAt(s, x, y, true);
+    }
+
     /** Right-aligned variant of {@link #drawOutlinedText} - places
      *  the text so its right edge lands at {@code rightX}. */
     protected final void drawOutlinedRightAligned(GC gc, String s, int rightX, int y) {

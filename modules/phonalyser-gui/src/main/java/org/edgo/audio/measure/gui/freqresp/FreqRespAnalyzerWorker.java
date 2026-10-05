@@ -227,6 +227,11 @@ public final class FreqRespAnalyzerWorker {
         // The silence before the chirp: the fixed window the deconvolution
         // measures each channel's DC offset on, plus the operator's lead-in.
         double leadInSec = FreqRespCalHelper.OFFSET_LEAD_IN_SEC + prefs.getFreqRespLeadInSec();
+        // The chirp is played over the SWEPT band - the configured band widened
+        // at both ends - and the analyzer's deconvolution reference is built by
+        // the same rule, so the two are one chirp.
+        double[] swept = FreqRespConstants.sweptBandHz(prefs.getFreqRespStartHz(),
+                prefs.getFreqRespStopHz(), backend.getInputSampleRate(), playbackRate);
         return FreqRespAnalyzerConfig.builder()
                 .outDevice(out)
                 .inDevice(in)
@@ -253,7 +258,7 @@ public final class FreqRespAnalyzerWorker {
                 // every local backend plays it from here.  Its sample counts
                 // describe what the DAC emits, so they are on the playback clock.
                 .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
-                        prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz(),
+                        swept[0], swept[1],
                         prefs.getFreqRespDurationSec(), leadInSec,
                         sweepAmplitudeVrms, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R)))
                 .build();

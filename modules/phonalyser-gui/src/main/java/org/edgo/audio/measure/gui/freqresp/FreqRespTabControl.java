@@ -723,8 +723,8 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // count), so it can't use the ordinal-based Bindings.combo - the
         // hand-wired helper mirrors that contract over the int value array.
         // The sweep duration is DERIVED by the controller's own fftSize /
-        // leadIn subscriptions; the tab only renders it - the label + tile
-        // follow the derived pref and the chosen size.
+        // leadIn subscriptions; the tab only renders - the label shows the
+        // whole capture the chosen size holds, the tile the chosen size.
         bindFftSizeCombo(fftSizeCombo, prefs.freqRespFftSizeProperty());
         Bindings.onChange(toolbarTabs, prefs.freqRespFftSizeProperty(), n -> {
             refreshFftSizeLabel();
@@ -928,10 +928,14 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     /** Updates the FFT-size label's caption to "FFT size (D.Ds)" where
-     *  D.D is the current derived sweep duration. */
+     *  D.D is the whole capture the chosen size holds at the capture rate -
+     *  lead-in, sweep and tail together, which is what the measurement
+     *  takes; the sweep alone is the derived remainder and is not shown. */
     private void refreshFftSizeLabel() {
         if (fftSizeLabel == null || fftSizeLabel.isDisposed()) return;
-        double dur = Preferences.instance().getFreqRespDurationSec();
+        Preferences prefs = Preferences.instance();
+        double dur = prefs.getFreqRespFftSize()
+                / (double) Math.max(1, prefs.current().getInputSampleRate());
         fftSizeLabel.setText(I18n.t("freqResp.settings.fftSize")
                 + " (" + String.format(Locale.ROOT, "%.1f", dur) + "s)");
         fftSizeLabel.requestLayout();

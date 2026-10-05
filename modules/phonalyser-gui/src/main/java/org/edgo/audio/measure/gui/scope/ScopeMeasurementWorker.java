@@ -737,7 +737,7 @@ public final class ScopeMeasurementWorker {
                 data = measTailBuf;
             }
         }
-        SignalMeasurements result = SignalMeasurements.from(data, measLen, sampleRate, peakVolts, false);
+        SignalMeasurements result = new SignalMeasurements(data, measLen, sampleRate, peakVolts, false);
         if (Double.isNaN(result.getFrequency())) {
             // Weak / noisy signal: the broad-band fundamental search is too
             // costly for this thread - it would drop the 10 Hz cadence and
@@ -754,7 +754,7 @@ public final class ScopeMeasurementWorker {
             // in dual-tone mode: the single-value frequency is cleared by
             // withoutTimes() below, so re-pinning it would be wasted work - the
             // two dual-tone frequencies are measured separately just after.
-            double precise = SignalMeasurements.refineFrequencyAround(
+            double precise = result.refineFrequencyAround(
                     raw, avail, sampleRate, result.getFrequency(), FREQ_REFINE_HALF_HZ);
             if (Double.isFinite(precise)) result = result.withFrequency(precise);
         }
@@ -791,12 +791,12 @@ public final class ScopeMeasurementWorker {
                 double seed1 = emitted[0];
                 double seed2 = emitted[1];
                 if (seed1 > 0) {
-                    double refined = SignalMeasurements.refineFrequencyAround(
+                    double refined = result.refineFrequencyAround(
                             src, avail, sampleRate, seed1, FREQ_REFINE_HALF_HZ);
                     if (Double.isFinite(refined)) r1 = refined;
                 }
                 if (seed2 > 0) {
-                    double refined = SignalMeasurements.refineFrequencyAround(
+                    double refined = result.refineFrequencyAround(
                             src, avail, sampleRate, seed2, FREQ_REFINE_HALF_HZ);
                     if (Double.isFinite(refined)) r2 = refined;
                 }
@@ -825,7 +825,7 @@ public final class ScopeMeasurementWorker {
         float[] buf = freqScanBuf;
         freqScanExec.execute(() -> {
             try {
-                double f = SignalMeasurements.from(buf, n, sampleRate, peakVolts, true).getFrequency();
+                double f = new SignalMeasurements(buf, n, sampleRate, peakVolts, true).getFrequency();
                 if (left) asyncFreqLeft = f; else asyncFreqRight = f;
             } finally {
                 freqScanBusy.set(false);

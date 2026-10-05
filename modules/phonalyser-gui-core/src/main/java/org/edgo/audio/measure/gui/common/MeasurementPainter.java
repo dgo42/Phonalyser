@@ -124,6 +124,15 @@ public interface MeasurementPainter {
      *  glyph background unfilled (the GC {@code isTransparent} flag). */
     void drawText(String s, int x, int y, boolean transparent);
 
+    /** Draws {@code s} with its origin at the FRACTIONAL ({@code x}, {@code y}) -
+     *  the text counterpart of {@link #fillOvalAt}, for captions anchored to a
+     *  sub-pixel chart position.  A backend without sub-pixel text placement
+     *  rounds to the nearest pixel, which is the plain {@link #drawText}
+     *  placement. */
+    default void drawTextAt(String s, double x, double y, boolean transparent) {
+        drawText(s, (int) Math.round(x), (int) Math.round(y), transparent);
+    }
+
     // --- Stroked path (NanoVG-style; GC backend uses an SWT Path internally) --
 
     void beginPath();
