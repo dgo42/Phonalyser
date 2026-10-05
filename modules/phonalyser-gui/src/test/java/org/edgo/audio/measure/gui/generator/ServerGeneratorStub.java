@@ -553,6 +553,19 @@ public final class ServerGeneratorStub implements AudioDeviceManager, RemoteGene
         record("clearCompensation");
     }
 
+    /** Recorded like every other command, so a test can assert that the pilot
+     *  controls never reach a bench at all - a recorded call here is the
+     *  routing defect, not the proof of one. */
+    @Override
+    public void setPilotTones(double hz1, double hz2, double levelDbv) {
+        record("setPilotTones", hz1, hz2, levelDbv);
+    }
+
+    @Override
+    public void clearPilotTones() {
+        record("clearPilotTones");
+    }
+
     // -------------------------------------------------------------------------
     // The device manager - enumeration only; nothing here opens a line
     // -------------------------------------------------------------------------

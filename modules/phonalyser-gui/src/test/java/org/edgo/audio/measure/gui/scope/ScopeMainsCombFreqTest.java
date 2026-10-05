@@ -65,7 +65,8 @@ class ScopeMainsCombFreqTest {
             int n = 96_000;
             float[] raw = toneUnderMains(fs, n, 1e-4, 4e-4);     // mains 4× the tone
             double seed = TONE_HZ - 0.3;                          // simulate comb pull
-            double f = SignalMeasurements.refineFrequencyAround(raw, n, fs, seed, 2.0);
+            double f = new SignalMeasurements(raw, n, fs, 1.0, false)
+                    .refineFrequencyAround(raw, n, fs, seed, 2.0);
             assertTrue(Math.abs(f - TONE_HZ) < 0.01,
                     String.format("fs=%.0f: got %.5f, err %+.5f", fs, f, f - TONE_HZ));
         }
@@ -79,7 +80,7 @@ class ScopeMainsCombFreqTest {
         double fs = 384_000;
         int n = 96_000;
         float[] raw = toneUnderMains(fs, n, 1e-4, 4e-4);
-        double fRaw = SignalMeasurements.from(raw, n, fs, 1.0, true).getFrequency();
+        double fRaw = new SignalMeasurements(raw, n, fs, 1.0, true).getFrequency();
         assertTrue(Math.abs(fRaw - TONE_HZ) > 1.0,
                 "expected raw-direct to lock onto mains, not the tone; got " + fRaw);
     }
@@ -102,8 +103,9 @@ class ScopeMainsCombFreqTest {
         int measLen = n - from;
         float[] tail = new float[measLen];
         System.arraycopy(combed, from, tail, 0, measLen);
-        double seed = SignalMeasurements.from(tail, measLen, fs, 1.0, true).getFrequency();
-        double f = SignalMeasurements.refineFrequencyAround(raw, n, fs, seed, 2.0);
+        SignalMeasurements tailMeas = new SignalMeasurements(tail, measLen, fs, 1.0, true);
+        double seed = tailMeas.getFrequency();
+        double f = tailMeas.refineFrequencyAround(raw, n, fs, seed, 2.0);
         assertTrue(Math.abs(f - TONE_HZ) < 0.01,
                 String.format("seed=%.4f -> %.5f, err %+.5f", seed, f, f - TONE_HZ));
     }

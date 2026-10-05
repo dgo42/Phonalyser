@@ -118,8 +118,7 @@ class FreqRespCalDeEmbedTest {
         deEmbedByInterpolatingEveryBin(reference, cal, linPerMag);
         new FftAnalyzer().recomputeStats(reference);
 
-        FreqRespCalHelper.applyInverseInPlace(cascaded,
-                withNoiseInverse(cascaded, List.of(cal)), null);
+        FreqRespCalHelper.applyInverseInPlace(cascaded, withNoiseInverse(cascaded, List.of(cal)));
         new FftAnalyzer().recomputeStats(cascaded);
 
         assertNotEquals(uncorrectedFundamentalDbFs, cascaded.amplitudeDbFs[FUNDAMENTAL_BIN],
@@ -161,7 +160,7 @@ class FreqRespCalDeEmbedTest {
         deEmbedByInterpolatingEveryBin(sequential, second, linPerMag);
 
         FreqRespCalHelper.applyInverseInPlace(cascaded,
-                withNoiseInverse(cascaded, List.of(first, second)), null);
+                withNoiseInverse(cascaded, List.of(first, second)));
 
         assertNotEquals(uncorrected, cascaded.amplitudeDbFs[FUNDAMENTAL_BIN],
                 "neither path corrected anything, so the comparison below is empty");
@@ -182,9 +181,12 @@ class FreqRespCalDeEmbedTest {
     /**
      * A tone-only row writes ONE value per tone - the response at the tone
      * frequency - across that tone's whole main lobe, and touches nothing else.
-     * The lobe bins are checked against the response itself (magnitude divided,
-     * phase rotated); every other bin must still carry the analyser's own
-     * numbers, unchanged in all four of its outputs.
+     * Inside the lobe the value is applied as a stretch: the phase turns every
+     * bin in full, the magnitude divides the peak in full and a bin on the
+     * floor not at all, a bin between by its log-height above the floor - the
+     * lobe grows taller on its feet instead of lifting off the floor as a
+     * box.  Every other bin must still carry the analyser's own numbers,
+     * unchanged in all four of its outputs.
      */
     @Test
     @DisplayName("a tone-only row corrects the tone lobes and nothing else")
@@ -193,23 +195,36 @@ class FreqRespCalDeEmbedTest {
         FftResult corrected = analyzedTone();
         FftResult raw = corrected.deepCopy();
         boolean[] inLobe = toneLobeBins(raw, cal);
-        int[] fundamentalSpan = lobeSpanAt(raw, raw.fundamentalHzRefined);
+        ToneLobe fundamentalLobe = lobeSpanAt(raw, raw.fundamentalHzRefined);
         double[] h = FreqRespCalHelper.interpolate(cal, raw.fundamentalHzRefined);
+        ToneLobeLift lift = new ToneLobeLift();
 
         int reported = FreqRespCalHelper.applyInverseInPlace(corrected,
-                toneOnlyInverse(corrected, List.of(cal)), toneBinsOf(corrected));
+                toneOnlyInverse(corrected, List.of(cal)));
 
         assertTrue(reported > 0, "nothing was corrected, so the checks below are empty");
-        for (int k = fundamentalSpan[0]; k <= fundamentalSpan[1]; k++) {
+        double peakLift = 0.0;
+        double footLift = Double.POSITIVE_INFINITY;
+        for (int k = fundamentalLobe.lo(); k <= fundamentalLobe.hi(); k++) {
             double rawMag = Math.hypot(raw.re[k], raw.im[k]);
             double newMag = Math.hypot(corrected.re[k], corrected.im[k]);
-            assertEquals(rawMag / h[0], newMag, slack(rawMag / h[0]),
-                    "bin " + k + " of the fundamental lobe is divided by the response magnitude");
+            double t = lift.stretchExponent(rawMag, fundamentalLobe.floorMag(), fundamentalLobe.peakMag());
+            double expected = rawMag * Math.pow(1.0 / h[0], t);
+            assertEquals(expected, newMag, slack(expected),
+                    "bin " + k + " of the fundamental lobe is divided by the response magnitude "
+                            + "raised to its stretch exponent");
             double turned = wrapDegrees(corrected.phaseDeg[k] - raw.phaseDeg[k]
                     + Math.toDegrees(h[1]));
             assertEquals(0.0, turned, PHASE_DEGREE_TOLERANCE,
                     "bin " + k + " of the fundamental lobe is rotated by the response phase");
+            double liftDb = 20.0 * Math.log10(newMag / rawMag);
+            peakLift = Math.max(peakLift, liftDb);
+            footLift = Math.min(footLift, liftDb);
         }
+        assertEquals(-20.0 * Math.log10(h[0]), peakLift, 1e-9, "the peak gets the full lift");
+        assertTrue(footLift < peakLift / TWO,
+                "the lobe's feet get less than half the peak's lift - a dome, not a box; feet "
+                        + footLift + " dB against the peak's " + peakLift + " dB");
         for (int k = 0; k <= FFT_SIZE / 2; k++) {
             if (inLobe[k]) continue;
             assertEquals(raw.re[k], corrected.re[k], "real part of untouched bin " + k);
@@ -237,11 +252,11 @@ class FreqRespCalDeEmbedTest {
         boolean[] inLobe = toneLobeBins(raw, tones);
         double binWidth = SAMPLE_RATE_HZ / (double) FFT_SIZE;
         double[] toneSet = FreqRespCalHelper.toneFrequencies(mixed);
-        int[][] spans = FreqRespCalHelper.toneLobeSpans(mixed, toneSet);
+        ToneLobe[] spans = FreqRespCalHelper.toneLobeSpans(mixed, toneSet);
 
-        double[][] inv = FreqRespCalHelper.cascadeInverse(List.of(wide), List.of(tones),
+        InverseCascade inv = FreqRespCalHelper.cascadeInverse(List.of(wide), List.of(tones),
                 toneSet, spans, mixed.fftSize, mixed.sampleRate);
-        int reported = FreqRespCalHelper.applyInverseInPlace(mixed, inv, null);
+        int reported = FreqRespCalHelper.applyInverseInPlace(mixed, inv);
 
         assertTrue(reported > 0, "nothing was corrected, so the checks below are empty");
         int lobeBin = FUNDAMENTAL_BIN;
@@ -281,7 +296,7 @@ class FreqRespCalDeEmbedTest {
         }
 
         int reported = FreqRespCalHelper.applyInverseInPlace(frame,
-                toneOnlyInverse(frame, List.of(cal)), toneBinsOf(frame));
+                toneOnlyInverse(frame, List.of(cal)));
 
         assertTrue(expected > 0, "the tone set must reach the spectrum, or nothing is asked here");
         assertEquals(expected, reported, "every lobe bin and no other bin is written");
@@ -320,17 +335,17 @@ class FreqRespCalDeEmbedTest {
     void aMovedLobeSpanShowsUpInTheSpans() {
         FftResult frame = analyzedTone();
         double[] tones = FreqRespCalHelper.toneFrequencies(frame);
-        int[][] spans = FreqRespCalHelper.toneLobeSpans(frame, tones);
-        int[] span = lobeSpanAt(frame, frame.fundamentalHzRefined);
+        ToneLobe[] spans = FreqRespCalHelper.toneLobeSpans(frame, tones);
+        ToneLobe span = lobeSpanAt(frame, frame.fundamentalHzRefined);
 
         FftResult widened = frame.deepCopy();
-        int beyond = span[1] + 1;
+        int beyond = span.hi() + 1;
         widened.re[beyond] = frame.re[frame.fundamentalBin] / TWO;
         widened.im[beyond] = 0.0;
-        int[][] widenedSpans = FreqRespCalHelper.toneLobeSpans(widened, tones);
+        ToneLobe[] widenedSpans = FreqRespCalHelper.toneLobeSpans(widened, tones);
 
         assertTrue(beyond <= FFT_SIZE / 2, "the widened bin must be inside the spectrum");
-        assertFalse(Arrays.deepEquals(spans, widenedSpans),
+        assertFalse(FreqRespCalHelper.sameGeometry(spans, widenedSpans),
                 "the lobe now reaches a bin the held response does not cover");
     }
 
@@ -341,14 +356,14 @@ class FreqRespCalDeEmbedTest {
     void anUnchangedFrameKeepsTheSameSpans() {
         FftResult frame = analyzedTone();
         double[] tones = FreqRespCalHelper.toneFrequencies(frame);
-        int[][] spans = FreqRespCalHelper.toneLobeSpans(frame, tones);
+        ToneLobe[] spans = FreqRespCalHelper.toneLobeSpans(frame, tones);
 
         FftResult again = frame.deepCopy();
         double[] againTones = FreqRespCalHelper.toneFrequencies(again);
-        int[][] againSpans = FreqRespCalHelper.toneLobeSpans(again, againTones);
+        ToneLobe[] againSpans = FreqRespCalHelper.toneLobeSpans(again, againTones);
 
         assertTrue(Arrays.equals(tones, againTones), "an identical later frame's tone set");
-        assertTrue(Arrays.deepEquals(spans, againSpans), "and its lobe spans");
+        assertTrue(FreqRespCalHelper.sameGeometry(spans, againSpans), "and its lobe spans");
         assertTrue(spans.length > 1 + MAX_HARMONIC,
                 "absent tones keep their slot, so the list is the full tone set and two "
                         + "frames always compare slot for slot");
@@ -369,8 +384,8 @@ class FreqRespCalDeEmbedTest {
         int nyquistBin = FFT_SIZE / 2;
         double binWidth = SAMPLE_RATE_HZ / (double) FFT_SIZE;
 
-        double[][] inv = withNoiseInverse(frame, List.of(cal));
-        FreqRespCalHelper.applyInverseInPlace(frame, inv, null);
+        InverseCascade inv = withNoiseInverse(frame, List.of(cal));
+        FreqRespCalHelper.applyInverseInPlace(frame, inv);
 
         assertTrue(nyquistBin * binWidth > cal.freqs[cal.freqs.length - 1],
                 "the test grid must reach past the calibration's top point, or there is no "
@@ -445,12 +460,12 @@ class FreqRespCalDeEmbedTest {
     void theArrayCarriesOneValuePerBinOfItsOwnGrid() {
         FreqRespCalibration cal = notchLikeCal(1.0);
 
-        double[][] shortInv = withNoiseInverse(flatFrame(FFT_SIZE, SAMPLE_RATE_HZ), List.of(cal));
-        double[][] longInv =
+        InverseCascade shortInv = withNoiseInverse(flatFrame(FFT_SIZE, SAMPLE_RATE_HZ), List.of(cal));
+        InverseCascade longInv =
                 withNoiseInverse(flatFrame(DOUBLED_FFT_SIZE, SAMPLE_RATE_HZ), List.of(cal));
 
-        assertEquals(FFT_SIZE / 2 + 1, shortInv[0].length, "one value per bin up to Nyquist");
-        assertEquals(DOUBLED_FFT_SIZE / 2 + 1, longInv[0].length,
+        assertEquals(FFT_SIZE / 2 + 1, shortInv.invRe().length, "one value per bin up to Nyquist");
+        assertEquals(DOUBLED_FFT_SIZE / 2 + 1, longInv.invRe().length,
                 "one value per bin up to Nyquist");
         assertEquals(0.0, FreqRespCalHelper.gainDbAt(shortInv, DOUBLED_FFT_SIZE / 2),
                 "a bin index past the sampled grid carries no correction");
@@ -498,24 +513,17 @@ class FreqRespCalDeEmbedTest {
     }
 
     /** The cascade of with-noise rows alone, sampled on the frame's grid. */
-    private double[][] withNoiseInverse(FftResult r, List<FreqRespCalibration> rows) {
+    private InverseCascade withNoiseInverse(FftResult r, List<FreqRespCalibration> rows) {
         double[] tones = FreqRespCalHelper.toneFrequencies(r);
         return FreqRespCalHelper.cascadeInverse(rows, List.of(), tones,
                 FreqRespCalHelper.toneLobeSpans(r, tones), r.fftSize, r.sampleRate);
     }
 
     /** The cascade of tone-only rows alone, sampled on the frame's grid. */
-    private double[][] toneOnlyInverse(FftResult r, List<FreqRespCalibration> rows) {
+    private InverseCascade toneOnlyInverse(FftResult r, List<FreqRespCalibration> rows) {
         double[] tones = FreqRespCalHelper.toneFrequencies(r);
         return FreqRespCalHelper.cascadeInverse(List.of(), rows, tones,
                 FreqRespCalHelper.toneLobeSpans(r, tones), r.fftSize, r.sampleRate);
-    }
-
-    /** The fast path's bin list for the frame's own tone set. */
-    private int[] toneBinsOf(FftResult r) {
-        double[] tones = FreqRespCalHelper.toneFrequencies(r);
-        return FreqRespCalHelper.toneBins(FreqRespCalHelper.toneLobeSpans(r, tones),
-                r.fftSize / 2);
     }
 
     /** Linear amplitude per unit of raw bin magnitude, read off the
@@ -526,17 +534,18 @@ class FreqRespCalDeEmbedTest {
         return fundMag > 0.0 ? r.fundamentalLinear / fundMag : 0.0;
     }
 
-    /** Inclusive lobe span of the tone at {@code toneHz}, found the way the
-     *  correction finds it: peak bin, robust local floor, walk out to the
-     *  floor. */
-    private int[] lobeSpanAt(FftResult r, double toneHz) {
+    /** The lobe of the tone at {@code toneHz}, found the way the correction
+     *  finds it: peak bin, robust local floor, walk out to the floor, the
+     *  floor and the peak's magnitude carried for the stretch. */
+    private ToneLobe lobeSpanAt(FftResult r, double toneHz) {
         int half = r.fftSize / 2;
         double binWidth = r.sampleRate / (double) r.fftSize;
         IntToDoubleFunction mag = k -> Math.hypot(r.re[k], r.im[k]);
         ToneLobeLift lift = new ToneLobeLift();
         int peak = (int) Math.round(toneHz / binWidth);
         double floor = lift.localFloor(mag, peak, half);
-        return lift.lobeBins(mag, peak, half, floor);
+        int[] edges = lift.lobeBins(mag, peak, half, floor);
+        return new ToneLobe(peak, edges[0], edges[1], floor, mag.applyAsDouble(peak));
     }
 
     /** Every bin a tone-only row of {@code cal} reaches on {@code r}: the lobe
@@ -554,8 +563,8 @@ class FreqRespCalDeEmbedTest {
         }
         for (double toneHz : tones) {
             if (!(toneHz > 0.0) || toneHz < fLo || toneHz > fHi) continue;
-            int[] span = lobeSpanAt(r, toneHz);
-            for (int k = span[0]; k <= span[1]; k++) {
+            ToneLobe span = lobeSpanAt(r, toneHz);
+            for (int k = span.lo(); k <= span.hi(); k++) {
                 if (k >= 1 && k < marked.length) marked[k] = true;
             }
         }

@@ -24,6 +24,7 @@ import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -441,6 +442,203 @@ class SignalGeneratorTest {
             assertEquals(first, high, "period " + p + " carries a different pulse width");
         }
         return first;
+    }
+
+    // -------------------------------------------------------------------------
+    // The pilot lines: two generated tones the FFT-side phase alignment reads
+    // as a time-base reference
+    // -------------------------------------------------------------------------
+
+    /** The first pilot's frequency in the level tests.  15 kHz is a whole
+     *  number of cycles in a one-second block at 48 kHz, as is the 1 kHz tone
+     *  beside it, so the correlation reads each exactly and neither leaks into
+     *  the other. */
+    private static final double PILOT_HZ  = 15_000.0;
+    /** The second pilot's frequency there - the alignment asks for a PAIR of
+     *  lines, each of which pins the elapsed sample count only modulo its own
+     *  period.  17.5 kHz is a whole number of cycles in the same block, so the
+     *  correlation reads it exactly too, and it lands on no harmonic of the
+     *  1 kHz tone. */
+    private static final double PILOT_2_HZ = 17_500.0;
+    /** The pilots' level - the value the alignment asks for, carried by both
+     *  lines. */
+    private static final double PILOT_DBV = -100.0;
+    /** A pilot's expected peak level on a lane: its own V RMS
+     *  ({@code 10^(dBV/20)}) at a sine's peak / RMS ratio, against the DAC
+     *  full scale - the main tone's commanded amplitude plays no part. */
+    private static final double PILOT_PEAK = Math.pow(10.0, PILOT_DBV / 20.0)
+            * Constants.SQRT2 / DAC_FS_VRMS;
+    /** How far a pilot's own level may sit from the requested one, dB. */
+    private static final double PILOT_TOL_DB = 0.1;
+    /** How far the MAIN tone's level may move when the pilots are added, dB -
+     *  it must not move at all, so this is a numerical bound, not a budget. */
+    private static final double TONE_TOL_DB = 1e-3;
+    /** Samples rendered after a pilot is switched on or off before anything is
+     *  read: the generator fades a pilot's level with a 50 ms time constant,
+     *  and two seconds at 48 kHz are forty of them - the fade's remainder,
+     *  e^-40, lies far under the trim test's per-sample 1e-9, and a line fading
+     *  out has fallen to exact silence.  A whole number of cycles of both trim
+     *  lines, so the trim seam still falls on their crests. */
+    private static final int    PILOT_SETTLE_SAMPLES = 96_000;
+    /** The first pilot's frequency in the trim test: 80 samples per cycle at
+     *  48 kHz, slow enough that a restarted phase is a step no slope can
+     *  explain. */
+    private static final double TRIM_HZ         = 600.0;
+    /** The trimmed value - a 1 % correction, far more than a lock ever asks. */
+    private static final double TRIM_TARGET_HZ  = 606.0;
+    /** The second pilot's frequency in the trim test, and its trimmed value at
+     *  the same 1 %.  3 kHz stands at ITS crest at the seam as well
+     *  ({@code 3000 · 96020 / 48000} is a whole number of cycles plus a
+     *  quarter), so a restart of either line is a full-amplitude step. */
+    private static final double TRIM_2_HZ        = 3_000.0;
+    private static final double TRIM_2_TARGET_HZ = 3_030.0;
+    /** A quarter cycle of {@link #TRIM_HZ} at 48 kHz.  The trim is placed here
+     *  so the seam falls on the crest: a phase restart is then a full-amplitude
+     *  step instead of one hidden in the slope at a zero crossing. */
+    private static final int    TRIM_SEAM_OFFSET = 20;
+    /** Samples checked against the analytic continuation past the trim. */
+    private static final int    TRIM_CHECK_SAMPLES = 100;
+    /** The sweep the pilot must not reach: 100 Hz to 1 kHz over one second. */
+    private static final double SWEEP_START_HZ = 100.0;
+    private static final double SWEEP_END_HZ   = 1_000.0;
+
+    /** {@code measured} against {@code expected} in dB - the domain the level
+     *  assertions state their tolerance in. */
+    private double levelDiffDb(double measured, double expected) {
+        return 20.0 * Math.log10(measured / expected);
+    }
+
+    /**
+     * Both pilots arrive at the requested frequencies and at their own
+     * absolute level, and the tone they ride on does not move: a pilot is
+     * added after the per-lane scaling, so it enters neither the main tone's
+     * level nor the RMS normalisation that level is derived from.
+     */
+    @Test
+    void pilots_arriveAtTheirOwnLevelAndLeaveTheToneAlone() {
+        int    sampleRate = 48_000;
+        double freqHz     = 1_000.0;
+        double vrms       = 1.0;
+
+        SignalGenerator plain = new SignalGenerator(
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
+        SignalGenerator piloted = new SignalGenerator(
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
+        piloted.setPilotTones(PILOT_HZ, PILOT_2_HZ, PILOT_DBV);
+        render(piloted, PILOT_SETTLE_SAMPLES);
+
+        double[] without = render(plain, sampleRate);
+        double[] with    = render(piloted, sampleRate);
+
+        assertEquals(0.0, levelDiffDb(componentPeak(with, sampleRate, PILOT_HZ), PILOT_PEAK),
+                PILOT_TOL_DB, "the first pilot must arrive at the level its dBV names");
+        assertEquals(0.0, levelDiffDb(componentPeak(with, sampleRate, PILOT_2_HZ), PILOT_PEAK),
+                PILOT_TOL_DB, "the second pilot must arrive at the same level");
+        assertEquals(0.0, levelDiffDb(componentPeak(with, sampleRate, freqHz),
+                        componentPeak(without, sampleRate, freqHz)),
+                TONE_TOL_DB, "adding the pilots must not move the main tone's level");
+    }
+
+    /** Clearing the pilots takes both lines out of the frames entirely. */
+    @Test
+    void pilots_areGoneAfterClear() {
+        int    sampleRate = 48_000;
+        double freqHz     = 1_000.0;
+        double vrms       = 1.0;
+
+        SignalGenerator gen = new SignalGenerator(
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
+        gen.setPilotTones(PILOT_HZ, PILOT_2_HZ, PILOT_DBV);
+        render(gen, PILOT_SETTLE_SAMPLES);
+        double[] on = render(gen, sampleRate);
+        gen.clearPilotTones();
+        render(gen, PILOT_SETTLE_SAMPLES);
+        double[] off = render(gen, sampleRate);
+
+        assertEquals(0.0, levelDiffDb(componentPeak(on, sampleRate, PILOT_HZ), PILOT_PEAK),
+                PILOT_TOL_DB, "the first pilot was running before the clear");
+        assertEquals(0.0, levelDiffDb(componentPeak(on, sampleRate, PILOT_2_HZ), PILOT_PEAK),
+                PILOT_TOL_DB, "the second pilot was running before the clear");
+        assertTrue(componentPeak(off, sampleRate, PILOT_HZ) < PILOT_PEAK * 1e-6,
+                "nothing may remain at the first pilot's frequency after the clear");
+        assertTrue(componentPeak(off, sampleRate, PILOT_2_HZ) < PILOT_PEAK * 1e-6,
+                "nothing may remain at the second pilot's frequency after the clear");
+    }
+
+    /**
+     * A re-aim writes both pilots' phase increments and their level and never
+     * an accumulator, so each line continues from the phase it had reached:
+     * past the seam every sample matches the sum of the two analytic
+     * continuations at the NEW frequencies, and the seam itself steps by no
+     * more than one sample of those two sines' own slopes.  A restarted phase -
+     * the failure this guards, in either line - lands a near-full-amplitude
+     * step there, because the seam is placed on both crests.
+     *
+     * <p>The main tone is commanded to 0 V RMS so the frames ARE the pilots; at
+     * -100 dBV beside a volt of tone no per-sample assertion could see them.
+     */
+    @Test
+    void pilotReaim_isPhaseContinuousForBothLines() {
+        int    sampleRate = 48_000;
+        int    beforeLen  = PILOT_SETTLE_SAMPLES + TRIM_SEAM_OFFSET;
+
+        SignalGenerator gen = new SignalGenerator(
+                GenSignalForm.SINE, 1_000.0, sampleRate, 0.0, 0.0, DAC_FS_VRMS, DAC_FS_VRMS);
+        gen.setPilotTones(TRIM_HZ, TRIM_2_HZ, PILOT_DBV);
+
+        double[] before = render(gen, beforeLen);
+        gen.setPilotTones(TRIM_TARGET_HZ, TRIM_2_TARGET_HZ, PILOT_DBV);
+        double[] after  = render(gen, sampleRate);
+
+        double seamPhase  = 2.0 * Math.PI * TRIM_HZ * beforeLen / sampleRate;
+        double seamPhase2 = 2.0 * Math.PI * TRIM_2_HZ * beforeLen / sampleRate;
+        double step       = Math.abs(after[0] - before[beforeLen - 1]);
+        double maxStep    = PILOT_PEAK * 2.0
+                * (Math.sin(Math.PI * TRIM_TARGET_HZ / sampleRate)
+                 + Math.sin(Math.PI * TRIM_2_TARGET_HZ / sampleRate));
+        assertTrue(step <= maxStep,
+                "the trim stepped the pilot pair by " + step + ", more than one sample's slope "
+                        + maxStep + " - a phase was restarted");
+        for (int m = 0; m < TRIM_CHECK_SAMPLES; m++) {
+            double expected = PILOT_PEAK
+                    * (Math.sin(seamPhase + 2.0 * Math.PI * TRIM_TARGET_HZ * m / sampleRate)
+                     + Math.sin(seamPhase2 + 2.0 * Math.PI * TRIM_2_TARGET_HZ * m / sampleRate));
+            assertEquals(expected, after[m], PILOT_PEAK * 1e-9,
+                    "sample " + m + " past the trim leaves the phase-continuous "
+                            + "continuation of both lines at their trimmed frequencies");
+        }
+    }
+
+    /**
+     * A sweep carries no pilot: its samples are bit-identical with and without
+     * one, because the sweep's own spectrum IS the measurement and an added
+     * line in it would be read as the device's.  The request is not lost
+     * though - it is remembered and both lines start with the next tonal form.
+     */
+    @Test
+    void sweep_carriesNoPilotUntilATonalFormStarts() {
+        int    sampleRate = 48_000;
+        double vrms       = 1.0;
+
+        SignalGenerator plain = new SignalGenerator(SWEEP_START_HZ, SWEEP_END_HZ, sampleRate,
+                sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
+        SignalGenerator piloted = new SignalGenerator(SWEEP_START_HZ, SWEEP_END_HZ, sampleRate,
+                sampleRate, vrms, vrms, DAC_FS_VRMS, DAC_FS_VRMS);
+        piloted.setPilotTones(PILOT_HZ, PILOT_2_HZ, PILOT_DBV);
+
+        assertArrayEquals(render(plain, sampleRate), render(piloted, sampleRate), 0.0,
+                "a sweep's samples must be untouched by a pilot request");
+
+        // The sweep constructor leaves the tone accumulator at a zero
+        // increment, so the tonal form that follows is silent apart from the
+        // pilots - which are exactly the lines under test.
+        piloted.setForm(GenSignalForm.SINE);
+        render(piloted, PILOT_SETTLE_SAMPLES);
+        double[] tonal = render(piloted, sampleRate);
+        assertEquals(0.0, levelDiffDb(componentPeak(tonal, sampleRate, PILOT_HZ), PILOT_PEAK),
+                PILOT_TOL_DB, "the remembered first pilot must start with the tonal form");
+        assertEquals(0.0, levelDiffDb(componentPeak(tonal, sampleRate, PILOT_2_HZ), PILOT_PEAK),
+                PILOT_TOL_DB, "the remembered second pilot must start with it too");
     }
 
     /** Renders {@code samples} consecutive samples into a block. */

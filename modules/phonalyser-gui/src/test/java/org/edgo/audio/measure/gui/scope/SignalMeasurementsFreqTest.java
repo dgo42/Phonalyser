@@ -57,7 +57,7 @@ class SignalMeasurementsFreqTest {
             for (double seconds : new double[]{0.02, 0.05, 0.1, 0.25, 0.5, 1.0}) {
                 int n = Math.min(96_000, (int) Math.round(fs * seconds));
                 for (double ph = 0; ph < 2 * Math.PI; ph += Math.PI / 4) {
-                    double f = SignalMeasurements.from(tone(trueF, fs, n, 0.5, ph), n, fs, 1.0, true)
+                    double f = new SignalMeasurements(tone(trueF, fs, n, 0.5, ph), n, fs, 1.0, true)
                                                  .getFrequency();
                     assertTrue(Math.abs(f - trueF) < TOL_HZ,
                             String.format("fs=%.0f n=%d phase=%.2f: f=%.5f err=%+.5f", fs, n, ph, f, f - trueF));
@@ -80,7 +80,7 @@ class SignalMeasurementsFreqTest {
                         + 3e-3 * Math.sin(2 * Math.PI * 3 * trueF * t)        // H3
                         + 1.6e-3 * rnd.nextGaussian());                       // ~-50 dB noise
             }
-            double f = SignalMeasurements.from(d, n, fs, 1.0, true).getFrequency();
+            double f = new SignalMeasurements(d, n, fs, 1.0, true).getFrequency();
             assertTrue(Math.abs(f - trueF) < TOL_HZ,
                     String.format("phase=%.2f: f=%.5f err=%+.5f", ph, f, f - trueF));
         }
@@ -126,8 +126,9 @@ class SignalMeasurementsFreqTest {
             double true1 = DUAL_F1_HZ * scale;
             double true2 = DUAL_F2_HZ * scale;
             float[] d = dualTone(true1, true2, DUAL_FS, DUAL_N);
-            double r1 = SignalMeasurements.refineFrequencyAround(d, DUAL_N, DUAL_FS, DUAL_F1_HZ, REFINE_HALF_HZ);
-            double r2 = SignalMeasurements.refineFrequencyAround(d, DUAL_N, DUAL_FS, DUAL_F2_HZ, REFINE_HALF_HZ);
+            SignalMeasurements m = new SignalMeasurements(d, DUAL_N, DUAL_FS, 1.0, false);
+            double r1 = m.refineFrequencyAround(d, DUAL_N, DUAL_FS, DUAL_F1_HZ, REFINE_HALF_HZ);
+            double r2 = m.refineFrequencyAround(d, DUAL_N, DUAL_FS, DUAL_F2_HZ, REFINE_HALF_HZ);
             assertTrue(Math.abs(r1 - true1) < TOL_HZ,
                     String.format("%.0f ppm: f1=%.5f err=%+.5f", ppm, r1, r1 - true1));
             assertTrue(Math.abs(r2 - true2) < TOL_HZ,
@@ -143,8 +144,9 @@ class SignalMeasurementsFreqTest {
         float[] d = dualTone(true1, true2, DUAL_FS, DUAL_N);
 
         // End-to-end path: commanded seeds -> refined as-captured frequencies.
-        double r1 = SignalMeasurements.refineFrequencyAround(d, DUAL_N, DUAL_FS, DUAL_F1_HZ, REFINE_HALF_HZ);
-        double r2 = SignalMeasurements.refineFrequencyAround(d, DUAL_N, DUAL_FS, DUAL_F2_HZ, REFINE_HALF_HZ);
+        SignalMeasurements m = new SignalMeasurements(d, DUAL_N, DUAL_FS, 1.0, false);
+        double r1 = m.refineFrequencyAround(d, DUAL_N, DUAL_FS, DUAL_F1_HZ, REFINE_HALF_HZ);
+        double r2 = m.refineFrequencyAround(d, DUAL_N, DUAL_FS, DUAL_F2_HZ, REFINE_HALF_HZ);
 
         double rmsRefined   = dualFitResidualRms(d, r1, r2);
         double rmsCommanded = dualFitResidualRms(d, DUAL_F1_HZ, DUAL_F2_HZ);

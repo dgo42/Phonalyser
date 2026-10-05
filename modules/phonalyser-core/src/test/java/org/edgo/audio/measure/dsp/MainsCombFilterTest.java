@@ -35,15 +35,9 @@ class MainsCombFilterTest {
     /** Goertzel power |X(f)|² over a plain (unwindowed) block - the
      *  measurement yardstick for attenuation checks. */
     private static double power(float[] x, int len, double freqHz) {
-        double omega = 2.0 * Math.PI * freqHz / FS;
-        double coeff = 2.0 * Math.cos(omega);
-        double s1 = 0.0, s2 = 0.0;
-        for (int i = 0; i < len; i++) {
-            double s = x[i] + coeff * s1 - s2;
-            s2 = s1;
-            s1 = s;
-        }
-        return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+        Goertzel.SingleBin bin = Goertzel.goertzelBin(x, 0, len, null,
+                2.0 * Math.PI * freqHz / FS, 0.0);
+        return bin.re() * bin.re() + bin.im() * bin.im();
     }
 
     private static double dbDrop(float[] before, float[] after, int off, int len, double f) {

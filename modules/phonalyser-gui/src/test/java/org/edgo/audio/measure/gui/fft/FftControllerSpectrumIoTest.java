@@ -95,7 +95,7 @@ class FftControllerSpectrumIoTest {
 
         FftController.LoadedSpectrum loaded = io().loadSpectrum(file.toString());
         FftResult r = loaded.result();
-        assertNull(loaded.imd(), "THD capture must not switch the view to IMD");
+        assertNull(loaded.result().imd, "THD capture must not switch the view to IMD");
         assertEquals(original.fftSize,       r.fftSize);
         assertEquals(original.sampleRate,    r.sampleRate);
         assertEquals(FREQ_RES_HZ,            r.freqResolution, PRINT_EPS);
@@ -122,7 +122,7 @@ class FftControllerSpectrumIoTest {
         io().saveSpectrum(file, original, true, tone1, tone2);
 
         FftController.LoadedSpectrum loaded = io().loadSpectrum(file.toString());
-        assertNotNull(loaded.imd(), "IMD capture must restore the IMD table mode");
+        assertNotNull(loaded.result().imd, "IMD capture must restore the IMD table mode");
         assertEquals(tone1, loaded.result().fundamentalHzRefined,  PRINT_EPS,
                 "lower tone pinned as F1");
         assertEquals(tone2, loaded.result().fundamental2HzRefined, PRINT_EPS,

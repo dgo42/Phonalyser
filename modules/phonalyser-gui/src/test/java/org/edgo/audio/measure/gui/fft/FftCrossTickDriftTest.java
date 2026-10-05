@@ -196,7 +196,7 @@ class FftCrossTickDriftTest {
                 analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(false);
                 analyzer.setSecondToneHintHz(Double.NaN);
-                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
+                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT, HARMONIC_COUNT,
                         WINDOW, FftOverlap.RAND, 0.0, 0.0, true, Double.NaN,
                         false, Double.NaN, new FftResult(), hop, 2);
                 call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);

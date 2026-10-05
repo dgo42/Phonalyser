@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.sound;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -56,12 +57,25 @@ import org.junit.jupiter.api.io.TempDir;
  * amplitude and frequency edit made since.  Second: switching a running
  * generator to a compensated form loads the file the path preference names AT
  * THAT MOMENT, which is what fixes the order the wizard has to commit in.
+ *
+ * <p>The same fixture asks what a WAVEFORM change does to the pilot lines - the
+ * two low-level extra tones the FFT's fundamental phase alignment reads as its
+ * time base.  They belong to the analysis, which elects them and asks for them
+ * again whenever it restarts its alignment, so a change that rebuilds the DDS
+ * drops both together with the frequency-lock correction of the tone that
+ * ended, and a change the DDS takes live leaves them where they are.
  */
 class GeneratorLaneLiveChangeTest {
 
     private static final int RATE_HZ = 48_000;
     private static final int BIT_DEPTH = 24;
     private static final double TONE_HZ = 1_000.0;
+    /** The second tone of the two-tone forms, Hz.  It comes from the settings,
+     *  not from the run, so it is pinned in the fixture: what a rebuilt
+     *  two-tone generator emits has to be the same in every run of this class.
+     *  130 whole cycles of the {@link #COHERENT_SAMPLES} span, and far from the
+     *  pilot line the tests read. */
+    private static final double DUAL_TONE_2_HZ = 1_300.0;
     private static final double AMPLITUDE_VRMS = 0.1;
     /** DAC full scale of the run: 1.0 V, so an emitted peak IS the amplitude scale. */
     private static final double DAC_FS_VOLTS = 1.0;
@@ -78,6 +92,36 @@ class GeneratorLaneLiveChangeTest {
     /** The correction amplitude every test file carries, in percent of the fundamental. */
     private static final double HARMONIC_PCT = 20.0;
     private static final double TWO = 2.0;
+    /** The first pilot line the tests ask the lane for - the low-level extra
+     *  tones the FFT's fundamental phase alignment reads as its time base.
+     *  15370 Hz is bin 1537 of the {@link #COHERENT_SAMPLES} window at 48 kHz,
+     *  and it sits thousands of bins from every tone this test emits. */
+    private static final double PILOT_HZ = 15_370.0;
+    /** The second line of the pair, bin 1653 of the same window: 116 bins from
+     *  the first and on no harmonic of the tones this test emits, so each line
+     *  is read without the other. */
+    private static final double PILOT_2_HZ = 16_530.0;
+    /** The level the alignment elects its pilots at, dBV - one value for both
+     *  lines. */
+    private static final double PILOT_LEVEL_DBV = -100.0;
+    /** What that level is worth in the emitted samples: the pilot's V RMS
+     *  against the run's DAC full scale, at a sine's peak / RMS ratio - the
+     *  pilot is added outside the lane's amplitude scaling, so its own level is
+     *  all that decides it. */
+    private static final double PILOT_AMPLITUDE =
+            Math.pow(10.0, PILOT_LEVEL_DBV / 20.0) * Math.sqrt(TWO) / DAC_FS_VOLTS;
+    /** A twentieth of the pilot's amplitude: far under what a dropped or
+     *  re-levelled line would show, far over the windowed read's own error. */
+    private static final double PILOT_TOLERANCE = PILOT_AMPLITUDE / 20.0;
+    /** Samples emitted after the pilots are switched on before they are read:
+     *  the generator fades a pilot's level in with a 50 ms time constant, and
+     *  half a second at 48 kHz is ten of them - the remainder, e^-10, is far
+     *  under {@link #PILOT_TOLERANCE}. */
+    private static final int PILOT_SETTLE_SAMPLES = 24_000;
+    /** The frequency-lock correction the tests put on tone 1 - one percent,
+     *  orders above any real converter-pair mismatch, so a pilot carried on it
+     *  lands far from its own frequency and the two are told apart. */
+    private static final double TRIM_RATIO = 1.01;
 
     @TempDir
     private Path tempDir;
@@ -89,6 +133,9 @@ class GeneratorLaneLiveChangeTest {
     private BackendKey previousSelection;
     private GenSignalForm previousForm;
     private String previousDpd;
+    private double previousDualToneFreq2Hz;
+    private double previousFrequencyHz;
+    private boolean previousSnapToFftBin;
 
     @BeforeEach
     void armTheStubBackend() {
@@ -97,6 +144,9 @@ class GeneratorLaneLiveChangeTest {
         previousSelection = prefs.getSelectedBackend();
         previousForm = prefs.getGenSignalForm();
         previousDpd = prefs.getGenDpd(GenSignalForm.SINE_COMP);
+        previousDualToneFreq2Hz = prefs.getGenDualToneFreq2Hz();
+        previousFrequencyHz = prefs.getGenFrequencyHz();
+        previousSnapToFftBin = prefs.isGenSnapToFftBin();
 
         AudioBackend audio = AudioBackend.instance();
         previousActive = audio.activeKey();
@@ -112,6 +162,16 @@ class GeneratorLaneLiveChangeTest {
         backend.setOutputSampleRate(RATE_HZ);
         backend.setOutputBitDepth(BIT_DEPTH);
         prefs.setGenSignalForm(GenSignalForm.SINE);
+        // The two-tone form reads its second frequency from the settings and
+        // snaps it onto the analysis grid when the snap is on, so both are
+        // pinned: what a two-tone generator emits here must not depend on what
+        // another test left in the live settings.  The single tone's own
+        // setting is pinned with them, because a frequency-lock trim is read
+        // against it: the lane divides the corrected frequency by this one to
+        // get the ratio it carries the pilot on.
+        prefs.setGenDualToneFreq2Hz(DUAL_TONE_2_HZ);
+        prefs.setGenFrequencyHz(TONE_HZ);
+        prefs.setGenSnapToFftBin(false);
     }
 
     @AfterEach
@@ -124,6 +184,9 @@ class GeneratorLaneLiveChangeTest {
         }
         prefs.setGenSignalForm(previousForm);
         prefs.setGenDpd(GenSignalForm.SINE_COMP, previousDpd);
+        prefs.setGenDualToneFreq2Hz(previousDualToneFreq2Hz);
+        prefs.setGenFrequencyHz(previousFrequencyHz);
+        prefs.setGenSnapToFftBin(previousSnapToFftBin);
     }
 
     /**
@@ -265,6 +328,106 @@ class GeneratorLaneLiveChangeTest {
                 "the lane was restarted rather than stopped");
     }
 
+    /**
+     * A waveform change the DDS cannot take live rebuilds the generator, and the
+     * rebuilt tone comes up bare: no pilots, and no frequency-lock correction.
+     * Entering or leaving the dual-tone family is such a change (a second tone
+     * needs its own accumulator).  The pilots are the analysis's own lines - the
+     * analysis elects them, and asks for them again as soon as it has restarted
+     * its alignment on the changed signal - so re-issuing them from this side
+     * would put lines on the new tone that nobody had asked for, and they would
+     * carry the trim measured on the tone that has just ended while the tone
+     * itself came up on its set frequency.
+     */
+    @Test
+    @DisplayName("a waveform change that rebuilds the generator drops both pilots and the trim")
+    void aRebuildingFormChangeDropsThePilots() {
+        Preferences prefs = Preferences.instance();
+        // The lane remembers the form it was last told about; pin it here, so
+        // the change below is a rebuild whatever the settings held before.
+        lane.formChanged(GenSignalForm.SINE, sineRun());
+        assertEquals(PlaybackStateEnum.STARTED, lane.start(sineRun()));
+        SignalGenerator before = lane();
+        lane.setPilotTones(PILOT_HZ, PILOT_2_HZ, PILOT_LEVEL_DBV);
+        lane.trimFrequency(TONE_HZ * TRIM_RATIO);   // a lock correction now stands on tone 1
+        emit(before, PILOT_SETTLE_SAMPLES);
+        double[] playing = emit(before, COHERENT_SAMPLES);
+        assertEquals(PILOT_AMPLITUDE, pilotAmplitude(playing, PILOT_HZ * TRIM_RATIO),
+                PILOT_TOLERANCE,
+                "the first pilot never reached the tone that was playing, carried on tone 1's trim");
+        assertEquals(PILOT_AMPLITUDE, pilotAmplitude(playing, PILOT_2_HZ * TRIM_RATIO),
+                PILOT_TOLERANCE,
+                "the second pilot never reached it on the same trim");
+
+        prefs.setGenSignalForm(GenSignalForm.DUAL_TONE);
+        lane.formChanged(GenSignalForm.DUAL_TONE, dualRun());
+
+        SignalGenerator after = lane();
+        assertNotSame(before, after,
+                "entering the dual-tone family did not rebuild the DDS at all - the case this "
+                        + "test is about never happened");
+        double[] rebuilt = emit(after, COHERENT_SAMPLES);
+        assertEquals(0.0, pilotAmplitude(rebuilt, PILOT_HZ), PILOT_TOLERANCE,
+                "the rebuilt generator carries the first pilot, which nobody asked it for");
+        assertEquals(0.0, pilotAmplitude(rebuilt, PILOT_2_HZ), PILOT_TOLERANCE,
+                "the rebuilt generator carries the second pilot, which nobody asked it for");
+        assertEquals(0.0, pilotAmplitude(rebuilt, PILOT_HZ * TRIM_RATIO), PILOT_TOLERANCE,
+                "the rebuilt generator carries the first pilot at its trimmed position");
+        assertEquals(0.0, pilotAmplitude(rebuilt, PILOT_2_HZ * TRIM_RATIO), PILOT_TOLERANCE,
+                "the rebuilt generator carries the second pilot at its trimmed position");
+
+        // The trim went with it: pilots asked for now are issued at their own
+        // frequencies, not at the ratio the ended tone had been corrected by.
+        lane.setPilotTones(PILOT_HZ, PILOT_2_HZ, PILOT_LEVEL_DBV);
+        emit(after, PILOT_SETTLE_SAMPLES);
+        double[] asked = emit(after, COHERENT_SAMPLES);
+        assertEquals(PILOT_AMPLITUDE, pilotAmplitude(asked, PILOT_HZ), PILOT_TOLERANCE,
+                "a first pilot asked of the rebuilt tone is not at the frequency it was asked for");
+        assertEquals(PILOT_AMPLITUDE, pilotAmplitude(asked, PILOT_2_HZ), PILOT_TOLERANCE,
+                "a second pilot asked of the rebuilt tone is not at the frequency it was asked for");
+        assertEquals(0.0, pilotAmplitude(asked, PILOT_HZ * TRIM_RATIO), PILOT_TOLERANCE,
+                "the rebuilt tone still carried the previous trim: the pilots rode a correction "
+                        + "measured on a tone that had ended, while the tone itself came up on "
+                        + "its set frequency");
+        assertEquals(0.0, pilotAmplitude(asked, PILOT_2_HZ * TRIM_RATIO), PILOT_TOLERANCE,
+                "the second pilot too was issued on the trim of the tone that had ended");
+    }
+
+    /**
+     * A waveform change the DDS takes live leaves the pilots alone: nothing is
+     * rebuilt, so there is nothing to put back, and both lines go on at their
+     * elected frequencies and level.  Plain sine to its compensated sibling is
+     * such a change - both render the same tone from the same accumulator - and
+     * the pilots ride outside every predistortion kernel, so the corrections
+     * that arrive with the form do not touch them either.
+     */
+    @Test
+    @DisplayName("a live waveform change leaves both pilots where they are")
+    void aLiveFormChangeLeavesThePilotsAlone() throws IOException {
+        Preferences prefs = Preferences.instance();
+        prefs.setGenDpd(GenSignalForm.SINE_COMP,
+                writeDpd("live-swap.dpd", SECOND_HARMONIC).toString());
+        lane.formChanged(GenSignalForm.SINE, sineRun());
+        assertEquals(PlaybackStateEnum.STARTED, lane.start(sineRun()));
+        SignalGenerator running = lane();
+        lane.setPilotTones(PILOT_HZ, PILOT_2_HZ, PILOT_LEVEL_DBV);
+        emit(running, PILOT_SETTLE_SAMPLES);
+        int openedBefore = stub.openedPlaybacks();
+
+        prefs.setGenSignalForm(GenSignalForm.SINE_COMP);
+        lane.formChanged(GenSignalForm.SINE_COMP, sineCompRun());
+
+        assertEquals(openedBefore, stub.openedPlaybacks(),
+                "the compensated sibling was answered with a stop and a start - a live swap "
+                        + "was expected, and this test then says nothing about one");
+        assertSame(running, lane(), "and it rebuilt the DDS");
+        double[] swapped = emit(running, COHERENT_SAMPLES);
+        assertEquals(PILOT_AMPLITUDE, pilotAmplitude(swapped, PILOT_HZ),
+                PILOT_TOLERANCE, "the live form swap moved the first pilot");
+        assertEquals(PILOT_AMPLITUDE, pilotAmplitude(swapped, PILOT_2_HZ),
+                PILOT_TOLERANCE, "the live form swap moved the second pilot");
+    }
+
     /** The run the pane's Play would derive for the compensated dual tone. */
     private GeneratorRun dualCompRun() {
         return new GeneratorRun(GenSignalForm.DUAL_TONE_COMP, TONE_HZ, AMPLITUDE_VRMS, AMPLITUDE_VRMS, RATE_HZ,
@@ -276,6 +439,22 @@ class GeneratorLaneLiveChangeTest {
     private GeneratorRun sineRun() {
         return new GeneratorRun(GenSignalForm.SINE, TONE_HZ, AMPLITUDE_VRMS, AMPLITUDE_VRMS, RATE_HZ,
                 BIT_DEPTH, DITHER_BITS, DITHER_BITS, DAC_FS_VOLTS, DAC_FS_VOLTS,
+                OutputChannels.BOTH, false, null);
+    }
+
+    /** The same for the compensated sibling - the run a live form swap is
+     *  handed, and which it does not use because it rebuilds nothing. */
+    private GeneratorRun sineCompRun() {
+        return new GeneratorRun(GenSignalForm.SINE_COMP, TONE_HZ, AMPLITUDE_VRMS, AMPLITUDE_VRMS,
+                RATE_HZ, BIT_DEPTH, DITHER_BITS, DITHER_BITS, DAC_FS_VOLTS, DAC_FS_VOLTS,
+                OutputChannels.BOTH, false, null);
+    }
+
+    /** The run for the plain two-tone form: tone 1 is the test's tone, tone 2
+     *  comes from the settings the way the pane's Play leaves it. */
+    private GeneratorRun dualRun() {
+        return new GeneratorRun(GenSignalForm.DUAL_TONE, TONE_HZ, AMPLITUDE_VRMS, AMPLITUDE_VRMS,
+                RATE_HZ, BIT_DEPTH, DITHER_BITS, DITHER_BITS, DAC_FS_VOLTS, DAC_FS_VOLTS,
                 OutputChannels.BOTH, false, null);
     }
 
@@ -334,5 +513,34 @@ class GeneratorLaneLiveChangeTest {
     /** The second harmonic's share of the fundamental. */
     private double harmonicRatio(double[] samples) {
         return ratioAt(samples, SECOND_HARMONIC * TONE_HZ);
+    }
+
+    /** The amplitude of the {@code hz} component of {@code samples} (peak
+     *  units), read through a Hann window - the pilot's own frequency, or the
+     *  position a trim would have carried it to.
+     *
+     *  <p>The window is what makes the reading the pilot's own.  The pilot sits
+     *  some 80 dB under the main tone, and the second tone of a dual pair comes
+     *  from the settings at whatever frequency they hold - a frequency that
+     *  need not complete a whole number of periods in this span.  The leakage
+     *  of such a tone into a rectangular one-bin read a thousand bins away
+     *  falls only as 1/distance and still exceeds the pilot; under the Hann
+     *  window it falls three orders faster and is gone.  The pilot itself sits
+     *  on a whole bin of the span, where the windowed read returns its
+     *  amplitude exactly; a trimmed position lands between bins, where the read
+     *  is up to a sixth low - far inside what tells a line from none. */
+    private double pilotAmplitude(double[] samples, double hz) {
+        int n = samples.length;
+        double re = 0.0;
+        double im = 0.0;
+        double sumWin = 0.0;
+        double w = TWO * Math.PI * hz / RATE_HZ;
+        for (int i = 0; i < n; i++) {
+            double win = 0.5 - 0.5 * Math.cos(TWO * Math.PI * i / n);
+            sumWin += win;
+            re += win * samples[i] * Math.cos(w * i);
+            im += win * samples[i] * Math.sin(w * i);
+        }
+        return TWO * Math.hypot(re, im) / sumWin;
     }
 }

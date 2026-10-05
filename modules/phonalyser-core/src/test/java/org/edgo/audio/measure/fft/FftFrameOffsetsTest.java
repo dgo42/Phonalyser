@@ -83,17 +83,17 @@ class FftFrameOffsetsTest {
 
         // The spacing must be positive.
         assertThrows(IllegalArgumentException.class, () -> analyzer.analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, WindowType.HANN, FftOverlap.PCT_0,
+                signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_0,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
                 0, 2));
         // At least one frame.
         assertThrows(IllegalArgumentException.class, () -> analyzer.analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, WindowType.HANN, FftOverlap.PCT_0,
+                signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_0,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
                 4_096, 0));
         // The last frame must fit the buffer.
         assertThrows(IllegalArgumentException.class, () -> analyzer.analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, WindowType.HANN, FftOverlap.PCT_0,
+                signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_0,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
                 FFT_SIZE + 1, 2));
     }
@@ -122,7 +122,7 @@ class FftFrameOffsetsTest {
         int step = FftOverlap.PCT_75.hopSamples(FFT_SIZE);
         int frameCount = (signal.length - FFT_SIZE) / step + 1;
         FftResult stated = new FftAnalyzer().analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, WindowType.HANN, FftOverlap.PCT_75,
+                signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_75,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
                 step, frameCount);
 
@@ -151,11 +151,11 @@ class FftFrameOffsetsTest {
         // than half a cycle of this fundamental per frame (N / (2*k_f) =
         // 8192 / (2 * 170.967) = 23.96 samples), far outside the tolerance.
         FftResult a = new FftAnalyzer().analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, WindowType.HANN, FftOverlap.RAND,
+                signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.RAND,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
                 1_000, 6);
         FftResult b = new FftAnalyzer().analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, WindowType.HANN, FftOverlap.RAND,
+                signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.RAND,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
                 1_024, 6);
 

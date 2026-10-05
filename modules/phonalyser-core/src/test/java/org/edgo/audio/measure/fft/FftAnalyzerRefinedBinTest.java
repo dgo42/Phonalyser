@@ -33,8 +33,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Both window shapes the measurement meets are covered - the analysis
  * default BH7, whose main lobe spans several bins, and RECT, whose lobe is one
- * bin wide - and both the single-frame geometry and a four-frame one, since the
- * frames are averaged after a de-rotation that is common to the three bins.
+ * bin wide - and both geometries: a single frame, read by the three-bin
+ * log-power fit, and several frames, read by the tone's phase change between
+ * the first two, which on a clean tone is exact.
  */
 class FftAnalyzerRefinedBinTest {
 
@@ -46,6 +47,9 @@ class FftAnalyzerRefinedBinTest {
     private static final double TONE_OFFSET_BINS = 0.37;
     /** The accuracy the frequency lock is fed with under a tapered window. */
     private static final double TOLERANCE_BINS = 0.01;
+    /** The accuracy of the phase change between two frames on a clean tone:
+     *  rounding only. */
+    private static final double PHASE_STEP_TOLERANCE_BINS = 1e-6;
 
     private final FftAnalyzer analyzer = new FftAnalyzer();
 
@@ -55,8 +59,8 @@ class FftAnalyzerRefinedBinTest {
     }
 
     @Test
-    void offBinToneIsRecoveredAcrossAveragedFrames() {
-        assertRecovered(WindowType.BH7, 4, FFT_SIZE / 2, TOLERANCE_BINS);
+    void offBinToneIsRecoveredFromThePhaseChangeBetweenFrames() {
+        assertRecovered(WindowType.BH7, 4, FFT_SIZE / 2, PHASE_STEP_TOLERANCE_BINS);
     }
 
     /**
@@ -87,7 +91,7 @@ class FftAnalyzerRefinedBinTest {
         double[] samples = tone(trueBin, (frames - 1) * step + FFT_SIZE);
 
         double refined = analyzer.refinedBin(samples, FFT_SIZE, window,
-                TONE_BIN, step, frames, trueBin);
+                TONE_BIN, step, frames);
 
         assertEquals(trueBin, refined, toleranceBins,
                 "fractional bin of a tone " + TONE_OFFSET_BINS + " bins above bin "

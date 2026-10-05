@@ -64,16 +64,6 @@ class FreqRespFormatTest {
     }
 
     @Test
-    void phaseToYFractionClampsAndCenters() {
-        assertEquals(0.0, FreqRespFormat.phaseToYFraction( 180.0), 1e-9);
-        assertEquals(1.0, FreqRespFormat.phaseToYFraction(-180.0), 1e-9);
-        assertEquals(0.5, FreqRespFormat.phaseToYFraction(   0.0), 1e-9);
-        // Out-of-range clamps.
-        assertEquals(0.0, FreqRespFormat.phaseToYFraction( 999.0), 1e-9);
-        assertEquals(1.0, FreqRespFormat.phaseToYFraction(-999.0), 1e-9);
-    }
-
-    @Test
     void formatDbProducesExpectedLabel() {
         assertEquals("0.00 dB",   FreqRespFormat.formatDb(0.0));
         assertEquals("-3.50 dB",  FreqRespFormat.formatDb(-3.5));

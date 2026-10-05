@@ -32,7 +32,9 @@ import java.util.function.Consumer;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.GeneratorCorrectionsRequest;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.bus.PilotToneRequest;
 import org.edgo.audio.measure.gui.common.RemoteBackendRegistry;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.sound.RecordingRemoteBackendUi;
@@ -79,6 +81,14 @@ class GeneratorControllerRemoteTest {
     private static final double SWEEP_SECONDS = 1.0;
     private static final double TONE_HZ = 1000.0;
     private static final double AMPLITUDE_VRMS = 1.0;
+    /** The pilot lines of the fundamental phase alignment, as the analysis asks
+     *  for them: two frequencies of the capture grid at the level the alignment
+     *  elects, -100 dBV.  No value is read by anything on this path - the
+     *  request is refused before it reaches a bench - so any admissible request
+     *  states the case. */
+    private static final double PILOT_HZ = 15000.0;
+    private static final double PILOT_2_HZ = 17000.0;
+    private static final double PILOT_LEVEL_DBV = -100.0;
     /** A minimal harmonic {@code .dpd}: the H1 row is the system-delay
      *  reference, the rest are the corrections. */
     private static final String HARMONIC_DPD =
@@ -272,6 +282,111 @@ class GeneratorControllerRemoteTest {
                 "the rebuild has to carry the JUST-SELECTED waveform; replaying the "
                         + "started run keeps emitting the dual tone and the second tone "
                         + "goes on sounding");
+    }
+
+    @Test
+    void aHarmonicCorrectionsRequestOverTheBusReachesTheTone() {
+        Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
+        controller = new GeneratorController();
+        controller.start();
+        server.reset();
+        double[] ampRatios = { 5e-5, 2e-5 };
+        int[]    harmonics = { 2, 3 };
+        double[] phiInits  = { 0.3, -0.2 };
+
+        MessageBus.instance().publish(Events.GENERATOR_CORRECTIONS, new GeneratorCorrectionsRequest(
+                GeneratorCorrectionsRequest.Kind.HARMONIC, ampRatios, harmonics, null, null, phiInits));
+
+        assertTrue(server.names().contains("applyCompensation"),
+                "a distortion measurement holds no generator - its correction set travels "
+                        + "over the bus and must still reach the tone: " + server.names());
+        assertArrayEquals(ampRatios, (double[]) server.firstArg("applyCompensation"),
+                "with the arrays as published");
+    }
+
+    @Test
+    void anIntermodCorrectionsRequestOverTheBusReachesTheTone() {
+        Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
+        controller = new GeneratorController();
+        controller.start();
+        server.reset();
+        double[] ampRatios = { 4e-5 };
+        int[]    coefA     = { 2 };
+        int[]    coefB     = { -1 };
+        double[] phiInits  = { 0.1 };
+
+        MessageBus.instance().publish(Events.GENERATOR_CORRECTIONS, new GeneratorCorrectionsRequest(
+                GeneratorCorrectionsRequest.Kind.INTERMOD, ampRatios, null, coefA, coefB, phiInits));
+
+        assertTrue(server.names().contains("applyDualToneCompensation"),
+                "the dual-tone set takes the dual-tone entry point: " + server.names());
+        assertArrayEquals(ampRatios, (double[]) server.firstArg("applyDualToneCompensation"));
+    }
+
+    @Test
+    void aClearRequestOverTheBusDropsTheTablesWithoutAnAnnouncement() {
+        Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
+        controller = new GeneratorController();
+        controller.start();
+        controller.applyCompensation(new double[] { 5e-5 }, new int[] { 2 }, new double[] { 0.3 });
+        // No stub reset here: a reset also parks the stub's tone in IDLE, and an
+        // announcement, were there one, is made only while the tone plays.
+        int before = server.commands().size();
+        int[] announced = { 0 };
+        Consumer<Object> onChanged = ignored -> announced[0]++;
+        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, onChanged);
+        try {
+            MessageBus.instance().publish(Events.GENERATOR_CORRECTIONS, new GeneratorCorrectionsRequest(
+                    GeneratorCorrectionsRequest.Kind.CLEAR, null, null, null, null, null));
+        } finally {
+            MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onChanged);
+        }
+
+        List<String> afterClear = new ArrayList<>();
+        for (ServerGeneratorStub.Command c : commandsAfter(before)) afterClear.add(c.name());
+        assertTrue(afterClear.contains("clearCompensation"),
+                "the tables go: " + afterClear);
+        assertEquals(0, announced[0],
+                "a dropped table is not a signal change: the measurement resets the analyser's "
+                        + "statistics itself, and an announcement would restart the analyser's "
+                        + "fundamental phase alignment");
+    }
+
+    /**
+     * The pilot tones of the fundamental phase alignment - the extra lines the
+     * analysis reads as its time base - stop at the lane when the DDS is a
+     * bench's: every line has to come from ONE clock for the pilots to say
+     * anything about the fundamental's time base, and a bench drives its DAC
+     * from its own.  And the request is not a changed signal: the analysis
+     * asked for these lines itself, so announcing them would restart the very
+     * alignment that asked.
+     */
+    @Test
+    void aPilotRequestOverTheBusStopsAtTheLaneAndAnnouncesNothing() {
+        Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
+        controller = new GeneratorController();
+        controller.start();
+        // No stub reset: a reset also parks the stub's tone in IDLE, and an
+        // announcement, were there one, is made only while the tone plays.
+        int before = server.commands().size();
+        int[] announced = { 0 };
+        Consumer<Object> onChanged = ignored -> announced[0]++;
+        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, onChanged);
+        try {
+            MessageBus.instance().publish(Events.GENERATOR_PILOT_ON,
+                    new PilotToneRequest(PILOT_HZ, PILOT_2_HZ, PILOT_LEVEL_DBV));
+        } finally {
+            MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onChanged);
+        }
+
+        List<String> afterRequest = new ArrayList<>();
+        for (ServerGeneratorStub.Command c : commandsAfter(before)) afterRequest.add(c.name());
+        assertFalse(afterRequest.contains("setPilotTones"),
+                "the pilots were sent to the bench, whose DAC runs on its own clock: "
+                        + afterRequest);
+        assertEquals(0, announced[0],
+                "the pilot request was announced as a changed signal, which restarts the "
+                        + "fundamental phase alignment that asked for the pilots");
     }
 
     @Test

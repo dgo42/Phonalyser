@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.fft;
 
+import java.util.Random;
+
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 import org.junit.jupiter.api.Test;
@@ -124,6 +126,36 @@ class FftAnalyzerThdTest {
     }
 
     @Test
+    void thdSumsOnlyTheHarmonicsUpToTheStatedLimit() {
+        // H2, H3 and H5 at 1 % each.  Summing all eight gives sqrt(3) %, up to
+        // H3 gives sqrt(2) %, H2 alone gives 1 %; the harmonic table keeps all
+        // of them whatever the limit, and the result says what it summed.
+        int sampleRate = 48_000;
+        int fftSize    = 8_192;
+        double freqHz  = (double) sampleRate / fftSize * 50;    // bin 50
+        double[] signal = new double[fftSize * 2];
+        for (int n = 0; n < signal.length; n++) {
+            double t = 2.0 * Math.PI * freqHz * n / sampleRate;
+            signal[n] = 0.5 * Math.sin(t) + 0.005 * (Math.sin(2 * t) + Math.sin(3 * t) + Math.sin(5 * t));
+        }
+        int step = FftOverlap.PCT_0.hopSamples(fftSize);
+        int frames = (signal.length - fftSize) / step + 1;
+
+        double[][] cases = { { 8, Math.sqrt(3.0) }, { 2, Math.sqrt(2.0) }, { 1, 1.0 } };
+        for (double[] c : cases) {
+            int limit = (int) c[0];
+            FftResult r = new FftAnalyzer().analyze(
+                    signal, sampleRate, fftSize, 8, limit,
+                    WindowType.HANN, FftOverlap.PCT_0,
+                    0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                    new FftResult(), step, frames);
+            assertEquals(c[1], r.thdPct, 0.05, "THD over H2..H" + (limit + 1));
+            assertEquals(limit, r.thdHarmonics, "the result names the harmonics it summed");
+            assertEquals(5 * r.fundamentalBin, r.harmonicBins[3], "H5 stays in the table at limit " + limit);
+        }
+    }
+
+    @Test
     void result_carriesInputParameters() {
         // Sanity bookkeeping: the analyser doesn't mangle the parameters
         // it was given on the way through.  Catches a subtle bug where
@@ -144,6 +176,125 @@ class FftAnalyzerThdTest {
         assertEquals(10.0,    r.snrFreqMin);
         assertEquals(40_000.0, r.snrFreqMax);
         assertEquals(false,   r.coherentAveraging);
+    }
+
+    @Test
+    void pilotTones_stayOutOfTheReadoutsAndSitOnTheirOwnBins() {
+        // A pilot tone is a generated line the fundamental's phase alignment
+        // reads as its time base; two of them run at once, each on a WHOLE bin
+        // of the analysis grid.  They must leave the readouts where they were:
+        // pinned on the analyser by their bins, each bin plus the window's main
+        // lobe is kept out of the noise, SNR and ENOB sums, and standing clear
+        // of the harmonic ladder THD never sees either of them.
+        // Geometry: 48 kHz, 1 M points, the fundamental on bin 21911 (1003 Hz
+        // snapped to the grid), the pilots on bins 339620 and 361531 - halfway
+        // between the 15th and 16th harmonic of that fundamental, and between
+        // the 16th and the 17th, so 10955 bins clear of every one of them.
+        int sampleRate  = 48_000;
+        int fftSize     = 1 << 20;
+        int fundBin     = 21_911;
+        int pilot1Bin   = 339_620;
+        int pilot2Bin   = 361_531;
+        double fundHz   = fundBin * (double) sampleRate / fftSize;
+        double fundAmp  = 0.5;
+        double pilotAmp = 1.0e-5;     // -100 dBV against a 1 V full scale
+        // A deterministic noise floor ~70 dB below a pilot.  Being the same
+        // draw in both runs it holds every noise bin at the same value, so the
+        // comparison below sees the pilot lines alone and not the round-off of
+        // two different sums.
+        double noiseAmp = 1.0e-6;
+        Random noise    = new Random(4242L);
+
+        double[] signal = new double[fftSize * 2];
+        for (int n = 0; n < signal.length; n++) {
+            signal[n] = fundAmp * Math.sin(2.0 * Math.PI * fundHz * n / sampleRate)
+                      + noiseAmp * noise.nextGaussian();
+        }
+
+        FftAnalyzer analyzer = new FftAnalyzer();
+        analyzer.setPilotBins(-1, -1);             // no pilot on the reference run
+        FftResult noPilot = analyzer.analyze(signal, sampleRate, fftSize, 8,
+                WindowType.BH7, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false);
+        double thdDb  = noPilot.thdDb;
+        double snrDb  = noPilot.snrDb;
+        double enobDb = noPilot.enobSinadDb;
+
+        // The same signal plus both pilot lines, each on its own bin, as the
+        // generator carries them.
+        for (int n = 0; n < signal.length; n++) {
+            signal[n] += pilotAmp * Math.sin(2.0 * Math.PI * pilot1Bin * n / fftSize)
+                       + pilotAmp * Math.sin(2.0 * Math.PI * pilot2Bin * n / fftSize);
+        }
+        analyzer.setPilotBins(pilot1Bin, pilot2Bin);
+        FftResult withPilots = analyzer.analyze(signal, sampleRate, fftSize, 8,
+                WindowType.BH7, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false);
+
+        assertEquals(thdDb, withPilots.thdDb, 0.01,
+                "THD must not move when the two pilots are added");
+        assertEquals(snrDb, withPilots.snrDb, 0.01,
+                "SNR must not move when the two pilots are added");
+        assertEquals(enobDb, withPilots.enobSinadDb, 0.01,
+                "the ENOB basis must not move when the two pilots are added");
+
+        assertEquals(pilot1Bin, withPilots.pilot1Bin,
+                "the result carries the first pilot's bin as pinned");
+        assertEquals(pilot2Bin, withPilots.pilot2Bin,
+                "the result carries the second pilot's bin as pinned");
+        assertEquals(pilot1Bin, withPilots.pilot1HzRefined / withPilots.freqResolution, 1e-6,
+                "a pilot on a whole bin has that bin times the bin width for its frequency");
+        assertEquals(pilot2Bin, withPilots.pilot2HzRefined / withPilots.freqResolution, 1e-6,
+                "the second pilot's frequency is its own bin times the bin width");
+
+        // Both lines have to come through the coherent sum at their own level,
+        // or the three readings above would hold for the trivial reason that
+        // nothing was there to disturb them.  A line on a whole bin is periodic
+        // in the frame, so no window loss and no de-rotation residual is
+        // expected at either of them.
+        assertEquals(20.0 * Math.log10(pilotAmp),
+                withPilots.amplitudeDbFs[pilot1Bin], 0.1,
+                "the first pilot must survive the coherent sum at its own level");
+        assertEquals(20.0 * Math.log10(pilotAmp),
+                withPilots.amplitudeDbFs[pilot2Bin], 0.1,
+                "the second pilot must survive the coherent sum at its own level");
+    }
+
+    @Test
+    void pilotSpans_coverEachPilotBinPlusTheWindowsMainLobe() {
+        // The analyser is the one place the excluded width is decided, and each
+        // pilot's span is stamped on the result so that the readouts outside it
+        // - the dual-tone TD+N residual - leave exactly the same bins out as
+        // its own noise, SNR and ENOB sums.  One span per pilot: the bins its
+        // position straddles, which for a whole bin is that bin alone, widened
+        // by the window's own main-lobe half-width on either side.
+        int sampleRate = 48_000;
+        int fftSize    = 8_192;
+        int pilot1Bin  = 1_500;
+        int pilot2Bin  = 2_600;
+        double fundHz  = (double) sampleRate / fftSize * 100;   // bin 100
+        double fundAmp  = 0.5;
+        double pilotAmp = 1.0e-5;
+
+        double[] signal = new double[fftSize * 2];
+        for (int n = 0; n < signal.length; n++) {
+            signal[n] = fundAmp * Math.sin(2.0 * Math.PI * fundHz * n / sampleRate)
+                      + pilotAmp * Math.sin(2.0 * Math.PI * pilot1Bin * n / fftSize)
+                      + pilotAmp * Math.sin(2.0 * Math.PI * pilot2Bin * n / fftSize);
+        }
+
+        FftAnalyzer analyzer = new FftAnalyzer();
+        analyzer.setPilotBins(pilot1Bin, pilot2Bin);
+        FftResult r = analyzer.analyze(signal, sampleRate, fftSize, 8,
+                WindowType.BH7, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false);
+
+        int lobe = analyzer.mainLobeBins(WindowType.BH7);
+        assertEquals(pilot1Bin - lobe, r.pilot1MaskLoBin,
+                "the first pilot's span starts a main lobe below its bin");
+        assertEquals(pilot1Bin + lobe, r.pilot1MaskHiBin,
+                "the first pilot's span ends a main lobe above its bin");
+        assertEquals(pilot2Bin - lobe, r.pilot2MaskLoBin,
+                "the second pilot's span starts a main lobe below its bin");
+        assertEquals(pilot2Bin + lobe, r.pilot2MaskHiBin,
+                "the second pilot's span ends a main lobe above its bin");
     }
 
     private static double[] pureSine(int sampleRate, double freqHz, double amplitude, int n) {

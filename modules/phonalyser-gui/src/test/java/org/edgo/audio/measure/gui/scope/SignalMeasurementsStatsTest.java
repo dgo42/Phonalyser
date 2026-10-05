@@ -38,7 +38,7 @@ class SignalMeasurementsStatsTest {
         // capture phase; whole-period integration must hold Vmean within 10 µV
         // at every phase.
         for (double phase : new double[] { 0.0, 0.7, 1.3, 2.1, 2.9 }) {
-            SignalMeasurements m = SignalMeasurements.from(
+            SignalMeasurements m = new SignalMeasurements(
                     sine(1.0, 0.0, phase), N, SAMPLE_RATE, PEAK_VOLTS, false);
             assertTrue(Math.abs(m.getVmean()) < 10e-6,
                     "Vmean " + m.getVmean() + " V at phase " + phase);
@@ -47,14 +47,14 @@ class SignalMeasurementsStatsTest {
 
     @Test
     void vmean_preservesTrueDcOffset() {
-        SignalMeasurements m = SignalMeasurements.from(
+        SignalMeasurements m = new SignalMeasurements(
                 sine(0.5, 0.1, 0.4), N, SAMPLE_RATE, PEAK_VOLTS, false);
         assertEquals(0.1 * PEAK_VOLTS, m.getVmean(), 10e-6);
     }
 
     @Test
     void vrms_wholePeriods_matchesAmplitude() {
-        SignalMeasurements m = SignalMeasurements.from(
+        SignalMeasurements m = new SignalMeasurements(
                 sine(1.0, 0.0, 0.9), N, SAMPLE_RATE, PEAK_VOLTS, false);
         assertEquals(PEAK_VOLTS / Math.sqrt(2), m.getVrms(), 1e-4);
     }
@@ -63,7 +63,7 @@ class SignalMeasurementsStatsTest {
     void vmean_dcOnly_fallsBackToFullWindow() {
         float[] d = new float[N];
         Arrays.fill(d, 0.25f);
-        SignalMeasurements m = SignalMeasurements.from(d, N, SAMPLE_RATE, PEAK_VOLTS, false);
+        SignalMeasurements m = new SignalMeasurements(d, N, SAMPLE_RATE, PEAK_VOLTS, false);
         assertEquals(0.25 * PEAK_VOLTS, m.getVmean(), 1e-6);
     }
 }
