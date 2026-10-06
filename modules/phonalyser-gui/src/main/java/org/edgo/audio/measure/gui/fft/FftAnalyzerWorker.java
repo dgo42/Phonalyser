@@ -510,14 +510,10 @@ public final class FftAnalyzerWorker {
      *  spectrum is phase-rotated by the time delta from this reference
      *  to keep tones coherent across ticks. */
     private long    accumRefSampleStart;
-    /** The pilots' measured advance on the reference tick, samples, or
-     *  {@link Double#NaN} where the pair had nothing settled then.  A tick's
-     *  rotation is its own measured advance less this one. */
-    private double  accumRefPilotAdvance = Double.NaN;
-    /** The reference channel's tone phases on the reference tick, radians, or
-     *  {@link Double#NaN} where that tick read none: in mode
-     *  {@link FundamentalPhaseAlignment#REFERENCE_CHANNEL} a tick's rotation
-     *  is its own reading less this one. */
+    /** The tones' reference phases on the reference tick, radians, or
+     *  {@link Double#NaN} where that tick read none - {@link #referenceTone1Rad}
+     *  and {@link #referenceTone2Rad} as they stood then: a tick's rotation is
+     *  its own reading less this one, in either aligning mode. */
     private double  accumRefTone1Rad = Double.NaN;
     private double  accumRefTone2Rad = Double.NaN;
     /** Cross-tick de-rotation frequency (fractional fundamental bin), PINNED at
@@ -684,20 +680,23 @@ public final class FftAnalyzerWorker {
      *  collection's first read frame, or {@link Double#NaN} where the pair
      *  has nothing settled.  Measured from the two pilot lines, so it carries
      *  neither the capture's count of the samples nor the phase of the
-     *  fundamental, and it is the rotation the accumulator turns the frame by
-     *  at every bin. */
+     *  fundamental.  The tones' excess is derived from it; the accumulator's
+     *  rotation runs on {@link #referenceTone1Rad}. */
     private double pilotAdvanceSamples = Double.NaN;
-    /** The reference channel's own phase of each tone on THIS tick's frame,
-     *  radians at the window's start - F1's and, while a dual pair is pinned,
-     *  F2's - or {@link Double#NaN} where mode
-     *  {@link FundamentalPhaseAlignment#REFERENCE_CHANNEL} read none.  That
-     *  channel carries the tones clear of the notch, so a tone's change
-     *  between two ticks IS the turn the advance between them gives that
-     *  tone: the reference mode's measurement of the advance, as
-     *  {@link #pilotAdvanceSamples} is the pilot mode's.  Kept as a phase and
-     *  not in samples: every harmonic and every product owes a whole-number
-     *  combination of these two turns, so no whole period has to be counted
-     *  and none can be miscounted. */
+    /** Each tone's reference phase on THIS tick's frame, radians at the
+     *  window's start - a reading of the tone as the generator emitted it,
+     *  clear of the notch - or {@link Double#NaN} where the aligning mode in
+     *  force read none.  Mode {@link FundamentalPhaseAlignment#REFERENCE_CHANNEL}:
+     *  the reference channel's own phase of F1 and, while a dual pair is
+     *  pinned, of F2.  Mode {@link FundamentalPhaseAlignment#PILOT_TONE}: the
+     *  first pilot's phase less the second's for F1 - the two lines stand one
+     *  fundamental apart, so their difference turns exactly as the fundamental
+     *  does - and nothing for F2.  A tone's change between two ticks IS the
+     *  turn the advance between them gives that tone, and it is what the
+     *  accumulator turns the frame by.  Kept as a phase and not in samples:
+     *  every harmonic and every product owes a whole-number combination of
+     *  these two turns, so no whole period has to be counted and none can be
+     *  miscounted. */
     private double referenceTone1Rad = Double.NaN;
     private double referenceTone2Rad = Double.NaN;
     /** True while the operator has been told that the alignment is deciding.
@@ -1278,11 +1277,10 @@ public final class FftAnalyzerWorker {
             accumCoherent = coherent;
             accumRefSampleStart    = samplesAbsStart;
             // The aligning mode's reading on the tick that becomes the
-            // reference - the pair's advance, or the reference channel's tone
-            // phases: every later tick's rotation is its own reading less this
-            // one, so the accumulator turns by an advance that was MEASURED
-            // rather than by the count the capture kept.
-            accumRefPilotAdvance   = pilotAdvanceSamples;
+            // reference - the tones' reference phases: every later tick's
+            // rotation is its own reading less this one, so the accumulator
+            // turns by a turn that was MEASURED rather than by the count the
+            // capture kept.
             accumRefTone1Rad       = referenceTone1Rad;
             accumRefTone2Rad       = referenceTone2Rad;
             accumKFractional       = kFrac;
@@ -1336,23 +1334,16 @@ public final class FftAnalyzerWorker {
         // wrong across a re-anchor.  The notched fundamental's phase then
         // steers nothing - it is a line to be corrected, not a clock - which
         // is what keeps a re-sync from leaving a rotation behind on every
-        // harmonic.  The pilot pair states the advance itself, and this
-        // tick's rotation is that reading less the reference tick's.  The
-        // reference channel states the fundamental's TURN over the advance,
-        // which places the advance within one period of the fundamental -
-        // all that a ladder of its whole multiples can tell apart - so the
-        // count is moved to the nearest advance that turn fits.
-        final boolean pilotGeometry = !Double.isNaN(pilotAdvanceSamples)
-                && !Double.isNaN(accumRefPilotAdvance);
-        final boolean referenceGeometry = !pilotGeometry && !phaseAlignRefused
-                && accumKFractional > 0.0
+        // harmonic.  Either mode states the fundamental's TURN over the
+        // advance - the reference channel's own tone, or the pilot pair's
+        // phase difference - which places the advance within one period of
+        // the fundamental, all that a ladder of its whole multiples can tell
+        // apart, so the count is moved to the nearest advance that turn fits.
+        final boolean measuredGeometry = !phaseAlignRefused && accumKFractional > 0.0
                 && !Double.isNaN(referenceTone1Rad) && !Double.isNaN(accumRefTone1Rad);
-        if (pilotGeometry) {
-            delta = pilotAdvanceSamples - accumRefPilotAdvance;
-        } else if (referenceGeometry) {
+        if (measuredGeometry) {
             delta = advanceForTurn(delta, referenceTone1Rad - accumRefTone1Rad, fftSize);
         }
-        final boolean measuredGeometry = pilotGeometry || referenceGeometry;
 
         int weight = Math.max(1, r.frameCount);
         // A coherent "dropout hold" used to sit here: when the pinned fundamental's
@@ -1605,7 +1596,7 @@ public final class FftAnalyzerWorker {
                 // read: the advance above is placed by the fundamental alone,
                 // within one of ITS periods, and a whole period of the
                 // fundamental is no whole turn of the second tone.
-                final boolean referenceTone2 = referenceGeometry
+                final boolean referenceTone2 = measuredGeometry
                         && !Double.isNaN(referenceTone2Rad) && !Double.isNaN(accumRefTone2Rad);
                 final double phi2 = !(accumKappa2 > 0.0) ? 0.0
                         : referenceTone2
@@ -1971,6 +1962,10 @@ public final class FftAnalyzerWorker {
      * @return the fundamental's bin, or 0 when the frame gives none
      */
     private int readAlignmentFrame(FundamentalPhaseAlignment mode, FftResult r, boolean coherent) {
+        // This frame's reference phases are its own: a frame that reads none
+        // must not be turned by the frame before it.
+        referenceTone1Rad = Double.NaN;
+        referenceTone2Rad = Double.NaN;
         int halfSize = r.fftSize / 2;
         int k0 = phaseAlignBin(r, halfSize, coherent);
         if (k0 <= 0) return 0;
@@ -2094,6 +2089,11 @@ public final class FftAnalyzerWorker {
             pilotRawPhase1 = Double.NaN;    // no line, no phase of its own to turn by
             pilotRawPhase2 = Double.NaN;
             warnNoPilotLine(held1 ? pilotReader2.getBin() : pilotReader1.getBin());
+            // In the pilot mode the pair is the frame's clock: a frame it
+            // cannot be read on has no measured turn, and turning it by the
+            // count would hand the time base to the notched fundamental, so
+            // the frame is not averaged.
+            if (steersByPair(mode)) phaseAlignUnsettled = true;
             pilotsMissing(mode, r, timeSec);
             return;
         }
@@ -2103,6 +2103,13 @@ public final class FftAnalyzerWorker {
                 : Double.NaN;
         pilotRawPhase1 = raw1;      // the lobes' own de-rotation reads them, accepted or not
         pilotRawPhase2 = raw2;
+        // The two lines stand one fundamental apart, so the first pilot's
+        // phase less the second's turns between two frames exactly as the
+        // emitted fundamental does: the frame's reference phase, the reading
+        // the reference channel gives in its own mode.  Stated on the
+        // collection's first read frame as on every later one, so the tick
+        // that becomes the accumulator's reference holds it.
+        if (steersByPair(mode)) referenceTone1Rad = wrapTurn(raw1 - raw2);
         if (!pilotFirstTaken) {
             // The collection's first read frame is the zero everything after
             // it is measured from: it holds the phases and states no change.
@@ -2137,9 +2144,9 @@ public final class FftAnalyzerWorker {
         // is kept out of the accumulator altogether.
         phaseAlignUnsettled = !advance.settled();
         // The advance the pair settled on, since the collection's first read
-        // frame: what the accumulator turns this frame by, at every bin.  The
-        // capture's own count and the phase the fundamental happens to show
-        // no longer enter that rotation - see the accumulator's use of it.
+        // frame: what the tones' excess is counted against.  The accumulator's
+        // rotation does not read it - that runs on the pair's phase difference
+        // stated above.
         // MODE PILOT_TONE ONLY: the reference-channel mode reads the pair as
         // the control of its own reading, under a trace switch, and a switch
         // that is there to observe must not change what is measured.
@@ -2180,6 +2187,14 @@ public final class FftAnalyzerWorker {
                         String.format("%.3f", Math.toDegrees(excessCarry1Rad)));
             }
         }
+    }
+
+    /** Whether the pilot pair is the frame's clock: mode PILOT_TONE with both
+     *  lines elected.  In the reference-channel mode the pair is read as the
+     *  control of that mode's own reading and steers nothing; one elected
+     *  line has no difference to state. */
+    private boolean steersByPair(FundamentalPhaseAlignment mode) {
+        return mode == FundamentalPhaseAlignment.PILOT_TONE && pilotReader2 != null;
     }
 
     /** Makes this frame's readings the zero every later frame of the
@@ -2342,8 +2357,6 @@ public final class FftAnalyzerWorker {
     private void readReferenceChange(FundamentalPhaseAlignment mode, FftResult r, int k0, int k1,
             double fundMag, double phiF, double phiF2) {
         traceRawRefRad    = Double.NaN;     // no mirror read yet on this frame
-        referenceTone1Rad = Double.NaN;
-        referenceTone2Rad = Double.NaN;
         boolean steers = mode == FundamentalPhaseAlignment.REFERENCE_CHANNEL;
         if (refWinBuf == null || !winValid) return;
         // Read at the window's start, the origin the analysed channel's own

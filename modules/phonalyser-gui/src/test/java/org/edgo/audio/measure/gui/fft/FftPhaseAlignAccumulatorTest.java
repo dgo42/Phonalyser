@@ -138,6 +138,10 @@ class FftPhaseAlignAccumulatorTest {
      *  count names the wrong period, which a ladder of whole multiples of the
      *  fundamental must not see. */
     private static final int        SLIP_MAX_SAMPLES = 40;
+    /** The least number of ticks the pilot case with the gap must average: a
+     *  run in which the pair settled on few frames would hold its levels on
+     *  those few and prove nothing about the rest. */
+    private static final int        SLIP_MIN_AVERAGED_TICKS = TICKS * 3 / 4;
 
     /** The two pilot bins of the cases below, both whole bins of the
      *  transform and spaced ONE FUNDAMENTAL BIN apart - 992 and 992 - 64 -
@@ -458,6 +462,83 @@ class FftPhaseAlignAccumulatorTest {
             accumulateTick(worker, phiF, r, base);
             base += HOP;
         }
+        return levels(worker, r);
+    }
+
+    /**
+     * The pilot pair as the frame's clock.  Half way through the run the
+     * capture loses {@value #GAP_SAMPLES} samples without telling the
+     * counter, so from there on the counted advance is wrong on every frame
+     * by more than a third of the fundamental's period - at H9 a turn that
+     * sets the second half of the run against the first.  In mode PILOT_TONE
+     * the worker turns each frame by the change of the two pilots' phase
+     * difference - the lines stand one fundamental apart, so that difference
+     * turns as the emitted fundamental does - and every harmonic holds its
+     * level while the fundamental's phase walks through the notch.
+     */
+    @Test
+    void thePilotPairsTurnCarriesTheFrameThroughAnUncountedGap() throws Exception {
+        int gap   = (int) GAP_SAMPLES;
+        int total = (TICKS - 1) * HOP + WIN_LEN + gap;
+        double[] walk     = phaseWalk(SEED + 13, total);
+        double[] analysed = channel(SEED + 14, total, FUND_BIN, HARMONICS, 0.0, walk);
+        addPilots(analysed);
+        int[] slips = new int[TICKS];
+        for (int t = TICKS / 2; t < TICKS; t++) {
+            slips[t] = gap;
+        }
+
+        double[] measured = accumulatePilotSlipped(analysed, slips);
+
+        LOG.info("pilot pair: fund={} H2..H9={}", fmt(measured[0]), fmtAll(measured));
+        assertEquals(FUND_DBFS, measured[0], FUND_TOL_DB,
+                "the fundamental must hold its level on the pilot pair's turn");
+        for (int h = 2; h <= HARMONICS + 1; h++) {
+            assertEquals(HARMONIC_DBFS, measured[h - 1], LEVEL_TOL_DB,
+                    "H" + h + " must hold its level through a gap the counter never saw");
+        }
+    }
+
+    /** Adds the two pilot lines, each on its whole bin, to a capture. */
+    private void addPilots(double[] capture) {
+        double a  = Math.pow(10.0, PILOT_ACCUM_DBFS / 20.0);
+        double w1 = 2.0 * Math.PI * PILOT_BIN / FFT_SIZE;
+        double w2 = 2.0 * Math.PI * PILOT2_BIN / FFT_SIZE;
+        for (int k = 0; k < capture.length; k++) {
+            capture[k] += a * (Math.sin(w1 * k + PILOT_PHASE_RAD)
+                    + Math.sin(w2 * k + PILOT2_PHASE_RAD));
+        }
+    }
+
+    /** Drives a pilot-mode worker over a capture whose window at tick
+     *  {@code t} starts {@code slips[t]} samples later than the counter says,
+     *  the way the tick loop does: the worker reads its own excess, and a tick
+     *  its alignment left unsettled is not averaged.  Returns the accumulated
+     *  {@code [fundamental, H2 .. H9]} in dBFS. */
+    private double[] accumulatePilotSlipped(double[] analysed, int[] slips) throws Exception {
+        FftAnalyzer       analyzer = new FftAnalyzer();
+        FftAnalyzerWorker worker   = pilotWorker();
+        double[]  win      = new double[WIN_LEN];
+        FftResult r        = null;
+        long      base     = 0;
+        int       averaged = 0;
+        for (int t = 0; t < TICKS; t++) {
+            System.arraycopy(analysed, (int) base + slips[t], win, 0, WIN_LEN);
+            analyzer.setPilotBins(PILOT_BIN, PILOT2_BIN);
+            r = analyze(analyzer, win, base);
+            FieldUtils.writeField(worker, "winAbsStart", base, true);
+            FieldUtils.writeField(worker, "phaseAlignUnsettled", false, true);
+            double phiF = (Double) MethodUtils.invokeMethod(worker, true, "tickPhiF",
+                    FundamentalPhaseAlignment.PILOT_TONE, r, true);
+            if (!(Boolean) FieldUtils.readField(worker, "phaseAlignUnsettled", true)) {
+                accumulateTick(worker, phiF, r, base);
+                averaged++;
+            }
+            base += HOP;
+        }
+        assertTrue(averaged >= SLIP_MIN_AVERAGED_TICKS,
+                "the pair must settle on at least " + SLIP_MIN_AVERAGED_TICKS + " of " + TICKS
+                        + " ticks; it settled on " + averaged);
         return levels(worker, r);
     }
 
