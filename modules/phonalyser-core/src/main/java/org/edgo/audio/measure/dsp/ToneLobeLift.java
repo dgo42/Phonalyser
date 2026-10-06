@@ -56,6 +56,20 @@ public final class ToneLobeLift {
 
     /** Noise ceiling = median + {@code CEIL_K}·MAD of the flank band. */
     private static final double CEIL_K = 4.0;
+    /** Half-width of the median-floor window around a line, in Hz -
+     *  converted to bins with the spectrum's own resolution, so the window
+     *  covers the same spectral neighbourhood at every sample rate and FFT
+     *  size. */
+    private static final double MEDIAN_FLOOR_SPAN_HZ = 25.0;
+    /** The lobe exclusion at the median-floor window's centre, in equivalent
+     *  noise bandwidths of the spectrum's window function: the main lobe
+     *  widens with the window's NENBW, so the exclusion follows it instead of
+     *  assuming one window type. */
+    private static final double MEDIAN_FLOOR_EXCLUDE_NENBW = 4.0;
+    /** The neighbour bins' median stands for the local floor only over
+     *  enough bins; fewer than this beyond the exclusion and the window is
+     *  too narrow to read a floor from. */
+    private static final int MEDIAN_FLOOR_MIN_BINS = 16;
 
     private final int floorGap;      // bins skipped each side before sampling the flanks
     private final int floorSpan;     // bins sampled each side for the noise estimate
@@ -94,6 +108,43 @@ public final class ToneLobeLift {
         Arrays.sort(c);
         double mad = c[m / 2];
         return median + CEIL_K * mad;
+    }
+
+    /** A line's local noise floor in dB: the MEDIAN of {@code levelDb} over
+     *  the bins within {@link #MEDIAN_FLOOR_SPAN_HZ} of {@code bin}, the lobe
+     *  at the centre excluded over {@link #MEDIAN_FLOOR_EXCLUDE_NENBW} noise
+     *  bandwidths of the window - the level of the local grass.  The median,
+     *  not the highest bin: the window is half the mains spacing wide to
+     *  either side, so it always holds one mains harmonic, and a single
+     *  foreign line standing in it would otherwise be read as the floor.
+     *  Unlike {@link #localFloor}, the ceiling a lobe must rise above, this is
+     *  the floor's own level.  A bin whose level is not finite is left out.
+     *  {@code NaN} when the window leaves too few floor bins to mean anything.
+     *
+     * @param levelDb   a bin's level in dB, by bin index
+     * @param bin       the line's bin
+     * @param maxBin    highest bin index {@code levelDb} may be read at
+     * @param binHz     the spectrum's bin width in Hz
+     * @param nenbwBins the window's equivalent noise bandwidth in bins
+     */
+    public double medianFloorDb(IntToDoubleFunction levelDb, int bin, int maxBin,
+            double binHz, double nenbwBins) {
+        if (binHz <= 0.0) return Double.NaN;
+        int exclude = (int) Math.ceil(MEDIAN_FLOOR_EXCLUDE_NENBW * Math.max(1.0, nenbwBins));
+        int span = Math.max((int) Math.round(MEDIAN_FLOOR_SPAN_HZ / binHz),
+                exclude + MEDIAN_FLOOR_MIN_BINS);
+        int lo = Math.max(0, bin - span);
+        int hi = Math.min(maxBin, bin + span);
+        double[] floor = new double[Math.max(0, hi - lo + 1)];
+        int n = 0;
+        for (int k = lo; k <= hi; k++) {
+            if (Math.abs(k - bin) <= exclude) continue;
+            double db = levelDb.applyAsDouble(k);
+            if (Double.isFinite(db)) floor[n++] = db;
+        }
+        if (n < MEDIAN_FLOOR_MIN_BINS) return Double.NaN;
+        Arrays.sort(floor, 0, n);
+        return floor[n / 2];
     }
 
     /** Inclusive {@code [lo, hi]} bin span of the main lobe: the contiguous bins

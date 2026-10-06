@@ -69,20 +69,6 @@ public final class HarmonicCompensation {
      *  vector, and a step on it writes that noise into the generator as a
      *  new harmonic. */
     public static final double APPLY_CLEARANCE_DB = 5.0;
-    /** Half-width of the local-floor window around a harmonic, in Hz -
-     *  converted to bins with the result's own resolution, so the window
-     *  covers the same spectral neighbourhood at every sample rate and FFT
-     *  size. */
-    private static final double LOCAL_FLOOR_SPAN_HZ = 25.0;
-    /** The lobe exclusion at the window's centre, in equivalent noise
-     *  bandwidths of the result's own window function: the main lobe widens
-     *  with the window's NENBW, so the exclusion follows it instead of
-     *  assuming one window type. */
-    private static final double LOCAL_FLOOR_EXCLUDE_NENBW = 4.0;
-    /** The neighbour bins' median stands for the local floor only over
-     *  enough bins; fewer than this beyond the exclusion and the window is
-     *  too narrow to read a floor from. */
-    private static final int LOCAL_FLOOR_MIN_BINS = 16;
 
     private final int      maxHarmonics;
     /** Per-harmonic accumulated correction phasor (real / imaginary parts)
@@ -94,6 +80,8 @@ public final class HarmonicCompensation {
      *  correction - zero where the apply gate held the harmonic. */
     private final double[]  lastDeltaRe;
     private final double[]  lastDeltaIm;
+    /** Reads each harmonic's local noise floor for the apply gate. */
+    private final ToneLobeLift lobe = new ToneLobeLift();
 
     public HarmonicCompensation(int maxHarmonics) {
         this.maxHarmonics    = maxHarmonics;
@@ -231,41 +219,14 @@ public final class HarmonicCompensation {
             // at H2) while its neighbours do not, which would fake exactly
             // that much clearance.
             if (r.amplitudeDbFs != null && bin < r.amplitudeDbFs.length) {
+                double[] ampDb  = r.amplitudeDbFs;
                 double rawDb   = r.rawHarmonicDbFs(h);
-                double floorDb = localFloorDb(r, bin);
+                double floorDb = lobe.medianFloorDb(k -> ampDb[k], bin, ampDb.length - 1,
+                        r.freqResolution, r.windowNenbwBins);
                 if (Double.isFinite(rawDb) && Double.isFinite(floorDb)) clearance[h] = rawDb - floorDb;
             }
         }
         return new HarmonicPhasors(re, im, hz, clearance);
-    }
-
-    /** One harmonic's local noise floor: the MEDIAN bin level (dB) inside
-     *  {@link #LOCAL_FLOOR_SPAN_HZ} around its bin, the lobe at the centre
-     *  excluded over {@link #LOCAL_FLOOR_EXCLUDE_NENBW} noise bandwidths of
-     *  the result's window - the level of the local grass.  The median, not
-     *  the highest bin: the window is half the mains spacing wide to either
-     *  side, so it always holds one mains harmonic, and a single foreign
-     *  line standing in it would otherwise be read as the floor and gate
-     *  out a harmonic far above the noise.  {@code NaN} when the window
-     *  leaves too few floor bins to mean anything. */
-    private double localFloorDb(FftResult r, int bin) {
-        double[] ampDb = r.amplitudeDbFs;
-        if (ampDb == null || r.freqResolution <= 0.0) return Double.NaN;
-        int exclude = (int) Math.ceil(LOCAL_FLOOR_EXCLUDE_NENBW
-                * Math.max(1.0, r.windowNenbwBins));
-        int span = Math.max((int) Math.round(LOCAL_FLOOR_SPAN_HZ / r.freqResolution),
-                exclude + LOCAL_FLOOR_MIN_BINS);
-        int lo = Math.max(0, bin - span);
-        int hi = Math.min(ampDb.length - 1, bin + span);
-        double[] floor = new double[Math.max(0, hi - lo + 1)];
-        int n = 0;
-        for (int k = lo; k <= hi; k++) {
-            if (Math.abs(k - bin) <= exclude || !Double.isFinite(ampDb[k])) continue;
-            floor[n++] = ampDb[k];
-        }
-        if (n < LOCAL_FLOOR_MIN_BINS) return Double.NaN;
-        Arrays.sort(floor, 0, n);
-        return floor[n / 2];
     }
 
     /** True once at least one harmonic has accumulated a non-zero correction. */

@@ -36,6 +36,7 @@ import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.dsp.TimeDiscontinuityDetector;
+import org.edgo.audio.measure.dsp.ToneLobeLift;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
@@ -1666,8 +1667,9 @@ public final class FftAnalyzerWorker {
                 // across a long collection shows in the log as well.
                 double conv = magToAmplitudeFactor(r, halfSize);
                 traceHarmonicLevels(r.re, r.im, halfSize, conv, 1.0,
-                        "frame " + completedAnalyses);
+                        r.freqResolution, r.windowNenbwBins, "frame " + completedAnalyses);
                 traceHarmonicLevels(accumRe, accumIm, halfSize, conv, accumFrames + weight,
+                        r.freqResolution, r.windowNenbwBins,
                         "accumulator after frame " + completedAnalyses);
             }
         } else {
@@ -1739,6 +1741,9 @@ public final class FftAnalyzerWorker {
      *  one the distortion readouts are built on, so the trace speaks the same
      *  set. */
     private static final int TRACE_MAX_HARMONIC = 9;
+    /** Reads each harmonic's local noise floor for the floor trace - the same
+     *  median floor the predistortion apply gate measures. */
+    private final ToneLobeLift lobe = new ToneLobeLift();
 
     /**
      * One line of the harmonic phase trace (see
@@ -1800,30 +1805,49 @@ public final class FftAnalyzerWorker {
      * harmonic grows or shrinks across a long average - a DAC correction
      * ageing, or a floor averaging down; this line is that.
      *
-     * @param re       real parts to read, indexed by bin
-     * @param im       imaginary parts to read, indexed by bin
-     * @param halfSize highest bin index either array is read at
-     * @param conv     the magnitude-to-amplitude factor of this spectrum's
-     *                 window and length, see {@link #magToAmplitudeFactor}
-     * @param norm     what the arrays are a sum of: one for a single frame,
-     *                 the accumulated frame count for the accumulator
-     * @param label    what this line reads - the frame, or the accumulator
-     *                 after that frame
+     * <p>A second line, the floor trace, states each harmonic's local noise
+     * floor from H2 on, read from the same arrays scaled the same way by
+     * {@link ToneLobeLift#medianFloorDb} - the floor the predistortion apply
+     * gate measures.  On the accumulator it is the coherent average's own
+     * floor, which falls with the frame count, so the level line beside it
+     * says how far a harmonic stands clear of what the average can resolve.
+     *
+     * @param re        real parts to read, indexed by bin
+     * @param im        imaginary parts to read, indexed by bin
+     * @param halfSize  highest bin index either array is read at
+     * @param conv      the magnitude-to-amplitude factor of this spectrum's
+     *                  window and length, see {@link #magToAmplitudeFactor}
+     * @param norm      what the arrays are a sum of: one for a single frame,
+     *                  the accumulated frame count for the accumulator
+     * @param binHz     the spectrum's bin width in Hz
+     * @param nenbwBins the window's equivalent noise bandwidth in bins
+     * @param label     what this line reads - the frame, or the accumulator
+     *                  after that frame
      */
     private void traceHarmonicLevels(double[] re, double[] im, int halfSize, double conv,
-            double norm, String label) {
+            double norm, double binHz, double nenbwBins, String label) {
         if (accumKFractional < KAPPA_FAMILY_MIN_BIN || accumIntFundBinRounded <= 0
                 || conv <= 0.0 || norm <= 0.0) {
             return;
         }
         StringBuilder levels = new StringBuilder();
+        StringBuilder floors = new StringBuilder();
         for (int h = 1; h <= TRACE_MAX_HARMONIC; h++) {
             int kh = (int) Math.round(h * accumKFractional);
             if (kh > halfSize) break;
             double amp = Math.hypot(re[kh], im[kh]) * conv / norm;
             levels.append(String.format(" H%d=%.2f", h, amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0));
+            if (h >= 2) {
+                double floorDb = lobe.medianFloorDb(
+                        k -> 20.0 * Math.log10(Math.hypot(re[k], im[k]) * conv / norm),
+                        kh, halfSize, binHz, nenbwBins);
+                floors.append(String.format(" H%d=%.2f", h, floorDb));
+            }
         }
-        log.info("FFT harmonic level trace, {} (dBFS):{}", label, levels);
+        if (log.isInfoEnabled()) {
+            log.info("FFT harmonic level trace, {} (dBFS):{}", label, levels);
+            log.info("FFT harmonic floor trace, {} (dBFS):{}", label, floors);
+        }
     }
 
     /** This tick's FUNDAMENTAL phase excess for the selected alignment mode,
