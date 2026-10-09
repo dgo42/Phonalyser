@@ -26,6 +26,7 @@ import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -77,11 +78,10 @@ class FftPhaseAlignAccumulatorTest {
     private static final int        FFT_SIZE    = 4096;
     private static final WindowType WINDOW      = WindowType.BH7;
     private static final FftOverlap OVERLAP     = FftOverlap.PCT_75;
-    /** The overlap's hop, and with it the spacing of the two frames a tick
-     *  analyses - the worker's own geometry. */
+    /** The overlap's hop: the advance between the frames of successive ticks
+     *  - the worker's own geometry. */
     private static final int        HOP         = FFT_SIZE / 4;
-    private static final int        FRAMES      = 2;
-    private static final int        WIN_LEN     = FFT_SIZE + HOP;
+    private static final int        WIN_LEN     = FFT_SIZE;
     private static final int        TICKS       = 300;
 
     /** On-bin fundamental: an integer bin makes the accumulated level exactly
@@ -228,12 +228,12 @@ class FftPhaseAlignAccumulatorTest {
     /** The worker members this harness drives, by name because that is what
      *  reflection takes: the private field holding the next tick's phase
      *  excess, the private accumulate step, the private rollback the
-     *  discontinuity path uses, and the private overlay that writes the
-     *  accumulator back onto a result for the display path. */
+     *  discontinuity path uses, and the private accumulator whose overlay
+     *  writes the average back onto a result for the display path. */
     private static final String PHI_F_FIELD = "pendingPhiF";
     private static final String ACCUMULATE  = "accumulateIntoForeverBuffer";
     private static final String SUBTRACT    = "subtractPreviousTicks";
-    private static final String OVERLAY     = "overlayAccumulatorOnto";
+    private static final String ACCUMULATOR = "accumulator";
 
     private static final Logger LOG = LogManager.getLogger("FftPhaseAlign");
 
@@ -991,8 +991,10 @@ class FftPhaseAlignAccumulatorTest {
             accumulateTick(worker, 0.0, r, base);
             base += PILOT_ACCUM_HOP;
         }
-        double[] accumRe = (double[]) FieldUtils.readField(worker, "accumRe", true);
-        double[] accumIm = (double[]) FieldUtils.readField(worker, "accumIm", true);
+        CoherentAccumulator accumulator =
+                (CoherentAccumulator) FieldUtils.readField(worker, ACCUMULATOR, true);
+        double[] accumRe = accumulator.getSumRe();
+        double[] accumIm = accumulator.getSumIm();
         int weight = Math.max(1, r.frameCount);
         for (int bin : new int[]{ PILOT_BIN, PILOT2_BIN }) {
             double one = Math.hypot(r.re[bin], r.im[bin]) * weight;
@@ -1028,63 +1030,6 @@ class FftPhaseAlignAccumulatorTest {
     }
 
     /**
-     * Dual tone: each tone turns its OWN member of the de-rotation family and
-     * nothing else turns at all.  A notch's phase response at F2 is not the
-     * one it has at F1, so the second tone carries a second excess, and the
-     * products - which are neither tone - keep the phase the shared time base
-     * gives them.  Read off the family the accumulator builds: the harmonic
-     * rung at the fundamental, the (0,1) grid member at the second tone, the
-     * (1,-1) difference product, and the second harmonic beside them.
-     */
-    @Test
-    void dualToneTurnsEachToneByItsOwnExcess() throws Exception {
-        FftAnalyzerWorker worker = new FftAnalyzerWorker(null);
-        double kappa1 = 64.0;
-        double kappa2 = 96.0;
-        double phi1   = 0.31;
-        double phi2   = -0.77;
-        double e1     = 0.11;
-        double e2     = -0.23;
-        FieldUtils.writeField(worker, "accumKFractional", kappa1, true);
-        FieldUtils.writeField(worker, "accumKappa2", kappa2, true);
-        // The grid as the analyser publishes it: the second tone itself, the
-        // difference product f2 - f1 and the sum f1 + f2.
-        FftResult r = new FftResult();
-        r.imdProductA   = new int[]{  0, -1,   1 };
-        r.imdProductB   = new int[]{  1,  1,   1 };
-        r.imdProductBin = new int[]{ 96, 32, 160 };
-
-        int n = (Integer) MethodUtils.invokeMethod(worker, true, "buildFamily",
-                r, FFT_SIZE / 2, phi1, phi2, e1, e2);
-        double[] pos = (double[]) FieldUtils.readField(worker, "famPos", true);
-        double[] cos = (double[]) FieldUtils.readField(worker, "famCos", true);
-        double[] sin = (double[]) FieldUtils.readField(worker, "famSin", true);
-
-        assertEquals(phi1 - e1, memberAngle(pos, cos, sin, n, kappa1),
-                1.0e-12, "the fundamental's member turns by its own excess");
-        assertEquals(phi2 - e2, memberAngle(pos, cos, sin, n, kappa2),
-                1.0e-12, "the second tone's member turns by ITS own excess");
-        assertEquals(phi2 - phi1, memberAngle(pos, cos, sin, n, kappa2 - kappa1),
-                1.0e-12, "the difference product keeps the shared time base's phase");
-        assertEquals(Math.IEEEremainder(phi1 + phi2, 2.0 * Math.PI),
-                memberAngle(pos, cos, sin, n, kappa1 + kappa2),
-                1.0e-12, "and so does the sum product");
-        assertEquals(2.0 * phi1, memberAngle(pos, cos, sin, n, 2.0 * kappa1),
-                1.0e-12, "and so does the second harmonic");
-    }
-
-    /** The angle of the family member standing at {@code position} bins,
-     *  radians on the nearest branch of one turn. */
-    private double memberAngle(double[] pos, double[] cos, double[] sin, int n, double position) {
-        for (int i = 0; i < n; i++) {
-            if (Math.abs(pos[i] - position) < 1.0e-9) {
-                return Math.IEEEremainder(Math.atan2(sin[i], cos[i]), 2.0 * Math.PI);
-            }
-        }
-        throw new AssertionError("no family member at " + position + " bins");
-    }
-
-    /**
      * The overlay restates the fundamental's level scalars from the bin it
      * just wrote.  The frequency-response correction runs on the overlaid
      * spectrum before the readouts are recomputed and reads its level scale
@@ -1111,7 +1056,7 @@ class FftPhaseAlignAccumulatorTest {
         // a level the fresh tick never had, as a drifted notch would leave it
         r.fundamentalDbFs   = FUND_DBFS + 6.0;
         r.fundamentalLinear = Math.pow(10.0, r.fundamentalDbFs / 20.0);
-        call(worker, OVERLAY, r);
+        overlay(worker, r);
         assertEquals(r.amplitudeDbFs[FUND_BIN], r.fundamentalDbFs, 1.0e-12,
                 "the fundamental's level is the overlaid bin's");
         assertEquals(Math.pow(10.0, r.amplitudeDbFs[FUND_BIN] / 20.0), r.fundamentalLinear,
@@ -1311,13 +1256,13 @@ class FftPhaseAlignAccumulatorTest {
         return levels(worker, r);
     }
 
-    /** The accumulated levels read back through the worker's own overlay:
+    /** The accumulated levels read back through the accumulator's overlay:
      *  {@code [fundamental, H2 .. H9]} in dBFS, taken at the tones' own bins -
      *  every tone is on-bin, so the peak bin IS the level.  {@code r} is the
      *  slot the overlay writes into and carries no meaning of its own
      *  afterwards. */
     private double[] levels(FftAnalyzerWorker worker, FftResult r) {
-        call(worker, OVERLAY, r);
+        overlay(worker, r);
         double[] levels = new double[HARMONICS + 1];
         for (int i = 0; i <= HARMONICS; i++) {
             levels[i] = r.amplitudeDbFs[(i + 1) * FUND_BIN];
@@ -1325,10 +1270,19 @@ class FftPhaseAlignAccumulatorTest {
         return levels;
     }
 
+    /** The worker's accumulator, written back onto {@code r} - the display
+     *  path's step. */
+    private void overlay(FftAnalyzerWorker worker, FftResult r) {
+        try {
+            ((CoherentAccumulator) FieldUtils.readField(worker, ACCUMULATOR, true)).overlayOnto(r);
+        } catch (IllegalAccessException ex) {
+            throw new AssertionError("the worker's " + ACCUMULATOR + " is not reachable", ex);
+        }
+    }
+
     /** One tick's analysis, with the worker's own settings: the spectrum only
      *  (the stats are re-derived from the accumulator), single tone, no hint. */
     private FftResult analyze(FftAnalyzer analyzer, double[] win, long base) {
-        analyzer.setSamplesAbsStart(base);
         analyzer.setSpectrumOnly(true);
         analyzer.setMultiTone(false);
         analyzer.setSecondToneHintHz(Double.NaN);
@@ -1338,12 +1292,10 @@ class FftPhaseAlignAccumulatorTest {
 
     /** The worker's phiF: the analysed spectrum's RAW fundamental-bin phase
      *  (before any accumulator de-rotation) minus the same bin's phase on the
-     *  reference window, produced by the analyser's single-bin recipe over the
-     *  same span, the same frame geometry and the same de-rotation frequency. */
+     *  reference window, read by the analyser's single-bin recipe on the same
+     *  frame, at the window's start. */
     private double phaseExcess(FftAnalyzer analyzer, FftResult r, double[] refWin) {
-        double kFractional = r.fundamentalHzRefined / r.freqResolution;
-        FftAnalyzer.BinPhasor ref = analyzer.binPhasor(refWin, FFT_SIZE, WINDOW,
-                FUND_BIN, HOP, FRAMES, kFractional);
+        FftAnalyzer.BinPhasor ref = analyzer.frameBinPhasor(refWin, 0, FFT_SIZE, WINDOW, FUND_BIN);
         return Math.IEEEremainder(
                 Math.atan2(r.im[FUND_BIN], r.re[FUND_BIN])
                         - Math.atan2(ref.im(), ref.re()),

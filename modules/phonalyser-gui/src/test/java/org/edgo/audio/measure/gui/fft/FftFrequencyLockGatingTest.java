@@ -73,11 +73,16 @@ class FftFrequencyLockGatingTest {
     private static final double MEASURED_HZ    = TARGET_HZ * (1.0 + MISTUNE_PPM * 1.0e-6);
     private static final double FUND_DBFS      = -20.0;
     private static final double BUFFER_SECONDS = 1.0;
-    /** Window starts, samples.  The later two stand past the point from which
-     *  the first tick's correction counts as arrived - its write position plus
-     *  the loop's 0.7 s drain guard, 37 696 samples here - so a tick that
-     *  reaches the loop is a full correction, not a hold in transit. */
+    /** Window starts, samples.  A tick's reading reaches the loop on the tick
+     *  after it, so the loop's first update is the second tick's, under the
+     *  first tick's window start.  The readings fed after the re-sync stand
+     *  past the point from which that update's correction counts as arrived -
+     *  the second tick's write position plus the loop's 0.7 s drain guard,
+     *  38 720 samples here - so a reading that reaches the loop is a full
+     *  correction, not a hold in transit. */
     private static final long   FIRST_TICK     = 0L;
+    private static final long   SECOND_TICK    = 1_024L;
+    private static final long   STORED_TICK    = 30_000L;
     private static final long   SKIPPED_TICK   = 40_000L;
     private static final long   FED_TICK       = 50_000L;
     /** A last-published correction no loop would produce: survives a reset
@@ -94,6 +99,11 @@ class FftFrequencyLockGatingTest {
     private static final String ARMED     = "alignWatchArmed";
     /** The loop's record of its last update, by name for the same reason. */
     private static final String LAST_UPDATE = "lastUpdateAbsPos";
+    /** The worker's memory of the analysed channel's tones, and that
+     *  memory's last reading of the first tone - where the loop takes the
+     *  analysed channel's measurement from. */
+    private static final String ANALYSED_TONES = "analysedTones";
+    private static final String TONE1_HZ       = "hz1";
 
     private boolean        previousSnap;
     private boolean        previousFundFromGen;
@@ -137,11 +147,13 @@ class FftFrequencyLockGatingTest {
     }
 
     /**
-     * A re-sync holds the loop for exactly one tick: the first tick after it
-     * that would feed the loop - every gate passed - is skipped and uses the
-     * hold up; the tick after it updates the loop again.  The loop itself is
-     * not reset by the re-sync: its correction stands through the skipped
-     * tick.
+     * A re-sync holds the loop for exactly one feed.  A tick's reading reaches
+     * the loop on the tick after it, and the re-sync drops the reading in
+     * hand: the first tick after it has nothing to feed, and the tick after
+     * that - the first that would feed the loop, every gate passed - is
+     * skipped and uses the hold up; the next one updates the loop again.  The
+     * loop itself is not reset by the re-sync: its correction stands through
+     * the skipped tick.
      */
     @Test
     void theFirstTickThatWouldFeedTheLoopAfterAReSyncIsSkipped() throws Exception {
@@ -150,21 +162,28 @@ class FftFrequencyLockGatingTest {
         tick(worker, FIRST_TICK);
         FrequencyAligner fll = loop(worker);
         assertNotNull(fll, "a tick that passes every gate engages the loop");
-        assertEquals(FIRST_TICK, lastUpdate(fll), "and updates it");
+        assertEquals(-1L, lastUpdate(fll), "its reading is kept for the next tick");
+        tick(worker, SECOND_TICK);
+        assertEquals(FIRST_TICK, lastUpdate(fll), "which updates the loop with it");
         double corrected = fll.getCorrection();
         assertNotEquals(0.0, corrected, "a 1 ppm mistune is corrected in one step");
 
         call(worker, RESYNC, new SignalBufferReader(new DoubleSignalBuffer(SAMPLE_RATE, BUFFER_SECONDS)));
         assertTrue((Boolean) FieldUtils.readField(worker, HOLD, true), "the re-sync holds the loop");
 
+        tick(worker, STORED_TICK);
+        assertEquals(FIRST_TICK, lastUpdate(fll),
+                "the first tick after the re-sync has no reading to feed");
+        assertTrue((Boolean) FieldUtils.readField(worker, HOLD, true), "and leaves the hold armed");
+
         tick(worker, SKIPPED_TICK);
         assertEquals(FIRST_TICK, lastUpdate(fll),
-                "the first tick after the re-sync does not update the loop");
+                "the first tick that would feed the loop does not update it");
         assertEquals(corrected, fll.getCorrection(), "nor move its correction");
         assertFalse((Boolean) FieldUtils.readField(worker, HOLD, true), "and it uses the hold up");
 
         tick(worker, FED_TICK);
-        assertEquals(FED_TICK, lastUpdate(fll), "the next tick updates the loop");
+        assertEquals(SKIPPED_TICK, lastUpdate(fll), "the next tick updates the loop");
         assertNotEquals(corrected, fll.getCorrection(),
                 "and the mistune it still measures moves the correction");
     }
@@ -198,16 +217,18 @@ class FftFrequencyLockGatingTest {
 
     // ── Drivers ────────────────────────────────────────────────────────────
 
-    /** One tick of the loop step with the analysis mode NONE, a result that
-     *  measures {@link #MEASURED_HZ} on the analysed channel alone, and the
-     *  write position one transform past the window's start. */
-    private void tick(FftAnalyzerWorker worker, long absStart) {
+    /** One tick of the loop step with the analysis mode NONE, the analysed
+     *  channel measuring {@link #MEASURED_HZ} - the reading the worker's
+     *  analysed-tone memory holds for the tick - and the write position one
+     *  transform past the window's start. */
+    private void tick(FftAnalyzerWorker worker, long absStart) throws IllegalAccessException {
         FftResult r = new FftResult();
         r.sampleRate           = SAMPLE_RATE;
         r.fftSize              = FFT_SIZE;
         r.freqResolution       = SAMPLE_RATE / (double) FFT_SIZE;
         r.fundamentalHzRefined = MEASURED_HZ;
         r.fundamentalDbFs      = FUND_DBFS;
+        FieldUtils.writeField(FieldUtils.readField(worker, ANALYSED_TONES, true), TONE1_HZ, MEASURED_HZ, true);
         call(worker, STEP, r, FundamentalPhaseAlignment.NONE, absStart, absStart + FFT_SIZE,
                 worker.currentResetEpoch());
     }

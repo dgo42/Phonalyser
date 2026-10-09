@@ -54,6 +54,7 @@ import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.FftResult.DistortionLine;
 import org.edgo.audio.measure.fft.ImdResult;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
@@ -101,10 +102,15 @@ public final class FftView extends AbstractFreqDomainView {
     /** Bin index standing for "this frame carries no second tone" in the
      *  calibration cascade's keys. */
     private static final int NO_TONE_BIN = -1;
+    /** Bin index of a slot of the line-floor table that holds no distortion
+     *  line - a fundamental's slot, or a line the frame does not carry. */
+    private static final int NO_LINE_BIN = -1;
+    /** How close, dB, a harmonic's readout stands to its line floor when the
+     *  floor hold wrote it: the hold's linear-to-dB round trip, nothing a
+     *  measured level lands on by chance. */
+    private static final double LINE_FLOOR_MATCH_DB = 1e-9;
     /** Nanoseconds per millisecond - the render-step timings are stated in ms. */
     private static final double NANOS_PER_MS = 1_000_000.0;
-    /** How long the rejection warning keeps blinking after the last hit. */
-    private static final long REJECTION_WARN_NANOS = 10_000_000_000L;
     /** How long the alignment magnitude-drift hint keeps blinking. */
     private static final long ALIGN_DRIFT_WARN_NANOS = 20_000_000_000L;
 
@@ -334,23 +340,9 @@ public final class FftView extends AbstractFreqDomainView {
             }
             logRenderStep("3.6 result copy");
             syncDataButtons();
-            // Frame / phase rejections slow the averaging - raise a sticky
-            // (20 s, restarted on each fresh rejection) blinking warning with
-            // the full detail in its tooltip.  Otherwise live data clears any
-            // stale banner: the loaded-CSV path (persistent) or a warning whose
-            // timer has already run out.
-            if (slot.rejectedFrames > 0) {
-                String detail = String.format(Locale.US, "%.2f", slot.rejectionDetail);
-                String tip = I18n.t(slot.rejectionPhaseCoherence
-                                ? "fft.warning.rejection.phase"
-                                : "fft.warning.rejection.rInvariant",
-                        slot.rejectedFrames, slot.rejectionTotalFrames, detail);
-                setBanner(I18n.t("fft.warning.rejection"), tip,
-                        ColorRole.WARNING_LIT, ColorRole.WARNING_DIM,
-                        System.nanoTime() + REJECTION_WARN_NANOS);
-            } else {
-                clearBannerIfStale();
-            }
+            // Live data clears any stale banner: the loaded-CSV path
+            // (persistent) or a warning whose timer has already run out.
+            clearBannerIfStale();
             // Sticky table mode: re-evaluated on every recorded result
             // and held between recordings.  Tied to the generator form
             // because that's the only signal that lets us pick between
@@ -951,7 +943,8 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Post-average pipeline, run ONCE per DISPLAYED frame (the worker now hands
      *  over only the RAW averaged spectrum + the state below): mains rejection ->
-     *  recompute every measurement -> .frc calibration.  So all
+     *  the distortion lines' local noise floors -> .frc calibration ->
+     *  recompute every measurement.  So all
      *  readouts (THD / SNR / N / fundamental / harmonics, every unit + %) and the
      *  plot derive from one de-hummed, calibrated spectrum, computed only on
      *  frames the user actually sees. */
@@ -961,15 +954,21 @@ public final class FftView extends AbstractFreqDomainView {
 
         // 1. Mains rejection - de-hum amplitudeDbFs (dBV is just dBFS + the global
         //    ADC offset, applied at display time, so nothing extra to correct here).
-        boolean mainsApplied = false;
         if (r.mainsF0Hz > 0.0 && r.sampleRate > 0) {
             if (mainsCorrector == null) {
                 mainsCorrector = new MainsCombFilter(r.sampleRate, MainsCombFilter.DEFAULT_NOTCH_BANDWIDTH_HZ);
             }
             mainsCorrector.applySpectrumCorrection(r.amplitudeDbFs, null, r.freqResolution, r.mainsF0Hz);
-            mainsApplied = true;
             logRenderStep("3.1 mains rejection");
         }
+
+        // 1.5 The local noise floor under every distortion line, measured on
+        //    the averaged spectrum as the capture holds it - before the
+        //    de-embedding, which lifts a tone-only row's lobes but not the bins
+        //    around them, so a floor read afterwards would stand a whole
+        //    calibration gain below the line it is held against.
+        double[] lineHz = FreqRespCalHelper.toneFrequencies(r);
+        measureLineFloors(r, lineHz);
 
         // 2. Frequency-response (.frc) calibration - adjusts spectrum + readouts;
         //    independent of mains, never on the cal (green) line.
@@ -977,6 +976,7 @@ public final class FftView extends AbstractFreqDomainView {
         boolean calibrated = !correctionStore.getEntries().isEmpty();
         if (calibrated) {
             r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
+            holdPreCorrectionHarmonicsAtFloor(r);
             // While a row corrects only the tones, the held response stands in
             // the bins this frame's tones and lobes named - a frame that moved
             // one of them needs a fresh one.
@@ -990,14 +990,14 @@ public final class FftView extends AbstractFreqDomainView {
             if (DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
                 logRenderStep("3.3 .frc apply (" + correctedBins + " bins)");
             }
+            carryLineFloorsThroughCal(r, lineHz, accumulated);
         }
-        // 3. Measurements - averaging always needs a recompute (analyze skipped
-        //    the stats while accumulating); a single tick only needs it once mains
-        //    has changed the spectrum (analyze already produced the rest).
-        if (accumulated || mainsApplied || correctedBins > 0) {
-            mainsStats.recomputeStats(r);
-            logRenderStep("3.4 statistics recompute");
-        }
+        // 3. Measurements - recomputed on every frame: averaging needs it
+        //    (analyze skipped the stats while accumulating), mains and the
+        //    calibration change the spectrum, and the line-floor hold of step
+        //    1.5 lives in the recompute.
+        mainsStats.recomputeStats(r);
+        logRenderStep("3.4 statistics recompute");
         // 4. The BLUE "before-cal" dots of an ACCUMULATED frame, derived here -
         //    after step 3 - because the readouts they start from are the ones
         //    that recompute produces: while averaging, the analysis carries no
@@ -1019,8 +1019,7 @@ public final class FftView extends AbstractFreqDomainView {
             for (int h = 0; h < hc; h++) {
                 if (r.harmonicBins[h] > 0) {
                     preFreqs[1 + h] = r.harmonicHz[h];
-                    double stableHarmHz = stableFundHz * (h + 2);
-                    preDbFs[1 + h] = r.harmonicDbFs[h] + calGainDbAt(r, stableHarmHz);
+                    preDbFs[1 + h] = r.harmonicDbFs[h] + calGainDbAt(r, harmonicCalHz(r, h, true));
                 }
             }
             r.preCorrectionPeaks = new double[][] { preFreqs, preDbFs };
@@ -1028,6 +1027,84 @@ public final class FftView extends AbstractFreqDomainView {
         }
 
 
+    }
+
+    /** Measures the local noise floor under every distortion line of
+     *  {@code r} - each harmonic and, for a dual tone, each intermodulation
+     *  product, at {@code lineHz} as {@link FreqRespCalHelper#toneFrequencies}
+     *  lists them - as the upper border of the noise band beside the line
+     *  ({@link ToneLobeLift#lineFloor}: within 25 Hz of the line, its lobe
+     *  excluded by the window's noise bandwidth), and writes each line's bin
+     *  and floor onto the result's
+     *  line-floor table ({@link FftResult#lineFloorDbFs}), where the
+     *  statistics recompute holds the line's reading at it from below.  The
+     *  fundamentals keep no floor: they are the signal, not a line read
+     *  against the noise. */
+    private void measureLineFloors(FftResult r, double[] lineHz) {
+        if (!(r.freqResolution > 0.0)) {
+            r.lineFloorBins = null;
+            r.lineFloorDbFs = null;
+            return;
+        }
+        int harmonics = Math.max(0, r.harmonicCount);
+        int half = r.amplitudeDbFs.length - 1;
+        int[]    bins   = new int[lineHz.length];
+        double[] floors = new double[lineHz.length];
+        final double[] dbFs = r.amplitudeDbFs;
+        IntToDoubleFunction mag = k -> Math.pow(10.0, dbFs[k] / 20.0);
+        for (int i = 0; i < lineHz.length; i++) {
+            boolean fundamental = i == 0 || i == 1 + harmonics;
+            int bin = (int) Math.round(lineHz[i] / r.freqResolution);
+            if (fundamental || !(lineHz[i] > 0.0) || bin < 1 || bin > half) {
+                bins[i]   = NO_LINE_BIN;
+                floors[i] = Double.NaN;
+                continue;
+            }
+            double floorLin = LOBE.lineFloor(mag, bin, half, r.freqResolution, r.windowNenbwBins);
+            bins[i]   = bin;
+            floors[i] = floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN;
+        }
+        r.lineFloorBins = bins;
+        r.lineFloorDbFs = floors;
+    }
+
+    /** Holds the BLUE snapshot's harmonics - the levels the capture measured,
+     *  before the calibration - at their local noise floors from below, the
+     *  floors still standing in that same domain.  Matters for a single
+     *  cycle, whose blue dots are this snapshot; an accumulated frame
+     *  re-derives them from the held readouts after the recompute. */
+    private void holdPreCorrectionHarmonicsAtFloor(FftResult r) {
+        double[] freqs = r.preCorrectionPeaks[0];
+        double[] dbFs  = r.preCorrectionPeaks[1];
+        for (int i = 1; i < dbFs.length; i++) {
+            if (!(freqs[i] > 0.0)) continue;
+            double floorDbFs = r.lineFloorDbFs((int) Math.round(freqs[i] / r.freqResolution));
+            if (Double.isFinite(floorDbFs) && Double.isFinite(dbFs[i])) dbFs[i] = Math.max(dbFs[i], floorDbFs);
+        }
+    }
+
+    /** Carries the line-floor table into the calibrated domain the recompute
+     *  reads: each floor less the dB the calibration takes off its line - the
+     *  inverse of how a blue dot is derived from a red one - looked up at the
+     *  same frequency the blue dot is, so a line held at its floor draws its
+     *  blue dot on that floor and its red dot the calibration's gain away. */
+    private void carryLineFloorsThroughCal(FftResult r, double[] lineHz, boolean accumulated) {
+        if (r.lineFloorBins == null) return;
+        int harmonics = Math.max(0, r.harmonicCount);
+        for (int i = 0; i < r.lineFloorBins.length; i++) {
+            if (r.lineFloorBins[i] == NO_LINE_BIN || !Double.isFinite(r.lineFloorDbFs[i])) continue;
+            boolean harmonic = i >= 1 && i <= harmonics;
+            double  hz = harmonic ? harmonicCalHz(r, i - 1, accumulated) : lineHz[i];
+            r.lineFloorDbFs[i] -= calGainDbAt(r, hz);
+        }
+    }
+
+    /** The frequency the calibration's gain at harmonic {@code h} (0 = H2) is
+     *  looked up at: on an accumulated frame the multiple of the PINNED
+     *  coherent fundamental - a single cycle's refined fundamental jitters and
+     *  dances the lookup point - else the harmonic's own frequency. */
+    private double harmonicCalHz(FftResult r, int h, boolean accumulated) {
+        return accumulated ? r.coherentKappa * r.freqResolution * (h + 2) : r.harmonicHz[h];
     }
 
     /** Shows a static spectrum loaded from file instead of live data.  When
@@ -2468,6 +2545,7 @@ public final class FftView extends AbstractFreqDomainView {
                 liftFactor = Math.pow(10.0, (targetDbFs - dbfs[peak]) / 20.0);
             }
         }
+        double[] drawnDbFs = heldLinesLifted(r);
         int kFirst = Math.max(1,  (int) Math.floor(freqMin / binBw));
         int kLast  = Math.min(n - 1, (int) Math.ceil (freqMax / binBw));
         if (kLast <= kFirst) return;
@@ -2512,7 +2590,7 @@ public final class FftView extends AbstractFreqDomainView {
         double fBound   = Double.NEGATIVE_INFINITY;   // f where x rounds to the next column
         for (int k = kPrev; k <= kNext; k++) {
             double f = k * binBw;
-            double binDbFs = r.amplitudeDbFs[k];
+            double binDbFs = drawnDbFs[k];
             if (lobeLo >= 0 && k >= lobeLo && k <= lobeHi) {
                 double m = Math.pow(10.0, binDbFs / 20.0);
                 double newMag = LOBE.stretch(m, floorLin, peakMagLin, liftFactor);
@@ -2554,6 +2632,47 @@ public final class FftView extends AbstractFreqDomainView {
         flushSpectrumColumn(painter, prefs, r, plot, unit, magTop, magBot,
                 curX, curMinDb, curMaxDb, curBins);
         painter.drawTo(gc);
+    }
+
+    /** {@code r}'s spectrum as drawn: every distortion line - each harmonic
+     *  and, for a dual tone, each intermodulation product - whose readout the
+     *  line-floor hold raised has its lobe stretched up to that readout, its
+     *  red dot, with {@link #stretchLobe}.  The red dot and the drawn spectrum
+     *  stand in one domain, de-embedded or not, so the lobe meets its dot
+     *  either way.  On a copy: the result's own spectrum stays as measured,
+     *  the way a saved file writes it.  Without a line-floor table (a loaded
+     *  file) or with no line held, the spectrum itself. */
+    private double[] heldLinesLifted(FftResult r) {
+        double[] dbFs = r.amplitudeDbFs;
+        if (r.lineFloorBins == null) return dbFs;
+        double[] out = dbFs;
+        for (DistortionLine line : r.harmonicLines()) {
+            out = liftHeldLine(out, r, line.bin(), line.readoutDbFs());
+        }
+        for (DistortionLine line : r.intermodLines()) {
+            out = liftHeldLine(out, r, line.bin(), line.readoutDbFs());
+        }
+        return out;
+    }
+
+    /** Lifts the lobe of the line at {@code bin} in {@code out} to
+     *  {@code readoutDbFs} when the line-floor hold set that readout - it
+     *  stands on the line's floor, above the bin as measured - copying
+     *  {@code r}'s spectrum first if {@code out} still is it.  A line read
+     *  above its floor is left as measured.  Returns the array to go on
+     *  with. */
+    private double[] liftHeldLine(double[] out, FftResult r, int bin, double readoutDbFs) {
+        int half = r.amplitudeDbFs.length - 1;
+        if (bin < 1 || bin > half || !Double.isFinite(readoutDbFs)) return out;
+        double floorDbFs = r.lineFloorDbFs(bin);
+        if (!Double.isFinite(floorDbFs) || Math.abs(readoutDbFs - floorDbFs) > LINE_FLOOR_MATCH_DB
+                || !(readoutDbFs > r.amplitudeDbFs[bin])) {
+            return out;
+        }
+        final double[] lifted = out == r.amplitudeDbFs ? out.clone() : out;
+        stretchLobe(lifted, k -> Math.pow(10.0, lifted[k] / 20.0), bin, half,
+                Math.pow(10.0, (readoutDbFs - lifted[bin]) / 20.0));
+        return lifted;
     }
 
     /** Emits one accumulated spectrum column to the painter: the column's

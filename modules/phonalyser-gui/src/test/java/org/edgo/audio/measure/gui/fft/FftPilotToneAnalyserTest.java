@@ -81,8 +81,6 @@ class FftPilotToneAnalyserTest {
     private static final int        SAMPLE_RATE = 48_000;
     private static final int        FFT_SIZE    = 4096;
     private static final WindowType WINDOW      = WindowType.BH7;
-    /** Frames one tick analyses - the worker's own averages count. */
-    private static final int        FRAMES      = 2;
     /** Harmonics the analysis evaluates, as the tick loop states them. */
     private static final int        HARMONICS   = 8;
     private static final int        TICKS       = 20;
@@ -316,7 +314,7 @@ class FftPilotToneAnalyserTest {
             if (t == retrackAtTick) {
                 FieldUtils.writeField(worker, "pilotRetrackPending", true, true);
             }
-            FftResult r = analyse(analyzer, win, pos, hop);
+            FftResult r = analyse(analyzer, win, hop);
             excess[t]    = tickPhiF(worker, r);
             deviation[t] = pilotAgainstReference(worker, r);
             advances[t]  = (Double)  FieldUtils.readField(worker, "pilotAdvanceSamples", true);
@@ -338,16 +336,15 @@ class FftPilotToneAnalyserTest {
     /** One tick's analysis with the tick loop's own arguments: the spectrum
      *  only (the stats are re-derived from the accumulator), single tone, no
      *  second-tone hint, the pilot pinned on its bin, coherent averaging on,
-     *  and the frame geometry stated - two frames spaced by the drawn hop. */
-    private FftResult analyse(FftAnalyzer analyzer, double[] win, long absStart, int hop) {
-        analyzer.setSamplesAbsStart(absStart);
+     *  and the frame spacing stated - the drawn hop. */
+    private FftResult analyse(FftAnalyzer analyzer, double[] win, int hop) {
         analyzer.setSpectrumOnly(true);
         analyzer.setMultiTone(false);
         analyzer.setSecondToneHintHz(Double.NaN);
         analyzer.setPilotBins(PILOT1_BIN, PILOT2_BIN);
         return analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONICS, HARMONICS,
                 WINDOW, FftOverlap.PCT_50, 0.0, 0.0, true, Double.NaN, false, FUND_HINT_HZ,
-                new FftResult(), hop, FRAMES);
+                new FftResult(), hop);
     }
 
     /** The worker's own third trace value after this tick, radians - "pilot

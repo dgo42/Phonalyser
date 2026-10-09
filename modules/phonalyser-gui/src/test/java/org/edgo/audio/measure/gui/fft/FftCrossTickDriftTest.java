@@ -18,11 +18,13 @@
 
 package org.edgo.audio.measure.gui.fft;
 
+import org.apache.commons.lang3.reflect.FieldUtils;
 import org.apache.commons.lang3.reflect.MethodUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.junit.jupiter.api.Tag;
@@ -38,9 +40,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Unlike {@code FftHarmonicStabilityTest} (a single long {@code analyze()} call),
  * this drives the <b>real</b> {@link FftAnalyzerWorker} cross-tick path - the one the
- * live FFT view actually uses: 2 frames per tick (averages = 2), accumulated across
+ * live FFT view actually uses: one frame per tick, accumulated across
  * ticks by {@code accumulateIntoForeverBuffer} with its type-1
- * phase-lock loop, then read back via {@code overlayAccumulatorOnto}
+ * phase-lock loop, then read back via the accumulator's overlay
  * + {@link FftAnalyzer#recomputeStats}.  Only the Thread/Display/MessageBus plumbing
  * is bypassed; the accumulator + PLL are the production code, reached through
  * reflection because both worker members are private.
@@ -77,11 +79,12 @@ class FftCrossTickDriftTest {
     private static final double[]   DRIFT_PPM_PER_MIN = {0.0, 0.01, 1.0, 10.0};
 
     /** The worker members this harness drives, by name because that is what
-     *  reflection takes: the private accumulate step and the private overlay
-     *  that writes the accumulator back onto a result for the display path.
-     *  A productive class is not widened to let a test in. */
-    private static final String ACCUMULATE = "accumulateIntoForeverBuffer";
-    private static final String OVERLAY    = "overlayAccumulatorOnto";
+     *  reflection takes: the private accumulate step and the private
+     *  accumulator whose overlay writes the average back onto a result for
+     *  the display path.  A productive class is not widened to let a test
+     *  in. */
+    private static final String ACCUMULATE  = "accumulateIntoForeverBuffer";
+    private static final String ACCUMULATOR = "accumulator";
 
     private static final Logger LOG = LogManager.getLogger("FftCrossTickDrift");
 
@@ -95,12 +98,21 @@ class FftCrossTickDriftTest {
         }
     }
 
+    /** The worker's accumulator, written back onto {@code r}. */
+    private void overlay(FftAnalyzerWorker worker, FftResult r) {
+        try {
+            ((CoherentAccumulator) FieldUtils.readField(worker, ACCUMULATOR, true)).overlayOnto(r);
+        } catch (IllegalAccessException ex) {
+            throw new AssertionError("the worker's " + ACCUMULATOR + " is not reachable", ex);
+        }
+    }
+
     @Test
     void crossTickHarmonicDriftSweep() {
         int hop    = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - OVERLAP.fraction)));
-        int winLen = FFT_SIZE + hop;                                    // averages = 2 (worker geometry)
+        int winLen = FFT_SIZE;                                          // one frame per tick (worker geometry)
         int total  = (TICKS - 1) * hop + winLen;
-        LOG.info("=== CROSS-TICK DRIFT: real worker PLL | {} ticks x 2-frame | {} pt {} {} | {} Hz ===",
+        LOG.info("=== CROSS-TICK DRIFT: real worker PLL | {} ticks x 1 frame | {} pt {} {} | {} Hz ===",
                 TICKS, FFT_SIZE, WINDOW, OVERLAP.label, FUND_HZ);
 
         for (double driftPpmMin : DRIFT_PPM_PER_MIN) {
@@ -124,7 +136,6 @@ class FftCrossTickDriftTest {
             FftResult r;
             for (int t = 0; t < TICKS; t++) {
                 System.arraycopy(sig, (int) base, win, 0, winLen);
-                analyzer.setSamplesAbsStart(base);
                 analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(false);
                 analyzer.setSecondToneHintHz(Double.NaN);
@@ -133,7 +144,7 @@ class FftCrossTickDriftTest {
                 call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
 
                 if ((t + 1) % READOUT_EVERY == 0) {
-                    call(worker, OVERLAY, r);
+                    overlay(worker, r);
                     analyzer.recomputeStats(r);
                     StringBuilder sb = new StringBuilder();
                     for (int i = 0; i < HARMONIC_COUNT; i++) {
@@ -171,9 +182,9 @@ class FftCrossTickDriftTest {
     void crossTickRandomHopSweep() {
         int minHop = FftOverlap.RAND.minHopSamples(FFT_SIZE);
         int maxHop = FftOverlap.RAND.maxHopSamples(FFT_SIZE);
-        int winLen = FFT_SIZE + maxHop;                     // worker capacity: the largest hop
+        int winLen = FFT_SIZE;                              // one frame per tick
         int total  = (TICKS - 1) * maxHop + winLen;
-        LOG.info("=== CROSS-TICK RANDOM HOP: {} ticks x 2-frame | hop in [{}..{}] | {} pt {} | {} Hz ===",
+        LOG.info("=== CROSS-TICK RANDOM HOP: {} ticks x 1 frame | hop in [{}..{}] | {} pt {} | {} Hz ===",
                 TICKS, minHop, maxHop, FFT_SIZE, WINDOW, FUND_HZ);
 
         for (double driftPpmMin : DRIFT_PPM_PER_MIN) {
@@ -192,17 +203,16 @@ class FftCrossTickDriftTest {
                 int hop = minHop + (1 + hopDraw.nextInt(FftOverlap.RAND_HOP_STEPS))
                         * ((maxHop - minHop) / FftOverlap.RAND_HOP_STEPS);
                 System.arraycopy(sig, (int) base, win, 0, winLen);
-                analyzer.setSamplesAbsStart(base);
                 analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(false);
                 analyzer.setSecondToneHintHz(Double.NaN);
                 r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT, HARMONIC_COUNT,
                         WINDOW, FftOverlap.RAND, 0.0, 0.0, true, Double.NaN,
-                        false, Double.NaN, new FftResult(), hop, 2);
+                        false, Double.NaN, new FftResult(), hop);
                 call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
 
                 if ((t + 1) % READOUT_EVERY == 0) {
-                    call(worker, OVERLAY, r);
+                    overlay(worker, r);
                     analyzer.recomputeStats(r);
                     StringBuilder sb = new StringBuilder();
                     for (int i = 0; i < HARMONIC_COUNT; i++) {
@@ -259,7 +269,6 @@ class FftCrossTickDriftTest {
             FftResult r;
             for (int t = 0; t < TICKS; t++) {
                 System.arraycopy(sig, (int) base, win, 0, winLen);
-                analyzer.setSamplesAbsStart(base);
                 analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(true);
                 analyzer.setSecondToneHintHz(freqs[1]);
@@ -268,7 +277,7 @@ class FftCrossTickDriftTest {
                 call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
 
                 if ((t + 1) % (READOUT_EVERY * 5) == 0) {
-                    call(worker, OVERLAY, r);
+                    overlay(worker, r);
                     StringBuilder sb = new StringBuilder();
                     for (int i = 0; i < bins.length; i++) {
                         double lv = (r.amplitudeDbFs != null && bins[i] < r.amplitudeDbFs.length)
@@ -328,7 +337,6 @@ class FftCrossTickDriftTest {
             FftResult r;
             for (int t = 0; t < TICKS; t++) {
                 System.arraycopy(sig, (int) base, win, 0, winLen);
-                analyzer.setSamplesAbsStart(base);
                 analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(true);
                 analyzer.setSecondToneHintHz(freqs[1]);
@@ -341,7 +349,7 @@ class FftCrossTickDriftTest {
                 }
                 call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
                 if ((t + 1) % (READOUT_EVERY * 2) == 0) {
-                    call(worker, OVERLAY, r);
+                    overlay(worker, r);
                     double f1 = r.amplitudeDbFs[f1Bin], f2 = r.amplitudeDbFs[f2Bin];
                     LOG.info(String.format("  tick %4d  frames=%6d |  F1=%.2f  F2=%.2f  (F2-F1=%.2f dB)",
                             t + 1, worker.getAccumulatedFrames(), f1, f2, f2 - f1));
@@ -358,16 +366,13 @@ class FftCrossTickDriftTest {
         }
     }
 
-    /** Reproduces the EXACT live case: 19 & 20 kHz at 2 M FFT.  The bug is
-     *  intra-capture, so a single {@code analyze()} (2-frame) shows it directly -
-     *  no cross-tick needed.  Δ=5462 bins -> 0.25·5462 = 1365.5 -> 180° cancel under
-     *  the single-tone snap.  Logs F1/F2 and the second-tone refine so we can see
-     *  whether the dual-tone fix even engaged. */
+    /** Reproduces the EXACT live case: 19 & 20 kHz at 2 M FFT, one frame
+     *  analysed.  Logs F1/F2 and the second-tone refine so we can see
+     *  whether the dual-tone detection engaged. */
     @Test
     void crossTickImd2M() {
         final int FFT = 2_097_152;
-        int hop    = Math.max(1, (int) Math.round(FFT * (1.0 - OVERLAP.fraction)));
-        int winLen = FFT + hop;                              // averages = 2 (single capture = the bug)
+        int winLen = FFT;
         double binHz = (double) SAMPLE_RATE / FFT;
         int    f1Bin = 103765;                               // ≈19.0 kHz
         int[]  dFbins = { 500, 2000, 5462, 10000, 30000 };   // F2−F1 spacing sweep (5462 = the live 1 kHz)
@@ -380,7 +385,6 @@ class FftCrossTickDriftTest {
             double[] freqs = { f1Bin * binHz, f2Bin * binHz };
             double[] dbfs  = { -10.0, -10.0 };
             double[] sig = synthesizeTones(SEED, winLen, 0.0, freqs, dbfs);
-            analyzer.setSamplesAbsStart(0);
             analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(true);
             analyzer.setSecondToneHintHz(Double.NaN);        // NO hint - get-fund-from-gen OFF
@@ -400,8 +404,7 @@ class FftCrossTickDriftTest {
     @Test
     void crossTickImdProducts2M() {
         final int FFT = 2_097_152;
-        int hop    = Math.max(1, (int) Math.round(FFT * (1.0 - OVERLAP.fraction)));
-        int winLen = FFT + hop;
+        int winLen = FFT;
         double binHz = (double) SAMPLE_RATE / FFT;
         int f1 = 103765, f2 = 109227;                        // 19 kHz, 20 kHz
         int[]    bins = { f1, f2, (f2 - f1), (2 * f1 - f2), (2 * f2 - f1), (f1 + f2) };
@@ -412,7 +415,6 @@ class FftCrossTickDriftTest {
 
         double[] sig = synthesizeTones(SEED, winLen, 0.0, freqs, dbfs);
         FftAnalyzer analyzer = new FftAnalyzer();
-        analyzer.setSamplesAbsStart(0);
         analyzer.setSpectrumOnly(true);
         analyzer.setMultiTone(true);
         analyzer.setSecondToneHintHz(freqs[1]);              // get-fund-from-gen ON
@@ -465,7 +467,6 @@ class FftCrossTickDriftTest {
             long base = 0;
             for (int t = 0; t < ticks; t++) {
                 System.arraycopy(sig, (int) base, win, 0, winLen);
-                analyzer.setSamplesAbsStart(base);
                 analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(true);
                 analyzer.setSecondToneHintHz(f2);
@@ -473,7 +474,7 @@ class FftCrossTickDriftTest {
                         WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
                 call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
                 if (t == 50 || t == ticks - 1) {
-                    call(worker, OVERLAY, r);
+                    overlay(worker, r);
                     double[] dst = (t == 50) ? early : late;
                     for (int i = 0; i < freqs.length; i++) {
                         dst[i] = (r.amplitudeDbFs != null && bins[i] < r.amplitudeDbFs.length)
@@ -514,7 +515,6 @@ class FftCrossTickDriftTest {
         long base = 0;
         for (int t = 0; t < ticks; t++) {
             System.arraycopy(sig, (int) base, win, 0, winLen);
-            analyzer.setSamplesAbsStart(base);
             analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(false);
             analyzer.setSecondToneHintHz(Double.NaN);
@@ -526,7 +526,7 @@ class FftCrossTickDriftTest {
             }
             call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
             if (t == ticks - 1) {
-                call(worker, OVERLAY, r);
+                overlay(worker, r);
                 fundLate = r.amplitudeDbFs[fundBin];
                 lineLate = Math.max(r.amplitudeDbFs[lineBin], r.amplitudeDbFs[lineBin + 1]);
             }

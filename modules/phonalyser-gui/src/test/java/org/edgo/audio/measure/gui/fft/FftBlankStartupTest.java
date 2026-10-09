@@ -18,11 +18,13 @@
 
 package org.edgo.audio.measure.gui.fft;
 
+import org.apache.commons.lang3.reflect.FieldUtils;
 import org.apache.commons.lang3.reflect.MethodUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.junit.jupiter.api.Tag;
@@ -47,12 +49,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Same driving pattern as {@link FftCrossTickDriftTest}: the real
  * {@link FftAnalyzerWorker} accumulator + PLL headlessly, read back
- * through {@code overlayAccumulatorOnto} +
+ * through the accumulator's overlay +
  * {@link FftAnalyzer#recomputeStats} - the exact display path.  Both of
  * those worker members are private - a productive class is not widened to
  * let a test in - so this harness reaches them by reflection.  The
  * geometry mirrors the reported bench: 32 kHz, 64k FFT, Hann, 0 %
- * overlap, ring of 4 (targetN 8), tone 999.96 Hz at -2.8 dBFS.
+ * overlap, ring of 4, tone 999.96 Hz at -2.8 dBFS.
  */
 @Tag("exploratory")   // parked red: pins the intended post-fix behaviour - excluded from the normal build (see pom surefire)
 class FftBlankStartupTest {
@@ -62,7 +64,7 @@ class FftBlankStartupTest {
     private static final WindowType WINDOW      = WindowType.HANN;
     private static final FftOverlap OVERLAP     = FftOverlap.PCT_0;
     private static final int        HARMONICS   = 8;
-    private static final int        TARGET_N    = 8;            // ring 4 -> 2 frames/tick cap
+    private static final int        TARGET_N    = 4;            // ring 4 -> 4 frames, one per tick
     private static final double     FUND_HZ     = 999.96;       // fractional bin 2047.918
     private static final double     AMPL        = 0.724;        // -2.8 dBFS
     private static final double     NOISE_STD   = 3.0e-6;
@@ -72,10 +74,11 @@ class FftBlankStartupTest {
     private static final double     HEALTHY_DBFS = -30.0;
 
     /** The worker members this harness drives, by name because that is what
-     *  reflection takes: the private accumulate step and the private overlay
-     *  that writes the accumulator back onto a result for the display path. */
-    private static final String ACCUMULATE = "accumulateIntoForeverBuffer";
-    private static final String OVERLAY    = "overlayAccumulatorOnto";
+     *  reflection takes: the private accumulate step and the private
+     *  accumulator whose overlay writes the average back onto a result for
+     *  the display path. */
+    private static final String ACCUMULATE  = "accumulateIntoForeverBuffer";
+    private static final String ACCUMULATOR = "accumulator";
 
     private static final Logger LOG = LogManager.getLogger("FftBlankStartup");
 
@@ -87,6 +90,15 @@ class FftBlankStartupTest {
             MethodUtils.invokeMethod(worker, true, method, args);
         } catch (ReflectiveOperationException ex) {
             throw new AssertionError("the worker's " + method + " is not reachable", ex);
+        }
+    }
+
+    /** The worker's accumulator, written back onto {@code r}. */
+    private void overlay(FftAnalyzerWorker worker, FftResult r) {
+        try {
+            ((CoherentAccumulator) FieldUtils.readField(worker, ACCUMULATOR, true)).overlayOnto(r);
+        } catch (IllegalAccessException ex) {
+            throw new AssertionError("the worker's " + ACCUMULATOR + " is not reachable", ex);
         }
     }
 
@@ -111,7 +123,7 @@ class FftBlankStartupTest {
     @Test
     void startTransientMustNotBlankTheAverageForever() {
         int hop    = FFT_SIZE;                       // 0 % overlap
-        int winLen = FFT_SIZE + hop;                 // 2 frames per tick (worker geometry)
+        int winLen = FFT_SIZE;                       // one frame per tick (worker geometry)
         int total  = (TICKS - 1) * hop + winLen;
 
         StringBuilder failures = new StringBuilder();
@@ -139,7 +151,6 @@ class FftBlankStartupTest {
         long base = 0;
         for (int t = 0; t < TICKS; t++) {
             System.arraycopy(sig, (int) base, win, 0, winLen);
-            analyzer.setSamplesAbsStart(base);
             analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(false);
             analyzer.setSecondToneHintHz(Double.NaN);
@@ -147,7 +158,7 @@ class FftBlankStartupTest {
                     WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, FUND_HZ);
             call(worker, ACCUMULATE, r, base, true, TARGET_N);
 
-            call(worker, OVERLAY, r);                // the display path, every tick
+            overlay(worker, r);                      // the display path, every tick
             analyzer.recomputeStats(r);
             int nanBins = 0, liveBins = 0;
             for (int k = 1; k < r.amplitudeDbFs.length; k++) {
