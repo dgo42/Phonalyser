@@ -48,6 +48,8 @@ import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.CaptureAverage;
+import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
@@ -268,7 +270,8 @@ public class IterativeCompensateMode {
         // uncompensated, so it starts empty).
         HarmonicCompensation bestApplied = accumulate ? new HarmonicCompensation(harmonics) : null;
 
-        FftAnalyzer fftAnalyzer = new FftAnalyzer();
+        FftAnalyzer    fftAnalyzer = new FftAnalyzer();
+        CaptureAverage average     = new CaptureAverage(fftAnalyzer, new CoherentAccumulator());
 
         log.info("--- Iteration 0: uncompensated sine ---");
         FftResult result0;
@@ -282,7 +285,7 @@ public class IterativeCompensateMode {
                             dac.peakVolts(Channel.L), dac.peakVolts(Channel.R)),
                     outDevice, inDevice, sampleRate, bitDepth, ditherBits, ditherBits, duration);
             try {
-                result0 = fftAnalyzer.analyze(
+                result0 = average.analyze(
                         s0, sampleRate, fftSize, harmonics,
                         windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbFs,
                         freqRespCal == null, frequency);
@@ -400,7 +403,7 @@ public class IterativeCompensateMode {
                 double[] s = CaptureWithGenerator.run(gen,
                         outDevice, inDevice, sampleRate, bitDepth, ditherBits, ditherBits, duration);
                 try {
-                    result = fftAnalyzer.analyze(
+                    result = average.analyze(
                             s, sampleRate, fftSize, harmonics,
                             windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbFs,
                             freqRespCal == null, frequency);

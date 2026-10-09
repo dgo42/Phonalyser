@@ -38,6 +38,8 @@ import org.edgo.audio.measure.cli.util.SampleRates;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.CaptureAverage;
+import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
@@ -242,7 +244,8 @@ public class GenFftMode {
                 sampleRate, bitDepth, ditherBits, ditherBits, duration, weights, syncPauseSec);
 
         FftAnalyzer fftAnalyzer = new FftAnalyzer();
-        FftResult result = fftAnalyzer.analyze(
+        CaptureAverage average = new CaptureAverage(fftAnalyzer, new CoherentAccumulator());
+        FftResult result = average.analyze(
                 samples, sampleRate, fftSize, harmonics,
                 windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbFs,
                 freqRespCal == null, frequency);

@@ -63,11 +63,14 @@ import org.edgo.audio.measure.fft.FftResult;
 public final class HarmonicCompensation {
 
     /** A reading moves the correction only when the harmonic stands this far
-     *  above its own local noise floor.  At 5 dB the reading's phase
-     *  scatters by about 32 degrees (one sigma), where a full step still
-     *  cancels about half of the harmonic; a reading at the floor is a noise
-     *  vector, and a step on it writes that noise into the generator as a
-     *  new harmonic. */
+     *  above its own local noise floor, the upper border of the noise band
+     *  beside it ({@link ToneLobeLift#lineFloor}: median + 4 MAD of the
+     *  magnitudes within 25 Hz outside the lobe, about 2.97 sigma of complex
+     *  Gaussian noise).  At
+     *  5 dB over it the reading's phase scatters by about 11 degrees (one
+     *  sigma), where a full step cancels about four fifths of the harmonic;
+     *  a reading at the floor is a noise vector, and a step on it writes
+     *  that noise into the generator as a new harmonic. */
     public static final double APPLY_CLEARANCE_DB = 5.0;
 
     private final int      maxHarmonics;
@@ -177,7 +180,8 @@ public final class HarmonicCompensation {
      * the chain's de-embedding), phase is the RAW measured phase de-rotated by
      * n*phi1 as described on {@link #accumulate}; a harmonic that was not
      * located carries {@code (0, 0)} at frequency 0.  The clearance is the
-     * same raw level over the median of the neighbour bins outside the lobe.
+     * same raw level over the upper border of the noise band beside the line
+     * ({@link ToneLobeLift#lineFloor}).
      */
     public HarmonicPhasors measurePhasors(FftResult r, double calFundPhaseRad) {
         double[] re = new double[maxHarmonics];
@@ -220,9 +224,10 @@ public final class HarmonicCompensation {
             // that much clearance.
             if (r.amplitudeDbFs != null && bin < r.amplitudeDbFs.length) {
                 double[] ampDb  = r.amplitudeDbFs;
-                double rawDb   = r.rawHarmonicDbFs(h);
-                double floorDb = lobe.medianFloorDb(k -> ampDb[k], bin, ampDb.length - 1,
+                double rawDb    = r.rawHarmonicDbFs(h);
+                double floorLin = lobe.lineFloor(k -> Math.pow(10.0, ampDb[k] / 20.0), bin, ampDb.length - 1,
                         r.freqResolution, r.windowNenbwBins);
+                double floorDb  = floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN;
                 if (Double.isFinite(rawDb) && Double.isFinite(floorDb)) clearance[h] = rawDb - floorDb;
             }
         }

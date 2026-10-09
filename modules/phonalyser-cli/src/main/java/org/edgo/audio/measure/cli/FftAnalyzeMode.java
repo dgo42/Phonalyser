@@ -35,6 +35,8 @@ import org.edgo.audio.measure.dsp.InverseCascade;
 import org.edgo.audio.measure.dsp.ToneLobe;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.CaptureAverage;
+import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
@@ -199,7 +201,8 @@ public class FftAnalyzeMode {
 
         boolean willPostCorrect = adcCompArg != null || freqRespCalArg != null;
         double expectedFundHz = genFreqHz != null ? genFreqHz : Double.NaN;
-        FftResult result = fftAnalyzer.analyze(trimmed, sampleRate, fftSize, harmonics,
+        CaptureAverage average = new CaptureAverage(fftAnalyzer, new CoherentAccumulator());
+        FftResult result = average.analyze(trimmed, sampleRate, fftSize, harmonics,
                 windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbFs,
                 !willPostCorrect, expectedFundHz);
 

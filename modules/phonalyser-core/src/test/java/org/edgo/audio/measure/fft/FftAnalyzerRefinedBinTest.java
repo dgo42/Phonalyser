@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.fft;
 
+import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 import org.junit.jupiter.api.Test;
 
@@ -25,27 +26,30 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Drives {@link FftAnalyzer#refinedBin} with a synthetic tone deliberately
- * placed BETWEEN two bins and checks that the fractional bin comes back.  That
- * is the whole claim of the method: the frequency lock is steered with it, and
- * an estimate good only to the nearest bin would be 0.7 Hz out at a 1 M-point
- * FFT on a 48 kHz capture and useless for a loop that chases parts per million.
+ * The two readings of a tone's fractional bin, driven with a synthetic tone
+ * deliberately placed BETWEEN two bins: the one-frame log-power parabola the
+ * analysis reads a frame's fundamental with, and the phase change of the
+ * tone's bin between two frames ({@link FftAnalyzer#frameBinPhasor} read
+ * twice, {@link MathUtil#kappaFromPhaseStep}) that the frequency lock is
+ * steered with on the reference channel and that the coherent average
+ * re-pins its fundamental by.  An estimate good only to the nearest bin
+ * would be 0.7 Hz out at a 1 M-point FFT on a 48 kHz capture and useless for
+ * a loop that chases parts per million.
  *
  * <p>Both window shapes the measurement meets are covered - the analysis
- * default BH7, whose main lobe spans several bins, and RECT, whose lobe is one
- * bin wide - and both geometries: a single frame, read by the three-bin
- * log-power fit, and several frames, read by the tone's phase change between
- * the first two, which on a clean tone is exact.
+ * default BH7, whose main lobe spans several bins, and RECT, whose lobe is
+ * one bin wide.
  */
 class FftAnalyzerRefinedBinTest {
 
-    private static final int FFT_SIZE = 4096;
+    private static final int FFT_SIZE    = 4096;
+    private static final int SAMPLE_RATE = 48_000;
     /** The tone's integer bin - clear of DC and of the Nyquist end. */
     private static final int TONE_BIN = 500;
     /** How far between bins the tone sits, in bins: an awkward fraction, so a
      *  method that merely returned the peak bin, or rounded, cannot pass. */
     private static final double TONE_OFFSET_BINS = 0.37;
-    /** The accuracy the frequency lock is fed with under a tapered window. */
+    /** The accuracy the one-frame parabola reaches under a tapered window. */
     private static final double TOLERANCE_BINS = 0.01;
     /** The accuracy of the phase change between two frames on a clean tone:
      *  rounding only. */
@@ -55,12 +59,15 @@ class FftAnalyzerRefinedBinTest {
 
     @Test
     void offBinToneIsRecoveredWithTheAnalysisWindow() {
-        assertRecovered(WindowType.BH7, 1, FFT_SIZE, TOLERANCE_BINS);
+        assertParabolaRecovers(WindowType.BH7, TOLERANCE_BINS);
     }
 
     @Test
     void offBinToneIsRecoveredFromThePhaseChangeBetweenFrames() {
-        assertRecovered(WindowType.BH7, 4, FFT_SIZE / 2, PHASE_STEP_TOLERANCE_BINS);
+        // The analysis window only: under RECT the tone's own image at the
+        // negative frequency leaks into the bin's phase and the step is no
+        // longer exact.
+        assertPhaseStepRecovers(WindowType.BH7, FFT_SIZE / 2);
     }
 
     /**
@@ -76,27 +83,36 @@ class FftAnalyzerRefinedBinTest {
     @Test
     void offBinToneWithoutAWindowIsRecoveredOnlyCoarsely() {
         double trueBin = TONE_BIN + TONE_OFFSET_BINS;
-        double refined = assertRecovered(WindowType.RECT, 1, FFT_SIZE, 0.2);
+        double refined = assertParabolaRecovers(WindowType.RECT, 0.2);
         assertTrue(refined > TONE_BIN && refined < trueBin,
                 "an untapered lobe reads short, but stays between the peak bin "
                         + "and the tone: " + refined);
     }
 
-    /** One case: a tone at {@link #TONE_BIN} plus {@link #TONE_OFFSET_BINS},
-     *  read over {@code frames} frames spaced {@code step} samples apart, held
-     *  to {@code toleranceBins}.  Returns the estimate. */
-    private double assertRecovered(WindowType window, int frames, int step,
-            double toleranceBins) {
+    /** The analysis of one frame of the tone, held to {@code toleranceBins}.
+     *  Returns the estimate in bins. */
+    private double assertParabolaRecovers(WindowType window, double toleranceBins) {
         double trueBin = TONE_BIN + TONE_OFFSET_BINS;
-        double[] samples = tone(trueBin, (frames - 1) * step + FFT_SIZE);
-
-        double refined = analyzer.refinedBin(samples, FFT_SIZE, window,
-                TONE_BIN, step, frames);
-
+        FftResult r = analyzer.analyze(tone(trueBin, FFT_SIZE), SAMPLE_RATE, FFT_SIZE, 8,
+                window, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
+        double refined = r.fundamentalHzRefined / r.freqResolution;
         assertEquals(trueBin, refined, toleranceBins,
                 "fractional bin of a tone " + TONE_OFFSET_BINS + " bins above bin "
-                        + TONE_BIN + " (" + window + ", " + frames + " frame(s))");
+                        + TONE_BIN + " (" + window + ", one frame)");
         return refined;
+    }
+
+    /** The phase change of the tone's bin between two frames {@code step}
+     *  samples apart, which on a clean tone is exact. */
+    private void assertPhaseStepRecovers(WindowType window, int step) {
+        double trueBin = TONE_BIN + TONE_OFFSET_BINS;
+        double[] samples = tone(trueBin, step + FFT_SIZE);
+        FftAnalyzer.BinPhasor first  = analyzer.frameBinPhasor(samples, 0,    FFT_SIZE, window, TONE_BIN);
+        FftAnalyzer.BinPhasor second = analyzer.frameBinPhasor(samples, step, FFT_SIZE, window, TONE_BIN);
+        double refined = MathUtil.kappaFromPhaseStep(Math.atan2(first.im(), first.re()),
+                Math.atan2(second.im(), second.re()), TONE_BIN, step, FFT_SIZE);
+        assertEquals(trueBin, refined, PHASE_STEP_TOLERANCE_BINS,
+                "fractional bin from the phase step (" + window + ", step " + step + ")");
     }
 
     /** {@code length} samples of a unit sine whose frequency is

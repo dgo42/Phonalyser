@@ -27,15 +27,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * The analyser's frame-geometry contract: the full analyze method takes the
- * stated frame spacing and count, the fixed overlaps derive both through
+ * The analyser's frame-geometry contract: the full analyze method analyses
+ * the one frame at the buffer's start and takes the stated frame spacing for
+ * its statistics, the fixed overlaps derive that spacing through
  * {@link FftOverlap#hopSamples}, and the random overlap has no derivable
  * spacing at all - its per-tick drawn hop enters as the stated step.
  *
  * <p>Covers: the enum's spacing derivation (values and the random-mode
  * refusal), the geometry validation, bit-identity between the convenience
- * overload and hand-stated geometry, and the coherent level's independence
- * from the stated spacing.
+ * overload and a hand-stated spacing, and the frame's independence from the
+ * stated spacing.
  */
 class FftFrameOffsetsTest {
 
@@ -85,17 +86,13 @@ class FftFrameOffsetsTest {
         assertThrows(IllegalArgumentException.class, () -> analyzer.analyze(
                 signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_0,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
-                0, 2));
-        // At least one frame.
+                0));
+        // The frame must fit the buffer.
+        double[] short1 = sine(1_000.0, FFT_SIZE - 1);
         assertThrows(IllegalArgumentException.class, () -> analyzer.analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_0,
+                short1, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_0,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
-                4_096, 0));
-        // The last frame must fit the buffer.
-        assertThrows(IllegalArgumentException.class, () -> analyzer.analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_0,
-                0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
-                FFT_SIZE + 1, 2));
+                4_096));
     }
 
     @Test
@@ -120,12 +117,12 @@ class FftFrameOffsetsTest {
                 0.0, 0.0, true, Double.NaN, false);
 
         int step = FftOverlap.PCT_75.hopSamples(FFT_SIZE);
-        int frameCount = (signal.length - FFT_SIZE) / step + 1;
         FftResult stated = new FftAnalyzer().analyze(
                 signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_75,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
-                step, frameCount);
+                step);
 
+        assertEquals(1, derived.frameCount, "one frame analysed");
         assertEquals(derived.frameCount, stated.frameCount);
         assertEquals(derived.stepSamples, stated.stepSamples);
         assertEquals(step, stated.stepSamples);
@@ -134,35 +131,30 @@ class FftFrameOffsetsTest {
         assertArrayEquals(derived.amplitudeDbFs, stated.amplitudeDbFs, 0.0);
     }
 
-    // ── Variable spacing: the de-rotation rides the true positions ───────────
+    // ── Variable spacing: the frame does not depend on it ────────────────────
 
     @Test
-    void statedStep_doesNotMoveTheCoherentLevel() {
+    void statedStep_doesNotMoveTheFrame() {
         double binWidth = (double) SAMPLE_RATE / FFT_SIZE;
         double freqHz   = 1_000.0 + 0.3 * binWidth;
         double[] signal = sine(freqHz, FFT_SIZE * 3);
 
-        // Two different spacings in the random-draw regime cut two different
-        // frame sets from the same buffer; the per-frame de-rotation rides
-        // each stated spacing, so the coherent fundamental must read the same
-        // level either way.  Arithmetic that de-rotated at a spacing other
-        // than the one the frames were cut at would mis-rotate frames and
-        // partially cancel the tone - 1024 vs 1000 samples differs by more
-        // than half a cycle of this fundamental per frame (N / (2*k_f) =
-        // 8192 / (2 * 170.967) = 23.96 samples), far outside the tolerance.
+        // The stated spacing enters the statistics alone - how many frames
+        // share a sample.  The frame analysed is the one at the buffer's
+        // start whatever the spacing, so its spectrum reads the same.
         FftResult a = new FftAnalyzer().analyze(
                 signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.RAND,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
-                1_000, 6);
+                1_000);
         FftResult b = new FftAnalyzer().analyze(
                 signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.RAND,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
-                1_024, 6);
+                1_024);
 
         assertEquals(freqHz, a.fundamentalHzRefined, binWidth * 0.1,
-                "refined Hz must track the tone at a stated spacing");
-        assertEquals(a.fundamentalDbFs, b.fundamentalDbFs, 0.05,
-                "coherent fundamental level must not depend on the stated spacing");
+                "refined Hz must track the tone");
+        assertArrayEquals(a.amplitudeDbFs, b.amplitudeDbFs, 0.0,
+                "the frame's spectrum must not depend on the stated spacing");
         assertEquals(1_000, a.stepSamples, "the stated spacing is stamped");
         assertEquals(1_024, b.stepSamples, "the stated spacing is stamped");
     }

@@ -50,6 +50,25 @@ public final class MathUtil {
         return Math.log(x + Math.sqrt(x * x - 1.0));
     }
 
+    /**
+     * The fractional bin of a tone from its phase at {@code bin} in two frames
+     * {@code step} samples apart: the phase change with its whole turns taken
+     * from the advance a tone exactly on {@code bin} makes, scaled to bins.
+     * Resolves an offset of up to {@code fftSize / (2·step)} bins either way of
+     * {@code bin}.  The one recipe every live tone frequency is read with - the
+     * fundamental, the second tone and the reference channel's tones.
+     *
+     * @param p0   the tone's phase at {@code bin} in the first frame, radians
+     * @param p1   the same in the frame {@code step} samples later
+     * @param step the frames' spacing in samples; fractional where a measured
+     *             advance says so
+     */
+    public static double kappaFromPhaseStep(double p0, double p1, int bin, double step, int fftSize) {
+        double expected = 2.0 * Math.PI * bin * step / fftSize;
+        long   turns    = Math.round((p1 - p0 - expected) / (2.0 * Math.PI));
+        return (p1 - p0 - 2.0 * Math.PI * turns) * fftSize / (2.0 * Math.PI * step);
+    }
+
     /** Added to a bin's power before its logarithm, so a bin that cancelled to
      *  exactly zero reads as a very small power instead of minus infinity. */
     private static final double BIN_POWER_FLOOR = 1e-30;

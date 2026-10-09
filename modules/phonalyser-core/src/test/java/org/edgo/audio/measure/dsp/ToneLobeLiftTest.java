@@ -59,6 +59,25 @@ class ToneLobeLiftTest {
     }
 
     @Test
+    void lineFloorReadsTheBandTopWithin25HzOutsideTheLobe() {
+        // 1 Hz bins and a noise bandwidth of 2 bins: the lobe is excluded out
+        // to 4 x 2 = 8 bins, the window reaches 25 bins.  The lobe inside the
+        // exclusion and the huge level beyond 25 Hz must both stay out, which
+        // leaves the 8,10,12 pattern of d = 9..25: 12 x 8, 12 x 10, 10 x 12,
+        // median 10, MAD 2, band top 18.
+        IntToDoubleFunction mag = k -> {
+            int d = Math.abs(k - PEAK);
+            if (d <= 8) return 5000.0;
+            return d <= 25 ? 8.0 + 2.0 * (d % 3) : 1.0e6;
+        };
+        ToneLobeLift lobe = new ToneLobeLift();
+        assertEquals(18.0, lobe.lineFloor(mag, PEAK, 4000, 1.0, 2.0), 1e-9);
+        // The window is set in Hz: at 0.5 Hz bins it reaches 50 bins and takes
+        // the huge level in.
+        assertTrue(lobe.lineFloor(mag, PEAK, 4000, 0.5, 2.0) > 1000.0);
+    }
+
+    @Test
     void lobeExtendsOutToTheNoiseFloor() {
         // A dome descending ×0.5/bin; with the floor at 10 it stands above the
         // noise out to d=6 (1000·0.5^6 = 15.6 > 10; 0.5^7 = 7.8 < 10).

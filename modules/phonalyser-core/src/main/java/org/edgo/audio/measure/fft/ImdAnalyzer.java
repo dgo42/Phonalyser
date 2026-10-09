@@ -36,7 +36,8 @@ package org.edgo.audio.measure.fft;
  *       the nearest bin to {@code n·f₁ − (n−1)·f₂} (lower) and
  *       {@code n·f₂ − (n−1)·f₁} (upper).  Also read the {@code f₂ − f₁}
  *       bin for DFD2 and the {@code 2f₁ − f₂} / {@code 2f₂ − f₁} bins
- *       for DFD3.</li>
+ *       for DFD3.  Every product reading is held at the product's local
+ *       noise floor from below where the result carries one.</li>
  *   <li><b>Ratios</b> - the IMD-product reference is {@code |F1| +
  *       |F2|} (linear-magnitude sum of the two fundamentals).  Each
  *       dnL / dnH product is expressed as a percent of that
@@ -142,9 +143,9 @@ public final class ImdAnalyzer {
         double refMag = Math.max(1e-12, out.f1Mag + out.f2Mag);
 
         // --- DFD2 (= f2 − f1) and DFD3 (= 2f1 − f2 / 2f2 − f1).
-        double dfd2Mag     = readBinLinear(amplitudeDbFs, binBw, out.f2Hz - out.f1Hz);
-        double dfd3LowMag  = readBinLinear(amplitudeDbFs, binBw, 2.0 * out.f1Hz - out.f2Hz);
-        double dfd3HighMag = readBinLinear(amplitudeDbFs, binBw, 2.0 * out.f2Hz - out.f1Hz);
+        double dfd2Mag     = readProductLinear(r, out.f2Hz - out.f1Hz);
+        double dfd3LowMag  = readProductLinear(r, 2.0 * out.f1Hz - out.f2Hz);
+        double dfd3HighMag = readProductLinear(r, 2.0 * out.f2Hz - out.f1Hz);
         // DFD3 is the RMS of its two sidebands; a sideband outside the
         // measurable range (NaN) is skipped so the other still reports -
         // SMPTE-style tone pairs routinely put 2f1 − f2 below DC.  Both
@@ -174,8 +175,8 @@ public final class ImdAnalyzer {
                 fL = (k - 1) * out.f1Hz - (k - 2) * out.f2Hz;
                 fH = (k - 1) * out.f2Hz - (k - 2) * out.f1Hz;
             }
-            double magL = readBinLinear(amplitudeDbFs, binBw, fL);
-            double magH = readBinLinear(amplitudeDbFs, binBw, fH);
+            double magL = readProductLinear(r, fL);
+            double magH = readProductLinear(r, fH);
             out.dnLHz[k]  = fL;
             out.dnHHz[k]  = fH;
             out.dnLPct[k] = 100.0 * magL / refMag;
@@ -290,16 +291,18 @@ public final class ImdAnalyzer {
         return p;
     }
 
-    /** Returns the linear magnitude (full scale = 1) at the bin nearest
-     *  {@code freqHz}.  Frequencies outside the representable bin range (at
-     *  or below DC, or beyond the spectrum) return {@code NaN} - the product
-     *  is not measurable at this sample rate. */
-    private double readBinLinear(double[] amplitudeDbFs, double binBw, double freqHz) {
+    /** Returns a product's linear magnitude (full scale = 1) at the bin
+     *  nearest {@code freqHz}, held at the product's local noise floor from
+     *  below where {@code r} carries one ({@link FftResult#lineFloorDbFs}).
+     *  Frequencies outside the representable bin range (at or below DC, or
+     *  beyond the spectrum) return {@code NaN} - the product is not
+     *  measurable at this sample rate. */
+    private double readProductLinear(FftResult r, double freqHz) {
         if (!(freqHz > 0)) return Double.NaN;
-        int n = amplitudeDbFs.length;
-        int b = (int) Math.round(freqHz / binBw);
+        int n = r.amplitudeDbFs.length;
+        int b = (int) Math.round(freqHz / r.freqResolution);
         if (b < 1 || b >= n) return Double.NaN;
-        return Math.pow(10.0, amplitudeDbFs[b] / 20.0);
+        return r.atLeastLineFloor(b, Math.pow(10.0, r.amplitudeDbFs[b] / 20.0));
     }
 
     /** Leakage-immune noise-floor estimate: the 10th-percentile bin

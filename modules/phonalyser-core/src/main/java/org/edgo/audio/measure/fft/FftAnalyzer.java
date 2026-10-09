@@ -25,13 +25,9 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Locale;
-import java.util.stream.IntStream;
 
-import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.Goertzel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
@@ -40,8 +36,10 @@ import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * FFT-based audio analyzer: coherent averaging, fundamental detection, THD,
- * THD+N (IEC 61672:2003 A-weighting), SNR.
+ * FFT-based audio analyzer: the raw transform of one frame, fundamental
+ * detection, THD, THD+N (IEC 61672:2003 A-weighting), SNR.  Averaging over
+ * frames is the {@link CoherentAccumulator}'s; the statistics it needs on
+ * the average come back through {@link #recomputeStats}.
  *
  * <p>Supports configurable overlap (0 %, 50 %, 75 %, 87.5 %, 93.75 %) and
  * configurable window function (Rectangular, Hann, Blackman-Harris 4/7,
@@ -49,10 +47,6 @@ import lombok.extern.log4j.Log4j2;
  */
 @Log4j2
 public class FftAnalyzer {
-
-    /** Below this bin count the per-bin passes run serially - the fork/dispatch
-     *  overhead would dominate. */
-    private static final int PASS_PARALLEL_THRESHOLD = 1 << 16;   // 64k bins
 
     /** Shared empty grid published on {@link FftResult} for non-dual-tone (or
      *  non-de-rotated) ticks - avoids a per-tick allocation on the hot path. */
@@ -103,20 +97,10 @@ public class FftAnalyzer {
     private double[]   cachedAweight;
     private double     cachedAweightFreqRes;
 
-    /** Cache instance to consult during {@link #analyze}; {@code null}
-     *  disables caching (CLI default).  Set by the caller via
-     *  {@link #setFrameCache}; copied into a local at the top of
-     *  {@code analyze} so changes mid-call have no effect. */
-    private FrameFftCache frameCache;
-    /** Absolute sample-start position of {@code samples[0]} in the
-     *  caller's stream, used to key the cache.  Only meaningful when
-     *  {@link #frameCache} is non-null. */
-    private long samplesAbsStart;
-
     /** Optional second-tone frequency hint (Hz) for dual-/multi-tone
      *  signals; {@link Double#NaN} disables it.  When set, {@code analyze}
      *  also produces a sub-bin frequency estimate for this tone - via the
-     *  same clean-frame parabolic / phase method used for the fundamental
+     *  same one-frame parabola used for the fundamental
      *  - so a dual-tone readout reports its TRUE frequency rather than a
      *  peak read off the coherently-collapsed average. */
     private double secondToneHintHz = Double.NaN;
@@ -188,18 +172,13 @@ public class FftAnalyzer {
     // Reusable scratch buffers
     // =========================================================================
 
-    /** Per-fftSize scratch arrays that are purely internal to one
-     *  {@code analyze} call - they are filled in, consumed, and then
-     *  discarded before the {@link FftResult} is returned (i.e., nothing
-     *  in the Result holds a reference to them).  Caching them as
-     *  instance fields and re-using them across calls eliminates the
-     *  10 × fftSize × 8 B allocation per analyze (≈ 80 MB at fftSize=1 M,
-     *  ≈ 320 MB at 4 M).  Lazily (re-)allocated when fftSize changes. */
+    /** Per-fftSize scratch pair for the frame's transform, purely internal
+     *  to one {@code analyze} call - filled in, consumed, and discarded
+     *  before the {@link FftResult} is returned (nothing in the result holds
+     *  a reference to it).  Caching it as instance fields and re-using it
+     *  across calls eliminates the 2 × fftSize × 8 B allocation per analyze
+     *  (16 MB at fftSize = 1 M).  Lazily (re-)allocated when fftSize changes. */
     private double[] scratchF0Re, scratchF0Im;
-    private double[] scratchSumRe, scratchSumIm;
-    private double[] scratchFrameRe, scratchFrameIm;
-    private double[] scratchS0Re, scratchS0Im;
-    private double[] scratchS1Re, scratchS1Im;
     /** Half-size scratch for amplitudes - used only inside one
      *  {@code analyze} call by the harmonic-detection and noise-floor
      *  paths; never returned. */
@@ -232,42 +211,6 @@ public class FftAnalyzer {
         cachedCohGain = sum / N;
         cachedNenbw   = (double) N * sum2 / (sum * sum);
         return cachedWindow;
-    }
-
-    // =========================================================================
-    // Per-frame FFT cache (optional; populated by the caller)
-    // =========================================================================
-
-    /** Optional per-frame raw windowed-FFT cache.  The caller (typically
-     *  the GUI worker) provides an implementation keyed by absolute
-     *  sample-start position; the analyser consults it before every
-     *  per-frame FFT and stores fresh results back.  This avoids
-     *  re-FFT-ing the same raw frame across overlapping sliding-window
-     *  ticks (the dominant cost at large fftSize × N). */
-    public interface FrameFftCache {
-        /** If a cached result exists for {@code (absStart, fftSize)},
-         *  copy its real and imaginary parts into {@code outRe} /
-         *  {@code outIm} (length = fftSize) and return {@code true}.
-         *  Otherwise return {@code false}. */
-        boolean tryFill(long absStart, int fftSize, double[] outRe, double[] outIm);
-
-        /** Stores a copy of {@code (re, im)} (length = fftSize) for the
-         *  key {@code (absStart, fftSize)}.  The cache MUST copy - the
-         *  caller reuses the input arrays. */
-        void put(long absStart, int fftSize, double[] re, double[] im);
-    }
-
-    /** Wires (or clears) the per-frame FFT cache.  Call with
-     *  {@code null} to disable caching for the next {@code analyze}. */
-    public void setFrameCache(FrameFftCache cache) {
-        this.frameCache = cache;
-    }
-
-    /** Sets the absolute sample-start position of the next
-     *  {@code analyze} call's {@code samples[0]}.  Used as the cache
-     *  key offset.  Ignored when {@link #frameCache} is null. */
-    public void setSamplesAbsStart(long absStart) {
-        this.samplesAbsStart = absStart;
     }
 
     /** Sets (or clears, with NaN) the second-tone frequency hint for the
@@ -321,16 +264,12 @@ public class FftAnalyzer {
     }
 
     /** Drops every retained fftSize-scaled scratch buffer and the cached
-     *  window table - at fftSize 4 M the set idles on ~300 MB after the last
+     *  window table - at fftSize 4 M the set idles on ~100 MB after the last
      *  {@code analyze}.  Everything reallocates on demand at the next call,
      *  so this belongs in a stop path, never mid-run.  Callers must not have
      *  an analysis in flight. */
     public void releaseScratch() {
         scratchF0Re    = scratchF0Im    = null;
-        scratchSumRe   = scratchSumIm   = null;
-        scratchFrameRe = scratchFrameIm = null;
-        scratchS0Re    = scratchS0Im    = null;
-        scratchS1Re    = scratchS1Im    = null;
         scratchAmplLinear = null;
         scratchSignalMask = null;
         scratchNoiseCand  = null;
@@ -343,87 +282,21 @@ public class FftAnalyzer {
         imdAnalyzer.releaseScratch();
     }
 
-    /** Tries the cache for the windowed FFT of the frame starting at
-     *  local sample offset {@code localStart}.  On miss, windows +
-     *  FFTs from {@code samples} and stores the result.  Always leaves
-     *  {@code re} / {@code im} populated with the result. */
-    private void cachedFrameFft(double[] samples, int localStart, int fftSize,
-                                double[] window, double[] re, double[] im) {
-        long absStart = samplesAbsStart + localStart;
-        if (frameCache != null && frameCache.tryFill(absStart, fftSize, re, im)) {
-            return;
-        }
+    /** The windowed FFT of the frame starting at local sample offset
+     *  {@code localStart}: the window times the raw samples, transformed in
+     *  place into {@code re} / {@code im}. */
+    private void frameFft(double[] samples, int localStart, int fftSize,
+                          double[] window, double[] re, double[] im) {
         for (int n = 0; n < fftSize; n++) {
             re[n] = samples[localStart + n] * window[n];
             im[n] = 0.0;
         }
         Fft.forward(re, im);
-        if (frameCache != null) {
-            frameCache.put(absStart, fftSize, re, im);
-        }
     }
 
     /** One spectral bin's complex value, in the raw FFT units of
      *  {@link FftResult#re} / {@link FftResult#im}. */
     public record BinPhasor(double re, double im) {}
-
-    /** The frame-averaged phasor of ONE bin of {@code samples}, produced by
-     *  the recipe {@code analyze} uses for its coherent {@code re[k]/im[k]}:
-     *  per frame of {@code fftSize} samples (frame f starting at
-     *  {@code f·step}) a windowed single-bin Goertzel, de-rotated to the
-     *  window's own origin by the fundamental's phase advance
-     *  {@code −2π·base·kFractional/fftSize} - the same region-constant angle
-     *  the coherent pass applies to the fundamental's bin - and the frames
-     *  averaged.  The window table is the analyser's own cached one, so the
-     *  caller never holds a second copy of the coefficients.
-     *
-     *  <p>The answer therefore shares the time origin and the scale of a
-     *  spectrum computed by {@code analyze} over the same span, and the phase
-     *  difference between the two is free of any hop-dependent term.  That is
-     *  what the FFT worker's reference-channel phase alignment compares: the
-     *  analysed channel's fundamental bin against the same bin of the
-     *  opposite channel.
-     *
-     *  @param bin         integer bin, 0 .. fftSize/2
-     *  @param step        spacing between successive frame starts, in samples
-     *  @param frameCount  frames to average, the first one starting at
-     *                     {@code samples[0]}
-     *  @param kFractional the de-rotation frequency in fractional bins (the
-     *                     tick's refined fundamental bin) */
-    public BinPhasor binPhasor(double[] samples, int fftSize, WindowType windowType,
-                               int bin, int step, int frameCount, double kFractional) {
-        if (Integer.bitCount(fftSize) != 1) {
-            throw new IllegalArgumentException("fftSize must be a power of 2, got: " + fftSize);
-        }
-        if (bin < 0 || bin > fftSize / 2) {
-            throw new IllegalArgumentException("Bin out of range: " + bin);
-        }
-        if (step < 1 || frameCount < 1) {
-            throw new IllegalArgumentException("Frame geometry must be positive, got step "
-                    + step + " and " + frameCount + " frame(s)");
-        }
-        if ((long) (frameCount - 1) * step + fftSize > samples.length) {
-            throw new IllegalArgumentException(
-                    "Stated geometry exceeds the buffer: " + frameCount + " frames at step "
-                    + step + " need " + ((long) (frameCount - 1) * step + fftSize)
-                    + " samples, got " + samples.length);
-        }
-        double[] window = getCachedWindow(fftSize, windowType);
-        final double w  = 2.0 * Math.PI * bin / fftSize;
-        double   sumRe = 0.0;
-        double   sumIm = 0.0;
-        for (int f = 0; f < frameCount; f++) {
-            int base = f * step;
-            Goertzel.SingleBin gz = Goertzel.goertzelBin(samples, base, fftSize, window, w, 0.0);
-            double ang   = -2.0 * Math.PI
-                    * Math.IEEEremainder((double) base * kFractional, fftSize) / fftSize;
-            double c = Math.cos(ang);
-            double s = Math.sin(ang);
-            sumRe += gz.re() * c - gz.im() * s;
-            sumIm += gz.re() * s + gz.im() * c;
-        }
-        return new BinPhasor(sumRe / frameCount, sumIm / frameCount);
-    }
 
     /** The raw DFT bin {@code bin} of ONE frame of {@code samples}, the frame
      *  starting at {@code base}: the windowed single-bin Goertzel with its
@@ -452,160 +325,54 @@ public class FftAnalyzer {
         return new BinPhasor(gz.re(), gz.im());
     }
 
-    /**
-     * The fractional bin of a tone sitting at {@code bin} in {@code samples},
-     * measured the way the analysis refines the fundamental: with two frames or
-     * more, the tone's phase change at {@code bin} between the first frame and
-     * the one {@code step} samples later ({@link #kappaFromPhaseStep}); with a
-     * single frame, the log-power parabolic fit of
-     * {@link MathUtil#parabolicBinInterp(double, double, double, double, double, double, int)}
-     * over {@code bin-1}, {@code bin} and {@code bin+1} of that frame.
-     * Multiplied by the frequency resolution it is that tone's frequency.
+    /** The raw windowed transform of ONE frame of {@code samples}, the frame
+     *  starting at {@code base}, written to {@code re} / {@code im} (length
+     *  {@code fftSize}, both halves) in the units of {@link FftResult#re} /
+     *  {@link FftResult#im} - what {@code analyze} measures, with nothing
+     *  measured.  The frames an average takes beyond the analysed one.
      *
-     * <p>It exists for a buffer the analysis never transformed - the opposite
-     * channel's window in the reference-channel phase alignment, whose
-     * fundamental stands tens of dB clear of the notched one and is therefore
-     * the better measurement to steer a frequency lock with.  The same
-     * estimator as on the analysed channel, so the two readings differ by the
-     * channel and nothing else.  Two single-bin transforms per call (three for
-     * a single frame); no spectrum is built and no window table copied.
-     *
-     * <p>In the single-frame fit the three bins are clamped into
-     * {@code 1 .. fftSize/2}, so a tone at the very first or last bin
-     * degenerates to a two-point fit exactly as the array form of the same fit
-     * does.
-     *
-     * @param bin        the tone's integer bin - the phase is read there, and
-     *                   the answer's whole turns are resolved against it
-     * @param step       spacing between successive frame starts, in samples
-     * @param frameCount frames the buffer holds, the first at {@code samples[0]}
-     */
-    public double refinedBin(double[] samples, int fftSize, WindowType windowType,
-                             int bin, int step, int frameCount) {
-        if (step < 1 || frameCount < 1) {
-            throw new IllegalArgumentException("Frame geometry must be positive, got step "
-                    + step + " and " + frameCount + " frame(s)");
+     *  @param base first sample of the frame */
+    public void frameSpectrum(double[] samples, int base, int fftSize,
+                              WindowType windowType, double[] re, double[] im) {
+        if (Integer.bitCount(fftSize) != 1) {
+            throw new IllegalArgumentException("fftSize must be a power of 2, got: " + fftSize);
         }
-        if (frameCount >= 2) {
-            BinPhasor first  = frameBinPhasor(samples, 0,    fftSize, windowType, bin);
-            BinPhasor second = frameBinPhasor(samples, step, fftSize, windowType, bin);
-            return kappaFromPhaseStep(Math.atan2(first.im(), first.re()),
-                    Math.atan2(second.im(), second.re()), bin, step, fftSize);
+        if (base < 0 || (long) base + fftSize > samples.length) {
+            throw new IllegalArgumentException("Frame at " + base + " exceeds the buffer: "
+                    + fftSize + " samples needed, " + samples.length + " held");
         }
-        int halfSize = fftSize / 2;
-        int lo = Math.max(1, bin - 1);
-        int hi = Math.min(halfSize, bin + 1);
-        BinPhasor pLo  = frameBinPhasor(samples, 0, fftSize, windowType, lo);
-        BinPhasor pMid = frameBinPhasor(samples, 0, fftSize, windowType, bin);
-        BinPhasor pHi  = frameBinPhasor(samples, 0, fftSize, windowType, hi);
-        return MathUtil.parabolicBinInterp(pLo.re(), pLo.im(), pMid.re(), pMid.im(),
-                pHi.re(), pHi.im(), bin);
-    }
-
-    /**
-     * Full-integration refinement of the fundamental's fractional bin κ.  The
-     * coarse estimate is a single one-hop phase difference; its residual error δk
-     * is applied as a linear de-rotation ramp across the whole segment, so on a
-     * long coherent average the harmonics de-cohere (∝ sinc(π·h·δk·M·step/N)) and
-     * read low - the slow harmonic decline seen on long captures.  Here κ is
-     * measured from the SLOPE of the fundamental's phase at {@code refIntBin} over
-     * every clean-segment frame: a {@code (bestLen-1)·step} baseline instead of one
-     * hop, shrinking δk by ~that factor.  The phase RESIDUAL relative to the coarse
-     * κ stays within ±π over the segment (no unwrapping), and the sample-offsets are
-     * centred so the regression stays well-conditioned.  Returns the refined κ.
-     *
-     * <p>Only the fundamental BIN is needed per frame, so a single-bin Goertzel
-     * (O(N) per frame, ~6% of a full FFT) replaces the FFT - no extra spectra.  The
-     * Goertzel result carries a constant phase factor e^{−jω}; being frame-independent
-     * it cancels in the phase SLOPE and does not bias κ.  The residuals are re-centred
-     * on their circular mean before the fit so an arbitrary fundamental phase landing
-     * near ±π cannot wrap mid-segment and corrupt the slope.
-     */
-    private double refineKappaOverSegment(double[] samples, double[] window, int fftSize,
-                                          int step, int bestStart, int bestLen,
-                                          int refIntBin, double kCoarse) {
-        final double w     = 2.0 * Math.PI * refIntBin / fftSize;
-        double[] resid  = new double[bestLen];
-        double   sumCos = 0.0, sumSin = 0.0;
-        for (int f = bestStart; f < bestStart + bestLen; f++) {
-            int base = f * step;
-            Goertzel.SingleBin gz = Goertzel.goertzelBin(samples, base, fftSize, window, w, 0.0);
-            double ph       = Math.atan2(gz.im(), gz.re());
-            double expected = 2.0 * Math.PI * kCoarse * base / (double) fftSize;
-            double r        = Math.IEEEremainder(ph - expected, 2.0 * Math.PI);
-            resid[f - bestStart] = r;
-            sumCos += Math.cos(r);
-            sumSin += Math.sin(r);
+        if (re.length < fftSize || im.length < fftSize) {
+            throw new IllegalArgumentException("Spectrum arrays shorter than the transform: "
+                    + fftSize + " needed, " + Math.min(re.length, im.length) + " given");
         }
-        double meanAngle = Math.atan2(sumSin, sumCos);          // circular mean -> wrap-safe centre
-        double meanBase  = ((double) bestStart + (bestStart + bestLen - 1)) * 0.5 * step;
-        double sDbR = 0.0, sDb2 = 0.0;
-        for (int f = bestStart; f < bestStart + bestLen; f++) {
-            double rc = Math.IEEEremainder(resid[f - bestStart] - meanAngle, 2.0 * Math.PI);
-            double db = (double) f * step - meanBase;
-            sDbR += db * rc;
-            sDb2 += db * db;
-        }
-        if (!(sDb2 > 0.0)) {
-            return kCoarse;
-        }
-        return kCoarse + (sDbR / sDb2) * fftSize / (2.0 * Math.PI);
+        frameFft(samples, base, fftSize, getCachedWindow(fftSize, windowType), re, im);
     }
 
     /**
      * Sub-bin fractional bin κ of the line sitting near {@code hintBin},
-     * measured on the clean segment the same way the fundamental's own κ is:
-     * the peak is re-found within ±{@code searchBins} of the hint, then the
-     * one-hop phase difference between the segment's first two frames gives
-     * the fractional position; with a single frame ({@code s1Re == null}) the
-     * three lobe bins carry a parabolic interpolation instead.  Only the lobe
-     * bins feed the estimate, so noise elsewhere in the spectrum cannot bias
-     * it.  The integer part of the answer is the bin the search settled on, so
-     * a caller whose line can stray states how far; a caller that knows where
+     * measured on the frame the same way the fundamental's own κ is: the
+     * peak is re-found within ±{@code searchBins} of the hint, then the
+     * three lobe bins carry a parabolic interpolation.  Only the lobe bins
+     * feed the estimate, so noise elsewhere in the spectrum cannot bias it.
+     * The integer part of the answer is the bin the search settled on, so a
+     * caller whose line can stray states how far; a caller that knows where
      * its line stands passes 0 and the hint bin is measured as it is, which
-     * also keeps a neighbouring line from taking the bin.  The phase
-     * difference then resolves an offset of up to half a frame spacing's worth
-     * of bins ({@code fftSize / (2·step)}, one bin at 50 % overlap) either way.
+     * also keeps a neighbouring line from taking the bin.
      *
      * <p>Serves every line the analysis reports a TRUE frequency for beside the
-     * fundamental - the second tone of a dual-tone signal - so it too is read
-     * off a fresh frame rather than off the
-     * coherently-collapsed average.  Returns {@link Double#NaN} when the hint
-     * sits within 3 bins of an edge of the single-sided spectrum, where no full
-     * lobe exists to measure.
+     * fundamental - the second tone of a dual-tone signal.  Returns
+     * {@link Double#NaN} when the hint sits within 3 bins of an edge of the
+     * single-sided spectrum, where no full lobe exists to measure.
      */
     private double refineToneKappaAt(int hintBin, int searchBins,
-                                     double[] s0Re, double[] s0Im,
-                                     double[] s1Re, double[] s1Im,
-                                     int halfSize, int fftSize, int step) {
+                                     double[] re, double[] im,
+                                     int halfSize, int fftSize) {
         if (hintBin < 3 || hintBin > halfSize - 3) {
             return Double.NaN;
         }
-        int peak = peakBin(s0Re, s0Im,
+        int peak = peakBin(re, im,
                 Math.max(1, hintBin - searchBins), Math.min(halfSize, hintBin + searchBins));
-        if (s1Re == null) {
-            return MathUtil.parabolicBinInterp(s0Re, s0Im, peak, fftSize);
-        }
-        double p0 = Math.atan2(s0Im[peak], s0Re[peak]);
-        double p1 = Math.atan2(s1Im[peak], s1Re[peak]);
-        return kappaFromPhaseStep(p0, p1, peak, step, fftSize);
-    }
-
-    /**
-     * The fractional bin of a tone from its phase at {@code bin} in two frames
-     * {@code step} samples apart: the phase change with its whole turns taken
-     * from the advance a tone exactly on {@code bin} makes, scaled to bins.
-     * Resolves an offset of up to {@code fftSize / (2·step)} bins either way of
-     * {@code bin}.  The one recipe every live tone frequency is read with - the
-     * fundamental, the second tone and the reference channel's tones.
-     *
-     * @param p0 the tone's phase at {@code bin} in the first frame, radians
-     * @param p1 the same in the frame {@code step} samples later
-     */
-    private double kappaFromPhaseStep(double p0, double p1, int bin, int step, int fftSize) {
-        double expected = 2.0 * Math.PI * bin * step / (double) fftSize;
-        long   turns    = Math.round((p1 - p0 - expected) / (2.0 * Math.PI));
-        return (p1 - p0 - 2.0 * Math.PI * turns) * fftSize / (2.0 * Math.PI * step);
+        return MathUtil.parabolicBinInterp(re, im, peak, fftSize);
     }
 
     /**
@@ -735,12 +502,12 @@ public class FftAnalyzer {
      * loudest-bin behaviour.
      *
      * <p>Allocates a fresh {@link FftResult} per call - preferred for one-shot
-     * CLI / test callers; the THD sums its historic H2..H9.  The live FFT view
-     * goes through
+     * test callers; the THD sums its historic H2..H9.  The live FFT view and
+     * the capture average go through
      * {@link #analyze(double[], int, int, int, int, WindowType, FftOverlap,
-     * double, double, boolean, double, boolean, double, FftResult, int, int)}
-     * to state the THD's harmonic limit and to write into a pre-allocated pool
-     * slot, avoiding per-tick array churn.
+     * double, double, boolean, double, boolean, double, FftResult, int)}
+     * to state the THD's harmonic limit and to write into a pre-allocated
+     * result slot, avoiding per-call array churn.
      */
     public FftResult analyze(double[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
@@ -748,49 +515,24 @@ public class FftAnalyzer {
                                  double snrFreqMin, double snrFreqMax,
                                  boolean coherentAveraging, double fundRefDbFs,
                                  boolean logSummary, double expectedFundHz) {
-        // The one place the fixed overlap's spacing is derived: everything
-        // below runs on the stated geometry.  A random overlap has no fixed
-        // spacing (hopSamples throws) - its drawn hop enters as the stated
-        // step directly.
+        // The one place the fixed overlap's spacing is derived.  A random
+        // overlap has no fixed spacing (hopSamples throws) - its drawn hop
+        // enters as the stated step directly.
         int step = overlap.hopSamples(fftSize);
-        int frameCount = samples.length >= fftSize
-                ? (samples.length - fftSize) / step + 1
-                : 0;
         return analyze(samples, sampleRate, fftSize, harmonicCount, THD_HARMONICS_LEGACY,
                 windowType, overlap, snrFreqMin, snrFreqMax, coherentAveraging,
-                fundRefDbFs, logSummary, expectedFundHz, new FftResult(),
-                step, frameCount);
-    }
-
-    /** A contiguous half-open [lo, hi) bin range to process. */
-    @FunctionalInterface
-    private interface RangeTask { void run(int lo, int hi); }
-
-    /** Runs {@code task} over [0, n) split into one contiguous chunk per core on
-     *  the common pool; below {@link #PASS_PARALLEL_THRESHOLD} it runs the whole
-     *  range on the caller's thread.  Chunks are disjoint, so a task that writes
-     *  only its own [lo, hi) slice needs no synchronisation. */
-    private void parallelChunks(int n, RangeTask task) {
-        if (n < PASS_PARALLEL_THRESHOLD) { task.run(0, n); return; }
-        int chunks    = Math.max(2, Runtime.getRuntime().availableProcessors() - 1);
-        int chunkSize = (n + chunks - 1) / chunks;
-        IntStream.range(0, chunks).parallel().forEach(c -> {
-            int lo = c * chunkSize;
-            int hi = Math.min(n, lo + chunkSize);
-            if (lo < hi) task.run(lo, hi);
-        });
+                fundRefDbFs, logSummary, expectedFundHz, new FftResult(), step);
     }
 
     /**
      * The one full analysis method - every overload above funnels into it.
-     * The caller states the frame geometry: {@code step} is the spacing
-     * between successive frame starts and {@code frameCount} the number of
-     * frames to take, so an over-sized buffer is never mis-read as extra
-     * frames.  Fixed overlaps derive both once in the convenience overload;
-     * the analyser worker states its per-tick DRAWN hop directly - under the
-     * random overlap the buffer's two frames are spaced by the hop drawn for
-     * the next tick, so the second frame is exactly the next tick's first
-     * and the raw-frame cache keeps hitting.
+     * It analyses ONE frame: the {@code fftSize} samples at the start of
+     * {@code samples}, transformed as they stand.  Averaging over frames is
+     * the {@link CoherentAccumulator}'s, which takes this result's spectrum
+     * as one frame; {@code step} - the spacing between successive frame
+     * starts, in samples - enters only the statistics that depend on how
+     * many frames share a sample (the skirt look-ahead), and is the fixed
+     * overlap's hop or the drawn one under the random overlap.
      *
      * <p>{@code thdHarmonics} is how many of the evaluated harmonics the THD
      * sums, counted from the 2nd (H2 .. H(thdHarmonics+1)), each still subject
@@ -804,35 +546,28 @@ public class FftAnalyzer {
      * the four fftSize/2+1-long spectrum arrays.  Returns {@code outResult}
      * for convenience.
      */
-    @SuppressWarnings("unused")
     public FftResult analyze(double[] samples, int sampleRate,
                                  int fftSize, int harmonicCount, int thdHarmonics,
                                  WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
                                  boolean coherentAveraging, double fundRefDbFs,
                                  boolean logSummary, double expectedFundHz,
-                                 FftResult outResult, int step, int frameCount) {
+                                 FftResult outResult, int step) {
         if (Integer.bitCount(fftSize) != 1) {
             throw new IllegalArgumentException("fftSize must be a power of 2, got: " + fftSize);
         }
         if (step < 1) {
             throw new IllegalArgumentException("Frame spacing must be positive, got: " + step);
         }
-        if (frameCount <= 0 || samples.length < fftSize) {
+        if (samples.length < fftSize) {
             throw new IllegalArgumentException(
                     "Signal too short for fftSize=" + fftSize +
                     ": need at least " + fftSize + " samples, got " + samples.length);
         }
-        if ((long) (frameCount - 1) * step + fftSize > samples.length) {
-            throw new IllegalArgumentException(
-                    "Stated geometry exceeds the buffer: " + frameCount + " frames at step "
-                    + step + " need " + ((long) (frameCount - 1) * step + fftSize)
-                    + " samples, got " + samples.length);
-        }
 
         double freqRes = (double) sampleRate / fftSize;
-        log.info("FFT: size={}, frames={}, overlap={}, window={}, averaging={}, freq-res={} Hz, harmonics={}",
-                fftSize, frameCount, overlap.label, windowType,
+        log.info("FFT: size={}, overlap={}, window={}, averaging={}, freq-res={} Hz, harmonics={}",
+                fftSize, overlap.label, windowType,
                 coherentAveraging ? "coherent" : "incoherent",
                 String.format(Locale.US, "%.4f", freqRes), harmonicCount);
 
@@ -844,29 +579,19 @@ public class FftAnalyzer {
         double   cohGain = cachedCohGain;   // cached with the window table
         double   nenbw   = cachedNenbw;     // ditto - corrects the noise integrals
 
-        // --- Estimate fundamental fractional bin (always, for both averaging modes) --
-        // The true signal frequency is k_f × Fs/N where k_f is non-integer.
-        // Using the integer bin for harmonic synthesis causes phase drift of
-        // 2π×ε×n/N per sample -> complete cancellation failure over long recordings.
-        // Phase-difference method: window-independent, accurate to ~1e-5 bins.
-        //
-        // Strategy: do peak-bin detection on a frame from inside the longest
-        // CLEAN segment (re-estimated below), so glitchy frames at the
-        // beginning of the recording cannot poison the kFractional estimate.
         int halfSize = fftSize / 2;
 
         // Resize the pool slot's bin / harmonic arrays once up-front so
-        // the per-frame loops below can write into them directly (no
-        // per-tick allocation for the four halfSize+1-long arrays).
+        // the per-bin loops below can write into them directly (no
+        // per-call allocation for the four halfSize+1-long arrays).
         outResult.ensureArrays(halfSize + 1, harmonicCount);
 
-        // --- Pre-pass peak-bin estimate (from frame 0; only used to size the
-        //     slew threshold - final kFractional is re-estimated post-rejection)
+        // --- The frame -------------------------------------------------------
         scratchF0Re = scratchOrAlloc(scratchF0Re, fftSize);
         scratchF0Im = scratchOrAlloc(scratchF0Im, fftSize);
         double[] f0Re = scratchF0Re;
         double[] f0Im = scratchF0Im;
-        cachedFrameFft(samples, 0, fftSize, window, f0Re, f0Im);
+        frameFft(samples, 0, fftSize, window, f0Re, f0Im);
         // Restrict the fundamental search to FUND_SEARCH_MIN_HZ ... 0.7·Nyquist:
         // window leakage from a residual DC offset can populate the lowest bins at
         // roughly -32 dB (Hann) below DC level, easily beating a deeply notched
@@ -896,334 +621,22 @@ public class FftAnalyzer {
                     String.format(Locale.US, "%.4f", intFundBin * freqRes));
         }
 
-        // --- Frame-rejection threshold (signal-interruption detector) --------
-        // Pythagorean sine invariant: for s = A·sin(θ) and k = 2π·f/Fs,
-        //   ds/dn = A·k·cos(θ)  =>  s² + (ds/dn / k)² ≡ A²
-        // For each sample we compute R = √(s² + (Δs/k)²) using a central
-        // difference. Clean samples -> R ≈ A; glitches violate the invariant.
-        // The test is amplitude-relative and phase-aware: a small |Δ| at a
-        // peak (where slope ≈ 0) still produces a large R deviation, which the
-        // old constant-|Δ| threshold would have missed.
-        //
-        // peakAmp is RMS-derived (peak = √2·RMS for a sine) so that overshoots
-        // from dropouts do not inflate A and mask further glitches.
-        // BOTH the RMS and the per-sample R scan operate on the
-        // DC-removed signal - a live ADC capture typically carries a
-        // small DC bias that, when not subtracted, makes peakAmp =
-        // √(2·DC² + A²) instead of A.  For a small AC signal
-        // dominated by DC (e.g. 5 mV sine on top of 10 mV bias) this
-        // inflates peakAmp by √2·DC, and R for every sample drifts
-        // ~29% away from peakAmp regardless of glitches - flagging
-        // half the samples and rejecting every frame.
-        // FRAME REJECTION DISABLED - capture glitches of every origin are now
-        // handled by the cross-tick gap recovery, and per-frame rejection also
-        // (harmlessly) flags AGC amplitude wobble.  This one switch gates BOTH
-        // the R-invariant scan and the phase-coherence check, and short-circuits
-        // their per-sample work so a disabled analysis costs nothing.  Flip to
-        // true to restore.
-        final boolean frameRejection = false;
-        // DC mean + RMS feed only the rejection-feasibility test and the DEBUG
-        // diagnostic - two full passes over the multi-million-sample window
-        // that are pure waste while both are off.
-        final double dcMean;
-        final double peakAmp;
-        if (frameRejection || log.isDebugEnabled()) {
-            dcMean  = sampleMean(samples);
-            peakAmp = dcRemovedRms(samples, dcMean) * Constants.SQRT2;
-        } else {
-            dcMean  = 0.0;
-            peakAmp = 0.0;
-        }
-        double estFundHz = intFundBin * freqRes;
-        double omegaPerSample = 2.0 * Math.PI * estFundHz / sampleRate;
-        final double R_TOLERANCE = 0.10;      // |R−A|/A > 10 %  -> flag sample
-
-        // The R-invariant test assumes s(n) ≈ A·sin(ωn); when the fundamental
-        // sine is not the dominant component of the time-domain signal (typical
-        // when measuring distortion through a deep filter notch - fundamental
-        // at -100 dBFS while DC offset + noise + harmonics dominate the time
-        // domain), the invariant cannot hold and the whole recording would be
-        // rejected.  Compare the spectrum-bin amplitude at the candidate
-        // fundamental against the time-domain peak; skip rejection unless the
-        // sine carries at least half the time-domain peak amplitude.
-        double specMag = Math.sqrt(f0Re[intFundBin] * f0Re[intFundBin]
-                                 + f0Im[intFundBin] * f0Im[intFundBin]);
-        double specPeakAmp = specMag * 2.0 / ((double) fftSize * cohGain);
-        boolean rejectionFeasible = frameRejection && peakAmp > 0.0 && specPeakAmp >= 0.5 * peakAmp;
-        // Per-analysis diagnostic - demoted to DEBUG and guarded so its five
-        // String.format calls don't run (or spam the log) on every tick.
-        if (log.isDebugEnabled()) {
-            log.debug("Frame R-invariant check: peakAmp(RMS-derived)={}, fund-bin peak={} (ratio {} dB), k={}, tolerance={}% (using intBin={}, ~{} Hz)",
-                    String.format(Locale.US, "%.6e", peakAmp),
-                    String.format(Locale.US, "%.6e", specPeakAmp),
-                    peakAmp > 0
-                            ? String.format(Locale.US, "%+.1f", 20.0 * Math.log10(specPeakAmp / peakAmp))
-                            : "n/a",
-                    String.format(Locale.US, "%.6f", omegaPerSample),
-                    String.format(Locale.US, "%.1f", R_TOLERANCE * 100.0),
-                    intFundBin,
-                    String.format(Locale.US, "%.4f", estFundHz));
-        }
-        if (frameRejection && !rejectionFeasible && log.isInfoEnabled()) {
-            log.info("Frame R-invariant rejection skipped: fundamental sine buried in noise/spurs "
-                    + "(fund-bin peak >20 dB below time-domain peak); accepting all frames");
-        }
-
-        // Quick noise-derivative check: for a clean A·sin(ωn) the
-        // second difference Δ²s = s[n+1] − 2·s[n] + s[n−1] has peak
-        // |A·k²|; broadband per-sample noise produces |Δ²s| ≈ 4N.
-        // When the observed RMS(Δ²) is much larger than the expected
-        // sine contribution, derivative noise dominates dq = Δs/k
-        // and the R-invariant test fires on most samples regardless
-        // of glitches - turning every analysis into a "rejection
-        // invalidated" log entry.  Bail out upfront instead.
-        if (rejectionFeasible && peakAmp > 0 && omegaPerSample > 0) {
-            double noiseAmplification = derivativeNoiseRatio(samples, peakAmp, omegaPerSample);
-            final double MAX_NOISE_AMPLIFICATION = 5.0;
-            if (noiseAmplification > MAX_NOISE_AMPLIFICATION) {
-                log.info("Frame R-invariant rejection skipped: derivative-noise ratio {} > {} (signal {} too small for the 1/k amplification at k={}); accepting all frames",
-                        String.format(Locale.US, "%.1f", noiseAmplification),
-                        String.format(Locale.US, "%.1f", MAX_NOISE_AMPLIFICATION),
-                        String.format(Locale.US, "%.4e", peakAmp),
-                        String.format(Locale.US, "%.6f", omegaPerSample));
-                rejectionFeasible = false;
-            }
-        }
-
-        // Multi-tone signals (dual tone, etc.): the R-invariant assumes a
-        // single sine, so a sum of tones violates it at almost every sample -
-        // the scan would flag tens of thousands of "events", then invalidate
-        // itself and accept all frames anyway.  Skip it outright.
-        if (rejectionFeasible && multiTone) {
-            log.info("Frame R-invariant rejection skipped: multi-tone signal "
-                    + "(single-sine invariant does not apply); accepting all frames");
-            rejectionFeasible = false;
-        }
-
-        // --- Averaging (coherent: complex sum; incoherent: power sum) --------
-        scratchSumRe   = scratchOrAlloc(scratchSumRe,   fftSize);
-        scratchSumIm   = scratchOrAlloc(scratchSumIm,   fftSize);
-        scratchFrameRe = scratchOrAlloc(scratchFrameRe, fftSize);
-        scratchFrameIm = scratchOrAlloc(scratchFrameIm, fftSize);
-        // sumRe / sumIm are the averaging accumulators - must start at 0.
-        // frameRe / frameIm are fully overwritten per frame (either by the
-        // cache copy or by the windowing loop in cachedFrameFft), so no
-        // explicit fill is needed.
-        Arrays.fill(scratchSumRe, 0.0);
-        Arrays.fill(scratchSumIm, 0.0);
-        double[] sumRe   = scratchSumRe;          // complex Re  OR  power (incoherent)
-        double[] sumIm   = scratchSumIm;          // complex Im  OR  unused (incoherent)
-        double[] frameRe = scratchFrameRe;
-        double[] frameIm = scratchFrameIm;
-
-        // --- Pass 1: per-sample R scan, then group hits into events ----------
-        // Adjacent hits (within GAP samples) belong to the same disturbance, so we
-        // collapse them into one "event" with a start/end sample index.
-        // Each event is logged with its file-time so it can be cross-checked
-        // against an external viewer (e.g. Audacity).
-        // Then, for every event, all FFT frames whose sample range overlaps
-        // the event are marked dirty. Longest-clean-segment selection follows.
-        final int EVENT_GAP_SAMPLES = 16;
-        int hitCount = 0;
-        double maxRDevSeen = 0.0;             // max |R−A|/A over the whole signal
-        List<long[]> events = new ArrayList<>();  // {startSample, endSample, peakDevScaled (×1e9 as long)}
-        if (rejectionFeasible) {
-            int evStart = -1;
-            int evEnd   = -1;
-            double evPeak = 0.0;
-            for (int n = 1; n < samples.length - 1; n++) {
-                double sCur     = samples[n]     - dcMean;
-                double sPrev    = samples[n - 1] - dcMean;
-                double sNext    = samples[n + 1] - dcMean;
-                double dCentral = (sNext - sPrev) * 0.5;
-                double dq       = dCentral / omegaPerSample;
-                double r        = Math.sqrt(sCur * sCur + dq * dq);
-                double dev      = Math.abs(r - peakAmp) / peakAmp;
-                if (dev > maxRDevSeen) maxRDevSeen = dev;
-                if (dev > R_TOLERANCE) {
-                    hitCount++;
-                    if (evStart < 0 || n - evEnd > EVENT_GAP_SAMPLES) {
-                        if (evStart >= 0) {
-                            events.add(new long[]{evStart, evEnd, Math.round(evPeak * 1e9)});
-                        }
-                        evStart = n;
-                        evPeak  = dev;
-                    }
-                    evEnd = n;
-                    if (dev > evPeak) evPeak = dev;
-                }
-            }
-            if (evStart >= 0) {
-                events.add(new long[]{evStart, evEnd, Math.round(evPeak * 1e9)});
-            }
-        }
-
-        boolean[] frameClean = new boolean[frameCount];
-        Arrays.fill(frameClean, true);
-        int rejectedFrames = 0;
-        if (!events.isEmpty()) {
-            log.warn("R-invariant scan: {} sample hit(s) > {}%, grouped into {} event(s) (max |R−A|/A in signal = {}%)",
-                    hitCount,
-                    String.format(Locale.US, "%.1f", R_TOLERANCE * 100.0),
-                    events.size(),
-                    String.format(Locale.US, "%.2f", maxRDevSeen * 100.0));
-            for (int e = 0; e < events.size(); e++) {
-                long[] ev     = events.get(e);
-                int   evS     = (int) ev[0];
-                int   evE     = (int) ev[1];
-                double evPk   = ev[2] / 1e9;
-                double tStart = evS / (double) sampleRate;
-                int    width  = evE - evS + 1;
-                // Frames whose [base .. base+fftSize-1] window SPANS the whole
-                // event [evS .. evE]:
-                //   base <= evS  AND  base + fftSize - 1 >= evE
-                //   -> base in [evE - fftSize + 1 .. evS] / step.
-                int fLo = Math.max(0, (int) Math.ceil((evE - (long) fftSize + 1) / (double) step));
-                int fHi = Math.min(frameCount - 1, evS / step);
-                int dirty = 0;
-                for (int f = fLo; f <= fHi; f++) {
-                    if (frameClean[f]) {
-                        frameClean[f] = false;
-                        dirty++;
-                    }
-                }
-                log.warn("  event {}/{}: sample {} (t={} s), width={} samples ({} µs), peak |R−A|/A={}% -> frames [{}..{}] dirty (+{})",
-                        e + 1, events.size(),
-                        evS,
-                        String.format(Locale.US, "%.6f", tStart),
-                        width,
-                        String.format(Locale.US, "%.2f", width * 1e6 / sampleRate),
-                        String.format(Locale.US, "%.2f", evPk * 100.0),
-                        fLo, fHi, dirty);
-            }
-            for (boolean c : frameClean) if (!c) rejectedFrames++;
-        }
-        // Sanity gate: the R-invariant test assumes a clean sine
-        // dominates the time domain.  At low SNR / low amplitude the
-        // derivative term dq = Δs/k amplifies broadband noise by
-        // ~1/k (≈60× at 1 kHz on a 384 kHz ADC), so R drifts far
-        // above peakAmp on most samples.  Even a 3 % sample-hit rate
-        // groups into tens of thousands of events spread evenly
-        // across the signal, marking every frame dirty.  When the
-        // rejection would mark ALL frames dirty (no clean segment
-        // left to analyse), the test is no longer a glitch detector;
-        // bypass it and use every frame as-is.
-        if (!events.isEmpty() && rejectedFrames >= frameCount) {
-            log.warn("R-invariant rejection invalidated: would reject all {} frame(s) (likely low-SNR signal - derivative-noise amplification); accepting all frames",
-                    frameCount);
-            Arrays.fill(frameClean, true);
-            rejectedFrames = 0;
-            events.clear();
-            hitCount = 0;
-        }
-        double maxRDevAccepted = events.isEmpty() ? maxRDevSeen : 0.0;
-        double maxRDevRejected = events.isEmpty() ? 0.0 : maxRDevSeen;
-        if (!events.isEmpty()) {
-            // Recompute max accepted R deviation over surviving frames so the
-            // log line below stays meaningful when some frames are rejected.
-            for (int f = 0; f < frameCount; f++) {
-                if (!frameClean[f]) continue;
-                int base = f * step;
-                int from = Math.max(1, base);
-                int to   = Math.min(samples.length - 2, base + fftSize - 1);
-                for (int n = from; n <= to; n++) {
-                    double sCur     = samples[n]     - dcMean;
-                    double sPrev    = samples[n - 1] - dcMean;
-                    double sNext    = samples[n + 1] - dcMean;
-                    double dCentral = (sNext - sPrev) * 0.5;
-                    double dq       = dCentral / omegaPerSample;
-                    double r        = Math.sqrt(sCur * sCur + dq * dq);
-                    double dev      = Math.abs(r - peakAmp) / peakAmp;
-                    if (dev > maxRDevAccepted) maxRDevAccepted = dev;
-                }
-            }
-        }
-
-        // --- Find longest contiguous clean run -------------------------------
-        int bestStart = 0, bestLen = 0;
-        int curStart  = 0, curLen  = 0;
-        for (int f = 0; f < frameCount; f++) {
-            if (frameClean[f]) {
-                if (curLen == 0) curStart = f;
-                curLen++;
-                if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
-            } else {
-                curLen = 0;
-            }
-        }
-
-        if (frameRejection && log.isInfoEnabled()) {
-            log.info("Frame R-invariant stats: max accepted |R−A|/A={}%, max rejected |R−A|/A={}",
-                    String.format(Locale.US, "%.2f", maxRDevAccepted * 100.0),
-                    rejectedFrames > 0 ? String.format(Locale.US, "%.2f%%", maxRDevRejected * 100.0) : "n/a");
-        }
-        if (rejectedFrames > 0) {
-            log.warn("Frame rejection: {} of {} frames R-invariant-rejected; using longest clean segment [{}..{}] ({} frames)",
-                    rejectedFrames, frameCount,
-                    bestStart, bestStart + bestLen - 1, bestLen);
-            outResult.rejectedFrames          = rejectedFrames;
-            outResult.rejectionTotalFrames    = frameCount;
-            outResult.rejectionPhaseCoherence = false;
-            outResult.rejectionDetail         = maxRDevRejected * 100.0;   // %
-        }
-        if (bestLen == 0) {
-            throw new IllegalStateException("All " + frameCount + " frames rejected as corrupt - aborting FFT.");
-        }
-
-        // --- Re-estimate kFractional from the clean segment ------------------
-        // Glitchy frames at the start of the recording would otherwise poison
-        // the phase-difference estimate, leaving a linear residual phase drift
-        // across the (clean) segment that smears the fundamental over many bins.
-        // We use the segment's first frame + its immediate successor when
-        // available, otherwise fall back to parabolic interpolation.
-        int    segBaseSample = bestStart * step;
-        double[] s0Re;
-        double[] s0Im;
-        if (segBaseSample == 0) {
-            // The segment's first frame IS the pre-pass frame (bestStart is 0
-            // whenever rejection is off - the only shipping configuration):
-            // alias it instead of re-fetching the same cached FFT into a
-            // second scratch pair (2 × 8.4 MB memcpy per tick at 1 M).
-            // Both pairs are write-once-then-read-only in this method.
-            s0Re = f0Re;
-            s0Im = f0Im;
-        } else {
-            scratchS0Re = scratchOrAlloc(scratchS0Re, fftSize);
-            scratchS0Im = scratchOrAlloc(scratchS0Im, fftSize);
-            s0Re = scratchS0Re;
-            s0Im = scratchS0Im;
-            cachedFrameFft(samples, segBaseSample, fftSize, window, s0Re, s0Im);
-        }
-        // refine intFundBin within ±2 bins of the pre-pass estimate (in case of drift)
-        int refIntBin = peakBin(s0Re, s0Im,
-                Math.max(1, intFundBin - 2),
-                Math.min(halfSize, intFundBin + 2));
-        double kFractional;
-        if (bestLen >= 2) {
-            int    estStep = step;
-            scratchS1Re = scratchOrAlloc(scratchS1Re, fftSize);
-            scratchS1Im = scratchOrAlloc(scratchS1Im, fftSize);
-            double[] s1Re = scratchS1Re;
-            double[] s1Im = scratchS1Im;
-            cachedFrameFft(samples, segBaseSample + estStep, fftSize, window, s1Re, s1Im);
-            double phi0 = Math.atan2(s0Im[refIntBin], s0Re[refIntBin]);
-            double phi1 = Math.atan2(s1Im[refIntBin], s1Re[refIntBin]);
-            kFractional = kappaFromPhaseStep(phi0, phi1, refIntBin, estStep, fftSize);
-        } else {
-            kFractional = MathUtil.parabolicBinInterp(s0Re, s0Im, refIntBin, fftSize);
-        }
-        intFundBin = refIntBin;
-        log.info("k_f re-estimate (from clean segment frame {}): intBin={}, k_f={}, refinedHz={}",
-                bestStart, intFundBin,
+        // --- Fundamental's fractional bin --------------------------------------
+        // A single frame holds no phase step to read it from, so the
+        // log-power parabola over the peak and its two neighbours gives it.
+        // That is the one-frame readout only: an average pins it from the
+        // phase step between consecutive frames (CoherentAccumulator) and the
+        // integer bin above is all that pin needs.
+        double kFractional = MathUtil.parabolicBinInterp(f0Re, f0Im, intFundBin, fftSize);
+        log.info("k_f (one-frame parabola): intBin={}, k_f={}, refinedHz={}",
+                intFundBin,
                 String.format(Locale.US, "%.6f", kFractional),
                 String.format(Locale.US, "%.6f", kFractional * freqRes));
 
-        // --- Second tone (dual-/multi-tone): same clean-frame sub-bin
-        // estimate around its hinted bin.  Computed on the SAME single clean
-        // frame as the fundamental, so the dual-tone frequency readout is as
-        // honest and un-pinned as the single-tone fundamental - never read
-        // off the coherently-collapsed average.  Only the 3 lobe bins feed
-        // the phase difference / parabola, so noise bins can't bias it.
+        // --- Second tone (dual-/multi-tone): the same one-frame sub-bin
+        // estimate around its hinted bin, on the same frame as the
+        // fundamental.  Only the 3 lobe bins feed the parabola, so noise bins
+        // can't bias it.
         outResult.fundamental2HzRefined = Double.NaN;
         // The hint is the COMMANDED second-tone frequency - set only when
         // fund-from-generator is on AND the generator is internal.  When it's
@@ -1240,41 +653,14 @@ public class FftAnalyzer {
         // window main lobe out of the contest.
         double effHint = secondToneHintHz;
         if (Double.isNaN(effHint) && multiTone && intFundBin > 0) {
-            int bestK = partnerToneBin(s0Re, s0Im, intFundBin, halfSize, freqRes);
+            int bestK = partnerToneBin(f0Re, f0Im, intFundBin, halfSize, freqRes);
             if (bestK > 0) effHint = bestK * freqRes;
         }
-        // The clean segment's SECOND frame, or null when the segment is one
-        // frame long - that is what decides between the one-hop phase
-        // difference and the single-frame parabola in the estimate below.
-        double[] segS1Re = (bestLen >= 2) ? scratchS1Re : null;
-        double[] segS1Im = (bestLen >= 2) ? scratchS1Im : null;
         if (!Double.isNaN(effHint) && effHint > 0.0) {
             double kf2 = refineToneKappaAt((int) Math.round(effHint / freqRes), 2,
-                    s0Re, s0Im, segS1Re, segS1Im, halfSize, fftSize, step);
+                    f0Re, f0Im, halfSize, fftSize);
             if (!Double.isNaN(kf2)) {
                 outResult.fundamental2HzRefined = kf2 * freqRes;
-            }
-        }
-
-        // --- Full-integration κ refit (long-baseline) ------------------------
-        // The coarse κ above is a one-hop phase difference; its residual error is
-        // applied as a de-rotation ramp across the whole segment, so on long
-        // averages the harmonics de-cohere and read low.  Refine κ by regressing
-        // the fundamental phase over EVERY clean frame - a whole-segment
-        // baseline vs one hop.  See refineKappaOverSegment.
-        if (coherentAveraging && bestLen >= 4) {
-            double kRefined = refineKappaOverSegment(samples, window, fftSize, step,
-                    bestStart, bestLen, refIntBin, kFractional);
-            if (Math.abs(kRefined - kFractional) < 0.5) {       // sanity: reject a wild fit
-                if (log.isInfoEnabled()) {
-                    log.info("k_f full-segment refit over {} frames: {} -> {} ({} bins, {} Hz)",
-                            bestLen,
-                            String.format(Locale.US, "%.6f", kFractional),
-                            String.format(Locale.US, "%.6f", kRefined),
-                            String.format(Locale.US, "%.2e", kRefined - kFractional),
-                            String.format(Locale.US, "%.6f", (kRefined - kFractional) * freqRes));
-                }
-                kFractional = kRefined;
             }
         }
 
@@ -1303,14 +689,14 @@ public class FftAnalyzer {
         // Every product a·κ_F1 + b·κ_F2 (b≠0, |a|+|b| ≤ order) that lands in
         // band is listed with its bin, so the predistortion engine can read
         // each product's phasor straight from re/im[bin].  The list doubles
-        // as the product part of pass 2's coherent family below: each entry
-        // becomes a de-rotation region of its own, rotated by a·Φ1 + b·Φ2.
+        // as the product part of the coherent average's family
+        // (CoherentAccumulator): each entry's hump turns by a·Φ1 + b·Φ2.
         // Default to "no products published": recycled result slots must not
         // leak a previous dual-tone tick's grid into a single-tone tick.
         outResult.imdProductA   = NO_IMD_PRODUCTS;
         outResult.imdProductB   = NO_IMD_PRODUCTS;
         outResult.imdProductBin = NO_IMD_PRODUCTS;
-        if (coherentAveraging && bestLen >= 2 && !Double.isNaN(outResult.fundamental2HzRefined)
+        if (coherentAveraging && !Double.isNaN(outResult.fundamental2HzRefined)
                 && outResult.fundamental2HzRefined > 0.0 && kFractional > 0.0) {
             double kappa2 = outResult.fundamental2HzRefined / freqRes;
             int    k2     = (int) Math.round(kappa2);
@@ -1337,382 +723,16 @@ public class FftAnalyzer {
             }
         }
 
-        // --- Pass 2: accumulate frames in the longest clean segment ----------
-        // Also store per-frame corrected fundamental complex value so we can
-        // detect sub-slew sample drops (which manifest as a phase step in the
-        // fundamental that the time-shift correction cannot account for).
-        int    intFundBinRounded = Math.max(1, (int) Math.round(kFractional));
-        double[] fundCorrRe = coherentAveraging ? new double[bestLen] : null;
-        double[] fundCorrIm = coherentAveraging ? new double[bestLen] : null;
-        // Coherent family for the region-constant de-rotation (the same
-        // construction as the cross-tick accumulator's - see the pass-2
-        // comment below): member positions and (a, b, p) coefficients built
-        // once per call, phasors re-derived per frame from that frame's
-        // Φ1/Φ2/Φpilot1/Φpilot2.  The pilot coefficient p names which pilot a
-        // member is: 0 none, 1 the first, 2 the second.  Members: the harmonic
-        // ladder h·κ (h = 0 covers DC and the deep bass side) merged
-        // position-sorted with the published product grid and with the bin of
-        // each pinned pilot.  A pilot is neither a multiple of κ nor a
-        // product, so without a member of its own its lobe would ride the
-        // nearest harmonic's rotation and the frames of a tick would sum there
-        // with a residual of up to half the harmonic spacing - attenuated and
-        // turned by the drawn hop.  As a member it sums as coherently as the
-        // fundamental does, and each pilot turns by its own bin's time-shift
-        // phase alone, independent of the fundamental's fractional position.
-        final double f2Kappa = (outResult.imdProductBin.length > 0)
-                ? outResult.fundamental2HzRefined / freqRes : Double.NaN;
-        int     famCount = 0;
-        int[]   fA  = null;
-        int[]   fB  = null;
-        int[]   fPil = null;
-        double[] fP = null;
-        if (coherentAveraging && kFractional > 0.0) {
-            int hMaxT = (int) Math.min(halfSize, halfSize / kFractional);
-            int[] pa = outResult.imdProductA;
-            int[] pb = outResult.imdProductB;
-            int   nGrid = (f2Kappa > 0.0) ? pa.length : 0;
-            int[]    spA = new int[nGrid + 2];              // + a slot per pilot
-            int[]    spB = new int[nGrid + 2];
-            int[]    spPil = new int[nGrid + 2];
-            double[] spP = new double[nGrid + 2];
-            int nP = 0;
-            for (int p = 0; p < nGrid; p++) {
-                double posP = pa[p] * kFractional + pb[p] * f2Kappa;
-                if (posP < 1.0 || posP > halfSize - 1) continue;
-                spA[nP] = pa[p];
-                spB[nP] = pb[p];
-                spP[nP] = posP;
-                nP++;
-            }
-            if (pilotBin1 > 1 && pilotBin1 < halfSize - 1) {
-                spA[nP] = 0;
-                spB[nP] = 0;
-                spPil[nP] = 1;
-                spP[nP] = pilotBin1;
-                nP++;
-            }
-            if (pilotBin2 > 1 && pilotBin2 < halfSize - 1) {
-                spA[nP] = 0;
-                spB[nP] = 0;
-                spPil[nP] = 2;
-                spP[nP] = pilotBin2;
-                nP++;
-            }
-            for (int i = 1; i < nP; i++) {                  // position sort, tiny n
-                int ia = spA[i];
-                int ib = spB[i];
-                int ip2 = spPil[i];
-                double ip = spP[i];
-                int j = i - 1;
-                while (j >= 0 && spP[j] > ip) {
-                    spA[j + 1] = spA[j];
-                    spB[j + 1] = spB[j];
-                    spPil[j + 1] = spPil[j];
-                    spP[j + 1] = spP[j];
-                    j--;
-                }
-                spA[j + 1] = ia;
-                spB[j + 1] = ib;
-                spPil[j + 1] = ip2;
-                spP[j + 1] = ip;
-            }
-            fA = new int[hMaxT + 1 + nP];
-            fB = new int[fA.length];
-            fPil = new int[fA.length];
-            fP = new double[fA.length];
-            int pi = 0;
-            for (int h = 0; h <= hMaxT; h++) {
-                double hp = h * kFractional;
-                while (pi < nP && spP[pi] <= hp) {
-                    fA[famCount] = spA[pi];
-                    fB[famCount] = spB[pi];
-                    fPil[famCount] = spPil[pi];
-                    fP[famCount] = spP[pi];
-                    famCount++;
-                    pi++;
-                }
-                fA[famCount] = h;
-                fB[famCount] = 0;
-                fPil[famCount] = 0;
-                fP[famCount] = hp;
-                famCount++;
-            }
-            while (pi < nP) {
-                fA[famCount] = spA[pi];
-                fB[famCount] = spB[pi];
-                fPil[famCount] = spPil[pi];
-                fP[famCount] = spP[pi];
-                famCount++;
-                pi++;
-            }
-        }
-        final int      nFam   = famCount;
-        final int[]    famA   = fA;
-        final int[]    famB   = fB;
-        final int[]    famPil = fPil;
-        final double[] famPos = fP;
-        final double[] famC   = (nFam > 0) ? new double[nFam] : null;
-        final double[] famS   = (nFam > 0) ? new double[nFam] : null;
-        // Region-constant de-rotation.  A windowed tone's lobe - the peak and
-        // its off-centre bins together - advances by ONE common phase per
-        // frame step (the tone's own frequency times the step), so a per-bin
-        // ramp mis-rotates every off-centre lobe bin and the overlapped frame
-        // sum carves the lobe into a comb; a constant phasor per lobe keeps
-        // it intact under every window.  The regions tile the spectrum at the
-        // MIDPOINTS between the coherent family's members (the same
-        // half-spacing rule the SNR noise separation is built on), each
-        // member rotated by its derived phase a·Φ1 + b·Φ2 - so no edge is
-        // ever measured and no environmental line can earn a region of its
-        // own.  The upper half of the full-length transform carries the
-        // NEGATIVE frequencies: a bin there belongs to the member at |kf| and
-        // rotates by the CONJUGATE phasor.
-        // RECT exception: on-bin content occupies single bins (no lobe to hold
-        // together) while the 1/Δf skirt crosses every region midpoint, which
-        // is where a piecewise rotation prints - so RECT keeps the per-bin
-        // time-shift ramp with the SIGNED bin index; tapered windows take the
-        // region-constant family.
-        final boolean rectWin   = windowType == WindowType.RECT;
-        final double  rampScale = (kFractional > 0.0 && intFundBinRounded > 0)
-                ? kFractional / intFundBinRounded
-                : 1.0;
-        int acceptedFrames = 0;
-        for (int f = bestStart; f < bestStart + bestLen; f++) {
-            int base = f * step;
-            cachedFrameFft(samples, base, fftSize, window, frameRe, frameIm);
-            if (coherentAveraging && rectWin) {
-                final double thetaF = -2.0 * Math.PI * (double) base * rampScale
-                                      / (double) fftSize;
-                final double stepRe = Math.cos(thetaF);
-                final double stepIm = Math.sin(thetaF);
-                final int frameIdx = f - bestStart;
-                final int ifb      = intFundBin;
-                parallelChunks(fftSize, (kLo, kHi) -> {
-                    int seg = kLo;
-                    while (seg < kHi) {
-                        int segEnd = (seg <= halfSize) ? Math.min(kHi, halfSize + 1) : kHi;
-                        int    kfSeed = (seg <= halfSize) ? seg : seg - fftSize;
-                        double ang    = Math.IEEEremainder(thetaF * kfSeed, 2.0 * Math.PI);
-                        double phRe   = Math.cos(ang);
-                        double phIm   = Math.sin(ang);
-                        for (int k = seg; k < segEnd; k++) {
-                            double cRe = frameRe[k] * phRe - frameIm[k] * phIm;
-                            double cIm = frameRe[k] * phIm + frameIm[k] * phRe;
-                            sumRe[k] += cRe;
-                            sumIm[k] += cIm;
-                            if (k == ifb) {
-                                fundCorrRe[frameIdx] = cRe;
-                                fundCorrIm[frameIdx] = cIm;
-                            }
-                            double nextRe = phRe * stepRe - phIm * stepIm;
-                            phIm = phRe * stepIm + phIm * stepRe;
-                            phRe = nextRe;
-                        }
-                        seg = segEnd;
-                    }
-                });
-            } else if (coherentAveraging && nFam > 0) {
-                final double phi1 = -2.0 * Math.PI
-                        * Math.IEEEremainder((double) base * kFractional, fftSize) / fftSize;
-                final double phi2 = (f2Kappa > 0.0)
-                        ? -2.0 * Math.PI
-                            * Math.IEEEremainder((double) base * f2Kappa, fftSize) / fftSize
-                        : 0.0;
-                // Indexed by the member's pilot coefficient: slot 0 is the
-                // members that are no pilot and contributes nothing.
-                final double[] phiPilot = {
-                        0.0,
-                        (pilotBin1 > 0)
-                                ? -2.0 * Math.PI
-                                    * Math.IEEEremainder((double) base * pilotBin1, fftSize) / fftSize
-                                : 0.0,
-                        (pilotBin2 > 0)
-                                ? -2.0 * Math.PI
-                                    * Math.IEEEremainder((double) base * pilotBin2, fftSize) / fftSize
-                                : 0.0 };
-                for (int i = 0; i < nFam; i++) {
-                    double ang = Math.IEEEremainder(
-                            famA[i] * phi1 + famB[i] * phi2 + phiPilot[famPil[i]],
-                            2.0 * Math.PI);
-                    famC[i] = Math.cos(ang);
-                    famS[i] = Math.sin(ang);
-                }
-                final int frameIdx = f - bestStart;
-                final int ifb      = intFundBin;
-                parallelChunks(fftSize, (kLo, kHi) -> {
-                    // Lower half: |kf| = k ascends, the member cursor advances
-                    // upward.  Upper half: |kf| = fftSize - k DESCENDS as k
-                    // ascends, so its cursor walks downward.  A chunk spanning
-                    // the boundary handles each side with its own cursor.
-                    int seg = kLo;
-                    while (seg < kHi) {
-                        boolean lower = seg <= halfSize;
-                        int segEnd = lower ? Math.min(kHi, halfSize + 1) : kHi;
-                        if (lower) {
-                            int c = 0;
-                            while (c < nFam - 1 && seg > 0.5 * (famPos[c] + famPos[c + 1])) c++;
-                            for (int k = seg; k < segEnd; k++) {
-                                while (c < nFam - 1 && k > 0.5 * (famPos[c] + famPos[c + 1])) c++;
-                                double cRe = frameRe[k] * famC[c] - frameIm[k] * famS[c];
-                                double cIm = frameRe[k] * famS[c] + frameIm[k] * famC[c];
-                                sumRe[k] += cRe;
-                                sumIm[k] += cIm;
-                                if (k == ifb) {
-                                    fundCorrRe[frameIdx] = cRe;
-                                    fundCorrIm[frameIdx] = cIm;
-                                }
-                            }
-                        } else {
-                            int c = nFam - 1;
-                            while (c > 0 && fftSize - seg <= 0.5 * (famPos[c - 1] + famPos[c])) c--;
-                            for (int k = seg; k < segEnd; k++) {
-                                while (c > 0 && fftSize - k <= 0.5 * (famPos[c - 1] + famPos[c])) c--;
-                                double cRe =  frameRe[k] * famC[c] + frameIm[k] * famS[c];
-                                double cIm = -frameRe[k] * famS[c] + frameIm[k] * famC[c];
-                                sumRe[k] += cRe;
-                                sumIm[k] += cIm;
-                            }
-                        }
-                        seg = segEnd;
-                    }
-                });
-            } else if (coherentAveraging) {
-                // No pinned fundamental: nothing coherent to align - add the
-                // frame straight (the capture below still records the bin).
-                final int frameIdx = f - bestStart;
-                final int ifb      = intFundBin;
-                parallelChunks(fftSize, (kLo, kHi) -> {
-                    for (int k = kLo; k < kHi; k++) {
-                        sumRe[k] += frameRe[k];
-                        sumIm[k] += frameIm[k];
-                        if (k == ifb) {
-                            fundCorrRe[frameIdx] = frameRe[k];
-                            fundCorrIm[frameIdx] = frameIm[k];
-                        }
-                    }
-                });
-            } else {
-                for (int k = 0; k < fftSize; k++) {
-                    sumRe[k] += frameRe[k] * frameRe[k] + frameIm[k] * frameIm[k];
-                }
-            }
-            acceptedFrames++;
-        }
-
-        // --- Per-frame fundamental phase coherence check ---------------------
-        // After time-shift correction, every frame's fundamental should land at
-        // the same phase (to within thermal noise).  A sub-slew sample drop
-        // produces a phase step Δφ = 2π·f·Δsamples/Fs that the correction does
-        // not account for, so the offending frame stands out as a phase outlier.
-        // We reject any frame deviating from the circular median by more than
-        // PHASE_COHERENCE_THRESHOLD_RAD, then re-FFT and SUBTRACT each rejected
-        // frame's contribution from the accumulator.
-        if (frameRejection && coherentAveraging && bestLen >= 4) {
-            final double PHASE_COHERENCE_THRESHOLD_RAD = Math.toRadians(3.0);   // 3°
-            double medianPhase = circularMedianPhase(fundCorrRe, fundCorrIm, bestLen);
-
-            int phaseRejected = 0;
-            double maxDeviationDeg = 0.0;
-            for (int i = 0; i < bestLen; i++) {
-                double phi = Math.atan2(fundCorrIm[i], fundCorrRe[i]);
-                double dev = phi - medianPhase;
-                while (dev >  Math.PI) dev -= 2.0 * Math.PI;
-                while (dev < -Math.PI) dev += 2.0 * Math.PI;
-                double devAbs = Math.abs(dev);
-                if (devAbs > Math.toRadians(maxDeviationDeg)) maxDeviationDeg = Math.toDegrees(devAbs);
-                if (devAbs > PHASE_COHERENCE_THRESHOLD_RAD) {
-                    // Re-FFT the rejected frame and subtract its corrected
-                    // spectrum.  This is the exact inverse of the pass-2 add
-                    // above, so it runs the SAME region-constant family
-                    // rotation - the member phasors re-derived for THIS
-                    // frame's offset, the upper (negative-frequency) half
-                    // subtracting with the conjugate.  Serial; only an
-                    // outlier frame reaches this loop.
-                    int f    = bestStart + i;
-                    int base = f * step;
-                    cachedFrameFft(samples, base, fftSize, window, frameRe, frameIm);
-                    if (rectWin) {
-                        // RECT: the same signed-index ramp as the add path,
-                        // serial - seeded at bin 0 and at the half boundary.
-                        double thetaR  = -2.0 * Math.PI * (double) base * rampScale
-                                         / (double) fftSize;
-                        double cosBase = Math.cos(thetaR);
-                        double sinBase = Math.sin(thetaR);
-                        int seg = 0;
-                        while (seg < fftSize) {
-                            int segEnd = (seg <= halfSize) ? halfSize + 1 : fftSize;
-                            int    kfSeed = (seg <= halfSize) ? seg : seg - fftSize;
-                            double ang    = Math.IEEEremainder(thetaR * kfSeed, 2.0 * Math.PI);
-                            double corrRe = Math.cos(ang);
-                            double corrIm = Math.sin(ang);
-                            for (int k = seg; k < segEnd; k++) {
-                                sumRe[k] -= frameRe[k] * corrRe - frameIm[k] * corrIm;
-                                sumIm[k] -= frameRe[k] * corrIm + frameIm[k] * corrRe;
-                                double nextCorrRe = corrRe * cosBase - corrIm * sinBase;
-                                corrIm            = corrRe * sinBase + corrIm * cosBase;
-                                corrRe            = nextCorrRe;
-                            }
-                            seg = segEnd;
-                        }
-                    } else {
-                        double phi1R = -2.0 * Math.PI
-                                * Math.IEEEremainder((double) base * kFractional, fftSize) / fftSize;
-                        double phi2R = (f2Kappa > 0.0)
-                                ? -2.0 * Math.PI
-                                    * Math.IEEEremainder((double) base * f2Kappa, fftSize) / fftSize
-                                : 0.0;
-                        for (int n = 0; n < nFam; n++) {
-                            double ang = Math.IEEEremainder(famA[n] * phi1R + famB[n] * phi2R,
-                                    2.0 * Math.PI);
-                            famC[n] = Math.cos(ang);
-                            famS[n] = Math.sin(ang);
-                        }
-                        int c = 0;
-                        for (int k = 0; k <= halfSize; k++) {
-                            while (c < nFam - 1 && k > 0.5 * (famPos[c] + famPos[c + 1])) c++;
-                            sumRe[k] -= frameRe[k] * famC[c] - frameIm[k] * famS[c];
-                            sumIm[k] -= frameRe[k] * famS[c] + frameIm[k] * famC[c];
-                        }
-                        c = nFam - 1;
-                        for (int k = halfSize + 1; k < fftSize; k++) {
-                            while (c > 0 && fftSize - k <= 0.5 * (famPos[c - 1] + famPos[c])) c--;
-                            sumRe[k] -=  frameRe[k] * famC[c] + frameIm[k] * famS[c];
-                            sumIm[k] -= -frameRe[k] * famS[c] + frameIm[k] * famC[c];
-                        }
-                    }
-                    phaseRejected++;
-                    acceptedFrames--;
-                }
-            }
-            log.info("Phase coherence: max deviation from median = {} deg (threshold {} deg)",
-                    String.format(Locale.US, "%.3f", maxDeviationDeg),
-                    String.format(Locale.US, "%.3f", Math.toDegrees(PHASE_COHERENCE_THRESHOLD_RAD)));
-            if (phaseRejected > 0) {
-                log.warn("Phase coherence rejection: {} of {} segment frames rejected as out-of-phase",
-                        phaseRejected, bestLen);
-                outResult.rejectedFrames          = phaseRejected;
-                outResult.rejectionTotalFrames    = bestLen;
-                outResult.rejectionPhaseCoherence = true;
-                outResult.rejectionDetail         = maxDeviationDeg;   // degrees
-            }
-            if (acceptedFrames < 2) {
-                throw new IllegalStateException("Only " + acceptedFrames
-                        + " frame(s) survived phase coherence check - aborting FFT.");
-            }
-        }
-
-        frameCount = acceptedFrames;
-
         // --- Single-sided amplitude & phase spectrum -------------------------
         double   normFactor = 1.0 / ((double) fftSize * cohGain);
-        // avgRe / avgIm / amplDbFs / phaseDeg are stored in outResult and
-        // outlive this call - but the pool guarantees outResult is owned
-        // exclusively by this analysis until the worker publishes it.
-        // Aliasing the slot's pre-sized arrays as locals avoids per-tick
-        // allocation of four halfSize+1-long arrays.  amplLinear is
-        // purely local and overwritten cell-by-cell below - safe to
-        // reuse from scratch.
-        double[] avgRe      = outResult.re;
-        double[] avgIm      = outResult.im;
+        // re / im / amplDbFs / phaseDeg are stored in outResult and outlive
+        // this call - but the pool guarantees outResult is owned exclusively
+        // by this analysis until the worker publishes it.  Aliasing the
+        // slot's pre-sized arrays as locals avoids per-tick allocation of
+        // four halfSize+1-long arrays.  amplLinear is purely local and
+        // overwritten cell-by-cell below - safe to reuse from scratch.
+        double[] outRe      = outResult.re;
+        double[] outIm      = outResult.im;
         scratchAmplLinear   = scratchOrAlloc(scratchAmplLinear, halfSize + 1);
         double[] amplLinear = scratchAmplLinear;
         double[] amplDbFs   = outResult.amplitudeDbFs;
@@ -1720,19 +740,20 @@ public class FftAnalyzer {
 
         // Per-bin and independent -> parallelize across cores (the 1M× log10/atan2
         // is the single biggest compute chunk).  Disjoint k-writes, no recursion.
-        final int fc = frameCount;
-        parallelChunks(halfSize + 1, (lo, hi) -> {
+        // The result carries the frame as it stands: the complex phasor per
+        // bin under coherent averaging, the magnitude in re (im = 0) under
+        // incoherent - the form each average of frames takes, so a single
+        // frame and an average read alike.
+        BinRanges.parallel(halfSize + 1, (lo, hi) -> {
             for (int k = lo; k < hi; k++) {
-                double mag;
+                double mag = Math.sqrt(f0Re[k] * f0Re[k] + f0Im[k] * f0Im[k]);
                 if (coherentAveraging) {
-                    avgRe[k] = sumRe[k] / fc;
-                    avgIm[k] = sumIm[k] / fc;
-                    mag = Math.sqrt(avgRe[k] * avgRe[k] + avgIm[k] * avgIm[k]);
-                    phaseDeg[k] = Math.toDegrees(Math.atan2(avgIm[k], avgRe[k]));
+                    outRe[k] = f0Re[k];
+                    outIm[k] = f0Im[k];
+                    phaseDeg[k] = Math.toDegrees(Math.atan2(f0Im[k], f0Re[k]));
                 } else {
-                    mag = Math.sqrt(sumRe[k] / fc);
-                    avgRe[k] = mag;   // store magnitude in re for export
-                    avgIm[k] = 0.0;
+                    outRe[k] = mag;
+                    outIm[k] = 0.0;
                     phaseDeg[k] = 0.0;
                 }
                 amplLinear[k] = (k == 0 || k == halfSize)
@@ -1744,27 +765,8 @@ public class FftAnalyzer {
             }
         });
 
-        // --- Fundamental (max bin, skip DC + ULF) ----------------------------
-        // When the caller provided expectedFundHz, restrict the search to a
-        // ±10-bin window around the expected bin - same reason as the pre-pass:
-        // a deeply notched fundamental must not be lost to a louder spur.
-        // Without a hint, scan FUND_SEARCH_MIN_HZ ... 0.7·Nyquist so neither DC
-        // leakage nor a high-frequency spur wins.
-        int fundBin;
-        if (!Double.isNaN(expectedFundHz) && expectedFundHz > 0.0) {
-            int expectedBin = (int) Math.round(expectedFundHz * fftSize / (double) sampleRate);
-            int kLo = Math.max(1,        expectedBin - 10);
-            int kHi = Math.min(halfSize, expectedBin + 10);
-            fundBin = kLo;
-            for (int k = kLo + 1; k <= kHi; k++) {
-                if (amplLinear[k] > amplLinear[fundBin]) fundBin = k;
-            }
-        } else {
-            fundBin = fundSearchMinBin;
-            for (int k = fundSearchMinBin + 1; k <= fundSearchMaxBin; k++) {
-                if (amplLinear[k] > amplLinear[fundBin]) fundBin = k;
-            }
-        }
+        // --- Fundamental: the bin the search above settled on ---------------
+        int    fundBin        = intFundBin;
         double fundHz         = fundBin * freqRes;
         double fundHzRefined  = kFractional * freqRes;   // sub-bin accurate frequency
         double fundDbFs       = amplDbFs[fundBin];
@@ -1840,7 +842,7 @@ public class FftAnalyzer {
         if (spectrumOnly) {
             outResult.fftSize                    = fftSize;
             outResult.sampleRate                 = sampleRate;
-            outResult.frameCount                 = frameCount;
+            outResult.frameCount                 = 1;
             outResult.freqResolution             = freqRes;
             outResult.windowType                 = windowType;
             outResult.overlap                    = overlap;
@@ -1850,6 +852,7 @@ public class FftAnalyzer {
             // correction silently no-ops (that exact miss shipped the first
             // version of the ENBW fix as a visible no-change).
             outResult.windowNenbwBins            = nenbw;
+            outResult.windowCoherentGain         = cohGain;
             outResult.fundamentalBin             = fundBin;
             outResult.fundamentalHz              = fundHz;
             outResult.fundamentalHzRefined       = fundHzRefined;
@@ -2023,27 +1026,12 @@ public class FftAnalyzer {
         // unweighted like SINAD.
         double thdNDb = -sinadDb;
 
-        if (logSummary) {
-            log.info("THD   : {}%  ({} dB)",
-                    String.format(Locale.US, "%.8f", thdPct),
-                    String.format(Locale.US, "%.2f", thdDb));
-            log.info("THD+N : {} dB", String.format(Locale.US, "%.2f", thdNDb));
-            if (snrFreqMin > 0.0 || snrFreqMax > 0.0) {
-                log.info("SNR   : {} dB  (range: {}-{} Hz)",
-                        String.format(Locale.US, "%.2f", snrDb),
-                        String.format(Locale.US, "%.0f", snrLo),
-                        String.format(Locale.US, "%.0f", snrHi));
-            } else {
-                log.info("SNR   : {} dB", String.format(Locale.US, "%.2f", snrDb));
-            }
-        }
-
-        // outResult's arrays were aliased above (avgRe/avgIm/amplDbFs/
+        // outResult's arrays were aliased above (outRe/outIm/amplDbFs/
         // phaseDeg/hBins/hHz/hDbFs/hPct point into outResult).  Only
         // the scalars need to be written here.
         outResult.fftSize                    = fftSize;
         outResult.sampleRate                 = sampleRate;
-        outResult.frameCount                 = frameCount;
+        outResult.frameCount                 = 1;
         outResult.freqResolution             = freqRes;
         outResult.windowType                 = windowType;
         outResult.overlap                    = overlap;
@@ -2068,6 +1056,7 @@ public class FftAnalyzer {
         outResult.noisePower                 = noisePower;
         outResult.awNoisePower               = awNoisePower;
         outResult.windowNenbwBins            = nenbw;
+        outResult.windowCoherentGain         = cohGain;
         outResult.avgNoiseFloorDbFs          = avgNoiseFloorDbFs;
         outResult.fundamentalTrueDbFs        = fundTrueDbFs;
         outResult.fundamentalDynExclusionHz  = dynWidthBins * freqRes;
@@ -2080,7 +1069,27 @@ public class FftAnalyzer {
         outResult.referenceFundamentalHzRefined  = Double.NaN;
         outResult.referenceFundamental2HzRefined = Double.NaN;
         outResult.captureRawPeaks();   // raw F + peak phasors for the DAC-predistortion de-embed
+        if (logSummary) logSummary(outResult);
         return outResult;
+    }
+
+    /** The trailing THD / THD+N / SNR lines of an analysis, from the result's
+     *  own numbers - after the statistics are final, whether the analyser
+     *  wrote them for one frame or {@link #recomputeStats} for an average. */
+    public void logSummary(FftResult r) {
+        if (!log.isInfoEnabled()) return;
+        log.info("THD   : {}%  ({} dB)",
+                String.format(Locale.US, "%.8f", r.thdPct),
+                String.format(Locale.US, "%.2f", r.thdDb));
+        log.info("THD+N : {} dB", String.format(Locale.US, "%.2f", r.thdNDb));
+        if (r.snrFreqMin > 0.0 || r.snrFreqMax > 0.0) {
+            log.info("SNR   : {} dB  (range: {}-{} Hz)",
+                    String.format(Locale.US, "%.2f", r.snrDb),
+                    String.format(Locale.US, "%.0f", r.snrFreqMin > 0.0 ? r.snrFreqMin : 0.0),
+                    String.format(Locale.US, "%.0f", r.snrFreqMax > 0.0 ? r.snrFreqMax : Double.MAX_VALUE));
+        } else {
+            log.info("SNR   : {} dB", String.format(Locale.US, "%.2f", r.snrDb));
+        }
     }
 
     /**
@@ -2130,7 +1139,7 @@ public class FftAnalyzer {
      * Measures the second tone of a stored dual-tone spectrum: the strongest
      * partner of the fundamental ({@link #partnerToneBin}, the detection the
      * live path runs when no hint is given), refined to sub-bin the way the
-     * live path refines a one-frame segment, written to
+     * live path refines a frame, written to
      * {@code fundamental2HzRefined} - {@link Double#NaN} when no partner is
      * found.  Needs {@code fundamentalBin} (a stated one, or
      * {@link #findFundamental}) and the phasors ({@link #rebuildPhasors}).
@@ -2148,10 +1157,8 @@ public class FftAnalyzer {
         int partnerBin = partnerToneBin(stored.re, stored.im, stored.fundamentalBin,
                 halfSize, freqRes);
         if (partnerBin <= 0) return;
-        // One spectrum, no second frame: the parabolic branch, so the hop
-        // length is never read.
-        double kf2 = refineToneKappaAt(partnerBin, 2, stored.re, stored.im, null, null,
-                halfSize, stored.fftSize, 0);
+        double kf2 = refineToneKappaAt(partnerBin, 2, stored.re, stored.im,
+                halfSize, stored.fftSize);
         if (!Double.isNaN(kf2)) {
             stored.fundamental2HzRefined = kf2 * freqRes;
         }
@@ -2174,16 +1181,10 @@ public class FftAnalyzer {
     public void applyDistortionSettings(int calcHarmonics, int thdHarmonics,
                                         double fundRefDbFs, double distMinHz, double distMaxHz) {
         if (stored == null) return;     // no spectrum held - nothing to recompute
-        int halfSize = stored.amplitudeDbFs.length - 1;
         // Spectrum kept; the harmonic arrays resize only when the count changed.
         stored.ensureArrays(stored.amplitudeDbFs.length, calcHarmonics);
         stored.harmonicCount = calcHarmonics;
-        for (int h = 0; h < calcHarmonics; h++) {
-            double hz = (h + 2) * stored.fundamentalHzRefined;
-            int    hb = (int) Math.round(hz / stored.freqResolution);
-            stored.harmonicHz[h]   = hz;
-            stored.harmonicBins[h] = (hb >= 1 && hb <= halfSize) ? hb : -1;
-        }
+        stored.placeHarmonics();
         stored.fundamentalTrueDbFs = fundRefDbFs;
         stored.snrFreqMin          = distMinHz;
         stored.snrFreqMax          = distMaxHz;
@@ -2223,7 +1224,7 @@ public class FftAnalyzer {
         // fftSize 2 M.  Every cell is overwritten below, so no zero-fill.
         final double[] amplLinear = scratchOrAlloc(scratchAmplLinear, halfSize + 1);
         scratchAmplLinear = amplLinear;
-        parallelChunks(halfSize + 1, (lo, hi) -> {
+        BinRanges.parallel(halfSize + 1, (lo, hi) -> {
             for (int k = lo; k < hi; k++) {
                 amplLinear[k] = r.amplitudeDbFs[k] > -290.0
                         ? Math.pow(10.0, r.amplitudeDbFs[k] / 20.0)
@@ -2272,7 +1273,10 @@ public class FftAnalyzer {
             double w = Math.abs(offset);
             double pMain = amplLinear[binMain] * amplLinear[binMain];
             double pAdj  = amplLinear[binAdj]  * amplLinear[binAdj];
-            double aCombined = Math.sqrt((1.0 - w) * pMain + w * pAdj);
+            // Held at the harmonic's local noise floor from below, where the
+            // result carries one (FftResult#lineFloorDbFs): every reading
+            // below derives from this level, THD among them.
+            double aCombined = r.atLeastLineFloor(binMain, Math.sqrt((1.0 - w) * pMain + w * pAdj));
             r.harmonicBins[h] = binMain;
             r.harmonicDbFs[h] = aCombined > 1e-15 ? 20.0 * Math.log10(aCombined) : -300.0;
             r.harmonicPct[h]  = refLin > 0 ? aCombined / refLin * 100.0 : 0.0;
@@ -2535,8 +1539,10 @@ public class FftAnalyzer {
      *       {@code √((π/2)² + acosh(10^(A/20))²)/π} for every transform size
      *       in use, far inside the one bin the ceiling rounds to.</li>
      * </ul>
+     * The hump the coherent average turns as one ({@link CoherentAccumulator})
+     * is this many bins to either side of a line.
      */
-    int mainLobeBins(WindowType type) {
+    public int mainLobeBins(WindowType type) {
         switch (type) {
             case RECT:
                 return RECT_COEFFS.length;
@@ -2789,28 +1795,6 @@ public class FftAnalyzer {
 
     private String ts() {
         return LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-    }
-
-    /** Arithmetic mean of {@code samples}.  Used by {@link #analyze} to
-     *  estimate the DC bias before computing the R-invariant peak amplitude
-     *  - without subtracting the bias the RMS-derived peakAmp inflates by
-     *  √2·DC for any signal where DC is comparable to the AC swing. */
-    private double sampleMean(double[] samples) {
-        double sum = 0.0;
-        for (double s : samples) sum += s;
-        return sum / samples.length;
-    }
-
-    /** RMS of {@code samples} with the supplied {@code dcMean} subtracted
-     *  beforehand.  Two-pass: caller computes {@link #sampleMean} first,
-     *  then passes the result here. */
-    private double dcRemovedRms(double[] samples, double dcMean) {
-        double sumSq = 0.0;
-        for (double s : samples) {
-            double d = s - dcMean;
-            sumSq += d * d;
-        }
-        return Math.sqrt(sumSq / samples.length);
     }
 
     /** Locates each harmonic (H2..H{@code harmonicCount+1}) in the
@@ -3141,43 +2125,5 @@ public class FftAnalyzer {
             if (p > peakPow) { peakPow = p; best = k; }
         }
         return best;
-    }
-
-    /** Circular median of {@code n} complex phasors {@code (re[i], im[i])}.
-     *  Computes median(sin) and median(cos) on the unit-circle-normalised
-     *  components, then takes {@code atan2(medSin, medCos)}.  Robust for
-     *  tightly clustered phases - the expected case for the fundamental
-     *  bin across all accepted FFT frames.  Used by {@link #analyze}'s
-     *  phase-coherence outlier rejection. */
-    private static double circularMedianPhase(double[] re, double[] im, int n) {
-        double[] sins = new double[n];
-        double[] coss = new double[n];
-        for (int i = 0; i < n; i++) {
-            double mag = Math.sqrt(re[i] * re[i] + im[i] * im[i]);
-            sins[i] = mag > 0 ? im[i] / mag : 0.0;
-            coss[i] = mag > 0 ? re[i] / mag : 0.0;
-        }
-        Arrays.sort(sins);
-        Arrays.sort(coss);
-        return Math.atan2(sins[n / 2], coss[n / 2]);
-    }
-
-    /** Ratio of {@code RMS(Δ²s)} to the expected sine contribution at
-     *  {@code peakAmp · omega²/√2}.  Used inside {@link #analyze} to
-     *  decide whether per-sample R-invariant rejection is feasible: when
-     *  this ratio exceeds the threshold, the 1/k amplification on
-     *  dq = Δs/k turns broadband noise into a per-sample "glitch"
-     *  detector and every frame gets rejected - so the analyser bails
-     *  out of rejection entirely instead.  See the inline rationale in
-     *  {@code analyze}. */
-    private double derivativeNoiseRatio(double[] samples, double peakAmp, double omegaPerSample) {
-        double sumD2Sq = 0.0;
-        for (int n = 1; n < samples.length - 1; n++) {
-            double d2 = (double) samples[n + 1] - 2.0 * samples[n] + samples[n - 1];
-            sumD2Sq += d2 * d2;
-        }
-        double rmsD2             = Math.sqrt(sumD2Sq / Math.max(1, samples.length - 2));
-        double expectedSineRmsD2 = peakAmp * omegaPerSample * omegaPerSample / Constants.SQRT2;
-        return rmsD2 / Math.max(1e-30, expectedSineRmsD2);
     }
 }

@@ -36,6 +36,8 @@ import org.edgo.audio.measure.cli.util.SampleRates;
 import org.edgo.audio.measure.common.StereoSampleDouble;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.CaptureAverage;
+import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -258,10 +260,10 @@ public class RecordWavMode {
             AdcCorrection adc = AdcCorrectionHelper.loadCsv(adcCompPath);
             log.info("ADC correction: running FFT (size={}, harmonics={}) to extract fundamental phase/level",
                     fftSize, harmonics);
-            FftAnalyzer fftAnalyzer = new FftAnalyzer();
-            FftResult r = fftAnalyzer.analyze(samples, sampleRate, fftSize, harmonics,
+            CaptureAverage average = new CaptureAverage(new FftAnalyzer(), new CoherentAccumulator());
+            FftResult r = average.analyze(samples, sampleRate, fftSize, harmonics,
                     WindowType.HANN, FftOverlap.PCT_0,
-                    0.0, 0.0, true, Double.NaN);
+                    0.0, 0.0, true, Double.NaN, true, Double.NaN);
             AdcCorrectionHelper.logCorrectedHarmonics(r, adc);
             AdcCorrectionHelper.subtractDistortionPerFrameInPlace(samples, sampleRate, fftSize, r, adc);
 

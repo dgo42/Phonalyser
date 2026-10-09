@@ -265,7 +265,9 @@ class FreqRespCalDeEmbedTest {
         assertTrue(noiseBin > 0,
                 "the frame must have a bin between the tones inside the with-noise range, "
                         + "or the second half of this question is empty");
-        double bothMag = FreqRespCalHelper.interpolate(wide, raw.fundamentalHzRefined)[0]
+        // The with-noise row corrects a bin at the bin's own frequency, the
+        // tone-only row the tone's lobe at the tone's frequency.
+        double bothMag = FreqRespCalHelper.interpolate(wide, lobeBin * binWidth)[0]
                 * FreqRespCalHelper.interpolate(tones, raw.fundamentalHzRefined)[0];
         assertEquals(Math.hypot(raw.re[lobeBin], raw.im[lobeBin]) / bothMag,
                 Math.hypot(mixed.re[lobeBin], mixed.im[lobeBin]),

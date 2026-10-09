@@ -139,7 +139,6 @@ class FftAnalyzerThdTest {
             signal[n] = 0.5 * Math.sin(t) + 0.005 * (Math.sin(2 * t) + Math.sin(3 * t) + Math.sin(5 * t));
         }
         int step = FftOverlap.PCT_0.hopSamples(fftSize);
-        int frames = (signal.length - fftSize) / step + 1;
 
         double[][] cases = { { 8, Math.sqrt(3.0) }, { 2, Math.sqrt(2.0) }, { 1, 1.0 } };
         for (double[] c : cases) {
@@ -148,7 +147,7 @@ class FftAnalyzerThdTest {
                     signal, sampleRate, fftSize, 8, limit,
                     WindowType.HANN, FftOverlap.PCT_0,
                     0.0, 0.0, true, Double.NaN, false, Double.NaN,
-                    new FftResult(), step, frames);
+                    new FftResult(), step);
             assertEquals(c[1], r.thdPct, 0.05, "THD over H2..H" + (limit + 1));
             assertEquals(limit, r.thdHarmonics, "the result names the harmonics it summed");
             assertEquals(5 * r.fundamentalBin, r.harmonicBins[3], "H5 stays in the table at limit " + limit);
@@ -295,6 +294,68 @@ class FftAnalyzerThdTest {
                 "the second pilot's span starts a main lobe below its bin");
         assertEquals(pilot2Bin + lobe, r.pilot2MaskHiBin,
                 "the second pilot's span ends a main lobe above its bin");
+    }
+
+    @Test
+    void lineFloorHold_harmonicUnderItsFloorReadsTheFloorAndThdSumsIt() {
+        // A harmonic read below the local noise floor the result carries for
+        // its bin reads that floor, one above it reads as measured, and THD
+        // sums the held level.
+        int sampleRate = 48_000;
+        int fftSize    = 8_192;
+        double binHz   = (double) sampleRate / fftSize;
+        double floorDbFs = -90.0;
+        int n = fftSize * 2;
+        double[] signal = pureSine(sampleRate, 100 * binHz, 0.5, n);
+        double[] h2 = pureSine(sampleRate, 200 * binHz, 1e-6, n);   // far under the floor
+        double[] h3 = pureSine(sampleRate, 300 * binHz, 1e-3, n);   // far above it
+        for (int i = 0; i < n; i++) signal[i] += h2[i] + h3[i];
+
+        FftAnalyzer analyzer = new FftAnalyzer();
+        FftResult r = analyzer.analyze(signal, sampleRate, fftSize, 8,
+                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false);
+        analyzer.recomputeStats(r);
+        double h3Measured = r.harmonicDbFs[1];
+        assertTrue(r.harmonicDbFs[0] < floorDbFs, "H2 is measured under the floor");
+
+        r.lineFloorBins = new int[]{ 200, 300 };
+        r.lineFloorDbFs = new double[]{ floorDbFs, floorDbFs };
+        analyzer.recomputeStats(r);
+        assertEquals(floorDbFs, r.harmonicDbFs[0], 1e-9, "H2 is held at its floor");
+        assertEquals(h3Measured, r.harmonicDbFs[1], 1e-9, "H3 reads as measured");
+        double fundLin = Math.pow(10.0, r.fundamentalDbFs / 20.0);
+        double expected = Math.hypot(Math.pow(10.0, floorDbFs / 20.0), Math.pow(10.0, h3Measured / 20.0))
+                / fundLin * 100.0;
+        assertEquals(expected, r.thdPct, expected * 1e-6, "THD sums the held H2 with the measured H3");
+    }
+
+    @Test
+    void lineFloorHold_intermodProductUnderItsFloorReadsTheFloor() {
+        // The same hold on a dual tone's intermodulation product 2f1 - f2.
+        int sampleRate = 48_000;
+        int fftSize    = 8_192;
+        double binHz   = (double) sampleRate / fftSize;
+        double floorDbFs = -90.0;
+        int n = fftSize * 2;
+        double[] signal = pureSine(sampleRate, 100 * binHz, 0.25, n);
+        double[] f2     = pureSine(sampleRate, 130 * binHz, 0.25, n);
+        double[] d3     = pureSine(sampleRate,  70 * binHz, 1e-6, n);   // 2f1 - f2, under the floor
+        for (int i = 0; i < n; i++) signal[i] += f2[i] + d3[i];
+
+        // Equal tones: the fundamental is seeded with F1, so the second-tone
+        // hint finds F2 and not the fundamental itself.
+        FftAnalyzer analyzer = new FftAnalyzer();
+        analyzer.setMultiTone(true);
+        analyzer.setSecondToneHintHz(130 * binHz);
+        FftResult r = analyzer.analyze(signal, sampleRate, fftSize, 8,
+                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, 100 * binHz);
+        assertTrue(r.imd != null, "the pair is analysed as a dual tone");
+        assertTrue(r.imd.dnLDbFs[3] < floorDbFs, "2f1 - f2 is measured under the floor");
+
+        r.lineFloorBins = new int[]{ 70 };
+        r.lineFloorDbFs = new double[]{ floorDbFs };
+        analyzer.recomputeStats(r);
+        assertEquals(floorDbFs, r.imd.dnLDbFs[3], 1e-9, "2f1 - f2 is held at its floor");
     }
 
     private static double[] pureSine(int sampleRate, double freqHz, double amplitude, int n) {

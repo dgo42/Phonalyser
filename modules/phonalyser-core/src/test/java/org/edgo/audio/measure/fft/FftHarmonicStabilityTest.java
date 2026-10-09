@@ -36,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Builds an off-bin tone + H2..H9 at predefined levels + a broadband noise
  * floor (Gaussian) that is then TPDF-dithered to {@link #DITHER_BITS}, runs it
- * through the coherent-averaging FFT over {@link #FRAMES} frames, and repeats
+ * through the coherent capture average over {@link #FRAMES} frames, and repeats
  * {@link #COLLECTIONS} times (independent noise seeds) to measure the run-to-run
  * SPREAD of each harmonic - the "drift" we have been chasing by overlaying
  * screenshots.  All results go to an INDEPENDENT log
@@ -96,9 +96,13 @@ class FftHarmonicStabilityTest {
     private static final int   KAPPA_SEEDS  = 24;
     private static final FftOverlap KAPPA_OVERLAP = FftOverlap.PCT_75;
 
+    private CaptureAverage captureAverage() {
+        return new CaptureAverage(new FftAnalyzer(), new CoherentAccumulator());
+    }
+
     @Test
     void harmonicStabilityAcrossCollections() {
-        FftAnalyzer analyzer = new FftAnalyzer();
+        CaptureAverage analyzer = captureAverage();
         double[][] hDbFs    = new double[HARMONIC_COUNT][COLLECTIONS];  // existing peak-pick (window search)
         double[][] singleDb = new double[HARMONIC_COUNT][COLLECTIONS];  // single-bin magnitude @ theoretical bin
         double[][] lockDb   = new double[HARMONIC_COUNT][COLLECTIONS];  // phase-sensitive (lock-in) in-phase
@@ -113,7 +117,7 @@ class FftHarmonicStabilityTest {
         for (int c = 0; c < COLLECTIONS; c++) {
             double[] sig = synthesize(SEED + c, FRAMES, OVERLAP);
             FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
-                    WINDOW, OVERLAP, 0.0, 0.0, COHERENT, Double.NaN, false);
+                    WINDOW, OVERLAP, 0.0, 0.0, COHERENT, Double.NaN, false, Double.NaN);
 
             thd[c] = r.thdPct;
             snr[c] = r.snrDb;
@@ -183,7 +187,7 @@ class FftHarmonicStabilityTest {
      */
     @Test
     void harmonicSpreadSweep() {
-        FftAnalyzer analyzer = new FftAnalyzer();
+        CaptureAverage analyzer = captureAverage();
         LOG.info("=== SWEEP: peak-pick spread (dB) vs frames x overlap | {} pt {} | {} Hz | {} seeds/cell ===",
                 FFT_SIZE, WINDOW, FUND_HZ, SWEEP_COLLECTIONS);
         for (int frames : FRAMES_SWEEP) {
@@ -192,7 +196,7 @@ class FftHarmonicStabilityTest {
                 for (int c = 0; c < SWEEP_COLLECTIONS; c++) {
                     double[] sig = synthesize(SEED + c, frames, ov);
                     FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
-                            WINDOW, ov, 0.0, 0.0, COHERENT, Double.NaN, false);
+                            WINDOW, ov, 0.0, 0.0, COHERENT, Double.NaN, false, Double.NaN);
                     for (int i = 0; i < HARMONIC_COUNT; i++) {
                         h[i][c] = (r.harmonicDbFs != null && i < r.harmonicDbFs.length)
                                 ? r.harmonicDbFs[i] : Double.NaN;
@@ -217,7 +221,7 @@ class FftHarmonicStabilityTest {
      */
     @Test
     void harmonicPlateauCheck() {
-        FftAnalyzer analyzer = new FftAnalyzer();
+        CaptureAverage analyzer = captureAverage();
         LOG.info("=== PLATEAU CHECK: spread vs frames @ fixed {} overlap | {} seeds | {} Hz ===",
                 PLATEAU_OVERLAP.label, PLATEAU_SEEDS, FUND_HZ);
         LOG.info("  pure 1/√N => σ halves per 4× frames.  Flat σ tail => systematic floor.  (σ = std dev, dB)");
@@ -226,7 +230,7 @@ class FftHarmonicStabilityTest {
             for (int c = 0; c < PLATEAU_SEEDS; c++) {
                 double[] sig = synthesize(SEED + c, frames, PLATEAU_OVERLAP);
                 FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
-                        WINDOW, PLATEAU_OVERLAP, 0.0, 0.0, COHERENT, Double.NaN, false);
+                        WINDOW, PLATEAU_OVERLAP, 0.0, 0.0, COHERENT, Double.NaN, false, Double.NaN);
                 for (int i = 0; i < HARMONIC_COUNT; i++) {
                     h[i][c] = (r.harmonicDbFs != null && i < r.harmonicDbFs.length)
                             ? r.harmonicDbFs[i] : Double.NaN;

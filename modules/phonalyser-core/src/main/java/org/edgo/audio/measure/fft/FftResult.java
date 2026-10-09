@@ -18,7 +18,9 @@
 
 package org.edgo.audio.measure.fft;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.enums.FftOverlap;
@@ -175,6 +177,19 @@ public class FftResult {
     public double[] harmonicDbFs;
     public double[] harmonicPct;
 
+    /** The local noise floor under each distortion line - every harmonic and
+     *  every intermodulation product - by the line's bin: the level, dBFS in
+     *  the domain {@link #amplitudeDbFs} stands in when the statistics are
+     *  derived, below which the line's reading is not taken.  A line under
+     *  its floor carries no stable level: what its bin holds is the noise
+     *  there, wandering across the floor's band from one collection to the
+     *  next, and summed into THD it would move THD and everything steered by
+     *  it.  So the reading is held at the floor from below and is free to
+     *  rise above it.  Index-parallel; a bin of -1 holds no floor.  Both
+     *  {@code null} when no floor was measured, which clamps nothing. */
+    public int[]    lineFloorBins;
+    public double[] lineFloorDbFs;
+
     // Raw (pre-.frc-de-embed) complex phasors of the fundamental and of each
     // distortion peak, stamped by the analyser ({@link #captureRawPeaks}) off
     // the raw spectrum BEFORE any in-place .frc de-embed.  The DAC-predistortion
@@ -270,6 +285,11 @@ public class FftResult {
      *  apply the same noise-integral correction to THIS spectrum regardless of
      *  the window selected by then. */
     public double windowNenbwBins;
+    /** Coherent gain of the analysis window - the mean of its table, 1 for
+     *  the rectangular window - stamped at analysis time: a bin's amplitude
+     *  is its raw magnitude times {@code 2 / (fftSize · gain)} (half that at
+     *  DC and Nyquist), the scale an average of frames is converted with. */
+    public double windowCoherentGain;
     /** Average noise floor: RMS amplitude of a single noise bin converted to dBFS. */
     public double avgNoiseFloorDbFs;
     /** Pre-correction (BLUE-dot) snapshot of fundamental + harmonic
@@ -310,21 +330,6 @@ public class FftResult {
      */
     public double fundamentalTrueDbFs;
 
-    // Frame-rejection diagnostics - rejections discard frames and slow the
-    // averaging convergence.  Structured (not a pre-formatted string) so the
-    // GUI layer can localise the warning banner / tooltip.  rejectedFrames
-    // == 0 means the capture was clean this tick.
-    /** Number of frames rejected this tick; {@code 0} = clean. */
-    public int     rejectedFrames;
-    /** Total frames examined this tick (rejection-ratio denominator). */
-    public int     rejectionTotalFrames;
-    /** {@code true} = phase-coherence rejection (sub-sample drop);
-     *  {@code false} = R-invariant rejection. */
-    public boolean rejectionPhaseCoherence;
-    /** Detail value: max {@code |R−A|/A} in % (R-invariant) or max phase
-     *  deviation in degrees (phase-coherence). */
-    public double  rejectionDetail;
-
     /** Spectral discontinuity detector gate snapshot for the debug overlay
      *  ({@code DebugSwitches.SHOW_DISCONTINUITY_GATES}); {@code null} when the
      *  detector isn't running. */
@@ -363,6 +368,32 @@ public class FftResult {
             harmonicHz    = new double[harmonicCount];
             harmonicDbFs  = new double[harmonicCount];
             harmonicPct   = new double[harmonicCount];
+        }
+    }
+
+    /** The factor a bin's raw magnitude ({@code hypot(re, im)}) is multiplied
+     *  by for its single-sided amplitude, full scale 1: {@code 2 / (fftSize ·
+     *  windowCoherentGain)}.  At DC and Nyquist, where the two sides are one
+     *  bin, a caller applies half of it.  0 while the result carries no
+     *  window gain. */
+    public double amplitudePerMagnitude() {
+        return windowCoherentGain > 0.0 && fftSize > 0
+                ? 2.0 / ((double) fftSize * windowCoherentGain)
+                : 0.0;
+    }
+
+    /** Places the harmonic ladder on the refined fundamental: harmonic
+     *  {@code h + 2} at {@code (h + 2) · fundamentalHzRefined}, its bin the
+     *  nearest one, or -1 beyond the spectrum.  The levels are the
+     *  statistics' ({@link FftAnalyzer#recomputeStats}), which read the
+     *  positions written here. */
+    public void placeHarmonics() {
+        int halfSize = amplitudeDbFs.length - 1;
+        for (int h = 0; h < harmonicCount; h++) {
+            double hz = (h + 2) * fundamentalHzRefined;
+            int    hb = (int) Math.round(hz / freqResolution);
+            harmonicHz[h]   = hz;
+            harmonicBins[h] = (hb >= 1 && hb <= halfSize) ? hb : -1;
         }
     }
 
@@ -445,6 +476,8 @@ public class FftResult {
         c.harmonicHz                 = reuseCopy(c.harmonicHz,    src.harmonicHz);
         c.harmonicDbFs               = reuseCopy(c.harmonicDbFs,  src.harmonicDbFs);
         c.harmonicPct                = reuseCopy(c.harmonicPct,   src.harmonicPct);
+        c.lineFloorBins              = reuseCopy(c.lineFloorBins, src.lineFloorBins);
+        c.lineFloorDbFs              = reuseCopy(c.lineFloorDbFs, src.lineFloorDbFs);
         c.rawFundRe                  = src.rawFundRe;
         c.rawFundIm                  = src.rawFundIm;
         c.dacFundPhaseRad            = src.dacFundPhaseRad;
@@ -469,13 +502,10 @@ public class FftResult {
         c.noisePower                 = src.noisePower;
         c.awNoisePower               = src.awNoisePower;
         c.windowNenbwBins            = src.windowNenbwBins;
+        c.windowCoherentGain         = src.windowCoherentGain;
         c.avgNoiseFloorDbFs          = src.avgNoiseFloorDbFs;
         c.fundamentalDynExclusionHz  = src.fundamentalDynExclusionHz;
         c.fundamentalTrueDbFs        = src.fundamentalTrueDbFs;
-        c.rejectedFrames             = src.rejectedFrames;
-        c.rejectionTotalFrames       = src.rejectionTotalFrames;
-        c.rejectionPhaseCoherence    = src.rejectionPhaseCoherence;
-        c.rejectionDetail            = src.rejectionDetail;
         c.gates                      = src.gates;   // immutable snapshot - share the reference
         c.gateBlockDbFs              = src.gateBlockDbFs;    // debug snapshots - share (not mutated)
         c.gateRejectDbFs             = src.gateRejectDbFs;
@@ -549,6 +579,57 @@ public class FftResult {
         if (cnt == 0) return Double.NaN;
         Arrays.sort(band, 0, cnt);
         return band[cnt / 2];                                          // median = local grass level
+    }
+
+    /** The local noise floor a distortion line at {@code bin} is held at from
+     *  below ({@link #lineFloorDbFs}), dBFS; {@link Double#NaN} where none was
+     *  measured. */
+    public double lineFloorDbFs(int bin) {
+        if (lineFloorBins == null || lineFloorDbFs == null || bin < 1) return Double.NaN;
+        for (int i = 0; i < lineFloorBins.length; i++) {
+            if (lineFloorBins[i] == bin) return lineFloorDbFs[i];
+        }
+        return Double.NaN;
+    }
+
+    /** {@code linear}, a line's amplitude at {@code bin} (full scale 1), held
+     *  at the line's local noise floor from below
+     *  ({@link #lineFloorDbFs(int)}); unchanged where no floor was measured
+     *  or the reading is not finite. */
+    public double atLeastLineFloor(int bin, double linear) {
+        double floorDbFs = lineFloorDbFs(bin);
+        if (!Double.isFinite(floorDbFs) || !Double.isFinite(linear)) return linear;
+        return Math.max(linear, Math.pow(10.0, floorDbFs / 20.0));
+    }
+
+    /** One distortion line as the readouts carry it: the bin it sits on and
+     *  its readout in dBFS, held at the line's floor from below. */
+    public record DistortionLine(int bin, double readoutDbFs) {}
+
+    /** The harmonics as distortion lines, H2 first; empty without
+     *  harmonics. */
+    public List<DistortionLine> harmonicLines() {
+        List<DistortionLine> lines = new ArrayList<>();
+        if (harmonicBins == null || harmonicDbFs == null) return lines;
+        for (int h = 0; h < harmonicCount; h++) {
+            lines.add(new DistortionLine(harmonicBins[h], harmonicDbFs[h]));
+        }
+        return lines;
+    }
+
+    /** The intermodulation products as distortion lines - both sidebands of
+     *  every order from 2 to {@link ImdResult#MAX_ORDER}, the lower first, the
+     *  lines the combined intermod figure sums; empty for a single tone or a
+     *  spectrum whose bin width is unknown.  A product outside the measurable
+     *  range carries a {@link Double#NaN} readout. */
+    public List<DistortionLine> intermodLines() {
+        List<DistortionLine> lines = new ArrayList<>();
+        if (imd == null || !(freqResolution > 0.0)) return lines;
+        for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
+            lines.add(new DistortionLine((int) Math.round(imd.dnLHz[k] / freqResolution), imd.dnLDbFs[k]));
+            lines.add(new DistortionLine((int) Math.round(imd.dnHHz[k] / freqResolution), imd.dnHDbFs[k]));
+        }
+        return lines;
     }
 
     /**
