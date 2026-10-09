@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.fft.predistortion;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.function.DoubleFunction;
 
@@ -32,6 +33,7 @@ import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.FftResult.DistortionLine;
 import org.edgo.audio.measure.fft.ImdResult;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
@@ -112,6 +114,11 @@ public final class PredistortionEngine {
      *  EXTEND_DROP_FACTOR}, so each round averages this much beyond the bare
      *  THD0/THD ratio to measure the shrinking residual with headroom. */
     private static final double EXTEND_DROP_FACTOR = 0.75;
+    /** The resolution rule ({@link #resolutionHolds}) takes a round over while
+     *  the live distortion stands above this share of the target, and ends it
+     *  once the distortion falls to it: below it, a line that grows a little
+     *  once the average resolves it still leaves the run under target. */
+    private static final double RESOLVE_TARGET_FRACTION = 0.5;
     /** Tone counts as aligned when the measured fundamental STOPS moving -
      *  consecutive frames agree to within this fraction of an FFT bin.  The
      *  test is frame-to-frame stability, NOT a match against a computed target
@@ -325,7 +332,7 @@ public final class PredistortionEngine {
                 phase = Phase.COLLECTING;
                 int maxAverages = (int) Math.round(baseAverages * MAX_AVG_GROW);
                 FftResult r = collectUntilAverages(round, baseAverages, baselineDist, prevDist,
-                        maxAverages, harm);
+                        maxAverages, targetThdPct, harm);
                 if (r == null) {
                     reason = stopRequested ? StopReason.USER_STOP : StopReason.ERROR;
                     break;
@@ -546,21 +553,29 @@ public final class PredistortionEngine {
      *  result, or {@code null} on stop.  The target is seeded by
      *  {@link #sizeAverages} from {@code prevDistPct} (the last round's
      *  residual) and re-evaluated against the LIVE residual at every poll,
-     *  only rising, single tone and dual tone alike.
+     *  only rising, single tone and dual tone alike.  The resolution rule
+     *  ({@link #resolutionHolds}) starts working once that target is
+     *  reached: if it holds then, it takes the round over - its count
+     *  ({@link #averagesToResolve}), taken afresh at every poll and
+     *  uncapped, is the target from then on - and the round ends the moment
+     *  it stops holding; if it does not hold then, the round ends there.  So
+     *  the rule only ever extends a round past the residual-ratio target.
      *  {@link FftController#completedAnalyses()} was re-zeroed by the reset
      *  that precedes every round.  {@code statsRound} labels the collected
      *  frames in the diagnostic record; {@code harm} (single tone, else
      *  null) only supplies the clearances of the round's closing log line. */
     private FftResult collectUntilAverages(int statsRound, int baseAverages, double baselineDistPct,
-                                           double prevDistPct, int maxAverages,
+                                           double prevDistPct, int maxAverages, double targetThdPct,
                                            HarmonicCompensation harm) {
-        collectTargetAvg   = sizeAverages(baseAverages, baselineDistPct, prevDistPct, maxAverages);
+        int sizingTarget   = sizeAverages(baseAverages, baselineDistPct, prevDistPct, maxAverages);
+        boolean resolving  = false;     // the resolution rule has taken the round over
+        collectTargetAvg   = sizingTarget;
         roundStopRequested = false;
         if (log.isInfoEnabled()) {
             log.info("Predistortion round {}: target {} averages (last round's residual {} %, round 0's {} %)",
                     statsRound, collectTargetAvg, prevDistPct, baselineDistPct);
         }
-        while (fft.completedAnalyses() < collectTargetAvg) {
+        while (true) {
             if (stopRequested) {
                 // Stop ENDS this round, it does not throw it away: the frames
                 // averaged so far are a measurement like any other, taken with
@@ -573,16 +588,38 @@ public final class PredistortionEngine {
             // one) and proceed to apply, instead of waiting out the target.
             if (roundStopRequested && fft.completedAnalyses() >= 1) break;
             FftResult live = readResult();
+            if (live == null) {
+                // nothing displayed: a reset of the view just cleared it
+                sleep(POLL_MS);
+                continue;
+            }
+            int averagesDone = fft.completedAnalyses();
             stats.frame(statsRound, live);
             double liveDistPct = distortionPct(live);
             int target = sizeAverages(baseAverages, baselineDistPct, liveDistPct, maxAverages);
-            if (target > collectTargetAvg) {
+            if (target > sizingTarget) {
                 if (log.isInfoEnabled()) {
                     log.info("Predistortion round {}: target {} -> {} at {} averages done (live residual {} %, round 0's {} %)",
-                            statsRound, collectTargetAvg, target, fft.completedAnalyses(),
+                            statsRound, sizingTarget, target, fft.completedAnalyses(),
                             liveDistPct, baselineDistPct);
                 }
-                collectTargetAvg = target;
+                sizingTarget = target;
+            }
+            if (resolving || averagesDone >= sizingTarget) {
+                boolean holds = resolutionHolds(live, liveDistPct, targetThdPct);
+                if (!holds) {
+                    if (resolving) {
+                        logResolution(statsRound, false, averagesDone, averagesDone, liveDistPct, targetThdPct);
+                    }
+                    break;
+                }
+                collectTargetAvg = averagesToResolve(live, averagesDone);
+                if (!resolving) {
+                    resolving = true;
+                    logResolution(statsRound, true, averagesDone, collectTargetAvg, liveDistPct, targetThdPct);
+                }
+            } else {
+                collectTargetAvg = sizingTarget;
             }
             sleep(POLL_MS);
         }
@@ -592,6 +629,30 @@ public final class PredistortionEngine {
                     statsRound, fft.completedAnalyses(), formatClearances(done, harm));
         }
         return done;
+    }
+
+    /** One line when the resolution rule takes the round over, with the
+     *  target it sets then (its count changes at every poll), and one when it
+     *  ends the round, with the reason. */
+    private void logResolution(int statsRound, boolean takesOver, int averagesDone, int target,
+                               double liveDistPct, double targetPct) {
+        if (!log.isInfoEnabled()) return;
+        String lines = dualTone ? "intermodulation product" : "harmonic";
+        if (takesOver) {
+            log.info("Predistortion round {}: resolution rule takes the round over at {} averages done, the"
+                    + " residual-ratio target reached - no {} {} dB over its band-top floor, live residual {} % over"
+                    + " {} x the target {} %; target {}, uncapped",
+                    statsRound, averagesDone, lines, HarmonicCompensation.APPLY_CLEARANCE_DB, liveDistPct,
+                    RESOLVE_TARGET_FRACTION, targetPct, target);
+        } else if (liveDistPct > RESOLVE_TARGET_FRACTION * targetPct) {
+            log.info("Predistortion round {}: resolution rule ends the round at {} averages done - a {} stands {} dB"
+                    + " over its band-top floor",
+                    statsRound, averagesDone, lines, HarmonicCompensation.APPLY_CLEARANCE_DB);
+        } else {
+            log.info("Predistortion round {}: resolution rule ends the round at {} averages done - live residual {} %"
+                    + " at or under {} x the target {} %",
+                    statsRound, averagesDone, liveDistPct, RESOLVE_TARGET_FRACTION, targetPct);
+        }
     }
 
     /** Each harmonic's clearance over its local floor in dB, H2 first, one
@@ -619,6 +680,67 @@ public final class PredistortionEngine {
         if (!(baselineDistPct > 0) || !(distPct > 0)) return baseAverages;
         int target = (int) Math.round(baseAverages * (baselineDistPct / distPct) * EXTEND_DROP_FACTOR);
         return Math.max(baseAverages, Math.min(target, maxAverages));
+    }
+
+    /**
+     * True while the resolution rule holds: no distortion line stands
+     * {@link HarmonicCompensation#APPLY_CLEARANCE_DB} over its band-top floor
+     * and the live distortion {@code distPct} stands above
+     * {@link #RESOLVE_TARGET_FRACTION} of {@code targetPct}.  The lines are the
+     * harmonics for a single tone and the intermodulation products for a dual
+     * tone - the lines the round's distortion figure sums; a line's clearance
+     * is its held readout over the floor the result holds it at
+     * ({@link FftResult#lineFloorDbFs}).
+     *
+     * <p>Why: a line at or near its floor reads the floor (the hold) or a
+     * floor-inflated level.  Once the average resolves it, it settles at its
+     * own level, which can lie above what the round read - a target reached
+     * on unresolved lines can be missed again on a longer average, and a line
+     * just over its floor still grows a little as it stabilises.
+     */
+    private boolean resolutionHolds(FftResult live, double distPct, double targetPct) {
+        if (!(distPct > RESOLVE_TARGET_FRACTION * targetPct)) return false;
+        for (DistortionLine line : distortionLines(live)) {
+            if (line.readoutDbFs() - live.lineFloorDbFs(line.bin()) >= HarmonicCompensation.APPLY_CLEARANCE_DB) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * The averages, counted like {@link FftController#completedAnalyses()},
+     * the round needs from where it stands before its strongest distortion
+     * line stands {@link HarmonicCompensation#APPLY_CLEARANCE_DB} over its
+     * band-top floor.  The coherent average's noise falls with sqrt(N): after
+     * n frames the floor stands 20 log10(sqrt(n)) dB under one frame's, so
+     * the clearance still missing, g dB, takes n (10^(g/10) - 1) frames more.
+     * The strongest line is the one with the highest held readout; its
+     * clearance counts from zero, the hold standing it on its floor.  Not
+     * capped by {@link #MAX_AVG_GROW}, which bounds the residual-ratio sizing
+     * only.
+     *
+     * @param live the result just polled
+     * @param done the round's completed analyses at that poll
+     */
+    private int averagesToResolve(FftResult live, int done) {
+        double strongestDbFs = Double.NEGATIVE_INFINITY;
+        double clearDb = 0.0;
+        for (DistortionLine line : distortionLines(live)) {
+            double lineClearDb = line.readoutDbFs() - live.lineFloorDbFs(line.bin());
+            if (Double.isFinite(lineClearDb) && line.readoutDbFs() > strongestDbFs) {
+                strongestDbFs = line.readoutDbFs();
+                clearDb = Math.max(0.0, lineClearDb);
+            }
+        }
+        double missingDb = HarmonicCompensation.APPLY_CLEARANCE_DB - clearDb;
+        return done + (int) Math.ceil(live.frameCount * (Math.pow(10.0, missingDb / 10.0) - 1.0));
+    }
+
+    /** The lines the round's distortion figure sums: the harmonics for a
+     *  single tone, the intermodulation products for a dual tone. */
+    private List<DistortionLine> distortionLines(FftResult live) {
+        return dualTone ? live.intermodLines() : live.harmonicLines();
     }
 
     /** Cumulative distortion of an FFT result - THD for a single tone, the
