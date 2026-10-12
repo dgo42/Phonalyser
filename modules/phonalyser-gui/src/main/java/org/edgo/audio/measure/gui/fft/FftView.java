@@ -1076,16 +1076,8 @@ public final class FftView extends AbstractFreqDomainView {
                 floors[i] = Double.NaN;
                 continue;
             }
-            bins[i] = bin;
-            // The coherent average's own local band top for the line, the one
-            // the DPD engine reads too; the band beside the line in this
-            // spectrum only where no average keeps one.
-            double localTopDbFs = r.localBandTopDbFs(bin);
-            if (Double.isFinite(localTopDbFs)) {
-                floors[i] = localTopDbFs;
-                continue;
-            }
             double floorLin = LOBE.lineFloor(mag, bin, half, r.freqResolution, r.windowNenbwBins);
+            bins[i]   = bin;
             floors[i] = floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN;
         }
         r.lineFloorBins = bins;

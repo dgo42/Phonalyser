@@ -18,17 +18,9 @@
 
 package org.edgo.audio.measure.gui.fft;
 
-import java.io.IOException;
-import java.nio.file.Path;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -58,14 +50,11 @@ import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.FftResultPool;
 import org.edgo.audio.measure.fft.PilotToneSelector;
-import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.GeneratorOutput;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.bus.PilotToneRequest;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
-import org.edgo.audio.measure.gui.fft.predistortion.LineRestarts;
-import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
@@ -91,7 +80,7 @@ import lombok.extern.log4j.Log4j2;
  * {@link #stop}.
  */
 @Log4j2
-public final class FftAnalyzerWorker implements LineRestarts {
+public final class FftAnalyzerWorker {
 
     /** Idle tick when there's no buffer / not enough fresh samples. */
     private static final int IDLE_TICK_MS = 250;
@@ -136,38 +125,6 @@ public final class FftAnalyzerWorker implements LineRestarts {
      *  {@link #accumulateIntoForeverBuffer} on the collection's first frame
      *  and on a change of the transform length or the averaging mode. */
     private final CoherentAccumulator accumulator = new CoherentAccumulator();
-    /** The predistortion engine every published result is handed to, on this
-     *  worker's thread; null while none is registered.  Stored, not owned: the
-     *  predistortion dialog creates the engine, registers and unregisters it. */
-    private volatile PredistortionEngine predistortionEngine;
-    /** One requested line restart that is not due yet: its lines, and the
-     *  capture position the window start must reach before they are reset. */
-    private record PendingLineRestart(List<Line> lines, long boundSample) {}
-    /** The line restarts requested and not yet taken in by the worker, each
-     *  with its bound counted from its request: offered from any thread by
-     *  {@link #requestLineRestart}, drained by the accumulate step, which marks
-     *  the lines waiting in the accumulator; dropped with the collection. */
-    private final ConcurrentLinkedQueue<PendingLineRestart> requestedLineRestarts =
-            new ConcurrentLinkedQueue<>();
-    /** The taken-in line restarts that are not due yet, in request order, each
-     *  holding the lines the accumulator marked waiting for their reset.
-     *  Worker-thread only: filled and executed by the accumulate step, dropped
-     *  with the collection. */
-    private final List<PendingLineRestart> pendingLineRestarts = new ArrayList<>();
-    /** The tones a restart's fade is placed on, Hz, {F1, F2}, published by the
-     *  worker with every result it hands the engine: the emitted pair the
-     *  worker holds (F2 0 for a single tone), or, while it holds none, the
-     *  result's refined tones (F2 NaN for a single tone); null before the first
-     *  result.  A fresh array each time, so a reader on another thread sees a
-     *  whole pair. */
-    private volatile double[] fadeTonesHz;
-    /** The amplitude scale of the running collection's results
-     *  ({@link FftResult#amplitudePerMagnitude}) the statistics export writes
-     *  the levels on: one value while the transform length and the window
-     *  stand, and a change of either starts a new collection.  Set where the
-     *  collection starts; volatile, as the export runs on whichever thread
-     *  ends the predistortion run. */
-    private volatile double collectionAmplitudePerMagnitude;
 
     private volatile SignalBufferReader reader;
     /** True while this worker holds a {@code SharedCapture} reference (acquired
@@ -958,8 +915,6 @@ public final class FftAnalyzerWorker implements LineRestarts {
      *  arrays are reassigned, not cleared in place. */
     private void resetAccumulator() {
         accumulator.reset();
-        requestedLineRestarts.clear();  // the lines they name belong to the dropped collection
-        pendingLineRestarts.clear();
         accumIntFundBinRounded = 0;
         spectralDetector.reset();   // the median reference restarts with the average
         lastRejectBlockDbFs = null;
@@ -1103,10 +1058,6 @@ public final class FftAnalyzerWorker implements LineRestarts {
                 ? r.fundamentalHzRefined / r.freqResolution
                 : 0.0;
 
-        // The restarts requested since the last frame are taken in first, so
-        // one requested before a restart of the collection is dropped below
-        // with the others.
-        takeRequestedRestarts();
         boolean restart = !accumulator.isStarted()
                 || accumulator.getFftSize() != fftSize
                 || accumulator.isCoherent() != coherent;
@@ -1118,11 +1069,9 @@ public final class FftAnalyzerWorker implements LineRestarts {
                     : Double.NaN;
             accumulator.restart(fftSize, coherent, kFrac, kappa2, r.imdProductA, r.imdProductB,
                     analyzer.mainLobeBins(r.windowType), r.pilot1Bin, r.pilot2Bin);
-            // Each line's local band, on the bin width and noise bandwidth the
-            // view's line floors read with; laid out here, before any line
-            // reset, and again by the accumulator on the family its κ
-            // refinement rebuilds.
-            accumulator.lineBands(r.freqResolution, r.windowNenbwBins);
+            // The band tops of the collection's statistics, on the bin width
+            // and the noise bandwidth the collection is pinned to.
+            accumulator.bandGeometry(r.freqResolution, r.windowNenbwBins);
             accumIntFundBinRounded = Math.max(1, (int) Math.round(kFrac));
             prevTickRe     = coherent ? new double[DISCONTINUITY_DROP_TICKS][N] : null;
             prevTickIm     = coherent ? new double[DISCONTINUITY_DROP_TICKS][N] : null;
@@ -1144,10 +1093,6 @@ public final class FftAnalyzerWorker implements LineRestarts {
             pilotRawRef2           = pilotRawPhase2;
             accumDroppedSamples    = 0.0;
             gapRecoverPending      = false;
-            // A line restart requested on the collection that ended names
-            // lines of a family the restart has just rebuilt.
-            pendingLineRestarts.clear();
-            collectionAmplitudePerMagnitude = r.amplitudePerMagnitude();
             tickStats.close();
             tickStats = (coherent && DebugSwitches.WRITE_FFT_TICK_STATS)
                     ? new FftTickStatsWriter(AppPaths.instance().getLogsDir(),
@@ -1302,7 +1247,6 @@ public final class FftAnalyzerWorker implements LineRestarts {
                     ? -Math.IEEEremainder(referenceTone2Rad - accumRefTone2Rad, 2.0 * Math.PI)
                     : Double.NaN;
             final boolean refinedBefore = accumulator.isKappaRefined();
-            resetDueLines(samplesAbsStart);
             accumulator.add(r.re, r.im, weight,
                     new FrameTurns(delta, phi2, phiF, phiF2,
                             pilotTurn(pilotRawPhase1, pilotRawRef1),
@@ -1323,7 +1267,7 @@ public final class FftAnalyzerWorker implements LineRestarts {
                 // read against, so it is traced as the spectrum stands; every
                 // later frame is traced with the phase excess taken out, which
                 // is what keeps the relations still if the alignment works.
-                traceHarmonicPhases(r.re, r.im, halfSize, restart ? 0.0 : phiF,
+                traceHarmonicPhases(r.re, r.im, halfSize, restart ? 0.0 : phiF, Double.NaN,
                         "frame " + completedAnalyses + (restart
                                 ? " (first accumulated frame, spectrum as it stands)"
                                 : " (phase excess taken out)"));
@@ -1332,9 +1276,17 @@ public final class FftAnalyzerWorker implements LineRestarts {
                 // carries -phiF from its hump's rotation, so taking it out again
                 // here would count it twice.  This is the line that says whether
                 // the harmonics of a LONG average hold together, which no
-                // single-tick reading can show.
+                // single-tick reading can show.  It also carries the chain's
+                // phase at the fundamental, which turns the harmonics' relations
+                // into the generator's correction phases: the emitted fundamental
+                // the accumulator holds is the pilot pair's difference on the
+                // reference frame - the phases every added frame lands the pilot
+                // humps back on - less the quarter turn a sine's bin reads
+                // behind its accumulator phase.
+                double emittedFundRad = Double.isNaN(pilotRawRef1) || Double.isNaN(pilotRawRef2)
+                        ? Double.NaN : wrapTurn(pilotRawRef1 - pilotRawRef2 - Math.PI / 2.0);
                 traceHarmonicPhases(accumulator.getSumRe(), accumulator.getSumIm(), halfSize, 0.0,
-                        "accumulator after frame " + completedAnalyses);
+                        emittedFundRad, "accumulator after frame " + completedAnalyses);
                 // The levels beside the phases: the same bins, the fresh
                 // frame as one frame and the accumulator over the frames it
                 // holds with this one in, so a residual that grows or shrinks
@@ -1448,18 +1400,28 @@ public final class FftAnalyzerWorker implements LineRestarts {
      * @param re       real parts to read, indexed by bin
      * @param im       imaginary parts to read, indexed by bin
      * @param halfSize highest bin index either array is read at
-     * @param phiF     the phase excess to take out of the fundamental's phase;
-     *                 zero reads the spectrum as it stands
-     * @param label    what this line reads - the frame and how, or the
-     *                 accumulator after that frame
+     * @param phiF           the phase excess to take out of the fundamental's
+     *                       phase; zero reads the spectrum as it stands
+     * @param emittedFundRad the fundamental's phase as the DAC emitted it, in
+     *                       this spectrum's frame; the fundamental's phase
+     *                       less it leads the line as {@code H1} in degrees -
+     *                       the chain's phase at the fundamental, the notch's
+     *                       as it stands, which harmonic h's relation takes
+     *                       h times to become the harmonic's phase against
+     *                       the emitted fundamental; NaN writes no {@code H1}
+     * @param label          what this line reads - the frame and how, or the
+     *                       accumulator after that frame
      */
     private void traceHarmonicPhases(double[] re, double[] im, int halfSize, double phiF,
-            String label) {
+            double emittedFundRad, String label) {
         double kappa = accumulator.getKappa();
         int    k0    = pinnedFundBin(halfSize);
         if (kappa < KAPPA_FAMILY_MIN_BIN || k0 <= 0) return;
         double fundPhase = Math.atan2(im[k0], re[k0]) - phiF;
         StringBuilder rel = new StringBuilder();
+        if (!Double.isNaN(emittedFundRad)) {
+            rel.append(String.format(" H1=%.2f", Math.toDegrees(wrapTurn(fundPhase - emittedFundRad))));
+        }
         for (int h = 2; h <= TRACE_MAX_HARMONIC; h++) {
             int kh = (int) Math.round(h * kappa);
             if (kh > halfSize) break;
@@ -4158,7 +4120,6 @@ public final class FftAnalyzerWorker implements LineRestarts {
             return IDLE_TICK_MS;
         }
         publishResult(r);
-        handToPredistortionEngine(r);   // the engine's one call site - see its comment for the fields it reads
         return awaitFor(pendingHopSamples, sampleRate);
     }
 
@@ -4231,197 +4192,6 @@ public final class FftAnalyzerWorker implements LineRestarts {
     public void uiGotResult() {
         if (log.isWarnEnabled() && DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
             log.warn("2. FFT result achieved UI in {} ms", (double)(System.nanoTime() - startSendToUi) / 1_000_000);
-        }
-    }
-
-    // ─── Predistortion: the engine and its line restarts ────────────────────
-
-    /** Hands every published result to {@code engine} from now on, in place
-     *  of any engine registered before. */
-    public void registerPredistortionEngine(PredistortionEngine engine) {
-        predistortionEngine = engine;
-    }
-
-    /** Stops handing results to the registered engine.  Restarts it requested
-     *  are still carried out, so no line stays marked waiting. */
-    public void unregisterPredistortionEngine() {
-        predistortionEngine = null;
-    }
-
-    /**
-     * Hands {@code r}, the same object {@link #publishResult} has just put
-     * into the hand-off slot, to the registered engine on this worker's
-     * thread; the engine decides and returns.  A result whose epoch a reset
-     * has moved past since the last gate belongs to a collection that has
-     * ended and is not handed.  Before the hand, the tones a restart's fade is
-     * placed on are published ({@link #fadeTonesHz}).
-     *
-     * <p>The view finalizes the same object in place on the display's thread.
-     * The engine reads, directly and through the correction sets'
-     * measurements: the frame count, the line states, the κ-refined flag, the
-     * channel, the bin width, the refined tones, the captured fundamental and
-     * peak phasors ({@link FftResult#rawFundRe} / {@link FftResult#rawFundIm},
-     * {@link FftResult#rawPeakRe} / {@link FftResult#rawPeakIm}), the tones'
-     * DAC phases ({@link FftResult#dacFundPhaseRad},
-     * {@link FftResult#dacFund2PhaseRad}), the harmonic count, bins and
-     * frequencies and the product grid ({@link FftResult#imdProductA} /
-     * {@link FftResult#imdProductB}).  The view writes none of them but the
-     * harmonic bins, which its statistics recompute rewrites with the value
-     * they hold (the nearest bin to the same harmonic frequency).  For a dual
-     * tone the intermodulation measurement reads F1's own harmonics (b zero)
-     * off {@link FftResult#amplitudeDbFs}, {@link FftResult#re} and
-     * {@link FftResult#im} at their bins, which the view's mains correction
-     * and calibration rewrite in place.
-     */
-    private void handToPredistortionEngine(FftResult r) {
-        PredistortionEngine engine = predistortionEngine;
-        if (engine == null) return;
-        if (r.epoch != resetEpoch.get()) return;
-        double[] emitted = heldEmittedHz;
-        fadeTonesHz = (emitted != null && emitted[0] > 0.0)
-                ? new double[]{ emitted[0], emitted.length > 1 ? emitted[1] : 0.0 }
-                : new double[]{ r.fundamentalHzRefined, r.fundamental2HzRefined };
-        engine.onResult(r);
-    }
-
-    /**
-     * Requests the restart of {@code lines}: each is reset once no frame of
-     * its own can straddle the generator change that asked for it.  The
-     * bound is the capture's write position at this call, plus the output
-     * drain ({@link #OUTPUT_DRAIN_SKIP_SEC}) the old signal still flows
-     * through, plus the generator's fade of that line, in capture samples:
-     * as the generator fades it, {@link SignalGenerator#LINE_FADE_PERIODS}
-     * periods of F1 or of the line's own frequency |a F1 + b F2|, whichever
-     * take the longer - a product below F1, F2 - F1 among them, fades longer
-     * than F1's periods; a harmonic always takes F1's.  The first frame added
-     * whose window starts at or past the bound starts after the change
-     * reached the converter whole, and finds the line reset.  The bound counts
-     * samples, not cycles, so a random overlap shifts nothing.  F1 and F2 are
-     * the tones the worker published with its last handed result
-     * ({@link #fadeTonesHz}).
-     *
-     * <p>Callable from any thread - the engine calls it right after the
-     * correction went to the generator, so the bound counts from the change
-     * itself: the call places the bounds and queues the request, and the
-     * worker takes it in on its next accumulated frame, where the accumulator
-     * marks the lines waiting ({@link #takeRequestedRestarts}).  With no
-     * capture or no fundamental known nothing is queued, and a product (b not
-     * zero) with no F2 known is refused.  The lines of one call that share a
-     * bound are queued as one request; requests coexist, each with its own
-     * bound.
-     */
-    @Override
-    public void requestLineRestart(List<Line> lines) {
-        SignalBufferReader rdr = reader;
-        double[] tones = fadeTonesHz;
-        double fundamentalHz = tones != null ? tones[0] : Double.NaN;
-        double tone2Hz       = tones != null ? tones[1] : Double.NaN;
-        if (rdr == null || !(fundamentalHz > 0.0)) {
-            if (log.isWarnEnabled()) {
-                log.warn("FFT line restart of {} refused: no capture or no fundamental known", lines);
-            }
-            return;
-        }
-        long writePos     = rdr.getWritePos();
-        int  sampleRate   = rdr.getSampleRate();
-        long drainSamples = (long) Math.ceil(OUTPUT_DRAIN_SKIP_SEC * sampleRate);
-        Map<Long, List<Line>> byFade = new LinkedHashMap<>();
-        for (Line line : lines) {
-            // A product's fade depends on F2: without it no bound can be placed.
-            if (line.b() != 0 && !(tone2Hz > 0.0)) {
-                if (log.isWarnEnabled()) {
-                    log.warn("FFT line restart of {} refused: no second tone known", line);
-                }
-                continue;
-            }
-            // The generator's own rule: the slower of F1 and the line itself,
-            // F1 for a line that lands on 0 Hz and has no period of its own.
-            // A harmonic (b zero) is |a| F1, whatever F2 holds.
-            double lineHz  = line.b() == 0
-                    ? Math.abs(line.a()) * fundamentalHz
-                    : Math.abs(line.a() * fundamentalHz + line.b() * tone2Hz);
-            double slowest = lineHz > 0.0 ? Math.min(fundamentalHz, lineHz) : fundamentalHz;
-            long fadeSamples = (long) Math.ceil(SignalGenerator.LINE_FADE_PERIODS * sampleRate / slowest);
-            byFade.computeIfAbsent(fadeSamples, f -> new ArrayList<>()).add(line);
-        }
-        for (Map.Entry<Long, List<Line>> group : byFade.entrySet()) {
-            long bound = writePos + drainSamples + group.getKey();
-            requestedLineRestarts.add(new PendingLineRestart(group.getValue(), bound));
-            if (log.isInfoEnabled()) {
-                log.info("FFT line restart of {} requested at capture position {}: reset on the first "
-                        + "frame starting at or past {} (fade {} samples)",
-                        group.getValue(), writePos, bound, group.getKey());
-            }
-        }
-    }
-
-    /** Takes the queued line restarts in, on this worker's thread: every line
-     *  the accumulator marks waiting joins the pending list with its
-     *  request's bound.  A line it refuses - κ not refined yet, which it logs -
-     *  or rejects - a tone, a pilot, a line not in the family - is logged once
-     *  and left out. */
-    private void takeRequestedRestarts() {
-        PendingLineRestart requested;
-        while ((requested = requestedLineRestarts.poll()) != null) {
-            List<Line> marked = new ArrayList<>(requested.lines().size());
-            for (Line line : requested.lines()) {
-                try {
-                    if (accumulator.markLineWaiting(line.a(), line.b())) marked.add(line);
-                } catch (IllegalArgumentException ex) {
-                    if (log.isWarnEnabled()) {
-                        log.warn("FFT line restart of {} refused: {}", line, ex.getMessage());
-                    }
-                }
-            }
-            if (!marked.isEmpty()) {
-                pendingLineRestarts.add(new PendingLineRestart(marked, requested.boundSample()));
-            }
-        }
-    }
-
-    /** Resets the lines of every requested restart that is due - the frame
-     *  about to be added starts at {@code windowStart}, at or past the
-     *  request's bound - and drops the request.  Runs before that frame is
-     *  added, so a reset line's lobe holds none of the frames before it.  The
-     *  reset clears each line's waiting mark, which the next overlay stamps.
-     *  A line the accumulator refuses or rejects is logged once and dropped
-     *  with its request: the cycle goes on, and nothing is tried again. */
-    private void resetDueLines(long windowStart) {
-        Iterator<PendingLineRestart> it = pendingLineRestarts.iterator();
-        while (it.hasNext()) {
-            PendingLineRestart due = it.next();
-            if (windowStart < due.boundSample()) continue;
-            it.remove();
-            if (log.isInfoEnabled()) {
-                log.info("FFT line restart of {} due: frame at {} at or past the bound {}",
-                        due.lines(), windowStart, due.boundSample());
-            }
-            for (Line line : due.lines()) {
-                try {
-                    // a refusal returns false with the accumulator's own log line
-                    accumulator.resetLine(line.a(), line.b());
-                } catch (IllegalArgumentException ex) {
-                    if (log.isWarnEnabled()) {
-                        log.warn("FFT line restart of {} dropped: {}", line, ex.getMessage());
-                    }
-                }
-            }
-        }
-    }
-
-    /** Writes the accumulator's per-frame statistics of the running
-     *  collection to {@code file}, the levels on the collection's amplitude
-     *  scale.  Any thread: the accumulator copies its rows out under its own
-     *  lock while the analysis goes on adding.  A file that cannot be written
-     *  is logged and the run goes on. */
-    @Override
-    public void exportStatistics(Path file) {
-        try {
-            accumulator.exportStatistics(file, collectionAmplitudePerMagnitude);
-        } catch (IOException ex) {
-            if (log.isWarnEnabled()) {
-                log.warn("FFT statistics could not be written to {}", file, ex);
-            }
         }
     }
 

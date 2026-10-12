@@ -66,17 +66,6 @@ public final class DebugSwitches {
      *  doesn't move. */
     public static final boolean TRACE_FLL = Boolean.parseBoolean("true");
 
-    /** DEBUG hard switch: write the DAC-predistortion training statistics file
-     *  - one {@code dpd-stats-<timestamp>.csv} per training session in the
-     *  application's log directory, holding the {@code .frc} chain response,
-     *  the measured plant, every collected FFT frame, each round's averaged
-     *  measurement and each round's applied correction.  It is a measurement
-     *  record for spreadsheet analysis, not a log, and a deep run fills it
-     *  with thousands of rows - hence a switch rather than a permanent write.
-     *  {@code false} leaves the training loop writing nothing; the probe and
-     *  the correction math run either way. */
-    public static final boolean WRITE_DPD_STATS = Boolean.parseBoolean("false");
-
     /** DEBUG hard switch: write a per-tick record of the coherent FFT
      *  accumulator - one {@code fft-ticks-<timestamp>.csv} per accumulator
      *  run in the application's log directory: every tick's de-rotation

@@ -875,47 +875,6 @@ public final class GeneratorLane {
         setDualToneFrequency2(hz);
     }
 
-    /** Hot-applies harmonic predistortion to the running generator and
-     *  switches it to compensated sine (no restart) - the predistortion
-     *  wizard's per-round apply.  No-op when nothing is playing. */
-    public void applyCompensation(double[] ampRatios, int[] hNums, double[] phiInits) {
-        GeneratorControls g = live();
-        if (g != null) g.applyCompensation(ampRatios, hNums, phiInits);
-    }
-
-    /** Hot-applies dual-tone intermod predistortion to the running generator
-     *  and switches it to compensated dual tone (no restart) - the dual-tone
-     *  counterpart of {@link #applyCompensation}.  No-op when nothing is
-     *  playing. */
-    public void applyDualToneCompensation(double[] ampRatios, int[] coefA, int[] coefB, double[] phiInits) {
-        GeneratorControls g = live();
-        if (g != null) g.applyDualToneCompensation(ampRatios, coefA, coefB, phiInits);
-    }
-
-    /** Hot-applies the named harmonics alone to the running generator - which
-     *  fades each from what it renders to its new ratio and phase and leaves
-     *  every other line as it is - the per-line counterpart of
-     *  {@link #applyCompensation}.  No-op when nothing is playing. */
-    public void applyCompensationLines(double[] ampRatios, int[] hNums, double[] phiInits) {
-        GeneratorControls g = live();
-        if (g != null) g.applyCompensationLines(ampRatios, hNums, phiInits);
-    }
-
-    /** The dual-tone counterpart of {@link #applyCompensationLines}: the named
-     *  intermodulation products alone.  No-op when nothing is playing. */
-    public void applyDualToneCompensationLines(double[] ampRatios, int[] coefA, int[] coefB,
-            double[] phiInits) {
-        GeneratorControls g = live();
-        if (g != null) g.applyDualToneCompensationLines(ampRatios, coefA, coefB, phiInits);
-    }
-
-    /** Clears wizard predistortion and returns the running generator to
-     *  plain sine. */
-    public void clearCompensation() {
-        GeneratorControls g = live();
-        if (g != null) g.clearCompensation();
-    }
-
     /** Loads a saved predistortion file (.dpd) onto the running generator - the
      *  wizard's Apply path.  The file is self-describing (single-tone harmonic
      *  vs dual-tone intermod), so the generator switches to the matching

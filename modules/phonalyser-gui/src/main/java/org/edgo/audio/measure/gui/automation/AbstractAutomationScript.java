@@ -1159,8 +1159,7 @@ public abstract class AbstractAutomationScript {
     /** Opens the DAC-predistortion wizard non-modally for capture - the
      *  generator must already be playing a sine / dual-tone and the FFT
      *  recording, so the closed loop has live data.  Leaves it up; drive it with
-     *  {@link #setPredistortionTarget}, {@link #startPredistortion},
-     *  {@link #waitPredistortionTarget}; pair with {@link #closePredistortion}. */
+     *  {@link #setPredistortionTarget}; pair with {@link #closePredistortion}. */
     protected final void openPredistortion() {
         ui(() -> predistortionDialog = fftPane().openPredistortionForCapture());
     }
@@ -1168,27 +1167,6 @@ public abstract class AbstractAutomationScript {
     /** Sets the wizard's Target-THD field (%). */
     protected final void setPredistortionTarget(double pct) {
         ui(() -> { if (predistortionDialog != null) predistortionDialog.setTargetPct(pct); });
-    }
-
-    /** Presses the wizard's Start button (begins the closed-loop run). */
-    protected final void startPredistortion() {
-        ui(() -> { if (predistortionDialog != null) predistortionDialog.pressStart(); });
-    }
-
-    /** Blocks (up to {@code maxSeconds}) until the run reaches the target THD or
-     *  stops (stalled) - polling the wizard once a second. */
-    protected final void waitPredistortionTarget(int maxSeconds) throws InterruptedException {
-        for (int i = 0; i < maxSeconds; i++) {
-            boolean[] running = new boolean[1];
-            boolean[] target  = new boolean[1];
-            ui(() -> {
-                running[0] = predistortionDialog != null && predistortionDialog.isRunning();
-                target[0]  = predistortionDialog != null && predistortionDialog.isTargetReached();
-            });
-            if (target[0]) return;
-            if (i > 3 && !running[0]) return;   // stopped after startup (stalled / done)
-            waitSeconds(1);
-        }
     }
 
     /** Switches the UI language for the wizard ONLY - re-translates its labels in

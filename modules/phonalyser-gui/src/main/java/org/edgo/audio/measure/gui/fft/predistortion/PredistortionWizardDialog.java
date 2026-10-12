@@ -18,10 +18,6 @@
 
 package org.edgo.audio.measure.gui.fft.predistortion;
 
-import java.io.File;
-import java.nio.file.Path;
-import java.time.Duration;
-import java.time.Instant;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -36,61 +32,34 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
-import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.TableColumn;
 import org.eclipse.swt.widgets.TableItem;
-import org.edgo.audio.measure.common.FileVersions;
-import org.edgo.audio.measure.enums.FftOverlap;
-import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.ImdResult;
-import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.common.CorrectionStore;
-import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.ShellIcons;
-import org.edgo.audio.measure.gui.fft.FftAnalyzerWorker;
 import org.edgo.audio.measure.gui.fft.FftController;
 import org.edgo.audio.measure.gui.fft.FftView;
-import org.edgo.audio.measure.gui.bus.GeneratorCorrectionsRequest;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
-import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
-import org.edgo.audio.measure.sound.DeviceCalibration;
 
 import lombok.Getter;
-import lombok.extern.log4j.Log4j2;
 
 /**
- * Modal wizard that runs the closed-loop DAC predistortion measurement and
- * saves / applies the result.  Drives the already-running generator + FFT
- * through a {@link PredistortionEngine}.
- *
- * <p>Rendering follows the (historic) PID-autotune dialog: an intro that
- * explains the procedure, an FFT-settings group and a progress group of live
- * readouts - all refreshed by a ~{@value #TIMER_MS} ms timer that polls the
- * displayed FFT result.  The engine runs on the FFT worker: Start registers
- * it there, the end of the run and the window's close unregister it.
- *
- * <p>Lifecycle: <b>Start</b> begins the run (becoming <b>Stop</b>); it
- * auto-stops on the target distortion.  <b>Save</b> writes
- * the {@code .dpd} predistortion file; it then becomes <b>Apply</b>, which
- * loads that file onto the generator and switches it to the compensated form.
- * Closing the window any other way after a run puts the generator back on the
- * form the preferences hold: a compensated form gets its saved {@code .dpd}
- * reloaded, a plain form is restarted without corrections.
+ * The DAC predistortion window: an intro that explains the procedure, the
+ * event history of the window's runs, an FFT-settings group and a progress
+ * group of live readouts - refreshed by a ~{@value #TIMER_MS} ms timer that
+ * polls the displayed FFT result - and the target distortion.  No
+ * measurement runs from this window yet: Start and Save are disabled.
  */
-@Log4j2
-public final class PredistortionWizardDialog implements PredistortionEngine.Listener {
+public final class PredistortionWizardDialog {
 
     /** One line of the event history: when it happened, the averages the
      *  progress showed then, its message key and
@@ -98,8 +67,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
      *  without names. */
     private record HistoryEntry(LocalTime time, int averages, String key, String names) {}
 
-    /** Floor of the target THD (%): the run stops at or under half the
-     *  target, which a zero target would never let happen. */
+    /** Floor of the target THD (%): a zero target could never be reached. */
     private static final double MIN_TARGET_PCT = 0.1e-6;
     /** Live-refresh cadence (ms) for the polling render - fast enough that the
      *  averages readout climbs smoothly. */
@@ -114,20 +82,10 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     private static final String AVERAGES_RESERVE = "100000";
     /** Before each history line: the time of its event. */
     private static final DateTimeFormatter EVENT_TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
-    /** The progress's time: hours, minutes and seconds since Start. */
-    private static final String ELAPSED_FORMAT = "%02d:%02d:%02d";
-    /** Between the line names of one history entry: "H2, H3". */
-    private static final String NAME_SEPARATOR = ", ";
 
     private final Shell               parentShell;
     private final FftController       fft;
     private final FftView             view;
-    /** Loaded {@code .frc} corrections, handed to the engine so it de-embeds
-     *  their phase when computing the DAC correction. */
-    private final CorrectionStore correctionStore;
-    /** The analyser worker the engine runs on: the engine is registered on
-     *  it for the run and takes it as the lines' restarts. */
-    private final FftAnalyzerWorker worker;
 
     private Shell            dialog;
     /** The margin composite holding every widget - printed for the help
@@ -161,45 +119,15 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
      *  the resize it causes is not judged again. */
     private boolean          fitting;
 
-    private PredistortionEngine engine;
-    /** {@code true} while a measurement loop is running (Lombok exposes
-     *  {@code isRunning()} for the automation-capture wait). */
-    @Getter private boolean running;
-    /** When the last run started and ended - the progress's time; the start
-     *  {@code null} before the first run, the end {@code null} while it runs. */
-    private Instant runStart, runEnd;
     private boolean timerArmed;
-    private String  savedPath;
-    private boolean applied;
-    /** True once a run has been started in this window - the point from which
-     *  the generator and the analyser carry this wizard's state.  A window
-     *  closed before that must leave both untouched. */
-    private boolean engaged;
-    /** The waveform the preferences held when the run started.  A run measures
-     *  the converter's own distortion, so it plays the plain sibling of a
-     *  compensated form for its whole length - every rebuild of the tone
-     *  derives from the preferences, and a compensated form there would load
-     *  its saved correction file back under the measurement.  Restored when
-     *  the window closes without Apply; Apply sets the compensated form
-     *  itself. */
-    private GenSignalForm formBeforeRun;
-    /** The key of the state the last run ended in, or of the Save after it -
-     *  what {@link #isTargetReached} compares. */
-    private String  terminalStatusKey = "predistortion.status.idle";
     /** The entries {@link #historyTable} shows, the newest last.  UI-thread
      *  confined. */
     private final List<HistoryEntry> history = new ArrayList<>();
-    /** A deep copy of the displayed result as the run ended - the
-     *  provenance a Save writes; {@code null} before a run has ended. */
-    private FftResult resultAtStop;
 
-    public PredistortionWizardDialog(Shell parent, FftController fft, FftView view,
-                                     CorrectionStore correctionStore, FftAnalyzerWorker worker) {
-        this.parentShell     = parent;
-        this.fft             = fft;
-        this.view            = view;
-        this.correctionStore = correctionStore;
-        this.worker          = worker;
+    public PredistortionWizardDialog(Shell parent, FftController fft, FftView view) {
+        this.parentShell = parent;
+        this.fft         = fft;
+        this.view        = view;
     }
 
     /** Opens the wizard and blocks until it is dismissed (interactive use). */
@@ -212,8 +140,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
 
     /** Builds and shows the wizard non-modally (no blocking loop), returning the
      *  shell - for automation capture, which drives it via {@link #setTargetPct},
-     *  {@link #pressStart}, {@link #isTargetReached}, {@link #retranslate} and
-     *  {@link #getContent}. */
+     *  {@link #retranslate} and {@link #getContent}. */
     public Shell buildAndShow() {
         dialog = new Shell(parentShell, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.RESIZE);
         ShellIcons.apply(dialog);
@@ -257,8 +184,6 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         buildProgressGroup();
         buildSettings();
         buildButtonBar();
-
-        dialog.addListener(SWT.Close, e -> e.doit = handleCancel());
 
         refresh();
         dialog.pack();
@@ -326,14 +251,14 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         c.setLayout(gl);
 
         // Seeded from Preferences so the last-used value survives reopening
-        // the wizard AND restarting the app - never reset by a completed run.
+        // the wizard AND restarting the app.
         Preferences prefs = Preferences.instance();
 
         targetLabel = new Label(c, SWT.NONE);
         targetLabel.setText(I18n.t("predistortion.targetThd"));
         // PERCENT policy, like the other % fields.  8 decimals so a sub-ppm
         // target distortion can be entered; the floor of 0.1e-6 % keeps the
-        // target above zero, which the stop rule needs.
+        // target above zero.
         targetField = new NumericStepField(c, UnitFamily.PERCENT, MIN_TARGET_PCT, 100.0, 8, 90);
         targetField.setValue(prefs.getPredistortionTargetPct());
         targetField.setToolTipText(I18n.t("predistortion.targetThd.tooltip"));
@@ -350,19 +275,18 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
 
         startStopBtn = new Button(bar, SWT.PUSH);
         startStopBtn.setText(I18n.t("predistortion.button.start"));
+        startStopBtn.setEnabled(false);
         startStopBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        startStopBtn.addListener(SWT.Selection, e -> onStartStop());
 
         saveBtn = new Button(bar, SWT.PUSH);
         saveBtn.setText(I18n.t("predistortion.button.save"));
         saveBtn.setEnabled(false);
         saveBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        saveBtn.addListener(SWT.Selection, e -> onSaveOrApply());
 
         cancelBtn = new Button(bar, SWT.PUSH);
         cancelBtn.setText(I18n.t("common.close"));
         cancelBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        cancelBtn.addListener(SWT.Selection, e -> { if (handleCancel()) dialog.close(); });
+        cancelBtn.addListener(SWT.Selection, e -> dialog.close());
     }
 
     // -------------------------------------------------------------------------
@@ -375,16 +299,6 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     /** Sets the target-THD field (%). */
     public void setTargetPct(double pct) {
         if (targetField != null) targetField.setValue(pct);
-    }
-
-    /** Presses Start if idle (no-op while a run is in progress). */
-    public void pressStart() {
-        if (!running) onStartStop();
-    }
-
-    /** {@code true} once a run stopped because it reached the target THD. */
-    public boolean isTargetReached() {
-        return !running && "predistortion.status.targetReached".equals(terminalStatusKey);
     }
 
     /** Re-reads every UI label in the current locale, in place, WITHOUT rebuilding
@@ -400,8 +314,8 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         fftGroup.setText(I18n.t("predistortion.group.fft"));
         progressGroup.setText(I18n.t("predistortion.group.progress"));
         targetLabel.setText(I18n.t("predistortion.targetThd"));
-        startStopBtn.setText(I18n.t(running ? "predistortion.button.stop" : "predistortion.button.start"));
-        saveBtn.setText(I18n.t(savedPath == null ? "predistortion.button.save" : "predistortion.button.apply"));
+        startStopBtn.setText(I18n.t("predistortion.button.start"));
+        saveBtn.setText(I18n.t("predistortion.button.save"));
         cancelBtn.setText(I18n.t("common.close"));
         showHistory();
         refresh();
@@ -462,7 +376,8 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     }
 
     // -------------------------------------------------------------------------
-    // Live refresh timer (polls the engine - the autotune-dialog render style)
+    // Live refresh timer (polls the displayed result - the autotune-dialog
+    // render style)
     // -------------------------------------------------------------------------
 
     private void armTimer() {
@@ -489,11 +404,11 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         fftRateLbl  .setText(I18n.t("predistortion.fft.rate", rate));
         fftWindowLbl.setText(I18n.t("predistortion.fft.window", prefs.getFftWindow()));
 
-        // Dual-tone signal -> the loop minimises INTERMOD, not THD; show IMD /
-        // D+N in place of THD / THD+N.
+        // Dual-tone signal -> the measurement is the INTERMOD, not THD; show
+        // IMD / D+N in place of THD / THD+N.
         // The products ride on the live result; one without them (no second
         // tone found) reads "-" - a THD figure measures a single tone and says
-        // nothing about the intermod the loop minimises.
+        // nothing about the intermod.
         boolean dual = prefs.getGenSignalForm().isDualTone();
         ImdResult imd = (dual && live != null) ? live.imd : null;
 
@@ -501,12 +416,11 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         curThdLbl.setText(dual
                 ? metric("currentImd", imd != null ? fmtPct(imd.imdPwrPct) : "-")
                 : metric("currentThd", live != null ? fmtPct(live.thdPct) : "-"));
-        // What is inside the average - the SAME number the FFT pane shows:
-        // under the infinite averaging the run sets, the averages performed
-        // since the reset at Start, NOT the per-call frameCount (only the 2-3
-        // frames of one analyze() segment).
-        timeLbl .setText(metric("time", runStart != null ? fmtElapsed(Duration.between(runStart,
-                runEnd != null ? runEnd : Instant.now())) : "-"));
+        // No run to time yet.
+        timeLbl .setText(metric("time", "-"));
+        // What is inside the average - the SAME number the FFT pane shows: the
+        // averages performed since the last reset, NOT the per-call frameCount
+        // (only the 2-3 frames of one analyze() segment).
         avgLbl  .setText(metric("averages", Integer.toString(fft.averagesInWindow())));
         // Match the FFT pane: the ratio figures (THD+N / TD+N / SNR / SINAD)
         // read plain dB - they measure against the fundamental, so no absolute
@@ -526,158 +440,9 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         return I18n.t("predistortion.metric." + key) + ":  " + value;
     }
 
-    /** A run's length as hh:mm:ss. */
-    private String fmtElapsed(Duration d) {
-        return String.format(Locale.ROOT, ELAPSED_FORMAT, d.toHours(), d.toMinutesPart(), d.toSecondsPart());
-    }
-
     // -------------------------------------------------------------------------
-    // Start / Stop
+    // Event history
     // -------------------------------------------------------------------------
-
-    private void onStartStop() {
-        if (running) {
-            engine.stop();
-            worker.unregisterPredistortionEngine();
-            startStopBtn.setEnabled(false);   // re-enabled by onFinished
-            return;
-        }
-        // "Is the generator emitting?" - the same bus question the analyser
-        // asks; this window holds no generator.
-        Boolean emitting = MessageBus.instance().request(Events.GENERATOR_RUNNING);
-        if (!Boolean.TRUE.equals(emitting)) {
-            Dialogs.error(dialog, I18n.t("predistortion.wizard.title"),
-                    I18n.t("predistortion.error.noGenerator"));
-            return;
-        }
-        Preferences prefs = Preferences.instance();
-        GenSignalForm form = prefs.getGenSignalForm();
-        boolean supported = form == GenSignalForm.SINE
-                || form == GenSignalForm.SINE_COMP
-                || form.isDualTone();
-        if (!supported) {
-            // Single tone -> harmonic compensation; dual tone -> intermod
-            // compensation.  Every other waveform (noise / sweep / triangle /
-            // rectangle) has no meaningful predistortion target.
-            Dialogs.error(dialog, I18n.t("predistortion.wizard.title"),
-                    I18n.t("predistortion.error.notSupported"));
-            return;
-        }
-        // Settings persist on edit (see buildSettings), independently of this
-        // run - Start just reads the current field values.
-        double targetThdPct = targetField.getValue();
-
-        running = true;
-        runStart = Instant.now();
-        runEnd = null;
-        engaged = true;
-        savedPath = null;
-        applied = false;
-        resultAtStop = null;
-        saveBtn.setEnabled(false);
-        saveBtn.setText(I18n.t("predistortion.button.save"));
-        targetField.setEnabled(false);
-        startStopBtn.setText(I18n.t("predistortion.button.stop"));
-
-        // The run measures the raw converter: a compensated preference form
-        // gives way to its plain sibling for the run's length, through the
-        // preferences the generator derives every start from (see
-        // formBeforeRun).  The generator's form listener switches the running
-        // tone live and forgets what was hot-swapped onto it.
-        formBeforeRun = form;
-        if (form.isCompensated()) {
-            prefs.setGenSignalForm(form.plainSibling());
-        }
-        // The run ends by its own stop rule.  With stop-after-N on, the
-        // worker pauses the analysis once N averages are performed, no result
-        // reaches the engine any more, and the run would never end; the
-        // preference stays off until it is switched on again by hand.
-        if (prefs.isFftStopAfterNEnabled()) {
-            prefs.setFftStopAfterNEnabled(false);
-        }
-
-        // The engine reaches this window through a deferred UI-thread task:
-        // its correction requests and callbacks come from the worker thread,
-        // and a stop from this thread delivers its end of run after the
-        // button handler has returned.
-        Display display = dialog.getDisplay();
-        engine = new PredistortionEngine(r -> { if (!display.isDisposed()) display.asyncExec(r); },
-                MessageBus.instance(), worker, correctionStore, this);
-        engine.start(targetThdPct);
-        // The worker hands the engine every result, so the analyser runs.
-        if (!fft.isRecording()) fft.startRecording();
-        // The run begins from zero on the tone the clear left: the statistics
-        // are emptied first, so the fresh count carries no frame of a table an
-        // earlier run hot-swapped onto the tone.
-        fft.resetStatisticsAfterSignalChange();
-        worker.registerPredistortionEngine(engine);
-    }
-
-    // -------------------------------------------------------------------------
-    // Engine callbacks (UI thread)
-    // -------------------------------------------------------------------------
-
-    @Override
-    public void onStarted() {
-        addHistory("predistortion.history.started", List.of());
-    }
-
-    @Override
-    public void onLinesApplied(List<String> names) {
-        addHistory("predistortion.history.applied", names);
-    }
-
-    /** Its own history line: the restart follows the apply by the output
-     *  latency and one full frame - seconds at the large FFT sizes. */
-    @Override
-    public void onLinesRestarted(List<String> names) {
-        addHistory("predistortion.history.restarted", names);
-    }
-
-    @Override
-    public void onLinesParked(List<String> names) {
-        addHistory("predistortion.history.parked", names);
-    }
-
-    @Override
-    public void onLinesUnparked(List<String> names) {
-        addHistory("predistortion.history.unparked", names);
-    }
-
-    @Override
-    public void onFinished(PredistortionEngine.StopReason reason, boolean hasResult) {
-        worker.unregisterPredistortionEngine();
-        if (dialog.isDisposed()) return;
-        running = false;
-        runEnd = Instant.now();
-        // The provenance of a Save: the displayed result as the run ended.
-        FftResult last = view.getLastResult();
-        resultAtStop = last != null ? last.deepCopy() : null;
-        startStopBtn.setEnabled(true);
-        startStopBtn.setText(I18n.t("predistortion.button.start"));
-        targetField.setEnabled(true);
-        // Save writes the displayed result's provenance; without one there is
-        // nothing to write the file from.
-        if (hasResult && resultAtStop != null) saveBtn.setEnabled(true);
-        terminalStatusKey = switch (reason) {
-            case TARGET_REACHED -> "predistortion.status.targetReached";
-            case ERROR          -> "predistortion.status.error";
-            default             -> "predistortion.status.stopped";
-        };
-        // The target reached with a correction in force asks for the Save;
-        // reached without one, nothing is there to save.
-        boolean saveAsked = reason == PredistortionEngine.StopReason.TARGET_REACHED && hasResult;
-        addHistory(saveAsked ? "predistortion.history.finished" : terminalStatusKey, List.of());
-        refresh();
-    }
-
-    /** Appends an event to the history - its time now, the averages the
-     *  progress shows now, the line names joined.  UI thread. */
-    private void addHistory(String key, List<String> names) {
-        history.add(new HistoryEntry(LocalTime.now(), fft.averagesInWindow(), key,
-                String.join(NAME_SEPARATOR, names)));
-        showHistory();
-    }
 
     /** Renders the history in the current locale, each line after the time
      *  and the averages of its event, the newest last and in view; the idle
@@ -736,223 +501,6 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     }
 
     // -------------------------------------------------------------------------
-    // Save / Apply
-    // -------------------------------------------------------------------------
-
-    private void onSaveOrApply() {
-        if (savedPath == null) doSave();
-        else                   doApply();
-    }
-
-    private void doSave() {
-        FftResult r = resultAtStop;
-        boolean dual = engine.isDualTone();
-        if (r == null) return;
-        if (dual ? engine.getIntermodInForce() == null : engine.getHarmonicsInForce() == null) return;
-
-        FileDialog fd = new FileDialog(dialog, SWT.SAVE);
-        fd.setText(I18n.t("predistortion.save.dialog"));
-        fd.setFilterExtensions(new String[]{ "*.dpd" });
-        fd.setFilterNames(new String[]{ I18n.t("predistortion.save.filter") });
-        fd.setOverwrite(true);
-        Preferences prefs = Preferences.instance();
-        String folder = prefs.getGenDpdFolder();
-        if (folder != null) fd.setFilterPath(folder);
-        fd.setFileName(defaultDpdFileName(r));
-        String picked = fd.open();
-        if (picked == null) return;
-        try {
-            int bitDepth = prefs.current().getOutputBitDepth();
-            AudioBackend audio = AudioBackend.instance();
-            double amplitudeVrms = audio.calibrationOrDefault(false)
-                    .amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L);
-            double adcFsVrms = audio.calibrationOrDefault(true).fsRms(Channel.L);
-            if (dual) {
-                engine.getIntermodInForce().writeDpd(Path.of(picked), buildHeader(r),
-                        r.fundamentalHzRefined, r.fundamental2HzRefined, r.fundamentalDbFs,
-                        r.sampleRate, bitDepth, amplitudeVrms,
-                        engine.calResponseFor(r.channelLeft), adcFsVrms,
-                        engine.dualToneFundamentalVrms());
-            } else {
-                engine.getHarmonicsInForce().writeDpd(Path.of(picked), buildHeader(r),
-                        r.fundamentalHzRefined, r.fundamentalDbFs,
-                        r.sampleRate, bitDepth, amplitudeVrms,
-                        engine.calResponseFor(r.channelLeft), adcFsVrms);
-            }
-            savedPath = picked;
-            prefs.setGenDpdFolder(new File(picked).getParent());
-            prefs.save();
-            saveBtn.setText(I18n.t("predistortion.button.apply"));
-            terminalStatusKey = "predistortion.status.saved";
-            addHistory(terminalStatusKey, List.of());
-            log.info("Predistortion saved to {}", picked);
-        } catch (Exception ex) {
-            log.warn("Predistortion save failed", ex);
-            Dialogs.error(dialog, I18n.t("predistortion.save.dialog"),
-                    ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
-        }
-    }
-
-    /** Suggested {@code .dpd} name encoding the measurement conditions:
-     *  {@code predistortion-<THD|IMD>-<freq>[-<freq2>]-<fftSize>-<overlap>-<window>-<distPpm>.dpd}.
-     *  Single tone, e.g. {@code predistortion-THD-1003_0518-2M-87_5-BH7-0_83.dpd}
-     *  (THD in ppm: 0.83); dual tone carries both tone frequencies, e.g.
-     *  {@code predistortion-IMD-19005_0661-20000_0611-2M-87_5-HFT248D-5_05.dpd}
-     *  (IMD in ppm: 5.05).  Decimal points become underscores so the name stays
-     *  path-friendly.  The random mode's token spells out its draw range from
-     *  the enum's own bounds rather than its label, so the name still records
-     *  the geometry that produced the measurement and follows those bounds if
-     *  they change: {@code Rand_80_90}. */
-    private String defaultDpdFileName(FftResult r) {
-        boolean dual   = engine.isDualTone();
-        String kind    = dual ? "IMD" : "THD";
-        String freq    = String.format(Locale.US, "%.4f", r.fundamentalHzRefined).replace('.', '_');
-        String freq2   = dual
-                ? "-" + String.format(Locale.US, "%.4f", r.fundamental2HzRefined).replace('.', '_')
-                : "";
-        String size    = humanFftSize(r.fftSize);
-        String overlap = r.overlap.isRandom()
-                ? "Rand_" + pctToken(FftOverlap.RAND_MIN_OVERLAP_PCT)
-                        + "_" + pctToken(FftOverlap.RAND_MAX_OVERLAP_PCT)
-                : r.overlap.label.replace("%", "").replace('.', '_');
-        String window  = r.windowType.name();
-        double distPpm = engine.getHeldDistortionPct() * 1_000_000.0;   // % -> ppm % (THD single-tone / IMD dual-tone)
-        String dist    = String.format(Locale.US, "%.2f", distPpm).replace('.', '_');
-        return "predistortion-" + kind + "-" + freq + freq2 + "-" + size + "-" + overlap
-                + "-" + window + "-" + dist + ".dpd";
-    }
-
-    /** An overlap percent as a filename token: the plain integer when the
-     *  value is whole (80 -> 80), otherwise two decimals with the point as
-     *  an underscore (93.75 -> 93_75). */
-    private String pctToken(double pct) {
-        return pct == Math.rint(pct)
-                ? String.valueOf((int) pct)
-                : String.format(Locale.US, "%.2f", pct).replace('.', '_');
-    }
-
-    /** Compact power-of-two FFT length: 2097152 -> "2M", 524288 -> "512k". */
-    private String humanFftSize(int n) {
-        if (n >= 1 << 20 && n % (1 << 20) == 0) return (n >> 20) + "M";
-        if (n >= 1 << 10 && n % (1 << 10) == 0) return (n >> 10) + "k";
-        return Integer.toString(n);
-    }
-
-    private void doApply() {
-        if (savedPath == null) return;
-        Preferences prefs = Preferences.instance();
-        // Apply = LOAD the just-saved .dpd onto the running generator (no
-        // restart).  The file is the single source of truth, so the live tone
-        // and a later relaunch agree.  Persist the form + corrections path so
-        // it survives a restart AND so the generator pane's Corrections field
-        // shows the loaded file.
-        //
-        // The PATH is written before the FORM: switching the form live loads the
-        // corrections configured for it, so the path has to be the new one by
-        // then - written the other way round, the compensated tone comes up on
-        // whatever .dpd was configured before this session.
-        //
-        // No explicit load of the file here: the run played the PLAIN sibling
-        // (see formBeforeRun), so the form written below always differs from
-        // the one in force, the generator's form listener fires, switches the
-        // tone to the compensated form live and loads the file the path now
-        // names - the case of re-applying to the SAME path included.
-        GenSignalForm form = engine.isDualTone()
-                ? GenSignalForm.DUAL_TONE_COMP : GenSignalForm.SINE_COMP;
-        prefs.setGenDpd(form, savedPath);
-        prefs.setGenSignalForm(form);
-        prefs.save();
-        applied = true;
-        dialog.close();
-    }
-
-    private List<String> buildHeader(FftResult r) {
-        Preferences prefs = Preferences.instance();
-        List<String> h = new ArrayList<>();
-        h.add("# Phonalyser DAC predistortion");
-        h.add("# format_version=" + FileVersions.PREDISTORTION);
-        h.add("# kind=predistortion");
-        h.add("# gen_form="           + prefs.getGenSignalForm());
-        if (engine.isDualTone()) {
-            h.add("# gen_frequency1_hz=" + fmt(prefs.getGenDualToneFreq1Hz()));
-            h.add("# gen_frequency2_hz=" + fmt(prefs.getGenDualToneFreq2Hz()));
-        } else {
-            h.add("# gen_frequency_hz="   + fmt(prefs.getGenFrequencyHz()));
-        }
-        DeviceCalibration dac = AudioBackend.instance().calibrationOrDefault(false);
-        h.add("# gen_amplitude_vrms=" + fmt(dac.amplitudeVrms(prefs.getGenAmplitudeLeft(), Channel.L)));
-        h.add("# gen_dither_bits="    + dac.ditherBits(prefs.getGenDither(), Channel.L));
-        h.add("# fft_size="           + r.fftSize);
-        h.add("# fft_window="         + prefs.getFftWindow());
-        h.add("# fft_overlap="        + prefs.getFftOverlap().label);
-        h.add("# fft_max_harmonic="   + prefs.getFftCalcMaxHarmonic());
-        h.add("# fft_averages="       + r.frameCount);
-        // The run's distortion is the engine's figure, every line held at its
-        // local band top; the noise readouts are the displayed result's.
-        FftResult live = view.getLastResult();
-        h.add("# thd_pct="            + fmt(engine.getHeldDistortionPct()));
-        h.add("# thd_plus_n_db="      + fmt(live != null ? -live.sinadDb : Double.NaN));
-        h.add("# snr_db="             + fmt(live != null ? live.snrDb : Double.NaN));
-        h.add("# dist_min_hz="        + fmt(r.snrFreqMin));
-        h.add("# dist_max_hz="        + fmt(r.snrFreqMax));
-        return h;
-    }
-
-    // -------------------------------------------------------------------------
-    // Cancel
-    // -------------------------------------------------------------------------
-
-    private boolean handleCancel() {
-        if (running) {
-            engine.stop();
-            worker.unregisterPredistortionEngine();
-            running = false;
-        }
-        // A dialog that never started a run has touched neither the generator
-        // nor the analyser, so closing it must leave both exactly as they were -
-        // no revert, and above all no statistics reset, which would throw away a
-        // deep average the operator collected before opening this window.
-        if (!engaged) return true;
-        // Undo what the run did to the generator, unless the user committed via
-        // Apply.  The run hot-swapped its corrections onto the running tone and
-        // played the plain sibling of the configured form, so the state to
-        // return to is the form the preferences held before the run - only
-        // Apply changes that.  A compensated form IS its saved correction file:
-        // writing it back into the preferences makes the generator's form
-        // listener switch the tone live, load the file and forget the
-        // hot-swapped set.  A plain form carries no corrections at all: the
-        // tables are dropped over the bus, and the generator announces that as
-        // the signal change the FFT and the scope restart on - no rebuild of
-        // the tone is needed for it.  The single-tone .dpd slot keeps its path
-        // while the form is plain, so a plain form must never consult it - that
-        // is how a closed wizard used to leave an old correction file playing
-        // under the plain-sine label.
-        // The analyser goes down BEFORE the generator is touched, on the same
-        // path the Record button takes, and comes back up on the restored tone
-        // below: no tick then analyses the seam in which the tone is rebuilt.
-        boolean wasRecording = fft.isRecording();
-        if (wasRecording) fft.stopRecording();
-        if (!applied) {
-            if (formBeforeRun != null && formBeforeRun.isCompensated()) {
-                Preferences.instance().setGenSignalForm(formBeforeRun);
-            } else {
-                MessageBus.instance().publish(Events.GENERATOR_CORRECTIONS,
-                        new GeneratorCorrectionsRequest(GeneratorCorrectionsRequest.Kind.CLEAR,
-                                null, null, null, null, null));
-            }
-        }
-        // The run left the FFT in infinite coherent averaging with a deep
-        // accumulator full of predistortion-run frames (and, when reverting,
-        // the signal just changed); clear the statistics + accumulator so the
-        // live view restarts clean instead of averaging across the change.
-        fft.resetStatistics();
-        // Back up on the restored tone - an analyser that was not recording
-        // when this window closed stays as it was.
-        if (wasRecording) fft.startRecording();
-        return true;
-    }
-
-    // -------------------------------------------------------------------------
     // Formatting
     // -------------------------------------------------------------------------
 
@@ -972,9 +520,5 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
 
     private String fmtHz(double v) {
         return Double.isFinite(v) ? String.format(Locale.US, "%.4f", v) : "-";
-    }
-
-    private String fmt(double v) {
-        return String.format(Locale.US, "%.6f", v);
     }
 }

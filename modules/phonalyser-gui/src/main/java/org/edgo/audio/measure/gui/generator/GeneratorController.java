@@ -39,7 +39,6 @@ import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.generator.FilePlaybackGenerator;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.GeneratorCorrectionsRequest;
 import org.edgo.audio.measure.gui.bus.GeneratorOutput;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.bus.PilotToneRequest;
@@ -332,13 +331,6 @@ public final class GeneratorController {
         // The FreqResp sweep needs the DAC exclusively - stop both engines.
         Consumer<Void> freqRespStarted = ignored -> stopEngines();
         onBus(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStarted);
-        // A distortion measurement's correction sets arrive here, never by a
-        // call: the measurement lives on the analyser's side and holds no
-        // generator.  Nothing is announced for them - the measurement resets
-        // the analyser's statistics itself, and a signal-change announcement
-        // would restart the analyser's fundamental phase alignment.
-        Consumer<GeneratorCorrectionsRequest> corrections = this::applyCorrectionsRequest;
-        onBus(Events.GENERATOR_CORRECTIONS, corrections);
         // "Is the generator running?" - read by the FFT worker to decide
         // whether to anchor the fundamental to the generator's frequency.
         bus.registerResponder(Events.GENERATOR_RUNNING,
@@ -669,46 +661,6 @@ public final class GeneratorController {
 
     public void trimFrequency2(double hz) {
         lane.trimFrequency2(hz);
-    }
-
-    public void applyCompensation(double[] ampRatios, int[] hNums, double[] phiInits) {
-        lane.applyCompensation(ampRatios, hNums, phiInits);
-    }
-
-    public void applyDualToneCompensation(double[] ampRatios, int[] coefA, int[] coefB,
-            double[] phiInits) {
-        lane.applyDualToneCompensation(ampRatios, coefA, coefB, phiInits);
-    }
-
-    public void applyCompensationLines(double[] ampRatios, int[] hNums, double[] phiInits) {
-        lane.applyCompensationLines(ampRatios, hNums, phiInits);
-    }
-
-    public void applyDualToneCompensationLines(double[] ampRatios, int[] coefA, int[] coefB,
-            double[] phiInits) {
-        lane.applyDualToneCompensationLines(ampRatios, coefA, coefB, phiInits);
-    }
-
-    public void clearCompensation() {
-        lane.clearCompensation();
-    }
-
-    /** {@link Events#GENERATOR_CORRECTIONS} handler: the request goes onto the
-     *  running tone through the same entry points a direct caller would use.
-     *  On a tone that carries no tables a drop changes nothing. */
-    private void applyCorrectionsRequest(GeneratorCorrectionsRequest request) {
-        if (request == null) return;
-        switch (request.kind()) {
-            case CLEAR    -> clearCompensation();
-            case HARMONIC -> applyCompensation(request.ampRatios(), request.harmonics(),
-                    request.phiInits());
-            case INTERMOD -> applyDualToneCompensation(request.ampRatios(), request.coefA(),
-                    request.coefB(), request.phiInits());
-            case HARMONIC_LINES -> applyCompensationLines(request.ampRatios(),
-                    request.harmonics(), request.phiInits());
-            case INTERMOD_LINES -> applyDualToneCompensationLines(request.ampRatios(),
-                    request.coefA(), request.coefB(), request.phiInits());
-        }
     }
 
     public void loadCorrectionsFromFile(String path) {
